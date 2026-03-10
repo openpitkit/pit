@@ -145,6 +145,186 @@ class Order:
     def price(self) -> str:
         """Order price."""
 
+class Leverage:
+    """Leverage multiplier stored as fixed-point with scale ``100``."""
+
+    def __init__(self, multiplier: int) -> None:
+        """Create leverage from integer multiplier (for example ``100`` for 100x)."""
+        _ = multiplier
+
+    @staticmethod
+    def from_multiplier(multiplier: int) -> Leverage:
+        """Create leverage from integer multiplier (for example, ``100`` for 100x)."""
+        _ = multiplier
+
+    @staticmethod
+    def from_stored(raw: int) -> Leverage:
+        """Create leverage from raw fixed-point storage."""
+        _ = raw
+
+    @property
+    def value(self) -> float:
+        """Leverage value as a floating-point multiplier."""
+
+    def margin_required(self, *, notional: float) -> float:
+        """Return required margin as ``notional / leverage``."""
+        _ = notional
+
+class Asset:
+    """Asset or currency symbol."""
+
+    def __init__(self, value: str) -> None:
+        """Create an asset identifier."""
+        _ = value
+
+    @property
+    def value(self) -> str:
+        """Asset symbol value."""
+
+class Side:
+    """Trade side value type."""
+
+    def __init__(self, value: str) -> None:
+        """Create side from ``buy`` or ``sell``."""
+        _ = value
+
+    @property
+    def value(self) -> Literal["buy", "sell"]:
+        """Side value."""
+
+    def is_buy(self) -> bool:
+        """Return ``True`` when side is ``buy``."""
+
+    def is_sell(self) -> bool:
+        """Return ``True`` when side is ``sell``."""
+
+    def opposite(self) -> Side:
+        """Return opposite side."""
+
+    def sign(self) -> int:
+        """Return +1 for buy and -1 for sell."""
+
+class PositionSide:
+    """Position direction value type."""
+
+    def __init__(self, value: str) -> None:
+        """Create position side from ``long`` or ``short``."""
+        _ = value
+
+    @property
+    def value(self) -> Literal["long", "short"]:
+        """Position side value."""
+
+    def is_long(self) -> bool:
+        """Return ``True`` when side is ``long``."""
+
+    def is_short(self) -> bool:
+        """Return ``True`` when side is ``short``."""
+
+    def opposite(self) -> PositionSide:
+        """Return opposite position side."""
+
+class Quantity:
+    """Non-negative quantity value."""
+
+    def __init__(self, value: NumericValue) -> None:
+        """Create quantity."""
+        _ = value
+
+    @property
+    def value(self) -> str:
+        """Decimal quantity value."""
+
+class Price:
+    """Signed price value."""
+
+    def __init__(self, value: NumericValue) -> None:
+        """Create price."""
+        _ = value
+
+    @property
+    def value(self) -> str:
+        """Decimal price value."""
+
+class Pnl:
+    """Signed PnL value."""
+
+    def __init__(self, value: NumericValue) -> None:
+        """Create PnL."""
+        _ = value
+
+    @property
+    def value(self) -> str:
+        """Decimal PnL value."""
+
+class Fee:
+    """Signed fee value."""
+
+    def __init__(self, value: NumericValue) -> None:
+        """Create fee."""
+        _ = value
+
+    @property
+    def value(self) -> str:
+        """Decimal fee value."""
+
+class Volume:
+    """Non-negative notional volume value."""
+
+    def __init__(self, value: NumericValue) -> None:
+        """Create volume."""
+        _ = value
+
+    @property
+    def value(self) -> str:
+        """Decimal volume value."""
+
+class CashFlow:
+    """Signed cash flow value."""
+
+    def __init__(self, value: NumericValue) -> None:
+        """Create cash flow."""
+        _ = value
+
+    @property
+    def value(self) -> str:
+        """Decimal cash flow value."""
+
+class PositionSize:
+    """Signed position size value."""
+
+    def __init__(self, value: NumericValue) -> None:
+        """Create position size."""
+        _ = value
+
+    @property
+    def value(self) -> str:
+        """Decimal position size value."""
+
+class ParamKind:
+    """Stable parameter kind constants."""
+
+    QUANTITY: ClassVar[str]
+    VOLUME: ClassVar[str]
+    PRICE: ClassVar[str]
+    PNL: ClassVar[str]
+    CASH_FLOW: ClassVar[str]
+    POSITION_SIZE: ClassVar[str]
+    FEE: ClassVar[str]
+    LEVERAGE: ClassVar[str]
+
+class RoundingStrategy:
+    """Stable rounding strategy constants."""
+
+    MIDPOINT_NEAREST_EVEN: ClassVar[str]
+    MIDPOINT_AWAY_FROM_ZERO: ClassVar[str]
+    UP: ClassVar[str]
+    DOWN: ClassVar[str]
+    DEFAULT: ClassVar[str]
+    BANKER: ClassVar[str]
+    CONSERVATIVE_PROFIT: ClassVar[str]
+    CONSERVATIVE_LOSS: ClassVar[str]
+
 class ExecutionReport:
     """Post-trade execution feedback for policy state updates."""
 

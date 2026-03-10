@@ -78,6 +78,14 @@ test-python-unit: python-develop
 test-python-integration: python-develop
     just _pytest bindings/python/tests/integration
 
+# Format all.
+fmt-all:
+    just fmt-rust
+
+# Format Rust.
+fmt-rust:
+    cargo fmt --all
+
 # Prepare new release (kind is patch, minor or major).
 release kind:
     cargo release {{ kind }} --execute

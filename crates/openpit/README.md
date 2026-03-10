@@ -1,5 +1,9 @@
 # Pit: Pre-trade Integrity Toolkit
 
+<!-- markdownlint-disable MD013 -->
+[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![Rust](https://img.shields.io/badge/rust-1.75+-orange)](https://crates.io/crates/openpit) [![crates.io](https://img.shields.io/crates/v/openpit)](https://crates.io/crates/openpit) [![docs.rs](https://img.shields.io/docsrs/openpit)](https://docs.rs/openpit/latest/openpit/) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
+<!-- markdownlint-enable MD013 -->
+
 `openpit` is an embeddable pre-trade risk SDK for integrating policy-driven
 risk checks into trading systems.
 
@@ -7,6 +11,27 @@ For full project documentation, see
 [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
 For conceptual and architectural pages, see
 [the project wiki](https://github.com/openpitkit/pit/wiki).
+
+## Versioning Policy (Pre‑1.0)
+
+Until Pit reaches a stable `1.0` release, the project follows a relaxed
+interpretation of Semantic Versioning.
+
+During this phase:
+
+- `PATCH` releases are used for bug fixes and small internal corrections.
+- `MINOR` releases may introduce new features **and may also change the public
+  interface**.
+
+This means that breaking API changes can appear in minor releases before `1.0`.
+Consumers of the library should take this into account when declaring
+dependencies and consider using version constraints that tolerate API
+evolution during the pre‑stable phase.
+
+## Getting Started
+
+Visit the [crate page on crates.io](https://crates.io/crates/openpit) and the
+[API documentation on docs.rs](https://docs.rs/openpit/latest/openpit/).
 
 ## Install
 

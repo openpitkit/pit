@@ -21,6 +21,7 @@ use std::thread;
 use std::time::Duration;
 
 use openpit::param::{Asset, Fee, Pnl, Price, Quantity, Side, Volume};
+use openpit::pretrade::policies::pnl_killswitch::PnlKillSwitchError;
 use openpit::pretrade::policies::OrderValidationPolicy;
 use openpit::pretrade::policies::PnlKillSwitchPolicy;
 use openpit::pretrade::policies::RateLimitPolicy;
@@ -36,7 +37,7 @@ use rust_decimal::Decimal;
 fn integration_scenario_rate_limit_then_kill_switch_then_reset_resume() {
     let usd = Asset::new("USD").expect("asset code must be valid");
     let shared_pnl = Rc::new(
-        PnlKillSwitchPolicy::new((usd.clone(), pnl("500")), [])
+        PnlKillSwitchPolicy::new((usd.clone(), pnl("500")), vec![])
             .expect("pnl policy must be configured"),
     );
 
@@ -397,7 +398,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
                     Asset::new("USD").expect("asset code must be valid"),
                     pnl("100"),
                 ),
-                [],
+                vec![],
             )
             .expect("policy config must be valid"),
         )
@@ -407,7 +408,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
                     Asset::new("USD").expect("asset code must be valid"),
                     pnl("100"),
                 ),
-                [],
+                vec![],
             )
             .expect("policy config must be valid"),
         )
@@ -477,7 +478,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
             Asset::new("EUR").expect("asset code must be valid"),
             pnl("100"),
         ),
-        [],
+        vec![],
     )
     .expect("policy config must be valid");
     assert!(!pnl_policy.apply_execution_report(&execution_report_spx_usd("-10")));
@@ -490,6 +491,34 @@ fn integration_engine_builder_defaults_and_guardrails() {
     assert_eq!(
         missing_barrier.details,
         "settlement asset USD has no configured loss barrier"
+    );
+
+    let usd = Asset::new("USD").expect("asset code must be valid");
+    let overflow_policy = PnlKillSwitchPolicy::new((usd.clone(), pnl("100")), vec![])
+        .expect("policy config must be valid");
+    overflow_policy
+        .set_barrier(&usd, pnl("90"))
+        .expect("set_barrier must accept positive values");
+    let set_barrier_error = overflow_policy
+        .set_barrier(&usd, pnl("0"))
+        .expect_err("set_barrier must reject non-positive values");
+    assert_eq!(
+        set_barrier_error.to_string(),
+        "barrier must be positive for settlement asset USD, got 0"
+    );
+    overflow_policy
+        .report_realized_pnl(&usd, Pnl::new(Decimal::MAX))
+        .expect("initial accumulation must succeed");
+    let overflow = overflow_policy
+        .report_realized_pnl(&usd, Pnl::new(Decimal::MAX))
+        .expect_err("second accumulation must overflow");
+    assert_eq!(
+        overflow,
+        PnlKillSwitchError::PnlAccumulationOverflow { settlement: usd }
+    );
+    assert_eq!(
+        overflow.to_string(),
+        "pnl accumulation overflow for settlement asset USD"
     );
 }
 

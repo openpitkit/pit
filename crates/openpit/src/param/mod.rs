@@ -18,8 +18,9 @@
 //! Parameter value types for trading operations.
 //!
 //! This module provides domain-specific, type-safe financial values.
-//! All numeric types use exact decimal arithmetic and never use floating-point
-//! arithmetic internally.
+//! Decimal-based numeric types use exact decimal arithmetic and never use
+//! floating-point arithmetic internally.
+//! [`Leverage`] is represented as fixed-point integer with scale `100`.
 //!
 //! Prefer exact constructors such as `from_str` or `from_decimal_rounded` in
 //! domain code. `from_f64` and related helpers exist for integration
@@ -29,7 +30,8 @@
 //!
 //! - **Unsigned types** ([`Quantity`], [`Volume`]) — cannot be negative.
 //! - **Signed types** ([`Price`], [`Pnl`], [`CashFlow`], [`PositionSize`], [`Fee`]) — can be negative.
-//! - **Identifiers** ([`Asset`], [`Side`]) — non-numeric types.
+//! - **Fixed-point types** ([`Leverage`]) — scaled integer domain values.
+//! - **Identifiers** ([`Asset`], [`Side`], [`PositionSide`]) — non-numeric types.
 //!
 //! # Rounding
 //!
@@ -52,7 +54,8 @@
 //!
 //! # Error model
 //!
-//! Every numeric operation returns [`Result<T, Error>`].
+//! Every checked arithmetic operation on decimal value types returns
+//! [`Result<T, Error>`].
 //! Arithmetic and validation failures are contextual and always carry the
 //! parameter type through [`ParamKind`].
 //!
@@ -60,6 +63,7 @@
 //! - [`Error::DivisionByZero`] includes the failing [`ParamKind`].
 //! - [`Error::Overflow`] includes the failing [`ParamKind`].
 //! - [`Error::Underflow`] includes the failing [`ParamKind`].
+//! - [`Error::InvalidLeverage`] reports invalid fixed-point leverage values.
 //!
 //! There are no panicking arithmetic operators in this module.
 //! All arithmetic is exposed through `checked_*` methods.
@@ -101,7 +105,9 @@ use std::fmt::{Display, Formatter};
 pub mod asset;
 pub mod cash_flow;
 pub mod fee;
+pub mod leverage;
 pub mod pnl;
+pub mod position_side;
 pub mod position_size;
 pub mod price;
 pub mod quantity;
@@ -111,7 +117,9 @@ pub mod volume;
 pub use asset::Asset;
 pub use cash_flow::CashFlow;
 pub use fee::Fee;
+pub use leverage::Leverage;
 pub use pnl::Pnl;
+pub use position_side::PositionSide;
 pub use position_size::PositionSize;
 pub use price::Price;
 pub use quantity::Quantity;
@@ -129,6 +137,7 @@ pub enum ParamKind {
     CashFlow,
     PositionSize,
     Fee,
+    Leverage,
 }
 
 impl Display for ParamKind {
@@ -141,6 +150,7 @@ impl Display for ParamKind {
             Self::CashFlow => formatter.write_str("CashFlow"),
             Self::PositionSize => formatter.write_str("PositionSize"),
             Self::Fee => formatter.write_str("Fee"),
+            Self::Leverage => formatter.write_str("Leverage"),
         }
     }
 }
@@ -275,6 +285,8 @@ pub enum Error {
     InvalidFloat,
     /// Price has invalid value.
     InvalidPrice,
+    /// Leverage has invalid value.
+    InvalidLeverage,
     /// Failed to parse string into decimal value.
     InvalidFormat { param: ParamKind, input: Box<str> },
 }
@@ -292,6 +304,7 @@ impl Display for Error {
             Self::Underflow { param } => write!(formatter, "arithmetic underflow in {param}"),
             Self::InvalidFloat => formatter.write_str("invalid float value"),
             Self::InvalidPrice => formatter.write_str("invalid price value"),
+            Self::InvalidLeverage => formatter.write_str("invalid leverage value"),
             Self::InvalidFormat { param, input } => {
                 write!(formatter, "invalid format for {param}: '{input}'")
             }
@@ -1188,6 +1201,7 @@ mod tests {
         );
         assert_eq!(Error::InvalidFloat.to_string(), "invalid float value");
         assert_eq!(Error::InvalidPrice.to_string(), "invalid price value");
+        assert_eq!(Error::InvalidLeverage.to_string(), "invalid leverage value");
         assert_eq!(
             Error::InvalidFormat {
                 param: ParamKind::Quantity,
@@ -1221,6 +1235,7 @@ mod tests {
         assert_eq!(ParamKind::CashFlow.to_string(), "CashFlow");
         assert_eq!(ParamKind::PositionSize.to_string(), "PositionSize");
         assert_eq!(ParamKind::Fee.to_string(), "Fee");
+        assert_eq!(ParamKind::Leverage.to_string(), "Leverage");
     }
 
     #[test]

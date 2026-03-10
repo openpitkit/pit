@@ -616,6 +616,62 @@ mod tests {
     }
 
     #[test]
+    fn request_returns_system_unavailable_when_engine_is_dropped() {
+        let request = {
+            let engine = Engine::builder().build().expect("engine must build");
+            engine
+                .start_pre_trade(order_with_settlement("USD"))
+                .expect("start stage must pass")
+        };
+
+        let result = request.execute();
+        assert!(
+            result.is_err(),
+            "request must fail when engine is unavailable"
+        );
+        let rejects = result
+            .err()
+            .expect("rejects must be present when engine is unavailable");
+        assert_eq!(rejects.len(), 1);
+
+        let reject = &rejects[0];
+        assert_eq!(reject.policy, "Engine");
+        assert_eq!(reject.scope, RejectScope::Order);
+        assert_eq!(reject.code, RejectCode::SystemUnavailable);
+        assert_eq!(reject.reason, "engine is no longer available");
+        assert_eq!(reject.details, "request handle outlived engine instance");
+    }
+
+    #[test]
+    fn reservation_mutation_callback_is_noop_when_engine_is_dropped() {
+        let reservation = {
+            let engine = Engine::builder()
+                .check_pre_trade_start_policy(StartPolicyMock::pass("start"))
+                .pre_trade_policy(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                    "main",
+                    shared_kill_switch_mutation(false, false),
+                    false,
+                    RejectScope::Order,
+                ))
+                .build()
+                .expect("engine must build");
+
+            let request = engine
+                .start_pre_trade(order_with_settlement("USD"))
+                .expect("start stage must pass");
+            request.execute().expect("main stage must pass")
+        };
+
+        reservation.commit();
+    }
+
+    #[test]
+    fn build_error_display_is_stable() {
+        let err = EngineBuildError::DuplicatePolicyName { name: "dup" };
+        assert_eq!(err.to_string(), "duplicate policy name: dup");
+    }
+
+    #[test]
     fn main_stage_observes_settlement_assets_independently() {
         let seen = Rc::new(RefCell::new(Vec::new()));
         let engine = Engine::builder()

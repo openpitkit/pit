@@ -89,8 +89,6 @@ pub enum PnlKillSwitchError {
     NonPositiveBarrier { settlement: Asset, barrier: Pnl },
     /// Realized PnL accumulation overflowed.
     PnlAccumulationOverflow { settlement: Asset },
-    /// Barrier negation overflowed while checking threshold.
-    BarrierNegationOverflow { settlement: Asset },
 }
 
 impl Display for PnlKillSwitchError {
@@ -106,10 +104,6 @@ impl Display for PnlKillSwitchError {
             Self::PnlAccumulationOverflow { settlement } => write!(
                 formatter,
                 "pnl accumulation overflow for settlement asset {settlement}"
-            ),
-            Self::BarrierNegationOverflow { settlement } => write!(
-                formatter,
-                "barrier negation overflow for settlement asset {settlement}"
             ),
         }
     }
@@ -172,7 +166,7 @@ impl PnlKillSwitchPolicy {
         realized.insert(settlement.clone(), updated);
         drop(realized);
 
-        if self.is_threshold_crossed(settlement).unwrap_or(true) {
+        if self.is_threshold_crossed(settlement) {
             self.triggered.borrow_mut().insert(settlement.clone());
         }
         Ok(())
@@ -195,19 +189,16 @@ impl PnlKillSwitchPolicy {
             .unwrap_or(Pnl::ZERO)
     }
 
-    fn is_threshold_crossed(&self, settlement: &Asset) -> Result<bool, PnlKillSwitchError> {
+    fn is_threshold_crossed(&self, settlement: &Asset) -> bool {
         let barrier = match self.barrier(settlement) {
             Some(barrier) => barrier,
-            None => return Ok(false),
+            None => return false,
         };
-        let threshold =
-            barrier
-                .checked_neg()
-                .map_err(|_| PnlKillSwitchError::BarrierNegationOverflow {
-                    settlement: settlement.clone(),
-                })?;
+        // validate_barrier guarantees barrier > ZERO, so negation cannot overflow.
+        debug_assert!(barrier > Pnl::ZERO);
+        let threshold = barrier.checked_neg().unwrap();
         let realized = self.realized_pnl(settlement);
-        Ok(realized.to_decimal() <= threshold.to_decimal())
+        realized.to_decimal() <= threshold.to_decimal()
     }
 
     fn is_triggered(&self, settlement: &Asset) -> bool {
@@ -239,7 +230,7 @@ impl CheckPreTradeStartPolicy for PnlKillSwitchPolicy {
             }
         };
 
-        if self.is_triggered(settlement) || self.is_threshold_crossed(settlement).unwrap_or(true) {
+        if self.is_triggered(settlement) || self.is_threshold_crossed(settlement) {
             self.triggered.borrow_mut().insert(settlement.clone());
             return Err(Reject::new(
                 self.name(),
@@ -280,8 +271,9 @@ fn validate_barrier(settlement: &Asset, barrier: Pnl) -> Result<(), PnlKillSwitc
 #[cfg(test)]
 mod tests {
     use crate::core::{Instrument, Order};
-    use crate::param::{Asset, Fee, Price, Quantity, Side};
+    use crate::param::{Asset, Fee, Pnl, Price, Quantity, Side};
     use crate::pretrade::{CheckPreTradeStartPolicy, ExecutionReport, RejectCode, RejectScope};
+    use rust_decimal::Decimal;
 
     use super::{PnlKillSwitchError, PnlKillSwitchPolicy};
 
@@ -292,7 +284,7 @@ mod tests {
                 Asset::new("USD").expect("asset code must be valid"),
                 pnl("100"),
             ),
-            [],
+            vec![],
         )
         .expect("policy must be valid");
         policy
@@ -313,7 +305,7 @@ mod tests {
                 Asset::new("USD").expect("asset code must be valid"),
                 pnl("100"),
             ),
-            [],
+            vec![],
         )
         .expect("policy must be valid");
         policy
@@ -342,7 +334,7 @@ mod tests {
                 Asset::new("EUR").expect("asset code must be valid"),
                 pnl("100"),
             ),
-            [],
+            vec![],
         )
         .expect("policy must be valid");
 
@@ -365,7 +357,7 @@ mod tests {
                 Asset::new("USD").expect("asset code must be valid"),
                 pnl("100"),
             ),
-            [(
+            vec![(
                 Asset::new("EUR").expect("asset code must be valid"),
                 pnl("100"),
             )],
@@ -408,7 +400,7 @@ mod tests {
                 Asset::new("USD").expect("asset code must be valid"),
                 pnl("100"),
             ),
-            [],
+            vec![],
         )
         .expect("policy must be valid");
         policy
@@ -438,7 +430,7 @@ mod tests {
                 Asset::new("USD").expect("asset code must be valid"),
                 pnl("100"),
             ),
-            [],
+            vec![],
         )
         .expect("policy must be valid");
         policy
@@ -464,7 +456,7 @@ mod tests {
                 Asset::new("USD").expect("asset code must be valid"),
                 pnl("100"),
             ),
-            [],
+            vec![],
         )
         .expect("policy must be valid");
 
@@ -492,7 +484,7 @@ mod tests {
                 Asset::new("EUR").expect("asset code must be valid"),
                 pnl("100"),
             ),
-            [],
+            vec![],
         )
         .expect("policy must be valid");
 
@@ -525,7 +517,7 @@ mod tests {
                 Asset::new("EUR").expect("asset code must be valid"),
                 pnl("100"),
             ),
-            [],
+            vec![],
         )
         .expect("policy must be valid");
         let usd = Asset::new("USD").expect("asset code must be valid");
@@ -542,7 +534,7 @@ mod tests {
     #[test]
     fn constructor_rejects_non_positive_barrier() {
         let settlement = Asset::new("USD").expect("asset code must be valid");
-        let err = PnlKillSwitchPolicy::new((settlement.clone(), pnl("0")), [])
+        let err = PnlKillSwitchPolicy::new((settlement.clone(), pnl("0")), vec![])
             .err()
             .expect("zero barrier must be rejected");
 
@@ -556,13 +548,37 @@ mod tests {
     }
 
     #[test]
+    fn constructor_rejects_non_positive_additional_barrier() {
+        let initial_settlement = Asset::new("USD").expect("asset code must be valid");
+        let valid_additional_settlement = Asset::new("EUR").expect("asset code must be valid");
+        let invalid_additional_settlement = Asset::new("JPY").expect("asset code must be valid");
+        let err = PnlKillSwitchPolicy::new(
+            (initial_settlement, pnl("100")),
+            vec![
+                (valid_additional_settlement, pnl("50")),
+                (invalid_additional_settlement.clone(), pnl("0")),
+            ],
+        )
+        .err()
+        .expect("non-positive additional barrier must be rejected");
+
+        assert_eq!(
+            err,
+            PnlKillSwitchError::NonPositiveBarrier {
+                settlement: invalid_additional_settlement,
+                barrier: pnl("0"),
+            }
+        );
+    }
+
+    #[test]
     fn set_barrier_rejects_non_positive_barrier() {
         let policy = PnlKillSwitchPolicy::new(
             (
                 Asset::new("EUR").expect("asset code must be valid"),
                 pnl("100"),
             ),
-            [],
+            vec![],
         )
         .expect("policy must be valid");
         let settlement = Asset::new("USD").expect("asset code must be valid");
@@ -577,6 +593,70 @@ mod tests {
                 barrier: pnl("-1"),
             }
         );
+    }
+
+    #[test]
+    fn error_display_messages_are_stable() {
+        assert_eq!(
+            PnlKillSwitchError::NonPositiveBarrier {
+                settlement: Asset::new("USD").expect("asset code must be valid"),
+                barrier: pnl("0"),
+            }
+            .to_string(),
+            "barrier must be positive for settlement asset USD, got 0"
+        );
+        assert_eq!(
+            PnlKillSwitchError::PnlAccumulationOverflow {
+                settlement: Asset::new("USD").expect("asset code must be valid"),
+            }
+            .to_string(),
+            "pnl accumulation overflow for settlement asset USD"
+        );
+    }
+
+    #[test]
+    fn report_realized_pnl_marks_triggered_on_accumulation_overflow() {
+        let settlement = Asset::new("USD").expect("asset code must be valid");
+        let policy = PnlKillSwitchPolicy::new((settlement.clone(), pnl("100")), vec![])
+            .expect("policy must be valid");
+
+        policy
+            .report_realized_pnl(&settlement, Pnl::new(Decimal::MAX))
+            .expect("initial accumulation must succeed");
+
+        let err = policy
+            .report_realized_pnl(&settlement, Pnl::new(Decimal::MAX))
+            .expect_err("overflow must be reported");
+        assert_eq!(
+            err,
+            PnlKillSwitchError::PnlAccumulationOverflow {
+                settlement: settlement.clone(),
+            }
+        );
+        assert!(policy.is_triggered(&settlement));
+    }
+
+    #[test]
+    fn apply_execution_report_marks_triggered_when_accumulation_overflows() {
+        let settlement = Asset::new("USD").expect("asset code must be valid");
+        let policy = PnlKillSwitchPolicy::new((settlement.clone(), pnl("100")), vec![])
+            .expect("policy must be valid");
+
+        policy
+            .report_realized_pnl(&settlement, Pnl::new(Decimal::MAX))
+            .expect("initial accumulation must succeed");
+
+        let report = ExecutionReport {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                settlement.clone(),
+            ),
+            pnl: Pnl::new(Decimal::MAX),
+            fee: Fee::ZERO,
+        };
+
+        assert!(policy.apply_execution_report(&report));
+        assert!(policy.is_triggered(&settlement));
     }
 
     fn order(settlement: &str) -> Order {

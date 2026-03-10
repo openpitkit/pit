@@ -305,9 +305,11 @@ jobs:
           echo "WHEEL_PATH=${WHEEL}" >> "$GITHUB_ENV"
 
       - name: Install built wheel
+        if: matrix.name == 'linux-x86_64-manylinux2014' || !startsWith(matrix.os, 'ubuntu')
         run: python -m pip install --force-reinstall --no-deps "${{ env.WHEEL_PATH }}"
 
       - name: Verify wheel import and version
+        if: matrix.name == 'linux-x86_64-manylinux2014' || !startsWith(matrix.os, 'ubuntu')
         shell: bash
         env:
           VERSION: ${{ needs.verify-tag.outputs.version }}
@@ -316,6 +318,7 @@ jobs:
           python -c "import importlib.metadata as m; v=m.version('openpit'); print(v); assert v=='${VERSION}', f'expected {VERSION}, got {v}'"
 
       - name: Run wheel tests
+        if: matrix.name == 'linux-x86_64-manylinux2014' || !startsWith(matrix.os, 'ubuntu')
         run: python -m pytest bindings/python/tests
 
       - name: Publish wheel

@@ -23,7 +23,9 @@ use std::rc::Rc;
 use std::thread_local;
 use std::time::Duration;
 
-use openpit::param::{Asset, Fee, Pnl, Price, Quantity, Side, Volume};
+use openpit::param::{
+    Asset, CashFlow, Fee, Leverage, Pnl, PositionSide, PositionSize, Price, Quantity, Side, Volume,
+};
 use openpit::pretrade::policies::OrderValidationPolicy;
 use openpit::pretrade::policies::PnlKillSwitchPolicy;
 use openpit::pretrade::policies::RateLimitPolicy;
@@ -1112,6 +1114,78 @@ struct PyInstrument {
     inner: Instrument,
 }
 
+#[pyclass(name = "Leverage", module = "openpit.param")]
+#[derive(Clone, Copy)]
+struct PyLeverage {
+    inner: Leverage,
+}
+
+#[pyclass(name = "Asset", module = "openpit.param")]
+#[derive(Clone)]
+struct PyAsset {
+    inner: Asset,
+}
+
+#[pyclass(name = "Side", module = "openpit.param")]
+#[derive(Clone, Copy)]
+struct PySide {
+    inner: Side,
+}
+
+#[pyclass(name = "PositionSide", module = "openpit.param")]
+#[derive(Clone, Copy)]
+struct PyPositionSide {
+    inner: PositionSide,
+}
+
+#[pyclass(name = "Quantity", module = "openpit.param")]
+#[derive(Clone)]
+struct PyQuantity {
+    inner: Quantity,
+}
+
+#[pyclass(name = "Price", module = "openpit.param")]
+#[derive(Clone)]
+struct PyPrice {
+    inner: Price,
+}
+
+#[pyclass(name = "Pnl", module = "openpit.param")]
+#[derive(Clone)]
+struct PyPnl {
+    inner: Pnl,
+}
+
+#[pyclass(name = "Fee", module = "openpit.param")]
+#[derive(Clone)]
+struct PyFee {
+    inner: Fee,
+}
+
+#[pyclass(name = "Volume", module = "openpit.param")]
+#[derive(Clone)]
+struct PyVolume {
+    inner: Volume,
+}
+
+#[pyclass(name = "CashFlow", module = "openpit.param")]
+#[derive(Clone)]
+struct PyCashFlow {
+    inner: CashFlow,
+}
+
+#[pyclass(name = "PositionSize", module = "openpit.param")]
+#[derive(Clone)]
+struct PyPositionSize {
+    inner: PositionSize,
+}
+
+#[pyclass(name = "ParamKind", module = "openpit.param")]
+struct PyParamKind;
+
+#[pyclass(name = "RoundingStrategy", module = "openpit.param")]
+struct PyRoundingStrategy;
+
 #[pymethods]
 impl PyInstrument {
     #[new]
@@ -1179,10 +1253,7 @@ impl PyOrder {
 
     #[getter]
     fn side(&self) -> &'static str {
-        match self.inner.side {
-            Side::Buy => "buy",
-            Side::Sell => "sell",
-        }
+        side_name(self.inner.side)
     }
 
     #[getter]
@@ -1205,6 +1276,309 @@ impl PyOrder {
             self.price()
         )
     }
+}
+
+#[pymethods]
+impl PyLeverage {
+    #[new]
+    fn new(multiplier: u16) -> PyResult<Self> {
+        Ok(Self {
+            inner: Leverage::new(multiplier)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?,
+        })
+    }
+
+    #[staticmethod]
+    fn from_multiplier(multiplier: u16) -> PyResult<Self> {
+        Ok(Self {
+            inner: Leverage::from_multiplier(multiplier)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?,
+        })
+    }
+
+    #[staticmethod]
+    fn from_stored(raw: u16) -> PyResult<Self> {
+        Ok(Self {
+            inner: Leverage::from_stored(raw)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?,
+        })
+    }
+
+    #[getter]
+    fn value(&self) -> f32 {
+        self.inner.value()
+    }
+
+    #[pyo3(signature = (*, notional))]
+    fn margin_required(&self, notional: f64) -> f64 {
+        self.inner.margin_required(notional)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Leverage(value={:?})", self.value())
+    }
+}
+
+#[pymethods]
+impl PyAsset {
+    #[new]
+    fn new(value: String) -> PyResult<Self> {
+        Ok(Self {
+            inner: parse_asset(&value)?,
+        })
+    }
+
+    #[getter]
+    fn value(&self) -> String {
+        self.inner.to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Asset(value={:?})", self.value())
+    }
+}
+
+#[pymethods]
+impl PySide {
+    #[new]
+    fn new(value: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: parse_side(value)?,
+        })
+    }
+
+    #[getter]
+    fn value(&self) -> &'static str {
+        side_name(self.inner)
+    }
+
+    fn is_buy(&self) -> bool {
+        self.inner.is_buy()
+    }
+
+    fn is_sell(&self) -> bool {
+        self.inner.is_sell()
+    }
+
+    fn opposite(&self) -> Self {
+        Self {
+            inner: self.inner.opposite(),
+        }
+    }
+
+    fn sign(&self) -> i8 {
+        self.inner.sign()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Side(value={:?})", self.value())
+    }
+}
+
+#[pymethods]
+impl PyPositionSide {
+    #[new]
+    fn new(value: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: parse_position_side(value)?,
+        })
+    }
+
+    #[getter]
+    fn value(&self) -> &'static str {
+        position_side_name(self.inner)
+    }
+
+    fn is_long(&self) -> bool {
+        self.inner.is_long()
+    }
+
+    fn is_short(&self) -> bool {
+        self.inner.is_short()
+    }
+
+    fn opposite(&self) -> Self {
+        Self {
+            inner: self.inner.opposite(),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("PositionSide(value={:?})", self.value())
+    }
+}
+
+#[pymethods]
+impl PyQuantity {
+    #[new]
+    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: parse_quantity_input(value)?,
+        })
+    }
+
+    #[getter]
+    fn value(&self) -> String {
+        self.inner.to_decimal().to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Quantity(value={:?})", self.value())
+    }
+}
+
+#[pymethods]
+impl PyPrice {
+    #[new]
+    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: parse_price_input(value)?,
+        })
+    }
+
+    #[getter]
+    fn value(&self) -> String {
+        self.inner.to_decimal().to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Price(value={:?})", self.value())
+    }
+}
+
+#[pymethods]
+impl PyPnl {
+    #[new]
+    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: parse_pnl_input(value)?,
+        })
+    }
+
+    #[getter]
+    fn value(&self) -> String {
+        self.inner.to_decimal().to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Pnl(value={:?})", self.value())
+    }
+}
+
+#[pymethods]
+impl PyFee {
+    #[new]
+    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: parse_fee_input(value)?,
+        })
+    }
+
+    #[getter]
+    fn value(&self) -> String {
+        self.inner.to_decimal().to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Fee(value={:?})", self.value())
+    }
+}
+
+#[pymethods]
+impl PyVolume {
+    #[new]
+    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: parse_volume_input(value)?,
+        })
+    }
+
+    #[getter]
+    fn value(&self) -> String {
+        self.inner.to_decimal().to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Volume(value={:?})", self.value())
+    }
+}
+
+#[pymethods]
+impl PyCashFlow {
+    #[new]
+    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: parse_cash_flow_input(value)?,
+        })
+    }
+
+    #[getter]
+    fn value(&self) -> String {
+        self.inner.to_decimal().to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("CashFlow(value={:?})", self.value())
+    }
+}
+
+#[pymethods]
+impl PyPositionSize {
+    #[new]
+    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: parse_position_size_input(value)?,
+        })
+    }
+
+    #[getter]
+    fn value(&self) -> String {
+        self.inner.to_decimal().to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("PositionSize(value={:?})", self.value())
+    }
+}
+
+#[pymethods]
+impl PyParamKind {
+    #[classattr]
+    const QUANTITY: &'static str = "Quantity";
+    #[classattr]
+    const VOLUME: &'static str = "Volume";
+    #[classattr]
+    const PRICE: &'static str = "Price";
+    #[classattr]
+    const PNL: &'static str = "Pnl";
+    #[classattr]
+    const CASH_FLOW: &'static str = "CashFlow";
+    #[classattr]
+    const POSITION_SIZE: &'static str = "PositionSize";
+    #[classattr]
+    const FEE: &'static str = "Fee";
+    #[classattr]
+    const LEVERAGE: &'static str = "Leverage";
+}
+
+#[pymethods]
+impl PyRoundingStrategy {
+    #[classattr]
+    const MIDPOINT_NEAREST_EVEN: &'static str = "MidpointNearestEven";
+    #[classattr]
+    const MIDPOINT_AWAY_FROM_ZERO: &'static str = "MidpointAwayFromZero";
+    #[classattr]
+    const UP: &'static str = "Up";
+    #[classattr]
+    const DOWN: &'static str = "Down";
+    #[classattr]
+    const DEFAULT: &'static str = "MidpointNearestEven";
+    #[classattr]
+    const BANKER: &'static str = "MidpointNearestEven";
+    #[classattr]
+    const CONSERVATIVE_PROFIT: &'static str = "Down";
+    #[classattr]
+    const CONSERVATIVE_LOSS: &'static str = "Down";
 }
 
 #[pyclass(name = "Request", module = "openpit.pretrade", unsendable)]
@@ -1371,6 +1745,30 @@ fn parse_side(value: &str) -> PyResult<Side> {
     }
 }
 
+fn side_name(value: Side) -> &'static str {
+    match value {
+        Side::Buy => "buy",
+        Side::Sell => "sell",
+    }
+}
+
+fn parse_position_side(value: &str) -> PyResult<PositionSide> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "long" => Ok(PositionSide::Long),
+        "short" => Ok(PositionSide::Short),
+        other => Err(PyValueError::new_err(format!(
+            "invalid position side {other:?}; expected 'long' or 'short'"
+        ))),
+    }
+}
+
+fn position_side_name(value: PositionSide) -> &'static str {
+    match value {
+        PositionSide::Long => "long",
+        PositionSide::Short => "short",
+    }
+}
+
 fn parse_quantity(value: &str) -> PyResult<Quantity> {
     Quantity::from_str(value).map_err(|error| PyValueError::new_err(error.to_string()))
 }
@@ -1393,6 +1791,14 @@ fn parse_fee(value: &str) -> PyResult<Fee> {
 
 fn parse_volume(value: &str) -> PyResult<Volume> {
     Volume::from_str(value).map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+fn parse_cash_flow(value: &str) -> PyResult<CashFlow> {
+    CashFlow::from_str(value).map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+fn parse_position_size(value: &str) -> PyResult<PositionSize> {
+    PositionSize::from_str(value).map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
 fn parse_decimal_input<T, ParseStr, ParseF64>(
@@ -1462,6 +1868,18 @@ fn parse_volume_input(value: &Bound<'_, PyAny>) -> PyResult<Volume> {
     })
 }
 
+fn parse_cash_flow_input(value: &Bound<'_, PyAny>) -> PyResult<CashFlow> {
+    parse_decimal_input(value, "cash flow", parse_cash_flow, |value| {
+        CashFlow::from_f64(value).map_err(|error| PyValueError::new_err(error.to_string()))
+    })
+}
+
+fn parse_position_size_input(value: &Bound<'_, PyAny>) -> PyResult<PositionSize> {
+    parse_decimal_input(value, "position size", parse_position_size, |value| {
+        PositionSize::from_f64(value).map_err(|error| PyValueError::new_err(error.to_string()))
+    })
+}
+
 fn convert_reject(reject: &Reject) -> PyReject {
     PyReject {
         code: reject_code_name(reject.code).to_owned(),
@@ -1503,6 +1921,19 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyEngineBuilder>()?;
     module.add_class::<PyInstrument>()?;
     module.add_class::<PyOrder>()?;
+    module.add_class::<PyAsset>()?;
+    module.add_class::<PySide>()?;
+    module.add_class::<PyPositionSide>()?;
+    module.add_class::<PyQuantity>()?;
+    module.add_class::<PyPrice>()?;
+    module.add_class::<PyPnl>()?;
+    module.add_class::<PyFee>()?;
+    module.add_class::<PyVolume>()?;
+    module.add_class::<PyCashFlow>()?;
+    module.add_class::<PyPositionSize>()?;
+    module.add_class::<PyLeverage>()?;
+    module.add_class::<PyParamKind>()?;
+    module.add_class::<PyRoundingStrategy>()?;
     module.add_class::<PyRequest>()?;
     module.add_class::<PyReservation>()?;
     module.add_class::<PyExecutionReport>()?;

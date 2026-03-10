@@ -34,7 +34,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Lint
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --no-default-features --locked -- -D warnings
+
+      - name: Lint (all features)
+        run: cargo clippy -p openpit --all-targets --all-features --locked -- -D warnings
 
       - name: Build documentation
         env:
@@ -42,7 +45,10 @@ jobs:
         run: cargo doc --workspace --no-deps --all-features --locked
 
       - name: Test
-        run: cargo test --workspace --all-features --locked
+        run: cargo test --workspace --locked
+
+      - name: Test (all features)
+        run: cargo test -p openpit --all-features --locked
 
   python:
     name: Python checks
