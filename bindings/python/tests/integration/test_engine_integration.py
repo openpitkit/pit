@@ -24,7 +24,7 @@ class IntegrationStrategy(openpit.pretrade.Policy):
     def perform_pre_trade_check(
         self,
         *,
-        context: openpit.pretrade.PolicyContext
+        context: openpit.pretrade.PolicyContext,
     ) -> openpit.pretrade.PolicyDecision:
         self.journal.append(
             (
@@ -109,8 +109,9 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
             .build()
         )
 
-        start = engine.start_pre_trade(order=make_order(
-            side="sell", quantity=5.0, price=100.0))
+        start = engine.start_pre_trade(
+            order=make_order(side="sell", quantity=5.0, price=100.0)
+        )
         assert start.ok
         execute = start.request.execute()
         assert execute.ok
@@ -127,8 +128,9 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         strategy = IntegrationStrategy(max_abs_notional="1000")
         engine = openpit.Engine.builder().pre_trade_policy(policy=strategy).build()
 
-        start = engine.start_pre_trade(order=make_order(
-            side="buy", quantity=3.0, price=100.0))
+        start = engine.start_pre_trade(
+            order=make_order(side="buy", quantity=3.0, price=100.0)
+        )
         assert start.ok
         execute = start.request.execute()
         assert execute.ok
@@ -142,7 +144,8 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
                 raise
 
         resumed = engine.start_pre_trade(
-            order=make_order(side="buy", quantity=7.0, price=100.0))
+            order=make_order(side="buy", quantity=7.0, price=100.0)
+        )
         resumed_execute = resumed.request.execute()
         assert resumed_execute.ok
         resumed_execute.reservation.rollback()
@@ -152,8 +155,9 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         strategy = IntegrationStrategy(max_abs_notional="700")
         engine = openpit.Engine.builder().pre_trade_policy(policy=strategy).build()
 
-        start = engine.start_pre_trade(order=make_order(
-            side="buy", quantity=8.0, price=100.0))
+        start = engine.start_pre_trade(
+            order=make_order(side="buy", quantity=8.0, price=100.0)
+        )
         assert start.ok
         execute = start.request.execute()
         assert not execute.ok
@@ -172,7 +176,9 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
             openpit.Engine.builder()
             .check_pre_trade_start_policy(
                 policy=openpit.pretrade.policies.RateLimitPolicy(
-                    max_orders=1, window_seconds=60)
+                    max_orders=1,
+                    window_seconds=60,
+                )
             )
             .build()
         )
@@ -186,15 +192,16 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
 
     if case == "kill_switch_reset_resume":
         pnl_policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
-            settlement_asset="USD", barrier="500")
+            settlement_asset="USD",
+            barrier="500",
+        )
         engine = (
             openpit.Engine.builder()
             .check_pre_trade_start_policy(policy=pnl_policy)
             .build()
         )
 
-        post_trade = engine.apply_execution_report(
-            report=make_report(pnl=-600.0))
+        post_trade = engine.apply_execution_report(report=make_report(pnl=-600.0))
         assert post_trade.kill_switch_triggered
 
         blocked = engine.start_pre_trade(order=make_order(price=99.5))
@@ -203,8 +210,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         assert blocked.reject.scope == "account"
 
         pnl_policy.reset_pnl(settlement_asset="USD")
-        resumed = engine.start_pre_trade(
-            order=make_order(price=101.0, quantity=2.0))
+        resumed = engine.start_pre_trade(order=make_order(price=101.0, quantity=2.0))
         assert resumed.ok
         resumed_execute = resumed.request.execute()
         assert resumed_execute.ok
@@ -243,7 +249,8 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
             .build()
         )
         result = engine.start_pre_trade(
-            order=make_order(quantity=quantity, price=price))
+            order=make_order(quantity=quantity, price=price)
+        )
         if expected_code is None:
             assert result.ok
             result.request.execute().reservation.rollback()

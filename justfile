@@ -35,6 +35,7 @@ lint-rust:
 # Lint Python.
 lint-python:
     python -m ruff check bindings/python
+    python -m ruff format --check bindings/python
 
 # Run all tests.
 test-all: test-rust test-python
@@ -46,6 +47,11 @@ test-rust:
 # Rust tests with coverage (requires cargo-llvm-cov).
 test-rust-cov:
     cargo llvm-cov --workspace --all-features
+
+# Dry-run the release workflow locally.
+test-release:
+    printf '%s\n' '{"ref":"refs/tags/v0.1.0","ref_name":"v0.1.0"}' > /tmp/pit-release-event.json
+    act push -W .github/workflows/release.yml -e /tmp/pit-release-event.json -P ubuntu-latest=ghcr.io/catthehacker/ubuntu:act-latest --container-architecture linux/amd64 --matrix name:manylinux2014
 
 # Install Python bindings into the current Python environment (debug build).
 python-develop:
@@ -71,3 +77,7 @@ test-python-unit: python-develop
 # Python integration test only.
 test-python-integration: python-develop
     just _pytest bindings/python/tests/integration
+
+# Prepare new release (kind is patch, minor or major).
+release kind:
+    cargo release {{ kind }} --execute

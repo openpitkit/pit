@@ -47,8 +47,8 @@ def test_start_result_exposes_reject_without_exception() -> None:
     assert start_result.request is None
     assert start_result.reject is not None
     assert (
-        start_result.reject.policy ==
-        openpit.pretrade.policies.OrderValidationPolicy.NAME
+        start_result.reject.policy
+        == openpit.pretrade.policies.OrderValidationPolicy.NAME
     )
     assert start_result.reject.scope == "order"
     assert "StartPreTradeResult" in repr(start_result)
@@ -56,9 +56,13 @@ def test_start_result_exposes_reject_without_exception() -> None:
 
 @pytest.mark.unit
 def test_execute_result_exposes_rejects_without_exception() -> None:
-    engine = openpit.Engine.builder().pre_trade_policy(
-        policy=AlwaysRejectPolicy()
-    ).build()
+    engine = (
+        openpit.Engine.builder()
+        .pre_trade_policy(
+            policy=AlwaysRejectPolicy(),
+        )
+        .build()
+    )
     request = engine.start_pre_trade(order=make_order()).request
     execute_result = request.execute()
 

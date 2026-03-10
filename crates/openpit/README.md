@@ -10,9 +10,10 @@ For conceptual and architectural pages, see
 
 ## Install
 
-```toml
-[dependencies]
-openpit = "0.1.0"
+Run the following Cargo command in your project directory:
+
+```bash
+cargo add openpit
 ```
 
 ## Engine

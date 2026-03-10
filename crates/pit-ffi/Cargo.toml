@@ -11,4 +11,4 @@ description = "Pit FFI bindings"
 crate-type = ["cdylib"]
 
 [dependencies]
-openpit = { version = "0.0.0", path = "../openpit" }
+openpit = { version = "0.1.0", path = "../openpit" }

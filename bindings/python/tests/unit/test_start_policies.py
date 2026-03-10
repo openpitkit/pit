@@ -1,4 +1,3 @@
-
 import openpit
 import pytest
 from conftest import make_order, make_report
@@ -24,12 +23,9 @@ def test_rate_limit_rejects_second_order_in_window() -> None:
 
 @pytest.mark.unit
 def test_pnl_kill_switch_can_be_reset_after_trigger() -> None:
-    policy = policies.PnlKillSwitchPolicy(
-        settlement_asset="USD", barrier="100")
+    policy = policies.PnlKillSwitchPolicy(settlement_asset="USD", barrier="100")
     engine = (
-        openpit.Engine.builder()
-        .check_pre_trade_start_policy(policy=policy)
-        .build()
+        openpit.Engine.builder().check_pre_trade_start_policy(policy=policy).build()
     )
 
     post_trade = engine.apply_execution_report(report=make_report(pnl=-120.0))

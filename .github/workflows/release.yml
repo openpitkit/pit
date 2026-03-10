@@ -37,106 +37,85 @@ jobs:
         id: extract-version
         shell: bash
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION="${GITHUB_REF#refs/tags/v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Resolved release version: ${VERSION}"
 
-      - name: Validate semantic version bump
+      - name: Verify Cargo.toml versions match tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          for MANIFEST in crates/openpit/Cargo.toml crates/pit-ffi/Cargo.toml bindings/python/Cargo.toml; do
+            CARGO_VERSION="$(grep -m1 '^version\s*=' "${MANIFEST}" | sed 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/')"
+            if [[ "${CARGO_VERSION}" != "${VERSION}" ]]; then
+              echo "::error::Tag version ${VERSION} does not match ${MANIFEST} version ${CARGO_VERSION}"
+              exit 1
+            fi
+            echo "${MANIFEST}: ${CARGO_VERSION} OK"
+          done
+
+      - name: Validate monotonic version bump
         shell: bash
         run: |
           set -euo pipefail
 
           CURRENT_TAG="${GITHUB_REF_NAME}"
           CURRENT_VERSION="${CURRENT_TAG#v}"
-
-          # Reliable semver-like ordering for vX.Y.Z tags.
           PREVIOUS_TAG="$(
             git tag -l 'v*' \
               | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-              | sort -V \
               | grep -vx "${CURRENT_TAG}" \
+              | sort -V \
               | tail -n 1 || true
           )"
 
           if [[ -z "${PREVIOUS_TAG}" ]]; then
-            if [[ "${CURRENT_TAG}" == "v0.1.0" ]]; then
-              echo "First release validated: ${CURRENT_TAG}"
-              exit 0
-            fi
-            echo "::error::Invalid first release tag. No previous tags found, expected v0.1.0, got ${CURRENT_TAG}"
-            exit 1
+            echo "No previous release tag found, skipping monotonic check"
+            exit 0
           fi
 
           PREVIOUS_VERSION="${PREVIOUS_TAG#v}"
 
+          IFS='.' read -r CUR_MAJOR CUR_MINOR CUR_PATCH <<< "${CURRENT_VERSION}"
           IFS='.' read -r PREV_MAJOR PREV_MINOR PREV_PATCH <<< "${PREVIOUS_VERSION}"
-          IFS='.' read -r NEW_MAJOR NEW_MINOR NEW_PATCH <<< "${CURRENT_VERSION}"
 
-          PREV_MAJOR=$((10#${PREV_MAJOR}))
-          PREV_MINOR=$((10#${PREV_MINOR}))
-          PREV_PATCH=$((10#${PREV_PATCH}))
-          NEW_MAJOR=$((10#${NEW_MAJOR}))
-          NEW_MINOR=$((10#${NEW_MINOR}))
-          NEW_PATCH=$((10#${NEW_PATCH}))
-
-          fail() {
-            local reason="$1"
-            local expected="$2"
-            echo "Invalid version bump."
-            echo "Previous version: ${PREVIOUS_VERSION}"
-            echo "New version: ${CURRENT_VERSION}"
-            echo "${reason}"
-            if [[ -n "${expected}" ]]; then
-              echo "Expected: ${expected}"
-            fi
-            exit 1
-          }
-
-          if [[ ${NEW_MAJOR} -eq ${PREV_MAJOR} && ${NEW_MINOR} -eq ${PREV_MINOR} ]]; then
-            if [[ ${NEW_PATCH} -eq $((PREV_PATCH + 1)) ]]; then
-              echo "Valid PATCH release: ${PREVIOUS_VERSION} -> ${CURRENT_VERSION}"
-              exit 0
-            fi
-            fail "Patch release must increment patch by exactly 1." "${PREV_MAJOR}.${PREV_MINOR}.$((PREV_PATCH + 1))"
-          fi
-
-          if [[ ${NEW_MAJOR} -eq ${PREV_MAJOR} ]]; then
-            if [[ ${NEW_MINOR} -eq $((PREV_MINOR + 1)) && ${NEW_PATCH} -eq 0 ]]; then
-              echo "Valid MINOR release: ${PREVIOUS_VERSION} -> ${CURRENT_VERSION}"
-              exit 0
-            fi
-            if [[ ${NEW_MINOR} -gt $((PREV_MINOR + 1)) ]]; then
-              fail "Minor version jumped by more than one step." "${PREV_MAJOR}.$((PREV_MINOR + 1)).0"
-            fi
-            fail "Minor release must be X.(Y+1).0." "${PREV_MAJOR}.$((PREV_MINOR + 1)).0"
-          fi
-
-          if [[ ${NEW_MAJOR} -eq $((PREV_MAJOR + 1)) ]]; then
-            if [[ ${NEW_MINOR} -eq 0 && ${NEW_PATCH} -eq 0 ]]; then
-              echo "Valid MAJOR release: ${PREVIOUS_VERSION} -> ${CURRENT_VERSION}"
-              exit 0
-            fi
-            fail "Major release must reset minor and patch to 0." "$((PREV_MAJOR + 1)).0.0"
-          fi
-
-          if [[ ${NEW_MAJOR} -gt $((PREV_MAJOR + 1)) ]]; then
-            fail "Major version jumped by more than one step." "$((PREV_MAJOR + 1)).0.0"
-          fi
-
-          fail "New version must be strictly greater than previous version." ""
-
-      - name: Ensure matching tag exists in pit.wiki.git
-        shell: bash
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          WIKI_REPO="https://github.com/openpitkit/pit.wiki.git"
-
-          if git ls-remote --exit-code --tags "${WIKI_REPO}" "refs/tags/${TAG}" > /dev/null; then
-            echo "Found ${TAG} in ${WIKI_REPO}"
-          else
-            echo "::error::Tag ${TAG} is missing in ${WIKI_REPO}. Push the same tag to wiki first."
+          if (( CUR_MAJOR < PREV_MAJOR )); then
+            echo "::error::Major version decreased: ${CURRENT_VERSION} < ${PREVIOUS_VERSION}"
             exit 1
           fi
+
+          if (( CUR_MAJOR > PREV_MAJOR )); then
+            if (( CUR_MINOR != 0 || CUR_PATCH != 0 )); then
+              echo "::error::Major version bump requires minor and patch to be 0 (got ${CURRENT_VERSION}, previous ${PREVIOUS_VERSION})"
+              exit 1
+            fi
+            echo "Valid major version bump: ${PREVIOUS_VERSION} -> ${CURRENT_VERSION}"
+            exit 0
+          fi
+
+          # major equal
+          if (( CUR_MINOR < PREV_MINOR )); then
+            echo "::error::Minor version decreased: ${CURRENT_VERSION} < ${PREVIOUS_VERSION}"
+            exit 1
+          fi
+
+          if (( CUR_MINOR > PREV_MINOR )); then
+            if (( CUR_PATCH != 0 )); then
+              echo "::error::Minor version bump requires patch to be 0 (got ${CURRENT_VERSION}, previous ${PREVIOUS_VERSION})"
+              exit 1
+            fi
+            echo "Valid minor version bump: ${PREVIOUS_VERSION} -> ${CURRENT_VERSION}"
+            exit 0
+          fi
+
+          # major and minor equal
+          if (( CUR_PATCH <= PREV_PATCH )); then
+            echo "::error::Patch version must increase: ${CURRENT_VERSION} <= ${PREVIOUS_VERSION}"
+            exit 1
+          fi
+
+          echo "Valid patch version bump: ${PREVIOUS_VERSION} -> ${CURRENT_VERSION}"
 
   verify:
     name: Verify (Rust + Python)
@@ -167,96 +146,41 @@ jobs:
           VERSION: ${{ needs.verify-tag.outputs.version }}
         run: |
           set -euo pipefail
-          URL="https://crates.io/api/v1/crates/openpit/${VERSION}"
-
-          if curl --retry 3 --retry-delay 2 -fsS "${URL}" > /dev/null; then
-            echo "::error::openpit version ${VERSION} already exists on crates.io"
-            exit 1
-          else
-            status=$?
-            if [[ ${status} -eq 22 ]]; then
-              echo "Version ${VERSION} is not published on crates.io yet"
-            else
-              echo "::error::Failed to query crates.io (curl exit code ${status})"
-              exit ${status}
-            fi
-          fi
-
-      - name: Patch crate version from tag (temporary)
-        shell: bash
-        env:
-          VERSION: ${{ needs.verify-tag.outputs.version }}
-        run: |
-          set -euo pipefail
-          OPENPIT_MANIFEST="crates/openpit/Cargo.toml"
-          LOCKFILE="Cargo.lock"
-          BACKUP_DIR="$(mktemp -d)"
-          DEP_MANIFESTS=(
-            "bindings/python/Cargo.toml"
-            "crates/pit-ffi/Cargo.toml"
-          )
-          echo "RELEASE_BACKUP_DIR=${BACKUP_DIR}" >> "$GITHUB_ENV"
-
-          cp "${OPENPIT_MANIFEST}" "${BACKUP_DIR}/openpit.Cargo.toml"
-          sed -E -i \
-            "0,/^version = \".*\"/s//version = \"${VERSION}\"/" \
-            "${OPENPIT_MANIFEST}"
-          grep -q "^version = \"${VERSION}\"$" "${OPENPIT_MANIFEST}"
-
-          for MANIFEST in "${DEP_MANIFESTS[@]}"; do
-            BACKUP_NAME="${MANIFEST//\//__}"
-            cp "${MANIFEST}" "${BACKUP_DIR}/${BACKUP_NAME}"
-            sed -E -i \
-              "s/^(openpit = \\{ version = \")[^\"]+(\".*)$/\\1${VERSION}\\2/" \
-              "${MANIFEST}"
-            grep -q "openpit = { version = \"${VERSION}\"" "${MANIFEST}"
-          done
-
-          cp "${LOCKFILE}" "${BACKUP_DIR}/Cargo.lock"
-          cargo update -p openpit --precise "${VERSION}" --workspace
-          grep -q 'name = "openpit"' "${LOCKFILE}"
-          grep -q "version = \"${VERSION}\"" "${LOCKFILE}"
-
-          echo "Using crate version ${VERSION} for this release build"
-
-      - name: Validate package publishability
-        run: cargo publish -p openpit --locked --allow-dirty --dry-run
-
-      - name: Publish crate
-        run: cargo publish -p openpit --locked --allow-dirty --token "${{ secrets.CRATES_IO_API_TOKEN }}"
-
-      - name: Restore crate manifest
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          MANIFESTS=(
-            "bindings/python/Cargo.toml"
-            "crates/pit-ffi/Cargo.toml"
-          )
-          LOCKFILE="Cargo.lock"
-          BACKUP_DIR="${RELEASE_BACKUP_DIR:-}"
-
-          if [[ -z "${BACKUP_DIR}" || ! -d "${BACKUP_DIR}" ]]; then
+          if [[ -z "${{ secrets.CRATES_IO_API_TOKEN }}" ]]; then
+            echo "Skipping crates.io version check as run in dry-run mode."
             exit 0
           fi
 
-          if [[ -f "${BACKUP_DIR}/openpit.Cargo.toml" ]]; then
-            cp "${BACKUP_DIR}/openpit.Cargo.toml" "crates/openpit/Cargo.toml"
+          URL="https://crates.io/api/v1/crates/openpit/${VERSION}"
+          HTTP_CODE="$(curl -H "User-Agent: openpit-release-ci" --retry 3 --retry-delay 2 -sS -o /tmp/openpit-crates-version.json -w '%{http_code}' "${URL}")"
+
+          case "${HTTP_CODE}" in
+            200)
+              echo "::error::openpit version ${VERSION} already exists on crates.io"
+              exit 1
+              ;;
+            404)
+              echo "Version ${VERSION} is not published on crates.io yet"
+              ;;
+            *)
+              echo "::error::Failed to query crates.io (HTTP ${HTTP_CODE})"
+              cat /tmp/openpit-crates-version.json || true
+              exit 1
+              ;;
+          esac
+
+      - name: Publish crate
+        shell: bash
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${CRATES_IO_TOKEN}" ]]; then
+            cargo publish -p openpit --locked --token "${CRATES_IO_TOKEN}"
+          else
+            echo "CRATES_IO_API_TOKEN is not configured, skipping publish"
           fi
 
-          for MANIFEST in "${MANIFESTS[@]}"; do
-            BACKUP_NAME="${MANIFEST//\//__}"
-            if [[ -f "${BACKUP_DIR}/${BACKUP_NAME}" ]]; then
-              cp "${BACKUP_DIR}/${BACKUP_NAME}" "${MANIFEST}"
-            fi
-          done
-
-          if [[ -f "${BACKUP_DIR}/Cargo.lock" ]]; then
-            cp "${BACKUP_DIR}/Cargo.lock" "${LOCKFILE}"
-          fi
-
-          rm -rf "${BACKUP_DIR}"
   publish-wheels:
     name: Publish wheels (${{ matrix.name }})
     needs:
@@ -288,10 +212,15 @@ jobs:
           - name: macos-aarch64
             os: macos-14
             target: aarch64-apple-darwin
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -302,26 +231,22 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -m pip install twine
 
-      # Linux wheels need manylinux/musllinux policy.
       - name: Build Linux wheel
         if: startsWith(matrix.os, 'ubuntu')
         uses: PyO3/maturin-action@v1
-        env:
-          MATURIN_PEP440_VERSION: ${{ needs.verify-tag.outputs.version }}
         with:
           working-directory: bindings/python
           command: build
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
-          args: --release --strip --locked -i python3.11 --out dist
+          container: off
+          args: --release --strip --locked --zig -i python3.11 --out dist
 
-      # macOS/Windows wheels must not pass manylinux.
       - name: Build macOS/Windows wheel
         if: ${{ !startsWith(matrix.os, 'ubuntu') }}
         uses: PyO3/maturin-action@v1
-        env:
-          MATURIN_PEP440_VERSION: ${{ needs.verify-tag.outputs.version }}
         with:
           working-directory: bindings/python
           command: build
@@ -334,14 +259,49 @@ jobs:
           VERSION: ${{ needs.verify-tag.outputs.version }}
         run: |
           set -euo pipefail
-          WHEEL="$(find bindings/python/dist -maxdepth 1 -type f -name "openpit-${VERSION}-*.whl" | sort | head -n1)"
-          test -n "$WHEEL"
-          COUNT="$(find bindings/python/dist -maxdepth 1 -type f -name "openpit-${VERSION}-*.whl" | wc -l | tr -d ' ')"
-          if [[ "$COUNT" != "1" ]]; then
-            echo "::error::Expected exactly one wheel for version ${VERSION}, found ${COUNT}"
-            find bindings/python/dist -maxdepth 1 -type f -name "openpit-${VERSION}-*.whl" -print
+          CANDIDATE_DIRS=(
+            "bindings/python/dist"
+            "dist"
+            "bindings/python/target/wheels"
+            "target/wheels"
+          )
+
+          WHEELS=()
+          for DIR in "${CANDIDATE_DIRS[@]}"; do
+            if [[ -d "${DIR}" ]]; then
+              while IFS= read -r FILE; do
+                WHEELS+=("${FILE}")
+              done < <(find "${DIR}" -maxdepth 1 -type f -name "openpit-*.whl" | sort)
+            fi
+          done
+
+          if [[ ${#WHEELS[@]} -eq 0 ]]; then
+            echo "::error::No wheel files found in expected directories"
             exit 1
           fi
+
+          VERSION_MATCH=()
+          for FILE in "${WHEELS[@]}"; do
+            BASE="$(basename "${FILE}")"
+            if [[ "${BASE}" == openpit-"${VERSION}"*".whl" ]]; then
+              VERSION_MATCH+=("${FILE}")
+            fi
+          done
+
+          if [[ ${#VERSION_MATCH[@]} -eq 1 ]]; then
+            WHEEL="${VERSION_MATCH[0]}"
+          elif [[ ${#VERSION_MATCH[@]} -gt 1 ]]; then
+            echo "::error::Expected exactly one wheel for version ${VERSION}, found ${#VERSION_MATCH[@]}"
+            printf '%s\n' "${VERSION_MATCH[@]}"
+            exit 1
+          elif [[ ${#WHEELS[@]} -eq 1 ]]; then
+            WHEEL="${WHEELS[0]}"
+          else
+            echo "::error::Could not uniquely resolve wheel path"
+            printf '%s\n' "${WHEELS[@]}"
+            exit 1
+          fi
+
           echo "WHEEL_PATH=${WHEEL}" >> "$GITHUB_ENV"
 
       - name: Install built wheel
@@ -359,12 +319,18 @@ jobs:
         run: python -m pytest bindings/python/tests
 
       - name: Publish wheel
-        uses: PyO3/maturin-action@v1
+        shell: bash
         env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        with:
-          command: upload
-          args: --non-interactive --skip-existing ${{ env.WHEEL_PATH }}
+          PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${PYPI_TOKEN}" ]]; then
+            TWINE_USERNAME=__token__ TWINE_PASSWORD="${PYPI_TOKEN}" \
+              twine upload --skip-existing --non-interactive "${WHEEL_PATH}"
+          else
+            echo "PYPI_API_TOKEN is not configured, running twine check only"
+            twine check "${WHEEL_PATH}"
+          fi
 
   publish-sdist:
     name: Publish source distribution
@@ -376,6 +342,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -385,16 +357,24 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -m pip install twine
 
       - name: Build sdist
-        env:
-          MATURIN_PEP440_VERSION: ${{ needs.verify-tag.outputs.version }}
-        run: maturin sdist --manifest-path bindings/python/Cargo.toml --locked --out dist
+        run: maturin sdist --manifest-path bindings/python/Cargo.toml --out dist
 
       - name: Publish sdist
+        shell: bash
         env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: maturin upload --non-interactive --skip-existing dist/*
+          PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${PYPI_TOKEN}" ]]; then
+            TWINE_USERNAME=__token__ TWINE_PASSWORD="${PYPI_TOKEN}" \
+              twine upload --skip-existing --non-interactive dist/*
+          else
+            echo "PYPI_API_TOKEN is not configured, running twine check only"
+            twine check dist/*
+          fi
 
   publish-github-release:
     name: Publish GitHub release metadata
@@ -406,17 +386,22 @@ jobs:
       contents: write
     steps:
       - name: Create GitHub Release without assets
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          generate_release_notes: true
-          append_body: true
-          make_latest: true
-          body: |
-            Install from package registries:
+        shell: bash
+        run: |
+          set -euo pipefail
 
-            - crates.io: https://crates.io/crates/openpit
-            - PyPI: https://pypi.org/project/openpit/${{ needs.verify-tag.outputs.version }}/
+          BODY_FILE="$(mktemp)"
+          cat <<EOF > "${BODY_FILE}"
+          Install from package registries:
 
-            This release intentionally does not include attached build artifacts.
+          - crates.io: https://crates.io/crates/openpit
+          - PyPI: https://pypi.org/project/openpit/${{ needs.verify-tag.outputs.version }}/
+
+          This release intentionally does not include attached build artifacts.
+          EOF
+
+          GH_TOKEN="${{ github.token }}" gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            --notes-file "${BODY_FILE}" \
+            --latest

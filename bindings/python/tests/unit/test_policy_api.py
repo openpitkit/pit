@@ -1,4 +1,3 @@
-
 import openpit
 import pytest
 from conftest import make_order, make_report
@@ -37,7 +36,7 @@ class ReportHookStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy):
     def check_pre_trade_start(
         self,
         *,
-        order: openpit.Order
+        order: openpit.Order,
     ) -> openpit.pretrade.PolicyReject | None:
         _ = order
         return None

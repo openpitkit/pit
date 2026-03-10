@@ -25,10 +25,8 @@ from .pretrade import CheckPreTradeStartPolicy, Policy
 
 NumericValue = str | int | float
 
-
 class RejectError(Exception):
     """Python exception type exposed by the native module."""
-
 
 class RejectCode:
     """Stable reject code constants."""
@@ -74,7 +72,6 @@ class RejectCode:
     SYSTEM_UNAVAILABLE: ClassVar[str]
     OTHER: ClassVar[str]
 
-
 class Reject:
     """Business reject returned by pre-trade checks."""
 
@@ -98,7 +95,6 @@ class Reject:
     def scope(self) -> str:
         """Reject scope (``order`` or ``account``)."""
 
-
 class Instrument:
     """Trading instrument with underlying and settlement assets."""
 
@@ -113,7 +109,6 @@ class Instrument:
     @property
     def settlement_asset(self) -> str:
         """Settlement asset symbol."""
-
 
 class Order:
     """Order input for pre-trade checks."""
@@ -150,7 +145,6 @@ class Order:
     def price(self) -> str:
         """Order price."""
 
-
 class ExecutionReport:
     """Post-trade execution feedback for policy state updates."""
 
@@ -181,13 +175,11 @@ class ExecutionReport:
     def fee(self) -> str:
         """Fee value."""
 
-
 class Request:
     """Pre-trade request handle."""
 
     def execute(self) -> ExecuteResult:
         """Run main-stage pre-trade checks."""
-
 
 class Reservation:
     """Reservation handle that must be finalized once."""
@@ -197,7 +189,6 @@ class Reservation:
 
     def rollback(self) -> None:
         """Finalize reservation as rolled back."""
-
 
 class StartPreTradeResult:
     """Result of ``Engine.start_pre_trade``."""
@@ -217,7 +208,6 @@ class StartPreTradeResult:
     def __bool__(self) -> bool:
         """Boolean convenience alias for ``ok``."""
 
-
 class ExecuteResult:
     """Result of ``Request.execute``."""
 
@@ -236,14 +226,12 @@ class ExecuteResult:
     def __bool__(self) -> bool:
         """Boolean convenience alias for ``ok``."""
 
-
 class PostTradeResult:
     """Result of ``Engine.apply_execution_report``."""
 
     @property
     def kill_switch_triggered(self) -> bool:
         """Whether any policy reported an active kill switch."""
-
 
 class PnlKillSwitchPolicy:
     """Built-in start-stage kill-switch policy based on PnL threshold."""
@@ -262,7 +250,6 @@ class PnlKillSwitchPolicy:
         """Reset accumulated PnL for a settlement asset."""
         _ = settlement_asset
 
-
 class RateLimitPolicy:
     """Built-in start-stage rate limit policy."""
 
@@ -272,7 +259,6 @@ class RateLimitPolicy:
         """Create a rate limit policy."""
         _ = (max_orders, window_seconds)
 
-
 class OrderValidationPolicy:
     """Built-in start-stage order schema/field validation policy."""
 
@@ -280,7 +266,6 @@ class OrderValidationPolicy:
 
     def __init__(self) -> None:
         """Create the order validation policy."""
-
 
 class OrderSizeLimit:
     """Order size limits for one settlement asset."""
@@ -295,7 +280,6 @@ class OrderSizeLimit:
         """Create order size limits."""
         _ = (settlement_asset, max_quantity, max_notional)
 
-
 class OrderSizeLimitPolicy:
     """Built-in start-stage order size limit policy."""
 
@@ -308,7 +292,6 @@ class OrderSizeLimitPolicy:
     def set_limit(self, *, limit: OrderSizeLimit) -> None:
         """Add or update a limit for settlement asset."""
         _ = limit
-
 
 class EngineBuilder:
     """Engine configuration builder."""
@@ -333,7 +316,6 @@ class EngineBuilder:
 
     def build(self) -> Engine:
         """Build an engine instance."""
-
 
 class Engine:
     """Pre-trade risk engine."""

@@ -2,6 +2,14 @@
 resolver = "2"
 members = ["bindings/python", "crates/openpit", "crates/pit-ffi"]
 
+[workspace.metadata.release]
+shared-version = true
+tag-prefix = ""
+tag-message = "Release {{version}}"
+pre-release-commit-message = "Release {{version}}"
+push = false
+publish = false
+
 [profile.release]
 lto = true
 codegen-units = 1
