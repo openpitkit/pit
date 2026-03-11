@@ -1,6 +1,6 @@
 [package]
 name = "pit-ffi"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 publish = false
 license = "Apache-2.0"
@@ -11,4 +11,4 @@ description = "Pit FFI bindings"
 crate-type = ["cdylib"]
 
 [dependencies]
-openpit = { version = "0.1.1", path = "../openpit" }
+openpit = { version = "0.1.2", path = "../openpit" }
