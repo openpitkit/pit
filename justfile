@@ -21,17 +21,16 @@
 build:
     cargo build --workspace
 
-# Lint all.
-lint-all:
-    just lint-rust
-    just lint-python
+# Lint and test.
+check: lint-all test-all
 
+# Lint all.
+lint-all: lint-rust lint-python
 # Lint Rus.
 lint-rust:
     cargo clippy --all-targets --all-features
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
     cargo fmt --all -- --check
-
 # Lint Python.
 lint-python:
     python -m ruff check bindings/python
@@ -39,24 +38,28 @@ lint-python:
 
 # Run all tests.
 test-all: test-rust test-python
-
 # Rust tests.
 test-rust:
     cargo test --workspace
-
-# Rust tests with coverage (requires cargo-llvm-cov).
+# Rust tests with actionable coverage summary.
 test-rust-cov:
+    mkdir -p target/llvm-cov
+    cargo llvm-cov test --workspace --all-features --json --output-path target/llvm-cov/workspace.json
+    python3 scripts/summarize_llvm_cov.py target/llvm-cov/workspace.json --output target/llvm-cov/workspace-summary.json --text
+# Raw cargo-llvm-cov console report.
+test-rust-cov-raw:
     cargo llvm-cov --workspace --all-features
-
 # Dry-run the release workflow locally.
 test-release:
-    printf '%s\n' '{"ref":"refs/tags/v0.1.0","ref_name":"v0.1.0"}' > /tmp/pit-release-event.json
+    VERSION=$(grep -m1 '^version = ' crates/openpit/Cargo.toml | cut -d '"' -f2); printf '{"ref":"refs/tags/v%s","ref_name":"v%s"}\n' "$VERSION" "$VERSION" > /tmp/pit-release-event.json
     act push -W .github/workflows/release.yml -e /tmp/pit-release-event.json -P ubuntu-latest=ghcr.io/catthehacker/ubuntu:act-latest --container-architecture linux/amd64 --matrix name:manylinux2014
+# Run docker-based release e2e checks against published artifacts.
+test-release-e2e version:
+    ./e2e/run.sh {{ version }}
 
 # Install Python bindings into the current Python environment (debug build).
 python-develop:
     maturin develop --manifest-path bindings/python/Cargo.toml
-
 # Install Python bindings into the current Python environment (release build).
 python-develop-release:
     maturin develop --release --manifest-path bindings/python/Cargo.toml
@@ -65,26 +68,24 @@ python-develop-release:
 _pytest args:
     # shellcheck disable=SC1083
     python -m pytest {{ args }}
-
 # Full Python test suite.
 test-python: python-develop
     just _pytest bindings/python/tests
-
 # Python unit tests only.
 test-python-unit: python-develop
     just _pytest bindings/python/tests/unit
-
 # Python integration test only.
 test-python-integration: python-develop
     just _pytest bindings/python/tests/integration
 
 # Format all.
-fmt-all:
-    just fmt-rust
-
+fmt-all: fmt-rust fmt-python
 # Format Rust.
 fmt-rust:
     cargo fmt --all
+# Format Python.
+fmt-python:
+    ruff format
 
 # Prepare new release (kind is patch, minor or major).
 release kind:

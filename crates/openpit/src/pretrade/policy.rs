@@ -15,158 +15,216 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use crate::core::Order;
+use super::{Context, Mutations, Reject};
 
-use super::{Context, ExecutionReport, Mutations, Reject};
-
-/// Lightweight pre-trade policy executed in `start_pre_trade`.
+/// Start-stage pre-trade policy contract.
 ///
-/// Runs in registration order. The engine stops at the first reject and does not
-/// proceed to subsequent policies in this stage. State changes made here are
-/// never rolled back.
+/// Start-stage policies run in [`crate::Engine::start_pre_trade`] before the
+/// engine creates a deferred request. They are intended for cheap gating logic
+/// such as session checks, static order validation, and stateful throttles.
+///
+/// Policies execute in registration order. The engine stops on the first
+/// reject, does not evaluate remaining start-stage policies, and does not roll
+/// back any state changes performed here.
+///
+/// `O` is the order contract type seen by the policy. `R` is the execution
+/// report contract type that will later be fed back through
+/// [`CheckPreTradeStartPolicy::apply_execution_report`].
 ///
 /// # Examples
 ///
-/// ```
-/// use openpit::core::Order;
-/// use openpit::pretrade::{CheckPreTradeStartPolicy, ExecutionReport, Reject, RejectScope};
+/// ```rust
+/// use std::cell::Cell;
+///
+/// use openpit::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
 ///
 /// struct SessionPolicy {
-///     active: std::cell::Cell<bool>,
+///     active: Cell<bool>,
 /// }
 ///
-/// impl CheckPreTradeStartPolicy for SessionPolicy {
+/// impl SessionPolicy {
+///     const NAME: &'static str = "SessionPolicy";
+/// }
+///
+/// impl<O, R> CheckPreTradeStartPolicy<O, R> for SessionPolicy {
 ///     fn name(&self) -> &'static str {
-///         "SessionPolicy"
+///         Self::NAME
 ///     }
 ///
-///     fn check_pre_trade_start(&self, _order: &Order) -> Result<(), Reject> {
+///     fn check_pre_trade_start(&self, _order: &O) -> Result<(), Reject> {
 ///         if !self.active.get() {
 ///             return Err(Reject::new(
-///                 self.name(),
+///                 Self::NAME,
 ///                 RejectScope::Account,
-///                 openpit::pretrade::RejectCode::Other,
+///                 RejectCode::Other,
 ///                 "session inactive",
 ///                 "trading session is closed",
 ///             ));
 ///         }
 ///         Ok(())
 ///     }
+///
+///     fn apply_execution_report(&self, _report: &R) -> bool {
+///         false
+///     }
 /// }
 /// ```
-pub trait CheckPreTradeStartPolicy {
+pub trait CheckPreTradeStartPolicy<O, R> {
     /// Stable policy name.
     ///
-    /// Must be unique across all policies registered in an engine.
+    /// Policy names must be unique across all policies registered in the same
+    /// engine instance.
     fn name(&self) -> &'static str;
 
-    /// Performs lightweight checks before creating a request.
-    fn check_pre_trade_start(&self, order: &Order) -> Result<(), Reject>;
-
-    /// Applies post-trade updates.
+    /// Performs start-stage checks against an immutable order.
     ///
-    /// Returns `true` when this policy reports a kill-switch trigger.
-    fn apply_execution_report(&self, _report: &ExecutionReport) -> bool {
-        false
-    }
+    /// Returning `Ok(())` allows the engine to continue building the deferred
+    /// request. Returning [`Reject`] aborts the start stage immediately.
+    fn check_pre_trade_start(&self, order: &O) -> Result<(), Reject>;
+
+    /// Applies post-trade updates from execution reports.
+    ///
+    /// The engine calls this hook from [`crate::Engine::apply_execution_report`]
+    /// so that a start-stage policy can maintain state from realized outcomes.
+    ///
+    /// Returns `true` when this policy reports kill-switch trigger.
+    fn apply_execution_report(&self, report: &R) -> bool;
 }
 
-/// Main pre-trade policy executed in `Request::execute`.
+/// Main-stage pre-trade policy contract.
 ///
-/// All registered policies run regardless of earlier rejects. Mutations are
-/// registered as commit/rollback pairs. If any policy produces a reject, the
-/// engine reverts all mutations in reverse registration order.
+/// Main-stage policies run during [`crate::pretrade::Request::execute`] after a
+/// request has already passed start-stage checks. They are intended for work
+/// that may need to reserve or mutate engine state and therefore must
+/// participate in commit/rollback handling.
+///
+/// All registered policies are evaluated even when one policy already emitted a
+/// reject. If any reject is produced, the engine rolls back accumulated
+/// mutations in reverse order before returning the reject list to the caller.
+///
+/// `O` is the order contract type visible through [`Context`]. `R` is the
+/// execution report contract type used for post-trade updates.
 ///
 /// # Examples
 ///
-/// ```
-/// use openpit::pretrade::{Context, ExecutionReport, Mutations, Policy, Reject};
+/// ```rust
+/// use openpit::pretrade::{Context, Mutations, Policy, Reject};
 ///
 /// struct NoopPolicy;
 ///
-/// impl Policy for NoopPolicy {
+/// impl<O, R> Policy<O, R> for NoopPolicy {
 ///     fn name(&self) -> &'static str {
 ///         "NoopPolicy"
 ///     }
 ///
 ///     fn perform_pre_trade_check(
 ///         &self,
-///         _ctx: &Context<'_>,
+///         _ctx: &Context<'_, O>,
 ///         _mutations: &mut Mutations,
 ///         _rejects: &mut Vec<Reject>,
 ///     ) {
-///         // always passes
+///     }
+///
+///     fn apply_execution_report(&self, _report: &R) -> bool {
+///         false
 ///     }
 /// }
 /// ```
-pub trait Policy {
+pub trait Policy<O, R> {
     /// Stable policy name.
     ///
-    /// Must be unique across all policies registered in an engine.
+    /// Policy names must be unique across all policies registered in the same
+    /// engine instance.
     fn name(&self) -> &'static str;
 
-    /// Evaluates request context and optionally emits rejects/mutations.
+    /// Performs main-stage checks and can emit mutations or rejects.
+    ///
+    /// Policies may inspect the immutable request [`Context`], append mutations
+    /// to be committed or rolled back later, and push one or more rejects into
+    /// `rejects`.
     fn perform_pre_trade_check(
         &self,
-        ctx: &Context<'_>,
+        ctx: &Context<'_, O>,
         mutations: &mut Mutations,
         rejects: &mut Vec<Reject>,
     );
 
-    /// Applies post-trade updates.
+    /// Applies post-trade updates from execution reports.
     ///
-    /// Returns `true` when this policy reports a kill-switch trigger.
-    fn apply_execution_report(&self, _report: &ExecutionReport) -> bool {
-        false
-    }
+    /// The engine calls this hook from [`crate::Engine::apply_execution_report`]
+    /// so that a main-stage policy can maintain post-trade state.
+    ///
+    /// Returns `true` when this policy reports kill-switch trigger.
+    fn apply_execution_report(&self, report: &R) -> bool;
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::param::{Asset, Fee, Pnl, Price, Quantity, Side, Volume};
-
-    use crate::core::{Instrument, Order};
-
-    use super::{CheckPreTradeStartPolicy, Context, ExecutionReport, Mutations, Policy};
+    use crate::core::{
+        ExecutionReportOperation, FinancialImpact, OrderOperation, WithExecutionReportOperation,
+        WithFinancialImpact,
+    };
+    use crate::param::{Asset, Fee, Pnl, Quantity, Side, TradeAmount};
     use crate::pretrade::Reject;
+
+    use super::{CheckPreTradeStartPolicy, Context, Mutations, Policy};
 
     struct StartPolicyNoop;
 
-    impl CheckPreTradeStartPolicy for StartPolicyNoop {
+    type TestOrder = OrderOperation;
+    type TestReport = WithExecutionReportOperation<WithFinancialImpact<()>>;
+
+    impl CheckPreTradeStartPolicy<TestOrder, TestReport> for StartPolicyNoop {
         fn name(&self) -> &'static str {
             "StartPolicyNoop"
         }
 
-        fn check_pre_trade_start(&self, _order: &Order) -> Result<(), Reject> {
+        fn check_pre_trade_start(&self, _order: &TestOrder) -> Result<(), Reject> {
             Ok(())
+        }
+
+        fn apply_execution_report(&self, _report: &TestReport) -> bool {
+            false
         }
     }
 
     struct MainPolicyNoop;
 
-    impl Policy for MainPolicyNoop {
+    impl Policy<TestOrder, TestReport> for MainPolicyNoop {
         fn name(&self) -> &'static str {
             "MainPolicyNoop"
         }
 
         fn perform_pre_trade_check(
             &self,
-            _ctx: &Context<'_>,
+            _ctx: &Context<'_, TestOrder>,
             _mutations: &mut Mutations,
             _rejects: &mut Vec<Reject>,
         ) {
         }
+
+        fn apply_execution_report(&self, _report: &TestReport) -> bool {
+            false
+        }
     }
 
     #[test]
-    fn default_post_trade_hooks_return_false() {
-        let report = ExecutionReport {
-            instrument: Instrument::new(
-                Asset::new("AAPL").expect("asset code must be valid"),
-                Asset::new("USD").expect("asset code must be valid"),
-            ),
-            pnl: Pnl::from_str("0").expect("pnl must be valid"),
-            fee: Fee::ZERO,
+    fn post_trade_hooks_return_false() {
+        let report = WithExecutionReportOperation {
+            inner: WithFinancialImpact {
+                inner: (),
+                financial_impact: FinancialImpact {
+                    pnl: Pnl::from_str("0").expect("pnl must be valid"),
+                    fee: Fee::ZERO,
+                },
+            },
+            operation: ExecutionReportOperation {
+                instrument: crate::Instrument::new(
+                    Asset::new("AAPL").expect("asset code must be valid"),
+                    Asset::new("USD").expect("asset code must be valid"),
+                ),
+                side: Side::Buy,
+            },
         };
 
         assert!(!StartPolicyNoop.apply_execution_report(&report));
@@ -175,21 +233,18 @@ mod tests {
 
     #[test]
     fn required_trait_methods_can_be_invoked_without_side_effects() {
-        let order = Order {
-            instrument: Instrument::new(
+        let order = OrderOperation {
+            instrument: crate::Instrument::new(
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
             side: Side::Buy,
-            quantity: Quantity::from_str("1").expect("quantity must be valid"),
-            price: Price::from_str("10").expect("price must be valid"),
+            trade_amount: TradeAmount::Quantity(
+                Quantity::from_str("1").expect("quantity must be valid"),
+            ),
+            price: None,
         };
-        let ctx = Context::new(
-            &order,
-            Volume::from_str("10")
-                .expect("volume must be valid")
-                .to_cash_flow_outflow(),
-        );
+        let ctx = Context::new(&order);
         let mut mutations = Mutations::new();
         let mut rejects = Vec::new();
 

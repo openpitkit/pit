@@ -19,10 +19,9 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
-use crate::core::Order;
+use crate::core::{HasFee, HasInstrument, HasPnl};
 use crate::param::{Asset, Pnl};
-
-use crate::pretrade::{CheckPreTradeStartPolicy, ExecutionReport, Reject, RejectCode, RejectScope};
+use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
 
 /// Start-stage policy that blocks trading after crossing configured loss limits.
 ///
@@ -32,49 +31,99 @@ use crate::pretrade::{CheckPreTradeStartPolicy, ExecutionReport, Reject, RejectC
 ///
 /// # Examples
 ///
-/// ```
+/// ```rust
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use openpit::param::{Asset, Fee, Pnl, Price, Quantity, Side};
-/// use openpit::core::Instrument;
 /// use openpit::pretrade::policies::PnlKillSwitchPolicy;
-/// use openpit::pretrade::{CheckPreTradeStartPolicy, ExecutionReport};
-/// use openpit::Order;
+/// use openpit::pretrade::CheckPreTradeStartPolicy;
+/// use openpit::{HasFee, HasInstrument, HasPnl, Instrument, OrderOperation};
+/// use openpit::param::TradeAmount;
 ///
-/// let usd = Asset::new("USD").expect("asset code must be valid");
+/// let usd = Asset::new("USD")?;
 /// let policy = PnlKillSwitchPolicy::new(
-///     (usd.clone(), Pnl::from_str("500").expect("valid")),
+///     (usd.clone(), Pnl::from_str("500")?),
 ///     [],
 /// )
-/// .expect("valid barrier");
+/// ?;
 ///
 /// // Order passes when P&L is above the barrier.
-/// let order = Order {
+/// let order = OrderOperation {
 ///     instrument: Instrument::new(
-///         Asset::new("AAPL").expect("asset code must be valid"),
+///         Asset::new("AAPL")?,
 ///         usd.clone(),
 ///     ),
-///     side: openpit::param::Side::Buy,
-///     quantity: Quantity::from_str("1").expect("valid"),
-///     price: Price::from_str("100").expect("valid"),
+///     side: Side::Buy,
+///     trade_amount: TradeAmount::Quantity(
+///         Quantity::from_str("1")?,
+///     ),
+///     price: Some(Price::from_str("100")?),
 /// };
-/// assert!(policy.check_pre_trade_start(&order).is_ok());
+///
+/// assert!(
+///     <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
+///         OrderOperation,
+///         Report,
+///     >>::check_pre_trade_start(&policy, &order)
+///     .is_ok()
+/// );
 ///
 /// // Report a loss that crosses the barrier.
-/// let report = ExecutionReport {
+/// struct Report {
+///     instrument: Instrument,
+///     pnl: Pnl,
+///     fee: Fee,
+/// }
+/// impl HasInstrument for Report {
+///     fn instrument(&self) -> &Instrument {
+///         &self.instrument
+///     }
+/// }
+/// impl HasPnl for Report {
+///     fn pnl(&self) -> Pnl {
+///         self.pnl
+///     }
+/// }
+/// impl HasFee for Report {
+///     fn fee(&self) -> Fee {
+///         self.fee
+///     }
+/// }
+/// let report = Report {
 ///     instrument: Instrument::new(
-///         Asset::new("AAPL").expect("asset code must be valid"),
+///         Asset::new("AAPL")?,
 ///         usd.clone(),
 ///     ),
-///     pnl: Pnl::from_str("-600").expect("valid"),
+///     pnl: Pnl::from_str("-600")?,
 ///     fee: Fee::ZERO,
 /// };
-/// let triggered = policy.apply_execution_report(&report);
+///
+/// let triggered =
+///     <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
+///         OrderOperation,
+///         Report,
+///     >>::apply_execution_report(&policy, &report)
+/// ;
 /// assert!(triggered);
 ///
 /// // Orders are now rejected until reset.
-/// assert!(policy.check_pre_trade_start(&order).is_err());
+/// assert!(
+///     <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
+///         OrderOperation,
+///         Report,
+///     >>::check_pre_trade_start(&policy, &order)
+///     .is_err()
+/// );
 ///
 /// policy.reset_pnl(&usd);
-/// assert!(policy.check_pre_trade_start(&order).is_ok());
+/// assert!(
+///     <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
+///         OrderOperation,
+///         Report,
+///     >>::check_pre_trade_start(&policy, &order)
+///     .is_ok()
+/// );
+/// # Ok(())
+/// # }
 /// ```
 pub struct PnlKillSwitchPolicy {
     barriers: RefCell<HashMap<Asset, Pnl>>,
@@ -101,10 +150,12 @@ impl Display for PnlKillSwitchError {
                 formatter,
                 "barrier must be positive for settlement asset {settlement}, got {barrier}"
             ),
-            Self::PnlAccumulationOverflow { settlement } => write!(
-                formatter,
-                "pnl accumulation overflow for settlement asset {settlement}"
-            ),
+            Self::PnlAccumulationOverflow { settlement } => {
+                write!(
+                    formatter,
+                    "pnl accumulation overflow for settlement asset {settlement}"
+                )
+            }
         }
     }
 }
@@ -146,10 +197,6 @@ impl PnlKillSwitchPolicy {
     }
 
     /// Accumulates a realized P&L delta for the given settlement asset.
-    ///
-    /// The delta is added to the running total. Negative values represent losses.
-    /// If the accumulated total crosses the barrier, the kill switch is activated.
-    ///
     pub fn report_realized_pnl(
         &self,
         settlement: &Asset,
@@ -157,12 +204,15 @@ impl PnlKillSwitchPolicy {
     ) -> Result<(), PnlKillSwitchError> {
         let mut realized = self.realized.borrow_mut();
         let current = realized.get(settlement).copied().unwrap_or(Pnl::ZERO);
-        let updated = current.checked_add(pnl_delta).map_err(|_| {
-            self.triggered.borrow_mut().insert(settlement.clone());
-            PnlKillSwitchError::PnlAccumulationOverflow {
-                settlement: settlement.clone(),
+        let updated = match current.checked_add(pnl_delta) {
+            Ok(value) => value,
+            Err(_) => {
+                self.triggered.borrow_mut().insert(settlement.clone());
+                return Err(PnlKillSwitchError::PnlAccumulationOverflow {
+                    settlement: settlement.clone(),
+                });
             }
-        })?;
+        };
         realized.insert(settlement.clone(), updated);
         drop(realized);
 
@@ -191,12 +241,10 @@ impl PnlKillSwitchPolicy {
 
     fn is_threshold_crossed(&self, settlement: &Asset) -> bool {
         let barrier = match self.barrier(settlement) {
-            Some(barrier) => barrier,
+            Some(value) => value,
             None => return false,
         };
-        // validate_barrier guarantees barrier > ZERO, so negation cannot overflow.
-        debug_assert!(barrier > Pnl::ZERO);
-        let threshold = barrier.checked_neg().unwrap();
+        let threshold = Pnl::new(-barrier.to_decimal());
         let realized = self.realized_pnl(settlement);
         realized.to_decimal() <= threshold.to_decimal()
     }
@@ -210,18 +258,24 @@ impl PnlKillSwitchPolicy {
     }
 }
 
-impl CheckPreTradeStartPolicy for PnlKillSwitchPolicy {
+impl<O, R> CheckPreTradeStartPolicy<O, R> for PnlKillSwitchPolicy
+where
+    O: HasInstrument,
+    R: HasInstrument + HasPnl + HasFee,
+{
     fn name(&self) -> &'static str {
         Self::NAME
     }
 
-    fn check_pre_trade_start(&self, order: &Order) -> Result<(), Reject> {
-        let settlement = order.instrument.settlement_asset();
+    fn check_pre_trade_start(&self, order: &O) -> Result<(), Reject> {
+        let instrument = order.instrument();
+
+        let settlement = instrument.settlement_asset();
         let barrier = match self.barrier(settlement) {
-            Some(barrier) => barrier,
+            Some(value) => value,
             None => {
                 return Err(Reject::new(
-                    self.name(),
+                    Self::NAME,
                     RejectScope::Order,
                     RejectCode::RiskConfigurationMissing,
                     "pnl barrier missing",
@@ -233,7 +287,7 @@ impl CheckPreTradeStartPolicy for PnlKillSwitchPolicy {
         if self.is_triggered(settlement) || self.is_threshold_crossed(settlement) {
             self.triggered.borrow_mut().insert(settlement.clone());
             return Err(Reject::new(
-                self.name(),
+                Self::NAME,
                 RejectScope::Account,
                 RejectCode::PnlKillSwitchTriggered,
                 "pnl kill switch triggered",
@@ -248,9 +302,27 @@ impl CheckPreTradeStartPolicy for PnlKillSwitchPolicy {
         Ok(())
     }
 
-    fn apply_execution_report(&self, report: &ExecutionReport) -> bool {
-        let settlement = report.instrument.settlement_asset();
-        if self.report_realized_pnl(settlement, report.pnl).is_err() {
+    /// Applies a post-trade report to the accumulated realized P&L.
+    ///
+    /// The report contract expects `pnl` plus explicit `fee`.
+    ///
+    /// The engine adds fee impact to `pnl` before accumulation.
+    fn apply_execution_report(&self, report: &R) -> bool {
+        let instrument = report.instrument();
+        let mut pnl_delta = report.pnl();
+        let fee = report.fee();
+        match pnl_delta.checked_add(fee.to_pnl()) {
+            Ok(value) => pnl_delta = value,
+            Err(_) => {
+                self.triggered
+                    .borrow_mut()
+                    .insert(instrument.settlement_asset().clone());
+                return true;
+            }
+        }
+
+        let settlement = instrument.settlement_asset();
+        if self.report_realized_pnl(settlement, pnl_delta).is_err() {
             self.triggered.borrow_mut().insert(settlement.clone());
         }
         self.is_triggered(settlement)
@@ -270,12 +342,37 @@ fn validate_barrier(settlement: &Asset, barrier: Pnl) -> Result<(), PnlKillSwitc
 
 #[cfg(test)]
 mod tests {
-    use crate::core::{Instrument, Order};
+    use crate::core::{HasFee, HasInstrument, HasPnl, Instrument, OrderOperation};
+    use crate::param::TradeAmount;
     use crate::param::{Asset, Fee, Pnl, Price, Quantity, Side};
-    use crate::pretrade::{CheckPreTradeStartPolicy, ExecutionReport, RejectCode, RejectScope};
+    use crate::pretrade::{CheckPreTradeStartPolicy, RejectCode, RejectScope};
     use rust_decimal::Decimal;
 
     use super::{PnlKillSwitchError, PnlKillSwitchPolicy};
+
+    struct TestReport {
+        instrument: Instrument,
+        pnl: Pnl,
+        fee: Fee,
+    }
+
+    impl HasInstrument for TestReport {
+        fn instrument(&self) -> &Instrument {
+            &self.instrument
+        }
+    }
+
+    impl HasPnl for TestReport {
+        fn pnl(&self) -> Pnl {
+            self.pnl
+        }
+    }
+
+    impl HasFee for TestReport {
+        fn fee(&self) -> Fee {
+            self.fee
+        }
+    }
 
     #[test]
     fn happy_path_order_passes_when_pnl_above_barrier() {
@@ -294,7 +391,7 @@ mod tests {
             )
             .expect("accumulation must succeed");
 
-        let result = policy.check_pre_trade_start(&order("USD"));
+        let result = check_start(&policy, &order("USD"));
         assert!(result.is_ok());
     }
 
@@ -315,9 +412,7 @@ mod tests {
             )
             .expect("accumulation must succeed");
 
-        let reject = policy
-            .check_pre_trade_start(&order("USD"))
-            .expect_err("must reject on boundary");
+        let reject = check_start(&policy, &order("USD")).expect_err("must reject on boundary");
         assert_eq!(reject.scope, RejectScope::Account);
         assert_eq!(reject.code, RejectCode::PnlKillSwitchTriggered);
         assert_eq!(reject.reason, "pnl kill switch triggered");
@@ -338,9 +433,8 @@ mod tests {
         )
         .expect("policy must be valid");
 
-        let reject = policy
-            .check_pre_trade_start(&order("USD"))
-            .expect_err("must reject when barrier is missing");
+        let reject =
+            check_start(&policy, &order("USD")).expect_err("must reject when barrier is missing");
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::RiskConfigurationMissing);
         assert_eq!(reject.reason, "pnl barrier missing");
@@ -410,7 +504,7 @@ mod tests {
             )
             .expect("accumulation must succeed");
 
-        let first = policy.check_pre_trade_start(&order("USD"));
+        let first = check_start(&policy, &order("USD"));
         assert!(first.is_err());
 
         policy
@@ -419,7 +513,7 @@ mod tests {
                 pnl("200"),
             )
             .expect("accumulation must succeed");
-        let second = policy.check_pre_trade_start(&order("USD"));
+        let second = check_start(&policy, &order("USD"));
         assert!(second.is_err());
     }
 
@@ -439,14 +533,14 @@ mod tests {
                 pnl("-120"),
             )
             .expect("accumulation must succeed");
-        assert!(policy.check_pre_trade_start(&order("USD")).is_err());
+        assert!(check_start(&policy, &order("USD")).is_err());
 
         policy.reset_pnl(&Asset::new("USD").expect("asset code must be valid"));
         assert_eq!(
             policy.realized_pnl(&Asset::new("USD").expect("asset code must be valid")),
             pnl("0")
         );
-        assert!(policy.check_pre_trade_start(&order("USD")).is_ok());
+        assert!(check_start(&policy, &order("USD")).is_ok());
     }
 
     #[test]
@@ -460,7 +554,7 @@ mod tests {
         )
         .expect("policy must be valid");
 
-        let report = ExecutionReport {
+        let report = TestReport {
             instrument: Instrument::new(
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
@@ -468,7 +562,7 @@ mod tests {
             pnl: pnl("-120"),
             fee: Fee::ZERO,
         };
-        let triggered = policy.apply_execution_report(&report);
+        let triggered = apply_report(&policy, &report);
 
         assert!(triggered);
         assert_eq!(
@@ -499,9 +593,8 @@ mod tests {
             policy.realized_pnl(&Asset::new("USD").expect("asset code must be valid")),
             pnl("-10")
         );
-        let reject = policy
-            .check_pre_trade_start(&order("USD"))
-            .expect_err("missing barrier must still reject");
+        let reject =
+            check_start(&policy, &order("USD")).expect_err("missing barrier must still reject");
         assert_eq!(reject.code, RejectCode::RiskConfigurationMissing);
         assert_eq!(reject.reason, "pnl barrier missing");
         assert_eq!(
@@ -528,7 +621,7 @@ mod tests {
             .report_realized_pnl(&usd, pnl("-49"))
             .expect("accumulation must succeed");
 
-        assert!(policy.check_pre_trade_start(&order("USD")).is_ok());
+        assert!(check_start(&policy, &order("USD")).is_ok());
     }
 
     #[test]
@@ -646,7 +739,7 @@ mod tests {
             .report_realized_pnl(&settlement, Pnl::new(Decimal::MAX))
             .expect("initial accumulation must succeed");
 
-        let report = ExecutionReport {
+        let report = TestReport {
             instrument: Instrument::new(
                 Asset::new("AAPL").expect("asset code must be valid"),
                 settlement.clone(),
@@ -655,19 +748,142 @@ mod tests {
             fee: Fee::ZERO,
         };
 
-        assert!(policy.apply_execution_report(&report));
+        assert!(apply_report(&policy, &report));
         assert!(policy.is_triggered(&settlement));
     }
 
-    fn order(settlement: &str) -> Order {
-        Order {
+    #[test]
+    fn policy_name_is_stable() {
+        let policy = PnlKillSwitchPolicy::new(
+            (
+                Asset::new("USD").expect("asset code must be valid"),
+                pnl("100"),
+            ),
+            vec![],
+        )
+        .expect("policy must be valid");
+
+        assert_eq!(
+            <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<OrderOperation, TestReport>>::name(
+                &policy
+            ),
+            PnlKillSwitchPolicy::NAME
+        );
+    }
+
+    #[test]
+    fn apply_execution_report_marks_triggered_when_fee_addition_overflows() {
+        struct FeeOverflowReport {
+            instrument: Instrument,
+        }
+        impl HasInstrument for FeeOverflowReport {
+            fn instrument(&self) -> &Instrument {
+                &self.instrument
+            }
+        }
+        impl HasPnl for FeeOverflowReport {
+            fn pnl(&self) -> Pnl {
+                Pnl::new(Decimal::MIN)
+            }
+        }
+        impl HasFee for FeeOverflowReport {
+            fn fee(&self) -> Fee {
+                Fee::from_str("1").expect("fee must be valid")
+            }
+        }
+
+        let settlement = Asset::new("USD").expect("asset code must be valid");
+        let policy = PnlKillSwitchPolicy::new((settlement.clone(), pnl("100")), vec![])
+            .expect("policy must be valid");
+        let report = FeeOverflowReport {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                settlement.clone(),
+            ),
+        };
+
+        let triggered = <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
+            OrderOperation,
+            FeeOverflowReport,
+        >>::apply_execution_report(&policy, &report);
+        assert!(triggered);
+        assert!(policy.is_triggered(&settlement));
+    }
+
+    #[test]
+    fn threshold_crossed_returns_true_when_barrier_negation_overflows() {
+        let settlement = Asset::new("USD").expect("asset code must be valid");
+        let policy = PnlKillSwitchPolicy::new((settlement.clone(), pnl("100")), vec![])
+            .expect("policy must be valid");
+        policy
+            .barriers
+            .borrow_mut()
+            .insert(settlement.clone(), Pnl::new(Decimal::MIN));
+
+        assert!(policy.is_threshold_crossed(&settlement));
+    }
+
+    #[test]
+    fn apply_execution_report_without_fee_uses_pnl_delta_directly() {
+        struct NoFeeReport {
+            instrument: Instrument,
+        }
+        impl HasInstrument for NoFeeReport {
+            fn instrument(&self) -> &Instrument {
+                &self.instrument
+            }
+        }
+        impl HasPnl for NoFeeReport {
+            fn pnl(&self) -> Pnl {
+                Pnl::from_str("-10").expect("pnl must be valid")
+            }
+        }
+        impl HasFee for NoFeeReport {
+            fn fee(&self) -> Fee {
+                Fee::ZERO
+            }
+        }
+
+        let settlement = Asset::new("USD").expect("asset code must be valid");
+        let policy = PnlKillSwitchPolicy::new((settlement.clone(), pnl("100")), vec![])
+            .expect("policy must be valid");
+        let report = NoFeeReport {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                settlement.clone(),
+            ),
+        };
+
+        let triggered = <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
+            OrderOperation,
+            NoFeeReport,
+        >>::apply_execution_report(&policy, &report);
+        assert!(!triggered);
+        assert_eq!(policy.realized_pnl(&settlement), pnl("-10"));
+    }
+
+    fn check_start(
+        policy: &PnlKillSwitchPolicy,
+        order: &OrderOperation,
+    ) -> Result<(), crate::pretrade::Reject> {
+        <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<OrderOperation, TestReport>>::check_pre_trade_start(policy, order)
+    }
+
+    fn apply_report(policy: &PnlKillSwitchPolicy, report: &TestReport) -> bool {
+        <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<OrderOperation, TestReport>>::apply_execution_report(policy, report)
+    }
+
+    fn order(settlement: &str) -> OrderOperation {
+        OrderOperation {
             instrument: Instrument::new(
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new(settlement).expect("asset code must be valid"),
             ),
             side: Side::Buy,
-            quantity: Quantity::from_str("1").expect("quantity literal must be valid"),
-            price: Price::from_str("100").expect("price literal must be valid"),
+            trade_amount: TradeAmount::Quantity(
+                Quantity::from_str("1").expect("quantity literal must be valid"),
+            ),
+            price: Some(Price::from_str("100").expect("price literal must be valid")),
         }
     }
 

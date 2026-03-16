@@ -3,42 +3,109 @@ import pytest
 
 
 @pytest.mark.unit
-def test_order_accepts_keyword_arguments_and_numeric_variants() -> None:
-    order = openpit.Order(
-        underlying_asset="AAPL",
-        settlement_asset="USD",
-        side="buy",
-        quantity="10.5",
-        price=185,
+def test_order_operation_accepts_keyword_arguments_and_numeric_variants() -> None:
+    op = openpit.OrderOperation(
+        instrument=openpit.Instrument(
+            openpit.param.Asset("AAPL"),
+            openpit.param.Asset("USD"),
+        ),
+        side=openpit.param.Side.BUY,
+        trade_amount=openpit.param.Quantity("10.5"),
+        price=openpit.param.Price("185"),
     )
+    order = openpit.Order(operation=op)
 
-    assert order.underlying_asset == "AAPL"
-    assert order.settlement_asset == "USD"
-    assert order.side == "buy"
-    assert order.quantity == "10.5"
-    assert order.price == "185"
+    assert order.operation.instrument.underlying_asset.value == "AAPL"
+    assert order.operation.instrument.settlement_asset.value == "USD"
+    assert order.operation.side is openpit.param.Side.BUY
+    assert order.operation.trade_amount.value == "10.5"
+    assert order.operation.price.value == "185"
     assert "Order(" in repr(order)
 
 
 @pytest.mark.unit
-def test_order_rejects_invalid_side() -> None:
-    with pytest.raises(ValueError, match="expected 'buy' or 'sell'"):
-        openpit.Order(
-            underlying_asset="AAPL",
-            settlement_asset="USD",
-            side="hold",
-            quantity=1.0,
-            price=10.0,
+def test_order_uses_optional_defaults() -> None:
+    order = openpit.Order()
+
+    assert order.operation is None
+    assert order.position is None
+    assert order.margin is None
+
+
+@pytest.mark.unit
+def test_order_operation_rejects_invalid_side() -> None:
+    with pytest.raises(TypeError):
+        openpit.OrderOperation(
+            instrument=openpit.Instrument(
+                openpit.param.Asset("AAPL"),
+                openpit.param.Asset("USD"),
+            ),
+            side="hold",  # type: ignore[arg-type]
+            trade_amount=openpit.param.Quantity("1"),
+            price=openpit.param.Price("10"),
         )
 
 
 @pytest.mark.unit
-def test_order_rejects_bool_quantity() -> None:
-    with pytest.raises(ValueError, match="quantity must be a str, int, or float"):
-        openpit.Order(
-            underlying_asset="AAPL",
-            settlement_asset="USD",
-            side="buy",
-            quantity=True,
-            price=10.0,
+def test_order_operation_rejects_bool_quantity() -> None:
+    with pytest.raises(TypeError):
+        openpit.OrderOperation(
+            instrument=openpit.Instrument(
+                openpit.param.Asset("AAPL"),
+                openpit.param.Asset("USD"),
+            ),
+            side=openpit.param.Side.BUY,
+            trade_amount=True,  # type: ignore[arg-type]
+            price=openpit.param.Price("10"),
         )
+
+
+@pytest.mark.unit
+def test_order_operation_accepts_volume_without_price() -> None:
+    op = openpit.OrderOperation(
+        instrument=openpit.Instrument(
+            openpit.param.Asset("AAPL"),
+            openpit.param.Asset("USD"),
+        ),
+        side=openpit.param.Side.BUY,
+        trade_amount=openpit.param.Volume("250"),
+        price=None,
+    )
+    order = openpit.Order(operation=op)
+
+    assert order.operation.trade_amount.value == "250"
+    assert order.operation.price is None
+
+
+@pytest.mark.unit
+def test_order_rejects_positional_arguments_for_keyword_only_constructor() -> None:
+    with pytest.raises(TypeError):
+        openpit.Order("operation")  # type: ignore[call-arg]
+
+
+@pytest.mark.unit
+def test_instrument_rejects_empty_settlement_asset() -> None:
+    with pytest.raises(ValueError):
+        openpit.Instrument(
+            openpit.param.Asset("AAPL"),
+            openpit.param.Asset(""),
+        )
+
+
+@pytest.mark.unit
+def test_order_margin_fields_are_optional() -> None:
+    margin = openpit.OrderMargin()
+    order = openpit.Order(margin=margin)
+
+    assert order.margin.leverage is None
+    assert order.margin.collateral_asset is None
+    assert order.margin.auto_borrow is False
+
+
+@pytest.mark.unit
+def test_order_position_bool_flags_default_to_false() -> None:
+    position = openpit.OrderPosition()
+    order = openpit.Order(position=position)
+
+    assert order.position.reduce_only is False
+    assert order.position.close_position is False

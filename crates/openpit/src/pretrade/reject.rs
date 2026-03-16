@@ -214,6 +214,53 @@ pub struct Reject {
     pub scope: RejectScope,
 }
 
+impl Display for Reject {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "[{}] {}: {}",
+            self.policy, self.reason, self.details
+        )
+    }
+}
+
+impl std::error::Error for Reject {}
+
+/// Collection of rejects returned by [`Request::execute`].
+///
+/// Implements `Deref` to `[Reject]` for direct element access.
+///
+/// [`Request::execute`]: crate::pretrade::Request::execute
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rejects(Vec<Reject>);
+
+impl Rejects {
+    pub(crate) fn new(rejects: Vec<Reject>) -> Self {
+        Self(rejects)
+    }
+}
+
+impl std::ops::Deref for Rejects {
+    type Target = Vec<Reject>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Display for Rejects {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        for (i, reject) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(formatter, "; ")?;
+            }
+            Display::fmt(reject, formatter)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for Rejects {}
+
 impl Reject {
     /// Creates a reject with human-readable reason and details.
     pub fn new(
@@ -307,5 +354,117 @@ mod tests {
             assert_eq!(code.as_str(), expected_name);
             assert_eq!(code.to_string(), expected_name);
         }
+    }
+
+    #[test]
+    fn reject_display_formats_policy_reason_and_details() {
+        let reject = super::Reject::new(
+            "TestPolicy",
+            super::RejectScope::Order,
+            RejectCode::Other,
+            "something went wrong",
+            "extra info",
+        );
+        assert_eq!(
+            reject.to_string(),
+            "[TestPolicy] something went wrong: extra info"
+        );
+    }
+
+    #[test]
+    fn rejects_deref_gives_slice_access() {
+        let rejects = super::Rejects::new(vec![super::Reject::new(
+            "P",
+            super::RejectScope::Order,
+            RejectCode::Other,
+            "r",
+            "d",
+        )]);
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].policy, "P");
+    }
+
+    #[test]
+    fn rejects_display_single() {
+        let rejects = super::Rejects::new(vec![super::Reject::new(
+            "P",
+            super::RejectScope::Order,
+            RejectCode::Other,
+            "reason",
+            "details",
+        )]);
+        assert_eq!(rejects.to_string(), "[P] reason: details");
+    }
+
+    #[test]
+    fn rejects_display_multiple_joined_with_separator() {
+        let rejects = super::Rejects::new(vec![
+            super::Reject::new(
+                "P1",
+                super::RejectScope::Order,
+                RejectCode::Other,
+                "r1",
+                "d1",
+            ),
+            super::Reject::new(
+                "P2",
+                super::RejectScope::Account,
+                RejectCode::Other,
+                "r2",
+                "d2",
+            ),
+        ]);
+        assert_eq!(rejects.to_string(), "[P1] r1: d1; [P2] r2: d2");
+    }
+
+    #[test]
+    fn rejects_display_empty_produces_empty_string() {
+        let rejects = super::Rejects::new(vec![]);
+        assert_eq!(rejects.to_string(), "");
+    }
+
+    #[test]
+    fn rejects_display_propagates_error_from_reject_fmt() {
+        use std::fmt;
+        use std::fmt::Write;
+
+        struct ImmediateFailWriter;
+        impl Write for ImmediateFailWriter {
+            fn write_str(&mut self, _: &str) -> fmt::Result {
+                Err(fmt::Error)
+            }
+        }
+
+        let rejects = super::Rejects::new(vec![super::Reject::new(
+            "P",
+            super::RejectScope::Order,
+            RejectCode::Other,
+            "r",
+            "d",
+        )]);
+        assert!(fmt::write(&mut ImmediateFailWriter, format_args!("{rejects}")).is_err());
+    }
+
+    #[test]
+    fn rejects_display_propagates_write_error() {
+        use std::fmt;
+        use std::fmt::Write;
+
+        struct FailOnSeparator;
+        impl Write for FailOnSeparator {
+            fn write_str(&mut self, s: &str) -> fmt::Result {
+                if s == "; " {
+                    Err(fmt::Error)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let rejects = super::Rejects::new(vec![
+            super::Reject::new("P", super::RejectScope::Order, RejectCode::Other, "r", "d"),
+            super::Reject::new("P", super::RejectScope::Order, RejectCode::Other, "r", "d"),
+        ]);
+        assert!(fmt::write(&mut FailOnSeparator, format_args!("{rejects}")).is_err());
     }
 }

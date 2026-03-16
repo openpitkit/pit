@@ -3,31 +3,50 @@ import openpit
 
 def make_order(
     *,
-    side: str = "buy",
-    quantity: float = 1.0,
-    price: float = 10.0,
-    underlying_asset: str = "AAPL",
-    settlement_asset: str = "USD",
+    side: openpit.param.Side = openpit.param.Side.BUY,
+    trade_amount: openpit.param.Quantity | openpit.param.Volume | None = None,
+    price: openpit.param.Price | None = None,
+    instrument: openpit.Instrument | None = None,
 ) -> openpit.Order:
+    if trade_amount is None:
+        trade_amount = openpit.param.Quantity("1")
+    if price is None:
+        price = openpit.param.Price("10")
+    if instrument is None:
+        instrument = openpit.Instrument(
+            openpit.param.Asset("AAPL"),
+            openpit.param.Asset("USD"),
+        )
+
     return openpit.Order(
-        underlying_asset=underlying_asset,
-        settlement_asset=settlement_asset,
-        side=side,
-        quantity=quantity,
-        price=price,
+        operation=openpit.OrderOperation(
+            instrument=instrument,
+            side=side,
+            trade_amount=trade_amount,
+            price=price,
+        ),
     )
 
 
 def make_report(
     *,
-    pnl: float,
-    fee: float = 0.0,
-    underlying_asset: str = "AAPL",
-    settlement_asset: str = "USD",
-) -> openpit.pretrade.ExecutionReport:
-    return openpit.pretrade.ExecutionReport(
-        underlying_asset=underlying_asset,
-        settlement_asset=settlement_asset,
-        pnl=pnl,
-        fee=fee,
+    pnl: openpit.param.Pnl,
+    fee: openpit.param.Fee | None = None,
+    instrument: openpit.Instrument | None = None,
+    side: openpit.param.Side = openpit.param.Side.BUY,
+) -> openpit.ExecutionReport:
+    if fee is None:
+        fee = openpit.param.Fee("0")
+    if instrument is None:
+        instrument = openpit.Instrument(
+            openpit.param.Asset("AAPL"),
+            openpit.param.Asset("USD"),
+        )
+
+    return openpit.ExecutionReport(
+        operation=openpit.ExecutionReportOperation(
+            instrument=instrument,
+            side=side,
+        ),
+        financial_impact=openpit.FinancialImpact(pnl=pnl, fee=fee),
     )

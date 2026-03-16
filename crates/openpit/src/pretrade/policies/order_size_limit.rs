@@ -18,10 +18,10 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::core::Order;
-use crate::param::{Asset, Quantity, Volume};
-
+use crate::param::{Asset, Price, Quantity, TradeAmount, Volume};
 use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
+use crate::HasInstrument;
+use crate::{HasOrderPrice, HasTradeAmount};
 
 /// Per-settlement order size limits.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,36 +41,34 @@ pub struct OrderSizeLimit {
 ///
 /// # Examples
 ///
-/// ```
-/// use openpit::param::{Asset, Price, Quantity, Side, Volume};
-/// use openpit::core::Instrument;
+/// ```rust
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use openpit::param::{Asset, Price, Quantity, Side, TradeAmount, Volume};
 /// use openpit::pretrade::policies::{OrderSizeLimit, OrderSizeLimitPolicy};
-/// use openpit::{Engine, Order};
+/// use openpit::{Engine, Instrument, OrderOperation};
 ///
 /// let policy = OrderSizeLimitPolicy::new(
 ///     OrderSizeLimit {
-///         settlement_asset: Asset::new("USD").expect("asset code must be valid"),
-///         max_quantity: Quantity::from_str("100").expect("valid"),
-///         max_notional: Volume::from_str("50000").expect("valid"),
+///         settlement_asset: Asset::new("USD")?,
+///         max_quantity: Quantity::from_str("100")?,
+///         max_notional: Volume::from_str("50000")?,
 ///     },
 ///     [],
 /// );
 ///
-/// let engine = Engine::builder()
+/// let engine = Engine::<OrderOperation, ()>::builder()
 ///     .check_pre_trade_start_policy(policy)
-///     .build()
-///     .expect("valid");
+///     .build()?;
 ///
-/// let order = Order {
-///     instrument: Instrument::new(
-///         Asset::new("AAPL").expect("asset code must be valid"),
-///         Asset::new("USD").expect("asset code must be valid"),
-///     ),
+/// let order = OrderOperation {
+///     instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
 ///     side: Side::Buy,
-///     quantity: Quantity::from_str("10").expect("valid"),
-///     price: Price::from_str("200").expect("valid"),
+///     trade_amount: TradeAmount::Quantity(Quantity::from_str("10")?),
+///     price: Some(Price::from_str("200")?),
 /// };
 /// assert!(engine.start_pre_trade(order).is_ok());
+/// # Ok(())
+/// # }
 /// ```
 pub struct OrderSizeLimitPolicy {
     limits: RefCell<HashMap<Asset, OrderSizeLimit>>,
@@ -90,7 +88,6 @@ impl OrderSizeLimitPolicy {
         for limit in additional_limits {
             limits.insert(limit.settlement_asset.clone(), limit);
         }
-
         Self {
             limits: RefCell::new(limits),
         }
@@ -104,80 +101,139 @@ impl OrderSizeLimitPolicy {
     }
 }
 
-impl CheckPreTradeStartPolicy for OrderSizeLimitPolicy {
+impl<O, R> CheckPreTradeStartPolicy<O, R> for OrderSizeLimitPolicy
+where
+    O: HasInstrument + HasTradeAmount + HasOrderPrice,
+{
     fn name(&self) -> &'static str {
         Self::NAME
     }
 
-    fn check_pre_trade_start(&self, order: &Order) -> Result<(), Reject> {
-        let settlement = order.instrument.settlement_asset();
-        let limit = match self.limits.borrow().get(settlement).cloned() {
-            Some(limit) => limit,
-            None => {
-                return Err(Reject::new(
-                    self.name(),
-                    RejectScope::Order,
-                    RejectCode::RiskConfigurationMissing,
-                    "order size limit missing",
-                    format!("settlement asset {settlement} has no configured limit"),
-                ));
-            }
-        };
-
-        let quantity_exceeded = order.quantity > limit.max_quantity;
-        let requested_notional = order.price.calculate_volume(order.quantity);
-        let notional_exceeded = match &requested_notional {
-            Ok(notional) => *notional > limit.max_notional,
-            Err(_) => true,
-        };
-
-        match (quantity_exceeded, notional_exceeded) {
-            (false, false) => Ok(()),
-            (true, false) => Err(Reject::new(
-                self.name(),
-                RejectScope::Order,
-                RejectCode::OrderQtyExceedsLimit,
-                "order quantity exceeded",
-                format!(
-                    "requested {}, max allowed: {}",
-                    order.quantity, limit.max_quantity
-                ),
-            )),
-            (false, true) => Err(order_notional_reject(
-                self.name(),
-                order,
-                &limit,
-                requested_notional.as_ref().ok(),
-            )),
-            (true, true) => Err(order_size_reject(
-                self.name(),
-                order,
-                &limit,
-                requested_notional.as_ref().ok(),
-            )),
-        }
+    fn check_pre_trade_start(&self, order: &O) -> Result<(), Reject> {
+        let limits = self.limits.borrow();
+        check_pre_trade_start_with_limits(
+            Self::NAME,
+            &limits,
+            order.instrument().settlement_asset(),
+            order.trade_amount(),
+            order.price(),
+        )
     }
+
+    fn apply_execution_report(&self, _report: &R) -> bool {
+        false
+    }
+}
+
+fn check_pre_trade_start_with_limits(
+    policy: &'static str,
+    limits: &HashMap<Asset, OrderSizeLimit>,
+    settlement: &Asset,
+    trade_amount: TradeAmount,
+    price: Option<Price>,
+) -> Result<(), Reject> {
+    let limit = match limits.get(settlement).cloned() {
+        Some(value) => value,
+        None => return Err(missing_order_size_limit_reject(policy, settlement)),
+    };
+
+    let quantity = resolve_quantity(policy, trade_amount, price)?;
+    let requested_notional = resolve_notional(policy, trade_amount, price)?;
+    let quantity_exceeded = quantity > limit.max_quantity;
+    let notional_exceeded = requested_notional > limit.max_notional;
+
+    match (quantity_exceeded, notional_exceeded) {
+        (false, false) => Ok(()),
+        (true, false) => Err(Reject::new(
+            policy,
+            RejectScope::Order,
+            RejectCode::OrderQtyExceedsLimit,
+            "order quantity exceeded",
+            format!("requested {quantity}, max allowed: {}", limit.max_quantity),
+        )),
+        (false, true) => Err(order_notional_reject(policy, &limit, requested_notional)),
+        (true, true) => Err(order_size_reject(
+            policy,
+            quantity,
+            &limit,
+            requested_notional,
+        )),
+    }
+}
+
+fn resolve_notional(
+    policy: &'static str,
+    trade_amount: TradeAmount,
+    price: Option<Price>,
+) -> Result<Volume, Reject> {
+    match (trade_amount, price) {
+        (TradeAmount::Volume(volume), _) => Ok(volume),
+        (TradeAmount::Quantity(quantity), Some(price)) => {
+            price.calculate_volume(quantity).map_err(|_| {
+                order_value_calculation_failed_reject(
+                    policy,
+                    "price or quantity could not be used to evaluate order notional",
+                )
+            })
+        }
+        (TradeAmount::Quantity(_), None) => Err(order_value_calculation_failed_reject(
+            policy,
+            "price not provided for evaluating cash flow/notional/volume",
+        )),
+    }
+}
+
+fn resolve_quantity(
+    policy: &'static str,
+    trade_amount: TradeAmount,
+    price: Option<Price>,
+) -> Result<Quantity, Reject> {
+    match (trade_amount, price) {
+        (TradeAmount::Quantity(quantity), _) => Ok(quantity),
+        (TradeAmount::Volume(volume), Some(price)) => {
+            volume.calculate_quantity(price).map_err(|_| {
+                order_value_calculation_failed_reject(
+                    policy,
+                    "price or volume could not be used to evaluate order quantity",
+                )
+            })
+        }
+        (TradeAmount::Volume(_), None) => Err(order_value_calculation_failed_reject(
+            policy,
+            "price not provided for evaluating cash flow/notional/volume",
+        )),
+    }
+}
+
+fn missing_order_size_limit_reject(policy: &'static str, settlement: &Asset) -> Reject {
+    Reject::new(
+        policy,
+        RejectScope::Order,
+        RejectCode::RiskConfigurationMissing,
+        "order size limit missing",
+        format!("settlement asset {settlement} has no configured limit"),
+    )
+}
+
+fn order_value_calculation_failed_reject(policy: &'static str, details: &'static str) -> Reject {
+    Reject::new(
+        policy,
+        RejectScope::Order,
+        RejectCode::OrderValueCalculationFailed,
+        "order value calculation failed",
+        details,
+    )
 }
 
 fn order_notional_reject(
     policy: &'static str,
-    order: &Order,
     limit: &OrderSizeLimit,
-    requested_notional: Option<&Volume>,
+    requested_notional: Volume,
 ) -> Reject {
-    let details = match requested_notional {
-        Some(notional) => format!(
-            "requested {}, max allowed: {}",
-            notional,
-            limit.max_notional
-        ),
-        None => format!(
-            "requested price {}, requested quantity {}, max allowed notional: {}; could not calculate requested notional",
-            order.price,
-            order.quantity,
-            limit.max_notional
-        ),
-    };
+    let details = format!(
+        "requested {requested_notional}, max allowed: {}",
+        limit.max_notional
+    );
 
     Reject::new(
         policy,
@@ -190,51 +246,58 @@ fn order_notional_reject(
 
 fn order_size_reject(
     policy: &'static str,
-    order: &Order,
+    quantity: crate::param::Quantity,
     limit: &OrderSizeLimit,
-    requested_notional: Option<&Volume>,
+    requested_notional: Volume,
 ) -> Reject {
-    let notional_details = match requested_notional {
-        Some(notional) => format!(
-            "requested notional {}, max allowed: {}",
-            notional,
-            limit.max_notional
-        ),
-        None => format!(
-            "requested price {}, requested quantity {}, max allowed notional: {}; could not calculate requested notional",
-            order.price,
-            order.quantity,
-            limit.max_notional
-        ),
-    };
-
     Reject::new(
         policy,
         RejectScope::Order,
         RejectCode::OrderExceedsLimit,
         "order size exceeded",
         format!(
-            "requested quantity {}, max allowed: {}; {notional_details}",
-            order.quantity, limit.max_quantity
+            "requested quantity {quantity}, max allowed: {}; requested notional {requested_notional}, max allowed: {}",
+            limit.max_quantity,
+            limit.max_notional
         ),
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::core::{Instrument, Order};
+    use crate::core::{Instrument, OrderOperation};
+    use crate::param::TradeAmount;
     use crate::param::{Asset, Price, Quantity, Side, Volume};
     use crate::pretrade::{CheckPreTradeStartPolicy, RejectCode, RejectScope};
     use rust_decimal::Decimal;
 
     use super::{OrderSizeLimit, OrderSizeLimitPolicy};
 
+    type TestOrder = OrderOperation;
+
+    fn order(settlement: &str, quantity: &str, price: &str) -> TestOrder {
+        OrderOperation {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new(settlement).expect("asset code must be valid"),
+            ),
+            side: Side::Buy,
+            trade_amount: TradeAmount::Quantity(
+                Quantity::from_str(quantity).expect("quantity literal must be valid"),
+            ),
+            price: Some(Price::from_str(price).expect("price literal must be valid")),
+        }
+    }
+
     #[test]
     fn quantity_violation_returns_order_quantity_exceeded() {
-        let policy = OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), []);
+        let policy = OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), no_limits());
 
-        let reject = policy
-            .check_pre_trade_start(&order("USD", "11", "90"))
+        let reject =
+            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
+                &policy,
+                &order("USD", "11", "90"),
+            )
             .expect_err("quantity must be rejected");
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::OrderQtyExceedsLimit);
@@ -244,10 +307,13 @@ mod tests {
 
     #[test]
     fn notional_violation_returns_order_notional_exceeded() {
-        let policy = OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), []);
+        let policy = OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), no_limits());
 
-        let reject = policy
-            .check_pre_trade_start(&order("USD", "10", "101"))
+        let reject =
+            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
+                &policy,
+                &order("USD", "10", "101"),
+            )
             .expect_err("notional must be rejected");
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::OrderNotionalExceedsLimit);
@@ -257,10 +323,13 @@ mod tests {
 
     #[test]
     fn both_violations_are_returned_in_single_reject() {
-        let policy = OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), []);
+        let policy = OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), no_limits());
 
-        let reject = policy
-            .check_pre_trade_start(&order("USD", "11", "100"))
+        let reject =
+            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
+                &policy,
+                &order("USD", "11", "100"),
+            )
             .expect_err("quantity and notional must be rejected");
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::OrderExceedsLimit);
@@ -273,10 +342,13 @@ mod tests {
 
     #[test]
     fn missing_limit_returns_order_size_limit_missing() {
-        let policy = OrderSizeLimitPolicy::new(limit("EUR", "10", "1000"), []);
+        let policy = OrderSizeLimitPolicy::new(limit("EUR", "10", "1000"), no_limits());
 
-        let reject = policy
-            .check_pre_trade_start(&order("USD", "1", "1"))
+        let reject =
+            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
+                &policy,
+                &order("USD", "1", "1"),
+            )
             .expect_err("missing limit must reject");
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::RiskConfigurationMissing);
@@ -289,18 +361,25 @@ mod tests {
 
     #[test]
     fn boundary_values_are_accepted() {
-        let policy = OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), []);
+        let policy = OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), no_limits());
 
-        let result = policy.check_pre_trade_start(&order("USD", "10", "100"));
+        let result =
+            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
+                &policy,
+                &order("USD", "10", "100"),
+            );
         assert!(result.is_ok());
     }
 
     #[test]
     fn unconfigured_settlement_rejects_when_limit_is_missing() {
-        let policy = OrderSizeLimitPolicy::new(limit("EUR", "10", "1000"), []);
+        let policy = OrderSizeLimitPolicy::new(limit("EUR", "10", "1000"), no_limits());
 
-        let reject = policy
-            .check_pre_trade_start(&order("USD", "1", "1"))
+        let reject =
+            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
+                &policy,
+                &order("USD", "1", "1"),
+            )
             .expect_err("default policy must reject without configured limits");
         assert_eq!(reject.code, RejectCode::RiskConfigurationMissing);
         assert_eq!(reject.reason, "order size limit missing");
@@ -312,77 +391,178 @@ mod tests {
 
     #[test]
     fn volume_overflow_is_treated_as_notional_exceeded() {
-        let policy = OrderSizeLimitPolicy::new(limit("USD", "100", "1000"), []);
+        let policy = OrderSizeLimitPolicy::new(limit("USD", "100", "1000"), no_limits());
 
-        let order = Order {
+        let order = OrderOperation {
             instrument: Instrument::new(
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
-            side: Side::Buy,
-            quantity: Quantity::from_str("2").expect("quantity literal must be valid"),
-            price: Price::new(Decimal::MAX),
+            side: crate::param::Side::Buy,
+            trade_amount: TradeAmount::Quantity(
+                Quantity::from_str("2").expect("quantity literal must be valid"),
+            ),
+            price: Some(crate::param::Price::new(Decimal::MAX)),
         };
 
-        let reject = policy
-            .check_pre_trade_start(&order)
+        let reject =
+            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
+                &policy,
+                &order,
+            )
             .expect_err("overflow must be treated as notional exceeded");
         assert_eq!(reject.scope, RejectScope::Order);
-        assert_eq!(reject.code, RejectCode::OrderNotionalExceedsLimit);
-        assert_eq!(reject.reason, "order notional exceeded");
+        assert_eq!(reject.code, RejectCode::OrderValueCalculationFailed);
+        assert_eq!(reject.reason, "order value calculation failed");
         assert_eq!(
             reject.details,
-            format!(
-                "requested price {}, requested quantity 2, max allowed notional: 1000; could not calculate requested notional",
-                Price::new(Decimal::MAX)
-            )
+            "price or quantity could not be used to evaluate order notional"
         );
     }
 
     #[test]
     fn volume_overflow_with_quantity_violation_returns_order_size_exceeded() {
-        let policy = OrderSizeLimitPolicy::new(limit("USD", "1", "1000"), []);
+        let policy = OrderSizeLimitPolicy::new(limit("USD", "1", "1000"), no_limits());
 
-        let order = Order {
+        let order = OrderOperation {
             instrument: Instrument::new(
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
-            side: Side::Buy,
-            quantity: Quantity::from_str("2").expect("quantity literal must be valid"),
-            price: Price::new(Decimal::MAX),
+            side: crate::param::Side::Buy,
+            trade_amount: TradeAmount::Quantity(
+                Quantity::from_str("2").expect("quantity literal must be valid"),
+            ),
+            price: Some(crate::param::Price::new(Decimal::MAX)),
         };
 
-        let reject = policy
-            .check_pre_trade_start(&order)
+        let reject =
+            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
+                &policy,
+                &order,
+            )
             .expect_err("overflow plus quantity violation must be order size exceeded");
         assert_eq!(reject.scope, RejectScope::Order);
-        assert_eq!(reject.code, RejectCode::OrderExceedsLimit);
-        assert_eq!(reject.reason, "order size exceeded");
+        assert_eq!(reject.code, RejectCode::OrderValueCalculationFailed);
+        assert_eq!(reject.reason, "order value calculation failed");
         assert_eq!(
             reject.details,
-            format!(
-                "requested quantity 2, max allowed: 1; requested price {}, requested quantity 2, max allowed notional: 1000; could not calculate requested notional",
-                Price::new(Decimal::MAX)
-            )
+            "price or quantity could not be used to evaluate order notional"
         );
     }
 
     #[test]
     fn additional_limits_and_set_limit_are_applied() {
-        let policy =
-            OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), [limit("EUR", "5", "500")]);
+        let policy = OrderSizeLimitPolicy::new(
+            limit("USD", "10", "1000"),
+            vec![limit("EUR", "5", "500"), limit("GBP", "3", "300")],
+        );
 
-        assert!(policy
-            .check_pre_trade_start(&order("EUR", "5", "100"))
-            .is_ok());
+        assert!(<OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(&policy, &order("EUR", "5", "100")).is_ok());
+        assert!(<OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(&policy, &order("GBP", "3", "100")).is_ok());
 
         policy.set_limit(limit("EUR", "1", "100"));
-        let reject = policy
-            .check_pre_trade_start(&order("EUR", "2", "10"))
+        let reject = <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(&policy, &order("EUR", "2", "10"))
             .expect_err("updated limit must be enforced");
         assert_eq!(reject.code, RejectCode::OrderQtyExceedsLimit);
         assert_eq!(reject.details, "requested 2, max allowed: 1");
+    }
+
+    #[test]
+    fn policy_name_is_stable() {
+        let policy = OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), no_limits());
+        assert_eq!(
+            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::name(&policy),
+            OrderSizeLimitPolicy::NAME
+        );
+    }
+
+    #[test]
+    fn apply_execution_report_returns_false() {
+        let policy = OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), no_limits());
+
+        assert!(!<OrderSizeLimitPolicy as CheckPreTradeStartPolicy<
+            TestOrder,
+            (),
+        >>::apply_execution_report(&policy, &()));
+    }
+
+    #[test]
+    fn resolve_notional_covers_volume_and_missing_price_paths() {
+        let from_volume = super::resolve_notional(
+            OrderSizeLimitPolicy::NAME,
+            TradeAmount::Volume(Volume::from_str("123").expect("volume literal must be valid")),
+            None,
+        )
+        .expect("volume amount should resolve notional without price");
+        assert_eq!(
+            from_volume,
+            Volume::from_str("123").expect("volume literal must be valid")
+        );
+
+        let missing_price = super::resolve_notional(
+            OrderSizeLimitPolicy::NAME,
+            TradeAmount::Quantity(Quantity::from_str("1").expect("quantity literal must be valid")),
+            None,
+        )
+        .expect_err("quantity amount without price must reject");
+        assert_eq!(missing_price.code, RejectCode::OrderValueCalculationFailed);
+        assert_eq!(
+            missing_price.details,
+            "price not provided for evaluating cash flow/notional/volume"
+        );
+    }
+
+    #[test]
+    fn volume_order_without_price_propagates_resolve_quantity_error() {
+        let policy = OrderSizeLimitPolicy::new(limit("USD", "100", "10000"), no_limits());
+        let order = OrderOperation {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new("USD").expect("asset code must be valid"),
+            ),
+            side: Side::Buy,
+            trade_amount: TradeAmount::Volume(
+                Volume::from_str("100").expect("volume literal must be valid"),
+            ),
+            price: None,
+        };
+        let reject =
+            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
+                &policy, &order,
+            )
+            .expect_err("volume order without price must reject");
+        assert_eq!(reject.code, RejectCode::OrderValueCalculationFailed);
+    }
+
+    #[test]
+    fn resolve_quantity_covers_invalid_volume_conversion_and_missing_price_paths() {
+        let conversion_failed = super::resolve_quantity(
+            OrderSizeLimitPolicy::NAME,
+            TradeAmount::Volume(Volume::from_str("10").expect("volume literal must be valid")),
+            Some(Price::from_str("0").expect("zero price literal must be valid")),
+        )
+        .expect_err("volume-to-quantity conversion with zero price must reject");
+        assert_eq!(
+            conversion_failed.code,
+            RejectCode::OrderValueCalculationFailed
+        );
+        assert_eq!(
+            conversion_failed.details,
+            "price or volume could not be used to evaluate order quantity"
+        );
+
+        let missing_price = super::resolve_quantity(
+            OrderSizeLimitPolicy::NAME,
+            TradeAmount::Volume(Volume::from_str("10").expect("volume literal must be valid")),
+            None,
+        )
+        .expect_err("volume amount without price must reject");
+        assert_eq!(missing_price.code, RejectCode::OrderValueCalculationFailed);
+        assert_eq!(
+            missing_price.details,
+            "price not provided for evaluating cash flow/notional/volume"
+        );
     }
 
     fn limit(settlement: &str, max_quantity: &str, max_notional: &str) -> OrderSizeLimit {
@@ -395,15 +575,7 @@ mod tests {
         }
     }
 
-    fn order(settlement: &str, quantity: &str, price: &str) -> Order {
-        Order {
-            instrument: Instrument::new(
-                Asset::new("AAPL").expect("asset code must be valid"),
-                Asset::new(settlement).expect("asset code must be valid"),
-            ),
-            side: Side::Buy,
-            quantity: Quantity::from_str(quantity).expect("quantity literal must be valid"),
-            price: Price::from_str(price).expect("price literal must be valid"),
-        }
+    fn no_limits() -> Vec<OrderSizeLimit> {
+        Vec::new()
     }
 }

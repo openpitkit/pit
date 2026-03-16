@@ -15,26 +15,32 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
+use super::lock::Lock;
 use super::mutations::{Mutation, RiskMutation};
-use super::reject::Reject;
+use super::reject::Rejects;
 use super::request::RequestHandle;
 use super::reservation::{Reservation, ReservationHandle};
+use std::marker::PhantomData;
 
-type RequestExecutor = Box<dyn FnOnce() -> Result<Reservation, Vec<Reject>>>;
+type RequestExecutor = Box<dyn FnOnce() -> Result<Reservation, Rejects>>;
 type MutationApplier = Box<dyn FnMut(&RiskMutation)>;
 
-pub(crate) struct RequestHandleImpl {
+pub(crate) struct RequestHandleImpl<O> {
     execute: RequestExecutor,
+    marker: PhantomData<fn(O)>,
 }
 
-impl RequestHandleImpl {
+impl<O> RequestHandleImpl<O> {
     pub(crate) fn new(execute: RequestExecutor) -> Self {
-        Self { execute }
+        Self {
+            execute,
+            marker: PhantomData,
+        }
     }
 }
 
-impl RequestHandle for RequestHandleImpl {
-    fn execute(self: Box<Self>) -> Result<Reservation, Vec<Reject>> {
+impl<O> RequestHandle<O> for RequestHandleImpl<O> {
+    fn execute(self: Box<Self>) -> Result<Reservation, Rejects> {
         let this = *self;
         (this.execute)()
     }
@@ -61,6 +67,10 @@ impl ReservationHandle for ReservationHandleImpl {
 
     fn rollback(mut self: Box<Self>) {
         apply_rollback_mutations(&self.mutations, &mut self.apply_mutation);
+    }
+
+    fn lock(&self) -> Lock {
+        Lock::default()
     }
 }
 

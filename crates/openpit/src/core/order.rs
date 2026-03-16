@@ -15,49 +15,260 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use crate::param::{Price, Quantity, Side};
+use crate::impl_request_has_field;
+use crate::param::{Asset, Leverage, PositionSide, Price, Side, TradeAmount};
 
-use super::Instrument;
+use crate::{
+    HasAutoBorrow, HasClosePosition, HasInstrument, HasOrderCollateralAsset, HasOrderLeverage,
+    HasOrderPositionSide, HasOrderPrice, HasReduceOnly, HasSide, HasTradeAmount, Instrument,
+};
 
-/// Limit order submitted for pre-trade checks.
-///
-/// Market orders are not supported in this version, therefore `price` is
-/// mandatory and not optional.
+//--------------------------------------------------------------------------------------------------
+
+/// Data: main operation parameters that describe side, instrument, price, and amount.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
+/// struct literals from external crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Order {
-    /// Instrument being traded.
+pub struct OrderOperation {
     pub instrument: Instrument,
-    /// Trade side.
     pub side: Side,
-    /// Order size in underlying asset units.
-    pub quantity: Quantity,
-    /// Limit price.
-    pub price: Price,
+    pub trade_amount: TradeAmount,
+    /// Requested worst execution price used for size translation and price-sensitive checks.
+    ///
+    /// `None` means the order should execute at market price.
+    pub price: Option<Price>,
 }
+
+/// Adds main operation parameters that describe side, instrument, price, and amount.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
+/// struct literals from external crates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WithOrderOperation<T> {
+    pub inner: T,
+    pub operation: OrderOperation,
+}
+
+impl_request_has_field!(
+    HasInstrument,
+    instrument,
+    &Instrument,
+    OrderOperation,
+    instrument,
+    WithOrderOperation,
+    operation,
+);
+
+impl_request_has_field!(
+    HasSide,
+    side,
+    Side,
+    OrderOperation,
+    side,
+    WithOrderOperation,
+    operation,
+);
+
+impl_request_has_field!(
+    HasTradeAmount,
+    trade_amount,
+    TradeAmount,
+    OrderOperation,
+    trade_amount,
+    WithOrderOperation,
+    operation,
+);
+
+impl_request_has_field!(
+    HasOrderPrice,
+    price,
+    Option<Price>,
+    OrderOperation,
+    price,
+    WithOrderOperation,
+    operation,
+);
+
+//--------------------------------------------------------------------------------------------------
+
+/// Data: position management parameters.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
+/// struct literals from external crates.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OrderPosition {
+    /// Hedge-mode leg targeted by the order.
+    ///
+    /// `Some(...)` selects an explicit long/short leg; `None` uses one-way mode semantics.
+    pub position_side: Option<PositionSide>,
+    /// Restricts the order to exposure-reducing execution only.
+    pub reduce_only: bool,
+    /// Marks intent to close the entire open position for the targeted leg/symbol.
+    pub close_position: bool,
+}
+
+/// Adds position management parameters.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
+/// struct literals from external crates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WithOrderPosition<T> {
+    pub inner: T,
+    pub position: OrderPosition,
+}
+
+impl_request_has_field!(
+    HasOrderPositionSide,
+    position_side,
+    Option<PositionSide>,
+    OrderPosition,
+    position_side,
+    WithOrderPosition,
+    position,
+);
+
+impl_request_has_field!(
+    HasReduceOnly,
+    reduce_only,
+    bool,
+    OrderPosition,
+    reduce_only,
+    WithOrderPosition,
+    position,
+);
+
+impl_request_has_field!(
+    HasClosePosition,
+    close_position,
+    bool,
+    OrderPosition,
+    close_position,
+    WithOrderPosition,
+    position,
+);
+
+//--------------------------------------------------------------------------------------------------
+
+/// Data: margin configuration parameters.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
+/// struct literals from external crates.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OrderMargin {
+    /// Per-order leverage target used for margin requirement calculation.
+    ///
+    /// `None` means "use integration/account default leverage configuration".
+    pub leverage: Option<Leverage>,
+    /// Collateral currency intended to fund this specific order.
+    ///
+    /// `None` means "use default collateral asset selected by integration".
+    pub collateral_asset: Option<Asset>,
+    /// Whether temporary collateral shortage may be covered by auto-borrow.
+    ///
+    /// Defaults to `false`.
+    pub auto_borrow: bool,
+}
+
+/// Adds margin configuration parameters.
+/// No `#[non_exhaustive]`: these are client-facing convenience structs meant to be constructed via
+/// struct literals from external crates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WithOrderMargin<T> {
+    pub inner: T,
+    pub margin: OrderMargin,
+}
+
+impl_request_has_field!(
+    HasOrderLeverage,
+    leverage,
+    Option<Leverage>,
+    OrderMargin,
+    leverage,
+    WithOrderMargin,
+    margin,
+);
+
+impl HasOrderCollateralAsset for OrderMargin {
+    fn collateral_asset(&self) -> Option<&Asset> {
+        self.collateral_asset.as_ref()
+    }
+}
+
+impl<T> HasOrderCollateralAsset for WithOrderMargin<T> {
+    fn collateral_asset(&self) -> Option<&Asset> {
+        self.margin.collateral_asset()
+    }
+}
+
+impl_request_has_field!(
+    HasAutoBorrow,
+    auto_borrow,
+    bool,
+    OrderMargin,
+    auto_borrow,
+    WithOrderMargin,
+    margin,
+);
+
+//--------------------------------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
-    use crate::param::{Asset, Price, Quantity, Side};
+    use crate::param::Asset;
 
-    use super::Order;
-    use crate::core::Instrument;
+    use super::{HasOrderCollateralAsset, OrderMargin, WithOrderMargin};
 
     #[test]
-    fn order_exposes_required_fields() {
-        let order = Order {
-            instrument: Instrument::new(
-                Asset::new("SPX").expect("asset code must be valid"),
-                Asset::new("USD").expect("asset code must be valid"),
-            ),
-            side: Side::Sell,
-            quantity: Quantity::from_str("2").expect("quantity must be valid"),
-            price: Price::from_str("5000").expect("price must be valid"),
+    fn collateral_asset_returns_some_when_set() {
+        let asset = Asset::new("BTC").expect("must be valid");
+        let margin = OrderMargin {
+            leverage: None,
+            collateral_asset: Some(asset.clone()),
+            auto_borrow: false,
         };
+        assert_eq!(margin.collateral_asset(), Some(&asset));
+    }
 
-        assert_eq!(
-            order.instrument.underlying_asset(),
-            &Asset::new("SPX").expect("asset code must be valid")
+    #[test]
+    fn collateral_asset_returns_none_when_not_set() {
+        let margin = OrderMargin {
+            leverage: None,
+            collateral_asset: None,
+            auto_borrow: false,
+        };
+        assert_eq!(margin.collateral_asset(), None);
+    }
+
+    #[test]
+    fn with_order_margin_delegates_collateral_asset() {
+        let asset = Asset::new("ETH").expect("must be valid");
+        let w = WithOrderMargin {
+            inner: (),
+            margin: OrderMargin {
+                leverage: None,
+                collateral_asset: Some(asset.clone()),
+                auto_borrow: false,
+            },
+        };
+        assert_eq!(w.collateral_asset(), Some(&asset));
+    }
+
+    #[test]
+    fn with_order_operation_instrument_delegates_via_ref_arm() {
+        use crate::param::{Quantity, Side, TradeAmount};
+        use crate::{HasInstrument, Instrument};
+
+        let instrument = Instrument::new(
+            Asset::new("BTC").expect("must be valid"),
+            Asset::new("USD").expect("must be valid"),
         );
-        assert_eq!(order.side, Side::Sell);
+        let w = super::WithOrderOperation {
+            inner: (),
+            operation: super::OrderOperation {
+                instrument: instrument.clone(),
+                side: Side::Buy,
+                trade_amount: TradeAmount::Quantity(
+                    Quantity::from_str("1").expect("must be valid"),
+                ),
+                price: None,
+            },
+        };
+        assert_eq!(w.instrument(), &instrument);
     }
 }

@@ -1,6 +1,6 @@
 # Pit: Pre-trade Integrity Toolkit
 
-![Pit](doc/assets/pit-readme-banner.png)
+[![Pit](docs/assets/pit-readme-banner.png)](https://openpit.dev/)
 <!-- markdownlint-disable MD013 -->
 [![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![Rust](https://img.shields.io/badge/rust-1.75+-orange)](https://crates.io/crates/openpit) [![Python versions](https://img.shields.io/pypi/pyversions/openpit)](https://pypi.org/project/openpit/) [![crates.io](https://img.shields.io/crates/v/openpit)](https://crates.io/crates/openpit) [![PyPI](https://img.shields.io/pypi/v/openpit)](https://pypi.org/project/openpit/) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 <!-- markdownlint-enable MD013 -->
@@ -60,6 +60,9 @@ evolution during the pre‑stable phase.
 
 ## Where To Start
 
+The project website [openpit.dev](https://openpit.dev/) for an overview
+and links to all documentation.
+
 [The `openpit` crate README](crates/openpit/README.md) if you want to start
 with the Rust interface and a runnable example.
 
@@ -73,7 +76,7 @@ with Pit from Python via the `openpit` package.
 ### Prerequisites
 
 - Rust toolchain
-- Python `>=3.9`
+- Python `>=3.10`
 - `maturin` for Python bindings build
 - `pytest` for Python tests
 

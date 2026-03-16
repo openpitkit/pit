@@ -7,6 +7,8 @@
 `openpit` is an embeddable pre-trade risk SDK for integrating policy-driven
 risk checks into trading systems from Python.
 
+For an overview and links to all resources, see
+the project website [openpit.dev](https://openpit.dev/).
 For full project documentation, see
 [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
 For conceptual and architectural pages, see
@@ -87,21 +89,21 @@ when automatic order submission must be halted until the situation is analyzed.
 import openpit
 
 # 1. Configure policies.
-pnl = openpit.pretrade.policies.PnlKillSwitchPolicy(
-    settlement_asset="USD",
-    barrier="1000",
+pnl_policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
+    settlement_asset=openpit.param.Asset("USD"),
+    barrier=openpit.param.Pnl("1000"),
 )
 
-rate_limit = openpit.pretrade.policies.RateLimitPolicy(
+rate_limit_policy = openpit.pretrade.policies.RateLimitPolicy(
     max_orders=100,
     window_seconds=1,
 )
 
-size = openpit.pretrade.policies.OrderSizeLimitPolicy(
+order_size_policy = openpit.pretrade.policies.OrderSizeLimitPolicy(
     limit=openpit.pretrade.policies.OrderSizeLimit(
-        settlement_asset="USD",
-        max_quantity="500",
-        max_notional="100000",
+        settlement_asset=openpit.param.Asset("USD"),
+        max_quantity=openpit.param.Quantity("500"),
+        max_notional=openpit.param.Volume("100000"),
     ),
 )
 
@@ -111,19 +113,23 @@ engine = (
     .check_pre_trade_start_policy(
         policy=openpit.pretrade.policies.OrderValidationPolicy(),
     )
-    .check_pre_trade_start_policy(policy=pnl)
-    .check_pre_trade_start_policy(policy=rate_limit)
-    .check_pre_trade_start_policy(policy=size)
+    .check_pre_trade_start_policy(policy=pnl_policy)
+    .check_pre_trade_start_policy(policy=rate_limit_policy)
+    .check_pre_trade_start_policy(policy=order_size_policy)
     .build()
 )
 
 # 3. Check an order.
 order = openpit.Order(
-    underlying_asset="AAPL",
-    settlement_asset="USD",
-    side="buy",
-    quantity=100.0,
-    price=185.0,
+    operation=openpit.OrderOperation(
+        instrument=openpit.Instrument(
+            openpit.param.Asset("AAPL"),
+            openpit.param.Asset("USD"),
+        ),
+        side=openpit.param.Side.BUY,
+        trade_amount=openpit.param.Quantity("100"),
+        price=openpit.param.Price("185"),
+    ),
 )
 
 start_result = engine.start_pre_trade(order=order)
@@ -165,11 +171,18 @@ except Exception:
 reservation.commit()
 
 # 7. The order goes to the venue and returns with an execution report.
-report = openpit.pretrade.ExecutionReport(
-    underlying_asset="AAPL",
-    settlement_asset="USD",
-    pnl=-50.0,
-    fee=3.4,
+report = openpit.ExecutionReport(
+    operation=openpit.ExecutionReportOperation(
+        instrument=openpit.Instrument(
+            openpit.param.Asset("AAPL"),
+            openpit.param.Asset("USD"),
+        ),
+        side=openpit.param.Side.BUY,
+    ),
+    financial_impact=openpit.FinancialImpact(
+        pnl=openpit.param.Pnl("-50"),
+        fee=openpit.param.Fee("3.4"),
+    ),
 )
 
 result = engine.apply_execution_report(report=report)
@@ -190,6 +203,9 @@ Input validation errors and API misuse still raise exceptions:
 - `ValueError` for invalid assets/sides/malformed numeric inputs
 - `RuntimeError` for lifecycle misuse, for example executing the same request
   twice or finalizing the same reservation twice
+- Business rejects use stable reject codes such as
+  `openpit.pretrade.RejectCode.ORDER_VALUE_CALCULATION_FAILED` when a policy
+  cannot evaluate order value without `price`
 
 ## Local Testing
 

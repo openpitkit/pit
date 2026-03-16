@@ -1,41 +1,47 @@
-from decimal import Decimal
-
+import conftest
 import openpit
 import pytest
-from conftest import make_order, make_report
-
-
-def _format_decimal(value: Decimal) -> str:
-    text = format(value, "f")
-    if "." in text:
-        text = text.rstrip("0").rstrip(".")
-    return text or "0"
 
 
 class IntegrationStrategy(openpit.pretrade.Policy):
+    # @typing.override
     def __init__(self, *, max_abs_notional: str) -> None:
-        self._max_abs_notional = Decimal(max_abs_notional)
+        self._max_abs_notional = openpit.param.Volume(max_abs_notional)
         self.journal: list[tuple[str, str, str]] = []
 
+    # @typing.override
     @property
     def name(self) -> str:
         return "IntegrationStrategy"
 
+    # @typing.override
     def perform_pre_trade_check(
         self,
         *,
         context: openpit.pretrade.PolicyContext,
     ) -> openpit.pretrade.PolicyDecision:
+        assert context.order.operation is not None
+        assert context.order.operation.trade_amount is not None
+        assert context.order.operation.price is not None
+
+        assert isinstance(context.order.operation.trade_amount, openpit.param.Quantity)
+        quantity = context.order.operation.trade_amount
+        price = context.order.operation.price
+        requested_notional = price.calculate_volume(quantity)
+        signed_notional_text = (
+            requested_notional.to_cash_flow_outflow().value
+            if context.order.operation.side == openpit.param.Side.BUY
+            else requested_notional.to_cash_flow_inflow().value
+        )
         self.journal.append(
             (
-                context.order.underlying_asset,
-                context.order.settlement_asset,
-                context.notional,
+                context.order.operation.instrument.underlying_asset.value,
+                context.order.operation.instrument.settlement_asset.value,
+                signed_notional_text,
             )
         )
 
-        requested = Decimal(context.notional).copy_abs()
-        if requested > self._max_abs_notional:
+        if requested_notional > self._max_abs_notional:
             return openpit.pretrade.PolicyDecision.reject(
                 rejects=[
                     openpit.pretrade.PolicyReject(
@@ -43,10 +49,10 @@ class IntegrationStrategy(openpit.pretrade.Policy):
                         reason="strategy cap exceeded",
                         details=(
                             "requested notional "
-                            f"{_format_decimal(requested)}, "
-                            f"max allowed: {_format_decimal(self._max_abs_notional)}"
+                            f"{requested_notional.value}, "
+                            f"max allowed: {self._max_abs_notional.value}"
                         ),
-                        scope="order",
+                        scope=openpit.pretrade.RejectScope.ORDER,
                     )
                 ]
             )
@@ -61,16 +67,21 @@ class IntegrationStrategy(openpit.pretrade.Policy):
             ]
         )
 
+    # @typing.override
     def apply_execution_report(
         self,
         *,
-        report: openpit.pretrade.ExecutionReport,
+        report: openpit.ExecutionReport,
     ) -> bool:
+        assert report.operation is not None
+        assert report.financial_impact is not None
+        assert report.financial_impact.pnl is not None
+
         self.journal.append(
             (
-                report.underlying_asset,
-                report.settlement_asset,
-                report.pnl,
+                report.operation.instrument.underlying_asset.value,
+                report.operation.instrument.settlement_asset.value,
+                report.financial_impact.pnl.value,
             )
         )
         return False
@@ -110,7 +121,11 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         )
 
         start = engine.start_pre_trade(
-            order=make_order(side="sell", quantity=5.0, price=100.0)
+            order=conftest.make_order(
+                side=openpit.param.Side.SELL,
+                trade_amount=openpit.param.Quantity("5"),
+                price=openpit.param.Price("100"),
+            )
         )
         assert start.ok
         execute = start.request.execute()
@@ -119,7 +134,9 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
 
         assert strategy.journal[0] == ("AAPL", "USD", "500")
 
-        post_trade = engine.apply_execution_report(report=make_report(pnl=4.5))
+        post_trade = engine.apply_execution_report(
+            report=conftest.make_report(pnl=openpit.param.Pnl("4.5"))
+        )
         assert post_trade.kill_switch_triggered is False
         assert strategy.journal[-1] == ("AAPL", "USD", "4.5")
         return
@@ -129,7 +146,11 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         engine = openpit.Engine.builder().pre_trade_policy(policy=strategy).build()
 
         start = engine.start_pre_trade(
-            order=make_order(side="buy", quantity=3.0, price=100.0)
+            order=conftest.make_order(
+                side=openpit.param.Side.BUY,
+                trade_amount=openpit.param.Quantity("3"),
+                price=openpit.param.Price("100"),
+            )
         )
         assert start.ok
         execute = start.request.execute()
@@ -144,7 +165,11 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
                 raise
 
         resumed = engine.start_pre_trade(
-            order=make_order(side="buy", quantity=7.0, price=100.0)
+            order=conftest.make_order(
+                side=openpit.param.Side.BUY,
+                trade_amount=openpit.param.Quantity("7"),
+                price=openpit.param.Price("100"),
+            )
         )
         resumed_execute = resumed.request.execute()
         assert resumed_execute.ok
@@ -156,7 +181,11 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         engine = openpit.Engine.builder().pre_trade_policy(policy=strategy).build()
 
         start = engine.start_pre_trade(
-            order=make_order(side="buy", quantity=8.0, price=100.0)
+            order=conftest.make_order(
+                side=openpit.param.Side.BUY,
+                trade_amount=openpit.param.Quantity("8"),
+                price=openpit.param.Price("100"),
+            )
         )
         assert start.ok
         execute = start.request.execute()
@@ -183,8 +212,8 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
             .build()
         )
 
-        assert engine.start_pre_trade(order=make_order()).ok
-        blocked = engine.start_pre_trade(order=make_order())
+        assert engine.start_pre_trade(order=conftest.make_order()).ok
+        blocked = engine.start_pre_trade(order=conftest.make_order())
         assert not blocked.ok
         assert blocked.reject.code == expected_code
         assert blocked.reject.scope == "order"
@@ -192,8 +221,8 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
 
     if case == "kill_switch_reset_resume":
         pnl_policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
-            settlement_asset="USD",
-            barrier="500",
+            settlement_asset=openpit.param.Asset("USD"),
+            barrier=openpit.param.Pnl("500"),
         )
         engine = (
             openpit.Engine.builder()
@@ -201,16 +230,25 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
             .build()
         )
 
-        post_trade = engine.apply_execution_report(report=make_report(pnl=-600.0))
+        post_trade = engine.apply_execution_report(
+            report=conftest.make_report(pnl=openpit.param.Pnl("-600"))
+        )
         assert post_trade.kill_switch_triggered
 
-        blocked = engine.start_pre_trade(order=make_order(price=99.5))
+        blocked = engine.start_pre_trade(
+            order=conftest.make_order(price=openpit.param.Price("99.5"))
+        )
         assert not blocked.ok
         assert blocked.reject.code == expected_code
         assert blocked.reject.scope == "account"
 
-        pnl_policy.reset_pnl(settlement_asset="USD")
-        resumed = engine.start_pre_trade(order=make_order(price=101.0, quantity=2.0))
+        pnl_policy.reset_pnl(settlement_asset=openpit.param.Asset("USD"))
+        resumed = engine.start_pre_trade(
+            order=conftest.make_order(
+                price=openpit.param.Price("101"),
+                trade_amount=openpit.param.Quantity("2"),
+            )
+        )
         assert resumed.ok
         resumed_execute = resumed.request.execute()
         assert resumed_execute.ok
@@ -219,21 +257,21 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
 
     if case.startswith("order_size_"):
         if case == "order_size_missing":
-            limit_asset = "EUR"
-            quantity = 1.0
-            price = 100.0
+            limit_asset = openpit.param.Asset("EUR")
+            quantity = openpit.param.Quantity("1")
+            price = openpit.param.Price("100")
         elif case == "order_size_quantity":
-            limit_asset = "USD"
-            quantity = 11.0
-            price = 90.0
+            limit_asset = openpit.param.Asset("USD")
+            quantity = openpit.param.Quantity("11")
+            price = openpit.param.Price("90")
         elif case == "order_size_notional":
-            limit_asset = "USD"
-            quantity = 10.0
-            price = 101.0
+            limit_asset = openpit.param.Asset("USD")
+            quantity = openpit.param.Quantity("10")
+            price = openpit.param.Price("101")
         else:
-            limit_asset = "USD"
-            quantity = 10.0
-            price = 100.0
+            limit_asset = openpit.param.Asset("USD")
+            quantity = openpit.param.Quantity("10")
+            price = openpit.param.Price("100")
 
         engine = (
             openpit.Engine.builder()
@@ -241,15 +279,15 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
                 policy=openpit.pretrade.policies.OrderSizeLimitPolicy(
                     limit=openpit.pretrade.policies.OrderSizeLimit(
                         settlement_asset=limit_asset,
-                        max_quantity="10",
-                        max_notional="1000",
+                        max_quantity=openpit.param.Quantity("10"),
+                        max_notional=openpit.param.Volume("1000"),
                     )
                 )
             )
             .build()
         )
         result = engine.start_pre_trade(
-            order=make_order(quantity=quantity, price=price)
+            order=conftest.make_order(trade_amount=quantity, price=price)
         )
         if expected_code is None:
             assert result.ok

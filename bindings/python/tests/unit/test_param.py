@@ -8,6 +8,7 @@ def test_param_types_are_exported_from_openpit_and_param_module() -> None:
         "Asset",
         "Side",
         "PositionSide",
+        "PositionEffect",
         "Quantity",
         "Price",
         "Pnl",
@@ -27,6 +28,7 @@ def test_param_types_are_exported_from_openpit_and_param_module() -> None:
         "Asset",
         "Side",
         "PositionSide",
+        "PositionEffect",
         "Quantity",
         "Price",
         "Pnl",
@@ -48,6 +50,7 @@ def test_param_types_have_rust_like_module_paths() -> None:
     assert openpit.param.Asset.__module__ == "openpit.param"
     assert openpit.param.Side.__module__ == "openpit.param"
     assert openpit.param.PositionSide.__module__ == "openpit.param"
+    assert openpit.param.PositionEffect.__module__ == "openpit.param"
     assert openpit.param.Quantity.__module__ == "openpit.param"
     assert openpit.param.Price.__module__ == "openpit.param"
     assert openpit.param.Pnl.__module__ == "openpit.param"
@@ -79,16 +82,19 @@ def test_param_numeric_wrappers_accept_and_validate_values() -> None:
 @pytest.mark.unit
 def test_param_directional_and_identifier_wrappers() -> None:
     asset = openpit.param.Asset("AAPL")
-    side = openpit.param.Side("buy")
-    position_side = openpit.param.PositionSide("long")
+    side = openpit.param.Side.BUY
+    position_side = openpit.param.PositionSide.LONG
+    position_effect = openpit.param.PositionEffect.OPEN
 
     assert asset.value == "AAPL"
     assert side.value == "buy"
+    assert isinstance(side, str)
     assert side.is_buy()
     assert side.opposite().value == "sell"
     assert side.sign() == 1
     assert position_side.value == "long"
     assert position_side.opposite().value == "short"
+    assert position_effect.value == "open"
 
     with pytest.raises(ValueError, match="asset must not be empty"):
         openpit.param.Asset(" ")
@@ -96,6 +102,22 @@ def test_param_directional_and_identifier_wrappers() -> None:
         openpit.param.Side("hold")
     with pytest.raises(ValueError, match="expected 'long' or 'short'"):
         openpit.param.PositionSide("flat")
+    with pytest.raises(ValueError, match="expected 'open' or 'close'"):
+        openpit.param.PositionEffect("flip")
+
+
+@pytest.mark.unit
+def test_param_notional_helpers_are_exposed() -> None:
+    quantity = openpit.param.Quantity("8")
+    price = openpit.param.Price("-100")
+    requested_notional = price.calculate_volume(quantity)
+
+    assert requested_notional.value == "800"
+    assert quantity.calculate_volume(price).value == "800"
+    assert requested_notional.to_cash_flow_inflow().value == "800"
+    assert requested_notional.to_cash_flow_outflow().value == "-800"
+    assert requested_notional > openpit.param.Volume("700")
+    assert requested_notional <= openpit.param.Volume("800")
 
 
 @pytest.mark.unit

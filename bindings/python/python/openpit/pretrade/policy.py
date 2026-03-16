@@ -15,7 +15,67 @@
 #
 # Please see https://github.com/openpitkit and the OWNERS file for details.
 
-"""Python policy interfaces and decision types exposed by openpit."""
+"""
+Python policy interfaces and decision types exposed by openpit.
+
+The recommended integration style is to derive boundary models directly from
+the engine contracts and add project-specific fields in subclasses:
+
+```python
+import typing
+
+import openpit
+
+if not hasattr(typing, "override"):
+    def _override(method):
+        return method
+
+    typing.override = _override  # type: ignore[attr-defined]
+
+
+class BrokerOrder(openpit.Order):
+    @typing.override
+    def __init__(
+        self,
+        *,
+        underlying_asset: openpit.param.Asset,
+        settlement_asset: openpit.param.Asset,
+        side: openpit.param.Side,
+        trade_amount: openpit.param.Quantity | openpit.param.Volume,
+        price: openpit.param.Price,
+    ) -> None:
+        super().__init__(
+            underlying_asset=underlying_asset,
+            settlement_asset=settlement_asset,
+            side=side,
+            trade_amount=trade_amount,
+            price=price,
+        )
+        self.strategy = "broker-default"
+
+
+class BrokerReport(openpit.ExecutionReport):
+    @typing.override
+    def __init__(
+        self,
+        *,
+        underlying_asset: openpit.param.Asset,
+        settlement_asset: openpit.param.Asset,
+        pnl: openpit.param.Pnl,
+        fee: openpit.param.Fee,
+    ) -> None:
+        super().__init__(
+            underlying_asset=underlying_asset,
+            settlement_asset=settlement_asset,
+            pnl=pnl,
+            fee=fee,
+        )
+        self.source = "broker-fill"
+```
+
+This keeps custom metadata on the same object that reaches policy callbacks and
+preserves one explicit engine-facing contract.
+"""
 
 from __future__ import annotations
 
@@ -24,9 +84,9 @@ import dataclasses
 import typing
 
 if typing.TYPE_CHECKING:
-    from .._openpit import ExecutionReport, Order
-
-NumericValue = str | int | float
+    from .. import ExecutionReport, Order
+from ..param import Asset, Volume
+from ._enum import MutationKind, RejectScope
 
 
 @dataclasses.dataclass(frozen=True)
@@ -35,14 +95,12 @@ class PolicyContext:
     Immutable context passed into :meth:`Policy.perform_pre_trade_check`.
 
     Attributes:
-        order: The original :class:`openpit.Order` under evaluation.
-        notional: Precomputed order notional as a decimal string.
-            For buy orders this value is negative (outflow), for sell orders
-            positive (inflow).
+        order: The original order object under evaluation. This is typed as
+            :class:`openpit.Order` and should be an instance of
+            :class:`openpit.Order` or one of its subclasses.
     """
 
     order: Order
-    notional: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -64,11 +122,11 @@ class PolicyReject:
     code: str
     reason: str
     details: str
-    scope: str = "order"
+    scope: RejectScope = RejectScope.ORDER
 
     def __post_init__(self) -> None:
-        if self.scope not in ("order", "account"):
-            raise ValueError("scope must be either 'order' or 'account'")
+        if not isinstance(self.scope, RejectScope):
+            raise TypeError("scope must be openpit.pretrade.RejectScope")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -80,23 +138,23 @@ class RiskMutation:
     Avoid creating instances manually unless you need full control.
     """
 
-    kind: str
-    settlement_asset: str | None = None
-    amount: NumericValue | None = None
-    id: str | None = None
+    kind: MutationKind
+    settlement_asset: Asset | None = None
+    amount: Volume | None = None
+    kill_switch_id: str | None = None
     enabled: bool | None = None
 
     def __post_init__(self) -> None:
-        if self.kind == "reserve_notional":
+        if self.kind == MutationKind.RESERVE_NOTIONAL:
             if not self.settlement_asset:
                 raise ValueError("reserve_notional requires settlement_asset")
-            if self.amount is None or isinstance(self.amount, bool):
-                raise ValueError("reserve_notional requires numeric amount")
+            if self.amount is None:
+                raise ValueError("reserve_notional requires amount")
             return
 
-        if self.kind == "set_kill_switch":
-            if not self.id:
-                raise ValueError("set_kill_switch requires id")
+        if self.kind == MutationKind.SET_KILL_SWITCH:
+            if not self.kill_switch_id:
+                raise ValueError("set_kill_switch requires kill_switch_id")
             if not isinstance(self.enabled, bool):
                 raise ValueError("set_kill_switch requires enabled bool")
             return
@@ -106,21 +164,22 @@ class RiskMutation:
     @classmethod
     def reserve_notional(
         cls,
-        settlement_asset: str,
-        amount: NumericValue,
+        settlement_asset: Asset,
+        amount: Volume,
     ) -> RiskMutation:
         """
         Create a reserve-notional mutation.
 
         Args:
-            settlement_asset: Settlement asset symbol (for example ``"USD"``).
-            amount: Reserved amount as ``str``/``int``/``float``.
+            settlement_asset: Settlement asset identifier.
+            amount: Reserved notional amount.
 
         Returns:
-            RiskMutation: Mutation with ``kind="reserve_notional"``.
+            RiskMutation: Mutation with
+                ``kind=openpit.pretrade.MutationKind.RESERVE_NOTIONAL``.
         """
         return cls(
-            kind="reserve_notional",
+            kind=MutationKind.RESERVE_NOTIONAL,
             settlement_asset=settlement_asset,
             amount=amount,
         )
@@ -128,25 +187,25 @@ class RiskMutation:
     @classmethod
     def kill_switch(
         cls,
-        id: str | None = None,
-        *,
+        kill_switch_id: str,
         enabled: bool,
-        kill_switch_id: str | None = None,
     ) -> RiskMutation:
         """
         Create a kill-switch mutation.
 
         Args:
-            id: Kill-switch identifier.
+            kill_switch_id: Kill-switch identifier.
             enabled: Desired kill-switch state.
 
         Returns:
-            RiskMutation: Mutation with ``kind="set_kill_switch"``.
+            RiskMutation: Mutation with
+                ``kind=openpit.pretrade.MutationKind.SET_KILL_SWITCH``.
         """
-        resolved_id = kill_switch_id if kill_switch_id is not None else id
-        if resolved_id is None:
-            raise TypeError("id is required")
-        return cls(kind="set_kill_switch", id=resolved_id, enabled=enabled)
+        return cls(
+            kind=MutationKind.SET_KILL_SWITCH,
+            kill_switch_id=kill_switch_id,
+            enabled=enabled,
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -164,9 +223,9 @@ class Mutation:
     @classmethod
     def reserve_notional(
         cls,
-        settlement_asset: str,
-        commit_amount: NumericValue,
-        rollback_amount: NumericValue,
+        settlement_asset: Asset,
+        commit_amount: Volume,
+        rollback_amount: Volume,
     ) -> Mutation:
         """
         Build a reserve-notional commit/rollback pair.
@@ -190,30 +249,25 @@ class Mutation:
     @classmethod
     def kill_switch(
         cls,
-        id: str | None = None,
-        *,
+        kill_switch_id: str,
         commit_enabled: bool,
         rollback_enabled: bool,
-        kill_switch_id: str | None = None,
     ) -> Mutation:
         """
         Build a kill-switch commit/rollback pair.
 
         Args:
-            id: Kill-switch identifier.
+            kill_switch_id: Kill-switch identifier.
             commit_enabled: State to apply on commit.
             rollback_enabled: State to apply on rollback.
         """
-        resolved_id = kill_switch_id if kill_switch_id is not None else id
-        if resolved_id is None:
-            raise TypeError("id is required")
         return cls(
             commit=RiskMutation.kill_switch(
-                id=resolved_id,
+                kill_switch_id=kill_switch_id,
                 enabled=commit_enabled,
             ),
             rollback=RiskMutation.kill_switch(
-                id=resolved_id,
+                kill_switch_id=kill_switch_id,
                 enabled=rollback_enabled,
             ),
         )
@@ -295,7 +349,8 @@ class CheckPreTradeStartPolicy(abc.ABC):
         Evaluate an order in start stage.
 
         Args:
-            order: Incoming order candidate.
+            order: Incoming order candidate. This must be
+                :class:`openpit.Order` or one of its subclasses.
 
         Returns:
             Optional[PolicyReject]:
@@ -310,7 +365,7 @@ class CheckPreTradeStartPolicy(abc.ABC):
         Apply post-trade feedback to policy state.
 
         Args:
-            report: Execution report produced after venue fill/close.
+            report: Execution report produced after fill/close.
 
         Returns:
             bool:
@@ -350,7 +405,7 @@ class Policy(abc.ABC):
         Evaluate order context in main stage.
 
         Args:
-            context: Immutable context with order and precomputed notional.
+            context: Immutable context with original order.
 
         Returns:
             PolicyDecision:
@@ -365,7 +420,7 @@ class Policy(abc.ABC):
         Apply post-trade feedback to policy state.
 
         Args:
-            report: Execution report produced after venue fill/close.
+            report: Execution report produced after fill/close.
 
         Returns:
             bool:

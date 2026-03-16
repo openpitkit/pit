@@ -19,45 +19,48 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crate::core::Order;
 use crate::pretrade::start_pre_trade_time::start_pre_trade_now;
 use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
 
 /// Start-stage policy that limits order rate in a sliding time window.
 ///
-/// Every call to `check_pre_trade_start` — including rejected ones — consumes a
+/// Every call to `check_pre_trade_start`, including rejected ones, consumes a
 /// slot in the window. This ensures flood attempts cannot bypass the counter.
 ///
 /// # Examples
 ///
-/// ```
+/// ```rust
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use std::time::Duration;
 /// use openpit::param::{Asset, Price, Quantity, Side};
 /// use openpit::pretrade::policies::RateLimitPolicy;
-/// use openpit::core::Instrument;
-/// use openpit::pretrade::CheckPreTradeStartPolicy;
-/// use openpit::{Engine, Order};
+/// use openpit::{Engine, Instrument};
+/// use openpit::OrderOperation;
+/// use openpit::param::TradeAmount;
 ///
-/// let engine = Engine::builder()
+/// let engine = Engine::<OrderOperation, ()>::builder()
 ///     .check_pre_trade_start_policy(RateLimitPolicy::new(2, Duration::from_secs(60)))
-///     .build()
-///     .expect("valid");
+///     .build()?;
 ///
-/// // Two orders are allowed within the window.
-/// let order = Order {
+/// let order = OrderOperation {
 ///     instrument: Instrument::new(
-///         Asset::new("AAPL").expect("asset code must be valid"),
-///         Asset::new("USD").expect("asset code must be valid"),
+///         Asset::new("AAPL")?,
+///         Asset::new("USD")?,
 ///     ),
 ///     side: Side::Buy,
-///     quantity: Quantity::from_str("1").expect("valid"),
-///     price: Price::from_str("100").expect("valid"),
+///     trade_amount: TradeAmount::Quantity(
+///         Quantity::from_str("1")?,
+///     ),
+///     price: Some(Price::from_str("100")?),
 /// };
+/// // Two orders are allowed within the window.
 /// assert!(engine.start_pre_trade(order.clone()).is_ok());
 /// assert!(engine.start_pre_trade(order.clone()).is_ok());
 ///
 /// // Third order is rejected.
 /// assert!(engine.start_pre_trade(order).is_err());
+/// # Ok(())
+/// # }
 /// ```
 pub struct RateLimitPolicy {
     timestamps: RefCell<VecDeque<Instant>>,
@@ -79,12 +82,12 @@ impl RateLimitPolicy {
     }
 }
 
-impl CheckPreTradeStartPolicy for RateLimitPolicy {
+impl<O, R> CheckPreTradeStartPolicy<O, R> for RateLimitPolicy {
     fn name(&self) -> &'static str {
         Self::NAME
     }
 
-    fn check_pre_trade_start(&self, _order: &Order) -> Result<(), Reject> {
+    fn check_pre_trade_start(&self, _order: &O) -> Result<(), Reject> {
         let now = start_pre_trade_now();
         let mut timestamps = self.timestamps.borrow_mut();
 
@@ -100,7 +103,7 @@ impl CheckPreTradeStartPolicy for RateLimitPolicy {
         timestamps.push_back(now);
         if timestamps.len() > self.max_orders {
             return Err(Reject::new(
-                self.name(),
+                Self::NAME,
                 RejectScope::Order,
                 RejectCode::RateLimitExceeded,
                 "rate limit exceeded",
@@ -115,17 +118,20 @@ impl CheckPreTradeStartPolicy for RateLimitPolicy {
 
         Ok(())
     }
+
+    fn apply_execution_report(&self, _report: &R) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
 
-    use crate::core::{Instrument, Order};
-    use crate::param::{Asset, Price, Quantity, Side};
-    use crate::pretrade::{CheckPreTradeStartPolicy, RejectCode, RejectScope};
-
+    use crate::core::OrderOperation;
+    use crate::param::{Asset, Quantity, Side, TradeAmount};
     use crate::pretrade::start_pre_trade_time::with_start_pre_trade_now;
+    use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
 
     use super::RateLimitPolicy;
 
@@ -182,21 +188,27 @@ mod tests {
 
     fn check_at(
         policy: &RateLimitPolicy,
-        order: &Order,
+        order: &OrderOperation,
         now: Instant,
-    ) -> Result<(), crate::pretrade::Reject> {
-        with_start_pre_trade_now(now, || policy.check_pre_trade_start(order))
+    ) -> Result<(), Reject> {
+        with_start_pre_trade_now(now, || {
+            <RateLimitPolicy as CheckPreTradeStartPolicy<OrderOperation, ()>>::check_pre_trade_start(
+                policy, order,
+            )
+        })
     }
 
-    fn order(settlement: &str) -> Order {
-        Order {
-            instrument: Instrument::new(
+    fn order(settlement: &str) -> OrderOperation {
+        OrderOperation {
+            instrument: crate::Instrument::new(
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new(settlement).expect("asset code must be valid"),
             ),
             side: Side::Buy,
-            quantity: Quantity::from_str("1").expect("quantity literal must be valid"),
-            price: Price::from_str("100").expect("price literal must be valid"),
+            trade_amount: TradeAmount::Quantity(
+                Quantity::from_str("1").expect("quantity literal must be valid"),
+            ),
+            price: None,
         }
     }
 }

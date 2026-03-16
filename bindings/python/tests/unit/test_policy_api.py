@@ -1,13 +1,15 @@
+import conftest
 import openpit
 import pytest
-from conftest import make_order, make_report
 
 
 class BlockAllStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy):
+    # @typing.override
     @property
     def name(self) -> str:
         return "BlockAllStartPolicy"
 
+    # @typing.override
     def check_pre_trade_start(
         self, *, order: openpit.Order
     ) -> openpit.pretrade.PolicyReject | None:
@@ -16,23 +18,26 @@ class BlockAllStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy):
             code=openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION,
             reason="blocked by policy",
             details="test start policy reject",
-            scope="account",
+            scope=openpit.pretrade.RejectScope.ACCOUNT,
         )
 
+    # @typing.override
     def apply_execution_report(
         self,
         *,
-        report: openpit.pretrade.ExecutionReport,
+        report: openpit.ExecutionReport,
     ) -> bool:
         _ = report
         return False
 
 
 class ReportHookStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy):
+    # @typing.override
     @property
     def name(self) -> str:
         return "ReportHookStartPolicy"
 
+    # @typing.override
     def check_pre_trade_start(
         self,
         *,
@@ -41,10 +46,11 @@ class ReportHookStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy):
         _ = order
         return None
 
+    # @typing.override
     def apply_execution_report(
         self,
         *,
-        report: openpit.pretrade.ExecutionReport,
+        report: openpit.ExecutionReport,
     ) -> bool:
         _ = report
         return True
@@ -52,28 +58,34 @@ class ReportHookStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy):
 
 @pytest.mark.unit
 def test_policy_reject_scope_validation() -> None:
-    with pytest.raises(ValueError, match="scope must be either"):
+    with pytest.raises(TypeError, match="scope must be openpit.pretrade.RejectScope"):
         openpit.pretrade.PolicyReject(
             code=openpit.pretrade.RejectCode.OTHER,
             reason="invalid",
             details="invalid",
-            scope="invalid",
+            scope="invalid",  # type: ignore[arg-type]
         )
 
 
 @pytest.mark.unit
 def test_policy_decision_and_mutation_factories() -> None:
     mutation = openpit.pretrade.Mutation.reserve_notional(
-        settlement_asset="USD",
-        commit_amount="10",
-        rollback_amount="0",
+        settlement_asset=openpit.param.Asset("USD"),
+        commit_amount=openpit.param.Volume("10"),
+        rollback_amount=openpit.param.Volume("0"),
     )
     decision = openpit.pretrade.PolicyDecision.accept(mutations=[mutation])
 
     assert len(decision.rejects) == 0
     assert len(decision.mutations) == 1
-    assert decision.mutations[0].commit.kind == "reserve_notional"
-    assert decision.mutations[0].rollback.kind == "reserve_notional"
+    assert (
+        decision.mutations[0].commit.kind
+        is openpit.pretrade.MutationKind.RESERVE_NOTIONAL
+    )
+    assert (
+        decision.mutations[0].rollback.kind
+        is openpit.pretrade.MutationKind.RESERVE_NOTIONAL
+    )
 
 
 @pytest.mark.unit
@@ -84,7 +96,7 @@ def test_custom_start_policy_reject_is_returned_as_result() -> None:
         .build()
     )
 
-    result = engine.start_pre_trade(order=make_order())
+    result = engine.start_pre_trade(order=conftest.make_order())
     assert not result.ok
     assert result.reject.policy == "BlockAllStartPolicy"
     assert result.reject.scope == "account"
@@ -98,5 +110,7 @@ def test_custom_start_policy_post_trade_hook_is_supported() -> None:
         .build()
     )
 
-    result = engine.apply_execution_report(report=make_report(pnl=1.0))
+    result = engine.apply_execution_report(
+        report=conftest.make_report(pnl=openpit.param.Pnl("1"))
+    )
     assert result.kill_switch_triggered

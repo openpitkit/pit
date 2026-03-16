@@ -1,0 +1,8 @@
+[package]
+name = "openpit-release-e2e-rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+openpit = "=__OPENPIT_VERSION__"

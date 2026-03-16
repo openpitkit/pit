@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["bindings/python", "crates/openpit", "crates/pit-ffi"]
+members = ["bindings/python", "crates/openpit", "crates/pit-ffi", "crates/pit-interop"]
 
 [workspace.metadata.release]
 shared-version = true

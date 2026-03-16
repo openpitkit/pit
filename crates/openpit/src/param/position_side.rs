@@ -26,6 +26,15 @@ pub enum PositionSide {
     Short,
 }
 
+impl std::fmt::Display for PositionSide {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Long => "LONG",
+            Self::Short => "SHORT",
+        })
+    }
+}
+
 impl PositionSide {
     /// Returns `true` when the side is [`PositionSide::Long`].
     #[inline]
@@ -80,5 +89,11 @@ mod tests {
     fn opposite_returns_other_side() {
         assert_eq!(PositionSide::Long.opposite(), PositionSide::Short);
         assert_eq!(PositionSide::Short.opposite(), PositionSide::Long);
+    }
+
+    #[test]
+    fn display_uses_api_names() {
+        assert_eq!(PositionSide::Long.to_string(), "LONG");
+        assert_eq!(PositionSide::Short.to_string(), "SHORT");
     }
 }

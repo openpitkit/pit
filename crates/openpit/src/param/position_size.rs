@@ -120,16 +120,16 @@ impl PositionSize {
     /// # Examples
     ///
     /// ```
-    /// # use openpit::param::{PositionSize, Quantity, Side};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use openpit::param::{PositionSize, Quantity, Side};
     /// let pos = PositionSize::from_str("1")?;
     /// let qty = Quantity::from_str("1")?;
     ///
-    /// let new_pos = pos
-    ///     .checked_add_quantity(qty, Side::Sell)
-    ///     .expect("must be valid");
+    /// let new_pos = pos.checked_add_quantity(qty, Side::Sell)?;
     ///
     /// assert_eq!(new_pos, PositionSize::ZERO);
-    /// # Ok::<(), openpit::param::Error>(())
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn checked_add_quantity(self, qty: Quantity, side: Side) -> Result<Self, Error> {
         let delta = match side {

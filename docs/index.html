@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pit — Pre-trade Integrity Toolkit</title>
+  <meta name="description"
+    content="Embeddable, deterministic pre-trade risk pipeline for algorithmic trading systems." />
+  <link rel="canonical" href="https://openpit.dev/" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --accent: #f59e0b;
+      --accent-dim: rgba(245, 158, 11, 0.12);
+      --bg: #080808;
+      --surface: #0f0f0f;
+      --border: #1a1a1a;
+      --border-hover: #f59e0b;
+      --text: #e2e2e2;
+      --muted: #555;
+      --muted-lt: #777;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    a:hover {
+      color: var(--accent);
+    }
+
+    /* ── card ─────────────────────────────────────────────────── */
+    .card {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 28px 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+    }
+
+    .card:hover {
+      border-color: var(--border-hover);
+      background: var(--accent-dim);
+      transform: translateY(-2px);
+    }
+
+    .card-icon {
+      color: var(--muted);
+      transition: color 0.18s ease;
+      line-height: 0;
+    }
+
+    .card:hover .card-icon {
+      color: var(--accent);
+    }
+
+    .card-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--text);
+    }
+
+    .card-desc {
+      font-size: 0.75rem;
+      color: var(--muted-lt);
+      line-height: 1.65;
+      flex: 1;
+    }
+
+    .card-link {
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-top: 6px;
+      transition: color 0.18s ease;
+    }
+
+    .card:hover .card-link {
+      color: var(--accent);
+    }
+
+    /* ── tag pills ─────────────────────────────────────────────── */
+    .tag {
+      display: inline-block;
+      font-size: 0.65rem;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border: 1px solid #222;
+      border-radius: 3px;
+      color: var(--muted);
+    }
+
+    /* ── divider ───────────────────────────────────────────────── */
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ── footer link ───────────────────────────────────────────── */
+    .foot-link {
+      color: var(--muted);
+      transition: color 0.15s ease;
+    }
+
+    .foot-link:hover {
+      color: var(--accent);
+    }
+  </style>
+</head>
+
+<body>
+  <div
+    style="max-width: 860px; margin: 0 auto; padding: 72px 24px 56px; display: flex; flex-direction: column; flex: 1;">
+
+    <!-- ── Hero ────────────────────────────────────────────────── -->
+    <header style="text-align: center; margin-bottom: 64px;">
+      <a href="https://openpit.dev/" target="_blank" rel="noopener">
+        <img src="assets/pit-readme-banner.png" alt="Pit — Pre-trade Integrity Toolkit"
+          style="max-width: 520px; width: 100%; height: auto; display: block; margin: 0 auto 36px;" />
+      </a>
+
+      <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 28px;">
+        <span class="tag">rust</span>
+        <span class="tag">python</span>
+        <span class="tag">pre-trade risk</span>
+        <span class="tag">open source</span>
+        <span class="tag">apache 2.0</span>
+      </div>
+
+      <p style="font-size: 0.875rem; color: var(--muted-lt); max-width: 500px; margin: 0 auto; line-height: 1.8;">
+        Embeddable pre-trade risk pipeline.<br />
+        Deterministic. In-memory. Designed to be embedded, not replaced.
+      </p>
+    </header>
+
+    <!-- ── Navigation cards ────────────────────────────────────── -->
+    <main style="flex: 1;">
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px;">
+
+        <!-- Python API -->
+        <a href="api/python/openpit/" class="card">
+          <div class="card-icon">
+            <!-- terminal / code icon -->
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+              stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="4 17 10 11 4 5" />
+              <line x1="12" y1="19" x2="20" y2="19" />
+            </svg>
+          </div>
+          <div class="card-title">Python API</div>
+          <div class="card-desc">
+            Package reference for the <code style="color:var(--accent);font-size:0.7rem;">openpit</code> Python
+            bindings.
+            Classes, types, enumerations, and usage examples.
+          </div>
+          <div class="card-link">→ /api/python/openpit/</div>
+        </a>
+
+        <!-- Rust docs -->
+        <a href="https://docs.rs/openpit" target="_blank" rel="noopener" class="card">
+          <div class="card-icon">
+            <!-- gear / cog icon -->
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+              stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06
+                       a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09
+                       A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83
+                       l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09
+                       A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83
+                       l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09
+                       a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83
+                       l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09
+                       a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </div>
+          <div class="card-title">Rust Docs</div>
+          <div class="card-desc">
+            Full API reference on docs.rs. Crate-level documentation for the
+            <code style="color:var(--accent);font-size:0.7rem;">openpit</code> Rust SDK.
+          </div>
+          <div class="card-link">→ docs.rs/openpit</div>
+        </a>
+
+        <!-- Repository -->
+        <a href="https://github.com/openpitkit/pit" target="_blank" rel="noopener" class="card">
+          <div class="card-icon">
+            <!-- git branch icon -->
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+              stroke-linecap="round" stroke-linejoin="round">
+              <line x1="6" y1="3" x2="6" y2="15" />
+              <circle cx="18" cy="6" r="3" />
+              <circle cx="6" cy="18" r="3" />
+              <path d="M18 9a9 9 0 0 1-9 9" />
+            </svg>
+          </div>
+          <div class="card-title">Repository</div>
+          <div class="card-desc">
+            Source code, issue tracker, and contribution guide. Rust workspace
+            with Python FFI bindings.
+          </div>
+          <div class="card-link">→ github.com/openpitkit/pit</div>
+        </a>
+
+        <!-- PyPI -->
+        <a href="https://pypi.org/project/openpit/" target="_blank" rel="noopener" class="card">
+          <div class="card-icon">
+            <!-- package / box icon -->
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8
+                       a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+              <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+              <line x1="12" y1="22.08" x2="12" y2="12" />
+            </svg>
+          </div>
+          <div class="card-title">PyPI</div>
+          <div class="card-desc">
+            Binary wheels for Linux, macOS, and Windows.
+            Install with <code style="color:var(--accent);font-size:0.7rem;">pip install openpit</code>.
+          </div>
+          <div class="card-link">→ pypi.org/project/openpit/</div>
+        </a>
+
+        <!-- Wiki -->
+        <a href="https://github.com/openpitkit/pit/wiki" target="_blank" rel="noopener" class="card">
+          <div class="card-icon">
+            <!-- document / lines icon -->
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="8" y1="13" x2="16" y2="13" />
+              <line x1="8" y1="17" x2="13" y2="17" />
+            </svg>
+          </div>
+          <div class="card-title">Wiki</div>
+          <div class="card-desc">
+            Architecture, domain types, pipeline design, policies,
+            and conceptual documentation. Available in EN and RU.
+          </div>
+          <div class="card-link">→ github.com/openpitkit/pit/wiki</div>
+        </a>
+
+        <!-- Discussions -->
+        <a href="https://github.com/openpitkit/pit/discussions" target="_blank" rel="noopener" class="card">
+          <div class="card-icon">
+            <!-- speech bubble icon -->
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+          </div>
+          <div class="card-title">Discussions</div>
+          <div class="card-desc">
+            Questions, integration ideas, and community conversation.
+            Bug reports go to the issue tracker.
+          </div>
+          <div class="card-link">→ github.com/openpitkit/pit/discussions</div>
+        </a>
+
+      </div>
+    </main>
+
+    <!-- ── Footer ──────────────────────────────────────────────── -->
+    <footer style="margin-top: 72px; padding-top: 24px; border-top: 1px solid var(--border);">
+      <div style="display: flex; justify-content: space-between; align-items: center;
+                  flex-wrap: wrap; gap: 12px; font-size: 0.7rem; color: var(--muted);">
+
+        <div style="display: flex; gap: 24px; flex-wrap: wrap; align-items: center;">
+          <a href="https://github.com/openpitkit/pit" target="_blank" rel="noopener" class="foot-link">
+            <!-- github icon -->
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"
+              style="display:inline;vertical-align:middle;margin-right:5px;">
+              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.387.6.113.82-.258.82-.577
+                       0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756
+                       -1.333-1.756-1.09-.745.083-.729.083-.729 1.205.084 1.838 1.236 1.838 1.236
+                       1.07 1.835 2.809 1.305 3.495.998.108-.776.418-1.305.762-1.605-2.665-.3-5.466
+                       -1.332-5.466-5.93 0-1.31.468-2.38 1.235-3.22-.124-.303-.535-1.524.117-3.176
+                       0 0 1.008-.322 3.3 1.23a11.5 11.5 0 0 1 3-.404c1.02.005 2.046.138 3 .404
+                       2.29-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.12 3.176.77.84 1.232
+                       1.91 1.232 3.22 0 4.61-2.807 5.625-5.48 5.92.43.372.823 1.102.823 2.222
+                       0 1.606-.015 2.898-.015 3.293 0 .322.216.694.825.576C20.565 21.795 24 17.298
+                       24 12c0-6.63-5.37-12-12-12z" />
+            </svg>
+            GitHub
+          </a>
+          <a href="https://github.com/openpitkit/pit/blob/main/LICENSE" target="_blank" rel="noopener"
+            class="foot-link">Apache 2.0</a>
+        </div>
+
+        <div style="color: var(--muted);">© Eugene V. Palchukovsky</div>
+
+        <div style="display:flex;gap:16px;align-items:center;">
+          <a href="https://openpit.dev/" class="foot-link"
+            style="font-size:0.65rem;letter-spacing:0.05em;">openpit.dev</a>
+        </div>
+      </div>
+    </footer>
+
+  </div>
+</body>
+
+</html>

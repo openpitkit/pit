@@ -20,7 +20,7 @@
 //! This module provides domain-specific, type-safe financial values.
 //! Decimal-based numeric types use exact decimal arithmetic and never use
 //! floating-point arithmetic internally.
-//! [`Leverage`] is represented as fixed-point integer with scale `100`.
+//! [`Leverage`] is represented as fixed-point integer with scale `10`.
 //!
 //! Prefer exact constructors such as `from_str` or `from_decimal_rounded` in
 //! domain code. `from_f64` and related helpers exist for integration
@@ -42,13 +42,13 @@
 //! use openpit::param::{Price, RoundingStrategy};
 //!
 //! let price = Price::from_str_rounded("100.126", 2, RoundingStrategy::DEFAULT)?;
-//! assert_eq!(price.to_decimal().to_string(), "100.13");
+//! assert_eq!(price.to_string(), "100.13");
 //!
 //! let price = Price::from_str_rounded("100.125", 2, RoundingStrategy::BANKER)?;
-//! assert_eq!(price.to_decimal().to_string(), "100.12");
+//! assert_eq!(price.to_string(), "100.12");
 //!
 //! let profit = Price::from_str_rounded("123.456", 2, RoundingStrategy::CONSERVATIVE_PROFIT)?;
-//! assert_eq!(profit.to_decimal().to_string(), "123.45");
+//! assert_eq!(profit.to_string(), "123.45");
 //! # Ok::<(), openpit::param::Error>(())
 //! ```
 //!
@@ -92,7 +92,7 @@
 //! let price = Price::from_str("100")?;
 //! let qty = Quantity::from_str("10")?;
 //! let volume = price.calculate_volume(qty)?;
-//! assert_eq!(volume.to_decimal().to_string(), "1000");
+//! assert_eq!(volume.to_string(), "1000");
 //!
 //! let err = Quantity::from_str("-1").expect_err("negative quantity must be rejected");
 //! assert_eq!(err, Error::Negative { param: ParamKind::Quantity });
@@ -105,25 +105,33 @@ use std::fmt::{Display, Formatter};
 pub mod asset;
 pub mod cash_flow;
 pub mod fee;
+pub mod fill_type;
 pub mod leverage;
 pub mod pnl;
+pub mod position_effect;
 pub mod position_side;
 pub mod position_size;
 pub mod price;
 pub mod quantity;
 pub mod side;
+pub mod trade;
+pub mod trade_amount;
 pub mod volume;
 
 pub use asset::Asset;
 pub use cash_flow::CashFlow;
 pub use fee::Fee;
+pub use fill_type::FillType;
 pub use leverage::Leverage;
 pub use pnl::Pnl;
+pub use position_effect::PositionEffect;
 pub use position_side::PositionSide;
 pub use position_size::PositionSize;
 pub use price::Price;
 pub use quantity::Quantity;
 pub use side::Side;
+pub use trade::Trade;
+pub use trade_amount::TradeAmount;
 pub use volume::Volume;
 
 /// Identifies a parameter type that caused a validation or arithmetic error.
@@ -233,7 +241,7 @@ impl RoundingStrategy {
     ///
     /// // Profit of 123.456 rounds down to 123.45
     /// let profit = Pnl::from_str_rounded("123.456", 2, RoundingStrategy::CONSERVATIVE_PROFIT)?;
-    /// assert_eq!(profit.to_decimal().to_string(), "123.45");
+    /// assert_eq!(profit.to_string(), "123.45");
     /// # Ok::<(), openpit::param::Error>(())
     /// ```
     pub const CONSERVATIVE_PROFIT: Self = Self::Down;
@@ -252,7 +260,7 @@ impl RoundingStrategy {
     ///
     /// // Loss of -123.456 rounds to -123.46 (more negative)
     /// let loss = Pnl::from_str_rounded("-123.456", 2, RoundingStrategy::CONSERVATIVE_LOSS)?;
-    /// assert_eq!(loss.to_decimal().to_string(), "-123.46");
+    /// assert_eq!(loss.to_string(), "-123.46");
     /// # Ok::<(), openpit::param::Error>(())
     /// ```
     pub const CONSERVATIVE_LOSS: Self = Self::Down;
@@ -370,7 +378,7 @@ macro_rules! define_non_negative_value_type {
             /// ```
             /// # use openpit::param::Quantity;
             /// let qty = Quantity::from_str("123.45")?;
-            /// assert_eq!(qty.to_decimal().to_string(), "123.45");
+            /// assert_eq!(qty.to_string(), "123.45");
             /// # Ok::<(), openpit::param::Error>(())
             /// ```
             ///
@@ -402,7 +410,7 @@ macro_rules! define_non_negative_value_type {
             ///     8,
             ///     RoundingStrategy::DEFAULT
             /// )?;
-            /// assert_eq!(qty.to_decimal().to_string(), "123.12345679");
+            /// assert_eq!(qty.to_string(), "123.12345679");
             ///
             /// // Conservative profit
             /// let qty = Quantity::from_str_rounded(
@@ -410,7 +418,7 @@ macro_rules! define_non_negative_value_type {
             ///     2,
             ///     RoundingStrategy::CONSERVATIVE_PROFIT
             /// )?;
-            /// assert_eq!(qty.to_decimal().to_string(), "123.12");
+            /// assert_eq!(qty.to_string(), "123.12");
             /// # Ok::<(), openpit::param::Error>(())
             /// ```
             ///
@@ -718,10 +726,10 @@ macro_rules! define_signed_value_type {
             /// ```
             /// # use openpit::param::Price;
             /// let price = Price::from_str("42350.75")?;
-            /// assert_eq!(price.to_decimal().to_string(), "42350.75");
+            /// assert_eq!(price.to_string(), "42350.75");
             ///
             /// let negative_price = Price::from_str("-10.5")?;
-            /// assert_eq!(negative_price.to_decimal().to_string(), "-10.5");
+            /// assert_eq!(negative_price.to_string(), "-10.5");
             /// # Ok::<(), openpit::param::Error>(())
             /// ```
             ///
@@ -1008,9 +1016,9 @@ macro_rules! test_value_type_common_methods {
             }
 
             #[test]
-            fn to_decimal_roundtrip() {
+            fn string_roundtrip() {
                 let val = <$type>::from_str($sample_value).expect("must be valid");
-                assert_eq!(val.to_decimal().to_string(), $sample_value);
+                assert_eq!(val.to_string(), $sample_value);
             }
 
             #[test]
@@ -1096,9 +1104,9 @@ macro_rules! test_value_type_common_methods {
             }
 
             #[test]
-            fn to_decimal_roundtrip() {
+            fn string_roundtrip() {
                 let val = <$type>::from_str($pos_value).expect("must be valid");
-                assert_eq!(val.to_decimal().to_string(), $pos_value);
+                assert_eq!(val.to_string(), $pos_value);
             }
 
             #[test]

@@ -28,17 +28,20 @@ use crate::param::{Asset, Volume};
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use openpit::param::{Asset, Volume};
 /// use openpit::pretrade::RiskMutation;
 ///
 /// let reserve = RiskMutation::ReserveNotional {
-///     asset: Asset::new("USD").expect("asset code must be valid"),
-///     amount: Volume::from_str("18500").expect("valid"),
+///     asset: Asset::new("USD")?,
+///     amount: Volume::from_str("18500")?,
 /// };
 /// let toggle = RiskMutation::SetKillSwitch {
 ///     id: "daily_loss_limit",
 ///     enabled: true,
 /// };
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RiskMutation {

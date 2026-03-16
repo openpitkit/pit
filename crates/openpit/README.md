@@ -7,6 +7,8 @@
 `openpit` is an embeddable pre-trade risk SDK for integrating policy-driven
 risk checks into trading systems.
 
+For an overview and links to all resources, see
+the project website [openpit.dev](https://openpit.dev/).
 For full project documentation, see
 [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
 For conceptual and architectural pages, see
@@ -73,29 +75,33 @@ when automatic order submission must be halted until the situation is analyzed.
 ```rust
 use std::time::Duration;
 
-use openpit::param::{Asset, Fee, Pnl, Price, Quantity, Side, Volume};
+use openpit::{
+    FinancialImpact, ExecutionReportOperation, OrderOperation,
+    WithFinancialImpact, WithExecutionReportOperation,
+};
+use openpit::param::{Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume};
 use openpit::pretrade::policies::{OrderSizeLimit, OrderSizeLimitPolicy};
 use openpit::pretrade::policies::OrderValidationPolicy;
 use openpit::pretrade::policies::PnlKillSwitchPolicy;
 use openpit::pretrade::policies::RateLimitPolicy;
-use openpit::pretrade::{ExecutionReport, Instrument, Order};
-use openpit::Engine;
+use openpit::{Engine, Instrument};
 
-let usd = Asset::new("USD").expect("asset code must be valid");
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let usd = Asset::new("USD")?;
 
 // 1. Configure policies.
-let pnl = PnlKillSwitchPolicy::new(
-    (usd.clone(), Pnl::from_str("1000").expect("valid pnl literal")),
+let pnl_policy = PnlKillSwitchPolicy::new(
+    (usd.clone(), Pnl::from_str("1000")?),
     [],
-);
+)?;
 
-let rate_limit = RateLimitPolicy::new(100, Duration::from_secs(1));
+let rate_limit_policy = RateLimitPolicy::new(100, Duration::from_secs(1));
 
-let size = OrderSizeLimitPolicy::new(
+let size_policy = OrderSizeLimitPolicy::new(
     OrderSizeLimit {
         settlement_asset: usd.clone(),
-        max_quantity: Quantity::from_str("500").expect("valid quantity literal"),
-        max_notional: Volume::from_str("100000").expect("valid volume literal"),
+        max_quantity: Quantity::from_str("500")?,
+        max_notional: Volume::from_str("100000")?,
     },
     [],
 );
@@ -103,26 +109,25 @@ let size = OrderSizeLimitPolicy::new(
 // 2. Build the engine (one time at the platform initialization).
 let engine = Engine::builder()
     .check_pre_trade_start_policy(OrderValidationPolicy::new())
-    .check_pre_trade_start_policy(pnl)
-    .check_pre_trade_start_policy(rate_limit)
-    .check_pre_trade_start_policy(size)
-    .build()
-    .expect("engine config must be valid");
+    .check_pre_trade_start_policy(pnl_policy)
+    .check_pre_trade_start_policy(rate_limit_policy)
+    .check_pre_trade_start_policy(size_policy)
+    .build()?;
 
 // 3. Check an order.
-let order = Order {
+let order = OrderOperation {
     instrument: Instrument::new(
-        Asset::new("AAPL").expect("asset code must be valid"),
+        Asset::new("AAPL")?,
         usd.clone(),
     ),
     side: Side::Buy,
-    quantity: Quantity::from_f64(100).expect("valid quantity value"),
-    price: Price::from_f64(185).expect("valid price value"),
+    trade_amount: TradeAmount::Quantity(
+        Quantity::from_str("100")?,
+    ),
+    price: Some(Price::from_str("185")?),
 };
 
-let request = engine
-    .start_pre_trade(order)
-    .expect("start-stage checks must pass");
+let request = engine.start_pre_trade(order)?;
 
 // 4. Quick, lightweight checks, such as fat-finger scope or enabled killswitch,
 // were performed during pre-trade request creation. The system state has not
@@ -132,20 +137,28 @@ let request = engine
 // holding the request object.
 
 // 5. Real pre-trade and risk control.
-let reservation = request.execute().expect("main-stage checks must pass");
+let reservation = request.execute()?;
 
 // 6. If the request is successfully sent to the venue, it must be committed.
 // The rollback must be called otherwise to revert all performed reservations.
 reservation.commit();
 
 // 5. The order goes to the venue and returns with an execution report.
-let report = ExecutionReport {
-    instrument: Instrument::new(
-        Asset::new("AAPL").expect("asset code must be valid"),
-        usd,
-    ),
-    pnl: Pnl::from_f64(-50).expect("valid pnl value"),
-    fee: Fee::from_f64(3.4).expect("valid fee value"),
+let report = WithExecutionReportOperation {
+    inner: WithFinancialImpact {
+        inner: (),
+        financial_impact: FinancialImpact {
+            pnl: Pnl::from_str("-50")?,
+            fee: Fee::from_str("3.4")?,
+        },
+    },
+    operation: ExecutionReportOperation {
+        instrument: Instrument::new(
+            Asset::new("AAPL")?,
+            usd,
+        ),
+        side: Side::Buy,
+    },
 };
 
 let result = engine.apply_execution_report(&report);
@@ -154,6 +167,8 @@ let result = engine.apply_execution_report(&report);
 // been determined in advance that all subsequent requests will be rejected if
 // the account status does not change.
 assert!(!result.kill_switch_triggered);
+# Ok(())
+# }
 ```
 
 ## Errors

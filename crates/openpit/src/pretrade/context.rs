@@ -15,103 +15,95 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use crate::param::CashFlow;
-
-use crate::core::Order;
-
 /// Immutable request data available during main-stage pre-trade checks.
 ///
-/// `notional` is precomputed before policy execution. The context is provided
-/// by the engine to [`crate::pretrade::Policy::perform_pre_trade_check`]; it cannot be constructed
-/// directly by user code.
-pub struct Context<'a> {
-    order: &'a Order,
-    notional: CashFlow,
+/// The engine passes this context into [`crate::pretrade::Policy`] so policies
+/// can inspect the original order without taking ownership of it. The context
+/// cannot be constructed directly by user code.
+pub struct Context<'a, O> {
+    order: &'a O,
 }
 
-impl<'a> Context<'a> {
-    /// Returns the current order.
+impl<'a, O> Context<'a, O> {
+    /// Returns the original order passed to `start_pre_trade`.
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use openpit::{HasInstrument, OrderOperation};
+    /// use openpit::param::{Asset, Side, TradeAmount, Quantity};
     /// use openpit::pretrade::{Context, Mutations, Policy, Reject};
     ///
     /// struct InspectPolicy;
     ///
-    /// impl Policy for InspectPolicy {
+    /// impl<O, R> Policy<O, R> for InspectPolicy
+    /// where
+    ///     O: HasInstrument,
+    /// {
     ///     fn name(&self) -> &'static str { "InspectPolicy" }
     ///
     ///     fn perform_pre_trade_check(
     ///         &self,
-    ///         ctx: &Context<'_>,
+    ///         ctx: &Context<'_, O>,
     ///         _mutations: &mut Mutations,
     ///         _rejects: &mut Vec<Reject>,
     ///     ) {
-    ///         let _ = ctx.order().instrument.settlement_asset();
+    ///         let _ = ctx.order().instrument().settlement_asset();
+    ///     }
+    ///
+    ///     fn apply_execution_report(&self, _report: &R) -> bool {
+    ///         false
     ///     }
     /// }
+    ///
+    /// let order = OrderOperation {
+    ///     instrument: openpit::Instrument::new(
+    ///         Asset::new("AAPL")?,
+    ///         Asset::new("USD")?,
+    ///     ),
+    ///     side: Side::Buy,
+    ///     trade_amount: TradeAmount::Quantity(
+    ///         Quantity::from_str("1")?,
+    ///     ),
+    ///     price: None,
+    /// };
+    /// let _ = order;
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn order(&self) -> &Order {
+    pub fn order(&self) -> &O {
         self.order
     }
 
-    /// Returns the precomputed notional.
-    ///
-    /// Negative `CashFlow` means outflow (buy); positive means inflow (sell).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use openpit::pretrade::{Context, Mutations, Policy, Reject};
-    ///
-    /// struct NotionalLogger;
-    ///
-    /// impl Policy for NotionalLogger {
-    ///     fn name(&self) -> &'static str { "NotionalLogger" }
-    ///
-    ///     fn perform_pre_trade_check(
-    ///         &self,
-    ///         ctx: &Context<'_>,
-    ///         _mutations: &mut Mutations,
-    ///         _rejects: &mut Vec<Reject>,
-    ///     ) {
-    ///         let _ = ctx.notional();
-    ///     }
-    /// }
-    /// ```
-    pub fn notional(&self) -> CashFlow {
-        self.notional
-    }
-
-    pub(crate) fn new(order: &'a Order, notional: CashFlow) -> Self {
-        Self { order, notional }
+    pub(crate) fn new(order: &'a O) -> Self {
+        Self { order }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::param::{Asset, CashFlow, Price, Quantity, Side};
-
-    use crate::core::{Instrument, Order};
+    use crate::core::OrderOperation;
+    use crate::param::{Asset, Quantity, Side, TradeAmount};
 
     use super::Context;
 
     #[test]
-    fn accessors_return_original_order_and_notional() {
-        let order = Order {
-            instrument: Instrument::new(
+    fn stores_order_reference() {
+        let order = OrderOperation {
+            instrument: crate::Instrument::new(
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
             side: Side::Buy,
-            quantity: Quantity::from_str("10").expect("quantity must be valid"),
-            price: Price::from_str("100").expect("price must be valid"),
+            trade_amount: TradeAmount::Quantity(
+                Quantity::from_str("10").expect("quantity must be valid"),
+            ),
+            price: None,
         };
-        let notional = CashFlow::from_str("-1000").expect("cash flow must be valid");
-        let ctx = Context::new(&order, notional);
 
-        assert_eq!(ctx.order(), &order);
-        assert_eq!(ctx.notional(), notional);
+        let ctx = Context::new(&order);
+
+        assert_eq!(ctx.order().trade_amount, order.trade_amount);
     }
 }

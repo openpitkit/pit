@@ -29,6 +29,15 @@ pub enum Side {
     Sell,
 }
 
+impl std::fmt::Display for Side {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Buy => "BUY",
+            Self::Sell => "SELL",
+        })
+    }
+}
+
 impl Side {
     /// Returns `true` if the side is [`Side::Buy`].
     #[inline]
@@ -102,5 +111,11 @@ mod tests {
     fn sign_matches_direction() {
         assert_eq!(Side::Buy.sign(), 1);
         assert_eq!(Side::Sell.sign(), -1);
+    }
+
+    #[test]
+    fn display_uses_api_names() {
+        assert_eq!(Side::Buy.to_string(), "BUY");
+        assert_eq!(Side::Sell.to_string(), "SELL");
     }
 }

@@ -31,10 +31,13 @@ use std::ops::Deref;
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use openpit::param::Asset;
 ///
-/// let usd = Asset::new("USD").expect("asset code must be valid");
+/// let usd = Asset::new("USD")?;
 /// assert_eq!(&*usd, "USD");
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

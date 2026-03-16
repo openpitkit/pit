@@ -251,11 +251,19 @@ name = "openpit-python"
 version = "0.1.3"
 dependencies = [
  "openpit",
+ "pit-interop",
  "pyo3",
 ]
 
 [[package]]
 name = "pit-ffi"
+version = "0.1.3"
+dependencies = [
+ "openpit",
+]
+
+[[package]]
+name = "pit-interop"
 version = "0.1.3"
 dependencies = [
  "openpit",

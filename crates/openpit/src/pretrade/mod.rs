@@ -18,32 +18,33 @@
 //! Pre-trade pipeline types and extension points.
 //!
 //! This module contains the request lifecycle used by Pit before an order is
-//! sent to a venue:
+//! sent to an external execution system:
 //!
 //! - [`CheckPreTradeStartPolicy`] models fast admission checks;
 //! - [`Policy`] models deeper stateful checks;
 //! - [`Request`] is the single-use handle returned after start-stage success;
 //! - [`Reservation`] is the finalizable handle for reserved state;
-//! - [`ExecutionReport`] feeds realized outcomes back into the engine.
 //!
 //! Custom controls typically start from the policy traits plus [`Context`] and
 //! [`Mutations`].
 
 mod context;
 pub(crate) mod handles;
+mod lock;
 mod mutations;
 pub mod policies;
 mod policy;
+mod post_trade_result;
 mod reject;
-mod report;
 mod request;
 mod reservation;
 pub(crate) mod start_pre_trade_time;
 
 pub use context::Context;
+pub use lock::Lock;
 pub use mutations::{Mutation, Mutations, RiskMutation};
 pub use policy::{CheckPreTradeStartPolicy, Policy};
-pub use reject::{Reject, RejectCode, RejectScope};
-pub use report::{ExecutionReport, PostTradeResult};
+pub use post_trade_result::PostTradeResult;
+pub use reject::{Reject, RejectCode, RejectScope, Rejects};
 pub use request::Request;
 pub use reservation::Reservation;

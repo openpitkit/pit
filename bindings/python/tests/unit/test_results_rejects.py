@@ -1,13 +1,15 @@
+import conftest
 import openpit
 import pytest
-from conftest import make_order
 
 
 class AlwaysRejectPolicy(openpit.pretrade.Policy):
+    # @typing.override
     @property
     def name(self) -> str:
         return "AlwaysRejectPolicy"
 
+    # @typing.override
     def perform_pre_trade_check(
         self, *, context: openpit.pretrade.PolicyContext
     ) -> openpit.pretrade.PolicyDecision:
@@ -18,15 +20,16 @@ class AlwaysRejectPolicy(openpit.pretrade.Policy):
                     code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
                     reason="main stage rejected",
                     details="synthetic reject",
-                    scope="order",
+                    scope=openpit.pretrade.RejectScope.ORDER,
                 )
             ]
         )
 
+    # @typing.override
     def apply_execution_report(
         self,
         *,
-        report: openpit.pretrade.ExecutionReport,
+        report: openpit.ExecutionReport,
     ) -> bool:
         _ = report
         return False
@@ -42,7 +45,9 @@ def test_start_result_exposes_reject_without_exception() -> None:
         .build()
     )
 
-    start_result = engine.start_pre_trade(order=make_order(quantity=0.0))
+    start_result = engine.start_pre_trade(
+        order=conftest.make_order(trade_amount=openpit.param.Quantity("0"))
+    )
     assert not start_result
     assert start_result.request is None
     assert start_result.reject is not None
@@ -63,7 +68,7 @@ def test_execute_result_exposes_rejects_without_exception() -> None:
         )
         .build()
     )
-    request = engine.start_pre_trade(order=make_order()).request
+    request = engine.start_pre_trade(order=conftest.make_order()).request
     execute_result = request.execute()
 
     assert not execute_result

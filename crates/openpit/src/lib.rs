@@ -23,8 +23,6 @@
 //! - [`Engine`] to coordinate pre-trade checks and post-trade feedback;
 //! - [`param`] for typed financial values such as [`param::Price`] and
 //!   [`param::Pnl`];
-//! - [`core`] for foundational trading entities such as [`Order`] and
-//!   [`Instrument`];
 //! - [`pretrade`] for policy traits, rejects, deferred requests, and
 //!   reservations.
 //!
@@ -36,17 +34,26 @@
 //!    [`pretrade::Reservation`].
 //! 3. [`pretrade::Reservation::commit`] or
 //!    [`pretrade::Reservation::rollback`] finalizes reserved state.
-//! 4. [`Engine::apply_execution_report`] feeds realized outcomes back into
-//!    policies.
+//! 4. [`Engine::apply_execution_report`] feeds realized outcomes back into policies.
 //!
 //! The current crate scope is deliberately narrow: in-memory admission control,
 //! exact decimal value types, and a small set of built-in start-stage
 //! policies. Persistence, market connectivity, and thread synchronization stay
 //! with the caller.
 
-pub mod core;
+mod core;
 pub mod param;
 pub mod pretrade;
 
 pub use core::engine::{Engine, EngineBuildError, EngineBuilder};
-pub use core::{Instrument, Order};
+pub use core::{
+    ExecutionReportFillDetails, ExecutionReportOperation, ExecutionReportPositionImpact,
+    FinancialImpact, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
+    HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
+    HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
+    HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,
+    Instrument, OrderMargin, OrderOperation, OrderPosition, WithExecutionReportFillDetails,
+    WithExecutionReportOperation, WithExecutionReportPositionImpact, WithFinancialImpact,
+    WithOrderMargin, WithOrderOperation, WithOrderPosition,
+};
+pub use pretrade::PostTradeResult;

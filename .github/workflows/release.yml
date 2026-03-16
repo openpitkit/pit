@@ -379,6 +379,45 @@ jobs:
             twine check dist/*
           fi
 
+  publish-docs:
+    name: Publish Python API docs
+    needs: [publish-sdist, verify-tag]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install maturin pdoc
+
+      - name: Build Python extension
+        run: maturin develop --manifest-path bindings/python/Cargo.toml
+
+      - name: Generate API docs
+        run: pdoc openpit --html --output-dir docs/api/python
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: docs/api/python/openpit
+
   publish-github-release:
     name: Publish GitHub release metadata
     needs:
@@ -388,6 +427,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Create GitHub Release without assets
         shell: bash
         run: |
@@ -408,3 +450,52 @@ jobs:
             --generate-notes \
             --notes-file "${BODY_FILE}" \
             --latest
+
+  release-e2e-advisory:
+    name: Release e2e advisory
+    needs:
+      - publish-github-release
+      - verify-tag
+    if: ${{ needs.publish-github-release.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Run release e2e
+        id: release-e2e
+        continue-on-error: true
+        shell: bash
+        run: ./e2e/run.sh "${{ needs.verify-tag.outputs.version }}"
+
+      - name: Summarize release e2e success
+        if: ${{ steps.release-e2e.outcome == 'success' }}
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: |
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## Release e2e
+
+          Release e2e passed for \`openpit ${VERSION}\`.
+          EOF
+
+      - name: Summarize release e2e advisory failure
+        if: ${{ steps.release-e2e.outcome == 'failure' }}
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: |
+          echo "::warning::Release e2e failed for openpit ${VERSION}. The release is already published; review the final advisory job logs."
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## Release e2e advisory
+
+          Release e2e failed for \`openpit ${VERSION}\`.
+
+          The release has already been published. Review the final advisory job logs for details.
+          EOF

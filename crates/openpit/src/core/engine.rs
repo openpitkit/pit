@@ -18,21 +18,21 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
+use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
 use std::time::Instant;
 
-use crate::core::Order;
-use crate::param::{Asset, CashFlow, Side, Volume};
+use crate::param::{Asset, Volume};
 use crate::pretrade::handles::{RequestHandleImpl, ReservationHandleImpl};
 use crate::pretrade::start_pre_trade_time::with_start_pre_trade_now;
 use crate::pretrade::{
-    CheckPreTradeStartPolicy, Context, ExecutionReport, Mutations, Policy, PostTradeResult, Reject,
-    RejectCode, RejectScope, Request, Reservation, RiskMutation,
+    CheckPreTradeStartPolicy, Context, Mutation, Mutations, Policy, PostTradeResult, Reject,
+    RejectCode, RejectScope, Rejects, Request, Reservation, RiskMutation,
 };
 
-struct EngineInner {
-    check_pre_trade_start_policies: Vec<Box<dyn CheckPreTradeStartPolicy>>,
-    pre_trade_policies: Vec<Box<dyn Policy>>,
+struct EngineInner<O, R> {
+    check_pre_trade_start_policies: Vec<Box<dyn CheckPreTradeStartPolicy<O, R>>>,
+    pre_trade_policies: Vec<Box<dyn Policy<O, R>>>,
     state: EngineState,
 }
 
@@ -64,8 +64,12 @@ impl std::error::Error for EngineBuildError {}
 
 /// Risk engine orchestrating start-stage and main-stage pre-trade checks.
 ///
-/// Build the engine once during platform initialization using [`Engine::builder`],
-/// then share it across order submissions.
+/// Build the engine once during platform initialization using
+/// [`Engine::builder`], then share it across order submissions.
+///
+/// Generic parameters:
+/// - `O`: order contract type used by `start_pre_trade`;
+/// - `R`: execution-report contract type used by `apply_execution_report`.
 ///
 /// # Thread safety
 ///
@@ -75,47 +79,55 @@ impl std::error::Error for EngineBuildError {}
 ///
 /// # Examples
 ///
-/// ```
-/// use openpit::param::{Asset, Price, Quantity, Side};
-/// use openpit::core::Instrument;
-/// use openpit::{Engine, Order};
+/// ```rust
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use openpit::param::{Asset, Price, Quantity, Side, TradeAmount};
+/// use openpit::{Engine, Instrument, OrderOperation, WithOrderOperation};
+/// use openpit::{FinancialImpact, ExecutionReportOperation, WithFinancialImpact, WithExecutionReportOperation};
 ///
-/// let engine = Engine::builder().build().expect("valid config");
+/// type MyOrder = WithOrderOperation<()>;
+/// type MyReport = WithExecutionReportOperation<WithFinancialImpact<()>>;
 ///
-/// let order = Order {
-///     instrument: Instrument::new(
-///         Asset::new("AAPL").expect("asset literal must be valid"),
-///         Asset::new("USD").expect("asset literal must be valid"),
-///     ),
-///     side: Side::Buy,
-///     quantity: Quantity::from_str("100").expect("valid"),
-///     price: Price::from_str("185").expect("valid"),
+/// let engine = Engine::<MyOrder, MyReport>::builder().build()?;
+///
+/// let order = WithOrderOperation {
+///     inner: (),
+///     operation: OrderOperation {
+///         instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
+///         side: Side::Buy,
+///         trade_amount: TradeAmount::Quantity(Quantity::from_str("100")?),
+///         price: Some(Price::from_str("185")?),
+///     },
 /// };
 ///
-/// let request = engine.start_pre_trade(order).expect("must pass");
-/// let reservation = request.execute().expect("must pass");
+/// let request = engine.start_pre_trade(order)?;
+/// let reservation = request.execute()?;
 /// reservation.commit();
+/// # Ok(())
+/// # }
 /// ```
-pub struct Engine {
-    inner: Rc<RefCell<EngineInner>>,
+pub struct Engine<O, R> {
+    inner: Rc<RefCell<EngineInner<O, R>>>,
 }
 
-impl Engine {
+impl<O: 'static, R: 'static> Engine<O, R> {
     /// Creates an engine builder.
-    pub fn builder() -> EngineBuilder {
+    pub fn builder() -> EngineBuilder<O, R> {
         EngineBuilder::new()
     }
 
     /// Executes start-stage checks and creates a deferred [`Request`].
     ///
     /// Start-stage policies run in registration order and stop at the first reject.
-    /// Notional is precomputed before the main-stage policies run.
+    ///
+    /// The engine does not enforce optional order extensions (for example
+    /// `instrument` or `side`). Policies that depend on extension fields must
+    /// validate their presence.
     ///
     /// # Errors
     ///
-    /// Returns [`Reject`] when any start-stage policy rejects the order, or when
-    /// the notional calculation overflows.
-    pub fn start_pre_trade(&self, order: Order) -> Result<Request, Reject> {
+    /// Returns [`Reject`] when any start-stage policy rejects the order.
+    pub fn start_pre_trade(&self, order: O) -> Result<Request<O>, Reject> {
         let now: Instant = Instant::now();
         with_start_pre_trade_now(now, || {
             let inner = self.inner.borrow();
@@ -125,10 +137,9 @@ impl Engine {
             Ok::<(), Reject>(())
         })?;
 
-        let notional = calculate_notional(&order)?;
         let engine = Rc::downgrade(&self.inner);
         let request_handle =
-            RequestHandleImpl::new(Box::new(move || execute_request(engine, order, notional)));
+            RequestHandleImpl::<O>::new(Box::new(move || execute_request(engine, order)));
 
         Ok(Request::from_handle(Box::new(request_handle)))
     }
@@ -137,7 +148,7 @@ impl Engine {
     ///
     /// Returns [`PostTradeResult::kill_switch_triggered`] `true` when at least one policy
     /// reports a kill-switch condition.
-    pub fn apply_execution_report(&self, report: &ExecutionReport) -> PostTradeResult {
+    pub fn apply_execution_report(&self, report: &R) -> PostTradeResult {
         let inner = self.inner.borrow();
         let mut kill_switch_triggered = false;
 
@@ -162,48 +173,77 @@ impl Engine {
 ///
 /// # Examples
 ///
-/// ```
+/// ```rust
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use std::time::Duration;
-/// use openpit::param::{Asset, Pnl, Price, Quantity, Side};
-/// use openpit::pretrade::policies::PnlKillSwitchPolicy;
-/// use openpit::pretrade::policies::RateLimitPolicy;
-/// use openpit::core::Instrument;
-/// use openpit::{Engine, Order};
+/// use openpit::{HasFee, HasInstrument, HasPnl, Instrument, WithOrderOperation};
+/// use openpit::pretrade::policies::{PnlKillSwitchPolicy, RateLimitPolicy};
+/// use openpit::Engine;
+/// use openpit::param::{Asset, Fee, Pnl};
+///
+/// type MyOrder = WithOrderOperation<()>;
+///
+/// struct MyReport {
+///     instrument: Instrument,
+///     pnl: Pnl,
+///     fee: Fee,
+/// }
+///
+/// impl HasInstrument for MyReport {
+///     fn instrument(&self) -> &Instrument {
+///         &self.instrument
+///     }
+/// }
+///
+/// impl HasPnl for MyReport {
+///     fn pnl(&self) -> Pnl {
+///         self.pnl
+///     }
+/// }
+///
+/// impl HasFee for MyReport {
+///     fn fee(&self) -> Fee {
+///         self.fee
+///     }
+/// }
 ///
 /// let pnl_policy = PnlKillSwitchPolicy::new(
 ///     (
-///         Asset::new("USD").expect("asset code must be valid"),
-///         Pnl::from_str("500").expect("valid"),
+///         Asset::new("USD")?,
+///         Pnl::from_str("500")?,
 ///     ),
 ///     [],
-/// )
-/// .expect("policy config must be valid");
+/// )?;
 ///
-/// let engine = Engine::builder()
+/// let engine = Engine::<MyOrder, MyReport>::builder()
 ///     .check_pre_trade_start_policy(pnl_policy)
 ///     .check_pre_trade_start_policy(RateLimitPolicy::new(100, Duration::from_secs(1)))
-///     .build()
-///     .expect("engine config must be valid");
+///     .build()?;
+/// let _ = engine;
+/// # Ok(())
+/// # }
 /// ```
-pub struct EngineBuilder {
-    check_pre_trade_start_policies: Vec<Box<dyn CheckPreTradeStartPolicy>>,
-    pre_trade_policies: Vec<Box<dyn Policy>>,
+pub struct EngineBuilder<O, R> {
+    check_pre_trade_start_policies: Vec<Box<dyn CheckPreTradeStartPolicy<O, R>>>,
+    pre_trade_policies: Vec<Box<dyn Policy<O, R>>>,
+    marker: PhantomData<fn(O, R)>,
 }
 
-impl EngineBuilder {
+impl<O, R> EngineBuilder<O, R> {
     /// Creates a new builder.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             check_pre_trade_start_policies: Vec::new(),
             pre_trade_policies: Vec::new(),
+            marker: PhantomData,
         }
     }
 
     /// Registers a start-stage policy.
     pub fn check_pre_trade_start_policy<P>(mut self, policy: P) -> Self
     where
-        P: CheckPreTradeStartPolicy + 'static,
+        P: CheckPreTradeStartPolicy<O, R> + 'static,
     {
         self.check_pre_trade_start_policies.push(Box::new(policy));
         self
@@ -212,14 +252,18 @@ impl EngineBuilder {
     /// Registers a main-stage policy.
     pub fn pre_trade_policy<P>(mut self, policy: P) -> Self
     where
-        P: Policy + 'static,
+        P: Policy<O, R> + 'static,
     {
         self.pre_trade_policies.push(Box::new(policy));
         self
     }
 
     /// Builds the engine.
-    pub fn build(self) -> Result<Engine, EngineBuildError> {
+    pub fn build(self) -> Result<Engine<O, R>, EngineBuildError>
+    where
+        O: 'static,
+        R: 'static,
+    {
         ensure_unique_policy_names(
             &self.check_pre_trade_start_policies,
             &self.pre_trade_policies,
@@ -235,9 +279,9 @@ impl EngineBuilder {
     }
 }
 
-fn ensure_unique_policy_names(
-    check_pre_trade_start_policies: &[Box<dyn CheckPreTradeStartPolicy>],
-    pre_trade_policies: &[Box<dyn Policy>],
+fn ensure_unique_policy_names<O, R>(
+    check_pre_trade_start_policies: &[Box<dyn CheckPreTradeStartPolicy<O, R>>],
+    pre_trade_policies: &[Box<dyn Policy<O, R>>],
 ) -> Result<(), EngineBuildError> {
     let mut unique = HashSet::new();
 
@@ -262,39 +306,35 @@ fn ensure_unique_policy_names(
     Ok(())
 }
 
-fn execute_request(
-    engine: Weak<RefCell<EngineInner>>,
-    order: Order,
-    notional: CashFlow,
-) -> Result<Reservation, Vec<Reject>> {
+fn execute_request<O: 'static, R: 'static>(
+    engine: Weak<RefCell<EngineInner<O, R>>>,
+    order: O,
+) -> Result<Reservation, Rejects> {
     let Some(engine_ref) = engine.upgrade() else {
-        return Err(vec![Reject::new(
+        return Err(Rejects::new(vec![Reject::new(
             "Engine",
             RejectScope::Order,
             RejectCode::SystemUnavailable,
             "engine is no longer available",
             "request handle outlived engine instance".to_owned(),
-        )]);
+        )]));
     };
     let mut inner = engine_ref.borrow_mut();
 
     let mut mutations = Mutations::new();
     let mut rejects = Vec::new();
-    let ctx = Context::new(&order, notional);
+    let ctx = Context::new(&order);
 
     for policy in &inner.pre_trade_policies {
         policy.perform_pre_trade_check(&ctx, &mut mutations, &mut rejects);
     }
 
     if !rejects.is_empty() {
-        for mutation in mutations.as_slice().iter().rev() {
-            apply_mutation(&mut inner.state, &mutation.rollback);
-        }
-        return Err(rejects);
+        rollback_mutations(&mut inner.state, mutations.as_slice());
+        return Err(Rejects::new(rejects));
     }
 
     drop(inner);
-
     let reservation_engine = engine;
     let reservation_handle = ReservationHandleImpl::new(
         mutations.into_vec(),
@@ -306,29 +346,13 @@ fn execute_request(
             apply_mutation(&mut inner.state, mutation);
         }),
     );
-
     Ok(Reservation::from_handle(Box::new(reservation_handle)))
 }
 
-fn calculate_notional(order: &Order) -> Result<CashFlow, Reject> {
-    let volume = order.price.calculate_volume(order.quantity).map_err(|_| {
-        Reject::new(
-            "Engine",
-            RejectScope::Order,
-            RejectCode::OrderValueCalculationFailed,
-            "order notional overflow",
-            format!(
-                "requested price {}, requested quantity {}; could not calculate order notional",
-                order.price, order.quantity
-            ),
-        )
-    })?;
-
-    let notional = match order.side {
-        Side::Buy => volume.to_cash_flow_outflow(),
-        Side::Sell => volume.to_cash_flow_inflow(),
-    };
-    Ok(notional)
+fn rollback_mutations(state: &mut EngineState, mutations: &[Mutation]) {
+    for mutation in mutations.iter().rev() {
+        apply_mutation(state, &mutation.rollback);
+    }
 }
 
 fn apply_mutation(state: &mut EngineState, mutation: &RiskMutation) {
@@ -347,19 +371,24 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
-    use crate::core::{Instrument, Order};
-    use crate::param::{Asset, Fee, Pnl, Price, Quantity, Side, Volume};
-    use crate::pretrade::{
-        CheckPreTradeStartPolicy, Context, ExecutionReport, Mutation, Mutations, Policy, Reject,
-        RejectCode, RejectScope, RiskMutation,
+    use crate::core::{
+        ExecutionReportOperation, FinancialImpact, Instrument, OrderOperation,
+        WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation,
     };
-    use rust_decimal::Decimal;
+    use crate::param::{Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume};
+    use crate::pretrade::{
+        CheckPreTradeStartPolicy, Context, Mutation, Mutations, Policy, Reject, RejectCode,
+        RejectScope, RiskMutation,
+    };
 
     use super::{Engine, EngineBuildError};
 
+    type TestOrder = WithOrderOperation<()>;
+    type TestReport = WithExecutionReportOperation<WithFinancialImpact<()>>;
+
     #[test]
     fn build_rejects_duplicate_policy_names_across_stages() {
-        let result = Engine::builder()
+        let result = Engine::<TestOrder, TestReport>::builder()
             .check_pre_trade_start_policy(StartPolicyMock::pass("dup"))
             .pre_trade_policy(MainPolicyMock::pass("dup"))
             .build();
@@ -372,7 +401,7 @@ mod tests {
 
     #[test]
     fn build_rejects_duplicate_policy_names_within_start_stage() {
-        let result = Engine::builder()
+        let result = Engine::<TestOrder, TestReport>::builder()
             .check_pre_trade_start_policy(StartPolicyMock::pass("dup"))
             .check_pre_trade_start_policy(StartPolicyMock::pass("dup"))
             .build();
@@ -385,7 +414,7 @@ mod tests {
 
     #[test]
     fn builder_builds_operational_empty_engine() {
-        let reservation = Engine::builder()
+        let reservation = Engine::<TestOrder, TestReport>::builder()
             .build()
             .expect("builder must build")
             .start_pre_trade(order_with_settlement("USD"))
@@ -393,6 +422,185 @@ mod tests {
             .execute()
             .expect("built engine must allow execute");
         reservation.rollback();
+    }
+
+    #[test]
+    fn accepts_order_without_operation_fields_when_no_policy_requires_them() {
+        let engine = Engine::<(), TestReport>::builder()
+            .check_pre_trade_start_policy(CoreStartPolicyMock {
+                name: "core_start",
+                reject: false,
+            })
+            .pre_trade_policy(CoreMainPolicyMock {
+                name: "core_main",
+                mutation_id: None,
+                reject: false,
+            })
+            .build()
+            .expect("engine must build");
+        let order = ();
+        let reservation = engine
+            .start_pre_trade(order)
+            .expect("start stage must pass")
+            .execute()
+            .expect("main stage must pass");
+        reservation.commit();
+
+        let post_trade = engine.apply_execution_report(&execution_report("USD"));
+        assert!(!post_trade.kill_switch_triggered);
+    }
+
+    #[test]
+    fn order_trade_input_build_rejects_duplicate_policy_names_across_stages() {
+        let result = Engine::<(), TestReport>::builder()
+            .check_pre_trade_start_policy(CoreStartPolicyMock {
+                name: "dup",
+                reject: false,
+            })
+            .pre_trade_policy(CoreMainPolicyMock {
+                name: "dup",
+                mutation_id: None,
+                reject: false,
+            })
+            .build();
+
+        assert!(matches!(
+            result,
+            Err(EngineBuildError::DuplicatePolicyName { name: "dup" })
+        ));
+    }
+
+    #[test]
+    fn order_trade_input_build_rejects_duplicate_policy_names_within_start_stage() {
+        let result = Engine::<(), TestReport>::builder()
+            .check_pre_trade_start_policy(CoreStartPolicyMock {
+                name: "dup",
+                reject: false,
+            })
+            .check_pre_trade_start_policy(CoreStartPolicyMock {
+                name: "dup",
+                reject: false,
+            })
+            .build();
+
+        assert!(matches!(
+            result,
+            Err(EngineBuildError::DuplicatePolicyName { name: "dup" })
+        ));
+    }
+
+    #[test]
+    fn order_trade_input_start_pre_trade_rejects_before_request_is_created() {
+        let engine = Engine::<(), TestReport>::builder()
+            .check_pre_trade_start_policy(CoreStartPolicyMock {
+                name: "core_start_reject",
+                reject: true,
+            })
+            .build()
+            .expect("engine must build");
+        let order = ();
+
+        let result = engine.start_pre_trade(order);
+        assert!(matches!(
+            result,
+            Err(Reject {
+                policy: "core_start_reject",
+                code: RejectCode::Other,
+                ..
+            })
+        ));
+
+        let post_trade = engine.apply_execution_report(&execution_report("USD"));
+        assert!(!post_trade.kill_switch_triggered);
+    }
+
+    #[test]
+    fn order_core_execute_rejects_and_rolls_back_mutations() {
+        let engine = Engine::<(), TestReport>::builder()
+            .check_pre_trade_start_policy(CoreStartPolicyMock {
+                name: "core_start",
+                reject: false,
+            })
+            .pre_trade_policy(CoreMainPolicyMock {
+                name: "core_main",
+                mutation_id: Some("core_order_mutation"),
+                reject: true,
+            })
+            .build()
+            .expect("engine must build");
+        let order = ();
+
+        let request = engine
+            .start_pre_trade(order)
+            .expect("start stage must create request");
+        let result = request.execute();
+        assert!(result.is_err(), "main stage must reject");
+        let rejects = result.err().expect("rejects must be present");
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].policy, "core_main");
+        assert_eq!(rejects[0].code, RejectCode::Other);
+        assert_eq!(
+            engine
+                .inner
+                .borrow()
+                .state
+                .kill_switch
+                .get("core_order_mutation")
+                .copied(),
+            Some(false)
+        );
+
+        let post_trade = engine.apply_execution_report(&execution_report("USD"));
+        assert!(!post_trade.kill_switch_triggered);
+    }
+
+    #[test]
+    fn order_core_execute_commit_and_rollback_apply_mutation_callback() {
+        let cases = [
+            (FinalizeAction::Commit, Some(true)),
+            (FinalizeAction::Rollback, Some(false)),
+        ];
+
+        for (action, expected_state) in cases {
+            let engine = Engine::<(), TestReport>::builder()
+                .check_pre_trade_start_policy(CoreStartPolicyMock {
+                    name: "core_start",
+                    reject: false,
+                })
+                .pre_trade_policy(CoreMainPolicyMock {
+                    name: "core_main",
+                    mutation_id: Some("core_finalize_mutation"),
+                    reject: false,
+                })
+                .build()
+                .expect("engine must build");
+            let order = ();
+
+            let reservation = engine
+                .start_pre_trade(order)
+                .expect("start stage must create request")
+                .execute()
+                .expect("main stage must pass");
+
+            match action {
+                FinalizeAction::Commit => reservation.commit(),
+                FinalizeAction::Rollback => reservation.rollback(),
+            }
+
+            assert_eq!(
+                engine
+                    .inner
+                    .borrow()
+                    .state
+                    .kill_switch
+                    .get("core_finalize_mutation")
+                    .copied(),
+                expected_state
+            );
+
+            let post_trade = engine.apply_execution_report(&execution_report("USD"));
+            assert!(!post_trade.kill_switch_triggered);
+        }
     }
 
     #[test]
@@ -425,26 +633,18 @@ mod tests {
             let calls_2 = Rc::new(Cell::new(0));
             let main_calls = Rc::new(Cell::new(0));
 
-            let start_0 = StartPolicyMock::new(
-                "s0",
-                Rc::clone(&calls_0),
-                case.reject_index == Some(0),
-                false,
-            );
+            let start_0 = StartPolicyMock::new("s0", Rc::clone(&calls_0), false, false, None, None);
             let start_1 = StartPolicyMock::new(
                 "s1",
                 Rc::clone(&calls_1),
                 case.reject_index == Some(1),
                 false,
+                None,
+                None,
             );
-            let start_2 = StartPolicyMock::new(
-                "s2",
-                Rc::clone(&calls_2),
-                case.reject_index == Some(2),
-                false,
-            );
+            let start_2 = StartPolicyMock::new("s2", Rc::clone(&calls_2), false, false, None, None);
 
-            let engine = Engine::builder()
+            let engine = Engine::<TestOrder, TestReport>::builder()
                 .check_pre_trade_start_policy(start_0)
                 .check_pre_trade_start_policy(start_1)
                 .check_pre_trade_start_policy(start_2)
@@ -492,7 +692,7 @@ mod tests {
         ];
 
         for case in cases {
-            let engine = Engine::builder()
+            let engine = Engine::<TestOrder, TestReport>::builder()
                 .check_pre_trade_start_policy(StartPolicyMock::pass("start"))
                 .pre_trade_policy(MainPolicyMock::with_custom_mutation_and_optional_reject(
                     "m1_policy",
@@ -538,7 +738,7 @@ mod tests {
     #[test]
     fn light_stage_changes_are_not_rolled_back_when_execute_rejects() {
         let light_counter = Rc::new(Cell::new(0));
-        let engine = Engine::builder()
+        let engine = Engine::<TestOrder, TestReport>::builder()
             .check_pre_trade_start_policy(StartPolicyMock::with_counter(
                 "start",
                 Rc::clone(&light_counter),
@@ -562,7 +762,7 @@ mod tests {
 
     #[test]
     fn reservation_drop_triggers_rollback_in_reverse_order() {
-        let engine = Engine::builder()
+        let engine = Engine::<TestOrder, TestReport>::builder()
             .check_pre_trade_start_policy(StartPolicyMock::pass("start"))
             .pre_trade_policy(MainPolicyMock::with_custom_mutation_and_optional_reject(
                 "m1_policy",
@@ -594,12 +794,14 @@ mod tests {
 
     #[test]
     fn apply_execution_report_aggregates_kill_switch_triggered() {
-        let engine = Engine::builder()
+        let engine = Engine::<TestOrder, TestReport>::builder()
             .check_pre_trade_start_policy(StartPolicyMock::new(
                 "start_false",
                 Rc::new(Cell::new(0)),
                 false,
                 false,
+                None,
+                None,
             ))
             .pre_trade_policy(MainPolicyMock::with_calls(
                 "main_true",
@@ -618,7 +820,9 @@ mod tests {
     #[test]
     fn request_returns_system_unavailable_when_engine_is_dropped() {
         let request = {
-            let engine = Engine::builder().build().expect("engine must build");
+            let engine = Engine::<TestOrder, TestReport>::builder()
+                .build()
+                .expect("engine must build");
             engine
                 .start_pre_trade(order_with_settlement("USD"))
                 .expect("start stage must pass")
@@ -643,9 +847,30 @@ mod tests {
     }
 
     #[test]
+    fn order_core_request_returns_system_unavailable_when_engine_is_dropped() {
+        let request = {
+            let engine = Engine::<(), TestReport>::builder()
+                .build()
+                .expect("engine must build");
+            engine.start_pre_trade(()).expect("start stage must pass")
+        };
+
+        let result = request.execute();
+        assert!(
+            result.is_err(),
+            "request must fail when engine is unavailable"
+        );
+        let rejects = result.err().expect("rejects must be present");
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].policy, "Engine");
+        assert_eq!(rejects[0].scope, RejectScope::Order);
+        assert_eq!(rejects[0].code, RejectCode::SystemUnavailable);
+    }
+
+    #[test]
     fn reservation_mutation_callback_is_noop_when_engine_is_dropped() {
         let reservation = {
-            let engine = Engine::builder()
+            let engine = Engine::<TestOrder, TestReport>::builder()
                 .check_pre_trade_start_policy(StartPolicyMock::pass("start"))
                 .pre_trade_policy(MainPolicyMock::with_custom_mutation_and_optional_reject(
                     "main",
@@ -666,6 +891,32 @@ mod tests {
     }
 
     #[test]
+    fn order_core_reservation_mutation_callback_is_noop_when_engine_is_dropped() {
+        let reservation = {
+            let engine = Engine::<(), TestReport>::builder()
+                .check_pre_trade_start_policy(CoreStartPolicyMock {
+                    name: "core_start",
+                    reject: false,
+                })
+                .pre_trade_policy(CoreMainPolicyMock {
+                    name: "core_main",
+                    mutation_id: Some("core_drop_mutation"),
+                    reject: false,
+                })
+                .build()
+                .expect("engine must build");
+
+            engine
+                .start_pre_trade(())
+                .expect("start stage must pass")
+                .execute()
+                .expect("main stage must pass")
+        };
+
+        reservation.commit();
+    }
+
+    #[test]
     fn build_error_display_is_stable() {
         let err = EngineBuildError::DuplicatePolicyName { name: "dup" };
         assert_eq!(err.to_string(), "duplicate policy name: dup");
@@ -674,7 +925,7 @@ mod tests {
     #[test]
     fn main_stage_observes_settlement_assets_independently() {
         let seen = Rc::new(RefCell::new(Vec::new()));
-        let engine = Engine::builder()
+        let engine = Engine::<TestOrder, TestReport>::builder()
             .check_pre_trade_start_policy(StartPolicyMock::pass("start"))
             .pre_trade_policy(MainPolicyMock::with_calls(
                 "collector",
@@ -713,7 +964,7 @@ mod tests {
     #[test]
     fn reset_like_start_policy_state_allows_trading_to_resume() {
         let blocked = Rc::new(Cell::new(true));
-        let engine = Engine::builder()
+        let engine = Engine::<TestOrder, TestReport>::builder()
             .check_pre_trade_start_policy(StartPolicyMock::with_block_flag(
                 "toggle",
                 Rc::clone(&blocked),
@@ -731,61 +982,416 @@ mod tests {
     }
 
     #[test]
-    fn start_pre_trade_rejects_notional_overflow() {
-        let engine = Engine::builder().build().expect("engine must build");
-        let order = Order {
-            instrument: Instrument::new(
-                Asset::new("AAPL").expect("asset code must be valid"),
-                Asset::new("USD").expect("asset code must be valid"),
-            ),
-            side: Side::Buy,
-            quantity: Quantity::from_str("2").expect("quantity must be valid"),
-            price: Price::new(Decimal::MAX),
-        };
+    fn tagged_build_rejects_duplicate_policy_names_across_stages() {
+        let journal = Rc::new(RefCell::new(Vec::new()));
+        let seen_orders = Rc::new(RefCell::new(Vec::new()));
+        let seen_reports = Rc::new(RefCell::new(Vec::new()));
 
-        let result = engine.start_pre_trade(order);
-        assert!(
-            result.is_err(),
-            "overflow must reject before request creation"
-        );
-        let reject = result.err().expect("reject must be present");
-        assert_eq!(reject.policy, "Engine");
-        assert_eq!(reject.scope, RejectScope::Order);
-        assert_eq!(reject.code, RejectCode::OrderValueCalculationFailed);
-        assert_eq!(reject.reason, "order notional overflow");
-        assert_eq!(
-            reject.details,
-            format!(
-                "requested price {}, requested quantity 2; could not calculate order notional",
-                Price::new(Decimal::MAX)
-            )
-        );
+        let result = Engine::<TaggedOrder, TaggedReport>::builder()
+            .check_pre_trade_start_policy(CaptureTaggedStartPolicy::new(
+                "dup",
+                Rc::clone(&journal),
+                Rc::clone(&seen_orders),
+                Rc::clone(&seen_reports),
+            ))
+            .pre_trade_policy(CaptureTaggedMainPolicy::new(
+                "dup",
+                Rc::clone(&journal),
+                Rc::clone(&seen_orders),
+                Rc::clone(&seen_reports),
+            ))
+            .build();
+
+        assert!(matches!(
+            result,
+            Err(EngineBuildError::DuplicatePolicyName { name: "dup" })
+        ));
     }
 
     #[test]
-    fn sell_order_uses_inflow_notional_and_applies_reserve_mutation() {
+    fn tagged_build_rejects_duplicate_policy_names_within_start_stage() {
+        let journal = Rc::new(RefCell::new(Vec::new()));
+        let seen_orders = Rc::new(RefCell::new(Vec::new()));
+        let seen_reports = Rc::new(RefCell::new(Vec::new()));
+
+        let result = Engine::<TaggedOrder, TaggedReport>::builder()
+            .check_pre_trade_start_policy(CaptureTaggedStartPolicy::new(
+                "dup",
+                Rc::clone(&journal),
+                Rc::clone(&seen_orders),
+                Rc::clone(&seen_reports),
+            ))
+            .check_pre_trade_start_policy(SequenceFenceStartPolicy::new("dup", Rc::clone(&journal)))
+            .build();
+
+        assert!(matches!(
+            result,
+            Err(EngineBuildError::DuplicatePolicyName { name: "dup" })
+        ));
+    }
+
+    #[test]
+    fn tagged_start_pre_trade_rejects_before_request_is_created() {
+        let engine = Engine::<TaggedOrder, TaggedReport>::builder()
+            .check_pre_trade_start_policy(RejectTaggedStartPolicyMock {
+                name: "tagged_start_reject",
+            })
+            .build()
+            .expect("engine must build");
+
+        let result = engine.start_pre_trade(tagged_order("ord-reject", "AAPL", "1", "10"));
+        assert!(matches!(
+            result,
+            Err(Reject {
+                policy: "tagged_start_reject",
+                code: RejectCode::Other,
+                ..
+            })
+        ));
+
+        let post_trade =
+            engine.apply_execution_report(&tagged_execution_report("rep-reject", "AAPL", "1", "1"));
+        assert!(!post_trade.kill_switch_triggered);
+    }
+
+    #[test]
+    fn tagged_request_returns_system_unavailable_when_engine_is_dropped() {
+        let request = {
+            let engine = Engine::<TaggedOrder, TaggedReport>::builder()
+                .build()
+                .expect("engine must build");
+            engine
+                .start_pre_trade(tagged_order("ord-dropped", "AAPL", "1", "10"))
+                .expect("start stage must pass")
+        };
+
+        let result = request.execute();
+        assert!(
+            result.is_err(),
+            "request must fail when engine is unavailable"
+        );
+        let rejects = result.err().expect("rejects must be present");
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].policy, "Engine");
+        assert_eq!(rejects[0].scope, RejectScope::Order);
+        assert_eq!(rejects[0].code, RejectCode::SystemUnavailable);
+    }
+
+    #[test]
+    fn tagged_execute_rejects_and_rolls_back_mutations() {
+        let engine = Engine::<TaggedOrder, TaggedReport>::builder()
+            .pre_trade_policy(TaggedMutationPolicyMock {
+                name: "tagged_main",
+                mutation_id: "tagged_reject_mutation",
+                reject: true,
+            })
+            .build()
+            .expect("engine must build");
+
+        let request = engine
+            .start_pre_trade(tagged_order("ord-tagged-reject", "AAPL", "2", "11"))
+            .expect("start stage must create request");
+        let result = request.execute();
+        assert!(result.is_err(), "main stage must reject");
+        let rejects = result.err().expect("rejects must be present");
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].policy, "tagged_main");
+        assert_eq!(rejects[0].code, RejectCode::Other);
+        assert_eq!(
+            engine
+                .inner
+                .borrow()
+                .state
+                .kill_switch
+                .get("tagged_reject_mutation")
+                .copied(),
+            Some(false)
+        );
+
+        let post_trade = engine.apply_execution_report(&tagged_execution_report(
+            "rep-tagged-reject",
+            "AAPL",
+            "2",
+            "1",
+        ));
+        assert!(!post_trade.kill_switch_triggered);
+    }
+
+    #[test]
+    fn tagged_execute_commit_and_rollback_apply_mutation_callback() {
+        let cases = [
+            (FinalizeAction::Commit, Some(true)),
+            (FinalizeAction::Rollback, Some(false)),
+        ];
+
+        for (action, expected_state) in cases {
+            let engine = Engine::<TaggedOrder, TaggedReport>::builder()
+                .pre_trade_policy(TaggedMutationPolicyMock {
+                    name: "tagged_main",
+                    mutation_id: "tagged_finalize_mutation",
+                    reject: false,
+                })
+                .build()
+                .expect("engine must build");
+
+            let reservation = engine
+                .start_pre_trade(tagged_order("ord-tagged-finalize", "MSFT", "3", "12"))
+                .expect("start stage must create request")
+                .execute()
+                .expect("main stage must pass");
+
+            match action {
+                FinalizeAction::Commit => reservation.commit(),
+                FinalizeAction::Rollback => reservation.rollback(),
+            }
+
+            assert_eq!(
+                engine
+                    .inner
+                    .borrow()
+                    .state
+                    .kill_switch
+                    .get("tagged_finalize_mutation")
+                    .copied(),
+                expected_state
+            );
+
+            let post_trade = engine.apply_execution_report(&tagged_execution_report(
+                "rep-tagged-finalize",
+                "MSFT",
+                "3",
+                "1",
+            ));
+            assert!(!post_trade.kill_switch_triggered);
+        }
+    }
+
+    #[test]
+    fn tagged_reservation_mutation_callback_is_noop_when_engine_is_dropped() {
+        let reservation = {
+            let engine = Engine::<TaggedOrder, TaggedReport>::builder()
+                .pre_trade_policy(TaggedMutationPolicyMock {
+                    name: "tagged_main",
+                    mutation_id: "tagged_drop_mutation",
+                    reject: false,
+                })
+                .build()
+                .expect("engine must build");
+
+            engine
+                .start_pre_trade(tagged_order("ord-tagged-drop", "AAPL", "1", "10"))
+                .expect("start stage must pass")
+                .execute()
+                .expect("main stage must pass")
+        };
+
+        reservation.commit();
+    }
+
+    #[test]
+    fn interleaved_requests_and_reports_preserve_original_tags_across_all_policies() {
+        struct Case {
+            execute_order: [usize; 3],
+            finalize_actions: [FinalizeAction; 3],
+            report_order: [usize; 3],
+        }
+
+        let cases = [
+            Case {
+                execute_order: [2, 0, 1],
+                finalize_actions: [
+                    FinalizeAction::Rollback,
+                    FinalizeAction::Commit,
+                    FinalizeAction::Rollback,
+                ],
+                report_order: [1, 2, 0],
+            },
+            Case {
+                execute_order: [1, 2, 0],
+                finalize_actions: [
+                    FinalizeAction::Commit,
+                    FinalizeAction::Rollback,
+                    FinalizeAction::Commit,
+                ],
+                report_order: [2, 0, 1],
+            },
+            Case {
+                execute_order: [0, 2, 1],
+                finalize_actions: [
+                    FinalizeAction::Commit,
+                    FinalizeAction::Commit,
+                    FinalizeAction::Rollback,
+                ],
+                report_order: [0, 1, 2],
+            },
+        ];
+
+        for case in cases {
+            let journal = Rc::new(RefCell::new(Vec::new()));
+            let start_seen_orders = Rc::new(RefCell::new(Vec::new()));
+            let start_seen_reports = Rc::new(RefCell::new(Vec::new()));
+            let main_seen_orders = Rc::new(RefCell::new(Vec::new()));
+            let main_seen_reports = Rc::new(RefCell::new(Vec::new()));
+
+            let engine = Engine::<TaggedOrder, TaggedReport>::builder()
+                .check_pre_trade_start_policy(CaptureTaggedStartPolicy::new(
+                    "capture_start",
+                    Rc::clone(&journal),
+                    Rc::clone(&start_seen_orders),
+                    Rc::clone(&start_seen_reports),
+                ))
+                .check_pre_trade_start_policy(SequenceFenceStartPolicy::new(
+                    "sequence_start",
+                    Rc::clone(&journal),
+                ))
+                .pre_trade_policy(CaptureTaggedMainPolicy::new(
+                    "capture_main",
+                    Rc::clone(&journal),
+                    Rc::clone(&main_seen_orders),
+                    Rc::clone(&main_seen_reports),
+                ))
+                .pre_trade_policy(SequenceFenceMainPolicy::new(
+                    "sequence_main",
+                    Rc::clone(&journal),
+                ))
+                .build()
+                .expect("engine must build");
+
+            let orders = [
+                tagged_order("ord-a", "AAPL", "10", "25"),
+                tagged_order("ord-b", "MSFT", "11", "26"),
+                tagged_order("ord-c", "TSLA", "12", "27"),
+            ];
+            let reports = [
+                tagged_execution_report("rep-a", "AAPL", "5", "1"),
+                tagged_execution_report("rep-b", "MSFT", "6", "1"),
+                tagged_execution_report("rep-c", "TSLA", "7", "1"),
+            ];
+
+            let mut requests: Vec<_> = orders
+                .iter()
+                .cloned()
+                .map(|order| {
+                    Some(
+                        engine
+                            .start_pre_trade(order)
+                            .expect("start stage must pass for tagged order"),
+                    )
+                })
+                .collect();
+
+            for (request_index, action) in
+                case.execute_order.iter().zip(case.finalize_actions.iter())
+            {
+                let request = requests[*request_index]
+                    .take()
+                    .expect("request must be available exactly once");
+                let reservation = request
+                    .execute()
+                    .expect("main stage must pass for tagged order");
+
+                match action {
+                    FinalizeAction::Commit => reservation.commit(),
+                    FinalizeAction::Rollback => reservation.rollback(),
+                }
+                journal.borrow_mut().push(format!(
+                    "finalize:{}:{}",
+                    action.as_str(),
+                    orders[*request_index].tag
+                ));
+            }
+
+            for report_index in case.report_order {
+                let post_trade = engine.apply_execution_report(&reports[report_index]);
+                assert!(!post_trade.kill_switch_triggered);
+            }
+
+            assert_eq!(*start_seen_orders.borrow(), vec!["ord-a", "ord-b", "ord-c"]);
+            assert_eq!(
+                *main_seen_orders.borrow(),
+                case.execute_order
+                    .iter()
+                    .map(|index| orders[*index].tag)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                *start_seen_reports.borrow(),
+                case.report_order
+                    .iter()
+                    .map(|index| reports[*index].tag)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                *main_seen_reports.borrow(),
+                case.report_order
+                    .iter()
+                    .map(|index| reports[*index].tag)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                *journal.borrow(),
+                expected_interleaving_journal(
+                    &case.execute_order,
+                    &case.finalize_actions,
+                    &case.report_order,
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn start_pre_trade_allows_extreme_price_without_notional_precompute() {
+        let engine = Engine::<TestOrder, TestReport>::builder()
+            .build()
+            .expect("engine must build");
+        let order = WithOrderOperation {
+            inner: (),
+            operation: OrderOperation {
+                instrument: Instrument::new(
+                    Asset::new("AAPL").expect("asset code must be valid"),
+                    Asset::new("USD").expect("asset code must be valid"),
+                ),
+                side: Side::Buy,
+                trade_amount: TradeAmount::Quantity(
+                    Quantity::from_str("1").expect("quantity must be valid"),
+                ),
+                price: Some(Price::from_str("100").expect("price must be valid")),
+            },
+        };
+
+        let reservation = engine
+            .start_pre_trade(order)
+            .expect("request must be created without notional precompute")
+            .execute()
+            .expect("execute without policies must pass");
+        reservation.rollback();
+    }
+
+    #[test]
+    fn sell_order_can_reserve_notional_without_engine_notional_cache() {
         let usd = Asset::new("USD").expect("asset code must be valid");
-        let expected_notional = Volume::from_str("20000")
-            .expect("volume must be valid")
-            .to_cash_flow_inflow();
         let reserved_amount = Volume::from_str("20000").expect("volume must be valid");
-        let engine = Engine::builder()
+        let engine = Engine::<TestOrder, TestReport>::builder()
             .pre_trade_policy(ReserveNotionalPolicy {
-                expected_notional,
                 settlement: usd.clone(),
                 amount: reserved_amount,
             })
             .build()
             .expect("engine must build");
 
-        let order = Order {
-            instrument: Instrument::new(
-                Asset::new("AAPL").expect("asset code must be valid"),
-                usd.clone(),
-            ),
-            side: Side::Sell,
-            quantity: Quantity::from_str("100").expect("quantity must be valid"),
-            price: Price::from_str("200").expect("price must be valid"),
+        let order = WithOrderOperation {
+            inner: (),
+            operation: OrderOperation {
+                instrument: Instrument::new(
+                    Asset::new("AAPL").expect("asset code must be valid"),
+                    usd.clone(),
+                ),
+                side: Side::Sell,
+                trade_amount: TradeAmount::Quantity(
+                    Quantity::from_str("100").expect("quantity must be valid"),
+                ),
+                price: Some(Price::from_str("200").expect("price must be valid")),
+            },
         };
 
         let reservation = engine
@@ -801,29 +1407,478 @@ mod tests {
             Some(reserved_amount)
         );
         assert!(inner.state.kill_switch.is_empty());
+        drop(inner);
+
+        let post_trade = engine.apply_execution_report(&execution_report("USD"));
+        assert!(!post_trade.kill_switch_triggered);
     }
 
-    fn order_with_settlement(settlement: &str) -> Order {
-        Order {
-            instrument: Instrument::new(
-                Asset::new("AAPL").expect("asset code must be valid"),
-                Asset::new(settlement).expect("asset code must be valid"),
-            ),
-            side: Side::Buy,
-            quantity: Quantity::from_str("100").expect("quantity must be valid"),
-            price: Price::from_str("200").expect("price must be valid"),
+    #[test]
+    #[should_panic(expected = "quantity-based order expected")]
+    fn reserve_notional_policy_panics_when_volume_order_is_passed() {
+        let policy = ReserveNotionalPolicy {
+            settlement: Asset::new("USD").expect("asset code must be valid"),
+            amount: Volume::from_str("100").expect("volume must be valid"),
+        };
+        let order = WithOrderOperation {
+            inner: (),
+            operation: OrderOperation {
+                instrument: Instrument::new(
+                    Asset::new("AAPL").expect("asset code must be valid"),
+                    Asset::new("USD").expect("asset code must be valid"),
+                ),
+                side: Side::Sell,
+                trade_amount: TradeAmount::Volume(
+                    Volume::from_str("100").expect("volume must be valid"),
+                ),
+                price: Some(Price::from_str("200").expect("price must be valid")),
+            },
+        };
+        let ctx = Context::new(&order);
+        let mut mutations = Mutations::default();
+        let mut rejects = Vec::<Reject>::new();
+        policy.perform_pre_trade_check(&ctx, &mut mutations, &mut rejects);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion `left == right` failed")]
+    fn reserve_notional_policy_panics_for_volume_based_order() {
+        let policy = ReserveNotionalPolicy {
+            settlement: Asset::new("USD").expect("asset code must be valid"),
+            amount: Volume::from_str("100").expect("volume must be valid"),
+        };
+        let order = WithOrderOperation {
+            inner: (),
+            operation: OrderOperation {
+                instrument: Instrument::new(
+                    Asset::new("AAPL").expect("asset code must be valid"),
+                    Asset::new("USD").expect("asset code must be valid"),
+                ),
+                side: Side::Sell,
+                trade_amount: TradeAmount::Quantity(
+                    Quantity::from_str("100").expect("quantity must be valid"),
+                ),
+                price: Some(Price::from_str("200").expect("price must be valid")),
+            },
+        };
+        let ctx = Context::new(&order);
+        let mut mutations = Mutations::default();
+        let mut rejects = Vec::<Reject>::new();
+
+        policy.perform_pre_trade_check(&ctx, &mut mutations, &mut rejects);
+    }
+
+    fn order_with_settlement(settlement: &str) -> TestOrder {
+        WithOrderOperation {
+            inner: (),
+            operation: OrderOperation {
+                instrument: Instrument::new(
+                    Asset::new("AAPL").expect("asset code must be valid"),
+                    Asset::new(settlement).expect("asset code must be valid"),
+                ),
+                side: Side::Buy,
+                trade_amount: TradeAmount::Quantity(
+                    Quantity::from_str("1").expect("quantity must be valid"),
+                ),
+                price: Some(Price::from_str("100").expect("price must be valid")),
+            },
         }
     }
 
-    fn execution_report(settlement: &str) -> ExecutionReport {
-        ExecutionReport {
-            instrument: Instrument::new(
-                Asset::new("AAPL").expect("asset code must be valid"),
-                Asset::new(settlement).expect("asset code must be valid"),
-            ),
-            pnl: Pnl::from_str("-10").expect("pnl must be valid"),
-            fee: Fee::from_str("1").expect("fee must be valid"),
+    fn execution_report(settlement: &str) -> TestReport {
+        WithExecutionReportOperation {
+            inner: WithFinancialImpact {
+                inner: (),
+                financial_impact: FinancialImpact {
+                    pnl: Pnl::from_str("-10").expect("pnl must be valid"),
+                    fee: Fee::from_str("1").expect("fee must be valid"),
+                },
+            },
+            operation: ExecutionReportOperation {
+                instrument: Instrument::new(
+                    Asset::new("AAPL").expect("asset code must be valid"),
+                    Asset::new(settlement).expect("asset code must be valid"),
+                ),
+                side: Side::Buy,
+            },
         }
+    }
+
+    #[derive(Clone, Copy)]
+    enum FinalizeAction {
+        Commit,
+        Rollback,
+    }
+
+    impl FinalizeAction {
+        fn as_str(self) -> &'static str {
+            match self {
+                Self::Commit => "commit",
+                Self::Rollback => "rollback",
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct TaggedOrder {
+        tag: &'static str,
+    }
+
+    #[derive(Clone)]
+    struct TaggedReport {
+        tag: &'static str,
+    }
+
+    struct CaptureTaggedStartPolicy {
+        name: &'static str,
+        journal: Rc<RefCell<Vec<String>>>,
+        seen_orders: Rc<RefCell<Vec<&'static str>>>,
+        seen_reports: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl CaptureTaggedStartPolicy {
+        fn new(
+            name: &'static str,
+            journal: Rc<RefCell<Vec<String>>>,
+            seen_orders: Rc<RefCell<Vec<&'static str>>>,
+            seen_reports: Rc<RefCell<Vec<&'static str>>>,
+        ) -> Self {
+            Self {
+                name,
+                journal,
+                seen_orders,
+                seen_reports,
+            }
+        }
+    }
+
+    impl CheckPreTradeStartPolicy<TaggedOrder, TaggedReport> for CaptureTaggedStartPolicy {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn check_pre_trade_start(&self, order: &TaggedOrder) -> Result<(), Reject> {
+            self.seen_orders.borrow_mut().push(order.tag);
+            self.journal
+                .borrow_mut()
+                .push(format!("start:{}:{}", self.name, order.tag));
+            Ok(())
+        }
+
+        fn apply_execution_report(&self, report: &TaggedReport) -> bool {
+            self.seen_reports.borrow_mut().push(report.tag);
+            self.journal
+                .borrow_mut()
+                .push(format!("report-start:{}:{}", self.name, report.tag));
+            false
+        }
+    }
+
+    struct SequenceFenceStartPolicy {
+        name: &'static str,
+        journal: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl SequenceFenceStartPolicy {
+        fn new(name: &'static str, journal: Rc<RefCell<Vec<String>>>) -> Self {
+            Self { name, journal }
+        }
+    }
+
+    impl CheckPreTradeStartPolicy<TaggedOrder, TaggedReport> for SequenceFenceStartPolicy {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn check_pre_trade_start(&self, order: &TaggedOrder) -> Result<(), Reject> {
+            self.journal
+                .borrow_mut()
+                .push(format!("start:{}:{}", self.name, order.tag));
+            Ok(())
+        }
+
+        fn apply_execution_report(&self, report: &TaggedReport) -> bool {
+            self.journal
+                .borrow_mut()
+                .push(format!("report-start:{}:{}", self.name, report.tag));
+            false
+        }
+    }
+
+    struct CaptureTaggedMainPolicy {
+        name: &'static str,
+        journal: Rc<RefCell<Vec<String>>>,
+        seen_orders: Rc<RefCell<Vec<&'static str>>>,
+        seen_reports: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl CaptureTaggedMainPolicy {
+        fn new(
+            name: &'static str,
+            journal: Rc<RefCell<Vec<String>>>,
+            seen_orders: Rc<RefCell<Vec<&'static str>>>,
+            seen_reports: Rc<RefCell<Vec<&'static str>>>,
+        ) -> Self {
+            Self {
+                name,
+                journal,
+                seen_orders,
+                seen_reports,
+            }
+        }
+    }
+
+    impl Policy<TaggedOrder, TaggedReport> for CaptureTaggedMainPolicy {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            ctx: &Context<'_, TaggedOrder>,
+            _mutations: &mut Mutations,
+            _rejects: &mut Vec<Reject>,
+        ) {
+            self.seen_orders.borrow_mut().push(ctx.order().tag);
+            self.journal
+                .borrow_mut()
+                .push(format!("execute:{}:{}", self.name, ctx.order().tag));
+        }
+
+        fn apply_execution_report(&self, report: &TaggedReport) -> bool {
+            self.seen_reports.borrow_mut().push(report.tag);
+            self.journal
+                .borrow_mut()
+                .push(format!("report-main:{}:{}", self.name, report.tag));
+            false
+        }
+    }
+
+    struct SequenceFenceMainPolicy {
+        name: &'static str,
+        journal: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl SequenceFenceMainPolicy {
+        fn new(name: &'static str, journal: Rc<RefCell<Vec<String>>>) -> Self {
+            Self { name, journal }
+        }
+    }
+
+    impl Policy<TaggedOrder, TaggedReport> for SequenceFenceMainPolicy {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            ctx: &Context<'_, TaggedOrder>,
+            _mutations: &mut Mutations,
+            _rejects: &mut Vec<Reject>,
+        ) {
+            self.journal
+                .borrow_mut()
+                .push(format!("execute:{}:{}", self.name, ctx.order().tag));
+        }
+
+        fn apply_execution_report(&self, report: &TaggedReport) -> bool {
+            self.journal
+                .borrow_mut()
+                .push(format!("report-main:{}:{}", self.name, report.tag));
+            false
+        }
+    }
+
+    struct RejectTaggedStartPolicyMock {
+        name: &'static str,
+    }
+
+    impl CheckPreTradeStartPolicy<TaggedOrder, TaggedReport> for RejectTaggedStartPolicyMock {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn check_pre_trade_start(&self, _order: &TaggedOrder) -> Result<(), Reject> {
+            Err(Reject::new(
+                self.name,
+                RejectScope::Order,
+                RejectCode::Other,
+                "tagged start reject",
+                "tagged start policy rejected the order",
+            ))
+        }
+
+        fn apply_execution_report(&self, _report: &TaggedReport) -> bool {
+            false
+        }
+    }
+
+    struct TaggedMutationPolicyMock {
+        name: &'static str,
+        mutation_id: &'static str,
+        reject: bool,
+    }
+
+    impl Policy<TaggedOrder, TaggedReport> for TaggedMutationPolicyMock {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            _ctx: &Context<'_, TaggedOrder>,
+            mutations: &mut Mutations,
+            rejects: &mut Vec<Reject>,
+        ) {
+            mutations.push(Mutation {
+                commit: RiskMutation::SetKillSwitch {
+                    id: self.mutation_id,
+                    enabled: true,
+                },
+                rollback: RiskMutation::SetKillSwitch {
+                    id: self.mutation_id,
+                    enabled: false,
+                },
+            });
+
+            if self.reject {
+                rejects.push(Reject::new(
+                    self.name,
+                    RejectScope::Order,
+                    RejectCode::Other,
+                    "tagged main reject",
+                    "tagged mutation policy rejected the order",
+                ));
+            }
+        }
+
+        fn apply_execution_report(&self, _report: &TaggedReport) -> bool {
+            false
+        }
+    }
+
+    struct CoreStartPolicyMock {
+        name: &'static str,
+        reject: bool,
+    }
+
+    impl CheckPreTradeStartPolicy<(), TestReport> for CoreStartPolicyMock {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn check_pre_trade_start(&self, _order: &()) -> Result<(), Reject> {
+            if self.reject {
+                return Err(Reject::new(
+                    self.name,
+                    RejectScope::Order,
+                    RejectCode::Other,
+                    "core start reject",
+                    "order core start policy rejected the order",
+                ));
+            }
+            Ok(())
+        }
+
+        fn apply_execution_report(&self, _report: &TestReport) -> bool {
+            false
+        }
+    }
+
+    struct CoreMainPolicyMock {
+        name: &'static str,
+        mutation_id: Option<&'static str>,
+        reject: bool,
+    }
+
+    impl Policy<(), TestReport> for CoreMainPolicyMock {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            _ctx: &Context<'_, ()>,
+            mutations: &mut Mutations,
+            rejects: &mut Vec<Reject>,
+        ) {
+            if let Some(mutation_id) = self.mutation_id {
+                mutations.push(Mutation {
+                    commit: RiskMutation::SetKillSwitch {
+                        id: mutation_id,
+                        enabled: true,
+                    },
+                    rollback: RiskMutation::SetKillSwitch {
+                        id: mutation_id,
+                        enabled: false,
+                    },
+                });
+            }
+
+            if self.reject {
+                rejects.push(Reject::new(
+                    self.name,
+                    RejectScope::Order,
+                    RejectCode::Other,
+                    "core main reject",
+                    "order core main policy rejected the order",
+                ));
+            }
+        }
+
+        fn apply_execution_report(&self, _report: &TestReport) -> bool {
+            false
+        }
+    }
+
+    fn tagged_order(
+        tag: &'static str,
+        _underlying: &'static str,
+        _quantity: &'static str,
+        _price: &'static str,
+    ) -> TaggedOrder {
+        TaggedOrder { tag }
+    }
+
+    fn tagged_execution_report(
+        tag: &'static str,
+        _underlying: &'static str,
+        _pnl: &'static str,
+        _fee: &'static str,
+    ) -> TaggedReport {
+        TaggedReport { tag }
+    }
+
+    fn expected_interleaving_journal(
+        execute_order: &[usize; 3],
+        finalize_actions: &[FinalizeAction; 3],
+        report_order: &[usize; 3],
+    ) -> Vec<String> {
+        let order_tags = ["ord-a", "ord-b", "ord-c"];
+        let report_tags = ["rep-a", "rep-b", "rep-c"];
+        let mut expected = Vec::new();
+
+        for order_tag in order_tags {
+            expected.push(format!("start:capture_start:{order_tag}"));
+            expected.push(format!("start:sequence_start:{order_tag}"));
+        }
+
+        for (request_index, action) in execute_order.iter().zip(finalize_actions.iter()) {
+            let order_tag = order_tags[*request_index];
+            expected.push(format!("execute:capture_main:{order_tag}"));
+            expected.push(format!("execute:sequence_main:{order_tag}"));
+            expected.push(format!("finalize:{}:{order_tag}", action.as_str()));
+        }
+
+        for report_index in report_order {
+            let report_tag = report_tags[*report_index];
+            expected.push(format!("report-start:capture_start:{report_tag}"));
+            expected.push(format!("report-start:sequence_start:{report_tag}"));
+            expected.push(format!("report-main:capture_main:{report_tag}"));
+            expected.push(format!("report-main:sequence_main:{report_tag}"));
+        }
+
+        expected
     }
 
     struct StartPolicyMock {
@@ -841,50 +1896,52 @@ mod tests {
             calls: Rc<Cell<usize>>,
             reject: bool,
             post_trade_trigger: bool,
+            light_counter: Option<Rc<Cell<usize>>>,
+            block_flag: Option<Rc<Cell<bool>>>,
         ) -> Self {
             Self {
                 name,
                 calls,
                 reject,
                 post_trade_trigger,
-                light_counter: None,
-                block_flag: None,
+                light_counter,
+                block_flag,
             }
         }
 
         fn pass(name: &'static str) -> Self {
-            Self::new(name, Rc::new(Cell::new(0)), false, false)
+            Self::new(name, Rc::new(Cell::new(0)), false, false, None, None)
         }
 
         fn with_counter(name: &'static str, counter: Rc<Cell<usize>>) -> Self {
-            Self {
+            Self::new(
                 name,
-                calls: Rc::new(Cell::new(0)),
-                reject: false,
-                post_trade_trigger: false,
-                light_counter: Some(counter),
-                block_flag: None,
-            }
+                Rc::new(Cell::new(0)),
+                false,
+                false,
+                Some(counter),
+                None,
+            )
         }
 
         fn with_block_flag(name: &'static str, block_flag: Rc<Cell<bool>>) -> Self {
-            Self {
+            Self::new(
                 name,
-                calls: Rc::new(Cell::new(0)),
-                reject: false,
-                post_trade_trigger: false,
-                light_counter: None,
-                block_flag: Some(block_flag),
-            }
+                Rc::new(Cell::new(0)),
+                false,
+                false,
+                None,
+                Some(block_flag),
+            )
         }
     }
 
-    impl CheckPreTradeStartPolicy for StartPolicyMock {
+    impl CheckPreTradeStartPolicy<TestOrder, TestReport> for StartPolicyMock {
         fn name(&self) -> &'static str {
             self.name
         }
 
-        fn check_pre_trade_start(&self, _order: &Order) -> Result<(), Reject> {
+        fn check_pre_trade_start(&self, _order: &TestOrder) -> Result<(), Reject> {
             self.calls.set(self.calls.get() + 1);
             if let Some(counter) = &self.light_counter {
                 counter.set(counter.get() + 1);
@@ -912,7 +1969,7 @@ mod tests {
             Ok(())
         }
 
-        fn apply_execution_report(&self, _report: &ExecutionReport) -> bool {
+        fn apply_execution_report(&self, _report: &TestReport) -> bool {
             self.post_trade_trigger
         }
     }
@@ -999,14 +2056,14 @@ mod tests {
         }
     }
 
-    impl Policy for MainPolicyMock {
+    impl Policy<TestOrder, TestReport> for MainPolicyMock {
         fn name(&self) -> &'static str {
             self.name
         }
 
         fn perform_pre_trade_check(
             &self,
-            ctx: &Context<'_>,
+            ctx: &Context<'_, TestOrder>,
             mutations: &mut Mutations,
             rejects: &mut Vec<Reject>,
         ) {
@@ -1014,7 +2071,7 @@ mod tests {
             if let Some(seen_settlement) = &self.seen_settlement {
                 seen_settlement
                     .borrow_mut()
-                    .push(ctx.order().instrument.settlement_asset().clone());
+                    .push(ctx.order().operation.instrument.settlement_asset().clone());
             }
 
             if let Some(mutation) = &self.mutation {
@@ -1032,13 +2089,12 @@ mod tests {
             }
         }
 
-        fn apply_execution_report(&self, _report: &ExecutionReport) -> bool {
+        fn apply_execution_report(&self, _report: &TestReport) -> bool {
             self.post_trade_trigger
         }
     }
 
     struct ReserveNotionalPolicy {
-        expected_notional: crate::param::CashFlow,
         settlement: Asset,
         amount: Volume,
     }
@@ -1056,18 +2112,29 @@ mod tests {
         }
     }
 
-    impl Policy for ReserveNotionalPolicy {
+    impl Policy<TestOrder, TestReport> for ReserveNotionalPolicy {
         fn name(&self) -> &'static str {
             "ReserveNotionalPolicy"
         }
 
         fn perform_pre_trade_check(
             &self,
-            ctx: &Context<'_>,
+            ctx: &Context<'_, TestOrder>,
             mutations: &mut Mutations,
             _rejects: &mut Vec<Reject>,
         ) {
-            assert_eq!(ctx.notional(), self.expected_notional);
+            use crate::core::{HasOrderPrice, HasTradeAmount};
+            assert_eq!(ctx.order().operation.side, Side::Sell);
+            let calculated_amount = ctx
+                .order()
+                .price()
+                .expect("price must be present")
+                .calculate_volume(match ctx.order().trade_amount() {
+                    TradeAmount::Quantity(value) => value,
+                    TradeAmount::Volume(_) => panic!("quantity-based order expected"),
+                })
+                .expect("volume must be calculable");
+            assert_eq!(calculated_amount, self.amount);
             mutations.push(Mutation {
                 commit: RiskMutation::ReserveNotional {
                     asset: self.settlement.clone(),
@@ -1078,6 +2145,10 @@ mod tests {
                     amount: Volume::ZERO,
                 },
             });
+        }
+
+        fn apply_execution_report(&self, _report: &TestReport) -> bool {
+            false
         }
     }
 }

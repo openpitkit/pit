@@ -16,8 +16,26 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 pub(crate) mod engine;
+pub(crate) mod execution_report;
 pub(crate) mod instrument;
 pub(crate) mod order;
+pub(crate) mod request_trait;
 
+mod macros;
+
+pub use execution_report::{
+    ExecutionReportFillDetails, ExecutionReportOperation, ExecutionReportPositionImpact,
+    FinancialImpact, WithExecutionReportFillDetails, WithExecutionReportOperation,
+    WithExecutionReportPositionImpact, WithFinancialImpact,
+};
 pub use instrument::Instrument;
-pub use order::Order;
+pub use order::{
+    OrderMargin, OrderOperation, OrderPosition, WithOrderMargin, WithOrderOperation,
+    WithOrderPosition,
+};
+pub use request_trait::{
+    HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal, HasExecutionReportLastTrade,
+    HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,
+    HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
+    HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,
+};

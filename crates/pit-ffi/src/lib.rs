@@ -19,6 +19,14 @@ use std::ffi::c_char;
 use std::ffi::CString;
 use std::sync::OnceLock;
 
+pub mod execution_report;
+pub mod order;
+
+pub use execution_report::{
+    ExecutionReport, FillDetailsData, FinancialImpactData, PositionImpactData,
+};
+pub use order::Order;
+
 use openpit::pretrade::policies::OrderSizeLimitPolicy;
 use openpit::pretrade::policies::PnlKillSwitchPolicy;
 use openpit::pretrade::policies::RateLimitPolicy;
