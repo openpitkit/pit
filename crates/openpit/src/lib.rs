@@ -47,16 +47,27 @@ pub mod pretrade;
 
 pub use core::engine::{Engine, EngineBuildError, EngineBuilder};
 pub use core::{
-    ExecutionReportFillDetails, ExecutionReportOperation, ExecutionReportPositionImpact,
-    FinancialImpact, HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
-    HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
-    HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
-    HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,
-    Instrument, OrderMargin, OrderOperation, OrderPosition, RequestFieldAccessError,
+    AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
+    AccountAdjustmentPositionOperation, ExecutionReportFillDetails, ExecutionReportOperation,
+    ExecutionReportPositionImpact, FinancialImpact, HasAccountAdjustmentBalanceAverageEntryPrice,
+    HasAccountAdjustmentPending, HasAccountAdjustmentPendingLowerBound,
+    HasAccountAdjustmentPendingUpperBound, HasAccountAdjustmentPositionLeverage,
+    HasAccountAdjustmentReserved, HasAccountAdjustmentReservedLowerBound,
+    HasAccountAdjustmentReservedUpperBound, HasAccountAdjustmentTotal,
+    HasAccountAdjustmentTotalLowerBound, HasAccountAdjustmentTotalUpperBound, HasAccountId,
+    HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition, HasCollateralAsset,
+    HasExecutionReportIsTerminal, HasExecutionReportLastTrade, HasExecutionReportPositionEffect,
+    HasExecutionReportPositionSide, HasFee, HasInstrument, HasLeavesQuantity, HasLock,
+    HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl,
+    HasPositionInstrument, HasPositionMode, HasReduceOnly, HasSide, HasTradeAmount, Instrument,
+    OrderMargin, OrderOperation, OrderPosition, RequestFieldAccessError,
+    WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
+    WithAccountAdjustmentBounds, WithAccountAdjustmentPositionOperation,
     WithExecutionReportFillDetails, WithExecutionReportOperation,
     WithExecutionReportPositionImpact, WithFinancialImpact, WithOrderMargin, WithOrderOperation,
     WithOrderPosition,
 };
 #[cfg(feature = "derive")]
 pub use openpit_derive::RequestFields;
+pub use param::{AdjustmentAmount, PositionMode};
 pub use pretrade::PostTradeResult;

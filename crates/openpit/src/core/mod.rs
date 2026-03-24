@@ -15,6 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
+pub(crate) mod account_adjustment;
 pub(crate) mod engine;
 pub(crate) mod execution_report;
 pub(crate) mod instrument;
@@ -23,6 +24,12 @@ pub(crate) mod request_trait;
 
 mod macros;
 
+pub use account_adjustment::{
+    AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
+    AccountAdjustmentPositionOperation, WithAccountAdjustmentAmount,
+    WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
+    WithAccountAdjustmentPositionOperation,
+};
 pub use execution_report::{
     ExecutionReportFillDetails, ExecutionReportOperation, ExecutionReportPositionImpact,
     FinancialImpact, WithExecutionReportFillDetails, WithExecutionReportOperation,
@@ -34,9 +41,15 @@ pub use order::{
     WithOrderPosition,
 };
 pub use request_trait::{
-    HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
+    HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentPending,
+    HasAccountAdjustmentPendingLowerBound, HasAccountAdjustmentPendingUpperBound,
+    HasAccountAdjustmentPositionLeverage, HasAccountAdjustmentReserved,
+    HasAccountAdjustmentReservedLowerBound, HasAccountAdjustmentReservedUpperBound,
+    HasAccountAdjustmentTotal, HasAccountAdjustmentTotalLowerBound,
+    HasAccountAdjustmentTotalUpperBound, HasAccountId, HasAutoBorrow, HasAverageEntryPrice,
+    HasBalanceAsset, HasClosePosition, HasCollateralAsset, HasExecutionReportIsTerminal,
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
     HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
-    HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,
-    RequestFieldAccessError,
+    HasOrderPositionSide, HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode,
+    HasReduceOnly, HasSide, HasTradeAmount, RequestFieldAccessError,
 };

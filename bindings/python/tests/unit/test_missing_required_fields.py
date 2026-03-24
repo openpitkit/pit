@@ -1,9 +1,9 @@
 # Copyright The Pit Project Owners. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import openpit
 import openpit.pretrade
+import pytest
 
 
 @pytest.mark.unit
@@ -24,9 +24,7 @@ def test_start_pre_trade_order_without_operation_produces_missing_field_reject()
 
 
 @pytest.mark.unit
-def test_start_pre_trade_pnl_kill_switch_without_operation_produces_missing_field_reject() -> (
-    None
-):
+def test_start_pre_trade_pnl_kill_switch_without_operation_rejects() -> None:
     policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
         settlement_asset=openpit.param.Asset("USD"),
         barrier=openpit.param.Pnl("500"),
@@ -42,7 +40,11 @@ def test_start_pre_trade_pnl_kill_switch_without_operation_produces_missing_fiel
 
 @pytest.mark.unit
 def test_apply_execution_report_without_financial_impact_does_not_panic() -> None:
-    """Engine must not panic when financial_impact group is absent; kill switch must not trigger."""
+    """
+    Engine must not panic when financial_impact group is absent.
+
+    Kill switch must not trigger.
+    """
     policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
         settlement_asset=openpit.param.Asset("USD"),
         barrier=openpit.param.Pnl("500"),
@@ -65,9 +67,7 @@ def test_apply_execution_report_without_financial_impact_does_not_panic() -> Non
 
 
 @pytest.mark.unit
-def test_start_pre_trade_order_size_limit_without_operation_produces_missing_field_reject() -> (
-    None
-):
+def test_start_pre_trade_order_size_limit_without_operation_rejects() -> None:
     limit = openpit.pretrade.policies.OrderSizeLimit(
         settlement_asset=openpit.param.Asset("USD"),
         max_quantity=openpit.param.Quantity("100"),

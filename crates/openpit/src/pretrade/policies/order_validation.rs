@@ -81,9 +81,9 @@ where
 #[cfg(test)]
 mod tests {
     use crate::core::{Instrument, OrderOperation};
-    use crate::RequestFieldAccessError;
     use crate::param::{AccountId, Asset, Price, Quantity, Side, TradeAmount, Volume};
     use crate::pretrade::{CheckPreTradeStartPolicy, RejectCode, RejectScope};
+    use crate::RequestFieldAccessError;
 
     use super::OrderValidationPolicy;
 

@@ -25,7 +25,7 @@ before they leave the application. The package provides:
   with exact decimal arithmetic.
 - :mod:`~openpit.pretrade` — pluggable policy interfaces, standard reject
   codes, deferred requests, and reservations.
-- :mod:`~openpit.core` — order and execution-report group models.
+- :mod:`~openpit.core` — order, execution-report, and account-adjustment group models.
 
 Quickstart::
 
@@ -57,6 +57,11 @@ Quickstart::
 from . import core, param, pretrade
 from ._openpit import Engine, EngineBuilder, RejectError
 from .core import (
+    AccountAdjustment,
+    AccountAdjustmentAmount,
+    AccountAdjustmentBalanceOperation,
+    AccountAdjustmentBounds,
+    AccountAdjustmentPositionOperation,
     ExecutionReport,
     ExecutionReportFillDetails,
     ExecutionReportOperation,
@@ -68,7 +73,7 @@ from .core import (
     OrderOperation,
     OrderPosition,
 )
-from .param import Leverage
+from .param import AdjustmentAmount, Leverage, PositionMode
 from .pretrade import PostTradeResult
 
 Engine.__doc__ = """
@@ -94,6 +99,12 @@ this exception.
 __all__ = [
     "Engine",
     "EngineBuilder",
+    "AccountAdjustment",
+    "AccountAdjustmentAmount",
+    "AccountAdjustmentBalanceOperation",
+    "AccountAdjustmentBounds",
+    "AccountAdjustmentPositionOperation",
+    "AdjustmentAmount",
     "ExecutionReport",
     "ExecutionReportFillDetails",
     "ExecutionReportOperation",
@@ -106,6 +117,7 @@ __all__ = [
     "OrderOperation",
     "OrderPosition",
     "PostTradeResult",
+    "PositionMode",
     "RejectError",
     "core",
     "param",

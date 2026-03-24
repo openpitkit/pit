@@ -21,9 +21,11 @@ use std::sync::OnceLock;
 
 use openpit::param::AccountId;
 
+pub mod account_adjustment;
 pub mod execution_report;
 pub mod order;
 
+pub use account_adjustment::{AccountAdjustment, AccountAdjustmentOperation};
 pub use execution_report::{
     ExecutionReport, FillDetailsData, FinancialImpactData, PositionImpactData,
 };

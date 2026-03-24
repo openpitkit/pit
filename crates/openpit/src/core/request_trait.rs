@@ -16,8 +16,8 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 use crate::param::{
-    AccountId, Asset, Fee, Leverage, Pnl, PositionEffect, PositionSide, Price, Quantity, Side,
-    Trade, TradeAmount,
+    AccountId, AdjustmentAmount, Asset, Fee, Leverage, Pnl, PositionEffect, PositionMode,
+    PositionSide, PositionSize, Price, Quantity, Side, Trade, TradeAmount,
 };
 use crate::pretrade::Lock;
 
@@ -75,7 +75,13 @@ macro_rules! has_request_field_trait {
 
 has_request_field_trait!(HasAccountId, account_id -> AccountId);
 
+has_request_field_trait!(HasBalanceAsset, balance_asset -> &Asset);
+
+has_request_field_trait!(HasCollateralAsset, collateral_asset -> &Asset);
+
 has_request_field_trait!(HasInstrument, instrument -> &Instrument);
+
+has_request_field_trait!(HasPositionInstrument, position_instrument -> &Instrument);
 
 has_request_field_trait!(HasSide, side -> Side);
 
@@ -108,6 +114,13 @@ has_request_field_trait!(
 );
 
 has_request_field_trait!(
+    /// Position accounting mode where exposure is represented either as one net
+    /// position or as separate hedged legs.
+    HasPositionMode,
+    position_mode -> PositionMode
+);
+
+has_request_field_trait!(
     /// Requested worst execution price used for size translation and price-sensitive checks.
     ///
     /// `None` means the order should execute at market price.
@@ -125,9 +138,75 @@ has_request_field_trait!(HasExecutionReportLastTrade, last_trade -> Option<Trade
 
 has_request_field_trait!(HasExecutionReportIsTerminal, is_terminal -> bool);
 
-has_request_field_trait!(HasExecutionReportPositionEffect, position_effect -> Option<PositionEffect>);
+has_request_field_trait!(
+    HasExecutionReportPositionEffect,
+    position_effect -> Option<PositionEffect>
+);
 
 has_request_field_trait!(HasExecutionReportPositionSide, position_side -> Option<PositionSide>);
+
+has_request_field_trait!( HasAverageEntryPrice, average_entry_price -> Price);
+
+has_request_field_trait!(
+    HasAccountAdjustmentBalanceAverageEntryPrice,
+    balance_average_entry_price -> Option<Price>
+);
+
+has_request_field_trait!(
+    /// Actual resulting balance/position value after applying the adjustment.
+    HasAccountAdjustmentTotal,
+    total -> Option<AdjustmentAmount>
+);
+
+has_request_field_trait!(
+    /// Amount earmarked for outgoing settlement and unavailable for immediate use.
+    HasAccountAdjustmentReserved,
+    reserved -> Option<AdjustmentAmount>
+);
+
+has_request_field_trait!(
+    /// Amount in-flight for incoming acquisition and not yet finalized.
+    HasAccountAdjustmentPending,
+    pending -> Option<AdjustmentAmount>
+);
+
+has_request_field_trait!(
+    /// Allowed post-adjustment range for the corresponding component.
+    HasAccountAdjustmentTotalUpperBound,
+    total_upper_bound -> Option<PositionSize>
+);
+
+has_request_field_trait!(
+    /// Allowed post-adjustment range for the corresponding component.
+    HasAccountAdjustmentTotalLowerBound,
+    total_lower_bound -> Option<PositionSize>
+);
+
+has_request_field_trait!(
+    /// Allowed post-adjustment range for the corresponding component.
+    HasAccountAdjustmentReservedUpperBound,
+    reserved_upper_bound -> Option<PositionSize>
+);
+
+has_request_field_trait!(
+    /// Allowed post-adjustment range for the corresponding component.
+    HasAccountAdjustmentReservedLowerBound,
+    reserved_lower_bound -> Option<PositionSize>
+);
+
+has_request_field_trait!(
+    /// Allowed post-adjustment range for the corresponding component.
+    HasAccountAdjustmentPendingUpperBound,
+    pending_upper_bound -> Option<PositionSize>
+);
+
+has_request_field_trait!(
+    /// Allowed post-adjustment range for the corresponding component.
+    HasAccountAdjustmentPendingLowerBound,
+    pending_lower_bound -> Option<PositionSize>
+);
+
+has_request_field_trait!(HasAccountAdjustmentPositionLeverage, position_leverage -> Option<Leverage>);
 
 #[cfg(test)]
 mod tests {

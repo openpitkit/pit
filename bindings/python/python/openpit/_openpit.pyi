@@ -425,6 +425,214 @@ class ExecutionReport:
     @position_impact.setter
     def position_impact(self, value: ExecutionReportPositionImpact | None) -> None: ...
 
+class AdjustmentAmount:
+    """Delta-or-absolute adjustment payload wrapper."""
+
+    def __init__(self, *, kind: str, value: param.PositionSize) -> None:
+        _ = (kind, value)
+
+    @staticmethod
+    def delta(value: param.PositionSize) -> AdjustmentAmount:
+        _ = value
+
+    @staticmethod
+    def absolute(value: param.PositionSize) -> AdjustmentAmount:
+        _ = value
+
+    @property
+    def kind(self) -> str:
+        """Variant name (`delta` or `absolute`)."""
+
+    @property
+    def value(self) -> param.PositionSize:
+        """Wrapped position-size payload."""
+
+class AccountAdjustmentAmount:
+    """Grouped amount payload (`total + reserved + pending`)."""
+
+    def __init__(
+        self,
+        *,
+        total: AdjustmentAmount | None = None,
+        reserved: AdjustmentAmount | None = None,
+        pending: AdjustmentAmount | None = None,
+    ) -> None:
+        _ = (total, reserved, pending)
+
+    @property
+    def total(self) -> AdjustmentAmount | None: ...
+    @total.setter
+    def total(self, value: AdjustmentAmount | None) -> None: ...
+    @property
+    def reserved(self) -> AdjustmentAmount | None: ...
+    @reserved.setter
+    def reserved(self, value: AdjustmentAmount | None) -> None: ...
+    @property
+    def pending(self) -> AdjustmentAmount | None: ...
+    @pending.setter
+    def pending(self, value: AdjustmentAmount | None) -> None: ...
+
+class AccountAdjustmentBalanceOperation:
+    """Physical-balance account-adjustment operation group."""
+
+    def __init__(
+        self,
+        *,
+        account_id: param.AccountId | None = None,
+        asset: str | None = None,
+        average_entry_price: param.Price | None = None,
+    ) -> None:
+        _ = (account_id, asset, average_entry_price)
+
+    @property
+    def account_id(self) -> param.AccountId | None: ...
+    @account_id.setter
+    def account_id(self, value: param.AccountId | None) -> None: ...
+    @property
+    def asset(self) -> str | None: ...
+    @asset.setter
+    def asset(self, value: str | None) -> None: ...
+    @property
+    def average_entry_price(self) -> str | None: ...
+    @average_entry_price.setter
+    def average_entry_price(self, value: param.Price | None) -> None: ...
+
+class AccountAdjustmentPositionOperation:
+    """Derivatives-like position account-adjustment operation group."""
+
+    def __init__(
+        self,
+        *,
+        underlying_asset: str | None = None,
+        settlement_asset: str | None = None,
+        account_id: param.AccountId | None = None,
+        collateral_asset: str | None = None,
+        average_entry_price: param.Price | None = None,
+        mode: param.PositionMode | None = None,
+        leverage: param.Leverage | None = None,
+    ) -> None:
+        _ = (
+            underlying_asset,
+            settlement_asset,
+            account_id,
+            collateral_asset,
+            average_entry_price,
+            mode,
+            leverage,
+        )
+
+    @property
+    def underlying_asset(self) -> str | None: ...
+    @underlying_asset.setter
+    def underlying_asset(self, value: str | None) -> None: ...
+    @property
+    def settlement_asset(self) -> str | None: ...
+    @settlement_asset.setter
+    def settlement_asset(self, value: str | None) -> None: ...
+    @property
+    def account_id(self) -> param.AccountId | None: ...
+    @account_id.setter
+    def account_id(self, value: param.AccountId | None) -> None: ...
+    @property
+    def collateral_asset(self) -> str | None: ...
+    @collateral_asset.setter
+    def collateral_asset(self, value: str | None) -> None: ...
+    @property
+    def average_entry_price(self) -> str | None: ...
+    @average_entry_price.setter
+    def average_entry_price(self, value: param.Price | None) -> None: ...
+    @property
+    def mode(self) -> str | None: ...
+    @mode.setter
+    def mode(self, value: param.PositionMode | None) -> None: ...
+    @property
+    def leverage(self) -> param.Leverage | None: ...
+    @leverage.setter
+    def leverage(self, value: param.Leverage | None) -> None: ...
+
+class AccountAdjustmentBounds:
+    """Optional post-adjustment bounds group."""
+
+    def __init__(
+        self,
+        *,
+        total_upper_bound: param.PositionSize | None = None,
+        total_lower_bound: param.PositionSize | None = None,
+        reserved_upper_bound: param.PositionSize | None = None,
+        reserved_lower_bound: param.PositionSize | None = None,
+        pending_upper_bound: param.PositionSize | None = None,
+        pending_lower_bound: param.PositionSize | None = None,
+    ) -> None:
+        _ = (
+            total_upper_bound,
+            total_lower_bound,
+            reserved_upper_bound,
+            reserved_lower_bound,
+            pending_upper_bound,
+            pending_lower_bound,
+        )
+
+    @property
+    def total_upper_bound(self) -> param.PositionSize | None: ...
+    @total_upper_bound.setter
+    def total_upper_bound(self, value: param.PositionSize | None) -> None: ...
+    @property
+    def total_lower_bound(self) -> param.PositionSize | None: ...
+    @total_lower_bound.setter
+    def total_lower_bound(self, value: param.PositionSize | None) -> None: ...
+    @property
+    def reserved_upper_bound(self) -> param.PositionSize | None: ...
+    @reserved_upper_bound.setter
+    def reserved_upper_bound(self, value: param.PositionSize | None) -> None: ...
+    @property
+    def reserved_lower_bound(self) -> param.PositionSize | None: ...
+    @reserved_lower_bound.setter
+    def reserved_lower_bound(self, value: param.PositionSize | None) -> None: ...
+    @property
+    def pending_upper_bound(self) -> param.PositionSize | None: ...
+    @pending_upper_bound.setter
+    def pending_upper_bound(self, value: param.PositionSize | None) -> None: ...
+    @property
+    def pending_lower_bound(self) -> param.PositionSize | None: ...
+    @pending_lower_bound.setter
+    def pending_lower_bound(self, value: param.PositionSize | None) -> None: ...
+
+class AccountAdjustment:
+    """Extensible non-trading account-adjustment record."""
+
+    def __init__(
+        self,
+        *,
+        operation: AccountAdjustmentBalanceOperation
+        | AccountAdjustmentPositionOperation
+        | None = None,
+        amount: AccountAdjustmentAmount | None = None,
+        bounds: AccountAdjustmentBounds | None = None,
+    ) -> None:
+        _ = (operation, amount, bounds)
+
+    @property
+    def operation(
+        self,
+    ) -> (
+        AccountAdjustmentBalanceOperation | AccountAdjustmentPositionOperation | None
+    ): ...
+    @operation.setter
+    def operation(
+        self,
+        value: AccountAdjustmentBalanceOperation
+        | AccountAdjustmentPositionOperation
+        | None,
+    ) -> None: ...
+    @property
+    def amount(self) -> AccountAdjustmentAmount | None: ...
+    @amount.setter
+    def amount(self, value: AccountAdjustmentAmount | None) -> None: ...
+    @property
+    def bounds(self) -> AccountAdjustmentBounds | None: ...
+    @bounds.setter
+    def bounds(self, value: AccountAdjustmentBounds | None) -> None: ...
+
 class Request:
     """
     Deferred main-stage request handle produced by ``Engine.start_pre_trade``.

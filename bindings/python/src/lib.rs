@@ -24,8 +24,8 @@ use std::thread_local;
 use std::time::Duration;
 
 use openpit::param::{
-    AccountId, Asset, CashFlow, Fee, Leverage, Pnl, PositionEffect, PositionSide, PositionSize,
-    Price, Quantity, Side, Trade, TradeAmount, Volume,
+    AccountId, AdjustmentAmount, Asset, CashFlow, Fee, Leverage, Pnl, PositionEffect, PositionMode,
+    PositionSide, PositionSize, Price, Quantity, Side, Trade, TradeAmount, Volume,
 };
 use openpit::pretrade::policies::OrderValidationPolicy;
 use openpit::pretrade::policies::PnlKillSwitchPolicy;
@@ -1766,6 +1766,76 @@ struct PyPositionSize {
     inner: PositionSize,
 }
 
+#[pyclass(name = "AdjustmentAmount", module = "openpit.param", subclass)]
+#[derive(Clone, Copy)]
+struct PyAdjustmentAmount {
+    inner: AdjustmentAmount,
+}
+
+#[pyclass(name = "AccountAdjustmentAmount", module = "openpit.core", subclass)]
+#[derive(Clone)]
+struct PyAccountAdjustmentAmount {
+    total: Option<AdjustmentAmount>,
+    reserved: Option<AdjustmentAmount>,
+    pending: Option<AdjustmentAmount>,
+}
+
+#[pyclass(
+    name = "AccountAdjustmentBalanceOperation",
+    module = "openpit.core",
+    subclass
+)]
+#[derive(Clone)]
+struct PyAccountAdjustmentBalanceOperation {
+    account_id: Option<AccountId>,
+    asset: Option<Asset>,
+    average_entry_price: Option<Price>,
+}
+
+#[pyclass(
+    name = "AccountAdjustmentPositionOperation",
+    module = "openpit.core",
+    subclass
+)]
+#[derive(Clone)]
+struct PyAccountAdjustmentPositionOperation {
+    underlying_asset: Option<Asset>,
+    settlement_asset: Option<Asset>,
+    account_id: Option<AccountId>,
+    collateral_asset: Option<Asset>,
+    average_entry_price: Option<Price>,
+    mode: Option<PositionMode>,
+    leverage: Option<Leverage>,
+}
+
+#[pyclass(name = "AccountAdjustmentBounds", module = "openpit.core", subclass)]
+#[derive(Clone)]
+struct PyAccountAdjustmentBounds {
+    total_upper_bound: Option<PositionSize>,
+    total_lower_bound: Option<PositionSize>,
+    reserved_upper_bound: Option<PositionSize>,
+    reserved_lower_bound: Option<PositionSize>,
+    pending_upper_bound: Option<PositionSize>,
+    pending_lower_bound: Option<PositionSize>,
+}
+
+enum PyAccountAdjustmentOperation {
+    Balance(Py<PyAccountAdjustmentBalanceOperation>),
+    Position(Py<PyAccountAdjustmentPositionOperation>),
+}
+
+#[pyclass(
+    name = "AccountAdjustment",
+    module = "openpit.core",
+    subclass,
+    unsendable
+)]
+struct PyAccountAdjustment {
+    operation: Option<PyAccountAdjustmentOperation>,
+    amount: Option<Py<PyAccountAdjustmentAmount>>,
+    bounds: Option<Py<PyAccountAdjustmentBounds>>,
+}
+
 #[pymethods]
 impl PyInstrument {
     #[new]
@@ -2188,6 +2258,527 @@ impl PyPositionSize {
 
     fn __repr__(&self) -> String {
         format!("PositionSize(value={:?})", self.value())
+    }
+}
+
+#[pymethods]
+impl PyAdjustmentAmount {
+    #[new]
+    #[pyo3(signature = (*, kind, value))]
+    fn new(kind: &str, value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let size = parse_position_size_input(value)?;
+        match kind.trim().to_ascii_lowercase().as_str() {
+            "delta" => Ok(Self {
+                inner: AdjustmentAmount::Delta(size),
+            }),
+            "absolute" => Ok(Self {
+                inner: AdjustmentAmount::Absolute(size),
+            }),
+            _ => Err(PyValueError::new_err("kind must be 'delta' or 'absolute'")),
+        }
+    }
+
+    #[staticmethod]
+    fn delta(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: AdjustmentAmount::Delta(parse_position_size_input(value)?),
+        })
+    }
+
+    #[staticmethod]
+    fn absolute(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: AdjustmentAmount::Absolute(parse_position_size_input(value)?),
+        })
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        match self.inner {
+            AdjustmentAmount::Delta(_) => "delta",
+            AdjustmentAmount::Absolute(_) => "absolute",
+            _ => "unknown",
+        }
+    }
+
+    #[getter]
+    fn value(&self) -> PyPositionSize {
+        let inner = match self.inner {
+            AdjustmentAmount::Delta(value) | AdjustmentAmount::Absolute(value) => value,
+            _ => PositionSize::from_str("0").expect("must be valid"),
+        };
+        PyPositionSize { inner }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AdjustmentAmount(kind={:?}, value={})",
+            self.kind(),
+            self.value().value()
+        )
+    }
+}
+
+#[pymethods]
+impl PyAccountAdjustmentAmount {
+    #[new]
+    #[pyo3(signature = (*, total = None, reserved = None, pending = None))]
+    fn new(
+        total: Option<&Bound<'_, PyAny>>,
+        reserved: Option<&Bound<'_, PyAny>>,
+        pending: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            total: total.map(parse_adjustment_amount_input).transpose()?,
+            reserved: reserved.map(parse_adjustment_amount_input).transpose()?,
+            pending: pending.map(parse_adjustment_amount_input).transpose()?,
+        })
+    }
+
+    #[getter]
+    fn total(&self) -> Option<PyAdjustmentAmount> {
+        self.total.map(|inner| PyAdjustmentAmount { inner })
+    }
+
+    #[setter]
+    fn set_total(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.total = value.map(parse_adjustment_amount_input).transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn reserved(&self) -> Option<PyAdjustmentAmount> {
+        self.reserved.map(|inner| PyAdjustmentAmount { inner })
+    }
+
+    #[setter]
+    fn set_reserved(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.reserved = value.map(parse_adjustment_amount_input).transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn pending(&self) -> Option<PyAdjustmentAmount> {
+        self.pending.map(|inner| PyAdjustmentAmount { inner })
+    }
+
+    #[setter]
+    fn set_pending(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.pending = value.map(parse_adjustment_amount_input).transpose()?;
+        Ok(())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AccountAdjustmentAmount(total={:?}, reserved={:?}, pending={:?})",
+            self.total().map(|v| v.__repr__()),
+            self.reserved().map(|v| v.__repr__()),
+            self.pending().map(|v| v.__repr__()),
+        )
+    }
+}
+
+#[pymethods]
+impl PyAccountAdjustmentBalanceOperation {
+    #[new]
+    #[pyo3(signature = (*, account_id = None, asset = None, average_entry_price = None))]
+    fn new(
+        account_id: Option<&Bound<'_, PyAny>>,
+        asset: Option<String>,
+        average_entry_price: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            account_id: account_id.map(parse_account_id_input).transpose()?,
+            asset: asset.as_deref().map(parse_asset).transpose()?,
+            average_entry_price: average_entry_price.map(parse_price_input).transpose()?,
+        })
+    }
+
+    #[getter]
+    fn account_id(&self) -> Option<PyAccountId> {
+        self.account_id.map(|inner| PyAccountId { inner })
+    }
+
+    #[setter]
+    fn set_account_id(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.account_id = value.map(parse_account_id_input).transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn asset(&self) -> Option<String> {
+        self.asset.as_ref().map(ToString::to_string)
+    }
+
+    #[setter]
+    fn set_asset(&mut self, value: Option<String>) -> PyResult<()> {
+        self.asset = value.as_deref().map(parse_asset).transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn average_entry_price(&self) -> Option<String> {
+        self.average_entry_price.as_ref().map(ToString::to_string)
+    }
+
+    #[setter]
+    fn set_average_entry_price(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.average_entry_price = value.map(parse_price_input).transpose()?;
+        Ok(())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AccountAdjustmentBalanceOperation(account_id={:?}, asset={:?}, average_entry_price={:?})",
+            self.account_id().map(|v| v.value()),
+            self.asset(),
+            self.average_entry_price(),
+        )
+    }
+}
+
+#[pymethods]
+impl PyAccountAdjustmentPositionOperation {
+    #[new]
+    #[pyo3(signature = (*, underlying_asset = None, settlement_asset = None, account_id = None, collateral_asset = None, average_entry_price = None, mode = None, leverage = None))]
+    fn new(
+        underlying_asset: Option<String>,
+        settlement_asset: Option<String>,
+        account_id: Option<&Bound<'_, PyAny>>,
+        collateral_asset: Option<String>,
+        average_entry_price: Option<&Bound<'_, PyAny>>,
+        mode: Option<&Bound<'_, PyAny>>,
+        leverage: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let assets_are_partial = underlying_asset.is_some() ^ settlement_asset.is_some();
+        if assets_are_partial {
+            return Err(PyValueError::new_err(
+                "underlying_asset and settlement_asset must be provided together",
+            ));
+        }
+
+        Ok(Self {
+            underlying_asset: underlying_asset.as_deref().map(parse_asset).transpose()?,
+            settlement_asset: settlement_asset.as_deref().map(parse_asset).transpose()?,
+            account_id: account_id.map(parse_account_id_input).transpose()?,
+            collateral_asset: collateral_asset.as_deref().map(parse_asset).transpose()?,
+            average_entry_price: average_entry_price.map(parse_price_input).transpose()?,
+            mode: mode.map(parse_position_mode_input).transpose()?,
+            leverage: leverage.map(parse_leverage_input).transpose()?,
+        })
+    }
+
+    #[getter]
+    fn underlying_asset(&self) -> Option<String> {
+        self.underlying_asset.as_ref().map(ToString::to_string)
+    }
+
+    #[setter]
+    fn set_underlying_asset(&mut self, value: Option<String>) -> PyResult<()> {
+        self.underlying_asset = value.as_deref().map(parse_asset).transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn settlement_asset(&self) -> Option<String> {
+        self.settlement_asset.as_ref().map(ToString::to_string)
+    }
+
+    #[setter]
+    fn set_settlement_asset(&mut self, value: Option<String>) -> PyResult<()> {
+        self.settlement_asset = value.as_deref().map(parse_asset).transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn account_id(&self) -> Option<PyAccountId> {
+        self.account_id.map(|inner| PyAccountId { inner })
+    }
+
+    #[setter]
+    fn set_account_id(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.account_id = value.map(parse_account_id_input).transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn collateral_asset(&self) -> Option<String> {
+        self.collateral_asset.as_ref().map(ToString::to_string)
+    }
+
+    #[setter]
+    fn set_collateral_asset(&mut self, value: Option<String>) -> PyResult<()> {
+        self.collateral_asset = value.as_deref().map(parse_asset).transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn average_entry_price(&self) -> Option<String> {
+        self.average_entry_price.as_ref().map(ToString::to_string)
+    }
+
+    #[setter]
+    fn set_average_entry_price(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.average_entry_price = value.map(parse_price_input).transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn mode(&self) -> Option<&'static str> {
+        self.mode.map(position_mode_name)
+    }
+
+    #[setter]
+    fn set_mode(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.mode = value.map(parse_position_mode_input).transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn leverage(&self) -> Option<PyLeverage> {
+        self.leverage.map(|inner| PyLeverage { inner })
+    }
+
+    #[setter]
+    fn set_leverage(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.leverage = value.map(parse_leverage_input).transpose()?;
+        Ok(())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AccountAdjustmentPositionOperation(underlying_asset={:?}, settlement_asset={:?}, account_id={:?}, collateral_asset={:?}, average_entry_price={:?}, mode={:?}, leverage={:?})",
+            self.underlying_asset(),
+            self.settlement_asset(),
+            self.account_id().map(|v| v.value()),
+            self.collateral_asset(),
+            self.average_entry_price(),
+            self.mode(),
+            self.leverage().map(|v| v.value()),
+        )
+    }
+}
+
+#[pymethods]
+impl PyAccountAdjustmentBounds {
+    #[new]
+    #[pyo3(signature = (*, total_upper_bound = None, total_lower_bound = None, reserved_upper_bound = None, reserved_lower_bound = None, pending_upper_bound = None, pending_lower_bound = None))]
+    fn new(
+        total_upper_bound: Option<&Bound<'_, PyAny>>,
+        total_lower_bound: Option<&Bound<'_, PyAny>>,
+        reserved_upper_bound: Option<&Bound<'_, PyAny>>,
+        reserved_lower_bound: Option<&Bound<'_, PyAny>>,
+        pending_upper_bound: Option<&Bound<'_, PyAny>>,
+        pending_lower_bound: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            total_upper_bound: total_upper_bound
+                .map(parse_position_size_input)
+                .transpose()?,
+            total_lower_bound: total_lower_bound
+                .map(parse_position_size_input)
+                .transpose()?,
+            reserved_upper_bound: reserved_upper_bound
+                .map(parse_position_size_input)
+                .transpose()?,
+            reserved_lower_bound: reserved_lower_bound
+                .map(parse_position_size_input)
+                .transpose()?,
+            pending_upper_bound: pending_upper_bound
+                .map(parse_position_size_input)
+                .transpose()?,
+            pending_lower_bound: pending_lower_bound
+                .map(parse_position_size_input)
+                .transpose()?,
+        })
+    }
+
+    #[getter]
+    fn total_upper_bound(&self) -> Option<PyPositionSize> {
+        self.total_upper_bound.map(|inner| PyPositionSize { inner })
+    }
+    #[setter]
+    fn set_total_upper_bound(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.total_upper_bound = value.map(parse_position_size_input).transpose()?;
+        Ok(())
+    }
+    #[getter]
+    fn total_lower_bound(&self) -> Option<PyPositionSize> {
+        self.total_lower_bound.map(|inner| PyPositionSize { inner })
+    }
+    #[setter]
+    fn set_total_lower_bound(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.total_lower_bound = value.map(parse_position_size_input).transpose()?;
+        Ok(())
+    }
+    #[getter]
+    fn reserved_upper_bound(&self) -> Option<PyPositionSize> {
+        self.reserved_upper_bound
+            .map(|inner| PyPositionSize { inner })
+    }
+    #[setter]
+    fn set_reserved_upper_bound(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.reserved_upper_bound = value.map(parse_position_size_input).transpose()?;
+        Ok(())
+    }
+    #[getter]
+    fn reserved_lower_bound(&self) -> Option<PyPositionSize> {
+        self.reserved_lower_bound
+            .map(|inner| PyPositionSize { inner })
+    }
+    #[setter]
+    fn set_reserved_lower_bound(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.reserved_lower_bound = value.map(parse_position_size_input).transpose()?;
+        Ok(())
+    }
+    #[getter]
+    fn pending_upper_bound(&self) -> Option<PyPositionSize> {
+        self.pending_upper_bound
+            .map(|inner| PyPositionSize { inner })
+    }
+    #[setter]
+    fn set_pending_upper_bound(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.pending_upper_bound = value.map(parse_position_size_input).transpose()?;
+        Ok(())
+    }
+    #[getter]
+    fn pending_lower_bound(&self) -> Option<PyPositionSize> {
+        self.pending_lower_bound
+            .map(|inner| PyPositionSize { inner })
+    }
+    #[setter]
+    fn set_pending_lower_bound(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.pending_lower_bound = value.map(parse_position_size_input).transpose()?;
+        Ok(())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AccountAdjustmentBounds(total_upper_bound={:?}, total_lower_bound={:?}, reserved_upper_bound={:?}, reserved_lower_bound={:?}, pending_upper_bound={:?}, pending_lower_bound={:?})",
+            self.total_upper_bound().map(|v| v.value()),
+            self.total_lower_bound().map(|v| v.value()),
+            self.reserved_upper_bound().map(|v| v.value()),
+            self.reserved_lower_bound().map(|v| v.value()),
+            self.pending_upper_bound().map(|v| v.value()),
+            self.pending_lower_bound().map(|v| v.value()),
+        )
+    }
+}
+
+#[pymethods]
+impl PyAccountAdjustment {
+    #[new]
+    #[pyo3(signature = (*, operation = None, amount = None, bounds = None))]
+    fn new(
+        py: Python<'_>,
+        operation: Option<&Bound<'_, PyAny>>,
+        amount: Option<&Bound<'_, PyAny>>,
+        bounds: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            operation: operation
+                .map(|value| parse_account_adjustment_operation(py, value))
+                .transpose()?,
+            amount: amount
+                .map(|v| {
+                    v.extract::<PyAccountAdjustmentAmount>()
+                        .map(|obj| Py::new(py, obj))
+                        .map_err(|_| {
+                            PyTypeError::new_err(
+                                "amount must be openpit.core.AccountAdjustmentAmount",
+                            )
+                        })
+                        .and_then(|r| r)
+                })
+                .transpose()?,
+            bounds: bounds
+                .map(|v| {
+                    v.extract::<PyAccountAdjustmentBounds>()
+                        .map(|obj| Py::new(py, obj))
+                        .map_err(|_| {
+                            PyTypeError::new_err(
+                                "bounds must be openpit.core.AccountAdjustmentBounds",
+                            )
+                        })
+                        .and_then(|r| r)
+                })
+                .transpose()?,
+        })
+    }
+
+    #[getter]
+    fn operation(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        self.operation.as_ref().map(|op| match op {
+            PyAccountAdjustmentOperation::Balance(value) => value.clone_ref(py).into_any(),
+            PyAccountAdjustmentOperation::Position(value) => value.clone_ref(py).into_any(),
+        })
+    }
+
+    #[setter]
+    fn set_operation(&mut self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.operation = value
+            .map(|v| parse_account_adjustment_operation(py, v))
+            .transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn amount(&self, py: Python<'_>) -> Option<Py<PyAccountAdjustmentAmount>> {
+        self.amount.as_ref().map(|v| v.clone_ref(py))
+    }
+
+    #[setter]
+    fn set_amount(&mut self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.amount = value
+            .map(|v| {
+                v.extract::<PyAccountAdjustmentAmount>()
+                    .map(|obj| Py::new(py, obj))
+                    .map_err(|_| {
+                        PyTypeError::new_err("amount must be openpit.core.AccountAdjustmentAmount")
+                    })
+                    .and_then(|r| r)
+            })
+            .transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn bounds(&self, py: Python<'_>) -> Option<Py<PyAccountAdjustmentBounds>> {
+        self.bounds.as_ref().map(|v| v.clone_ref(py))
+    }
+
+    #[setter]
+    fn set_bounds(&mut self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.bounds = value
+            .map(|v| {
+                v.extract::<PyAccountAdjustmentBounds>()
+                    .map(|obj| Py::new(py, obj))
+                    .map_err(|_| {
+                        PyTypeError::new_err("bounds must be openpit.core.AccountAdjustmentBounds")
+                    })
+                    .and_then(|r| r)
+            })
+            .transpose()?;
+        Ok(())
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> String {
+        let operation = self.operation.as_ref().map(|op| match op {
+            PyAccountAdjustmentOperation::Balance(value) => value.bind(py).borrow().__repr__(),
+            PyAccountAdjustmentOperation::Position(value) => value.bind(py).borrow().__repr__(),
+        });
+        let amount = self
+            .amount
+            .as_ref()
+            .map(|value| value.bind(py).borrow().__repr__());
+        let bounds = self
+            .bounds
+            .as_ref()
+            .map(|value| value.bind(py).borrow().__repr__());
+        format!(
+            "AccountAdjustment(operation={:?}, amount={:?}, bounds={:?})",
+            operation, amount, bounds
+        )
     }
 }
 
@@ -2825,6 +3416,54 @@ fn position_effect_name(value: PositionEffect) -> &'static str {
     }
 }
 
+fn parse_position_mode(value: &str) -> PyResult<PositionMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "netting" => Ok(PositionMode::Netting),
+        "hedged" => Ok(PositionMode::Hedged),
+        other => Err(PyValueError::new_err(format!(
+            "invalid position mode {other:?}; expected 'netting' or 'hedged'"
+        ))),
+    }
+}
+
+fn parse_position_mode_input(value: &Bound<'_, PyAny>) -> PyResult<PositionMode> {
+    let mode = value
+        .extract::<String>()
+        .map_err(|_| PyTypeError::new_err("mode must be a str or openpit.param.PositionMode"))?;
+    parse_position_mode(&mode).map_err(|error| PyTypeError::new_err(error.to_string()))
+}
+
+fn position_mode_name(value: PositionMode) -> &'static str {
+    match value {
+        PositionMode::Netting => "netting",
+        PositionMode::Hedged => "hedged",
+    }
+}
+
+fn parse_adjustment_amount_input(value: &Bound<'_, PyAny>) -> PyResult<AdjustmentAmount> {
+    if let Ok(value) = value.extract::<PyRef<'_, PyAdjustmentAmount>>() {
+        return Ok(value.inner);
+    }
+    Err(PyTypeError::new_err(
+        "value must be openpit.param.AdjustmentAmount",
+    ))
+}
+
+fn parse_account_adjustment_operation(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<PyAccountAdjustmentOperation> {
+    if let Ok(op) = value.extract::<PyAccountAdjustmentBalanceOperation>() {
+        return Ok(PyAccountAdjustmentOperation::Balance(Py::new(py, op)?));
+    }
+    if let Ok(op) = value.extract::<PyAccountAdjustmentPositionOperation>() {
+        return Ok(PyAccountAdjustmentOperation::Position(Py::new(py, op)?));
+    }
+    Err(PyTypeError::new_err(
+        "operation must be openpit.core.AccountAdjustmentBalanceOperation or openpit.core.AccountAdjustmentPositionOperation",
+    ))
+}
+
 fn parse_quantity(value: &str) -> PyResult<Quantity> {
     Quantity::from_str(value).map_err(|error| PyValueError::new_err(error.to_string()))
 }
@@ -2992,6 +3631,9 @@ fn parse_cash_flow_input(value: &Bound<'_, PyAny>) -> PyResult<CashFlow> {
 }
 
 fn parse_position_size_input(value: &Bound<'_, PyAny>) -> PyResult<PositionSize> {
+    if let Ok(value) = value.extract::<PyRef<'_, PyPositionSize>>() {
+        return Ok(value.inner);
+    }
     parse_decimal_input(value, "position size", parse_position_size, |value| {
         PositionSize::from_f64(value).map_err(|error| PyValueError::new_err(error.to_string()))
     })
@@ -3030,6 +3672,17 @@ fn format_engine_build_error(error: EngineBuildError) -> String {
 #[pymodule]
 fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("RejectError", py.get_type_bound::<RejectError>())?;
+    module.add_class::<PyAccountId>()?;
+    module.add_class::<PyAsset>()?;
+    module.add_class::<PyQuantity>()?;
+    module.add_class::<PyPrice>()?;
+    module.add_class::<PyPnl>()?;
+    module.add_class::<PyFee>()?;
+    module.add_class::<PyVolume>()?;
+    module.add_class::<PyCashFlow>()?;
+    module.add_class::<PyPositionSize>()?;
+    module.add_class::<PyAdjustmentAmount>()?;
+    module.add_class::<PyLeverage>()?;
     module.add_class::<PyEngine>()?;
     module.add_class::<PyRejectCode>()?;
     module.add_class::<PyReject>()?;
@@ -3041,16 +3694,6 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyOrderPosition>()?;
     module.add_class::<PyOrderMargin>()?;
     module.add_class::<PyOrder>()?;
-    module.add_class::<PyAccountId>()?;
-    module.add_class::<PyAsset>()?;
-    module.add_class::<PyQuantity>()?;
-    module.add_class::<PyPrice>()?;
-    module.add_class::<PyPnl>()?;
-    module.add_class::<PyFee>()?;
-    module.add_class::<PyVolume>()?;
-    module.add_class::<PyCashFlow>()?;
-    module.add_class::<PyPositionSize>()?;
-    module.add_class::<PyLeverage>()?;
     module.add_class::<PyRequest>()?;
     module.add_class::<PyReservation>()?;
     module.add_class::<PyExecutionReportOperation>()?;
@@ -3058,6 +3701,11 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyExecutionReportFillDetails>()?;
     module.add_class::<PyExecutionReportPositionImpact>()?;
     module.add_class::<PyExecutionReport>()?;
+    module.add_class::<PyAccountAdjustmentAmount>()?;
+    module.add_class::<PyAccountAdjustmentBalanceOperation>()?;
+    module.add_class::<PyAccountAdjustmentPositionOperation>()?;
+    module.add_class::<PyAccountAdjustmentBounds>()?;
+    module.add_class::<PyAccountAdjustment>()?;
     module.add_class::<PyPostTradeResult>()?;
     module.add_class::<PyPnlKillSwitchPolicy>()?;
     module.add_class::<PyRateLimitPolicy>()?;

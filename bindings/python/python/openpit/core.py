@@ -19,36 +19,16 @@ from __future__ import annotations
 
 import typing
 
-from ._openpit import (
-    ExecutionReport as _ExecutionReport,
-)
-from ._openpit import (
-    ExecutionReportFillDetails as _ExecutionReportFillDetails,
-)
-from ._openpit import (
-    ExecutionReportOperation as _ExecutionReportOperation,
-)
-from ._openpit import (
-    ExecutionReportPositionImpact as _ExecutionReportPositionImpact,
-)
-from ._openpit import (
-    FinancialImpact as _FinancialImpact,
-)
-from ._openpit import (
-    Instrument as _Instrument,
-)
-from ._openpit import (
-    Order as _Order,
-)
-from ._openpit import (
-    OrderMargin as _OrderMargin,
-)
-from ._openpit import (
-    OrderOperation as _OrderOperation,
-)
-from ._openpit import (
-    OrderPosition as _OrderPosition,
-)
+from ._openpit import ExecutionReport as _ExecutionReport
+from ._openpit import ExecutionReportFillDetails as _ExecutionReportFillDetails
+from ._openpit import ExecutionReportOperation as _ExecutionReportOperation
+from ._openpit import ExecutionReportPositionImpact as _ExecutionReportPositionImpact
+from ._openpit import FinancialImpact as _FinancialImpact
+from ._openpit import Instrument as _Instrument
+from ._openpit import Order as _Order
+from ._openpit import OrderMargin as _OrderMargin
+from ._openpit import OrderOperation as _OrderOperation
+from ._openpit import OrderPosition as _OrderPosition
 from .param import (
     AccountId,
     Asset,
@@ -607,7 +587,35 @@ class ExecutionReport(_ExecutionReport):
         return _ExecutionReport.__repr__(self)
 
 
+def __getattr__(name: str) -> typing.Any:
+    if name in {
+        "AccountAdjustment",
+        "AccountAdjustmentAmount",
+        "AccountAdjustmentBalanceOperation",
+        "AccountAdjustmentBounds",
+        "AccountAdjustmentPositionOperation",
+    }:
+        from . import account_adjustment
+
+        return getattr(account_adjustment, name)
+    raise AttributeError(name)
+
+
+if typing.TYPE_CHECKING:
+    from .account_adjustment import (
+        AccountAdjustment,
+        AccountAdjustmentAmount,
+        AccountAdjustmentBalanceOperation,
+        AccountAdjustmentBounds,
+        AccountAdjustmentPositionOperation,
+    )
+
 __all__ = [
+    "AccountAdjustment",
+    "AccountAdjustmentAmount",
+    "AccountAdjustmentBalanceOperation",
+    "AccountAdjustmentBounds",
+    "AccountAdjustmentPositionOperation",
     "ExecutionReport",
     "ExecutionReportFillDetails",
     "ExecutionReportOperation",

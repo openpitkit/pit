@@ -32,8 +32,8 @@ pub enum TradeAmount {
 impl std::fmt::Display for TradeAmount {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Quantity(qty) => write!(formatter, "{qty}"),
-            Self::Volume(vol) => write!(formatter, "{vol}"),
+            Self::Quantity(qty) => write!(formatter, "qty: {qty}"),
+            Self::Volume(vol) => write!(formatter, "vol: {vol}"),
         }
     }
 }
@@ -47,12 +47,12 @@ mod tests {
     #[test]
     fn display_quantity_variant() {
         let amount = TradeAmount::Quantity(Quantity::from_str("10").expect("must be valid"));
-        assert_eq!(amount.to_string(), "10");
+        assert_eq!(amount.to_string(), "qty: 10");
     }
 
     #[test]
     fn display_volume_variant() {
         let amount = TradeAmount::Volume(Volume::from_str("500.5").expect("must be valid"));
-        assert_eq!(amount.to_string(), "500.5");
+        assert_eq!(amount.to_string(), "vol: 500.5");
     }
 }

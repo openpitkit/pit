@@ -181,7 +181,9 @@ mod tests {
     use crate::pretrade::{Reject, RejectCode, RejectScope};
     use crate::RequestFieldAccessError;
 
-    use super::{request_field_access_reject, CheckPreTradeStartPolicy, Context, Mutations, Policy};
+    use super::{
+        request_field_access_reject, CheckPreTradeStartPolicy, Context, Mutations, Policy,
+    };
 
     struct StartPolicyNoop;
 

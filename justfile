@@ -28,20 +28,20 @@ check: lint-all test-all
 lint-all: lint-rust lint-python
 # Lint Rus.
 lint-rust:
-    cargo clippy --all-targets --all-features
+    cargo clippy --all-targets --all-features -q
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-    cargo fmt --all -- --check
+    cargo fmt --all -- --check --quiet
 # Lint Python.
 lint-python:
-    python -m ruff check bindings/python
-    python -m ruff format --check bindings/python
+    python -m ruff check --quiet bindings/python
+    python -m ruff format --check --quiet bindings/python
 
 # Run all tests.
 test-all: test-rust test-python
 # Rust tests.
 test-rust:
-    cargo test --workspace
-    cargo test -p openpit --all-features
+    cargo test --workspace -q
+    cargo test -p openpit --all-features -q
 # Rust tests with actionable coverage summary.
 test-rust-cov:
     mkdir -p target/llvm-cov
@@ -68,7 +68,7 @@ python-develop-release:
 # Shared pytest runner helper.
 _pytest args:
     # shellcheck disable=SC1083
-    python -m pytest {{ args }}
+    python -m pytest -q {{ args }}
 # Full Python test suite.
 test-python: python-develop
     just _pytest bindings/python/tests

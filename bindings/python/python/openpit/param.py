@@ -13,6 +13,9 @@ from ._openpit import (
     Quantity,
     Volume,
 )
+from ._openpit import (
+    AdjustmentAmount as _AdjustmentAmount,
+)
 
 
 @enum.unique
@@ -80,6 +83,64 @@ class PositionEffect(_enum.StrEnum):
     @classmethod
     def _missing_(cls, value: object) -> "PositionEffect | None":
         raise ValueError("expected 'open' or 'close'")
+
+
+@enum.unique
+class PositionMode(_enum.StrEnum):
+    """Netting vs hedged position mode."""
+
+    NETTING = "netting"
+    HEDGED = "hedged"
+
+    # @typing.override
+    @classmethod
+    def _missing_(cls, value: object) -> "PositionMode | None":
+        raise ValueError("expected 'netting' or 'hedged'")
+
+
+class AdjustmentAmount(_AdjustmentAmount):
+    """Delta or absolute payload wrapper."""
+
+    # @typing.override
+    def __new__(cls, *args: object, **kwargs: object) -> "AdjustmentAmount":
+        return _AdjustmentAmount.__new__(cls, *args, **kwargs)
+
+    # @typing.override
+    def __init__(self, *, kind: str, value: PositionSize) -> None:
+        if kind not in {"delta", "absolute"}:
+            raise ValueError("kind must be 'delta' or 'absolute'")
+        if not isinstance(value, PositionSize):
+            raise TypeError(
+                f"value must be {PositionSize.__module__}.{PositionSize.__name__}"
+            )
+
+    @staticmethod
+    def delta(value: PositionSize) -> "AdjustmentAmount":
+        if not isinstance(value, PositionSize):
+            raise TypeError(
+                f"value must be {PositionSize.__module__}.{PositionSize.__name__}"
+            )
+        raw = _AdjustmentAmount.delta(value)
+        return AdjustmentAmount(kind=raw.kind, value=raw.value)
+
+    @staticmethod
+    def absolute(value: PositionSize) -> "AdjustmentAmount":
+        if not isinstance(value, PositionSize):
+            raise TypeError(
+                f"value must be {PositionSize.__module__}.{PositionSize.__name__}"
+            )
+        raw = _AdjustmentAmount.absolute(value)
+        return AdjustmentAmount(kind=raw.kind, value=raw.value)
+
+    # @typing.override
+    @property
+    def kind(self) -> str:
+        return _AdjustmentAmount.kind.__get__(self, type(self))
+
+    # @typing.override
+    @property
+    def value(self) -> PositionSize:
+        return _AdjustmentAmount.value.__get__(self, type(self))
 
 
 @enum.unique
@@ -217,10 +278,21 @@ PositionSide.SHORT.__doc__ = "Short hedge-mode leg."
 
 PositionEffect.OPEN.__doc__ = "Execution opens exposure."
 PositionEffect.CLOSE.__doc__ = "Execution closes exposure."
+PositionMode.NETTING.__doc__ = "Single net position."
+PositionMode.HEDGED.__doc__ = "Separate long and short legs."
+
+AdjustmentAmount.__doc__ = """
+Delta or absolute payload wrapper.
+"""
+
+PositionMode.__doc__ = """
+Netting vs hedged position mode.
+"""
 
 
 __all__ = [
     "AccountId",
+    "AdjustmentAmount",
     "Asset",
     "CashFlow",
     "Fee",
@@ -228,6 +300,7 @@ __all__ = [
     "ParamKind",
     "Pnl",
     "PositionEffect",
+    "PositionMode",
     "PositionSide",
     "PositionSize",
     "Price",

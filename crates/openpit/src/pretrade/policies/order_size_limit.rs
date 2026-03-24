@@ -599,7 +599,9 @@ mod tests {
         }
         impl HasOrderPrice for InstrumentAccessErrorOrder {
             fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
-                Ok(Some(Price::from_str("1").expect("price literal must be valid")))
+                Ok(Some(
+                    Price::from_str("1").expect("price literal must be valid"),
+                ))
             }
         }
 
@@ -609,7 +611,7 @@ mod tests {
             InstrumentAccessErrorOrder,
             (),
         >>::check_pre_trade_start(&policy, &order)
-            .expect_err("field access error must reject");
+        .expect_err("field access error must reject");
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
         assert_eq!(reject.reason, "failed to access required field");
@@ -646,7 +648,9 @@ mod tests {
         }
         impl HasOrderPrice for TradeAmountAccessErrorOrder {
             fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
-                Ok(Some(Price::from_str("1").expect("price literal must be valid")))
+                Ok(Some(
+                    Price::from_str("1").expect("price literal must be valid"),
+                ))
             }
         }
 
@@ -657,9 +661,11 @@ mod tests {
                 Asset::new("USD").expect("asset code must be valid"),
             ),
         };
-        let reject =
-            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TradeAmountAccessErrorOrder, ()>>::check_pre_trade_start(&policy, &order)
-                .expect_err("field access error must reject");
+        let reject = <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<
+            TradeAmountAccessErrorOrder,
+            (),
+        >>::check_pre_trade_start(&policy, &order)
+        .expect_err("field access error must reject");
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
         assert_eq!(reject.reason, "failed to access required field");
@@ -703,9 +709,11 @@ mod tests {
                 Asset::new("USD").expect("asset code must be valid"),
             ),
         };
-        let reject =
-            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<PriceAccessErrorOrder, ()>>::check_pre_trade_start(&policy, &order)
-                .expect_err("field access error must reject");
+        let reject = <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<
+            PriceAccessErrorOrder,
+            (),
+        >>::check_pre_trade_start(&policy, &order)
+        .expect_err("field access error must reject");
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
         assert_eq!(reject.reason, "failed to access required field");

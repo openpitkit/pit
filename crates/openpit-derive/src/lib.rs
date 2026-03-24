@@ -474,7 +474,10 @@ mod tests {
             .expect("first mapping must register");
         let err = register_trait_once(&mut seen, &capability, &capability)
             .expect_err("duplicate mapping must reject");
-        assert_eq!(err.to_string(), "duplicate trait mapping for crate :: HasInstrument");
+        assert_eq!(
+            err.to_string(),
+            "duplicate trait mapping for crate :: HasInstrument"
+        );
     }
 
     #[test]
@@ -511,9 +514,8 @@ mod tests {
 
     #[test]
     fn parse_openpit_attr_item_parses_inferred_method_signature() {
-        let item: OpenpitAttrItem =
-            parse_str("HasPnl(-> Result<Pnl, RequestFieldAccessError>)")
-                .expect("must parse inferred signature");
+        let item: OpenpitAttrItem = parse_str("HasPnl(-> Result<Pnl, RequestFieldAccessError>)")
+            .expect("must parse inferred signature");
         assert_eq!(capability_method_name(item).as_deref(), Some("pnl"));
     }
 
