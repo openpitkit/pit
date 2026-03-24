@@ -156,6 +156,9 @@ request = start_result.request
 # 5. Real pre-trade and risk control.
 execute_result = request.execute()
 
+# Optional shortcut for the same two-stage flow:
+# execute_result = engine.execute_pre_trade(order=order)
+
 if not execute_result:
     messages = ", ".join(
         f"{reject.policy} [{reject.code}]: {reject.reason}: {reject.details}"

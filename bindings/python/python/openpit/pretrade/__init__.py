@@ -42,7 +42,7 @@ RejectCode.__module__ = __name__
 RejectScope.__module__ = __name__
 
 ExecuteResult.__doc__ = """
-Result of ``Request.execute``.
+Result of ``Request.execute`` or ``Engine.execute_pre_trade``.
 
 This object reports whether main-stage policies accepted the request and, on
 success, carries the single-use reservation handle that must later be committed

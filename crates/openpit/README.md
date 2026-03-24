@@ -144,6 +144,9 @@ let request = engine.start_pre_trade(order)?;
 // 5. Real pre-trade and risk control.
 let reservation = request.execute()?;
 
+// Optional shortcut for the same two-stage flow:
+// let reservation = engine.execute_pre_trade(order)?;
+
 // 6. If the request is successfully sent to the venue, it must be committed.
 // The rollback must be called otherwise to revert all performed reservations.
 reservation.commit();

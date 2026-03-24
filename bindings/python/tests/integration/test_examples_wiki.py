@@ -413,6 +413,30 @@ def test_example_wiki_pipeline_main_stage_finalize() -> None:
 
 
 @pytest.mark.integration
+def test_example_wiki_pipeline_shortcut_start_and_main() -> None:
+    # Used in: pit.wiki/Pre-trade-Pipeline.md — Shortcut for Start + Main Stages
+    # Used in: pit.wiki/Getting-Started.md — Shortcut for Start + Main Stages
+    engine = (
+        openpit.Engine.builder()
+        .check_pre_trade_start_policy(
+            policy=openpit.pretrade.policies.OrderValidationPolicy()
+        )
+        .build()
+    )
+    order = _aapl_usd_order("100", "185")
+
+    execute_result = engine.execute_pre_trade(order=order)
+    if execute_result:
+        execute_result.reservation.commit()
+    else:
+        for reject in execute_result.rejects:
+            print(
+                f"rejected by {reject.policy} "
+                f"[{reject.code}]: {reject.reason}: {reject.details}"
+            )
+
+
+@pytest.mark.integration
 def test_example_wiki_account_adjustments() -> None:
     # Used in: pit.wiki/Account-Adjustments.md — Examples → Python
     account_id = openpit.param.AccountId.from_u64(99224416)

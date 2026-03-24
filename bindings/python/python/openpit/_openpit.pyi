@@ -844,6 +844,10 @@ class Engine:
         """Run start-stage pre-trade checks."""
         _ = order
 
+    def execute_pre_trade(self, order: Order) -> ExecuteResult:
+        """Run start-stage and main-stage checks in one call."""
+        _ = order
+
     def apply_execution_report(self, report: ExecutionReport) -> PostTradeResult:
         """Apply post-trade report to policy state."""
         _ = report

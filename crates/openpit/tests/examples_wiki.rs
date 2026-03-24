@@ -501,6 +501,29 @@ fn example_wiki_pipeline_main_stage_finalize() -> Result<(), Box<dyn std::error:
 }
 
 #[test]
+fn example_wiki_pipeline_shortcut_start_and_main() -> Result<(), Box<dyn std::error::Error>> {
+    // Used in: pit.wiki/Pre-trade-Pipeline.md — Shortcut for Start + Main Stages
+    // Used in: pit.wiki/Getting-Started.md — Shortcut for Start + Main Stages
+    let engine = Engine::<OrderOperation, PitExecutionReport>::builder()
+        .check_pre_trade_start_policy(OrderValidationPolicy::new())
+        .build()?;
+    let order = aapl_usd_order("100", "185");
+
+    match engine.execute_pre_trade(order) {
+        Ok(reservation) => reservation.commit(),
+        Err(rejects) => {
+            for reject in rejects.iter() {
+                eprintln!(
+                    "rejected by {} [{}]: {} ({})",
+                    reject.policy, reject.code, reject.reason, reject.details
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn example_wiki_account_adjustments() -> Result<(), Box<dyn std::error::Error>> {
     // Used in: pit.wiki/Account-Adjustments.md — Examples → Rust
     use openpit::param::{AdjustmentAmount, PositionMode, PositionSize};

@@ -521,6 +521,41 @@ impl PyEngine {
         }
     }
 
+    #[pyo3(signature = (order))]
+    fn execute_pre_trade(
+        &self,
+        py: Python<'_>,
+        order: Bound<'_, PyAny>,
+    ) -> PyResult<PyExecuteResult> {
+        clear_python_callback_error();
+        let order = extract_python_order(&order)?;
+        match self.inner.execute_pre_trade(order) {
+            Ok(reservation) => {
+                if let Some(error) = take_python_callback_error() {
+                    return Err(error);
+                }
+                Ok(PyExecuteResult {
+                    reservation: Some(Py::new(
+                        py,
+                        PyReservation {
+                            inner: RefCell::new(Some(reservation)),
+                        },
+                    )?),
+                    rejects: Vec::new(),
+                })
+            }
+            Err(rejects) => {
+                if let Some(error) = take_python_callback_error() {
+                    return Err(error);
+                }
+                Ok(PyExecuteResult {
+                    reservation: None,
+                    rejects: rejects.iter().map(convert_reject).collect(),
+                })
+            }
+        }
+    }
+
     #[pyo3(signature = (report))]
     fn apply_execution_report(&self, report: &Bound<'_, PyAny>) -> PyResult<PyPostTradeResult> {
         clear_python_callback_error();

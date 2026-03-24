@@ -161,6 +161,22 @@ impl<O: 'static, R: 'static, A: 'static> Engine<O, R, A> {
         Ok(Request::from_handle(Box::new(request_handle)))
     }
 
+    /// Runs start-stage checks and executes main-stage checks immediately.
+    ///
+    /// This is a convenience shortcut equivalent to
+    /// `engine.start_pre_trade(order)?.execute()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Rejects`] for both stages:
+    /// - start-stage reject is wrapped into a single-element reject list;
+    /// - main-stage rejects are returned unchanged.
+    pub fn execute_pre_trade(&self, order: O) -> Result<Reservation, Rejects> {
+        self.start_pre_trade(order)
+            .map_err(wrap_single_reject)
+            .and_then(Request::execute)
+    }
+
     /// Applies post-trade updates and aggregates kill-switch status across all policies.
     ///
     /// Returns [`PostTradeResult::kill_switch_triggered`] `true` when at least one policy
@@ -403,6 +419,10 @@ fn execute_request<O: 'static, R: 'static, A: 'static>(
 
     let reservation_handle = ReservationHandleImpl::new(mutations);
     Ok(Reservation::from_handle(Box::new(reservation_handle)))
+}
+
+fn wrap_single_reject(reject: Reject) -> Rejects {
+    Rejects::new(vec![reject])
 }
 
 #[cfg(test)]
@@ -788,6 +808,115 @@ mod tests {
             .execute()
             .expect("built engine must allow execute");
         reservation.rollback();
+    }
+
+    #[test]
+    fn execute_pre_trade_shortcut_returns_reservation_when_both_stages_pass() {
+        let engine = Engine::<TestOrder, TestReport>::builder()
+            .check_pre_trade_start_policy(StartPolicyMock::pass("start"))
+            .pre_trade_policy(MainPolicyMock::pass("main"))
+            .build()
+            .expect("engine must build");
+
+        let reservation = engine
+            .execute_pre_trade(order_with_settlement("USD"))
+            .expect("shortcut must pass");
+        reservation.rollback();
+    }
+
+    #[test]
+    fn execute_pre_trade_wraps_start_stage_reject_into_single_element_rejects() {
+        let engine = Engine::<TestOrder, TestReport>::builder()
+            .check_pre_trade_start_policy(StartPolicyMock::new(
+                "start_reject",
+                Rc::new(Cell::new(0)),
+                true,
+                false,
+                None,
+                None,
+            ))
+            .build()
+            .expect("engine must build");
+
+        let rejects = match engine.execute_pre_trade(order_with_settlement("USD")) {
+            Ok(_) => panic!("start stage must reject"),
+            Err(rejects) => rejects,
+        };
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].policy, "start_reject");
+        assert_eq!(rejects[0].code, RejectCode::Other);
+        assert_eq!(rejects[0].reason, "start reject");
+    }
+
+    #[test]
+    fn execute_pre_trade_returns_main_stage_rejects_in_original_order() {
+        let engine = Engine::<TestOrder, TestReport>::builder()
+            .check_pre_trade_start_policy(StartPolicyMock::pass("start"))
+            .pre_trade_policy(MainPolicyMock::with_mutation_and_optional_reject(
+                "main_first",
+                "m1",
+                true,
+                RejectScope::Order,
+            ))
+            .pre_trade_policy(MainPolicyMock::with_mutation_and_optional_reject(
+                "main_second",
+                "m2",
+                true,
+                RejectScope::Account,
+            ))
+            .build()
+            .expect("engine must build");
+
+        let rejects = match engine.execute_pre_trade(order_with_settlement("USD")) {
+            Ok(_) => panic!("main stage must reject"),
+            Err(rejects) => rejects,
+        };
+        assert_eq!(rejects.len(), 2);
+        assert_eq!(rejects[0].policy, "main_first");
+        assert_eq!(rejects[1].policy, "main_second");
+        assert_eq!(rejects[0].scope, RejectScope::Order);
+        assert_eq!(rejects[1].scope, RejectScope::Account);
+    }
+
+    #[test]
+    fn execute_pre_trade_commit_applies_mutations_on_success() {
+        let state = Rc::new(RefCell::new(None));
+        let engine = Engine::<TestOrder, TestReport>::builder()
+            .check_pre_trade_start_policy(StartPolicyMock::pass("start"))
+            .pre_trade_policy(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                "main",
+                shared_kill_switch_mutation(Rc::clone(&state), "shortcut_commit", true, false),
+                false,
+                RejectScope::Order,
+            ))
+            .build()
+            .expect("engine must build");
+
+        let reservation = engine
+            .execute_pre_trade(order_with_settlement("USD"))
+            .expect("shortcut must pass");
+        reservation.commit();
+
+        assert_eq!(*state.borrow(), Some(true));
+    }
+
+    #[test]
+    fn execute_pre_trade_reject_does_not_apply_commit_mutations() {
+        let state = Rc::new(RefCell::new(None));
+        let engine = Engine::<TestOrder, TestReport>::builder()
+            .check_pre_trade_start_policy(StartPolicyMock::pass("start"))
+            .pre_trade_policy(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                "rejecting_main",
+                shared_kill_switch_mutation(Rc::clone(&state), "shortcut_reject", true, false),
+                true,
+                RejectScope::Order,
+            ))
+            .build()
+            .expect("engine must build");
+
+        let result = engine.execute_pre_trade(order_with_settlement("USD"));
+        assert!(result.is_err(), "shortcut must reject");
+        assert_eq!(*state.borrow(), Some(false));
     }
 
     #[test]

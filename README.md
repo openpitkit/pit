@@ -24,6 +24,8 @@ state, and later absorb post-trade outcomes back into the same control system.
    policies and collects all registered mutations. If the stage fails, the
    collected state is rolled back. If it succeeds, the caller receives a
    reservation.
+   For a compact path without manual request handling, use
+   `engine.execute_pre_trade(order)` as a shortcut.
 5. The reservation must then be finalized explicitly. Commit keeps the reserved
    state. Rollback cancels it. Dropping the reservation without finalization
    rolls it back automatically.
