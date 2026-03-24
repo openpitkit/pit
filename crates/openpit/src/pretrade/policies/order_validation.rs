@@ -17,6 +17,7 @@
 
 use crate::core::HasTradeAmount;
 use crate::param::TradeAmount;
+use crate::pretrade::policy::request_field_access_reject;
 use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
 
 /// Start-stage policy for basic order field validation.
@@ -45,7 +46,10 @@ where
     }
 
     fn check_pre_trade_start(&self, order: &O) -> Result<(), Reject> {
-        match order.trade_amount() {
+        match order
+            .trade_amount()
+            .map_err(|e| request_field_access_reject(Self::NAME, &e))?
+        {
             TradeAmount::Quantity(quantity) if quantity.is_zero() => {
                 return Err(Reject::new(
                     Self::NAME,
@@ -77,6 +81,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::core::{Instrument, OrderOperation};
+    use crate::RequestFieldAccessError;
     use crate::param::{AccountId, Asset, Price, Quantity, Side, TradeAmount, Volume};
     use crate::pretrade::{CheckPreTradeStartPolicy, RejectCode, RejectScope};
 
@@ -230,5 +235,24 @@ mod tests {
             (),
         >>::check_pre_trade_start(&policy, &order)
         .is_ok());
+    }
+
+    #[test]
+    fn maps_trade_amount_access_error_to_missing_required_field() {
+        struct InvalidOrder;
+
+        impl crate::HasTradeAmount for InvalidOrder {
+            fn trade_amount(&self) -> Result<TradeAmount, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("trade_amount"))
+            }
+        }
+
+        let policy = OrderValidationPolicy::new();
+        let reject = <OrderValidationPolicy as CheckPreTradeStartPolicy<InvalidOrder, ()>>::check_pre_trade_start(&policy, &InvalidOrder)
+            .expect_err("field access error must reject");
+        assert_eq!(reject.scope, RejectScope::Order);
+        assert_eq!(reject.code, RejectCode::MissingRequiredField);
+        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(reject.details, "failed to access field 'trade_amount'");
     }
 }

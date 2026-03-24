@@ -95,11 +95,12 @@ mod tests {
     }
 
     impl HasTradeAmount for FakeOrder {
-        fn trade_amount(&self) -> TradeAmount {
-            self.operation
+        fn trade_amount(&self) -> Result<TradeAmount, openpit::RequestFieldAccessError> {
+            Ok(self
+                .operation
                 .as_ref()
                 .expect("internal error: test order must have operation set")
-                .trade_amount
+                .trade_amount)
         }
     }
 

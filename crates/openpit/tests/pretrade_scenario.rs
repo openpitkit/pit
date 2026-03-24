@@ -33,8 +33,10 @@ use openpit::pretrade::{
     RejectScope, Rejects, RiskMutation,
 };
 use openpit::{
-    Engine, EngineBuildError, HasClosePosition, HasFee, HasInstrument, HasPnl, HasReduceOnly,
-    Instrument, OrderOperation, OrderPosition, WithOrderOperation, WithOrderPosition,
+    Engine, EngineBuildError, ExecutionReportOperation, FinancialImpact, HasClosePosition, HasFee,
+    HasInstrument, HasPnl, HasReduceOnly, HasTradeAmount, Instrument, OrderOperation,
+    OrderPosition, WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation,
+    WithOrderPosition,
 };
 use rust_decimal::Decimal;
 
@@ -47,20 +49,20 @@ struct TestReport {
 }
 
 impl HasInstrument for TestReport {
-    fn instrument(&self) -> &Instrument {
-        &self.instrument
+    fn instrument(&self) -> Result<&Instrument, openpit::RequestFieldAccessError> {
+        Ok(&self.instrument)
     }
 }
 
 impl HasPnl for TestReport {
-    fn pnl(&self) -> Pnl {
-        self.pnl
+    fn pnl(&self) -> Result<Pnl, openpit::RequestFieldAccessError> {
+        Ok(self.pnl)
     }
 }
 
 impl HasFee for TestReport {
-    fn fee(&self) -> Fee {
-        self.fee
+    fn fee(&self) -> Result<Fee, openpit::RequestFieldAccessError> {
+        Ok(self.fee)
     }
 }
 
@@ -606,10 +608,12 @@ fn integration_engine_builder_defaults_and_guardrails() {
 #[test]
 fn integration_custom_order_strategy_tag_policy() {
     trait HasStrategyTag {
-        fn strategy_tag(&self) -> &str;
+        fn strategy_tag(&self) -> &'static str;
     }
 
-    #[derive(Debug)]
+    type PitExecutionReport = WithExecutionReportOperation<WithFinancialImpact<()>>;
+
+    #[derive(Clone)]
     struct StrategyOrder {
         base: OrderOperation,
         strategy_tag: &'static str,
@@ -622,36 +626,51 @@ fn integration_custom_order_strategy_tag_policy() {
         }
     }
 
+    struct StrategyExecutionReport {
+        base: PitExecutionReport,
+        report_tag: &'static str,
+    }
+
+    impl Deref for StrategyExecutionReport {
+        type Target = PitExecutionReport;
+
+        fn deref(&self) -> &Self::Target {
+            &self.base
+        }
+    }
+
     impl HasStrategyTag for StrategyOrder {
-        fn strategy_tag(&self) -> &str {
+        fn strategy_tag(&self) -> &'static str {
             self.strategy_tag
         }
     }
 
-    struct StrategyTagPolicy {
-        allowed_tags: &'static [&'static str],
-    }
+    struct StrategyTagPolicy;
 
-    impl<O, R> CheckPreTradeStartPolicy<O, R> for StrategyTagPolicy
+    impl<O, R> Policy<O, R> for StrategyTagPolicy
     where
-        O: HasStrategyTag,
+        O: HasStrategyTag + HasTradeAmount,
     {
         fn name(&self) -> &'static str {
             "StrategyTagPolicy"
         }
 
-        fn check_pre_trade_start(&self, order: &O) -> Result<(), Reject> {
-            let tag = order.strategy_tag();
-            if !self.allowed_tags.contains(&tag) {
-                return Err(Reject::new(
+        fn perform_pre_trade_check(
+            &self,
+            ctx: &Context<'_, O>,
+            _mutations: &mut Mutations,
+            rejects: &mut Vec<Reject>,
+        ) {
+            let order = ctx.order();
+            if order.strategy_tag() == "blocked" {
+                rejects.push(Reject::new(
                     "StrategyTagPolicy",
                     RejectScope::Order,
-                    RejectCode::Other,
-                    "strategy tag not allowed",
-                    format!("tag '{tag}' is not in the allowed list"),
+                    RejectCode::ComplianceRestriction,
+                    "strategy blocked",
+                    "project strategy tag blocked",
                 ));
             }
-            Ok(())
         }
 
         fn apply_execution_report(&self, _report: &R) -> bool {
@@ -659,46 +678,61 @@ fn integration_custom_order_strategy_tag_policy() {
         }
     }
 
-    let engine = Engine::<StrategyOrder, TestReport>::builder()
-        .check_pre_trade_start_policy(StrategyTagPolicy {
-            allowed_tags: &["alpha", "beta"],
-        })
+    let engine = Engine::<StrategyOrder, StrategyExecutionReport>::builder()
+        .pre_trade_policy(StrategyTagPolicy)
         .build()
         .expect("engine must build");
 
     let allowed_order = StrategyOrder {
         base: order_aapl_usd("100", "1"),
-        strategy_tag: "alpha",
+        strategy_tag: "allowed",
     };
     let reservation = engine
         .start_pre_trade(allowed_order)
-        .expect("allowed strategy tag must pass")
-        .execute()
-        .expect("execute must pass");
+        .expect("start must pass");
+    let reservation = reservation.execute().expect("execute must pass");
     reservation.commit();
-
-    let another_allowed = StrategyOrder {
-        base: order_aapl_usd("100", "1"),
-        strategy_tag: "beta",
-    };
-    let reservation = engine
-        .start_pre_trade(another_allowed)
-        .expect("second allowed strategy tag must pass")
-        .execute()
-        .expect("execute must pass");
-    reservation.rollback();
 
     let disallowed_order = StrategyOrder {
         base: order_aapl_usd("100", "1"),
-        strategy_tag: "gamma",
+        strategy_tag: "blocked",
     };
-    let reject = engine
+    let request = engine
         .start_pre_trade(disallowed_order)
-        .expect_err("disallowed strategy tag must reject");
-    assert_eq!(reject.scope, RejectScope::Order);
-    assert_eq!(reject.code, RejectCode::Other);
-    assert_eq!(reject.reason, "strategy tag not allowed");
-    assert_eq!(reject.details, "tag 'gamma' is not in the allowed list");
+        .expect("start must pass for blocked order");
+    let rejects = match request.execute() {
+        Ok(_) => panic!("blocked strategy tag must reject"),
+        Err(rejects) => rejects,
+    };
+    assert_eq!(rejects.len(), 1);
+    assert_eq!(rejects[0].scope, RejectScope::Order);
+    assert_eq!(rejects[0].code, RejectCode::ComplianceRestriction);
+    assert_eq!(rejects[0].reason, "strategy blocked");
+    assert_eq!(rejects[0].details, "project strategy tag blocked");
+
+    let report = StrategyExecutionReport {
+        base: WithExecutionReportOperation {
+            inner: WithFinancialImpact {
+                inner: (),
+                financial_impact: FinancialImpact {
+                    pnl: Pnl::from_str("5").expect("must be valid"),
+                    fee: Fee::from_str("1").expect("must be valid"),
+                },
+            },
+            operation: ExecutionReportOperation {
+                instrument: Instrument::new(
+                    Asset::new("AAPL").expect("asset code must be valid"),
+                    Asset::new("USD").expect("asset code must be valid"),
+                ),
+                side: Side::Buy,
+                account_id: AccountId::from_u64(99224416),
+            },
+        },
+        report_tag: "fill-1",
+    };
+    let _ = report.report_tag;
+    let post_trade = engine.apply_execution_report(&report);
+    assert!(!post_trade.kill_switch_triggered);
 }
 
 #[test]
@@ -728,11 +762,12 @@ fn integration_with_order_operation_with_order_position_reduce_only_accessible()
         },
     };
 
-    assert!(
+    assert_eq!(
         order.inner.reduce_only(),
+        Ok(true),
         "reduce_only must be accessible via HasReduceOnly on the inner WithOrderPosition"
     );
-    assert!(!order.inner.close_position());
+    assert_eq!(order.inner.close_position(), Ok(false));
 
     let engine = Engine::<CompositeOrder, TestReport>::builder()
         .build()
@@ -767,7 +802,7 @@ fn integration_with_order_operation_with_order_position_reduce_only_accessible()
             price: None,
         },
     };
-    assert!(!non_reduce_order.inner.reduce_only());
+    assert_eq!(non_reduce_order.inner.reduce_only(), Ok(false));
 
     let reservation = engine
         .start_pre_trade(non_reduce_order)

@@ -66,6 +66,11 @@ Built-in start-stage policies currently include:
 - `RateLimitPolicy`
 - `OrderSizeLimitPolicy`
 
+These built-ins are intentionally small. The primary integration model is to
+write project-specific policies against the public Rust policy API described in
+the wiki:
+[Custom Rust policies](https://github.com/openpitkit/pit/wiki/Policies#rust-custom-policy-api).
+
 There are two types of rejections: a full kill switch for the account and a
 rejection of only the current request. This is useful in algorithmic trading
 when automatic order submission must be halted until the situation is analyzed.

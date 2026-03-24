@@ -177,36 +177,13 @@ impl<O: 'static, R: 'static> Engine<O, R> {
 /// ```rust
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use std::time::Duration;
-/// use openpit::{HasFee, HasInstrument, HasPnl, Instrument, WithOrderOperation};
+/// use openpit::{WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation};
 /// use openpit::pretrade::policies::{PnlKillSwitchPolicy, RateLimitPolicy};
 /// use openpit::Engine;
-/// use openpit::param::{Asset, Fee, Pnl};
+/// use openpit::param::{Asset, Pnl};
 ///
 /// type MyOrder = WithOrderOperation<()>;
-///
-/// struct MyReport {
-///     instrument: Instrument,
-///     pnl: Pnl,
-///     fee: Fee,
-/// }
-///
-/// impl HasInstrument for MyReport {
-///     fn instrument(&self) -> &Instrument {
-///         &self.instrument
-///     }
-/// }
-///
-/// impl HasPnl for MyReport {
-///     fn pnl(&self) -> Pnl {
-///         self.pnl
-///     }
-/// }
-///
-/// impl HasFee for MyReport {
-///     fn fee(&self) -> Fee {
-///         self.fee
-///     }
-/// }
+/// type MyReport = WithFinancialImpact<WithExecutionReportOperation<()>>;
 ///
 /// let pnl_policy = PnlKillSwitchPolicy::new(
 ///     (
@@ -216,9 +193,11 @@ impl<O: 'static, R: 'static> Engine<O, R> {
 ///     [],
 /// )?;
 ///
+/// let rate_policy = RateLimitPolicy::new(100, Duration::from_secs(1));
+///
 /// let engine = Engine::<MyOrder, MyReport>::builder()
 ///     .check_pre_trade_start_policy(pnl_policy)
-///     .check_pre_trade_start_policy(RateLimitPolicy::new(100, Duration::from_secs(1)))
+///     .check_pre_trade_start_policy(rate_policy)
 ///     .build()?;
 /// let _ = engine;
 /// # Ok(())
@@ -385,7 +364,7 @@ mod tests {
     use super::{Engine, EngineBuildError};
 
     type TestOrder = WithOrderOperation<()>;
-    type TestReport = WithExecutionReportOperation<WithFinancialImpact<()>>;
+    type TestReport = WithFinancialImpact<WithExecutionReportOperation<()>>;
 
     #[test]
     fn build_rejects_duplicate_policy_names_across_stages() {
@@ -1492,21 +1471,21 @@ mod tests {
     }
 
     fn execution_report(settlement: &str) -> TestReport {
-        WithExecutionReportOperation {
-            inner: WithFinancialImpact {
+        WithFinancialImpact {
+            inner: WithExecutionReportOperation {
                 inner: (),
-                financial_impact: FinancialImpact {
-                    pnl: Pnl::from_str("-10").expect("pnl must be valid"),
-                    fee: Fee::from_str("1").expect("fee must be valid"),
+                operation: ExecutionReportOperation {
+                    instrument: Instrument::new(
+                        Asset::new("AAPL").expect("asset code must be valid"),
+                        Asset::new(settlement).expect("asset code must be valid"),
+                    ),
+                    account_id: AccountId::from_u64(99224416),
+                    side: Side::Buy,
                 },
             },
-            operation: ExecutionReportOperation {
-                instrument: Instrument::new(
-                    Asset::new("AAPL").expect("asset code must be valid"),
-                    Asset::new(settlement).expect("asset code must be valid"),
-                ),
-                account_id: AccountId::from_u64(99224416),
-                side: Side::Buy,
+            financial_impact: FinancialImpact {
+                pnl: Pnl::from_str("-10").expect("pnl must be valid"),
+                fee: Fee::from_str("1").expect("fee must be valid"),
             },
         }
     }
@@ -2136,10 +2115,17 @@ mod tests {
                 .order()
                 .price()
                 .expect("price must be present")
-                .calculate_volume(match ctx.order().trade_amount() {
-                    TradeAmount::Quantity(value) => value,
-                    TradeAmount::Volume(_) => panic!("quantity-based order expected"),
-                })
+                .expect("price value must be Some")
+                .calculate_volume(
+                    match ctx
+                        .order()
+                        .trade_amount()
+                        .expect("trade_amount must be present")
+                    {
+                        TradeAmount::Quantity(value) => value,
+                        TradeAmount::Volume(_) => panic!("quantity-based order expected"),
+                    },
+                )
                 .expect("volume must be calculable");
             assert_eq!(calculated_amount, self.amount);
             mutations.push(Mutation {

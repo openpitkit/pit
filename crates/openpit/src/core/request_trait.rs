@@ -23,6 +23,27 @@ use crate::pretrade::Lock;
 
 use super::Instrument;
 
+/// Returned when a request field could not be delivered to the caller.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestFieldAccessError {
+    pub field: &'static str,
+}
+
+impl RequestFieldAccessError {
+    pub fn new(field: &'static str) -> Self {
+        Self { field }
+    }
+}
+
+impl std::fmt::Display for RequestFieldAccessError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "failed to access field '{}'", self.field)
+    }
+}
+
+impl std::error::Error for RequestFieldAccessError {}
+
 /// A macro to generate the trait that requests a specific field from the request.
 #[macro_export]
 macro_rules! has_request_field_trait {
@@ -33,7 +54,9 @@ macro_rules! has_request_field_trait {
     ) => {
         $(#[$meta])*
         pub trait $trait {
-            fn $method(&self) -> $ret;
+            fn $method(
+                &self,
+            ) -> ::std::result::Result<$ret, $crate::RequestFieldAccessError>;
         }
 
         impl<T> $trait for T
@@ -41,7 +64,9 @@ macro_rules! has_request_field_trait {
             T: std::ops::Deref,
             T::Target: $trait,
         {
-            fn $method(&self) -> $ret {
+            fn $method(
+                &self,
+            ) -> ::std::result::Result<$ret, $crate::RequestFieldAccessError> {
                 self.deref().$method()
             }
         }
@@ -106,7 +131,7 @@ has_request_field_trait!(HasExecutionReportPositionSide, position_side -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::HasSide;
+    use super::{HasSide, RequestFieldAccessError};
     use crate::core::order::OrderOperation;
     use crate::param::{Asset, Quantity, Side, TradeAmount};
     use crate::Instrument;
@@ -128,6 +153,24 @@ mod tests {
     #[test]
     fn deref_dispatch_calls_method_on_target() {
         let boxed: Box<OrderOperation> = Box::new(operation());
-        assert_eq!(boxed.side(), Side::Buy);
+        assert_eq!(boxed.side(), Ok(Side::Buy));
+    }
+
+    #[test]
+    fn display_is_stable() {
+        let err = RequestFieldAccessError::new("instrument");
+        assert_eq!(err.to_string(), "failed to access field 'instrument'");
+    }
+
+    #[test]
+    fn equality() {
+        assert_eq!(
+            RequestFieldAccessError::new("side"),
+            RequestFieldAccessError::new("side")
+        );
+        assert_ne!(
+            RequestFieldAccessError::new("side"),
+            RequestFieldAccessError::new("instrument")
+        );
     }
 }

@@ -105,12 +105,12 @@ mod tests {
     }
 
     impl HasInstrument for FakeOrder {
-        fn instrument(&self) -> &Instrument {
-            &self
+        fn instrument(&self) -> Result<&Instrument, openpit::RequestFieldAccessError> {
+            Ok(&self
                 .operation
                 .as_ref()
                 .expect("internal error: test order must have operation set")
-                .instrument
+                .instrument)
         }
     }
 
@@ -131,24 +131,24 @@ mod tests {
     }
 
     impl HasInstrument for FakeReport {
-        fn instrument(&self) -> &Instrument {
-            &self
+        fn instrument(&self) -> Result<&Instrument, openpit::RequestFieldAccessError> {
+            Ok(&self
                 .operation
                 .as_ref()
                 .expect("internal error: test report must have operation set")
-                .instrument
+                .instrument)
         }
     }
 
     impl HasPnl for FakeReport {
-        fn pnl(&self) -> Pnl {
-            self.pnl
+        fn pnl(&self) -> Result<openpit::param::Pnl, openpit::RequestFieldAccessError> {
+            Ok(self.pnl)
         }
     }
 
     impl HasFee for FakeReport {
-        fn fee(&self) -> Fee {
-            self.fee
+        fn fee(&self) -> Result<openpit::param::Fee, openpit::RequestFieldAccessError> {
+            Ok(self.fee)
         }
     }
 

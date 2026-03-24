@@ -32,15 +32,20 @@ state, and later absorb post-trade outcomes back into the same control system.
 
 ## Current Scope
 
-The current implementation focuses on the pre-trade pipeline and a set of
-foundational controls:
+The current implementation focuses on the pre-trade pipeline, a small set of
+foundational built-in controls, and an API for building project-specific
+strategy and risk policies:
 
 - P&L kill switch
 - sliding-window rate limit
 - per-settlement order size limits
 
 The engine is intentionally in-memory and deterministic. It is designed to be
-embedded into a larger trading system rather than replace one.
+embedded into a larger trading system rather than replace one. For custom
+policy APIs, see the wiki:
+[Rust custom policies](https://github.com/openpitkit/pit/wiki/Policies#rust-custom-policy-api)
+and
+[Python custom policies](https://github.com/openpitkit/pit/wiki/Policies#python-custom-policy-api).
 
 ## Versioning Policy (Pre‑1.0)
 

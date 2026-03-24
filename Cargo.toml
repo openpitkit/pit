@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["bindings/python", "crates/openpit", "crates/pit-ffi", "crates/pit-interop"]
+members = [
+    "bindings/python",
+    "crates/openpit",
+    "crates/openpit-derive",
+    "crates/pit-ffi",
+    "crates/pit-interop",
+]
 
 [workspace.metadata.release]
 shared-version = true
@@ -8,7 +14,7 @@ tag-prefix = ""
 tag-message = "Release {{version}}"
 pre-release-commit-message = "Release {{version}}"
 push = false
-publish = false
+publish = true
 
 [profile.release]
 lto = true

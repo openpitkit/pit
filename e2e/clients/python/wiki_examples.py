@@ -9,7 +9,7 @@
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.`
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
@@ -19,23 +19,27 @@ import typing
 
 import openpit
 
-# Source: pit.wiki/Policies.md
+if not hasattr(typing, "override"):
+
+    def _override(method: typing.Any) -> typing.Any:
+        return method
+
+    typing.override = _override  # type: ignore[attr-defined]
 
 
 class NotionalCapPolicy(openpit.pretrade.Policy):
-    # @typing.override
+    @typing.override
     def __init__(self, max_abs_notional: openpit.param.Volume) -> None:
         self._max_abs_notional = max_abs_notional
 
-    # @typing.override
     @property
+    @typing.override
     def name(self) -> str:
         return "NotionalCapPolicy"
 
-    # @typing.override
+    @typing.override
     def perform_pre_trade_check(
         self,
-        *,
         context: openpit.pretrade.PolicyContext,
     ) -> openpit.pretrade.PolicyDecision:
         assert context.order.operation is not None
@@ -75,10 +79,9 @@ class NotionalCapPolicy(openpit.pretrade.Policy):
             ]
         )
 
-    # @typing.override
+    @typing.override
     def apply_execution_report(
         self,
-        *,
         report: openpit.ExecutionReport,
     ) -> bool:
         _ = report
@@ -86,26 +89,14 @@ class NotionalCapPolicy(openpit.pretrade.Policy):
 
 
 class StrategyOrder(openpit.Order):
-    # @typing.override
+    @typing.override
     def __init__(self, *, strategy_tag: str) -> None:
-        super().__init__(
-            operation=openpit.OrderOperation(
-                instrument=openpit.Instrument(
-                    openpit.param.Asset("AAPL"),
-                    openpit.param.Asset("USD"),
-                ),
-                side=openpit.param.Side.BUY,
-                trade_amount=openpit.param.Quantity("10"),
-                price=openpit.param.Price("25"),
-            ),
-        )
-        # Project field: this field is added by the host application,
-        # not by the SDK.
+        super().__init__(operation=aapl_usd_order("10", "25").operation)
         self.strategy_tag = strategy_tag
 
 
 class StrategyReport(openpit.ExecutionReport):
-    # @typing.override
+    @typing.override
     def __init__(self, *, report_tag: str) -> None:
         super().__init__(
             operation=openpit.ExecutionReportOperation(
@@ -114,27 +105,25 @@ class StrategyReport(openpit.ExecutionReport):
                     openpit.param.Asset("USD"),
                 ),
                 side=openpit.param.Side.BUY,
+                account_id=openpit.param.AccountId.from_u64(99224416),
             ),
             financial_impact=openpit.FinancialImpact(
                 pnl=openpit.param.Pnl("5"),
                 fee=openpit.param.Fee("1"),
             ),
         )
-        # Project field: this field is added by the host application,
-        # not by the SDK.
         self.report_tag = report_tag
 
 
 class StrategyTagPolicy(openpit.pretrade.Policy):
-    # @typing.override
     @property
+    @typing.override
     def name(self) -> str:
         return "StrategyTagPolicy"
 
-    # @typing.override
+    @typing.override
     def perform_pre_trade_check(
         self,
-        *,
         context: openpit.pretrade.PolicyContext,
     ) -> openpit.pretrade.PolicyDecision:
         order = typing.cast(StrategyOrder, context.order)
@@ -151,47 +140,123 @@ class StrategyTagPolicy(openpit.pretrade.Policy):
             )
         return openpit.pretrade.PolicyDecision.accept()
 
-    # @typing.override
+    @typing.override
     def apply_execution_report(
         self,
-        *,
         report: openpit.ExecutionReport,
     ) -> bool:
         strategy_report = typing.cast(StrategyReport, report)
-        _ = strategy_report
+        assert strategy_report.report_tag == "fill-1"
         return False
 
 
-class StrategyTagStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy):
-    # @typing.override
-    @property
-    def name(self) -> str:
-        return "StrategyTagStartPolicy"
+def main() -> None:
+    run_domain_types_examples()
+    run_getting_started_examples()
+    run_pre_trade_pipeline_examples()
+    run_notional_cap_policy_example()
+    run_strategy_tag_policy_example()
 
-    # @typing.override
-    def check_pre_trade_start(
-        self,
-        *,
-        order: openpit.Order,
-    ) -> typing.Optional[openpit.pretrade.PolicyReject]:
-        strategy_order = typing.cast(StrategyOrder, order)
-        if strategy_order.strategy_tag == "blocked":
-            return openpit.pretrade.PolicyReject(
-                code=openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION,
-                reason="strategy blocked",
-                details="project strategy tag blocked",
-                scope=openpit.pretrade.RejectScope.ORDER,
+
+def run_domain_types_examples() -> None:
+    asset = openpit.param.Asset("AAPL")
+    quantity = openpit.param.Quantity("10.5")
+    price = openpit.param.Price(185)
+    pnl = openpit.param.Pnl(-12.5)
+
+    assert asset.value == "AAPL"
+    assert quantity.value == "10.5"
+    assert price.value == "185"
+    assert pnl.value == "-12.5"
+
+    side = openpit.param.Side.BUY
+    position_side = openpit.param.PositionSide.LONG
+    assert side.opposite().value == "sell"
+    assert side.sign() == 1
+    assert position_side.opposite().value == "short"
+
+    from_multiplier = openpit.param.Leverage.from_u16(100)
+    from_float = openpit.param.Leverage.from_f64(100.5)
+    assert from_multiplier.value == 100.0
+    assert from_float.value == 100.5
+
+
+def run_getting_started_examples() -> None:
+    pnl_policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
+        settlement_asset=openpit.param.Asset("USD"),
+        barrier=openpit.param.Pnl("1000"),
+    )
+    rate_limit_policy = openpit.pretrade.policies.RateLimitPolicy(
+        max_orders=100,
+        window_seconds=1,
+    )
+    order_size_policy = openpit.pretrade.policies.OrderSizeLimitPolicy(
+        limit=openpit.pretrade.policies.OrderSizeLimit(
+            settlement_asset=openpit.param.Asset("USD"),
+            max_quantity=openpit.param.Quantity("500"),
+            max_notional=openpit.param.Volume("100000"),
+        )
+    )
+
+    engine = (
+        openpit.Engine.builder()
+        .check_pre_trade_start_policy(
+            policy=openpit.pretrade.policies.OrderValidationPolicy(),
+        )
+        .check_pre_trade_start_policy(policy=pnl_policy)
+        .check_pre_trade_start_policy(policy=rate_limit_policy)
+        .check_pre_trade_start_policy(policy=order_size_policy)
+        .build()
+    )
+
+    start_result = engine.start_pre_trade(order=aapl_usd_order("100", "185"))
+    assert start_result.ok
+
+    execute_result = start_result.request.execute()
+    assert execute_result.ok
+    execute_result.reservation.commit()
+
+    result = engine.apply_execution_report(report=aapl_usd_report("-50", "3"))
+    assert result.kill_switch_triggered is False
+
+
+def run_pre_trade_pipeline_examples() -> None:
+    start_engine = (
+        openpit.Engine.builder()
+        .check_pre_trade_start_policy(
+            policy=openpit.pretrade.policies.OrderValidationPolicy()
+        )
+        .build()
+    )
+
+    start_result = start_engine.start_pre_trade(order=aapl_usd_order("0", "185"))
+    assert start_result.ok is False
+    assert start_result.reject.code == openpit.pretrade.RejectCode.INVALID_FIELD_VALUE
+
+    main_engine = (
+        openpit.Engine.builder()
+        .pre_trade_policy(
+            policy=NotionalCapPolicy(
+                max_abs_notional=openpit.param.Volume("1000"),
             )
-        return None
+        )
+        .build()
+    )
 
-    # @typing.override
-    def apply_execution_report(
-        self,
-        *,
-        report: openpit.ExecutionReport,
-    ) -> bool:
-        _ = report
-        return False
+    execute_result = main_engine.start_pre_trade(order=aapl_usd_order("10", "25"))
+    assert execute_result.ok
+    reservation_result = execute_result.request.execute()
+    assert reservation_result.ok
+    reservation_result.reservation.commit()
+
+    blocked_start = main_engine.start_pre_trade(order=aapl_usd_order("100", "25"))
+    assert blocked_start.ok
+    blocked_execute = blocked_start.request.execute()
+    assert blocked_execute.ok is False
+    assert (
+        blocked_execute.rejects[0].code
+        == openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED
+    )
 
 
 def run_notional_cap_policy_example() -> None:
@@ -205,36 +270,14 @@ def run_notional_cap_policy_example() -> None:
         .build()
     )
 
-    order_within_limit = openpit.Order(
-        operation=openpit.OrderOperation(
-            instrument=openpit.Instrument(
-                openpit.param.Asset("AAPL"),
-                openpit.param.Asset("USD"),
-            ),
-            side=openpit.param.Side.BUY,
-            trade_amount=openpit.param.Quantity("10"),
-            price=openpit.param.Price("25"),
-        ),
-    )
-    start_result = engine.start_pre_trade(order=order_within_limit)
+    start_result = engine.start_pre_trade(order=aapl_usd_order("10", "25"))
     assert start_result.ok
 
     execute_result = start_result.request.execute()
     assert execute_result.ok
     execute_result.reservation.commit()
 
-    order_above_limit = openpit.Order(
-        operation=openpit.OrderOperation(
-            instrument=openpit.Instrument(
-                openpit.param.Asset("AAPL"),
-                openpit.param.Asset("USD"),
-            ),
-            side=openpit.param.Side.BUY,
-            trade_amount=openpit.param.Quantity("100"),
-            price=openpit.param.Price("25"),
-        ),
-    )
-    blocked_result = engine.start_pre_trade(order=order_above_limit)
+    blocked_result = engine.start_pre_trade(order=aapl_usd_order("100", "25"))
     assert blocked_result.ok
 
     blocked_execute_result = blocked_result.request.execute()
@@ -250,39 +293,90 @@ def run_strategy_tag_policy_example() -> None:
         openpit.Engine.builder().pre_trade_policy(policy=StrategyTagPolicy()).build()
     )
 
-    order = StrategyOrder(strategy_tag="allowed")
-
-    start_result = engine.start_pre_trade(order=order)
-    if not start_result.ok:
-        raise RuntimeError(start_result.reject.reason)
+    start_result = engine.start_pre_trade(order=StrategyOrder(strategy_tag="allowed"))
+    assert start_result.ok
 
     execute_result = start_result.request.execute()
-    if not execute_result.ok:
-        raise RuntimeError(execute_result.rejects[0].reason)
-
+    assert execute_result.ok
     execute_result.reservation.commit()
 
-    report = StrategyReport(report_tag="fill-1")
-    post_trade = engine.apply_execution_report(report=report)
+    post_trade = engine.apply_execution_report(
+        report=StrategyReport(report_tag="fill-1")
+    )
     assert post_trade.kill_switch_triggered is False
 
     blocked_engine = (
         openpit.Engine.builder()
-        .check_pre_trade_start_policy(policy=StrategyTagStartPolicy())
+        .check_pre_trade_start_policy(policy=BlockedStrategyStartPolicy())
         .build()
     )
-    blocked_order = StrategyOrder(strategy_tag="blocked")
-    blocked_start_result = blocked_engine.start_pre_trade(order=blocked_order)
-    assert blocked_start_result.ok is False
-    assert (
-        blocked_start_result.reject.code
-        == openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION
+    blocked = blocked_engine.start_pre_trade(
+        order=StrategyOrder(strategy_tag="blocked")
+    )
+    assert blocked.ok is False
+    assert blocked.reject.code == openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION
+
+
+class BlockedStrategyStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy):
+    @property
+    @typing.override
+    def name(self) -> str:
+        return "StrategyTagStartPolicy"
+
+    @typing.override
+    def check_pre_trade_start(
+        self,
+        order: openpit.Order,
+    ) -> openpit.pretrade.PolicyReject | None:
+        strategy_order = typing.cast(StrategyOrder, order)
+        if strategy_order.strategy_tag == "blocked":
+            return openpit.pretrade.PolicyReject(
+                code=openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION,
+                reason="strategy blocked",
+                details="project strategy tag blocked",
+                scope=openpit.pretrade.RejectScope.ORDER,
+            )
+        return None
+
+    @typing.override
+    def apply_execution_report(
+        self,
+        report: openpit.ExecutionReport,
+    ) -> bool:
+        _ = report
+        return False
+
+
+def aapl_usd_order(quantity: str, price: str) -> openpit.Order:
+    return openpit.Order(
+        operation=openpit.OrderOperation(
+            instrument=openpit.Instrument(
+                openpit.param.Asset("AAPL"),
+                openpit.param.Asset("USD"),
+            ),
+            account_id=openpit.param.AccountId.from_u64(99224416),
+            side=openpit.param.Side.BUY,
+            trade_amount=openpit.param.Quantity(quantity),
+            price=openpit.param.Price(price),
+        ),
     )
 
 
-def main() -> None:
-    run_notional_cap_policy_example()
-    run_strategy_tag_policy_example()
+def aapl_usd_report(pnl: str, fee: str) -> openpit.ExecutionReport:
+    return openpit.ExecutionReport(
+        operation=openpit.ExecutionReportOperation(
+            instrument=openpit.Instrument(
+                openpit.param.Asset("AAPL"),
+                openpit.param.Asset("USD"),
+            ),
+            account_id=openpit.param.AccountId.from_u64(99224416),
+            side=openpit.param.Side.BUY,
+        ),
+        financial_impact=openpit.FinancialImpact(
+            pnl=openpit.param.Pnl(pnl),
+            fee=openpit.param.Fee(fee),
+        ),
+    )
 
 
 if __name__ == "__main__":

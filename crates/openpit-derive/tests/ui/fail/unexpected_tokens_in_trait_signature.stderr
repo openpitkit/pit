@@ -1,0 +1,5 @@
+error: unexpected tokens in trait signature
+  --> tests/ui/fail/unexpected_tokens_in_trait_signature.rs:13:79
+   |
+13 |     #[openpit(HasInstrument(instrument -> Result<u32, RequestFieldAccessError>, extra))]
+   |                                                                               ^

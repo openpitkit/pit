@@ -17,13 +17,16 @@
 
 use crate::core::request_trait::HasLock;
 use crate::impl_request_has_field;
+use crate::impl_request_has_field_passthrough;
 use crate::param::{AccountId, Fee, Pnl, PositionEffect, PositionSide, Quantity, Side, Trade};
 use crate::pretrade::Lock;
 
 use super::{
-    HasAccountId, HasExecutionReportIsTerminal, HasExecutionReportLastTrade,
-    HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,
-    HasLeavesQuantity, HasPnl, HasSide, Instrument,
+    HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
+    HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
+    HasFee, HasInstrument, HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage,
+    HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,
+    Instrument,
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -49,33 +52,61 @@ pub struct WithExecutionReportOperation<T> {
 }
 
 impl_request_has_field!(
-    HasInstrument,
-    instrument,
-    &Instrument,
     ExecutionReportOperation,
-    instrument,
     WithExecutionReportOperation,
     operation,
+    HasInstrument, instrument, &Instrument, instrument;
 );
-
-impl_request_has_field!(
-    HasAccountId,
-    account_id,
-    AccountId,
-    ExecutionReportOperation,
-    account_id,
+impl_request_has_field_passthrough!(
     WithExecutionReportOperation,
-    operation,
+    inner,
+    HasReduceOnly, reduce_only, bool;
+    HasClosePosition, close_position, bool;
+    HasAutoBorrow, auto_borrow, bool;
+    HasPnl, pnl, Pnl;
+    HasFee, fee, Fee;
+    HasLeavesQuantity, leaves_quantity, Quantity;
+    HasLock, lock, Lock;
+    HasOrderPrice, price, Option<crate::param::Price>;
+    HasOrderPositionSide, position_side, Option<PositionSide>;
+    HasOrderLeverage, leverage, Option<crate::param::Leverage>;
+    HasOrderCollateralAsset, collateral_asset, Option<&crate::param::Asset>;
+    HasExecutionReportLastTrade, last_trade, Option<Trade>;
+    HasExecutionReportIsTerminal, is_terminal, bool;
+    HasExecutionReportPositionEffect, position_effect, Option<PositionEffect>;
+    HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
-
 impl_request_has_field!(
-    HasSide,
-    side,
-    Side,
     ExecutionReportOperation,
-    side,
     WithExecutionReportOperation,
     operation,
+    HasAccountId, account_id, AccountId, account_id;
+    HasSide, side, Side, side;
+);
+impl_request_has_field_passthrough!(
+    WithFinancialImpact,
+    inner,
+    HasInstrument, instrument, &Instrument;
+);
+impl_request_has_field_passthrough!(
+    WithFinancialImpact,
+    inner,
+    HasAccountId, account_id, AccountId;
+    HasSide, side, Side;
+    HasTradeAmount, trade_amount, crate::param::TradeAmount;
+    HasReduceOnly, reduce_only, bool;
+    HasClosePosition, close_position, bool;
+    HasAutoBorrow, auto_borrow, bool;
+    HasLeavesQuantity, leaves_quantity, Quantity;
+    HasLock, lock, Lock;
+    HasOrderPrice, price, Option<crate::param::Price>;
+    HasOrderPositionSide, position_side, Option<PositionSide>;
+    HasOrderLeverage, leverage, Option<crate::param::Leverage>;
+    HasOrderCollateralAsset, collateral_asset, Option<&crate::param::Asset>;
+    HasExecutionReportLastTrade, last_trade, Option<Trade>;
+    HasExecutionReportIsTerminal, is_terminal, bool;
+    HasExecutionReportPositionEffect, position_effect, Option<PositionEffect>;
+    HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
 
 //--------------------------------------------------------------------------------------------------
@@ -106,22 +137,34 @@ pub struct WithFinancialImpact<T> {
 }
 
 impl_request_has_field!(
-    HasPnl,
-    pnl,
-    Pnl,
     FinancialImpact,
-    pnl,
     WithFinancialImpact,
     financial_impact,
+    HasPnl, pnl, Pnl, pnl;
+    HasFee, fee, Fee, fee;
 );
-impl_request_has_field!(
-    HasFee,
-    fee,
-    Fee,
-    FinancialImpact,
-    fee,
-    WithFinancialImpact,
-    financial_impact,
+impl_request_has_field_passthrough!(
+    WithExecutionReportFillDetails,
+    inner,
+    HasInstrument, instrument, &Instrument;
+);
+impl_request_has_field_passthrough!(
+    WithExecutionReportFillDetails,
+    inner,
+    HasAccountId, account_id, AccountId;
+    HasSide, side, Side;
+    HasTradeAmount, trade_amount, crate::param::TradeAmount;
+    HasReduceOnly, reduce_only, bool;
+    HasClosePosition, close_position, bool;
+    HasAutoBorrow, auto_borrow, bool;
+    HasPnl, pnl, Pnl;
+    HasFee, fee, Fee;
+    HasOrderPrice, price, Option<crate::param::Price>;
+    HasOrderPositionSide, position_side, Option<PositionSide>;
+    HasOrderLeverage, leverage, Option<crate::param::Leverage>;
+    HasOrderCollateralAsset, collateral_asset, Option<&crate::param::Asset>;
+    HasExecutionReportPositionEffect, position_effect, Option<PositionEffect>;
+    HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
 
 //--------------------------------------------------------------------------------------------------
@@ -150,43 +193,38 @@ pub struct WithExecutionReportFillDetails<T> {
 }
 
 impl_request_has_field!(
-    HasExecutionReportLastTrade,
-    last_trade,
-    Option<Trade>,
     ExecutionReportFillDetails,
-    last_trade,
     WithExecutionReportFillDetails,
     fill,
+    HasExecutionReportLastTrade, last_trade, Option<Trade>, last_trade;
+    HasLeavesQuantity, leaves_quantity, Quantity, leaves_quantity;
+    HasLock, lock, Lock, lock;
+    HasExecutionReportIsTerminal, is_terminal, bool, is_terminal;
 );
-
-impl_request_has_field!(
-    HasLeavesQuantity,
-    leaves_quantity,
-    Quantity,
-    ExecutionReportFillDetails,
-    leaves_quantity,
-    WithExecutionReportFillDetails,
-    fill,
+impl_request_has_field_passthrough!(
+    WithExecutionReportPositionImpact,
+    inner,
+    HasInstrument, instrument, &Instrument;
 );
-
-impl_request_has_field!(
-    HasLock,
-    lock,
-    Lock,
-    ExecutionReportFillDetails,
-    lock,
-    WithExecutionReportFillDetails,
-    fill,
-);
-
-impl_request_has_field!(
-    HasExecutionReportIsTerminal,
-    is_terminal,
-    bool,
-    ExecutionReportFillDetails,
-    is_terminal,
-    WithExecutionReportFillDetails,
-    fill,
+impl_request_has_field_passthrough!(
+    WithExecutionReportPositionImpact,
+    inner,
+    HasAccountId, account_id, AccountId;
+    HasSide, side, Side;
+    HasTradeAmount, trade_amount, crate::param::TradeAmount;
+    HasReduceOnly, reduce_only, bool;
+    HasClosePosition, close_position, bool;
+    HasAutoBorrow, auto_borrow, bool;
+    HasPnl, pnl, Pnl;
+    HasFee, fee, Fee;
+    HasLeavesQuantity, leaves_quantity, Quantity;
+    HasLock, lock, Lock;
+    HasOrderPrice, price, Option<crate::param::Price>;
+    HasOrderPositionSide, position_side, Option<PositionSide>;
+    HasOrderLeverage, leverage, Option<crate::param::Leverage>;
+    HasOrderCollateralAsset, collateral_asset, Option<&crate::param::Asset>;
+    HasExecutionReportLastTrade, last_trade, Option<Trade>;
+    HasExecutionReportIsTerminal, is_terminal, bool;
 );
 
 //--------------------------------------------------------------------------------------------------
@@ -212,23 +250,11 @@ pub struct WithExecutionReportPositionImpact<T> {
 }
 
 impl_request_has_field!(
-    HasExecutionReportPositionEffect,
-    position_effect,
-    Option<PositionEffect>,
     ExecutionReportPositionImpact,
-    position_effect,
     WithExecutionReportPositionImpact,
     position_impact,
-);
-
-impl_request_has_field!(
-    HasExecutionReportPositionSide,
-    position_side,
-    Option<PositionSide>,
-    ExecutionReportPositionImpact,
-    position_side,
-    WithExecutionReportPositionImpact,
-    position_impact,
+    HasExecutionReportPositionEffect, position_effect, Option<PositionEffect>, position_effect;
+    HasExecutionReportPositionSide, position_side, Option<PositionSide>, position_side;
 );
 
 //--------------------------------------------------------------------------------------------------
@@ -266,13 +292,13 @@ mod tests {
             account_id: id,
             side: Side::Sell,
         };
-        assert_eq!(op.account_id(), id);
+        assert_eq!(op.account_id(), Ok(id));
 
         let wrapped = WithExecutionReportOperation {
             inner: (),
             operation: op,
         };
-        assert_eq!(wrapped.account_id(), id);
+        assert_eq!(wrapped.account_id(), Ok(id));
     }
 
     #[test]

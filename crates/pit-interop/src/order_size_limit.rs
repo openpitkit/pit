@@ -86,30 +86,32 @@ mod tests {
     }
 
     impl HasInstrument for FakeOrder {
-        fn instrument(&self) -> &Instrument {
-            &self
+        fn instrument(&self) -> Result<&Instrument, openpit::RequestFieldAccessError> {
+            Ok(&self
                 .operation
                 .as_ref()
                 .expect("internal error: test order must have operation set")
-                .instrument
+                .instrument)
         }
     }
 
     impl HasTradeAmount for FakeOrder {
-        fn trade_amount(&self) -> TradeAmount {
-            self.operation
+        fn trade_amount(&self) -> Result<TradeAmount, openpit::RequestFieldAccessError> {
+            Ok(self
+                .operation
                 .as_ref()
                 .expect("internal error: test order must have operation set")
-                .trade_amount
+                .trade_amount)
         }
     }
 
     impl HasOrderPrice for FakeOrder {
-        fn price(&self) -> Option<Price> {
-            self.operation
+        fn price(&self) -> Result<Option<Price>, openpit::RequestFieldAccessError> {
+            Ok(self
+                .operation
                 .as_ref()
                 .expect("internal error: test order must have operation set")
-                .price
+                .price)
         }
     }
 

@@ -79,6 +79,11 @@ Built-in policies currently include:
 - `RateLimitPolicy`
 - `OrderSizeLimitPolicy`
 
+These built-ins are intentionally small. The primary integration model is to
+write project-specific policies against the public Python policy API described
+in the manual:
+[Custom Python policies](https://github.com/openpitkit/pit/wiki/Policies#python-custom-policy-api).
+
 There are two types of rejections: a full kill switch for the account and a
 rejection of only the current request. This is useful in algorithmic trading
 when automatic order submission must be halted until the situation is analyzed.

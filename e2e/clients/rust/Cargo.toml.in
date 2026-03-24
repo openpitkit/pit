@@ -5,4 +5,4 @@ edition = "2021"
 publish = false
 
 [dependencies]
-openpit = "=__OPENPIT_VERSION__"
+openpit = { version = "=__OPENPIT_VERSION__", features = ["derive"] }

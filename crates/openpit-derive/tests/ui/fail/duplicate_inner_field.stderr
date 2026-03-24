@@ -1,0 +1,6 @@
+error: only one #[openpit(inner)] field is allowed
+  --> tests/ui/fail/duplicate_inner_field.rs:15:5
+   |
+15 | /     #[openpit(inner, HasPnl(pnl -> Result<u32, RequestFieldAccessError>))]
+16 | |     right: U,
+   | |____________^

@@ -118,6 +118,17 @@ def metric_with_threshold(
     }
 
 
+def metric_from_counts(count: int, covered: int) -> MetricSummary:
+    notcovered = max(count - covered, 0)
+    percent = 100.0 if count == 0 else (covered / count) * 100.0
+    return {
+        "count": count,
+        "covered": covered,
+        "notcovered": notcovered,
+        "percent": percent,
+    }
+
+
 def resolve_region_filename(
     function_entry: Dict[str, Any],
     region: List[Any],
@@ -140,6 +151,25 @@ def collect_line_zeroes(file_entry: Dict[str, Any]) -> Set[int]:
         if bool(segment[3]) and int(segment[2]) == 0:
             zero_lines.add(int(segment[0]))
     return zero_lines
+
+
+def collect_line_covered(file_entry: Dict[str, Any]) -> Set[int]:
+    covered_lines: Set[int] = set()
+    for segment in file_entry.get("segments", []):
+        if len(segment) < 4:
+            continue
+        if bool(segment[3]) and int(segment[2]) > 0:
+            covered_lines.add(int(segment[0]))
+    return covered_lines
+
+
+def effective_line_metric(file_entry: Dict[str, Any]) -> MetricSummary:
+    zero_lines = collect_line_zeroes(file_entry)
+    covered_lines = collect_line_covered(file_entry)
+    effective_uncovered = zero_lines - covered_lines
+    effective_count = len(covered_lines | effective_uncovered)
+    effective_covered = len(covered_lines)
+    return metric_from_counts(effective_count, effective_covered)
 
 
 def collect_function_zero_counts(
@@ -186,14 +216,10 @@ def collect_region_spans(
 
 
 def threshold_for_lines(metric: MetricSummary, zero_lines: Set[int]) -> float:
-    if metric_notcovered(metric) > 0 and not zero_lines:
-        return 97.0
     return 100.0
 
 
 def threshold_for_functions(metric: MetricSummary, zero_count: int) -> float:
-    if metric_notcovered(metric) > 0 and zero_count == 0:
-        return 97.0
     return 100.0
 
 
@@ -202,13 +228,22 @@ def threshold_for_regions(
     covered_spans: Set[Span],
     zero_spans: Set[Span],
 ) -> float:
-    if (
-        metric_notcovered(metric) > 0
-        and zero_spans
-        and zero_spans.issubset(covered_spans)
-    ):
-        return 97.0
     return 100.0
+
+
+def effective_region_metric(
+    covered_spans: Set[Span], zero_spans: Set[Span]
+) -> MetricSummary:
+    raw_uncovered = zero_spans - covered_spans
+
+    # LLVM JSON may include point-sized bookkeeping regions (single-column spans)
+    # that are not meaningful executable regions for thresholding.
+    def is_point_span(span: Span) -> bool:
+        return span[0] == span[2] and (span[3] - span[1]) <= 1
+
+    effective_uncovered = {span for span in raw_uncovered if not is_point_span(span)}
+    effective_count = len(covered_spans) + len(effective_uncovered)
+    return metric_from_counts(effective_count, len(covered_spans))
 
 
 def build_summary(export: Dict[str, Any]) -> Dict[str, Any]:
@@ -222,22 +257,27 @@ def build_summary(export: Dict[str, Any]) -> Dict[str, Any]:
         for file_entry in item.get("files", []):
             filename = str(file_entry["filename"])
             summary = file_entry["summary"]
+            line_metric = effective_line_metric(file_entry)
+            region_metric = effective_region_metric(
+                region_covered_spans.get(filename, set()),
+                region_zero_spans.get(filename, set()),
+            )
             line_threshold = threshold_for_lines(
-                summary["lines"], collect_line_zeroes(file_entry)
+                line_metric, collect_line_zeroes(file_entry)
             )
             function_threshold = threshold_for_functions(
                 summary["functions"],
                 function_zero_counts.get(filename, 0),
             )
             region_threshold = threshold_for_regions(
-                summary["regions"],
+                region_metric,
                 region_covered_spans.get(filename, set()),
                 region_zero_spans.get(filename, set()),
             )
 
-            lines = metric_with_threshold(summary["lines"], line_threshold)
+            lines = metric_with_threshold(line_metric, line_threshold)
             functions = metric_with_threshold(summary["functions"], function_threshold)
-            regions = metric_with_threshold(summary["regions"], region_threshold)
+            regions = metric_with_threshold(region_metric, region_threshold)
 
             file_summary = {
                 "path": relative_path(filename),

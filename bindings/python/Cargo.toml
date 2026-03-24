@@ -15,7 +15,6 @@ extension-module = ["pyo3/extension-module"]
 [lib]
 name = "_openpit"
 crate-type = ["cdylib"]
-test = false
 
 [dependencies]
 openpit = { version = "0.2.0", path = "../../crates/openpit" }

@@ -1,0 +1,5 @@
+error: RequestFields requires named fields
+ --> tests/ui/fail/derive_on_tuple_struct.rs:6:8
+  |
+6 | struct Wrapper(u64);
+  |        ^^^^^^^

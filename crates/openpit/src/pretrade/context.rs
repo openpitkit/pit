@@ -49,7 +49,7 @@ impl<'a, O> Context<'a, O> {
     ///         _mutations: &mut Mutations,
     ///         _rejects: &mut Vec<Reject>,
     ///     ) {
-    ///         let _ = ctx.order().instrument().settlement_asset();
+    ///         let _ = ctx.order().instrument().expect("instrument must be present").settlement_asset();
     ///     }
     ///
     ///     fn apply_execution_report(&self, _report: &R) -> bool {
@@ -62,7 +62,7 @@ impl<'a, O> Context<'a, O> {
     ///         Asset::new("AAPL")?,
     ///         Asset::new("USD")?,
     ///     ),
-    ///     account_id: openpit::param::AccountId::from_u64(12345678),
+    ///     account_id: openpit::param::AccountId::from_u64(99224416),
     ///     side: Side::Buy,
     ///     trade_amount: TradeAmount::Quantity(
     ///         Quantity::from_str("1")?,

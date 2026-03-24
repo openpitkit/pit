@@ -38,4 +38,5 @@ pub use request_trait::{
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
     HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
     HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,
+    RequestFieldAccessError,
 };

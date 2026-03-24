@@ -15,7 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::{Context, Mutations, Reject};
+use super::{Context, Mutations, Reject, RejectCode, RejectScope};
 
 /// Start-stage pre-trade policy contract.
 ///
@@ -158,6 +158,19 @@ pub trait Policy<O, R> {
     fn apply_execution_report(&self, report: &R) -> bool;
 }
 
+pub(crate) fn request_field_access_reject(
+    policy_name: &'static str,
+    err: &crate::RequestFieldAccessError,
+) -> Reject {
+    Reject::new(
+        policy_name,
+        RejectScope::Order,
+        RejectCode::MissingRequiredField,
+        "failed to access required field",
+        err.to_string(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use crate::core::{
@@ -165,9 +178,10 @@ mod tests {
         WithFinancialImpact,
     };
     use crate::param::{AccountId, Asset, Fee, Pnl, Quantity, Side, TradeAmount};
-    use crate::pretrade::Reject;
+    use crate::pretrade::{Reject, RejectCode, RejectScope};
+    use crate::RequestFieldAccessError;
 
-    use super::{CheckPreTradeStartPolicy, Context, Mutations, Policy};
+    use super::{request_field_access_reject, CheckPreTradeStartPolicy, Context, Mutations, Policy};
 
     struct StartPolicyNoop;
 
@@ -256,5 +270,17 @@ mod tests {
         MainPolicyNoop.perform_pre_trade_check(&ctx, &mut mutations, &mut rejects);
         assert!(mutations.as_slice().is_empty());
         assert!(rejects.is_empty());
+    }
+
+    #[test]
+    fn request_field_access_error_is_mapped_to_reject_payload() {
+        let err = RequestFieldAccessError::new("instrument");
+        let reject = request_field_access_reject("TestPolicy", &err);
+
+        assert_eq!(reject.policy, "TestPolicy");
+        assert_eq!(reject.scope, RejectScope::Order);
+        assert_eq!(reject.code, RejectCode::MissingRequiredField);
+        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(reject.details, "failed to access field 'instrument'");
     }
 }

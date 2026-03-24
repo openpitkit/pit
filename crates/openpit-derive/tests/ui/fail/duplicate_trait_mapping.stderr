@@ -1,0 +1,6 @@
+error: duplicate trait mapping for HasInstrument
+  --> tests/ui/fail/duplicate_trait_mapping.rs:28:5
+   |
+28 | /     #[openpit(HasInstrument(instrument -> Result<&Instrument, RequestFieldAccessError>))]
+29 | |     right: Operation,
+   | |____________________^

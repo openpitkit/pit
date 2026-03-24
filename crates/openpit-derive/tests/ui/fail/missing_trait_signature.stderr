@@ -1,0 +1,5 @@
+error: invalid #[openpit(...)] item; expected `Trait(method -> ReturnType)` or `Trait(-> ReturnType)`
+  --> tests/ui/fail/missing_trait_signature.rs:24:15
+   |
+24 |     #[openpit(HasInstrument)]
+   |               ^^^^^^^^^^^^^

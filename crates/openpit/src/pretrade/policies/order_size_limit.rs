@@ -19,6 +19,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::param::{Asset, Price, Quantity, TradeAmount, Volume};
+use crate::pretrade::policy::request_field_access_reject;
 use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
 use crate::HasInstrument;
 use crate::{HasOrderPrice, HasTradeAmount};
@@ -112,12 +113,21 @@ where
 
     fn check_pre_trade_start(&self, order: &O) -> Result<(), Reject> {
         let limits = self.limits.borrow();
+        let instrument = order
+            .instrument()
+            .map_err(|e| request_field_access_reject(Self::NAME, &e))?;
+        let trade_amount = order
+            .trade_amount()
+            .map_err(|e| request_field_access_reject(Self::NAME, &e))?;
+        let price = order
+            .price()
+            .map_err(|e| request_field_access_reject(Self::NAME, &e))?;
         check_pre_trade_start_with_limits(
             Self::NAME,
             &limits,
-            order.instrument().settlement_asset(),
-            order.trade_amount(),
-            order.price(),
+            instrument.settlement_asset(),
+            trade_amount,
+            price,
         )
     }
 
@@ -270,6 +280,7 @@ mod tests {
     use crate::param::TradeAmount;
     use crate::param::{AccountId, Asset, Price, Quantity, Side, Volume};
     use crate::pretrade::{CheckPreTradeStartPolicy, RejectCode, RejectScope};
+    use crate::{HasInstrument, HasOrderPrice, HasTradeAmount, RequestFieldAccessError};
     use rust_decimal::Decimal;
 
     use super::{OrderSizeLimit, OrderSizeLimitPolicy};
@@ -567,6 +578,143 @@ mod tests {
         assert_eq!(
             missing_price.details,
             "price not provided for evaluating cash flow/notional/volume"
+        );
+    }
+
+    #[test]
+    fn maps_instrument_access_error_to_missing_required_field() {
+        struct InstrumentAccessErrorOrder;
+
+        impl HasInstrument for InstrumentAccessErrorOrder {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("instrument"))
+            }
+        }
+        impl HasTradeAmount for InstrumentAccessErrorOrder {
+            fn trade_amount(&self) -> Result<TradeAmount, RequestFieldAccessError> {
+                Ok(TradeAmount::Quantity(
+                    Quantity::from_str("1").expect("quantity literal must be valid"),
+                ))
+            }
+        }
+        impl HasOrderPrice for InstrumentAccessErrorOrder {
+            fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+                Ok(Some(Price::from_str("1").expect("price literal must be valid")))
+            }
+        }
+
+        let policy = OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), no_limits());
+        let order = InstrumentAccessErrorOrder;
+        let reject = <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<
+            InstrumentAccessErrorOrder,
+            (),
+        >>::check_pre_trade_start(&policy, &order)
+            .expect_err("field access error must reject");
+        assert_eq!(reject.scope, RejectScope::Order);
+        assert_eq!(reject.code, RejectCode::MissingRequiredField);
+        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(reject.details, "failed to access field 'instrument'");
+        assert_eq!(
+            order.trade_amount(),
+            Ok(TradeAmount::Quantity(
+                Quantity::from_str("1").expect("quantity literal must be valid")
+            ))
+        );
+        assert_eq!(
+            order.price(),
+            Ok(Some(
+                Price::from_str("1").expect("price literal must be valid")
+            ))
+        );
+    }
+
+    #[test]
+    fn maps_trade_amount_access_error_to_missing_required_field() {
+        struct TradeAmountAccessErrorOrder {
+            instrument: Instrument,
+        }
+
+        impl HasInstrument for TradeAmountAccessErrorOrder {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Ok(&self.instrument)
+            }
+        }
+        impl HasTradeAmount for TradeAmountAccessErrorOrder {
+            fn trade_amount(&self) -> Result<TradeAmount, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("trade_amount"))
+            }
+        }
+        impl HasOrderPrice for TradeAmountAccessErrorOrder {
+            fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+                Ok(Some(Price::from_str("1").expect("price literal must be valid")))
+            }
+        }
+
+        let policy = OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), no_limits());
+        let order = TradeAmountAccessErrorOrder {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new("USD").expect("asset code must be valid"),
+            ),
+        };
+        let reject =
+            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TradeAmountAccessErrorOrder, ()>>::check_pre_trade_start(&policy, &order)
+                .expect_err("field access error must reject");
+        assert_eq!(reject.scope, RejectScope::Order);
+        assert_eq!(reject.code, RejectCode::MissingRequiredField);
+        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(reject.details, "failed to access field 'trade_amount'");
+        assert_eq!(
+            order.price(),
+            Ok(Some(
+                Price::from_str("1").expect("price literal must be valid")
+            ))
+        );
+    }
+
+    #[test]
+    fn maps_price_access_error_to_missing_required_field() {
+        struct PriceAccessErrorOrder {
+            instrument: Instrument,
+        }
+
+        impl HasInstrument for PriceAccessErrorOrder {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Ok(&self.instrument)
+            }
+        }
+        impl HasTradeAmount for PriceAccessErrorOrder {
+            fn trade_amount(&self) -> Result<TradeAmount, RequestFieldAccessError> {
+                Ok(TradeAmount::Quantity(
+                    Quantity::from_str("1").expect("quantity literal must be valid"),
+                ))
+            }
+        }
+        impl HasOrderPrice for PriceAccessErrorOrder {
+            fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("price"))
+            }
+        }
+
+        let policy = OrderSizeLimitPolicy::new(limit("USD", "10", "1000"), no_limits());
+        let order = PriceAccessErrorOrder {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                Asset::new("USD").expect("asset code must be valid"),
+            ),
+        };
+        let reject =
+            <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<PriceAccessErrorOrder, ()>>::check_pre_trade_start(&policy, &order)
+                .expect_err("field access error must reject");
+        assert_eq!(reject.scope, RejectScope::Order);
+        assert_eq!(reject.code, RejectCode::MissingRequiredField);
+        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(reject.details, "failed to access field 'price'");
+        assert_eq!(
+            order.trade_amount(),
+            Ok(TradeAmount::Quantity(
+                Quantity::from_str("1").expect("quantity literal must be valid")
+            ))
         );
     }
 

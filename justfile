@@ -41,14 +41,15 @@ test-all: test-rust test-python
 # Rust tests.
 test-rust:
     cargo test --workspace
+    cargo test -p openpit --all-features
 # Rust tests with actionable coverage summary.
 test-rust-cov:
     mkdir -p target/llvm-cov
-    cargo llvm-cov test --workspace --all-features --json --output-path target/llvm-cov/workspace.json
+    cargo llvm-cov test --workspace --exclude openpit-python --all-features --json --output-path target/llvm-cov/workspace.json
     python3 scripts/summarize_llvm_cov.py target/llvm-cov/workspace.json --output target/llvm-cov/workspace-summary.json --text
 # Raw cargo-llvm-cov console report.
 test-rust-cov-raw:
-    cargo llvm-cov --workspace --all-features
+    cargo llvm-cov --workspace --exclude openpit-python --all-features
 # Dry-run the release workflow locally.
 test-release:
     VERSION=$(grep -m1 '^version = ' crates/openpit/Cargo.toml | cut -d '"' -f2); printf '{"ref":"refs/tags/v%s","ref_name":"v%s"}\n' "$VERSION" "$VERSION" > /tmp/pit-release-event.json

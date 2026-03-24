@@ -15,13 +15,15 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use crate::impl_request_has_field;
 use crate::param::{AccountId, Asset, Leverage, PositionSide, Price, Side, TradeAmount};
+use crate::{impl_request_has_field, impl_request_has_field_passthrough};
 
 use crate::{
-    HasAccountId, HasAutoBorrow, HasClosePosition, HasInstrument, HasOrderCollateralAsset,
-    HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasReduceOnly, HasSide, HasTradeAmount,
-    Instrument,
+    HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
+    HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
+    HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
+    HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,
+    Instrument, RequestFieldAccessError,
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -51,53 +53,61 @@ pub struct WithOrderOperation<T> {
 }
 
 impl_request_has_field!(
-    HasInstrument,
-    instrument,
-    &Instrument,
     OrderOperation,
-    instrument,
     WithOrderOperation,
     operation,
+    HasInstrument, instrument, &Instrument, instrument;
 );
-
-impl_request_has_field!(
-    HasAccountId,
-    account_id,
-    AccountId,
-    OrderOperation,
-    account_id,
+impl_request_has_field_passthrough!(
     WithOrderOperation,
-    operation,
+    inner,
+    HasReduceOnly, reduce_only, bool;
+    HasClosePosition, close_position, bool;
+    HasAutoBorrow, auto_borrow, bool;
+    HasPnl, pnl, crate::param::Pnl;
+    HasFee, fee, crate::param::Fee;
+    HasLeavesQuantity, leaves_quantity, crate::param::Quantity;
+    HasLock, lock, crate::pretrade::Lock;
+    HasOrderPositionSide, position_side, Option<PositionSide>;
+    HasOrderLeverage, leverage, Option<Leverage>;
+    HasOrderCollateralAsset, collateral_asset, Option<&Asset>;
+    HasExecutionReportLastTrade, last_trade, Option<crate::param::Trade>;
+    HasExecutionReportIsTerminal, is_terminal, bool;
+    HasExecutionReportPositionEffect, position_effect, Option<crate::param::PositionEffect>;
+    HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
-
 impl_request_has_field!(
-    HasTradeAmount,
-    trade_amount,
-    TradeAmount,
     OrderOperation,
-    trade_amount,
     WithOrderOperation,
     operation,
+    HasAccountId, account_id, AccountId, account_id;
+    HasTradeAmount, trade_amount, TradeAmount, trade_amount;
+    HasOrderPrice, price, Option<Price>, price;
+    HasSide, side, Side, side;
 );
-
-impl_request_has_field!(
-    HasOrderPrice,
-    price,
-    Option<Price>,
-    OrderOperation,
-    price,
-    WithOrderOperation,
-    operation,
+impl_request_has_field_passthrough!(
+    WithOrderPosition,
+    inner,
+    HasInstrument, instrument, &Instrument;
 );
-
-impl_request_has_field!(
-    HasSide,
-    side,
-    Side,
-    OrderOperation,
-    side,
-    WithOrderOperation,
-    operation,
+impl_request_has_field_passthrough!(
+    WithOrderPosition,
+    inner,
+    HasAccountId, account_id, AccountId;
+    HasTradeAmount, trade_amount, TradeAmount;
+    HasOrderPrice, price, Option<Price>;
+    HasSide, side, Side;
+    HasAutoBorrow, auto_borrow, bool;
+    HasPnl, pnl, crate::param::Pnl;
+    HasFee, fee, crate::param::Fee;
+    HasLeavesQuantity, leaves_quantity, crate::param::Quantity;
+    HasLock, lock, crate::pretrade::Lock;
+    HasOrderLeverage, leverage, Option<Leverage>;
+    HasOrderCollateralAsset, collateral_asset, Option<&Asset>;
+    HasExecutionReportLastTrade, last_trade, Option<crate::param::Trade>;
+    HasExecutionReportIsTerminal, is_terminal, bool;
+    HasExecutionReportPositionEffect, position_effect, Option<crate::param::PositionEffect>;
+    HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
 
 //--------------------------------------------------------------------------------------------------
@@ -127,33 +137,12 @@ pub struct WithOrderPosition<T> {
 }
 
 impl_request_has_field!(
-    HasOrderPositionSide,
-    position_side,
-    Option<PositionSide>,
     OrderPosition,
-    position_side,
     WithOrderPosition,
     position,
-);
-
-impl_request_has_field!(
-    HasReduceOnly,
-    reduce_only,
-    bool,
-    OrderPosition,
-    reduce_only,
-    WithOrderPosition,
-    position,
-);
-
-impl_request_has_field!(
-    HasClosePosition,
-    close_position,
-    bool,
-    OrderPosition,
-    close_position,
-    WithOrderPosition,
-    position,
+    HasOrderPositionSide, position_side, Option<PositionSide>, position_side;
+    HasReduceOnly, reduce_only, bool, reduce_only;
+    HasClosePosition, close_position, bool, close_position;
 );
 
 //--------------------------------------------------------------------------------------------------
@@ -186,36 +175,48 @@ pub struct WithOrderMargin<T> {
     pub margin: OrderMargin,
 }
 
-impl_request_has_field!(
-    HasOrderLeverage,
-    leverage,
-    Option<Leverage>,
-    OrderMargin,
-    leverage,
-    WithOrderMargin,
-    margin,
-);
-
 impl HasOrderCollateralAsset for OrderMargin {
-    fn collateral_asset(&self) -> Option<&Asset> {
-        self.collateral_asset.as_ref()
+    fn collateral_asset(&self) -> Result<Option<&Asset>, RequestFieldAccessError> {
+        Ok(self.collateral_asset.as_ref())
     }
 }
 
 impl<T> HasOrderCollateralAsset for WithOrderMargin<T> {
-    fn collateral_asset(&self) -> Option<&Asset> {
+    fn collateral_asset(&self) -> Result<Option<&Asset>, RequestFieldAccessError> {
         self.margin.collateral_asset()
     }
 }
 
 impl_request_has_field!(
-    HasAutoBorrow,
-    auto_borrow,
-    bool,
     OrderMargin,
-    auto_borrow,
     WithOrderMargin,
     margin,
+    HasOrderLeverage, leverage, Option<Leverage>, leverage;
+    HasAutoBorrow, auto_borrow, bool, auto_borrow;
+);
+impl_request_has_field_passthrough!(
+    WithOrderMargin,
+    inner,
+    HasInstrument, instrument, &Instrument;
+);
+impl_request_has_field_passthrough!(
+    WithOrderMargin,
+    inner,
+    HasAccountId, account_id, AccountId;
+    HasTradeAmount, trade_amount, TradeAmount;
+    HasOrderPrice, price, Option<Price>;
+    HasSide, side, Side;
+    HasOrderPositionSide, position_side, Option<PositionSide>;
+    HasReduceOnly, reduce_only, bool;
+    HasClosePosition, close_position, bool;
+    HasPnl, pnl, crate::param::Pnl;
+    HasFee, fee, crate::param::Fee;
+    HasLeavesQuantity, leaves_quantity, crate::param::Quantity;
+    HasLock, lock, crate::pretrade::Lock;
+    HasExecutionReportLastTrade, last_trade, Option<crate::param::Trade>;
+    HasExecutionReportIsTerminal, is_terminal, bool;
+    HasExecutionReportPositionEffect, position_effect, Option<crate::param::PositionEffect>;
+    HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
 
 //--------------------------------------------------------------------------------------------------
@@ -234,7 +235,7 @@ mod tests {
             collateral_asset: Some(asset.clone()),
             auto_borrow: false,
         };
-        assert_eq!(margin.collateral_asset(), Some(&asset));
+        assert_eq!(margin.collateral_asset(), Ok(Some(&asset)));
     }
 
     #[test]
@@ -244,7 +245,7 @@ mod tests {
             collateral_asset: None,
             auto_borrow: false,
         };
-        assert_eq!(margin.collateral_asset(), None);
+        assert_eq!(margin.collateral_asset(), Ok(None));
     }
 
     #[test]
@@ -258,7 +259,7 @@ mod tests {
                 auto_borrow: false,
             },
         };
-        assert_eq!(w.collateral_asset(), Some(&asset));
+        assert_eq!(w.collateral_asset(), Ok(Some(&asset)));
     }
 
     #[test]
@@ -282,7 +283,7 @@ mod tests {
                 price: None,
             },
         };
-        assert_eq!(w.instrument(), &instrument);
+        assert_eq!(w.instrument(), Ok(&instrument));
     }
 
     #[test]
@@ -301,12 +302,12 @@ mod tests {
             trade_amount: TradeAmount::Quantity(Quantity::from_str("1").expect("must be valid")),
             price: None,
         };
-        assert_eq!(op.account_id(), id);
+        assert_eq!(op.account_id(), Ok(id));
 
         let wrapped = super::WithOrderOperation {
             inner: (),
             operation: op,
         };
-        assert_eq!(wrapped.account_id(), id);
+        assert_eq!(wrapped.account_id(), Ok(id));
     }
 }

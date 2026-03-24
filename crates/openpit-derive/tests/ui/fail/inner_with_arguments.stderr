@@ -1,0 +1,5 @@
+error: `inner` must not have arguments
+ --> tests/ui/fail/inner_with_arguments.rs:9:20
+  |
+9 |     #[openpit(inner(something))]
+  |                    ^

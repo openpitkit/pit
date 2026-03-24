@@ -41,7 +41,7 @@ use openpit::{
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
     HasFee, HasInstrument, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
     HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount, Instrument, OrderMargin,
-    OrderOperation, OrderPosition, PostTradeResult,
+    OrderOperation, OrderPosition, PostTradeResult, RequestFieldAccessError,
 };
 use pit_interop::{
     ExecutionReportGroupAccess, GuardedOrderSizeLimit, GuardedOrderValidation,
@@ -89,83 +89,83 @@ impl PythonOrder {
 }
 
 impl HasInstrument for PythonOrder {
-    fn instrument(&self) -> &Instrument {
-        &self
-            .operation
+    fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+        self.operation
             .as_ref()
-            .expect("internal error: required order data not validated before policy dispatch")
-            .instrument
+            .map(|op| &op.instrument)
+            .ok_or_else(|| RequestFieldAccessError::new("instrument"))
     }
 }
 
 impl HasSide for PythonOrder {
-    fn side(&self) -> Side {
+    fn side(&self) -> Result<Side, RequestFieldAccessError> {
         self.operation
             .as_ref()
-            .expect("internal error: required order data not validated before policy dispatch")
-            .side
+            .map(|op| op.side)
+            .ok_or_else(|| RequestFieldAccessError::new("side"))
     }
 }
 
 impl HasAccountId for PythonOrder {
-    fn account_id(&self) -> AccountId {
+    fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
         self.operation
             .as_ref()
             .map(|op| op.account_id)
-            .unwrap_or_else(|| AccountId::from_u64(99224416))
+            .ok_or_else(|| RequestFieldAccessError::new("account_id"))
     }
 }
 
 impl HasTradeAmount for PythonOrder {
-    fn trade_amount(&self) -> TradeAmount {
+    fn trade_amount(&self) -> Result<TradeAmount, RequestFieldAccessError> {
         self.operation
             .as_ref()
-            .expect("internal error: required order data not validated before policy dispatch")
-            .trade_amount
+            .map(|op| op.trade_amount)
+            .ok_or_else(|| RequestFieldAccessError::new("trade_amount"))
     }
 }
 
 impl HasOrderPrice for PythonOrder {
-    fn price(&self) -> Option<Price> {
-        self.operation.as_ref().and_then(|op| op.price)
+    fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+        Ok(self.operation.as_ref().and_then(|op| op.price))
     }
 }
 
 impl HasOrderPositionSide for PythonOrder {
-    fn position_side(&self) -> Option<PositionSide> {
-        self.position.as_ref().and_then(|pos| pos.position_side)
+    fn position_side(&self) -> Result<Option<PositionSide>, RequestFieldAccessError> {
+        Ok(self.position.as_ref().and_then(|pos| pos.position_side))
     }
 }
 
 impl HasReduceOnly for PythonOrder {
-    fn reduce_only(&self) -> bool {
-        self.position.as_ref().is_some_and(|pos| pos.reduce_only)
+    fn reduce_only(&self) -> Result<bool, RequestFieldAccessError> {
+        Ok(self.position.as_ref().is_some_and(|pos| pos.reduce_only))
     }
 }
 
 impl HasClosePosition for PythonOrder {
-    fn close_position(&self) -> bool {
-        self.position.as_ref().is_some_and(|pos| pos.close_position)
+    fn close_position(&self) -> Result<bool, RequestFieldAccessError> {
+        Ok(self.position.as_ref().is_some_and(|pos| pos.close_position))
     }
 }
 
 impl HasOrderLeverage for PythonOrder {
-    fn leverage(&self) -> Option<Leverage> {
-        self.margin.as_ref().and_then(|m| m.leverage)
+    fn leverage(&self) -> Result<Option<Leverage>, RequestFieldAccessError> {
+        Ok(self.margin.as_ref().and_then(|m| m.leverage))
     }
 }
 
 impl HasOrderCollateralAsset for PythonOrder {
-    fn collateral_asset(&self) -> Option<&Asset> {
-        self.margin
+    fn collateral_asset(&self) -> Result<Option<&Asset>, RequestFieldAccessError> {
+        Ok(self
+            .margin
             .as_ref()
-            .and_then(|m| m.collateral_asset.as_ref())
+            .and_then(|m| m.collateral_asset.as_ref()))
     }
 }
 
 impl HasAutoBorrow for PythonOrder {
-    fn auto_borrow(&self) -> bool {
-        self.margin.as_ref().is_some_and(|m| m.auto_borrow)
+    fn auto_borrow(&self) -> Result<bool, RequestFieldAccessError> {
+        Ok(self.margin.as_ref().is_some_and(|m| m.auto_borrow))
     }
 }
 
@@ -195,75 +195,77 @@ impl PythonExecutionReport {
 }
 
 impl HasInstrument for PythonExecutionReport {
-    fn instrument(&self) -> &Instrument {
-        &self.operation
+    fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+        self.operation
             .as_ref()
-            .expect("internal error: required execution report data not validated before policy dispatch")
-            .instrument
+            .map(|op| &op.instrument)
+            .ok_or_else(|| RequestFieldAccessError::new("instrument"))
     }
 }
 
 impl HasSide for PythonExecutionReport {
-    fn side(&self) -> Side {
+    fn side(&self) -> Result<Side, RequestFieldAccessError> {
         self.operation
             .as_ref()
-            .expect("internal error: required execution report data not validated before policy dispatch")
-            .side
+            .map(|op| op.side)
+            .ok_or_else(|| RequestFieldAccessError::new("side"))
     }
 }
 
 impl HasAccountId for PythonExecutionReport {
-    fn account_id(&self) -> AccountId {
+    fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
         self.operation
             .as_ref()
             .map(|op| op.account_id)
-            .unwrap_or_else(|| AccountId::from_u64(99224416))
+            .ok_or_else(|| RequestFieldAccessError::new("account_id"))
     }
 }
 
 impl HasPnl for PythonExecutionReport {
-    fn pnl(&self) -> Pnl {
+    fn pnl(&self) -> Result<Pnl, RequestFieldAccessError> {
         self.financial_impact
             .as_ref()
-            .expect("internal error: required execution report data not validated before policy dispatch")
-            .pnl
+            .map(|fi| fi.pnl)
+            .ok_or_else(|| RequestFieldAccessError::new("pnl"))
     }
 }
 
 impl HasFee for PythonExecutionReport {
-    fn fee(&self) -> Fee {
+    fn fee(&self) -> Result<Fee, RequestFieldAccessError> {
         self.financial_impact
             .as_ref()
-            .expect("internal error: required execution report data not validated before policy dispatch")
-            .fee
+            .map(|fi| fi.fee)
+            .ok_or_else(|| RequestFieldAccessError::new("fee"))
     }
 }
 
 impl HasExecutionReportLastTrade for PythonExecutionReport {
-    fn last_trade(&self) -> Option<Trade> {
-        self.fill.as_ref().and_then(|f| f.last_trade)
+    fn last_trade(&self) -> Result<Option<Trade>, RequestFieldAccessError> {
+        Ok(self.fill.as_ref().and_then(|f| f.last_trade))
     }
 }
 
 impl HasExecutionReportIsTerminal for PythonExecutionReport {
-    fn is_terminal(&self) -> bool {
-        self.fill.as_ref().is_some_and(|f| f.is_terminal)
+    fn is_terminal(&self) -> Result<bool, RequestFieldAccessError> {
+        Ok(self.fill.as_ref().is_some_and(|f| f.is_terminal))
     }
 }
 
 impl HasExecutionReportPositionEffect for PythonExecutionReport {
-    fn position_effect(&self) -> Option<PositionEffect> {
-        self.position_impact
+    fn position_effect(&self) -> Result<Option<PositionEffect>, RequestFieldAccessError> {
+        Ok(self
+            .position_impact
             .as_ref()
-            .and_then(|pi| pi.position_effect)
+            .and_then(|pi| pi.position_effect))
     }
 }
 
 impl HasExecutionReportPositionSide for PythonExecutionReport {
-    fn position_side(&self) -> Option<PositionSide> {
-        self.position_impact
+    fn position_side(&self) -> Result<Option<PositionSide>, RequestFieldAccessError> {
+        Ok(self
+            .position_impact
             .as_ref()
-            .and_then(|pi| pi.position_side)
+            .and_then(|pi| pi.position_side))
     }
 }
 
@@ -3063,4 +3065,91 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyOrderSizeLimit>()?;
     module.add_class::<PyOrderSizeLimitPolicy>()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod field_access_tests {
+    use super::*;
+    use openpit::RequestFieldAccessError;
+    use std::sync::Once;
+
+    fn ensure_python_initialized() {
+        static INIT: Once = Once::new();
+        INIT.call_once(pyo3::prepare_freethreaded_python);
+    }
+
+    fn order_without_operation() -> PythonOrder {
+        ensure_python_initialized();
+        Python::with_gil(|py| PythonOrder {
+            operation: None,
+            position: None,
+            margin: None,
+            original: py.None(),
+        })
+    }
+
+    fn report_without_groups() -> PythonExecutionReport {
+        ensure_python_initialized();
+        Python::with_gil(|py| PythonExecutionReport {
+            operation: None,
+            financial_impact: None,
+            fill: None,
+            position_impact: None,
+            original: py.None(),
+        })
+    }
+
+    #[test]
+    fn python_order_instrument_returns_err_when_operation_absent() {
+        let order = order_without_operation();
+        assert_eq!(
+            order.instrument(),
+            Err(RequestFieldAccessError::new("instrument"))
+        );
+    }
+
+    #[test]
+    fn python_order_side_returns_err_when_operation_absent() {
+        let order = order_without_operation();
+        assert_eq!(order.side(), Err(RequestFieldAccessError::new("side")));
+    }
+
+    #[test]
+    fn python_order_account_id_returns_err_when_operation_absent() {
+        let order = order_without_operation();
+        assert_eq!(
+            order.account_id(),
+            Err(RequestFieldAccessError::new("account_id"))
+        );
+    }
+
+    #[test]
+    fn python_order_trade_amount_returns_err_when_operation_absent() {
+        let order = order_without_operation();
+        assert_eq!(
+            order.trade_amount(),
+            Err(RequestFieldAccessError::new("trade_amount"))
+        );
+    }
+
+    #[test]
+    fn python_report_instrument_returns_err_when_operation_absent() {
+        let report = report_without_groups();
+        assert_eq!(
+            report.instrument(),
+            Err(RequestFieldAccessError::new("instrument"))
+        );
+    }
+
+    #[test]
+    fn python_report_pnl_returns_err_when_financial_impact_absent() {
+        let report = report_without_groups();
+        assert_eq!(report.pnl(), Err(RequestFieldAccessError::new("pnl")));
+    }
+
+    #[test]
+    fn python_report_fee_returns_err_when_financial_impact_absent() {
+        let report = report_without_groups();
+        assert_eq!(report.fee(), Err(RequestFieldAccessError::new("fee")));
+    }
 }

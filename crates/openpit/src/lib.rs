@@ -52,8 +52,11 @@ pub use core::{
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
     HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
     HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,
-    Instrument, OrderMargin, OrderOperation, OrderPosition, WithExecutionReportFillDetails,
-    WithExecutionReportOperation, WithExecutionReportPositionImpact, WithFinancialImpact,
-    WithOrderMargin, WithOrderOperation, WithOrderPosition,
+    Instrument, OrderMargin, OrderOperation, OrderPosition, RequestFieldAccessError,
+    WithExecutionReportFillDetails, WithExecutionReportOperation,
+    WithExecutionReportPositionImpact, WithFinancialImpact, WithOrderMargin, WithOrderOperation,
+    WithOrderPosition,
 };
+#[cfg(feature = "derive")]
+pub use openpit_derive::RequestFields;
 pub use pretrade::PostTradeResult;

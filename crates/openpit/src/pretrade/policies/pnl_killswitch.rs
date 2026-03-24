@@ -21,6 +21,7 @@ use std::fmt::{Display, Formatter};
 
 use crate::core::{HasFee, HasInstrument, HasPnl};
 use crate::param::{Asset, Pnl};
+use crate::pretrade::policy::request_field_access_reject;
 use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
 
 /// Start-stage policy that blocks trading after crossing configured loss limits.
@@ -52,7 +53,7 @@ use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope}
 ///         Asset::new("AAPL")?,
 ///         usd.clone(),
 ///     ),
-///     account_id: openpit::param::AccountId::from_u64(98764321),
+///     account_id: openpit::param::AccountId::from_u64(99224416),
 ///     side: Side::Buy,
 ///     trade_amount: TradeAmount::Quantity(
 ///         Quantity::from_str("1")?,
@@ -75,18 +76,18 @@ use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope}
 ///     fee: Fee,
 /// }
 /// impl HasInstrument for Report {
-///     fn instrument(&self) -> &Instrument {
-///         &self.instrument
+///     fn instrument(&self) -> Result<&Instrument, openpit::RequestFieldAccessError> {
+///         Ok(&self.instrument)
 ///     }
 /// }
 /// impl HasPnl for Report {
-///     fn pnl(&self) -> Pnl {
-///         self.pnl
+///     fn pnl(&self) -> Result<Pnl, openpit::RequestFieldAccessError> {
+///         Ok(self.pnl)
 ///     }
 /// }
 /// impl HasFee for Report {
-///     fn fee(&self) -> Fee {
-///         self.fee
+///     fn fee(&self) -> Result<Fee, openpit::RequestFieldAccessError> {
+///         Ok(self.fee)
 ///     }
 /// }
 /// let report = Report {
@@ -269,7 +270,9 @@ where
     }
 
     fn check_pre_trade_start(&self, order: &O) -> Result<(), Reject> {
-        let instrument = order.instrument();
+        let instrument = order
+            .instrument()
+            .map_err(|e| request_field_access_reject(Self::NAME, &e))?;
 
         let settlement = instrument.settlement_asset();
         let barrier = match self.barrier(settlement) {
@@ -309,9 +312,18 @@ where
     ///
     /// The engine adds fee impact to `pnl` before accumulation.
     fn apply_execution_report(&self, report: &R) -> bool {
-        let instrument = report.instrument();
-        let mut pnl_delta = report.pnl();
-        let fee = report.fee();
+        let instrument = match report.instrument() {
+            Ok(i) => i,
+            Err(_) => return false,
+        };
+        let mut pnl_delta = match report.pnl() {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        let fee = match report.fee() {
+            Ok(f) => f,
+            Err(_) => return false,
+        };
         match pnl_delta.checked_add(fee.to_pnl()) {
             Ok(value) => pnl_delta = value,
             Err(_) => {
@@ -347,6 +359,7 @@ mod tests {
     use crate::param::TradeAmount;
     use crate::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side};
     use crate::pretrade::{CheckPreTradeStartPolicy, RejectCode, RejectScope};
+    use crate::RequestFieldAccessError;
     use rust_decimal::Decimal;
 
     use super::{PnlKillSwitchError, PnlKillSwitchPolicy};
@@ -358,20 +371,20 @@ mod tests {
     }
 
     impl HasInstrument for TestReport {
-        fn instrument(&self) -> &Instrument {
-            &self.instrument
+        fn instrument(&self) -> Result<&Instrument, crate::RequestFieldAccessError> {
+            Ok(&self.instrument)
         }
     }
 
     impl HasPnl for TestReport {
-        fn pnl(&self) -> Pnl {
-            self.pnl
+        fn pnl(&self) -> Result<Pnl, crate::RequestFieldAccessError> {
+            Ok(self.pnl)
         }
     }
 
     impl HasFee for TestReport {
-        fn fee(&self) -> Fee {
-            self.fee
+        fn fee(&self) -> Result<Fee, crate::RequestFieldAccessError> {
+            Ok(self.fee)
         }
     }
 
@@ -778,18 +791,18 @@ mod tests {
             instrument: Instrument,
         }
         impl HasInstrument for FeeOverflowReport {
-            fn instrument(&self) -> &Instrument {
-                &self.instrument
+            fn instrument(&self) -> Result<&Instrument, crate::RequestFieldAccessError> {
+                Ok(&self.instrument)
             }
         }
         impl HasPnl for FeeOverflowReport {
-            fn pnl(&self) -> Pnl {
-                Pnl::new(Decimal::MIN)
+            fn pnl(&self) -> Result<Pnl, crate::RequestFieldAccessError> {
+                Ok(Pnl::new(Decimal::MIN))
             }
         }
         impl HasFee for FeeOverflowReport {
-            fn fee(&self) -> Fee {
-                Fee::from_str("1").expect("fee must be valid")
+            fn fee(&self) -> Result<Fee, crate::RequestFieldAccessError> {
+                Ok(Fee::from_str("1").expect("fee must be valid"))
             }
         }
 
@@ -830,18 +843,18 @@ mod tests {
             instrument: Instrument,
         }
         impl HasInstrument for NoFeeReport {
-            fn instrument(&self) -> &Instrument {
-                &self.instrument
+            fn instrument(&self) -> Result<&Instrument, crate::RequestFieldAccessError> {
+                Ok(&self.instrument)
             }
         }
         impl HasPnl for NoFeeReport {
-            fn pnl(&self) -> Pnl {
-                Pnl::from_str("-10").expect("pnl must be valid")
+            fn pnl(&self) -> Result<Pnl, crate::RequestFieldAccessError> {
+                Ok(Pnl::from_str("-10").expect("pnl must be valid"))
             }
         }
         impl HasFee for NoFeeReport {
-            fn fee(&self) -> Fee {
-                Fee::ZERO
+            fn fee(&self) -> Result<Fee, crate::RequestFieldAccessError> {
+                Ok(Fee::ZERO)
             }
         }
 
@@ -861,6 +874,150 @@ mod tests {
         >>::apply_execution_report(&policy, &report);
         assert!(!triggered);
         assert_eq!(policy.realized_pnl(&settlement), pnl("-10"));
+    }
+
+    #[test]
+    fn check_pre_trade_start_maps_instrument_access_error() {
+        struct InvalidOrder;
+
+        impl HasInstrument for InvalidOrder {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("instrument"))
+            }
+        }
+
+        let policy = PnlKillSwitchPolicy::new(
+            (
+                Asset::new("USD").expect("asset code must be valid"),
+                pnl("100"),
+            ),
+            vec![],
+        )
+        .expect("policy must be valid");
+        let reject = <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<InvalidOrder, TestReport>>::check_pre_trade_start(&policy, &InvalidOrder)
+            .expect_err("field access error must reject");
+        assert_eq!(reject.scope, RejectScope::Order);
+        assert_eq!(reject.code, RejectCode::MissingRequiredField);
+        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(reject.details, "failed to access field 'instrument'");
+    }
+
+    #[test]
+    fn apply_execution_report_returns_false_on_field_access_errors() {
+        struct InstrumentAccessErrorReport;
+
+        impl HasInstrument for InstrumentAccessErrorReport {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("instrument"))
+            }
+        }
+        impl HasPnl for InstrumentAccessErrorReport {
+            fn pnl(&self) -> Result<Pnl, RequestFieldAccessError> {
+                Ok(pnl("-10"))
+            }
+        }
+        impl HasFee for InstrumentAccessErrorReport {
+            fn fee(&self) -> Result<Fee, RequestFieldAccessError> {
+                Ok(Fee::ZERO)
+            }
+        }
+
+        let policy = PnlKillSwitchPolicy::new(
+            (
+                Asset::new("USD").expect("asset code must be valid"),
+                pnl("100"),
+            ),
+            vec![],
+        )
+        .expect("policy must be valid");
+        let report = InstrumentAccessErrorReport;
+
+        let triggered = <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
+            OrderOperation,
+            InstrumentAccessErrorReport,
+        >>::apply_execution_report(&policy, &report);
+        assert!(!triggered);
+        assert_eq!(report.pnl(), Ok(pnl("-10")));
+        assert_eq!(report.fee(), Ok(Fee::ZERO));
+    }
+
+    #[test]
+    fn apply_execution_report_returns_false_when_pnl_access_fails() {
+        struct PnlAccessErrorReport {
+            instrument: Instrument,
+        }
+
+        impl HasInstrument for PnlAccessErrorReport {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Ok(&self.instrument)
+            }
+        }
+        impl HasPnl for PnlAccessErrorReport {
+            fn pnl(&self) -> Result<Pnl, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("pnl"))
+            }
+        }
+        impl HasFee for PnlAccessErrorReport {
+            fn fee(&self) -> Result<Fee, RequestFieldAccessError> {
+                Ok(Fee::ZERO)
+            }
+        }
+
+        let settlement = Asset::new("USD").expect("asset code must be valid");
+        let policy = PnlKillSwitchPolicy::new((settlement.clone(), pnl("100")), vec![])
+            .expect("policy must be valid");
+        let report = PnlAccessErrorReport {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                settlement,
+            ),
+        };
+
+        let triggered = <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
+            OrderOperation,
+            PnlAccessErrorReport,
+        >>::apply_execution_report(&policy, &report);
+        assert!(!triggered);
+        assert_eq!(report.fee(), Ok(Fee::ZERO));
+    }
+
+    #[test]
+    fn apply_execution_report_returns_false_when_fee_access_fails() {
+        struct FeeAccessErrorReport {
+            instrument: Instrument,
+        }
+
+        impl HasInstrument for FeeAccessErrorReport {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Ok(&self.instrument)
+            }
+        }
+        impl HasPnl for FeeAccessErrorReport {
+            fn pnl(&self) -> Result<Pnl, RequestFieldAccessError> {
+                Ok(pnl("-10"))
+            }
+        }
+        impl HasFee for FeeAccessErrorReport {
+            fn fee(&self) -> Result<Fee, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("fee"))
+            }
+        }
+
+        let settlement = Asset::new("USD").expect("asset code must be valid");
+        let policy = PnlKillSwitchPolicy::new((settlement.clone(), pnl("100")), vec![])
+            .expect("policy must be valid");
+        let report = FeeAccessErrorReport {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("asset code must be valid"),
+                settlement,
+            ),
+        };
+
+        let triggered = <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
+            OrderOperation,
+            FeeAccessErrorReport,
+        >>::apply_execution_report(&policy, &report);
+        assert!(!triggered);
     }
 
     fn check_start(

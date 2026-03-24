@@ -1,0 +1,19 @@
+[package]
+name = "openpit-derive"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+repository = "https://github.com/openpitkit/pit"
+description = "Proc-macro derives for openpit"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+trybuild = "1"
