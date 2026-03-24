@@ -42,7 +42,7 @@ RejectCode.__module__ = __name__
 RejectScope.__module__ = __name__
 
 ExecuteResult.__doc__ = """
-Result of ``Request.execute()``.
+Result of ``Request.execute``.
 
 This object reports whether main-stage policies accepted the request and, on
 success, carries the single-use reservation handle that must later be committed
@@ -50,7 +50,7 @@ or rolled back.
 """
 
 PostTradeResult.__doc__ = """
-Result of ``openpit.Engine.apply_execution_report()``.
+Result of ``openpit.Engine.apply_execution_report``.
 
 It currently reports whether any policy considers an account-level kill switch
 to be active after the report has been applied.
@@ -64,21 +64,21 @@ stable code, human-readable reason, details, policy name, and scope.
 """
 
 Request.__doc__ = """
-Deferred main-stage request handle produced by ``Engine.start_pre_trade()``.
+Deferred main-stage request handle produced by ``Engine.start_pre_trade``.
 
-The handle is single-use: calling ``execute()`` more than once is a lifecycle
+The handle is single-use: calling ``execute`` more than once is a lifecycle
 error.
 """
 
 Reservation.__doc__ = """
 Single-use reservation handle returned by successful main-stage execution.
 
-Exactly one of ``commit()`` or ``rollback()`` must be called to finalize the
+Exactly one of ``commit`` or ``rollback`` must be called to finalize the
 reserved state.
 """
 
 StartPreTradeResult.__doc__ = """
-Result of ``Engine.start_pre_trade()``.
+Result of ``Engine.start_pre_trade``.
 
 On success it exposes a deferred request handle; on failure it exposes a
 single business reject produced by the first rejecting start-stage policy.

@@ -34,8 +34,8 @@ pub use order::{
     WithOrderPosition,
 };
 pub use request_trait::{
-    HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal, HasExecutionReportLastTrade,
-    HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,
-    HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
-    HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,
+    HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
+    HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
+    HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
+    HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,
 };

@@ -32,6 +32,7 @@ class TaggedOrder(openpit.Order):
                     openpit.param.Asset("USD"),
                 ),
                 side=openpit.param.Side.BUY,
+                account_id=openpit.param.AccountId.from_u64(99224416),
                 trade_amount=openpit.param.Quantity("10"),
                 price=openpit.param.Price("25"),
             ),
@@ -49,6 +50,7 @@ class TaggedReport(openpit.ExecutionReport):
                     openpit.param.Asset("USD"),
                 ),
                 side=openpit.param.Side.BUY,
+                account_id=openpit.param.AccountId.from_u64(99224416),
             ),
             financial_impact=openpit.FinancialImpact(
                 pnl=openpit.param.Pnl("5"),

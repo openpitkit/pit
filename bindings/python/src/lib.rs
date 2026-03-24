@@ -24,8 +24,8 @@ use std::thread_local;
 use std::time::Duration;
 
 use openpit::param::{
-    Asset, CashFlow, Fee, Leverage, Pnl, PositionEffect, PositionSide, PositionSize, Price,
-    Quantity, Side, Trade, TradeAmount, Volume,
+    AccountId, Asset, CashFlow, Fee, Leverage, Pnl, PositionEffect, PositionSide, PositionSize,
+    Price, Quantity, Side, Trade, TradeAmount, Volume,
 };
 use openpit::pretrade::policies::OrderValidationPolicy;
 use openpit::pretrade::policies::PnlKillSwitchPolicy;
@@ -37,7 +37,7 @@ use openpit::pretrade::{
 };
 use openpit::{
     Engine, EngineBuildError, ExecutionReportOperation, ExecutionReportPositionImpact,
-    FinancialImpact, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
+    FinancialImpact, HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
     HasFee, HasInstrument, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
     HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount, Instrument, OrderMargin,
@@ -104,6 +104,15 @@ impl HasSide for PythonOrder {
             .as_ref()
             .expect("internal error: required order data not validated before policy dispatch")
             .side
+    }
+}
+
+impl HasAccountId for PythonOrder {
+    fn account_id(&self) -> AccountId {
+        self.operation
+            .as_ref()
+            .map(|op| op.account_id)
+            .unwrap_or_else(|| AccountId::from_u64(99224416))
     }
 }
 
@@ -200,6 +209,15 @@ impl HasSide for PythonExecutionReport {
             .as_ref()
             .expect("internal error: required execution report data not validated before policy dispatch")
             .side
+    }
+}
+
+impl HasAccountId for PythonExecutionReport {
+    fn account_id(&self) -> AccountId {
+        self.operation
+            .as_ref()
+            .map(|op| op.account_id)
+            .unwrap_or_else(|| AccountId::from_u64(99224416))
     }
 }
 
@@ -775,6 +793,9 @@ fn extract_python_order(obj: &Bound<'_, PyAny>) -> PyResult<PythonOrder> {
                     ));
                 }
             };
+            let account_id = op
+                .account_id
+                .unwrap_or_else(|| AccountId::from_u64(99224416));
             let side = op
                 .side
                 .ok_or_else(|| PyValueError::new_err("order.operation requires side"))?;
@@ -783,6 +804,7 @@ fn extract_python_order(obj: &Bound<'_, PyAny>) -> PyResult<PythonOrder> {
                 .ok_or_else(|| PyValueError::new_err("order.operation requires trade_amount"))?;
             Ok(OrderOperation {
                 instrument,
+                account_id,
                 side,
                 trade_amount,
                 price: op.price,
@@ -809,7 +831,7 @@ fn extract_python_order(obj: &Bound<'_, PyAny>) -> PyResult<PythonOrder> {
     });
 
     Ok(PythonOrder {
-        operation, // теперь Option<OrderOperation>
+        operation,
         position,
         margin,
         original: obj.clone().unbind(),
@@ -837,10 +859,17 @@ fn extract_python_execution_report(obj: &Bound<'_, PyAny>) -> PyResult<PythonExe
                     ));
                 }
             };
+            let account_id = op
+                .account_id
+                .unwrap_or_else(|| AccountId::from_u64(99224416));
             let side = op
                 .side
                 .ok_or_else(|| PyValueError::new_err("execution report operation requires side"))?;
-            Ok(ExecutionReportOperation { instrument, side })
+            Ok(ExecutionReportOperation {
+                instrument,
+                account_id,
+                side,
+            })
         })
         .transpose()?;
 
@@ -880,8 +909,8 @@ fn extract_python_execution_report(obj: &Bound<'_, PyAny>) -> PyResult<PythonExe
     });
 
     Ok(PythonExecutionReport {
-        operation,        // теперь Option<ExecutionReportOperation>
-        financial_impact, // теперь Option<FinancialImpact>
+        operation,
+        financial_impact,
         fill,
         position_impact,
         original: obj.clone().unbind(),
@@ -1416,6 +1445,7 @@ impl PyOrderSizeLimitPolicy {
 struct PyOrderOperation {
     underlying_asset: Option<Asset>,
     settlement_asset: Option<Asset>,
+    account_id: Option<AccountId>,
     side: Option<Side>,
     trade_amount: Option<TradeAmount>,
     price: Option<Price>,
@@ -1424,10 +1454,11 @@ struct PyOrderOperation {
 #[pymethods]
 impl PyOrderOperation {
     #[new]
-    #[pyo3(signature = (*, underlying_asset = None, settlement_asset = None, side = None, trade_amount = None, price = None))]
+    #[pyo3(signature = (*, underlying_asset = None, settlement_asset = None, account_id = None, side = None, trade_amount = None, price = None))]
     fn new(
         underlying_asset: Option<String>,
         settlement_asset: Option<String>,
+        account_id: Option<&Bound<'_, PyAny>>,
         side: Option<&Bound<'_, PyAny>>,
         trade_amount: Option<&Bound<'_, PyAny>>,
         price: Option<&Bound<'_, PyAny>>,
@@ -1441,6 +1472,7 @@ impl PyOrderOperation {
         Ok(Self {
             underlying_asset: underlying_asset.as_deref().map(parse_asset).transpose()?,
             settlement_asset: settlement_asset.as_deref().map(parse_asset).transpose()?,
+            account_id: account_id.map(parse_account_id_input).transpose()?,
             side: side.map(parse_side_input).transpose()?,
             trade_amount: trade_amount.map(parse_trade_amount_input).transpose()?,
             price: price.map(parse_price_input).transpose()?,
@@ -1466,6 +1498,17 @@ impl PyOrderOperation {
     #[setter]
     fn set_settlement_asset(&mut self, value: Option<String>) -> PyResult<()> {
         self.settlement_asset = value.as_deref().map(parse_asset).transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn account_id(&self) -> Option<PyAccountId> {
+        self.account_id.map(|inner| PyAccountId { inner })
+    }
+
+    #[setter]
+    fn set_account_id(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.account_id = value.map(parse_account_id_input).transpose()?;
         Ok(())
     }
 
@@ -1665,6 +1708,12 @@ struct PyInstrument {
 #[derive(Clone, Copy)]
 struct PyLeverage {
     inner: Leverage,
+}
+
+#[pyclass(name = "AccountId", module = "openpit.param")]
+#[derive(Clone, Copy)]
+struct PyAccountId {
+    inner: AccountId,
 }
 
 #[pyclass(name = "Asset", module = "openpit.param")]
@@ -1908,6 +1957,42 @@ impl PyLeverage {
 
     fn __repr__(&self) -> String {
         format!("Leverage(value={:?})", self.value())
+    }
+}
+
+#[pymethods]
+impl PyAccountId {
+    /// Constructs an account identifier.
+    ///
+    /// No hashing. No collision risk.
+    #[staticmethod]
+    fn from_u64(value: u64) -> Self {
+        Self {
+            inner: AccountId::from_u64(value),
+        }
+    }
+
+    /// Constructs an account identifier by hashing a string with FNV-1a 64-bit.
+    ///
+    /// Collisions are theoretically possible. For n distinct account strings
+    /// the probability of at least one collision is approximately n^2 / 2^65.
+    /// If collision risk is unacceptable, use ``from_u64`` with a collision-free
+    /// integer mapping instead. See <http://www.isthe.com/chongo/tech/comp/fnv/> for the algorithm
+    /// specification.
+    #[staticmethod]
+    fn from_str(value: &str) -> Self {
+        Self {
+            inner: AccountId::from_str(value),
+        }
+    }
+
+    #[getter]
+    fn value(&self) -> u64 {
+        self.inner.as_u64()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("AccountId(value={:?})", self.value())
     }
 }
 
@@ -2181,16 +2266,18 @@ impl PyReservation {
 struct PyExecutionReportOperation {
     underlying_asset: Option<Asset>,
     settlement_asset: Option<Asset>,
+    account_id: Option<AccountId>,
     side: Option<Side>,
 }
 
 #[pymethods]
 impl PyExecutionReportOperation {
     #[new]
-    #[pyo3(signature = (*, underlying_asset = None, settlement_asset = None, side = None))]
+    #[pyo3(signature = (*, underlying_asset = None, settlement_asset = None, account_id = None, side = None))]
     fn new(
         underlying_asset: Option<String>,
         settlement_asset: Option<String>,
+        account_id: Option<&Bound<'_, PyAny>>,
         side: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let assets_are_partial = underlying_asset.is_some() ^ settlement_asset.is_some();
@@ -2202,6 +2289,7 @@ impl PyExecutionReportOperation {
         Ok(Self {
             underlying_asset: underlying_asset.as_deref().map(parse_asset).transpose()?,
             settlement_asset: settlement_asset.as_deref().map(parse_asset).transpose()?,
+            account_id: account_id.map(parse_account_id_input).transpose()?,
             side: side.map(parse_side_input).transpose()?,
         })
     }
@@ -2229,6 +2317,17 @@ impl PyExecutionReportOperation {
     }
 
     #[getter]
+    fn account_id(&self) -> Option<PyAccountId> {
+        self.account_id.map(|inner| PyAccountId { inner })
+    }
+
+    #[setter]
+    fn set_account_id(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.account_id = value.map(parse_account_id_input).transpose()?;
+        Ok(())
+    }
+
+    #[getter]
     fn side(&self) -> Option<&'static str> {
         self.side.map(side_name)
     }
@@ -2241,9 +2340,10 @@ impl PyExecutionReportOperation {
 
     fn __repr__(&self) -> String {
         format!(
-            "ExecutionReportOperation(underlying_asset={:?}, settlement_asset={:?}, side={:?})",
+            "ExecutionReportOperation(underlying_asset={:?}, settlement_asset={:?}, account_id={:?}, side={:?})",
             self.underlying_asset(),
             self.settlement_asset(),
+            self.account_id().map(|a| a.inner.as_u64()),
             self.side(),
         )
     }
@@ -2646,6 +2746,21 @@ fn parse_side(value: &str) -> PyResult<Side> {
     }
 }
 
+fn parse_account_id_input(value: &Bound<'_, PyAny>) -> PyResult<AccountId> {
+    if let Ok(v) = value.extract::<u64>() {
+        return Ok(AccountId::from_u64(v));
+    }
+    if let Ok(v) = value.extract::<PyAccountId>() {
+        return Ok(v.inner);
+    }
+    if let Ok(s) = value.extract::<String>() {
+        return Ok(AccountId::from_str(s));
+    }
+    Err(PyTypeError::new_err(
+        "account_id must be openpit.param.AccountId, int, or str",
+    ))
+}
+
 fn parse_side_input(value: &Bound<'_, PyAny>) -> PyResult<Side> {
     let side = value
         .extract::<String>()
@@ -2924,6 +3039,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyOrderPosition>()?;
     module.add_class::<PyOrderMargin>()?;
     module.add_class::<PyOrder>()?;
+    module.add_class::<PyAccountId>()?;
     module.add_class::<PyAsset>()?;
     module.add_class::<PyQuantity>()?;
     module.add_class::<PyPrice>()?;

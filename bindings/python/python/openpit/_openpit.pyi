@@ -121,12 +121,13 @@ class OrderOperation:
         *,
         underlying_asset: str | None = None,
         settlement_asset: str | None = None,
+        account_id: param.AccountId | None = None,
         side: param.Side | None = None,
         trade_amount: param.Quantity | param.Volume | None = None,
         price: param.Price | None = None,
     ) -> None:
         """Create an order operation group."""
-        _ = (underlying_asset, settlement_asset, side, trade_amount, price)
+        _ = (underlying_asset, settlement_asset, account_id, side, trade_amount, price)
 
     @property
     def underlying_asset(self) -> str | None:
@@ -140,6 +141,12 @@ class OrderOperation:
 
     @settlement_asset.setter
     def settlement_asset(self, value: str | None) -> None: ...
+    @property
+    def account_id(self) -> param.AccountId | None:
+        """Account identifier."""
+
+    @account_id.setter
+    def account_id(self, value: param.AccountId | None) -> None: ...
     @property
     def side(self) -> str | None:
         """Order side string."""
@@ -263,10 +270,11 @@ class ExecutionReportOperation:
         *,
         underlying_asset: str | None = None,
         settlement_asset: str | None = None,
+        account_id: param.AccountId | None = None,
         side: param.Side | None = None,
     ) -> None:
         """Create an execution report operation group."""
-        _ = (underlying_asset, settlement_asset, side)
+        _ = (underlying_asset, settlement_asset, account_id, side)
 
     @property
     def underlying_asset(self) -> str | None:
@@ -280,6 +288,12 @@ class ExecutionReportOperation:
 
     @settlement_asset.setter
     def settlement_asset(self, value: str | None) -> None: ...
+    @property
+    def account_id(self) -> param.AccountId | None:
+        """Account identifier."""
+
+    @account_id.setter
+    def account_id(self, value: param.AccountId | None) -> None: ...
     @property
     def side(self) -> str | None:
         """Trade side string."""
@@ -412,13 +426,23 @@ class ExecutionReport:
     def position_impact(self, value: ExecutionReportPositionImpact | None) -> None: ...
 
 class Request:
-    """Pre-trade request handle."""
+    """
+    Deferred main-stage request handle produced by ``Engine.start_pre_trade``.
+
+    The handle is single-use: calling ``execute`` more than once is a lifecycle
+    error.
+    """
 
     def execute(self) -> ExecuteResult:
         """Run main-stage pre-trade checks."""
 
 class Reservation:
-    """Reservation handle that must be finalized once."""
+    """
+    Single-use reservation handle returned by successful main-stage execution.
+
+    Exactly one of ``commit`` or ``rollback`` must be called to finalize the
+    reserved state.
+    """
 
     def commit(self) -> None:
         """Finalize reservation as committed."""
@@ -427,7 +451,12 @@ class Reservation:
         """Finalize reservation as rolled back."""
 
 class StartPreTradeResult:
-    """Result of ``Engine.start_pre_trade``."""
+    """
+    Result of ``Engine.start_pre_trade``.
+
+    On success it exposes a deferred request handle; on failure it exposes a
+    single business reject produced by the first rejecting start-stage policy.
+    """
 
     @property
     def ok(self) -> bool:
@@ -445,7 +474,13 @@ class StartPreTradeResult:
         """Boolean convenience alias for ``ok``."""
 
 class ExecuteResult:
-    """Result of ``Request.execute``."""
+    """
+    Result of ``Request.execute``.
+
+    This object reports whether main-stage policies accepted the request and,
+    on success, carries the single-use reservation handle that must later be
+    committed or rolled back.
+    """
 
     @property
     def ok(self) -> bool:
@@ -463,7 +498,12 @@ class ExecuteResult:
         """Boolean convenience alias for ``ok``."""
 
 class PostTradeResult:
-    """Result of ``Engine.apply_execution_report``."""
+    """
+    Result of ``Engine.apply_execution_report``.
+
+    Reports whether any policy considers an account-level kill switch to be
+    active after the report has been applied.
+    """
 
     @property
     def kill_switch_triggered(self) -> bool:

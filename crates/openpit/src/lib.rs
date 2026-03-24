@@ -48,7 +48,7 @@ pub mod pretrade;
 pub use core::engine::{Engine, EngineBuildError, EngineBuilder};
 pub use core::{
     ExecutionReportFillDetails, ExecutionReportOperation, ExecutionReportPositionImpact,
-    FinancialImpact, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
+    FinancialImpact, HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
     HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
     HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,

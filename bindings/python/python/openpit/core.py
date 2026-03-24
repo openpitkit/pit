@@ -50,6 +50,7 @@ from ._openpit import (
     OrderPosition as _OrderPosition,
 )
 from .param import (
+    AccountId,
     Asset,
     Fee,
     Leverage,
@@ -140,6 +141,7 @@ class OrderOperation(_OrderOperation):
         instrument: Instrument,
         side: Side,
         trade_amount: Quantity | Volume,
+        account_id: AccountId,
         price: Price | None = None,
     ) -> None:
         _require_instance(instrument, Instrument, name="instrument")
@@ -149,6 +151,7 @@ class OrderOperation(_OrderOperation):
                 f"trade_amount must be {Quantity.__module__}.{Quantity.__name__} "
                 f"or {Volume.__module__}.{Volume.__name__}"
             )
+        _require_instance(account_id, AccountId, name="account_id")
         _require_instance(price, Price, name="price")
         _OrderOperation.underlying_asset.__set__(
             self, instrument.underlying_asset.value
@@ -156,6 +159,7 @@ class OrderOperation(_OrderOperation):
         _OrderOperation.settlement_asset.__set__(
             self, instrument.settlement_asset.value
         )
+        _OrderOperation.account_id.__set__(self, account_id)
         _OrderOperation.side.__set__(self, side)
         _OrderOperation.trade_amount.__set__(self, trade_amount)
         _OrderOperation.price.__set__(self, price)
@@ -165,6 +169,12 @@ class OrderOperation(_OrderOperation):
     def instrument(self) -> Instrument:
         """Traded instrument."""
         return self.__dict__["_py_instrument"]
+
+    # @typing.override
+    @property
+    def account_id(self) -> AccountId:
+        """Account identifier associated with the order."""
+        return _OrderOperation.account_id.__get__(self, type(self))
 
     # @typing.override
     @property
@@ -371,15 +381,18 @@ class ExecutionReportOperation(_ExecutionReportOperation):
         *,
         instrument: Instrument,
         side: Side,
+        account_id: AccountId,
     ) -> None:
         _require_instance(instrument, Instrument, name="instrument")
         _require_instance(side, Side, name="side")
+        _require_instance(account_id, AccountId, name="account_id")
         _ExecutionReportOperation.underlying_asset.__set__(
             self, instrument.underlying_asset.value
         )
         _ExecutionReportOperation.settlement_asset.__set__(
             self, instrument.settlement_asset.value
         )
+        _ExecutionReportOperation.account_id.__set__(self, account_id)
         _ExecutionReportOperation.side.__set__(self, side)
         self.__dict__["_py_instrument"] = instrument
 
@@ -387,6 +400,12 @@ class ExecutionReportOperation(_ExecutionReportOperation):
     def instrument(self) -> Instrument:
         """Traded instrument."""
         return self.__dict__["_py_instrument"]
+
+    # @typing.override
+    @property
+    def account_id(self) -> AccountId:
+        """Account identifier associated with the execution report."""
+        return _ExecutionReportOperation.account_id.__get__(self, type(self))
 
     # @typing.override
     @property

@@ -72,7 +72,7 @@ pub struct ExecutionReport {
 mod tests {
     use super::{ExecutionReport, FillDetailsData, FinancialImpactData, PositionImpactData};
     use openpit::param::{
-        Asset, Fee, Pnl, PositionEffect, PositionSide, Price, Quantity, Side, Trade,
+        AccountId, Asset, Fee, Pnl, PositionEffect, PositionSide, Price, Quantity, Side, Trade,
     };
     use openpit::pretrade::Lock;
     use openpit::Instrument;
@@ -86,6 +86,7 @@ mod tests {
                     Asset::new("AAPL").expect("asset code must be valid"),
                     Asset::new("USD").expect("asset code must be valid"),
                 ),
+                account_id: AccountId::from_u64(99224416),
                 side: Side::Sell,
             }),
             financial_impact: Some(FinancialImpactData {

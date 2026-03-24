@@ -1,6 +1,8 @@
 import openpit
 import pytest
 
+_ACCOUNT_ID = openpit.param.AccountId.from_u64(99224416)
+
 
 @pytest.mark.unit
 def test_order_operation_accepts_keyword_arguments_and_numeric_variants() -> None:
@@ -11,6 +13,7 @@ def test_order_operation_accepts_keyword_arguments_and_numeric_variants() -> Non
         ),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.Quantity("10.5"),
+        account_id=_ACCOUNT_ID,
         price=openpit.param.Price("185"),
     )
     order = openpit.Order(operation=op)
@@ -42,6 +45,7 @@ def test_order_operation_rejects_invalid_side() -> None:
             ),
             side="hold",  # type: ignore[arg-type]
             trade_amount=openpit.param.Quantity("1"),
+            account_id=_ACCOUNT_ID,
             price=openpit.param.Price("10"),
         )
 
@@ -56,6 +60,7 @@ def test_order_operation_rejects_bool_quantity() -> None:
             ),
             side=openpit.param.Side.BUY,
             trade_amount=True,  # type: ignore[arg-type]
+            account_id=_ACCOUNT_ID,
             price=openpit.param.Price("10"),
         )
 
@@ -69,6 +74,7 @@ def test_order_operation_accepts_volume_without_price() -> None:
         ),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.Volume("250"),
+        account_id=_ACCOUNT_ID,
         price=None,
     )
     order = openpit.Order(operation=op)
@@ -109,3 +115,44 @@ def test_order_position_bool_flags_default_to_false() -> None:
 
     assert order.position.reduce_only is False
     assert order.position.close_position is False
+
+
+@pytest.mark.unit
+def test_order_operation_accepts_account_id_from_u64() -> None:
+    op = openpit.OrderOperation(
+        instrument=openpit.Instrument(
+            openpit.param.Asset("AAPL"),
+            openpit.param.Asset("USD"),
+        ),
+        side=openpit.param.Side.BUY,
+        trade_amount=openpit.param.Quantity("1"),
+        account_id=openpit.param.AccountId.from_u64(12345678),
+    )
+    assert op.account_id.value == 12345678
+
+
+@pytest.mark.unit
+def test_order_operation_accepts_account_id_from_str() -> None:
+    op = openpit.OrderOperation(
+        instrument=openpit.Instrument(
+            openpit.param.Asset("AAPL"),
+            openpit.param.Asset("USD"),
+        ),
+        side=openpit.param.Side.BUY,
+        trade_amount=openpit.param.Quantity("1"),
+        account_id=openpit.param.AccountId.from_str("my-account"),
+    )
+    assert op.account_id.value == openpit.param.AccountId.from_str("my-account").value
+
+
+@pytest.mark.unit
+def test_order_operation_rejects_missing_account_id() -> None:
+    with pytest.raises(TypeError):
+        openpit.OrderOperation(
+            instrument=openpit.Instrument(
+                openpit.param.Asset("AAPL"),
+                openpit.param.Asset("USD"),
+            ),
+            side=openpit.param.Side.BUY,
+            trade_amount=openpit.param.Quantity("1"),
+        )  # type: ignore[call-arg]

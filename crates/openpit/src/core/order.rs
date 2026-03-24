@@ -16,11 +16,12 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 use crate::impl_request_has_field;
-use crate::param::{Asset, Leverage, PositionSide, Price, Side, TradeAmount};
+use crate::param::{AccountId, Asset, Leverage, PositionSide, Price, Side, TradeAmount};
 
 use crate::{
-    HasAutoBorrow, HasClosePosition, HasInstrument, HasOrderCollateralAsset, HasOrderLeverage,
-    HasOrderPositionSide, HasOrderPrice, HasReduceOnly, HasSide, HasTradeAmount, Instrument,
+    HasAccountId, HasAutoBorrow, HasClosePosition, HasInstrument, HasOrderCollateralAsset,
+    HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasReduceOnly, HasSide, HasTradeAmount,
+    Instrument,
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -31,12 +32,13 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrderOperation {
     pub instrument: Instrument,
-    pub side: Side,
+    pub account_id: AccountId,
     pub trade_amount: TradeAmount,
     /// Requested worst execution price used for size translation and price-sensitive checks.
     ///
     /// `None` means the order should execute at market price.
     pub price: Option<Price>,
+    pub side: Side,
 }
 
 /// Adds main operation parameters that describe side, instrument, price, and amount.
@@ -59,11 +61,11 @@ impl_request_has_field!(
 );
 
 impl_request_has_field!(
-    HasSide,
-    side,
-    Side,
+    HasAccountId,
+    account_id,
+    AccountId,
     OrderOperation,
-    side,
+    account_id,
     WithOrderOperation,
     operation,
 );
@@ -84,6 +86,16 @@ impl_request_has_field!(
     Option<Price>,
     OrderOperation,
     price,
+    WithOrderOperation,
+    operation,
+);
+
+impl_request_has_field!(
+    HasSide,
+    side,
+    Side,
+    OrderOperation,
+    side,
     WithOrderOperation,
     operation,
 );
@@ -251,7 +263,7 @@ mod tests {
 
     #[test]
     fn with_order_operation_instrument_delegates_via_ref_arm() {
-        use crate::param::{Quantity, Side, TradeAmount};
+        use crate::param::{AccountId, Quantity, Side, TradeAmount};
         use crate::{HasInstrument, Instrument};
 
         let instrument = Instrument::new(
@@ -262,6 +274,7 @@ mod tests {
             inner: (),
             operation: super::OrderOperation {
                 instrument: instrument.clone(),
+                account_id: AccountId::from_u64(99224416),
                 side: Side::Buy,
                 trade_amount: TradeAmount::Quantity(
                     Quantity::from_str("1").expect("must be valid"),
@@ -270,5 +283,30 @@ mod tests {
             },
         };
         assert_eq!(w.instrument(), &instrument);
+    }
+
+    #[test]
+    fn order_operation_account_id_via_has_account_id() {
+        use crate::param::{AccountId, Quantity, Side, TradeAmount};
+        use crate::{HasAccountId, Instrument};
+
+        let id = AccountId::from_u64(42);
+        let op = super::OrderOperation {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("must be valid"),
+                Asset::new("USD").expect("must be valid"),
+            ),
+            account_id: id,
+            side: Side::Buy,
+            trade_amount: TradeAmount::Quantity(Quantity::from_str("1").expect("must be valid")),
+            price: None,
+        };
+        assert_eq!(op.account_id(), id);
+
+        let wrapped = super::WithOrderOperation {
+            inner: (),
+            operation: op,
+        };
+        assert_eq!(wrapped.account_id(), id);
     }
 }

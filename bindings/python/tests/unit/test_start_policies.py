@@ -121,6 +121,7 @@ def test_order_size_limit_paths(
                     openpit.param.Asset("USD"),
                 ),
                 side=openpit.param.Side.BUY,
+                account_id=openpit.param.AccountId.from_u64(99224416),
                 trade_amount=trade_amount,
             ),
         )

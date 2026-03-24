@@ -164,7 +164,7 @@ mod tests {
         ExecutionReportOperation, FinancialImpact, OrderOperation, WithExecutionReportOperation,
         WithFinancialImpact,
     };
-    use crate::param::{Asset, Fee, Pnl, Quantity, Side, TradeAmount};
+    use crate::param::{AccountId, Asset, Fee, Pnl, Quantity, Side, TradeAmount};
     use crate::pretrade::Reject;
 
     use super::{CheckPreTradeStartPolicy, Context, Mutations, Policy};
@@ -223,6 +223,7 @@ mod tests {
                     Asset::new("AAPL").expect("asset code must be valid"),
                     Asset::new("USD").expect("asset code must be valid"),
                 ),
+                account_id: AccountId::from_u64(99224416),
                 side: Side::Buy,
             },
         };
@@ -238,6 +239,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Quantity(
                 Quantity::from_str("1").expect("quantity must be valid"),

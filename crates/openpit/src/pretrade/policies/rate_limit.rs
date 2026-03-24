@@ -47,6 +47,7 @@ use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope}
 ///         Asset::new("AAPL")?,
 ///         Asset::new("USD")?,
 ///     ),
+///     account_id: openpit::param::AccountId::from_u64(987654321),
 ///     side: Side::Buy,
 ///     trade_amount: TradeAmount::Quantity(
 ///         Quantity::from_str("1")?,
@@ -129,7 +130,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::core::OrderOperation;
-    use crate::param::{Asset, Quantity, Side, TradeAmount};
+    use crate::param::{AccountId, Asset, Quantity, Side, TradeAmount};
     use crate::pretrade::start_pre_trade_time::with_start_pre_trade_now;
     use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
 
@@ -204,6 +205,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new(settlement).expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Quantity(
                 Quantity::from_str("1").expect("quantity literal must be valid"),

@@ -77,7 +77,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::core::{Instrument, OrderOperation};
-    use crate::param::{Asset, Price, Quantity, Side, TradeAmount, Volume};
+    use crate::param::{AccountId, Asset, Price, Quantity, Side, TradeAmount, Volume};
     use crate::pretrade::{CheckPreTradeStartPolicy, RejectCode, RejectScope};
 
     use super::OrderValidationPolicy;
@@ -90,6 +90,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Quantity(Quantity::ZERO),
             price: Some(Price::from_str("10").expect("price must be valid")),
@@ -114,6 +115,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Volume(Volume::ZERO),
             price: None,
@@ -136,6 +138,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Volume(
                 Volume::from_str("100").expect("volume must be valid"),
@@ -158,6 +161,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Quantity(
                 Quantity::from_str("10").expect("quantity must be valid"),
@@ -176,6 +180,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Volume(
                 Volume::from_str("100").expect("volume must be valid"),
@@ -208,6 +213,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Quantity(
                 Quantity::from_str("1").expect("quantity must be valid"),

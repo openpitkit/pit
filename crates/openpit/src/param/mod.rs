@@ -31,7 +31,7 @@
 //! - **Unsigned types** ([`Quantity`], [`Volume`]) — cannot be negative.
 //! - **Signed types** ([`Price`], [`Pnl`], [`CashFlow`], [`PositionSize`], [`Fee`]) — can be negative.
 //! - **Fixed-point types** ([`Leverage`]) — scaled integer domain values.
-//! - **Identifiers** ([`Asset`], [`Side`], [`PositionSide`]) — non-numeric types.
+//! - **Identifiers** ([`Asset`], [`AccountId`], [`Side`], [`PositionSide`]) — non-numeric types.
 //!
 //! # Rounding
 //!
@@ -102,6 +102,7 @@
 use rust_decimal::Decimal;
 use std::fmt::{Display, Formatter};
 
+pub mod account_id;
 pub mod asset;
 pub mod cash_flow;
 pub mod fee;
@@ -118,6 +119,7 @@ pub mod trade;
 pub mod trade_amount;
 pub mod volume;
 
+pub use account_id::AccountId;
 pub use asset::Asset;
 pub use cash_flow::CashFlow;
 pub use fee::Fee;

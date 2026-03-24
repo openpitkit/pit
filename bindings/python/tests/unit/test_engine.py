@@ -63,6 +63,7 @@ class TaggedOrder(openpit.Order):
                     openpit.param.Asset("USD"),
                 ),
                 side=openpit.param.Side.BUY,
+                account_id=openpit.param.AccountId.from_u64(99224416),
                 trade_amount=openpit.param.Quantity("1"),
                 price=openpit.param.Price("10"),
             ),
@@ -80,6 +81,7 @@ class MissingPriceOrder(openpit.Order):
                     openpit.param.Asset("USD"),
                 ),
                 side=openpit.param.Side.BUY,
+                account_id=openpit.param.AccountId.from_u64(99224416),
                 trade_amount=openpit.param.Quantity("1"),
             ),
         )

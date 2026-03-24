@@ -123,6 +123,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         start = engine.start_pre_trade(
             order=conftest.make_order(
                 side=openpit.param.Side.SELL,
+                account_id=openpit.param.AccountId.from_u64(99224416),
                 trade_amount=openpit.param.Quantity("5"),
                 price=openpit.param.Price("100"),
             )
@@ -148,6 +149,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         start = engine.start_pre_trade(
             order=conftest.make_order(
                 side=openpit.param.Side.BUY,
+                account_id=openpit.param.AccountId.from_u64(99224416),
                 trade_amount=openpit.param.Quantity("3"),
                 price=openpit.param.Price("100"),
             )
@@ -167,6 +169,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         resumed = engine.start_pre_trade(
             order=conftest.make_order(
                 side=openpit.param.Side.BUY,
+                account_id=openpit.param.AccountId.from_u64(99224416),
                 trade_amount=openpit.param.Quantity("7"),
                 price=openpit.param.Price("100"),
             )
@@ -183,6 +186,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         start = engine.start_pre_trade(
             order=conftest.make_order(
                 side=openpit.param.Side.BUY,
+                account_id=openpit.param.AccountId.from_u64(99224416),
                 trade_amount=openpit.param.Quantity("8"),
                 price=openpit.param.Price("100"),
             )

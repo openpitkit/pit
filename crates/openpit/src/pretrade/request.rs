@@ -65,6 +65,7 @@ impl<O> Request<O> {
     ///         Asset::new("AAPL")?,
     ///         Asset::new("USD")?,
     ///     ),
+    ///     account_id: openpit::param::AccountId::from_u64(12345678),
     ///     side: Side::Buy,
     ///     trade_amount: TradeAmount::Quantity(
     ///         Quantity::from_str("10")?

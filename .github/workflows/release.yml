@@ -379,45 +379,6 @@ jobs:
             twine check dist/*
           fi
 
-  publish-docs:
-    name: Publish Python API docs
-    needs: [publish-sdist, verify-tag]
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install maturin pdoc
-
-      - name: Build Python extension
-        run: maturin develop --manifest-path bindings/python/Cargo.toml
-
-      - name: Generate API docs
-        run: pdoc openpit --html --output-dir docs/api/python
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: docs/api/python/openpit
-
   publish-github-release:
     name: Publish GitHub release metadata
     needs:

@@ -34,7 +34,9 @@ pub struct Order {
 #[cfg(test)]
 mod tests {
     use super::Order;
-    use openpit::param::{Asset, Leverage, PositionSide, Price, Quantity, Side, TradeAmount};
+    use openpit::param::{
+        AccountId, Asset, Leverage, PositionSide, Price, Quantity, Side, TradeAmount,
+    };
     use openpit::Instrument;
     use openpit::{OrderMargin, OrderOperation, OrderPosition};
 
@@ -46,6 +48,7 @@ mod tests {
                     Asset::new("AAPL").expect("asset code must be valid"),
                     Asset::new("USD").expect("asset code must be valid"),
                 ),
+                account_id: AccountId::from_u64(99224416),
                 side: Side::Buy,
                 trade_amount: TradeAmount::Quantity(
                     Quantity::from_str("2").expect("quantity must be valid"),

@@ -19,6 +19,8 @@ use std::ffi::c_char;
 use std::ffi::CString;
 use std::sync::OnceLock;
 
+use openpit::param::AccountId;
+
 pub mod execution_report;
 pub mod order;
 
@@ -124,6 +126,33 @@ impl From<PitRejectCode> for RejectCode {
     }
 }
 
+/// Constructs an account identifier from a 64-bit integer.
+/// No hashing. No collision risk.
+#[no_mangle]
+pub extern "C" fn pit_account_id_from_u64(value: u64) -> u64 {
+    AccountId::from_u64(value).as_u64()
+}
+
+/// Constructs an account identifier by hashing a UTF-8 string with FNV-1a 64.
+///
+/// `ptr` must point to valid UTF-8; `len` is the byte length (no null
+/// terminator required). The string is not retained after the call returns.
+///
+/// Hash collisions are possible. For n distinct account strings the
+/// probability of at least one collision is approximately n^2 / 2^65.
+/// If collision risk is unacceptable, maintain a collision-free
+/// string-to-integer mapping on your side and use pit_account_id_from_u64.
+///
+/// # Safety
+///
+/// `ptr` must be non-null and point to at least `len` bytes of valid UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn pit_account_id_from_str(ptr: *const c_char, len: usize) -> u64 {
+    let bytes = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) };
+    let s = std::str::from_utf8(bytes).unwrap_or("");
+    AccountId::from_str(s).as_u64()
+}
+
 const fn cstr_ptr(bytes: &'static [u8]) -> *const c_char {
     bytes.as_ptr().cast()
 }
@@ -206,9 +235,23 @@ mod tests {
     use openpit::pretrade::RejectCode;
 
     use super::{
-        pit_policy_name_order_size_limit, pit_policy_name_pnl_killswitch,
-        pit_policy_name_rate_limit, pit_reject_code_to_cstr, PitRejectCode,
+        pit_account_id_from_str, pit_account_id_from_u64, pit_policy_name_order_size_limit,
+        pit_policy_name_pnl_killswitch, pit_policy_name_rate_limit, pit_reject_code_to_cstr,
+        PitRejectCode,
     };
+
+    #[test]
+    fn account_id_from_u64_returns_value() {
+        assert_eq!(pit_account_id_from_u64(99224416), 99224416);
+        assert_eq!(pit_account_id_from_u64(u64::MIN), u64::MIN);
+        assert_eq!(pit_account_id_from_u64(u64::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn account_id_from_str_empty_returns_fnv1a_offset_basis() {
+        let result = unsafe { pit_account_id_from_str(c"".as_ptr(), 0) };
+        assert_eq!(result, 14_695_981_039_346_656_037);
+    }
 
     #[test]
     fn exports_policy_names_without_instances() {

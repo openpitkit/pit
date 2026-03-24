@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 from .param import (
+    AccountId,
     Asset,
     Fee,
     Leverage,
@@ -55,11 +56,16 @@ class OrderOperation:
         instrument: Instrument,
         side: Side,
         trade_amount: Quantity | Volume,
+        account_id: AccountId,
         price: Price | None = None,
     ) -> None: ...
     @property
     def instrument(self) -> Instrument:
         """Traded instrument."""
+
+    @property
+    def account_id(self) -> AccountId:
+        """Account identifier associated with the order."""
 
     @property
     def side(self) -> Side:
@@ -147,10 +153,15 @@ class ExecutionReportOperation:
         *,
         instrument: Instrument,
         side: Side,
+        account_id: AccountId,
     ) -> None: ...
     @property
     def instrument(self) -> Instrument:
         """Traded instrument."""
+
+    @property
+    def account_id(self) -> AccountId:
+        """Account identifier associated with the execution report."""
 
     @property
     def side(self) -> Side:

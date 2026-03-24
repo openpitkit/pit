@@ -62,6 +62,7 @@ impl<'a, O> Context<'a, O> {
     ///         Asset::new("AAPL")?,
     ///         Asset::new("USD")?,
     ///     ),
+    ///     account_id: openpit::param::AccountId::from_u64(12345678),
     ///     side: Side::Buy,
     ///     trade_amount: TradeAmount::Quantity(
     ///         Quantity::from_str("1")?,
@@ -84,7 +85,7 @@ impl<'a, O> Context<'a, O> {
 #[cfg(test)]
 mod tests {
     use crate::core::OrderOperation;
-    use crate::param::{Asset, Quantity, Side, TradeAmount};
+    use crate::param::{AccountId, Asset, Quantity, Side, TradeAmount};
 
     use super::Context;
 
@@ -95,6 +96,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Quantity(
                 Quantity::from_str("10").expect("quantity must be valid"),

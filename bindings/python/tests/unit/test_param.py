@@ -5,6 +5,7 @@ import pytest
 @pytest.mark.unit
 def test_param_types_are_exported_from_openpit_and_param_module() -> None:
     names = [
+        "AccountId",
         "Asset",
         "Side",
         "PositionSide",
@@ -25,6 +26,7 @@ def test_param_types_are_exported_from_openpit_and_param_module() -> None:
         assert hasattr(openpit.param, name)
 
     root_only_param = [
+        "AccountId",
         "Asset",
         "Side",
         "PositionSide",
@@ -46,8 +48,28 @@ def test_param_types_are_exported_from_openpit_and_param_module() -> None:
 
 
 @pytest.mark.unit
+def test_account_id_constructors() -> None:
+    from_int = openpit.param.AccountId.from_u64(12345)
+    from_string = openpit.param.AccountId.from_str("my-account")
+
+    assert from_int.value == 12345
+    assert openpit.param.AccountId.from_u64(12345).value == from_int.value
+    assert openpit.param.AccountId.from_str("my-account").value == from_string.value
+    assert from_int.value != from_string.value
+
+    # FNV-1a of the empty string must equal the offset basis.
+    assert openpit.param.AccountId.from_str("").value == 14_695_981_039_346_656_037
+
+    # from_u64 and from_str of the same numeric string are NOT equal.
+    assert (
+        openpit.param.AccountId.from_u64(42).value
+        != openpit.param.AccountId.from_str("42").value
+    )
+
+
+@pytest.mark.unit
 def test_param_types_have_rust_like_module_paths() -> None:
-    assert openpit.param.Asset.__module__ == "openpit.param"
+    assert openpit.param.AccountId.__module__ == "openpit.param"
     assert openpit.param.Side.__module__ == "openpit.param"
     assert openpit.param.PositionSide.__module__ == "openpit.param"
     assert openpit.param.PositionEffect.__module__ == "openpit.param"

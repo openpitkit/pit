@@ -17,13 +17,13 @@
 
 use crate::core::request_trait::HasLock;
 use crate::impl_request_has_field;
-use crate::param::{Fee, Pnl, PositionEffect, PositionSide, Quantity, Side, Trade};
+use crate::param::{AccountId, Fee, Pnl, PositionEffect, PositionSide, Quantity, Side, Trade};
 use crate::pretrade::Lock;
 
 use super::{
-    HasExecutionReportIsTerminal, HasExecutionReportLastTrade, HasExecutionReportPositionEffect,
-    HasExecutionReportPositionSide, HasFee, HasInstrument, HasLeavesQuantity, HasPnl, HasSide,
-    Instrument,
+    HasAccountId, HasExecutionReportIsTerminal, HasExecutionReportLastTrade,
+    HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,
+    HasLeavesQuantity, HasPnl, HasSide, Instrument,
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -34,6 +34,7 @@ use super::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionReportOperation {
     pub instrument: Instrument,
+    pub account_id: AccountId,
     /// Economic direction of the reported execution event.
     pub side: Side,
 }
@@ -53,6 +54,16 @@ impl_request_has_field!(
     &Instrument,
     ExecutionReportOperation,
     instrument,
+    WithExecutionReportOperation,
+    operation,
+);
+
+impl_request_has_field!(
+    HasAccountId,
+    account_id,
+    AccountId,
+    ExecutionReportOperation,
+    account_id,
     WithExecutionReportOperation,
     operation,
 );
@@ -224,10 +235,12 @@ impl_request_has_field!(
 
 #[cfg(test)]
 mod tests {
-    use crate::param::Quantity;
+    use crate::param::{AccountId, Quantity};
     use crate::pretrade::Lock;
 
-    use super::ExecutionReportFillDetails;
+    use super::{
+        ExecutionReportFillDetails, ExecutionReportOperation, WithExecutionReportOperation,
+    };
 
     fn fill() -> ExecutionReportFillDetails {
         ExecutionReportFillDetails {
@@ -236,6 +249,30 @@ mod tests {
             lock: Lock::default(),
             is_terminal: false,
         }
+    }
+
+    #[test]
+    fn execution_report_operation_account_id_via_has_account_id() {
+        use crate::param::Asset;
+        use crate::param::Side;
+        use crate::{HasAccountId, Instrument};
+
+        let id = AccountId::from_u64(99);
+        let op = ExecutionReportOperation {
+            instrument: Instrument::new(
+                Asset::new("BTC").expect("must be valid"),
+                Asset::new("USD").expect("must be valid"),
+            ),
+            account_id: id,
+            side: Side::Sell,
+        };
+        assert_eq!(op.account_id(), id);
+
+        let wrapped = WithExecutionReportOperation {
+            inner: (),
+            operation: op,
+        };
+        assert_eq!(wrapped.account_id(), id);
     }
 
     #[test]

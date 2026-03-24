@@ -22,7 +22,7 @@ use std::thread;
 use std::time::Duration;
 
 use openpit::param::TradeAmount;
-use openpit::param::{Asset, Fee, Pnl, Price, Quantity, Side, Volume};
+use openpit::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side, Volume};
 use openpit::pretrade::policies::pnl_killswitch::PnlKillSwitchError;
 use openpit::pretrade::policies::OrderValidationPolicy;
 use openpit::pretrade::policies::PnlKillSwitchPolicy;
@@ -231,6 +231,7 @@ fn integration_table_order_size_limit_paths() {
             Asset::new("AAPL").expect("asset code must be valid"),
             Asset::new("USD").expect("asset code must be valid"),
         ),
+        account_id: AccountId::from_u64(99224416),
         side: Side::Buy,
         trade_amount: TradeAmount::Quantity(
             Quantity::from_str("2").expect("quantity literal must be valid"),
@@ -264,6 +265,7 @@ fn integration_order_validation_checks_only_provided_fields() {
             Asset::new("AAPL").expect("asset code must be valid"),
             Asset::new("USD").expect("asset code must be valid"),
         ),
+        account_id: AccountId::from_u64(99224416),
         side: Side::Buy,
         trade_amount: TradeAmount::Quantity(Quantity::ZERO),
         price: Some(Price::from_str("10").expect("price literal must be valid")),
@@ -280,6 +282,7 @@ fn integration_order_validation_checks_only_provided_fields() {
             Asset::new("AAPL").expect("asset code must be valid"),
             Asset::new("USD").expect("asset code must be valid"),
         ),
+        account_id: AccountId::from_u64(99224416),
         side: Side::Buy,
         trade_amount: TradeAmount::Quantity(
             Quantity::from_str("5").expect("quantity literal must be valid"),
@@ -298,6 +301,7 @@ fn integration_order_validation_checks_only_provided_fields() {
             Asset::new("AAPL").expect("asset code must be valid"),
             Asset::new("USD").expect("asset code must be valid"),
         ),
+        account_id: AccountId::from_u64(99224416),
         side: Side::Buy,
         trade_amount: TradeAmount::Volume(
             Volume::from_str("10").expect("volume literal must be valid"),
@@ -316,6 +320,7 @@ fn integration_order_validation_checks_only_provided_fields() {
             Asset::new("AAPL").expect("asset code must be valid"),
             Asset::new("USD").expect("asset code must be valid"),
         ),
+        account_id: AccountId::from_u64(99224416),
         side: Side::Buy,
         trade_amount: TradeAmount::Quantity(
             Quantity::from_str("2").expect("quantity literal must be valid"),
@@ -527,6 +532,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
             Asset::new("AAPL").expect("asset code must be valid"),
             Asset::new("USD").expect("asset code must be valid"),
         ),
+        account_id: AccountId::from_u64(99224416),
         side: Side::Buy,
         trade_amount: TradeAmount::Quantity(
             Quantity::from_str("2").expect("quantity literal must be valid"),
@@ -713,6 +719,7 @@ fn integration_with_order_operation_with_order_position_reduce_only_accessible()
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Sell,
             trade_amount: TradeAmount::Quantity(
                 Quantity::from_str("3").expect("quantity literal must be valid"),
@@ -752,6 +759,7 @@ fn integration_with_order_operation_with_order_position_reduce_only_accessible()
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Quantity(
                 Quantity::from_str("1").expect("quantity literal must be valid"),
@@ -901,6 +909,7 @@ fn order_aapl_usd_with_side(price: &str, quantity: &str, side: Side) -> OrderOpe
             Asset::new("AAPL").expect("asset code must be valid"),
             Asset::new("USD").expect("asset code must be valid"),
         ),
+        account_id: AccountId::from_u64(99224416),
         side,
         trade_amount: TradeAmount::Quantity(
             Quantity::from_str(quantity).expect("quantity literal must be valid"),

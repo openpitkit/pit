@@ -16,8 +16,8 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 use crate::param::{
-    Asset, Fee, Leverage, Pnl, PositionEffect, PositionSide, Price, Quantity, Side, Trade,
-    TradeAmount,
+    AccountId, Asset, Fee, Leverage, Pnl, PositionEffect, PositionSide, Price, Quantity, Side,
+    Trade, TradeAmount,
 };
 use crate::pretrade::Lock;
 
@@ -47,6 +47,8 @@ macro_rules! has_request_field_trait {
         }
     };
 }
+
+has_request_field_trait!(HasAccountId, account_id -> AccountId);
 
 has_request_field_trait!(HasInstrument, instrument -> &Instrument);
 
@@ -110,11 +112,13 @@ mod tests {
     use crate::Instrument;
 
     fn operation() -> OrderOperation {
+        use crate::param::AccountId;
         OrderOperation {
             instrument: Instrument::new(
                 Asset::new("BTC").expect("must be valid"),
                 Asset::new("USD").expect("must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Quantity(Quantity::from_str("1").expect("must be valid")),
             price: None,

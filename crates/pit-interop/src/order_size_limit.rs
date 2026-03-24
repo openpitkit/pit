@@ -70,7 +70,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openpit::param::{Asset, Price, Quantity, Side, TradeAmount, Volume};
+    use openpit::param::{AccountId, Asset, Price, Quantity, Side, TradeAmount, Volume};
     use openpit::pretrade::policies::{OrderSizeLimit, OrderSizeLimitPolicy};
     use openpit::pretrade::RejectCode;
     use openpit::{HasInstrument, HasOrderPrice, HasTradeAmount, Instrument, OrderOperation};
@@ -124,6 +124,7 @@ mod tests {
 
     fn sample_operation() -> OrderOperation {
         OrderOperation {
+            account_id: AccountId::from_u64(99224416),
             instrument: Instrument::new(
                 Asset::new("AAPL").expect("valid"),
                 Asset::new("USD").expect("valid"),
@@ -194,6 +195,7 @@ mod tests {
         ));
         let order = FakeOrder {
             operation: Some(OrderOperation {
+                account_id: AccountId::from_u64(99224416),
                 instrument: Instrument::new(
                     Asset::new("AAPL").expect("valid"),
                     Asset::new("USD").expect("valid"),

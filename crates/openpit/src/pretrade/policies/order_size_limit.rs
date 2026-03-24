@@ -62,6 +62,7 @@ pub struct OrderSizeLimit {
 ///
 /// let order = OrderOperation {
 ///     instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
+///     account_id: openpit::param::AccountId::from_u64(99224416),
 ///     side: Side::Buy,
 ///     trade_amount: TradeAmount::Quantity(Quantity::from_str("10")?),
 ///     price: Some(Price::from_str("200")?),
@@ -267,7 +268,7 @@ fn order_size_reject(
 mod tests {
     use crate::core::{Instrument, OrderOperation};
     use crate::param::TradeAmount;
-    use crate::param::{Asset, Price, Quantity, Side, Volume};
+    use crate::param::{AccountId, Asset, Price, Quantity, Side, Volume};
     use crate::pretrade::{CheckPreTradeStartPolicy, RejectCode, RejectScope};
     use rust_decimal::Decimal;
 
@@ -281,6 +282,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new(settlement).expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Quantity(
                 Quantity::from_str(quantity).expect("quantity literal must be valid"),
@@ -398,6 +400,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: crate::param::Side::Buy,
             trade_amount: TradeAmount::Quantity(
                 Quantity::from_str("2").expect("quantity literal must be valid"),
@@ -429,6 +432,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: crate::param::Side::Buy,
             trade_amount: TradeAmount::Quantity(
                 Quantity::from_str("2").expect("quantity literal must be valid"),
@@ -521,6 +525,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new("USD").expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Volume(
                 Volume::from_str("100").expect("volume literal must be valid"),

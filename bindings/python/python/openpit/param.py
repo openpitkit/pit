@@ -2,6 +2,7 @@ import enum
 
 from . import _enum
 from ._openpit import (
+    AccountId,
     Asset,
     CashFlow,
     Fee,
@@ -125,6 +126,21 @@ class RoundingStrategy(_enum.StrEnum):
         return cls.DOWN
 
 
+AccountId.__doc__ = """
+Type-safe account identifier.
+
+Use :meth:`from_u64` when the broker or venue assigns numeric account IDs —
+zero cost, zero collision risk.
+
+Use :meth:`from_str` when only a string identifier is available. The string is
+hashed with FNV-1a 64-bit, so hash collisions are theoretically possible.
+For n distinct account strings the probability of at least one collision is
+approximately n² / 2⁶⁵. If that risk is unacceptable, maintain a
+collision-free string-to-integer mapping on your side and use
+:meth:`from_u64`. See <http://www.isthe.com/chongo/tech/comp/fnv/> for the algorithm
+specification.
+"""
+
 Asset.__doc__ = """
 Validated asset code used across instruments, collateral fields, and settlement keys.
 
@@ -204,6 +220,7 @@ PositionEffect.CLOSE.__doc__ = "Execution closes exposure."
 
 
 __all__ = [
+    "AccountId",
     "Asset",
     "CashFlow",
     "Fee",

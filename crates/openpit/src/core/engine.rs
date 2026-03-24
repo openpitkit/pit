@@ -94,6 +94,7 @@ impl std::error::Error for EngineBuildError {}
 ///     inner: (),
 ///     operation: OrderOperation {
 ///         instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
+///         account_id: openpit::param::AccountId::from_u64(12345),
 ///         side: Side::Buy,
 ///         trade_amount: TradeAmount::Quantity(Quantity::from_str("100")?),
 ///         price: Some(Price::from_str("185")?),
@@ -375,7 +376,7 @@ mod tests {
         ExecutionReportOperation, FinancialImpact, Instrument, OrderOperation,
         WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation,
     };
-    use crate::param::{Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume};
+    use crate::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume};
     use crate::pretrade::{
         CheckPreTradeStartPolicy, Context, Mutation, Mutations, Policy, Reject, RejectCode,
         RejectScope, RiskMutation,
@@ -1351,6 +1352,7 @@ mod tests {
                     Asset::new("AAPL").expect("asset code must be valid"),
                     Asset::new("USD").expect("asset code must be valid"),
                 ),
+                account_id: AccountId::from_u64(99224416),
                 side: Side::Buy,
                 trade_amount: TradeAmount::Quantity(
                     Quantity::from_str("1").expect("quantity must be valid"),
@@ -1386,6 +1388,7 @@ mod tests {
                     Asset::new("AAPL").expect("asset code must be valid"),
                     usd.clone(),
                 ),
+                account_id: AccountId::from_u64(99224416),
                 side: Side::Sell,
                 trade_amount: TradeAmount::Quantity(
                     Quantity::from_str("100").expect("quantity must be valid"),
@@ -1427,6 +1430,7 @@ mod tests {
                     Asset::new("AAPL").expect("asset code must be valid"),
                     Asset::new("USD").expect("asset code must be valid"),
                 ),
+                account_id: AccountId::from_u64(99224416),
                 side: Side::Sell,
                 trade_amount: TradeAmount::Volume(
                     Volume::from_str("100").expect("volume must be valid"),
@@ -1454,6 +1458,7 @@ mod tests {
                     Asset::new("AAPL").expect("asset code must be valid"),
                     Asset::new("USD").expect("asset code must be valid"),
                 ),
+                account_id: AccountId::from_u64(99224416),
                 side: Side::Sell,
                 trade_amount: TradeAmount::Quantity(
                     Quantity::from_str("100").expect("quantity must be valid"),
@@ -1476,6 +1481,7 @@ mod tests {
                     Asset::new("AAPL").expect("asset code must be valid"),
                     Asset::new(settlement).expect("asset code must be valid"),
                 ),
+                account_id: AccountId::from_u64(99224416),
                 side: Side::Buy,
                 trade_amount: TradeAmount::Quantity(
                     Quantity::from_str("1").expect("quantity must be valid"),
@@ -1499,6 +1505,7 @@ mod tests {
                     Asset::new("AAPL").expect("asset code must be valid"),
                     Asset::new(settlement).expect("asset code must be valid"),
                 ),
+                account_id: AccountId::from_u64(99224416),
                 side: Side::Buy,
             },
         }

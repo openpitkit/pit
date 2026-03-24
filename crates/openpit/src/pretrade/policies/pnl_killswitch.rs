@@ -52,6 +52,7 @@ use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope}
 ///         Asset::new("AAPL")?,
 ///         usd.clone(),
 ///     ),
+///     account_id: openpit::param::AccountId::from_u64(98764321),
 ///     side: Side::Buy,
 ///     trade_amount: TradeAmount::Quantity(
 ///         Quantity::from_str("1")?,
@@ -344,7 +345,7 @@ fn validate_barrier(settlement: &Asset, barrier: Pnl) -> Result<(), PnlKillSwitc
 mod tests {
     use crate::core::{HasFee, HasInstrument, HasPnl, Instrument, OrderOperation};
     use crate::param::TradeAmount;
-    use crate::param::{Asset, Fee, Pnl, Price, Quantity, Side};
+    use crate::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side};
     use crate::pretrade::{CheckPreTradeStartPolicy, RejectCode, RejectScope};
     use rust_decimal::Decimal;
 
@@ -879,6 +880,7 @@ mod tests {
                 Asset::new("AAPL").expect("asset code must be valid"),
                 Asset::new(settlement).expect("asset code must be valid"),
             ),
+            account_id: AccountId::from_u64(99224416),
             side: Side::Buy,
             trade_amount: TradeAmount::Quantity(
                 Quantity::from_str("1").expect("quantity literal must be valid"),
