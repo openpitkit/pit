@@ -30,7 +30,6 @@ from ._openpit import (
 )
 from .core import Instrument
 from .param import (
-    AccountId,
     AdjustmentAmount,
     Asset,
     Leverage,
@@ -119,23 +118,15 @@ class AccountAdjustmentBalanceOperation(_AccountAdjustmentBalanceOperation):
     def __init__(
         self,
         *,
-        account_id: AccountId,
         asset: Asset,
         average_entry_price: Price | None = None,
     ) -> None:
-        _require_instance(account_id, AccountId, name="account_id")
         _require_instance(asset, Asset, name="asset")
         _require_instance(average_entry_price, Price, name="average_entry_price")
-        _AccountAdjustmentBalanceOperation.account_id.__set__(self, account_id)
         _AccountAdjustmentBalanceOperation.asset.__set__(self, asset.value)
         _AccountAdjustmentBalanceOperation.average_entry_price.__set__(
             self, average_entry_price
         )
-
-    # @typing.override
-    @property
-    def account_id(self) -> AccountId:
-        return _AccountAdjustmentBalanceOperation.account_id.__get__(self, type(self))
 
     # @typing.override
     @property
@@ -169,14 +160,12 @@ class AccountAdjustmentPositionOperation(_AccountAdjustmentPositionOperation):
     def __init__(
         self,
         *,
-        account_id: AccountId,
         instrument: Instrument,
         collateral_asset: Asset,
         average_entry_price: Price,
         mode: PositionMode,
         leverage: Leverage | None = None,
     ) -> None:
-        _require_instance(account_id, AccountId, name="account_id")
         _require_instance(instrument, Instrument, name="instrument")
         _require_instance(collateral_asset, Asset, name="collateral_asset")
         _require_instance(average_entry_price, Price, name="average_entry_price")
@@ -188,7 +177,6 @@ class AccountAdjustmentPositionOperation(_AccountAdjustmentPositionOperation):
         _AccountAdjustmentPositionOperation.settlement_asset.__set__(
             self, instrument.settlement_asset.value
         )
-        _AccountAdjustmentPositionOperation.account_id.__set__(self, account_id)
         _AccountAdjustmentPositionOperation.collateral_asset.__set__(
             self, collateral_asset.value
         )
@@ -202,11 +190,6 @@ class AccountAdjustmentPositionOperation(_AccountAdjustmentPositionOperation):
     @property
     def instrument(self) -> Instrument:
         return self.__dict__["_py_instrument"]
-
-    # @typing.override
-    @property
-    def account_id(self) -> AccountId:
-        return _AccountAdjustmentPositionOperation.account_id.__get__(self, type(self))
 
     # @typing.override
     @property

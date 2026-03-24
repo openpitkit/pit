@@ -59,7 +59,7 @@ impl<O> Request<O> {
     /// use openpit::OrderOperation;
     /// use openpit::param::TradeAmount;
     ///
-    /// let engine = Engine::<OrderOperation, ()>::builder().build()?;
+    /// let engine = Engine::<OrderOperation>::builder().build()?;
     /// let order = OrderOperation {
     ///     instrument: Instrument::new(
     ///         Asset::new("AAPL")?,
@@ -96,7 +96,7 @@ impl<O> Request<O> {
 #[cfg(test)]
 mod tests {
     use super::Request;
-    use crate::pretrade::handles::RequestHandleImpl;
+    use crate::pretrade::handle::RequestHandleImpl;
     use crate::pretrade::Reservation;
 
     #[test]

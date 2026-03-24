@@ -26,7 +26,7 @@ use openpit::pretrade::policies::RateLimitPolicy;
 use openpit::pretrade::policies::{OrderSizeLimit, OrderSizeLimitPolicy};
 use openpit::pretrade::{
     CheckPreTradeStartPolicy, Context, ExecutionReport, Mutation, Mutations, Policy, Reject,
-    RejectCode, RejectScope, RiskMutation,
+    RejectCode, RejectScope,
 };
 use openpit::{Engine, Instrument, Order};
 
@@ -360,16 +360,7 @@ impl Policy for NotionalCapPolicy {
             return;
         }
 
-        mutations.push(Mutation {
-            commit: RiskMutation::SetKillSwitch {
-                id: "integration.noop",
-                enabled: false,
-            },
-            rollback: RiskMutation::SetKillSwitch {
-                id: "integration.noop",
-                enabled: false,
-            },
-        });
+        mutations.push(Mutation::new(|| {}, || {}));
     }
 }
 

@@ -32,20 +32,28 @@ use openpit::pretrade::policies::PnlKillSwitchPolicy;
 use openpit::pretrade::policies::RateLimitPolicy;
 use openpit::pretrade::policies::{OrderSizeLimit, OrderSizeLimitPolicy};
 use openpit::pretrade::{
-    CheckPreTradeStartPolicy, Mutation, Mutations, Policy, Reject, RejectCode, RejectScope,
-    Request, Reservation, RiskMutation,
+    AccountAdjustmentPolicy, CheckPreTradeStartPolicy, Mutation, Mutations, Policy, Reject,
+    RejectCode, RejectScope, Request, Reservation,
 };
 use openpit::{
-    Engine, EngineBuildError, ExecutionReportOperation, ExecutionReportPositionImpact,
-    FinancialImpact, HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
+    AccountAdjustmentBalanceOperation, AccountAdjustmentPositionOperation, Engine,
+    EngineBuildError, ExecutionReportOperation, ExecutionReportPositionImpact, FinancialImpact,
+    HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentPending,
+    HasAccountAdjustmentPendingLowerBound, HasAccountAdjustmentPendingUpperBound,
+    HasAccountAdjustmentPositionLeverage, HasAccountAdjustmentReserved,
+    HasAccountAdjustmentReservedLowerBound, HasAccountAdjustmentReservedUpperBound,
+    HasAccountAdjustmentTotal, HasAccountAdjustmentTotalLowerBound,
+    HasAccountAdjustmentTotalUpperBound, HasAccountId, HasAutoBorrow, HasAverageEntryPrice,
+    HasBalanceAsset, HasClosePosition, HasCollateralAsset, HasExecutionReportIsTerminal,
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
     HasFee, HasInstrument, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
-    HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount, Instrument, OrderMargin,
-    OrderOperation, OrderPosition, PostTradeResult, RequestFieldAccessError,
+    HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode, HasReduceOnly, HasSide,
+    HasTradeAmount, Instrument, OrderMargin, OrderOperation, OrderPosition, PostTradeResult,
+    RequestFieldAccessError,
 };
 use pit_interop::{
-    ExecutionReportGroupAccess, GuardedOrderSizeLimit, GuardedOrderValidation,
-    GuardedPnlKillSwitch, GuardedRateLimit, OrderGroupAccess,
+    AccountAdjustmentGroupAccess, ExecutionReportGroupAccess, GuardedOrderSizeLimit,
+    GuardedOrderValidation, GuardedPnlKillSwitch, GuardedRateLimit, OrderGroupAccess,
 };
 use pyo3::basic::CompareOp;
 use pyo3::create_exception;
@@ -278,9 +286,191 @@ impl ExecutionReportGroupAccess for PythonExecutionReport {
     }
 }
 
+struct PythonAccountAdjustment {
+    operation: Option<PythonAccountAdjustmentOperation>,
+    amount: Option<openpit::AccountAdjustmentAmount>,
+    bounds: Option<openpit::AccountAdjustmentBounds>,
+    original: Py<PyAny>,
+}
+
+enum PythonAccountAdjustmentOperation {
+    Balance(AccountAdjustmentBalanceOperation),
+    Position(AccountAdjustmentPositionOperation),
+}
+
+impl PythonAccountAdjustment {
+    fn original(&self, py: Python<'_>) -> Py<PyAny> {
+        self.original.clone_ref(py)
+    }
+}
+
+impl HasBalanceAsset for PythonAccountAdjustment {
+    fn balance_asset(&self) -> Result<&Asset, RequestFieldAccessError> {
+        match self.operation.as_ref() {
+            Some(PythonAccountAdjustmentOperation::Balance(operation)) => Ok(&operation.asset),
+            _ => Err(RequestFieldAccessError::new("balance_asset")),
+        }
+    }
+}
+
+impl HasAccountAdjustmentBalanceAverageEntryPrice for PythonAccountAdjustment {
+    fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+        match self.operation.as_ref() {
+            Some(PythonAccountAdjustmentOperation::Balance(operation)) => {
+                Ok(operation.average_entry_price)
+            }
+            _ => Err(RequestFieldAccessError::new("balance_average_entry_price")),
+        }
+    }
+}
+
+impl HasPositionInstrument for PythonAccountAdjustment {
+    fn position_instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+        match self.operation.as_ref() {
+            Some(PythonAccountAdjustmentOperation::Position(operation)) => {
+                Ok(&operation.instrument)
+            }
+            _ => Err(RequestFieldAccessError::new("position_instrument")),
+        }
+    }
+}
+
+impl HasCollateralAsset for PythonAccountAdjustment {
+    fn collateral_asset(&self) -> Result<&Asset, RequestFieldAccessError> {
+        match self.operation.as_ref() {
+            Some(PythonAccountAdjustmentOperation::Position(operation)) => {
+                Ok(&operation.collateral_asset)
+            }
+            _ => Err(RequestFieldAccessError::new("collateral_asset")),
+        }
+    }
+}
+
+impl HasAverageEntryPrice for PythonAccountAdjustment {
+    fn average_entry_price(&self) -> Result<Price, RequestFieldAccessError> {
+        match self.operation.as_ref() {
+            Some(PythonAccountAdjustmentOperation::Position(operation)) => {
+                Ok(operation.average_entry_price)
+            }
+            _ => Err(RequestFieldAccessError::new("average_entry_price")),
+        }
+    }
+}
+
+impl HasPositionMode for PythonAccountAdjustment {
+    fn position_mode(&self) -> Result<PositionMode, RequestFieldAccessError> {
+        match self.operation.as_ref() {
+            Some(PythonAccountAdjustmentOperation::Position(operation)) => Ok(operation.mode),
+            _ => Err(RequestFieldAccessError::new("position_mode")),
+        }
+    }
+}
+
+impl HasAccountAdjustmentPositionLeverage for PythonAccountAdjustment {
+    fn position_leverage(&self) -> Result<Option<Leverage>, RequestFieldAccessError> {
+        match self.operation.as_ref() {
+            Some(PythonAccountAdjustmentOperation::Position(operation)) => Ok(operation.leverage),
+            _ => Err(RequestFieldAccessError::new("position_leverage")),
+        }
+    }
+}
+
+impl HasAccountAdjustmentTotal for PythonAccountAdjustment {
+    fn total(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
+        self.amount
+            .as_ref()
+            .map(|amount| amount.total)
+            .ok_or_else(|| RequestFieldAccessError::new("total"))
+    }
+}
+
+impl HasAccountAdjustmentReserved for PythonAccountAdjustment {
+    fn reserved(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
+        self.amount
+            .as_ref()
+            .map(|amount| amount.reserved)
+            .ok_or_else(|| RequestFieldAccessError::new("reserved"))
+    }
+}
+
+impl HasAccountAdjustmentPending for PythonAccountAdjustment {
+    fn pending(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
+        self.amount
+            .as_ref()
+            .map(|amount| amount.pending)
+            .ok_or_else(|| RequestFieldAccessError::new("pending"))
+    }
+}
+
+impl HasAccountAdjustmentTotalUpperBound for PythonAccountAdjustment {
+    fn total_upper_bound(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        self.bounds
+            .as_ref()
+            .map(|bounds| bounds.total_upper_bound)
+            .ok_or_else(|| RequestFieldAccessError::new("total_upper_bound"))
+    }
+}
+
+impl HasAccountAdjustmentTotalLowerBound for PythonAccountAdjustment {
+    fn total_lower_bound(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        self.bounds
+            .as_ref()
+            .map(|bounds| bounds.total_lower_bound)
+            .ok_or_else(|| RequestFieldAccessError::new("total_lower_bound"))
+    }
+}
+
+impl HasAccountAdjustmentReservedUpperBound for PythonAccountAdjustment {
+    fn reserved_upper_bound(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        self.bounds
+            .as_ref()
+            .map(|bounds| bounds.reserved_upper_bound)
+            .ok_or_else(|| RequestFieldAccessError::new("reserved_upper_bound"))
+    }
+}
+
+impl HasAccountAdjustmentReservedLowerBound for PythonAccountAdjustment {
+    fn reserved_lower_bound(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        self.bounds
+            .as_ref()
+            .map(|bounds| bounds.reserved_lower_bound)
+            .ok_or_else(|| RequestFieldAccessError::new("reserved_lower_bound"))
+    }
+}
+
+impl HasAccountAdjustmentPendingUpperBound for PythonAccountAdjustment {
+    fn pending_upper_bound(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        self.bounds
+            .as_ref()
+            .map(|bounds| bounds.pending_upper_bound)
+            .ok_or_else(|| RequestFieldAccessError::new("pending_upper_bound"))
+    }
+}
+
+impl HasAccountAdjustmentPendingLowerBound for PythonAccountAdjustment {
+    fn pending_lower_bound(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        self.bounds
+            .as_ref()
+            .map(|bounds| bounds.pending_lower_bound)
+            .ok_or_else(|| RequestFieldAccessError::new("pending_lower_bound"))
+    }
+}
+
+impl AccountAdjustmentGroupAccess for PythonAccountAdjustment {
+    fn has_operation(&self) -> bool {
+        self.operation.is_some()
+    }
+    fn has_amount(&self) -> bool {
+        self.amount.is_some()
+    }
+    fn has_bounds(&self) -> bool {
+        self.bounds.is_some()
+    }
+}
+
 #[pyclass(name = "Engine", module = "openpit", unsendable)]
 struct PyEngine {
-    inner: Engine<PythonOrder, PythonExecutionReport>,
+    inner: Engine<PythonOrder, PythonExecutionReport, PythonAccountAdjustment>,
 }
 
 #[pymethods]
@@ -290,6 +480,7 @@ impl PyEngine {
         PyEngineBuilder {
             start_policies: RefCell::new(Vec::new()),
             main_policies: RefCell::new(Vec::new()),
+            adjustment_policies: RefCell::new(Vec::new()),
         }
     }
 
@@ -341,6 +532,42 @@ impl PyEngine {
             return Err(error);
         }
         Ok(result)
+    }
+
+    #[pyo3(signature = (account_id, adjustments))]
+    fn apply_account_adjustment(
+        &self,
+        account_id: &Bound<'_, PyAny>,
+        adjustments: &Bound<'_, PyAny>,
+    ) -> PyResult<PyAccountAdjustmentBatchResult> {
+        clear_python_callback_error();
+
+        let account_id = parse_account_id_input(account_id)?;
+        let batch = adjustments
+            .iter()?
+            .map(|item| extract_python_account_adjustment(&item?))
+            .collect::<PyResult<Vec<_>>>()?;
+
+        match self.inner.apply_account_adjustment(account_id, &batch) {
+            Ok(()) => {
+                if let Some(error) = take_python_callback_error() {
+                    return Err(error);
+                }
+                Ok(PyAccountAdjustmentBatchResult {
+                    failed_index: None,
+                    reject: None,
+                })
+            }
+            Err(error) => {
+                if let Some(py_error) = take_python_callback_error() {
+                    return Err(py_error);
+                }
+                Ok(PyAccountAdjustmentBatchResult {
+                    failed_index: Some(error.index),
+                    reject: Some(convert_reject(&error.reject)),
+                })
+            }
+        }
     }
 }
 
@@ -549,6 +776,47 @@ impl PyExecuteResult {
     }
 }
 
+#[pyclass(
+    name = "AccountAdjustmentBatchResult",
+    module = "openpit.pretrade",
+    unsendable
+)]
+struct PyAccountAdjustmentBatchResult {
+    failed_index: Option<usize>,
+    reject: Option<PyReject>,
+}
+
+#[pymethods]
+impl PyAccountAdjustmentBatchResult {
+    #[getter]
+    fn ok(&self) -> bool {
+        self.reject.is_none()
+    }
+
+    #[getter]
+    fn failed_index(&self) -> Option<usize> {
+        self.failed_index
+    }
+
+    #[getter]
+    fn reject(&self) -> Option<PyReject> {
+        self.reject.clone()
+    }
+
+    fn __bool__(&self) -> bool {
+        self.ok()
+    }
+
+    fn __repr__(&self) -> String {
+        match (&self.failed_index, &self.reject) {
+            (Some(index), Some(reject)) => {
+                format!("AccountAdjustmentBatchResult(ok=False, failed_index={index}, reject={reject:?})")
+            }
+            _ => "AccountAdjustmentBatchResult(ok=True)".to_owned(),
+        }
+    }
+}
+
 enum StartPolicyConfig {
     OrderValidation,
     PnlKillSwitchShared {
@@ -581,12 +849,24 @@ enum MainPolicyConfig {
     },
 }
 
+enum AdjustmentPolicyConfig {
+    PythonCustom {
+        name: &'static str,
+        policy: Py<PyAny>,
+    },
+}
+
 struct PythonStartPolicyAdapter {
     name: &'static str,
     policy: Py<PyAny>,
 }
 
 struct PythonMainPolicyAdapter {
+    name: &'static str,
+    policy: Py<PyAny>,
+}
+
+struct PythonAccountAdjustmentPolicyAdapter {
     name: &'static str,
     policy: Py<PyAny>,
 }
@@ -735,6 +1015,83 @@ impl Policy<PythonOrder, PythonExecutionReport> for PythonMainPolicyAdapter {
                     false
                 }
             }
+        })
+    }
+}
+
+impl AccountAdjustmentPolicy<PythonAccountAdjustment> for PythonAccountAdjustmentPolicyAdapter {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn apply_account_adjustment(
+        &self,
+        account_id: AccountId,
+        adjustment: &PythonAccountAdjustment,
+        mutations: &mut Mutations,
+    ) -> Result<(), Reject> {
+        Python::with_gil(|py| {
+            let kwargs = PyDict::new_bound(py);
+            let py_account_id =
+                Py::new(py, PyAccountId { inner: account_id }).map_err(|error| {
+                    set_python_callback_error(error);
+                    python_callback_reject(self.name)
+                })?;
+            kwargs
+                .set_item("account_id", py_account_id)
+                .map_err(|error| {
+                    set_python_callback_error(error);
+                    python_callback_reject(self.name)
+                })?;
+            kwargs
+                .set_item("adjustment", adjustment.original(py))
+                .map_err(|error| {
+                    set_python_callback_error(error);
+                    python_callback_reject(self.name)
+                })?;
+            let result = self
+                .policy
+                .bind(py)
+                .call_method("apply_account_adjustment", (), Some(&kwargs))
+                .map_err(|error| {
+                    set_python_callback_error(error);
+                    python_callback_reject(self.name)
+                })?;
+
+            // None -> pass without mutations.
+            if result.is_none() {
+                return Ok(());
+            }
+
+            // Try PolicyReject first (has .code attribute).
+            if result.hasattr("code").map_err(|error| {
+                set_python_callback_error(error);
+                python_callback_reject(self.name)
+            })? {
+                let reject = parse_policy_reject(&result, self.name).map_err(|error| {
+                    set_python_callback_error(error);
+                    python_callback_reject(self.name)
+                })?;
+                return Err(reject);
+            }
+
+            // Otherwise treat as iterable of Mutation objects.
+            let iter = result.iter().map_err(|error| {
+                set_python_callback_error(error);
+                python_callback_reject(self.name)
+            })?;
+            for item in iter {
+                let item = item.map_err(|error| {
+                    set_python_callback_error(error);
+                    python_callback_reject(self.name)
+                })?;
+                let mutation = parse_policy_mutation(&item).map_err(|error| {
+                    set_python_callback_error(error);
+                    python_callback_reject(self.name)
+                })?;
+                mutations.push(mutation);
+            }
+            Ok(())
         })
     }
 }
@@ -919,6 +1276,113 @@ fn extract_python_execution_report(obj: &Bound<'_, PyAny>) -> PyResult<PythonExe
     })
 }
 
+fn extract_python_account_adjustment(obj: &Bound<'_, PyAny>) -> PyResult<PythonAccountAdjustment> {
+    let py = obj.py();
+    let adjustment = obj
+        .extract::<PyRef<'_, PyAccountAdjustment>>()
+        .map_err(|_| {
+            PyTypeError::new_err("adjustment must inherit from openpit.AccountAdjustment")
+        })?;
+
+    let operation = adjustment
+        .operation
+        .as_ref()
+        .map(|py_operation| {
+            match py_operation {
+                PyAccountAdjustmentOperation::Balance(py_balance_operation) => {
+                    let operation = py_balance_operation.bind(py).borrow();
+                    let asset = operation.asset.clone().ok_or_else(|| {
+                        PyValueError::new_err(
+                            "account adjustment balance operation requires asset",
+                        )
+                    })?;
+
+                    Ok(PythonAccountAdjustmentOperation::Balance(
+                        AccountAdjustmentBalanceOperation {
+                            asset,
+                            average_entry_price: operation.average_entry_price,
+                        },
+                    ))
+                }
+                PyAccountAdjustmentOperation::Position(py_position_operation) => {
+                    let operation = py_position_operation.bind(py).borrow();
+                    let instrument =
+                        match (&operation.underlying_asset, &operation.settlement_asset) {
+                            (Some(underlying_asset), Some(settlement_asset)) => {
+                                Instrument::new(underlying_asset.clone(), settlement_asset.clone())
+                            }
+                            _ => {
+                                return Err(PyValueError::new_err(
+                                    "account adjustment position operation requires underlying_asset and settlement_asset",
+                                ));
+                            }
+                        };
+                    let collateral_asset = operation.collateral_asset.clone().ok_or_else(|| {
+                        PyValueError::new_err(
+                            "account adjustment position operation requires collateral_asset",
+                        )
+                    })?;
+                    let average_entry_price = operation.average_entry_price.ok_or_else(|| {
+                        PyValueError::new_err(
+                            "account adjustment position operation requires average_entry_price",
+                        )
+                    })?;
+                    let mode = operation.mode.ok_or_else(|| {
+                        PyValueError::new_err(
+                            "account adjustment position operation requires mode",
+                        )
+                    })?;
+                    Ok(PythonAccountAdjustmentOperation::Position(
+                        AccountAdjustmentPositionOperation {
+                            instrument,
+                            collateral_asset,
+                            average_entry_price,
+                            mode,
+                            leverage: operation.leverage,
+                        },
+                    ))
+                }
+            }
+        })
+        .transpose()?;
+
+    let amount = adjustment
+        .amount
+        .as_ref()
+        .map(|py_amount| {
+            let value = py_amount.bind(py).borrow();
+            Ok::<_, PyErr>(openpit::AccountAdjustmentAmount {
+                total: value.total,
+                reserved: value.reserved,
+                pending: value.pending,
+            })
+        })
+        .transpose()?;
+
+    let bounds = adjustment
+        .bounds
+        .as_ref()
+        .map(|py_bounds| {
+            let value = py_bounds.bind(py).borrow();
+            Ok::<_, PyErr>(openpit::AccountAdjustmentBounds {
+                total_upper_bound: value.total_upper_bound,
+                total_lower_bound: value.total_lower_bound,
+                reserved_upper_bound: value.reserved_upper_bound,
+                reserved_lower_bound: value.reserved_lower_bound,
+                pending_upper_bound: value.pending_upper_bound,
+                pending_lower_bound: value.pending_lower_bound,
+            })
+        })
+        .transpose()?;
+
+    Ok(PythonAccountAdjustment {
+        operation,
+        amount,
+        bounds,
+        original: obj.clone().unbind(),
+    })
+}
+
 fn build_python_policy_context(py: Python<'_>, order: &PythonOrder) -> PyResult<Py<PyAny>> {
     let module = PyModule::import_bound(py, "openpit.pretrade")?;
     let cls = module.getattr("PolicyContext")?;
@@ -972,63 +1436,25 @@ fn parse_policy_reject(value: &Bound<'_, PyAny>, policy_name: &'static str) -> P
 }
 
 fn parse_policy_mutation(value: &Bound<'_, PyAny>) -> PyResult<Mutation> {
-    Ok(Mutation {
-        commit: parse_risk_mutation(&value.getattr("commit")?)?,
-        rollback: parse_risk_mutation(&value.getattr("rollback")?)?,
-    })
-}
+    let commit_callable = value.getattr("commit")?.unbind();
+    let rollback_callable = value.getattr("rollback")?.unbind();
 
-fn parse_risk_mutation(value: &Bound<'_, PyAny>) -> PyResult<RiskMutation> {
-    let kind = value
-        .getattr("kind")?
-        .extract::<String>()
-        .map_err(|_| PyValueError::new_err("risk mutation kind must be a string"))?;
-
-    match kind.as_str() {
-        "reserve_notional" => {
-            let settlement_asset_obj = value.getattr("settlement_asset")?;
-            let settlement_asset_str = settlement_asset_obj
-                .extract::<String>()
-                .or_else(|_| {
-                    settlement_asset_obj
-                        .getattr("value")
-                        .and_then(|v| v.extract::<String>())
-                })
-                .map_err(|_| {
-                    PyValueError::new_err(
-                        "reserve_notional.settlement_asset must be a string or openpit.param.Asset",
-                    )
-                })?;
-            Ok(RiskMutation::ReserveNotional {
-                asset: parse_asset(&settlement_asset_str)?,
-                amount: parse_volume_input(&value.getattr("amount")?)?,
-            })
-        }
-        "set_kill_switch" => {
-            let id = value
-                .getattr("kill_switch_id")?
-                .extract::<String>()
-                .map_err(|_| {
-                    PyValueError::new_err("set_kill_switch.kill_switch_id must be a string")
-                })?;
-            if id.trim().is_empty() {
-                return Err(PyValueError::new_err(
-                    "set_kill_switch.kill_switch_id must not be empty",
-                ));
-            }
-            let enabled = value
-                .getattr("enabled")?
-                .extract::<bool>()
-                .map_err(|_| PyValueError::new_err("set_kill_switch.enabled must be a bool"))?;
-            Ok(RiskMutation::SetKillSwitch {
-                id: leak_static_str(id),
-                enabled,
-            })
-        }
-        _ => Err(PyValueError::new_err(format!(
-            "unsupported risk mutation kind {kind:?}"
-        ))),
-    }
+    Ok(Mutation::new(
+        move || {
+            Python::with_gil(|py| {
+                if let Err(error) = commit_callable.bind(py).call0() {
+                    set_python_callback_error(error);
+                }
+            });
+        },
+        move || {
+            Python::with_gil(|py| {
+                if let Err(error) = rollback_callable.bind(py).call0() {
+                    set_python_callback_error(error);
+                }
+            });
+        },
+    ))
 }
 
 fn parse_reject_scope(value: &str) -> PyResult<RejectScope> {
@@ -1135,12 +1561,25 @@ impl PyEngineBuilder {
             });
         Ok(())
     }
+
+    fn push_account_adjustment_policy(&self, policy: &Bound<'_, PyAny>) -> PyResult<()> {
+        let name = extract_python_policy_name(policy)?;
+        ensure_callable_method(policy, "apply_account_adjustment")?;
+        self.adjustment_policies
+            .borrow_mut()
+            .push(AdjustmentPolicyConfig::PythonCustom {
+                name,
+                policy: policy.clone().unbind(),
+            });
+        Ok(())
+    }
 }
 
 #[pyclass(name = "EngineBuilder", module = "openpit", unsendable)]
 struct PyEngineBuilder {
     start_policies: RefCell<Vec<StartPolicyConfig>>,
     main_policies: RefCell<Vec<MainPolicyConfig>>,
+    adjustment_policies: RefCell<Vec<AdjustmentPolicyConfig>>,
 }
 
 #[pymethods]
@@ -1163,8 +1602,18 @@ impl PyEngineBuilder {
         Ok(slf)
     }
 
+    #[pyo3(signature = (policy))]
+    fn account_adjustment_policy<'py>(
+        slf: PyRef<'py, Self>,
+        policy: &Bound<'_, PyAny>,
+    ) -> PyResult<PyRef<'py, Self>> {
+        slf.push_account_adjustment_policy(policy)?;
+        Ok(slf)
+    }
+
     fn build(&self) -> PyResult<PyEngine> {
-        let mut builder = Engine::<PythonOrder, PythonExecutionReport>::builder();
+        let mut builder =
+            Engine::<PythonOrder, PythonExecutionReport, PythonAccountAdjustment>::builder();
 
         for policy in self.start_policies.borrow().iter() {
             builder = match policy {
@@ -1217,6 +1666,16 @@ impl PyEngineBuilder {
                         policy: Python::with_gil(|py| policy.clone_ref(py)),
                     })
                 }
+            };
+        }
+
+        for policy in self.adjustment_policies.borrow().iter() {
+            builder = match policy {
+                AdjustmentPolicyConfig::PythonCustom { name, policy } => builder
+                    .account_adjustment_policy(PythonAccountAdjustmentPolicyAdapter {
+                        name,
+                        policy: Python::with_gil(|py| policy.clone_ref(py)),
+                    }),
             };
         }
 
@@ -1787,7 +2246,6 @@ struct PyAccountAdjustmentAmount {
 )]
 #[derive(Clone)]
 struct PyAccountAdjustmentBalanceOperation {
-    account_id: Option<AccountId>,
     asset: Option<Asset>,
     average_entry_price: Option<Price>,
 }
@@ -1801,7 +2259,6 @@ struct PyAccountAdjustmentBalanceOperation {
 struct PyAccountAdjustmentPositionOperation {
     underlying_asset: Option<Asset>,
     settlement_asset: Option<Asset>,
-    account_id: Option<AccountId>,
     collateral_asset: Option<Asset>,
     average_entry_price: Option<Price>,
     mode: Option<PositionMode>,
@@ -2381,28 +2838,15 @@ impl PyAccountAdjustmentAmount {
 #[pymethods]
 impl PyAccountAdjustmentBalanceOperation {
     #[new]
-    #[pyo3(signature = (*, account_id = None, asset = None, average_entry_price = None))]
+    #[pyo3(signature = (*, asset = None, average_entry_price = None))]
     fn new(
-        account_id: Option<&Bound<'_, PyAny>>,
         asset: Option<String>,
         average_entry_price: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         Ok(Self {
-            account_id: account_id.map(parse_account_id_input).transpose()?,
             asset: asset.as_deref().map(parse_asset).transpose()?,
             average_entry_price: average_entry_price.map(parse_price_input).transpose()?,
         })
-    }
-
-    #[getter]
-    fn account_id(&self) -> Option<PyAccountId> {
-        self.account_id.map(|inner| PyAccountId { inner })
-    }
-
-    #[setter]
-    fn set_account_id(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.account_id = value.map(parse_account_id_input).transpose()?;
-        Ok(())
     }
 
     #[getter]
@@ -2429,8 +2873,7 @@ impl PyAccountAdjustmentBalanceOperation {
 
     fn __repr__(&self) -> String {
         format!(
-            "AccountAdjustmentBalanceOperation(account_id={:?}, asset={:?}, average_entry_price={:?})",
-            self.account_id().map(|v| v.value()),
+            "AccountAdjustmentBalanceOperation(asset={:?}, average_entry_price={:?})",
             self.asset(),
             self.average_entry_price(),
         )
@@ -2440,11 +2883,10 @@ impl PyAccountAdjustmentBalanceOperation {
 #[pymethods]
 impl PyAccountAdjustmentPositionOperation {
     #[new]
-    #[pyo3(signature = (*, underlying_asset = None, settlement_asset = None, account_id = None, collateral_asset = None, average_entry_price = None, mode = None, leverage = None))]
+    #[pyo3(signature = (*, underlying_asset = None, settlement_asset = None, collateral_asset = None, average_entry_price = None, mode = None, leverage = None))]
     fn new(
         underlying_asset: Option<String>,
         settlement_asset: Option<String>,
-        account_id: Option<&Bound<'_, PyAny>>,
         collateral_asset: Option<String>,
         average_entry_price: Option<&Bound<'_, PyAny>>,
         mode: Option<&Bound<'_, PyAny>>,
@@ -2460,7 +2902,6 @@ impl PyAccountAdjustmentPositionOperation {
         Ok(Self {
             underlying_asset: underlying_asset.as_deref().map(parse_asset).transpose()?,
             settlement_asset: settlement_asset.as_deref().map(parse_asset).transpose()?,
-            account_id: account_id.map(parse_account_id_input).transpose()?,
             collateral_asset: collateral_asset.as_deref().map(parse_asset).transpose()?,
             average_entry_price: average_entry_price.map(parse_price_input).transpose()?,
             mode: mode.map(parse_position_mode_input).transpose()?,
@@ -2487,17 +2928,6 @@ impl PyAccountAdjustmentPositionOperation {
     #[setter]
     fn set_settlement_asset(&mut self, value: Option<String>) -> PyResult<()> {
         self.settlement_asset = value.as_deref().map(parse_asset).transpose()?;
-        Ok(())
-    }
-
-    #[getter]
-    fn account_id(&self) -> Option<PyAccountId> {
-        self.account_id.map(|inner| PyAccountId { inner })
-    }
-
-    #[setter]
-    fn set_account_id(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.account_id = value.map(parse_account_id_input).transpose()?;
         Ok(())
     }
 
@@ -2547,10 +2977,9 @@ impl PyAccountAdjustmentPositionOperation {
 
     fn __repr__(&self) -> String {
         format!(
-            "AccountAdjustmentPositionOperation(underlying_asset={:?}, settlement_asset={:?}, account_id={:?}, collateral_asset={:?}, average_entry_price={:?}, mode={:?}, leverage={:?})",
+            "AccountAdjustmentPositionOperation(underlying_asset={:?}, settlement_asset={:?}, collateral_asset={:?}, average_entry_price={:?}, mode={:?}, leverage={:?})",
             self.underlying_asset(),
             self.settlement_asset(),
-            self.account_id().map(|v| v.value()),
             self.collateral_asset(),
             self.average_entry_price(),
             self.mode(),
@@ -3688,6 +4117,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyReject>()?;
     module.add_class::<PyStartPreTradeResult>()?;
     module.add_class::<PyExecuteResult>()?;
+    module.add_class::<PyAccountAdjustmentBatchResult>()?;
     module.add_class::<PyEngineBuilder>()?;
     module.add_class::<PyInstrument>()?;
     module.add_class::<PyOrderOperation>()?;
@@ -3719,6 +4149,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
 mod field_access_tests {
     use super::*;
     use openpit::RequestFieldAccessError;
+    use pyo3::types::PyList;
     use std::sync::Once;
 
     fn ensure_python_initialized() {
@@ -3745,6 +4176,32 @@ mod field_access_tests {
             position_impact: None,
             original: py.None(),
         })
+    }
+
+    fn install_policy_context_module(py: Python<'_>) -> PyResult<()> {
+        let module = PyModule::from_code_bound(
+            py,
+            r#"
+import sys
+import types
+
+pretrade = types.ModuleType("openpit.pretrade")
+
+class PolicyContext:
+    def __init__(self, *, order):
+        self.order = order
+
+pretrade.PolicyContext = PolicyContext
+openpit = sys.modules.get("openpit", types.ModuleType("openpit"))
+openpit.pretrade = pretrade
+sys.modules["openpit"] = openpit
+sys.modules["openpit.pretrade"] = pretrade
+"#,
+            "test_policy_context.py",
+            "test_policy_context",
+        )?;
+        let _ = module;
+        Ok(())
     }
 
     #[test]
@@ -3799,5 +4256,193 @@ mod field_access_tests {
     fn python_report_fee_returns_err_when_financial_impact_absent() {
         let report = report_without_groups();
         assert_eq!(report.fee(), Err(RequestFieldAccessError::new("fee")));
+    }
+
+    #[test]
+    fn python_engine_end_to_end_covers_python_adapter_paths() {
+        ensure_python_initialized();
+        Python::with_gil(|py| -> PyResult<()> {
+            install_policy_context_module(py)?;
+
+            let policy_module = PyModule::from_code_bound(
+                py,
+                r#"
+from types import SimpleNamespace
+
+class StartPolicy:
+    def __init__(self):
+        self.name = "PythonStartPolicy"
+
+    def check_pre_trade_start(self, *, order):
+        return None
+
+    def apply_execution_report(self, *, report):
+        return False
+
+class MainPolicy:
+    def __init__(self):
+        self.name = "PythonMainPolicy"
+
+    def perform_pre_trade_check(self, *, context):
+        mutation = SimpleNamespace(commit=lambda: None, rollback=lambda: None)
+        return SimpleNamespace(rejects=[], mutations=[mutation])
+
+    def apply_execution_report(self, *, report):
+        return False
+
+class AdjustmentPolicy:
+    def __init__(self):
+        self.name = "PythonAdjustmentPolicy"
+
+    def apply_account_adjustment(self, *, account_id, adjustment):
+        return None
+"#,
+                "test_python_policies.py",
+                "test_python_policies",
+            )?;
+
+            let start_policy = policy_module.getattr("StartPolicy")?.call0()?;
+            let main_policy = policy_module.getattr("MainPolicy")?.call0()?;
+            let adjustment_policy = policy_module.getattr("AdjustmentPolicy")?.call0()?;
+
+            let builder = PyEngineBuilder {
+                start_policies: RefCell::new(Vec::new()),
+                main_policies: RefCell::new(Vec::new()),
+                adjustment_policies: RefCell::new(Vec::new()),
+            };
+
+            let order_validation = Py::new(py, PyOrderValidationPolicy::new())?;
+            builder.push_start_policy(&order_validation.bind(py).clone().into_any())?;
+
+            let pnl_policy = Py::new(
+                py,
+                PyPnlKillSwitchPolicy {
+                    barriers: RefCell::new(vec![("USD".to_owned(), "500".to_owned())]),
+                    runtime_policy: RefCell::new(None),
+                },
+            )?;
+            builder.push_start_policy(&pnl_policy.bind(py).clone().into_any())?;
+
+            let rate_limit = Py::new(py, PyRateLimitPolicy::new(100, 1))?;
+            builder.push_start_policy(&rate_limit.bind(py).clone().into_any())?;
+
+            let size_limit = Py::new(
+                py,
+                PyOrderSizeLimit {
+                    inner: OrderSizeLimitConfig {
+                        settlement_asset: "USD".to_owned(),
+                        max_quantity: "1000".to_owned(),
+                        max_notional: "1000000".to_owned(),
+                    },
+                },
+            )?;
+            let size_limit_policy = Py::new(
+                py,
+                PyOrderSizeLimitPolicy::new(&size_limit.bind(py).borrow()),
+            )?;
+            builder.push_start_policy(&size_limit_policy.bind(py).clone().into_any())?;
+            builder.push_start_policy(&start_policy)?;
+            builder.push_main_policy(&main_policy)?;
+            builder.push_account_adjustment_policy(&adjustment_policy)?;
+
+            let engine = builder.build()?;
+
+            let operation = Py::new(
+                py,
+                PyOrderOperation {
+                    underlying_asset: Some(Asset::new("AAPL").expect("asset code must be valid")),
+                    settlement_asset: Some(Asset::new("USD").expect("asset code must be valid")),
+                    account_id: Some(AccountId::from_u64(99224416)),
+                    side: Some(Side::Buy),
+                    trade_amount: Some(TradeAmount::Quantity(
+                        Quantity::from_str("1").expect("quantity must be valid"),
+                    )),
+                    price: Some(Price::from_str("100").expect("price must be valid")),
+                },
+            )?;
+            let order = Py::new(
+                py,
+                PyOrder {
+                    operation: Some(operation),
+                    position: None,
+                    margin: None,
+                },
+            )?;
+
+            let start_result = engine.start_pre_trade(py, order.bind(py).clone().into_any())?;
+            assert!(start_result.ok());
+
+            let request = start_result.request(py).expect("request must be present");
+            let execute_result = request.bind(py).borrow().execute(py)?;
+            assert!(execute_result.ok());
+
+            let reservation = execute_result
+                .reservation(py)
+                .expect("reservation must be present");
+            {
+                let reservation_ref = reservation.bind(py).borrow();
+                let lock_price = reservation_ref
+                    .inner
+                    .borrow()
+                    .as_ref()
+                    .expect("reservation must exist")
+                    .lock()
+                    .price();
+                assert_eq!(lock_price, None);
+            }
+            reservation.bind(py).borrow().commit()?;
+
+            let report_operation = Py::new(
+                py,
+                PyExecutionReportOperation {
+                    underlying_asset: Some(Asset::new("AAPL").expect("asset code must be valid")),
+                    settlement_asset: Some(Asset::new("USD").expect("asset code must be valid")),
+                    account_id: Some(AccountId::from_u64(99224416)),
+                    side: Some(Side::Buy),
+                },
+            )?;
+            let report_impact = Py::new(
+                py,
+                PyFinancialImpact {
+                    pnl: Some(Pnl::from_str("1").expect("pnl must be valid")),
+                    fee: Some(Fee::from_str("0").expect("fee must be valid")),
+                },
+            )?;
+            let report = Py::new(
+                py,
+                PyExecutionReport {
+                    operation: Some(report_operation),
+                    financial_impact: Some(report_impact),
+                    fill: None,
+                    position_impact: None,
+                },
+            )?;
+            let _ = engine.apply_execution_report(&report.bind(py).clone().into_any())?;
+
+            let adjustment = Py::new(
+                py,
+                PyAccountAdjustment {
+                    operation: None,
+                    amount: None,
+                    bounds: None,
+                },
+            )?;
+            let account_id = Py::new(
+                py,
+                PyAccountId {
+                    inner: AccountId::from_u64(99224416),
+                },
+            )?;
+            let adjustments = PyList::new_bound(py, [adjustment.bind(py).clone().into_any()]);
+            let batch = engine.apply_account_adjustment(
+                &account_id.bind(py).clone().into_any(),
+                &adjustments.into_any(),
+            )?;
+            assert_eq!(batch.failed_index(), None);
+            assert!(batch.reject().is_none());
+
+            Ok(())
+        })
+        .expect("python adapter flow must succeed");
     }
 }

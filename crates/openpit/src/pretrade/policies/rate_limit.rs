@@ -38,7 +38,7 @@ use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope}
 /// use openpit::OrderOperation;
 /// use openpit::param::TradeAmount;
 ///
-/// let engine = Engine::<OrderOperation, ()>::builder()
+/// let engine = Engine::<OrderOperation>::builder()
 ///     .check_pre_trade_start_policy(RateLimitPolicy::new(2, Duration::from_secs(60)))
 ///     .build()?;
 ///

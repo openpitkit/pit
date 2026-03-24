@@ -22,7 +22,7 @@ from __future__ import annotations
 import typing
 
 from . import param
-from .pretrade import CheckPreTradeStartPolicy, Policy
+from .pretrade import AccountAdjustmentPolicy, CheckPreTradeStartPolicy, Policy
 
 class RejectError(Exception):
     """Python exception type exposed by the native module."""
@@ -705,6 +705,24 @@ class ExecuteResult:
     def __bool__(self) -> bool:
         """Boolean convenience alias for ``ok``."""
 
+class AccountAdjustmentBatchResult:
+    """Result of ``Engine.apply_account_adjustment``."""
+
+    @property
+    def ok(self) -> bool:
+        """Whether the full batch passed."""
+
+    @property
+    def failed_index(self) -> int | None:
+        """Zero-based index of the failing adjustment."""
+
+    @property
+    def reject(self) -> Reject | None:
+        """Reject data when validation fails."""
+
+    def __bool__(self) -> bool:
+        """Boolean convenience alias for ``ok``."""
+
 class PostTradeResult:
     """
     Result of ``Engine.apply_execution_report``.
@@ -805,6 +823,13 @@ class EngineBuilder:
         """Register a main-stage policy."""
         _ = policy
 
+    def account_adjustment_policy(
+        self,
+        policy: AccountAdjustmentPolicy,
+    ) -> EngineBuilder:
+        """Register an account-adjustment policy."""
+        _ = policy
+
     def build(self) -> Engine:
         """Build an engine instance."""
 
@@ -822,3 +847,11 @@ class Engine:
     def apply_execution_report(self, report: ExecutionReport) -> PostTradeResult:
         """Apply post-trade report to policy state."""
         _ = report
+
+    def apply_account_adjustment(
+        self,
+        account_id: param.AccountId,
+        adjustments: typing.Iterable[AccountAdjustment],
+    ) -> AccountAdjustmentBatchResult:
+        """Validate a batch of account adjustments."""
+        _ = account_id, adjustments

@@ -57,7 +57,7 @@ pub struct OrderSizeLimit {
 ///     [],
 /// );
 ///
-/// let engine = Engine::<OrderOperation, ()>::builder()
+/// let engine = Engine::<OrderOperation>::builder()
 ///     .check_pre_trade_start_policy(policy)
 ///     .build()?;
 ///

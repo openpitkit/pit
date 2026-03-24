@@ -30,7 +30,7 @@ use openpit::pretrade::policies::RateLimitPolicy;
 use openpit::pretrade::policies::{OrderSizeLimit, OrderSizeLimitPolicy};
 use openpit::pretrade::{
     CheckPreTradeStartPolicy, Context, Mutation, Mutations, Policy, Reject, RejectCode,
-    RejectScope, Rejects, RiskMutation,
+    RejectScope, Rejects,
 };
 use openpit::{
     Engine, EngineBuildError, ExecutionReportOperation, FinancialImpact, HasClosePosition, HasFee,
@@ -887,16 +887,7 @@ impl Policy<TestOrder, TestReport> for NotionalCapPolicy {
             return;
         }
 
-        mutations.push(Mutation {
-            commit: RiskMutation::SetKillSwitch {
-                id: "integration.noop",
-                enabled: false,
-            },
-            rollback: RiskMutation::SetKillSwitch {
-                id: "integration.noop",
-                enabled: false,
-            },
-        });
+        mutations.push(Mutation::new(|| {}, || {}));
     }
 
     fn apply_execution_report(&self, _report: &TestReport) -> bool {

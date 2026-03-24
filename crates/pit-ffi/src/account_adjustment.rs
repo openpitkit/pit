@@ -45,7 +45,7 @@ pub struct AccountAdjustment {
 #[cfg(test)]
 mod tests {
     use super::{AccountAdjustment, AccountAdjustmentOperation};
-    use openpit::param::{AccountId, AdjustmentAmount, Asset, PositionMode, PositionSize, Price};
+    use openpit::param::{AdjustmentAmount, Asset, PositionMode, PositionSize, Price};
     use openpit::{
         AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
         AccountAdjustmentPositionOperation, Instrument,
@@ -96,7 +96,6 @@ mod tests {
         let payload = AccountAdjustment {
             operation: Some(AccountAdjustmentOperation::Balance(
                 AccountAdjustmentBalanceOperation {
-                    account_id: AccountId::from_u64(99),
                     asset: Asset::new("CHF").expect("asset code must be valid"),
                     average_entry_price: None,
                 },
@@ -128,7 +127,6 @@ mod tests {
         assert_eq!(
             operation,
             AccountAdjustmentOperation::Balance(AccountAdjustmentBalanceOperation {
-                account_id: AccountId::from_u64(99),
                 asset: Asset::new("CHF").expect("asset code must be valid"),
                 average_entry_price: None,
             })
@@ -153,7 +151,6 @@ mod tests {
         let payload = AccountAdjustment {
             operation: Some(AccountAdjustmentOperation::Position(
                 AccountAdjustmentPositionOperation {
-                    account_id: AccountId::from_u64(100),
                     instrument: Instrument::new(
                         Asset::new("XRP").expect("asset code must be valid"),
                         Asset::new("USD").expect("asset code must be valid"),
@@ -189,7 +186,6 @@ mod tests {
         assert_eq!(
             operation,
             AccountAdjustmentOperation::Position(AccountAdjustmentPositionOperation {
-                account_id: AccountId::from_u64(100),
                 instrument: Instrument::new(
                     Asset::new("XRP").expect("asset code must be valid"),
                     Asset::new("USD").expect("asset code must be valid"),

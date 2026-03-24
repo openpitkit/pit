@@ -61,7 +61,7 @@ use super::Lock;
 /// use openpit::{Engine, Instrument, OrderOperation};
 /// use openpit::param::TradeAmount;
 ///
-/// let engine = Engine::<OrderOperation, ()>::builder().build()?;
+/// let engine = Engine::<OrderOperation>::builder().build()?;
 /// let order = OrderOperation {
 ///     instrument: Instrument::new(
 ///         Asset::new("AAPL")?,
@@ -151,90 +151,54 @@ mod tests {
     use std::rc::Rc;
 
     use super::{Lock, Reservation, ReservationHandle};
-    use crate::param::{Asset, Price, Volume};
-    use crate::pretrade::handles::ReservationHandleImpl;
-    use crate::pretrade::{Mutation, RiskMutation};
+    use crate::param::Price;
+    use crate::pretrade::handle::ReservationHandleImpl;
+    use crate::pretrade::{Mutation, Mutations};
 
     #[test]
     fn drop_without_explicit_finalize_rolls_back() {
         let calls = Rc::new(RefCell::new(Vec::new()));
-        let calls_clone = Rc::clone(&calls);
-        let apply = Box::new(move |mutation: &RiskMutation| {
-            if let RiskMutation::SetKillSwitch { id, enabled } = mutation {
-                calls_clone.borrow_mut().push((*id, *enabled));
-            }
-        });
+        let mut mutations = Mutations::new();
+        let r1 = Rc::clone(&calls);
+        mutations.push(Mutation::new(
+            || {},
+            move || {
+                r1.borrow_mut().push("m1");
+            },
+        ));
+        let r2 = Rc::clone(&calls);
+        mutations.push(Mutation::new(
+            || {},
+            move || {
+                r2.borrow_mut().push("m2");
+            },
+        ));
 
-        let reservation = Reservation::from_handle(Box::new(ReservationHandleImpl::new(
-            vec![
-                Mutation {
-                    commit: RiskMutation::SetKillSwitch {
-                        id: "m1",
-                        enabled: true,
-                    },
-                    rollback: RiskMutation::SetKillSwitch {
-                        id: "m1",
-                        enabled: false,
-                    },
-                },
-                Mutation {
-                    commit: RiskMutation::ReserveNotional {
-                        asset: Asset::new("USD").expect("asset code must be valid"),
-                        amount: Volume::from_str("10").expect("volume must be valid"),
-                    },
-                    rollback: RiskMutation::ReserveNotional {
-                        asset: Asset::new("USD").expect("asset code must be valid"),
-                        amount: Volume::from_str("10").expect("volume must be valid"),
-                    },
-                },
-            ],
-            apply,
-        )));
+        let reservation = Reservation::from_handle(Box::new(ReservationHandleImpl::new(mutations)));
 
         drop(reservation);
 
-        assert_eq!(&*calls.borrow(), &[("m1", false)]);
+        assert_eq!(&*calls.borrow(), &["m2", "m1"]);
     }
 
     #[test]
     fn drop_without_explicit_finalize_can_ignore_non_kill_switch_mutations() {
         let calls = Rc::new(RefCell::new(Vec::new()));
-        let calls_clone = Rc::clone(&calls);
-        let apply = Box::new(move |mutation: &RiskMutation| {
-            if let RiskMutation::SetKillSwitch { id, enabled } = mutation {
-                calls_clone.borrow_mut().push((*id, *enabled));
-            }
-        });
+        let mut mutations = Mutations::new();
+        let rollback_calls = Rc::clone(&calls);
+        mutations.push(Mutation::new(
+            || {},
+            move || {
+                rollback_calls.borrow_mut().push("rollback");
+            },
+        ));
+        mutations.push(Mutation::new(|| {}, || {}));
 
-        let reservation = Reservation::from_handle(Box::new(ReservationHandleImpl::new(
-            vec![
-                Mutation {
-                    commit: RiskMutation::SetKillSwitch {
-                        id: "m1",
-                        enabled: true,
-                    },
-                    rollback: RiskMutation::SetKillSwitch {
-                        id: "m1",
-                        enabled: false,
-                    },
-                },
-                Mutation {
-                    commit: RiskMutation::ReserveNotional {
-                        asset: Asset::new("USD").expect("asset code must be valid"),
-                        amount: Volume::from_str("10").expect("volume must be valid"),
-                    },
-                    rollback: RiskMutation::ReserveNotional {
-                        asset: Asset::new("USD").expect("asset code must be valid"),
-                        amount: Volume::from_str("10").expect("volume must be valid"),
-                    },
-                },
-            ],
-            apply,
-        )));
+        let reservation = Reservation::from_handle(Box::new(ReservationHandleImpl::new(mutations)));
 
         drop(reservation);
 
-        assert_eq!(&*calls.borrow(), &[("m1", false)]);
+        assert_eq!(&*calls.borrow(), &["rollback"]);
     }
 
     #[test]
@@ -280,6 +244,42 @@ mod tests {
         }));
 
         assert_eq!(reservation.lock().price(), None);
+    }
+
+    #[test]
+    fn commit_executes_commit_mutations() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let mut mutations = Mutations::new();
+        let commit_calls = Rc::clone(&calls);
+        mutations.push(Mutation::new(
+            move || {
+                commit_calls.borrow_mut().push("commit");
+            },
+            || {},
+        ));
+
+        let reservation = Reservation::from_handle(Box::new(ReservationHandleImpl::new(mutations)));
+        reservation.commit();
+
+        assert_eq!(&*calls.borrow(), &["commit"]);
+    }
+
+    #[test]
+    fn rollback_executes_rollback_mutations() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let mut mutations = Mutations::new();
+        let rollback_calls = Rc::clone(&calls);
+        mutations.push(Mutation::new(
+            || {},
+            move || {
+                rollback_calls.borrow_mut().push("rollback");
+            },
+        ));
+
+        let reservation = Reservation::from_handle(Box::new(ReservationHandleImpl::new(mutations)));
+        reservation.rollback();
+
+        assert_eq!(&*calls.borrow(), &["rollback"]);
     }
 
     struct LockedReservationHandle {

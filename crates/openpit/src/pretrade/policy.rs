@@ -17,80 +17,6 @@
 
 use super::{Context, Mutations, Reject, RejectCode, RejectScope};
 
-/// Start-stage pre-trade policy contract.
-///
-/// Start-stage policies run in [`crate::Engine::start_pre_trade`] before the
-/// engine creates a deferred request. They are intended for cheap gating logic
-/// such as session checks, static order validation, and stateful throttles.
-///
-/// Policies execute in registration order. The engine stops on the first
-/// reject, does not evaluate remaining start-stage policies, and does not roll
-/// back any state changes performed here.
-///
-/// `O` is the order contract type seen by the policy. `R` is the execution
-/// report contract type that will later be fed back through
-/// [`CheckPreTradeStartPolicy::apply_execution_report`].
-///
-/// # Examples
-///
-/// ```rust
-/// use std::cell::Cell;
-///
-/// use openpit::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
-///
-/// struct SessionPolicy {
-///     active: Cell<bool>,
-/// }
-///
-/// impl SessionPolicy {
-///     const NAME: &'static str = "SessionPolicy";
-/// }
-///
-/// impl<O, R> CheckPreTradeStartPolicy<O, R> for SessionPolicy {
-///     fn name(&self) -> &'static str {
-///         Self::NAME
-///     }
-///
-///     fn check_pre_trade_start(&self, _order: &O) -> Result<(), Reject> {
-///         if !self.active.get() {
-///             return Err(Reject::new(
-///                 Self::NAME,
-///                 RejectScope::Account,
-///                 RejectCode::Other,
-///                 "session inactive",
-///                 "trading session is closed",
-///             ));
-///         }
-///         Ok(())
-///     }
-///
-///     fn apply_execution_report(&self, _report: &R) -> bool {
-///         false
-///     }
-/// }
-/// ```
-pub trait CheckPreTradeStartPolicy<O, R> {
-    /// Stable policy name.
-    ///
-    /// Policy names must be unique across all policies registered in the same
-    /// engine instance.
-    fn name(&self) -> &'static str;
-
-    /// Performs start-stage checks against an immutable order.
-    ///
-    /// Returning `Ok(())` allows the engine to continue building the deferred
-    /// request. Returning [`Reject`] aborts the start stage immediately.
-    fn check_pre_trade_start(&self, order: &O) -> Result<(), Reject>;
-
-    /// Applies post-trade updates from execution reports.
-    ///
-    /// The engine calls this hook from [`crate::Engine::apply_execution_report`]
-    /// so that a start-stage policy can maintain state from realized outcomes.
-    ///
-    /// Returns `true` when this policy reports kill-switch trigger.
-    fn apply_execution_report(&self, report: &R) -> bool;
-}
-
 /// Main-stage pre-trade policy contract.
 ///
 /// Main-stage policies run during [`crate::pretrade::Request::execute`] after a
@@ -101,6 +27,15 @@ pub trait CheckPreTradeStartPolicy<O, R> {
 /// All registered policies are evaluated even when one policy already emitted a
 /// reject. If any reject is produced, the engine rolls back accumulated
 /// mutations in reverse order before returning the reject list to the caller.
+///
+/// # Rollback safety
+///
+/// Mutations registered during pre-trade checks may be committed or
+/// rolled back after external systems have already observed intermediate
+/// state (for example, a venue accepted an order based on a reserved
+/// notional). Avoid absolute-value rollback in this pipeline; prefer
+/// delta-based undo or capture the value to restore at registration
+/// time.
 ///
 /// `O` is the order contract type visible through [`Context`]. `R` is the
 /// execution report contract type used for post-trade updates.
@@ -142,6 +77,13 @@ pub trait Policy<O, R> {
     /// Policies may inspect the immutable request [`Context`], append mutations
     /// to be committed or rolled back later, and push one or more rejects into
     /// `rejects`.
+    ///
+    /// # Rollback safety
+    ///
+    /// In this pre-trade pipeline, rollback may happen after external systems
+    /// observed intermediate reserved state. Avoid absolute-value rollback in
+    /// mutations registered here; prefer delta-based undo or restore values
+    /// captured at registration time.
     fn perform_pre_trade_check(
         &self,
         ctx: &Context<'_, O>,
@@ -181,28 +123,10 @@ mod tests {
     use crate::pretrade::{Reject, RejectCode, RejectScope};
     use crate::RequestFieldAccessError;
 
-    use super::{
-        request_field_access_reject, CheckPreTradeStartPolicy, Context, Mutations, Policy,
-    };
-
-    struct StartPolicyNoop;
+    use super::{request_field_access_reject, Context, Mutations, Policy};
 
     type TestOrder = OrderOperation;
     type TestReport = WithExecutionReportOperation<WithFinancialImpact<()>>;
-
-    impl CheckPreTradeStartPolicy<TestOrder, TestReport> for StartPolicyNoop {
-        fn name(&self) -> &'static str {
-            "StartPolicyNoop"
-        }
-
-        fn check_pre_trade_start(&self, _order: &TestOrder) -> Result<(), Reject> {
-            Ok(())
-        }
-
-        fn apply_execution_report(&self, _report: &TestReport) -> bool {
-            false
-        }
-    }
 
     struct MainPolicyNoop;
 
@@ -225,7 +149,7 @@ mod tests {
     }
 
     #[test]
-    fn post_trade_hooks_return_false() {
+    fn apply_execution_report_hook_returns_false_for_noop_main_policy() {
         let report = WithExecutionReportOperation {
             inner: WithFinancialImpact {
                 inner: (),
@@ -244,7 +168,6 @@ mod tests {
             },
         };
 
-        assert!(!StartPolicyNoop.apply_execution_report(&report));
         assert!(!MainPolicyNoop.apply_execution_report(&report));
     }
 
@@ -266,11 +189,9 @@ mod tests {
         let mut mutations = Mutations::new();
         let mut rejects = Vec::new();
 
-        assert_eq!(StartPolicyNoop.name(), "StartPolicyNoop");
-        assert!(StartPolicyNoop.check_pre_trade_start(&order).is_ok());
         assert_eq!(MainPolicyNoop.name(), "MainPolicyNoop");
         MainPolicyNoop.perform_pre_trade_check(&ctx, &mut mutations, &mut rejects);
-        assert!(mutations.as_slice().is_empty());
+        assert!(mutations.is_empty());
         assert!(rejects.is_empty());
     }
 

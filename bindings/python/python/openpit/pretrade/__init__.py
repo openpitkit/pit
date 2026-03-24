@@ -18,6 +18,7 @@
 """Pre-trade pipeline components: policies, rejects, requests, and reservations."""
 
 from .._openpit import (
+    AccountAdjustmentBatchResult,
     ExecuteResult,
     PostTradeResult,
     Reject,
@@ -26,18 +27,17 @@ from .._openpit import (
     StartPreTradeResult,
 )
 from . import policies
-from ._enum import MutationKind, RejectCode, RejectScope
+from ._enum import RejectCode, RejectScope
 from .policy import (
+    AccountAdjustmentPolicy,
     CheckPreTradeStartPolicy,
     Mutation,
     Policy,
     PolicyContext,
     PolicyDecision,
     PolicyReject,
-    RiskMutation,
 )
 
-MutationKind.__module__ = __name__
 RejectCode.__module__ = __name__
 RejectScope.__module__ = __name__
 
@@ -84,11 +84,19 @@ On success it exposes a deferred request handle; on failure it exposes a
 single business reject produced by the first rejecting start-stage policy.
 """
 
+AccountAdjustmentBatchResult.__doc__ = """
+Result of ``Engine.apply_account_adjustment``.
+
+This object reports whether the full batch passed atomically and, on failure,
+contains the failing element index and reject payload.
+"""
+
 __all__ = [
+    "AccountAdjustmentBatchResult",
+    "AccountAdjustmentPolicy",
     "CheckPreTradeStartPolicy",
     "ExecuteResult",
     "Mutation",
-    "MutationKind",
     "Policy",
     "PolicyContext",
     "PolicyDecision",
@@ -99,7 +107,6 @@ __all__ = [
     "RejectScope",
     "Request",
     "Reservation",
-    "RiskMutation",
     "StartPreTradeResult",
     "policies",
 ]

@@ -59,10 +59,9 @@ class IntegrationStrategy(openpit.pretrade.Policy):
 
         return openpit.pretrade.PolicyDecision.accept(
             mutations=[
-                openpit.pretrade.Mutation.kill_switch(
-                    kill_switch_id="integration.noop",
-                    commit_enabled=False,
-                    rollback_enabled=False,
+                openpit.pretrade.Mutation(
+                    commit=lambda: None,
+                    rollback=lambda: None,
                 )
             ]
         )

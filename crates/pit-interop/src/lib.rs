@@ -7,7 +7,8 @@
 //!
 //! This crate provides:
 //!
-//! - [`OrderGroupAccess`] and [`ExecutionReportGroupAccess`] — traits
+//! - [`OrderGroupAccess`], [`ExecutionReportGroupAccess`], and
+//!   [`AccountAdjustmentGroupAccess`] — traits
 //!   that binding-level types implement to report which Optional groups
 //!   are populated.
 //! - `Guarded*` policy wrappers — each built-in policy has a guarded
@@ -43,7 +44,7 @@ pub mod order_validation;
 pub mod pnl_killswitch;
 pub mod rate_limit;
 
-pub use access::{ExecutionReportGroupAccess, OrderGroupAccess};
+pub use access::{AccountAdjustmentGroupAccess, ExecutionReportGroupAccess, OrderGroupAccess};
 pub use order_size_limit::GuardedOrderSizeLimit;
 pub use order_validation::GuardedOrderValidation;
 pub use pnl_killswitch::GuardedPnlKillSwitch;

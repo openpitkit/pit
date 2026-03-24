@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from .core import Instrument
 from .param import (
-    AccountId,
     AdjustmentAmount,
     Asset,
     Leverage,
@@ -42,12 +41,9 @@ class AccountAdjustmentBalanceOperation:
     def __init__(
         self,
         *,
-        account_id: AccountId,
         asset: Asset,
         average_entry_price: Price | None = None,
     ) -> None: ...
-    @property
-    def account_id(self) -> AccountId: ...
     @property
     def asset(self) -> Asset: ...
     @property
@@ -60,7 +56,6 @@ class AccountAdjustmentPositionOperation:
     def __init__(
         self,
         *,
-        account_id: AccountId,
         instrument: Instrument,
         collateral_asset: Asset,
         average_entry_price: Price,
@@ -69,8 +64,6 @@ class AccountAdjustmentPositionOperation:
     ) -> None: ...
     @property
     def instrument(self) -> Instrument: ...
-    @property
-    def account_id(self) -> AccountId: ...
     @property
     def collateral_asset(self) -> Asset: ...
     @property

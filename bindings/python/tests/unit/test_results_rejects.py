@@ -35,6 +35,41 @@ class AlwaysRejectPolicy(openpit.pretrade.Policy):
         return False
 
 
+class RejectWithMutationPolicy(openpit.pretrade.Policy):
+    @property
+    def name(self) -> str:
+        return "RejectWithMutationPolicy"
+
+    def perform_pre_trade_check(
+        self, *, context: openpit.pretrade.PolicyContext
+    ) -> openpit.pretrade.PolicyDecision:
+        _ = context
+        return openpit.pretrade.PolicyDecision.reject(
+            rejects=[
+                openpit.pretrade.PolicyReject(
+                    code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
+                    reason="main stage rejected with mutation",
+                    details="synthetic reject with mutation",
+                    scope=openpit.pretrade.RejectScope.ORDER,
+                )
+            ],
+            mutations=[
+                openpit.pretrade.Mutation(
+                    commit=lambda: None,
+                    rollback=lambda: None,
+                )
+            ],
+        )
+
+    def apply_execution_report(
+        self,
+        *,
+        report: openpit.ExecutionReport,
+    ) -> bool:
+        _ = report
+        return False
+
+
 @pytest.mark.unit
 def test_start_result_exposes_reject_without_exception() -> None:
     engine = (
@@ -79,6 +114,27 @@ def test_execute_result_exposes_rejects_without_exception() -> None:
     assert reject.code == openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED
     assert reject.scope == "order"
     assert "ExecuteResult" in repr(execute_result)
+
+
+@pytest.mark.unit
+def test_execute_result_reject_with_mutations_still_has_no_reservation() -> None:
+    engine = (
+        openpit.Engine.builder()
+        .pre_trade_policy(
+            policy=RejectWithMutationPolicy(),
+        )
+        .build()
+    )
+    request = engine.start_pre_trade(order=conftest.make_order()).request
+    execute_result = request.execute()
+
+    assert not execute_result
+    assert execute_result.reservation is None
+    assert len(execute_result.rejects) == 1
+    reject = execute_result.rejects[0]
+    assert reject.policy == "RejectWithMutationPolicy"
+    assert reject.code == openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED
+    assert reject.scope == "order"
 
 
 @pytest.mark.unit

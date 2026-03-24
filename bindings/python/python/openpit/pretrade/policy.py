@@ -84,9 +84,9 @@ import dataclasses
 import typing
 
 if typing.TYPE_CHECKING:
-    from .. import ExecutionReport, Order
-from ..param import Asset, Volume
-from ._enum import MutationKind, RejectScope
+    from .. import AccountAdjustment, ExecutionReport, Order
+from ..param import AccountId
+from ._enum import RejectScope
 
 
 @dataclasses.dataclass(frozen=True)
@@ -130,147 +130,42 @@ class PolicyReject:
 
 
 @dataclasses.dataclass(frozen=True)
-class RiskMutation:
-    """
-    Closed-set mutation descriptor consumed by the Rust engine.
-
-    Use class constructors :meth:`reserve_notional` and :meth:`kill_switch`.
-    Avoid creating instances manually unless you need full control.
-    """
-
-    kind: MutationKind
-    settlement_asset: Asset | None = None
-    amount: Volume | None = None
-    kill_switch_id: str | None = None
-    enabled: bool | None = None
-
-    def __post_init__(self) -> None:
-        if self.kind == MutationKind.RESERVE_NOTIONAL:
-            if not self.settlement_asset:
-                raise ValueError("reserve_notional requires settlement_asset")
-            if self.amount is None:
-                raise ValueError("reserve_notional requires amount")
-            return
-
-        if self.kind == MutationKind.SET_KILL_SWITCH:
-            if not self.kill_switch_id:
-                raise ValueError("set_kill_switch requires kill_switch_id")
-            if not isinstance(self.enabled, bool):
-                raise ValueError("set_kill_switch requires enabled bool")
-            return
-
-        raise ValueError("unsupported mutation kind")
-
-    @classmethod
-    def reserve_notional(
-        cls,
-        settlement_asset: Asset,
-        amount: Volume,
-    ) -> RiskMutation:
-        """
-        Create a reserve-notional mutation.
-
-        Args:
-            settlement_asset: Settlement asset identifier.
-            amount: Reserved notional amount.
-
-        Returns:
-            RiskMutation: Mutation with
-                ``kind=openpit.pretrade.MutationKind.RESERVE_NOTIONAL``.
-        """
-        return cls(
-            kind=MutationKind.RESERVE_NOTIONAL,
-            settlement_asset=settlement_asset,
-            amount=amount,
-        )
-
-    @classmethod
-    def kill_switch(
-        cls,
-        kill_switch_id: str,
-        enabled: bool,
-    ) -> RiskMutation:
-        """
-        Create a kill-switch mutation.
-
-        Args:
-            kill_switch_id: Kill-switch identifier.
-            enabled: Desired kill-switch state.
-
-        Returns:
-            RiskMutation: Mutation with
-                ``kind=openpit.pretrade.MutationKind.SET_KILL_SWITCH``.
-        """
-        return cls(
-            kind=MutationKind.SET_KILL_SWITCH,
-            kill_switch_id=kill_switch_id,
-            enabled=enabled,
-        )
-
-
-@dataclasses.dataclass(frozen=True)
 class Mutation:
+    """Commit/rollback action pair registered by a policy.
+
+    The engine applies commit actions in registration order on success,
+    and rollback actions in reverse registration order on failure.
+
+    Both ``commit`` and ``rollback`` must be callables that take no
+    arguments. The engine calls each at most once.
+
+    Rollback safety by pipeline:
+
+    - Account adjustment pipeline: rollback by absolute value is safe.
+      The entire batch runs within a single engine call. No external
+      system observes intermediate state.
+    - Pre-trade pipeline: rollback by absolute value can break
+      consistency. Between reservation creation and finalization,
+      external systems may observe reserved state. Prefer delta-based
+      rollback.
+
+    Example::
+
+        counter = 0
+
+        def on_commit():
+            nonlocal counter
+            counter += 100
+
+        def on_rollback():
+            nonlocal counter
+            counter -= 100
+
+        mutation = Mutation(commit=on_commit, rollback=on_rollback)
     """
-    Commit/rollback mutation pair for main-stage policies.
 
-    The engine applies ``commit`` on successful reservation finalization and
-    ``rollback`` when a reservation is rolled back or when execute stage fails.
-    """
-
-    commit: RiskMutation
-    rollback: RiskMutation
-
-    @classmethod
-    def reserve_notional(
-        cls,
-        settlement_asset: Asset,
-        commit_amount: Volume,
-        rollback_amount: Volume,
-    ) -> Mutation:
-        """
-        Build a reserve-notional commit/rollback pair.
-
-        Args:
-            settlement_asset: Settlement asset symbol.
-            commit_amount: Amount to apply on commit.
-            rollback_amount: Amount to apply on rollback.
-        """
-        return cls(
-            commit=RiskMutation.reserve_notional(
-                settlement_asset=settlement_asset,
-                amount=commit_amount,
-            ),
-            rollback=RiskMutation.reserve_notional(
-                settlement_asset=settlement_asset,
-                amount=rollback_amount,
-            ),
-        )
-
-    @classmethod
-    def kill_switch(
-        cls,
-        kill_switch_id: str,
-        commit_enabled: bool,
-        rollback_enabled: bool,
-    ) -> Mutation:
-        """
-        Build a kill-switch commit/rollback pair.
-
-        Args:
-            kill_switch_id: Kill-switch identifier.
-            commit_enabled: State to apply on commit.
-            rollback_enabled: State to apply on rollback.
-        """
-        return cls(
-            commit=RiskMutation.kill_switch(
-                kill_switch_id=kill_switch_id,
-                enabled=commit_enabled,
-            ),
-            rollback=RiskMutation.kill_switch(
-                kill_switch_id=kill_switch_id,
-                enabled=rollback_enabled,
-            ),
-        )
+    commit: typing.Callable[[], None]
+    rollback: typing.Callable[[], None]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -428,3 +323,50 @@ class Policy(abc.ABC):
                 processing the report, otherwise ``False``.
         """
         raise NotImplementedError("apply_execution_report is not implemented")
+
+
+class AccountAdjustmentPolicy(abc.ABC):
+    """Interface for account-adjustment batch checks.
+
+    Stage semantics:
+    - called during ``engine.apply_account_adjustment(adjustments=...)``
+    - evaluated per batch element in registration order
+    - evaluation stops at first reject
+    - mutations are committed on batch success, rolled back in reverse
+      order on reject
+    """
+
+    @property
+    @abc.abstractmethod
+    def name(self) -> str:
+        """Return a stable, unique policy name."""
+        raise NotImplementedError("name is not implemented")
+
+    @abc.abstractmethod
+    def apply_account_adjustment(
+        self,
+        account_id: AccountId,
+        adjustment: AccountAdjustment,
+    ) -> PolicyReject | tuple[Mutation, ...] | None:
+        """Validate a single account adjustment.
+
+        Args:
+            account_id: Account identifier passed to
+                ``apply_account_adjustment``.
+            adjustment: Single adjustment element from the batch.
+
+        Returns:
+            - ``None`` if the adjustment passes with no mutations.
+            - ``tuple[Mutation, ...]`` if the adjustment passes and the
+              policy registers commit/rollback mutations. The engine
+              commits all mutations if the full batch passes, or rolls
+              them back in reverse order if any later element is rejected.
+            - ``PolicyReject`` to reject the whole batch immediately.
+
+        Rollback safety:
+            Account adjustment batches run within a single engine call. No
+            external system observes intermediate state, so rollback by
+            absolute value is safe. This differs from pre-trade mutations
+            where reserved state may be observed externally.
+        """
+        raise NotImplementedError("apply_account_adjustment is not implemented")

@@ -19,17 +19,18 @@ use std::ops::Deref;
 use std::time::Duration;
 
 use openpit::param::{
-    AccountId, Asset, Fee, Leverage, Pnl, PositionSide, Price, Quantity, Side, TradeAmount,
-    Volume,
+    AccountId, AdjustmentAmount, Asset, Fee, Leverage, Pnl, PositionMode, PositionSide,
+    PositionSize, Price, Quantity, Side, TradeAmount, Volume,
 };
 use openpit::pretrade::policies::{
     OrderSizeLimit, OrderSizeLimitPolicy, OrderValidationPolicy, PnlKillSwitchPolicy,
     RateLimitPolicy,
 };
 use openpit::pretrade::{
-    CheckPreTradeStartPolicy, Context, Mutations, Policy, Reject, RejectCode, RejectScope,
+    CheckPreTradeStartPolicy, Context, Mutation, Mutations, Policy, Reject, RejectCode, RejectScope,
 };
 use openpit::{
+    AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentPositionOperation,
     Engine, ExecutionReportOperation, FinancialImpact, HasOrderPrice, HasTradeAmount, Instrument,
     OrderOperation, RequestFields, WithExecutionReportOperation, WithFinancialImpact,
 };
@@ -249,7 +250,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     run_domain_types_examples()?;
     run_getting_started_examples()?;
     run_pre_trade_pipeline_examples()?;
+    run_account_adjustments_examples()?;
     run_notional_cap_policy_example()?;
+    run_policy_rollback_on_error_example()?;
     run_strategy_tag_policy_example()?;
     run_request_fields_example()?;
     Ok(())
@@ -351,7 +354,58 @@ fn run_pre_trade_pipeline_examples() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn run_account_adjustments_examples() -> Result<(), Box<dyn std::error::Error>> {
+    // Used in: pit.wiki/Account-Adjustments.md (Examples -> Rust).
+    #[derive(Clone)]
+    enum AccountAdjustmentOperation {
+        Balance(AccountAdjustmentBalanceOperation),
+        Position(AccountAdjustmentPositionOperation),
+    }
+
+    #[derive(Clone)]
+    struct AccountAdjustment {
+        operation: AccountAdjustmentOperation,
+        amount: AccountAdjustmentAmount,
+    }
+
+    let account_id = AccountId::from_u64(99224416);
+
+    let adjustments = vec![
+        AccountAdjustment {
+            operation: AccountAdjustmentOperation::Balance(AccountAdjustmentBalanceOperation {
+                asset: Asset::new("USD")?,
+                average_entry_price: None,
+            }),
+            amount: AccountAdjustmentAmount {
+                total: Some(AdjustmentAmount::Absolute(PositionSize::from_f64(10000.0)?)),
+                reserved: None,
+                pending: None,
+            },
+        },
+        AccountAdjustment {
+            operation: AccountAdjustmentOperation::Position(AccountAdjustmentPositionOperation {
+                instrument: Instrument::new(Asset::new("SPX")?, Asset::new("USD")?),
+                collateral_asset: Asset::new("USD")?,
+                average_entry_price: Price::from_f64(95000.0)?,
+                mode: PositionMode::Hedged,
+                leverage: None,
+            }),
+            amount: AccountAdjustmentAmount {
+                total: Some(AdjustmentAmount::Absolute(PositionSize::from_f64(-3.0)?)),
+                reserved: None,
+                pending: None,
+            },
+        },
+    ];
+
+    let engine = Engine::<(), (), AccountAdjustment>::builder().build()?;
+    let result = engine.apply_account_adjustment(account_id, &adjustments);
+    assert!(result.is_ok());
+    Ok(())
+}
+
 fn run_notional_cap_policy_example() -> Result<(), Box<dyn std::error::Error>> {
+    // Used in: pit.wiki/Policy-API.md (Example: Custom Main-Stage Policy -> Rust).
     let engine = Engine::<OrderOperation, PitExecutionReport>::builder()
         .pre_trade_policy(NotionalCapPolicy {
             max_abs_notional: Volume::from_str("1000")?,
@@ -367,6 +421,94 @@ fn run_notional_cap_policy_example() -> Result<(), Box<dyn std::error::Error>> {
         Err(rejects) => rejects,
     };
     assert_eq!(rejects[0].code, RejectCode::RiskLimitExceeded);
+    Ok(())
+}
+
+fn run_policy_rollback_on_error_example() -> Result<(), Box<dyn std::error::Error>> {
+    // Used in: pit.wiki/Policy-API.md (Rollback on Main-Stage Error -> Rust).
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct ReservePolicy {
+        reserved: Rc<RefCell<Volume>>,
+        next: Volume,
+    }
+
+    impl<O, R> Policy<O, R> for ReservePolicy {
+        fn name(&self) -> &'static str {
+            "ReservePolicy"
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            _ctx: &Context<'_, O>,
+            mutations: &mut Mutations,
+            _rejects: &mut Vec<Reject>,
+        ) {
+            let prev = *self.reserved.borrow();
+            let commit_reserved = Rc::clone(&self.reserved);
+            let rollback_reserved = Rc::clone(&self.reserved);
+            let next = self.next;
+            mutations.push(Mutation::new(
+                move || {
+                    *commit_reserved.borrow_mut() = next;
+                },
+                move || {
+                    *rollback_reserved.borrow_mut() = prev;
+                },
+            ));
+        }
+
+        fn apply_execution_report(&self, _report: &R) -> bool {
+            false
+        }
+    }
+
+    struct RejectingPolicy;
+
+    impl<O, R> Policy<O, R> for RejectingPolicy {
+        fn name(&self) -> &'static str {
+            "RejectingPolicy"
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            _ctx: &Context<'_, O>,
+            _mutations: &mut Mutations,
+            rejects: &mut Vec<Reject>,
+        ) {
+            rejects.push(Reject::new(
+                self.name(),
+                RejectScope::Order,
+                RejectCode::RiskLimitExceeded,
+                "forced reject",
+                "demonstrates rollback when a later policy fails",
+            ));
+        }
+
+        fn apply_execution_report(&self, _report: &R) -> bool {
+            false
+        }
+    }
+
+    let reserved = Rc::new(RefCell::new(Volume::from_str("0")?));
+    let reserve_policy = ReservePolicy {
+        reserved: Rc::clone(&reserved),
+        next: Volume::from_str("100")?,
+    };
+
+    let engine = Engine::<OrderOperation, PitExecutionReport>::builder()
+        .pre_trade_policy(reserve_policy)
+        .pre_trade_policy(RejectingPolicy)
+        .build()?;
+
+    let request = engine.start_pre_trade(aapl_usd_order("10", "25"))?;
+    let rejects = match request.execute() {
+        Ok(_) => panic!("main stage must reject"),
+        Err(rejects) => rejects,
+    };
+    assert_eq!(rejects[0].code, RejectCode::RiskLimitExceeded);
+    assert_eq!(reserved.borrow().to_string(), "0");
     Ok(())
 }
 

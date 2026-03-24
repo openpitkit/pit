@@ -15,9 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use crate::param::{
-    AccountId, AdjustmentAmount, Asset, Leverage, PositionMode, PositionSize, Price,
-};
+use crate::param::{AdjustmentAmount, Asset, Leverage, PositionMode, PositionSize, Price};
 use crate::{impl_request_has_field, impl_request_has_field_passthrough};
 
 use super::{
@@ -26,8 +24,8 @@ use super::{
     HasAccountAdjustmentPositionLeverage, HasAccountAdjustmentReserved,
     HasAccountAdjustmentReservedLowerBound, HasAccountAdjustmentReservedUpperBound,
     HasAccountAdjustmentTotal, HasAccountAdjustmentTotalLowerBound,
-    HasAccountAdjustmentTotalUpperBound, HasAccountId, HasAverageEntryPrice, HasBalanceAsset,
-    HasCollateralAsset, HasPositionInstrument, HasPositionMode, Instrument,
+    HasAccountAdjustmentTotalUpperBound, HasAverageEntryPrice, HasBalanceAsset, HasCollateralAsset,
+    HasPositionInstrument, HasPositionMode, Instrument,
 };
 
 /// Grouped total/reserved/pending adjustment payload.
@@ -59,7 +57,6 @@ impl_request_has_field!(
 impl_request_has_field_passthrough!(
     WithAccountAdjustmentAmount,
     inner,
-    HasAccountId, account_id, AccountId;
     HasBalanceAsset, balance_asset, &Asset;
     HasAccountAdjustmentBalanceAverageEntryPrice, balance_average_entry_price, Option<Price>;
     HasPositionInstrument, position_instrument, &Instrument;
@@ -78,7 +75,6 @@ impl_request_has_field_passthrough!(
 /// Direct adjustment of a physical asset balance without hedge/netting semantics.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountAdjustmentBalanceOperation {
-    pub account_id: AccountId,
     pub asset: Asset,
     /// Optional cost basis for the adjusted physical balance.
     pub average_entry_price: Option<Price>,
@@ -101,7 +97,6 @@ impl_request_has_field!(
     AccountAdjustmentBalanceOperation,
     WithAccountAdjustmentBalanceOperation,
     operation,
-    HasAccountId, account_id, AccountId, account_id;
     HasAccountAdjustmentBalanceAverageEntryPrice, balance_average_entry_price, Option<Price>, average_entry_price;
 );
 impl_request_has_field_passthrough!(
@@ -126,7 +121,6 @@ impl_request_has_field_passthrough!(
 /// Direct adjustment of a derivatives-like position with explicit position mode.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountAdjustmentPositionOperation {
-    pub account_id: AccountId,
     pub instrument: Instrument,
     /// Asset used to collateralize and settle the adjusted position state.
     ///
@@ -159,7 +153,6 @@ impl_request_has_field!(
     AccountAdjustmentPositionOperation,
     WithAccountAdjustmentPositionOperation,
     operation,
-    HasAccountId, account_id, AccountId, account_id;
     HasAverageEntryPrice, average_entry_price, Price, average_entry_price;
     HasPositionMode, position_mode, PositionMode, mode;
     HasAccountAdjustmentPositionLeverage, position_leverage, Option<Leverage>, leverage;
@@ -218,7 +211,6 @@ impl_request_has_field!(
 impl_request_has_field_passthrough!(
     WithAccountAdjustmentBounds,
     inner,
-    HasAccountId, account_id, AccountId;
     HasBalanceAsset, balance_asset, &Asset;
     HasAccountAdjustmentBalanceAverageEntryPrice, balance_average_entry_price, Option<Price>;
     HasPositionInstrument, position_instrument, &Instrument;
@@ -239,16 +231,14 @@ mod tests {
         WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
         WithAccountAdjustmentPositionOperation,
     };
-    use crate::param::{
-        AccountId, AdjustmentAmount, Asset, Leverage, PositionMode, PositionSize, Price,
-    };
+    use crate::param::{AdjustmentAmount, Asset, Leverage, PositionMode, PositionSize, Price};
     use crate::{
         HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentPending,
         HasAccountAdjustmentPendingLowerBound, HasAccountAdjustmentPendingUpperBound,
         HasAccountAdjustmentPositionLeverage, HasAccountAdjustmentReserved,
         HasAccountAdjustmentReservedLowerBound, HasAccountAdjustmentReservedUpperBound,
         HasAccountAdjustmentTotal, HasAccountAdjustmentTotalLowerBound,
-        HasAccountAdjustmentTotalUpperBound, HasAccountId, HasAverageEntryPrice, HasBalanceAsset,
+        HasAccountAdjustmentTotalUpperBound, HasAverageEntryPrice, HasBalanceAsset,
         HasCollateralAsset, HasPositionInstrument, HasPositionMode, Instrument,
     };
 
@@ -257,12 +247,10 @@ mod tests {
         let asset = Asset::new("USD").expect("must be valid");
         let average = Price::from_str("1.25").expect("must be valid");
         let operation = AccountAdjustmentBalanceOperation {
-            account_id: AccountId::from_u64(99224416),
             asset: asset.clone(),
             average_entry_price: Some(average),
         };
 
-        assert_eq!(operation.account_id(), Ok(AccountId::from_u64(99224416)));
         assert_eq!(operation.balance_asset(), Ok(&asset));
         assert_eq!(operation.balance_average_entry_price(), Ok(Some(average)));
     }
@@ -277,7 +265,6 @@ mod tests {
         let leverage = Leverage::from_u16(25).expect("must be valid");
 
         let operation = AccountAdjustmentPositionOperation {
-            account_id: AccountId::from_u64(2),
             instrument: instrument.clone(),
             collateral_asset: collateral.clone(),
             average_entry_price: Price::from_str("100").expect("must be valid"),
@@ -285,7 +272,6 @@ mod tests {
             leverage: Some(leverage),
         };
 
-        assert_eq!(operation.account_id(), Ok(AccountId::from_u64(2)));
         assert_eq!(operation.position_instrument(), Ok(&instrument));
         assert_eq!(operation.collateral_asset(), Ok(&collateral));
         assert_eq!(
@@ -353,13 +339,11 @@ mod tests {
         let with_balance = WithAccountAdjustmentBalanceOperation {
             inner: with_bounds,
             operation: AccountAdjustmentBalanceOperation {
-                account_id: AccountId::from_u64(5),
                 asset: Asset::new("USD").expect("must be valid"),
                 average_entry_price: None,
             },
         };
 
-        assert_eq!(with_balance.account_id(), Ok(AccountId::from_u64(5)));
         assert!(with_balance.total().expect("must be available").is_some());
         assert!(with_balance
             .total_upper_bound()
@@ -370,7 +354,6 @@ mod tests {
         let wrapped_position = WithAccountAdjustmentPositionOperation {
             inner: with_balance,
             operation: AccountAdjustmentPositionOperation {
-                account_id: AccountId::from_u64(5),
                 instrument: Instrument::new(
                     Asset::new("ETH").expect("must be valid"),
                     Asset::new("USD").expect("must be valid"),
@@ -399,7 +382,6 @@ mod tests {
         );
         let collateral = Asset::new("USDC").expect("must be valid");
         let position = AccountAdjustmentPositionOperation {
-            account_id: AccountId::from_u64(42),
             instrument: instrument.clone(),
             collateral_asset: collateral.clone(),
             average_entry_price: Price::from_str("10").expect("must be valid"),
@@ -411,7 +393,6 @@ mod tests {
         assert_eq!(position.collateral_asset(), Ok(&collateral));
 
         let balance = AccountAdjustmentBalanceOperation {
-            account_id: AccountId::from_u64(42),
             asset: collateral.clone(),
             average_entry_price: None,
         };
@@ -439,7 +420,6 @@ mod tests {
                 inner: WithAccountAdjustmentPositionOperation {
                     inner: (),
                     operation: AccountAdjustmentPositionOperation {
-                        account_id: AccountId::from_u64(42),
                         instrument: instrument.clone(),
                         collateral_asset: collateral.clone(),
                         average_entry_price: average,
@@ -465,7 +445,6 @@ mod tests {
 
         assert_eq!(request.total(), Ok(Some(total)));
         assert_eq!(request.pending(), Ok(Some(pending)));
-        assert_eq!(request.account_id(), Ok(AccountId::from_u64(42)));
         assert_eq!(request.position_instrument(), Ok(&instrument));
         assert_eq!(request.collateral_asset(), Ok(&collateral));
         assert_eq!(request.average_entry_price(), Ok(average));
@@ -493,7 +472,6 @@ mod tests {
                 inner: WithAccountAdjustmentBalanceOperation {
                     inner: (),
                     operation: AccountAdjustmentBalanceOperation {
-                        account_id: AccountId::from_u64(7),
                         asset: asset.clone(),
                         average_entry_price: Some(average),
                     },
@@ -516,7 +494,6 @@ mod tests {
 
         assert_eq!(request.reserved(), Ok(Some(reserved)));
         assert_eq!(request.pending(), Ok(Some(pending)));
-        assert_eq!(request.account_id(), Ok(AccountId::from_u64(7)));
         assert_eq!(request.balance_asset(), Ok(&asset));
         assert_eq!(request.balance_average_entry_price(), Ok(Some(average)));
         assert_eq!(request.total_lower_bound(), Ok(Some(total_lower)));

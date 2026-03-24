@@ -1,18 +1,14 @@
 import openpit
 import pytest
 
-_ACCOUNT_ID = openpit.param.AccountId.from_u64(99224416)
-
 
 @pytest.mark.unit
 def test_balance_operation_construction() -> None:
     operation = openpit.AccountAdjustmentBalanceOperation(
-        account_id=_ACCOUNT_ID,
         asset=openpit.param.Asset("USD"),
         average_entry_price=openpit.param.Price("1"),
     )
 
-    assert operation.account_id.value == _ACCOUNT_ID.value
     assert operation.asset.value == "USD"
     assert operation.average_entry_price.value == "1"
 
@@ -20,7 +16,6 @@ def test_balance_operation_construction() -> None:
 @pytest.mark.unit
 def test_position_operation_construction() -> None:
     operation = openpit.AccountAdjustmentPositionOperation(
-        account_id=_ACCOUNT_ID,
         instrument=openpit.Instrument(
             openpit.param.Asset("BTC"),
             openpit.param.Asset("USD"),
@@ -113,7 +108,6 @@ def test_adjustment_amount_absolute() -> None:
 def test_repr_and_basic_property_access() -> None:
     adjustment = openpit.AccountAdjustment(
         operation=openpit.AccountAdjustmentBalanceOperation(
-            account_id=_ACCOUNT_ID,
             asset=openpit.param.Asset("USD"),
         ),
         amount=openpit.AccountAdjustmentAmount(

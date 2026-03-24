@@ -192,3 +192,62 @@ def test_build_summary_keeps_functions_threshold_strict_with_zero_count_function
 
     assert file_summary["functions"]["threshold"] == 100.0
     assert file_summary["functions"]["ok"] is False
+
+
+def test_build_summary_lowers_threshold_for_uncovered_wildcard_fallback(tmp_path):
+    module = load_module()
+    source = tmp_path / "non_exhaustive_match.rs"
+    source.write_text(
+        "fn map(value: i32) -> i32 {\n"
+        "    match value {\n"
+        "        $(VALUE => RESULT,)+\n"
+        "        _ => 0,\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    export = {
+        "cargo_llvm_cov": "cargo-llvm-cov 0.0.0",
+        "data": [
+            {
+                "totals": {
+                    "lines": {"count": 5, "covered": 4, "percent": 80.0},
+                    "functions": {"count": 1, "covered": 1, "percent": 100.0},
+                    "regions": {"count": 5, "covered": 4, "percent": 80.0},
+                    "instantiations": {"count": 1, "covered": 1, "percent": 100.0},
+                },
+                "files": [
+                    {
+                        "filename": str(source),
+                        "summary": {
+                            "lines": {"count": 5, "covered": 4, "percent": 80.0},
+                            "functions": {"count": 1, "covered": 1, "percent": 100.0},
+                            "regions": {"count": 5, "covered": 4, "percent": 80.0},
+                        },
+                        "segments": [
+                            [2, 1, 1, True, True, False],
+                            [3, 1, 0, True, True, False],
+                            [4, 1, 0, True, True, False],
+                        ],
+                    }
+                ],
+                "functions": [
+                    {
+                        "name": "map",
+                        "count": 1,
+                        "filenames": [str(source)],
+                        "regions": [
+                            [2, 1, 3, 10, 1, 0, 0, 0],
+                            [4, 9, 4, 15, 0, 0, 0, 0],
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    summary = module.build_summary(export)
+    file_summary = summary["files"][0]
+
+    assert file_summary["lines"]["threshold"] == 97.0
+    assert file_summary["regions"]["threshold"] == 97.0

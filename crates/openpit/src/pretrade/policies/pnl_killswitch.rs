@@ -44,8 +44,7 @@ use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope}
 /// let policy = PnlKillSwitchPolicy::new(
 ///     (usd.clone(), Pnl::from_str("500")?),
 ///     [],
-/// )
-/// ?;
+/// )?;
 ///
 /// // Order passes when P&L is above the barrier.
 /// let order = OrderOperation {

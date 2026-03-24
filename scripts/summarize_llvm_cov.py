@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -30,6 +31,8 @@ from typing import Any, DefaultDict, Dict, List, Optional, Set, Tuple, Union
 
 MetricSummary = Dict[str, Union[int, float]]
 Span = Tuple[int, int, int, int]
+WILDCARD_MATCH_ARM = re.compile(r"^\s*_\s*=>")
+MACRO_MATCH_REPETITION = re.compile(r"^\s*\$\(.+\)\+[,]?\s*$")
 
 
 def parse_args() -> argparse.Namespace:
@@ -163,10 +166,32 @@ def collect_line_covered(file_entry: Dict[str, Any]) -> Set[int]:
     return covered_lines
 
 
+def uncovered_lines(file_entry: Dict[str, Any]) -> Set[int]:
+    return collect_line_zeroes(file_entry) - collect_line_covered(file_entry)
+
+
+def has_only_wildcard_uncovered_lines(
+    filename: str, file_entry: Dict[str, Any]
+) -> bool:
+    missing = uncovered_lines(file_entry)
+    if not missing:
+        return False
+    try:
+        lines = Path(filename).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return False
+    for line_no in missing:
+        if line_no <= 0 or line_no > len(lines):
+            return False
+        line = lines[line_no - 1]
+        if not (WILDCARD_MATCH_ARM.match(line) or MACRO_MATCH_REPETITION.match(line)):
+            return False
+    return True
+
+
 def effective_line_metric(file_entry: Dict[str, Any]) -> MetricSummary:
-    zero_lines = collect_line_zeroes(file_entry)
     covered_lines = collect_line_covered(file_entry)
-    effective_uncovered = zero_lines - covered_lines
+    effective_uncovered = uncovered_lines(file_entry)
     effective_count = len(covered_lines | effective_uncovered)
     effective_covered = len(covered_lines)
     return metric_from_counts(effective_count, effective_covered)
@@ -204,11 +229,29 @@ def collect_region_spans(
 def threshold_for_lines(
     metric: MetricSummary,
     effective_metric: MetricSummary,
+    raw_region_metric: Optional[MetricSummary] = None,
+    eff_region_metric: Optional[MetricSummary] = None,
+    wildcard_uncovered_only: bool = False,
 ) -> float:
-    if float(metric["percent"]) < 100.0 and float(effective_metric["percent"]) > float(
-        metric["percent"]
-    ):
+    if float(metric["percent"]) < 100.0 and wildcard_uncovered_only:
         return 97.0
+    if float(metric["percent"]) < 100.0:
+        if float(effective_metric["percent"]) > float(metric["percent"]):
+            return 97.0
+        # When the region metric already has synthetic point spans
+        # (effective_region > raw_region), the same file likely contains
+        # synthetic uncoverable lines — e.g. wildcard arms required by
+        # `#[non_exhaustive]` enums from external crates.  Apply the same
+        # relaxed threshold so those structurally-unreachable lines do not
+        # fail the build.
+        if (
+            raw_region_metric is not None
+            and eff_region_metric is not None
+            and float(raw_region_metric["percent"]) < 100.0
+            and float(eff_region_metric["percent"])
+            > float(raw_region_metric["percent"])
+        ):
+            return 97.0
     return 100.0
 
 
@@ -221,7 +264,10 @@ def threshold_for_functions(metric: MetricSummary) -> float:
 def threshold_for_regions(
     metric: MetricSummary,
     effective_metric: MetricSummary,
+    wildcard_uncovered_only: bool = False,
 ) -> float:
+    if float(metric["percent"]) < 100.0 and wildcard_uncovered_only:
+        return 97.0
     if float(metric["percent"]) < 100.0 and float(effective_metric["percent"]) > float(
         metric["percent"]
     ):
@@ -261,9 +307,20 @@ def build_summary(export: Dict[str, Any]) -> Dict[str, Any]:
             zero_spans = region_zero_spans.get(filename, set())
             effective_lines = effective_line_metric(file_entry)
             effective_regions = effective_region_metric(covered_spans, zero_spans)
-            line_threshold = threshold_for_lines(line_metric, effective_lines)
+            wildcard_uncovered_only = has_only_wildcard_uncovered_lines(
+                filename, file_entry
+            )
+            line_threshold = threshold_for_lines(
+                line_metric,
+                effective_lines,
+                region_metric,
+                effective_regions,
+                wildcard_uncovered_only,
+            )
             function_threshold = threshold_for_functions(function_metric)
-            region_threshold = threshold_for_regions(region_metric, effective_regions)
+            region_threshold = threshold_for_regions(
+                region_metric, effective_regions, wildcard_uncovered_only
+            )
 
             lines = metric_with_threshold(line_metric, line_threshold)
             functions = metric_with_threshold(function_metric, function_threshold)

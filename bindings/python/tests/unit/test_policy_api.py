@@ -69,23 +69,18 @@ def test_policy_reject_scope_validation() -> None:
 
 @pytest.mark.unit
 def test_policy_decision_and_mutation_factories() -> None:
-    mutation = openpit.pretrade.Mutation.reserve_notional(
-        settlement_asset=openpit.param.Asset("USD"),
-        commit_amount=openpit.param.Volume("10"),
-        rollback_amount=openpit.param.Volume("0"),
+    committed = []
+    rolled_back = []
+    mutation = openpit.pretrade.Mutation(
+        commit=lambda: committed.append("USD:10"),
+        rollback=lambda: rolled_back.append("USD:0"),
     )
     decision = openpit.pretrade.PolicyDecision.accept(mutations=[mutation])
 
     assert len(decision.rejects) == 0
     assert len(decision.mutations) == 1
-    assert (
-        decision.mutations[0].commit.kind
-        is openpit.pretrade.MutationKind.RESERVE_NOTIONAL
-    )
-    assert (
-        decision.mutations[0].rollback.kind
-        is openpit.pretrade.MutationKind.RESERVE_NOTIONAL
-    )
+    assert callable(mutation.commit)
+    assert callable(mutation.rollback)
 
 
 @pytest.mark.unit

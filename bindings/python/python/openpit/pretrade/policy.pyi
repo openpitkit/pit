@@ -20,10 +20,11 @@ from __future__ import annotations
 import abc
 import collections.abc
 import dataclasses
+import typing
 
-from .. import ExecutionReport, Order
-from ..param import Asset, Volume
-from ._enum import MutationKind, RejectScope
+from .. import AccountAdjustment, ExecutionReport, Order
+from ..param import AccountId
+from ._enum import RejectScope
 
 @dataclasses.dataclass(frozen=True)
 class PolicyContext:
@@ -37,45 +38,9 @@ class PolicyReject:
     scope: RejectScope = RejectScope.ORDER
 
 @dataclasses.dataclass(frozen=True)
-class RiskMutation:
-    kind: MutationKind
-    settlement_asset: Asset | None = None
-    amount: Volume | None = None
-    kill_switch_id: str | None = None
-    enabled: bool | None = None
-
-    @classmethod
-    def reserve_notional(
-        cls,
-        settlement_asset: Asset,
-        amount: Volume,
-    ) -> RiskMutation: ...
-    @classmethod
-    def kill_switch(
-        cls,
-        kill_switch_id: str,
-        enabled: bool,
-    ) -> RiskMutation: ...
-
-@dataclasses.dataclass(frozen=True)
 class Mutation:
-    commit: RiskMutation
-    rollback: RiskMutation
-
-    @classmethod
-    def reserve_notional(
-        cls,
-        settlement_asset: Asset,
-        commit_amount: Volume,
-        rollback_amount: Volume,
-    ) -> Mutation: ...
-    @classmethod
-    def kill_switch(
-        cls,
-        kill_switch_id: str,
-        commit_enabled: bool,
-        rollback_enabled: bool,
-    ) -> Mutation: ...
+    commit: typing.Callable[[], None]
+    rollback: typing.Callable[[], None]
 
 @dataclasses.dataclass(frozen=True)
 class PolicyDecision:
@@ -111,3 +76,14 @@ class Policy(abc.ABC):
     def perform_pre_trade_check(self, context: PolicyContext) -> PolicyDecision: ...
     @abc.abstractmethod
     def apply_execution_report(self, report: ExecutionReport) -> bool: ...
+
+class AccountAdjustmentPolicy(abc.ABC):
+    @property
+    @abc.abstractmethod
+    def name(self) -> str: ...
+    @abc.abstractmethod
+    def apply_account_adjustment(
+        self,
+        account_id: AccountId,
+        adjustment: AccountAdjustment,
+    ) -> PolicyReject | tuple[Mutation, ...] | None: ...

@@ -36,14 +36,6 @@ class RejectScope(_enum.StrEnum):
 
 
 @enum.unique
-class MutationKind(_enum.StrEnum):
-    """Closed set of reversible mutation kinds supported by Python policies."""
-
-    RESERVE_NOTIONAL = "reserve_notional"
-    SET_KILL_SWITCH = "set_kill_switch"
-
-
-@enum.unique
 class RejectCode(_enum.StrEnum):
     """Stable machine-readable reject codes used across built-in and custom policies."""
 
@@ -91,11 +83,6 @@ class RejectCode(_enum.StrEnum):
 
 RejectScope.ORDER.__doc__ = "Reject that applies only to the current order."
 RejectScope.ACCOUNT.__doc__ = "Reject that applies at account scope."
-
-MutationKind.RESERVE_NOTIONAL.__doc__ = (
-    "Mutation that reserves notional for a settlement asset."
-)
-MutationKind.SET_KILL_SWITCH.__doc__ = "Mutation that toggles a kill-switch state."
 
 RejectCode.MISSING_REQUIRED_FIELD.__doc__ = "A required field is absent."
 RejectCode.INVALID_FIELD_FORMAT.__doc__ = "A field exists but has an invalid format."

@@ -37,6 +37,18 @@ pub trait ExecutionReportGroupAccess {
     fn has_financial_impact(&self) -> bool;
 }
 
+/// Implemented by binding-level account-adjustment types so that guarded
+/// account-adjustment policies can check at runtime which Optional groups are
+/// present.
+pub trait AccountAdjustmentGroupAccess {
+    /// Returns `true` when the adjustment carries the operation group.
+    fn has_operation(&self) -> bool;
+    /// Returns `true` when the adjustment carries the amount group.
+    fn has_amount(&self) -> bool;
+    /// Returns `true` when the adjustment carries the bounds group.
+    fn has_bounds(&self) -> bool;
+}
+
 impl<T> OrderGroupAccess for T
 where
     T: std::ops::Deref,
@@ -57,6 +69,22 @@ where
     }
     fn has_financial_impact(&self) -> bool {
         self.deref().has_financial_impact()
+    }
+}
+
+impl<T> AccountAdjustmentGroupAccess for T
+where
+    T: std::ops::Deref,
+    T::Target: AccountAdjustmentGroupAccess,
+{
+    fn has_operation(&self) -> bool {
+        self.deref().has_operation()
+    }
+    fn has_amount(&self) -> bool {
+        self.deref().has_amount()
+    }
+    fn has_bounds(&self) -> bool {
+        self.deref().has_bounds()
     }
 }
 
@@ -88,6 +116,24 @@ mod tests {
         }
     }
 
+    struct FakeAdjustment {
+        has_op: bool,
+        has_amount: bool,
+        has_bounds: bool,
+    }
+
+    impl AccountAdjustmentGroupAccess for FakeAdjustment {
+        fn has_operation(&self) -> bool {
+            self.has_op
+        }
+        fn has_amount(&self) -> bool {
+            self.has_amount
+        }
+        fn has_bounds(&self) -> bool {
+            self.has_bounds
+        }
+    }
+
     #[test]
     fn order_group_access_via_box() {
         let present: Box<FakeOrder> = Box::new(FakeOrder { has_op: true });
@@ -116,5 +162,26 @@ mod tests {
         assert!(no_op.has_financial_impact());
         assert!(no_fi.has_operation());
         assert!(!no_fi.has_financial_impact());
+    }
+
+    #[test]
+    fn account_adjustment_group_access_via_box() {
+        let full: Box<FakeAdjustment> = Box::new(FakeAdjustment {
+            has_op: true,
+            has_amount: true,
+            has_bounds: true,
+        });
+        let missing_amount: Box<FakeAdjustment> = Box::new(FakeAdjustment {
+            has_op: true,
+            has_amount: false,
+            has_bounds: true,
+        });
+
+        assert!(full.has_operation());
+        assert!(full.has_amount());
+        assert!(full.has_bounds());
+        assert!(missing_amount.has_operation());
+        assert!(!missing_amount.has_amount());
+        assert!(missing_amount.has_bounds());
     }
 }

@@ -35,6 +35,7 @@
 //! 3. [`pretrade::Reservation::commit`] or
 //!    [`pretrade::Reservation::rollback`] finalizes reserved state.
 //! 4. [`Engine::apply_execution_report`] feeds realized outcomes back into policies.
+//! 5. [`Engine::apply_account_adjustment`] validates non-trade adjustment batches.
 //!
 //! The current crate scope is deliberately narrow: in-memory admission control,
 //! exact decimal value types, and a small set of built-in start-stage
@@ -45,7 +46,7 @@ mod core;
 pub mod param;
 pub mod pretrade;
 
-pub use core::engine::{Engine, EngineBuildError, EngineBuilder};
+pub use core::engine::{AccountAdjustmentBatchError, Engine, EngineBuildError, EngineBuilder};
 pub use core::{
     AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
     AccountAdjustmentPositionOperation, ExecutionReportFillDetails, ExecutionReportOperation,
@@ -70,4 +71,4 @@ pub use core::{
 #[cfg(feature = "derive")]
 pub use openpit_derive::RequestFields;
 pub use param::{AdjustmentAmount, PositionMode};
-pub use pretrade::PostTradeResult;
+pub use pretrade::{AccountAdjustmentPolicy, PostTradeResult};
