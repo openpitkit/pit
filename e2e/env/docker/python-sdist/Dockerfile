@@ -33,8 +33,6 @@ COPY bindings/python/pyproject.toml /opt/e2e/pyproject.toml
 COPY bindings/python/tests/conftest.py /opt/e2e/tests/conftest.py
 COPY bindings/python/tests/integration /opt/e2e/tests/integration
 COPY e2e/scripts/python-sdist.sh /usr/local/bin/run-release-e2e
-COPY e2e/clients/python/readme_quickstart.py /opt/e2e/readme_quickstart.py
-COPY e2e/clients/python/wiki_examples.py /opt/e2e/wiki_examples.py
 
 RUN ln -sf /usr/bin/python3 /usr/local/bin/python \
     && ln -sf /usr/bin/pip3 /usr/local/bin/pip \

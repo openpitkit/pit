@@ -29,6 +29,4 @@ sed "s/__OPENPIT_VERSION__/${OPENPIT_VERSION}/g" Cargo.toml.in > Cargo.toml
 rm Cargo.toml.in
 
 cargo fetch
-cargo test --test release_integration
-cargo run --bin readme_quickstart
-cargo run --bin wiki_examples
+cargo test

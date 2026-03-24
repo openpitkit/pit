@@ -21,6 +21,7 @@ WORKDIR /opt/e2e
 
 COPY e2e/scripts/rust-crate.sh /usr/local/bin/run-release-e2e
 COPY e2e/clients/rust /opt/e2e/rust-consumer
+COPY crates/openpit/tests /opt/e2e/rust-consumer/tests
 
 RUN chmod +x /usr/local/bin/run-release-e2e
 

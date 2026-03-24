@@ -39,7 +39,4 @@ python -m pip install --force-reinstall --no-deps /tmp/openpit-dist/*.tar.gz
 python -c "import importlib.metadata as m; version = m.version('openpit'); print(version); assert version == '${OPENPIT_VERSION}'"
 
 cd /opt/e2e/tests
-pytest integration/test_engine_integration.py
-
-python /opt/e2e/readme_quickstart.py
-python /opt/e2e/wiki_examples.py
+pytest integration/
