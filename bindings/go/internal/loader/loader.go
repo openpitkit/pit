@@ -28,7 +28,7 @@ import (
 	pitruntime "github.com/openpitkit/pit-go/internal/runtime"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 const (
 	envRuntimePath  = "OPENPIT_RUNTIME_LIBRARY_PATH"
