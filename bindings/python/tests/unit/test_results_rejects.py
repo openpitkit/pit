@@ -3,7 +3,7 @@ import openpit
 import pytest
 
 
-class AlwaysRejectPolicy(openpit.pretrade.Policy):
+class AlwaysRejectPolicy(openpit.pretrade.PreTradePolicy):
     # @typing.override
     @property
     def name(self) -> str:
@@ -11,9 +11,11 @@ class AlwaysRejectPolicy(openpit.pretrade.Policy):
 
     # @typing.override
     def perform_pre_trade_check(
-        self, *, context: openpit.pretrade.PolicyContext
+        self,
+        ctx: openpit.pretrade.PreTradeContext,
+        order: openpit.Order,
     ) -> openpit.pretrade.PolicyDecision:
-        _ = context
+        del ctx, order
         return openpit.pretrade.PolicyDecision.reject(
             rejects=[
                 openpit.pretrade.PolicyReject(
@@ -35,15 +37,17 @@ class AlwaysRejectPolicy(openpit.pretrade.Policy):
         return False
 
 
-class RejectWithMutationPolicy(openpit.pretrade.Policy):
+class RejectWithMutationPolicy(openpit.pretrade.PreTradePolicy):
     @property
     def name(self) -> str:
         return "RejectWithMutationPolicy"
 
     def perform_pre_trade_check(
-        self, *, context: openpit.pretrade.PolicyContext
+        self,
+        ctx: openpit.pretrade.PreTradeContext,
+        order: openpit.Order,
     ) -> openpit.pretrade.PolicyDecision:
-        _ = context
+        del ctx, order
         return openpit.pretrade.PolicyDecision.reject(
             rejects=[
                 openpit.pretrade.PolicyReject(
@@ -54,11 +58,42 @@ class RejectWithMutationPolicy(openpit.pretrade.Policy):
                 )
             ],
             mutations=[
-                openpit.pretrade.Mutation(
+                openpit.Mutation(
                     commit=lambda: None,
                     rollback=lambda: None,
                 )
             ],
+        )
+
+    def apply_execution_report(
+        self,
+        *,
+        report: openpit.ExecutionReport,
+    ) -> bool:
+        _ = report
+        return False
+
+
+class RejectWithUserDataTokenPolicy(openpit.pretrade.PreTradePolicy):
+    @property
+    def name(self) -> str:
+        return "RejectWithUserDataTokenPolicy"
+
+    def perform_pre_trade_check(
+        self,
+        ctx: openpit.pretrade.PreTradeContext,
+        order: openpit.Order,
+    ) -> openpit.pretrade.PolicyDecision:
+        del ctx, order
+        return openpit.pretrade.PolicyDecision.reject(
+            rejects=[
+                openpit.pretrade.PolicyReject(
+                    code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
+                    reason="main stage rejected",
+                    details="token roundtrip",
+                    user_data=0xCAFEBABE,
+                )
+            ]
         )
 
     def apply_execution_report(
@@ -81,16 +116,16 @@ def test_start_result_exposes_reject_without_exception() -> None:
     )
 
     start_result = engine.start_pre_trade(
-        order=conftest.make_order(trade_amount=openpit.param.Quantity("0"))
+        order=conftest.make_order(trade_amount=openpit.param.TradeAmount.quantity(0))
     )
     assert not start_result
     assert start_result.request is None
-    assert start_result.reject is not None
+    assert len(start_result.rejects) == 1
     assert (
-        start_result.reject.policy
+        start_result.rejects[0].policy
         == openpit.pretrade.policies.OrderValidationPolicy.NAME
     )
-    assert start_result.reject.scope == "order"
+    assert start_result.rejects[0].scope == "order"
     assert "StartPreTradeResult" in repr(start_result)
 
 
@@ -135,6 +170,81 @@ def test_execute_result_reject_with_mutations_still_has_no_reservation() -> None
     assert reject.policy == "RejectWithMutationPolicy"
     assert reject.code == openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED
     assert reject.scope == "order"
+
+
+@pytest.mark.unit
+def test_execute_result_reject_roundtrips_integer_user_data_token() -> None:
+    engine = (
+        openpit.Engine.builder()
+        .pre_trade_policy(policy=RejectWithUserDataTokenPolicy())
+        .build()
+    )
+    request = engine.start_pre_trade(order=conftest.make_order()).request
+    execute_result = request.execute()
+
+    assert not execute_result
+    assert len(execute_result.rejects) == 1
+    reject = execute_result.rejects[0]
+    assert reject.user_data == 0xCAFEBABE
+
+
+@pytest.mark.unit
+def test_execute_result_reject_user_data_defaults_to_zero() -> None:
+    engine = (
+        openpit.Engine.builder().pre_trade_policy(policy=AlwaysRejectPolicy()).build()
+    )
+    request = engine.start_pre_trade(order=conftest.make_order()).request
+    execute_result = request.execute()
+
+    assert not execute_result
+    assert len(execute_result.rejects) == 1
+    assert execute_result.rejects[0].user_data == 0
+
+
+class RejectWithInvalidUserDataPolicy(openpit.pretrade.PreTradePolicy):
+    @property
+    def name(self) -> str:
+        return "RejectWithInvalidUserDataPolicy"
+
+    def perform_pre_trade_check(
+        self,
+        ctx: openpit.pretrade.PreTradeContext,
+        order: openpit.Order,
+    ) -> openpit.pretrade.PolicyDecision:
+        del ctx, order
+        return openpit.pretrade.PolicyDecision.reject(
+            rejects=[
+                openpit.pretrade.PolicyReject(
+                    code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
+                    reason="main stage rejected",
+                    details="invalid token type",
+                    user_data="not-an-int",
+                )
+            ]
+        )
+
+    def apply_execution_report(
+        self,
+        *,
+        report: openpit.ExecutionReport,
+    ) -> bool:
+        _ = report
+        return False
+
+
+@pytest.mark.unit
+def test_execute_result_reject_user_data_invalid_type_raises_value_error() -> None:
+    engine = (
+        openpit.Engine.builder()
+        .pre_trade_policy(policy=RejectWithInvalidUserDataPolicy())
+        .build()
+    )
+    request = engine.start_pre_trade(order=conftest.make_order()).request
+    with pytest.raises(
+        ValueError,
+        match="reject.user_data must be an integer token \\(default 0\\)",
+    ):
+        request.execute()
 
 
 @pytest.mark.unit

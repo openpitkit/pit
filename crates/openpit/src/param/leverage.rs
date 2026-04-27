@@ -15,7 +15,8 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::{Error, ParamKind};
+use super::{Error, Notional, ParamKind};
+use rust_decimal::Decimal;
 use std::fmt::{Display, Formatter};
 
 /// Leverage multiplier used to calculate required margin.
@@ -41,11 +42,27 @@ impl Leverage {
     const MIN_RAW: u16 = Self::MIN * Self::SCALE;
     const MAX_RAW: u16 = Self::MAX * Self::SCALE;
 
-    fn from_raw(raw: u16) -> Result<Self, Error> {
+    /// Creates leverage from fixed-point raw value with scale [`Self::SCALE`].
+    ///
+    /// For example:
+    /// - `10` means `1.0x`
+    /// - `11` means `1.1x`
+    /// - `1005` means `100.5x`
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidLeverage`] when `raw` is outside
+    /// `10..=30000`.
+    pub fn from_raw(raw: u16) -> Result<Self, Error> {
         if !(Self::MIN_RAW..=Self::MAX_RAW).contains(&raw) {
             return Err(Error::InvalidLeverage);
         }
         Ok(Self(raw))
+    }
+
+    /// Returns fixed-point raw value with scale [`Self::SCALE`].
+    pub const fn raw(&self) -> u16 {
+        self.0
     }
 
     /// Creates leverage from an integer multiplier.
@@ -124,24 +141,42 @@ impl Leverage {
         f32::from(self.0) / f32::from(Self::SCALE)
     }
 
-    /// Returns the margin required for a given notional exposure.
+    /// Computes the margin required to hold `notional` at this leverage.
     ///
-    /// The margin is calculated as:
+    /// Formula: `margin = notional / leverage`.
     ///
-    /// `margin = notional / leverage`
+    /// Uses exact decimal arithmetic.
     ///
     /// # Examples
     ///
     /// ```
-    /// use openpit::param::Leverage;
+    /// use openpit::param::{Leverage, Notional};
     ///
     /// let lev = Leverage::from_u16(100)?;
-    /// let margin = lev.margin_required(1000.0);
-    /// assert_eq!(margin, 10.0);
+    /// let notional = Notional::from_str("10000")?;
+    /// let margin = lev.calculate_margin_required(notional)?;
+    /// assert_eq!(margin.to_string(), "100");
     /// # Ok::<(), openpit::param::Error>(())
     /// ```
-    pub fn margin_required(&self, notional: f64) -> f64 {
-        notional * f64::from(Self::SCALE) / f64::from(self.0)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Overflow`] with [`ParamKind::Notional`] on arithmetic
+    /// overflow.
+    pub fn calculate_margin_required(&self, notional: Notional) -> Result<Notional, Error> {
+        let raw = Decimal::from(self.raw());
+        let scale = Decimal::from(Self::SCALE);
+        // margin = notional × SCALE / raw  ≡  notional / (raw / SCALE)
+        let numerator = notional
+            .to_decimal()
+            .checked_mul(scale)
+            .ok_or(Error::Overflow {
+                param: ParamKind::Notional,
+            })?;
+        let margin = numerator.checked_div(raw).ok_or(Error::Overflow {
+            param: ParamKind::Notional,
+        })?;
+        Ok(Notional::new_unchecked(margin))
     }
 }
 
@@ -160,7 +195,7 @@ impl Display for Leverage {
 #[cfg(test)]
 mod tests {
     use super::Leverage;
-    use crate::param::{Error, ParamKind};
+    use crate::param::{Error, Notional, ParamKind};
 
     #[test]
     fn from_u16_creates_valid_leverage() {
@@ -174,6 +209,45 @@ mod tests {
         let lev = Leverage::from_u16(100).expect("leverage must be valid");
 
         assert_eq!(lev.value(), 100.0);
+    }
+
+    #[test]
+    fn from_raw_and_raw_roundtrip() {
+        let lev = Leverage::from_raw(1005).expect("leverage must be valid");
+        assert_eq!(lev.raw(), 1005);
+        assert_eq!(lev.value(), 100.5);
+    }
+
+    #[test]
+    fn from_raw_supports_fractional_table() {
+        let cases = [
+            (11_u16, 1.1_f32),
+            (1005_u16, 100.5_f32),
+            (29999_u16, 2999.9_f32),
+        ];
+        for (raw, expected) in cases {
+            let lev = Leverage::from_raw(raw).expect("leverage must be valid");
+            assert_eq!(lev.value(), expected);
+            assert_eq!(lev.raw(), raw);
+        }
+    }
+
+    #[test]
+    fn from_raw_boundaries_table() {
+        let cases = [(10_u16, 1.0_f32), (30000_u16, 3000.0_f32)];
+        for (raw, expected) in cases {
+            let lev = Leverage::from_raw(raw).expect("boundary leverage must be valid");
+            assert_eq!(lev.value(), expected);
+            assert_eq!(lev.raw(), raw);
+        }
+    }
+
+    #[test]
+    fn from_raw_rejects_invalid_range_table() {
+        let cases = [9_u16, 30001_u16];
+        for raw in cases {
+            assert_eq!(Leverage::from_raw(raw), Err(Error::InvalidLeverage));
+        }
     }
 
     #[test]
@@ -215,7 +289,7 @@ mod tests {
         let cases = [
             0.0_f64,
             0.9_f64,
-            1.111_f64,
+            1.11_f64,
             3000.1_f64,
             f64::NAN,
             f64::INFINITY,
@@ -237,10 +311,16 @@ mod tests {
     }
 
     #[test]
-    fn margin_required_calculates_expected_value() {
+    fn calculate_margin_required_calculates_expected_value() {
         let lev = Leverage::from_u16(100).expect("leverage must be valid");
+        let notional = Notional::from_str("1000").expect("notional must be valid");
 
-        assert_eq!(lev.margin_required(1000.0), 10.0);
+        assert_eq!(
+            lev.calculate_margin_required(notional)
+                .expect("margin must be valid")
+                .to_string(),
+            "10"
+        );
     }
 
     #[test]
@@ -270,5 +350,17 @@ mod tests {
         let leverage = Leverage::from_u16(3000).expect("leverage must be valid");
 
         assert_eq!(leverage.value(), 3000.0);
+    }
+
+    #[test]
+    fn from_f64_raw_from_raw_value_is_symmetric() {
+        let cases = [1.1_f64, 100.5_f64, 2999.9_f64, 1.0_f64, 3000.0_f64];
+        for input in cases {
+            let from_float = Leverage::from_f64(input).expect("leverage must be valid");
+            let from_raw =
+                Leverage::from_raw(from_float.raw()).expect("raw leverage must be valid");
+            assert_eq!(from_raw.raw(), from_float.raw());
+            assert_eq!(from_raw.value(), from_float.value());
+        }
     }
 }

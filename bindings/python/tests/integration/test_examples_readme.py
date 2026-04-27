@@ -26,10 +26,12 @@ def send_order_to_venue(order: openpit.Order) -> None:
 @pytest.mark.integration
 def test_readme_quickstart() -> None:
     # Source: bindings/python/README.md — Usage
+    # Shared with: pit.wiki/Getting-Started.md
+    # Keep README and wiki versions of this example in sync.
 
     # 1. Configure policies.
     pnl_policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
-        settlement_asset=openpit.param.Asset("USD"),
+        settlement_asset="USD",
         barrier=openpit.param.Pnl("1000"),
     )
 
@@ -40,7 +42,7 @@ def test_readme_quickstart() -> None:
 
     order_size_policy = openpit.pretrade.policies.OrderSizeLimitPolicy(
         limit=openpit.pretrade.policies.OrderSizeLimit(
-            settlement_asset=openpit.param.Asset("USD"),
+            settlement_asset="USD",
             max_quantity=openpit.param.Quantity("500"),
             max_notional=openpit.param.Volume("100000"),
         ),
@@ -62,23 +64,24 @@ def test_readme_quickstart() -> None:
     order = openpit.Order(
         operation=openpit.OrderOperation(
             instrument=openpit.Instrument(
-                openpit.param.Asset("AAPL"),
-                openpit.param.Asset("USD"),
+                "AAPL",
+                "USD",
             ),
             account_id=openpit.param.AccountId.from_u64(99224416),
             side=openpit.param.Side.BUY,
-            trade_amount=openpit.param.Quantity("100"),
-            price=openpit.param.Price("185"),
+            trade_amount=openpit.param.TradeAmount.quantity(100.0),
+            price=openpit.param.Price(185.0),
         ),
     )
 
     start_result = engine.start_pre_trade(order=order)
 
     if not start_result:
-        reject = start_result.reject
-        raise RuntimeError(
-            f"{reject.policy} [{reject.code}]: {reject.reason}: {reject.details}"
+        messages = ", ".join(
+            f"{r.policy} [{r.code}]: {r.reason}: {r.details}"
+            for r in start_result.rejects
         )
+        raise RuntimeError(messages)
 
     request = start_result.request
 
@@ -90,6 +93,9 @@ def test_readme_quickstart() -> None:
 
     # 5. Real pre-trade and risk control.
     execute_result = request.execute()
+
+    # Optional shortcut for the same two-stage flow:
+    # execute_result = engine.execute_pre_trade(order=order)
 
     if not execute_result:
         messages = ", ".join(
@@ -114,8 +120,8 @@ def test_readme_quickstart() -> None:
     report = openpit.ExecutionReport(
         operation=openpit.ExecutionReportOperation(
             instrument=openpit.Instrument(
-                openpit.param.Asset("AAPL"),
-                openpit.param.Asset("USD"),
+                "AAPL",
+                "USD",
             ),
             account_id=openpit.param.AccountId.from_u64(99224416),
             side=openpit.param.Side.BUY,

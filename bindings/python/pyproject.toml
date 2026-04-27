@@ -30,6 +30,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
     "Topic :: Office/Business :: Financial :: Investment",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -57,14 +58,14 @@ markers = [
     "integration: end-to-end engine integration tests from Python",
 ]
 
+[tool.ruff.format]
+
 [tool.ruff]
-line-length = 88
-target-version = "py313"
+target-version = "py310" # Python 3.10
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = []
+ignore = ["D102", "D103"]
 
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
+[tool.black]
+target-version = ["py313"] # Python 3.13

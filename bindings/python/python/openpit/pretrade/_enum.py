@@ -78,6 +78,7 @@ class RejectCode(_enum.StrEnum):
     REFERENCE_DATA_UNAVAILABLE = "ReferenceDataUnavailable"
     ORDER_VALUE_CALCULATION_FAILED = "OrderValueCalculationFailed"
     SYSTEM_UNAVAILABLE = "SystemUnavailable"
+    CUSTOM = "Custom"
     OTHER = "Other"
 
 
@@ -158,6 +159,10 @@ RejectCode.ORDER_VALUE_CALCULATION_FAILED.__doc__ = (
 )
 RejectCode.SYSTEM_UNAVAILABLE.__doc__ = (
     "The system cannot process the request right now."
+)
+RejectCode.CUSTOM.__doc__ = (
+    "Custom reject code, depends on policy implementation."
+    " The integer `user_data` reject field can be used for extended information."
 )
 RejectCode.OTHER.__doc__ = (
     "A standard code does not describe the case precisely enough."

@@ -11,14 +11,18 @@ class BlockAllStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy):
 
     # @typing.override
     def check_pre_trade_start(
-        self, *, order: openpit.Order
-    ) -> openpit.pretrade.PolicyReject | None:
-        _ = order
-        return openpit.pretrade.PolicyReject(
-            code=openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION,
-            reason="blocked by policy",
-            details="test start policy reject",
-            scope=openpit.pretrade.RejectScope.ACCOUNT,
+        self,
+        ctx: openpit.pretrade.PreTradeContext,
+        order: openpit.Order,
+    ) -> tuple[openpit.pretrade.PolicyReject, ...]:
+        del ctx, order
+        return (
+            openpit.pretrade.PolicyReject(
+                code=openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION,
+                reason="blocked by policy",
+                details="test start policy reject",
+                scope=openpit.pretrade.RejectScope.ACCOUNT,
+            ),
         )
 
     # @typing.override
@@ -40,11 +44,11 @@ class ReportHookStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy):
     # @typing.override
     def check_pre_trade_start(
         self,
-        *,
+        ctx: openpit.pretrade.PreTradeContext,
         order: openpit.Order,
-    ) -> openpit.pretrade.PolicyReject | None:
-        _ = order
-        return None
+    ) -> tuple[openpit.pretrade.PolicyReject, ...]:
+        del ctx, order
+        return ()
 
     # @typing.override
     def apply_execution_report(
@@ -71,7 +75,7 @@ def test_policy_reject_scope_validation() -> None:
 def test_policy_decision_and_mutation_factories() -> None:
     committed = []
     rolled_back = []
-    mutation = openpit.pretrade.Mutation(
+    mutation = openpit.Mutation(
         commit=lambda: committed.append("USD:10"),
         rollback=lambda: rolled_back.append("USD:0"),
     )
@@ -93,8 +97,9 @@ def test_custom_start_policy_reject_is_returned_as_result() -> None:
 
     result = engine.start_pre_trade(order=conftest.make_order())
     assert not result.ok
-    assert result.reject.policy == "BlockAllStartPolicy"
-    assert result.reject.scope == "account"
+    assert len(result.rejects) == 1
+    assert result.rejects[0].policy == "BlockAllStartPolicy"
+    assert result.rejects[0].scope == "account"
 
 
 @pytest.mark.unit

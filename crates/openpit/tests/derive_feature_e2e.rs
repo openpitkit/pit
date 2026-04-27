@@ -79,7 +79,7 @@ struct DerivedReport {
 #[test]
 fn derive_feature_reexport_builds_wrappers_and_engine_smoke_path() {
     let instrument = Instrument::new(
-        Asset::new("BTC").expect("must be valid"),
+        Asset::new("SPX").expect("must be valid"),
         Asset::new("USD").expect("must be valid"),
     );
     let order = DerivedOrder {

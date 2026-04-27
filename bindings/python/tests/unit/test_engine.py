@@ -3,7 +3,7 @@ import openpit
 import pytest
 
 
-class AcceptPolicy(openpit.pretrade.Policy):
+class AcceptPolicy(openpit.pretrade.PreTradePolicy):
     # @typing.override
     @property
     def name(self) -> str:
@@ -11,9 +11,11 @@ class AcceptPolicy(openpit.pretrade.Policy):
 
     # @typing.override
     def perform_pre_trade_check(
-        self, *, context: openpit.pretrade.PolicyContext
+        self,
+        ctx: openpit.pretrade.PreTradeContext,
+        order: openpit.Order,
     ) -> openpit.pretrade.PolicyDecision:
-        _ = context
+        del ctx, order
         return openpit.pretrade.PolicyDecision.accept()
 
     # @typing.override
@@ -26,7 +28,7 @@ class AcceptPolicy(openpit.pretrade.Policy):
         return False
 
 
-class NamedRejectPolicy(openpit.pretrade.Policy):
+class NamedRejectPolicy(openpit.pretrade.PreTradePolicy):
     # @typing.override
     def __init__(self, *, policy_name: str) -> None:
         self._policy_name = policy_name
@@ -38,9 +40,11 @@ class NamedRejectPolicy(openpit.pretrade.Policy):
 
     # @typing.override
     def perform_pre_trade_check(
-        self, *, context: openpit.pretrade.PolicyContext
+        self,
+        ctx: openpit.pretrade.PreTradeContext,
+        order: openpit.Order,
     ) -> openpit.pretrade.PolicyDecision:
-        _ = context
+        del ctx, order
         return openpit.pretrade.PolicyDecision.accept()
 
     # @typing.override
@@ -49,7 +53,7 @@ class NamedRejectPolicy(openpit.pretrade.Policy):
         *,
         report: openpit.ExecutionReport,
     ) -> bool:
-        _ = report
+        del report
         return False
 
 
@@ -59,13 +63,13 @@ class TaggedOrder(openpit.Order):
         super().__init__(
             operation=openpit.OrderOperation(
                 instrument=openpit.Instrument(
-                    openpit.param.Asset("AAPL"),
-                    openpit.param.Asset("USD"),
+                    "AAPL",
+                    "USD",
                 ),
                 side=openpit.param.Side.BUY,
                 account_id=openpit.param.AccountId.from_u64(99224416),
-                trade_amount=openpit.param.Quantity("1"),
-                price=openpit.param.Price("10"),
+                trade_amount=openpit.param.TradeAmount.quantity(1),
+                price=openpit.param.Price(10),
             ),
         )
         self.strategy_tag = strategy_tag
@@ -77,12 +81,12 @@ class MissingPriceOrder(openpit.Order):
         super().__init__(
             operation=openpit.OrderOperation(
                 instrument=openpit.Instrument(
-                    openpit.param.Asset("AAPL"),
-                    openpit.param.Asset("USD"),
+                    "AAPL",
+                    "USD",
                 ),
                 side=openpit.param.Side.BUY,
                 account_id=openpit.param.AccountId.from_u64(99224416),
-                trade_amount=openpit.param.Quantity("1"),
+                trade_amount=openpit.param.TradeAmount.quantity(1),
             ),
         )
 

@@ -7,23 +7,23 @@ def test_execution_report_exposes_fields_and_optional_defaults() -> None:
     report = openpit.ExecutionReport(
         operation=openpit.ExecutionReportOperation(
             instrument=openpit.Instrument(
-                openpit.param.Asset("AAPL"),
-                openpit.param.Asset("USD"),
+                "AAPL",
+                "USD",
             ),
             side=openpit.param.Side.BUY,
             account_id=openpit.param.AccountId.from_u64(99224416),
         ),
         financial_impact=openpit.FinancialImpact(
-            pnl=openpit.param.Pnl("-5"),
-            fee=openpit.param.Fee("0"),
+            pnl=openpit.param.Pnl(-5),
+            fee=openpit.param.Fee(0),
         ),
     )
 
-    assert report.operation.instrument.underlying_asset.value == "AAPL"
-    assert report.operation.instrument.settlement_asset.value == "USD"
+    assert report.operation.instrument.underlying_asset == "AAPL"
+    assert report.operation.instrument.settlement_asset == "USD"
     assert report.operation.side is openpit.param.Side.BUY
-    assert report.financial_impact.pnl.value == "-5"
-    assert report.financial_impact.fee.value == "0"
+    assert str(report.financial_impact.pnl) == "-5"
+    assert str(report.financial_impact.fee) == "0"
     assert report.fill is None
     assert "ExecutionReport(" in repr(report)
 
@@ -33,8 +33,8 @@ def test_execution_report_operation_rejects_invalid_asset() -> None:
     with pytest.raises(ValueError):
         openpit.ExecutionReportOperation(
             instrument=openpit.Instrument(
-                openpit.param.Asset("AAPL"),
-                openpit.param.Asset(""),
+                "AAPL",
+                "",
             ),
             side=openpit.param.Side.BUY,
             account_id=openpit.param.AccountId.from_u64(99224416),
@@ -63,21 +63,21 @@ def test_execution_report_optional_groups_default_to_none() -> None:
 def test_execution_report_operation_accepts_account_id_from_u64() -> None:
     op = openpit.ExecutionReportOperation(
         instrument=openpit.Instrument(
-            openpit.param.Asset("AAPL"),
-            openpit.param.Asset("USD"),
+            "AAPL",
+            "USD",
         ),
         side=openpit.param.Side.BUY,
-        account_id=openpit.param.AccountId.from_u64(12345678),
+        account_id=openpit.param.AccountId.from_u64(99224416),
     )
-    assert op.account_id.value == 12345678
+    assert op.account_id.value == 99224416
 
 
 @pytest.mark.unit
 def test_execution_report_operation_accepts_account_id_from_str() -> None:
     op = openpit.ExecutionReportOperation(
         instrument=openpit.Instrument(
-            openpit.param.Asset("AAPL"),
-            openpit.param.Asset("USD"),
+            "AAPL",
+            "USD",
         ),
         side=openpit.param.Side.BUY,
         account_id=openpit.param.AccountId.from_str("my-account"),
@@ -86,12 +86,99 @@ def test_execution_report_operation_accepts_account_id_from_str() -> None:
 
 
 @pytest.mark.unit
+def test_execution_report_operation_rejects_raw_account_id_int() -> None:
+    with pytest.raises(TypeError):
+        openpit.ExecutionReportOperation(
+            instrument=openpit.Instrument(
+                "AAPL",
+                "USD",
+            ),
+            side=openpit.param.Side.BUY,
+            account_id=99224416,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.unit
+def test_execution_report_operation_rejects_raw_account_id_str() -> None:
+    with pytest.raises(TypeError):
+        openpit.ExecutionReportOperation(
+            instrument=openpit.Instrument(
+                "AAPL",
+                "USD",
+            ),
+            side=openpit.param.Side.BUY,
+            account_id="my-account",  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.unit
+def test_financial_impact_requires_explicit_fee() -> None:
+    with pytest.raises(TypeError):
+        openpit.FinancialImpact(
+            pnl=openpit.param.Pnl(-5),
+        )  # type: ignore[call-arg]
+
+
+@pytest.mark.unit
+def test_fill_details_requires_explicit_leaves_quantity_and_lock() -> None:
+    with pytest.raises(TypeError):
+        openpit.ExecutionReportFillDetails(
+            lock=openpit.pretrade.PreTradeLock(),
+        )  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        openpit.ExecutionReportFillDetails(
+            leaves_quantity=openpit.param.Quantity(0),
+        )  # type: ignore[call-arg]
+
+
+@pytest.mark.unit
+def test_fill_details_happy_path_without_last_trade() -> None:
+    fill = openpit.ExecutionReportFillDetails(
+        leaves_quantity=openpit.param.Quantity(3),
+        lock=openpit.pretrade.PreTradeLock(price=openpit.param.Price(101)),
+    )
+
+    assert str(fill.leaves_quantity) == "3"
+    assert str(fill.lock.price) == "101"
+    assert fill.last_trade is None
+    assert fill.is_terminal is False
+
+
+@pytest.mark.unit
+def test_fill_details_happy_path_with_last_trade_and_terminal_flag() -> None:
+    fill = openpit.ExecutionReportFillDetails(
+        last_trade=openpit.param.Trade(
+            price=openpit.param.Price(102),
+            quantity=openpit.param.Quantity(7),
+        ),
+        leaves_quantity=openpit.param.Quantity(0),
+        lock=openpit.pretrade.PreTradeLock(price=openpit.param.Price(102)),
+        is_terminal=True,
+    )
+
+    assert str(fill.leaves_quantity) == "0"
+    assert str(fill.lock.price) == "102"
+    assert fill.last_trade is not None
+    assert str(fill.last_trade.price) == "102"
+    assert str(fill.last_trade.quantity) == "7"
+    assert fill.is_terminal is True
+
+
+@pytest.mark.unit
 def test_execution_report_operation_rejects_missing_account_id() -> None:
     with pytest.raises(TypeError):
         openpit.ExecutionReportOperation(
             instrument=openpit.Instrument(
-                openpit.param.Asset("AAPL"),
-                openpit.param.Asset("USD"),
+                "AAPL",
+                "USD",
             ),
             side=openpit.param.Side.BUY,
         )  # type: ignore[call-arg]
+
+
+@pytest.mark.unit
+def test_execution_report_rejects_non_wrapper_fill() -> None:
+    with pytest.raises(
+        TypeError, match="fill must be openpit.core.ExecutionReportFillDetails"
+    ):
+        openpit.ExecutionReport(fill=object())  # type: ignore[arg-type]

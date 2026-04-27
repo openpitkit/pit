@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run the staging release pipeline without publishing production releases
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -14,10 +21,13 @@ concurrency:
 
 jobs:
   verify-tag:
-    name: Validate tag and version bump
-    runs-on: ubuntu-latest
+    name: Resolve release context
+    runs-on: ubuntu-22.04
     outputs:
-      version: ${{ steps.extract-version.outputs.version }}
+      base_version: ${{ steps.resolve-context.outputs.base_version }}
+      pit_go_ref: ${{ steps.resolve-context.outputs.pit_go_ref }}
+      release_mode: ${{ steps.resolve-context.outputs.release_mode }}
+      version: ${{ steps.resolve-context.outputs.version }}
     steps:
       - name: Checkout tags
         uses: actions/checkout@v4
@@ -25,23 +35,54 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Validate tag format
+      - name: Resolve release mode and version
+        id: resolve-context
         shell: bash
+        env:
+          DRY_RUN_INPUT: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
-          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match required format vMAJOR.MINOR.PATCH"
-            exit 1
-          fi
+          set -euo pipefail
 
-      - name: Extract version from tag
-        id: extract-version
-        shell: bash
-        run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
+          BASE_VERSION="$(grep -m1 '^version\s*=' crates/openpit/Cargo.toml | sed 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/')"
+          SHORT_SHA="$(git rev-parse --short=12 HEAD)"
+
+          case "${GITHUB_EVENT_NAME}" in
+            push)
+              if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::Tag ${GITHUB_REF_NAME} does not match required format vMAJOR.MINOR.PATCH"
+                exit 1
+              fi
+              RELEASE_MODE="production"
+              VERSION="${GITHUB_REF#refs/tags/v}"
+              PIT_GO_REF="main"
+              ;;
+            workflow_dispatch)
+              if [[ "${GITHUB_REF_NAME}" != "release-dry-run" ]]; then
+                echo "::error::workflow_dispatch release dry-run is only allowed from branch release-dry-run"
+                exit 1
+              fi
+              if [[ "${DRY_RUN_INPUT}" != "true" ]]; then
+                echo "::error::workflow_dispatch runs must set dry_run=true"
+                exit 1
+              fi
+              RELEASE_MODE="dry-run"
+              VERSION="${BASE_VERSION}-alpha.${GITHUB_RUN_NUMBER}"
+              PIT_GO_REF="release-dry-run/${BASE_VERSION}-${SHORT_SHA}"
+              ;;
+            *)
+              echo "::error::Unsupported event ${GITHUB_EVENT_NAME}"
+              exit 1
+              ;;
+          esac
+
+          echo "base_version=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "pit_go_ref=${PIT_GO_REF}" >> "$GITHUB_OUTPUT"
+          echo "release_mode=${RELEASE_MODE}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Resolved release version: ${VERSION}"
+          echo "Resolved ${RELEASE_MODE} version: ${VERSION}"
 
       - name: Verify Cargo.toml versions match tag
+        if: ${{ steps.resolve-context.outputs.release_mode == 'production' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -56,6 +97,7 @@ jobs:
           done
 
       - name: Validate monotonic version bump
+        if: ${{ steps.resolve-context.outputs.release_mode == 'production' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -127,29 +169,32 @@ jobs:
     needs:
       - verify
       - verify-tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST }}
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
 
       - name: Ensure crates.io version is not published
+        if: ${{ needs.verify-tag.outputs.release_mode == 'production' }}
         shell: bash
         env:
           VERSION: ${{ needs.verify-tag.outputs.version }}
         run: |
           set -euo pipefail
-          if [[ -z "${{ secrets.CRATES_IO_API_TOKEN }}" ]]; then
-            echo "Skipping crates.io version check as run in dry-run mode."
-            exit 0
-          fi
 
           URL="https://crates.io/api/v1/crates/openpit/${VERSION}"
           HTTP_CODE="$(curl -H "User-Agent: openpit-release-ci" --retry 3 --retry-delay 2 -sS -o /tmp/openpit-crates-version.json -w '%{http_code}' "${URL}")"
@@ -169,16 +214,21 @@ jobs:
               ;;
           esac
 
-      - name: Publish crate
+      - name: Publish or dry-run crates
         shell: bash
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+          RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
         run: |
           set -euo pipefail
-          if [[ -n "${CRATES_IO_TOKEN}" ]]; then
-            cargo publish -p openpit --locked --token "${CRATES_IO_TOKEN}"
+          if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
+            cargo publish -p openpit --dry-run --locked
           else
-            echo "CRATES_IO_API_TOKEN is not configured, skipping publish"
+            if [[ -z "${CRATES_IO_TOKEN}" ]]; then
+              echo "::error::CRATES_IO_API_TOKEN is required for production releases"
+              exit 1
+            fi
+            cargo publish -p openpit --locked --token "${CRATES_IO_TOKEN}"
           fi
 
   publish-wheels:
@@ -192,19 +242,19 @@ jobs:
       matrix:
         include:
           - name: linux-x86_64-manylinux2014
-            os: ubuntu-latest
+            os: ubuntu-22.04 # Using as lowest Python version is 3.10 and 22 has it
             target: x86_64-unknown-linux-gnu
             manylinux: manylinux2014
           - name: linux-aarch64-manylinux2014
-            os: ubuntu-latest
+            os: ubuntu-22.04 # Using as lowest Python version is 3.10 and 22 has it
             target: aarch64-unknown-linux-gnu
             manylinux: manylinux2014
           - name: linux-x86_64-musllinux_1_2
-            os: ubuntu-latest
+            os: ubuntu-22.04 # Using as lowest Python version is 3.10 and 22 has it
             target: x86_64-unknown-linux-musl
             manylinux: musllinux_1_2
           - name: windows-x86_64
-            os: windows-latest
+            os: windows-2022
             target: x86_64-pc-windows-msvc
           - name: macos-x86_64
             os: macos-15-intel
@@ -216,8 +266,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST }}
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -225,13 +281,35 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.CI_PYTHON }}
 
       - name: Install Python test dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install twine
+
+      - name: Apply staging Python package version
+        if: ${{ needs.verify-tag.outputs.release_mode == 'dry-run' }}
+        shell: bash
+        env:
+          STAGING_VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import os
+
+          path = Path("bindings/python/Cargo.toml")
+          lines = path.read_text().splitlines()
+          for index, line in enumerate(lines):
+              if line.startswith("version = "):
+                  lines[index] = f'version = "{os.environ["STAGING_VERSION"]}"'
+                  break
+          else:
+              raise SystemExit("version field not found in bindings/python/Cargo.toml")
+          path.write_text("\n".join(lines) + "\n")
+          PY
 
       - name: Build Linux wheel
         if: startsWith(matrix.os, 'ubuntu')
@@ -242,7 +320,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           container: off
-          args: --release --strip --locked --zig -i python3.11 --out dist
+          args: --release --strip --locked --zig -i python${{ env.CI_PYTHON }} --out dist
 
       - name: Build macOS/Windows wheel
         if: ${{ !startsWith(matrix.os, 'ubuntu') }}
@@ -251,7 +329,7 @@ jobs:
           working-directory: bindings/python
           command: build
           target: ${{ matrix.target }}
-          args: --release --strip --locked -i python --out dist
+          args: --release --strip --locked -i python${{ env.CI_PYTHON }} --out dist
 
       - name: Resolve built wheel path
         shell: bash
@@ -312,27 +390,60 @@ jobs:
         if: matrix.name == 'linux-x86_64-manylinux2014' || !startsWith(matrix.os, 'ubuntu')
         shell: bash
         env:
+          BASE_VERSION: ${{ needs.verify-tag.outputs.base_version }}
+          RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
           VERSION: ${{ needs.verify-tag.outputs.version }}
         run: |
           python -c "import openpit"
-          python -c "import importlib.metadata as m; v=m.version('openpit'); print(v); assert v=='${VERSION}', f'expected {VERSION}, got {v}'"
+          python - <<'PY'
+          import importlib.metadata as metadata
+          import os
+
+          version = metadata.version("openpit")
+          print(version)
+
+          if os.environ["RELEASE_MODE"] == "production":
+              expected = os.environ["VERSION"]
+              assert version == expected, f"expected {expected}, got {version}"
+          else:
+              base_version = os.environ["BASE_VERSION"]
+              assert version != base_version, f"expected staging version, got production version {version}"
+              assert version.startswith(base_version), f"expected version starting with {base_version}, got {version}"
+          PY
 
       - name: Run wheel tests
         if: matrix.name == 'linux-x86_64-manylinux2014' || !startsWith(matrix.os, 'ubuntu')
         run: python -m pytest bindings/python/tests
 
+      - name: Validate wheel metadata
+        shell: bash
+        run: twine check "${WHEEL_PATH}"
+
+      - name: Upload wheel artifact
+        if: ${{ needs.verify-tag.outputs.release_mode == 'dry-run' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.name }}
+          path: ${{ env.WHEEL_PATH }}
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Publish wheel
         shell: bash
         env:
           PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
         run: |
           set -euo pipefail
-          if [[ -n "${PYPI_TOKEN}" ]]; then
+          if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
+            echo "Skipping TestPyPI wheel upload in dry-run mode"
+          else
+            if [[ -z "${PYPI_TOKEN}" ]]; then
+              echo "::error::PYPI_API_TOKEN is required for production wheel uploads"
+              exit 1
+            fi
             TWINE_USERNAME=__token__ TWINE_PASSWORD="${PYPI_TOKEN}" \
               twine upload --skip-existing --non-interactive "${WHEEL_PATH}"
-          else
-            echo "PYPI_API_TOKEN is not configured, running twine check only"
-            twine check "${WHEEL_PATH}"
           fi
 
   publish-sdist:
@@ -340,13 +451,19 @@ jobs:
     needs:
       - publish-wheels
       - verify-tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST }}
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -354,7 +471,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.CI_PYTHON }}
 
       - name: Install requirements
         run: |
@@ -362,36 +479,328 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install twine
 
+      - name: Apply staging Python package version
+        if: ${{ needs.verify-tag.outputs.release_mode == 'dry-run' }}
+        shell: bash
+        env:
+          STAGING_VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import os
+
+          path = Path("bindings/python/Cargo.toml")
+          lines = path.read_text().splitlines()
+          for index, line in enumerate(lines):
+              if line.startswith("version = "):
+                  lines[index] = f'version = "{os.environ["STAGING_VERSION"]}"'
+                  break
+          else:
+              raise SystemExit("version field not found in bindings/python/Cargo.toml")
+          path.write_text("\n".join(lines) + "\n")
+          PY
+
       - name: Build sdist
         run: maturin sdist --manifest-path bindings/python/Cargo.toml --out dist
+
+      - name: Validate sdist metadata
+        shell: bash
+        run: twine check dist/*
+
+      - name: Smoke-test sdist install
+        shell: bash
+        env:
+          BASE_VERSION: ${{ needs.verify-tag.outputs.base_version }}
+          RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/openpit-sdist-smoke
+          source /tmp/openpit-sdist-smoke/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install maturin
+          python -m pip install dist/*.tar.gz
+          python -c "import openpit"
+          python - <<'PY'
+          import importlib.metadata as metadata
+          import os
+
+          version = metadata.version("openpit")
+          print(version)
+
+          if os.environ["RELEASE_MODE"] == "production":
+              expected = os.environ["VERSION"]
+              assert version == expected, f"expected {expected}, got {version}"
+          else:
+              base_version = os.environ["BASE_VERSION"]
+              assert version != base_version, f"expected staging version, got production version {version}"
+              assert version.startswith(base_version), f"expected version starting with {base_version}, got {version}"
+          PY
+
+      - name: Upload sdist artifact
+        if: ${{ needs.verify-tag.outputs.release_mode == 'dry-run' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Publish sdist
         shell: bash
         env:
           PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
         run: |
           set -euo pipefail
-          if [[ -n "${PYPI_TOKEN}" ]]; then
+          if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
+            echo "Skipping TestPyPI sdist upload in dry-run mode"
+          else
+            if [[ -z "${PYPI_TOKEN}" ]]; then
+              echo "::error::PYPI_API_TOKEN is required for production sdist uploads"
+              exit 1
+            fi
             TWINE_USERNAME=__token__ TWINE_PASSWORD="${PYPI_TOKEN}" \
               twine upload --skip-existing --non-interactive dist/*
+          fi
+
+  build-runtime-artifacts:
+    name: Build runtime artifacts (${{ matrix.name }})
+    needs:
+      - publish-rust
+      - verify-tag
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            goos: linux
+            goarch: amd64
+            lib_name: libpit_ffi.so
+          - name: linux-arm64
+            os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            goos: linux
+            goarch: arm64
+            lib_name: libpit_ffi.so
+          - name: darwin-amd64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            goos: darwin
+            goarch: amd64
+            lib_name: libpit_ffi.dylib
+          - name: darwin-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            goos: darwin
+            goarch: arm64
+            lib_name: libpit_ffi.dylib
+          - name: windows-amd64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            goos: windows
+            goarch: amd64
+            lib_name: pit_ffi.dll
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST }}
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.CI_PYTHON }}
+
+      - name: Install Linux cross-compiler for arm64
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-aarch64-linux-gnu
+
+      - name: Build runtime library
+        shell: bash
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          set -euo pipefail
+          export RUSTFLAGS="--remap-path-prefix=$(pwd)=."
+          python scripts/generate_api_c.py
+          cargo build -p pit-ffi --release --locked --target "${{ matrix.target }}"
+
+      - name: Package artifact (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          SRC="target/${{ matrix.target }}/release/${{ matrix.lib_name }}"
+          strip --strip-unneeded "${SRC}" || true
+          DST="dist/pit-ffi-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.lib_name }}"
+          cp "${SRC}" "${DST}"
+          cp bindings/c/pit.h dist/pit.h
+          cp LICENSE dist/LICENSE
+          cp OWNERS dist/OWNERS
+          sha256sum "${DST}" | awk '{print $1}' > "${DST}.sha256"
+
+      - name: Package artifact (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          $src = "target/${{ matrix.target }}/release/${{ matrix.lib_name }}"
+          $dst = "dist/pit-ffi-$env:VERSION-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.lib_name }}"
+          Copy-Item $src $dst -Force
+          Copy-Item bindings/c/pit.h dist/pit.h -Force
+          Copy-Item LICENSE dist/LICENSE -Force
+          Copy-Item OWNERS dist/OWNERS -Force
+          $hash = (Get-FileHash -Path $dst -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path "$dst.sha256" -Value $hash
+
+      - name: Upload runtime artifacts
+        if: ${{ needs.verify-tag.outputs.release_mode == 'production' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Upload runtime artifacts (dry-run)
+        if: ${{ needs.verify-tag.outputs.release_mode == 'dry-run' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-go-sources:
+    name: Publish pit-go sources
+    needs:
+      - publish-sdist
+      - build-runtime-artifacts
+      - verify-tag
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download runtime artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: runtime-*
+          path: /tmp/runtime-dl
+          merge-multiple: true
+
+      - name: Push sources to pit-go
+        shell: bash
+        env:
+          PIT_GO_REF: ${{ needs.verify-tag.outputs.pit_go_ref }}
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+          PIT_GO_PUSH_TOKEN: ${{ secrets.PIT_GO_PUSH_TOKEN }}
+          RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PIT_GO_PUSH_TOKEN}" ]]; then
+            if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
+              echo "::error::PIT_GO_PUSH_TOKEN is required for dry-run pit-go publish"
+              exit 1
+            fi
+            echo "PIT_GO_PUSH_TOKEN is not configured, skipping pit-go publish"
+            exit 0
+          fi
+
+          WORKDIR="$(mktemp -d)"
+          git clone "https://x-access-token:${PIT_GO_PUSH_TOKEN}@github.com/openpitkit/pit-go.git" "${WORKDIR}/pit-go"
+          rm -rf "${WORKDIR}/pit-go"/*
+          cp -R bindings/go/. "${WORKDIR}/pit-go/"
+          cp LICENSE "${WORKDIR}/pit-go/LICENSE"
+          cp OWNERS "${WORKDIR}/pit-go/OWNERS"
+          declare -A PLATFORMS=(
+            ["linux-amd64"]="libpit_ffi.so"
+            ["linux-arm64"]="libpit_ffi.so"
+            ["darwin-amd64"]="libpit_ffi.dylib"
+            ["darwin-arm64"]="libpit_ffi.dylib"
+            ["windows-amd64"]="pit_ffi.dll"
+          )
+          for platform in "${!PLATFORMS[@]}"; do
+            lib="${PLATFORMS[$platform]}"
+            goos="${platform%-*}"
+            goarch="${platform#*-}"
+            dir="${WORKDIR}/pit-go/internal/runtime/${platform}"
+            mkdir -p "${dir}"
+            cp "/tmp/runtime-dl/pit-ffi-${VERSION}-${goos}-${goarch}-${lib}" "${dir}/${lib}"
+          done
+          find "${WORKDIR}/pit-go/internal/runtime" -name .gitkeep -delete
+          rm -f "${WORKDIR}/pit-go/internal/runtime/.gitignore"
+          cd "${WORKDIR}/pit-go"
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
+            git commit -m "Dry-run release ${VERSION}" || true
+            git push origin HEAD:"${PIT_GO_REF}" --force
           else
-            echo "PYPI_API_TOKEN is not configured, running twine check only"
-            twine check dist/*
+            git commit -m "Release v${VERSION}" || true
+            git tag -f "v${VERSION}"
+
+            # Do not fail entire release if go repo push fails (bootstrap phase)
+            set +e
+            git push origin HEAD:main
+            git push origin "v${VERSION}" --force
+            EXIT_CODE=$?
+            set -e
+
+            if [ $EXIT_CODE -ne 0 ]; then
+              echo "::warning::pit-go publish failed"
+            fi
+
+            # TODO: remove soft-fail after first stable release; go publish must fail pipeline later
           fi
 
   publish-github-release:
     name: Publish GitHub release metadata
     needs:
       - publish-sdist
+      - build-runtime-artifacts
       - verify-tag
-    runs-on: ubuntu-latest
+    if: ${{ needs.verify-tag.outputs.release_mode == 'production' }}
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create GitHub Release without assets
+      - name: Download runtime artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: runtime-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub Release with runtime assets
         shell: bash
         run: |
           set -euo pipefail
@@ -403,14 +812,18 @@ jobs:
           - crates.io: https://crates.io/crates/openpit
           - PyPI: https://pypi.org/project/openpit/${{ needs.verify-tag.outputs.version }}/
 
-          This release intentionally does not include attached build artifacts.
+          Runtime artifacts for Go SDK delivery are attached to this release
+          (`.so`, `.dylib`, `.dll` and `.sha256` files per target).
           EOF
+
+          mapfile -t ASSETS < <(find release-assets -type f | sort)
 
           GH_TOKEN="${{ github.token }}" gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
             --generate-notes \
             --notes-file "${BODY_FILE}" \
-            --latest
+            --latest \
+            "${ASSETS[@]}"
 
   release-e2e-advisory:
     name: Release e2e advisory
@@ -418,7 +831,7 @@ jobs:
       - publish-github-release
       - verify-tag
     if: ${{ needs.publish-github-release.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
     steps:

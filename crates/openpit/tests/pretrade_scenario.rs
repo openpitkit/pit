@@ -29,14 +29,14 @@ use openpit::pretrade::policies::PnlKillSwitchPolicy;
 use openpit::pretrade::policies::RateLimitPolicy;
 use openpit::pretrade::policies::{OrderSizeLimit, OrderSizeLimitPolicy};
 use openpit::pretrade::{
-    CheckPreTradeStartPolicy, Context, Mutation, Mutations, Policy, Reject, RejectCode,
-    RejectScope, Rejects,
+    CheckPreTradeStartPolicy, PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope,
+    Rejects,
 };
 use openpit::{
     Engine, EngineBuildError, ExecutionReportOperation, FinancialImpact, HasClosePosition, HasFee,
-    HasInstrument, HasPnl, HasReduceOnly, HasTradeAmount, Instrument, OrderOperation,
-    OrderPosition, WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation,
-    WithOrderPosition,
+    HasInstrument, HasPnl, HasReduceOnly, HasTradeAmount, Instrument, Mutation, Mutations,
+    OrderOperation, OrderPosition, WithExecutionReportOperation, WithFinancialImpact,
+    WithOrderOperation, WithOrderPosition,
 };
 use rust_decimal::Decimal;
 
@@ -88,6 +88,7 @@ fn integration_scenario_rate_limit_then_kill_switch_then_reset_resume() {
         Ok(_) => panic!("second AAPL order must hit rate limit"),
         Err(reject) => reject,
     };
+    let rate_limit_reject = &rate_limit_reject[0];
     assert_eq!(rate_limit_reject.scope, RejectScope::Order);
     assert_eq!(rate_limit_reject.code, RejectCode::RateLimitExceeded);
     assert_eq!(rate_limit_reject.reason, "rate limit exceeded");
@@ -104,6 +105,7 @@ fn integration_scenario_rate_limit_then_kill_switch_then_reset_resume() {
         Ok(_) => panic!("AAPL order must be blocked by kill switch"),
         Err(reject) => reject,
     };
+    let kill_switch_reject = &kill_switch_reject[0];
     assert_eq!(kill_switch_reject.scope, RejectScope::Account);
     assert_eq!(kill_switch_reject.code, RejectCode::PnlKillSwitchTriggered);
     assert_eq!(kill_switch_reject.reason, "pnl kill switch triggered");
@@ -117,7 +119,7 @@ fn integration_scenario_rate_limit_then_kill_switch_then_reset_resume() {
 
     thread::sleep(Duration::from_millis(700));
 
-    let reservation = engine
+    let mut reservation = engine
         .start_pre_trade(order_aapl_usd("101", "2"))
         .expect("trading must resume after reset and window expiry")
         .execute()
@@ -208,13 +210,14 @@ fn integration_table_order_size_limit_paths() {
                     Ok(_) => panic!("{}", case.name),
                     Err(reject) => reject,
                 };
+                let reject = &reject[0];
                 assert_eq!(reject.scope, RejectScope::Order, "{}", case.name);
                 assert_eq!(reject.code, expected_code, "{}", case.name);
                 assert_eq!(reject.reason, expected_reason, "{}", case.name);
                 assert_eq!(reject.details, expected_details, "{}", case.name);
             }
             None => {
-                let reservation = result
+                let mut reservation = result
                     .expect(case.name)
                     .execute()
                     .expect("boundary order must execute");
@@ -244,6 +247,7 @@ fn integration_table_order_size_limit_paths() {
         Ok(_) => panic!("overflow order must reject"),
         Err(reject) => reject,
     };
+    let overflow_reject = &overflow_reject[0];
     assert_eq!(
         overflow_reject.code,
         RejectCode::OrderValueCalculationFailed
@@ -276,6 +280,7 @@ fn integration_order_validation_checks_only_provided_fields() {
         Ok(_) => panic!("zero quantity order must reject"),
         Err(reject) => reject,
     };
+    let reject = &reject[0];
     assert_eq!(reject.reason, "order quantity must be non-zero");
     assert_eq!(reject.details, "requested quantity 0 is not allowed");
 
@@ -291,7 +296,7 @@ fn integration_order_validation_checks_only_provided_fields() {
         ),
         price: None,
     };
-    let reservation = engine
+    let mut reservation = engine
         .start_pre_trade(valid_quantity_order)
         .expect("valid quantity without price must pass validation")
         .execute()
@@ -310,7 +315,7 @@ fn integration_order_validation_checks_only_provided_fields() {
         ),
         price: None,
     };
-    let reservation = engine
+    let mut reservation = engine
         .start_pre_trade(volume_order)
         .expect("volume-only order must pass validation")
         .execute()
@@ -329,7 +334,7 @@ fn integration_order_validation_checks_only_provided_fields() {
         ),
         price: Some(Price::from_str("-1").expect("price literal must be valid")),
     };
-    let reservation = engine
+    let mut reservation = engine
         .start_pre_trade(negative_price_order)
         .expect("negative price must pass validation")
         .execute()
@@ -414,7 +419,7 @@ fn integration_table_main_stage_paths() {
 
         match case.finalization {
             Finalization::Commit => {
-                let reservation = request.execute().expect("execute must pass");
+                let mut reservation = request.execute().expect("execute must pass");
                 reservation.commit();
             }
             Finalization::Drop => {
@@ -451,7 +456,7 @@ fn integration_table_main_stage_paths() {
 
 #[test]
 fn integration_engine_builder_defaults_and_guardrails() {
-    let reservation = Engine::<TestOrder, TestReport>::builder()
+    let mut reservation = Engine::<TestOrder, TestReport>::builder()
         .build()
         .expect("builder must build")
         .start_pre_trade(order_aapl_usd("100", "1"))
@@ -460,7 +465,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
         .expect("engine::builder request must execute");
     reservation.rollback();
 
-    let reservation = Engine::<TestOrder, TestReport>::builder()
+    let mut reservation = Engine::<TestOrder, TestReport>::builder()
         .build()
         .expect("builder must build")
         .start_pre_trade(order_aapl_usd("100", "1"))
@@ -493,9 +498,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
         .build();
     assert!(matches!(
         duplicate_start,
-        Err(EngineBuildError::DuplicatePolicyName {
-            name: "PnlKillSwitchPolicy",
-        })
+        Err(EngineBuildError::DuplicatePolicyName { name }) if name == "PnlKillSwitchPolicy"
     ));
 
     let duplicate_main = Engine::<TestOrder, TestReport>::builder()
@@ -512,7 +515,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
         .build();
     assert!(matches!(
         duplicate_main,
-        Err(EngineBuildError::DuplicatePolicyName { name: "MainDup" })
+        Err(EngineBuildError::DuplicatePolicyName { name }) if name == "MainDup"
     ));
 
     let engine = Engine::<TestOrder, TestReport>::builder()
@@ -541,7 +544,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
         ),
         price: Some(Price::new(Decimal::MAX)),
     };
-    let reservation = overflow_engine
+    let mut reservation = overflow_engine
         .start_pre_trade(overflow_order)
         .expect("engine no longer precomputes notional and must allow request creation")
         .execute()
@@ -566,8 +569,13 @@ fn integration_engine_builder_defaults_and_guardrails() {
     let missing_barrier = <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
         TestOrder,
         TestReport,
-    >>::check_pre_trade_start(&pnl_policy, &order_aapl_usd("100", "1"))
+    >>::check_pre_trade_start(
+        &pnl_policy,
+        &PreTradeContext::new(),
+        &order_aapl_usd("100", "1"),
+    )
     .expect_err("missing barrier must reject");
+    let missing_barrier = &missing_barrier[0];
     assert_eq!(missing_barrier.scope, RejectScope::Order);
     assert_eq!(missing_barrier.code, RejectCode::RiskConfigurationMissing);
     assert_eq!(missing_barrier.reason, "pnl barrier missing");
@@ -647,30 +655,30 @@ fn integration_custom_order_strategy_tag_policy() {
 
     struct StrategyTagPolicy;
 
-    impl<O, R> Policy<O, R> for StrategyTagPolicy
+    impl<O, R> PreTradePolicy<O, R> for StrategyTagPolicy
     where
         O: HasStrategyTag + HasTradeAmount,
     {
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             "StrategyTagPolicy"
         }
 
         fn perform_pre_trade_check(
             &self,
-            ctx: &Context<'_, O>,
+            _ctx: &PreTradeContext,
+            order: &O,
             _mutations: &mut Mutations,
-            rejects: &mut Vec<Reject>,
-        ) {
-            let order = ctx.order();
+        ) -> Result<(), Rejects> {
             if order.strategy_tag() == "blocked" {
-                rejects.push(Reject::new(
+                return Err(Rejects::from(Reject::new(
                     "StrategyTagPolicy",
                     RejectScope::Order,
                     RejectCode::ComplianceRestriction,
                     "strategy blocked",
                     "project strategy tag blocked",
-                ));
+                )));
             }
+            Ok(())
         }
 
         fn apply_execution_report(&self, _report: &R) -> bool {
@@ -690,7 +698,7 @@ fn integration_custom_order_strategy_tag_policy() {
     let reservation = engine
         .start_pre_trade(allowed_order)
         .expect("start must pass");
-    let reservation = reservation.execute().expect("execute must pass");
+    let mut reservation = reservation.execute().expect("execute must pass");
     reservation.commit();
 
     let disallowed_order = StrategyOrder {
@@ -773,7 +781,7 @@ fn integration_with_order_operation_with_order_position_reduce_only_accessible()
         .build()
         .expect("engine must build");
 
-    let reservation = engine
+    let mut reservation = engine
         .start_pre_trade(order)
         .expect("composite order must pass pre-trade")
         .execute()
@@ -804,7 +812,7 @@ fn integration_with_order_operation_with_order_position_reduce_only_accessible()
     };
     assert_eq!(non_reduce_order.inner.reduce_only(), Ok(false));
 
-    let reservation = engine
+    let mut reservation = engine
         .start_pre_trade(non_reduce_order)
         .expect("non-reduce-only order must pass")
         .execute()
@@ -841,18 +849,17 @@ impl NotionalCapPolicy {
     }
 }
 
-impl Policy<TestOrder, TestReport> for NotionalCapPolicy {
-    fn name(&self) -> &'static str {
+impl PreTradePolicy<TestOrder, TestReport> for NotionalCapPolicy {
+    fn name(&self) -> &str {
         self.name
     }
 
     fn perform_pre_trade_check(
         &self,
-        ctx: &Context<'_, TestOrder>,
+        _ctx: &PreTradeContext,
+        order: &TestOrder,
         mutations: &mut Mutations,
-        rejects: &mut Vec<Reject>,
-    ) {
-        let order = ctx.order();
+    ) -> Result<(), Rejects> {
         let requested_notional = order
             .price
             .expect("price must be present")
@@ -874,7 +881,7 @@ impl Policy<TestOrder, TestReport> for NotionalCapPolicy {
         });
 
         if requested_notional.to_decimal() > self.max_abs_notional.to_decimal() {
-            rejects.push(Reject::new(
+            return Err(Rejects::from(Reject::new(
                 self.name(),
                 RejectScope::Order,
                 RejectCode::RiskLimitExceeded,
@@ -883,11 +890,11 @@ impl Policy<TestOrder, TestReport> for NotionalCapPolicy {
                     "requested notional {}, max allowed: {}",
                     requested_notional, self.max_abs_notional
                 ),
-            ));
-            return;
+            )));
         }
 
         mutations.push(Mutation::new(|| {}, || {}));
+        Ok(())
     }
 
     fn apply_execution_report(&self, _report: &TestReport) -> bool {
@@ -906,15 +913,19 @@ impl SharedPnlPolicy {
 }
 
 impl CheckPreTradeStartPolicy<TestOrder, TestReport> for SharedPnlPolicy {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<TestOrder, TestReport>>::name(&self.inner)
     }
 
-    fn check_pre_trade_start(&self, order: &TestOrder) -> Result<(), Reject> {
+    fn check_pre_trade_start(
+        &self,
+        _ctx: &PreTradeContext,
+        order: &TestOrder,
+    ) -> Result<(), Rejects> {
         <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
             TestOrder,
             TestReport,
-        >>::check_pre_trade_start(&self.inner, order)
+        >>::check_pre_trade_start(&self.inner, &PreTradeContext::new(), order)
     }
 
     fn apply_execution_report(&self, report: &TestReport) -> bool {

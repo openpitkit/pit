@@ -19,8 +19,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::param::{Asset, Price, Quantity, TradeAmount, Volume};
-use crate::pretrade::policy::request_field_access_reject;
-use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
+use crate::pretrade::policy::request_field_access_pre_trade_reject;
+use crate::pretrade::{
+    CheckPreTradeStartPolicy, PreTradeContext, Reject, RejectCode, RejectScope, Rejects,
+};
 use crate::HasInstrument;
 use crate::{HasOrderPrice, HasTradeAmount};
 
@@ -51,8 +53,8 @@ pub struct OrderSizeLimit {
 /// let policy = OrderSizeLimitPolicy::new(
 ///     OrderSizeLimit {
 ///         settlement_asset: Asset::new("USD")?,
-///         max_quantity: Quantity::from_str("100")?,
-///         max_notional: Volume::from_str("50000")?,
+///         max_quantity: Quantity::from_f64(100.0)?,
+///         max_notional: Volume::from_f64(50000.0)?,
 ///     },
 ///     [],
 /// );
@@ -107,21 +109,21 @@ impl<O, R> CheckPreTradeStartPolicy<O, R> for OrderSizeLimitPolicy
 where
     O: HasInstrument + HasTradeAmount + HasOrderPrice,
 {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::NAME
     }
 
-    fn check_pre_trade_start(&self, order: &O) -> Result<(), Reject> {
+    fn check_pre_trade_start(&self, _ctx: &PreTradeContext, order: &O) -> Result<(), Rejects> {
         let limits = self.limits.borrow();
         let instrument = order
             .instrument()
-            .map_err(|e| request_field_access_reject(Self::NAME, &e))?;
+            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
         let trade_amount = order
             .trade_amount()
-            .map_err(|e| request_field_access_reject(Self::NAME, &e))?;
+            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
         let price = order
             .price()
-            .map_err(|e| request_field_access_reject(Self::NAME, &e))?;
+            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
         check_pre_trade_start_with_limits(
             Self::NAME,
             &limits,
@@ -129,6 +131,7 @@ where
             trade_amount,
             price,
         )
+        .map_err(Rejects::from)
     }
 
     fn apply_execution_report(&self, _report: &R) -> bool {
@@ -137,7 +140,7 @@ where
 }
 
 fn check_pre_trade_start_with_limits(
-    policy: &'static str,
+    policy: &str,
     limits: &HashMap<Asset, OrderSizeLimit>,
     settlement: &Asset,
     trade_amount: TradeAmount,
@@ -173,7 +176,7 @@ fn check_pre_trade_start_with_limits(
 }
 
 fn resolve_notional(
-    policy: &'static str,
+    policy: &str,
     trade_amount: TradeAmount,
     price: Option<Price>,
 ) -> Result<Volume, Reject> {
@@ -195,7 +198,7 @@ fn resolve_notional(
 }
 
 fn resolve_quantity(
-    policy: &'static str,
+    policy: &str,
     trade_amount: TradeAmount,
     price: Option<Price>,
 ) -> Result<Quantity, Reject> {
@@ -216,7 +219,7 @@ fn resolve_quantity(
     }
 }
 
-fn missing_order_size_limit_reject(policy: &'static str, settlement: &Asset) -> Reject {
+fn missing_order_size_limit_reject(policy: &str, settlement: &Asset) -> Reject {
     Reject::new(
         policy,
         RejectScope::Order,
@@ -226,7 +229,7 @@ fn missing_order_size_limit_reject(policy: &'static str, settlement: &Asset) -> 
     )
 }
 
-fn order_value_calculation_failed_reject(policy: &'static str, details: &'static str) -> Reject {
+fn order_value_calculation_failed_reject(policy: &str, details: &'static str) -> Reject {
     Reject::new(
         policy,
         RejectScope::Order,
@@ -237,7 +240,7 @@ fn order_value_calculation_failed_reject(policy: &'static str, details: &'static
 }
 
 fn order_notional_reject(
-    policy: &'static str,
+    policy: &str,
     limit: &OrderSizeLimit,
     requested_notional: Volume,
 ) -> Reject {
@@ -256,7 +259,7 @@ fn order_notional_reject(
 }
 
 fn order_size_reject(
-    policy: &'static str,
+    policy: &str,
     quantity: crate::param::Quantity,
     limit: &OrderSizeLimit,
     requested_notional: Volume,
@@ -279,7 +282,7 @@ mod tests {
     use crate::core::{Instrument, OrderOperation};
     use crate::param::TradeAmount;
     use crate::param::{AccountId, Asset, Price, Quantity, Side, Volume};
-    use crate::pretrade::{CheckPreTradeStartPolicy, RejectCode, RejectScope};
+    use crate::pretrade::{CheckPreTradeStartPolicy, PreTradeContext, RejectCode, RejectScope};
     use crate::{HasInstrument, HasOrderPrice, HasTradeAmount, RequestFieldAccessError};
     use rust_decimal::Decimal;
 
@@ -309,9 +312,11 @@ mod tests {
         let reject =
             <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
                 &policy,
+                &PreTradeContext::new(),
                 &order("USD", "11", "90"),
             )
             .expect_err("quantity must be rejected");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::OrderQtyExceedsLimit);
         assert_eq!(reject.reason, "order quantity exceeded");
@@ -325,9 +330,11 @@ mod tests {
         let reject =
             <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
                 &policy,
+                &PreTradeContext::new(),
                 &order("USD", "10", "101"),
             )
             .expect_err("notional must be rejected");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::OrderNotionalExceedsLimit);
         assert_eq!(reject.reason, "order notional exceeded");
@@ -341,9 +348,11 @@ mod tests {
         let reject =
             <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
                 &policy,
+                &PreTradeContext::new(),
                 &order("USD", "11", "100"),
             )
             .expect_err("quantity and notional must be rejected");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::OrderExceedsLimit);
         assert_eq!(reject.reason, "order size exceeded");
@@ -360,9 +369,11 @@ mod tests {
         let reject =
             <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
                 &policy,
+                &PreTradeContext::new(),
                 &order("USD", "1", "1"),
             )
             .expect_err("missing limit must reject");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::RiskConfigurationMissing);
         assert_eq!(reject.reason, "order size limit missing");
@@ -379,6 +390,7 @@ mod tests {
         let result =
             <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
                 &policy,
+                &PreTradeContext::new(),
                 &order("USD", "10", "100"),
             );
         assert!(result.is_ok());
@@ -391,9 +403,11 @@ mod tests {
         let reject =
             <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
                 &policy,
+                &PreTradeContext::new(),
                 &order("USD", "1", "1"),
             )
             .expect_err("default policy must reject without configured limits");
+        let reject = &reject[0];
         assert_eq!(reject.code, RejectCode::RiskConfigurationMissing);
         assert_eq!(reject.reason, "order size limit missing");
         assert_eq!(
@@ -422,9 +436,11 @@ mod tests {
         let reject =
             <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
                 &policy,
+                &PreTradeContext::new(),
                 &order,
             )
             .expect_err("overflow must be treated as notional exceeded");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::OrderValueCalculationFailed);
         assert_eq!(reject.reason, "order value calculation failed");
@@ -454,9 +470,11 @@ mod tests {
         let reject =
             <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
                 &policy,
+                &PreTradeContext::new(),
                 &order,
             )
             .expect_err("overflow plus quantity violation must be order size exceeded");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::OrderValueCalculationFailed);
         assert_eq!(reject.reason, "order value calculation failed");
@@ -473,12 +491,13 @@ mod tests {
             vec![limit("EUR", "5", "500"), limit("GBP", "3", "300")],
         );
 
-        assert!(<OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(&policy, &order("EUR", "5", "100")).is_ok());
-        assert!(<OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(&policy, &order("GBP", "3", "100")).is_ok());
+        assert!(<OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order("EUR", "5", "100")).is_ok());
+        assert!(<OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order("GBP", "3", "100")).is_ok());
 
         policy.set_limit(limit("EUR", "1", "100"));
-        let reject = <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(&policy, &order("EUR", "2", "10"))
+        let reject = <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order("EUR", "2", "10"))
             .expect_err("updated limit must be enforced");
+        let reject = &reject[0];
         assert_eq!(reject.code, RejectCode::OrderQtyExceedsLimit);
         assert_eq!(reject.details, "requested 2, max allowed: 1");
     }
@@ -545,9 +564,12 @@ mod tests {
         };
         let reject =
             <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy, &order,
+                &policy,
+                &PreTradeContext::new(),
+                &order,
             )
             .expect_err("volume order without price must reject");
+        let reject = &reject[0];
         assert_eq!(reject.code, RejectCode::OrderValueCalculationFailed);
     }
 
@@ -610,8 +632,9 @@ mod tests {
         let reject = <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<
             InstrumentAccessErrorOrder,
             (),
-        >>::check_pre_trade_start(&policy, &order)
+        >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order)
         .expect_err("field access error must reject");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
         assert_eq!(reject.reason, "failed to access required field");
@@ -664,8 +687,9 @@ mod tests {
         let reject = <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<
             TradeAmountAccessErrorOrder,
             (),
-        >>::check_pre_trade_start(&policy, &order)
+        >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order)
         .expect_err("field access error must reject");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
         assert_eq!(reject.reason, "failed to access required field");
@@ -712,8 +736,9 @@ mod tests {
         let reject = <OrderSizeLimitPolicy as CheckPreTradeStartPolicy<
             PriceAccessErrorOrder,
             (),
-        >>::check_pre_trade_start(&policy, &order)
+        >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order)
         .expect_err("field access error must reject");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
         assert_eq!(reject.reason, "failed to access required field");

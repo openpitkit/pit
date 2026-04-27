@@ -22,26 +22,32 @@ build:
     cargo build --workspace
 
 # Lint and test.
-check: lint-all test-all
+check: gen-api-c lint-all test-all
 
 # Lint all.
-lint-all: lint-rust lint-python
+lint-all: lint-rust lint-python lint-go
 # Lint Rus.
 lint-rust:
-    cargo clippy --all-targets --all-features -q
-    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
     cargo fmt --all -- --check --quiet
+    cargo clippy --all-targets --all-features -q -- -D warnings
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
 # Lint Python.
 lint-python:
-    python -m ruff check --quiet bindings/python
-    python -m ruff format --check --quiet bindings/python
+    python -m ruff check --quiet .
+    python -m black . --check
+# Lint Go.
+lint-go:
+    cd bindings/go && gofmt -l . | (! grep .)
+    cd bindings/go && go vet -all ./...
+    cd bindings/go && golangci-lint run ./...
 
 # Run all tests.
-test-all: test-rust test-python
+test-all: test-rust test-python test-go test-go-race
+
 # Rust tests.
 test-rust:
-    cargo test --workspace -q
-    cargo test -p openpit --all-features -q
+    cargo test --workspace --locked
+    cargo test -p openpit --all-features --locked
 # Rust tests with actionable coverage summary.
 test-rust-cov:
     mkdir -p target/llvm-cov
@@ -50,20 +56,10 @@ test-rust-cov:
 # Raw cargo-llvm-cov console report.
 test-rust-cov-raw:
     cargo llvm-cov --workspace --exclude openpit-python --all-features
-# Dry-run the release workflow locally.
-test-release:
-    VERSION=$(grep -m1 '^version = ' crates/openpit/Cargo.toml | cut -d '"' -f2); printf '{"ref":"refs/tags/v%s","ref_name":"v%s"}\n' "$VERSION" "$VERSION" > /tmp/pit-release-event.json
-    act push -W .github/workflows/release.yml -e /tmp/pit-release-event.json -P ubuntu-latest=ghcr.io/catthehacker/ubuntu:act-latest --container-architecture linux/amd64 --matrix name:manylinux2014
+
 # Run docker-based release e2e checks against published artifacts.
 test-release-e2e version:
     ./e2e/run.sh {{ version }}
-
-# Install Python bindings into the current Python environment (debug build).
-python-develop:
-    maturin develop --manifest-path bindings/python/Cargo.toml
-# Install Python bindings into the current Python environment (release build).
-python-develop-release:
-    maturin develop --release --manifest-path bindings/python/Cargo.toml
 
 # Shared pytest runner helper.
 _pytest args:
@@ -79,15 +75,66 @@ test-python-unit: python-develop
 test-python-integration: python-develop
     just _pytest bindings/python/tests/integration
 
+# Full Go test suite.
+test-go:
+    just _go "go test ./..."
+# Go race test suite.
+test-go-race:
+    just _go "go test -race ./..."
+# Go tests with actionable coverage summary.
+test-go-cov:
+    just _go "go test -coverprofile=coverage.out -coverpkg=./... ./..."
+    cd bindings/go && go tool cover -func=coverage.out | grep -v '100.0%'
+
 # Format all.
-fmt-all: fmt-rust fmt-python
+fmt-all: fmt-rust fmt-python fmt-go
 # Format Rust.
 fmt-rust:
     cargo fmt --all
 # Format Python.
 fmt-python:
-    ruff format
+    python -m black .
+# Format Go.
+fmt-go:
+    cd bindings/go && gofmt -w .
 
 # Prepare new release (kind is patch, minor or major).
-release kind:
+release kind: check
     cargo release {{ kind }} --execute
+# Push the current HEAD to the dry-run branch and start the staging release workflow.
+release-dry:
+    git push --force-with-lease origin HEAD:release-dry-run
+    gh workflow run release.yml --ref release-dry-run -f dry_run=true
+
+# Install Python bindings into the current Python environment (debug build).
+python-develop:
+    maturin develop --manifest-path bindings/python/Cargo.toml
+# Install Python bindings into the current Python environment (release build).
+python-develop-release:
+    maturin develop --release --manifest-path bindings/python/Cargo.toml
+
+# Generate the C header and Markdown docs for the FFI crate.
+gen-api-c:
+    python3 scripts/generate_api_c.py
+
+# Build FFI.
+_build-ffi:
+    cargo build -p pit-ffi --release --locked
+
+# Run a Go command with FFI runtime/linker environment configured.
+_go args: _build-ffi
+    OPENPIT_RUNTIME_LIBRARY_PATH="$(if [ "$(uname -s)" = "Darwin" ]; then \
+      echo "$(pwd)/target/release/libpit_ffi.dylib"; \
+    elif [ "$(uname -s)" = "Linux" ]; then \
+      echo "$(pwd)/target/release/libpit_ffi.so"; \
+    else \
+      echo "unsupported OS for pit-ffi runtime lookup" >&2; \
+      exit 1; \
+    fi)" && CGO_LDFLAGS="$(if [ "$(uname -s)" = "Darwin" ]; then \
+      echo "-Wl,-no_warn_duplicate_libraries -L$(pwd)/target/release -lpit_ffi"; \
+    elif [ "$(uname -s)" = "Linux" ]; then \
+      echo "-L$(pwd)/target/release -lpit_ffi"; \
+    else \
+      echo "unsupported OS for pit-ffi linker flags" >&2; \
+      exit 1; \
+    fi)" && RUNTIME_DIR="$(pwd)/target/release" && cd bindings/go && OPENPIT_RUNTIME_LIBRARY_PATH="$OPENPIT_RUNTIME_LIBRARY_PATH" CGO_LDFLAGS="$CGO_LDFLAGS" LD_LIBRARY_PATH="${RUNTIME_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" DYLD_LIBRARY_PATH="${RUNTIME_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}" {{ args }}

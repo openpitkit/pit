@@ -16,36 +16,36 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 use super::reject::Rejects;
-use super::reservation::Reservation;
+use super::reservation::PreTradeReservation;
 
 /// Opaque deferred pre-trade capability produced by `start_pre_trade`.
 ///
 /// Created by [`crate::Engine::start_pre_trade`] after start-stage policies pass.
-/// Holds a single-use capability: once [`Request::execute`] is called, the
+/// Holds a single-use capability: once [`PreTradeRequest::execute`] is called, the
 /// object is consumed and cannot be reused.
 ///
-/// The capability is single-use: once [`Request::execute`] is called, the
+/// The capability is single-use: once [`PreTradeRequest::execute`] is called, the
 /// request is consumed and cannot be reused.
 ///
 /// The request does not expose the underlying order to the caller;
 /// those values are visible only to the engine and the policies.
-pub struct Request<O> {
+pub struct PreTradeRequest<O> {
     inner: Box<dyn RequestHandle<O>>,
 }
 
-/// Internal capability interface used by [`Request`].
+/// Internal capability interface used by [`PreTradeRequest`].
 pub(crate) trait RequestHandle<O> {
     /// Executes deferred main-stage pre-trade checks.
-    fn execute(self: Box<Self>) -> Result<Reservation, Rejects>;
+    fn execute(self: Box<Self>) -> Result<PreTradeReservation, Rejects>;
 }
 
-impl<O> std::fmt::Debug for Request<O> {
+impl<O> std::fmt::Debug for PreTradeRequest<O> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Request").finish_non_exhaustive()
+        f.debug_struct("PreTradeRequest").finish_non_exhaustive()
     }
 }
 
-impl<O> Request<O> {
+impl<O> PreTradeRequest<O> {
     /// Executes deferred pre-trade checks.
     ///
     /// The call is single-use by type semantics because `self` is consumed.
@@ -73,7 +73,7 @@ impl<O> Request<O> {
     ///     price: Some(Price::from_str("185")?),
     /// };
     /// let request = engine.start_pre_trade(order)?;
-    /// let reservation = request.execute()?;
+    /// let mut reservation = request.execute()?;
     /// reservation.commit();
     /// # Ok(())
     /// # }
@@ -84,7 +84,7 @@ impl<O> Request<O> {
     /// Returns [`Rejects`] when any main-stage policy rejects the order.
     /// All policies run before returning, and all registered mutations are
     /// rolled back in reverse order.
-    pub fn execute(self) -> Result<Reservation, Rejects> {
+    pub fn execute(self) -> Result<PreTradeReservation, Rejects> {
         self.inner.execute()
     }
 
@@ -95,39 +95,45 @@ impl<O> Request<O> {
 
 #[cfg(test)]
 mod tests {
-    use super::Request;
+    use super::PreTradeRequest;
     use crate::pretrade::handle::RequestHandleImpl;
-    use crate::pretrade::Reservation;
+    use crate::pretrade::PreTradeReservation;
 
     #[test]
     fn execute_consumes_request_and_delegates_to_handle() {
         let request =
-            Request::<()>::from_handle(Box::new(RequestHandleImpl::new(Box::new(|| {
-                Ok(Reservation::from_handle(Box::new(NoopReservationHandle)))
+            PreTradeRequest::<()>::from_handle(Box::new(RequestHandleImpl::new(Box::new(|| {
+                Ok(PreTradeReservation::from_handle(Box::new(
+                    NoopReservationHandle,
+                )))
             }))));
 
-        let reservation = request.execute().expect("request execution must succeed");
+        let mut reservation = request.execute().expect("request execution must succeed");
         reservation.commit();
     }
 
     #[test]
     fn execute_can_finalize_returned_reservation_with_rollback() {
         let request =
-            Request::<()>::from_handle(Box::new(RequestHandleImpl::new(Box::new(|| {
-                Ok(Reservation::from_handle(Box::new(NoopReservationHandle)))
+            PreTradeRequest::<()>::from_handle(Box::new(RequestHandleImpl::new(Box::new(|| {
+                Ok(PreTradeReservation::from_handle(Box::new(
+                    NoopReservationHandle,
+                )))
             }))));
 
-        let reservation = request.execute().expect("request execution must succeed");
+        let mut reservation = request.execute().expect("request execution must succeed");
         reservation.rollback();
     }
 
     #[test]
     fn debug_format_is_opaque() {
         let request =
-            Request::<()>::from_handle(Box::new(RequestHandleImpl::new(Box::new(|| {
-                Ok(Reservation::from_handle(Box::new(NoopReservationHandle)))
+            PreTradeRequest::<()>::from_handle(Box::new(RequestHandleImpl::new(Box::new(|| {
+                Ok(PreTradeReservation::from_handle(Box::new(
+                    NoopReservationHandle,
+                )))
             }))));
-        assert!(format!("{request:?}").contains("Request"));
+        assert!(format!("{request:?}").contains("PreTradeRequest"));
         drop(request.execute());
     }
 
@@ -138,8 +144,8 @@ mod tests {
 
         fn rollback(self: Box<Self>) {}
 
-        fn lock(&self) -> crate::pretrade::Lock {
-            crate::pretrade::Lock::default()
+        fn lock(&self) -> crate::pretrade::PreTradeLock {
+            crate::pretrade::PreTradeLock::default()
         }
     }
 }

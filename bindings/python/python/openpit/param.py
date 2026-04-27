@@ -1,12 +1,22 @@
 import enum
+from typing import TypeAlias
 
 from . import _enum
 from ._openpit import (
+    _LEVERAGE_MAX,
+    _LEVERAGE_MIN,
+    _LEVERAGE_SCALE,
+    _LEVERAGE_STEP,
+    _ROUNDING_STRATEGY_BANKER,
+    _ROUNDING_STRATEGY_CONSERVATIVE_LOSS,
+    _ROUNDING_STRATEGY_CONSERVATIVE_PROFIT,
+    _ROUNDING_STRATEGY_DEFAULT,
     AccountId,
-    Asset,
     CashFlow,
     Fee,
     Leverage,
+    Notional,
+    ParamError,
     Pnl,
     PositionSize,
     Price,
@@ -15,6 +25,12 @@ from ._openpit import (
 )
 from ._openpit import (
     AdjustmentAmount as _AdjustmentAmount,
+)
+from ._openpit import (
+    Trade as _Trade,
+)
+from ._openpit import (
+    TradeAmount as _TradeAmount,
 )
 
 
@@ -98,57 +114,171 @@ class PositionMode(_enum.StrEnum):
         raise ValueError("expected 'netting' or 'hedged'")
 
 
+@enum.unique
+class FillType(_enum.StrEnum):
+    """Type of fill event reported by the venue."""
+
+    TRADE = "TRADE"
+    LIQUIDATION = "LIQUIDATION"
+    AUTO_DELEVERAGE = "AUTO_DELEVERAGE"
+    SETTLEMENT = "SETTLEMENT"
+    FUNDING = "FUNDING"
+
+    # @typing.override
+    @classmethod
+    def _missing_(cls, value: object) -> "FillType | None":
+        raise ValueError(
+            "expected 'TRADE', 'LIQUIDATION', 'AUTO_DELEVERAGE', "
+            "'SETTLEMENT', or 'FUNDING'",
+        )
+
+
+class AssetError(ValueError):
+    """Error type for asset validation failures."""
+
+
+Asset: TypeAlias = str
+
+
 class AdjustmentAmount(_AdjustmentAmount):
-    """Delta or absolute payload wrapper."""
+    """Delta-or-absolute adjustment payload.
+
+    Use factory methods :meth:`delta` and :meth:`absolute` to construct;
+    inspect the variant with :attr:`is_delta` / :attr:`is_absolute` and
+    extract the inner value with :attr:`as_delta` / :attr:`as_absolute`.
+    """
 
     # @typing.override
     def __new__(cls, *args: object, **kwargs: object) -> "AdjustmentAmount":
         return _AdjustmentAmount.__new__(cls, *args, **kwargs)
 
+    @staticmethod
+    def delta(value: "PositionSize") -> "AdjustmentAmount":
+        """Create a delta-type adjustment amount."""
+        base = _AdjustmentAmount.delta(value)
+        return AdjustmentAmount.__new__(AdjustmentAmount, base)
+
+    @staticmethod
+    def absolute(value: "PositionSize") -> "AdjustmentAmount":
+        """Create an absolute-type adjustment amount."""
+        base = _AdjustmentAmount.absolute(value)
+        return AdjustmentAmount.__new__(AdjustmentAmount, base)
+
+    @property
+    def is_delta(self) -> bool:
+        """True when the adjustment is a signed delta."""
+        return _AdjustmentAmount.is_delta.__get__(self, type(self))
+
+    @property
+    def is_absolute(self) -> bool:
+        """True when the adjustment sets an absolute value."""
+        return _AdjustmentAmount.is_absolute.__get__(self, type(self))
+
+    @property
+    def as_delta(self) -> "PositionSize | None":
+        """Inner position size when delta, otherwise None."""
+        return _AdjustmentAmount.as_delta.__get__(self, type(self))
+
+    @property
+    def as_absolute(self) -> "PositionSize | None":
+        """Inner position size when absolute, otherwise None."""
+        return _AdjustmentAmount.as_absolute.__get__(self, type(self))
+
     # @typing.override
-    def __init__(self, *, kind: str, value: PositionSize) -> None:
-        if kind not in {"delta", "absolute"}:
-            raise ValueError("kind must be 'delta' or 'absolute'")
-        if not isinstance(value, PositionSize):
-            raise TypeError(
-                f"value must be {PositionSize.__module__}.{PositionSize.__name__}"
-            )
+    def __repr__(self) -> str:
+        return _AdjustmentAmount.__repr__(self)
 
-    @staticmethod
-    def delta(value: PositionSize) -> "AdjustmentAmount":
-        if not isinstance(value, PositionSize):
-            raise TypeError(
-                f"value must be {PositionSize.__module__}.{PositionSize.__name__}"
-            )
-        raw = _AdjustmentAmount.delta(value)
-        return AdjustmentAmount(kind=raw.kind, value=raw.value)
 
-    @staticmethod
-    def absolute(value: PositionSize) -> "AdjustmentAmount":
-        if not isinstance(value, PositionSize):
+class Trade(_Trade):
+    """Last executed trade details."""
+
+    # @typing.override
+    def __new__(cls, *args: object, **kwargs: object) -> "Trade":
+        return _Trade.__new__(cls, *args, **kwargs)
+
+    # @typing.override
+    def __init__(self, *, price: Price, quantity: Quantity) -> None:
+        if not isinstance(price, Price):
+            raise TypeError(f"price must be {Price.__module__}.{Price.__name__}")
+        if not isinstance(quantity, Quantity):
             raise TypeError(
-                f"value must be {PositionSize.__module__}.{PositionSize.__name__}"
+                f"quantity must be {Quantity.__module__}.{Quantity.__name__}",
             )
-        raw = _AdjustmentAmount.absolute(value)
-        return AdjustmentAmount(kind=raw.kind, value=raw.value)
 
     # @typing.override
     @property
-    def kind(self) -> str:
-        return _AdjustmentAmount.kind.__get__(self, type(self))
+    def price(self) -> Price:
+        return _Trade.price.__get__(self, type(self))
 
     # @typing.override
     @property
-    def value(self) -> PositionSize:
-        return _AdjustmentAmount.value.__get__(self, type(self))
+    def quantity(self) -> Quantity:
+        return _Trade.quantity.__get__(self, type(self))
+
+    # @typing.override
+    def __repr__(self) -> str:
+        return f"Trade(price={self.price!r}, quantity={self.quantity!r})"
+
+
+class TradeAmount(_TradeAmount):
+    """Quantity- or volume-based trade amount wrapper.
+
+    Use factory methods :meth:`quantity` and :meth:`volume` to construct.
+    Factory arguments accept either value objects (:class:`Quantity` /
+    :class:`Volume`) or primitive numeric/string literals.
+
+    inspect the variant with :attr:`is_quantity` / :attr:`is_volume` and
+    extract the inner value with :attr:`as_quantity` / :attr:`as_volume`.
+    """
+
+    # @typing.override
+    def __new__(cls, *args: object, **kwargs: object) -> "TradeAmount":
+        return _TradeAmount.__new__(cls, *args, **kwargs)
+
+    @staticmethod
+    def quantity(value: "Quantity | str | int | float") -> "TradeAmount":
+        """Create a quantity-based trade amount."""
+        base = _TradeAmount.quantity(value)
+        return TradeAmount.__new__(TradeAmount, base)
+
+    @staticmethod
+    def volume(value: "Volume | str | int | float") -> "TradeAmount":
+        """Create a volume-based trade amount."""
+        base = _TradeAmount.volume(value)
+        return TradeAmount.__new__(TradeAmount, base)
+
+    @property
+    def is_quantity(self) -> bool:
+        """True when the amount is expressed as quantity."""
+        return _TradeAmount.is_quantity.__get__(self, type(self))
+
+    @property
+    def is_volume(self) -> bool:
+        """True when the amount is expressed as volume."""
+        return _TradeAmount.is_volume.__get__(self, type(self))
+
+    @property
+    def as_quantity(self) -> "Quantity | None":
+        """Inner quantity, or None when volume-based."""
+        return _TradeAmount.as_quantity.__get__(self, type(self))
+
+    @property
+    def as_volume(self) -> "Volume | None":
+        """Inner volume, or None when quantity-based."""
+        return _TradeAmount.as_volume.__get__(self, type(self))
+
+    # @typing.override
+    def __repr__(self) -> str:
+        return _TradeAmount.__repr__(self)
 
 
 @enum.unique
-class ParamKind(_enum.StrEnum):
+class Kind(_enum.StrEnum):
     """Stable identifiers for numeric domain value categories."""
 
     QUANTITY = "Quantity"
     VOLUME = "Volume"
+    NOTIONAL = "Notional"
     PRICE = "Price"
     PNL = "Pnl"
     CASH_FLOW = "CashFlow"
@@ -159,7 +289,7 @@ class ParamKind(_enum.StrEnum):
 
 @enum.unique
 class RoundingStrategy(_enum.StrEnum):
-    """Named rounding strategies used by the Rust value-type layer."""
+    """Named rounding strategies used by the SDK value-type layer."""
 
     MIDPOINT_NEAREST_EVEN = "MidpointNearestEven"
     MIDPOINT_AWAY_FROM_ZERO = "MidpointAwayFromZero"
@@ -169,22 +299,22 @@ class RoundingStrategy(_enum.StrEnum):
     @_enum.classproperty
     def DEFAULT(cls) -> "RoundingStrategy":
         """Default rounding strategy used by the Python binding."""
-        return cls.MIDPOINT_NEAREST_EVEN
+        return cls(_ROUNDING_STRATEGY_DEFAULT)
 
     @_enum.classproperty
     def BANKER(cls) -> "RoundingStrategy":
         """Alias for banker-style midpoint-to-even rounding."""
-        return cls.MIDPOINT_NEAREST_EVEN
+        return cls(_ROUNDING_STRATEGY_BANKER)
 
     @_enum.classproperty
     def CONSERVATIVE_PROFIT(cls) -> "RoundingStrategy":
         """Conservative rounding direction for profit-sensitive flows."""
-        return cls.DOWN
+        return cls(_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT)
 
     @_enum.classproperty
     def CONSERVATIVE_LOSS(cls) -> "RoundingStrategy":
         """Conservative rounding direction for loss-sensitive flows."""
-        return cls.DOWN
+        return cls(_ROUNDING_STRATEGY_CONSERVATIVE_LOSS)
 
 
 AccountId.__doc__ = """
@@ -200,74 +330,209 @@ approximately n² / 2⁶⁵. If that risk is unacceptable, maintain a
 collision-free string-to-integer mapping on your side and use
 :meth:`from_u64`. See <http://www.isthe.com/chongo/tech/comp/fnv/> for the algorithm
 specification.
-"""
 
-Asset.__doc__ = """
-Validated asset code used across instruments, collateral fields, and settlement keys.
-
-Use this wrapper when the host application wants an explicit asset value object
-instead of a plain string while preserving the same validation rules as the
-Rust core.
+WARNING:
+Use exactly one source model per runtime:
+- either only ``AccountId.from_u64(...)``,
+- or only ``AccountId.from_str(...)``.
+Do not mix both in one runtime state. A hashed string-derived ID can equal a
+direct numeric ID, and then two distinct accounts become one logical key.
 """
 
 CashFlow.__doc__ = """
 Signed cash-flow amount expressed in the settlement currency.
 
+Behaves like ``decimal.Decimal`` with domain-type safety: arithmetic accepts
+only ``CashFlow`` operands of the same type.
+Cross-type arithmetic (for example ``CashFlow + Fee``) returns ``TypeError``.
+
+Constructor accepts ``Decimal``, ``str``, ``int``, or ``float``.
+
+WARNING:
+``float`` is inherently imprecise. The same numeric literal passed as
+``float`` can differ from its ``str``/``Decimal`` representation by one ULP
+and may produce platform-dependent results. For external monetary inputs,
+prefer ``str`` or ``Decimal`` values.
+
+Use ``.decimal`` to access the underlying ``decimal.Decimal`` and
+``.to_json_value()`` for canonical JSON serialization.
+
+Use :meth:`from_pnl` and :meth:`from_fee` for explicit domain conversions.
 Positive values represent inflow and negative values represent outflow.
-Policies and adapters can use this type when they need explicit cash-flow
-semantics instead of a raw numeric literal.
 """
 
 Fee.__doc__ = """
 Execution fee or rebate expressed in the settlement currency.
 
-Use this value type for venue commissions, maker rebates, and similar
-post-trade charges instead of passing untyped numeric values around.
+Behaves like ``decimal.Decimal`` with domain-type safety: arithmetic accepts
+only ``Fee`` operands of the same type.
+Cross-type arithmetic (for example ``Fee + Pnl``) returns ``TypeError``.
+
+Constructor accepts ``Decimal``, ``str``, ``int``, or ``float``.
+
+WARNING:
+``float`` is inherently imprecise. The same numeric literal passed as
+``float`` can differ from its ``str``/``Decimal`` representation by one ULP
+and may produce platform-dependent results. For external monetary inputs,
+prefer ``str`` or ``Decimal`` values.
+
+Use ``.decimal`` to access the underlying ``decimal.Decimal`` and
+``.to_json_value()`` for canonical JSON serialization.
+
+Use :meth:`to_pnl` and :meth:`to_position_size` for domain conversions.
 """
 
 Leverage.__doc__ = """
 Per-order leverage multiplier with `0.1` step and range `1..=3000`.
 
-The Python wrapper exposes constructors from integer and float multipliers and
-returns the normalized multiplier through ``value``. Use it for explicit
-leverage overrides on margin orders and margin-parameter objects.
+Use ``Leverage(10)`` or ``Leverage(10.1)`` for direct multiplier
+construction. ``from_int`` and ``from_float`` remain available when explicit
+constructor intent is preferred.
+
+The normalized multiplier is exposed through ``value``. Use this type for
+explicit leverage overrides on margin orders and margin-parameter objects.
 """
+Leverage.SCALE = _LEVERAGE_SCALE
+Leverage.MIN = _LEVERAGE_MIN
+Leverage.MAX = _LEVERAGE_MAX
+Leverage.STEP = _LEVERAGE_STEP
 
 Pnl.__doc__ = """
 Signed profit-and-loss amount expressed in the settlement currency.
 
+Behaves like ``decimal.Decimal`` with domain-type safety: arithmetic accepts
+only ``Pnl`` operands of the same type.
+Cross-type arithmetic (for example ``Pnl + Fee``) returns ``TypeError``.
+
+Constructor accepts ``Decimal``, ``str``, ``int``, or ``float``.
+
+WARNING:
+``float`` is inherently imprecise. The same numeric literal passed as
+``float`` can differ from its ``str``/``Decimal`` representation by one ULP
+and may produce platform-dependent results. For external monetary inputs,
+prefer ``str`` or ``Decimal`` values.
+
+Use ``.decimal`` to access the underlying ``decimal.Decimal`` and
+``.to_json_value()`` for canonical JSON serialization.
+
+Use :meth:`to_cash_flow` and :meth:`to_position_size` for domain conversions.
 Positive values represent realized profit and negative values represent
-realized loss. Policies such as kill switches consume this type when tracking
-account-level realized outcome.
+realized loss.
 """
 
 PositionSize.__doc__ = """
 Signed position size in instrument units.
 
-This value type is useful when the host integration needs explicit directional
-position semantics instead of a generic numeric payload.
+Behaves like ``decimal.Decimal`` with domain-type safety: arithmetic accepts
+only ``PositionSize`` operands of the same type.
+Cross-type arithmetic (for example ``PositionSize + Quantity``) returns
+``TypeError``.
+
+Constructor accepts ``Decimal``, ``str``, ``int``, or ``float``.
+
+WARNING:
+``float`` is inherently imprecise. The same numeric literal passed as
+``float`` can differ from its ``str``/``Decimal`` representation by one ULP
+and may produce platform-dependent results. For external monetary inputs,
+prefer ``str`` or ``Decimal`` values.
+
+Use ``.decimal`` to access the underlying ``decimal.Decimal`` and
+``.to_json_value()`` for canonical JSON serialization.
+
+Use :meth:`from_quantity_and_side`, :meth:`to_open_quantity`,
+:meth:`to_close_quantity`, and :meth:`checked_add_quantity` for directional
+position workflows.
 """
 
 Price.__doc__ = """
 Per-unit instrument price.
 
+Behaves like ``decimal.Decimal`` with domain-type safety: arithmetic accepts
+only ``Price`` operands of the same type.
+Cross-type arithmetic (for example ``Price + Quantity``) returns ``TypeError``.
+
+Constructor accepts ``Decimal``, ``str``, ``int``, or ``float``.
+
+WARNING:
+``float`` is inherently imprecise. The same numeric literal passed as
+``float`` can differ from its ``str``/``Decimal`` representation by one ULP
+and may produce platform-dependent results. For external monetary inputs,
+prefer ``str`` or ``Decimal`` values.
+
+Use ``.decimal`` to access the underlying ``decimal.Decimal`` and
+``.to_json_value()`` for canonical JSON serialization.
+
 Use ``Price.calculate_volume(quantity)`` to derive notional volume through the
-same exact arithmetic as the Rust core instead of multiplying raw numbers in
-Python.
+same exact arithmetic as the SDK core instead of multiplying raw numbers.
 """
 
 Quantity.__doc__ = """
 Unsigned order or fill size in instrument units.
 
+Behaves like ``decimal.Decimal`` with domain-type safety: arithmetic accepts
+only ``Quantity`` operands of the same type.
+Cross-type arithmetic (for example ``Quantity + Price``) returns ``TypeError``.
+
+Constructor accepts ``Decimal``, ``str``, ``int``, or ``float``.
+
+WARNING:
+``float`` is inherently imprecise. The same numeric literal passed as
+``float`` can differ from its ``str``/``Decimal`` representation by one ULP
+and may produce platform-dependent results. For external monetary inputs,
+prefer ``str`` or ``Decimal`` values.
+
+Use ``.decimal`` to access the underlying ``decimal.Decimal`` and
+``.to_json_value()`` for canonical JSON serialization.
+
 Use ``Quantity.calculate_volume(price)`` to derive notional volume through the
-engine's domain arithmetic rather than manual float or decimal math.
+engine's domain arithmetic rather than manual number math.
+"""
+
+Notional.__doc__ = """
+Monetary position exposure in the settlement currency.
+
+Represents the absolute face value of a position: ``|price| × quantity``.
+Always non-negative. Used to calculate required margin and evaluate risk.
+
+Behaves like ``decimal.Decimal`` with domain-type safety: arithmetic accepts
+only ``Notional`` operands of the same type.
+Cross-type arithmetic (for example ``Notional + Volume``) returns ``TypeError``.
+
+Constructor accepts ``Decimal``, ``str``, ``int``, or ``float``.
+
+WARNING:
+``float`` is inherently imprecise. The same numeric literal passed as
+``float`` can differ from its ``str``/``Decimal`` representation by one ULP
+and may produce platform-dependent results. For external monetary inputs,
+prefer ``str`` or ``Decimal`` values.
+
+Use ``.decimal`` to access the underlying ``decimal.Decimal`` and
+``.to_json_value()`` for canonical JSON serialization.
+
+Use :meth:`from_price_quantity` to compute notional from a trade;
+use :meth:`calculate_margin_required` to derive the required margin.
 """
 
 Volume.__doc__ = """
 Unsigned notional volume in the settlement currency.
 
-This wrapper also exposes helpers that convert notional into signed cash-flow
-contributions for inflow/outflow bookkeeping.
+Behaves like ``decimal.Decimal`` with domain-type safety: arithmetic accepts
+only ``Volume`` operands of the same type.
+Cross-type arithmetic (for example ``Volume + Quantity``) returns ``TypeError``.
+
+Constructor accepts ``Decimal``, ``str``, ``int``, or ``float``.
+
+WARNING:
+``float`` is inherently imprecise. The same numeric literal passed as
+``float`` can differ from its ``str``/``Decimal`` representation by one ULP
+and may produce platform-dependent results. For external monetary inputs,
+prefer ``str`` or ``Decimal`` values.
+
+Use ``.decimal`` to access the underlying ``decimal.Decimal`` and
+``.to_json_value()`` for canonical JSON serialization.
+
+Use :meth:`calculate_quantity`, :meth:`to_cash_flow_inflow`, and
+:meth:`to_cash_flow_outflow` for domain conversions.
 """
 
 Side.BUY.__doc__ = "Buy direction."
@@ -280,7 +545,11 @@ PositionEffect.OPEN.__doc__ = "Execution opens exposure."
 PositionEffect.CLOSE.__doc__ = "Execution closes exposure."
 PositionMode.NETTING.__doc__ = "Single net position."
 PositionMode.HEDGED.__doc__ = "Separate long and short legs."
-
+FillType.TRADE.__doc__ = "Normal trade execution."
+FillType.LIQUIDATION.__doc__ = "Forced liquidation by the venue."
+FillType.AUTO_DELEVERAGE.__doc__ = "Auto-deleveraging event."
+FillType.SETTLEMENT.__doc__ = "Settlement at expiry or delivery."
+FillType.FUNDING.__doc__ = "Funding payment."
 AdjustmentAmount.__doc__ = """
 Delta or absolute payload wrapper.
 """
@@ -294,10 +563,14 @@ __all__ = [
     "AccountId",
     "AdjustmentAmount",
     "Asset",
+    "AssetError",
     "CashFlow",
     "Fee",
+    "FillType",
+    "Kind",
     "Leverage",
-    "ParamKind",
+    "Notional",
+    "ParamError",
     "Pnl",
     "PositionEffect",
     "PositionMode",
@@ -307,5 +580,7 @@ __all__ = [
     "Quantity",
     "RoundingStrategy",
     "Side",
+    "Trade",
+    "TradeAmount",
     "Volume",
 ]

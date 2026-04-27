@@ -17,8 +17,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 import typing
 
+from ._openpit import AccountAdjustmentContext as AccountAdjustmentContext
 from ._openpit import ExecutionReport as _ExecutionReport
 from ._openpit import ExecutionReportFillDetails as _ExecutionReportFillDetails
 from ._openpit import ExecutionReportOperation as _ExecutionReportOperation
@@ -40,8 +42,12 @@ from .param import (
     Price,
     Quantity,
     Side,
-    Volume,
+    Trade,
+    TradeAmount,
 )
+
+if typing.TYPE_CHECKING:
+    from .pretrade import PreTradeLock
 
 
 def _require_instance(
@@ -59,12 +65,12 @@ def _require_instance(
     return value
 
 
-def _convert_trade_amount(value: typing.Any) -> Quantity | Volume:
-    if isinstance(value, (Quantity, Volume)):
-        return value
-    raise TypeError(
-        "trade_amount must be openpit.param.Quantity or openpit.param.Volume"
-    )
+@dataclasses.dataclass(frozen=True)
+class Mutation:
+    """Commit/rollback action pair registered by a policy."""
+
+    commit: typing.Callable[[], None]
+    rollback: typing.Callable[[], None]
 
 
 class Instrument:
@@ -79,11 +85,9 @@ class Instrument:
     """
 
     def __init__(self, underlying_asset: Asset, settlement_asset: Asset) -> None:
-        _require_instance(underlying_asset, Asset, name="underlying_asset")
-        _require_instance(settlement_asset, Asset, name="settlement_asset")
         self._inner = _Instrument(
-            underlying_asset=underlying_asset.value,
-            settlement_asset=settlement_asset.value,
+            underlying_asset=underlying_asset,
+            settlement_asset=settlement_asset,
         )
 
     @property
@@ -92,7 +96,7 @@ class Instrument:
 
         This is the asset in which order quantity and resulting position are measured.
         """
-        return Asset(self._inner.underlying_asset)
+        return self._inner.underlying_asset
 
     @property
     def settlement_asset(self) -> Asset:
@@ -100,10 +104,21 @@ class Instrument:
 
         This is the asset in which cash flow, fees, and P&L are measured.
         """
-        return Asset(self._inner.settlement_asset)
+        return self._inner.settlement_asset
 
     def __repr__(self) -> str:
         return repr(self._inner)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Instrument):
+            return NotImplemented
+        return (
+            self.underlying_asset == other.underlying_asset
+            and self.settlement_asset == other.settlement_asset
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.underlying_asset, self.settlement_asset))
 
 
 class OrderOperation(_OrderOperation):
@@ -120,25 +135,16 @@ class OrderOperation(_OrderOperation):
         *,
         instrument: Instrument,
         side: Side,
-        trade_amount: Quantity | Volume,
+        trade_amount: TradeAmount,
         account_id: AccountId,
         price: Price | None = None,
     ) -> None:
+        # Structural aggregate check is intentionally kept in Python so
+        # aggregate misuse fails with a clear contract error instead of
+        # indirect attribute/field errors during aggregation.
         _require_instance(instrument, Instrument, name="instrument")
-        _require_instance(side, Side, name="side")
-        if not isinstance(trade_amount, (Quantity, Volume)):
-            raise TypeError(
-                f"trade_amount must be {Quantity.__module__}.{Quantity.__name__} "
-                f"or {Volume.__module__}.{Volume.__name__}"
-            )
-        _require_instance(account_id, AccountId, name="account_id")
-        _require_instance(price, Price, name="price")
-        _OrderOperation.underlying_asset.__set__(
-            self, instrument.underlying_asset.value
-        )
-        _OrderOperation.settlement_asset.__set__(
-            self, instrument.settlement_asset.value
-        )
+        _OrderOperation.underlying_asset.__set__(self, instrument.underlying_asset)
+        _OrderOperation.settlement_asset.__set__(self, instrument.settlement_asset)
         _OrderOperation.account_id.__set__(self, account_id)
         _OrderOperation.side.__set__(self, side)
         _OrderOperation.trade_amount.__set__(self, trade_amount)
@@ -160,15 +166,13 @@ class OrderOperation(_OrderOperation):
     @property
     def side(self) -> Side:
         """Order side."""
-        return Side(_OrderOperation.side.__get__(self, type(self)))
+        return _OrderOperation.side.__get__(self, type(self))
 
     # @typing.override
     @property
-    def trade_amount(self) -> Quantity | Volume:
+    def trade_amount(self) -> TradeAmount:
         """Requested trade amount; context is determined by value type."""
-        return _convert_trade_amount(
-            _OrderOperation.trade_amount.__get__(self, type(self))
-        )
+        return _OrderOperation.trade_amount.__get__(self, type(self))
 
     # @typing.override
     @property
@@ -179,7 +183,7 @@ class OrderOperation(_OrderOperation):
         ``None`` means the order should execute at market price.
         """
         value = _OrderOperation.price.__get__(self, type(self))
-        return None if value is None else Price(value)
+        return value
 
     def __repr__(self) -> str:
         return _OrderOperation.__repr__(self)
@@ -201,7 +205,6 @@ class OrderPosition(_OrderPosition):
         reduce_only: bool = False,
         close_position: bool = False,
     ) -> None:
-        _require_instance(position_side, PositionSide, name="position_side")
         _OrderPosition.position_side.__set__(self, position_side)
         _OrderPosition.reduce_only.__set__(self, reduce_only)
         _OrderPosition.close_position.__set__(self, close_position)
@@ -246,16 +249,14 @@ class OrderMargin(_OrderMargin):
     def __init__(
         self,
         *,
-        leverage: Leverage | None = None,
+        leverage: Leverage | int | float | None = None,
         collateral_asset: Asset | None = None,
         auto_borrow: bool = False,
     ) -> None:
-        _require_instance(leverage, Leverage, name="leverage")
-        _require_instance(collateral_asset, Asset, name="collateral_asset")
         _OrderMargin.leverage.__set__(self, leverage)
         _OrderMargin.collateral_asset.__set__(
             self,
-            None if collateral_asset is None else collateral_asset.value,
+            collateral_asset,
         )
         _OrderMargin.auto_borrow.__set__(self, auto_borrow)
 
@@ -276,7 +277,7 @@ class OrderMargin(_OrderMargin):
         ``None`` means "use default collateral asset selected by integration".
         """
         value = _OrderMargin.collateral_asset.__get__(self, type(self))
-        return None if value is None else Asset(value)
+        return value
 
     # @typing.override
     @property
@@ -298,6 +299,11 @@ class Order(_Order):
     All groups are optional. The engine's built-in policies validate at
     runtime that the groups they need are present and produce a standard
     ``MissingRequiredField`` reject when they are not.
+
+    Snapshot semantics:
+    When an order is submitted to the engine, an internal snapshot of its
+    current group fields is created for policy evaluation. Later mutations of
+    the same ``Order`` object do not affect that in-flight evaluation.
     """
 
     # @typing.override
@@ -313,6 +319,8 @@ class Order(_Order):
         position: OrderPosition | None = None,
         margin: OrderMargin | None = None,
     ) -> None:
+        # Structural checks for aggregate groups stay at Python boundary to keep
+        # explicit API-contract errors for wrong wrapper types.
         _require_instance(operation, OrderOperation, name="operation")
         _require_instance(position, OrderPosition, name="position")
         _require_instance(margin, OrderMargin, name="margin")
@@ -363,14 +371,15 @@ class ExecutionReportOperation(_ExecutionReportOperation):
         side: Side,
         account_id: AccountId,
     ) -> None:
+        # Structural aggregate check is intentionally kept in Python so
+        # aggregate misuse fails with a clear contract error instead of
+        # indirect attribute/field errors during aggregation.
         _require_instance(instrument, Instrument, name="instrument")
-        _require_instance(side, Side, name="side")
-        _require_instance(account_id, AccountId, name="account_id")
         _ExecutionReportOperation.underlying_asset.__set__(
-            self, instrument.underlying_asset.value
+            self, instrument.underlying_asset
         )
         _ExecutionReportOperation.settlement_asset.__set__(
-            self, instrument.settlement_asset.value
+            self, instrument.settlement_asset
         )
         _ExecutionReportOperation.account_id.__set__(self, account_id)
         _ExecutionReportOperation.side.__set__(self, side)
@@ -391,7 +400,7 @@ class ExecutionReportOperation(_ExecutionReportOperation):
     @property
     def side(self) -> Side:
         """Economic direction of the reported execution event."""
-        return Side(_ExecutionReportOperation.side.__get__(self, type(self)))
+        return _ExecutionReportOperation.side.__get__(self, type(self))
 
     def __repr__(self) -> str:
         return _ExecutionReportOperation.__repr__(self)
@@ -402,13 +411,10 @@ class FinancialImpact(_FinancialImpact):
 
     # @typing.override
     def __new__(cls, *args: typing.Any, **kwargs: typing.Any) -> FinancialImpact:
-        _ = args, kwargs
-        return _FinancialImpact.__new__(cls)
+        return _FinancialImpact.__new__(cls, *args, **kwargs)
 
     # @typing.override
     def __init__(self, *, pnl: Pnl, fee: Fee) -> None:
-        _require_instance(pnl, Pnl, name="pnl")
-        _require_instance(fee, Fee, name="fee")
         _FinancialImpact.pnl.__set__(self, pnl)
         _FinancialImpact.fee.__set__(self, fee)
 
@@ -419,7 +425,7 @@ class FinancialImpact(_FinancialImpact):
 
         Positive values for gains, negative values for losses.
         """
-        return Pnl(_FinancialImpact.pnl.__get__(self, type(self)))
+        return _FinancialImpact.pnl.__get__(self, type(self))
 
     # @typing.override
     @property
@@ -428,7 +434,7 @@ class FinancialImpact(_FinancialImpact):
 
         Negative values for fees, positive values for rebates.
         """
-        return Fee(_FinancialImpact.fee.__get__(self, type(self)))
+        return _FinancialImpact.fee.__get__(self, type(self))
 
     def __repr__(self) -> str:
         return _FinancialImpact.__repr__(self)
@@ -441,36 +447,46 @@ class ExecutionReportFillDetails(_ExecutionReportFillDetails):
     def __new__(
         cls, *args: typing.Any, **kwargs: typing.Any
     ) -> ExecutionReportFillDetails:
-        _ = args, kwargs
-        return _ExecutionReportFillDetails.__new__(cls)
+        return _ExecutionReportFillDetails.__new__(cls, *args, **kwargs)
 
     # @typing.override
     def __init__(
         self,
         *,
-        fill_price: Price | None = None,
-        fill_quantity: Quantity | None = None,
+        last_trade: Trade | None = None,
+        leaves_quantity: Quantity,
+        lock: PreTradeLock,
         is_terminal: bool = False,
     ) -> None:
-        _require_instance(fill_price, Price, name="fill_price")
-        _require_instance(fill_quantity, Quantity, name="fill_quantity")
-        _ExecutionReportFillDetails.fill_price.__set__(self, fill_price)
-        _ExecutionReportFillDetails.fill_quantity.__set__(self, fill_quantity)
+        _ExecutionReportFillDetails.last_trade.__set__(self, last_trade)
+        _ExecutionReportFillDetails.leaves_quantity.__set__(self, leaves_quantity)
+        _ExecutionReportFillDetails.lock.__set__(self, lock)
         _ExecutionReportFillDetails.is_terminal.__set__(self, is_terminal)
 
     # @typing.override
     @property
-    def fill_price(self) -> Price | None:
-        """Actual execution price."""
-        value = _ExecutionReportFillDetails.fill_price.__get__(self, type(self))
-        return None if value is None else Price(value)
+    def last_trade(self) -> Trade | None:
+        """Actual execution trade."""
+        value = _ExecutionReportFillDetails.last_trade.__get__(self, type(self))
+        if value is None:
+            return None
+        return Trade(price=value.price, quantity=value.quantity)
 
     # @typing.override
     @property
-    def fill_quantity(self) -> Quantity | None:
-        """Executed size."""
-        value = _ExecutionReportFillDetails.fill_quantity.__get__(self, type(self))
-        return None if value is None else Quantity(value)
+    def leaves_quantity(self) -> Quantity:
+        """Remaining order quantity after this fill."""
+        return _ExecutionReportFillDetails.leaves_quantity.__get__(self, type(self))
+
+    # @typing.override
+    @property
+    def lock(self) -> PreTradeLock:
+        """Order lock payload."""
+        # Lazy import avoids runtime import cycles between core and pretrade modules.
+        from .pretrade import PreTradeLock as _PythonPreTradeLock
+
+        value = _ExecutionReportFillDetails.lock.__get__(self, type(self))
+        return _PythonPreTradeLock(price=value.price)
 
     # @typing.override
     @property
@@ -499,8 +515,6 @@ class ExecutionReportPositionImpact(_ExecutionReportPositionImpact):
         position_effect: PositionEffect | None = None,
         position_side: PositionSide | None = None,
     ) -> None:
-        _require_instance(position_effect, PositionEffect, name="position_effect")
-        _require_instance(position_side, PositionSide, name="position_side")
         _ExecutionReportPositionImpact.position_effect.__set__(self, position_effect)
         _ExecutionReportPositionImpact.position_side.__set__(self, position_side)
 
@@ -509,14 +523,14 @@ class ExecutionReportPositionImpact(_ExecutionReportPositionImpact):
     def position_effect(self) -> PositionEffect | None:
         """Whether this execution opened or closed exposure."""
         value = _ExecutionReportPositionImpact.position_effect.__get__(self, type(self))
-        return None if value is None else PositionEffect(value)
+        return value
 
     # @typing.override
     @property
     def position_side(self) -> PositionSide | None:
         """Hedge-mode leg affected by this execution, when provided."""
         value = _ExecutionReportPositionImpact.position_side.__get__(self, type(self))
-        return None if value is None else PositionSide(value)
+        return value
 
     def __repr__(self) -> str:
         return _ExecutionReportPositionImpact.__repr__(self)
@@ -528,6 +542,11 @@ class ExecutionReport(_ExecutionReport):
 
     All groups are optional. Policies that need specific data validate
     group presence at runtime.
+
+    Snapshot semantics:
+    When ``Engine.apply_execution_report(...)`` is called, a snapshot of the
+    report groups is captured for processing. Mutating the same object after
+    the call does not alter the already-submitted report.
     """
 
     # @typing.override
@@ -544,6 +563,8 @@ class ExecutionReport(_ExecutionReport):
         fill: ExecutionReportFillDetails | None = None,
         position_impact: ExecutionReportPositionImpact | None = None,
     ) -> None:
+        # Structural checks for aggregate groups stay at Python boundary to keep
+        # explicit API-contract errors for wrong wrapper types.
         _require_instance(operation, ExecutionReportOperation, name="operation")
         _require_instance(financial_impact, FinancialImpact, name="financial_impact")
         _require_instance(fill, ExecutionReportFillDetails, name="fill")
@@ -615,6 +636,7 @@ __all__ = [
     "AccountAdjustmentAmount",
     "AccountAdjustmentBalanceOperation",
     "AccountAdjustmentBounds",
+    "AccountAdjustmentContext",
     "AccountAdjustmentPositionOperation",
     "ExecutionReport",
     "ExecutionReportFillDetails",

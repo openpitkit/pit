@@ -28,7 +28,7 @@
 //!
 //! # Type categories
 //!
-//! - **Unsigned types** ([`Quantity`], [`Volume`]) — cannot be negative.
+//! - **Unsigned types** ([`Quantity`], [`Volume`], [`Notional`]) — cannot be negative.
 //! - **Signed types** ([`Price`], [`Pnl`], [`CashFlow`], [`PositionSize`], [`Fee`]) — can be negative.
 //! - **Fixed-point types** ([`Leverage`]) — scaled integer domain values.
 //! - **Identifiers** ([`Asset`], [`AccountId`], [`Side`], [`PositionSide`]) — non-numeric types.
@@ -109,6 +109,7 @@ pub mod cash_flow;
 pub mod fee;
 pub mod fill_type;
 pub mod leverage;
+pub mod notional;
 pub mod pnl;
 pub mod position_effect;
 pub mod position_mode;
@@ -128,6 +129,7 @@ pub use cash_flow::CashFlow;
 pub use fee::Fee;
 pub use fill_type::FillType;
 pub use leverage::Leverage;
+pub use notional::Notional;
 pub use pnl::Pnl;
 pub use position_effect::PositionEffect;
 pub use position_mode::PositionMode;
@@ -146,6 +148,7 @@ pub use volume::Volume;
 pub enum ParamKind {
     Quantity,
     Volume,
+    Notional,
     Price,
     Pnl,
     CashFlow,
@@ -159,6 +162,7 @@ impl Display for ParamKind {
         match self {
             Self::Quantity => formatter.write_str("Quantity"),
             Self::Volume => formatter.write_str("Volume"),
+            Self::Notional => formatter.write_str("Notional"),
             Self::Price => formatter.write_str("Price"),
             Self::Pnl => formatter.write_str("Pnl"),
             Self::CashFlow => formatter.write_str("CashFlow"),
@@ -1244,6 +1248,7 @@ mod tests {
     fn param_kind_display_is_stable() {
         assert_eq!(ParamKind::Quantity.to_string(), "Quantity");
         assert_eq!(ParamKind::Volume.to_string(), "Volume");
+        assert_eq!(ParamKind::Notional.to_string(), "Notional");
         assert_eq!(ParamKind::Price.to_string(), "Price");
         assert_eq!(ParamKind::Pnl.to_string(), "Pnl");
         assert_eq!(ParamKind::CashFlow.to_string(), "CashFlow");

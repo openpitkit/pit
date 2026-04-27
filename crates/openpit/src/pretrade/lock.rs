@@ -19,7 +19,7 @@ use crate::param::Price;
 
 /// Stable lock context captured during pre-trade reservation.
 ///
-/// `Lock` is not just a copy of request input. It is the serialized context of
+/// `PreTradeLock` is not just a copy of request input. It is the serialized context of
 /// what the engine actually reserved and how that reservation must later be
 /// reconciled.
 ///
@@ -44,7 +44,7 @@ use crate::param::Price;
 /// Without the stored lock context, post-trade reconciliation would need to
 /// guess, which is not a valid contract for deterministic risk handling.
 ///
-/// In other words, `Lock` is the continuation token of reservation logic. It
+/// In other words, `PreTradeLock` is the continuation token of reservation logic. It
 /// captures the policy context that must survive from pre-trade acceptance to
 /// the last execution report relevant for that reservation.
 ///
@@ -59,12 +59,12 @@ use crate::param::Price;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(default))]
 #[non_exhaustive]
-pub struct Lock {
+pub struct PreTradeLock {
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     price: Option<Price>,
 }
 
-impl Lock {
+impl PreTradeLock {
     /// Creates a new lock context captured during reservation.
     pub fn new(price: Option<Price>) -> Self {
         Self { price }
@@ -81,12 +81,12 @@ impl Lock {
 
 #[cfg(test)]
 mod tests {
-    use super::Lock;
+    use super::PreTradeLock;
     use crate::param::Price;
 
     #[test]
     fn new_stores_none_price() {
-        let lock = Lock::new(None);
+        let lock = PreTradeLock::new(None);
 
         assert_eq!(lock.price(), None);
     }
@@ -95,14 +95,14 @@ mod tests {
     fn new_stores_some_price() {
         let price = Price::from_str("185").expect("price must be valid");
 
-        let lock = Lock::new(Some(price));
+        let lock = PreTradeLock::new(Some(price));
 
         assert_eq!(lock.price(), Some(price));
     }
 
     #[test]
     fn lock_is_copy() {
-        let lock = Lock::new(Some(Price::from_str("185").expect("price must be valid")));
+        let lock = PreTradeLock::new(Some(Price::from_str("185").expect("price must be valid")));
         let copied = lock;
 
         assert_eq!(copied, lock);

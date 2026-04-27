@@ -2,24 +2,15 @@
 //!
 //! Rust users verify policy-to-order compatibility at compile time through
 //! `Has*` capability traits. Language bindings (Python, C++, WASM, Go, C#,
-//! Java) represent orders and execution reports with all-Optional groups
+//! Java) represent orders and execution reports with all-optional groups
 //! and cannot rely on compile-time checks.
 //!
-//! This crate provides:
-//!
-//! - [`OrderGroupAccess`], [`ExecutionReportGroupAccess`], and
-//!   [`AccountAdjustmentGroupAccess`] — traits
-//!   that binding-level types implement to report which Optional groups
-//!   are populated.
-//! - `Guarded*` policy wrappers — each built-in policy has a guarded
-//!   counterpart that validates required groups at runtime. Missing groups
-//!   produce a standard `Reject` with `RejectCode::MissingRequiredField`
-//!   instead of a panic. When all groups are present, the wrapper
-//!   delegates to the inner policy unchanged.
-//!
-//! Every built-in policy has a guard, including those that currently
-//! require no order data. Empty guards are kept for API uniformity and
-//! forward-compatibility — new trait bounds may appear in future versions.
+//! This crate provides `Populated*` / `Absent*` wrapper types and `*Access`
+//! enums for each optional group in the domain model. Each `*Access` enum
+//! implements the relevant `Has*` traits: `Populated` delegates to the
+//! stored data, `Absent` returns `Err(RequestFieldAccessError)` for required
+//! fields and `Ok(None)` for optional fields. Missing required fields surface
+//! as `Reject(MissingRequiredField)` inside the policy that first needs them.
 
 // Copyright The Pit Project Owners. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
@@ -38,14 +29,30 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-mod access;
-pub mod order_size_limit;
-pub mod order_validation;
-pub mod pnl_killswitch;
-pub mod rate_limit;
+pub mod account_adjustment_amount;
+pub mod account_adjustment_bounds;
+pub mod account_adjustment_operation;
+pub mod execution_report_fill;
+pub mod execution_report_operation;
+pub mod execution_report_position_impact;
+pub mod financial_impact;
+pub mod order_margin;
+pub mod order_operation;
+pub mod order_position;
 
-pub use access::{AccountAdjustmentGroupAccess, ExecutionReportGroupAccess, OrderGroupAccess};
-pub use order_size_limit::GuardedOrderSizeLimit;
-pub use order_validation::GuardedOrderValidation;
-pub use pnl_killswitch::GuardedPnlKillSwitch;
-pub use rate_limit::GuardedRateLimit;
+pub use account_adjustment_amount::AccountAdjustmentAmountAccess;
+pub use account_adjustment_bounds::AccountAdjustmentBoundsAccess;
+pub use account_adjustment_operation::{
+    AccountAdjustmentOperationAccess, PopulatedAccountAdjustmentOperation,
+};
+pub use execution_report_fill::{ExecutionReportFillAccess, PopulatedExecutionReportFill};
+pub use execution_report_operation::{
+    ExecutionReportOperationAccess, PopulatedExecutionReportOperation,
+};
+pub use execution_report_position_impact::{
+    ExecutionReportPositionImpactAccess, PopulatedExecutionReportPositionImpact,
+};
+pub use financial_impact::{FinancialImpactAccess, PopulatedFinancialImpact};
+pub use order_margin::{OrderMarginAccess, PopulatedOrderMargin};
+pub use order_operation::{OrderOperationAccess, PopulatedOrderOperation};
+pub use order_position::{OrderPositionAccess, PopulatedOrderPosition};

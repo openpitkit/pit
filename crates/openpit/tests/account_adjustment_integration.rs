@@ -19,10 +19,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use openpit::param::AccountId;
-use openpit::pretrade::{
-    AccountAdjustmentPolicy, Mutation, Mutations, Reject, RejectCode, RejectScope,
+use openpit::pretrade::{Reject, RejectCode, RejectScope, Rejects};
+use openpit::{
+    AccountAdjustmentBalanceOperation, AccountAdjustmentContext, AccountAdjustmentPolicy, Engine,
+    HasBalanceAsset, Mutation, Mutations,
 };
-use openpit::{AccountAdjustmentBalanceOperation, Engine, HasBalanceAsset};
 
 type TestAdjustment = AccountAdjustmentBalanceOperation;
 type TestEngine = Engine<(), (), TestAdjustment>;
@@ -52,10 +53,11 @@ impl AccountAdjustmentPolicy<TestAdjustment> for RecordingAdjustmentPolicy {
 
     fn apply_account_adjustment(
         &self,
+        _ctx: &AccountAdjustmentContext,
         account_id: AccountId,
         adjustment: &TestAdjustment,
         _mutations: &mut Mutations,
-    ) -> Result<(), Reject> {
+    ) -> Result<(), Rejects> {
         self.seen_account_ids.borrow_mut().push(account_id);
         let asset_code = adjustment
             .balance_asset()
@@ -63,13 +65,13 @@ impl AccountAdjustmentPolicy<TestAdjustment> for RecordingAdjustmentPolicy {
             .to_string();
         self.seen_asset_codes.borrow_mut().push(asset_code.clone());
         if self.reject_on_asset.as_deref() == Some(&asset_code) {
-            return Err(Reject::new(
+            return Err(Rejects::from(Reject::new(
                 self.name,
                 RejectScope::Order,
                 RejectCode::Other,
                 "test reject",
                 format!("asset {} blocked by test policy", asset_code),
-            ));
+            )));
         }
         Ok(())
     }
@@ -93,23 +95,24 @@ impl AccountAdjustmentPolicy<TestAdjustment> for MutatingRecordingPolicy {
 
     fn apply_account_adjustment(
         &self,
+        _ctx: &AccountAdjustmentContext,
         _account_id: AccountId,
         adjustment: &TestAdjustment,
         mutations: &mut Mutations,
-    ) -> Result<(), Reject> {
+    ) -> Result<(), Rejects> {
         let asset = adjustment
             .balance_asset()
             .expect("balance_asset must be accessible")
             .to_string();
 
         if self.reject_on_asset.as_deref() == Some(&asset) {
-            return Err(Reject::new(
+            return Err(Rejects::from(Reject::new(
                 self.name,
                 RejectScope::Order,
                 RejectCode::Other,
                 "test reject",
                 format!("asset {} blocked by test policy", asset),
-            ));
+            )));
         }
 
         // Apply immediately. Safe because account adjustments run within a single
@@ -204,7 +207,7 @@ fn account_adjustment_integration_reject_on_first() {
     let result = engine.apply_account_adjustment(account_id, &adjustments);
 
     let error = result.expect_err("must reject");
-    assert_eq!(error.index, 0);
+    assert_eq!(error.failed_adjustment_index, 0);
     assert_eq!(*seen_assets.borrow(), vec!["USD"]);
 }
 
@@ -221,7 +224,7 @@ fn account_adjustment_integration_reject_on_last() {
     let result = engine.apply_account_adjustment(account_id, &adjustments);
 
     let error = result.expect_err("must reject");
-    assert_eq!(error.index, 2);
+    assert_eq!(error.failed_adjustment_index, 2);
     assert_eq!(*seen_assets.borrow(), vec!["USD", "EUR", "GBP"]);
 }
 
@@ -239,7 +242,7 @@ fn account_adjustment_integration_reject_on_middle() {
     let result = engine.apply_account_adjustment(account_id, &adjustments);
 
     let error = result.expect_err("must reject");
-    assert_eq!(error.index, 1);
+    assert_eq!(error.failed_adjustment_index, 1);
     assert_eq!(*seen_assets.borrow(), vec!["USD", "EUR"]);
 }
 

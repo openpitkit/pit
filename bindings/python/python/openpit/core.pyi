@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import collections.abc
+
 from .account_adjustment import (
     AccountAdjustment,
     AccountAdjustmentAmount,
@@ -35,8 +37,22 @@ from .param import (
     Price,
     Quantity,
     Side,
-    Volume,
+    Trade,
+    TradeAmount,
 )
+from .pretrade import PreTradeLock
+
+class AccountAdjustmentContext:
+    """Context of the current account-adjustment operation."""
+
+class Mutation:
+    """Commit/rollback action pair registered by a policy."""
+
+    def __init__(
+        self,
+        commit: collections.abc.Callable[[], None],
+        rollback: collections.abc.Callable[[], None],
+    ) -> None: ...
 
 class Instrument:
     """Trading instrument definition."""
@@ -62,7 +78,7 @@ class OrderOperation:
         *,
         instrument: Instrument,
         side: Side,
-        trade_amount: Quantity | Volume,
+        trade_amount: TradeAmount,
         account_id: AccountId,
         price: Price | None = None,
     ) -> None: ...
@@ -79,7 +95,7 @@ class OrderOperation:
         """Order side."""
 
     @property
-    def trade_amount(self) -> Quantity | Volume:
+    def trade_amount(self) -> TradeAmount:
         """Requested trade amount; context is determined by value type."""
 
     @property
@@ -114,7 +130,7 @@ class OrderMargin:
     def __init__(
         self,
         *,
-        leverage: Leverage | None = None,
+        leverage: Leverage | int | float | None = None,
         collateral_asset: Asset | None = None,
         auto_borrow: bool = False,
     ) -> None: ...
@@ -192,17 +208,22 @@ class ExecutionReportFillDetails:
     def __init__(
         self,
         *,
-        fill_price: Price | None = None,
-        fill_quantity: Quantity | None = None,
+        last_trade: Trade | None = None,
+        leaves_quantity: Quantity,
+        lock: PreTradeLock,
         is_terminal: bool = False,
     ) -> None: ...
     @property
-    def fill_price(self) -> Price | None:
-        """Actual execution price."""
+    def last_trade(self) -> Trade | None:
+        """Actual execution trade."""
 
     @property
-    def fill_quantity(self) -> Quantity | None:
-        """Executed size."""
+    def leaves_quantity(self) -> Quantity:
+        """Remaining order quantity after this fill."""
+
+    @property
+    def lock(self) -> PreTradeLock:
+        """Order lock payload."""
 
     @property
     def is_terminal(self) -> bool:

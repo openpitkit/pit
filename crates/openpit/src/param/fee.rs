@@ -15,7 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::{define_signed_value_type, ParamKind, Pnl, PositionSize};
+use super::{define_signed_value_type, CashFlow, ParamKind, Pnl, PositionSize};
 
 define_signed_value_type!(
     /// Fee amount.
@@ -38,12 +38,17 @@ impl Fee {
     pub fn to_position_size(self) -> PositionSize {
         PositionSize::new(-self.to_decimal())
     }
+
+    /// Converts fee into a cash flow contribution (negates the fee amount).
+    pub fn to_cash_flow(self) -> CashFlow {
+        CashFlow::from_fee(self)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Fee;
-    use crate::param::{Pnl, PositionSize};
+    use crate::param::{CashFlow, Pnl, PositionSize};
     use rust_decimal::Decimal;
 
     fn d(value: &str) -> Decimal {
@@ -66,5 +71,12 @@ mod tests {
 
         assert_eq!(fee.to_position_size(), PositionSize::new(d("-2.5")));
         assert_eq!(rebate.to_position_size(), PositionSize::new(d("2.5")));
+    }
+
+    #[test]
+    fn converts_to_cash_flow() {
+        let fee = Fee::new(d("3.18"));
+
+        assert_eq!(fee.to_cash_flow(), CashFlow::new(d("-3.18")));
     }
 }

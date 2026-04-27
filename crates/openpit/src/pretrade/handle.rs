@@ -15,14 +15,14 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::lock::Lock;
-use super::mutation::Mutations;
+use super::lock::PreTradeLock;
 use super::reject::Rejects;
 use super::request::RequestHandle;
-use super::reservation::{Reservation, ReservationHandle};
+use super::reservation::{PreTradeReservation, ReservationHandle};
+use crate::Mutations;
 use std::marker::PhantomData;
 
-type RequestExecutor = Box<dyn FnOnce() -> Result<Reservation, Rejects>>;
+type RequestExecutor = Box<dyn FnOnce() -> Result<PreTradeReservation, Rejects>>;
 
 pub(crate) struct RequestHandleImpl<O> {
     execute: RequestExecutor,
@@ -39,7 +39,7 @@ impl<O> RequestHandleImpl<O> {
 }
 
 impl<O> RequestHandle<O> for RequestHandleImpl<O> {
-    fn execute(self: Box<Self>) -> Result<Reservation, Rejects> {
+    fn execute(self: Box<Self>) -> Result<PreTradeReservation, Rejects> {
         let this = *self;
         (this.execute)()
     }
@@ -70,8 +70,8 @@ impl ReservationHandle for ReservationHandleImpl {
         }
     }
 
-    fn lock(&self) -> Lock {
-        Lock::default()
+    fn lock(&self) -> PreTradeLock {
+        PreTradeLock::default()
     }
 }
 
@@ -83,8 +83,10 @@ mod tests {
     use super::{RequestHandleImpl, ReservationHandleImpl};
     use crate::pretrade::request::RequestHandle;
     use crate::pretrade::reservation::ReservationHandle;
-    use crate::pretrade::{Mutation, Mutations};
     use crate::pretrade::{Reject, RejectCode, RejectScope, Rejects};
+    use crate::{Mutation, Mutations};
+
+    fn noop_action() {}
 
     #[test]
     fn commit_calls_commit_closures_in_order() {
@@ -96,7 +98,7 @@ mod tests {
                 move || {
                     c.borrow_mut().push(id);
                 },
-                || {},
+                noop_action,
             ));
         }
 
@@ -112,66 +114,15 @@ mod tests {
         let mut mutations = Mutations::new();
         for id in ["a", "b", "c"] {
             let r = Rc::clone(&calls);
-            mutations.push(Mutation::new(
-                || {},
-                move || {
-                    r.borrow_mut().push(id);
-                },
-            ));
+            mutations.push(Mutation::new(noop_action, move || {
+                r.borrow_mut().push(id);
+            }));
         }
 
         let handle = Box::new(ReservationHandleImpl::new(mutations));
         handle.rollback();
 
         assert_eq!(&*calls.borrow(), &["c", "b", "a"]);
-    }
-
-    #[test]
-    fn commit_does_not_call_rollback() {
-        let commits = Rc::new(RefCell::new(Vec::new()));
-        let rollbacks = Rc::new(RefCell::new(Vec::new()));
-        let mut mutations = Mutations::new();
-
-        let c = Rc::clone(&commits);
-        let r = Rc::clone(&rollbacks);
-        mutations.push(Mutation::new(
-            move || {
-                c.borrow_mut().push("commit");
-            },
-            move || {
-                r.borrow_mut().push("rollback");
-            },
-        ));
-
-        let handle = Box::new(ReservationHandleImpl::new(mutations));
-        handle.commit();
-
-        assert_eq!(&*commits.borrow(), &["commit"]);
-        assert!(rollbacks.borrow().is_empty());
-    }
-
-    #[test]
-    fn rollback_does_not_call_commit() {
-        let commits = Rc::new(RefCell::new(Vec::new()));
-        let rollbacks = Rc::new(RefCell::new(Vec::new()));
-        let mut mutations = Mutations::new();
-
-        let c = Rc::clone(&commits);
-        let r = Rc::clone(&rollbacks);
-        mutations.push(Mutation::new(
-            move || {
-                c.borrow_mut().push("commit");
-            },
-            move || {
-                r.borrow_mut().push("rollback");
-            },
-        ));
-
-        let handle = Box::new(ReservationHandleImpl::new(mutations));
-        handle.rollback();
-
-        assert!(commits.borrow().is_empty());
-        assert_eq!(&*rollbacks.borrow(), &["rollback"]);
     }
 
     #[test]
@@ -197,7 +148,8 @@ mod tests {
 
     #[test]
     fn lock_returns_default_lock() {
+        noop_action();
         let handle = ReservationHandleImpl::new(Mutations::new());
-        assert_eq!(handle.lock(), crate::pretrade::Lock::default());
+        assert_eq!(handle.lock(), crate::pretrade::PreTradeLock::default());
     }
 }

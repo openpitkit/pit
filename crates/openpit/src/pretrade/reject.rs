@@ -122,6 +122,12 @@ pub enum RejectCode {
     OrderValueCalculationFailed,
     /// Risk system is temporarily unavailable.
     SystemUnavailable,
+    /// Reserved discriminant for caller-defined reject classes.
+    ///
+    /// Use together with `Reject::with_user_data` to attach a caller-defined
+    /// payload that the receiving code can decode. The SDK does not interpret
+    /// this code beyond mapping it to FFI value 254.
+    Custom, // FFI: reserved as 254
     /// Reject reason does not fit a more specific code.
     Other,
 }
@@ -169,6 +175,7 @@ impl RejectCode {
             Self::ReferenceDataUnavailable => "ReferenceDataUnavailable",
             Self::OrderValueCalculationFailed => "OrderValueCalculationFailed",
             Self::SystemUnavailable => "SystemUnavailable",
+            Self::Custom => "Custom",
             Self::Other => "Other",
         }
     }
@@ -202,14 +209,25 @@ impl Display for RejectCode {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Reject {
-    /// Stable machine-readable reject code.
-    pub code: RejectCode,
     /// Human-readable reject reason.
     pub reason: String,
     /// Case-specific reject details.
     pub details: String,
     /// Policy name that produced the reject.
-    pub policy: &'static str,
+    pub policy: String,
+    /// Opaque caller-defined token.
+    ///
+    /// The SDK never inspects, dereferences, or frees this value. Its meaning,
+    /// lifetime, and thread-safety are the caller's responsibility. `0` / null
+    /// means "not set". See the project Threading Contract for the full lifetime
+    /// model.
+    ///
+    /// The token flows through every reject path the SDK exposes (start-stage,
+    /// main-stage, account-adjustment, batch results) and is preserved on
+    /// `Clone`.
+    pub user_data: usize,
+    /// Stable machine-readable reject code.
+    pub code: RejectCode,
     /// Reject scope.
     pub scope: RejectScope,
 }
@@ -226,17 +244,34 @@ impl Display for Reject {
 
 impl std::error::Error for Reject {}
 
-/// Collection of rejects returned by [`Request::execute`].
+/// Collection of rejects returned by [`PreTradeRequest::execute`].
 ///
 /// Implements `Deref` to `[Reject]` for direct element access.
 ///
-/// [`Request::execute`]: crate::pretrade::Request::execute
+/// [`PreTradeRequest::execute`]: crate::pretrade::PreTradeRequest::execute
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rejects(Vec<Reject>);
 
 impl Rejects {
-    pub(crate) fn new(rejects: Vec<Reject>) -> Self {
+    /// Creates a reject collection from a vector.
+    pub fn new(rejects: Vec<Reject>) -> Self {
         Self(rejects)
+    }
+
+    pub(crate) fn into_vec(self) -> Vec<Reject> {
+        self.0
+    }
+}
+
+impl From<Reject> for Rejects {
+    fn from(value: Reject) -> Self {
+        Self(vec![value])
+    }
+}
+
+impl From<Vec<Reject>> for Rejects {
+    fn from(value: Vec<Reject>) -> Self {
+        Self(value)
     }
 }
 
@@ -264,7 +299,7 @@ impl std::error::Error for Rejects {}
 impl Reject {
     /// Creates a reject with human-readable reason and details.
     pub fn new(
-        policy: &'static str,
+        policy: impl Into<String>,
         scope: RejectScope,
         code: RejectCode,
         reason: impl Into<String>,
@@ -274,9 +309,16 @@ impl Reject {
             code,
             reason: reason.into(),
             details: details.into(),
-            policy,
+            policy: policy.into(),
+            user_data: 0,
             scope,
         }
+    }
+
+    /// Returns a copy of this reject with caller-defined opaque token.
+    pub fn with_user_data(mut self, user_data: usize) -> Self {
+        self.user_data = user_data;
+        self
     }
 }
 
@@ -347,6 +389,7 @@ mod tests {
                 "OrderValueCalculationFailed",
             ),
             (RejectCode::SystemUnavailable, "SystemUnavailable"),
+            (RejectCode::Custom, "Custom"),
             (RejectCode::Other, "Other"),
         ];
 
@@ -369,6 +412,31 @@ mod tests {
             reject.to_string(),
             "[TestPolicy] something went wrong: extra info"
         );
+    }
+
+    #[test]
+    fn reject_new_sets_default_user_data() {
+        let reject = super::Reject::new(
+            "TestPolicy",
+            super::RejectScope::Order,
+            RejectCode::Other,
+            "reason",
+            "details",
+        );
+        assert_eq!(reject.user_data, 0);
+    }
+
+    #[test]
+    fn reject_with_user_data_overrides_default_payload() {
+        let reject = super::Reject::new(
+            "TestPolicy",
+            super::RejectScope::Order,
+            RejectCode::Other,
+            "reason",
+            "details",
+        )
+        .with_user_data(42usize);
+        assert_eq!(reject.user_data, 42usize);
     }
 
     #[test]

@@ -50,9 +50,9 @@ cargo add openpit
 The engine evaluates an order through a deterministic pre-trade pipeline:
 
 - `start_pre_trade(order)` runs lightweight start-stage policies
-- `Request::execute()` runs main-stage policies
-- `Reservation::commit()` applies reserved state
-- dropping `Reservation` rolls state back automatically
+- `PreTradeRequest::execute()` runs main-stage policies
+- `PreTradeReservation::commit()` applies reserved state
+- dropping `PreTradeReservation` rolls state back automatically
 - `apply_execution_report(report)` updates post-trade policy state
 
 Start-stage policies stop on the first reject. Main-stage policies aggregate
@@ -66,14 +66,33 @@ Built-in start-stage policies currently include:
 - `RateLimitPolicy`
 - `OrderSizeLimitPolicy`
 
-These built-ins are intentionally small. The primary integration model is to
-write project-specific policies against the public Rust policy API described in
-the wiki:
-[Custom Rust policies](https://github.com/openpitkit/pit/wiki/Policies#rust-custom-policy-api).
+The primary integration model is to write project-specific policies against the
+public Rust policy API described in the wiki: [Custom Rust policies](https://github.com/openpitkit/pit/wiki/Policies#rust-custom-policy-api).
 
 There are two types of rejections: a full kill switch for the account and a
 rejection of only the current request. This is useful in algorithmic trading
 when automatic order submission must be halted until the situation is analyzed.
+
+## Threading
+
+Canonical contract: [Threading Contract](https://github.com/openpitkit/pit/wiki/Threading-Contract).
+
+1. The SDK never spawns OS threads. Every public method runs on the OS thread
+   that invoked that method.
+2. Concurrent invocation of any public method on the same SDK handle is the
+   caller's responsibility to prevent. Entering one handle concurrently from
+   multiple threads is undefined behavior.
+3. Sequential calls to public methods on the same handle from different OS
+   threads are supported. Handles, contexts, and callbacks are not pinned to a
+   specific thread.
+4. Go binding addendum: goroutine migration between OS threads during a single
+   SDK call is supported. SDK callbacks into Go may run on a different OS
+   thread than the goroutine that started the call; callback code must not rely
+   on thread-local OS state.
+5. `Reject.user_data` / `Order.user_data` / `ExecutionReport.user_data` /
+   `AccountAdjustment.user_data` are opaque caller tokens. The SDK never
+   inspects, dereferences, or frees them. Lifetime, thread-safety, and meaning
+   are entirely caller-managed.
 
 ## Usage
 
@@ -84,7 +103,9 @@ use openpit::{
     FinancialImpact, ExecutionReportOperation, OrderOperation,
     WithFinancialImpact, WithExecutionReportOperation,
 };
-use openpit::param::{Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume};
+use openpit::param::{
+    AccountId, Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume,
+};
 use openpit::pretrade::policies::{OrderSizeLimit, OrderSizeLimitPolicy};
 use openpit::pretrade::policies::OrderValidationPolicy;
 use openpit::pretrade::policies::PnlKillSwitchPolicy;
@@ -125,9 +146,10 @@ let order = OrderOperation {
         Asset::new("AAPL")?,
         usd.clone(),
     ),
+    account_id: AccountId::from_u64(99224416),
     side: Side::Buy,
     trade_amount: TradeAmount::Quantity(
-        Quantity::from_str("100")?,
+        Quantity::from_f64(100.0)?,
     ),
     price: Some(Price::from_str("185")?),
 };
@@ -165,6 +187,7 @@ let report = WithExecutionReportOperation {
             Asset::new("AAPL")?,
             usd,
         ),
+        account_id: AccountId::from_u64(99224416),
         side: Side::Buy,
     },
 };
@@ -181,8 +204,9 @@ assert!(!result.kill_switch_triggered);
 
 ## Errors
 
-Rejects from `start_pre_trade(order)` and `Request::execute()` are returned as
-`Err(Reject)` and `Result<Reservation, Vec<Reject>>`.
+Rejects from `start_pre_trade(order)` and `PreTradeRequest::execute()` are
+returned as
+`Err(Reject)` and `Result<PreTradeReservation, Vec<Reject>>`.
 
 Each `Reject` contains:
 
@@ -191,5 +215,6 @@ Each `Reject` contains:
 - `reason`: short human-readable reject type (for example `"order quantity exceeded"`)
 - `details`: concrete case details (for example `"requested 11, max allowed: 10"`)
 - `scope`: `RejectScope::Order` or `RejectScope::Account`
+- `user_data`: opaque caller-defined pointer payload (`null` by default)
 
 `RejectCode` values are standardized and stable across Rust, Python, and C FFI.

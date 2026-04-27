@@ -1,36 +1,37 @@
-import typing
-
 import openpit
 import pytest
 
 
-class RecordingAdjustmentPolicy(openpit.pretrade.AccountAdjustmentPolicy):
+class RecordingAdjustmentPolicy(openpit.AccountAdjustmentPolicy):
     def __init__(self, *, reject_on_asset: str | None = None) -> None:
         self.seen_account_ids: list[int] = []
         self.seen_assets: list[str] = []
         self._reject_on_asset = reject_on_asset
 
-    @typing.override
+    # @typing.override
     @property
     def name(self) -> str:
         return "RecordingAdjustmentPolicy"
 
-    @typing.override
+    # @typing.override
     def apply_account_adjustment(
         self,
+        ctx: openpit.AccountAdjustmentContext,
         account_id: openpit.param.AccountId,
         adjustment: openpit.AccountAdjustment,
-    ) -> openpit.pretrade.PolicyReject | tuple[openpit.pretrade.Mutation, ...] | None:
+    ) -> list[openpit.pretrade.PolicyReject] | tuple[openpit.Mutation, ...] | None:
         self.seen_account_ids.append(account_id.value)
-        asset = adjustment.operation.asset.value
+        asset = adjustment.operation.asset
         self.seen_assets.append(asset)
         if self._reject_on_asset == asset:
-            return openpit.pretrade.PolicyReject(
-                code=openpit.pretrade.RejectCode.OTHER,
-                reason="rejected by test",
-                details=f"asset {asset} is blocked",
-                scope=openpit.pretrade.RejectScope.ORDER,
-            )
+            return [
+                openpit.pretrade.PolicyReject(
+                    code=openpit.pretrade.RejectCode.OTHER,
+                    reason="rejected by test",
+                    details=f"asset {asset} is blocked",
+                    scope=openpit.pretrade.RejectScope.ORDER,
+                )
+            ]
         return None
 
 
@@ -39,33 +40,36 @@ class RecordingAdjustmentPolicy(openpit.pretrade.AccountAdjustmentPolicy):
 # Rollback correctness is verified by running the same batch a second time on the same
 # engine and confirming identical behaviour — if the engine had retained committed state
 # from the first run, the second run would deviate.
-class MutatingRecordingPolicy(openpit.pretrade.AccountAdjustmentPolicy):
+class MutatingRecordingPolicy(openpit.AccountAdjustmentPolicy):
     def __init__(self, *, reject_on_asset: str | None = None) -> None:
         self.seen_assets: list[str] = []
         self._reject_on_asset = reject_on_asset
 
-    @typing.override
+    # @typing.override
     @property
     def name(self) -> str:
         return "MutatingRecordingPolicy"
 
-    @typing.override
+    # @typing.override
     def apply_account_adjustment(
         self,
+        ctx: openpit.AccountAdjustmentContext,
         account_id: openpit.param.AccountId,
         adjustment: openpit.AccountAdjustment,
-    ) -> openpit.pretrade.PolicyReject | tuple[openpit.pretrade.Mutation, ...] | None:
-        asset = adjustment.operation.asset.value
+    ) -> list[openpit.pretrade.PolicyReject] | tuple[openpit.Mutation, ...] | None:
+        asset = adjustment.operation.asset
         self.seen_assets.append(asset)
         if self._reject_on_asset == asset:
-            return openpit.pretrade.PolicyReject(
-                code=openpit.pretrade.RejectCode.OTHER,
-                reason="rejected by test",
-                details=f"asset {asset} is blocked",
-                scope=openpit.pretrade.RejectScope.ORDER,
-            )
+            return [
+                openpit.pretrade.PolicyReject(
+                    code=openpit.pretrade.RejectCode.OTHER,
+                    reason="rejected by test",
+                    details=f"asset {asset} is blocked",
+                    scope=openpit.pretrade.RejectScope.ORDER,
+                )
+            ]
         return (
-            openpit.pretrade.Mutation(
+            openpit.Mutation(
                 commit=lambda: None,
                 rollback=lambda: None,
             ),
@@ -75,7 +79,7 @@ class MutatingRecordingPolicy(openpit.pretrade.AccountAdjustmentPolicy):
 def _make_balance_adjustment(asset_code: str) -> openpit.AccountAdjustment:
     return openpit.AccountAdjustment(
         operation=openpit.AccountAdjustmentBalanceOperation(
-            asset=openpit.param.Asset(asset_code),
+            asset=asset_code,
         )
     )
 

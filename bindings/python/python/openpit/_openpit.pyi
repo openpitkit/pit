@@ -19,57 +19,27 @@
 
 from __future__ import annotations
 
+import decimal
 import typing
 
 from . import param
-from .pretrade import AccountAdjustmentPolicy, CheckPreTradeStartPolicy, Policy
+from .account_adjustment import AccountAdjustmentPolicy
+from .pretrade import CheckPreTradeStartPolicy, PreTradePolicy
+
+_ROUNDING_STRATEGY_DEFAULT: str
+_ROUNDING_STRATEGY_BANKER: str
+_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT: str
+_ROUNDING_STRATEGY_CONSERVATIVE_LOSS: str
+_LEVERAGE_SCALE: int
+_LEVERAGE_MIN: int
+_LEVERAGE_MAX: int
+_LEVERAGE_STEP: float
 
 class RejectError(Exception):
     """Python exception type exposed by the native module."""
 
-class RejectCode:
-    """Stable reject code constants."""
-
-    MISSING_REQUIRED_FIELD: typing.ClassVar[str]
-    INVALID_FIELD_FORMAT: typing.ClassVar[str]
-    INVALID_FIELD_VALUE: typing.ClassVar[str]
-    UNSUPPORTED_ORDER_TYPE: typing.ClassVar[str]
-    UNSUPPORTED_TIME_IN_FORCE: typing.ClassVar[str]
-    UNSUPPORTED_ORDER_ATTRIBUTE: typing.ClassVar[str]
-    DUPLICATE_CLIENT_ORDER_ID: typing.ClassVar[str]
-    TOO_LATE_TO_ENTER: typing.ClassVar[str]
-    EXCHANGE_CLOSED: typing.ClassVar[str]
-    UNKNOWN_INSTRUMENT: typing.ClassVar[str]
-    UNKNOWN_ACCOUNT: typing.ClassVar[str]
-    UNKNOWN_VENUE: typing.ClassVar[str]
-    UNKNOWN_CLEARING_ACCOUNT: typing.ClassVar[str]
-    UNKNOWN_COLLATERAL_ASSET: typing.ClassVar[str]
-    INSUFFICIENT_FUNDS: typing.ClassVar[str]
-    INSUFFICIENT_MARGIN: typing.ClassVar[str]
-    INSUFFICIENT_POSITION: typing.ClassVar[str]
-    CREDIT_LIMIT_EXCEEDED: typing.ClassVar[str]
-    RISK_LIMIT_EXCEEDED: typing.ClassVar[str]
-    ORDER_EXCEEDS_LIMIT: typing.ClassVar[str]
-    ORDER_QTY_EXCEEDS_LIMIT: typing.ClassVar[str]
-    ORDER_NOTIONAL_EXCEEDS_LIMIT: typing.ClassVar[str]
-    POSITION_LIMIT_EXCEEDED: typing.ClassVar[str]
-    CONCENTRATION_LIMIT_EXCEEDED: typing.ClassVar[str]
-    LEVERAGE_LIMIT_EXCEEDED: typing.ClassVar[str]
-    RATE_LIMIT_EXCEEDED: typing.ClassVar[str]
-    PNL_KILL_SWITCH_TRIGGERED: typing.ClassVar[str]
-    ACCOUNT_BLOCKED: typing.ClassVar[str]
-    ACCOUNT_NOT_AUTHORIZED: typing.ClassVar[str]
-    COMPLIANCE_RESTRICTION: typing.ClassVar[str]
-    INSTRUMENT_RESTRICTED: typing.ClassVar[str]
-    JURISDICTION_RESTRICTION: typing.ClassVar[str]
-    WASH_TRADE_PREVENTION: typing.ClassVar[str]
-    SELF_MATCH_PREVENTION: typing.ClassVar[str]
-    SHORT_SALE_RESTRICTION: typing.ClassVar[str]
-    RISK_CONFIGURATION_MISSING: typing.ClassVar[str]
-    REFERENCE_DATA_UNAVAILABLE: typing.ClassVar[str]
-    ORDER_VALUE_CALCULATION_FAILED: typing.ClassVar[str]
-    SYSTEM_UNAVAILABLE: typing.ClassVar[str]
-    OTHER: typing.ClassVar[str]
+class ParamError(ValueError):
+    """Numeric parameter validation and arithmetic error."""
 
 class Reject:
     """Business reject returned by pre-trade checks."""
@@ -94,23 +64,473 @@ class Reject:
     def scope(self) -> str:
         """Reject scope (``order`` or ``account``)."""
 
+    @property
+    def user_data(self) -> int:
+        """Opaque caller-defined integer token. ``0`` means "not set". The SDK never
+        inspects, dereferences, or frees it."""
+
+class Leverage:
+    """Per-order leverage multiplier."""
+
+    SCALE: typing.ClassVar[int]
+    MIN: typing.ClassVar[int]
+    MAX: typing.ClassVar[int]
+    STEP: typing.ClassVar[float]
+
+    def __init__(self, value: int | float) -> None:
+        """WARNING: passing ``float`` is imprecise and may yield inconsistent
+        results across platforms; prefer ``int`` or ``from_int``."""
+
+    @staticmethod
+    def from_int(value: int) -> Leverage: ...
+    @staticmethod
+    def from_float(value: float) -> Leverage:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``from_int`` with an integer value."""
+
+    @property
+    def value(self) -> float: ...
+    def calculate_margin_required(
+        self,
+        notional: Notional | decimal.Decimal | str | int | float,
+    ) -> Notional: ...
+
+class AccountId:
+    """Type-safe account identifier."""
+
+    @staticmethod
+    def from_u64(value: int) -> AccountId: ...
+    @staticmethod
+    def from_str(value: str) -> AccountId: ...
+    @property
+    def value(self) -> int: ...
+
+class Quantity:
+    """Instrument quantity value type."""
+
+    ZERO: typing.ClassVar[Quantity]
+
+    def __init__(self, value: decimal.Decimal | str | int | float) -> None:
+        """WARNING: passing ``float`` is imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal(value: decimal.Decimal) -> Quantity: ...
+    @staticmethod
+    def from_str(value: str) -> Quantity: ...
+    @staticmethod
+    def from_int(value: int) -> Quantity: ...
+    @staticmethod
+    def from_u64(value: int) -> Quantity: ...
+    @staticmethod
+    def from_float(value: float) -> Quantity:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_str_rounded(value: str, scale: int, strategy: str) -> Quantity: ...
+    @staticmethod
+    def from_float_rounded(value: float, scale: int, strategy: str) -> Quantity:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal_rounded(
+        value: decimal.Decimal,
+        scale: int,
+        strategy: str,
+    ) -> Quantity: ...
+    @property
+    def decimal(self) -> decimal.Decimal: ...
+    def to_json_value(self) -> str: ...
+    def calculate_volume(self, price: Price) -> Volume: ...
+    def __add__(self, other: Quantity) -> Quantity: ...
+    def __sub__(self, other: Quantity) -> Quantity: ...
+    def __mul__(self, other: int | float) -> Quantity: ...
+    def __rmul__(self, other: int | float) -> Quantity: ...
+    def __truediv__(self, other: int | float) -> Quantity: ...
+    def __mod__(self, other: int | float) -> Quantity: ...
+
+class Price:
+    """Instrument price value type."""
+
+    ZERO: typing.ClassVar[Price]
+
+    def __init__(self, value: decimal.Decimal | str | int | float) -> None:
+        """WARNING: passing ``float`` is imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal(value: decimal.Decimal) -> Price: ...
+    @staticmethod
+    def from_str(value: str) -> Price: ...
+    @staticmethod
+    def from_int(value: int) -> Price: ...
+    @staticmethod
+    def from_u64(value: int) -> Price: ...
+    @staticmethod
+    def from_float(value: float) -> Price:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_str_rounded(value: str, scale: int, strategy: str) -> Price: ...
+    @staticmethod
+    def from_float_rounded(value: float, scale: int, strategy: str) -> Price:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal_rounded(
+        value: decimal.Decimal,
+        scale: int,
+        strategy: str,
+    ) -> Price: ...
+    @property
+    def decimal(self) -> decimal.Decimal: ...
+    def to_json_value(self) -> str: ...
+    def calculate_volume(self, quantity: Quantity) -> Volume: ...
+    def __add__(self, other: Price) -> Price: ...
+    def __sub__(self, other: Price) -> Price: ...
+    def __neg__(self) -> Price: ...
+    def __mul__(self, other: int | float) -> Price: ...
+    def __rmul__(self, other: int | float) -> Price: ...
+    def __truediv__(self, other: int | float) -> Price: ...
+    def __mod__(self, other: int | float) -> Price: ...
+
+class Pnl:
+    """Profit and loss value type."""
+
+    ZERO: typing.ClassVar[Pnl]
+
+    def __init__(self, value: decimal.Decimal | str | int | float) -> None:
+        """WARNING: passing ``float`` is imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal(value: decimal.Decimal) -> Pnl: ...
+    @staticmethod
+    def from_str(value: str) -> Pnl: ...
+    @staticmethod
+    def from_int(value: int) -> Pnl: ...
+    @staticmethod
+    def from_u64(value: int) -> Pnl: ...
+    @staticmethod
+    def from_float(value: float) -> Pnl:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_str_rounded(value: str, scale: int, strategy: str) -> Pnl: ...
+    @staticmethod
+    def from_float_rounded(value: float, scale: int, strategy: str) -> Pnl:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal_rounded(
+        value: decimal.Decimal,
+        scale: int,
+        strategy: str,
+    ) -> Pnl: ...
+    @staticmethod
+    def from_fee(fee: Fee) -> Pnl: ...
+    @property
+    def decimal(self) -> decimal.Decimal: ...
+    def to_json_value(self) -> str: ...
+    def to_cash_flow(self) -> CashFlow: ...
+    def to_position_size(self) -> PositionSize: ...
+    def __add__(self, other: Pnl) -> Pnl: ...
+    def __sub__(self, other: Pnl) -> Pnl: ...
+    def __neg__(self) -> Pnl: ...
+    def __mul__(self, other: int | float) -> Pnl: ...
+    def __rmul__(self, other: int | float) -> Pnl: ...
+    def __truediv__(self, other: int | float) -> Pnl: ...
+    def __mod__(self, other: int | float) -> Pnl: ...
+
+class Fee:
+    """Fee value type."""
+
+    ZERO: typing.ClassVar[Fee]
+
+    def __init__(self, value: decimal.Decimal | str | int | float) -> None:
+        """WARNING: passing ``float`` is imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal(value: decimal.Decimal) -> Fee: ...
+    @staticmethod
+    def from_str(value: str) -> Fee: ...
+    @staticmethod
+    def from_int(value: int) -> Fee: ...
+    @staticmethod
+    def from_u64(value: int) -> Fee: ...
+    @staticmethod
+    def from_float(value: float) -> Fee:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_str_rounded(value: str, scale: int, strategy: str) -> Fee: ...
+    @staticmethod
+    def from_float_rounded(value: float, scale: int, strategy: str) -> Fee:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal_rounded(
+        value: decimal.Decimal,
+        scale: int,
+        strategy: str,
+    ) -> Fee: ...
+    @property
+    def decimal(self) -> decimal.Decimal: ...
+    def to_json_value(self) -> str: ...
+    def to_pnl(self) -> Pnl: ...
+    def to_position_size(self) -> PositionSize: ...
+    def to_cash_flow(self) -> CashFlow: ...
+    def __add__(self, other: Fee) -> Fee: ...
+    def __sub__(self, other: Fee) -> Fee: ...
+    def __neg__(self) -> Fee: ...
+    def __mul__(self, other: int | float) -> Fee: ...
+    def __rmul__(self, other: int | float) -> Fee: ...
+    def __truediv__(self, other: int | float) -> Fee: ...
+    def __mod__(self, other: int | float) -> Fee: ...
+
+class Volume:
+    """Notional volume value type."""
+
+    ZERO: typing.ClassVar[Volume]
+
+    def __init__(self, value: decimal.Decimal | str | int | float) -> None:
+        """WARNING: passing ``float`` is imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal(value: decimal.Decimal) -> Volume: ...
+    @staticmethod
+    def from_str(value: str) -> Volume: ...
+    @staticmethod
+    def from_int(value: int) -> Volume: ...
+    @staticmethod
+    def from_u64(value: int) -> Volume: ...
+    @staticmethod
+    def from_float(value: float) -> Volume:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_str_rounded(value: str, scale: int, strategy: str) -> Volume: ...
+    @staticmethod
+    def from_float_rounded(value: float, scale: int, strategy: str) -> Volume:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal_rounded(
+        value: decimal.Decimal,
+        scale: int,
+        strategy: str,
+    ) -> Volume: ...
+    @property
+    def decimal(self) -> decimal.Decimal: ...
+    def to_json_value(self) -> str: ...
+    def to_cash_flow_inflow(self) -> CashFlow: ...
+    def to_cash_flow_outflow(self) -> CashFlow: ...
+    def calculate_quantity(self, price: Price) -> Quantity: ...
+    def to_notional(self) -> Notional: ...
+    def __add__(self, other: Volume) -> Volume: ...
+    def __sub__(self, other: Volume) -> Volume: ...
+    def __mul__(self, other: int | float) -> Volume: ...
+    def __rmul__(self, other: int | float) -> Volume: ...
+    def __truediv__(self, other: int | float) -> Volume: ...
+    def __mod__(self, other: int | float) -> Volume: ...
+
+class Notional:
+    """Monetary position exposure value type.
+
+    Represents the absolute monetary value of a position in the settlement
+    currency: ``|price| × quantity``. Always non-negative. Used for margin
+    and risk calculation.
+    """
+
+    ZERO: typing.ClassVar[Notional]
+
+    def __init__(self, value: decimal.Decimal | str | int | float) -> None:
+        """WARNING: passing ``float`` is imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal(value: decimal.Decimal) -> Notional: ...
+    @staticmethod
+    def from_str(value: str) -> Notional: ...
+    @staticmethod
+    def from_int(value: int) -> Notional: ...
+    @staticmethod
+    def from_u64(value: int) -> Notional: ...
+    @staticmethod
+    def from_float(value: float) -> Notional:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_str_rounded(value: str, scale: int, strategy: str) -> Notional: ...
+    @staticmethod
+    def from_float_rounded(value: float, scale: int, strategy: str) -> Notional:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal_rounded(
+        value: decimal.Decimal,
+        scale: int,
+        strategy: str,
+    ) -> Notional: ...
+    @staticmethod
+    def from_volume(volume: Volume) -> Notional: ...
+    @staticmethod
+    def from_price_quantity(price: Price, quantity: Quantity) -> Notional: ...
+    @property
+    def decimal(self) -> decimal.Decimal: ...
+    def to_json_value(self) -> str: ...
+    def to_volume(self) -> Volume: ...
+    def calculate_margin_required(
+        self,
+        leverage: Leverage | int | float,
+    ) -> Notional: ...
+    def __add__(self, other: Notional) -> Notional: ...
+    def __sub__(self, other: Notional) -> Notional: ...
+    def __mul__(self, other: int | float) -> Notional: ...
+    def __rmul__(self, other: int | float) -> Notional: ...
+    def __truediv__(self, other: int | float) -> Notional: ...
+    def __mod__(self, other: int | float) -> Notional: ...
+
+class CashFlow:
+    """Cash-flow contribution value type."""
+
+    ZERO: typing.ClassVar[CashFlow]
+
+    def __init__(self, value: decimal.Decimal | str | int | float) -> None:
+        """WARNING: passing ``float`` is imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal(value: decimal.Decimal) -> CashFlow: ...
+    @staticmethod
+    def from_str(value: str) -> CashFlow: ...
+    @staticmethod
+    def from_int(value: int) -> CashFlow: ...
+    @staticmethod
+    def from_u64(value: int) -> CashFlow: ...
+    @staticmethod
+    def from_float(value: float) -> CashFlow:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_str_rounded(value: str, scale: int, strategy: str) -> CashFlow: ...
+    @staticmethod
+    def from_float_rounded(value: float, scale: int, strategy: str) -> CashFlow:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal_rounded(
+        value: decimal.Decimal,
+        scale: int,
+        strategy: str,
+    ) -> CashFlow: ...
+    @staticmethod
+    def from_pnl(pnl: Pnl) -> CashFlow: ...
+    @staticmethod
+    def from_fee(fee: Fee) -> CashFlow: ...
+    @staticmethod
+    def from_volume_inflow(volume: Volume) -> CashFlow: ...
+    @staticmethod
+    def from_volume_outflow(volume: Volume) -> CashFlow: ...
+    @property
+    def decimal(self) -> decimal.Decimal: ...
+    def to_json_value(self) -> str: ...
+    def __add__(self, other: CashFlow) -> CashFlow: ...
+    def __sub__(self, other: CashFlow) -> CashFlow: ...
+    def __neg__(self) -> CashFlow: ...
+    def __mul__(self, other: int | float) -> CashFlow: ...
+    def __rmul__(self, other: int | float) -> CashFlow: ...
+    def __truediv__(self, other: int | float) -> CashFlow: ...
+    def __mod__(self, other: int | float) -> CashFlow: ...
+
+class PositionSize:
+    """Signed position-size value type."""
+
+    ZERO: typing.ClassVar[PositionSize]
+
+    def __init__(self, value: decimal.Decimal | str | int | float) -> None:
+        """WARNING: passing ``float`` is imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal(value: decimal.Decimal) -> PositionSize: ...
+    @staticmethod
+    def from_str(value: str) -> PositionSize: ...
+    @staticmethod
+    def from_int(value: int) -> PositionSize: ...
+    @staticmethod
+    def from_u64(value: int) -> PositionSize: ...
+    @staticmethod
+    def from_float(value: float) -> PositionSize:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_str_rounded(value: str, scale: int, strategy: str) -> PositionSize: ...
+    @staticmethod
+    def from_float_rounded(value: float, scale: int, strategy: str) -> PositionSize:
+        """WARNING: float inputs are imprecise and may yield inconsistent
+        results across platforms; prefer ``str`` or ``decimal.Decimal``."""
+
+    @staticmethod
+    def from_decimal_rounded(
+        value: decimal.Decimal,
+        scale: int,
+        strategy: str,
+    ) -> PositionSize: ...
+    @staticmethod
+    def from_quantity_and_side(quantity: Quantity, side: str) -> PositionSize: ...
+    @staticmethod
+    def from_pnl(pnl: Pnl) -> PositionSize: ...
+    @staticmethod
+    def from_fee(fee: Fee) -> PositionSize: ...
+    @property
+    def decimal(self) -> decimal.Decimal: ...
+    def to_json_value(self) -> str: ...
+    def to_open_quantity(self) -> tuple[Quantity, str]: ...
+    def to_close_quantity(self) -> tuple[Quantity, str | None]: ...
+    def checked_add_quantity(self, qty: Quantity, side: str) -> PositionSize: ...
+    def __add__(self, other: PositionSize) -> PositionSize: ...
+    def __sub__(self, other: PositionSize) -> PositionSize: ...
+    def __neg__(self) -> PositionSize: ...
+    def __mul__(self, other: int | float) -> PositionSize: ...
+    def __rmul__(self, other: int | float) -> PositionSize: ...
+    def __truediv__(self, other: int | float) -> PositionSize: ...
+    def __mod__(self, other: int | float) -> PositionSize: ...
+
 class Instrument:
     """Trading instrument with underlying and settlement assets."""
 
     def __init__(
         self,
-        underlying_asset: str,
-        settlement_asset: str,
+        underlying_asset: param.Asset,
+        settlement_asset: param.Asset,
     ) -> None:
         """Create an instrument."""
         _ = (underlying_asset, settlement_asset)
 
     @property
-    def underlying_asset(self) -> str:
+    def underlying_asset(self) -> param.Asset:
         """Underlying asset symbol string."""
 
     @property
-    def settlement_asset(self) -> str:
+    def settlement_asset(self) -> param.Asset:
         """Settlement asset symbol string."""
 
 class OrderOperation:
@@ -119,28 +539,28 @@ class OrderOperation:
     def __init__(
         self,
         *,
-        underlying_asset: str | None = None,
-        settlement_asset: str | None = None,
+        underlying_asset: param.Asset | None = None,
+        settlement_asset: param.Asset | None = None,
         account_id: param.AccountId | None = None,
         side: param.Side | None = None,
-        trade_amount: param.Quantity | param.Volume | None = None,
+        trade_amount: TradeAmount | None = None,
         price: param.Price | None = None,
     ) -> None:
         """Create an order operation group."""
         _ = (underlying_asset, settlement_asset, account_id, side, trade_amount, price)
 
     @property
-    def underlying_asset(self) -> str | None:
+    def underlying_asset(self) -> param.Asset | None:
         """Underlying asset symbol string."""
 
     @underlying_asset.setter
-    def underlying_asset(self, value: str | None) -> None: ...
+    def underlying_asset(self, value: param.Asset | None) -> None: ...
     @property
-    def settlement_asset(self) -> str | None:
+    def settlement_asset(self) -> param.Asset | None:
         """Settlement asset symbol string."""
 
     @settlement_asset.setter
-    def settlement_asset(self, value: str | None) -> None: ...
+    def settlement_asset(self, value: param.Asset | None) -> None: ...
     @property
     def account_id(self) -> param.AccountId | None:
         """Account identifier."""
@@ -148,20 +568,18 @@ class OrderOperation:
     @account_id.setter
     def account_id(self, value: param.AccountId | None) -> None: ...
     @property
-    def side(self) -> str | None:
-        """Order side string."""
+    def side(self) -> param.Side | None:
+        """Order side."""
 
     @side.setter
     def side(self, value: param.Side | None) -> None: ...
     @property
-    def trade_amount(self) -> param.Quantity | param.Volume | None:
-        """Trade amount as Quantity or Volume."""
-
+    def trade_amount(self) -> TradeAmount | None: ...
     @trade_amount.setter
-    def trade_amount(self, value: param.Quantity | param.Volume | None) -> None: ...
+    def trade_amount(self, value: TradeAmount | None) -> None: ...
     @property
-    def price(self) -> str | None:
-        """Price string."""
+    def price(self) -> param.Price | None:
+        """Order price."""
 
     @price.setter
     def price(self, value: param.Price | None) -> None: ...
@@ -180,8 +598,8 @@ class OrderPosition:
         _ = (position_side, reduce_only, close_position)
 
     @property
-    def position_side(self) -> str | None:
-        """Position side string."""
+    def position_side(self) -> param.PositionSide | None:
+        """Position side."""
 
     @position_side.setter
     def position_side(self, value: param.PositionSide | None) -> None: ...
@@ -204,8 +622,8 @@ class OrderMargin:
     def __init__(
         self,
         *,
-        leverage: param.Leverage | None = None,
-        collateral_asset: str | None = None,
+        leverage: param.Leverage | int | float | None = None,
+        collateral_asset: param.Asset | None = None,
         auto_borrow: bool = False,
     ) -> None:
         """Create an order margin group."""
@@ -216,13 +634,13 @@ class OrderMargin:
         """Optional leverage override."""
 
     @leverage.setter
-    def leverage(self, value: param.Leverage | None) -> None: ...
+    def leverage(self, value: param.Leverage | int | float | None) -> None: ...
     @property
-    def collateral_asset(self) -> str | None:
+    def collateral_asset(self) -> param.Asset | None:
         """Collateral asset string."""
 
     @collateral_asset.setter
-    def collateral_asset(self, value: str | None) -> None: ...
+    def collateral_asset(self, value: param.Asset | None) -> None: ...
     @property
     def auto_borrow(self) -> bool:
         """Auto-borrow flag."""
@@ -268,8 +686,8 @@ class ExecutionReportOperation:
     def __init__(
         self,
         *,
-        underlying_asset: str | None = None,
-        settlement_asset: str | None = None,
+        underlying_asset: param.Asset | None = None,
+        settlement_asset: param.Asset | None = None,
         account_id: param.AccountId | None = None,
         side: param.Side | None = None,
     ) -> None:
@@ -277,17 +695,17 @@ class ExecutionReportOperation:
         _ = (underlying_asset, settlement_asset, account_id, side)
 
     @property
-    def underlying_asset(self) -> str | None:
+    def underlying_asset(self) -> param.Asset | None:
         """Underlying asset symbol string."""
 
     @underlying_asset.setter
-    def underlying_asset(self, value: str | None) -> None: ...
+    def underlying_asset(self, value: param.Asset | None) -> None: ...
     @property
-    def settlement_asset(self) -> str | None:
+    def settlement_asset(self) -> param.Asset | None:
         """Settlement asset symbol string."""
 
     @settlement_asset.setter
-    def settlement_asset(self, value: str | None) -> None: ...
+    def settlement_asset(self, value: param.Asset | None) -> None: ...
     @property
     def account_id(self) -> param.AccountId | None:
         """Account identifier."""
@@ -295,8 +713,8 @@ class ExecutionReportOperation:
     @account_id.setter
     def account_id(self, value: param.AccountId | None) -> None: ...
     @property
-    def side(self) -> str | None:
-        """Trade side string."""
+    def side(self) -> param.Side | None:
+        """Trade side."""
 
     @side.setter
     def side(self, value: param.Side | None) -> None: ...
@@ -307,24 +725,24 @@ class FinancialImpact:
     def __init__(
         self,
         *,
-        pnl: param.Pnl | None = None,
-        fee: param.Fee | None = None,
+        pnl: param.Pnl,
+        fee: param.Fee,
     ) -> None:
         """Create a financial impact group."""
         _ = (pnl, fee)
 
     @property
-    def pnl(self) -> str | None:
-        """Realized PnL value string."""
+    def pnl(self) -> param.Pnl:
+        """Realized PnL value."""
 
     @pnl.setter
-    def pnl(self, value: param.Pnl | None) -> None: ...
+    def pnl(self, value: param.Pnl) -> None: ...
     @property
-    def fee(self) -> str | None:
-        """Fee value string."""
+    def fee(self) -> param.Fee:
+        """Fee value."""
 
     @fee.setter
-    def fee(self, value: param.Fee | None) -> None: ...
+    def fee(self, value: param.Fee) -> None: ...
 
 class ExecutionReportFillDetails:
     """Fill execution details group."""
@@ -332,25 +750,32 @@ class ExecutionReportFillDetails:
     def __init__(
         self,
         *,
-        fill_price: param.Price | None = None,
-        fill_quantity: param.Quantity | None = None,
+        last_trade: Trade | None = None,
+        leaves_quantity: param.Quantity,
+        lock: PreTradeLock,
         is_terminal: bool = False,
     ) -> None:
         """Create a fill details group."""
-        _ = (fill_price, fill_quantity, is_terminal)
+        _ = (last_trade, leaves_quantity, lock, is_terminal)
 
     @property
-    def fill_price(self) -> str | None:
-        """Fill price string."""
+    def last_trade(self) -> Trade | None:
+        """Last executed trade."""
 
-    @fill_price.setter
-    def fill_price(self, value: param.Price | None) -> None: ...
+    @last_trade.setter
+    def last_trade(self, value: Trade | None) -> None: ...
     @property
-    def fill_quantity(self) -> str | None:
-        """Fill quantity string."""
+    def leaves_quantity(self) -> param.Quantity:
+        """Remaining order quantity."""
 
-    @fill_quantity.setter
-    def fill_quantity(self, value: param.Quantity | None) -> None: ...
+    @leaves_quantity.setter
+    def leaves_quantity(self, value: param.Quantity) -> None: ...
+    @property
+    def lock(self) -> PreTradeLock:
+        """Order lock payload."""
+
+    @lock.setter
+    def lock(self, value: PreTradeLock) -> None: ...
     @property
     def is_terminal(self) -> bool:
         """Whether this is a terminal report."""
@@ -371,14 +796,14 @@ class ExecutionReportPositionImpact:
         _ = (position_effect, position_side)
 
     @property
-    def position_effect(self) -> str | None:
-        """Position effect string."""
+    def position_effect(self) -> param.PositionEffect | None:
+        """Position effect."""
 
     @position_effect.setter
     def position_effect(self, value: param.PositionEffect | None) -> None: ...
     @property
-    def position_side(self) -> str | None:
-        """Position side string."""
+    def position_side(self) -> param.PositionSide | None:
+        """Position side."""
 
     @position_side.setter
     def position_side(self, value: param.PositionSide | None) -> None: ...
@@ -425,11 +850,45 @@ class ExecutionReport:
     @position_impact.setter
     def position_impact(self, value: ExecutionReportPositionImpact | None) -> None: ...
 
-class AdjustmentAmount:
-    """Delta-or-absolute adjustment payload wrapper."""
+class TradeAmount:
+    """Quantity- or volume-based trade amount."""
 
-    def __init__(self, *, kind: str, value: param.PositionSize) -> None:
-        _ = (kind, value)
+    def __init__(self, other: TradeAmount) -> None:
+        """Copy / subclass constructor."""
+        _ = other
+
+    @staticmethod
+    def quantity(value: param.Quantity | str | int | float) -> TradeAmount:
+        """Create a quantity-based trade amount."""
+        _ = value
+
+    @staticmethod
+    def volume(value: param.Volume | str | int | float) -> TradeAmount:
+        """Create a volume-based trade amount."""
+        _ = value
+
+    @property
+    def is_quantity(self) -> bool:
+        """True when the amount is expressed as quantity (instrument units)."""
+
+    @property
+    def is_volume(self) -> bool:
+        """True when the amount is expressed as volume (notional units)."""
+
+    @property
+    def as_quantity(self) -> param.Quantity | None:
+        """Inner quantity, or None when the amount is volume-based."""
+
+    @property
+    def as_volume(self) -> param.Volume | None:
+        """Inner volume, or None when the amount is quantity-based."""
+
+class AdjustmentAmount:
+    """Delta-or-absolute adjustment payload."""
+
+    def __init__(self, other: AdjustmentAmount) -> None:
+        """Copy / subclass constructor."""
+        _ = other
 
     @staticmethod
     def delta(value: param.PositionSize) -> AdjustmentAmount:
@@ -437,15 +896,38 @@ class AdjustmentAmount:
 
     @staticmethod
     def absolute(value: param.PositionSize) -> AdjustmentAmount:
+        """Create an absolute-type adjustment."""
         _ = value
 
     @property
-    def kind(self) -> str:
-        """Variant name (`delta` or `absolute`)."""
+    def is_delta(self) -> bool:
+        """True when the adjustment is a signed delta."""
 
     @property
-    def value(self) -> param.PositionSize:
-        """Wrapped position-size payload."""
+    def is_absolute(self) -> bool:
+        """True when the adjustment sets an absolute value."""
+
+    @property
+    def as_delta(self) -> param.PositionSize | None:
+        """Inner position size when delta, otherwise None."""
+
+    @property
+    def as_absolute(self) -> param.PositionSize | None:
+        """Inner position size when absolute, otherwise None."""
+
+class Trade:
+    """Trade payload with price and quantity."""
+
+    def __init__(self, *, price: param.Price, quantity: param.Quantity) -> None:
+        _ = (price, quantity)
+
+    @property
+    def price(self) -> param.Price:
+        """Trade price."""
+
+    @property
+    def quantity(self) -> param.Quantity:
+        """Trade quantity."""
 
 class AccountAdjustmentAmount:
     """Grouped amount payload (`total + reserved + pending`)."""
@@ -478,22 +960,17 @@ class AccountAdjustmentBalanceOperation:
     def __init__(
         self,
         *,
-        account_id: param.AccountId | None = None,
-        asset: str | None = None,
+        asset: param.Asset | None = None,
         average_entry_price: param.Price | None = None,
     ) -> None:
-        _ = (account_id, asset, average_entry_price)
+        _ = (asset, average_entry_price)
 
     @property
-    def account_id(self) -> param.AccountId | None: ...
-    @account_id.setter
-    def account_id(self, value: param.AccountId | None) -> None: ...
-    @property
-    def asset(self) -> str | None: ...
+    def asset(self) -> param.Asset | None: ...
     @asset.setter
-    def asset(self, value: str | None) -> None: ...
+    def asset(self, value: param.Asset | None) -> None: ...
     @property
-    def average_entry_price(self) -> str | None: ...
+    def average_entry_price(self) -> param.Price | None: ...
     @average_entry_price.setter
     def average_entry_price(self, value: param.Price | None) -> None: ...
 
@@ -503,18 +980,16 @@ class AccountAdjustmentPositionOperation:
     def __init__(
         self,
         *,
-        underlying_asset: str | None = None,
-        settlement_asset: str | None = None,
-        account_id: param.AccountId | None = None,
-        collateral_asset: str | None = None,
+        underlying_asset: param.Asset | None = None,
+        settlement_asset: param.Asset | None = None,
+        collateral_asset: param.Asset | None = None,
         average_entry_price: param.Price | None = None,
         mode: param.PositionMode | None = None,
-        leverage: param.Leverage | None = None,
+        leverage: param.Leverage | int | float | None = None,
     ) -> None:
         _ = (
             underlying_asset,
             settlement_asset,
-            account_id,
             collateral_asset,
             average_entry_price,
             mode,
@@ -522,33 +997,29 @@ class AccountAdjustmentPositionOperation:
         )
 
     @property
-    def underlying_asset(self) -> str | None: ...
+    def underlying_asset(self) -> param.Asset | None: ...
     @underlying_asset.setter
-    def underlying_asset(self, value: str | None) -> None: ...
+    def underlying_asset(self, value: param.Asset | None) -> None: ...
     @property
-    def settlement_asset(self) -> str | None: ...
+    def settlement_asset(self) -> param.Asset | None: ...
     @settlement_asset.setter
-    def settlement_asset(self, value: str | None) -> None: ...
+    def settlement_asset(self, value: param.Asset | None) -> None: ...
     @property
-    def account_id(self) -> param.AccountId | None: ...
-    @account_id.setter
-    def account_id(self, value: param.AccountId | None) -> None: ...
-    @property
-    def collateral_asset(self) -> str | None: ...
+    def collateral_asset(self) -> param.Asset | None: ...
     @collateral_asset.setter
-    def collateral_asset(self, value: str | None) -> None: ...
+    def collateral_asset(self, value: param.Asset | None) -> None: ...
     @property
-    def average_entry_price(self) -> str | None: ...
+    def average_entry_price(self) -> param.Price | None: ...
     @average_entry_price.setter
     def average_entry_price(self, value: param.Price | None) -> None: ...
     @property
-    def mode(self) -> str | None: ...
+    def mode(self) -> param.PositionMode | None: ...
     @mode.setter
     def mode(self, value: param.PositionMode | None) -> None: ...
     @property
     def leverage(self) -> param.Leverage | None: ...
     @leverage.setter
-    def leverage(self, value: param.Leverage | None) -> None: ...
+    def leverage(self, value: param.Leverage | int | float | None) -> None: ...
 
 class AccountAdjustmentBounds:
     """Optional post-adjustment bounds group."""
@@ -556,46 +1027,46 @@ class AccountAdjustmentBounds:
     def __init__(
         self,
         *,
-        total_upper_bound: param.PositionSize | None = None,
-        total_lower_bound: param.PositionSize | None = None,
-        reserved_upper_bound: param.PositionSize | None = None,
-        reserved_lower_bound: param.PositionSize | None = None,
-        pending_upper_bound: param.PositionSize | None = None,
-        pending_lower_bound: param.PositionSize | None = None,
+        total_upper: param.PositionSize | None = None,
+        total_lower: param.PositionSize | None = None,
+        reserved_upper: param.PositionSize | None = None,
+        reserved_lower: param.PositionSize | None = None,
+        pending_upper: param.PositionSize | None = None,
+        pending_lower: param.PositionSize | None = None,
     ) -> None:
         _ = (
-            total_upper_bound,
-            total_lower_bound,
-            reserved_upper_bound,
-            reserved_lower_bound,
-            pending_upper_bound,
-            pending_lower_bound,
+            total_upper,
+            total_lower,
+            reserved_upper,
+            reserved_lower,
+            pending_upper,
+            pending_lower,
         )
 
     @property
-    def total_upper_bound(self) -> param.PositionSize | None: ...
-    @total_upper_bound.setter
-    def total_upper_bound(self, value: param.PositionSize | None) -> None: ...
+    def total_upper(self) -> param.PositionSize | None: ...
+    @total_upper.setter
+    def total_upper(self, value: param.PositionSize | None) -> None: ...
     @property
-    def total_lower_bound(self) -> param.PositionSize | None: ...
-    @total_lower_bound.setter
-    def total_lower_bound(self, value: param.PositionSize | None) -> None: ...
+    def total_lower(self) -> param.PositionSize | None: ...
+    @total_lower.setter
+    def total_lower(self, value: param.PositionSize | None) -> None: ...
     @property
-    def reserved_upper_bound(self) -> param.PositionSize | None: ...
-    @reserved_upper_bound.setter
-    def reserved_upper_bound(self, value: param.PositionSize | None) -> None: ...
+    def reserved_upper(self) -> param.PositionSize | None: ...
+    @reserved_upper.setter
+    def reserved_upper(self, value: param.PositionSize | None) -> None: ...
     @property
-    def reserved_lower_bound(self) -> param.PositionSize | None: ...
-    @reserved_lower_bound.setter
-    def reserved_lower_bound(self, value: param.PositionSize | None) -> None: ...
+    def reserved_lower(self) -> param.PositionSize | None: ...
+    @reserved_lower.setter
+    def reserved_lower(self, value: param.PositionSize | None) -> None: ...
     @property
-    def pending_upper_bound(self) -> param.PositionSize | None: ...
-    @pending_upper_bound.setter
-    def pending_upper_bound(self, value: param.PositionSize | None) -> None: ...
+    def pending_upper(self) -> param.PositionSize | None: ...
+    @pending_upper.setter
+    def pending_upper(self, value: param.PositionSize | None) -> None: ...
     @property
-    def pending_lower_bound(self) -> param.PositionSize | None: ...
-    @pending_lower_bound.setter
-    def pending_lower_bound(self, value: param.PositionSize | None) -> None: ...
+    def pending_lower(self) -> param.PositionSize | None: ...
+    @pending_lower.setter
+    def pending_lower(self, value: param.PositionSize | None) -> None: ...
 
 class AccountAdjustment:
     """Extensible non-trading account-adjustment record."""
@@ -603,9 +1074,11 @@ class AccountAdjustment:
     def __init__(
         self,
         *,
-        operation: AccountAdjustmentBalanceOperation
-        | AccountAdjustmentPositionOperation
-        | None = None,
+        operation: (
+            AccountAdjustmentBalanceOperation
+            | AccountAdjustmentPositionOperation
+            | None
+        ) = None,
         amount: AccountAdjustmentAmount | None = None,
         bounds: AccountAdjustmentBounds | None = None,
     ) -> None:
@@ -620,9 +1093,11 @@ class AccountAdjustment:
     @operation.setter
     def operation(
         self,
-        value: AccountAdjustmentBalanceOperation
-        | AccountAdjustmentPositionOperation
-        | None,
+        value: (
+            AccountAdjustmentBalanceOperation
+            | AccountAdjustmentPositionOperation
+            | None
+        ),
     ) -> None: ...
     @property
     def amount(self) -> AccountAdjustmentAmount | None: ...
@@ -633,7 +1108,7 @@ class AccountAdjustment:
     @bounds.setter
     def bounds(self, value: AccountAdjustmentBounds | None) -> None: ...
 
-class Request:
+class PreTradeRequest:
     """
     Deferred main-stage request handle produced by ``Engine.start_pre_trade``.
 
@@ -644,13 +1119,26 @@ class Request:
     def execute(self) -> ExecuteResult:
         """Run main-stage pre-trade checks."""
 
-class Reservation:
+class PreTradeLock:
+    """Pre-trade lock payload."""
+
+    def __init__(self, price: param.Price | None = None) -> None:
+        _ = price
+
+    @property
+    def price(self) -> param.Price | None:
+        """Optional locked price."""
+
+class PreTradeReservation:
     """
     Single-use reservation handle returned by successful main-stage execution.
 
     Exactly one of ``commit`` or ``rollback`` must be called to finalize the
     reserved state.
     """
+
+    def lock(self) -> PreTradeLock:
+        """Current reservation lock payload."""
 
     def commit(self) -> None:
         """Finalize reservation as committed."""
@@ -662,8 +1150,8 @@ class StartPreTradeResult:
     """
     Result of ``Engine.start_pre_trade``.
 
-    On success it exposes a deferred request handle; on failure it exposes a
-    single business reject produced by the first rejecting start-stage policy.
+    On success it exposes a deferred request handle; on failure it exposes the
+    merged reject list from all rejecting start-stage policies.
     """
 
     @property
@@ -671,19 +1159,19 @@ class StartPreTradeResult:
         """Whether start-stage checks passed."""
 
     @property
-    def request(self) -> Request | None:
+    def request(self) -> PreTradeRequest | None:
         """Request handle when checks pass."""
 
     @property
-    def reject(self) -> Reject | None:
-        """Reject data when checks fail."""
+    def rejects(self) -> list[Reject]:
+        """Reject list when checks fail."""
 
     def __bool__(self) -> bool:
         """Boolean convenience alias for ``ok``."""
 
 class ExecuteResult:
     """
-    Result of ``Request.execute``.
+    Result of ``PreTradeRequest.execute``.
 
     This object reports whether main-stage policies accepted the request and,
     on success, carries the single-use reservation handle that must later be
@@ -695,7 +1183,7 @@ class ExecuteResult:
         """Whether main-stage checks passed."""
 
     @property
-    def reservation(self) -> Reservation | None:
+    def reservation(self) -> PreTradeReservation | None:
         """Reservation when checks pass."""
 
     @property
@@ -717,8 +1205,8 @@ class AccountAdjustmentBatchResult:
         """Zero-based index of the failing adjustment."""
 
     @property
-    def reject(self) -> Reject | None:
-        """Reject data when validation fails."""
+    def rejects(self) -> list[Reject]:
+        """Reject list when validation fails."""
 
     def __bool__(self) -> bool:
         """Boolean convenience alias for ``ok``."""
@@ -734,6 +1222,12 @@ class PostTradeResult:
     @property
     def kill_switch_triggered(self) -> bool:
         """Whether any policy reported an active kill switch."""
+
+class PreTradeContext:
+    """Context of the current pre-trade operation."""
+
+class AccountAdjustmentContext:
+    """Context of the current account-adjustment operation."""
 
 class PnlKillSwitchPolicy:
     """Built-in start-stage kill-switch policy based on PnL threshold."""
@@ -819,7 +1313,7 @@ class EngineBuilder:
         """Register a start-stage policy."""
         _ = policy
 
-    def pre_trade_policy(self, policy: Policy) -> EngineBuilder:
+    def pre_trade_policy(self, policy: PreTradePolicy) -> EngineBuilder:
         """Register a main-stage policy."""
         _ = policy
 

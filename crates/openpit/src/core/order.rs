@@ -67,7 +67,7 @@ impl_request_has_field_passthrough!(
     HasPnl, pnl, crate::param::Pnl;
     HasFee, fee, crate::param::Fee;
     HasLeavesQuantity, leaves_quantity, crate::param::Quantity;
-    HasLock, lock, crate::pretrade::Lock;
+    HasLock, lock, crate::pretrade::PreTradeLock;
     HasOrderPositionSide, position_side, Option<PositionSide>;
     HasOrderLeverage, leverage, Option<Leverage>;
     HasOrderCollateralAsset, collateral_asset, Option<&Asset>;
@@ -101,7 +101,7 @@ impl_request_has_field_passthrough!(
     HasPnl, pnl, crate::param::Pnl;
     HasFee, fee, crate::param::Fee;
     HasLeavesQuantity, leaves_quantity, crate::param::Quantity;
-    HasLock, lock, crate::pretrade::Lock;
+    HasLock, lock, crate::pretrade::PreTradeLock;
     HasOrderLeverage, leverage, Option<Leverage>;
     HasOrderCollateralAsset, collateral_asset, Option<&Asset>;
     HasExecutionReportLastTrade, last_trade, Option<crate::param::Trade>;
@@ -212,7 +212,7 @@ impl_request_has_field_passthrough!(
     HasPnl, pnl, crate::param::Pnl;
     HasFee, fee, crate::param::Fee;
     HasLeavesQuantity, leaves_quantity, crate::param::Quantity;
-    HasLock, lock, crate::pretrade::Lock;
+    HasLock, lock, crate::pretrade::PreTradeLock;
     HasExecutionReportLastTrade, last_trade, Option<crate::param::Trade>;
     HasExecutionReportIsTerminal, is_terminal, bool;
     HasExecutionReportPositionEffect, position_effect, Option<crate::param::PositionEffect>;
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn collateral_asset_returns_some_when_set() {
-        let asset = Asset::new("BTC").expect("must be valid");
+        let asset = Asset::new("SPX").expect("must be valid");
         let margin = OrderMargin {
             leverage: None,
             collateral_asset: Some(asset.clone()),
@@ -250,7 +250,7 @@ mod tests {
 
     #[test]
     fn with_order_margin_delegates_collateral_asset() {
-        let asset = Asset::new("ETH").expect("must be valid");
+        let asset = Asset::new("AAPL").expect("must be valid");
         let w = WithOrderMargin {
             inner: (),
             margin: OrderMargin {
@@ -268,7 +268,7 @@ mod tests {
         use crate::{HasInstrument, Instrument};
 
         let instrument = Instrument::new(
-            Asset::new("BTC").expect("must be valid"),
+            Asset::new("SPX").expect("must be valid"),
             Asset::new("USD").expect("must be valid"),
         );
         let w = super::WithOrderOperation {

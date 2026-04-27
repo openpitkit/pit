@@ -15,7 +15,9 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::{define_non_negative_value_type, CashFlow, Error, ParamKind, Price, Quantity};
+use super::{
+    define_non_negative_value_type, CashFlow, Error, Notional, ParamKind, Price, Quantity,
+};
 
 define_non_negative_value_type!(
     /// Notional volume value.
@@ -24,6 +26,15 @@ define_non_negative_value_type!(
 );
 
 impl Volume {
+    /// Converts position notional into settlement volume.
+    ///
+    /// Both types represent monetary amounts in the settlement currency; this
+    /// cast changes the semantic context from "position exposure" to "order
+    /// size".
+    pub fn from_notional(notional: Notional) -> Self {
+        Self::new_unchecked(notional.to_decimal())
+    }
+
     /// Converts volume into a cash flow inflow.
     pub fn to_cash_flow_inflow(self) -> CashFlow {
         CashFlow::new(self.to_decimal())
@@ -65,7 +76,7 @@ impl Volume {
 #[cfg(test)]
 mod tests {
     use super::Volume;
-    use crate::param::{CashFlow, Error, ParamKind, Price, Quantity};
+    use crate::param::{CashFlow, Error, Notional, ParamKind, Price, Quantity};
     use rust_decimal::Decimal;
 
     fn d(value: &str) -> Decimal {
@@ -106,6 +117,15 @@ mod tests {
 
         assert_eq!(volume.to_cash_flow_inflow(), CashFlow::new(d("10.5")));
         assert_eq!(volume.to_cash_flow_outflow(), CashFlow::new(d("-10.5")));
+    }
+
+    #[test]
+    fn converts_from_notional() {
+        let notional = Notional::from_str("999.75").expect("must be valid");
+
+        let volume = Volume::from_notional(notional);
+
+        assert_eq!(volume.to_decimal(), notional.to_decimal());
     }
 
     #[test]

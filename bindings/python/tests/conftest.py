@@ -6,19 +6,19 @@ _DEFAULT_ACCOUNT_ID = openpit.param.AccountId.from_u64(99224416)
 def make_order(
     *,
     side: openpit.param.Side = openpit.param.Side.BUY,
-    trade_amount: openpit.param.Quantity | openpit.param.Volume | None = None,
+    trade_amount: openpit.param.TradeAmount | None = None,
     price: openpit.param.Price | None = None,
     instrument: openpit.Instrument | None = None,
     account_id: openpit.param.AccountId | None = None,
 ) -> openpit.Order:
     if trade_amount is None:
-        trade_amount = openpit.param.Quantity("1")
+        trade_amount = openpit.param.TradeAmount.quantity(1)
     if price is None:
         price = openpit.param.Price("10")
     if instrument is None:
         instrument = openpit.Instrument(
-            openpit.param.Asset("AAPL"),
-            openpit.param.Asset("USD"),
+            "AAPL",
+            "USD",
         )
     if account_id is None:
         account_id = _DEFAULT_ACCOUNT_ID
@@ -46,8 +46,8 @@ def make_report(
         fee = openpit.param.Fee("0")
     if instrument is None:
         instrument = openpit.Instrument(
-            openpit.param.Asset("AAPL"),
-            openpit.param.Asset("USD"),
+            "AAPL",
+            "USD",
         )
     if account_id is None:
         account_id = _DEFAULT_ACCOUNT_ID

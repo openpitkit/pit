@@ -26,11 +26,10 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, DefaultDict, Dict, List, Optional, Set, Tuple, Union
+from typing import Any
 
-
-MetricSummary = Dict[str, Union[int, float]]
-Span = Tuple[int, int, int, int]
+MetricSummary = dict[str, int | float]
+Span = tuple[int, int, int, int]
 WILDCARD_MATCH_ARM = re.compile(r"^\s*_\s*=>")
 MACRO_MATCH_REPETITION = re.compile(r"^\s*\$\(.+\)\+[,]?\s*$")
 
@@ -77,7 +76,7 @@ def metric_notcovered(metric: MetricSummary) -> int:
 
 def aggregate_metric(
     metric_name: str,
-    data_items: List[Dict[str, Any]],
+    data_items: list[dict[str, Any]],
 ) -> MetricSummary:
     total_count = 0
     total_covered = 0
@@ -109,7 +108,7 @@ def aggregate_metric(
 
 def metric_with_threshold(
     metric: MetricSummary, threshold: float
-) -> Dict[str, Union[int, float]]:
+) -> dict[str, int | float]:
     percent = float(metric["percent"])
     return {
         "count": int(metric["count"]),
@@ -133,9 +132,9 @@ def metric_from_counts(count: int, covered: int) -> MetricSummary:
 
 
 def resolve_region_filename(
-    function_entry: Dict[str, Any],
-    region: List[Any],
-) -> Optional[str]:
+    function_entry: dict[str, Any],
+    region: list[Any],
+) -> str | None:
     filenames = function_entry.get("filenames", [])
     if len(region) >= 6:
         file_index = region[5]
@@ -146,8 +145,8 @@ def resolve_region_filename(
     return None
 
 
-def collect_line_zeroes(file_entry: Dict[str, Any]) -> Set[int]:
-    zero_lines: Set[int] = set()
+def collect_line_zeroes(file_entry: dict[str, Any]) -> set[int]:
+    zero_lines: set[int] = set()
     for segment in file_entry.get("segments", []):
         if len(segment) < 4:
             continue
@@ -156,8 +155,8 @@ def collect_line_zeroes(file_entry: Dict[str, Any]) -> Set[int]:
     return zero_lines
 
 
-def collect_line_covered(file_entry: Dict[str, Any]) -> Set[int]:
-    covered_lines: Set[int] = set()
+def collect_line_covered(file_entry: dict[str, Any]) -> set[int]:
+    covered_lines: set[int] = set()
     for segment in file_entry.get("segments", []):
         if len(segment) < 4:
             continue
@@ -166,12 +165,12 @@ def collect_line_covered(file_entry: Dict[str, Any]) -> Set[int]:
     return covered_lines
 
 
-def uncovered_lines(file_entry: Dict[str, Any]) -> Set[int]:
+def uncovered_lines(file_entry: dict[str, Any]) -> set[int]:
     return collect_line_zeroes(file_entry) - collect_line_covered(file_entry)
 
 
 def has_only_wildcard_uncovered_lines(
-    filename: str, file_entry: Dict[str, Any]
+    filename: str, file_entry: dict[str, Any]
 ) -> bool:
     missing = uncovered_lines(file_entry)
     if not missing:
@@ -189,7 +188,7 @@ def has_only_wildcard_uncovered_lines(
     return True
 
 
-def effective_line_metric(file_entry: Dict[str, Any]) -> MetricSummary:
+def effective_line_metric(file_entry: dict[str, Any]) -> MetricSummary:
     covered_lines = collect_line_covered(file_entry)
     effective_uncovered = uncovered_lines(file_entry)
     effective_count = len(covered_lines | effective_uncovered)
@@ -198,10 +197,10 @@ def effective_line_metric(file_entry: Dict[str, Any]) -> MetricSummary:
 
 
 def collect_region_spans(
-    data_items: List[Dict[str, Any]],
-) -> Tuple[DefaultDict[str, Set[Span]], DefaultDict[str, Set[Span]]]:
-    covered_spans: DefaultDict[str, Set[Span]] = defaultdict(set)
-    zero_spans: DefaultDict[str, Set[Span]] = defaultdict(set)
+    data_items: list[dict[str, Any]],
+) -> tuple[defaultdict[str, set[Span]], defaultdict[str, set[Span]]]:
+    covered_spans: defaultdict[str, set[Span]] = defaultdict(set)
+    zero_spans: defaultdict[str, set[Span]] = defaultdict(set)
 
     for item in data_items:
         for function_entry in item.get("functions", []):
@@ -229,8 +228,8 @@ def collect_region_spans(
 def threshold_for_lines(
     metric: MetricSummary,
     effective_metric: MetricSummary,
-    raw_region_metric: Optional[MetricSummary] = None,
-    eff_region_metric: Optional[MetricSummary] = None,
+    raw_region_metric: MetricSummary | None = None,
+    eff_region_metric: MetricSummary | None = None,
     wildcard_uncovered_only: bool = False,
 ) -> float:
     if float(metric["percent"]) < 100.0 and wildcard_uncovered_only:
@@ -276,7 +275,7 @@ def threshold_for_regions(
 
 
 def effective_region_metric(
-    covered_spans: Set[Span], zero_spans: Set[Span]
+    covered_spans: set[Span], zero_spans: set[Span]
 ) -> MetricSummary:
     raw_uncovered = zero_spans - covered_spans
 
@@ -290,11 +289,11 @@ def effective_region_metric(
     return metric_from_counts(effective_count, len(covered_spans))
 
 
-def build_summary(export: Dict[str, Any]) -> Dict[str, Any]:
+def build_summary(export: dict[str, Any]) -> dict[str, Any]:
     data_items = export.get("data", [])
     region_covered_spans, region_zero_spans = collect_region_spans(data_items)
-    files_summary: List[Dict[str, Any]] = []
-    problem_files: List[Dict[str, Any]] = []
+    files_summary: list[dict[str, Any]] = []
+    problem_files: list[dict[str, Any]] = []
 
     for item in data_items:
         for file_entry in item.get("files", []):
@@ -379,7 +378,7 @@ def build_summary(export: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def print_text(summary: Dict[str, Any]) -> None:
+def print_text(summary: dict[str, Any]) -> None:
     totals = summary["totals"]
     report = summary["report"]
 

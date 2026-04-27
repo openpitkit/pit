@@ -41,26 +41,33 @@ Quickstart::
 
     order = openpit.Order(
         operation=openpit.OrderOperation(
-            instrument=openpit.Instrument(
-                openpit.param.Asset("AAPL"),
-                openpit.param.Asset("USD"),
-            ),
+            instrument=openpit.Instrument("AAPL", "USD"),
+            account_id=openpit.param.AccountId.from_u64(99224416),
             side=openpit.param.Side.BUY,
-            trade_amount=openpit.param.Quantity("100"),
-            price=openpit.param.Price("185"),
+            trade_amount=openpit.param.TradeAmount.quantity(100.0),
+            price=openpit.param.Price(185.0),
         ),
     )
 
     result = engine.start_pre_trade(order=order)
+
+Threading:
+The SDK never spawns OS threads: each public method runs on the OS thread that
+invoked it. Concurrent invocation of public methods on the same engine handle
+is undefined behavior and must be prevented by the caller. Sequential calls on
+the same handle from different OS threads are supported by the SDK contract.
 """
 
-from . import core, param, pretrade
+from . import core as core
+from . import param, pretrade
 from ._openpit import Engine, EngineBuilder, RejectError
+from .account_adjustment import AccountAdjustmentPolicy
 from .core import (
     AccountAdjustment,
     AccountAdjustmentAmount,
     AccountAdjustmentBalanceOperation,
     AccountAdjustmentBounds,
+    AccountAdjustmentContext,
     AccountAdjustmentPositionOperation,
     ExecutionReport,
     ExecutionReportFillDetails,
@@ -68,6 +75,7 @@ from .core import (
     ExecutionReportPositionImpact,
     FinancialImpact,
     Instrument,
+    Mutation,
     Order,
     OrderMargin,
     OrderOperation,
@@ -81,6 +89,12 @@ Single-threaded pre-trade risk engine.
 
 The engine evaluates orders through an explicit two-stage pipeline and accepts
 post-trade execution reports to update cumulative policy state.
+
+Snapshot semantics:
+Inputs passed to ``start_pre_trade``, ``apply_execution_report``, and
+``apply_account_adjustment`` are snapshotted at call time for evaluation.
+Mutating the same objects after submission does not affect
+the in-flight engine operation.
 """
 
 EngineBuilder.__doc__ = """
@@ -103,7 +117,9 @@ __all__ = [
     "AccountAdjustmentAmount",
     "AccountAdjustmentBalanceOperation",
     "AccountAdjustmentBounds",
+    "AccountAdjustmentContext",
     "AccountAdjustmentPositionOperation",
+    "AccountAdjustmentPolicy",
     "AdjustmentAmount",
     "ExecutionReport",
     "ExecutionReportFillDetails",
@@ -112,6 +128,7 @@ __all__ = [
     "FinancialImpact",
     "Instrument",
     "Leverage",
+    "Mutation",
     "Order",
     "OrderMargin",
     "OrderOperation",
@@ -119,7 +136,6 @@ __all__ = [
     "PostTradeResult",
     "PositionMode",
     "RejectError",
-    "core",
     "param",
     "pretrade",
 ]

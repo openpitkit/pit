@@ -43,7 +43,7 @@
 /// );
 ///
 /// let instrument = Instrument::new(
-///     Asset::new("BTC").expect("must be valid"),
+///     Asset::new("SPX").expect("must be valid"),
 ///     Asset::new("USD").expect("must be valid"),
 /// );
 /// let wrapper = WithOrder {
@@ -156,7 +156,7 @@ macro_rules! impl_request_has_field {
 /// );
 ///
 /// let instrument = Instrument::new(
-///     Asset::new("ETH").expect("must be valid"),
+///     Asset::new("AAPL").expect("must be valid"),
 ///     Asset::new("USD").expect("must be valid"),
 /// );
 /// let wrapper = Wrapper {

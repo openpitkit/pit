@@ -2,7 +2,7 @@
 
 [![Pit](docs/assets/pit-readme-banner.png)](https://openpit.dev/)
 <!-- markdownlint-disable MD013 -->
-[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![Rust](https://img.shields.io/badge/rust-1.75+-orange)](https://crates.io/crates/openpit) [![Python versions](https://img.shields.io/pypi/pyversions/openpit)](https://pypi.org/project/openpit/) [![crates.io](https://img.shields.io/crates/v/openpit)](https://crates.io/crates/openpit) [![PyPI](https://img.shields.io/pypi/v/openpit)](https://pypi.org/project/openpit/) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![Rust](https://img.shields.io/badge/rust-1.75+-orange)](https://crates.io/crates/openpit) [![Python versions](https://img.shields.io/pypi/pyversions/openpit)](https://pypi.org/project/openpit/) [![crates.io](https://img.shields.io/crates/v/openpit)](https://crates.io/crates/openpit) [![PyPI](https://img.shields.io/pypi/v/openpit)](https://pypi.org/project/openpit/) [![C API](https://img.shields.io/badge/C%20API-header%20%2B%20docs-4b5563)](docs/c-api/index.md) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 <!-- markdownlint-enable MD013 -->
 
 Pit is a workspace for embeddable pre-trade risk components.
@@ -45,9 +45,10 @@ strategy and risk policies:
 The engine is intentionally in-memory and deterministic. It is designed to be
 embedded into a larger trading system rather than replace one. For custom
 policy APIs, see the wiki:
-[Rust custom policies](https://github.com/openpitkit/pit/wiki/Policies#rust-custom-policy-api)
-and
-[Python custom policies](https://github.com/openpitkit/pit/wiki/Policies#python-custom-policy-api).
+
+- [Go custom policies](https://github.com/openpitkit/pit/wiki/Policy-API#go-interface)
+- [Python custom policies](https://github.com/openpitkit/pit/wiki/Policy-API#python-interface)
+- [Rust custom policies](https://github.com/openpitkit/pit/wiki/Policy-API#rust-interface)
 
 ## Versioning Policy (Pre‑1.0)
 
@@ -70,22 +71,27 @@ evolution during the pre‑stable phase.
 The project website [openpit.dev](https://openpit.dev/) for an overview
 and links to all documentation.
 
+[The Go SDK README](bindings/go/README.md) if you want to integrate Pit from Go.
+
+[The Python SDK README](bindings/python/README.md) if you want to work
+with Pit from Python via the `openpit` package.
+
 [The `openpit` crate README](crates/openpit/README.md) if you want to start
 with the Rust interface and a runnable example.
 
-[The Python bindings README](bindings/python/README.md) if you want to work
-with Pit from Python via the `openpit` package.
+[The C SDK README](bindings/c/README.md) if you want to integrate Pit
+from C or from environments that integrate through a C ABI.
 
-[Conceptual pages and longer architecture notes wiki.](https://github.com/openpitkit/pit/wiki).
+[Conceptual pages and longer architecture notes wiki](https://github.com/openpitkit/pit/wiki).
 
 ## Local Build And Test
 
 ### Prerequisites
 
 - Rust toolchain
-- Python `>=3.10`
-- `maturin` for Python bindings build
-- `pytest` for Python tests
+- Python `>=3.10` if you build or test Python bindings
+- `maturin` and `pytest` if you build or test Python bindings
+- Go `1.22` if you build or test Go bindings
 
 ```bash
 python3 -m venv .venv
@@ -129,6 +135,29 @@ The recommended Python test flow is to run `maturin develop` before `pytest`.
 This runs against the current checkout (including a dirty worktree). If sources
 did not change, Cargo can reuse cached artifacts and avoid a full rebuild.
 
+#### Go
+
+Verified with Go `1.22`.
+
+With [Just](https://just.systems/):
+
+```bash
+just test-go
+just test-go-race
+```
+
+Manual:
+
+```bash
+cargo build -p pit-ffi --release --locked
+cd bindings/go
+export OPENPIT_RUNTIME_LIBRARY_PATH="$(pwd)/../../target/release/libpit_ffi.so"
+export LD_LIBRARY_PATH="$(pwd)/../../target/release${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export CGO_LDFLAGS="-L$(pwd)/../../target/release -lpit_ffi"
+go test ./...
+go test -race ./...
+```
+
 ### Tests
 
 With [Just](https://just.systems/):
@@ -144,6 +173,10 @@ just test-rust
 just test-python
 just test-python-unit
 just test-python-integration
+
+# Go:
+just test-go
+just test-go-race
 ```
 
 Manual:
@@ -162,4 +195,13 @@ maturin develop --manifest-path bindings/python/Cargo.toml
 python -m pytest bindings/python/tests
 python -m pytest bindings/python/tests/unit
 python -m pytest bindings/python/tests/integration
+
+# Go:
+cargo build -p pit-ffi --release --locked
+cd bindings/go
+export OPENPIT_RUNTIME_LIBRARY_PATH="$(pwd)/../../target/release/libpit_ffi.so"
+export LD_LIBRARY_PATH="$(pwd)/../../target/release${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export CGO_LDFLAGS="-L$(pwd)/../../target/release -lpit_ffi"
+go test ./...
+go test -race ./...
 ```

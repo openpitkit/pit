@@ -19,4 +19,8 @@ crate-type = ["cdylib"]
 [dependencies]
 openpit = { version = "0.2.0", path = "../../crates/openpit" }
 pit-interop = { version = "0.2.0", path = "../../crates/pit-interop" }
-pyo3 = { version = "0.22", features = ["abi3-py39", "generate-import-lib"] }
+pyo3 = { version = "0.22", features = [
+  "abi3-py310",
+  "generate-import-lib",
+] } # Python 3.10
+rust_decimal = "1.41.0"

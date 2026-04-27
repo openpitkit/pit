@@ -28,13 +28,13 @@ class TaggedOrder(openpit.Order):
         super().__init__(
             operation=openpit.OrderOperation(
                 instrument=openpit.Instrument(
-                    openpit.param.Asset("AAPL"),
-                    openpit.param.Asset("USD"),
+                    "AAPL",
+                    "USD",
                 ),
                 side=openpit.param.Side.BUY,
                 account_id=openpit.param.AccountId.from_u64(99224416),
-                trade_amount=openpit.param.Quantity("10"),
-                price=openpit.param.Price("25"),
+                trade_amount=openpit.param.TradeAmount.quantity(10),
+                price=openpit.param.Price(25),
             ),
         )
         self.order_tag = order_tag
@@ -46,15 +46,15 @@ class TaggedReport(openpit.ExecutionReport):
         super().__init__(
             operation=openpit.ExecutionReportOperation(
                 instrument=openpit.Instrument(
-                    openpit.param.Asset("AAPL"),
-                    openpit.param.Asset("USD"),
+                    "AAPL",
+                    "USD",
                 ),
                 side=openpit.param.Side.BUY,
                 account_id=openpit.param.AccountId.from_u64(99224416),
             ),
             financial_impact=openpit.FinancialImpact(
-                pnl=openpit.param.Pnl("5"),
-                fee=openpit.param.Fee("1"),
+                pnl=openpit.param.Pnl(5),
+                fee=openpit.param.Fee(1),
             ),
         )
         self.report_tag = report_tag
@@ -84,12 +84,12 @@ class CaptureStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy):
     # @typing.override
     def check_pre_trade_start(
         self,
-        *,
+        ctx: openpit.pretrade.PreTradeContext,
         order: openpit.Order,
-    ) -> openpit.pretrade.PolicyReject | None:
+    ) -> tuple[openpit.pretrade.PolicyReject, ...]:
         self.orders.append(order)
         self._journal.append(f"start:{self.name}:{order.order_tag}")
-        return None
+        return ()
 
     # @typing.override
     def apply_execution_report(
@@ -117,11 +117,11 @@ class SequenceFenceStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy):
     # @typing.override
     def check_pre_trade_start(
         self,
-        *,
+        ctx: openpit.pretrade.PreTradeContext,
         order: openpit.Order,
-    ) -> openpit.pretrade.PolicyReject | None:
+    ) -> tuple[openpit.pretrade.PolicyReject, ...]:
         self._journal.append(f"start:{self.name}:{order.order_tag}")
-        return None
+        return ()
 
     # @typing.override
     def apply_execution_report(
@@ -134,7 +134,7 @@ class SequenceFenceStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy):
         return False
 
 
-class CaptureMainPolicy(openpit.pretrade.Policy):
+class CaptureMainPolicy(openpit.pretrade.PreTradePolicy):
     # @typing.override
     def __init__(self, *, name: str, journal: list[str]) -> None:
         self._name = name
@@ -150,11 +150,11 @@ class CaptureMainPolicy(openpit.pretrade.Policy):
     # @typing.override
     def perform_pre_trade_check(
         self,
-        *,
-        context: openpit.pretrade.PolicyContext,
+        ctx: openpit.pretrade.PreTradeContext,
+        order: openpit.Order,
     ) -> openpit.pretrade.PolicyDecision:
-        tagged_order = typing.cast(TaggedOrder, context.order)
-        self.orders.append(context.order)
+        tagged_order = typing.cast(TaggedOrder, order)
+        self.orders.append(order)
         self._journal.append(f"execute:{self.name}:{tagged_order.order_tag}")
         return openpit.pretrade.PolicyDecision.accept()
 
@@ -170,7 +170,7 @@ class CaptureMainPolicy(openpit.pretrade.Policy):
         return False
 
 
-class SequenceFenceMainPolicy(openpit.pretrade.Policy):
+class SequenceFenceMainPolicy(openpit.pretrade.PreTradePolicy):
     # @typing.override
     def __init__(self, *, name: str, journal: list[str]) -> None:
         self._name = name
@@ -184,10 +184,10 @@ class SequenceFenceMainPolicy(openpit.pretrade.Policy):
     # @typing.override
     def perform_pre_trade_check(
         self,
-        *,
-        context: openpit.pretrade.PolicyContext,
+        ctx: openpit.pretrade.PreTradeContext,
+        order: openpit.Order,
     ) -> openpit.pretrade.PolicyDecision:
-        tagged_order = typing.cast(TaggedOrder, context.order)
+        tagged_order = typing.cast(TaggedOrder, order)
         self._journal.append(f"execute:{self.name}:{tagged_order.order_tag}")
         return openpit.pretrade.PolicyDecision.accept()
 

@@ -12,3 +12,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 openpit = { version = "0.2.0", path = "../openpit" }
+pit-interop = { version = "0.2.0", path = "../pit-interop" }
+rust_decimal = "1"

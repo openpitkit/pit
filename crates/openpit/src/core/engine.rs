@@ -26,22 +26,23 @@ use crate::param::AccountId;
 use crate::pretrade::handle::{RequestHandleImpl, ReservationHandleImpl};
 use crate::pretrade::start_pre_trade_time::with_start_pre_trade_now;
 use crate::pretrade::{
-    AccountAdjustmentPolicy, CheckPreTradeStartPolicy, Context, Mutations, Policy, PostTradeResult,
-    Reject, RejectCode, RejectScope, Rejects, Request, Reservation,
+    CheckPreTradeStartPolicy, PostTradeResult, PreTradeContext, PreTradePolicy, PreTradeRequest,
+    PreTradeReservation, Reject, RejectCode, RejectScope, Rejects,
 };
+use crate::{AccountAdjustmentContext, AccountAdjustmentPolicy, Mutations};
 
 struct EngineInner<O, R, A> {
     check_pre_trade_start_policies: Vec<Box<dyn CheckPreTradeStartPolicy<O, R>>>,
-    pre_trade_policies: Vec<Box<dyn Policy<O, R>>>,
+    pre_trade_policies: Vec<Box<dyn PreTradePolicy<O, R>>>,
     account_adjustment_policies: Vec<Box<dyn AccountAdjustmentPolicy<A>>>,
 }
 
 /// Errors returned by [`EngineBuilder::build`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EngineBuildError {
     /// Duplicate policy name across registered policy sets.
-    DuplicatePolicyName { name: &'static str },
+    DuplicatePolicyName { name: String },
 }
 
 impl Display for EngineBuildError {
@@ -59,10 +60,10 @@ impl std::error::Error for EngineBuildError {}
 /// Error returned when account-adjustment batch validation fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountAdjustmentBatchError {
+    /// Rejects produced by the policy.
+    pub rejects: Rejects,
     /// Zero-based index of the failing adjustment.
-    pub index: usize,
-    /// The reject produced by the policy.
-    pub reject: Reject,
+    pub failed_adjustment_index: usize,
 }
 
 impl Display for AccountAdjustmentBatchError {
@@ -70,7 +71,7 @@ impl Display for AccountAdjustmentBatchError {
         write!(
             formatter,
             "account adjustment batch rejected at index {}: {}",
-            self.index, self.reject
+            self.failed_adjustment_index, self.rejects
         )
     }
 }
@@ -87,11 +88,19 @@ impl std::error::Error for AccountAdjustmentBatchError {}
 /// - `R`: execution-report contract type used by `apply_execution_report`;
 /// - `A`: account-adjustment contract type used by `apply_account_adjustment`.
 ///
-/// # Thread safety
+/// # Threading
 ///
-/// `Engine` is `!Send + !Sync`. All calls must happen on the same thread
-/// that created it. Synchronization across threads is the caller's
-/// responsibility.
+/// `Engine<O, R, A>` is `!Send + !Sync` because it stores
+/// `Rc<RefCell<EngineInner<O, R, A>>>`, so pure-Rust callers must keep each
+/// engine value on the OS thread that created it.
+///
+/// The broader SDK threading contract documented in
+/// `crates/openpit/README.md#threading` applies to language bindings, which
+/// manage handle lifecycle across the FFI boundary and may move handles
+/// between OS threads sequentially.
+///
+/// Callers must prevent concurrent invocation on the same engine handle;
+/// entering the same handle concurrently is undefined behavior.
 ///
 /// # Examples
 ///
@@ -112,13 +121,13 @@ impl std::error::Error for AccountAdjustmentBatchError {}
 ///         instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
 ///         account_id: openpit::param::AccountId::from_u64(12345),
 ///         side: Side::Buy,
-///         trade_amount: TradeAmount::Quantity(Quantity::from_str("100")?),
+///         trade_amount: TradeAmount::Quantity(Quantity::from_f64(100.0)?),
 ///         price: Some(Price::from_str("185")?),
 ///     },
 /// };
 ///
 /// let request = engine.start_pre_trade(order)?;
-/// let reservation = request.execute()?;
+/// let mut reservation = request.execute()?;
 /// reservation.commit();
 /// # Ok(())
 /// # }
@@ -127,15 +136,20 @@ pub struct Engine<O, R = (), A = ()> {
     inner: Rc<RefCell<EngineInner<O, R, A>>>,
 }
 
+/// # Threading
+///
+/// See [`Engine`]'s `# Threading` section for the threading contract.
 impl<O: 'static, R: 'static, A: 'static> Engine<O, R, A> {
     /// Creates an engine builder.
     pub fn builder() -> EngineBuilder<O, R, A> {
         EngineBuilder::new()
     }
 
-    /// Executes start-stage checks and creates a deferred [`Request`].
+    /// Executes start-stage checks and creates a deferred [`PreTradeRequest`].
     ///
-    /// Start-stage policies run in registration order and stop at the first reject.
+    /// Start-stage policies run in registration order. The engine collects
+    /// reject lists returned by all start-stage policies before deciding
+    /// whether to create a deferred request.
     ///
     /// The engine does not enforce optional order extensions (for example
     /// `instrument` or `side`). Policies that depend on extension fields must
@@ -143,22 +157,31 @@ impl<O: 'static, R: 'static, A: 'static> Engine<O, R, A> {
     ///
     /// # Errors
     ///
-    /// Returns [`Reject`] when any start-stage policy rejects the order.
-    pub fn start_pre_trade(&self, order: O) -> Result<Request<O>, Reject> {
+    /// Returns [`Rejects`] when any start-stage policy rejects the order.
+    pub fn start_pre_trade(&self, order: O) -> Result<PreTradeRequest<O>, Rejects> {
         let now: Instant = Instant::now();
-        with_start_pre_trade_now(now, || {
+        let ctx = PreTradeContext::new();
+        let start_rejects = with_start_pre_trade_now(now, || {
             let inner = self.inner.borrow();
+            let mut lists = Vec::new();
+            let mut len = 0;
             for policy in &inner.check_pre_trade_start_policies {
-                policy.check_pre_trade_start(&order)?;
+                if let Err(rejects) = policy.check_pre_trade_start(&ctx, &order) {
+                    len += rejects.len();
+                    lists.push(rejects);
+                }
             }
-            Ok::<(), Reject>(())
-        })?;
+            merge_reject_lists(lists, len)
+        });
+        if let Some(rejects) = start_rejects {
+            return Err(rejects);
+        }
 
         let engine = Rc::downgrade(&self.inner);
         let request_handle =
-            RequestHandleImpl::<O>::new(Box::new(move || execute_request(engine, order)));
+            RequestHandleImpl::<O>::new(Box::new(move || execute_request(engine, ctx, order)));
 
-        Ok(Request::from_handle(Box::new(request_handle)))
+        Ok(PreTradeRequest::from_handle(Box::new(request_handle)))
     }
 
     /// Runs start-stage checks and executes main-stage checks immediately.
@@ -168,13 +191,10 @@ impl<O: 'static, R: 'static, A: 'static> Engine<O, R, A> {
     ///
     /// # Errors
     ///
-    /// Returns [`Rejects`] for both stages:
-    /// - start-stage reject is wrapped into a single-element reject list;
-    /// - main-stage rejects are returned unchanged.
-    pub fn execute_pre_trade(&self, order: O) -> Result<Reservation, Rejects> {
+    /// Returns [`Rejects`] for both stages.
+    pub fn execute_pre_trade(&self, order: O) -> Result<PreTradeReservation, Rejects> {
         self.start_pre_trade(order)
-            .map_err(wrap_single_reject)
-            .and_then(Request::execute)
+            .and_then(PreTradeRequest::execute)
     }
 
     /// Applies post-trade updates and aggregates kill-switch status across all policies.
@@ -218,13 +238,20 @@ impl<O: 'static, R: 'static, A: 'static> Engine<O, R, A> {
         let inner = self.inner.borrow();
         let mut mutations = Mutations::new();
         let mut batch_error: Option<AccountAdjustmentBatchError> = None;
+        let ctx = AccountAdjustmentContext::new();
 
         'outer: for (index, adjustment) in adjustments.iter().enumerate() {
             for policy in &inner.account_adjustment_policies {
-                if let Err(reject) =
-                    policy.apply_account_adjustment(account_id, adjustment, &mut mutations)
+                if let Err(rejects) =
+                    policy.apply_account_adjustment(&ctx, account_id, adjustment, &mut mutations)
                 {
-                    batch_error = Some(AccountAdjustmentBatchError { index, reject });
+                    if rejects.is_empty() {
+                        continue;
+                    }
+                    batch_error = Some(AccountAdjustmentBatchError {
+                        failed_adjustment_index: index,
+                        rejects,
+                    });
                     break 'outer;
                 }
             }
@@ -280,7 +307,7 @@ impl<O: 'static, R: 'static, A: 'static> Engine<O, R, A> {
 /// ```
 pub struct EngineBuilder<O, R = (), A = ()> {
     check_pre_trade_start_policies: Vec<Box<dyn CheckPreTradeStartPolicy<O, R>>>,
-    pre_trade_policies: Vec<Box<dyn Policy<O, R>>>,
+    pre_trade_policies: Vec<Box<dyn PreTradePolicy<O, R>>>,
     account_adjustment_policies: Vec<Box<dyn AccountAdjustmentPolicy<A>>>,
     marker: PhantomData<fn(O, R, A)>,
 }
@@ -309,7 +336,7 @@ impl<O, R, A> EngineBuilder<O, R, A> {
     /// Registers a main-stage policy.
     pub fn pre_trade_policy<P>(mut self, policy: P) -> Self
     where
-        P: Policy<O, R> + 'static,
+        P: PreTradePolicy<O, R> + 'static,
     {
         self.pre_trade_policies.push(Box::new(policy));
         self
@@ -352,34 +379,34 @@ impl<O, R, A> EngineBuilder<O, R, A> {
 
 fn ensure_unique_policy_names<O, R, A>(
     check_pre_trade_start_policies: &[Box<dyn CheckPreTradeStartPolicy<O, R>>],
-    pre_trade_policies: &[Box<dyn Policy<O, R>>],
+    pre_trade_policies: &[Box<dyn PreTradePolicy<O, R>>],
     account_adjustment_policies: &[Box<dyn AccountAdjustmentPolicy<A>>],
 ) -> Result<(), EngineBuildError> {
     let mut unique = HashSet::new();
 
     for policy in check_pre_trade_start_policies {
-        let inserted = unique.insert(policy.name());
+        let inserted = unique.insert(policy.name().to_owned());
         if !inserted {
             return Err(EngineBuildError::DuplicatePolicyName {
-                name: policy.name(),
+                name: policy.name().to_owned(),
             });
         }
     }
 
     for policy in pre_trade_policies {
-        let inserted = unique.insert(policy.name());
+        let inserted = unique.insert(policy.name().to_owned());
         if !inserted {
             return Err(EngineBuildError::DuplicatePolicyName {
-                name: policy.name(),
+                name: policy.name().to_owned(),
             });
         }
     }
 
     for policy in account_adjustment_policies {
-        let inserted = unique.insert(policy.name());
+        let inserted = unique.insert(policy.name().to_owned());
         if !inserted {
             return Err(EngineBuildError::DuplicatePolicyName {
-                name: policy.name(),
+                name: policy.name().to_owned(),
             });
         }
     }
@@ -389,8 +416,9 @@ fn ensure_unique_policy_names<O, R, A>(
 
 fn execute_request<O: 'static, R: 'static, A: 'static>(
     engine: Weak<RefCell<EngineInner<O, R, A>>>,
+    ctx: PreTradeContext,
     order: O,
-) -> Result<Reservation, Rejects> {
+) -> Result<PreTradeReservation, Rejects> {
     let Some(engine_ref) = engine.upgrade() else {
         return Err(Rejects::new(vec![Reject::new(
             "Engine",
@@ -403,26 +431,37 @@ fn execute_request<O: 'static, R: 'static, A: 'static>(
     let inner = engine_ref.borrow();
 
     let mut mutations = Mutations::new();
-    let mut rejects = Vec::new();
-    let ctx = Context::new(&order);
-
+    let mut lists = Vec::new();
+    let mut len = 0;
     for policy in &inner.pre_trade_policies {
-        policy.perform_pre_trade_check(&ctx, &mut mutations, &mut rejects);
+        if let Err(rejects) = policy.perform_pre_trade_check(&ctx, &order, &mut mutations) {
+            len += rejects.len();
+            lists.push(rejects);
+        }
     }
 
     drop(inner);
 
-    if !rejects.is_empty() {
+    if let Some(rejects) = merge_reject_lists(lists, len) {
         mutations.rollback_all();
-        return Err(Rejects::new(rejects));
+        return Err(rejects);
     }
 
     let reservation_handle = ReservationHandleImpl::new(mutations);
-    Ok(Reservation::from_handle(Box::new(reservation_handle)))
+    Ok(PreTradeReservation::from_handle(Box::new(
+        reservation_handle,
+    )))
 }
 
-fn wrap_single_reject(reject: Reject) -> Rejects {
-    Rejects::new(vec![reject])
+fn merge_reject_lists(lists: Vec<Rejects>, len: usize) -> Option<Rejects> {
+    if len == 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(len);
+    for rejects in lists {
+        out.extend(rejects.into_vec());
+    }
+    Some(Rejects::new(out))
 }
 
 #[cfg(test)]
@@ -436,9 +475,10 @@ mod tests {
     };
     use crate::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume};
     use crate::pretrade::{
-        AccountAdjustmentPolicy, CheckPreTradeStartPolicy, Context, Mutation, Mutations, Policy,
-        Reject, RejectCode, RejectScope,
+        CheckPreTradeStartPolicy, PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope,
+        Rejects,
     };
+    use crate::{AccountAdjustmentContext, AccountAdjustmentPolicy, Mutation, Mutations};
 
     use super::{AccountAdjustmentBatchError, Engine, EngineBuildError};
 
@@ -457,7 +497,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(EngineBuildError::DuplicatePolicyName { name: "dup" })
+            Err(EngineBuildError::DuplicatePolicyName { name }) if name == "dup"
         ));
     }
 
@@ -470,7 +510,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(EngineBuildError::DuplicatePolicyName { name: "dup" })
+            Err(EngineBuildError::DuplicatePolicyName { name }) if name == "dup"
         ));
     }
 
@@ -511,12 +551,9 @@ mod tests {
         assert!(matches!(
             result,
             Err(AccountAdjustmentBatchError {
-                index: 1,
-                reject: Reject {
-                    policy: "adj_reject",
-                    ..
-                }
-            })
+                failed_adjustment_index: 1,
+                rejects,
+            }) if rejects[0].policy == "adj_reject"
         ));
         assert_eq!(
             *seen.borrow(),
@@ -620,12 +657,9 @@ mod tests {
         assert!(matches!(
             result,
             Err(AccountAdjustmentBatchError {
-                index: 0,
-                reject: Reject {
-                    policy: "second",
-                    ..
-                }
-            })
+                failed_adjustment_index: 0,
+                rejects,
+            }) if rejects[0].policy == "second"
         ));
         assert_eq!(*first_seen.borrow(), batch);
         assert_eq!(*second_seen.borrow(), batch);
@@ -655,12 +689,9 @@ mod tests {
         assert!(matches!(
             result,
             Err(AccountAdjustmentBatchError {
-                index: 0,
-                reject: Reject {
-                    policy: "first",
-                    ..
-                }
-            })
+                failed_adjustment_index: 0,
+                rejects,
+            }) if rejects[0].policy == "first"
         ));
         assert_eq!(*first_seen.borrow(), batch);
         assert!(second_seen.borrow().is_empty());
@@ -678,7 +709,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(EngineBuildError::DuplicatePolicyName { name: "dup" })
+            Err(EngineBuildError::DuplicatePolicyName { name }) if name == "dup"
         ));
     }
 
@@ -700,25 +731,12 @@ mod tests {
     #[test]
     fn apply_account_adjustment_commits_mutations_on_success() {
         let seen = Rc::new(RefCell::new(Vec::new()));
-        let flag = Rc::new(RefCell::new(false));
-        let commit_flag = Rc::clone(&flag);
-        let rollback_flag = Rc::clone(&flag);
+        let state = Rc::new(RefCell::new(None));
         let engine = Engine::<TestOrder, TestReport, TestAdjustment>::builder()
             .account_adjustment_policy(AdjustmentPolicyMock::with_side_effect(
                 "adj_mutation",
                 Rc::clone(&seen),
-                move |mutations| {
-                    let c = Rc::clone(&commit_flag);
-                    let r = Rc::clone(&rollback_flag);
-                    mutations.push(Mutation::new(
-                        move || {
-                            *c.borrow_mut() = true;
-                        },
-                        move || {
-                            *r.borrow_mut() = false;
-                        },
-                    ));
-                },
+                shared_kill_switch_mutation(Rc::clone(&state), "adj_mutation", true, false),
             ))
             .build()
             .expect("engine must build");
@@ -727,32 +745,19 @@ mod tests {
         assert!(engine
             .apply_account_adjustment(AccountId::from_u64(99224416), &batch)
             .is_ok());
-        assert!(*flag.borrow());
+        assert_eq!(*state.borrow(), Some(true));
     }
 
     #[test]
     fn apply_account_adjustment_rolls_back_mutations_on_reject() {
         let first_seen = Rc::new(RefCell::new(Vec::new()));
         let second_seen = Rc::new(RefCell::new(Vec::new()));
-        let flag = Rc::new(RefCell::new(false));
-        let commit_flag = Rc::clone(&flag);
-        let rollback_flag = Rc::clone(&flag);
+        let state = Rc::new(RefCell::new(None));
         let engine = Engine::<TestOrder, TestReport, TestAdjustment>::builder()
             .account_adjustment_policy(AdjustmentPolicyMock::with_side_effect(
                 "adj_mutation",
                 Rc::clone(&first_seen),
-                move |mutations| {
-                    let c = Rc::clone(&commit_flag);
-                    let r = Rc::clone(&rollback_flag);
-                    mutations.push(Mutation::new(
-                        move || {
-                            *c.borrow_mut() = true;
-                        },
-                        move || {
-                            *r.borrow_mut() = false;
-                        },
-                    ));
-                },
+                shared_kill_switch_mutation(Rc::clone(&state), "adj_mutation", true, false),
             ))
             .account_adjustment_policy(AdjustmentPolicyMock::reject_on_id(
                 "adj_rejecter",
@@ -766,7 +771,7 @@ mod tests {
         assert!(engine
             .apply_account_adjustment(AccountId::from_u64(99224416), &batch)
             .is_err());
-        assert!(!(*flag.borrow()));
+        assert_eq!(*state.borrow(), Some(false));
     }
 
     #[test]
@@ -791,7 +796,7 @@ mod tests {
         let request = engine
             .start_pre_trade(order_with_settlement("USD"))
             .expect("start stage must pass");
-        let reservation = request.execute().expect("execute must pass");
+        let mut reservation = request.execute().expect("execute must pass");
         reservation.rollback();
 
         let post_trade = engine.apply_execution_report(&());
@@ -800,7 +805,7 @@ mod tests {
 
     #[test]
     fn builder_builds_operational_empty_engine() {
-        let reservation = Engine::<TestOrder, TestReport>::builder()
+        let mut reservation = Engine::<TestOrder, TestReport>::builder()
             .build()
             .expect("builder must build")
             .start_pre_trade(order_with_settlement("USD"))
@@ -818,7 +823,7 @@ mod tests {
             .build()
             .expect("engine must build");
 
-        let reservation = engine
+        let mut reservation = engine
             .execute_pre_trade(order_with_settlement("USD"))
             .expect("shortcut must pass");
         reservation.rollback();
@@ -892,7 +897,7 @@ mod tests {
             .build()
             .expect("engine must build");
 
-        let reservation = engine
+        let mut reservation = engine
             .execute_pre_trade(order_with_settlement("USD"))
             .expect("shortcut must pass");
         reservation.commit();
@@ -934,7 +939,7 @@ mod tests {
             .build()
             .expect("engine must build");
         let order = ();
-        let reservation = engine
+        let mut reservation = engine
             .start_pre_trade(order)
             .expect("start stage must pass")
             .execute()
@@ -961,7 +966,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(EngineBuildError::DuplicatePolicyName { name: "dup" })
+            Err(EngineBuildError::DuplicatePolicyName { name }) if name == "dup"
         ));
     }
 
@@ -980,7 +985,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(EngineBuildError::DuplicatePolicyName { name: "dup" })
+            Err(EngineBuildError::DuplicatePolicyName { name }) if name == "dup"
         ));
     }
 
@@ -996,14 +1001,10 @@ mod tests {
         let order = ();
 
         let result = engine.start_pre_trade(order);
-        assert!(matches!(
-            result,
-            Err(Reject {
-                policy: "core_start_reject",
-                code: RejectCode::Other,
-                ..
-            })
-        ));
+        let rejects = result.expect_err("start stage must reject");
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].policy, "core_start_reject");
+        assert_eq!(rejects[0].code, RejectCode::Other);
 
         let post_trade = engine.apply_execution_report(&execution_report("USD"));
         assert!(!post_trade.kill_switch_triggered);
@@ -1074,7 +1075,7 @@ mod tests {
                 .expect("engine must build");
             let order = ();
 
-            let reservation = engine
+            let mut reservation = engine
                 .start_pre_trade(order)
                 .expect("start stage must create request")
                 .execute()
@@ -1093,7 +1094,7 @@ mod tests {
     }
 
     #[test]
-    fn start_pre_trade_table_cases_follow_registration_order_and_stop_on_first_reject() {
+    fn start_pre_trade_table_cases_follow_registration_order_and_collect_rejects() {
         struct Case {
             reject_index: Option<usize>,
             expected_calls: [usize; 3],
@@ -1110,7 +1111,7 @@ mod tests {
             },
             Case {
                 reject_index: Some(1),
-                expected_calls: [1, 1, 0],
+                expected_calls: [1, 1, 1],
                 expected_main_calls: 0,
                 expected_ok: false,
             },
@@ -1215,7 +1216,7 @@ mod tests {
             let execute_result = request.execute();
 
             if case.expected_rejects == 0 {
-                let reservation = execute_result.expect("execute must pass");
+                let mut reservation = execute_result.expect("execute must pass");
                 reservation.commit();
             } else {
                 assert!(execute_result.is_err(), "execute must reject");
@@ -1363,7 +1364,7 @@ mod tests {
     #[test]
     fn reservation_mutation_callback_is_noop_when_engine_is_dropped() {
         let state = Rc::new(RefCell::new(None));
-        let reservation = {
+        let mut reservation = {
             let engine = Engine::<TestOrder, TestReport>::builder()
                 .check_pre_trade_start_policy(StartPolicyMock::pass("start"))
                 .pre_trade_policy(MainPolicyMock::with_custom_mutation_and_optional_reject(
@@ -1392,7 +1393,7 @@ mod tests {
     #[test]
     fn order_core_reservation_mutation_callback_is_noop_when_engine_is_dropped() {
         let state = Rc::new(RefCell::new(None));
-        let reservation = {
+        let mut reservation = {
             let engine = Engine::<(), TestReport>::builder()
                 .check_pre_trade_start_policy(CoreStartPolicyMock {
                     name: "core_start",
@@ -1423,21 +1424,23 @@ mod tests {
 
     #[test]
     fn build_error_display_is_stable() {
-        let err = EngineBuildError::DuplicatePolicyName { name: "dup" };
+        let err = EngineBuildError::DuplicatePolicyName {
+            name: "dup".to_string(),
+        };
         assert_eq!(err.to_string(), "duplicate policy name: dup");
     }
 
     #[test]
     fn account_adjustment_batch_error_display_is_stable() {
         let err = AccountAdjustmentBatchError {
-            index: 2,
-            reject: Reject::new(
+            failed_adjustment_index: 2,
+            rejects: Rejects::from(Reject::new(
                 "adj_policy",
                 RejectScope::Order,
                 RejectCode::Other,
                 "account adjustment rejected",
                 "mock account adjustment policy rejected the adjustment",
-            ),
+            )),
         };
         assert_eq!(
             err.to_string(),
@@ -1463,13 +1466,13 @@ mod tests {
         let request_usd = engine
             .start_pre_trade(order_with_settlement("USD"))
             .expect("USD order must pass start stage");
-        let reservation_usd = request_usd.execute().expect("USD order must pass");
+        let mut reservation_usd = request_usd.execute().expect("USD order must pass");
         reservation_usd.commit();
 
         let request_eur = engine
             .start_pre_trade(order_with_settlement("EUR"))
             .expect("EUR order must pass start stage");
-        let reservation_eur = request_eur.execute().expect("EUR order must pass");
+        let mut reservation_eur = request_eur.execute().expect("EUR order must pass");
         reservation_eur.commit();
 
         let seen = seen.borrow();
@@ -1527,7 +1530,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(EngineBuildError::DuplicatePolicyName { name: "dup" })
+            Err(EngineBuildError::DuplicatePolicyName { name }) if name == "dup"
         ));
     }
 
@@ -1549,7 +1552,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(EngineBuildError::DuplicatePolicyName { name: "dup" })
+            Err(EngineBuildError::DuplicatePolicyName { name }) if name == "dup"
         ));
     }
 
@@ -1563,14 +1566,10 @@ mod tests {
             .expect("engine must build");
 
         let result = engine.start_pre_trade(tagged_order("ord-reject", "AAPL", "1", "10"));
-        assert!(matches!(
-            result,
-            Err(Reject {
-                policy: "tagged_start_reject",
-                code: RejectCode::Other,
-                ..
-            })
-        ));
+        let rejects = result.expect_err("start stage must reject");
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].policy, "tagged_start_reject");
+        assert_eq!(rejects[0].code, RejectCode::Other);
 
         let post_trade =
             engine.apply_execution_report(&tagged_execution_report("rep-reject", "AAPL", "1", "1"));
@@ -1660,7 +1659,7 @@ mod tests {
                 .build()
                 .expect("engine must build");
 
-            let reservation = engine
+            let mut reservation = engine
                 .start_pre_trade(tagged_order("ord-tagged-finalize", "MSFT", "3", "12"))
                 .expect("start stage must create request")
                 .execute()
@@ -1686,7 +1685,7 @@ mod tests {
     #[test]
     fn tagged_reservation_mutation_callback_is_noop_when_engine_is_dropped() {
         let state = Rc::new(RefCell::new(None));
-        let reservation = {
+        let mut reservation = {
             let engine = Engine::<TaggedOrder, TaggedReport>::builder()
                 .pre_trade_policy(TaggedMutationPolicyMock {
                     name: "tagged_main",
@@ -1809,7 +1808,7 @@ mod tests {
                 let request = requests[*request_index]
                     .take()
                     .expect("request must be available exactly once");
-                let reservation = request
+                let mut reservation = request
                     .execute()
                     .expect("main stage must pass for tagged order");
 
@@ -1883,7 +1882,7 @@ mod tests {
             },
         };
 
-        let reservation = engine
+        let mut reservation = engine
             .start_pre_trade(order)
             .expect("request must be created without notional precompute")
             .execute()
@@ -1921,7 +1920,7 @@ mod tests {
             },
         };
 
-        let reservation = engine
+        let mut reservation = engine
             .start_pre_trade(order)
             .expect("sell order must pass start stage")
             .execute()
@@ -1931,6 +1930,46 @@ mod tests {
 
         let post_trade = engine.apply_execution_report(&execution_report("USD"));
         assert!(!post_trade.kill_switch_triggered);
+    }
+
+    #[test]
+    fn sell_order_reservation_rollback_resets_reserved_notional_to_zero() {
+        let usd = Asset::new("USD").expect("asset code must be valid");
+        let reserved_amount = Volume::from_str("20000").expect("volume must be valid");
+        let reserved_notional = Rc::new(RefCell::new(None));
+        let engine = Engine::<TestOrder, TestReport>::builder()
+            .pre_trade_policy(ReserveNotionalPolicy {
+                settlement: usd.clone(),
+                amount: reserved_amount,
+                reserved_notional: Rc::clone(&reserved_notional),
+            })
+            .build()
+            .expect("engine must build");
+
+        let order = WithOrderOperation {
+            inner: (),
+            operation: OrderOperation {
+                instrument: Instrument::new(
+                    Asset::new("AAPL").expect("asset code must be valid"),
+                    usd,
+                ),
+                account_id: AccountId::from_u64(99224416),
+                side: Side::Sell,
+                trade_amount: TradeAmount::Quantity(
+                    Quantity::from_str("100").expect("quantity must be valid"),
+                ),
+                price: Some(Price::from_str("200").expect("price must be valid")),
+            },
+        };
+
+        let mut reservation = engine
+            .start_pre_trade(order)
+            .expect("sell order must pass start stage")
+            .execute()
+            .expect("sell order must pass execute");
+        reservation.rollback();
+
+        assert_eq!(*reserved_notional.borrow(), Some(Volume::ZERO));
     }
 
     #[test]
@@ -1956,10 +1995,8 @@ mod tests {
                 price: Some(Price::from_str("200").expect("price must be valid")),
             },
         };
-        let ctx = Context::new(&order);
         let mut mutations = Mutations::default();
-        let mut rejects = Vec::<Reject>::new();
-        policy.perform_pre_trade_check(&ctx, &mut mutations, &mut rejects);
+        let _ = policy.perform_pre_trade_check(&PreTradeContext::new(), &order, &mut mutations);
     }
 
     #[test]
@@ -1985,11 +2022,8 @@ mod tests {
                 price: Some(Price::from_str("200").expect("price must be valid")),
             },
         };
-        let ctx = Context::new(&order);
         let mut mutations = Mutations::default();
-        let mut rejects = Vec::<Reject>::new();
-
-        policy.perform_pre_trade_check(&ctx, &mut mutations, &mut rejects);
+        let _ = policy.perform_pre_trade_check(&PreTradeContext::new(), &order, &mut mutations);
     }
 
     fn order_with_settlement(settlement: &str) -> TestOrder {
@@ -2079,11 +2113,15 @@ mod tests {
     }
 
     impl CheckPreTradeStartPolicy<TaggedOrder, TaggedReport> for CaptureTaggedStartPolicy {
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             self.name
         }
 
-        fn check_pre_trade_start(&self, order: &TaggedOrder) -> Result<(), Reject> {
+        fn check_pre_trade_start(
+            &self,
+            _ctx: &PreTradeContext,
+            order: &TaggedOrder,
+        ) -> Result<(), Rejects> {
             self.seen_orders.borrow_mut().push(order.tag);
             self.journal
                 .borrow_mut()
@@ -2112,11 +2150,15 @@ mod tests {
     }
 
     impl CheckPreTradeStartPolicy<TaggedOrder, TaggedReport> for SequenceFenceStartPolicy {
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             self.name
         }
 
-        fn check_pre_trade_start(&self, order: &TaggedOrder) -> Result<(), Reject> {
+        fn check_pre_trade_start(
+            &self,
+            _ctx: &PreTradeContext,
+            order: &TaggedOrder,
+        ) -> Result<(), Rejects> {
             self.journal
                 .borrow_mut()
                 .push(format!("start:{}:{}", self.name, order.tag));
@@ -2154,21 +2196,22 @@ mod tests {
         }
     }
 
-    impl Policy<TaggedOrder, TaggedReport> for CaptureTaggedMainPolicy {
-        fn name(&self) -> &'static str {
+    impl PreTradePolicy<TaggedOrder, TaggedReport> for CaptureTaggedMainPolicy {
+        fn name(&self) -> &str {
             self.name
         }
 
         fn perform_pre_trade_check(
             &self,
-            ctx: &Context<'_, TaggedOrder>,
+            _ctx: &PreTradeContext,
+            order: &TaggedOrder,
             _mutations: &mut Mutations,
-            _rejects: &mut Vec<Reject>,
-        ) {
-            self.seen_orders.borrow_mut().push(ctx.order().tag);
+        ) -> Result<(), Rejects> {
+            self.seen_orders.borrow_mut().push(order.tag);
             self.journal
                 .borrow_mut()
-                .push(format!("execute:{}:{}", self.name, ctx.order().tag));
+                .push(format!("execute:{}:{}", self.name, order.tag));
+            Ok(())
         }
 
         fn apply_execution_report(&self, report: &TaggedReport) -> bool {
@@ -2191,20 +2234,21 @@ mod tests {
         }
     }
 
-    impl Policy<TaggedOrder, TaggedReport> for SequenceFenceMainPolicy {
-        fn name(&self) -> &'static str {
+    impl PreTradePolicy<TaggedOrder, TaggedReport> for SequenceFenceMainPolicy {
+        fn name(&self) -> &str {
             self.name
         }
 
         fn perform_pre_trade_check(
             &self,
-            ctx: &Context<'_, TaggedOrder>,
+            _ctx: &PreTradeContext,
+            order: &TaggedOrder,
             _mutations: &mut Mutations,
-            _rejects: &mut Vec<Reject>,
-        ) {
+        ) -> Result<(), Rejects> {
             self.journal
                 .borrow_mut()
-                .push(format!("execute:{}:{}", self.name, ctx.order().tag));
+                .push(format!("execute:{}:{}", self.name, order.tag));
+            Ok(())
         }
 
         fn apply_execution_report(&self, report: &TaggedReport) -> bool {
@@ -2220,18 +2264,22 @@ mod tests {
     }
 
     impl CheckPreTradeStartPolicy<TaggedOrder, TaggedReport> for RejectTaggedStartPolicyMock {
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             self.name
         }
 
-        fn check_pre_trade_start(&self, _order: &TaggedOrder) -> Result<(), Reject> {
-            Err(Reject::new(
+        fn check_pre_trade_start(
+            &self,
+            _ctx: &PreTradeContext,
+            _order: &TaggedOrder,
+        ) -> Result<(), Rejects> {
+            Err(Rejects::from(Reject::new(
                 self.name,
                 RejectScope::Order,
                 RejectCode::Other,
                 "tagged start reject",
                 "tagged start policy rejected the order",
-            ))
+            )))
         }
 
         fn apply_execution_report(&self, _report: &TaggedReport) -> bool {
@@ -2245,30 +2293,31 @@ mod tests {
         reject: bool,
     }
 
-    impl Policy<TaggedOrder, TaggedReport> for TaggedMutationPolicyMock {
-        fn name(&self) -> &'static str {
+    impl PreTradePolicy<TaggedOrder, TaggedReport> for TaggedMutationPolicyMock {
+        fn name(&self) -> &str {
             self.name
         }
 
         fn perform_pre_trade_check(
             &self,
-            _ctx: &Context<'_, TaggedOrder>,
+            _ctx: &PreTradeContext,
+            _order: &TaggedOrder,
             mutations: &mut Mutations,
-            rejects: &mut Vec<Reject>,
-        ) {
+        ) -> Result<(), Rejects> {
             if let Some(on_apply) = &self.on_apply {
                 on_apply(mutations);
             }
 
             if self.reject {
-                rejects.push(Reject::new(
+                return Err(Rejects::from(Reject::new(
                     self.name,
                     RejectScope::Order,
                     RejectCode::Other,
                     "tagged main reject",
                     "tagged mutation policy rejected the order",
-                ));
+                )));
             }
+            Ok(())
         }
 
         fn apply_execution_report(&self, _report: &TaggedReport) -> bool {
@@ -2282,19 +2331,23 @@ mod tests {
     }
 
     impl CheckPreTradeStartPolicy<(), TestReport> for CoreStartPolicyMock {
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             self.name
         }
 
-        fn check_pre_trade_start(&self, _order: &()) -> Result<(), Reject> {
+        fn check_pre_trade_start(
+            &self,
+            _ctx: &PreTradeContext,
+            _order: &(),
+        ) -> Result<(), Rejects> {
             if self.reject {
-                return Err(Reject::new(
+                return Err(Rejects::from(Reject::new(
                     self.name,
                     RejectScope::Order,
                     RejectCode::Other,
                     "core start reject",
                     "order core start policy rejected the order",
-                ));
+                )));
             }
             Ok(())
         }
@@ -2310,30 +2363,31 @@ mod tests {
         reject: bool,
     }
 
-    impl Policy<(), TestReport> for CoreMainPolicyMock {
-        fn name(&self) -> &'static str {
+    impl PreTradePolicy<(), TestReport> for CoreMainPolicyMock {
+        fn name(&self) -> &str {
             self.name
         }
 
         fn perform_pre_trade_check(
             &self,
-            _ctx: &Context<'_, ()>,
+            _ctx: &PreTradeContext,
+            _order: &(),
             mutations: &mut Mutations,
-            rejects: &mut Vec<Reject>,
-        ) {
+        ) -> Result<(), Rejects> {
             if let Some(on_apply) = &self.on_apply {
                 on_apply(mutations);
             }
 
             if self.reject {
-                rejects.push(Reject::new(
+                return Err(Rejects::from(Reject::new(
                     self.name,
                     RejectScope::Order,
                     RejectCode::Other,
                     "core main reject",
                     "order core main policy rejected the order",
-                ));
+                )));
             }
+            Ok(())
         }
 
         fn apply_execution_report(&self, _report: &TestReport) -> bool {
@@ -2447,34 +2501,38 @@ mod tests {
     }
 
     impl CheckPreTradeStartPolicy<TestOrder, TestReport> for StartPolicyMock {
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             self.name
         }
 
-        fn check_pre_trade_start(&self, _order: &TestOrder) -> Result<(), Reject> {
+        fn check_pre_trade_start(
+            &self,
+            _ctx: &PreTradeContext,
+            _order: &TestOrder,
+        ) -> Result<(), Rejects> {
             self.calls.set(self.calls.get() + 1);
             if let Some(counter) = &self.light_counter {
                 counter.set(counter.get() + 1);
             }
             if let Some(block_flag) = &self.block_flag {
                 if block_flag.get() {
-                    return Err(Reject::new(
+                    return Err(Rejects::from(Reject::new(
                         self.name,
                         RejectScope::Account,
                         RejectCode::PnlKillSwitchTriggered,
                         "pnl kill switch triggered",
                         "mock policy blocked the account",
-                    ));
+                    )));
                 }
             }
             if self.reject {
-                return Err(Reject::new(
+                return Err(Rejects::from(Reject::new(
                     self.name,
                     RejectScope::Order,
                     RejectCode::Other,
                     "start reject",
                     "mock start policy rejected the order",
-                ));
+                )));
             }
             Ok(())
         }
@@ -2558,22 +2616,22 @@ mod tests {
         }
     }
 
-    impl Policy<TestOrder, TestReport> for MainPolicyMock {
-        fn name(&self) -> &'static str {
+    impl PreTradePolicy<TestOrder, TestReport> for MainPolicyMock {
+        fn name(&self) -> &str {
             self.name
         }
 
         fn perform_pre_trade_check(
             &self,
-            ctx: &Context<'_, TestOrder>,
+            _ctx: &PreTradeContext,
+            order: &TestOrder,
             mutations: &mut Mutations,
-            rejects: &mut Vec<Reject>,
-        ) {
+        ) -> Result<(), Rejects> {
             self.calls.set(self.calls.get() + 1);
             if let Some(seen_settlement) = &self.seen_settlement {
                 seen_settlement
                     .borrow_mut()
-                    .push(ctx.order().operation.instrument.settlement_asset().clone());
+                    .push(order.operation.instrument.settlement_asset().clone());
             }
 
             if let Some(on_apply) = &self.on_apply {
@@ -2581,14 +2639,15 @@ mod tests {
             }
 
             if self.reject {
-                rejects.push(Reject::new(
+                return Err(Rejects::from(Reject::new(
                     self.name,
                     self.reject_scope.clone(),
                     RejectCode::Other,
                     "main reject",
                     "mock main-stage policy rejected the order",
-                ));
+                )));
             }
+            Ok(())
         }
 
         fn apply_execution_report(&self, _report: &TestReport) -> bool {
@@ -2647,28 +2706,29 @@ mod tests {
     }
 
     impl AccountAdjustmentPolicy<MockAdjustment> for AdjustmentPolicyMock {
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             self.name
         }
 
         fn apply_account_adjustment(
             &self,
+            _ctx: &AccountAdjustmentContext,
             _account_id: AccountId,
             adjustment: &MockAdjustment,
             mutations: &mut Mutations,
-        ) -> Result<(), Reject> {
+        ) -> Result<(), Rejects> {
             self.seen.borrow_mut().push(*adjustment);
             if let Some(ref on_apply) = self.on_apply {
                 on_apply(mutations);
             }
             if self.reject_on_id == Some(adjustment.id) {
-                return Err(Reject::new(
+                return Err(Rejects::from(Reject::new(
                     self.name,
                     RejectScope::Order,
                     RejectCode::Other,
                     "account adjustment rejected",
                     "mock account adjustment policy rejected the adjustment",
-                ));
+                )));
             }
             Ok(())
         }
@@ -2700,34 +2760,29 @@ mod tests {
         }
     }
 
-    impl Policy<TestOrder, TestReport> for ReserveNotionalPolicy {
-        fn name(&self) -> &'static str {
+    impl PreTradePolicy<TestOrder, TestReport> for ReserveNotionalPolicy {
+        fn name(&self) -> &str {
             "ReserveNotionalPolicy"
         }
 
         fn perform_pre_trade_check(
             &self,
-            ctx: &Context<'_, TestOrder>,
+            _ctx: &PreTradeContext,
+            order: &TestOrder,
             mutations: &mut Mutations,
-            _rejects: &mut Vec<Reject>,
-        ) {
+        ) -> Result<(), Rejects> {
             use crate::core::{HasOrderPrice, HasTradeAmount};
-            assert_eq!(ctx.order().operation.side, Side::Sell);
+            assert_eq!(order.operation.side, Side::Sell);
             assert_eq!(
-                ctx.order().operation.instrument.settlement_asset(),
+                order.operation.instrument.settlement_asset(),
                 &self.settlement
             );
-            let calculated_amount = ctx
-                .order()
+            let calculated_amount = order
                 .price()
                 .expect("price must be present")
                 .expect("price value must be Some")
                 .calculate_volume(
-                    match ctx
-                        .order()
-                        .trade_amount()
-                        .expect("trade_amount must be present")
-                    {
+                    match order.trade_amount().expect("trade_amount must be present") {
                         TradeAmount::Quantity(value) => value,
                         TradeAmount::Volume(_) => panic!("quantity-based order expected"),
                     },
@@ -2745,6 +2800,7 @@ mod tests {
                     *rollback_store.borrow_mut() = Some(Volume::ZERO);
                 },
             ));
+            Ok(())
         }
 
         fn apply_execution_report(&self, _report: &TestReport) -> bool {

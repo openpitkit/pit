@@ -90,6 +90,7 @@ run_or_record "rust-arm64" "${ROOT_DIR}/e2e/env/docker/rust-crate/Dockerfile" "l
 run_or_record "python-wheel-amd64" "${ROOT_DIR}/e2e/env/docker/python-wheel/Dockerfile" "linux/amd64"
 run_or_record "python-wheel-arm64" "${ROOT_DIR}/e2e/env/docker/python-wheel/Dockerfile" "linux/arm64"
 run_or_record "python-source-arm64" "${ROOT_DIR}/e2e/env/docker/python-sdist/Dockerfile" "linux/arm64"
+run_or_record "go-amd64" "${ROOT_DIR}/e2e/env/docker/go-module/Dockerfile" "linux/amd64"
 
 if [[ "${failures}" -ne 0 ]]; then
   print_banner "RELEASE E2E FAILED"

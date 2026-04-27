@@ -21,8 +21,10 @@ use std::fmt::{Display, Formatter};
 
 use crate::core::{HasFee, HasInstrument, HasPnl};
 use crate::param::{Asset, Pnl};
-use crate::pretrade::policy::request_field_access_reject;
-use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
+use crate::pretrade::policy::request_field_access_pre_trade_reject;
+use crate::pretrade::{
+    CheckPreTradeStartPolicy, PreTradeContext, Reject, RejectCode, RejectScope, Rejects,
+};
 
 /// Start-stage policy that blocks trading after crossing configured loss limits.
 ///
@@ -36,7 +38,7 @@ use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope}
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use openpit::param::{Asset, Fee, Pnl, Price, Quantity, Side};
 /// use openpit::pretrade::policies::PnlKillSwitchPolicy;
-/// use openpit::pretrade::CheckPreTradeStartPolicy;
+/// use openpit::pretrade::{CheckPreTradeStartPolicy, PreTradeContext};
 /// use openpit::{HasFee, HasInstrument, HasPnl, Instrument, OrderOperation};
 /// use openpit::param::TradeAmount;
 ///
@@ -64,7 +66,7 @@ use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope}
 ///     <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
 ///         OrderOperation,
 ///         Report,
-///     >>::check_pre_trade_start(&policy, &order)
+///     >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order)
 ///     .is_ok()
 /// );
 ///
@@ -111,7 +113,7 @@ use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope}
 ///     <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
 ///         OrderOperation,
 ///         Report,
-///     >>::check_pre_trade_start(&policy, &order)
+///     >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order)
 ///     .is_err()
 /// );
 ///
@@ -120,7 +122,7 @@ use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope}
 ///     <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
 ///         OrderOperation,
 ///         Report,
-///     >>::check_pre_trade_start(&policy, &order)
+///     >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order)
 ///     .is_ok()
 /// );
 /// # Ok(())
@@ -264,14 +266,14 @@ where
     O: HasInstrument,
     R: HasInstrument + HasPnl + HasFee,
 {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::NAME
     }
 
-    fn check_pre_trade_start(&self, order: &O) -> Result<(), Reject> {
+    fn check_pre_trade_start(&self, _ctx: &PreTradeContext, order: &O) -> Result<(), Rejects> {
         let instrument = order
             .instrument()
-            .map_err(|e| request_field_access_reject(Self::NAME, &e))?;
+            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
 
         let settlement = instrument.settlement_asset();
         let barrier = match self.barrier(settlement) {
@@ -283,7 +285,8 @@ where
                     RejectCode::RiskConfigurationMissing,
                     "pnl barrier missing",
                     format!("settlement asset {settlement} has no configured loss barrier"),
-                ));
+                )
+                .into());
             }
         };
 
@@ -299,7 +302,8 @@ where
                     self.realized_pnl(settlement),
                     barrier
                 ),
-            ));
+            )
+            .into());
         }
 
         Ok(())
@@ -357,7 +361,7 @@ mod tests {
     use crate::core::{HasFee, HasInstrument, HasPnl, Instrument, OrderOperation};
     use crate::param::TradeAmount;
     use crate::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side};
-    use crate::pretrade::{CheckPreTradeStartPolicy, RejectCode, RejectScope};
+    use crate::pretrade::{CheckPreTradeStartPolicy, PreTradeContext, RejectCode, RejectScope};
     use crate::RequestFieldAccessError;
     use rust_decimal::Decimal;
 
@@ -426,6 +430,7 @@ mod tests {
             .expect("accumulation must succeed");
 
         let reject = check_start(&policy, &order("USD")).expect_err("must reject on boundary");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Account);
         assert_eq!(reject.code, RejectCode::PnlKillSwitchTriggered);
         assert_eq!(reject.reason, "pnl kill switch triggered");
@@ -448,6 +453,7 @@ mod tests {
 
         let reject =
             check_start(&policy, &order("USD")).expect_err("must reject when barrier is missing");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::RiskConfigurationMissing);
         assert_eq!(reject.reason, "pnl barrier missing");
@@ -608,6 +614,7 @@ mod tests {
         );
         let reject =
             check_start(&policy, &order("USD")).expect_err("missing barrier must still reject");
+        let reject = &reject[0];
         assert_eq!(reject.code, RejectCode::RiskConfigurationMissing);
         assert_eq!(reject.reason, "pnl barrier missing");
         assert_eq!(
@@ -893,8 +900,9 @@ mod tests {
             vec![],
         )
         .expect("policy must be valid");
-        let reject = <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<InvalidOrder, TestReport>>::check_pre_trade_start(&policy, &InvalidOrder)
+        let reject = <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<InvalidOrder, TestReport>>::check_pre_trade_start(&policy, &PreTradeContext::new(), &InvalidOrder)
             .expect_err("field access error must reject");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
         assert_eq!(reject.reason, "failed to access required field");
@@ -1022,8 +1030,8 @@ mod tests {
     fn check_start(
         policy: &PnlKillSwitchPolicy,
         order: &OrderOperation,
-    ) -> Result<(), crate::pretrade::Reject> {
-        <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<OrderOperation, TestReport>>::check_pre_trade_start(policy, order)
+    ) -> Result<(), crate::pretrade::Rejects> {
+        <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<OrderOperation, TestReport>>::check_pre_trade_start(policy, &PreTradeContext::new(), order)
     }
 
     fn apply_report(policy: &PnlKillSwitchPolicy, report: &TestReport) -> bool {

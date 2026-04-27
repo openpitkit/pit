@@ -16,9 +16,12 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 pub(crate) mod account_adjustment;
+pub(crate) mod account_adjustment_context;
+pub(crate) mod account_adjustment_policy;
 pub(crate) mod engine;
 pub(crate) mod execution_report;
 pub(crate) mod instrument;
+pub(crate) mod mutation;
 pub(crate) mod order;
 pub(crate) mod request_trait;
 
@@ -30,12 +33,15 @@ pub use account_adjustment::{
     WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
     WithAccountAdjustmentPositionOperation,
 };
+pub use account_adjustment_context::AccountAdjustmentContext;
+pub use account_adjustment_policy::AccountAdjustmentPolicy;
 pub use execution_report::{
     ExecutionReportFillDetails, ExecutionReportOperation, ExecutionReportPositionImpact,
     FinancialImpact, WithExecutionReportFillDetails, WithExecutionReportOperation,
     WithExecutionReportPositionImpact, WithFinancialImpact,
 };
 pub use instrument::Instrument;
+pub use mutation::{Mutation, Mutations};
 pub use order::{
     OrderMargin, OrderOperation, OrderPosition, WithOrderMargin, WithOrderOperation,
     WithOrderPosition,

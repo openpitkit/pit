@@ -29,6 +29,14 @@ use std::fmt::{Display, Formatter};
 ///   with FNV-1a 64-bit. Collisions are theoretically possible; see
 ///   [`AccountId::from_str`] for the collision probability table.
 ///
+/// WARNING:
+/// Use exactly one constructor family per runtime state:
+/// - either only [`AccountId::from_u64`],
+/// - or only [`AccountId::from_str`].
+///
+/// Mixing both families can collapse distinct accounts into one key when a
+/// hashed string equals a direct numeric ID.
+///
 /// # Examples
 ///
 /// ```
@@ -56,6 +64,10 @@ impl AccountId {
     /// No hashing, no allocation, no collision risk.
     /// Prefer this constructor whenever the broker or venue assigns
     /// numeric account IDs.
+    ///
+    /// WARNING:
+    /// Do not mix IDs created with this function and IDs created with
+    /// [`AccountId::from_str`] in the same runtime state.
     pub fn from_u64(value: u64) -> Self {
         Self(value)
     }
@@ -84,6 +96,10 @@ impl AccountId {
     /// If collision risk is unacceptable for your use case, maintain your own
     /// collision-free string→u64 mapping (e.g. a registry or a database
     /// sequence) and pass the resulting integer to [`AccountId::from_u64`].
+    ///
+    /// WARNING:
+    /// Do not mix IDs created with this function and IDs created with
+    /// [`AccountId::from_u64`] in the same runtime state.
     ///
     /// # Examples
     ///

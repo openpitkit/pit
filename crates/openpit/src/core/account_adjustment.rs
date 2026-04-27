@@ -64,12 +64,12 @@ impl_request_has_field_passthrough!(
     HasAverageEntryPrice, average_entry_price, Price;
     HasPositionMode, position_mode, PositionMode;
     HasAccountAdjustmentPositionLeverage, position_leverage, Option<Leverage>;
-    HasAccountAdjustmentTotalUpperBound, total_upper_bound, Option<PositionSize>;
-    HasAccountAdjustmentTotalLowerBound, total_lower_bound, Option<PositionSize>;
-    HasAccountAdjustmentReservedUpperBound, reserved_upper_bound, Option<PositionSize>;
-    HasAccountAdjustmentReservedLowerBound, reserved_lower_bound, Option<PositionSize>;
-    HasAccountAdjustmentPendingUpperBound, pending_upper_bound, Option<PositionSize>;
-    HasAccountAdjustmentPendingLowerBound, pending_lower_bound, Option<PositionSize>;
+    HasAccountAdjustmentTotalUpperBound, total_upper, Option<PositionSize>;
+    HasAccountAdjustmentTotalLowerBound, total_lower, Option<PositionSize>;
+    HasAccountAdjustmentReservedUpperBound, reserved_upper, Option<PositionSize>;
+    HasAccountAdjustmentReservedLowerBound, reserved_lower, Option<PositionSize>;
+    HasAccountAdjustmentPendingUpperBound, pending_upper, Option<PositionSize>;
+    HasAccountAdjustmentPendingLowerBound, pending_lower, Option<PositionSize>;
 );
 
 /// Direct adjustment of a physical asset balance without hedge/netting semantics.
@@ -106,12 +106,12 @@ impl_request_has_field_passthrough!(
     HasAccountAdjustmentTotal, total, Option<AdjustmentAmount>;
     HasAccountAdjustmentReserved, reserved, Option<AdjustmentAmount>;
     HasAccountAdjustmentPending, pending, Option<AdjustmentAmount>;
-    HasAccountAdjustmentTotalUpperBound, total_upper_bound, Option<PositionSize>;
-    HasAccountAdjustmentTotalLowerBound, total_lower_bound, Option<PositionSize>;
-    HasAccountAdjustmentReservedUpperBound, reserved_upper_bound, Option<PositionSize>;
-    HasAccountAdjustmentReservedLowerBound, reserved_lower_bound, Option<PositionSize>;
-    HasAccountAdjustmentPendingUpperBound, pending_upper_bound, Option<PositionSize>;
-    HasAccountAdjustmentPendingLowerBound, pending_lower_bound, Option<PositionSize>;
+    HasAccountAdjustmentTotalUpperBound, total_upper, Option<PositionSize>;
+    HasAccountAdjustmentTotalLowerBound, total_lower, Option<PositionSize>;
+    HasAccountAdjustmentReservedUpperBound, reserved_upper, Option<PositionSize>;
+    HasAccountAdjustmentReservedLowerBound, reserved_lower, Option<PositionSize>;
+    HasAccountAdjustmentPendingUpperBound, pending_upper, Option<PositionSize>;
+    HasAccountAdjustmentPendingLowerBound, pending_lower, Option<PositionSize>;
     HasPositionInstrument, position_instrument, &Instrument;
     HasCollateralAsset, collateral_asset, &Asset;
     HasPositionMode, position_mode, PositionMode;
@@ -165,29 +165,29 @@ impl_request_has_field_passthrough!(
     HasAccountAdjustmentTotal, total, Option<AdjustmentAmount>;
     HasAccountAdjustmentReserved, reserved, Option<AdjustmentAmount>;
     HasAccountAdjustmentPending, pending, Option<AdjustmentAmount>;
-    HasAccountAdjustmentTotalUpperBound, total_upper_bound, Option<PositionSize>;
-    HasAccountAdjustmentTotalLowerBound, total_lower_bound, Option<PositionSize>;
-    HasAccountAdjustmentReservedUpperBound, reserved_upper_bound, Option<PositionSize>;
-    HasAccountAdjustmentReservedLowerBound, reserved_lower_bound, Option<PositionSize>;
-    HasAccountAdjustmentPendingUpperBound, pending_upper_bound, Option<PositionSize>;
-    HasAccountAdjustmentPendingLowerBound, pending_lower_bound, Option<PositionSize>;
+    HasAccountAdjustmentTotalUpperBound, total_upper, Option<PositionSize>;
+    HasAccountAdjustmentTotalLowerBound, total_lower, Option<PositionSize>;
+    HasAccountAdjustmentReservedUpperBound, reserved_upper, Option<PositionSize>;
+    HasAccountAdjustmentReservedLowerBound, reserved_lower, Option<PositionSize>;
+    HasAccountAdjustmentPendingUpperBound, pending_upper, Option<PositionSize>;
+    HasAccountAdjustmentPendingLowerBound, pending_lower, Option<PositionSize>;
 );
 
 /// Optional post-adjustment inclusive limits for account adjustment components.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountAdjustmentBounds {
     /// Allowed post-adjustment inclusive upper bound for total.
-    pub total_upper_bound: Option<PositionSize>,
+    pub total_upper: Option<PositionSize>,
     /// Allowed post-adjustment inclusive lower bound for total.
-    pub total_lower_bound: Option<PositionSize>,
+    pub total_lower: Option<PositionSize>,
     /// Allowed post-adjustment inclusive upper bound for reserved.
-    pub reserved_upper_bound: Option<PositionSize>,
+    pub reserved_upper: Option<PositionSize>,
     /// Allowed post-adjustment inclusive lower bound for reserved.
-    pub reserved_lower_bound: Option<PositionSize>,
+    pub reserved_lower: Option<PositionSize>,
     /// Allowed post-adjustment inclusive upper bound for pending.
-    pub pending_upper_bound: Option<PositionSize>,
+    pub pending_upper: Option<PositionSize>,
     /// Allowed post-adjustment inclusive lower bound for pending.
-    pub pending_lower_bound: Option<PositionSize>,
+    pub pending_lower: Option<PositionSize>,
 }
 
 /// Adds post-adjustment inclusive limits.
@@ -201,12 +201,12 @@ impl_request_has_field!(
     AccountAdjustmentBounds,
     WithAccountAdjustmentBounds,
     bounds,
-    HasAccountAdjustmentTotalUpperBound, total_upper_bound, Option<PositionSize>, total_upper_bound;
-    HasAccountAdjustmentTotalLowerBound, total_lower_bound, Option<PositionSize>, total_lower_bound;
-    HasAccountAdjustmentReservedUpperBound, reserved_upper_bound, Option<PositionSize>, reserved_upper_bound;
-    HasAccountAdjustmentReservedLowerBound, reserved_lower_bound, Option<PositionSize>, reserved_lower_bound;
-    HasAccountAdjustmentPendingUpperBound, pending_upper_bound, Option<PositionSize>, pending_upper_bound;
-    HasAccountAdjustmentPendingLowerBound, pending_lower_bound, Option<PositionSize>, pending_lower_bound;
+    HasAccountAdjustmentTotalUpperBound, total_upper, Option<PositionSize>, total_upper;
+    HasAccountAdjustmentTotalLowerBound, total_lower, Option<PositionSize>, total_lower;
+    HasAccountAdjustmentReservedUpperBound, reserved_upper, Option<PositionSize>, reserved_upper;
+    HasAccountAdjustmentReservedLowerBound, reserved_lower, Option<PositionSize>, reserved_lower;
+    HasAccountAdjustmentPendingUpperBound, pending_upper, Option<PositionSize>, pending_upper;
+    HasAccountAdjustmentPendingLowerBound, pending_lower, Option<PositionSize>, pending_lower;
 );
 impl_request_has_field_passthrough!(
     WithAccountAdjustmentBounds,
@@ -258,10 +258,10 @@ mod tests {
     #[test]
     fn direct_trait_access_for_position_operation() {
         let instrument = Instrument::new(
-            Asset::new("BTC").expect("must be valid"),
+            Asset::new("AAPL").expect("must be valid"),
             Asset::new("USD").expect("must be valid"),
         );
-        let collateral = Asset::new("USDT").expect("must be valid");
+        let collateral = Asset::new("USD").expect("must be valid");
         let leverage = Leverage::from_u16(25).expect("must be valid");
 
         let operation = AccountAdjustmentPositionOperation {
@@ -283,6 +283,24 @@ mod tests {
     }
 
     #[test]
+    fn direct_trait_access_for_position_operation_fractional_leverage() {
+        let leverage = Leverage::from_f64(100.5).expect("must be valid");
+        let operation = AccountAdjustmentPositionOperation {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("must be valid"),
+                Asset::new("USD").expect("must be valid"),
+            ),
+            collateral_asset: Asset::new("EUR").expect("must be valid"),
+            average_entry_price: Price::from_str("100").expect("must be valid"),
+            mode: PositionMode::Hedged,
+            leverage: Some(leverage),
+        };
+
+        assert_eq!(operation.position_leverage(), Ok(Some(leverage)));
+        assert_eq!(leverage.raw(), 1005);
+    }
+
+    #[test]
     fn direct_trait_access_for_amount_and_bounds() {
         let total = AdjustmentAmount::Absolute(PositionSize::from_str("4").expect("must be valid"));
         let reserved =
@@ -299,16 +317,16 @@ mod tests {
 
         let bound = PositionSize::from_str("10").expect("must be valid");
         let bounds = AccountAdjustmentBounds {
-            total_upper_bound: Some(bound),
-            total_lower_bound: None,
-            reserved_upper_bound: None,
-            reserved_lower_bound: None,
-            pending_upper_bound: None,
-            pending_lower_bound: None,
+            total_upper: Some(bound),
+            total_lower: None,
+            reserved_upper: None,
+            reserved_lower: None,
+            pending_upper: None,
+            pending_lower: None,
         };
 
-        assert_eq!(bounds.total_upper_bound(), Ok(Some(bound)));
-        assert_eq!(bounds.pending_lower_bound(), Ok(None));
+        assert_eq!(bounds.total_upper(), Ok(Some(bound)));
+        assert_eq!(bounds.pending_lower(), Ok(None));
     }
 
     #[test]
@@ -327,12 +345,12 @@ mod tests {
         let with_bounds = WithAccountAdjustmentBounds {
             inner: base,
             bounds: AccountAdjustmentBounds {
-                total_upper_bound: Some(PositionSize::from_str("8").expect("must be valid")),
-                total_lower_bound: None,
-                reserved_upper_bound: None,
-                reserved_lower_bound: None,
-                pending_upper_bound: None,
-                pending_lower_bound: None,
+                total_upper: Some(PositionSize::from_str("8").expect("must be valid")),
+                total_lower: None,
+                reserved_upper: None,
+                reserved_lower: None,
+                pending_upper: None,
+                pending_lower: None,
             },
         };
 
@@ -346,7 +364,7 @@ mod tests {
 
         assert!(with_balance.total().expect("must be available").is_some());
         assert!(with_balance
-            .total_upper_bound()
+            .total_upper()
             .expect("must be available")
             .is_some());
         assert_eq!(with_balance.balance_average_entry_price(), Ok(None));
@@ -355,7 +373,7 @@ mod tests {
             inner: with_balance,
             operation: AccountAdjustmentPositionOperation {
                 instrument: Instrument::new(
-                    Asset::new("ETH").expect("must be valid"),
+                    Asset::new("AAPL").expect("must be valid"),
                     Asset::new("USD").expect("must be valid"),
                 ),
                 collateral_asset: Asset::new("USD").expect("must be valid"),
@@ -377,10 +395,10 @@ mod tests {
     #[test]
     fn borrowed_values_come_from_original_fields() {
         let instrument = Instrument::new(
-            Asset::new("SOL").expect("must be valid"),
+            Asset::new("AAPL").expect("must be valid"),
             Asset::new("USD").expect("must be valid"),
         );
-        let collateral = Asset::new("USDC").expect("must be valid");
+        let collateral = Asset::new("EUR").expect("must be valid");
         let position = AccountAdjustmentPositionOperation {
             instrument: instrument.clone(),
             collateral_asset: collateral.clone(),
@@ -403,10 +421,10 @@ mod tests {
     #[test]
     fn outer_amount_wrapper_passthroughs_position_branch_traits() {
         let instrument = Instrument::new(
-            Asset::new("BTC").expect("must be valid"),
+            Asset::new("AAPL").expect("must be valid"),
             Asset::new("USD").expect("must be valid"),
         );
-        let collateral = Asset::new("USDT").expect("must be valid");
+        let collateral = Asset::new("EUR").expect("must be valid");
         let average = Price::from_str("123").expect("must be valid");
         let leverage = Leverage::from_u16(10).expect("must be valid");
         let total = AdjustmentAmount::Absolute(PositionSize::from_str("2").expect("must be valid"));
@@ -428,12 +446,12 @@ mod tests {
                     },
                 },
                 bounds: AccountAdjustmentBounds {
-                    total_upper_bound: Some(total_upper),
-                    total_lower_bound: None,
-                    reserved_upper_bound: None,
-                    reserved_lower_bound: None,
-                    pending_upper_bound: Some(pending_upper),
-                    pending_lower_bound: Some(pending_lower),
+                    total_upper: Some(total_upper),
+                    total_lower: None,
+                    reserved_upper: None,
+                    reserved_lower: None,
+                    pending_upper: Some(pending_upper),
+                    pending_lower: Some(pending_lower),
                 },
             },
             amount: AccountAdjustmentAmount {
@@ -450,9 +468,9 @@ mod tests {
         assert_eq!(request.average_entry_price(), Ok(average));
         assert_eq!(request.position_mode(), Ok(PositionMode::Hedged));
         assert_eq!(request.position_leverage(), Ok(Some(leverage)));
-        assert_eq!(request.total_upper_bound(), Ok(Some(total_upper)));
-        assert_eq!(request.pending_upper_bound(), Ok(Some(pending_upper)));
-        assert_eq!(request.pending_lower_bound(), Ok(Some(pending_lower)));
+        assert_eq!(request.total_upper(), Ok(Some(total_upper)));
+        assert_eq!(request.pending_upper(), Ok(Some(pending_upper)));
+        assert_eq!(request.pending_lower(), Ok(Some(pending_lower)));
     }
 
     #[test]
@@ -477,12 +495,12 @@ mod tests {
                     },
                 },
                 bounds: AccountAdjustmentBounds {
-                    total_upper_bound: None,
-                    total_lower_bound: Some(total_lower),
-                    reserved_upper_bound: Some(reserved_upper),
-                    reserved_lower_bound: Some(reserved_lower),
-                    pending_upper_bound: None,
-                    pending_lower_bound: None,
+                    total_upper: None,
+                    total_lower: Some(total_lower),
+                    reserved_upper: Some(reserved_upper),
+                    reserved_lower: Some(reserved_lower),
+                    pending_upper: None,
+                    pending_lower: None,
                 },
             },
             amount: AccountAdjustmentAmount {
@@ -496,8 +514,8 @@ mod tests {
         assert_eq!(request.pending(), Ok(Some(pending)));
         assert_eq!(request.balance_asset(), Ok(&asset));
         assert_eq!(request.balance_average_entry_price(), Ok(Some(average)));
-        assert_eq!(request.total_lower_bound(), Ok(Some(total_lower)));
-        assert_eq!(request.reserved_upper_bound(), Ok(Some(reserved_upper)));
-        assert_eq!(request.reserved_lower_bound(), Ok(Some(reserved_lower)));
+        assert_eq!(request.total_lower(), Ok(Some(total_lower)));
+        assert_eq!(request.reserved_upper(), Ok(Some(reserved_upper)));
+        assert_eq!(request.reserved_lower(), Ok(Some(reserved_lower)));
     }
 }

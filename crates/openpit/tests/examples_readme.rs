@@ -31,6 +31,8 @@ use openpit::{
 #[test]
 fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
     // Source: crates/openpit/README.md — Usage
+    // Shared with: pit.wiki/Getting-Started.md
+    // Keep README and wiki versions of this example in sync.
     let usd = Asset::new("USD")?;
 
     // 1. Configure policies.
@@ -61,7 +63,7 @@ fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
         instrument: Instrument::new(Asset::new("AAPL")?, usd.clone()),
         account_id: AccountId::from_u64(99224416),
         side: Side::Buy,
-        trade_amount: TradeAmount::Quantity(Quantity::from_str("100")?),
+        trade_amount: TradeAmount::Quantity(Quantity::from_f64(100.0)?),
         price: Some(Price::from_str("185")?),
     };
 
@@ -75,7 +77,10 @@ fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
     // holding the request object.
 
     // 5. Real pre-trade and risk control.
-    let reservation = request.execute()?;
+    let mut reservation = request.execute()?;
+
+    // Optional shortcut for the same two-stage flow:
+    // let reservation = engine.execute_pre_trade(order)?;
 
     // 6. If the request is successfully sent to the venue, it must be committed.
     // The rollback must be called otherwise to revert all performed reservations.

@@ -17,14 +17,19 @@ concurrency:
 jobs:
   rust:
     name: Rust checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.CI_RUST }}
           components: rustfmt, clippy
 
       - name: Cache Rust build
@@ -52,19 +57,25 @@ jobs:
 
   python:
     name: Python checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04 # Using as lowest Python version is 3.10 and 22 has it
     strategy:
       fail-fast: false
       matrix:
         python-version:
           - "3.10"
-          - "3.13"
+          - "3.14"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST }}
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -80,11 +91,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Lint Python
-        run: python -m ruff check bindings/python
-
       - name: Check Python formatting
-        run: python -m ruff format --check bindings/python
+        run: python -m black . --check
+
+      - name: Lint Python
+        run: python -m ruff check .
 
       - name: Install Python bindings
         run: pip install bindings/python/
@@ -94,3 +105,59 @@ jobs:
 
       - name: Run Python tests
         run: python -m pytest bindings/python/tests
+
+  go:
+    name: Go checks
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: bindings/go
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.CI_GO }}
+
+      - name: Build native runtime for Go integration tests
+        run: cargo build -p pit-ffi --release --locked --manifest-path ../../Cargo.toml
+
+      - name: Export runtime library path, loader path and CGO link flags
+        run: |
+          echo "OPENPIT_RUNTIME_LIBRARY_PATH=${GITHUB_WORKSPACE}/target/release/libpit_ffi.so" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=${GITHUB_WORKSPACE}/target/release${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-L${GITHUB_WORKSPACE}/target/release -lpit_ffi" >> "$GITHUB_ENV"
+
+      - name: Check formatting
+        run: |
+          test -z "$(gofmt -l .)"
+
+      - name: Vet
+        run: go vet -all ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v${{ env.CI_GOLANGCI_LINT }}
+          working-directory: bindings/go
+          args: --timeout=5m
+
+      - name: Test
+        run: go test ./...
+
+      - name: Test (race)
+        run: go test -race ./...

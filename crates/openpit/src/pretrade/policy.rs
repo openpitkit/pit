@@ -15,11 +15,12 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::{Context, Mutations, Reject, RejectCode, RejectScope};
+use super::{PreTradeContext, Reject, RejectCode, RejectScope, Rejects};
+use crate::Mutations;
 
 /// Main-stage pre-trade policy contract.
 ///
-/// Main-stage policies run during [`crate::pretrade::Request::execute`] after a
+/// Main-stage policies run during [`crate::pretrade::PreTradeRequest::execute`] after a
 /// request has already passed start-stage checks. They are intended for work
 /// that may need to reserve or mutate engine state and therefore must
 /// participate in commit/rollback handling.
@@ -37,27 +38,29 @@ use super::{Context, Mutations, Reject, RejectCode, RejectScope};
 /// delta-based undo or capture the value to restore at registration
 /// time.
 ///
-/// `O` is the order contract type visible through [`Context`]. `R` is the
+/// `O` is the order contract type visible in callbacks. `R` is the
 /// execution report contract type used for post-trade updates.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use openpit::pretrade::{Context, Mutations, Policy, Reject};
+/// use openpit::pretrade::{PreTradeContext, PreTradePolicy, Rejects};
+/// use openpit::Mutations;
 ///
 /// struct NoopPolicy;
 ///
-/// impl<O, R> Policy<O, R> for NoopPolicy {
-///     fn name(&self) -> &'static str {
+/// impl<O, R> PreTradePolicy<O, R> for NoopPolicy {
+///     fn name(&self) -> &str {
 ///         "NoopPolicy"
 ///     }
 ///
 ///     fn perform_pre_trade_check(
 ///         &self,
-///         _ctx: &Context<'_, O>,
+///         _ctx: &PreTradeContext,
+///         _order: &O,
 ///         _mutations: &mut Mutations,
-///         _rejects: &mut Vec<Reject>,
-///     ) {
+///     ) -> Result<(), Rejects> {
+///         Ok(())
 ///     }
 ///
 ///     fn apply_execution_report(&self, _report: &R) -> bool {
@@ -65,18 +68,17 @@ use super::{Context, Mutations, Reject, RejectCode, RejectScope};
 ///     }
 /// }
 /// ```
-pub trait Policy<O, R> {
+pub trait PreTradePolicy<O, R> {
     /// Stable policy name.
     ///
     /// Policy names must be unique across all policies registered in the same
     /// engine instance.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// Performs main-stage checks and can emit mutations or rejects.
     ///
-    /// Policies may inspect the immutable request [`Context`], append mutations
-    /// to be committed or rolled back later, and push one or more rejects into
-    /// `rejects`.
+    /// Policies may inspect the order, append mutations to be committed or
+    /// rolled back later, and return one or more rejects.
     ///
     /// # Rollback safety
     ///
@@ -86,10 +88,10 @@ pub trait Policy<O, R> {
     /// captured at registration time.
     fn perform_pre_trade_check(
         &self,
-        ctx: &Context<'_, O>,
+        ctx: &PreTradeContext,
+        order: &O,
         mutations: &mut Mutations,
-        rejects: &mut Vec<Reject>,
-    );
+    ) -> Result<(), Rejects>;
 
     /// Applies post-trade updates from execution reports.
     ///
@@ -100,8 +102,8 @@ pub trait Policy<O, R> {
     fn apply_execution_report(&self, report: &R) -> bool;
 }
 
-pub(crate) fn request_field_access_reject(
-    policy_name: &'static str,
+pub(crate) fn request_field_access_pre_trade_reject(
+    policy_name: &str,
     err: &crate::RequestFieldAccessError,
 ) -> Reject {
     Reject::new(
@@ -120,27 +122,28 @@ mod tests {
         WithFinancialImpact,
     };
     use crate::param::{AccountId, Asset, Fee, Pnl, Quantity, Side, TradeAmount};
-    use crate::pretrade::{Reject, RejectCode, RejectScope};
-    use crate::RequestFieldAccessError;
+    use crate::pretrade::{RejectCode, RejectScope, Rejects};
+    use crate::{Mutations, RequestFieldAccessError};
 
-    use super::{request_field_access_reject, Context, Mutations, Policy};
+    use super::{request_field_access_pre_trade_reject, PreTradeContext, PreTradePolicy};
 
     type TestOrder = OrderOperation;
     type TestReport = WithExecutionReportOperation<WithFinancialImpact<()>>;
 
     struct MainPolicyNoop;
 
-    impl Policy<TestOrder, TestReport> for MainPolicyNoop {
-        fn name(&self) -> &'static str {
+    impl PreTradePolicy<TestOrder, TestReport> for MainPolicyNoop {
+        fn name(&self) -> &str {
             "MainPolicyNoop"
         }
 
         fn perform_pre_trade_check(
             &self,
-            _ctx: &Context<'_, TestOrder>,
+            _ctx: &PreTradeContext,
+            _order: &TestOrder,
             _mutations: &mut Mutations,
-            _rejects: &mut Vec<Reject>,
-        ) {
+        ) -> Result<(), Rejects> {
+            Ok(())
         }
 
         fn apply_execution_report(&self, _report: &TestReport) -> bool {
@@ -185,20 +188,19 @@ mod tests {
             ),
             price: None,
         };
-        let ctx = Context::new(&order);
         let mut mutations = Mutations::new();
-        let mut rejects = Vec::new();
 
         assert_eq!(MainPolicyNoop.name(), "MainPolicyNoop");
-        MainPolicyNoop.perform_pre_trade_check(&ctx, &mut mutations, &mut rejects);
+        let result =
+            MainPolicyNoop.perform_pre_trade_check(&PreTradeContext::new(), &order, &mut mutations);
         assert!(mutations.is_empty());
-        assert!(rejects.is_empty());
+        assert!(result.is_ok());
     }
 
     #[test]
     fn request_field_access_error_is_mapped_to_reject_payload() {
         let err = RequestFieldAccessError::new("instrument");
-        let reject = request_field_access_reject("TestPolicy", &err);
+        let reject = request_field_access_pre_trade_reject("TestPolicy", &err);
 
         assert_eq!(reject.policy, "TestPolicy");
         assert_eq!(reject.scope, RejectScope::Order);

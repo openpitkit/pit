@@ -31,13 +31,13 @@ class StrategyOrder(openpit.Order):
         super().__init__(
             operation=openpit.OrderOperation(
                 instrument=openpit.Instrument(
-                    openpit.param.Asset("AAPL"),
-                    openpit.param.Asset("USD"),
+                    "AAPL",
+                    "USD",
                 ),
                 side=openpit.param.Side.BUY,
                 account_id=openpit.param.AccountId.from_u64(99224416),
-                trade_amount=openpit.param.Quantity("10"),
-                price=openpit.param.Price("25"),
+                trade_amount=openpit.param.TradeAmount.quantity(10),
+                price=openpit.param.Price(25),
             ),
         )
         self.strategy_tag = strategy_tag
@@ -53,15 +53,15 @@ class StrategyReport(openpit.ExecutionReport):
         super().__init__(
             operation=openpit.ExecutionReportOperation(
                 instrument=openpit.Instrument(
-                    openpit.param.Asset("AAPL"),
-                    openpit.param.Asset("USD"),
+                    "AAPL",
+                    "USD",
                 ),
                 side=openpit.param.Side.BUY,
                 account_id=openpit.param.AccountId.from_u64(99224416),
             ),
             financial_impact=openpit.FinancialImpact(
-                pnl=openpit.param.Pnl("5"),
-                fee=openpit.param.Fee("1"),
+                pnl=openpit.param.Pnl(5),
+                fee=openpit.param.Fee(1),
             ),
         )
         self.report_tag = report_tag
@@ -83,13 +83,13 @@ class CaptureStrategyOrderStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy)
     # @typing.override
     def check_pre_trade_start(
         self,
-        *,
+        ctx: openpit.pretrade.PreTradeContext,
         order: openpit.Order,
-    ) -> openpit.pretrade.PolicyReject | None:
+    ) -> tuple[openpit.pretrade.PolicyReject, ...]:
         strategy_order = typing.cast(StrategyOrder, order)
         self.orders.append(order)
         self.strategy_tags.append(strategy_order.strategy_tag)
-        return None
+        return ()
 
     # @typing.override
     def apply_execution_report(
@@ -103,7 +103,7 @@ class CaptureStrategyOrderStartPolicy(openpit.pretrade.CheckPreTradeStartPolicy)
         return False
 
 
-class StrategyTagPolicy(openpit.pretrade.Policy):
+class StrategyTagPolicy(openpit.pretrade.PreTradePolicy):
     # @typing.override
     def __init__(self) -> None:
         self.orders: list[openpit.Order] = []
@@ -119,11 +119,11 @@ class StrategyTagPolicy(openpit.pretrade.Policy):
     # @typing.override
     def perform_pre_trade_check(
         self,
-        *,
-        context: openpit.pretrade.PolicyContext,
+        ctx: openpit.pretrade.PreTradeContext,
+        order: openpit.Order,
     ) -> openpit.pretrade.PolicyDecision:
-        strategy_order = typing.cast(StrategyOrder, context.order)
-        self.orders.append(context.order)
+        strategy_order = typing.cast(StrategyOrder, order)
+        self.orders.append(order)
         self.strategy_tags.append(strategy_order.strategy_tag)
 
         if strategy_order.strategy_tag == "blocked":

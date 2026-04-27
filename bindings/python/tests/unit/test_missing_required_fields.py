@@ -20,13 +20,14 @@ def test_start_pre_trade_order_without_operation_produces_missing_field_reject()
     order = openpit.Order()
     result = engine.start_pre_trade(order=order)
     assert not result.ok
-    assert result.reject.code == openpit.pretrade.RejectCode.MISSING_REQUIRED_FIELD
+    assert len(result.rejects) == 1
+    assert result.rejects[0].code == openpit.pretrade.RejectCode.MISSING_REQUIRED_FIELD
 
 
 @pytest.mark.unit
 def test_start_pre_trade_pnl_kill_switch_without_operation_rejects() -> None:
     policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
-        settlement_asset=openpit.param.Asset("USD"),
+        settlement_asset="USD",
         barrier=openpit.param.Pnl("500"),
     )
     engine = (
@@ -35,7 +36,8 @@ def test_start_pre_trade_pnl_kill_switch_without_operation_rejects() -> None:
     order = openpit.Order()
     result = engine.start_pre_trade(order=order)
     assert not result.ok
-    assert result.reject.code == openpit.pretrade.RejectCode.MISSING_REQUIRED_FIELD
+    assert len(result.rejects) == 1
+    assert result.rejects[0].code == openpit.pretrade.RejectCode.MISSING_REQUIRED_FIELD
 
 
 @pytest.mark.unit
@@ -46,7 +48,7 @@ def test_apply_execution_report_without_financial_impact_does_not_panic() -> Non
     Kill switch must not trigger.
     """
     policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
-        settlement_asset=openpit.param.Asset("USD"),
+        settlement_asset="USD",
         barrier=openpit.param.Pnl("500"),
     )
     engine = (
@@ -55,8 +57,8 @@ def test_apply_execution_report_without_financial_impact_does_not_panic() -> Non
     report = openpit.ExecutionReport(
         operation=openpit.ExecutionReportOperation(
             instrument=openpit.Instrument(
-                openpit.param.Asset("AAPL"),
-                openpit.param.Asset("USD"),
+                "AAPL",
+                "USD",
             ),
             side=openpit.param.Side.BUY,
             account_id=openpit.param.AccountId.from_u64(99224416),
@@ -69,7 +71,7 @@ def test_apply_execution_report_without_financial_impact_does_not_panic() -> Non
 @pytest.mark.unit
 def test_start_pre_trade_order_size_limit_without_operation_rejects() -> None:
     limit = openpit.pretrade.policies.OrderSizeLimit(
-        settlement_asset=openpit.param.Asset("USD"),
+        settlement_asset="USD",
         max_quantity=openpit.param.Quantity("100"),
         max_notional=openpit.param.Volume("50000"),
     )
@@ -83,4 +85,5 @@ def test_start_pre_trade_order_size_limit_without_operation_rejects() -> None:
     order = openpit.Order()
     result = engine.start_pre_trade(order=order)
     assert not result.ok
-    assert result.reject.code == openpit.pretrade.RejectCode.MISSING_REQUIRED_FIELD
+    assert len(result.rejects) == 1
+    assert result.rejects[0].code == openpit.pretrade.RejectCode.MISSING_REQUIRED_FIELD

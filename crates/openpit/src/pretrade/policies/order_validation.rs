@@ -17,8 +17,10 @@
 
 use crate::core::HasTradeAmount;
 use crate::param::TradeAmount;
-use crate::pretrade::policy::request_field_access_reject;
-use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
+use crate::pretrade::policy::request_field_access_pre_trade_reject;
+use crate::pretrade::{
+    CheckPreTradeStartPolicy, PreTradeContext, Reject, RejectCode, RejectScope, Rejects,
+};
 
 /// Start-stage policy for basic order field validation.
 ///
@@ -41,14 +43,14 @@ impl<O, R> CheckPreTradeStartPolicy<O, R> for OrderValidationPolicy
 where
     O: HasTradeAmount,
 {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::NAME
     }
 
-    fn check_pre_trade_start(&self, order: &O) -> Result<(), Reject> {
+    fn check_pre_trade_start(&self, _ctx: &PreTradeContext, order: &O) -> Result<(), Rejects> {
         match order
             .trade_amount()
-            .map_err(|e| request_field_access_reject(Self::NAME, &e))?
+            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?
         {
             TradeAmount::Quantity(quantity) if quantity.is_zero() => {
                 return Err(Reject::new(
@@ -57,7 +59,8 @@ where
                     RejectCode::InvalidFieldValue,
                     "order quantity must be non-zero",
                     "requested quantity 0 is not allowed",
-                ));
+                )
+                .into());
             }
             TradeAmount::Volume(volume) if volume.is_zero() => {
                 return Err(Reject::new(
@@ -66,7 +69,8 @@ where
                     RejectCode::InvalidFieldValue,
                     "order volume must be non-zero",
                     "requested volume 0 is not allowed",
-                ));
+                )
+                .into());
             }
             _ => {}
         }
@@ -82,7 +86,7 @@ where
 mod tests {
     use crate::core::{Instrument, OrderOperation};
     use crate::param::{AccountId, Asset, Price, Quantity, Side, TradeAmount, Volume};
-    use crate::pretrade::{CheckPreTradeStartPolicy, RejectCode, RejectScope};
+    use crate::pretrade::{CheckPreTradeStartPolicy, PreTradeContext, RejectCode, RejectScope};
     use crate::RequestFieldAccessError;
 
     use super::OrderValidationPolicy;
@@ -104,8 +108,9 @@ mod tests {
         let reject = <OrderValidationPolicy as CheckPreTradeStartPolicy<
             OrderOperation,
             (),
-        >>::check_pre_trade_start(&policy, &order)
+        >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order)
         .expect_err("zero quantity must be rejected");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::InvalidFieldValue);
         assert_eq!(reject.reason, "order quantity must be non-zero");
@@ -129,8 +134,9 @@ mod tests {
         let reject = <OrderValidationPolicy as CheckPreTradeStartPolicy<
             OrderOperation,
             (),
-        >>::check_pre_trade_start(&policy, &order)
+        >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order)
         .expect_err("zero volume must be rejected");
+        let reject = &reject[0];
         assert_eq!(reject.code, RejectCode::InvalidFieldValue);
         assert_eq!(reject.reason, "order volume must be non-zero");
     }
@@ -154,7 +160,7 @@ mod tests {
         assert!(<OrderValidationPolicy as CheckPreTradeStartPolicy<
             OrderOperation,
             (),
-        >>::check_pre_trade_start(&policy, &order)
+        >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order)
         .is_ok());
     }
 
@@ -177,7 +183,7 @@ mod tests {
         assert!(<OrderValidationPolicy as CheckPreTradeStartPolicy<
             OrderOperation,
             (),
-        >>::check_pre_trade_start(&policy, &zero_price_order)
+        >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &zero_price_order)
         .is_ok());
 
         let negative_price_order = OrderOperation {
@@ -196,7 +202,7 @@ mod tests {
         assert!(<OrderValidationPolicy as CheckPreTradeStartPolicy<
             OrderOperation,
             (),
-        >>::check_pre_trade_start(&policy, &negative_price_order)
+        >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &negative_price_order)
         .is_ok());
     }
 
@@ -233,7 +239,7 @@ mod tests {
         assert!(<OrderValidationPolicy as CheckPreTradeStartPolicy<
             OrderOperation,
             (),
-        >>::check_pre_trade_start(&policy, &order)
+        >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order)
         .is_ok());
     }
 
@@ -248,8 +254,9 @@ mod tests {
         }
 
         let policy = OrderValidationPolicy::new();
-        let reject = <OrderValidationPolicy as CheckPreTradeStartPolicy<InvalidOrder, ()>>::check_pre_trade_start(&policy, &InvalidOrder)
+        let reject = <OrderValidationPolicy as CheckPreTradeStartPolicy<InvalidOrder, ()>>::check_pre_trade_start(&policy, &PreTradeContext::new(), &InvalidOrder)
             .expect_err("field access error must reject");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
         assert_eq!(reject.reason, "failed to access required field");

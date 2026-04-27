@@ -20,15 +20,12 @@ from __future__ import annotations
 import abc
 import collections.abc
 import dataclasses
-import typing
 
-from .. import AccountAdjustment, ExecutionReport, Order
-from ..param import AccountId
+from .. import ExecutionReport, Order
+from ..core import Mutation
 from ._enum import RejectScope
 
-@dataclasses.dataclass(frozen=True)
-class PolicyContext:
-    order: Order
+class PreTradeContext: ...
 
 @dataclasses.dataclass(frozen=True)
 class PolicyReject:
@@ -36,11 +33,6 @@ class PolicyReject:
     reason: str
     details: str
     scope: RejectScope = RejectScope.ORDER
-
-@dataclasses.dataclass(frozen=True)
-class Mutation:
-    commit: typing.Callable[[], None]
-    rollback: typing.Callable[[], None]
 
 @dataclasses.dataclass(frozen=True)
 class PolicyDecision:
@@ -64,26 +56,23 @@ class CheckPreTradeStartPolicy(abc.ABC):
     @abc.abstractmethod
     def name(self) -> str: ...
     @abc.abstractmethod
-    def check_pre_trade_start(self, order: Order) -> PolicyReject | None: ...
-    @abc.abstractmethod
-    def apply_execution_report(self, report: ExecutionReport) -> bool: ...
-
-class Policy(abc.ABC):
-    @property
-    @abc.abstractmethod
-    def name(self) -> str: ...
-    @abc.abstractmethod
-    def perform_pre_trade_check(self, context: PolicyContext) -> PolicyDecision: ...
-    @abc.abstractmethod
-    def apply_execution_report(self, report: ExecutionReport) -> bool: ...
-
-class AccountAdjustmentPolicy(abc.ABC):
-    @property
-    @abc.abstractmethod
-    def name(self) -> str: ...
-    @abc.abstractmethod
-    def apply_account_adjustment(
+    def check_pre_trade_start(
         self,
-        account_id: AccountId,
-        adjustment: AccountAdjustment,
-    ) -> PolicyReject | tuple[Mutation, ...] | None: ...
+        ctx: PreTradeContext,
+        order: Order,
+    ) -> collections.abc.Iterable[PolicyReject]: ...
+    @abc.abstractmethod
+    def apply_execution_report(self, report: ExecutionReport) -> bool: ...
+
+class PreTradePolicy(abc.ABC):
+    @property
+    @abc.abstractmethod
+    def name(self) -> str: ...
+    @abc.abstractmethod
+    def perform_pre_trade_check(
+        self,
+        ctx: PreTradeContext,
+        order: Order,
+    ) -> PolicyDecision: ...
+    @abc.abstractmethod
+    def apply_execution_report(self, report: ExecutionReport) -> bool: ...

@@ -19,7 +19,7 @@ use crate::core::request_trait::HasLock;
 use crate::impl_request_has_field;
 use crate::impl_request_has_field_passthrough;
 use crate::param::{AccountId, Fee, Pnl, PositionEffect, PositionSide, Quantity, Side, Trade};
-use crate::pretrade::Lock;
+use crate::pretrade::PreTradeLock;
 
 use super::{
     HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
@@ -66,7 +66,7 @@ impl_request_has_field_passthrough!(
     HasPnl, pnl, Pnl;
     HasFee, fee, Fee;
     HasLeavesQuantity, leaves_quantity, Quantity;
-    HasLock, lock, Lock;
+    HasLock, lock, PreTradeLock;
     HasOrderPrice, price, Option<crate::param::Price>;
     HasOrderPositionSide, position_side, Option<PositionSide>;
     HasOrderLeverage, leverage, Option<crate::param::Leverage>;
@@ -98,7 +98,7 @@ impl_request_has_field_passthrough!(
     HasClosePosition, close_position, bool;
     HasAutoBorrow, auto_borrow, bool;
     HasLeavesQuantity, leaves_quantity, Quantity;
-    HasLock, lock, Lock;
+    HasLock, lock, PreTradeLock;
     HasOrderPrice, price, Option<crate::param::Price>;
     HasOrderPositionSide, position_side, Option<PositionSide>;
     HasOrderLeverage, leverage, Option<crate::param::Leverage>;
@@ -178,7 +178,7 @@ pub struct ExecutionReportFillDetails {
     /// Remaining order quantity after this fill.
     pub leaves_quantity: Quantity,
     /// Order lock payload.
-    pub lock: Lock,
+    pub lock: PreTradeLock,
     /// Whether this report closes the report stream for the order.
     pub is_terminal: bool,
 }
@@ -198,7 +198,7 @@ impl_request_has_field!(
     fill,
     HasExecutionReportLastTrade, last_trade, Option<Trade>, last_trade;
     HasLeavesQuantity, leaves_quantity, Quantity, leaves_quantity;
-    HasLock, lock, Lock, lock;
+    HasLock, lock, PreTradeLock, lock;
     HasExecutionReportIsTerminal, is_terminal, bool, is_terminal;
 );
 impl_request_has_field_passthrough!(
@@ -218,7 +218,7 @@ impl_request_has_field_passthrough!(
     HasPnl, pnl, Pnl;
     HasFee, fee, Fee;
     HasLeavesQuantity, leaves_quantity, Quantity;
-    HasLock, lock, Lock;
+    HasLock, lock, PreTradeLock;
     HasOrderPrice, price, Option<crate::param::Price>;
     HasOrderPositionSide, position_side, Option<PositionSide>;
     HasOrderLeverage, leverage, Option<crate::param::Leverage>;
@@ -262,7 +262,7 @@ impl_request_has_field!(
 #[cfg(test)]
 mod tests {
     use crate::param::{AccountId, Quantity};
-    use crate::pretrade::Lock;
+    use crate::pretrade::PreTradeLock;
 
     use super::{
         ExecutionReportFillDetails, ExecutionReportOperation, WithExecutionReportOperation,
@@ -272,7 +272,7 @@ mod tests {
         ExecutionReportFillDetails {
             last_trade: None,
             leaves_quantity: Quantity::from_str("0").expect("must be valid"),
-            lock: Lock::default(),
+            lock: PreTradeLock::default(),
             is_terminal: false,
         }
     }
@@ -286,7 +286,7 @@ mod tests {
         let id = AccountId::from_u64(99);
         let op = ExecutionReportOperation {
             instrument: Instrument::new(
-                Asset::new("BTC").expect("must be valid"),
+                Asset::new("SPX").expect("must be valid"),
                 Asset::new("USD").expect("must be valid"),
             ),
             account_id: id,
@@ -309,7 +309,7 @@ mod tests {
             f.leaves_quantity,
             Quantity::from_str("0").expect("must be valid")
         );
-        assert_eq!(f.lock, Lock::default());
+        assert_eq!(f.lock, PreTradeLock::default());
         assert!(!f.is_terminal);
     }
 }

@@ -29,11 +29,11 @@
 //! The pipeline is intentionally explicit:
 //!
 //! 1. [`Engine::start_pre_trade`] runs start-stage policies and returns a
-//!    [`pretrade::Request`].
-//! 2. [`pretrade::Request::execute`] runs main-stage policies and returns a
-//!    [`pretrade::Reservation`].
-//! 3. [`pretrade::Reservation::commit`] or
-//!    [`pretrade::Reservation::rollback`] finalizes reserved state.
+//!    [`pretrade::PreTradeRequest`].
+//! 2. [`pretrade::PreTradeRequest::execute`] runs main-stage policies and returns a
+//!    [`pretrade::PreTradeReservation`].
+//! 3. [`pretrade::PreTradeReservation::commit`] or
+//!    [`pretrade::PreTradeReservation::rollback`] finalizes reserved state.
 //! 4. [`Engine::apply_execution_report`] feeds realized outcomes back into policies.
 //! 5. [`Engine::apply_account_adjustment`] validates non-trade adjustment batches.
 //!
@@ -49,26 +49,26 @@ pub mod pretrade;
 pub use core::engine::{AccountAdjustmentBatchError, Engine, EngineBuildError, EngineBuilder};
 pub use core::{
     AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
-    AccountAdjustmentPositionOperation, ExecutionReportFillDetails, ExecutionReportOperation,
-    ExecutionReportPositionImpact, FinancialImpact, HasAccountAdjustmentBalanceAverageEntryPrice,
-    HasAccountAdjustmentPending, HasAccountAdjustmentPendingLowerBound,
-    HasAccountAdjustmentPendingUpperBound, HasAccountAdjustmentPositionLeverage,
-    HasAccountAdjustmentReserved, HasAccountAdjustmentReservedLowerBound,
-    HasAccountAdjustmentReservedUpperBound, HasAccountAdjustmentTotal,
-    HasAccountAdjustmentTotalLowerBound, HasAccountAdjustmentTotalUpperBound, HasAccountId,
-    HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition, HasCollateralAsset,
-    HasExecutionReportIsTerminal, HasExecutionReportLastTrade, HasExecutionReportPositionEffect,
-    HasExecutionReportPositionSide, HasFee, HasInstrument, HasLeavesQuantity, HasLock,
-    HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl,
-    HasPositionInstrument, HasPositionMode, HasReduceOnly, HasSide, HasTradeAmount, Instrument,
-    OrderMargin, OrderOperation, OrderPosition, RequestFieldAccessError,
-    WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
-    WithAccountAdjustmentBounds, WithAccountAdjustmentPositionOperation,
-    WithExecutionReportFillDetails, WithExecutionReportOperation,
-    WithExecutionReportPositionImpact, WithFinancialImpact, WithOrderMargin, WithOrderOperation,
-    WithOrderPosition,
+    AccountAdjustmentContext, AccountAdjustmentPolicy, AccountAdjustmentPositionOperation,
+    ExecutionReportFillDetails, ExecutionReportOperation, ExecutionReportPositionImpact,
+    FinancialImpact, HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentPending,
+    HasAccountAdjustmentPendingLowerBound, HasAccountAdjustmentPendingUpperBound,
+    HasAccountAdjustmentPositionLeverage, HasAccountAdjustmentReserved,
+    HasAccountAdjustmentReservedLowerBound, HasAccountAdjustmentReservedUpperBound,
+    HasAccountAdjustmentTotal, HasAccountAdjustmentTotalLowerBound,
+    HasAccountAdjustmentTotalUpperBound, HasAccountId, HasAutoBorrow, HasAverageEntryPrice,
+    HasBalanceAsset, HasClosePosition, HasCollateralAsset, HasExecutionReportIsTerminal,
+    HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
+    HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
+    HasOrderPositionSide, HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode,
+    HasReduceOnly, HasSide, HasTradeAmount, Instrument, Mutation, Mutations, OrderMargin,
+    OrderOperation, OrderPosition, RequestFieldAccessError, WithAccountAdjustmentAmount,
+    WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
+    WithAccountAdjustmentPositionOperation, WithExecutionReportFillDetails,
+    WithExecutionReportOperation, WithExecutionReportPositionImpact, WithFinancialImpact,
+    WithOrderMargin, WithOrderOperation, WithOrderPosition,
 };
 #[cfg(feature = "derive")]
 pub use openpit_derive::RequestFields;
 pub use param::{AdjustmentAmount, PositionMode};
-pub use pretrade::{AccountAdjustmentPolicy, PostTradeResult};
+pub use pretrade::PostTradeResult;

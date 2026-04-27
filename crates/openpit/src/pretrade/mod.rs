@@ -21,20 +21,16 @@
 //! sent to an external execution system:
 //!
 //! - [`CheckPreTradeStartPolicy`] models fast admission checks;
-//! - [`Policy`] models deeper stateful checks;
-//! - [`AccountAdjustmentPolicy`] models account-adjustment batch checks;
-//! - [`Request`] is the single-use handle returned after start-stage success;
-//! - [`Reservation`] is the finalizable handle for reserved state;
+//! - [`PreTradePolicy`] models deeper stateful checks;
+//! - [`PreTradeRequest`] is the single-use handle returned after start-stage success;
+//! - [`PreTradeReservation`] is the finalizable handle for reserved state;
 //!
-//! Custom controls typically start from the policy traits plus [`Context`] and
-//! [`Mutations`].
+//! Custom controls typically start from the policy traits plus [`PreTradeContext`].
 
-mod account_adjustment_policy;
 mod check_pre_trade_start_policy;
 mod context;
 pub(crate) mod handle;
 mod lock;
-mod mutation;
 pub mod policies;
 mod policy;
 mod post_trade_result;
@@ -43,13 +39,11 @@ mod request;
 mod reservation;
 pub(crate) mod start_pre_trade_time;
 
-pub use account_adjustment_policy::AccountAdjustmentPolicy;
 pub use check_pre_trade_start_policy::CheckPreTradeStartPolicy;
-pub use context::Context;
-pub use lock::Lock;
-pub use mutation::{Mutation, Mutations};
-pub use policy::Policy;
+pub use context::PreTradeContext;
+pub use lock::PreTradeLock;
+pub use policy::PreTradePolicy;
 pub use post_trade_result::PostTradeResult;
 pub use reject::{Reject, RejectCode, RejectScope, Rejects};
-pub use request::Request;
-pub use reservation::Reservation;
+pub use request::PreTradeRequest;
+pub use reservation::PreTradeReservation;

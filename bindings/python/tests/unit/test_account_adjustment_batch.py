@@ -12,27 +12,28 @@ def _make_adjustment(*, pending: str | None = None) -> openpit.AccountAdjustment
         )
     return openpit.AccountAdjustment(
         operation=openpit.AccountAdjustmentBalanceOperation(
-            asset=openpit.param.Asset("USD"),
+            asset="USD",
         ),
         amount=amount,
     )
 
 
-class PassAdjustmentPolicy(openpit.pretrade.AccountAdjustmentPolicy):
+class PassAdjustmentPolicy(openpit.AccountAdjustmentPolicy):
     @property
     def name(self) -> str:
         return "PassAdjustmentPolicy"
 
     def apply_account_adjustment(
         self,
+        ctx: openpit.AccountAdjustmentContext,
         account_id: openpit.param.AccountId,
         adjustment: openpit.AccountAdjustment,
-    ) -> openpit.pretrade.PolicyReject | None:
+    ) -> list[openpit.pretrade.PolicyReject] | None:
         _ = account_id, adjustment
         return None
 
 
-class RejectOnPendingPolicy(openpit.pretrade.AccountAdjustmentPolicy):
+class RejectOnPendingPolicy(openpit.AccountAdjustmentPolicy):
     def __init__(self) -> None:
         self.seen_pending: list[str | None] = []
 
@@ -42,27 +43,35 @@ class RejectOnPendingPolicy(openpit.pretrade.AccountAdjustmentPolicy):
 
     def apply_account_adjustment(
         self,
+        ctx: openpit.AccountAdjustmentContext,
         account_id: openpit.param.AccountId,
         adjustment: openpit.AccountAdjustment,
-    ) -> openpit.pretrade.PolicyReject | None:
+    ) -> list[openpit.pretrade.PolicyReject] | None:
         _ = account_id
         pending = (
             None
             if adjustment.amount is None or adjustment.amount.pending is None
-            else adjustment.amount.pending.value.value
+            else (
+                str(adjustment.amount.pending.as_delta)
+                if adjustment.amount.pending.is_delta
+                and adjustment.amount.pending.as_delta is not None
+                else None
+            )
         )
         self.seen_pending.append(pending)
         if pending == "2":
-            return openpit.pretrade.PolicyReject(
-                code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
-                reason="blocked",
-                details="pending value 2 is forbidden",
-                scope=openpit.pretrade.RejectScope.ACCOUNT,
-            )
+            return [
+                openpit.pretrade.PolicyReject(
+                    code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
+                    reason="blocked",
+                    details="pending value 2 is forbidden",
+                    scope=openpit.pretrade.RejectScope.ACCOUNT,
+                )
+            ]
         return None
 
 
-class MutatingAdjustmentPolicy(openpit.pretrade.AccountAdjustmentPolicy):
+class MutatingAdjustmentPolicy(openpit.AccountAdjustmentPolicy):
     """Policy that registers a kill-switch mutation on every adjustment."""
 
     @property
@@ -71,12 +80,13 @@ class MutatingAdjustmentPolicy(openpit.pretrade.AccountAdjustmentPolicy):
 
     def apply_account_adjustment(
         self,
+        ctx: openpit.AccountAdjustmentContext,
         account_id: openpit.param.AccountId,
         adjustment: openpit.AccountAdjustment,
-    ) -> openpit.pretrade.PolicyReject | tuple[openpit.pretrade.Mutation, ...] | None:
+    ) -> openpit.pretrade.PolicyReject | tuple[openpit.Mutation, ...] | None:
         _ = account_id, adjustment
         return (
-            openpit.pretrade.Mutation(
+            openpit.Mutation(
                 commit=lambda: None,
                 rollback=lambda: None,
             ),
@@ -98,7 +108,7 @@ def test_account_adjustment_policy_passes_when_none_returned() -> None:
 
     assert result.ok
     assert result.failed_index is None
-    assert result.reject is None
+    assert result.rejects == []
     assert result
 
 
@@ -117,9 +127,9 @@ def test_account_adjustment_policy_rejects_batch() -> None:
 
     assert not result.ok
     assert result.failed_index == 0
-    assert result.reject is not None
-    assert result.reject.code == openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED
-    assert result.reject.reason == "blocked"
+    assert len(result.rejects) == 1
+    assert result.rejects[0].code == openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED
+    assert result.rejects[0].reason == "blocked"
     assert not result
 
 
@@ -193,4 +203,26 @@ def test_account_adjustment_mutations_do_not_prevent_reject() -> None:
 
     assert not result.ok
     assert result.failed_index == 0
-    assert result.reject is not None
+    assert len(result.rejects) == 1
+
+
+@pytest.mark.unit
+def test_account_adjustment_rejects_raw_account_id_int() -> None:
+    engine = openpit.Engine.builder().build()
+
+    with pytest.raises(TypeError, match="account_id must be openpit.param.AccountId"):
+        engine.apply_account_adjustment(
+            account_id=99224416,  # type: ignore[arg-type]
+            adjustments=[_make_adjustment()],
+        )
+
+
+@pytest.mark.unit
+def test_account_adjustment_rejects_raw_account_id_str() -> None:
+    engine = openpit.Engine.builder().build()
+
+    with pytest.raises(TypeError, match="account_id must be openpit.param.AccountId"):
+        engine.apply_account_adjustment(
+            account_id="my-account",  # type: ignore[arg-type]
+            adjustments=[_make_adjustment()],
+        )

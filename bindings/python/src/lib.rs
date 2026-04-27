@@ -1,6 +1,3 @@
-#![allow(unexpected_cfgs)]
-#![allow(clippy::useless_conversion)]
-
 // Copyright The Pit Project Owners. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -18,27 +15,32 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use std::cell::RefCell;
+#![allow(unexpected_cfgs)]
+#![allow(clippy::useless_conversion)]
+
+use std::cell::{Cell, RefCell};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::thread_local;
 use std::time::Duration;
 
 use openpit::param::{
-    AccountId, AdjustmentAmount, Asset, CashFlow, Fee, Leverage, Pnl, PositionEffect, PositionMode,
-    PositionSide, PositionSize, Price, Quantity, Side, Trade, TradeAmount, Volume,
+    AccountId, AdjustmentAmount, Asset, CashFlow, Fee, Leverage, Notional, Pnl, PositionEffect,
+    PositionMode, PositionSide, PositionSize, Price, Quantity, RoundingStrategy, Side, Trade,
+    TradeAmount, Volume,
 };
 use openpit::pretrade::policies::OrderValidationPolicy;
 use openpit::pretrade::policies::PnlKillSwitchPolicy;
 use openpit::pretrade::policies::RateLimitPolicy;
 use openpit::pretrade::policies::{OrderSizeLimit, OrderSizeLimitPolicy};
 use openpit::pretrade::{
-    AccountAdjustmentPolicy, CheckPreTradeStartPolicy, Mutation, Mutations, Policy, Reject,
-    RejectCode, RejectScope, Request, Reservation,
+    CheckPreTradeStartPolicy, PreTradeContext, PreTradeLock, PreTradePolicy, PreTradeRequest,
+    PreTradeReservation, Reject, RejectCode, RejectScope, Rejects,
 };
 use openpit::{
     AccountAdjustmentBalanceOperation, AccountAdjustmentPositionOperation, Engine,
-    EngineBuildError, ExecutionReportOperation, ExecutionReportPositionImpact, FinancialImpact,
-    HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentPending,
+    EngineBuildError, HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentPending,
     HasAccountAdjustmentPendingLowerBound, HasAccountAdjustmentPendingUpperBound,
     HasAccountAdjustmentPositionLeverage, HasAccountAdjustmentReserved,
     HasAccountAdjustmentReservedLowerBound, HasAccountAdjustmentReservedUpperBound,
@@ -48,20 +50,27 @@ use openpit::{
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
     HasFee, HasInstrument, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
     HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode, HasReduceOnly, HasSide,
-    HasTradeAmount, Instrument, OrderMargin, OrderOperation, OrderPosition, PostTradeResult,
-    RequestFieldAccessError,
+    HasTradeAmount, Instrument, Mutation, Mutations, PostTradeResult, RequestFieldAccessError,
 };
+use openpit::{AccountAdjustmentContext, AccountAdjustmentPolicy};
 use pit_interop::{
-    AccountAdjustmentGroupAccess, ExecutionReportGroupAccess, GuardedOrderSizeLimit,
-    GuardedOrderValidation, GuardedPnlKillSwitch, GuardedRateLimit, OrderGroupAccess,
+    AccountAdjustmentAmountAccess, AccountAdjustmentBoundsAccess, AccountAdjustmentOperationAccess,
+    ExecutionReportFillAccess, ExecutionReportOperationAccess, ExecutionReportPositionImpactAccess,
+    FinancialImpactAccess, OrderMarginAccess, OrderOperationAccess, OrderPositionAccess,
+    PopulatedAccountAdjustmentOperation, PopulatedExecutionReportFill,
+    PopulatedExecutionReportOperation, PopulatedExecutionReportPositionImpact,
+    PopulatedFinancialImpact, PopulatedOrderMargin, PopulatedOrderOperation,
+    PopulatedOrderPosition,
 };
 use pyo3::basic::CompareOp;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyInt, PyModule};
+use rust_decimal::prelude::ToPrimitive;
 
 create_exception!(openpit, RejectError, PyException);
+create_exception!(openpit, ParamError, PyValueError);
 
 thread_local! {
     static PY_CALLBACK_ERROR: RefCell<Option<PyErr>> = const { RefCell::new(None) };
@@ -83,394 +92,269 @@ fn clear_python_callback_error() {
     });
 }
 
-struct PythonOrder {
-    operation: Option<OrderOperation>,
-    position: Option<OrderPosition>,
-    margin: Option<OrderMargin>,
+fn create_param_error(message: impl Into<String>) -> PyErr {
+    ParamError::new_err(message.into())
+}
+
+struct Order {
+    operation: OrderOperationAccess,
+    position: OrderPositionAccess,
+    margin: OrderMarginAccess,
     original: Py<PyAny>,
 }
 
-impl PythonOrder {
+impl Order {
     fn original(&self, py: Python<'_>) -> Py<PyAny> {
         self.original.clone_ref(py)
     }
 }
 
-impl HasInstrument for PythonOrder {
+impl HasInstrument for Order {
     fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
-        self.operation
-            .as_ref()
-            .map(|op| &op.instrument)
-            .ok_or_else(|| RequestFieldAccessError::new("instrument"))
+        self.operation.instrument()
     }
 }
 
-impl HasSide for PythonOrder {
+impl HasSide for Order {
     fn side(&self) -> Result<Side, RequestFieldAccessError> {
-        self.operation
-            .as_ref()
-            .map(|op| op.side)
-            .ok_or_else(|| RequestFieldAccessError::new("side"))
+        self.operation.side()
     }
 }
 
-impl HasAccountId for PythonOrder {
+impl HasAccountId for Order {
     fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
-        self.operation
-            .as_ref()
-            .map(|op| op.account_id)
-            .ok_or_else(|| RequestFieldAccessError::new("account_id"))
+        self.operation.account_id()
     }
 }
 
-impl HasTradeAmount for PythonOrder {
+impl HasTradeAmount for Order {
     fn trade_amount(&self) -> Result<TradeAmount, RequestFieldAccessError> {
-        self.operation
-            .as_ref()
-            .map(|op| op.trade_amount)
-            .ok_or_else(|| RequestFieldAccessError::new("trade_amount"))
+        self.operation.trade_amount()
     }
 }
 
-impl HasOrderPrice for PythonOrder {
+impl HasOrderPrice for Order {
     fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
-        Ok(self.operation.as_ref().and_then(|op| op.price))
+        self.operation.price()
     }
 }
 
-impl HasOrderPositionSide for PythonOrder {
+impl HasOrderPositionSide for Order {
     fn position_side(&self) -> Result<Option<PositionSide>, RequestFieldAccessError> {
-        Ok(self.position.as_ref().and_then(|pos| pos.position_side))
+        self.position.position_side()
     }
 }
 
-impl HasReduceOnly for PythonOrder {
+impl HasReduceOnly for Order {
     fn reduce_only(&self) -> Result<bool, RequestFieldAccessError> {
-        Ok(self.position.as_ref().is_some_and(|pos| pos.reduce_only))
+        self.position.reduce_only()
     }
 }
 
-impl HasClosePosition for PythonOrder {
+impl HasClosePosition for Order {
     fn close_position(&self) -> Result<bool, RequestFieldAccessError> {
-        Ok(self.position.as_ref().is_some_and(|pos| pos.close_position))
+        self.position.close_position()
     }
 }
 
-impl HasOrderLeverage for PythonOrder {
+impl HasOrderLeverage for Order {
     fn leverage(&self) -> Result<Option<Leverage>, RequestFieldAccessError> {
-        Ok(self.margin.as_ref().and_then(|m| m.leverage))
+        self.margin.leverage()
     }
 }
 
-impl HasOrderCollateralAsset for PythonOrder {
+impl HasOrderCollateralAsset for Order {
     fn collateral_asset(&self) -> Result<Option<&Asset>, RequestFieldAccessError> {
-        Ok(self
-            .margin
-            .as_ref()
-            .and_then(|m| m.collateral_asset.as_ref()))
+        self.margin.collateral_asset()
     }
 }
 
-impl HasAutoBorrow for PythonOrder {
+impl HasAutoBorrow for Order {
     fn auto_borrow(&self) -> Result<bool, RequestFieldAccessError> {
-        Ok(self.margin.as_ref().is_some_and(|m| m.auto_borrow))
+        self.margin.auto_borrow()
     }
 }
 
-impl OrderGroupAccess for PythonOrder {
-    fn has_operation(&self) -> bool {
-        self.operation.is_some()
-    }
-}
-
-struct PythonFillData {
-    last_trade: Option<Trade>,
-    is_terminal: bool,
-}
-
-struct PythonExecutionReport {
-    operation: Option<ExecutionReportOperation>,
-    financial_impact: Option<FinancialImpact>,
-    fill: Option<PythonFillData>,
-    position_impact: Option<ExecutionReportPositionImpact>,
+struct ExecutionReport {
+    operation: ExecutionReportOperationAccess,
+    financial_impact: FinancialImpactAccess,
+    fill: ExecutionReportFillAccess,
+    position_impact: ExecutionReportPositionImpactAccess,
     original: Py<PyAny>,
 }
 
-impl PythonExecutionReport {
+impl ExecutionReport {
     fn original(&self, py: Python<'_>) -> Py<PyAny> {
         self.original.clone_ref(py)
     }
 }
 
-impl HasInstrument for PythonExecutionReport {
+impl HasInstrument for ExecutionReport {
     fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
-        self.operation
-            .as_ref()
-            .map(|op| &op.instrument)
-            .ok_or_else(|| RequestFieldAccessError::new("instrument"))
+        self.operation.instrument()
     }
 }
 
-impl HasSide for PythonExecutionReport {
+impl HasSide for ExecutionReport {
     fn side(&self) -> Result<Side, RequestFieldAccessError> {
-        self.operation
-            .as_ref()
-            .map(|op| op.side)
-            .ok_or_else(|| RequestFieldAccessError::new("side"))
+        self.operation.side()
     }
 }
 
-impl HasAccountId for PythonExecutionReport {
+impl HasAccountId for ExecutionReport {
     fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
-        self.operation
-            .as_ref()
-            .map(|op| op.account_id)
-            .ok_or_else(|| RequestFieldAccessError::new("account_id"))
+        self.operation.account_id()
     }
 }
 
-impl HasPnl for PythonExecutionReport {
+impl HasPnl for ExecutionReport {
     fn pnl(&self) -> Result<Pnl, RequestFieldAccessError> {
-        self.financial_impact
-            .as_ref()
-            .map(|fi| fi.pnl)
-            .ok_or_else(|| RequestFieldAccessError::new("pnl"))
+        self.financial_impact.pnl()
     }
 }
 
-impl HasFee for PythonExecutionReport {
+impl HasFee for ExecutionReport {
     fn fee(&self) -> Result<Fee, RequestFieldAccessError> {
-        self.financial_impact
-            .as_ref()
-            .map(|fi| fi.fee)
-            .ok_or_else(|| RequestFieldAccessError::new("fee"))
+        self.financial_impact.fee()
     }
 }
 
-impl HasExecutionReportLastTrade for PythonExecutionReport {
+impl HasExecutionReportLastTrade for ExecutionReport {
     fn last_trade(&self) -> Result<Option<Trade>, RequestFieldAccessError> {
-        Ok(self.fill.as_ref().and_then(|f| f.last_trade))
+        self.fill.last_trade()
     }
 }
 
-impl HasExecutionReportIsTerminal for PythonExecutionReport {
+impl HasExecutionReportIsTerminal for ExecutionReport {
     fn is_terminal(&self) -> Result<bool, RequestFieldAccessError> {
-        Ok(self.fill.as_ref().is_some_and(|f| f.is_terminal))
+        self.fill.is_terminal()
     }
 }
 
-impl HasExecutionReportPositionEffect for PythonExecutionReport {
+impl HasExecutionReportPositionEffect for ExecutionReport {
     fn position_effect(&self) -> Result<Option<PositionEffect>, RequestFieldAccessError> {
-        Ok(self
-            .position_impact
-            .as_ref()
-            .and_then(|pi| pi.position_effect))
+        self.position_impact.position_effect()
     }
 }
 
-impl HasExecutionReportPositionSide for PythonExecutionReport {
+impl HasExecutionReportPositionSide for ExecutionReport {
     fn position_side(&self) -> Result<Option<PositionSide>, RequestFieldAccessError> {
-        Ok(self
-            .position_impact
-            .as_ref()
-            .and_then(|pi| pi.position_side))
+        self.position_impact.position_side()
     }
 }
 
-impl ExecutionReportGroupAccess for PythonExecutionReport {
-    fn has_operation(&self) -> bool {
-        self.operation.is_some()
-    }
-    fn has_financial_impact(&self) -> bool {
-        self.financial_impact.is_some()
-    }
-}
-
-struct PythonAccountAdjustment {
-    operation: Option<PythonAccountAdjustmentOperation>,
-    amount: Option<openpit::AccountAdjustmentAmount>,
-    bounds: Option<openpit::AccountAdjustmentBounds>,
+struct AccountAdjustment {
+    operation: AccountAdjustmentOperationAccess,
+    amount: AccountAdjustmentAmountAccess,
+    bounds: AccountAdjustmentBoundsAccess,
     original: Py<PyAny>,
 }
 
-enum PythonAccountAdjustmentOperation {
-    Balance(AccountAdjustmentBalanceOperation),
-    Position(AccountAdjustmentPositionOperation),
-}
-
-impl PythonAccountAdjustment {
+impl AccountAdjustment {
     fn original(&self, py: Python<'_>) -> Py<PyAny> {
         self.original.clone_ref(py)
     }
 }
 
-impl HasBalanceAsset for PythonAccountAdjustment {
+impl HasBalanceAsset for AccountAdjustment {
     fn balance_asset(&self) -> Result<&Asset, RequestFieldAccessError> {
-        match self.operation.as_ref() {
-            Some(PythonAccountAdjustmentOperation::Balance(operation)) => Ok(&operation.asset),
-            _ => Err(RequestFieldAccessError::new("balance_asset")),
-        }
+        self.operation.balance_asset()
     }
 }
 
-impl HasAccountAdjustmentBalanceAverageEntryPrice for PythonAccountAdjustment {
+impl HasAccountAdjustmentBalanceAverageEntryPrice for AccountAdjustment {
     fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
-        match self.operation.as_ref() {
-            Some(PythonAccountAdjustmentOperation::Balance(operation)) => {
-                Ok(operation.average_entry_price)
-            }
-            _ => Err(RequestFieldAccessError::new("balance_average_entry_price")),
-        }
+        self.operation.balance_average_entry_price()
     }
 }
 
-impl HasPositionInstrument for PythonAccountAdjustment {
+impl HasPositionInstrument for AccountAdjustment {
     fn position_instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
-        match self.operation.as_ref() {
-            Some(PythonAccountAdjustmentOperation::Position(operation)) => {
-                Ok(&operation.instrument)
-            }
-            _ => Err(RequestFieldAccessError::new("position_instrument")),
-        }
+        self.operation.position_instrument()
     }
 }
 
-impl HasCollateralAsset for PythonAccountAdjustment {
+impl HasCollateralAsset for AccountAdjustment {
     fn collateral_asset(&self) -> Result<&Asset, RequestFieldAccessError> {
-        match self.operation.as_ref() {
-            Some(PythonAccountAdjustmentOperation::Position(operation)) => {
-                Ok(&operation.collateral_asset)
-            }
-            _ => Err(RequestFieldAccessError::new("collateral_asset")),
-        }
+        self.operation.collateral_asset()
     }
 }
 
-impl HasAverageEntryPrice for PythonAccountAdjustment {
+impl HasAverageEntryPrice for AccountAdjustment {
     fn average_entry_price(&self) -> Result<Price, RequestFieldAccessError> {
-        match self.operation.as_ref() {
-            Some(PythonAccountAdjustmentOperation::Position(operation)) => {
-                Ok(operation.average_entry_price)
-            }
-            _ => Err(RequestFieldAccessError::new("average_entry_price")),
-        }
+        self.operation.average_entry_price()
     }
 }
 
-impl HasPositionMode for PythonAccountAdjustment {
+impl HasPositionMode for AccountAdjustment {
     fn position_mode(&self) -> Result<PositionMode, RequestFieldAccessError> {
-        match self.operation.as_ref() {
-            Some(PythonAccountAdjustmentOperation::Position(operation)) => Ok(operation.mode),
-            _ => Err(RequestFieldAccessError::new("position_mode")),
-        }
+        self.operation.position_mode()
     }
 }
 
-impl HasAccountAdjustmentPositionLeverage for PythonAccountAdjustment {
+impl HasAccountAdjustmentPositionLeverage for AccountAdjustment {
     fn position_leverage(&self) -> Result<Option<Leverage>, RequestFieldAccessError> {
-        match self.operation.as_ref() {
-            Some(PythonAccountAdjustmentOperation::Position(operation)) => Ok(operation.leverage),
-            _ => Err(RequestFieldAccessError::new("position_leverage")),
-        }
+        self.operation.position_leverage()
     }
 }
 
-impl HasAccountAdjustmentTotal for PythonAccountAdjustment {
+impl HasAccountAdjustmentTotal for AccountAdjustment {
     fn total(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
-        self.amount
-            .as_ref()
-            .map(|amount| amount.total)
-            .ok_or_else(|| RequestFieldAccessError::new("total"))
+        self.amount.total()
     }
 }
 
-impl HasAccountAdjustmentReserved for PythonAccountAdjustment {
+impl HasAccountAdjustmentReserved for AccountAdjustment {
     fn reserved(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
-        self.amount
-            .as_ref()
-            .map(|amount| amount.reserved)
-            .ok_or_else(|| RequestFieldAccessError::new("reserved"))
+        self.amount.reserved()
     }
 }
 
-impl HasAccountAdjustmentPending for PythonAccountAdjustment {
+impl HasAccountAdjustmentPending for AccountAdjustment {
     fn pending(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
-        self.amount
-            .as_ref()
-            .map(|amount| amount.pending)
-            .ok_or_else(|| RequestFieldAccessError::new("pending"))
+        self.amount.pending()
     }
 }
 
-impl HasAccountAdjustmentTotalUpperBound for PythonAccountAdjustment {
-    fn total_upper_bound(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
-        self.bounds
-            .as_ref()
-            .map(|bounds| bounds.total_upper_bound)
-            .ok_or_else(|| RequestFieldAccessError::new("total_upper_bound"))
+impl HasAccountAdjustmentTotalUpperBound for AccountAdjustment {
+    fn total_upper(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        self.bounds.total_upper()
     }
 }
 
-impl HasAccountAdjustmentTotalLowerBound for PythonAccountAdjustment {
-    fn total_lower_bound(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
-        self.bounds
-            .as_ref()
-            .map(|bounds| bounds.total_lower_bound)
-            .ok_or_else(|| RequestFieldAccessError::new("total_lower_bound"))
+impl HasAccountAdjustmentTotalLowerBound for AccountAdjustment {
+    fn total_lower(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        self.bounds.total_lower()
     }
 }
 
-impl HasAccountAdjustmentReservedUpperBound for PythonAccountAdjustment {
-    fn reserved_upper_bound(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
-        self.bounds
-            .as_ref()
-            .map(|bounds| bounds.reserved_upper_bound)
-            .ok_or_else(|| RequestFieldAccessError::new("reserved_upper_bound"))
+impl HasAccountAdjustmentReservedUpperBound for AccountAdjustment {
+    fn reserved_upper(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        self.bounds.reserved_upper()
     }
 }
 
-impl HasAccountAdjustmentReservedLowerBound for PythonAccountAdjustment {
-    fn reserved_lower_bound(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
-        self.bounds
-            .as_ref()
-            .map(|bounds| bounds.reserved_lower_bound)
-            .ok_or_else(|| RequestFieldAccessError::new("reserved_lower_bound"))
+impl HasAccountAdjustmentReservedLowerBound for AccountAdjustment {
+    fn reserved_lower(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        self.bounds.reserved_lower()
     }
 }
 
-impl HasAccountAdjustmentPendingUpperBound for PythonAccountAdjustment {
-    fn pending_upper_bound(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
-        self.bounds
-            .as_ref()
-            .map(|bounds| bounds.pending_upper_bound)
-            .ok_or_else(|| RequestFieldAccessError::new("pending_upper_bound"))
+impl HasAccountAdjustmentPendingUpperBound for AccountAdjustment {
+    fn pending_upper(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        self.bounds.pending_upper()
     }
 }
 
-impl HasAccountAdjustmentPendingLowerBound for PythonAccountAdjustment {
-    fn pending_lower_bound(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
-        self.bounds
-            .as_ref()
-            .map(|bounds| bounds.pending_lower_bound)
-            .ok_or_else(|| RequestFieldAccessError::new("pending_lower_bound"))
-    }
-}
-
-impl AccountAdjustmentGroupAccess for PythonAccountAdjustment {
-    fn has_operation(&self) -> bool {
-        self.operation.is_some()
-    }
-    fn has_amount(&self) -> bool {
-        self.amount.is_some()
-    }
-    fn has_bounds(&self) -> bool {
-        self.bounds.is_some()
+impl HasAccountAdjustmentPendingLowerBound for AccountAdjustment {
+    fn pending_lower(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        self.bounds.pending_lower()
     }
 }
 
 #[pyclass(name = "Engine", module = "openpit", unsendable)]
 struct PyEngine {
-    inner: Engine<PythonOrder, PythonExecutionReport, PythonAccountAdjustment>,
+    inner: Engine<Order, ExecutionReport, AccountAdjustment>,
 }
 
 #[pymethods]
@@ -505,17 +389,17 @@ impl PyEngine {
                             inner: RefCell::new(Some(request)),
                         },
                     )?),
-                    reject: None,
+                    rejects: Vec::new(),
                 })
             }
-            Err(reject) => {
+            Err(rejects) => {
                 if let Some(error) = take_python_callback_error() {
                     return Err(error);
                 }
 
                 Ok(PyStartPreTradeResult {
                     request: None,
-                    reject: Some(convert_reject(&reject)),
+                    rejects: rejects.iter().map(convert_reject).collect(),
                 })
             }
         }
@@ -590,16 +474,18 @@ impl PyEngine {
                 }
                 Ok(PyAccountAdjustmentBatchResult {
                     failed_index: None,
-                    reject: None,
+                    rejects: Vec::new(),
                 })
             }
             Err(error) => {
                 if let Some(py_error) = take_python_callback_error() {
                     return Err(py_error);
                 }
+                let mut rejects = Vec::with_capacity(error.rejects.len());
+                rejects.extend(error.rejects.iter().map(convert_reject));
                 Ok(PyAccountAdjustmentBatchResult {
-                    failed_index: Some(error.index),
-                    reject: Some(convert_reject(&error.reject)),
+                    failed_index: Some(error.failed_adjustment_index),
+                    rejects,
                 })
             }
         }
@@ -614,6 +500,7 @@ struct PyReject {
     details: String,
     policy: String,
     scope: String,
+    user_data: u64,
 }
 
 #[pymethods]
@@ -643,112 +530,30 @@ impl PyReject {
         self.scope.clone()
     }
 
+    #[getter]
+    fn user_data(&self) -> u64 {
+        self.user_data
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "Reject(code={:?}, reason={:?}, details={:?}, policy={:?}, scope={:?})",
-            self.code, self.reason, self.details, self.policy, self.scope
+            "Reject(code={:?}, reason={:?}, details={:?}, policy={:?}, scope={:?}, user_data={})",
+            self.code, self.reason, self.details, self.policy, self.scope, self.user_data
         )
     }
-}
-
-#[pyclass(name = "RejectCode", module = "openpit.pretrade")]
-struct PyRejectCode;
-
-#[pymethods]
-impl PyRejectCode {
-    #[classattr]
-    const MISSING_REQUIRED_FIELD: &'static str = "MissingRequiredField";
-    #[classattr]
-    const INVALID_FIELD_FORMAT: &'static str = "InvalidFieldFormat";
-    #[classattr]
-    const INVALID_FIELD_VALUE: &'static str = "InvalidFieldValue";
-    #[classattr]
-    const UNSUPPORTED_ORDER_TYPE: &'static str = "UnsupportedOrderType";
-    #[classattr]
-    const UNSUPPORTED_TIME_IN_FORCE: &'static str = "UnsupportedTimeInForce";
-    #[classattr]
-    const UNSUPPORTED_ORDER_ATTRIBUTE: &'static str = "UnsupportedOrderAttribute";
-    #[classattr]
-    const DUPLICATE_CLIENT_ORDER_ID: &'static str = "DuplicateClientOrderId";
-    #[classattr]
-    const TOO_LATE_TO_ENTER: &'static str = "TooLateToEnter";
-    #[classattr]
-    const EXCHANGE_CLOSED: &'static str = "ExchangeClosed";
-    #[classattr]
-    const UNKNOWN_INSTRUMENT: &'static str = "UnknownInstrument";
-    #[classattr]
-    const UNKNOWN_ACCOUNT: &'static str = "UnknownAccount";
-    #[classattr]
-    const UNKNOWN_VENUE: &'static str = "UnknownVenue";
-    #[classattr]
-    const UNKNOWN_CLEARING_ACCOUNT: &'static str = "UnknownClearingAccount";
-    #[classattr]
-    const UNKNOWN_COLLATERAL_ASSET: &'static str = "UnknownCollateralAsset";
-    #[classattr]
-    const INSUFFICIENT_FUNDS: &'static str = "InsufficientFunds";
-    #[classattr]
-    const INSUFFICIENT_MARGIN: &'static str = "InsufficientMargin";
-    #[classattr]
-    const INSUFFICIENT_POSITION: &'static str = "InsufficientPosition";
-    #[classattr]
-    const CREDIT_LIMIT_EXCEEDED: &'static str = "CreditLimitExceeded";
-    #[classattr]
-    const RISK_LIMIT_EXCEEDED: &'static str = "RiskLimitExceeded";
-    #[classattr]
-    const ORDER_EXCEEDS_LIMIT: &'static str = "OrderExceedsLimit";
-    #[classattr]
-    const ORDER_QTY_EXCEEDS_LIMIT: &'static str = "OrderQtyExceedsLimit";
-    #[classattr]
-    const ORDER_NOTIONAL_EXCEEDS_LIMIT: &'static str = "OrderNotionalExceedsLimit";
-    #[classattr]
-    const POSITION_LIMIT_EXCEEDED: &'static str = "PositionLimitExceeded";
-    #[classattr]
-    const CONCENTRATION_LIMIT_EXCEEDED: &'static str = "ConcentrationLimitExceeded";
-    #[classattr]
-    const LEVERAGE_LIMIT_EXCEEDED: &'static str = "LeverageLimitExceeded";
-    #[classattr]
-    const RATE_LIMIT_EXCEEDED: &'static str = "RateLimitExceeded";
-    #[classattr]
-    const PNL_KILL_SWITCH_TRIGGERED: &'static str = "PnlKillSwitchTriggered";
-    #[classattr]
-    const ACCOUNT_BLOCKED: &'static str = "AccountBlocked";
-    #[classattr]
-    const ACCOUNT_NOT_AUTHORIZED: &'static str = "AccountNotAuthorized";
-    #[classattr]
-    const COMPLIANCE_RESTRICTION: &'static str = "ComplianceRestriction";
-    #[classattr]
-    const INSTRUMENT_RESTRICTED: &'static str = "InstrumentRestricted";
-    #[classattr]
-    const JURISDICTION_RESTRICTION: &'static str = "JurisdictionRestriction";
-    #[classattr]
-    const WASH_TRADE_PREVENTION: &'static str = "WashTradePrevention";
-    #[classattr]
-    const SELF_MATCH_PREVENTION: &'static str = "SelfMatchPrevention";
-    #[classattr]
-    const SHORT_SALE_RESTRICTION: &'static str = "ShortSaleRestriction";
-    #[classattr]
-    const RISK_CONFIGURATION_MISSING: &'static str = "RiskConfigurationMissing";
-    #[classattr]
-    const REFERENCE_DATA_UNAVAILABLE: &'static str = "ReferenceDataUnavailable";
-    #[classattr]
-    const ORDER_VALUE_CALCULATION_FAILED: &'static str = "OrderValueCalculationFailed";
-    #[classattr]
-    const SYSTEM_UNAVAILABLE: &'static str = "SystemUnavailable";
-    #[classattr]
-    const OTHER: &'static str = "Other";
 }
 
 #[pyclass(name = "StartPreTradeResult", module = "openpit.pretrade", unsendable)]
 struct PyStartPreTradeResult {
     request: Option<Py<PyRequest>>,
-    reject: Option<PyReject>,
+    rejects: Vec<PyReject>,
 }
 
 #[pymethods]
 impl PyStartPreTradeResult {
     #[getter]
     fn ok(&self) -> bool {
-        self.reject.is_none()
+        self.rejects.is_empty()
     }
 
     #[getter]
@@ -757,8 +562,8 @@ impl PyStartPreTradeResult {
     }
 
     #[getter]
-    fn reject(&self) -> Option<PyReject> {
-        self.reject.clone()
+    fn rejects(&self) -> Vec<PyReject> {
+        self.rejects.clone()
     }
 
     fn __bool__(&self) -> bool {
@@ -766,9 +571,13 @@ impl PyStartPreTradeResult {
     }
 
     fn __repr__(&self) -> String {
-        match &self.reject {
-            Some(reject) => format!("StartPreTradeResult(ok=False, reject={reject:?})"),
-            None => "StartPreTradeResult(ok=True)".to_owned(),
+        if self.rejects.is_empty() {
+            "StartPreTradeResult(ok=True)".to_owned()
+        } else {
+            format!(
+                "StartPreTradeResult(ok=False, rejects={})",
+                self.rejects.len()
+            )
         }
     }
 }
@@ -818,14 +627,14 @@ impl PyExecuteResult {
 )]
 struct PyAccountAdjustmentBatchResult {
     failed_index: Option<usize>,
-    reject: Option<PyReject>,
+    rejects: Vec<PyReject>,
 }
 
 #[pymethods]
 impl PyAccountAdjustmentBatchResult {
     #[getter]
     fn ok(&self) -> bool {
-        self.reject.is_none()
+        self.rejects.is_empty()
     }
 
     #[getter]
@@ -834,8 +643,8 @@ impl PyAccountAdjustmentBatchResult {
     }
 
     #[getter]
-    fn reject(&self) -> Option<PyReject> {
-        self.reject.clone()
+    fn rejects(&self) -> Vec<PyReject> {
+        self.rejects.clone()
     }
 
     fn __bool__(&self) -> bool {
@@ -843,31 +652,14 @@ impl PyAccountAdjustmentBatchResult {
     }
 
     fn __repr__(&self) -> String {
-        match (&self.failed_index, &self.reject) {
-            (Some(index), Some(reject)) => {
-                format!("AccountAdjustmentBatchResult(ok=False, failed_index={index}, reject={reject:?})")
-            }
+        match self.failed_index {
+            Some(index) => format!(
+                "AccountAdjustmentBatchResult(ok=False, failed_index={index}, rejects={})",
+                self.rejects.len()
+            ),
             _ => "AccountAdjustmentBatchResult(ok=True)".to_owned(),
         }
     }
-}
-
-enum StartPolicyConfig {
-    OrderValidation,
-    PnlKillSwitchShared {
-        policy: Rc<PnlKillSwitchPolicy>,
-    },
-    RateLimit {
-        max_orders: usize,
-        window_seconds: u64,
-    },
-    OrderSizeLimit {
-        limits: Vec<OrderSizeLimitConfig>,
-    },
-    PythonCustom {
-        name: &'static str,
-        policy: Py<PyAny>,
-    },
 }
 
 #[derive(Clone)]
@@ -877,152 +669,155 @@ struct OrderSizeLimitConfig {
     max_notional: String,
 }
 
-enum MainPolicyConfig {
-    PythonCustom {
-        name: &'static str,
-        policy: Py<PyAny>,
-    },
-}
+#[pyclass(name = "PreTradeContext", module = "openpit.pretrade", frozen)]
+struct PyPreTradeContext;
 
-enum AdjustmentPolicyConfig {
-    PythonCustom {
-        name: &'static str,
-        policy: Py<PyAny>,
-    },
-}
+#[pyclass(name = "AccountAdjustmentContext", module = "openpit", frozen)]
+struct PyAccountAdjustmentContext;
 
-struct PythonStartPolicyAdapter {
-    name: &'static str,
-    policy: Py<PyAny>,
-}
-
-struct PythonMainPolicyAdapter {
-    name: &'static str,
-    policy: Py<PyAny>,
-}
-
-struct PythonAccountAdjustmentPolicyAdapter {
-    name: &'static str,
-    policy: Py<PyAny>,
-}
-
-impl CheckPreTradeStartPolicy<PythonOrder, PythonExecutionReport> for PythonStartPolicyAdapter {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-
-    fn check_pre_trade_start(&self, order: &PythonOrder) -> Result<(), Reject> {
-        Python::with_gil(|py| {
-            let kwargs = PyDict::new_bound(py);
-            kwargs
-                .set_item("order", order.original(py))
-                .map_err(|error| {
-                    set_python_callback_error(error);
-                    python_callback_reject(self.name)
-                })?;
-            let result = self
-                .policy
-                .bind(py)
-                .call_method("check_pre_trade_start", (), Some(&kwargs))
-                .map_err(|error| {
-                    set_python_callback_error(error);
-                    python_callback_reject(self.name)
-                })?;
-
-            if result.is_none() {
-                Ok(())
-            } else {
-                let reject = parse_policy_reject(&result, self.name).map_err(|error| {
-                    set_python_callback_error(error);
-                    python_callback_reject(self.name)
-                })?;
-                Err(reject)
-            }
-        })
-    }
-
-    fn apply_execution_report(&self, report: &PythonExecutionReport) -> bool {
-        Python::with_gil(|py| {
-            let kwargs = PyDict::new_bound(py);
-            if let Err(error) = kwargs.set_item("report", report.original(py)) {
-                set_python_callback_error(error);
-                return false;
-            }
-
-            let result =
-                match self
-                    .policy
-                    .bind(py)
-                    .call_method("apply_execution_report", (), Some(&kwargs))
-                {
-                    Ok(result) => result,
-                    Err(error) => {
-                        set_python_callback_error(error);
-                        return false;
-                    }
-                };
-
-            match result.extract::<bool>() {
-                Ok(value) => value,
-                Err(error) => {
-                    set_python_callback_error(error);
-                    false
-                }
-            }
-        })
+impl From<&PreTradeContext> for PyPreTradeContext {
+    fn from(_: &PreTradeContext) -> Self {
+        Self
     }
 }
 
-impl Policy<PythonOrder, PythonExecutionReport> for PythonMainPolicyAdapter {
-    fn name(&self) -> &'static str {
-        self.name
+impl From<&AccountAdjustmentContext> for PyAccountAdjustmentContext {
+    fn from(_: &AccountAdjustmentContext) -> Self {
+        Self
+    }
+}
+
+struct SharedStartPolicy<P> {
+    policy: Rc<P>,
+}
+
+struct BoxedStartPolicy {
+    inner: Box<dyn CheckPreTradeStartPolicy<Order, ExecutionReport>>,
+}
+
+struct BoxedMainPolicy {
+    inner: Box<dyn PreTradePolicy<Order, ExecutionReport>>,
+}
+
+struct BoxedAccountAdjustmentPolicy {
+    inner: Box<dyn AccountAdjustmentPolicy<AccountAdjustment>>,
+}
+
+impl<P> CheckPreTradeStartPolicy<Order, ExecutionReport> for SharedStartPolicy<P>
+where
+    P: CheckPreTradeStartPolicy<Order, ExecutionReport>,
+{
+    fn name(&self) -> &str {
+        self.policy.name()
+    }
+
+    fn check_pre_trade_start(&self, ctx: &PreTradeContext, order: &Order) -> Result<(), Rejects> {
+        self.policy.check_pre_trade_start(ctx, order)
+    }
+
+    fn apply_execution_report(&self, report: &ExecutionReport) -> bool {
+        self.policy.apply_execution_report(report)
+    }
+}
+
+impl CheckPreTradeStartPolicy<Order, ExecutionReport> for BoxedStartPolicy {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn check_pre_trade_start(&self, ctx: &PreTradeContext, order: &Order) -> Result<(), Rejects> {
+        self.inner.check_pre_trade_start(ctx, order)
+    }
+
+    fn apply_execution_report(&self, report: &ExecutionReport) -> bool {
+        self.inner.apply_execution_report(report)
+    }
+}
+
+impl PreTradePolicy<Order, ExecutionReport> for BoxedMainPolicy {
+    fn name(&self) -> &str {
+        self.inner.name()
     }
 
     fn perform_pre_trade_check(
         &self,
-        ctx: &openpit::pretrade::Context<'_, PythonOrder>,
+        ctx: &PreTradeContext,
+        order: &Order,
         mutations: &mut Mutations,
-        rejects: &mut Vec<Reject>,
-    ) {
-        Python::with_gil(|py| {
-            let py_context = match build_python_policy_context(py, ctx.order()) {
-                Ok(value) => value,
-                Err(error) => {
-                    set_python_callback_error(error);
-                    rejects.push(python_callback_reject(self.name));
-                    return;
-                }
-            };
-
-            let kwargs = PyDict::new_bound(py);
-            if let Err(error) = kwargs.set_item("context", py_context) {
-                set_python_callback_error(error);
-                rejects.push(python_callback_reject(self.name));
-                return;
-            }
-
-            let decision =
-                match self
-                    .policy
-                    .bind(py)
-                    .call_method("perform_pre_trade_check", (), Some(&kwargs))
-                {
-                    Ok(value) => value,
-                    Err(error) => {
-                        set_python_callback_error(error);
-                        rejects.push(python_callback_reject(self.name));
-                        return;
-                    }
-                };
-
-            if let Err(error) = apply_policy_decision(self.name, decision, mutations, rejects) {
-                set_python_callback_error(error);
-                rejects.push(python_callback_reject(self.name));
-            }
-        });
+    ) -> Result<(), Rejects> {
+        self.inner.perform_pre_trade_check(ctx, order, mutations)
     }
 
-    fn apply_execution_report(&self, report: &PythonExecutionReport) -> bool {
+    fn apply_execution_report(&self, report: &ExecutionReport) -> bool {
+        self.inner.apply_execution_report(report)
+    }
+}
+
+impl AccountAdjustmentPolicy<AccountAdjustment> for BoxedAccountAdjustmentPolicy {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn apply_account_adjustment(
+        &self,
+        ctx: &AccountAdjustmentContext,
+        account_id: AccountId,
+        adjustment: &AccountAdjustment,
+        mutations: &mut Mutations,
+    ) -> Result<(), Rejects> {
+        self.inner
+            .apply_account_adjustment(ctx, account_id, adjustment, mutations)
+    }
+}
+
+struct PythonStartPolicyAdapter {
+    name: String,
+    policy: Py<PyAny>,
+}
+
+struct PythonMainPolicyAdapter {
+    name: String,
+    policy: Py<PyAny>,
+}
+
+struct PythonAccountAdjustmentPolicyAdapter {
+    name: String,
+    policy: Py<PyAny>,
+}
+
+impl CheckPreTradeStartPolicy<Order, ExecutionReport> for PythonStartPolicyAdapter {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn check_pre_trade_start(&self, ctx: &PreTradeContext, order: &Order) -> Result<(), Rejects> {
+        Python::with_gil(|py| {
+            let policy_ctx = Py::new(py, PyPreTradeContext::from(ctx)).map_err(|error| {
+                set_python_callback_error(error);
+                python_callback_rejects(&self.name)
+            })?;
+            let result = self
+                .policy
+                .bind(py)
+                .call_method1("check_pre_trade_start", (policy_ctx, order.original(py)))
+                .map_err(|error| {
+                    set_python_callback_error(error);
+                    python_callback_rejects(&self.name)
+                })?;
+
+            let rejects = parse_policy_rejects(&result, &self.name).map_err(|error| {
+                set_python_callback_error(error);
+                python_callback_rejects(&self.name)
+            })?;
+            if rejects.is_empty() {
+                Ok(())
+            } else {
+                Err(Rejects::from(rejects))
+            }
+        })
+    }
+
+    fn apply_execution_report(&self, report: &ExecutionReport) -> bool {
         Python::with_gil(|py| {
             let kwargs = PyDict::new_bound(py);
             if let Err(error) = kwargs.set_item("report", report.original(py)) {
@@ -1054,43 +849,111 @@ impl Policy<PythonOrder, PythonExecutionReport> for PythonMainPolicyAdapter {
     }
 }
 
-impl AccountAdjustmentPolicy<PythonAccountAdjustment> for PythonAccountAdjustmentPolicyAdapter {
-    fn name(&self) -> &'static str {
-        self.name
+impl PreTradePolicy<Order, ExecutionReport> for PythonMainPolicyAdapter {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn perform_pre_trade_check(
+        &self,
+        ctx: &PreTradeContext,
+        order: &Order,
+        mutations: &mut Mutations,
+    ) -> Result<(), Rejects> {
+        Python::with_gil(|py| {
+            let policy_ctx = Py::new(py, PyPreTradeContext::from(ctx)).map_err(|error| {
+                set_python_callback_error(error);
+                python_callback_rejects(&self.name)
+            })?;
+
+            let decision = self
+                .policy
+                .bind(py)
+                .call_method1("perform_pre_trade_check", (policy_ctx, order.original(py)))
+                .map_err(|error| {
+                    set_python_callback_error(error);
+                    python_callback_rejects(&self.name)
+                })?;
+
+            let mut rejects = Vec::new();
+            if let Err(error) = apply_policy_decision(&self.name, decision, mutations, &mut rejects)
+            {
+                set_python_callback_error(error);
+                return Err(python_callback_rejects(&self.name));
+            }
+            if rejects.is_empty() {
+                Ok(())
+            } else {
+                Err(Rejects::from(rejects))
+            }
+        })
+    }
+
+    fn apply_execution_report(&self, report: &ExecutionReport) -> bool {
+        Python::with_gil(|py| {
+            let kwargs = PyDict::new_bound(py);
+            if let Err(error) = kwargs.set_item("report", report.original(py)) {
+                set_python_callback_error(error);
+                return false;
+            }
+
+            let result =
+                match self
+                    .policy
+                    .bind(py)
+                    .call_method("apply_execution_report", (), Some(&kwargs))
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        set_python_callback_error(error);
+                        return false;
+                    }
+                };
+
+            match result.extract::<bool>() {
+                Ok(value) => value,
+                Err(error) => {
+                    set_python_callback_error(error);
+                    false
+                }
+            }
+        })
+    }
+}
+
+impl AccountAdjustmentPolicy<AccountAdjustment> for PythonAccountAdjustmentPolicyAdapter {
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn apply_account_adjustment(
         &self,
+        ctx: &AccountAdjustmentContext,
         account_id: AccountId,
-        adjustment: &PythonAccountAdjustment,
+        adjustment: &AccountAdjustment,
         mutations: &mut Mutations,
-    ) -> Result<(), Reject> {
+    ) -> Result<(), Rejects> {
         Python::with_gil(|py| {
-            let kwargs = PyDict::new_bound(py);
+            let adjustment_ctx =
+                Py::new(py, PyAccountAdjustmentContext::from(ctx)).map_err(|error| {
+                    set_python_callback_error(error);
+                    python_callback_rejects(&self.name)
+                })?;
             let py_account_id =
                 Py::new(py, PyAccountId { inner: account_id }).map_err(|error| {
                     set_python_callback_error(error);
-                    python_callback_reject(self.name)
-                })?;
-            kwargs
-                .set_item("account_id", py_account_id)
-                .map_err(|error| {
-                    set_python_callback_error(error);
-                    python_callback_reject(self.name)
-                })?;
-            kwargs
-                .set_item("adjustment", adjustment.original(py))
-                .map_err(|error| {
-                    set_python_callback_error(error);
-                    python_callback_reject(self.name)
+                    python_callback_rejects(&self.name)
                 })?;
             let result = self
                 .policy
                 .bind(py)
-                .call_method("apply_account_adjustment", (), Some(&kwargs))
+                .call_method1(
+                    "apply_account_adjustment",
+                    (adjustment_ctx, py_account_id, adjustment.original(py)),
+                )
                 .map_err(|error| {
                     set_python_callback_error(error);
-                    python_callback_reject(self.name)
+                    python_callback_rejects(&self.name)
                 })?;
 
             // None -> pass without mutations.
@@ -1098,48 +961,74 @@ impl AccountAdjustmentPolicy<PythonAccountAdjustment> for PythonAccountAdjustmen
                 return Ok(());
             }
 
-            // Try PolicyReject first (has .code attribute).
-            if result.hasattr("code").map_err(|error| {
+            if result.hasattr("rejects").map_err(|error| {
                 set_python_callback_error(error);
-                python_callback_reject(self.name)
+                python_callback_rejects(&self.name)
+            })? && result.hasattr("mutations").map_err(|error| {
+                set_python_callback_error(error);
+                python_callback_rejects(&self.name)
             })? {
-                let reject = parse_policy_reject(&result, self.name).map_err(|error| {
+                let mut rejects = Vec::new();
+                if let Err(error) =
+                    apply_policy_decision(&self.name, result, mutations, &mut rejects)
+                {
                     set_python_callback_error(error);
-                    python_callback_reject(self.name)
-                })?;
-                return Err(reject);
+                    return Err(python_callback_rejects(&self.name));
+                }
+                return if rejects.is_empty() {
+                    Ok(())
+                } else {
+                    Err(Rejects::from(rejects))
+                };
             }
 
-            // Otherwise treat as iterable of Mutation objects.
+            // Backward-compat mode: accept either a single reject, an iterable
+            // of rejects, or an iterable of mutations.
+            if result.hasattr("code").map_err(|error| {
+                set_python_callback_error(error);
+                python_callback_rejects(&self.name)
+            })? {
+                let reject = parse_policy_reject(&result, &self.name).map_err(|error| {
+                    set_python_callback_error(error);
+                    python_callback_rejects(&self.name)
+                })?;
+                return Err(Rejects::from(reject));
+            }
+
+            let mut rejects = Vec::new();
             let iter = result.iter().map_err(|error| {
                 set_python_callback_error(error);
-                python_callback_reject(self.name)
+                python_callback_rejects(&self.name)
             })?;
             for item in iter {
                 let item = item.map_err(|error| {
                     set_python_callback_error(error);
-                    python_callback_reject(self.name)
+                    python_callback_rejects(&self.name)
                 })?;
+                if item.hasattr("code").map_err(|error| {
+                    set_python_callback_error(error);
+                    python_callback_rejects(&self.name)
+                })? {
+                    let reject = parse_policy_reject(&item, &self.name).map_err(|error| {
+                        set_python_callback_error(error);
+                        python_callback_rejects(&self.name)
+                    })?;
+                    rejects.push(reject);
+                    continue;
+                }
                 let mutation = parse_policy_mutation(&item).map_err(|error| {
                     set_python_callback_error(error);
-                    python_callback_reject(self.name)
+                    python_callback_rejects(&self.name)
                 })?;
                 mutations.push(mutation);
             }
-            Ok(())
+            if rejects.is_empty() {
+                Ok(())
+            } else {
+                Err(Rejects::from(rejects))
+            }
         })
     }
-}
-
-fn extract_python_policy_name(policy: &Bound<'_, PyAny>) -> PyResult<&'static str> {
-    let name = policy
-        .getattr("name")?
-        .extract::<String>()
-        .map_err(|_| PyValueError::new_err("policy.name must be a string"))?;
-    if name.trim().is_empty() {
-        return Err(PyValueError::new_err("policy.name must not be empty"));
-    }
-    Ok(leak_static_str(name))
 }
 
 fn ensure_callable_method(policy: &Bound<'_, PyAny>, method: &str) -> PyResult<()> {
@@ -1152,11 +1041,7 @@ fn ensure_callable_method(policy: &Bound<'_, PyAny>, method: &str) -> PyResult<(
     Ok(())
 }
 
-fn leak_static_str(value: String) -> &'static str {
-    Box::leak(value.into_boxed_str())
-}
-
-fn python_callback_reject(policy_name: &'static str) -> Reject {
+fn python_callback_reject(policy_name: &str) -> Reject {
     Reject::new(
         policy_name,
         RejectScope::Order,
@@ -1166,65 +1051,65 @@ fn python_callback_reject(policy_name: &'static str) -> Reject {
     )
 }
 
-fn extract_python_order(obj: &Bound<'_, PyAny>) -> PyResult<PythonOrder> {
+fn python_callback_rejects(policy_name: &str) -> Rejects {
+    Rejects::from(python_callback_reject(policy_name))
+}
+
+fn extract_python_order(obj: &Bound<'_, PyAny>) -> PyResult<Order> {
     let py = obj.py();
+    // Aggregate wrapper/type contract is enforced on Python constructors.
+    // Rust still validates entry-point object kind here because engine APIs can
+    // receive arbitrary Python objects.
     let order = obj
         .extract::<PyRef<'_, PyOrder>>()
         .map_err(|_| PyTypeError::new_err("order must inherit from openpit.Order"))?;
 
-    let operation = order
-        .operation
-        .as_ref()
-        .map(|py_operation| {
+    let operation = match order.operation.as_ref() {
+        None => OrderOperationAccess::Absent,
+        Some(py_operation) => {
             let op = py_operation.bind(py).borrow();
             let instrument = match (&op.underlying_asset, &op.settlement_asset) {
-                (Some(underlying_asset), Some(settlement_asset)) => {
-                    Instrument::new(underlying_asset.clone(), settlement_asset.clone())
-                }
-                _ => {
-                    return Err(PyValueError::new_err(
-                        "order.operation requires underlying_asset and settlement_asset",
-                    ));
-                }
+                (Some(underlying_asset), Some(settlement_asset)) => Some(Instrument::new(
+                    underlying_asset.clone(),
+                    settlement_asset.clone(),
+                )),
+                _ => None,
             };
-            let account_id = op
-                .account_id
-                .unwrap_or_else(|| AccountId::from_u64(99224416));
-            let side = op
-                .side
-                .ok_or_else(|| PyValueError::new_err("order.operation requires side"))?;
-            let trade_amount = op
-                .trade_amount
-                .ok_or_else(|| PyValueError::new_err("order.operation requires trade_amount"))?;
-            Ok(OrderOperation {
+            OrderOperationAccess::Populated(PopulatedOrderOperation {
                 instrument,
-                account_id,
-                side,
-                trade_amount,
+                account_id: op.account_id,
+                side: op.side,
+                trade_amount: op.trade_amount,
                 price: op.price,
             })
-        })
-        .transpose()?;
-
-    let position = order.position.as_ref().map(|py_position| {
-        let pos = py_position.bind(py).borrow();
-        OrderPosition {
-            position_side: pos.position_side,
-            reduce_only: pos.reduce_only,
-            close_position: pos.close_position,
         }
-    });
+    };
 
-    let margin = order.margin.as_ref().map(|py_margin| {
-        let m = py_margin.bind(py).borrow();
-        OrderMargin {
-            leverage: m.leverage,
-            collateral_asset: m.collateral_asset.clone(),
-            auto_borrow: m.auto_borrow,
+    let position = match order.position.as_ref() {
+        None => OrderPositionAccess::Absent,
+        Some(py_position) => {
+            let pos = py_position.bind(py).borrow();
+            OrderPositionAccess::Populated(PopulatedOrderPosition {
+                position_side: pos.position_side,
+                reduce_only: pos.reduce_only,
+                close_position: pos.close_position,
+            })
         }
-    });
+    };
 
-    Ok(PythonOrder {
+    let margin = match order.margin.as_ref() {
+        None => OrderMarginAccess::Absent,
+        Some(py_margin) => {
+            let m = py_margin.bind(py).borrow();
+            OrderMarginAccess::Populated(PopulatedOrderMargin {
+                leverage: m.leverage,
+                collateral_asset: m.collateral_asset.clone(),
+                auto_borrow: m.auto_borrow,
+            })
+        }
+    };
+
+    Ok(Order {
         operation,
         position,
         margin,
@@ -1232,77 +1117,70 @@ fn extract_python_order(obj: &Bound<'_, PyAny>) -> PyResult<PythonOrder> {
     })
 }
 
-fn extract_python_execution_report(obj: &Bound<'_, PyAny>) -> PyResult<PythonExecutionReport> {
+fn extract_python_execution_report(obj: &Bound<'_, PyAny>) -> PyResult<ExecutionReport> {
     let py = obj.py();
+    // Aggregate wrapper/type contract is enforced on Python constructors.
+    // Rust still validates entry-point object kind here because engine APIs can
+    // receive arbitrary Python objects.
     let report = obj
         .extract::<PyRef<'_, PyExecutionReport>>()
         .map_err(|_| PyTypeError::new_err("report must inherit from openpit.ExecutionReport"))?;
 
-    let operation = report
-        .operation
-        .as_ref()
-        .map(|py_operation| {
+    let operation = match report.operation.as_ref() {
+        None => ExecutionReportOperationAccess::Absent,
+        Some(py_operation) => {
             let op = py_operation.bind(py).borrow();
             let instrument = match (&op.underlying_asset, &op.settlement_asset) {
-                (Some(underlying_asset), Some(settlement_asset)) => {
-                    Instrument::new(underlying_asset.clone(), settlement_asset.clone())
-                }
-                _ => {
-                    return Err(PyValueError::new_err(
-                        "execution report operation requires underlying_asset and settlement_asset",
-                    ));
-                }
+                (Some(underlying_asset), Some(settlement_asset)) => Some(Instrument::new(
+                    underlying_asset.clone(),
+                    settlement_asset.clone(),
+                )),
+                _ => None,
             };
-            let account_id = op
-                .account_id
-                .unwrap_or_else(|| AccountId::from_u64(99224416));
-            let side = op
-                .side
-                .ok_or_else(|| PyValueError::new_err("execution report operation requires side"))?;
-            Ok(ExecutionReportOperation {
+            ExecutionReportOperationAccess::Populated(PopulatedExecutionReportOperation {
                 instrument,
-                account_id,
-                side,
+                account_id: op.account_id,
+                side: op.side,
             })
-        })
-        .transpose()?;
+        }
+    };
 
-    let financial_impact = report
-        .financial_impact
-        .as_ref()
-        .map(|py_fi| {
+    let financial_impact = match report.financial_impact.as_ref() {
+        None => FinancialImpactAccess::Absent,
+        Some(py_fi) => {
             let fi = py_fi.bind(py).borrow();
-            let pnl = fi.pnl.ok_or_else(|| {
-                PyValueError::new_err("execution report financial_impact requires pnl")
-            })?;
-            let fee = fi.fee.ok_or_else(|| {
-                PyValueError::new_err("execution report financial_impact requires fee")
-            })?;
-            Ok::<_, PyErr>(FinancialImpact { pnl, fee })
-        })
-        .transpose()?;
-
-    let fill = report.fill.as_ref().map(|py_fill| {
-        let f = py_fill.bind(py).borrow();
-        let last_trade = f
-            .fill_price
-            .zip(f.fill_quantity)
-            .map(|(price, quantity)| Trade { price, quantity });
-        PythonFillData {
-            last_trade,
-            is_terminal: f.is_terminal,
+            FinancialImpactAccess::Populated(PopulatedFinancialImpact {
+                pnl: Some(fi.pnl),
+                fee: Some(fi.fee),
+            })
         }
-    });
+    };
 
-    let position_impact = report.position_impact.as_ref().map(|py_pi| {
-        let pi = py_pi.bind(py).borrow();
-        ExecutionReportPositionImpact {
-            position_effect: pi.position_effect,
-            position_side: pi.position_side,
+    let fill = match report.fill.as_ref() {
+        None => ExecutionReportFillAccess::Absent,
+        Some(py_fill) => {
+            let f = py_fill.bind(py).borrow();
+            ExecutionReportFillAccess::Populated(PopulatedExecutionReportFill {
+                last_trade: f.last_trade,
+                leaves_quantity: f.leaves_quantity,
+                lock: f.lock,
+                is_terminal: f.is_terminal,
+            })
         }
-    });
+    };
 
-    Ok(PythonExecutionReport {
+    let position_impact = match report.position_impact.as_ref() {
+        None => ExecutionReportPositionImpactAccess::Absent,
+        Some(py_pi) => {
+            let pi = py_pi.bind(py).borrow();
+            ExecutionReportPositionImpactAccess::Populated(PopulatedExecutionReportPositionImpact {
+                position_effect: pi.position_effect,
+                position_side: pi.position_side,
+            })
+        }
+    };
+
+    Ok(ExecutionReport {
         operation,
         financial_impact,
         fill,
@@ -1311,47 +1189,48 @@ fn extract_python_execution_report(obj: &Bound<'_, PyAny>) -> PyResult<PythonExe
     })
 }
 
-fn extract_python_account_adjustment(obj: &Bound<'_, PyAny>) -> PyResult<PythonAccountAdjustment> {
+fn extract_python_account_adjustment(obj: &Bound<'_, PyAny>) -> PyResult<AccountAdjustment> {
     let py = obj.py();
+    // Aggregate wrapper/type contract is enforced on Python constructors.
+    // Rust still validates entry-point object kind here because engine APIs can
+    // receive arbitrary Python objects.
     let adjustment = obj
         .extract::<PyRef<'_, PyAccountAdjustment>>()
         .map_err(|_| {
             PyTypeError::new_err("adjustment must inherit from openpit.AccountAdjustment")
         })?;
 
-    let operation = adjustment
-        .operation
-        .as_ref()
-        .map(|py_operation| {
-            match py_operation {
+    let operation = match adjustment.operation.as_ref() {
+        None => AccountAdjustmentOperationAccess::Absent,
+        Some(py_operation) => {
+            let populated = match py_operation {
                 PyAccountAdjustmentOperation::Balance(py_balance_operation) => {
                     let operation = py_balance_operation.bind(py).borrow();
                     let asset = operation.asset.clone().ok_or_else(|| {
-                        PyValueError::new_err(
-                            "account adjustment balance operation requires asset",
-                        )
+                        PyValueError::new_err("account adjustment balance operation requires asset")
                     })?;
-
-                    Ok(PythonAccountAdjustmentOperation::Balance(
+                    PopulatedAccountAdjustmentOperation::Balance(
                         AccountAdjustmentBalanceOperation {
                             asset,
                             average_entry_price: operation.average_entry_price,
                         },
-                    ))
+                    )
                 }
                 PyAccountAdjustmentOperation::Position(py_position_operation) => {
                     let operation = py_position_operation.bind(py).borrow();
-                    let instrument =
-                        match (&operation.underlying_asset, &operation.settlement_asset) {
-                            (Some(underlying_asset), Some(settlement_asset)) => {
-                                Instrument::new(underlying_asset.clone(), settlement_asset.clone())
-                            }
-                            _ => {
-                                return Err(PyValueError::new_err(
+                    let instrument = match (
+                        &operation.underlying_asset,
+                        &operation.settlement_asset,
+                    ) {
+                        (Some(underlying_asset), Some(settlement_asset)) => {
+                            Instrument::new(underlying_asset.clone(), settlement_asset.clone())
+                        }
+                        _ => {
+                            return Err(PyValueError::new_err(
                                     "account adjustment position operation requires underlying_asset and settlement_asset",
                                 ));
-                            }
-                        };
+                        }
+                    };
                     let collateral_asset = operation.collateral_asset.clone().ok_or_else(|| {
                         PyValueError::new_err(
                             "account adjustment position operation requires collateral_asset",
@@ -1363,11 +1242,9 @@ fn extract_python_account_adjustment(obj: &Bound<'_, PyAny>) -> PyResult<PythonA
                         )
                     })?;
                     let mode = operation.mode.ok_or_else(|| {
-                        PyValueError::new_err(
-                            "account adjustment position operation requires mode",
-                        )
+                        PyValueError::new_err("account adjustment position operation requires mode")
                     })?;
-                    Ok(PythonAccountAdjustmentOperation::Position(
+                    PopulatedAccountAdjustmentOperation::Position(
                         AccountAdjustmentPositionOperation {
                             instrument,
                             collateral_asset,
@@ -1375,42 +1252,41 @@ fn extract_python_account_adjustment(obj: &Bound<'_, PyAny>) -> PyResult<PythonA
                             mode,
                             leverage: operation.leverage,
                         },
-                    ))
+                    )
                 }
-            }
-        })
-        .transpose()?;
+            };
+            AccountAdjustmentOperationAccess::Populated(populated)
+        }
+    };
 
-    let amount = adjustment
-        .amount
-        .as_ref()
-        .map(|py_amount| {
+    let amount = match adjustment.amount.as_ref() {
+        None => AccountAdjustmentAmountAccess::Absent,
+        Some(py_amount) => {
             let value = py_amount.bind(py).borrow();
-            Ok::<_, PyErr>(openpit::AccountAdjustmentAmount {
+            AccountAdjustmentAmountAccess::Populated(openpit::AccountAdjustmentAmount {
                 total: value.total,
                 reserved: value.reserved,
                 pending: value.pending,
             })
-        })
-        .transpose()?;
+        }
+    };
 
-    let bounds = adjustment
-        .bounds
-        .as_ref()
-        .map(|py_bounds| {
+    let bounds = match adjustment.bounds.as_ref() {
+        None => AccountAdjustmentBoundsAccess::Absent,
+        Some(py_bounds) => {
             let value = py_bounds.bind(py).borrow();
-            Ok::<_, PyErr>(openpit::AccountAdjustmentBounds {
-                total_upper_bound: value.total_upper_bound,
-                total_lower_bound: value.total_lower_bound,
-                reserved_upper_bound: value.reserved_upper_bound,
-                reserved_lower_bound: value.reserved_lower_bound,
-                pending_upper_bound: value.pending_upper_bound,
-                pending_lower_bound: value.pending_lower_bound,
+            AccountAdjustmentBoundsAccess::Populated(openpit::AccountAdjustmentBounds {
+                total_upper: value.total_upper,
+                total_lower: value.total_lower,
+                reserved_upper: value.reserved_upper,
+                reserved_lower: value.reserved_lower,
+                pending_upper: value.pending_upper,
+                pending_lower: value.pending_lower,
             })
-        })
-        .transpose()?;
+        }
+    };
 
-    Ok(PythonAccountAdjustment {
+    Ok(AccountAdjustment {
         operation,
         amount,
         bounds,
@@ -1418,16 +1294,8 @@ fn extract_python_account_adjustment(obj: &Bound<'_, PyAny>) -> PyResult<PythonA
     })
 }
 
-fn build_python_policy_context(py: Python<'_>, order: &PythonOrder) -> PyResult<Py<PyAny>> {
-    let module = PyModule::import_bound(py, "openpit.pretrade")?;
-    let cls = module.getattr("PolicyContext")?;
-    let kwargs = PyDict::new_bound(py);
-    kwargs.set_item("order", order.original(py))?;
-    Ok(cls.call((), Some(&kwargs))?.unbind())
-}
-
 fn apply_policy_decision(
-    policy_name: &'static str,
+    policy_name: &str,
     decision: Bound<'_, PyAny>,
     mutations: &mut Mutations,
     rejects: &mut Vec<Reject>,
@@ -1444,7 +1312,19 @@ fn apply_policy_decision(
     Ok(())
 }
 
-fn parse_policy_reject(value: &Bound<'_, PyAny>, policy_name: &'static str) -> PyResult<Reject> {
+fn parse_policy_rejects(value: &Bound<'_, PyAny>, policy_name: &str) -> PyResult<Vec<Reject>> {
+    if value.is_none() {
+        return Ok(Vec::new());
+    }
+
+    let mut rejects = Vec::new();
+    for item in value.iter()? {
+        rejects.push(parse_policy_reject(&item?, policy_name)?);
+    }
+    Ok(rejects)
+}
+
+fn parse_policy_reject(value: &Bound<'_, PyAny>, policy_name: &str) -> PyResult<Reject> {
     let code = parse_reject_code(
         value
             .getattr("code")?
@@ -1467,7 +1347,14 @@ fn parse_policy_reject(value: &Bound<'_, PyAny>, policy_name: &'static str) -> P
             .map_err(|_| PyValueError::new_err("reject.scope must be a string"))?
             .as_str(),
     )?;
-    Ok(Reject::new(policy_name, scope, code, reason, details))
+    let user_data = if value.hasattr("user_data")? {
+        value.getattr("user_data")?.extract::<u64>().map_err(|_| {
+            PyValueError::new_err("reject.user_data must be an integer token (default 0)")
+        })?
+    } else {
+        0
+    };
+    Ok(Reject::new(policy_name, scope, code, reason, details).with_user_data(user_data as usize))
 }
 
 fn parse_policy_mutation(value: &Bound<'_, PyAny>) -> PyResult<Mutation> {
@@ -1504,46 +1391,100 @@ fn parse_reject_scope(value: &str) -> PyResult<RejectScope> {
 
 fn parse_reject_code(value: &str) -> PyResult<RejectCode> {
     match value {
-        "MissingRequiredField" => Ok(RejectCode::MissingRequiredField),
-        "InvalidFieldFormat" => Ok(RejectCode::InvalidFieldFormat),
-        "InvalidFieldValue" => Ok(RejectCode::InvalidFieldValue),
-        "UnsupportedOrderType" => Ok(RejectCode::UnsupportedOrderType),
-        "UnsupportedTimeInForce" => Ok(RejectCode::UnsupportedTimeInForce),
-        "UnsupportedOrderAttribute" => Ok(RejectCode::UnsupportedOrderAttribute),
-        "DuplicateClientOrderId" => Ok(RejectCode::DuplicateClientOrderId),
-        "TooLateToEnter" => Ok(RejectCode::TooLateToEnter),
-        "ExchangeClosed" => Ok(RejectCode::ExchangeClosed),
-        "UnknownInstrument" => Ok(RejectCode::UnknownInstrument),
-        "UnknownAccount" => Ok(RejectCode::UnknownAccount),
-        "UnknownVenue" => Ok(RejectCode::UnknownVenue),
-        "UnknownClearingAccount" => Ok(RejectCode::UnknownClearingAccount),
-        "UnknownCollateralAsset" => Ok(RejectCode::UnknownCollateralAsset),
-        "InsufficientFunds" => Ok(RejectCode::InsufficientFunds),
-        "InsufficientMargin" => Ok(RejectCode::InsufficientMargin),
-        "InsufficientPosition" => Ok(RejectCode::InsufficientPosition),
-        "CreditLimitExceeded" => Ok(RejectCode::CreditLimitExceeded),
-        "RiskLimitExceeded" => Ok(RejectCode::RiskLimitExceeded),
-        "OrderExceedsLimit" => Ok(RejectCode::OrderExceedsLimit),
-        "OrderQtyExceedsLimit" => Ok(RejectCode::OrderQtyExceedsLimit),
-        "OrderNotionalExceedsLimit" => Ok(RejectCode::OrderNotionalExceedsLimit),
-        "PositionLimitExceeded" => Ok(RejectCode::PositionLimitExceeded),
-        "ConcentrationLimitExceeded" => Ok(RejectCode::ConcentrationLimitExceeded),
-        "LeverageLimitExceeded" => Ok(RejectCode::LeverageLimitExceeded),
-        "RateLimitExceeded" => Ok(RejectCode::RateLimitExceeded),
-        "PnlKillSwitchTriggered" => Ok(RejectCode::PnlKillSwitchTriggered),
-        "AccountBlocked" => Ok(RejectCode::AccountBlocked),
-        "AccountNotAuthorized" => Ok(RejectCode::AccountNotAuthorized),
-        "ComplianceRestriction" => Ok(RejectCode::ComplianceRestriction),
-        "InstrumentRestricted" => Ok(RejectCode::InstrumentRestricted),
-        "JurisdictionRestriction" => Ok(RejectCode::JurisdictionRestriction),
-        "WashTradePrevention" => Ok(RejectCode::WashTradePrevention),
-        "SelfMatchPrevention" => Ok(RejectCode::SelfMatchPrevention),
-        "ShortSaleRestriction" => Ok(RejectCode::ShortSaleRestriction),
-        "RiskConfigurationMissing" => Ok(RejectCode::RiskConfigurationMissing),
-        "ReferenceDataUnavailable" => Ok(RejectCode::ReferenceDataUnavailable),
-        "OrderValueCalculationFailed" => Ok(RejectCode::OrderValueCalculationFailed),
-        "SystemUnavailable" => Ok(RejectCode::SystemUnavailable),
-        "Other" => Ok(RejectCode::Other),
+        code if code == RejectCode::MissingRequiredField.as_str() => {
+            Ok(RejectCode::MissingRequiredField)
+        }
+        code if code == RejectCode::InvalidFieldFormat.as_str() => {
+            Ok(RejectCode::InvalidFieldFormat)
+        }
+        code if code == RejectCode::InvalidFieldValue.as_str() => Ok(RejectCode::InvalidFieldValue),
+        code if code == RejectCode::UnsupportedOrderType.as_str() => {
+            Ok(RejectCode::UnsupportedOrderType)
+        }
+        code if code == RejectCode::UnsupportedTimeInForce.as_str() => {
+            Ok(RejectCode::UnsupportedTimeInForce)
+        }
+        code if code == RejectCode::UnsupportedOrderAttribute.as_str() => {
+            Ok(RejectCode::UnsupportedOrderAttribute)
+        }
+        code if code == RejectCode::DuplicateClientOrderId.as_str() => {
+            Ok(RejectCode::DuplicateClientOrderId)
+        }
+        code if code == RejectCode::TooLateToEnter.as_str() => Ok(RejectCode::TooLateToEnter),
+        code if code == RejectCode::ExchangeClosed.as_str() => Ok(RejectCode::ExchangeClosed),
+        code if code == RejectCode::UnknownInstrument.as_str() => Ok(RejectCode::UnknownInstrument),
+        code if code == RejectCode::UnknownAccount.as_str() => Ok(RejectCode::UnknownAccount),
+        code if code == RejectCode::UnknownVenue.as_str() => Ok(RejectCode::UnknownVenue),
+        code if code == RejectCode::UnknownClearingAccount.as_str() => {
+            Ok(RejectCode::UnknownClearingAccount)
+        }
+        code if code == RejectCode::UnknownCollateralAsset.as_str() => {
+            Ok(RejectCode::UnknownCollateralAsset)
+        }
+        code if code == RejectCode::InsufficientFunds.as_str() => Ok(RejectCode::InsufficientFunds),
+        code if code == RejectCode::InsufficientMargin.as_str() => {
+            Ok(RejectCode::InsufficientMargin)
+        }
+        code if code == RejectCode::InsufficientPosition.as_str() => {
+            Ok(RejectCode::InsufficientPosition)
+        }
+        code if code == RejectCode::CreditLimitExceeded.as_str() => {
+            Ok(RejectCode::CreditLimitExceeded)
+        }
+        code if code == RejectCode::RiskLimitExceeded.as_str() => Ok(RejectCode::RiskLimitExceeded),
+        code if code == RejectCode::OrderExceedsLimit.as_str() => Ok(RejectCode::OrderExceedsLimit),
+        code if code == RejectCode::OrderQtyExceedsLimit.as_str() => {
+            Ok(RejectCode::OrderQtyExceedsLimit)
+        }
+        code if code == RejectCode::OrderNotionalExceedsLimit.as_str() => {
+            Ok(RejectCode::OrderNotionalExceedsLimit)
+        }
+        code if code == RejectCode::PositionLimitExceeded.as_str() => {
+            Ok(RejectCode::PositionLimitExceeded)
+        }
+        code if code == RejectCode::ConcentrationLimitExceeded.as_str() => {
+            Ok(RejectCode::ConcentrationLimitExceeded)
+        }
+        code if code == RejectCode::LeverageLimitExceeded.as_str() => {
+            Ok(RejectCode::LeverageLimitExceeded)
+        }
+        code if code == RejectCode::RateLimitExceeded.as_str() => Ok(RejectCode::RateLimitExceeded),
+        code if code == RejectCode::PnlKillSwitchTriggered.as_str() => {
+            Ok(RejectCode::PnlKillSwitchTriggered)
+        }
+        code if code == RejectCode::AccountBlocked.as_str() => Ok(RejectCode::AccountBlocked),
+        code if code == RejectCode::AccountNotAuthorized.as_str() => {
+            Ok(RejectCode::AccountNotAuthorized)
+        }
+        code if code == RejectCode::ComplianceRestriction.as_str() => {
+            Ok(RejectCode::ComplianceRestriction)
+        }
+        code if code == RejectCode::InstrumentRestricted.as_str() => {
+            Ok(RejectCode::InstrumentRestricted)
+        }
+        code if code == RejectCode::JurisdictionRestriction.as_str() => {
+            Ok(RejectCode::JurisdictionRestriction)
+        }
+        code if code == RejectCode::WashTradePrevention.as_str() => {
+            Ok(RejectCode::WashTradePrevention)
+        }
+        code if code == RejectCode::SelfMatchPrevention.as_str() => {
+            Ok(RejectCode::SelfMatchPrevention)
+        }
+        code if code == RejectCode::ShortSaleRestriction.as_str() => {
+            Ok(RejectCode::ShortSaleRestriction)
+        }
+        code if code == RejectCode::RiskConfigurationMissing.as_str() => {
+            Ok(RejectCode::RiskConfigurationMissing)
+        }
+        code if code == RejectCode::ReferenceDataUnavailable.as_str() => {
+            Ok(RejectCode::ReferenceDataUnavailable)
+        }
+        code if code == RejectCode::OrderValueCalculationFailed.as_str() => {
+            Ok(RejectCode::OrderValueCalculationFailed)
+        }
+        code if code == RejectCode::SystemUnavailable.as_str() => Ok(RejectCode::SystemUnavailable),
+        code if code == RejectCode::Other.as_str() => Ok(RejectCode::Other),
         _ => Err(PyValueError::new_err(format!(
             "unsupported reject code {value:?}"
         ))),
@@ -1552,59 +1493,80 @@ fn parse_reject_code(value: &str) -> PyResult<RejectCode> {
 
 impl PyEngineBuilder {
     fn push_start_policy(&self, policy: &Bound<'_, PyAny>) -> PyResult<()> {
-        let config = if let Ok(policy) = policy.extract::<PyRef<'_, PyPnlKillSwitchPolicy>>() {
-            StartPolicyConfig::PnlKillSwitchShared {
-                policy: policy.get_or_create_runtime_policy()?,
-            }
-        } else if policy
-            .extract::<PyRef<'_, PyOrderValidationPolicy>>()
-            .is_ok()
-        {
-            StartPolicyConfig::OrderValidation
-        } else if let Ok(policy) = policy.extract::<PyRef<'_, PyRateLimitPolicy>>() {
-            StartPolicyConfig::RateLimit {
-                max_orders: policy.max_orders,
-                window_seconds: policy.window_seconds,
-            }
-        } else if let Ok(policy) = policy.extract::<PyRef<'_, PyOrderSizeLimitPolicy>>() {
-            StartPolicyConfig::OrderSizeLimit {
-                limits: policy.limits.borrow().clone(),
-            }
-        } else {
-            let name = extract_python_policy_name(policy)?;
-            ensure_callable_method(policy, "check_pre_trade_start")?;
-            ensure_callable_method(policy, "apply_execution_report")?;
-            StartPolicyConfig::PythonCustom {
-                name,
-                policy: policy.clone().unbind(),
-            }
-        };
+        let rust_policy: Box<dyn CheckPreTradeStartPolicy<Order, ExecutionReport>> =
+            if let Ok(policy) = policy.extract::<PyRef<'_, PyPnlKillSwitchPolicy>>() {
+                Box::new(SharedStartPolicy {
+                    policy: policy.policy_for_engine(),
+                })
+            } else if let Ok(policy) = policy.extract::<PyRef<'_, PyOrderValidationPolicy>>() {
+                Box::new(SharedStartPolicy {
+                    policy: policy.policy_for_engine(),
+                })
+            } else if let Ok(policy) = policy.extract::<PyRef<'_, PyRateLimitPolicy>>() {
+                Box::new(SharedStartPolicy {
+                    policy: policy.policy_for_engine(),
+                })
+            } else if let Ok(policy) = policy.extract::<PyRef<'_, PyOrderSizeLimitPolicy>>() {
+                Box::new(SharedStartPolicy {
+                    policy: policy.policy_for_engine(),
+                })
+            } else {
+                let name = policy
+                    .getattr("name")?
+                    .extract::<String>()
+                    .map_err(|_| PyValueError::new_err("policy.name must be a string"))?;
+                if name.trim().is_empty() {
+                    return Err(PyValueError::new_err("policy.name must not be empty"));
+                }
+                ensure_callable_method(policy, "check_pre_trade_start")?;
+                ensure_callable_method(policy, "apply_execution_report")?;
+                Box::new(PythonStartPolicyAdapter {
+                    name,
+                    policy: policy.clone().unbind(),
+                })
+            };
 
-        self.start_policies.borrow_mut().push(config);
+        self.start_policies
+            .borrow_mut()
+            .push(BoxedStartPolicy { inner: rust_policy });
         Ok(())
     }
 
     fn push_main_policy(&self, policy: &Bound<'_, PyAny>) -> PyResult<()> {
-        let name = extract_python_policy_name(policy)?;
+        let name = policy
+            .getattr("name")?
+            .extract::<String>()
+            .map_err(|_| PyValueError::new_err("policy.name must be a string"))?;
+        if name.trim().is_empty() {
+            return Err(PyValueError::new_err("policy.name must not be empty"));
+        }
         ensure_callable_method(policy, "perform_pre_trade_check")?;
         ensure_callable_method(policy, "apply_execution_report")?;
-        self.main_policies
-            .borrow_mut()
-            .push(MainPolicyConfig::PythonCustom {
+        self.main_policies.borrow_mut().push(BoxedMainPolicy {
+            inner: Box::new(PythonMainPolicyAdapter {
                 name,
                 policy: policy.clone().unbind(),
-            });
+            }),
+        });
         Ok(())
     }
 
     fn push_account_adjustment_policy(&self, policy: &Bound<'_, PyAny>) -> PyResult<()> {
-        let name = extract_python_policy_name(policy)?;
+        let name = policy
+            .getattr("name")?
+            .extract::<String>()
+            .map_err(|_| PyValueError::new_err("policy.name must be a string"))?;
+        if name.trim().is_empty() {
+            return Err(PyValueError::new_err("policy.name must not be empty"));
+        }
         ensure_callable_method(policy, "apply_account_adjustment")?;
         self.adjustment_policies
             .borrow_mut()
-            .push(AdjustmentPolicyConfig::PythonCustom {
-                name,
-                policy: policy.clone().unbind(),
+            .push(BoxedAccountAdjustmentPolicy {
+                inner: Box::new(PythonAccountAdjustmentPolicyAdapter {
+                    name,
+                    policy: policy.clone().unbind(),
+                }),
             });
         Ok(())
     }
@@ -1612,9 +1574,9 @@ impl PyEngineBuilder {
 
 #[pyclass(name = "EngineBuilder", module = "openpit", unsendable)]
 struct PyEngineBuilder {
-    start_policies: RefCell<Vec<StartPolicyConfig>>,
-    main_policies: RefCell<Vec<MainPolicyConfig>>,
-    adjustment_policies: RefCell<Vec<AdjustmentPolicyConfig>>,
+    start_policies: RefCell<Vec<BoxedStartPolicy>>,
+    main_policies: RefCell<Vec<BoxedMainPolicy>>,
+    adjustment_policies: RefCell<Vec<BoxedAccountAdjustmentPolicy>>,
 }
 
 #[pymethods]
@@ -1647,71 +1609,18 @@ impl PyEngineBuilder {
     }
 
     fn build(&self) -> PyResult<PyEngine> {
-        let mut builder =
-            Engine::<PythonOrder, PythonExecutionReport, PythonAccountAdjustment>::builder();
+        let mut builder = Engine::<Order, ExecutionReport, AccountAdjustment>::builder();
 
-        for policy in self.start_policies.borrow().iter() {
-            builder = match policy {
-                StartPolicyConfig::OrderValidation => {
-                    builder.check_pre_trade_start_policy(GuardedOrderValidation::new())
-                }
-                StartPolicyConfig::PnlKillSwitchShared { policy } => builder
-                    .check_pre_trade_start_policy(GuardedPnlKillSwitch::new(Rc::clone(policy))),
-                StartPolicyConfig::RateLimit {
-                    max_orders,
-                    window_seconds,
-                } => builder.check_pre_trade_start_policy(GuardedRateLimit::new(
-                    RateLimitPolicy::new(*max_orders, Duration::from_secs(*window_seconds)),
-                )),
-                StartPolicyConfig::OrderSizeLimit { limits } => {
-                    let (first, rest) = limits.split_first().ok_or_else(|| {
-                        PyValueError::new_err("OrderSizeLimitPolicy requires at least one limit")
-                    })?;
-                    let first_limit = OrderSizeLimit {
-                        settlement_asset: parse_asset(first.settlement_asset.as_str())?,
-                        max_quantity: parse_quantity(&first.max_quantity)?,
-                        max_notional: parse_volume(&first.max_notional)?,
-                    };
-                    let rest_limits = rest
-                        .iter()
-                        .map(|limit| {
-                            Ok(OrderSizeLimit {
-                                settlement_asset: parse_asset(limit.settlement_asset.as_str())?,
-                                max_quantity: parse_quantity(&limit.max_quantity)?,
-                                max_notional: parse_volume(&limit.max_notional)?,
-                            })
-                        })
-                        .collect::<PyResult<Vec<_>>>()?;
-                    let rust_policy = OrderSizeLimitPolicy::new(first_limit, rest_limits);
-                    builder.check_pre_trade_start_policy(GuardedOrderSizeLimit::new(rust_policy))
-                }
-                StartPolicyConfig::PythonCustom { name, policy } => builder
-                    .check_pre_trade_start_policy(PythonStartPolicyAdapter {
-                        name,
-                        policy: Python::with_gil(|py| policy.clone_ref(py)),
-                    }),
-            };
+        for policy in self.start_policies.borrow_mut().drain(..) {
+            builder = builder.check_pre_trade_start_policy(policy);
         }
 
-        for policy in self.main_policies.borrow().iter() {
-            builder = match policy {
-                MainPolicyConfig::PythonCustom { name, policy } => {
-                    builder.pre_trade_policy(PythonMainPolicyAdapter {
-                        name,
-                        policy: Python::with_gil(|py| policy.clone_ref(py)),
-                    })
-                }
-            };
+        for policy in self.main_policies.borrow_mut().drain(..) {
+            builder = builder.pre_trade_policy(policy);
         }
 
-        for policy in self.adjustment_policies.borrow().iter() {
-            builder = match policy {
-                AdjustmentPolicyConfig::PythonCustom { name, policy } => builder
-                    .account_adjustment_policy(PythonAccountAdjustmentPolicyAdapter {
-                        name,
-                        policy: Python::with_gil(|py| policy.clone_ref(py)),
-                    }),
-            };
+        for policy in self.adjustment_policies.borrow_mut().drain(..) {
+            builder = builder.account_adjustment_policy(policy);
         }
 
         let engine = builder
@@ -1722,6 +1631,45 @@ impl PyEngineBuilder {
     }
 }
 
+fn build_pnl_kill_switch_policy(barriers: &[(String, String)]) -> PyResult<PnlKillSwitchPolicy> {
+    let (first, rest) = barriers.split_first().ok_or_else(|| {
+        PyValueError::new_err("PnlKillSwitchPolicy requires at least one barrier")
+    })?;
+    let first_barrier = (parse_asset(first.0.as_str())?, parse_pnl(&first.1)?);
+    let rest_barriers = rest
+        .iter()
+        .map(|(settlement_asset, barrier)| {
+            Ok((parse_asset(settlement_asset.as_str())?, parse_pnl(barrier)?))
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    PnlKillSwitchPolicy::new(first_barrier, rest_barriers)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+fn build_order_size_limit_policy(
+    limits: &[OrderSizeLimitConfig],
+) -> PyResult<OrderSizeLimitPolicy> {
+    let (first, rest) = limits
+        .split_first()
+        .ok_or_else(|| PyValueError::new_err("OrderSizeLimitPolicy requires at least one limit"))?;
+    let first_limit = OrderSizeLimit {
+        settlement_asset: parse_asset(first.settlement_asset.as_str())?,
+        max_quantity: parse_quantity(&first.max_quantity)?,
+        max_notional: parse_volume(&first.max_notional)?,
+    };
+    let rest_limits = rest
+        .iter()
+        .map(|limit| {
+            Ok(OrderSizeLimit {
+                settlement_asset: parse_asset(limit.settlement_asset.as_str())?,
+                max_quantity: parse_quantity(&limit.max_quantity)?,
+                max_notional: parse_volume(&limit.max_notional)?,
+            })
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(OrderSizeLimitPolicy::new(first_limit, rest_limits))
+}
+
 #[pyclass(
     name = "PnlKillSwitchPolicy",
     module = "openpit.pretrade.policies",
@@ -1729,7 +1677,8 @@ impl PyEngineBuilder {
 )]
 struct PyPnlKillSwitchPolicy {
     barriers: RefCell<Vec<(String, String)>>,
-    runtime_policy: RefCell<Option<Rc<PnlKillSwitchPolicy>>>,
+    inner: RefCell<Rc<PnlKillSwitchPolicy>>,
+    bound_to_engine: Cell<bool>,
 }
 
 #[pymethods]
@@ -1740,18 +1689,15 @@ impl PyPnlKillSwitchPolicy {
     #[new]
     #[pyo3(signature = (settlement_asset, barrier))]
     fn new(settlement_asset: &Bound<'_, PyAny>, barrier: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let settlement_asset = if let Ok(asset) = settlement_asset.extract::<PyRef<'_, PyAsset>>() {
-            asset.inner.to_string()
-        } else {
-            settlement_asset
-                .extract::<String>()
-                .map_err(|_| PyTypeError::new_err("settlement_asset must be openpit.param.Asset"))?
-        };
-        parse_asset(&settlement_asset)?;
+        let settlement_asset = parse_asset_input(settlement_asset)?.to_string();
         let barrier = parse_pnl_input(barrier)?.to_string();
+        let barriers = vec![(settlement_asset, barrier)];
+        let policy = build_pnl_kill_switch_policy(&barriers)?;
+
         Ok(Self {
-            barriers: RefCell::new(vec![(settlement_asset, barrier)]),
-            runtime_policy: RefCell::new(None),
+            barriers: RefCell::new(barriers),
+            inner: RefCell::new(Rc::new(policy)),
+            bound_to_engine: Cell::new(false),
         })
     }
 
@@ -1761,20 +1707,13 @@ impl PyPnlKillSwitchPolicy {
         settlement_asset: &Bound<'_, PyAny>,
         barrier: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        if self.runtime_policy.borrow().is_some() {
+        if self.bound_to_engine.get() {
             return Err(PyRuntimeError::new_err(
                 "pnl policy is already bound to an engine and cannot be reconfigured",
             ));
         }
 
-        let settlement_asset = if let Ok(asset) = settlement_asset.extract::<PyRef<'_, PyAsset>>() {
-            asset.inner.to_string()
-        } else {
-            settlement_asset
-                .extract::<String>()
-                .map_err(|_| PyTypeError::new_err("settlement_asset must be openpit.param.Asset"))?
-        };
-        parse_asset(&settlement_asset)?;
+        let settlement_asset = parse_asset_input(settlement_asset)?.to_string();
         let barrier = parse_pnl_input(barrier)?.to_string();
 
         let mut barriers = self.barriers.borrow_mut();
@@ -1786,54 +1725,34 @@ impl PyPnlKillSwitchPolicy {
         } else {
             barriers.push((settlement_asset, barrier));
         }
+        let policy = build_pnl_kill_switch_policy(&barriers)?;
+        self.inner.replace(Rc::new(policy));
         Ok(())
     }
 
     #[pyo3(signature = (settlement_asset))]
     fn reset_pnl(&self, settlement_asset: &Bound<'_, PyAny>) -> PyResult<()> {
-        let settlement_asset = if let Ok(asset) = settlement_asset.extract::<PyRef<'_, PyAsset>>() {
-            asset.inner.clone()
-        } else {
-            return Err(PyTypeError::new_err(
-                "settlement_asset must be openpit.param.Asset",
-            ));
-        };
-        let policy = self.get_or_create_runtime_policy()?;
+        let settlement_asset = parse_asset_input(settlement_asset)?;
+        let policy = self.inner.borrow();
         policy.reset_pnl(&settlement_asset);
         Ok(())
     }
 }
 
 impl PyPnlKillSwitchPolicy {
-    fn get_or_create_runtime_policy(&self) -> PyResult<Rc<PnlKillSwitchPolicy>> {
-        if let Some(policy) = self.runtime_policy.borrow().as_ref() {
-            return Ok(Rc::clone(policy));
-        }
-
-        let barriers = self.barriers.borrow();
-        let (first, rest) = barriers.split_first().ok_or_else(|| {
-            PyValueError::new_err("PnlKillSwitchPolicy requires at least one barrier")
-        })?;
-        let first_barrier = (parse_asset(first.0.as_str())?, parse_pnl(&first.1)?);
-        let rest_barriers = rest
-            .iter()
-            .map(|(settlement_asset, barrier)| {
-                Ok((parse_asset(settlement_asset.as_str())?, parse_pnl(barrier)?))
-            })
-            .collect::<PyResult<Vec<_>>>()?;
-        let policy = Rc::new(
-            PnlKillSwitchPolicy::new(first_barrier, rest_barriers)
-                .map_err(|error| PyValueError::new_err(error.to_string()))?,
-        );
-        self.runtime_policy.borrow_mut().replace(Rc::clone(&policy));
-        Ok(policy)
+    fn policy_for_engine(&self) -> Rc<PnlKillSwitchPolicy> {
+        self.bound_to_engine.set(true);
+        Rc::clone(&self.inner.borrow())
     }
 }
 
-#[pyclass(name = "RateLimitPolicy", module = "openpit.pretrade.policies")]
+#[pyclass(
+    name = "RateLimitPolicy",
+    module = "openpit.pretrade.policies",
+    unsendable
+)]
 struct PyRateLimitPolicy {
-    max_orders: usize,
-    window_seconds: u64,
+    inner: Rc<RateLimitPolicy>,
 }
 
 #[pymethods]
@@ -1845,14 +1764,28 @@ impl PyRateLimitPolicy {
     #[pyo3(signature = (max_orders, window_seconds))]
     fn new(max_orders: usize, window_seconds: u64) -> Self {
         Self {
-            max_orders,
-            window_seconds,
+            inner: Rc::new(RateLimitPolicy::new(
+                max_orders,
+                Duration::from_secs(window_seconds),
+            )),
         }
     }
 }
 
-#[pyclass(name = "OrderValidationPolicy", module = "openpit.pretrade.policies")]
-struct PyOrderValidationPolicy;
+impl PyRateLimitPolicy {
+    fn policy_for_engine(&self) -> Rc<RateLimitPolicy> {
+        Rc::clone(&self.inner)
+    }
+}
+
+#[pyclass(
+    name = "OrderValidationPolicy",
+    module = "openpit.pretrade.policies",
+    unsendable
+)]
+struct PyOrderValidationPolicy {
+    inner: Rc<OrderValidationPolicy>,
+}
 
 #[pymethods]
 impl PyOrderValidationPolicy {
@@ -1861,7 +1794,15 @@ impl PyOrderValidationPolicy {
 
     #[new]
     fn new() -> Self {
-        Self
+        Self {
+            inner: Rc::new(OrderValidationPolicy::new()),
+        }
+    }
+}
+
+impl PyOrderValidationPolicy {
+    fn policy_for_engine(&self) -> Rc<OrderValidationPolicy> {
+        Rc::clone(&self.inner)
     }
 }
 
@@ -1880,14 +1821,7 @@ impl PyOrderSizeLimit {
         max_quantity: &Bound<'_, PyAny>,
         max_notional: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let settlement_asset = if let Ok(asset) = settlement_asset.extract::<PyRef<'_, PyAsset>>() {
-            asset.inner.to_string()
-        } else {
-            settlement_asset
-                .extract::<String>()
-                .map_err(|_| PyTypeError::new_err("settlement_asset must be openpit.param.Asset"))?
-        };
-        parse_asset(&settlement_asset)?;
+        let settlement_asset = parse_asset_input(settlement_asset)?.to_string();
         let max_quantity = parse_quantity_input(max_quantity)?.to_string();
         let max_notional = parse_volume_input(max_notional)?.to_string();
 
@@ -1908,6 +1842,7 @@ impl PyOrderSizeLimit {
 )]
 struct PyOrderSizeLimitPolicy {
     limits: RefCell<Vec<OrderSizeLimitConfig>>,
+    inner: RefCell<Rc<OrderSizeLimitPolicy>>,
 }
 
 #[pymethods]
@@ -1917,14 +1852,17 @@ impl PyOrderSizeLimitPolicy {
 
     #[new]
     #[pyo3(signature = (limit))]
-    fn new(limit: &PyOrderSizeLimit) -> Self {
-        Self {
-            limits: RefCell::new(vec![limit.inner.clone()]),
-        }
+    fn new(limit: &PyOrderSizeLimit) -> PyResult<Self> {
+        let limits = vec![limit.inner.clone()];
+        let policy = build_order_size_limit_policy(&limits)?;
+        Ok(Self {
+            limits: RefCell::new(limits),
+            inner: RefCell::new(Rc::new(policy)),
+        })
     }
 
     #[pyo3(signature = (limit))]
-    fn set_limit(&self, limit: &PyOrderSizeLimit) {
+    fn set_limit(&self, limit: &PyOrderSizeLimit) -> PyResult<()> {
         let mut limits = self.limits.borrow_mut();
         if let Some(existing) = limits.iter_mut().find(|existing| {
             existing.settlement_asset.as_str() == limit.inner.settlement_asset.as_str()
@@ -1933,6 +1871,15 @@ impl PyOrderSizeLimitPolicy {
         } else {
             limits.push(limit.inner.clone());
         }
+        let policy = build_order_size_limit_policy(&limits)?;
+        self.inner.replace(Rc::new(policy));
+        Ok(())
+    }
+}
+
+impl PyOrderSizeLimitPolicy {
+    fn policy_for_engine(&self) -> Rc<OrderSizeLimitPolicy> {
+        Rc::clone(&self.inner.borrow())
     }
 }
 
@@ -1952,8 +1899,8 @@ impl PyOrderOperation {
     #[new]
     #[pyo3(signature = (*, underlying_asset = None, settlement_asset = None, account_id = None, side = None, trade_amount = None, price = None))]
     fn new(
-        underlying_asset: Option<String>,
-        settlement_asset: Option<String>,
+        underlying_asset: Option<&Bound<'_, PyAny>>,
+        settlement_asset: Option<&Bound<'_, PyAny>>,
         account_id: Option<&Bound<'_, PyAny>>,
         side: Option<&Bound<'_, PyAny>>,
         trade_amount: Option<&Bound<'_, PyAny>>,
@@ -1966,8 +1913,8 @@ impl PyOrderOperation {
             ));
         }
         Ok(Self {
-            underlying_asset: underlying_asset.as_deref().map(parse_asset).transpose()?,
-            settlement_asset: settlement_asset.as_deref().map(parse_asset).transpose()?,
+            underlying_asset: underlying_asset.map(parse_asset_input).transpose()?,
+            settlement_asset: settlement_asset.map(parse_asset_input).transpose()?,
             account_id: account_id.map(parse_account_id_input).transpose()?,
             side: side.map(parse_side_input).transpose()?,
             trade_amount: trade_amount.map(parse_trade_amount_input).transpose()?,
@@ -1977,23 +1924,23 @@ impl PyOrderOperation {
 
     #[getter]
     fn underlying_asset(&self) -> Option<String> {
-        self.underlying_asset.as_ref().map(ToString::to_string)
+        self.underlying_asset.clone().map(|inner| inner.to_string())
     }
 
     #[setter]
-    fn set_underlying_asset(&mut self, value: Option<String>) -> PyResult<()> {
-        self.underlying_asset = value.as_deref().map(parse_asset).transpose()?;
+    fn set_underlying_asset(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.underlying_asset = value.map(parse_asset_input).transpose()?;
         Ok(())
     }
 
     #[getter]
     fn settlement_asset(&self) -> Option<String> {
-        self.settlement_asset.as_ref().map(ToString::to_string)
+        self.settlement_asset.clone().map(|inner| inner.to_string())
     }
 
     #[setter]
-    fn set_settlement_asset(&mut self, value: Option<String>) -> PyResult<()> {
-        self.settlement_asset = value.as_deref().map(parse_asset).transpose()?;
+    fn set_settlement_asset(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.settlement_asset = value.map(parse_asset_input).transpose()?;
         Ok(())
     }
 
@@ -2009,8 +1956,15 @@ impl PyOrderOperation {
     }
 
     #[getter]
-    fn side(&self) -> Option<&'static str> {
-        self.side.map(side_name)
+    fn side(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        self.side
+            .map(|side| {
+                PyModule::import_bound(py, "openpit.param")?
+                    .getattr("Side")?
+                    .call1((side_name(side),))
+                    .map(|obj| obj.into_py(py))
+            })
+            .transpose()
     }
 
     #[setter]
@@ -2020,10 +1974,8 @@ impl PyOrderOperation {
     }
 
     #[getter]
-    fn trade_amount(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        self.trade_amount
-            .map(|value| trade_amount_to_python(py, value))
-            .transpose()
+    fn trade_amount(&self) -> Option<PyTradeAmount> {
+        self.trade_amount.map(trade_amount_to_python)
     }
 
     #[setter]
@@ -2033,8 +1985,8 @@ impl PyOrderOperation {
     }
 
     #[getter]
-    fn price(&self) -> Option<String> {
-        self.price.as_ref().map(ToString::to_string)
+    fn price(&self) -> Option<PyPrice> {
+        self.price.map(|inner| PyPrice { inner })
     }
 
     #[setter]
@@ -2043,15 +1995,15 @@ impl PyOrderOperation {
         Ok(())
     }
 
-    fn __repr__(&self) -> String {
-        let trade_amount = self.trade_amount.as_ref().map(trade_amount_debug);
+    fn __repr__(&self, py: Python<'_>) -> String {
+        let trade_amount = self.trade_amount().map(|v| v.__repr__());
         format!(
             "OrderOperation(underlying_asset={:?}, settlement_asset={:?}, side={:?}, trade_amount={:?}, price={:?})",
             self.underlying_asset(),
             self.settlement_asset(),
-            self.side(),
+            self.side(py),
             trade_amount,
-            self.price(),
+            self.price().map(|v| v.inner.to_string()),
         )
     }
 }
@@ -2081,8 +2033,15 @@ impl PyOrderPosition {
     }
 
     #[getter]
-    fn position_side(&self) -> Option<&'static str> {
-        self.position_side.map(position_side_name)
+    fn position_side(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        self.position_side
+            .map(|side| {
+                PyModule::import_bound(py, "openpit.param")?
+                    .getattr("PositionSide")?
+                    .call1((position_side_name(side),))
+                    .map(|obj| obj.into_py(py))
+            })
+            .transpose()
     }
 
     #[setter]
@@ -2111,10 +2070,10 @@ impl PyOrderPosition {
         self.close_position = value;
     }
 
-    fn __repr__(&self) -> String {
+    fn __repr__(&self, py: Python<'_>) -> String {
         format!(
             "OrderPosition(position_side={:?}, reduce_only={:?}, close_position={:?})",
-            self.position_side(),
+            self.position_side(py),
             self.reduce_only(),
             self.close_position(),
         )
@@ -2135,12 +2094,12 @@ impl PyOrderMargin {
     #[pyo3(signature = (*, leverage = None, collateral_asset = None, auto_borrow = false))]
     fn new(
         leverage: Option<&Bound<'_, PyAny>>,
-        collateral_asset: Option<String>,
+        collateral_asset: Option<&Bound<'_, PyAny>>,
         auto_borrow: bool,
     ) -> PyResult<Self> {
         Ok(Self {
             leverage: leverage.map(parse_leverage_input).transpose()?,
-            collateral_asset: collateral_asset.as_deref().map(parse_asset).transpose()?,
+            collateral_asset: collateral_asset.map(parse_asset_input).transpose()?,
             auto_borrow,
         })
     }
@@ -2158,12 +2117,12 @@ impl PyOrderMargin {
 
     #[getter]
     fn collateral_asset(&self) -> Option<String> {
-        self.collateral_asset.as_ref().map(ToString::to_string)
+        self.collateral_asset.clone().map(|inner| inner.to_string())
     }
 
     #[setter]
-    fn set_collateral_asset(&mut self, value: Option<String>) -> PyResult<()> {
-        self.collateral_asset = value.as_deref().map(parse_asset).transpose()?;
+    fn set_collateral_asset(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.collateral_asset = value.map(parse_asset_input).transpose()?;
         Ok(())
     }
 
@@ -2212,12 +2171,6 @@ struct PyAccountId {
     inner: AccountId,
 }
 
-#[pyclass(name = "Asset", module = "openpit.param")]
-#[derive(Clone)]
-struct PyAsset {
-    inner: Asset,
-}
-
 #[pyclass(name = "Quantity", module = "openpit.param")]
 #[derive(Clone)]
 struct PyQuantity {
@@ -2228,6 +2181,12 @@ struct PyQuantity {
 #[derive(Clone)]
 struct PyPrice {
     inner: Price,
+}
+
+#[pyclass(name = "Trade", module = "openpit.param", subclass)]
+#[derive(Clone)]
+struct PyTrade {
+    inner: Trade,
 }
 
 #[pyclass(name = "Pnl", module = "openpit.param")]
@@ -2248,6 +2207,12 @@ struct PyVolume {
     inner: Volume,
 }
 
+#[pyclass(name = "Notional", module = "openpit.param")]
+#[derive(Clone)]
+struct PyNotional {
+    inner: Notional,
+}
+
 #[pyclass(name = "CashFlow", module = "openpit.param")]
 #[derive(Clone)]
 struct PyCashFlow {
@@ -2264,6 +2229,12 @@ struct PyPositionSize {
 #[derive(Clone, Copy)]
 struct PyAdjustmentAmount {
     inner: AdjustmentAmount,
+}
+
+#[pyclass(name = "TradeAmount", module = "openpit.param", subclass)]
+#[derive(Clone, Copy)]
+struct PyTradeAmount {
+    inner: TradeAmount,
 }
 
 #[pyclass(name = "AccountAdjustmentAmount", module = "openpit.core", subclass)]
@@ -2303,12 +2274,12 @@ struct PyAccountAdjustmentPositionOperation {
 #[pyclass(name = "AccountAdjustmentBounds", module = "openpit.core", subclass)]
 #[derive(Clone)]
 struct PyAccountAdjustmentBounds {
-    total_upper_bound: Option<PositionSize>,
-    total_lower_bound: Option<PositionSize>,
-    reserved_upper_bound: Option<PositionSize>,
-    reserved_lower_bound: Option<PositionSize>,
-    pending_upper_bound: Option<PositionSize>,
-    pending_lower_bound: Option<PositionSize>,
+    total_upper: Option<PositionSize>,
+    total_lower: Option<PositionSize>,
+    reserved_upper: Option<PositionSize>,
+    reserved_lower: Option<PositionSize>,
+    pending_upper: Option<PositionSize>,
+    pending_lower: Option<PositionSize>,
 }
 
 enum PyAccountAdjustmentOperation {
@@ -2332,11 +2303,14 @@ struct PyAccountAdjustment {
 impl PyInstrument {
     #[new]
     #[pyo3(signature = (underlying_asset, settlement_asset))]
-    fn new(underlying_asset: String, settlement_asset: String) -> PyResult<Self> {
+    fn new(
+        underlying_asset: &Bound<'_, PyAny>,
+        settlement_asset: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
         Ok(Self {
             inner: Instrument::new(
-                parse_asset(&underlying_asset)?,
-                parse_asset(&settlement_asset)?,
+                parse_asset_input(underlying_asset)?,
+                parse_asset_input(settlement_asset)?,
             ),
         })
     }
@@ -2470,11 +2444,11 @@ impl PyOrder {
         let operation = self
             .operation
             .as_ref()
-            .map(|v| v.bind(py).borrow().__repr__());
+            .map(|v| v.bind(py).borrow().__repr__(py));
         let position = self
             .position
             .as_ref()
-            .map(|v| v.bind(py).borrow().__repr__());
+            .map(|v| v.bind(py).borrow().__repr__(py));
         let margin = self.margin.as_ref().map(|v| v.bind(py).borrow().__repr__());
         format!(
             "Order(operation={:?}, position={:?}, margin={:?})",
@@ -2486,7 +2460,16 @@ impl PyOrder {
 #[pymethods]
 impl PyLeverage {
     #[new]
-    fn new(multiplier: u16) -> PyResult<Self> {
+    fn new(multiplier: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: parse_leverage_input(multiplier)?,
+        })
+    }
+
+    #[staticmethod]
+    fn from_int(multiplier: i64) -> PyResult<Self> {
+        let multiplier = u16::try_from(multiplier)
+            .map_err(|_| PyValueError::new_err("invalid leverage value"))?;
         Ok(Self {
             inner: Leverage::from_u16(multiplier)
                 .map_err(|error| PyValueError::new_err(error.to_string()))?,
@@ -2494,15 +2477,7 @@ impl PyLeverage {
     }
 
     #[staticmethod]
-    fn from_u16(multiplier: u16) -> PyResult<Self> {
-        Ok(Self {
-            inner: Leverage::from_u16(multiplier)
-                .map_err(|error| PyValueError::new_err(error.to_string()))?,
-        })
-    }
-
-    #[staticmethod]
-    fn from_f64(multiplier: f64) -> PyResult<Self> {
+    fn from_float(multiplier: f64) -> PyResult<Self> {
         Ok(Self {
             inner: Leverage::from_f64(multiplier)
                 .map_err(|error| PyValueError::new_err(error.to_string()))?,
@@ -2515,8 +2490,14 @@ impl PyLeverage {
     }
 
     #[pyo3(signature = (notional))]
-    fn margin_required(&self, notional: f64) -> f64 {
-        self.inner.margin_required(notional)
+    fn calculate_margin_required(&self, notional: &Bound<'_, PyAny>) -> PyResult<PyNotional> {
+        let notional = parse_notional_input(notional)?;
+        Ok(PyNotional {
+            inner: self
+                .inner
+                .calculate_margin_required(notional)
+                .map_err(|error| create_param_error(error.to_string()))?,
+        })
     }
 
     fn __repr__(&self) -> String {
@@ -2560,133 +2541,621 @@ impl PyAccountId {
     }
 }
 
-#[pymethods]
-impl PyAsset {
-    #[new]
-    fn new(value: String) -> PyResult<Self> {
-        Ok(Self {
-            inner: parse_asset(&value)?,
-        })
-    }
+macro_rules! impl_decimal_pymethods {
+    ($py_type:ident, $domain:ty, $parse_input:ident, $py_name:literal, signed, { $($extra:tt)* }) => {
+        #[pymethods]
+        impl $py_type {
+            #[new]
+            fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+                Ok(Self {
+                    inner: $parse_input(value)?,
+                })
+            }
 
-    #[getter]
-    fn value(&self) -> String {
-        self.inner.to_string()
-    }
+            #[classattr]
+            const ZERO: Self = Self {
+                inner: <$domain>::ZERO,
+            };
 
-    fn __repr__(&self) -> String {
-        format!("Asset(value={:?})", self.value())
-    }
+            #[staticmethod]
+            fn from_decimal(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+                let decimal = parse_python_decimal(value, $py_name)?;
+                Ok(Self {
+                    inner: <$domain>::from_str(decimal.to_string().as_str())
+                        .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            fn from_str(value: &str) -> PyResult<Self> {
+                Ok(Self {
+                    inner: <$domain>::from_str(value)
+                        .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            fn from_int(value: i64) -> PyResult<Self> {
+                Ok(Self {
+                    inner: <$domain>::from_str(value.to_string().as_str())
+                        .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            fn from_u64(value: u64) -> PyResult<Self> {
+                Ok(Self {
+                    inner: <$domain>::from_str(value.to_string().as_str())
+                        .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            /// WARNING:
+            /// float values are inherently imprecise.
+            /// Use decimal/string inputs for external monetary data.
+            fn from_float(value: f64) -> PyResult<Self> {
+                Ok(Self {
+                    inner: <$domain>::from_f64(value)
+                        .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            fn from_str_rounded(value: &str, scale: u32, strategy: &str) -> PyResult<Self> {
+                Ok(Self {
+                    inner: <$domain>::from_str_rounded(
+                        value,
+                        scale,
+                        parse_rounding_strategy(strategy)?,
+                    )
+                    .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            fn from_float_rounded(value: f64, scale: u32, strategy: &str) -> PyResult<Self> {
+                Ok(Self {
+                    inner: <$domain>::from_f64_rounded(
+                        value,
+                        scale,
+                        parse_rounding_strategy(strategy)?,
+                    )
+                    .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            fn from_decimal_rounded(
+                value: &Bound<'_, PyAny>,
+                scale: u32,
+                strategy: &str,
+            ) -> PyResult<Self> {
+                let decimal = parse_python_decimal(value, $py_name)?;
+                Ok(Self {
+                    inner: <$domain>::from_decimal_rounded(
+                        decimal,
+                        scale,
+                        parse_rounding_strategy(strategy)?,
+                    )
+                    .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[getter]
+            fn decimal(&self, py: Python<'_>) -> PyResult<PyObject> {
+                rust_decimal_to_python_decimal(py, self.inner.to_decimal())
+            }
+
+            fn to_json_value(&self) -> String {
+                self.inner.to_string()
+            }
+
+            fn __repr__(&self) -> String {
+                format!("{}(Decimal('{}'))", $py_name, self.inner)
+            }
+
+            fn __str__(&self) -> String {
+                self.inner.to_string()
+            }
+
+            fn __richcmp__(&self, other: &Bound<'_, PyAny>, op: CompareOp) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Ok(other) = other.extract::<PyRef<'_, $py_type>>() {
+                    let result = match op {
+                        CompareOp::Lt => self.inner < other.inner,
+                        CompareOp::Le => self.inner <= other.inner,
+                        CompareOp::Eq => self.inner == other.inner,
+                        CompareOp::Ne => self.inner != other.inner,
+                        CompareOp::Gt => self.inner > other.inner,
+                        CompareOp::Ge => self.inner >= other.inner,
+                    };
+                    return Ok(result.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            fn __hash__(&self) -> u64 {
+                let mut hasher = DefaultHasher::new();
+                self.inner.to_decimal().hash(&mut hasher);
+                hasher.finish()
+            }
+
+            fn __bool__(&self) -> bool {
+                !self.inner.is_zero()
+            }
+
+            /// WARNING:
+            /// float values are inherently imprecise.
+            /// Use decimal/string inputs for external monetary data.
+            fn __float__(&self) -> PyResult<f64> {
+                self.inner.to_decimal().to_f64().ok_or_else(|| {
+                    PyValueError::new_err(format!("{} cannot be represented as float", $py_name))
+                })
+            }
+
+            fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Ok(other) = other.extract::<PyRef<'_, $py_type>>() {
+                    let result = self
+                        .inner
+                        .checked_add(other.inner)
+                        .map_err(|error| create_param_error(error.to_string()))?;
+                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            fn __radd__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                self.__add__(other)
+            }
+
+            fn __sub__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Ok(other) = other.extract::<PyRef<'_, $py_type>>() {
+                    let result = self
+                        .inner
+                        .checked_sub(other.inner)
+                        .map_err(|error| create_param_error(error.to_string()))?;
+                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            fn __rsub__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Ok(other) = other.extract::<PyRef<'_, $py_type>>() {
+                    let result = other
+                        .inner
+                        .checked_sub(self.inner)
+                        .map_err(|error| create_param_error(error.to_string()))?;
+                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Some(scalar) = extract_scalar_operand(other)? {
+                    let result = match scalar {
+                        ScalarOperand::I64(v) => self
+                            .inner
+                            .checked_mul_i64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                        ScalarOperand::U64(v) => self
+                            .inner
+                            .checked_mul_u64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                        ScalarOperand::F64(v) => self
+                            .inner
+                            .checked_mul_f64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                    };
+                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            fn __rmul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                self.__mul__(other)
+            }
+
+            fn __truediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Some(divisor) = extract_scalar_operand(other)? {
+                    let result = match divisor {
+                        ScalarOperand::I64(v) => self
+                            .inner
+                            .checked_div_i64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                        ScalarOperand::U64(v) => self
+                            .inner
+                            .checked_div_u64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                        ScalarOperand::F64(v) => self
+                            .inner
+                            .checked_div_f64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                    };
+                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            fn __mod__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Some(divisor) = extract_scalar_operand(other)? {
+                    let result = match divisor {
+                        ScalarOperand::I64(v) => self
+                            .inner
+                            .checked_rem_i64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                        ScalarOperand::U64(v) => self
+                            .inner
+                            .checked_rem_u64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                        ScalarOperand::F64(v) => self
+                            .inner
+                            .checked_rem_f64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                    };
+                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            fn __neg__(&self) -> PyResult<Self> {
+                Ok(Self {
+                    inner: self
+                        .inner
+                        .checked_neg()
+                        .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            fn __abs__(&self) -> Self {
+                Self {
+                    inner: <$domain>::new(self.inner.to_decimal().abs()),
+                }
+            }
+
+            $($extra)*
+        }
+    };
+    ($py_type:ident, $domain:ty, $parse_input:ident, $py_name:literal, unsigned, { $($extra:tt)* }) => {
+        #[pymethods]
+        impl $py_type {
+            #[new]
+            fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+                Ok(Self {
+                    inner: $parse_input(value)?,
+                })
+            }
+
+            #[classattr]
+            const ZERO: Self = Self {
+                inner: <$domain>::ZERO,
+            };
+
+            #[staticmethod]
+            fn from_decimal(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+                let decimal = parse_python_decimal(value, $py_name)?;
+                Ok(Self {
+                    inner: <$domain>::from_str(decimal.to_string().as_str())
+                        .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            fn from_str(value: &str) -> PyResult<Self> {
+                Ok(Self {
+                    inner: <$domain>::from_str(value)
+                        .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            fn from_int(value: i64) -> PyResult<Self> {
+                Ok(Self {
+                    inner: <$domain>::from_str(value.to_string().as_str())
+                        .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            fn from_u64(value: u64) -> PyResult<Self> {
+                Ok(Self {
+                    inner: <$domain>::from_str(value.to_string().as_str())
+                        .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            /// WARNING:
+            /// float values are inherently imprecise.
+            /// Use decimal/string inputs for external monetary data.
+            fn from_float(value: f64) -> PyResult<Self> {
+                Ok(Self {
+                    inner: <$domain>::from_f64(value)
+                        .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            fn from_str_rounded(value: &str, scale: u32, strategy: &str) -> PyResult<Self> {
+                Ok(Self {
+                    inner: <$domain>::from_str_rounded(
+                        value,
+                        scale,
+                        parse_rounding_strategy(strategy)?,
+                    )
+                    .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            fn from_float_rounded(value: f64, scale: u32, strategy: &str) -> PyResult<Self> {
+                Ok(Self {
+                    inner: <$domain>::from_f64_rounded(
+                        value,
+                        scale,
+                        parse_rounding_strategy(strategy)?,
+                    )
+                    .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[staticmethod]
+            fn from_decimal_rounded(
+                value: &Bound<'_, PyAny>,
+                scale: u32,
+                strategy: &str,
+            ) -> PyResult<Self> {
+                let decimal = parse_python_decimal(value, $py_name)?;
+                Ok(Self {
+                    inner: <$domain>::from_decimal_rounded(
+                        decimal,
+                        scale,
+                        parse_rounding_strategy(strategy)?,
+                    )
+                    .map_err(|error| create_param_error(error.to_string()))?,
+                })
+            }
+
+            #[getter]
+            fn decimal(&self, py: Python<'_>) -> PyResult<PyObject> {
+                rust_decimal_to_python_decimal(py, self.inner.to_decimal())
+            }
+
+            fn to_json_value(&self) -> String {
+                self.inner.to_string()
+            }
+
+            fn __repr__(&self) -> String {
+                format!("{}(Decimal('{}'))", $py_name, self.inner)
+            }
+
+            fn __str__(&self) -> String {
+                self.inner.to_string()
+            }
+
+            fn __richcmp__(&self, other: &Bound<'_, PyAny>, op: CompareOp) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Ok(other) = other.extract::<PyRef<'_, $py_type>>() {
+                    let result = match op {
+                        CompareOp::Lt => self.inner < other.inner,
+                        CompareOp::Le => self.inner <= other.inner,
+                        CompareOp::Eq => self.inner == other.inner,
+                        CompareOp::Ne => self.inner != other.inner,
+                        CompareOp::Gt => self.inner > other.inner,
+                        CompareOp::Ge => self.inner >= other.inner,
+                    };
+                    return Ok(result.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            fn __hash__(&self) -> u64 {
+                let mut hasher = DefaultHasher::new();
+                self.inner.to_decimal().hash(&mut hasher);
+                hasher.finish()
+            }
+
+            fn __bool__(&self) -> bool {
+                !self.inner.is_zero()
+            }
+
+            /// WARNING:
+            /// float values are inherently imprecise.
+            /// Use decimal/string inputs for external monetary data.
+            fn __float__(&self) -> PyResult<f64> {
+                self.inner.to_decimal().to_f64().ok_or_else(|| {
+                    PyValueError::new_err(format!("{} cannot be represented as float", $py_name))
+                })
+            }
+
+            fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Ok(other) = other.extract::<PyRef<'_, $py_type>>() {
+                    let result = self
+                        .inner
+                        .checked_add(other.inner)
+                        .map_err(|error| create_param_error(error.to_string()))?;
+                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            fn __radd__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                self.__add__(other)
+            }
+
+            fn __sub__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Ok(other) = other.extract::<PyRef<'_, $py_type>>() {
+                    let result = self
+                        .inner
+                        .checked_sub(other.inner)
+                        .map_err(|error| create_param_error(error.to_string()))?;
+                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            fn __rsub__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Ok(other) = other.extract::<PyRef<'_, $py_type>>() {
+                    let result = other
+                        .inner
+                        .checked_sub(self.inner)
+                        .map_err(|error| create_param_error(error.to_string()))?;
+                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Some(scalar) = extract_scalar_operand(other)? {
+                    let result = match scalar {
+                        ScalarOperand::I64(v) => self
+                            .inner
+                            .checked_mul_i64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                        ScalarOperand::U64(v) => self
+                            .inner
+                            .checked_mul_u64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                        ScalarOperand::F64(v) => self
+                            .inner
+                            .checked_mul_f64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                    };
+                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            fn __rmul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                self.__mul__(other)
+            }
+
+            fn __truediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Some(divisor) = extract_scalar_operand(other)? {
+                    let result = match divisor {
+                        ScalarOperand::I64(v) => self
+                            .inner
+                            .checked_div_i64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                        ScalarOperand::U64(v) => self
+                            .inner
+                            .checked_div_u64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                        ScalarOperand::F64(v) => self
+                            .inner
+                            .checked_div_f64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                    };
+                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            fn __mod__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+                let py = other.py();
+                if let Some(divisor) = extract_scalar_operand(other)? {
+                    let result = match divisor {
+                        ScalarOperand::I64(v) => self
+                            .inner
+                            .checked_rem_i64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                        ScalarOperand::U64(v) => self
+                            .inner
+                            .checked_rem_u64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                        ScalarOperand::F64(v) => self
+                            .inner
+                            .checked_rem_f64(v)
+                            .map_err(|error| create_param_error(error.to_string()))?,
+                    };
+                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                }
+                Ok(py.NotImplemented().into())
+            }
+
+            $($extra)*
+        }
+    };
 }
 
-#[pymethods]
-impl PyQuantity {
-    #[new]
-    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(Self {
-            inner: parse_quantity_input(value)?,
-        })
+impl_decimal_pymethods!(
+    PyQuantity,
+    Quantity,
+    parse_quantity_input,
+    "Quantity",
+    unsigned,
+    {
+        fn calculate_volume(&self, price: &PyPrice) -> PyResult<PyVolume> {
+            Ok(PyVolume {
+                inner: self
+                    .inner
+                    .calculate_volume(price.inner)
+                    .map_err(|error| create_param_error(error.to_string()))?,
+            })
+        }
     }
-
-    #[getter]
-    fn value(&self) -> String {
-        self.inner.to_string()
-    }
-
-    fn calculate_volume(&self, price: &PyPrice) -> PyResult<PyVolume> {
-        Ok(PyVolume {
-            inner: self
-                .inner
-                .calculate_volume(price.inner)
-                .map_err(|error| PyValueError::new_err(error.to_string()))?,
-        })
-    }
-
-    fn __repr__(&self) -> String {
-        format!("Quantity(value={:?})", self.value())
-    }
-}
-
-#[pymethods]
-impl PyPrice {
-    #[new]
-    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(Self {
-            inner: parse_price_input(value)?,
-        })
-    }
-
-    #[getter]
-    fn value(&self) -> String {
-        self.inner.to_string()
-    }
-
+);
+impl_decimal_pymethods!(PyPrice, Price, parse_price_input, "Price", signed, {
     fn calculate_volume(&self, quantity: &PyQuantity) -> PyResult<PyVolume> {
         Ok(PyVolume {
             inner: self
                 .inner
                 .calculate_volume(quantity.inner)
-                .map_err(|error| PyValueError::new_err(error.to_string()))?,
+                .map_err(|error| create_param_error(error.to_string()))?,
         })
     }
-
-    fn __repr__(&self) -> String {
-        format!("Price(value={:?})", self.value())
-    }
-}
-
-#[pymethods]
-impl PyPnl {
-    #[new]
-    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(Self {
-            inner: parse_pnl_input(value)?,
-        })
+});
+impl_decimal_pymethods!(PyPnl, Pnl, parse_pnl_input, "Pnl", signed, {
+    #[staticmethod]
+    fn from_fee(fee: &PyFee) -> Self {
+        Self {
+            inner: Pnl::from_fee(fee.inner),
+        }
     }
 
-    #[getter]
-    fn value(&self) -> String {
-        self.inner.to_string()
+    fn to_cash_flow(&self) -> PyCashFlow {
+        PyCashFlow {
+            inner: self.inner.to_cash_flow(),
+        }
     }
 
-    fn __repr__(&self) -> String {
-        format!("Pnl(value={:?})", self.value())
+    fn to_position_size(&self) -> PyPositionSize {
+        PyPositionSize {
+            inner: self.inner.to_position_size(),
+        }
     }
-}
-
-#[pymethods]
-impl PyFee {
-    #[new]
-    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(Self {
-            inner: parse_fee_input(value)?,
-        })
-    }
-
-    #[getter]
-    fn value(&self) -> String {
-        self.inner.to_string()
+});
+impl_decimal_pymethods!(PyFee, Fee, parse_fee_input, "Fee", signed, {
+    fn to_pnl(&self) -> PyPnl {
+        PyPnl {
+            inner: self.inner.to_pnl(),
+        }
     }
 
-    fn __repr__(&self) -> String {
-        format!("Fee(value={:?})", self.value())
-    }
-}
-
-#[pymethods]
-impl PyVolume {
-    #[new]
-    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(Self {
-            inner: parse_volume_input(value)?,
-        })
+    fn to_position_size(&self) -> PyPositionSize {
+        PyPositionSize {
+            inner: self.inner.to_position_size(),
+        }
     }
 
-    #[getter]
-    fn value(&self) -> String {
-        self.inner.to_string()
+    fn to_cash_flow(&self) -> PyCashFlow {
+        PyCashFlow {
+            inner: self.inner.to_cash_flow(),
+        }
     }
-
+});
+impl_decimal_pymethods!(PyVolume, Volume, parse_volume_input, "Volume", unsigned, {
     fn to_cash_flow_inflow(&self) -> PyCashFlow {
         PyCashFlow {
             inner: self.inner.to_cash_flow_inflow(),
@@ -2699,77 +3168,193 @@ impl PyVolume {
         }
     }
 
-    fn __richcmp__(&self, other: &PyVolume, op: CompareOp) -> bool {
-        match op {
-            CompareOp::Lt => self.inner < other.inner,
-            CompareOp::Le => self.inner <= other.inner,
-            CompareOp::Eq => self.inner == other.inner,
-            CompareOp::Ne => self.inner != other.inner,
-            CompareOp::Gt => self.inner > other.inner,
-            CompareOp::Ge => self.inner >= other.inner,
+    fn calculate_quantity(&self, price: &PyPrice) -> PyResult<PyQuantity> {
+        Ok(PyQuantity {
+            inner: self
+                .inner
+                .calculate_quantity(price.inner)
+                .map_err(|error| create_param_error(error.to_string()))?,
+        })
+    }
+
+    fn to_notional(&self) -> PyNotional {
+        PyNotional {
+            inner: Notional::from_volume(self.inner),
+        }
+    }
+});
+impl_decimal_pymethods!(
+    PyNotional,
+    Notional,
+    parse_notional_input,
+    "Notional",
+    unsigned,
+    {
+        #[staticmethod]
+        fn from_volume(volume: &PyVolume) -> Self {
+            Self {
+                inner: Notional::from_volume(volume.inner),
+            }
+        }
+
+        #[staticmethod]
+        fn from_price_quantity(price: &PyPrice, quantity: &PyQuantity) -> PyResult<Self> {
+            Ok(Self {
+                inner: Notional::from_price_quantity(price.inner, quantity.inner)
+                    .map_err(|error| create_param_error(error.to_string()))?,
+            })
+        }
+
+        fn to_volume(&self) -> PyVolume {
+            PyVolume {
+                inner: self.inner.to_volume(),
+            }
+        }
+
+        fn calculate_margin_required(&self, leverage: &Bound<'_, PyAny>) -> PyResult<PyNotional> {
+            let lev = parse_leverage_input(leverage)?;
+            Ok(PyNotional {
+                inner: self
+                    .inner
+                    .calculate_margin_required(lev)
+                    .map_err(|error| create_param_error(error.to_string()))?,
+            })
+        }
+    }
+);
+impl_decimal_pymethods!(
+    PyCashFlow,
+    CashFlow,
+    parse_cash_flow_input,
+    "CashFlow",
+    signed,
+    {
+        #[staticmethod]
+        fn from_pnl(pnl: &PyPnl) -> Self {
+            Self {
+                inner: CashFlow::from_pnl(pnl.inner),
+            }
+        }
+
+        #[staticmethod]
+        fn from_fee(fee: &PyFee) -> Self {
+            Self {
+                inner: CashFlow::from_fee(fee.inner),
+            }
+        }
+
+        #[staticmethod]
+        fn from_volume_inflow(volume: &PyVolume) -> Self {
+            Self {
+                inner: CashFlow::from_volume_inflow(volume.inner),
+            }
+        }
+
+        #[staticmethod]
+        fn from_volume_outflow(volume: &PyVolume) -> Self {
+            Self {
+                inner: CashFlow::from_volume_outflow(volume.inner),
+            }
+        }
+    }
+);
+impl_decimal_pymethods!(
+    PyPositionSize,
+    PositionSize,
+    parse_position_size_input,
+    "PositionSize",
+    signed,
+    {
+        #[staticmethod]
+        fn from_quantity_and_side(quantity: &PyQuantity, side: &str) -> PyResult<Self> {
+            Ok(Self {
+                inner: PositionSize::from_quantity_and_side(quantity.inner, parse_side(side)?),
+            })
+        }
+
+        #[staticmethod]
+        fn from_pnl(pnl: &PyPnl) -> Self {
+            Self {
+                inner: PositionSize::from_pnl(pnl.inner),
+            }
+        }
+
+        #[staticmethod]
+        fn from_fee(fee: &PyFee) -> Self {
+            Self {
+                inner: PositionSize::from_fee(fee.inner),
+            }
+        }
+
+        fn to_open_quantity(&self) -> (PyQuantity, String) {
+            let (quantity, side) = self.inner.to_open_quantity();
+            (PyQuantity { inner: quantity }, side_name(side).to_owned())
+        }
+
+        fn to_close_quantity(&self) -> (PyQuantity, Option<String>) {
+            let (quantity, side) = self.inner.to_close_quantity();
+            (
+                PyQuantity { inner: quantity },
+                side.map(|value| side_name(value).to_owned()),
+            )
+        }
+
+        fn checked_add_quantity(&self, qty: &PyQuantity, side: &str) -> PyResult<Self> {
+            Ok(Self {
+                inner: self
+                    .inner
+                    .checked_add_quantity(qty.inner, parse_side(side)?)
+                    .map_err(|error| create_param_error(error.to_string()))?,
+            })
+        }
+    }
+);
+
+#[pymethods]
+impl PyTrade {
+    #[new]
+    #[pyo3(signature = (*, price, quantity))]
+    fn new(price: &Bound<'_, PyAny>, quantity: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: Trade {
+                price: parse_price_input(price)?,
+                quantity: parse_quantity_input(quantity)?,
+            },
+        })
+    }
+
+    #[getter]
+    fn price(&self) -> PyPrice {
+        PyPrice {
+            inner: self.inner.price,
+        }
+    }
+
+    #[getter]
+    fn quantity(&self) -> PyQuantity {
+        PyQuantity {
+            inner: self.inner.quantity,
         }
     }
 
     fn __repr__(&self) -> String {
-        format!("Volume(value={:?})", self.value())
-    }
-}
-
-#[pymethods]
-impl PyCashFlow {
-    #[new]
-    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(Self {
-            inner: parse_cash_flow_input(value)?,
-        })
-    }
-
-    #[getter]
-    fn value(&self) -> String {
-        self.inner.to_string()
-    }
-
-    fn __repr__(&self) -> String {
-        format!("CashFlow(value={:?})", self.value())
-    }
-}
-
-#[pymethods]
-impl PyPositionSize {
-    #[new]
-    fn new(value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(Self {
-            inner: parse_position_size_input(value)?,
-        })
-    }
-
-    #[getter]
-    fn value(&self) -> String {
-        self.inner.to_string()
-    }
-
-    fn __repr__(&self) -> String {
-        format!("PositionSize(value={:?})", self.value())
+        format!(
+            "Trade(price={:?}, quantity={:?})",
+            self.inner.price.to_string(),
+            self.inner.quantity.to_string()
+        )
     }
 }
 
 #[pymethods]
 impl PyAdjustmentAmount {
+    /// Copy / subclass constructor — accepts another AdjustmentAmount instance.
     #[new]
-    #[pyo3(signature = (*, kind, value))]
-    fn new(kind: &str, value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let size = parse_position_size_input(value)?;
-        match kind.trim().to_ascii_lowercase().as_str() {
-            "delta" => Ok(Self {
-                inner: AdjustmentAmount::Delta(size),
-            }),
-            "absolute" => Ok(Self {
-                inner: AdjustmentAmount::Absolute(size),
-            }),
-            _ => Err(PyValueError::new_err("kind must be 'delta' or 'absolute'")),
-        }
+    fn new(other: PyRef<'_, PyAdjustmentAmount>) -> Self {
+        Self { inner: other.inner }
     }
 
+    /// Create a delta-type adjustment amount.
     #[staticmethod]
     fn delta(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         Ok(Self {
@@ -2777,6 +3362,7 @@ impl PyAdjustmentAmount {
         })
     }
 
+    /// Create an absolute-type adjustment amount.
     #[staticmethod]
     fn absolute(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         Ok(Self {
@@ -2785,29 +3371,98 @@ impl PyAdjustmentAmount {
     }
 
     #[getter]
-    fn kind(&self) -> &'static str {
+    fn is_delta(&self) -> bool {
+        matches!(self.inner, AdjustmentAmount::Delta(_))
+    }
+
+    #[getter]
+    fn is_absolute(&self) -> bool {
+        matches!(self.inner, AdjustmentAmount::Absolute(_))
+    }
+
+    #[getter]
+    fn as_delta(&self) -> Option<PyPositionSize> {
         match self.inner {
-            AdjustmentAmount::Delta(_) => "delta",
-            AdjustmentAmount::Absolute(_) => "absolute",
-            _ => "unknown",
+            AdjustmentAmount::Delta(size) => Some(PyPositionSize { inner: size }),
+            _ => None,
         }
     }
 
     #[getter]
-    fn value(&self) -> PyPositionSize {
-        let inner = match self.inner {
-            AdjustmentAmount::Delta(value) | AdjustmentAmount::Absolute(value) => value,
-            _ => PositionSize::from_str("0").expect("must be valid"),
-        };
-        PyPositionSize { inner }
+    fn as_absolute(&self) -> Option<PyPositionSize> {
+        match self.inner {
+            AdjustmentAmount::Absolute(size) => Some(PyPositionSize { inner: size }),
+            _ => None,
+        }
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "AdjustmentAmount(kind={:?}, value={})",
-            self.kind(),
-            self.value().value()
-        )
+        match self.inner {
+            AdjustmentAmount::Delta(size) => format!("AdjustmentAmount.delta(value={size:?})"),
+            AdjustmentAmount::Absolute(size) => {
+                format!("AdjustmentAmount.absolute(value={size:?})")
+            }
+            _ => "AdjustmentAmount(<unsupported>)".to_string(),
+        }
+    }
+}
+
+#[pymethods]
+impl PyTradeAmount {
+    /// Copy / subclass constructor — accepts another TradeAmount instance.
+    #[new]
+    fn new(other: PyRef<'_, PyTradeAmount>) -> Self {
+        Self { inner: other.inner }
+    }
+
+    /// Create a quantity-based trade amount.
+    #[staticmethod]
+    fn quantity(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: TradeAmount::Quantity(parse_quantity_input(value)?),
+        })
+    }
+
+    /// Create a volume-based trade amount.
+    #[staticmethod]
+    fn volume(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: TradeAmount::Volume(parse_volume_input(value)?),
+        })
+    }
+
+    #[getter]
+    fn is_quantity(&self) -> bool {
+        matches!(self.inner, TradeAmount::Quantity(_))
+    }
+
+    #[getter]
+    fn is_volume(&self) -> bool {
+        matches!(self.inner, TradeAmount::Volume(_))
+    }
+
+    #[getter]
+    fn as_quantity(&self) -> Option<PyQuantity> {
+        match self.inner {
+            TradeAmount::Quantity(qty) => Some(PyQuantity { inner: qty }),
+            _ => None,
+        }
+    }
+
+    #[getter]
+    fn as_volume(&self) -> Option<PyVolume> {
+        match self.inner {
+            TradeAmount::Volume(vol) => Some(PyVolume { inner: vol }),
+            _ => None,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        match self.inner {
+            TradeAmount::Quantity(qty) => format!("TradeAmount.quantity(value={qty:?})"),
+            TradeAmount::Volume(vol) => format!("TradeAmount.volume(value={vol:?})"),
+            _ => "TradeAmount(<unsupported>)".to_string(),
+        }
     }
 }
 
@@ -2875,29 +3530,29 @@ impl PyAccountAdjustmentBalanceOperation {
     #[new]
     #[pyo3(signature = (*, asset = None, average_entry_price = None))]
     fn new(
-        asset: Option<String>,
+        asset: Option<&Bound<'_, PyAny>>,
         average_entry_price: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         Ok(Self {
-            asset: asset.as_deref().map(parse_asset).transpose()?,
+            asset: asset.map(parse_asset_input).transpose()?,
             average_entry_price: average_entry_price.map(parse_price_input).transpose()?,
         })
     }
 
     #[getter]
     fn asset(&self) -> Option<String> {
-        self.asset.as_ref().map(ToString::to_string)
+        self.asset.clone().map(|inner| inner.to_string())
     }
 
     #[setter]
-    fn set_asset(&mut self, value: Option<String>) -> PyResult<()> {
-        self.asset = value.as_deref().map(parse_asset).transpose()?;
+    fn set_asset(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.asset = value.map(parse_asset_input).transpose()?;
         Ok(())
     }
 
     #[getter]
-    fn average_entry_price(&self) -> Option<String> {
-        self.average_entry_price.as_ref().map(ToString::to_string)
+    fn average_entry_price(&self) -> Option<PyPrice> {
+        self.average_entry_price.map(|inner| PyPrice { inner })
     }
 
     #[setter]
@@ -2910,7 +3565,7 @@ impl PyAccountAdjustmentBalanceOperation {
         format!(
             "AccountAdjustmentBalanceOperation(asset={:?}, average_entry_price={:?})",
             self.asset(),
-            self.average_entry_price(),
+            self.average_entry_price().map(|v| v.inner.to_string()),
         )
     }
 }
@@ -2920,9 +3575,9 @@ impl PyAccountAdjustmentPositionOperation {
     #[new]
     #[pyo3(signature = (*, underlying_asset = None, settlement_asset = None, collateral_asset = None, average_entry_price = None, mode = None, leverage = None))]
     fn new(
-        underlying_asset: Option<String>,
-        settlement_asset: Option<String>,
-        collateral_asset: Option<String>,
+        underlying_asset: Option<&Bound<'_, PyAny>>,
+        settlement_asset: Option<&Bound<'_, PyAny>>,
+        collateral_asset: Option<&Bound<'_, PyAny>>,
         average_entry_price: Option<&Bound<'_, PyAny>>,
         mode: Option<&Bound<'_, PyAny>>,
         leverage: Option<&Bound<'_, PyAny>>,
@@ -2935,9 +3590,9 @@ impl PyAccountAdjustmentPositionOperation {
         }
 
         Ok(Self {
-            underlying_asset: underlying_asset.as_deref().map(parse_asset).transpose()?,
-            settlement_asset: settlement_asset.as_deref().map(parse_asset).transpose()?,
-            collateral_asset: collateral_asset.as_deref().map(parse_asset).transpose()?,
+            underlying_asset: underlying_asset.map(parse_asset_input).transpose()?,
+            settlement_asset: settlement_asset.map(parse_asset_input).transpose()?,
+            collateral_asset: collateral_asset.map(parse_asset_input).transpose()?,
             average_entry_price: average_entry_price.map(parse_price_input).transpose()?,
             mode: mode.map(parse_position_mode_input).transpose()?,
             leverage: leverage.map(parse_leverage_input).transpose()?,
@@ -2946,40 +3601,40 @@ impl PyAccountAdjustmentPositionOperation {
 
     #[getter]
     fn underlying_asset(&self) -> Option<String> {
-        self.underlying_asset.as_ref().map(ToString::to_string)
+        self.underlying_asset.clone().map(|inner| inner.to_string())
     }
 
     #[setter]
-    fn set_underlying_asset(&mut self, value: Option<String>) -> PyResult<()> {
-        self.underlying_asset = value.as_deref().map(parse_asset).transpose()?;
+    fn set_underlying_asset(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.underlying_asset = value.map(parse_asset_input).transpose()?;
         Ok(())
     }
 
     #[getter]
     fn settlement_asset(&self) -> Option<String> {
-        self.settlement_asset.as_ref().map(ToString::to_string)
+        self.settlement_asset.clone().map(|inner| inner.to_string())
     }
 
     #[setter]
-    fn set_settlement_asset(&mut self, value: Option<String>) -> PyResult<()> {
-        self.settlement_asset = value.as_deref().map(parse_asset).transpose()?;
+    fn set_settlement_asset(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.settlement_asset = value.map(parse_asset_input).transpose()?;
         Ok(())
     }
 
     #[getter]
     fn collateral_asset(&self) -> Option<String> {
-        self.collateral_asset.as_ref().map(ToString::to_string)
+        self.collateral_asset.clone().map(|inner| inner.to_string())
     }
 
     #[setter]
-    fn set_collateral_asset(&mut self, value: Option<String>) -> PyResult<()> {
-        self.collateral_asset = value.as_deref().map(parse_asset).transpose()?;
+    fn set_collateral_asset(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.collateral_asset = value.map(parse_asset_input).transpose()?;
         Ok(())
     }
 
     #[getter]
-    fn average_entry_price(&self) -> Option<String> {
-        self.average_entry_price.as_ref().map(ToString::to_string)
+    fn average_entry_price(&self) -> Option<PyPrice> {
+        self.average_entry_price.map(|inner| PyPrice { inner })
     }
 
     #[setter]
@@ -2989,8 +3644,15 @@ impl PyAccountAdjustmentPositionOperation {
     }
 
     #[getter]
-    fn mode(&self) -> Option<&'static str> {
-        self.mode.map(position_mode_name)
+    fn mode(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        self.mode
+            .map(|mode| {
+                PyModule::import_bound(py, "openpit.param")?
+                    .getattr("PositionMode")?
+                    .call1((position_mode_name(mode),))
+                    .map(|obj| obj.into_py(py))
+            })
+            .transpose()
     }
 
     #[setter]
@@ -3010,14 +3672,14 @@ impl PyAccountAdjustmentPositionOperation {
         Ok(())
     }
 
-    fn __repr__(&self) -> String {
+    fn __repr__(&self, py: Python<'_>) -> String {
         format!(
             "AccountAdjustmentPositionOperation(underlying_asset={:?}, settlement_asset={:?}, collateral_asset={:?}, average_entry_price={:?}, mode={:?}, leverage={:?})",
             self.underlying_asset(),
             self.settlement_asset(),
             self.collateral_asset(),
-            self.average_entry_price(),
-            self.mode(),
+            self.average_entry_price().map(|v| v.inner.to_string()),
+            self.mode(py),
             self.leverage().map(|v| v.value()),
         )
     }
@@ -3026,105 +3688,89 @@ impl PyAccountAdjustmentPositionOperation {
 #[pymethods]
 impl PyAccountAdjustmentBounds {
     #[new]
-    #[pyo3(signature = (*, total_upper_bound = None, total_lower_bound = None, reserved_upper_bound = None, reserved_lower_bound = None, pending_upper_bound = None, pending_lower_bound = None))]
+    #[pyo3(signature = (*, total_upper = None, total_lower = None, reserved_upper = None, reserved_lower = None, pending_upper = None, pending_lower = None))]
     fn new(
-        total_upper_bound: Option<&Bound<'_, PyAny>>,
-        total_lower_bound: Option<&Bound<'_, PyAny>>,
-        reserved_upper_bound: Option<&Bound<'_, PyAny>>,
-        reserved_lower_bound: Option<&Bound<'_, PyAny>>,
-        pending_upper_bound: Option<&Bound<'_, PyAny>>,
-        pending_lower_bound: Option<&Bound<'_, PyAny>>,
+        total_upper: Option<&Bound<'_, PyAny>>,
+        total_lower: Option<&Bound<'_, PyAny>>,
+        reserved_upper: Option<&Bound<'_, PyAny>>,
+        reserved_lower: Option<&Bound<'_, PyAny>>,
+        pending_upper: Option<&Bound<'_, PyAny>>,
+        pending_lower: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         Ok(Self {
-            total_upper_bound: total_upper_bound
-                .map(parse_position_size_input)
-                .transpose()?,
-            total_lower_bound: total_lower_bound
-                .map(parse_position_size_input)
-                .transpose()?,
-            reserved_upper_bound: reserved_upper_bound
-                .map(parse_position_size_input)
-                .transpose()?,
-            reserved_lower_bound: reserved_lower_bound
-                .map(parse_position_size_input)
-                .transpose()?,
-            pending_upper_bound: pending_upper_bound
-                .map(parse_position_size_input)
-                .transpose()?,
-            pending_lower_bound: pending_lower_bound
-                .map(parse_position_size_input)
-                .transpose()?,
+            total_upper: total_upper.map(parse_position_size_input).transpose()?,
+            total_lower: total_lower.map(parse_position_size_input).transpose()?,
+            reserved_upper: reserved_upper.map(parse_position_size_input).transpose()?,
+            reserved_lower: reserved_lower.map(parse_position_size_input).transpose()?,
+            pending_upper: pending_upper.map(parse_position_size_input).transpose()?,
+            pending_lower: pending_lower.map(parse_position_size_input).transpose()?,
         })
     }
 
     #[getter]
-    fn total_upper_bound(&self) -> Option<PyPositionSize> {
-        self.total_upper_bound.map(|inner| PyPositionSize { inner })
+    fn total_upper(&self) -> Option<PyPositionSize> {
+        self.total_upper.map(|inner| PyPositionSize { inner })
     }
     #[setter]
-    fn set_total_upper_bound(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.total_upper_bound = value.map(parse_position_size_input).transpose()?;
+    fn set_total_upper(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.total_upper = value.map(parse_position_size_input).transpose()?;
         Ok(())
     }
     #[getter]
-    fn total_lower_bound(&self) -> Option<PyPositionSize> {
-        self.total_lower_bound.map(|inner| PyPositionSize { inner })
+    fn total_lower(&self) -> Option<PyPositionSize> {
+        self.total_lower.map(|inner| PyPositionSize { inner })
     }
     #[setter]
-    fn set_total_lower_bound(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.total_lower_bound = value.map(parse_position_size_input).transpose()?;
+    fn set_total_lower(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.total_lower = value.map(parse_position_size_input).transpose()?;
         Ok(())
     }
     #[getter]
-    fn reserved_upper_bound(&self) -> Option<PyPositionSize> {
-        self.reserved_upper_bound
-            .map(|inner| PyPositionSize { inner })
+    fn reserved_upper(&self) -> Option<PyPositionSize> {
+        self.reserved_upper.map(|inner| PyPositionSize { inner })
     }
     #[setter]
-    fn set_reserved_upper_bound(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.reserved_upper_bound = value.map(parse_position_size_input).transpose()?;
+    fn set_reserved_upper(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.reserved_upper = value.map(parse_position_size_input).transpose()?;
         Ok(())
     }
     #[getter]
-    fn reserved_lower_bound(&self) -> Option<PyPositionSize> {
-        self.reserved_lower_bound
-            .map(|inner| PyPositionSize { inner })
+    fn reserved_lower(&self) -> Option<PyPositionSize> {
+        self.reserved_lower.map(|inner| PyPositionSize { inner })
     }
     #[setter]
-    fn set_reserved_lower_bound(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.reserved_lower_bound = value.map(parse_position_size_input).transpose()?;
+    fn set_reserved_lower(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.reserved_lower = value.map(parse_position_size_input).transpose()?;
         Ok(())
     }
     #[getter]
-    fn pending_upper_bound(&self) -> Option<PyPositionSize> {
-        self.pending_upper_bound
-            .map(|inner| PyPositionSize { inner })
+    fn pending_upper(&self) -> Option<PyPositionSize> {
+        self.pending_upper.map(|inner| PyPositionSize { inner })
     }
     #[setter]
-    fn set_pending_upper_bound(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.pending_upper_bound = value.map(parse_position_size_input).transpose()?;
+    fn set_pending_upper(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.pending_upper = value.map(parse_position_size_input).transpose()?;
         Ok(())
     }
     #[getter]
-    fn pending_lower_bound(&self) -> Option<PyPositionSize> {
-        self.pending_lower_bound
-            .map(|inner| PyPositionSize { inner })
+    fn pending_lower(&self) -> Option<PyPositionSize> {
+        self.pending_lower.map(|inner| PyPositionSize { inner })
     }
     #[setter]
-    fn set_pending_lower_bound(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.pending_lower_bound = value.map(parse_position_size_input).transpose()?;
+    fn set_pending_lower(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.pending_lower = value.map(parse_position_size_input).transpose()?;
         Ok(())
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "AccountAdjustmentBounds(total_upper_bound={:?}, total_lower_bound={:?}, reserved_upper_bound={:?}, reserved_lower_bound={:?}, pending_upper_bound={:?}, pending_lower_bound={:?})",
-            self.total_upper_bound().map(|v| v.value()),
-            self.total_lower_bound().map(|v| v.value()),
-            self.reserved_upper_bound().map(|v| v.value()),
-            self.reserved_lower_bound().map(|v| v.value()),
-            self.pending_upper_bound().map(|v| v.value()),
-            self.pending_lower_bound().map(|v| v.value()),
+            "AccountAdjustmentBounds(total_upper={:?}, total_lower={:?}, reserved_upper={:?}, reserved_lower={:?}, pending_upper={:?}, pending_lower={:?})",
+            self.total_upper().map(|v| v.inner.to_string()),
+            self.total_lower().map(|v| v.inner.to_string()),
+            self.reserved_upper().map(|v| v.inner.to_string()),
+            self.reserved_lower().map(|v| v.inner.to_string()),
+            self.pending_upper().map(|v| v.inner.to_string()),
+            self.pending_lower().map(|v| v.inner.to_string()),
         )
     }
 }
@@ -3229,7 +3875,7 @@ impl PyAccountAdjustment {
     fn __repr__(&self, py: Python<'_>) -> String {
         let operation = self.operation.as_ref().map(|op| match op {
             PyAccountAdjustmentOperation::Balance(value) => value.bind(py).borrow().__repr__(),
-            PyAccountAdjustmentOperation::Position(value) => value.bind(py).borrow().__repr__(),
+            PyAccountAdjustmentOperation::Position(value) => value.bind(py).borrow().__repr__(py),
         });
         let amount = self
             .amount
@@ -3246,9 +3892,9 @@ impl PyAccountAdjustment {
     }
 }
 
-#[pyclass(name = "Request", module = "openpit.pretrade", unsendable)]
+#[pyclass(name = "PreTradeRequest", module = "openpit.pretrade", unsendable)]
 struct PyRequest {
-    inner: RefCell<Option<Request<PythonOrder>>>,
+    inner: RefCell<Option<PreTradeRequest<Order>>>,
 }
 
 #[pymethods]
@@ -3289,28 +3935,67 @@ impl PyRequest {
     }
 }
 
-#[pyclass(name = "Reservation", module = "openpit.pretrade", unsendable)]
+#[pyclass(name = "PreTradeReservation", module = "openpit.pretrade", unsendable)]
 struct PyReservation {
-    inner: RefCell<Option<Reservation>>,
+    inner: RefCell<Option<PreTradeReservation>>,
+}
+
+#[pyclass(name = "PreTradeLock", module = "openpit.pretrade", subclass)]
+#[derive(Clone)]
+struct PyPreTradeLock {
+    inner: PreTradeLock,
 }
 
 #[pymethods]
 impl PyReservation {
+    fn lock(&self) -> PyResult<PyPreTradeLock> {
+        let reservation_ref = self.inner.borrow();
+        let reservation = reservation_ref
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("reservation has already been finalized"))?;
+        Ok(PyPreTradeLock {
+            inner: *reservation.lock(),
+        })
+    }
+
     fn commit(&self) -> PyResult<()> {
-        let reservation = self.take_reservation()?;
+        let mut reservation = self.take_reservation()?;
         reservation.commit();
         Ok(())
     }
 
     fn rollback(&self) -> PyResult<()> {
-        let reservation = self.take_reservation()?;
+        let mut reservation = self.take_reservation()?;
         reservation.rollback();
         Ok(())
     }
 }
 
+#[pymethods]
+impl PyPreTradeLock {
+    #[new]
+    #[pyo3(signature = (price = None))]
+    fn new(price: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        Ok(Self {
+            inner: PreTradeLock::new(price.map(parse_price_input).transpose()?),
+        })
+    }
+
+    #[getter]
+    fn price(&self) -> Option<PyPrice> {
+        self.inner.price().map(|inner| PyPrice { inner })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "PreTradeLock(price={:?})",
+            self.price().map(|price| price.inner.to_string())
+        )
+    }
+}
+
 impl PyReservation {
-    fn take_reservation(&self) -> PyResult<Reservation> {
+    fn take_reservation(&self) -> PyResult<PreTradeReservation> {
         self.inner
             .borrow_mut()
             .take()
@@ -3332,8 +4017,8 @@ impl PyExecutionReportOperation {
     #[new]
     #[pyo3(signature = (*, underlying_asset = None, settlement_asset = None, account_id = None, side = None))]
     fn new(
-        underlying_asset: Option<String>,
-        settlement_asset: Option<String>,
+        underlying_asset: Option<&Bound<'_, PyAny>>,
+        settlement_asset: Option<&Bound<'_, PyAny>>,
         account_id: Option<&Bound<'_, PyAny>>,
         side: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
@@ -3344,8 +4029,8 @@ impl PyExecutionReportOperation {
             ));
         }
         Ok(Self {
-            underlying_asset: underlying_asset.as_deref().map(parse_asset).transpose()?,
-            settlement_asset: settlement_asset.as_deref().map(parse_asset).transpose()?,
+            underlying_asset: underlying_asset.map(parse_asset_input).transpose()?,
+            settlement_asset: settlement_asset.map(parse_asset_input).transpose()?,
             account_id: account_id.map(parse_account_id_input).transpose()?,
             side: side.map(parse_side_input).transpose()?,
         })
@@ -3353,23 +4038,23 @@ impl PyExecutionReportOperation {
 
     #[getter]
     fn underlying_asset(&self) -> Option<String> {
-        self.underlying_asset.as_ref().map(ToString::to_string)
+        self.underlying_asset.clone().map(|inner| inner.to_string())
     }
 
     #[setter]
-    fn set_underlying_asset(&mut self, value: Option<String>) -> PyResult<()> {
-        self.underlying_asset = value.as_deref().map(parse_asset).transpose()?;
+    fn set_underlying_asset(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.underlying_asset = value.map(parse_asset_input).transpose()?;
         Ok(())
     }
 
     #[getter]
     fn settlement_asset(&self) -> Option<String> {
-        self.settlement_asset.as_ref().map(ToString::to_string)
+        self.settlement_asset.clone().map(|inner| inner.to_string())
     }
 
     #[setter]
-    fn set_settlement_asset(&mut self, value: Option<String>) -> PyResult<()> {
-        self.settlement_asset = value.as_deref().map(parse_asset).transpose()?;
+    fn set_settlement_asset(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.settlement_asset = value.map(parse_asset_input).transpose()?;
         Ok(())
     }
 
@@ -3385,8 +4070,15 @@ impl PyExecutionReportOperation {
     }
 
     #[getter]
-    fn side(&self) -> Option<&'static str> {
-        self.side.map(side_name)
+    fn side(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        self.side
+            .map(|side| {
+                PyModule::import_bound(py, "openpit.param")?
+                    .getattr("Side")?
+                    .call1((side_name(side),))
+                    .map(|obj| obj.into_py(py))
+            })
+            .transpose()
     }
 
     #[setter]
@@ -3395,13 +4087,13 @@ impl PyExecutionReportOperation {
         Ok(())
     }
 
-    fn __repr__(&self) -> String {
+    fn __repr__(&self, py: Python<'_>) -> String {
         format!(
             "ExecutionReportOperation(underlying_asset={:?}, settlement_asset={:?}, account_id={:?}, side={:?})",
             self.underlying_asset(),
             self.settlement_asset(),
             self.account_id().map(|a| a.inner.as_u64()),
-            self.side(),
+            self.side(py),
         )
     }
 }
@@ -3409,48 +4101,48 @@ impl PyExecutionReportOperation {
 #[pyclass(name = "FinancialImpact", module = "openpit.core", subclass)]
 #[derive(Clone)]
 struct PyFinancialImpact {
-    pnl: Option<Pnl>,
-    fee: Option<Fee>,
+    pnl: Pnl,
+    fee: Fee,
 }
 
 #[pymethods]
 impl PyFinancialImpact {
     #[new]
-    #[pyo3(signature = (*, pnl = None, fee = None))]
-    fn new(pnl: Option<&Bound<'_, PyAny>>, fee: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+    #[pyo3(signature = (*, pnl, fee))]
+    fn new(pnl: &Bound<'_, PyAny>, fee: &Bound<'_, PyAny>) -> PyResult<Self> {
         Ok(Self {
-            pnl: pnl.map(parse_pnl_input).transpose()?,
-            fee: fee.map(parse_fee_input).transpose()?,
+            pnl: parse_pnl_input(pnl)?,
+            fee: parse_fee_input(fee)?,
         })
     }
 
     #[getter]
-    fn pnl(&self) -> Option<String> {
-        self.pnl.as_ref().map(ToString::to_string)
+    fn pnl(&self) -> PyPnl {
+        PyPnl { inner: self.pnl }
     }
 
     #[setter]
-    fn set_pnl(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.pnl = value.map(parse_pnl_input).transpose()?;
+    fn set_pnl(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.pnl = parse_pnl_input(value)?;
         Ok(())
     }
 
     #[getter]
-    fn fee(&self) -> Option<String> {
-        self.fee.as_ref().map(ToString::to_string)
+    fn fee(&self) -> PyFee {
+        PyFee { inner: self.fee }
     }
 
     #[setter]
-    fn set_fee(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.fee = value.map(parse_fee_input).transpose()?;
+    fn set_fee(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.fee = parse_fee_input(value)?;
         Ok(())
     }
 
     fn __repr__(&self) -> String {
         format!(
             "FinancialImpact(pnl={:?}, fee={:?})",
-            self.pnl(),
-            self.fee(),
+            self.pnl().inner.to_string(),
+            self.fee().inner.to_string(),
         )
     }
 }
@@ -3458,46 +4150,74 @@ impl PyFinancialImpact {
 #[pyclass(name = "ExecutionReportFillDetails", module = "openpit.core", subclass)]
 #[derive(Clone)]
 struct PyExecutionReportFillDetails {
-    fill_price: Option<Price>,
-    fill_quantity: Option<Quantity>,
+    last_trade: Option<Trade>,
+    leaves_quantity: Quantity,
+    lock: PreTradeLock,
     is_terminal: bool,
 }
 
 #[pymethods]
 impl PyExecutionReportFillDetails {
     #[new]
-    #[pyo3(signature = (*, fill_price = None, fill_quantity = None, is_terminal = false))]
+    #[pyo3(signature = (*, last_trade = None, leaves_quantity, lock, is_terminal = false))]
     fn new(
-        fill_price: Option<&Bound<'_, PyAny>>,
-        fill_quantity: Option<&Bound<'_, PyAny>>,
+        last_trade: Option<&Bound<'_, PyAny>>,
+        leaves_quantity: &Bound<'_, PyAny>,
+        lock: &Bound<'_, PyAny>,
         is_terminal: bool,
     ) -> PyResult<Self> {
         Ok(Self {
-            fill_price: fill_price.map(parse_price_input).transpose()?,
-            fill_quantity: fill_quantity.map(parse_quantity_input).transpose()?,
+            last_trade: last_trade
+                .map(|value| {
+                    value
+                        .extract::<PyRef<'_, PyTrade>>()
+                        .map(|value| value.inner)
+                })
+                .transpose()?,
+            leaves_quantity: parse_quantity_input(leaves_quantity)?,
+            lock: lock.extract::<PyRef<'_, PyPreTradeLock>>()?.inner,
             is_terminal,
         })
     }
 
     #[getter]
-    fn fill_price(&self) -> Option<String> {
-        self.fill_price.as_ref().map(ToString::to_string)
+    fn last_trade(&self) -> Option<PyTrade> {
+        self.last_trade.map(|inner| PyTrade { inner })
     }
 
     #[setter]
-    fn set_fill_price(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.fill_price = value.map(parse_price_input).transpose()?;
+    fn set_last_trade(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.last_trade = value
+            .map(|value| {
+                value
+                    .extract::<PyRef<'_, PyTrade>>()
+                    .map(|value| value.inner)
+            })
+            .transpose()?;
         Ok(())
     }
 
     #[getter]
-    fn fill_quantity(&self) -> Option<String> {
-        self.fill_quantity.as_ref().map(ToString::to_string)
+    fn leaves_quantity(&self) -> PyQuantity {
+        PyQuantity {
+            inner: self.leaves_quantity,
+        }
     }
 
     #[setter]
-    fn set_fill_quantity(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.fill_quantity = value.map(parse_quantity_input).transpose()?;
+    fn set_leaves_quantity(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.leaves_quantity = parse_quantity_input(value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn lock(&self) -> PyPreTradeLock {
+        PyPreTradeLock { inner: self.lock }
+    }
+
+    #[setter]
+    fn set_lock(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.lock = value.extract::<PyRef<'_, PyPreTradeLock>>()?.inner;
         Ok(())
     }
 
@@ -3513,9 +4233,10 @@ impl PyExecutionReportFillDetails {
 
     fn __repr__(&self) -> String {
         format!(
-            "ExecutionReportFillDetails(fill_price={:?}, fill_quantity={:?}, is_terminal={:?})",
-            self.fill_price(),
-            self.fill_quantity(),
+            "ExecutionReportFillDetails(last_trade={:?}, leaves_quantity={:?}, lock={:?}, is_terminal={:?})",
+            self.last_trade().map(|trade| trade.__repr__()),
+            self.leaves_quantity().inner.to_string(),
+            self.lock().__repr__(),
             self.is_terminal(),
         )
     }
@@ -3549,8 +4270,15 @@ impl PyExecutionReportPositionImpact {
     }
 
     #[getter]
-    fn position_effect(&self) -> Option<&'static str> {
-        self.position_effect.map(position_effect_name)
+    fn position_effect(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        self.position_effect
+            .map(|effect| {
+                PyModule::import_bound(py, "openpit.param")?
+                    .getattr("PositionEffect")?
+                    .call1((position_effect_name(effect),))
+                    .map(|obj| obj.into_py(py))
+            })
+            .transpose()
     }
 
     #[setter]
@@ -3560,8 +4288,15 @@ impl PyExecutionReportPositionImpact {
     }
 
     #[getter]
-    fn position_side(&self) -> Option<&'static str> {
-        self.position_side.map(position_side_name)
+    fn position_side(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        self.position_side
+            .map(|side| {
+                PyModule::import_bound(py, "openpit.param")?
+                    .getattr("PositionSide")?
+                    .call1((position_side_name(side),))
+                    .map(|obj| obj.into_py(py))
+            })
+            .transpose()
     }
 
     #[setter]
@@ -3570,11 +4305,11 @@ impl PyExecutionReportPositionImpact {
         Ok(())
     }
 
-    fn __repr__(&self) -> String {
+    fn __repr__(&self, py: Python<'_>) -> String {
         format!(
             "ExecutionReportPositionImpact(position_effect={:?}, position_side={:?})",
-            self.position_effect(),
-            self.position_side(),
+            self.position_effect(py),
+            self.position_side(py),
         )
     }
 }
@@ -3755,7 +4490,7 @@ impl PyExecutionReport {
         let operation = self
             .operation
             .as_ref()
-            .map(|v| v.bind(py).borrow().__repr__());
+            .map(|v| v.bind(py).borrow().__repr__(py));
         let financial_impact = self
             .financial_impact
             .as_ref()
@@ -3764,7 +4499,7 @@ impl PyExecutionReport {
         let position_impact = self
             .position_impact
             .as_ref()
-            .map(|v| v.bind(py).borrow().__repr__());
+            .map(|v| v.bind(py).borrow().__repr__(py));
         format!(
             "ExecutionReport(operation={:?}, financial_impact={:?}, fill={:?}, position_impact={:?})",
             operation, financial_impact, fill, position_impact,
@@ -3803,18 +4538,15 @@ fn parse_side(value: &str) -> PyResult<Side> {
     }
 }
 
+// Leaf/value parsing and validation source of truth for Python bindings.
+// Python layer keeps only structural aggregate checks and delegates value
+// semantics to these native parsers/setters.
 fn parse_account_id_input(value: &Bound<'_, PyAny>) -> PyResult<AccountId> {
-    if let Ok(v) = value.extract::<u64>() {
-        return Ok(AccountId::from_u64(v));
-    }
-    if let Ok(v) = value.extract::<PyAccountId>() {
+    if let Ok(v) = value.extract::<PyRef<'_, PyAccountId>>() {
         return Ok(v.inner);
     }
-    if let Ok(s) = value.extract::<String>() {
-        return Ok(AccountId::from_str(s));
-    }
     Err(PyTypeError::new_err(
-        "account_id must be openpit.param.AccountId, int, or str",
+        "account_id must be openpit.param.AccountId",
     ))
 }
 
@@ -3890,6 +4622,27 @@ fn parse_position_mode(value: &str) -> PyResult<PositionMode> {
     }
 }
 
+fn parse_rounding_strategy(value: &str) -> PyResult<RoundingStrategy> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "midpointnearesteven" => Ok(RoundingStrategy::MidpointNearestEven),
+        "midpointawayfromzero" => Ok(RoundingStrategy::MidpointAwayFromZero),
+        "up" => Ok(RoundingStrategy::Up),
+        "down" => Ok(RoundingStrategy::Down),
+        other => Err(PyValueError::new_err(format!(
+            "invalid rounding strategy {other:?}; expected 'MidpointNearestEven', 'MidpointAwayFromZero', 'Up', or 'Down'"
+        ))),
+    }
+}
+
+fn rounding_strategy_name(value: RoundingStrategy) -> &'static str {
+    match value {
+        RoundingStrategy::MidpointNearestEven => "MidpointNearestEven",
+        RoundingStrategy::MidpointAwayFromZero => "MidpointAwayFromZero",
+        RoundingStrategy::Up => "Up",
+        RoundingStrategy::Down => "Down",
+    }
+}
+
 fn parse_position_mode_input(value: &Bound<'_, PyAny>) -> PyResult<PositionMode> {
     let mode = value
         .extract::<String>()
@@ -3929,40 +4682,155 @@ fn parse_account_adjustment_operation(
 }
 
 fn parse_quantity(value: &str) -> PyResult<Quantity> {
-    Quantity::from_str(value).map_err(|error| PyValueError::new_err(error.to_string()))
+    Quantity::from_str(value).map_err(|error| create_param_error(error.to_string()))
 }
 
 fn parse_asset(value: &str) -> PyResult<Asset> {
     Asset::new(value).map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
+fn parse_asset_input(value: &Bound<'_, PyAny>) -> PyResult<Asset> {
+    if let Ok(value) = value.extract::<String>() {
+        return parse_asset(&value);
+    }
+    Err(PyTypeError::new_err("asset must be a str"))
+}
+
 fn parse_price(value: &str) -> PyResult<Price> {
-    Price::from_str(value).map_err(|error| PyValueError::new_err(error.to_string()))
+    Price::from_str(value).map_err(|error| create_param_error(error.to_string()))
 }
 
 fn parse_pnl(value: &str) -> PyResult<Pnl> {
-    Pnl::from_str(value).map_err(|error| PyValueError::new_err(error.to_string()))
+    Pnl::from_str(value).map_err(|error| create_param_error(error.to_string()))
 }
 
 fn parse_fee(value: &str) -> PyResult<Fee> {
-    Fee::from_str(value).map_err(|error| PyValueError::new_err(error.to_string()))
+    Fee::from_str(value).map_err(|error| create_param_error(error.to_string()))
 }
 
 fn parse_volume(value: &str) -> PyResult<Volume> {
-    Volume::from_str(value).map_err(|error| PyValueError::new_err(error.to_string()))
+    Volume::from_str(value).map_err(|error| create_param_error(error.to_string()))
+}
+
+fn parse_notional(value: &str) -> PyResult<Notional> {
+    Notional::from_str(value).map_err(|error| create_param_error(error.to_string()))
 }
 
 fn parse_cash_flow(value: &str) -> PyResult<CashFlow> {
-    CashFlow::from_str(value).map_err(|error| PyValueError::new_err(error.to_string()))
+    CashFlow::from_str(value).map_err(|error| create_param_error(error.to_string()))
 }
 
 fn parse_position_size(value: &str) -> PyResult<PositionSize> {
-    PositionSize::from_str(value).map_err(|error| PyValueError::new_err(error.to_string()))
+    PositionSize::from_str(value).map_err(|error| create_param_error(error.to_string()))
+}
+
+fn rust_decimal_to_python_decimal(
+    py: Python<'_>,
+    value: rust_decimal::Decimal,
+) -> PyResult<PyObject> {
+    let decimal_mod = PyModule::import_bound(py, "decimal")?;
+    let decimal_cls = decimal_mod.getattr("Decimal")?;
+    let text = value.to_string();
+    Ok(decimal_cls.call1((text,))?.unbind())
+}
+
+fn extract_python_decimal_string(value: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
+    let py = value.py();
+    let decimal_mod = PyModule::import_bound(py, "decimal")?;
+    let decimal_cls = decimal_mod.getattr("Decimal")?;
+    if value.is_instance(&decimal_cls)? {
+        return Ok(Some(value.str()?.extract::<String>()?));
+    }
+    Ok(None)
+}
+
+fn parse_python_decimal(
+    value: &Bound<'_, PyAny>,
+    type_name: &str,
+) -> PyResult<rust_decimal::Decimal> {
+    let text = extract_python_decimal_string(value)?.ok_or_else(|| {
+        PyTypeError::new_err(format!("{type_name}.from_decimal expects decimal.Decimal"))
+    })?;
+    text.parse::<rust_decimal::Decimal>()
+        .map_err(|error| create_param_error(error.to_string()))
+}
+
+fn is_other_decimal_param_type(value: &Bound<'_, PyAny>, expected_type: &str) -> PyResult<bool> {
+    let py_type = value.get_type();
+    let module_name = py_type.getattr("__module__")?.extract::<String>()?;
+    if module_name != "openpit.param" {
+        return Ok(false);
+    }
+
+    let type_name = py_type.getattr("__name__")?.extract::<String>()?;
+    if type_name == expected_type {
+        return Ok(false);
+    }
+
+    Ok(matches!(
+        type_name.as_str(),
+        "Quantity" | "Volume" | "Notional" | "Price" | "Pnl" | "Fee" | "CashFlow" | "PositionSize"
+    ))
+}
+
+fn is_decimal_param_type(value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py_type = value.get_type();
+    let module_name = py_type.getattr("__module__")?.extract::<String>()?;
+    if module_name != "openpit.param" {
+        return Ok(false);
+    }
+
+    let type_name = py_type.getattr("__name__")?.extract::<String>()?;
+    Ok(matches!(
+        type_name.as_str(),
+        "Quantity" | "Volume" | "Notional" | "Price" | "Pnl" | "Fee" | "CashFlow" | "PositionSize"
+    ))
+}
+
+enum ScalarOperand {
+    I64(i64),
+    U64(u64),
+    F64(f64),
+}
+
+fn extract_scalar_operand(value: &Bound<'_, PyAny>) -> PyResult<Option<ScalarOperand>> {
+    if value.extract::<bool>().is_ok() {
+        return Ok(None);
+    }
+
+    if is_decimal_param_type(value)? {
+        return Ok(None);
+    }
+
+    if value.is_instance_of::<PyInt>() {
+        if let Ok(number) = value.extract::<i64>() {
+            return Ok(Some(ScalarOperand::I64(number)));
+        }
+        if let Ok(number) = value.extract::<u64>() {
+            if let Ok(number_i64) = i64::try_from(number) {
+                return Ok(Some(ScalarOperand::I64(number_i64)));
+            }
+            return Ok(Some(ScalarOperand::U64(number)));
+        }
+        return Err(create_param_error(
+            "integer operand is out of range for i64/u64",
+        ));
+    }
+
+    if let Ok(number) = value.extract::<f64>() {
+        return Ok(Some(ScalarOperand::F64(number)));
+    }
+
+    Ok(None)
 }
 
 fn parse_leverage_input(value: &Bound<'_, PyAny>) -> PyResult<Leverage> {
+    // Python bool is a subclass of int, so True/False would pass as 1/0 here.
+    // We explicitly reject bool to avoid silently accepting it as a numeric value.
     if value.extract::<bool>().is_ok() {
-        return Err(PyValueError::new_err("leverage must be a Leverage or int"));
+        return Err(PyValueError::new_err(
+            "leverage must be openpit.param.Leverage, int, or float",
+        ));
     }
 
     if let Ok(value) = value.extract::<PyRef<'_, PyLeverage>>() {
@@ -3973,155 +4841,116 @@ fn parse_leverage_input(value: &Bound<'_, PyAny>) -> PyResult<Leverage> {
         return Leverage::from_u16(value).map_err(|error| PyValueError::new_err(error.to_string()));
     }
 
-    Err(PyValueError::new_err("leverage must be a Leverage or int"))
-}
-
-fn parse_decimal_input<T, ParseStr, ParseF64>(
-    value: &Bound<'_, PyAny>,
-    type_name: &str,
-    parse_str_fn: ParseStr,
-    parse_f64_fn: ParseF64,
-) -> PyResult<T>
-where
-    ParseStr: Fn(&str) -> PyResult<T>,
-    ParseF64: Fn(f64) -> PyResult<T>,
-{
-    if value.extract::<bool>().is_ok() {
-        return Err(PyValueError::new_err(format!(
-            "{type_name} must be a str, int, or float"
-        )));
-    }
-
-    if let Ok(value) = value.extract::<String>() {
-        return parse_str_fn(&value);
-    }
-
-    if let Ok(value) = value.extract::<i64>() {
-        return parse_str_fn(&value.to_string());
-    }
-
-    if let Ok(value) = value.extract::<u64>() {
-        return parse_str_fn(&value.to_string());
-    }
-
     if let Ok(value) = value.extract::<f64>() {
-        return parse_f64_fn(value);
+        return Leverage::from_f64(value).map_err(|error| PyValueError::new_err(error.to_string()));
     }
 
-    Err(PyValueError::new_err(format!(
-        "{type_name} must be a str, int, or float"
-    )))
-}
-
-fn parse_quantity_input(value: &Bound<'_, PyAny>) -> PyResult<Quantity> {
-    if let Ok(value) = value.extract::<PyRef<'_, PyQuantity>>() {
-        return Ok(value.inner);
-    }
-    parse_decimal_input(value, "quantity", parse_quantity, |value| {
-        Quantity::from_f64(value).map_err(|error| PyValueError::new_err(error.to_string()))
-    })
-}
-
-fn parse_price_input(value: &Bound<'_, PyAny>) -> PyResult<Price> {
-    if let Ok(value) = value.extract::<PyRef<'_, PyPrice>>() {
-        return Ok(value.inner);
-    }
-    parse_decimal_input(value, "price", parse_price, |value| {
-        Price::from_f64(value).map_err(|error| PyValueError::new_err(error.to_string()))
-    })
-}
-
-fn parse_pnl_input(value: &Bound<'_, PyAny>) -> PyResult<Pnl> {
-    if let Ok(value) = value.extract::<PyRef<'_, PyPnl>>() {
-        return Ok(value.inner);
-    }
-    parse_decimal_input(value, "pnl", parse_pnl, |value| {
-        Pnl::from_f64(value).map_err(|error| PyValueError::new_err(error.to_string()))
-    })
-}
-
-fn parse_fee_input(value: &Bound<'_, PyAny>) -> PyResult<Fee> {
-    if let Ok(value) = value.extract::<PyRef<'_, PyFee>>() {
-        return Ok(value.inner);
-    }
-    parse_decimal_input(value, "fee", parse_fee, |value| {
-        Fee::from_f64(value).map_err(|error| PyValueError::new_err(error.to_string()))
-    })
-}
-
-fn parse_volume_input(value: &Bound<'_, PyAny>) -> PyResult<Volume> {
-    if let Ok(value) = value.extract::<PyRef<'_, PyVolume>>() {
-        return Ok(value.inner);
-    }
-    parse_decimal_input(value, "volume", parse_volume, |value| {
-        Volume::from_f64(value).map_err(|error| PyValueError::new_err(error.to_string()))
-    })
-}
-
-fn parse_trade_amount_input(value: &Bound<'_, PyAny>) -> PyResult<TradeAmount> {
-    if let Ok(value) = value.extract::<PyRef<'_, PyQuantity>>() {
-        return Ok(TradeAmount::Quantity(value.inner));
-    }
-    if let Ok(value) = value.extract::<PyRef<'_, PyVolume>>() {
-        return Ok(TradeAmount::Volume(value.inner));
-    }
-    Err(PyTypeError::new_err(
-        "trade_amount must be openpit.param.Quantity or openpit.param.Volume",
+    Err(PyValueError::new_err(
+        "leverage must be openpit.param.Leverage, int, or float",
     ))
 }
 
-fn trade_amount_to_python(py: Python<'_>, value: TradeAmount) -> PyResult<Py<PyAny>> {
-    match value {
-        TradeAmount::Quantity(quantity) => {
-            Ok(Py::new(py, PyQuantity { inner: quantity })?.into_any())
+macro_rules! define_typed_decimal_input_parser {
+    ($fn_name:ident, $py_wrapper:ident, $result_type:ty, $parse_fn:ident, $type_name:literal) => {
+        fn $fn_name(value: &Bound<'_, PyAny>) -> PyResult<$result_type> {
+            if let Ok(value) = value.extract::<PyRef<'_, $py_wrapper>>() {
+                return Ok(value.inner);
+            }
+
+            if let Some(text) = extract_python_decimal_string(value)? {
+                return $parse_fn(&text);
+            }
+
+            let error_message = format!("{0} must be a Decimal, str, int, or float", $type_name);
+
+            if is_other_decimal_param_type(value, $type_name)? {
+                return Err(PyTypeError::new_err(error_message));
+            }
+
+            if value.extract::<bool>().is_ok() {
+                return Err(PyValueError::new_err(error_message));
+            }
+
+            if let Ok(text) = value.extract::<String>() {
+                return $parse_fn(&text);
+            }
+
+            if let Ok(number) = value.extract::<i64>() {
+                return $parse_fn(&number.to_string());
+            }
+
+            if let Ok(number) = value.extract::<u64>() {
+                return $parse_fn(&number.to_string());
+            }
+
+            if let Ok(number) = value.extract::<f64>() {
+                return $parse_fn(&format!("{number}"));
+            }
+
+            Err(PyValueError::new_err(error_message))
         }
-        TradeAmount::Volume(volume) => Ok(Py::new(py, PyVolume { inner: volume })?.into_any()),
-        _ => Err(PyValueError::new_err("unrecognized trade amount type")),
-    }
+    };
 }
 
-fn trade_amount_debug(value: &TradeAmount) -> String {
-    match value {
-        TradeAmount::Quantity(quantity) => format!("Quantity(value={:?})", quantity),
-        TradeAmount::Volume(volume) => format!("Volume(value={:?})", volume),
-        _ => "TradeAmount(<unsupported>)".to_string(),
-    }
-}
+define_typed_decimal_input_parser!(
+    parse_quantity_input,
+    PyQuantity,
+    Quantity,
+    parse_quantity,
+    "Quantity"
+);
+define_typed_decimal_input_parser!(parse_price_input, PyPrice, Price, parse_price, "Price");
+define_typed_decimal_input_parser!(parse_pnl_input, PyPnl, Pnl, parse_pnl, "Pnl");
+define_typed_decimal_input_parser!(parse_fee_input, PyFee, Fee, parse_fee, "Fee");
+define_typed_decimal_input_parser!(parse_volume_input, PyVolume, Volume, parse_volume, "Volume");
+define_typed_decimal_input_parser!(
+    parse_notional_input,
+    PyNotional,
+    Notional,
+    parse_notional,
+    "Notional"
+);
+define_typed_decimal_input_parser!(
+    parse_cash_flow_input,
+    PyCashFlow,
+    CashFlow,
+    parse_cash_flow,
+    "CashFlow"
+);
+define_typed_decimal_input_parser!(
+    parse_position_size_input,
+    PyPositionSize,
+    PositionSize,
+    parse_position_size,
+    "PositionSize"
+);
 
-fn parse_cash_flow_input(value: &Bound<'_, PyAny>) -> PyResult<CashFlow> {
-    parse_decimal_input(value, "cash flow", parse_cash_flow, |value| {
-        CashFlow::from_f64(value).map_err(|error| PyValueError::new_err(error.to_string()))
-    })
-}
-
-fn parse_position_size_input(value: &Bound<'_, PyAny>) -> PyResult<PositionSize> {
-    if let Ok(value) = value.extract::<PyRef<'_, PyPositionSize>>() {
+fn parse_trade_amount_input(value: &Bound<'_, PyAny>) -> PyResult<TradeAmount> {
+    if let Ok(value) = value.extract::<PyRef<'_, PyTradeAmount>>() {
         return Ok(value.inner);
     }
-    parse_decimal_input(value, "position size", parse_position_size, |value| {
-        PositionSize::from_f64(value).map_err(|error| PyValueError::new_err(error.to_string()))
-    })
+    Err(PyTypeError::new_err(
+        "trade_amount must be openpit.param.TradeAmount",
+    ))
+}
+
+fn trade_amount_to_python(value: TradeAmount) -> PyTradeAmount {
+    PyTradeAmount { inner: value }
 }
 
 fn convert_reject(reject: &Reject) -> PyReject {
     PyReject {
-        code: reject_code_name(reject.code).to_owned(),
+        code: reject.code.as_str().to_owned(),
         reason: reject.reason.clone(),
         details: reject.details.clone(),
         policy: reject.policy.to_owned(),
-        scope: reject_scope_name(&reject.scope).to_owned(),
+        scope: match reject.scope {
+            RejectScope::Order => "order",
+            RejectScope::Account => "account",
+        }
+        .to_owned(),
+        user_data: reject.user_data as u64,
     }
-}
-
-fn reject_scope_name(scope: &RejectScope) -> &'static str {
-    match scope {
-        RejectScope::Order => "order",
-        RejectScope::Account => "account",
-    }
-}
-
-fn reject_code_name(code: RejectCode) -> &'static str {
-    code.as_str()
 }
 
 fn format_engine_build_error(error: EngineBuildError) -> String {
@@ -4136,19 +4965,41 @@ fn format_engine_build_error(error: EngineBuildError) -> String {
 #[pymodule]
 fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("RejectError", py.get_type_bound::<RejectError>())?;
+    module.add("ParamError", py.get_type_bound::<ParamError>())?;
+    module.add(
+        "_ROUNDING_STRATEGY_DEFAULT",
+        rounding_strategy_name(RoundingStrategy::DEFAULT),
+    )?;
+    module.add(
+        "_ROUNDING_STRATEGY_BANKER",
+        rounding_strategy_name(RoundingStrategy::BANKER),
+    )?;
+    module.add(
+        "_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT",
+        rounding_strategy_name(RoundingStrategy::CONSERVATIVE_PROFIT),
+    )?;
+    module.add(
+        "_ROUNDING_STRATEGY_CONSERVATIVE_LOSS",
+        rounding_strategy_name(RoundingStrategy::CONSERVATIVE_LOSS),
+    )?;
+    module.add("_LEVERAGE_SCALE", Leverage::SCALE)?;
+    module.add("_LEVERAGE_MIN", Leverage::MIN)?;
+    module.add("_LEVERAGE_MAX", Leverage::MAX)?;
+    module.add("_LEVERAGE_STEP", Leverage::STEP)?;
     module.add_class::<PyAccountId>()?;
-    module.add_class::<PyAsset>()?;
     module.add_class::<PyQuantity>()?;
     module.add_class::<PyPrice>()?;
+    module.add_class::<PyTrade>()?;
     module.add_class::<PyPnl>()?;
     module.add_class::<PyFee>()?;
     module.add_class::<PyVolume>()?;
+    module.add_class::<PyNotional>()?;
     module.add_class::<PyCashFlow>()?;
     module.add_class::<PyPositionSize>()?;
+    module.add_class::<PyTradeAmount>()?;
     module.add_class::<PyAdjustmentAmount>()?;
     module.add_class::<PyLeverage>()?;
     module.add_class::<PyEngine>()?;
-    module.add_class::<PyRejectCode>()?;
     module.add_class::<PyReject>()?;
     module.add_class::<PyStartPreTradeResult>()?;
     module.add_class::<PyExecuteResult>()?;
@@ -4172,11 +5023,14 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyAccountAdjustmentBounds>()?;
     module.add_class::<PyAccountAdjustment>()?;
     module.add_class::<PyPostTradeResult>()?;
+    module.add_class::<PyPreTradeLock>()?;
     module.add_class::<PyPnlKillSwitchPolicy>()?;
     module.add_class::<PyRateLimitPolicy>()?;
     module.add_class::<PyOrderValidationPolicy>()?;
     module.add_class::<PyOrderSizeLimit>()?;
     module.add_class::<PyOrderSizeLimitPolicy>()?;
+    module.add_class::<PyPreTradeContext>()?;
+    module.add_class::<PyAccountAdjustmentContext>()?;
     Ok(())
 }
 
@@ -4184,7 +5038,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
 mod field_access_tests {
     use super::*;
     use openpit::RequestFieldAccessError;
-    use pyo3::types::PyList;
+    use pyo3::types::{PyList, PyString};
     use std::sync::Once;
 
     fn ensure_python_initialized() {
@@ -4192,51 +5046,25 @@ mod field_access_tests {
         INIT.call_once(pyo3::prepare_freethreaded_python);
     }
 
-    fn order_without_operation() -> PythonOrder {
+    fn order_without_operation() -> Order {
         ensure_python_initialized();
-        Python::with_gil(|py| PythonOrder {
-            operation: None,
-            position: None,
-            margin: None,
+        Python::with_gil(|py| Order {
+            operation: OrderOperationAccess::Absent,
+            position: OrderPositionAccess::Absent,
+            margin: OrderMarginAccess::Absent,
             original: py.None(),
         })
     }
 
-    fn report_without_groups() -> PythonExecutionReport {
+    fn report_without_groups() -> ExecutionReport {
         ensure_python_initialized();
-        Python::with_gil(|py| PythonExecutionReport {
-            operation: None,
-            financial_impact: None,
-            fill: None,
-            position_impact: None,
+        Python::with_gil(|py| ExecutionReport {
+            operation: ExecutionReportOperationAccess::Absent,
+            financial_impact: FinancialImpactAccess::Absent,
+            fill: ExecutionReportFillAccess::Absent,
+            position_impact: ExecutionReportPositionImpactAccess::Absent,
             original: py.None(),
         })
-    }
-
-    fn install_policy_context_module(py: Python<'_>) -> PyResult<()> {
-        let module = PyModule::from_code_bound(
-            py,
-            r#"
-import sys
-import types
-
-pretrade = types.ModuleType("openpit.pretrade")
-
-class PolicyContext:
-    def __init__(self, *, order):
-        self.order = order
-
-pretrade.PolicyContext = PolicyContext
-openpit = sys.modules.get("openpit", types.ModuleType("openpit"))
-openpit.pretrade = pretrade
-sys.modules["openpit"] = openpit
-sys.modules["openpit.pretrade"] = pretrade
-"#,
-            "test_policy_context.py",
-            "test_policy_context",
-        )?;
-        let _ = module;
-        Ok(())
     }
 
     #[test]
@@ -4244,14 +5072,17 @@ sys.modules["openpit.pretrade"] = pretrade
         let order = order_without_operation();
         assert_eq!(
             order.instrument(),
-            Err(RequestFieldAccessError::new("instrument"))
+            Err(RequestFieldAccessError::new("operation.instrument"))
         );
     }
 
     #[test]
     fn python_order_side_returns_err_when_operation_absent() {
         let order = order_without_operation();
-        assert_eq!(order.side(), Err(RequestFieldAccessError::new("side")));
+        assert_eq!(
+            order.side(),
+            Err(RequestFieldAccessError::new("operation.side"))
+        );
     }
 
     #[test]
@@ -4259,7 +5090,7 @@ sys.modules["openpit.pretrade"] = pretrade
         let order = order_without_operation();
         assert_eq!(
             order.account_id(),
-            Err(RequestFieldAccessError::new("account_id"))
+            Err(RequestFieldAccessError::new("operation.account_id"))
         );
     }
 
@@ -4268,7 +5099,7 @@ sys.modules["openpit.pretrade"] = pretrade
         let order = order_without_operation();
         assert_eq!(
             order.trade_amount(),
-            Err(RequestFieldAccessError::new("trade_amount"))
+            Err(RequestFieldAccessError::new("operation.trade_amount"))
         );
     }
 
@@ -4277,28 +5108,32 @@ sys.modules["openpit.pretrade"] = pretrade
         let report = report_without_groups();
         assert_eq!(
             report.instrument(),
-            Err(RequestFieldAccessError::new("instrument"))
+            Err(RequestFieldAccessError::new("operation.instrument"))
         );
     }
 
     #[test]
     fn python_report_pnl_returns_err_when_financial_impact_absent() {
         let report = report_without_groups();
-        assert_eq!(report.pnl(), Err(RequestFieldAccessError::new("pnl")));
+        assert_eq!(
+            report.pnl(),
+            Err(RequestFieldAccessError::new("financial_impact.pnl"))
+        );
     }
 
     #[test]
     fn python_report_fee_returns_err_when_financial_impact_absent() {
         let report = report_without_groups();
-        assert_eq!(report.fee(), Err(RequestFieldAccessError::new("fee")));
+        assert_eq!(
+            report.fee(),
+            Err(RequestFieldAccessError::new("financial_impact.fee"))
+        );
     }
 
     #[test]
     fn python_engine_end_to_end_covers_python_adapter_paths() {
         ensure_python_initialized();
         Python::with_gil(|py| -> PyResult<()> {
-            install_policy_context_module(py)?;
-
             let policy_module = PyModule::from_code_bound(
                 py,
                 r#"
@@ -4308,7 +5143,7 @@ class StartPolicy:
     def __init__(self):
         self.name = "PythonStartPolicy"
 
-    def check_pre_trade_start(self, *, order):
+    def check_pre_trade_start(self, ctx, order):
         return None
 
     def apply_execution_report(self, *, report):
@@ -4318,7 +5153,7 @@ class MainPolicy:
     def __init__(self):
         self.name = "PythonMainPolicy"
 
-    def perform_pre_trade_check(self, *, context):
+    def perform_pre_trade_check(self, ctx, order):
         mutation = SimpleNamespace(commit=lambda: None, rollback=lambda: None)
         return SimpleNamespace(rejects=[], mutations=[mutation])
 
@@ -4329,7 +5164,7 @@ class AdjustmentPolicy:
     def __init__(self):
         self.name = "PythonAdjustmentPolicy"
 
-    def apply_account_adjustment(self, *, account_id, adjustment):
+    def apply_account_adjustment(self, ctx, account_id, adjustment):
         return None
 "#,
                 "test_python_policies.py",
@@ -4351,10 +5186,18 @@ class AdjustmentPolicy:
 
             let pnl_policy = Py::new(
                 py,
-                PyPnlKillSwitchPolicy {
-                    barriers: RefCell::new(vec![("USD".to_owned(), "500".to_owned())]),
-                    runtime_policy: RefCell::new(None),
-                },
+                PyPnlKillSwitchPolicy::new(
+                    &PyString::new_bound(py, "USD").into_any(),
+                    &Py::new(
+                        py,
+                        PyPnl {
+                            inner: Pnl::from_str("500").expect("pnl must be valid"),
+                        },
+                    )?
+                    .bind(py)
+                    .clone()
+                    .into_any(),
+                )?,
             )?;
             builder.push_start_policy(&pnl_policy.bind(py).clone().into_any())?;
 
@@ -4373,7 +5216,7 @@ class AdjustmentPolicy:
             )?;
             let size_limit_policy = Py::new(
                 py,
-                PyOrderSizeLimitPolicy::new(&size_limit.bind(py).borrow()),
+                PyOrderSizeLimitPolicy::new(&size_limit.bind(py).borrow())?,
             )?;
             builder.push_start_policy(&size_limit_policy.bind(py).clone().into_any())?;
             builder.push_start_policy(&start_policy)?;
@@ -4439,8 +5282,8 @@ class AdjustmentPolicy:
             let report_impact = Py::new(
                 py,
                 PyFinancialImpact {
-                    pnl: Some(Pnl::from_str("1").expect("pnl must be valid")),
-                    fee: Some(Fee::from_str("0").expect("fee must be valid")),
+                    pnl: Pnl::from_str("1").expect("pnl must be valid"),
+                    fee: Fee::from_str("0").expect("fee must be valid"),
                 },
             )?;
             let report = Py::new(
@@ -4474,7 +5317,7 @@ class AdjustmentPolicy:
                 &adjustments.into_any(),
             )?;
             assert_eq!(batch.failed_index(), None);
-            assert!(batch.reject().is_none());
+            assert!(batch.rejects().is_empty());
 
             Ok(())
         })

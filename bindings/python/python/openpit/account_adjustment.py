@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import abc
 import typing
 
 from ._openpit import AccountAdjustment as _AccountAdjustment
@@ -37,6 +38,28 @@ from .param import (
     PositionSize,
     Price,
 )
+
+if typing.TYPE_CHECKING:
+    from . import AccountAdjustmentContext
+    from .core import Mutation
+    from .param import AccountId
+    from .pretrade.policy import PolicyDecision, PolicyReject
+
+
+class AccountAdjustmentPolicy(abc.ABC):
+    @property
+    @abc.abstractmethod
+    def name(self) -> str: ...
+
+    @abc.abstractmethod
+    def apply_account_adjustment(
+        self,
+        ctx: AccountAdjustmentContext,
+        account_id: AccountId,
+        adjustment: AccountAdjustment,
+    ) -> (
+        PolicyDecision | typing.Iterable[PolicyReject] | tuple[Mutation, ...] | None
+    ): ...
 
 
 def _require_instance(
@@ -72,9 +95,6 @@ class AccountAdjustmentAmount(_AccountAdjustmentAmount):
         reserved: AdjustmentAmount | None = None,
         pending: AdjustmentAmount | None = None,
     ) -> None:
-        _require_instance(total, AdjustmentAmount, name="total")
-        _require_instance(reserved, AdjustmentAmount, name="reserved")
-        _require_instance(pending, AdjustmentAmount, name="pending")
         _AccountAdjustmentAmount.total.__set__(self, total)
         _AccountAdjustmentAmount.reserved.__set__(self, reserved)
         _AccountAdjustmentAmount.pending.__set__(self, pending)
@@ -83,7 +103,12 @@ class AccountAdjustmentAmount(_AccountAdjustmentAmount):
     @property
     def total(self) -> AdjustmentAmount | None:
         """Actual resulting balance/position value."""
-        return _AccountAdjustmentAmount.total.__get__(self, type(self))
+        value = _AccountAdjustmentAmount.total.__get__(self, type(self))
+        if value is None:
+            return None
+        if value.is_delta:
+            return AdjustmentAmount.delta(value.as_delta)
+        return AdjustmentAmount.absolute(value.as_absolute)
 
     # @typing.override
     @property
@@ -92,13 +117,23 @@ class AccountAdjustmentAmount(_AccountAdjustmentAmount):
 
         Unavailable for immediate use.
         """
-        return _AccountAdjustmentAmount.reserved.__get__(self, type(self))
+        value = _AccountAdjustmentAmount.reserved.__get__(self, type(self))
+        if value is None:
+            return None
+        if value.is_delta:
+            return AdjustmentAmount.delta(value.as_delta)
+        return AdjustmentAmount.absolute(value.as_absolute)
 
     # @typing.override
     @property
     def pending(self) -> AdjustmentAmount | None:
         """Amount in-flight for incoming acquisition and not yet finalized."""
-        return _AccountAdjustmentAmount.pending.__get__(self, type(self))
+        value = _AccountAdjustmentAmount.pending.__get__(self, type(self))
+        if value is None:
+            return None
+        if value.is_delta:
+            return AdjustmentAmount.delta(value.as_delta)
+        return AdjustmentAmount.absolute(value.as_absolute)
 
     def __repr__(self) -> str:
         return _AccountAdjustmentAmount.__repr__(self)
@@ -121,9 +156,7 @@ class AccountAdjustmentBalanceOperation(_AccountAdjustmentBalanceOperation):
         asset: Asset,
         average_entry_price: Price | None = None,
     ) -> None:
-        _require_instance(asset, Asset, name="asset")
-        _require_instance(average_entry_price, Price, name="average_entry_price")
-        _AccountAdjustmentBalanceOperation.asset.__set__(self, asset.value)
+        _AccountAdjustmentBalanceOperation.asset.__set__(self, asset)
         _AccountAdjustmentBalanceOperation.average_entry_price.__set__(
             self, average_entry_price
         )
@@ -131,7 +164,8 @@ class AccountAdjustmentBalanceOperation(_AccountAdjustmentBalanceOperation):
     # @typing.override
     @property
     def asset(self) -> Asset:
-        return Asset(_AccountAdjustmentBalanceOperation.asset.__get__(self, type(self)))
+        """Adjusted balance asset."""
+        return _AccountAdjustmentBalanceOperation.asset.__get__(self, type(self))
 
     # @typing.override
     @property
@@ -140,7 +174,7 @@ class AccountAdjustmentBalanceOperation(_AccountAdjustmentBalanceOperation):
         value = _AccountAdjustmentBalanceOperation.average_entry_price.__get__(
             self, type(self)
         )
-        return None if value is None else Price(value)
+        return value
 
     def __repr__(self) -> str:
         return _AccountAdjustmentBalanceOperation.__repr__(self)
@@ -164,21 +198,20 @@ class AccountAdjustmentPositionOperation(_AccountAdjustmentPositionOperation):
         collateral_asset: Asset,
         average_entry_price: Price,
         mode: PositionMode,
-        leverage: Leverage | None = None,
+        leverage: Leverage | int | float | None = None,
     ) -> None:
+        # Structural aggregate check is intentionally kept in Python so
+        # aggregate misuse fails with a clear contract error instead of
+        # indirect attribute/field errors during aggregation.
         _require_instance(instrument, Instrument, name="instrument")
-        _require_instance(collateral_asset, Asset, name="collateral_asset")
-        _require_instance(average_entry_price, Price, name="average_entry_price")
-        _require_instance(mode, PositionMode, name="mode")
-        _require_instance(leverage, Leverage, name="leverage")
         _AccountAdjustmentPositionOperation.underlying_asset.__set__(
-            self, instrument.underlying_asset.value
+            self, instrument.underlying_asset
         )
         _AccountAdjustmentPositionOperation.settlement_asset.__set__(
-            self, instrument.settlement_asset.value
+            self, instrument.settlement_asset
         )
         _AccountAdjustmentPositionOperation.collateral_asset.__set__(
-            self, collateral_asset.value
+            self, collateral_asset
         )
         _AccountAdjustmentPositionOperation.average_entry_price.__set__(
             self, average_entry_price
@@ -189,33 +222,30 @@ class AccountAdjustmentPositionOperation(_AccountAdjustmentPositionOperation):
 
     @property
     def instrument(self) -> Instrument:
+        """Adjusted position instrument."""
         return self.__dict__["_py_instrument"]
 
     # @typing.override
     @property
     def collateral_asset(self) -> Asset:
-        value = _AccountAdjustmentPositionOperation.collateral_asset.__get__(
+        """Collateral asset used by the adjusted position."""
+        return _AccountAdjustmentPositionOperation.collateral_asset.__get__(
             self, type(self)
         )
-        return Asset(value)
 
     # @typing.override
     @property
     def average_entry_price(self) -> Price:
         """Average entry price for the adjusted position state."""
-        return Price(
-            _AccountAdjustmentPositionOperation.average_entry_price.__get__(
-                self, type(self)
-            )
+        return _AccountAdjustmentPositionOperation.average_entry_price.__get__(
+            self, type(self)
         )
 
     # @typing.override
     @property
     def mode(self) -> PositionMode:
         """Netting vs hedged position representation."""
-        return PositionMode(
-            _AccountAdjustmentPositionOperation.mode.__get__(self, type(self))
-        )
+        return _AccountAdjustmentPositionOperation.mode.__get__(self, type(self))
 
     # @typing.override
     @property
@@ -241,70 +271,62 @@ class AccountAdjustmentBounds(_AccountAdjustmentBounds):
     def __init__(
         self,
         *,
-        total_upper_bound: PositionSize | None = None,
-        total_lower_bound: PositionSize | None = None,
-        reserved_upper_bound: PositionSize | None = None,
-        reserved_lower_bound: PositionSize | None = None,
-        pending_upper_bound: PositionSize | None = None,
-        pending_lower_bound: PositionSize | None = None,
+        total_upper: PositionSize | None = None,
+        total_lower: PositionSize | None = None,
+        reserved_upper: PositionSize | None = None,
+        reserved_lower: PositionSize | None = None,
+        pending_upper: PositionSize | None = None,
+        pending_lower: PositionSize | None = None,
     ) -> None:
-        _require_instance(total_upper_bound, PositionSize, name="total_upper_bound")
-        _require_instance(total_lower_bound, PositionSize, name="total_lower_bound")
-        _require_instance(
-            reserved_upper_bound, PositionSize, name="reserved_upper_bound"
-        )
-        _require_instance(
-            reserved_lower_bound, PositionSize, name="reserved_lower_bound"
-        )
-        _require_instance(pending_upper_bound, PositionSize, name="pending_upper_bound")
-        _require_instance(pending_lower_bound, PositionSize, name="pending_lower_bound")
-        _AccountAdjustmentBounds.total_upper_bound.__set__(self, total_upper_bound)
-        _AccountAdjustmentBounds.total_lower_bound.__set__(self, total_lower_bound)
-        _AccountAdjustmentBounds.reserved_upper_bound.__set__(
-            self, reserved_upper_bound
-        )
-        _AccountAdjustmentBounds.reserved_lower_bound.__set__(
-            self, reserved_lower_bound
-        )
-        _AccountAdjustmentBounds.pending_upper_bound.__set__(self, pending_upper_bound)
-        _AccountAdjustmentBounds.pending_lower_bound.__set__(self, pending_lower_bound)
+        _AccountAdjustmentBounds.total_upper.__set__(self, total_upper)
+        _AccountAdjustmentBounds.total_lower.__set__(self, total_lower)
+        _AccountAdjustmentBounds.reserved_upper.__set__(self, reserved_upper)
+        _AccountAdjustmentBounds.reserved_lower.__set__(self, reserved_lower)
+        _AccountAdjustmentBounds.pending_upper.__set__(self, pending_upper)
+        _AccountAdjustmentBounds.pending_lower.__set__(self, pending_lower)
 
     @property
-    def total_upper_bound(self) -> PositionSize | None:
+    def total_upper(self) -> PositionSize | None:
         """Allowed post-adjustment inclusive upper bound for total."""
-        return _AccountAdjustmentBounds.total_upper_bound.__get__(self, type(self))
+        return _AccountAdjustmentBounds.total_upper.__get__(self, type(self))
 
     @property
-    def total_lower_bound(self) -> PositionSize | None:
+    def total_lower(self) -> PositionSize | None:
         """Allowed post-adjustment inclusive lower bound for total."""
-        return _AccountAdjustmentBounds.total_lower_bound.__get__(self, type(self))
+        return _AccountAdjustmentBounds.total_lower.__get__(self, type(self))
 
     @property
-    def reserved_upper_bound(self) -> PositionSize | None:
+    def reserved_upper(self) -> PositionSize | None:
         """Allowed post-adjustment inclusive upper bound for reserved."""
-        return _AccountAdjustmentBounds.reserved_upper_bound.__get__(self, type(self))
+        return _AccountAdjustmentBounds.reserved_upper.__get__(self, type(self))
 
     @property
-    def reserved_lower_bound(self) -> PositionSize | None:
+    def reserved_lower(self) -> PositionSize | None:
         """Allowed post-adjustment inclusive lower bound for reserved."""
-        return _AccountAdjustmentBounds.reserved_lower_bound.__get__(self, type(self))
+        return _AccountAdjustmentBounds.reserved_lower.__get__(self, type(self))
 
     @property
-    def pending_upper_bound(self) -> PositionSize | None:
+    def pending_upper(self) -> PositionSize | None:
         """Allowed post-adjustment inclusive upper bound for pending."""
-        return _AccountAdjustmentBounds.pending_upper_bound.__get__(self, type(self))
+        return _AccountAdjustmentBounds.pending_upper.__get__(self, type(self))
 
     @property
-    def pending_lower_bound(self) -> PositionSize | None:
+    def pending_lower(self) -> PositionSize | None:
         """Allowed post-adjustment inclusive lower bound for pending."""
-        return _AccountAdjustmentBounds.pending_lower_bound.__get__(self, type(self))
+        return _AccountAdjustmentBounds.pending_lower.__get__(self, type(self))
 
     def __repr__(self) -> str:
         return _AccountAdjustmentBounds.__repr__(self)
 
 
 class AccountAdjustment(_AccountAdjustment):
-    """Extensible non-trading account-adjustment model."""
+    """Extensible non-trading account-adjustment model.
+
+    Snapshot semantics:
+    On ``Engine.apply_account_adjustment(...)``, each adjustment item is
+    snapshotted at submission time for policy evaluation. Mutations of
+    adjustment objects after submission do not affect the in-flight batch.
+    """
 
     # @typing.override
     def __new__(cls, *args: typing.Any, **kwargs: typing.Any) -> AccountAdjustment:
@@ -315,12 +337,16 @@ class AccountAdjustment(_AccountAdjustment):
     def __init__(
         self,
         *,
-        operation: AccountAdjustmentBalanceOperation
-        | AccountAdjustmentPositionOperation
-        | None = None,
+        operation: (
+            AccountAdjustmentBalanceOperation
+            | AccountAdjustmentPositionOperation
+            | None
+        ) = None,
         amount: AccountAdjustmentAmount | None = None,
         bounds: AccountAdjustmentBounds | None = None,
     ) -> None:
+        # Structural aggregate check is intentionally kept in Python because
+        # operation is a Python-only union wrapper at the public boundary.
         if operation is not None and not isinstance(
             operation,
             (AccountAdjustmentBalanceOperation, AccountAdjustmentPositionOperation),
@@ -330,6 +356,8 @@ class AccountAdjustment(_AccountAdjustment):
                 "openpit.account_adjustment.AccountAdjustmentBalanceOperation or "
                 "openpit.account_adjustment.AccountAdjustmentPositionOperation"
             )
+        # Structural checks for aggregate groups stay at Python boundary to keep
+        # explicit API-contract errors for wrong wrapper types.
         _require_instance(amount, AccountAdjustmentAmount, name="amount")
         _require_instance(bounds, AccountAdjustmentBounds, name="bounds")
         _AccountAdjustment.operation.__set__(self, operation)
@@ -343,14 +371,17 @@ class AccountAdjustment(_AccountAdjustment):
     def operation(
         self,
     ) -> AccountAdjustmentBalanceOperation | AccountAdjustmentPositionOperation | None:
+        """Adjustment operation details group."""
         return self.__dict__.get("_py_operation")
 
     @property
     def amount(self) -> AccountAdjustmentAmount | None:
+        """Adjustment amount deltas group."""
         return self.__dict__.get("_py_amount")
 
     @property
     def bounds(self) -> AccountAdjustmentBounds | None:
+        """Optional post-adjustment bounds group."""
         return self.__dict__.get("_py_bounds")
 
     def __repr__(self) -> str:
@@ -362,5 +393,6 @@ __all__ = [
     "AccountAdjustmentAmount",
     "AccountAdjustmentBalanceOperation",
     "AccountAdjustmentBounds",
+    "AccountAdjustmentPolicy",
     "AccountAdjustmentPositionOperation",
 ]

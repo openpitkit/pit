@@ -19,7 +19,7 @@ use crate::param::{
     AccountId, AdjustmentAmount, Asset, Fee, Leverage, Pnl, PositionEffect, PositionMode,
     PositionSide, PositionSize, Price, Quantity, Side, Trade, TradeAmount,
 };
-use crate::pretrade::Lock;
+use crate::pretrade::PreTradeLock;
 
 use super::Instrument;
 
@@ -110,7 +110,7 @@ has_request_field_trait!(
     /// must be preserved across the order lifecycle when later execution-report
     /// handling depends on reservation-time details.
     HasLock,
-    lock -> Lock
+    lock -> PreTradeLock
 );
 
 has_request_field_trait!(
@@ -173,37 +173,37 @@ has_request_field_trait!(
 has_request_field_trait!(
     /// Allowed post-adjustment range for the corresponding component.
     HasAccountAdjustmentTotalUpperBound,
-    total_upper_bound -> Option<PositionSize>
+    total_upper -> Option<PositionSize>
 );
 
 has_request_field_trait!(
     /// Allowed post-adjustment range for the corresponding component.
     HasAccountAdjustmentTotalLowerBound,
-    total_lower_bound -> Option<PositionSize>
+    total_lower -> Option<PositionSize>
 );
 
 has_request_field_trait!(
     /// Allowed post-adjustment range for the corresponding component.
     HasAccountAdjustmentReservedUpperBound,
-    reserved_upper_bound -> Option<PositionSize>
+    reserved_upper -> Option<PositionSize>
 );
 
 has_request_field_trait!(
     /// Allowed post-adjustment range for the corresponding component.
     HasAccountAdjustmentReservedLowerBound,
-    reserved_lower_bound -> Option<PositionSize>
+    reserved_lower -> Option<PositionSize>
 );
 
 has_request_field_trait!(
     /// Allowed post-adjustment range for the corresponding component.
     HasAccountAdjustmentPendingUpperBound,
-    pending_upper_bound -> Option<PositionSize>
+    pending_upper -> Option<PositionSize>
 );
 
 has_request_field_trait!(
     /// Allowed post-adjustment range for the corresponding component.
     HasAccountAdjustmentPendingLowerBound,
-    pending_lower_bound -> Option<PositionSize>
+    pending_lower -> Option<PositionSize>
 );
 
 has_request_field_trait!(HasAccountAdjustmentPositionLeverage, position_leverage -> Option<Leverage>);
@@ -219,7 +219,7 @@ mod tests {
         use crate::param::AccountId;
         OrderOperation {
             instrument: Instrument::new(
-                Asset::new("BTC").expect("must be valid"),
+                Asset::new("SPX").expect("must be valid"),
                 Asset::new("USD").expect("must be valid"),
             ),
             account_id: AccountId::from_u64(99224416),

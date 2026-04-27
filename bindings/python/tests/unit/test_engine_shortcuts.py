@@ -3,15 +3,17 @@ import openpit
 import pytest
 
 
-class DualRejectPolicy(openpit.pretrade.Policy):
+class DualRejectPolicy(openpit.pretrade.PreTradePolicy):
     @property
     def name(self) -> str:
         return "DualRejectPolicy"
 
     def perform_pre_trade_check(
-        self, *, context: openpit.pretrade.PolicyContext
+        self,
+        ctx: openpit.pretrade.PreTradeContext,
+        order: openpit.Order,
     ) -> openpit.pretrade.PolicyDecision:
-        _ = context
+        del ctx, order
         return openpit.pretrade.PolicyDecision.reject(
             rejects=[
                 openpit.pretrade.PolicyReject(
@@ -61,7 +63,7 @@ def test_execute_pre_trade_returns_single_reject_for_start_stage_failure() -> No
     )
 
     result = engine.execute_pre_trade(
-        order=conftest.make_order(trade_amount=openpit.param.Quantity("0"))
+        order=conftest.make_order(trade_amount=openpit.param.TradeAmount.quantity(0))
     )
 
     assert not result.ok

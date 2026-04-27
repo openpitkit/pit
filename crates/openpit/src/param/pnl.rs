@@ -15,7 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::{define_signed_value_type, CashFlow, ParamKind, PositionSize};
+use super::{define_signed_value_type, CashFlow, Fee, ParamKind, PositionSize};
 
 define_signed_value_type!(
     /// Profit and loss (P&L) value that can be positive or negative.
@@ -37,12 +37,17 @@ impl Pnl {
     pub fn to_position_size(self) -> super::position_size::PositionSize {
         PositionSize::new(self.to_decimal())
     }
+
+    /// Creates a P&L value from a fee (negates the fee amount).
+    pub fn from_fee(fee: Fee) -> Self {
+        Self::new(-fee.to_decimal())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Pnl;
-    use crate::param::{CashFlow, PositionSize};
+    use crate::param::{CashFlow, Fee, PositionSize};
     use rust_decimal::Decimal;
 
     fn d(value: &str) -> Decimal {
@@ -64,5 +69,10 @@ mod tests {
 
         assert_eq!(profit.to_position_size(), PositionSize::new(d("10")));
         assert_eq!(loss.to_position_size(), PositionSize::new(d("-10")));
+    }
+
+    #[test]
+    fn builds_from_fee() {
+        assert_eq!(Pnl::from_fee(Fee::new(d("3.18"))), Pnl::new(d("-3.18")));
     }
 }

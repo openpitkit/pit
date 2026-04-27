@@ -15,7 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::{define_signed_value_type, Error, ParamKind, Quantity, Side};
+use super::{define_signed_value_type, Error, Fee, ParamKind, Pnl, Quantity, Side};
 
 define_signed_value_type!(
     /// Signed position size where long is positive and short is negative.
@@ -51,6 +51,16 @@ impl PositionSize {
             Side::Sell => -quantity.to_decimal(),
         };
         Self::new(value)
+    }
+
+    /// Creates a position size from a P&L value.
+    pub fn from_pnl(pnl: Pnl) -> Self {
+        Self::new(pnl.to_decimal())
+    }
+
+    /// Creates a position size from a fee (negates the fee amount).
+    pub fn from_fee(fee: Fee) -> Self {
+        Self::new(-fee.to_decimal())
     }
 
     /// Converts this position size into the quantity required to open it and the corresponding
@@ -151,7 +161,7 @@ impl PositionSize {
 #[cfg(test)]
 mod tests {
     use super::PositionSize;
-    use crate::param::{Error, ParamKind, Quantity, Side};
+    use crate::param::{Error, Fee, ParamKind, Pnl, Quantity, Side};
     use rust_decimal::Decimal;
 
     fn d(value: &str) -> Decimal {
@@ -192,6 +202,22 @@ mod tests {
         assert_eq!(
             PositionSize::from_quantity_and_side(quantity, Side::Sell),
             PositionSize::new(d("-2"))
+        );
+    }
+
+    #[test]
+    fn builds_from_pnl() {
+        assert_eq!(
+            PositionSize::from_pnl(Pnl::new(d("3.18"))),
+            PositionSize::new(d("3.18"))
+        );
+    }
+
+    #[test]
+    fn builds_from_fee() {
+        assert_eq!(
+            PositionSize::from_fee(Fee::new(d("3.18"))),
+            PositionSize::new(d("-3.18"))
         );
     }
 

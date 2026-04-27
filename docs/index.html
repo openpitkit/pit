@@ -11,18 +11,18 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
-  <script src="https://cdn.tailwindcss.com"></script>
   <style>
     :root {
-      --accent: #f59e0b;
-      --accent-dim: rgba(245, 158, 11, 0.12);
-      --bg: #080808;
-      --surface: #0f0f0f;
-      --border: #1a1a1a;
-      --border-hover: #f59e0b;
-      --text: #e2e2e2;
-      --muted: #555;
-      --muted-lt: #777;
+      --accent: #ff7a00;
+      --accent-2: #ffb347;
+      --accent-dim: rgba(255, 122, 0, 0.12);
+      --bg: #0b0f14;
+      --surface: #121722;
+      --border: rgba(255, 255, 255, 0.06);
+      --border-hover: #ff7a00;
+      --text: #e6e6e6;
+      --muted: #6c748c;
+      --muted-lt: #98a2b3;
     }
 
     *,
@@ -66,23 +66,39 @@
       border: 1px solid var(--border);
       border-radius: 6px;
       cursor: pointer;
-      transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+      transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
     }
 
     .card:hover {
       border-color: var(--border-hover);
-      background: var(--accent-dim);
-      transform: translateY(-2px);
+      background: rgba(255, 122, 0, 0.06);
+      transform: translateY(-3px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
     }
 
     .card-icon {
       color: var(--muted);
       transition: color 0.18s ease;
       line-height: 0;
+      opacity: 0.85;
+    }
+
+    .brand-icon {
+      display: block;
+      width: 24px;
+      height: 24px;
+      object-fit: contain;
+      opacity: 0.94;
+      transition: opacity 0.18s ease;
+    }
+
+    .card:hover .brand-icon {
+      opacity: 1;
     }
 
     .card:hover .card-icon {
       color: var(--accent);
+      opacity: 1;
     }
 
     /* card-title: 0.9375rem = 15px @ 16px base — matches GitHub's UI label size */
@@ -99,6 +115,14 @@
       color: var(--muted-lt);
       line-height: 1.65;
       flex: 1;
+    }
+
+    .card-cmd {
+      color: var(--accent);
+      font-size: 0.75rem;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     .card-link {
@@ -122,7 +146,7 @@
       letter-spacing: 0.07em;
       text-transform: uppercase;
       padding: 2px 8px;
-      border: 1px solid #222;
+      border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 3px;
       color: var(--muted);
     }
@@ -142,38 +166,60 @@
     .foot-link:hover {
       color: var(--accent);
     }
+
+    @media (min-width: 1200px) {
+      .container-tight {
+        padding-top: 32px !important;
+        padding-bottom: 40px !important;
+      }
+
+      header {
+        margin-bottom: 28px !important;
+      }
+    }
   </style>
 </head>
 
 <body>
-  <div
-    style="max-width: 860px; margin: 0 auto; padding: 72px 24px 56px; display: flex; flex-direction: column; flex: 1;">
+  <div class="container-tight"
+    style="max-width: 860px; margin: 0 auto; padding: 48px 24px 48px; display: flex; flex-direction: column; flex: 1;">
 
     <!-- ── Hero ────────────────────────────────────────────────── -->
-    <header style="text-align: center; margin-bottom: 64px;">
-      <a href="https://openpit.dev/" target="_blank" rel="noopener">
-        <img src="assets/pit-readme-banner.png" alt="Pit — Pre-trade Integrity Toolkit"
-          style="width: 100%; height: auto; display: block; margin: 0 auto 36px;" />
-      </a>
+    <header style="text-align: center; margin-bottom: 28px;">
+      <div style="margin-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 16px;">
+          <img src="assets/pit-logo-ex.png" width="512" height="512"
+            style="width: 56px; height: 56px; display: block;" />
+          <div style="font-size: 2.2rem; font-weight: 700; letter-spacing: -0.02em;">
+            Pit
+          </div>
+        </div>
+        <div style="font-size: 0.9rem; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase;">
+          Pre-trade Integrity Toolkit
+        </div>
+      </div>
 
       <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 28px;">
         <span class="tag">pre-trade risk</span>
+        <span class="tag">go</span>
         <span class="tag">python</span>
         <span class="tag">rust</span>
+        <span class="tag">c api</span>
         <span class="tag">open source</span>
         <span class="tag">apache 2.0</span>
       </div>
 
       <p style="max-width: 500px; margin: 0 auto;">
         <span
-          style="display: block; font-size: 1.25rem; color: var(--muted-lt); line-height: 1.5; margin-bottom: 0.55em; white-space: nowrap;">
-          Embeddable pre-trade risk pipeline.
+          style="display: block; font-size: 1.5rem; font-weight: 700; color: var(--text); line-height: 1.35; margin-bottom: 0.25em;">
+          Embeddable pre-trade risk engine.
         </span>
-        <span style="display: block; font-size: 1rem; color: var(--muted-lt); line-height: 1.5; margin-bottom: 0.18em;">
+        <span
+          style="display: block; font-size: 1.05rem; color: var(--muted-lt); line-height: 1.5; margin-bottom: 0.25em;">
           Designed to be embedded and adaptable.
         </span>
-        <span style="display: block; font-size: 0.875rem; color: var(--muted); line-height: 1.3;">
-          Deterministic. In-memory. Policy-driven.
+        <span style="display: block; font-size: 0.8rem; color: var(--muted); line-height: 1.3; letter-spacing: 0.04em;">
+          Deterministic · In-memory · Policy-driven
         </span>
       </p>
     </header>
@@ -182,8 +228,23 @@
     <main style="flex: 1;">
       <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px;">
 
+        <!-- Go module -->
+        <a href="https://github.com/openpitkit/pit-go" target="_blank" rel="noopener" class="card"
+          style="border-top: 2px solid #ff7a00;">
+          <div class="card-icon">
+            <img class="brand-icon" src="https://cdn.simpleicons.org/go/7d8590" alt="Go logo" />
+          </div>
+          <div class="card-title">Go SDK</div>
+          <div class="card-desc">
+            Public Go module for embedding Pit into Go services.
+            <br /><code class="card-cmd">go get github.com/openpitkit/pit-go</code>
+          </div>
+          <div class="card-link">→ github.com/openpitkit/pit-go</div>
+        </a>
+
         <!-- PyPI -->
-        <a href="https://pypi.org/project/openpit/" target="_blank" rel="noopener" class="card">
+        <a href="https://pypi.org/project/openpit/" target="_blank" rel="noopener" class="card"
+          style="border-top: 2px solid #ff7a00;">
           <div class="card-icon">
             <!-- Python logo -->
             <svg width="24" height="24" viewBox="0 0 128 128" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -196,28 +257,43 @@
           <div class="card-title">PyPI</div>
           <div class="card-desc">
             Binary wheels for Linux, macOS, and Windows. Install with
-            <br /><code style="color:var(--accent);font-size:0.75rem;white-space:nowrap;">pip install openpit</code>
+            <br /><code class="card-cmd">pip install openpit</code>
           </div>
           <div class="card-link">→ pypi.org/project/openpit/</div>
         </a>
 
         <!-- crates.io -->
-        <a href="https://crates.io/crates/openpit" target="_blank" rel="noopener" class="card">
+        <a href="https://crates.io/crates/openpit" target="_blank" rel="noopener" class="card"
+          style="border-top: 2px solid #ff7a00;">
           <div class="card-icon">
             <!-- Rust gear logo -->
-            <svg width="24" height="24" viewBox="0 0 144 144" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-              <path
-                d="M73.647 18.488c-.215 0-.43.003-.645.009l-1.56 8.881a45.056 45.056 0 0 0-8.93 2.185l-6.878-6.09a53.944 53.944 0 0 0-1.124.667 54.154 54.154 0 0 0-10.043 8.134 53.89 53.89 0 0 0-.617.659l5.003 7.51a45.14 45.14 0 0 0-5.616 7.512l-8.905-1.374a53.697 53.697 0 0 0-.371 1.201 54.13 54.13 0 0 0-2.31 12.56l-.011.864 8.4 3.247a45.183 45.183 0 0 0 .408 9.284l-7.749 4.423c.11.406.226.81.348 1.213a54.097 54.097 0 0 0 5.567 12.01c.233.373.47.742.713 1.108l8.603-2.016a45.083 45.083 0 0 0 5.944 7.21l-3.354 8.442c.337.282.678.56 1.024.832a54.2 54.2 0 0 0 11.175 6.881c.394.18.79.355 1.188.524l6.168-6.692a45.09 45.09 0 0 0 9.078 1.684l2.485 8.717c.426.02.853.033 1.282.04a54.25 54.25 0 0 0 13.185-1.442c.418-.1.834-.207 1.248-.32l.783-9.03a45.083 45.083 0 0 0 8.347-3.757l7.344 5.372c.353-.25.702-.505 1.047-.765a54.17 54.17 0 0 0 8.988-9.128c.264-.351.523-.706.777-1.063l-4.48-7.93a45.115 45.115 0 0 0 4.11-8.476l8.98.498c.117-.404.228-.81.333-1.218a54.12 54.12 0 0 0 1.236-12.833c-.01-.43-.025-.859-.046-1.287l-8.612-2.888a45.122 45.122 0 0 0-1.952-9.108l7.006-5.645a54.044 54.044 0 0 0-.594-1.157 54.174 54.174 0 0 0-7.363-10.77 54.023 54.023 0 0 0-.835-.942l-8.53 3.09a45.091 45.091 0 0 0-6.75-6.387l1.943-8.98c-.385-.2-.773-.393-1.163-.58a54.18 54.18 0 0 0-12.255-4.149 54.111 54.111 0 0 0-1.278-.236l-5.398 7.299a45.057 45.057 0 0 0-9.142-.626zm-1.56 21.265c17.75 0 32.145 14.395 32.145 32.147 0 17.75-14.394 32.146-32.145 32.146-17.751 0-32.145-14.395-32.145-32.146 0-17.752 14.394-32.147 32.145-32.147zm0 8.73a23.418 23.418 0 1 0 0 46.836 23.418 23.418 0 0 0 0-46.836z" />
-              <path
-                d="M64.78 49.15v10.322l-8.934 5.11-1.296-2.145 6.735-3.852v-7.39L64.78 49.15zM80.81 49.22l3.495 2.045v7.39l6.735 3.852-1.296 2.145-8.934-5.11V49.22zm-8.724 19.637l-8.933 5.11v4.224h17.863v-4.225l-8.93-5.109zm0 2.49l6.735 3.852v2.492H65.35V75.2l6.735-3.853z" />
-            </svg>
+            <img class="brand-icon" src="https://cdn.simpleicons.org/rust/7d8590" alt="Rust logo" />
           </div>
           <div class="card-title">crates.io</div>
           <div class="card-desc">
             Rust SDK published on the official package registry. Add with
-            <br /><code style="color:var(--accent);font-size:0.75rem;white-space:nowrap;">cargo add openpit</code>
+            <br /><code class="card-cmd">cargo add openpit</code>
           </div>
           <div class="card-link">→ crates.io/crates/openpit</div>
+        </a>
+
+        <!-- C API -->
+        <a href="https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md" target="_blank" rel="noopener"
+          class="card">
+          <div class="card-icon">
+            <svg width="24" height="24" viewBox="0 0 128 128" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+              <path d="M64 8 15 36v56l49 28 49-28V36L64 8Zm0 10.8 39.6 22.6v45.2L64 109.2 24.4 86.6V41.4L64 18.8Z" />
+              <path
+                d="M74.2 39.5H54.3c-12.4 0-22.5 10.5-22.5 24s10.1 24 22.5 24h19.9V76.9H55.6c-6.8 0-12.3-5.8-12.3-13.4s5.5-13.4 12.3-13.4h18.6V39.5Z" />
+            </svg>
+          </div>
+          <div class="card-title">C API</div>
+          <div class="card-desc">
+            Header, release-ready native libraries, and split reference docs
+            for C integrations.
+            <br /><code class="card-cmd">#include &lt;pit.h&gt;</code>
+          </div>
+          <div class="card-link">→ github.com/openpitkit/pit/blob/main/docs/c-api/index.md</div>
         </a>
 
         <!-- Repository -->
@@ -235,6 +311,7 @@
           <div class="card-title">Repository</div>
           <div class="card-desc">
             Source code, issue tracker, and contribution guide.
+            <br /><code class="card-cmd">git clone https://github.com/openpitkit/pit.git</code>
           </div>
           <div class="card-link">→ github.com/openpitkit/pit</div>
         </a>

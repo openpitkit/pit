@@ -15,7 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::{define_signed_value_type, Fee, ParamKind, Pnl};
+use super::{define_signed_value_type, Fee, ParamKind, Pnl, Volume};
 
 define_signed_value_type!(
     /// Cash flow value where positive is inflow and negative is outflow.
@@ -33,12 +33,22 @@ impl CashFlow {
     pub fn from_fee(fee: Fee) -> Self {
         Self::new(-fee.to_decimal())
     }
+
+    /// Creates a cash flow contribution from a volume inflow.
+    pub fn from_volume_inflow(volume: Volume) -> Self {
+        Self::new(volume.to_decimal())
+    }
+
+    /// Creates a cash flow contribution from a volume outflow (negates the volume amount).
+    pub fn from_volume_outflow(volume: Volume) -> Self {
+        Self::new(-volume.to_decimal())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::CashFlow;
-    use crate::param::{Fee, Pnl};
+    use crate::param::{Fee, Pnl, Volume};
     use rust_decimal::Decimal;
 
     fn d(value: &str) -> Decimal {
@@ -55,6 +65,20 @@ mod tests {
         );
         assert_eq!(
             CashFlow::from_fee(Fee::new(d("1.25"))).to_decimal(),
+            d("-1.25")
+        );
+    }
+
+    #[test]
+    fn converts_from_volume_inflow_and_outflow() {
+        assert_eq!(
+            CashFlow::from_volume_inflow(Volume::new(d("1.25")).expect("volume must be valid"))
+                .to_decimal(),
+            d("1.25")
+        );
+        assert_eq!(
+            CashFlow::from_volume_outflow(Volume::new(d("1.25")).expect("volume must be valid"))
+                .to_decimal(),
             d("-1.25")
         );
     }

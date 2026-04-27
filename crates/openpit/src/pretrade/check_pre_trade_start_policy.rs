@@ -15,7 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::Reject;
+use super::{PreTradeContext, Rejects};
 
 /// Start-stage pre-trade policy contract.
 ///
@@ -23,9 +23,10 @@ use super::Reject;
 /// engine creates a deferred request. They are intended for cheap gating logic
 /// such as session checks, static order validation, and stateful throttles.
 ///
-/// Policies execute in registration order. The engine stops on the first
-/// reject, does not evaluate remaining start-stage policies, and does not roll
-/// back any state changes performed here.
+/// Policies execute in registration order. The engine evaluates all
+/// start-stage policies and merges every returned reject list before deciding
+/// whether to create a deferred request. State changes performed here are not
+/// rolled back by the engine.
 ///
 /// `O` is the order contract type seen by the policy. `R` is the execution
 /// report contract type that will later be fed back through
@@ -36,7 +37,7 @@ use super::Reject;
 /// ```rust
 /// use std::cell::Cell;
 ///
-/// use openpit::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
+/// use openpit::pretrade::{CheckPreTradeStartPolicy, PreTradeContext, Reject, RejectCode, RejectScope, Rejects};
 ///
 /// struct SessionPolicy {
 ///     active: Cell<bool>,
@@ -47,19 +48,19 @@ use super::Reject;
 /// }
 ///
 /// impl<O, R> CheckPreTradeStartPolicy<O, R> for SessionPolicy {
-///     fn name(&self) -> &'static str {
+///     fn name(&self) -> &str {
 ///         Self::NAME
 ///     }
 ///
-///     fn check_pre_trade_start(&self, _order: &O) -> Result<(), Reject> {
+///     fn check_pre_trade_start(&self, _ctx: &PreTradeContext, _order: &O) -> Result<(), Rejects> {
 ///         if !self.active.get() {
-///             return Err(Reject::new(
+///             return Err(Rejects::new(vec![Reject::new(
 ///                 Self::NAME,
 ///                 RejectScope::Account,
 ///                 RejectCode::Other,
 ///                 "session inactive",
 ///                 "trading session is closed",
-///             ));
+///             )]));
 ///         }
 ///         Ok(())
 ///     }
@@ -74,13 +75,14 @@ pub trait CheckPreTradeStartPolicy<O, R> {
     ///
     /// Policy names must be unique across all policies registered in the same
     /// engine instance.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
-    /// Performs start-stage checks against an immutable order.
+    /// Performs start-stage checks against an order.
     ///
     /// Returning `Ok(())` allows the engine to continue building the deferred
-    /// request. Returning [`Reject`] aborts the start stage immediately.
-    fn check_pre_trade_start(&self, order: &O) -> Result<(), Reject>;
+    /// request. Returning [`Rejects`] contributes rejects to the start-stage
+    /// reject result.
+    fn check_pre_trade_start(&self, ctx: &PreTradeContext, order: &O) -> Result<(), Rejects>;
 
     /// Applies post-trade updates from execution reports.
     ///
@@ -98,7 +100,7 @@ mod tests {
         WithFinancialImpact,
     };
     use crate::param::{AccountId, Asset, Fee, Pnl, Quantity, Side, TradeAmount};
-    use crate::pretrade::{CheckPreTradeStartPolicy, Reject};
+    use crate::pretrade::{CheckPreTradeStartPolicy, PreTradeContext, Rejects};
 
     struct StartPolicyNoop;
 
@@ -106,11 +108,15 @@ mod tests {
     type TestReport = WithExecutionReportOperation<WithFinancialImpact<()>>;
 
     impl CheckPreTradeStartPolicy<TestOrder, TestReport> for StartPolicyNoop {
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             "StartPolicyNoop"
         }
 
-        fn check_pre_trade_start(&self, _order: &TestOrder) -> Result<(), Reject> {
+        fn check_pre_trade_start(
+            &self,
+            _ctx: &PreTradeContext,
+            _order: &TestOrder,
+        ) -> Result<(), Rejects> {
             Ok(())
         }
 
@@ -158,6 +164,8 @@ mod tests {
         };
 
         assert_eq!(StartPolicyNoop.name(), "StartPolicyNoop");
-        assert!(StartPolicyNoop.check_pre_trade_start(&order).is_ok());
+        assert!(StartPolicyNoop
+            .check_pre_trade_start(&PreTradeContext::new(), &order)
+            .is_ok());
     }
 }

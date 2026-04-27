@@ -20,7 +20,9 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::pretrade::start_pre_trade_time::start_pre_trade_now;
-use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
+use crate::pretrade::{
+    CheckPreTradeStartPolicy, PreTradeContext, Reject, RejectCode, RejectScope, Rejects,
+};
 
 /// Start-stage policy that limits order rate in a sliding time window.
 ///
@@ -84,11 +86,11 @@ impl RateLimitPolicy {
 }
 
 impl<O, R> CheckPreTradeStartPolicy<O, R> for RateLimitPolicy {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::NAME
     }
 
-    fn check_pre_trade_start(&self, _order: &O) -> Result<(), Reject> {
+    fn check_pre_trade_start(&self, _ctx: &PreTradeContext, _order: &O) -> Result<(), Rejects> {
         let now = start_pre_trade_now();
         let mut timestamps = self.timestamps.borrow_mut();
 
@@ -114,7 +116,8 @@ impl<O, R> CheckPreTradeStartPolicy<O, R> for RateLimitPolicy {
                     self.window,
                     self.max_orders
                 ),
-            ));
+            )
+            .into());
         }
 
         Ok(())
@@ -132,7 +135,9 @@ mod tests {
     use crate::core::OrderOperation;
     use crate::param::{AccountId, Asset, Quantity, Side, TradeAmount};
     use crate::pretrade::start_pre_trade_time::with_start_pre_trade_now;
-    use crate::pretrade::{CheckPreTradeStartPolicy, Reject, RejectCode, RejectScope};
+    use crate::pretrade::{
+        CheckPreTradeStartPolicy, PreTradeContext, RejectCode, RejectScope, Rejects,
+    };
 
     use super::RateLimitPolicy;
 
@@ -147,6 +152,7 @@ mod tests {
 
         let reject = check_at(&policy, &order, base + Duration::from_secs(2))
             .expect_err("third order in window must be rejected");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::RateLimitExceeded);
         assert_eq!(reject.reason, "rate limit exceeded");
@@ -178,6 +184,7 @@ mod tests {
 
         let reject = check_at(&policy, &order, base + Duration::from_millis(3500))
             .expect_err("rejected attempt must stay counted in the window");
+        let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::RateLimitExceeded);
         assert_eq!(reject.reason, "rate limit exceeded");
@@ -191,10 +198,12 @@ mod tests {
         policy: &RateLimitPolicy,
         order: &OrderOperation,
         now: Instant,
-    ) -> Result<(), Reject> {
+    ) -> Result<(), Rejects> {
         with_start_pre_trade_now(now, || {
             <RateLimitPolicy as CheckPreTradeStartPolicy<OrderOperation, ()>>::check_pre_trade_start(
-                policy, order,
+                policy,
+                &PreTradeContext::new(),
+                order,
             )
         })
     }

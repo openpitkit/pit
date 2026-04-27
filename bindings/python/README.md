@@ -79,14 +79,20 @@ Built-in policies currently include:
 - `RateLimitPolicy`
 - `OrderSizeLimitPolicy`
 
-These built-ins are intentionally small. The primary integration model is to
-write project-specific policies against the public Python policy API described
-in the manual:
-[Custom Python policies](https://github.com/openpitkit/pit/wiki/Policies#python-custom-policy-api).
+The primary integration model is to write project-specific policies against the
+public Python policy API described in the manual: [Custom Python policies](https://github.com/openpitkit/pit/wiki/Policies#python-custom-policy-api).
 
 There are two types of rejections: a full kill switch for the account and a
 rejection of only the current request. This is useful in algorithmic trading
 when automatic order submission must be halted until the situation is analyzed.
+
+## Threading
+
+Canonical contract: [Threading Contract](https://github.com/openpitkit/pit/wiki/Threading-Contract).
+
+The Python binding follows the same SDK threading contract.
+Public methods acquire the GIL when needed; the SDK does not release the GIL
+across callback boundaries, so Python policies execute on the calling thread.
 
 ## Usage
 
@@ -95,7 +101,7 @@ import openpit
 
 # 1. Configure policies.
 pnl_policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
-    settlement_asset=openpit.param.Asset("USD"),
+    settlement_asset="USD",
     barrier=openpit.param.Pnl("1000"),
 )
 
@@ -106,7 +112,7 @@ rate_limit_policy = openpit.pretrade.policies.RateLimitPolicy(
 
 order_size_policy = openpit.pretrade.policies.OrderSizeLimitPolicy(
     limit=openpit.pretrade.policies.OrderSizeLimit(
-        settlement_asset=openpit.param.Asset("USD"),
+        settlement_asset="USD",
         max_quantity=openpit.param.Quantity("500"),
         max_notional=openpit.param.Volume("100000"),
     ),
@@ -127,23 +133,22 @@ engine = (
 # 3. Check an order.
 order = openpit.Order(
     operation=openpit.OrderOperation(
-        instrument=openpit.Instrument(
-            openpit.param.Asset("AAPL"),
-            openpit.param.Asset("USD"),
-        ),
+        instrument=openpit.Instrument("AAPL", "USD"),
+        account_id=openpit.param.AccountId.from_u64(99224416),
         side=openpit.param.Side.BUY,
-        trade_amount=openpit.param.Quantity("100"),
-        price=openpit.param.Price("185"),
+        trade_amount=openpit.param.TradeAmount.quantity(100.0),
+        price=openpit.param.Price(185.0),
     ),
 )
 
 start_result = engine.start_pre_trade(order=order)
 
 if not start_result:
-    reject = start_result.reject
-    raise RuntimeError(
-        f"{reject.policy} [{reject.code}]: {reject.reason}: {reject.details}"
+    messages = ", ".join(
+        f"{r.policy} [{r.code}]: {r.reason}: {r.details}"
+        for r in start_result.rejects
     )
+    raise RuntimeError(messages)
 
 request = start_result.request
 
@@ -181,10 +186,8 @@ reservation.commit()
 # 7. The order goes to the venue and returns with an execution report.
 report = openpit.ExecutionReport(
     operation=openpit.ExecutionReportOperation(
-        instrument=openpit.Instrument(
-            openpit.param.Asset("AAPL"),
-            openpit.param.Asset("USD"),
-        ),
+        instrument=openpit.Instrument("AAPL", "USD"),
+        account_id=openpit.param.AccountId.from_u64(99224416),
         side=openpit.param.Side.BUY,
     ),
     financial_impact=openpit.FinancialImpact(
