@@ -318,6 +318,12 @@ jobs:
           path.write_text("\n".join(lines) + "\n")
           PY
 
+      - name: Copy monorepo LICENSE and OWNERS into Python package
+        shell: bash
+        run: |
+          cp LICENSE bindings/python/LICENSE
+          cp OWNERS bindings/python/OWNERS
+
       - name: Build Linux wheel
         if: startsWith(matrix.os, 'ubuntu')
         uses: PyO3/maturin-action@v1
@@ -390,11 +396,13 @@ jobs:
           echo "WHEEL_PATH=${WHEEL}" >> "$GITHUB_ENV"
 
       - name: Install built wheel
-        if: matrix.name == 'linux-x86_64-manylinux2014' || !startsWith(matrix.os, 'ubuntu')
+        if: matrix.name == 'linux-x86_64-manylinux2014' || !startsWith(matrix.os,
+          'ubuntu')
         run: python -m pip install --force-reinstall --no-deps "${{ env.WHEEL_PATH }}"
 
       - name: Verify wheel import and version
-        if: matrix.name == 'linux-x86_64-manylinux2014' || !startsWith(matrix.os, 'ubuntu')
+        if: matrix.name == 'linux-x86_64-manylinux2014' || !startsWith(matrix.os,
+          'ubuntu')
         shell: bash
         env:
           BASE_VERSION: ${{ needs.verify-tag.outputs.base_version }}
@@ -419,7 +427,8 @@ jobs:
           PY
 
       - name: Run wheel tests
-        if: matrix.name == 'linux-x86_64-manylinux2014' || !startsWith(matrix.os, 'ubuntu')
+        if: matrix.name == 'linux-x86_64-manylinux2014' || !startsWith(matrix.os,
+          'ubuntu')
         run: python -m pytest bindings/python/tests
 
       - name: Validate wheel metadata
@@ -507,6 +516,12 @@ jobs:
               raise SystemExit("version field not found in bindings/python/Cargo.toml")
           path.write_text("\n".join(lines) + "\n")
           PY
+
+      - name: Copy monorepo LICENSE and OWNERS into Python package
+        shell: bash
+        run: |
+          cp LICENSE bindings/python/LICENSE
+          cp OWNERS bindings/python/OWNERS
 
       - name: Build sdist
         run: maturin sdist --manifest-path bindings/python/Cargo.toml --out dist
@@ -722,9 +737,15 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
+    concurrency:
+      group: pit-go-mirror
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Download runtime artifacts
         uses: actions/download-artifact@v4
@@ -733,7 +754,7 @@ jobs:
           path: /tmp/runtime-dl
           merge-multiple: true
 
-      - name: Push sources to pit-go
+      - name: Split bindings/go and publish release commit to pit-go
         shell: bash
         env:
           PIT_GO_REF: ${{ needs.verify-tag.outputs.pit_go_ref }}
@@ -747,13 +768,19 @@ jobs:
             exit 1
           fi
 
-          WORKDIR="$(mktemp -d)"
-          git clone "https://x-access-token:${PIT_GO_PUSH_TOKEN}@github.com/openpitkit/pit-go.git" "${WORKDIR}/pit-go"
-          git -C "${WORKDIR}/pit-go" remote set-url origin "https://x-access-token:${PIT_GO_PUSH_TOKEN}@github.com/openpitkit/pit-go.git"
-          rm -rf "${WORKDIR}/pit-go"/*
-          cp -R bindings/go/. "${WORKDIR}/pit-go/"
-          cp LICENSE "${WORKDIR}/pit-go/LICENSE"
-          cp OWNERS "${WORKDIR}/pit-go/OWNERS"
+          MONOREPO="${GITHUB_WORKSPACE}"
+          WORKTREE="$(mktemp -d)/pit-go-wt"
+          PIT_GO_URL="https://x-access-token:${PIT_GO_PUSH_TOKEN}@github.com/openpitkit/pit-go.git"
+
+          # Split preserves Author/Committer of every bindings/go commit up to
+          # the release tag. github-actions[bot] is the author only of the
+          # follow-up release commit that adds runtime binaries and metadata.
+          git subtree split --prefix=bindings/go -b go-split
+          git worktree add "${WORKTREE}" go-split
+
+          cp "${MONOREPO}/LICENSE" "${WORKTREE}/LICENSE"
+          cp "${MONOREPO}/OWNERS"  "${WORKTREE}/OWNERS"
+
           declare -A PLATFORMS=(
             ["linux-amd64"]="libpit_ffi.so"
             ["linux-arm64"]="libpit_ffi.so"
@@ -765,37 +792,45 @@ jobs:
             lib="${PLATFORMS[$platform]}"
             goos="${platform%-*}"
             goarch="${platform#*-}"
-            dir="${WORKDIR}/pit-go/internal/runtime/${platform}"
+            dir="${WORKTREE}/internal/runtime/${platform}"
             mkdir -p "${dir}"
             cp "/tmp/runtime-dl/pit-ffi-${VERSION}-${goos}-${goarch}-${lib}" "${dir}/${lib}"
           done
-          find "${WORKDIR}/pit-go/internal/runtime" -name .gitkeep -delete
-          rm -f "${WORKDIR}/pit-go/internal/runtime/.gitignore"
-          cd "${WORKDIR}/pit-go"
-          git remote set-url origin "https://x-access-token:${PIT_GO_PUSH_TOKEN}@github.com/openpitkit/pit-go.git"
-          git add -A
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
-            git commit -m "Dry-run release ${VERSION}" || true
-            git push origin HEAD:"${PIT_GO_REF}" --force
-          else
-            git commit -m "Release v${VERSION}" || true
-            git tag -f "v${VERSION}"
+          # internal/runtime/.gitignore excludes *.so/*.dylib/*.dll in the
+          # monorepo; -f below pierces that ignore inside the mirror only.
+          find "${WORKTREE}/internal/runtime" -name .gitkeep -delete
 
-            # Do not fail entire release if go repo push fails (bootstrap phase)
-            set +e
-            git push origin HEAD:main
-            git push origin "v${VERSION}" --force
-            EXIT_CODE=$?
-            set -e
+          # Remove any injected GitHub Actions auth headers (case variations and scopes)
+          git config --global --unset-all "http.https://github.com/.extraheader" || true
+          git config --global --unset-all "http.https://github.com/.extraHeader" || true
+          git config --unset-all "http.https://github.com/.extraheader" || true
+          git config --unset-all "http.https://github.com/.extraHeader" || true
 
-            if [ $EXIT_CODE -ne 0 ]; then
-              echo "::warning::pit-go publish failed"
+          (
+            cd "${WORKTREE}"
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add LICENSE OWNERS
+            git add -f internal/runtime/
+            git commit -m "Release v${VERSION}: add runtime binaries and monorepo metadata"
+
+            if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
+              # Dry-run pushes the full release commit to a disposable branch.
+              # No tag is created so dry-run cannot pollute the version space.
+              git -c http.extraheader= push --force "${PIT_GO_URL}" "HEAD:${PIT_GO_REF}"
+            else
+              git tag "v${VERSION}"
+              # main is force-pushed because every release rewrites it to the
+              # latest release commit; this is by design for the mirror.
+              git -c http.extraheader= push --force "${PIT_GO_URL}" HEAD:main
+              # Tag push is NOT forced: re-releasing the same version must
+              # fail loudly, consistent with crates.io and PyPI semantics.
+              git -c http.extraheader= push "${PIT_GO_URL}" "v${VERSION}"
             fi
+          )
 
-            # TODO: remove soft-fail after first stable release; go publish must fail pipeline later
-          fi
+          git worktree remove --force "${WORKTREE}"
+          git branch -D go-split
 
   publish-github-release:
     name: Publish GitHub release metadata

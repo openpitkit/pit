@@ -27,10 +27,10 @@ import (
 	"runtime/cgo"
 	"unsafe"
 
-	"github.com/openpitkit/pit-go/internal/callback"
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/model"
-	"github.com/openpitkit/pit-go/pretrade"
+	"go.openpit.dev/openpit/internal/callback"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/pretrade"
 )
 
 type CheckPreTradeStart struct {

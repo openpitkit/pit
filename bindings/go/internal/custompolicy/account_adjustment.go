@@ -27,12 +27,12 @@ import (
 	"runtime/cgo"
 	"unsafe"
 
-	"github.com/openpitkit/pit-go/accountadjustment"
-	"github.com/openpitkit/pit-go/internal/callback"
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/model"
-	"github.com/openpitkit/pit-go/param"
-	"github.com/openpitkit/pit-go/tx"
+	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/internal/callback"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/tx"
 )
 
 type AccountAdjustment struct {

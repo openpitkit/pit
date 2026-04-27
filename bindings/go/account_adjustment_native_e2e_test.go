@@ -15,17 +15,17 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-package pit
+package openpit
 
 import (
 	"testing"
 
-	"github.com/openpitkit/pit-go/accountadjustment"
-	"github.com/openpitkit/pit-go/model"
-	"github.com/openpitkit/pit-go/param"
-	"github.com/openpitkit/pit-go/pkg/optional"
-	"github.com/openpitkit/pit-go/reject"
-	"github.com/openpitkit/pit-go/tx"
+	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
+	"go.openpit.dev/openpit/reject"
+	"go.openpit.dev/openpit/tx"
 )
 
 func TestAccountAdjustmentNativeE2E_BatchAppliesAndInvokesPolicyPerItem(t *testing.T) {

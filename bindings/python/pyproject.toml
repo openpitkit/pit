@@ -49,6 +49,7 @@ bindings = "pyo3"
 features = ["extension-module"]
 module-name = "openpit._openpit"
 python-source = "python"
+include = ["OWNERS"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

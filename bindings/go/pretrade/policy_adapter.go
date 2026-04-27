@@ -21,11 +21,11 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/openpitkit/pit-go/internal/callback"
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/model"
-	"github.com/openpitkit/pit-go/reject"
-	"github.com/openpitkit/pit-go/tx"
+	"go.openpit.dev/openpit/internal/callback"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/reject"
+	"go.openpit.dev/openpit/tx"
 )
 
 // ClientOrder is the client-owned order shape accepted by ClientEngine.

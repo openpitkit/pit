@@ -18,9 +18,9 @@
 package pretrade
 
 import (
-	"github.com/openpitkit/pit-go/model"
-	"github.com/openpitkit/pit-go/reject"
-	"github.com/openpitkit/pit-go/tx"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/reject"
+	"go.openpit.dev/openpit/tx"
 )
 
 type CheckPreTradeStartPolicy interface {

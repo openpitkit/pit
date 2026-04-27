@@ -17,7 +17,7 @@
 
 package reject
 
-import "github.com/openpitkit/pit-go/internal/native"
+import "go.openpit.dev/openpit/internal/native"
 
 type AccountAdjustmentBatchError struct {
 	Rejects               List

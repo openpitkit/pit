@@ -18,8 +18,8 @@
 package param
 
 import (
-	"github.com/openpitkit/pit-go/internal/native"
 	"github.com/shopspring/decimal"
+	"go.openpit.dev/openpit/internal/native"
 )
 
 func newDecimalFromNative(source native.ParamDecimal) decimal.Decimal {

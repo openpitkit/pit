@@ -1,4 +1,4 @@
-module github.com/openpitkit/pit-go
+module go.openpit.dev/openpit
 
 go 1.22
 

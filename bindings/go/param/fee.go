@@ -18,9 +18,9 @@
 package param
 
 import (
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/pkg/optional"
 	"github.com/shopspring/decimal"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/pkg/optional"
 )
 
 // Fee is a fee amount.

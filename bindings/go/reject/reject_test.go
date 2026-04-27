@@ -21,7 +21,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/openpitkit/pit-go/internal/native"
+	"go.openpit.dev/openpit/internal/native"
 )
 
 func TestRejectWithUserDataReturnsCopyWithToken(t *testing.T) {

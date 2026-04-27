@@ -15,14 +15,14 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-package pit
+package openpit
 
 import (
 	"testing"
 
-	"github.com/openpitkit/pit-go/model"
-	"github.com/openpitkit/pit-go/param"
-	"github.com/openpitkit/pit-go/pkg/optional"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
 )
 
 func TestOrderNativeE2E_ExecuteAndApplyExecutionReport(t *testing.T) {

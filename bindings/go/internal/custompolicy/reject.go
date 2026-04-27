@@ -26,8 +26,8 @@ import "C"
 import (
 	"unsafe"
 
-	"github.com/openpitkit/pit-go/internal/convert"
-	"github.com/openpitkit/pit-go/reject"
+	"go.openpit.dev/openpit/internal/convert"
+	"go.openpit.dev/openpit/reject"
 )
 
 func newNativeRejectListOrNil(source reject.List) *C.PitRejectList {

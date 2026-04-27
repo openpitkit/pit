@@ -2,5 +2,5 @@ module openpit-release-e2e-go
 
 go 1.22
 
-require github.com/openpitkit/pit-go v__OPENPIT_VERSION__
+require go.openpit.dev/openpit v__OPENPIT_VERSION__
 

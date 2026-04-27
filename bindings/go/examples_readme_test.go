@@ -15,14 +15,14 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-package pit
+package openpit
 
 import (
 	"testing"
 
-	"github.com/openpitkit/pit-go/model"
-	"github.com/openpitkit/pit-go/param"
-	"github.com/openpitkit/pit-go/pretrade/policies"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pretrade/policies"
 )
 
 // TestReadmeQuickstart mirrors the Usage example in bindings/go/README.md.

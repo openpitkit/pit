@@ -22,7 +22,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/openpitkit/pit-go/internal/native"
+	"go.openpit.dev/openpit/internal/native"
 )
 
 const pnlCanonicalValue = "98.76"

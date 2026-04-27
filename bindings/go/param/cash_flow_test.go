@@ -24,8 +24,8 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/openpitkit/pit-go/internal/native"
 	"github.com/shopspring/decimal"
+	"go.openpit.dev/openpit/internal/native"
 )
 
 const (

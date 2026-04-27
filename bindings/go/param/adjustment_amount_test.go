@@ -20,7 +20,7 @@ package param
 import (
 	"testing"
 
-	"github.com/openpitkit/pit-go/internal/native"
+	"go.openpit.dev/openpit/internal/native"
 )
 
 func TestAdjustmentAmountDelta(t *testing.T) {

@@ -1,0 +1,72 @@
+name: Sync pit-go (sources branch)
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Sync bindings/go to pit-go:sources
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    concurrency:
+      group: pit-go-mirror
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Split bindings/go and push sources branch with monorepo metadata
+        shell: bash
+        env:
+          PIT_GO_PUSH_TOKEN: ${{ secrets.PIT_GO_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PIT_GO_PUSH_TOKEN}" ]]; then
+            echo "::error::PIT_GO_PUSH_TOKEN secret is required to push to pit-go repository"
+            exit 1
+          fi
+
+          MONOREPO="${GITHUB_WORKSPACE}"
+          WORKTREE="$(mktemp -d)/pit-go-wt"
+          PIT_GO_URL="https://x-access-token:${PIT_GO_PUSH_TOKEN}@github.com/openpitkit/pit-go.git"
+
+          # Split preserves Author/Committer of every original bindings/go commit.
+          # github-actions[bot] only appears as pusher (and as author of the
+          # follow-up metadata commit below).
+          git subtree split --prefix=bindings/go -b go-split
+
+          git worktree add "${WORKTREE}" go-split
+
+          cp "${MONOREPO}/LICENSE" "${WORKTREE}/LICENSE"
+          cp "${MONOREPO}/OWNERS"  "${WORKTREE}/OWNERS"
+
+          # actions/checkout sets a global http.extraHeader with GITHUB_TOKEN for
+          # all github.com URLs. Unset it so the PAT embedded in PIT_GO_URL is
+          # used instead; otherwise GitHub identifies the pusher as
+          # github-actions[bot] and denies access to pit-go.
+          git config --global --unset-all "http.https://github.com/.extraHeader" || true
+
+          (
+            cd "${WORKTREE}"
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add LICENSE OWNERS
+            if ! git diff --cached --quiet; then
+              git commit -m "Sync monorepo metadata (LICENSE, OWNERS)"
+            fi
+            # Force-push: subtree split regenerates SHAs on every run, so the
+            # sources branch is always rewritten. This is expected for a mirror.
+            git -c http.extraheader= push --force "${PIT_GO_URL}" HEAD:sources
+          )
+
+          git worktree remove --force "${WORKTREE}"
+          git branch -D go-split

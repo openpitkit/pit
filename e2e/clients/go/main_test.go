@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	openpit "github.com/openpitkit/pit-go"
-	"github.com/openpitkit/pit-go/pretrade/policies"
+	"go.openpit.dev/openpit"
+	"go.openpit.dev/openpit/pretrade/policies"
 )
 
 func TestBuildEngineFromPublicModule(t *testing.T) {

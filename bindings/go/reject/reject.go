@@ -20,7 +20,7 @@ package reject
 import (
 	"unsafe"
 
-	"github.com/openpitkit/pit-go/internal/native"
+	"go.openpit.dev/openpit/internal/native"
 )
 
 type Scope uint8

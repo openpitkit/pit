@@ -20,8 +20,8 @@ package policies
 import (
 	"errors"
 
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/pretrade"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/pretrade"
 )
 
 // NewPreTradePolicyHolder always returns an error.

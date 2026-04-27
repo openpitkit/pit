@@ -25,7 +25,7 @@ import (
 	"strings"
 	"sync"
 
-	pitruntime "github.com/openpitkit/pit-go/internal/runtime"
+	pitruntime "go.openpit.dev/openpit/internal/runtime"
 )
 
 const version = "0.2.1"

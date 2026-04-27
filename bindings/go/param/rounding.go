@@ -18,7 +18,7 @@
 package param
 
 import (
-	"github.com/openpitkit/pit-go/internal/native"
+	"go.openpit.dev/openpit/internal/native"
 )
 
 // RoundingStrategy configures decimal rounding behavior.

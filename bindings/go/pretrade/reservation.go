@@ -18,7 +18,7 @@
 package pretrade
 
 import (
-	"github.com/openpitkit/pit-go/internal/native"
+	"go.openpit.dev/openpit/internal/native"
 )
 
 type Reservation struct {

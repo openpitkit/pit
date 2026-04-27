@@ -27,20 +27,20 @@
 // than the goroutine that initiated the call, so callback code must not rely
 // on thread-local OS state.
 
-package pit
+package openpit
 
 import (
 	"fmt"
 
-	"github.com/openpitkit/pit-go/accountadjustment"
-	"github.com/openpitkit/pit-go/internal/custompolicy"
-	"github.com/openpitkit/pit-go/internal/loader"
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/model"
-	"github.com/openpitkit/pit-go/param"
-	"github.com/openpitkit/pit-go/pkg/optional"
-	"github.com/openpitkit/pit-go/pretrade"
-	"github.com/openpitkit/pit-go/reject"
+	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/internal/custompolicy"
+	"go.openpit.dev/openpit/internal/loader"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
+	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/reject"
 )
 
 //------------------------------------------------------------------------------

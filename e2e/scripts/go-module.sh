@@ -30,7 +30,7 @@ cd /tmp/openpit-go-consumer
 sed "s/__OPENPIT_VERSION__/${OPENPIT_VERSION}/g" go.mod.in > go.mod
 rm go.mod.in
 find ./tests/integration -type f -name "*.go" -exec \
-  sed -i "s|github.com/openpitkit/pit/bindings/go|github.com/openpitkit/pit-go|g" {} +
+  sed -i "s|github.com/openpitkit/pit/bindings/go|go.openpit.dev/openpit|g" {} +
 
 go mod tidy
 go test ./...

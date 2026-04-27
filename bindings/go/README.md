@@ -1,7 +1,12 @@
 # Pit (Pre-trade Integrity Toolkit) for Go
 
+> **Read-only mirror.** This repository is a mirror of
+> [`bindings/go/`](https://github.com/openpitkit/pit/tree/main/bindings/go)
+> from the [openpitkit/pit](https://github.com/openpitkit/pit) monorepo.
+> **Do not open pull requests here** — contribute to the monorepo instead.
+
 <!-- markdownlint-disable MD013 -->
-[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![Go version](https://img.shields.io/badge/go-1.22%2B-00ADD8)](https://go.dev/) [![Module](https://img.shields.io/badge/module-github.com%2Fopenpitkit%2Fpit--go-00ADD8)](https://github.com/openpitkit/pit-go) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
+[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![Go version](https://img.shields.io/badge/go-1.22%2B-00ADD8)](https://go.dev/) [![Module](https://img.shields.io/badge/module-go.openpit.dev%2Fopenpit-00ADD8)](https://go.openpit.dev/openpit) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 <!-- markdownlint-enable MD013 -->
 
 `openpit` is an embeddable pre-trade risk SDK for integrating policy-driven
@@ -14,7 +19,7 @@ For full project documentation, see
 For conceptual and architectural pages, see
 [the project wiki](https://github.com/openpitkit/pit/wiki).
 For the public Go module source, see
-[github.com/openpitkit/pit-go](https://github.com/openpitkit/pit-go).
+[go.openpit.dev/openpit](https://go.openpit.dev/openpit).
 
 ## Versioning Policy (Pre‑1.0)
 
@@ -34,14 +39,14 @@ evolution during the pre‑stable phase.
 
 ## Getting Started
 
-Visit the [Go module page](https://github.com/openpitkit/pit-go) and the
+Visit the [Go module page](https://go.openpit.dev/openpit) and the
 [project wiki](https://github.com/openpitkit/pit/wiki) for conceptual pages
 and architecture notes.
 
 ## Install
 
 ```bash
-go get github.com/openpitkit/pit-go
+go get go.openpit.dev/openpit
 ```
 
 ## Engine
@@ -96,10 +101,10 @@ import (
  "fmt"
  "log"
 
- pit "github.com/openpitkit/pit-go"
- "github.com/openpitkit/pit-go/model"
- "github.com/openpitkit/pit-go/param"
- "github.com/openpitkit/pit-go/pretrade/policies"
+ "go.openpit.dev/openpit"
+ "go.openpit.dev/openpit/model"
+ "go.openpit.dev/openpit/param"
+ "go.openpit.dev/openpit/pretrade/policies"
 )
 
 func main() {
@@ -143,7 +148,7 @@ func main() {
  defer sizePolicy.Close()
 
  // 2. Build the engine (one time at the platform initialization).
- builder, err := pit.NewEngineBuilder()
+ builder, err := openpit.NewEngineBuilder()
  if err != nil {
   log.Fatal(err)
  }

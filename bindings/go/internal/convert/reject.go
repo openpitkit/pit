@@ -18,8 +18,8 @@
 package convert
 
 import (
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/reject"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/reject"
 )
 
 func NewNativeRejectListOrNil(source reject.List) native.RejectList {

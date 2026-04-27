@@ -20,8 +20,8 @@ package tx
 import (
 	"errors"
 
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/tx/internal/mutation"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/tx/internal/mutation"
 )
 
 type Mutations struct{ handle native.Mutations }

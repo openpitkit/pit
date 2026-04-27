@@ -20,9 +20,9 @@ package pretrade
 import (
 	"testing"
 
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/model"
-	"github.com/openpitkit/pit-go/param"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
 )
 
 func TestRequestExecuteReturnsErrorOnSecondCall(t *testing.T) {

@@ -20,8 +20,8 @@ package convert
 import (
 	"testing"
 
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/pkg/optional"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/pkg/optional"
 )
 
 func TestNewNativeTriBoolTrueReturnsTriBoolTrue(t *testing.T) {

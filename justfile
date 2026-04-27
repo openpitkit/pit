@@ -29,25 +29,26 @@ lint-all: lint-rust lint-python lint-go
 # Lint Rus.
 lint-rust:
     cargo fmt --all -- --check --quiet
-    cargo clippy --all-targets --all-features -q -- -D warnings
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
+    cargo clippy --workspace --all-targets --no-default-features --locked -q -- -D warnings
+    cargo clippy -p openpit --all-targets --all-features --locked -q -- -D warnings
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked -q
 # Lint Python.
 lint-python:
     python -m ruff check --quiet .
-    python -m black . --check
+    python -m black . --check --quiet
 # Lint Go.
 lint-go:
     cd bindings/go && gofmt -l . | (! grep .)
-    cd bindings/go && go vet -all ./...
-    cd bindings/go && golangci-lint run ./...
+    cd bindings/go && go vet -all ./... > /dev/null
+    cd bindings/go && golangci-lint run ./... --out-format=colored-line-number
 
 # Run all tests.
 test-all: test-rust test-python test-go test-go-race
 
 # Rust tests.
 test-rust:
-    cargo test --workspace --locked
-    cargo test -p openpit --all-features --locked
+    cargo test --workspace --locked -q
+    cargo test -p openpit --all-features --locked -q
 # Rust tests with actionable coverage summary.
 test-rust-cov:
     mkdir -p target/llvm-cov
@@ -77,10 +78,10 @@ test-python-integration: python-develop
 
 # Full Go test suite.
 test-go:
-    just _go "go test ./..."
+    just _go "go test -q ./..."
 # Go race test suite.
 test-go-race:
-    just _go "go test -race ./..."
+    just _go "go test -race -q ./..."
 # Go tests with actionable coverage summary.
 test-go-cov:
     just _go "go test -coverprofile=coverage.out -coverpkg=./... ./..."

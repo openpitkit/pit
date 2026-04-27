@@ -18,9 +18,9 @@
 package policies
 
 import (
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/param"
-	"github.com/openpitkit/pit-go/pretrade"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pretrade"
 )
 
 // OrderSizeLimit defines per-settlement order size limits.

@@ -20,8 +20,8 @@ package pretrade
 import (
 	"fmt"
 
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/reject"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/reject"
 )
 
 type Request struct {

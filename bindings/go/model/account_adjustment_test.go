@@ -20,8 +20,8 @@ package model
 import (
 	"testing"
 
-	"github.com/openpitkit/pit-go/param"
-	"github.com/openpitkit/pit-go/pkg/optional"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
 )
 
 type accountAdjustmentFixture struct {

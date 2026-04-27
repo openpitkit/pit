@@ -11,173 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
-  <style>
-    :root {
-      --accent: #ff7a00;
-      --accent-2: #ffb347;
-      --accent-dim: rgba(255, 122, 0, 0.12);
-      --bg: #0b0f14;
-      --surface: #121722;
-      --border: rgba(255, 255, 255, 0.06);
-      --border-hover: #ff7a00;
-      --text: #e6e6e6;
-      --muted: #6c748c;
-      --muted-lt: #98a2b3;
-    }
-
-    *,
-    *::before,
-    *::after {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    html {
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
-      font-size: 16px;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    body {
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-
-    a {
-      color: inherit;
-      text-decoration: none;
-    }
-
-    a:hover {
-      color: var(--accent);
-    }
-
-    /* ── card ─────────────────────────────────────────────────── */
-    .card {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      padding: 28px 24px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      cursor: pointer;
-      transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
-    }
-
-    .card:hover {
-      border-color: var(--border-hover);
-      background: rgba(255, 122, 0, 0.06);
-      transform: translateY(-3px);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-    }
-
-    .card-icon {
-      color: var(--muted);
-      transition: color 0.18s ease;
-      line-height: 0;
-      opacity: 0.85;
-    }
-
-    .brand-icon {
-      display: block;
-      width: 24px;
-      height: 24px;
-      object-fit: contain;
-      opacity: 0.94;
-      transition: opacity 0.18s ease;
-    }
-
-    .card:hover .brand-icon {
-      opacity: 1;
-    }
-
-    .card:hover .card-icon {
-      color: var(--accent);
-      opacity: 1;
-    }
-
-    /* card-title: 0.9375rem = 15px @ 16px base — matches GitHub's UI label size */
-    .card-title {
-      font-size: 0.9375rem;
-      font-weight: 700;
-      letter-spacing: -0.01em;
-      color: var(--text);
-    }
-
-    /* card-desc: 0.8125rem = 13px @ 16px base — GitHub's secondary text size */
-    .card-desc {
-      font-size: 0.8125rem;
-      color: var(--muted-lt);
-      line-height: 1.65;
-      flex: 1;
-    }
-
-    .card-cmd {
-      color: var(--accent);
-      font-size: 0.75rem;
-      white-space: normal;
-      overflow-wrap: anywhere;
-      word-break: break-word;
-    }
-
-    .card-link {
-      font-size: 0.75rem;
-      color: var(--muted);
-      margin-top: 6px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      transition: color 0.18s ease;
-    }
-
-    .card:hover .card-link {
-      color: var(--accent);
-    }
-
-    /* ── tag pills ─────────────────────────────────────────────── */
-    .tag {
-      display: inline-block;
-      font-size: 0.6875rem;
-      letter-spacing: 0.07em;
-      text-transform: uppercase;
-      padding: 2px 8px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 3px;
-      color: var(--muted);
-    }
-
-    /* ── divider ───────────────────────────────────────────────── */
-    .divider {
-      border: none;
-      border-top: 1px solid var(--border);
-    }
-
-    /* ── footer link ───────────────────────────────────────────── */
-    .foot-link {
-      color: var(--muted);
-      transition: color 0.15s ease;
-    }
-
-    .foot-link:hover {
-      color: var(--accent);
-    }
-
-    @media (min-width: 1200px) {
-      .container-tight {
-        padding-top: 32px !important;
-        padding-bottom: 40px !important;
-      }
-
-      header {
-        margin-bottom: 28px !important;
-      }
-    }
-  </style>
+  <link rel="stylesheet" href="/assets/styles.css" />
 </head>
 
 <body>
@@ -188,7 +22,7 @@
     <header style="text-align: center; margin-bottom: 28px;">
       <div style="margin-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
         <div style="display: flex; align-items: center; gap: 16px;">
-          <img src="assets/pit-logo-ex.png" width="512" height="512"
+          <img src="/assets/pit-logo-ex.png" width="512" height="512"
             style="width: 56px; height: 56px; display: block;" />
           <div style="font-size: 2.2rem; font-weight: 700; letter-spacing: -0.02em;">
             Pit
@@ -212,11 +46,11 @@
       <p style="max-width: 500px; margin: 0 auto;">
         <span
           style="display: block; font-size: 1.5rem; font-weight: 700; color: var(--text); line-height: 1.35; margin-bottom: 0.25em;">
-          Embeddable pre-trade risk engine.
+          Embeddable pre-trade risk engine
         </span>
         <span
           style="display: block; font-size: 1.05rem; color: var(--muted-lt); line-height: 1.5; margin-bottom: 0.25em;">
-          Designed to be embedded and adaptable.
+          Designed to be embedded and adaptable
         </span>
         <span style="display: block; font-size: 0.8rem; color: var(--muted); line-height: 1.3; letter-spacing: 0.04em;">
           Deterministic · In-memory · Policy-driven
@@ -237,7 +71,7 @@
           <div class="card-title">Go SDK</div>
           <div class="card-desc">
             Public Go module for embedding Pit into Go services.
-            <br /><code class="card-cmd">go get github.com/openpitkit/pit-go</code>
+            <br /><code class="card-cmd">go get go.openpit.dev/openpit</code>
           </div>
           <div class="card-link">→ github.com/openpitkit/pit-go</div>
         </a>
@@ -393,6 +227,7 @@
     </footer>
 
   </div>
+  <script src="/assets/app.js"></script>
 </body>
 
 </html>

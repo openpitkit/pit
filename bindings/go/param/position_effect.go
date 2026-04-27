@@ -17,7 +17,7 @@
 
 package param
 
-import "github.com/openpitkit/pit-go/internal/native"
+import "go.openpit.dev/openpit/internal/native"
 
 // PositionEffect is fill effect on position.
 type PositionEffect native.ParamPositionEffect

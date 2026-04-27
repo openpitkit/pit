@@ -15,16 +15,16 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-package pit
+package openpit
 
 import (
 	"testing"
 
-	"github.com/openpitkit/pit-go/model"
-	"github.com/openpitkit/pit-go/param"
-	"github.com/openpitkit/pit-go/pretrade"
-	"github.com/openpitkit/pit-go/reject"
-	"github.com/openpitkit/pit-go/tx"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/reject"
+	"go.openpit.dev/openpit/tx"
 )
 
 func TestMutationsNativeE2E_CommitAndRollbackCallbacks(t *testing.T) {

@@ -18,11 +18,11 @@
 package policies
 
 import (
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/model"
-	"github.com/openpitkit/pit-go/pretrade"
-	"github.com/openpitkit/pit-go/reject"
-	"github.com/openpitkit/pit-go/tx"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/reject"
+	"go.openpit.dev/openpit/tx"
 )
 
 const (

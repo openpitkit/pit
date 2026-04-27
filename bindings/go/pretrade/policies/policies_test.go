@@ -23,14 +23,14 @@ import (
 	"strings"
 	"testing"
 
-	pit "github.com/openpitkit/pit-go"
-	"github.com/openpitkit/pit-go/internal/custompolicy"
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/model"
-	"github.com/openpitkit/pit-go/param"
-	"github.com/openpitkit/pit-go/pretrade"
-	"github.com/openpitkit/pit-go/reject"
-	"github.com/openpitkit/pit-go/tx"
+	"go.openpit.dev/openpit"
+	"go.openpit.dev/openpit/internal/custompolicy"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/reject"
+	"go.openpit.dev/openpit/tx"
 )
 
 func TestCheckPreTradeStartPolicyConstructorAndBuiltinMethods(t *testing.T) {
@@ -480,10 +480,10 @@ func (p *policiesTestNoopMainPolicy) ApplyExecutionReport(model.ExecutionReport)
 func newEngineWithStartPolicy(
 	t *testing.T,
 	policy ...pretrade.CheckPreTradeStartPolicy,
-) *pit.Engine {
+) *openpit.Engine {
 	t.Helper()
 
-	builder, err := pit.NewEngineBuilder()
+	builder, err := openpit.NewEngineBuilder()
 	if err != nil {
 		t.Fatalf("NewEngineBuilder() error = %v", err)
 	}

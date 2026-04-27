@@ -27,7 +27,7 @@ import (
 	"runtime/cgo"
 	"unsafe"
 
-	"github.com/openpitkit/pit-go/internal/callback"
+	"go.openpit.dev/openpit/internal/callback"
 )
 
 type Callbacks struct {

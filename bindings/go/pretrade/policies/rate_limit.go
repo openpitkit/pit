@@ -18,8 +18,8 @@
 package policies
 
 import (
-	"github.com/openpitkit/pit-go/internal/native"
-	"github.com/openpitkit/pit-go/pretrade"
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/pretrade"
 )
 
 // NewRateLimitPolicy creates a rate-limit policy.

@@ -17,7 +17,7 @@
 
 package accountadjustment
 
-import "github.com/openpitkit/pit-go/internal/native"
+import "go.openpit.dev/openpit/internal/native"
 
 type Context struct {
 	handle native.AccountAdjustmentContext

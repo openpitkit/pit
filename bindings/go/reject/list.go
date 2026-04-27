@@ -20,7 +20,7 @@ package reject
 import (
 	"errors"
 
-	"github.com/openpitkit/pit-go/internal/native"
+	"go.openpit.dev/openpit/internal/native"
 )
 
 type List = []Reject
