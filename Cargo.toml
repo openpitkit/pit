@@ -14,7 +14,7 @@ tag-prefix = ""
 tag-message = "Release {{version}}"
 pre-release-commit-message = "Release {{version}}"
 push = false
-publish = true
+publish = false
 
 [profile.release]
 lto = true

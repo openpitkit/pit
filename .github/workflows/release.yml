@@ -87,7 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF#refs/tags/v}"
-          for MANIFEST in crates/openpit/Cargo.toml crates/pit-ffi/Cargo.toml bindings/python/Cargo.toml; do
+          for MANIFEST in crates/openpit/Cargo.toml crates/openpit-derive/Cargo.toml crates/pit-ffi/Cargo.toml bindings/python/Cargo.toml; do
             CARGO_VERSION="$(grep -m1 '^version\s*=' "${MANIFEST}" | sed 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/')"
             if [[ "${CARGO_VERSION}" != "${VERSION}" ]]; then
               echo "::error::Tag version ${VERSION} does not match ${MANIFEST} version ${CARGO_VERSION}"
@@ -169,6 +169,9 @@ jobs:
     needs:
       - verify
       - verify-tag
+      - publish-wheels
+      - publish-sdist
+      - build-runtime-artifacts
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -188,7 +191,7 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
 
-      - name: Ensure crates.io version is not published
+      - name: Ensure crates.io versions are not published
         if: ${{ needs.verify-tag.outputs.release_mode == 'production' }}
         shell: bash
         env:
@@ -196,23 +199,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          URL="https://crates.io/api/v1/crates/openpit/${VERSION}"
-          HTTP_CODE="$(curl -H "User-Agent: openpit-release-ci" --retry 3 --retry-delay 2 -sS -o /tmp/openpit-crates-version.json -w '%{http_code}' "${URL}")"
+          for CRATE in openpit-derive openpit; do
+            URL="https://crates.io/api/v1/crates/${CRATE}/${VERSION}"
+            HTTP_CODE="$(curl -H "User-Agent: openpit-release-ci" --retry 3 --retry-delay 2 -sS -o "/tmp/${CRATE}-crates-version.json" -w '%{http_code}' "${URL}")"
 
-          case "${HTTP_CODE}" in
-            200)
-              echo "::error::openpit version ${VERSION} already exists on crates.io"
-              exit 1
-              ;;
-            404)
-              echo "Version ${VERSION} is not published on crates.io yet"
-              ;;
-            *)
-              echo "::error::Failed to query crates.io (HTTP ${HTTP_CODE})"
-              cat /tmp/openpit-crates-version.json || true
-              exit 1
-              ;;
-          esac
+            case "${HTTP_CODE}" in
+              200)
+                echo "::error::${CRATE} version ${VERSION} already exists on crates.io"
+                exit 1
+                ;;
+              404)
+                echo "${CRATE} version ${VERSION} is not published on crates.io yet"
+                ;;
+              *)
+                echo "::error::Failed to query crates.io for ${CRATE} (HTTP ${HTTP_CODE})"
+                cat "/tmp/${CRATE}-crates-version.json" || true
+                exit 1
+                ;;
+            esac
+          done
 
       - name: Publish or dry-run crates
         shell: bash
@@ -222,19 +227,21 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
+            cargo publish -p openpit-derive --dry-run --locked
             cargo publish -p openpit --dry-run --locked
           else
             if [[ -z "${CRATES_IO_TOKEN}" ]]; then
               echo "::error::CRATES_IO_API_TOKEN is required for production releases"
               exit 1
             fi
+            cargo publish -p openpit-derive --locked --token "${CRATES_IO_TOKEN}"
             cargo publish -p openpit --locked --token "${CRATES_IO_TOKEN}"
           fi
 
   publish-wheels:
     name: Publish wheels (${{ matrix.name }})
     needs:
-      - publish-rust
+      - verify
       - verify-tag
     runs-on: ${{ matrix.os }}
     strategy:
@@ -320,7 +327,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           container: off
-          args: --release --strip --locked --zig -i python${{ env.CI_PYTHON }} --out dist
+          args: --release --strip --zig -i python${{ env.CI_PYTHON }} --out dist
 
       - name: Build macOS/Windows wheel
         if: ${{ !startsWith(matrix.os, 'ubuntu') }}
@@ -329,7 +336,7 @@ jobs:
           working-directory: bindings/python
           command: build
           target: ${{ matrix.target }}
-          args: --release --strip --locked -i python${{ env.CI_PYTHON }} --out dist
+          args: --release --strip -i python${{ env.CI_PYTHON }} --out dist
 
       - name: Resolve built wheel path
         shell: bash
@@ -568,7 +575,7 @@ jobs:
   build-runtime-artifacts:
     name: Build runtime artifacts (${{ matrix.name }})
     needs:
-      - publish-rust
+      - verify
       - verify-tag
     runs-on: ${{ matrix.os }}
     strategy:
@@ -652,13 +659,26 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           SRC="target/${{ matrix.target }}/release/${{ matrix.lib_name }}"
-          strip --strip-unneeded "${SRC}" || true
+
+          if command -v strip >/dev/null 2>&1; then
+            if strip --help 2>&1 | grep -q -- '--strip-unneeded'; then
+              strip --strip-unneeded "${SRC}" || true
+            else
+              strip -x "${SRC}" || true
+            fi
+          fi
+
           DST="dist/pit-ffi-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.lib_name }}"
           cp "${SRC}" "${DST}"
           cp bindings/c/pit.h dist/pit.h
           cp LICENSE dist/LICENSE
           cp OWNERS dist/OWNERS
-          sha256sum "${DST}" | awk '{print $1}' > "${DST}.sha256"
+
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${DST}" | awk '{print $1}' > "${DST}.sha256"
+          else
+            shasum -a 256 "${DST}" | awk '{print $1}' > "${DST}.sha256"
+          fi
 
       - name: Package artifact (windows)
         if: runner.os == 'Windows'
@@ -723,16 +743,13 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${PIT_GO_PUSH_TOKEN}" ]]; then
-            if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
-              echo "::error::PIT_GO_PUSH_TOKEN is required for dry-run pit-go publish"
-              exit 1
-            fi
-            echo "PIT_GO_PUSH_TOKEN is not configured, skipping pit-go publish"
-            exit 0
+            echo "::error::PIT_GO_PUSH_TOKEN secret is required to push to pit-go repository"
+            exit 1
           fi
 
           WORKDIR="$(mktemp -d)"
           git clone "https://x-access-token:${PIT_GO_PUSH_TOKEN}@github.com/openpitkit/pit-go.git" "${WORKDIR}/pit-go"
+          git -C "${WORKDIR}/pit-go" remote set-url origin "https://x-access-token:${PIT_GO_PUSH_TOKEN}@github.com/openpitkit/pit-go.git"
           rm -rf "${WORKDIR}/pit-go"/*
           cp -R bindings/go/. "${WORKDIR}/pit-go/"
           cp LICENSE "${WORKDIR}/pit-go/LICENSE"
@@ -755,6 +772,7 @@ jobs:
           find "${WORKDIR}/pit-go/internal/runtime" -name .gitkeep -delete
           rm -f "${WORKDIR}/pit-go/internal/runtime/.gitignore"
           cd "${WORKDIR}/pit-go"
+          git remote set-url origin "https://x-access-token:${PIT_GO_PUSH_TOKEN}@github.com/openpitkit/pit-go.git"
           git add -A
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
