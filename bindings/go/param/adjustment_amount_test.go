@@ -58,8 +58,8 @@ func TestAdjustmentAmountDelta(t *testing.T) {
 		t.Fatal("Choose() called absolute branch unexpectedly")
 	}
 
-	nativeAmount := amount.Native()
-	roundTrip := NewAdjustmentAmountFromNative(nativeAmount)
+	nativeAmount := amount.Handle()
+	roundTrip := NewAdjustmentAmountFromHandle(nativeAmount)
 	got, ok := roundTrip.Get()
 	if !ok {
 		t.Fatal("round-trip amount should be present")
@@ -89,10 +89,10 @@ func TestAdjustmentAmountAbsolute(t *testing.T) {
 	}
 }
 
-func TestAdjustmentAmountFromNativeUnset(t *testing.T) {
+func TestAdjustmentAmountFromHandleUnset(t *testing.T) {
 	t.Parallel()
 
-	if got := NewAdjustmentAmountFromNative(native.ParamAdjustmentAmount{}); got.IsSet() {
+	if got := NewAdjustmentAmountFromHandle(native.ParamAdjustmentAmount{}); got.IsSet() {
 		t.Fatal("unset native value should map to empty option")
 	}
 }

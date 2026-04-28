@@ -45,7 +45,7 @@ func DestroyEngineBuilder(builder EngineBuilder) {
 
 func EngineBuilderBuild(builder EngineBuilder) (Engine, error) {
 	var outError SharedString
-	e := C.pit_engine_builder_build(builder, C.PitOutError(&outError))
+	e := C.pit_engine_builder_build(builder, C.PitOutError(&outError)) //nolint:gocritic
 	if e == nil {
 		return nil, consumeSharedStringAsError(outError, "pit_engine_builder_build failed")
 	}
@@ -60,7 +60,7 @@ func EngineBuilderAddCheckPreTradeStartPolicy(
 	if !C.pit_engine_builder_add_check_pre_trade_start_policy(
 		builder,
 		policy,
-		C.PitOutError(&outError),
+		C.PitOutError(&outError), //nolint:gocritic
 	) {
 		return consumeSharedStringAsError(
 			outError,
@@ -72,7 +72,7 @@ func EngineBuilderAddCheckPreTradeStartPolicy(
 
 func EngineBuilderAddPreTradePolicy(builder EngineBuilder, policy PretradePreTradePolicy) error {
 	var outError SharedString
-	if !C.pit_engine_builder_add_pre_trade_policy(builder, policy, C.PitOutError(&outError)) {
+	if !C.pit_engine_builder_add_pre_trade_policy(builder, policy, C.PitOutError(&outError)) { //nolint:gocritic
 		return consumeSharedStringAsError(outError, "pit_engine_builder_add_pre_trade_policy failed")
 	}
 	return nil
@@ -86,7 +86,7 @@ func EngineBuilderAddAccountAdjustmentPolicy(
 	if !C.pit_engine_builder_add_account_adjustment_policy(
 		builder,
 		policy,
-		C.PitOutError(&outError),
+		C.PitOutError(&outError), //nolint:gocritic
 	) {
 		return consumeSharedStringAsError(
 			outError,
@@ -109,7 +109,7 @@ func EngineStartPreTrade(engine Engine, order Order) (PretradePreTradeRequest, R
 		&order,
 		&request,
 		&rejects,
-		C.PitOutError(&outError),
+		C.PitOutError(&outError), //nolint:gocritic
 	)
 
 	switch status {
@@ -144,7 +144,7 @@ func EngineExecutePreTrade(
 		&order,
 		&reservation,
 		&rejects,
-		C.PitOutError(&outError),
+		C.PitOutError(&outError), //nolint:gocritic
 	)
 
 	switch status {
@@ -176,7 +176,7 @@ func EngineApplyExecutionReport(
 	report ExecutionReport,
 ) (PretradePostTradeResult, error) {
 	var outError SharedString
-	result := C.pit_engine_apply_execution_report(engine, &report, C.PitOutError(&outError))
+	result := C.pit_engine_apply_execution_report(engine, &report, C.PitOutError(&outError)) //nolint:gocritic
 	if result.is_error {
 		return PretradePostTradeResult{},
 			consumeSharedStringAsError(outError, "pit_engine_apply_execution_report failed")
@@ -204,7 +204,7 @@ func EngineApplyAccountAdjustment(
 		(*C.PitAccountAdjustment)(unsafe.Pointer(&adjustments[0])),
 		C.size_t(len(adjustments)),
 		&reject,
-		C.PitOutError(&outError),
+		C.PitOutError(&outError), //nolint:gocritic
 	)
 
 	switch status {
@@ -235,7 +235,7 @@ func PretradePreTradeRequestExecute(
 		request,
 		&reservation,
 		&rejects,
-		C.PitOutError(&outError),
+		C.PitOutError(&outError), //nolint:gocritic
 	)
 
 	switch status {
@@ -319,12 +319,12 @@ func DestroyAccountAdjustmentBatchError(handle AccountAdjustmentBatchError) {
 
 func AccountAdjustmentBatchErrorGetFailedAdjustmentIndex(
 	handle AccountAdjustmentBatchError,
-) uint {
-	return uint(C.pit_account_adjustment_batch_error_get_failed_adjustment_index(handle))
+) int {
+	return int(C.pit_account_adjustment_batch_error_get_failed_adjustment_index(handle))
 }
 
 func AccountAdjustmentBatchErrorGetRejects(handle AccountAdjustmentBatchError) RejectList {
-	return RejectList(C.pit_account_adjustment_batch_error_get_rejects(handle))
+	return C.pit_account_adjustment_batch_error_get_rejects(handle)
 }
 
 //------------------------------------------------------------------------------
@@ -344,7 +344,7 @@ func MutationsPush(
 		*(*C.PitMutationFn)(rollbackFnAddr),
 		userData,
 		*(*C.PitMutationFreeFn)(freeFnAddr),
-		C.PitOutError(&outError),
+		C.PitOutError(&outError), //nolint:gocritic
 	) {
 		return consumeSharedStringAsError(outError, "pit_mutations_push failed")
 	}

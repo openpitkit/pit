@@ -147,7 +147,7 @@ func TestNotionalCompare(t *testing.T) {
 	if large.Compare(small) <= 0 {
 		t.Fatal("large.Compare(small) must be positive")
 	}
-	if small.Compare(small) != 0 {
+	if small.Compare(small) != 0 { // nolint
 		t.Fatal("same.Compare(same) must be 0")
 	}
 }

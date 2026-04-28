@@ -42,13 +42,13 @@ type OrderSizeLimit struct {
 // configured limit are rejected.
 //
 // Must be closed with Close.
-func NewOrderSizeLimitPolicy(limits ...OrderSizeLimit) (pretrade.CheckPreTradeStartPolicy, error) {
+func NewOrderSizeLimitPolicy(limits ...OrderSizeLimit) (pretrade.BuiltinPolicy, error) {
 	params := make([]native.PretradePoliciesOrderSizeLimitParam, len(limits))
 	for i, limit := range limits {
 		params[i] = native.NewPretradePoliciesOrderSizeLimitParam(
-			limit.SettlementAsset.Native(),
-			limit.MaxQuantity.Native(),
-			limit.MaxNotional.Native(),
+			limit.SettlementAsset.Handle(),
+			limit.MaxQuantity.Handle(),
+			limit.MaxNotional.Handle(),
 		)
 	}
 

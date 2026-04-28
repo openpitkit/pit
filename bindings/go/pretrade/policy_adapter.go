@@ -50,7 +50,7 @@ type ClientExecutionReport interface {
 type ClientCheckPreTradeStartPolicy[Order ClientOrder, Report ClientExecutionReport] interface {
 	Close()
 	Name() string
-	CheckPreTradeStart(Context, Order) reject.List
+	CheckPreTradeStart(Context, Order) []reject.Reject
 	ApplyExecutionReport(Report) bool
 }
 
@@ -59,7 +59,7 @@ type ClientCheckPreTradeStartPolicy[Order ClientOrder, Report ClientExecutionRep
 type ClientPreTradePolicy[Order ClientOrder, Report ClientExecutionReport] interface {
 	Close()
 	Name() string
-	PerformPreTradeCheck(Context, Order, tx.Mutations) reject.List
+	PerformPreTradeCheck(Context, Order, tx.Mutations) []reject.Reject
 	ApplyExecutionReport(Report) bool
 }
 
@@ -73,7 +73,7 @@ func NewSafeClientCheckPreTradeStartPolicy[
 	Report ClientExecutionReport,
 ](
 	policy ClientCheckPreTradeStartPolicy[Order, Report],
-) CheckPreTradeStartPolicy {
+) CheckStartPolicy {
 	return &safeClientCheckPreTradeStartPolicy[Order, Report]{policy: policy}
 }
 
@@ -87,7 +87,7 @@ func NewUnsafeFastClientCheckPreTradeStartPolicy[
 	Report ClientExecutionReport,
 ](
 	policy ClientCheckPreTradeStartPolicy[Order, Report],
-) CheckPreTradeStartPolicy {
+) CheckStartPolicy {
 	return &unsafeFastClientCheckPreTradeStartPolicy[Order, Report]{policy: policy}
 }
 
@@ -101,7 +101,7 @@ func NewSafeClientPreTradePolicy[
 	Report ClientExecutionReport,
 ](
 	policy ClientPreTradePolicy[Order, Report],
-) PreTradePolicy {
+) Policy {
 	return &safeClientPreTradePolicy[Order, Report]{policy: policy}
 }
 
@@ -115,7 +115,7 @@ func NewUnsafeFastClientPreTradePolicy[
 	Report ClientExecutionReport,
 ](
 	policy ClientPreTradePolicy[Order, Report],
-) PreTradePolicy {
+) Policy {
 	return &unsafeFastClientPreTradePolicy[Order, Report]{policy: policy}
 }
 
@@ -137,7 +137,7 @@ func (p *safeClientCheckPreTradeStartPolicy[Order, Report]) Name() string {
 func (p *safeClientCheckPreTradeStartPolicy[Order, Report]) CheckPreTradeStart(
 	ctx Context,
 	engineOrder model.Order,
-) reject.List {
+) []reject.Reject {
 	order, ok := safeOrderPayload[Order](engineOrder)
 	if !ok {
 		return clientPayloadMismatchReject[Order](p.Name())
@@ -174,7 +174,7 @@ func (p *safeClientPreTradePolicy[Order, Report]) PerformPreTradeCheck(
 	ctx Context,
 	engineOrder model.Order,
 	mutations tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	order, ok := safeOrderPayload[Order](engineOrder)
 	if !ok {
 		return clientPayloadMismatchReject[Order](p.Name())
@@ -210,7 +210,7 @@ func (p *unsafeFastClientCheckPreTradeStartPolicy[Order, Report]) Name() string 
 func (p *unsafeFastClientCheckPreTradeStartPolicy[Order, Report]) CheckPreTradeStart(
 	ctx Context,
 	engineOrder model.Order,
-) reject.List {
+) []reject.Reject {
 	return p.policy.CheckPreTradeStart(ctx, unsafeFastOrderPayload[Order](engineOrder))
 }
 
@@ -239,7 +239,7 @@ func (p *unsafeFastClientPreTradePolicy[Order, Report]) PerformPreTradeCheck(
 	ctx Context,
 	engineOrder model.Order,
 	mutations tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	return p.policy.PerformPreTradeCheck(ctx, unsafeFastOrderPayload[Order](engineOrder), mutations)
 }
 
@@ -250,13 +250,13 @@ func (p *unsafeFastClientPreTradePolicy[Order, Report]) ApplyExecutionReport(
 }
 
 func safeOrderPayload[Order ClientOrder](order model.Order) (value Order, ok bool) {
-	return safePayload[Order](native.OrderGetUserData(order.Native()))
+	return safePayload[Order](native.OrderGetUserData(order.Handle()))
 }
 
 func safeReportPayload[Report ClientExecutionReport](
 	report model.ExecutionReport,
 ) (value Report, ok bool) {
-	return safePayload[Report](native.ExecutionReportGetUserData(report.Native()))
+	return safePayload[Report](native.ExecutionReportGetUserData(report.Handle()))
 }
 
 func safePayload[Payload any](userData unsafe.Pointer) (value Payload, ok bool) {
@@ -276,18 +276,18 @@ func safePayload[Payload any](userData unsafe.Pointer) (value Payload, ok bool) 
 }
 
 func unsafeFastOrderPayload[Order ClientOrder](order model.Order) Order {
-	return unsafeFastPayload[Order](native.OrderGetUserData(order.Native()))
+	return unsafeFastPayload[Order](native.OrderGetUserData(order.Handle()))
 }
 
 func unsafeFastReportPayload[Report ClientExecutionReport](report model.ExecutionReport) Report {
-	return unsafeFastPayload[Report](native.ExecutionReportGetUserData(report.Native()))
+	return unsafeFastPayload[Report](native.ExecutionReportGetUserData(report.Handle()))
 }
 
 func unsafeFastPayload[Payload any](userData unsafe.Pointer) Payload {
 	return callback.NewHandleFromUserData(userData).Value().(Payload)
 }
 
-func clientPayloadMismatchReject[Order ClientOrder](policyName string) reject.List {
+func clientPayloadMismatchReject[Order ClientOrder](policyName string) []reject.Reject {
 	return reject.NewSingleItemList(
 		reject.CodeOther,
 		policyName,

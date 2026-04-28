@@ -19,83 +19,46 @@ package native
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
-func TestMapParamErrorMessage(t *testing.T) {
+func TestConsumeParamErrorMapsSentinelByCode(t *testing.T) {
 	t.Parallel()
 
-	testCases := []struct {
-		name      string
-		message   string
-		expected  error
-		substring string
-	}{
-		{
-			name:     "negative",
-			message:  "invalid typed param.Quantity value: value must be non-negative",
-			expected: ErrNegative,
-		},
-		{
-			name:     "division by zero",
-			message:  "division by zero",
-			expected: ErrDivisionByZero,
-		},
-		{
-			name:     "overflow",
-			message:  "arithmetic overflow while multiplying",
-			expected: ErrOverflow,
-		},
-		{
-			name:     "underflow",
-			message:  "arithmetic underflow",
-			expected: ErrUnderflow,
-		},
-		{
-			name:     "invalid float",
-			message:  "invalid float value (NaN or infinity)",
-			expected: ErrInvalidFloat,
-		},
-		{
-			name:     "invalid format",
-			message:  "invalid format",
-			expected: ErrInvalidFormat,
-		},
-		{
-			name:     "invalid price",
-			message:  "invalid price value",
-			expected: ErrInvalidPrice,
-		},
-		{
-			name:     "invalid leverage",
-			message:  "invalid leverage value",
-			expected: ErrInvalidLeverage,
-		},
-		{
-			name:      "fallback wraps message",
-			message:   "something else",
-			substring: "param: something else",
-		},
+	_, err := CreateParamQuantityFromF64(-1)
+	if !errors.Is(err, ErrNegative) {
+		t.Fatalf("expected ErrNegative, got %v", err)
 	}
+	if err == nil || !strings.Contains(err.Error(), "value must be non-negative") {
+		t.Fatalf("expected wrapped error message, got %v", err)
+	}
+}
 
-	for _, testCase := range testCases {
-		testCase := testCase
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
+func TestConsumeParamErrorFallbackForUnspecifiedCode(t *testing.T) {
+	t.Parallel()
 
-			actual := mapParamErrorMessage(testCase.message)
-			if testCase.expected != nil {
-				if !errors.Is(actual, testCase.expected) {
-					t.Fatalf("unexpected mapped error: %v", actual)
-				}
-				return
-			}
-			if actual == nil {
-				t.Fatalf("expected wrapped error")
-			}
-			if actual.Error() != testCase.substring {
-				t.Fatalf("unexpected wrapped message: %q", actual.Error())
-			}
-		})
+	_, err := CreateParamPnl(ParamDecimal{
+		mantissa_lo: 1,
+		mantissa_hi: 0,
+		scale:       -1,
+	})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.HasPrefix(err.Error(), "param: ") {
+		t.Fatalf("expected generic param prefix, got %q", err.Error())
+	}
+}
+
+func TestConsumeParamErrorFallbackWhenHandleIsNil(t *testing.T) {
+	t.Parallel()
+
+	err := consumeParamError(nil, "fallback %d", 42)
+	if err == nil {
+		t.Fatalf("expected fallback error")
+	}
+	if err.Error() != "fallback 42" {
+		t.Fatalf("unexpected fallback message: %q", err.Error())
 	}
 }

@@ -71,7 +71,7 @@ func CreatePretradePoliciesPnlKillSwitchPolicy(
 	p := C.pit_create_pretrade_policies_pnl_killswitch_policy(
 		(*PretradePoliciesPnlKillSwitchParam)(unsafe.Pointer(&params[0])),
 		C.size_t(len(params)),
-		C.PitOutError(&outError),
+		C.PitOutError(&outError), //nolint:gocritic
 	)
 	if p == nil {
 		return nil,
@@ -109,7 +109,7 @@ func CreatePretradePoliciesOrderSizeLimitPolicy(
 	p := C.pit_create_pretrade_policies_order_size_limit_policy(
 		(*PretradePoliciesOrderSizeLimitParam)(unsafe.Pointer(&params[0])),
 		C.size_t(len(params)),
-		C.PitOutError(&outError),
+		C.PitOutError(&outError), //nolint:gocritic
 	)
 	if p == nil {
 		return nil,
@@ -138,7 +138,7 @@ func CreatePretradeCustomCheckPreTradeStartPolicy(
 		*(*C.PitPretradeCheckPreTradeStartPolicyApplyExecutionReportFn)(applyExecutionReportFnAddr),
 		*(*C.PitPretradeCheckPreTradeStartPolicyFreeUserDataFn)(freeUserDataFnAddr),
 		userData,
-		C.PitOutError(&outError),
+		C.PitOutError(&outError), //nolint:gocritic
 	)
 	if p == nil {
 		return nil,
@@ -177,7 +177,7 @@ func CreatePretradeCustomPreTradePolicy(
 		*(*C.PitPretradePreTradePolicyApplyExecutionReportFn)(applyFnAddr),
 		*(*C.PitPretradePreTradePolicyFreeUserDataFn)(freeUserDataFnAddr),
 		userData,
-		C.PitOutError(&outError),
+		C.PitOutError(&outError), //nolint:gocritic
 	)
 	if p == nil {
 		return nil,
@@ -209,7 +209,7 @@ func CreateCustomAccountAdjustmentPolicy(
 		*(*C.PitAccountAdjustmentPolicyApplyFn)(applyFnAddr),
 		*(*C.PitAccountAdjustmentPolicyFreeUserDataFn)(freeUserDataFnAddr),
 		userData,
-		C.PitOutError(&outError),
+		C.PitOutError(&outError), //nolint:gocritic
 	)
 	if p == nil {
 		return nil,

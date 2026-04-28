@@ -33,16 +33,16 @@ func NewInstrument(underlyingAsset Asset, settlementAsset Asset) Instrument {
 	return Instrument{UnderlyingAsset: underlyingAsset, SettlementAsset: settlementAsset}
 }
 
-func NewInstrumentFromNative(i native.Instrument) optional.Option[Instrument] {
-	underlyingAsset, hasUnderlyingAsset := NewAssetFromNative(
+func NewInstrumentFromHandle(i native.Instrument) optional.Option[Instrument] {
+	underlyingAsset, hasUnderlyingAsset := NewAssetFromHandle(
 		native.InstrumentGetUnderlyingAsset(i),
 	).Get()
 	if !hasUnderlyingAsset {
 		return optional.None[Instrument]()
 	}
 
-	settlementAsset, hasSettlementAsset := NewAssetFromNative(
-		native.InstrumentGetUnderlyingAsset(i),
+	settlementAsset, hasSettlementAsset := NewAssetFromHandle(
+		native.InstrumentGetSettlementAsset(i),
 	).Get()
 	if !hasSettlementAsset {
 		return optional.None[Instrument]()
@@ -55,6 +55,6 @@ func (i Instrument) String() string {
 	return fmt.Sprintf("%s/%s", i.UnderlyingAsset, i.SettlementAsset)
 }
 
-func (i Instrument) Native() native.Instrument {
-	return native.NewInstrument(i.UnderlyingAsset.Native(), i.SettlementAsset.Native())
+func (i Instrument) Handle() native.Instrument {
+	return native.NewInstrument(i.UnderlyingAsset.Handle(), i.SettlementAsset.Handle())
 }

@@ -368,16 +368,16 @@ type clientEngineTestStartPolicy struct {
 	killSwitch bool
 }
 
-func (p *clientEngineTestStartPolicy) Close() {}
+func (clientEngineTestStartPolicy) Close() {}
 
-func (p *clientEngineTestStartPolicy) Name() string {
+func (clientEngineTestStartPolicy) Name() string {
 	return "client-engine-test-start"
 }
 
 func (p *clientEngineTestStartPolicy) CheckPreTradeStart(
 	_ pretrade.Context,
 	order clientEngineTestOrder,
-) reject.List {
+) []reject.Reject {
 	p.order = order
 	return nil
 }
@@ -391,9 +391,9 @@ type clientEngineTestMainPolicy struct {
 	order clientEngineTestOrder
 }
 
-func (p *clientEngineTestMainPolicy) Close() {}
+func (clientEngineTestMainPolicy) Close() {}
 
-func (p *clientEngineTestMainPolicy) Name() string {
+func (clientEngineTestMainPolicy) Name() string {
 	return "client-engine-test-main"
 }
 
@@ -401,12 +401,12 @@ func (p *clientEngineTestMainPolicy) PerformPreTradeCheck(
 	_ pretrade.Context,
 	order clientEngineTestOrder,
 	_ tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	p.order = order
 	return nil
 }
 
-func (p *clientEngineTestMainPolicy) ApplyExecutionReport(clientEngineTestReport) bool {
+func (clientEngineTestMainPolicy) ApplyExecutionReport(clientEngineTestReport) bool {
 	return false
 }
 
@@ -415,9 +415,9 @@ type clientEngineTestAccountAdjustmentPolicy struct {
 	adjustments []clientEngineTestAdjustment
 }
 
-func (p *clientEngineTestAccountAdjustmentPolicy) Close() {}
+func (clientEngineTestAccountAdjustmentPolicy) Close() {}
 
-func (p *clientEngineTestAccountAdjustmentPolicy) Name() string {
+func (clientEngineTestAccountAdjustmentPolicy) Name() string {
 	return "client-engine-test-adjustment"
 }
 
@@ -426,7 +426,7 @@ func (p *clientEngineTestAccountAdjustmentPolicy) ApplyAccountAdjustment(
 	_ param.AccountID,
 	adjustment clientEngineTestAdjustment,
 	_ tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	p.adjustment = adjustment
 	p.adjustments = append(p.adjustments, adjustment)
 	return nil
@@ -434,16 +434,16 @@ func (p *clientEngineTestAccountAdjustmentPolicy) ApplyAccountAdjustment(
 
 type clientEngineTestRejectingStartPolicy struct{}
 
-func (p *clientEngineTestRejectingStartPolicy) Close() {}
+func (clientEngineTestRejectingStartPolicy) Close() {}
 
-func (p *clientEngineTestRejectingStartPolicy) Name() string {
+func (clientEngineTestRejectingStartPolicy) Name() string {
 	return "client-engine-test-reject-start"
 }
 
 func (p *clientEngineTestRejectingStartPolicy) CheckPreTradeStart(
 	_ pretrade.Context,
 	_ clientEngineTestOrder,
-) reject.List {
+) []reject.Reject {
 	return reject.NewSingleItemList(
 		reject.CodeOther,
 		p.Name(),
@@ -453,15 +453,15 @@ func (p *clientEngineTestRejectingStartPolicy) CheckPreTradeStart(
 	)
 }
 
-func (p *clientEngineTestRejectingStartPolicy) ApplyExecutionReport(clientEngineTestReport) bool {
+func (clientEngineTestRejectingStartPolicy) ApplyExecutionReport(clientEngineTestReport) bool {
 	return false
 }
 
 type clientEngineTestRejectingMainPolicy struct{}
 
-func (p *clientEngineTestRejectingMainPolicy) Close() {}
+func (clientEngineTestRejectingMainPolicy) Close() {}
 
-func (p *clientEngineTestRejectingMainPolicy) Name() string {
+func (clientEngineTestRejectingMainPolicy) Name() string {
 	return "client-engine-test-reject-main"
 }
 
@@ -469,7 +469,7 @@ func (p *clientEngineTestRejectingMainPolicy) PerformPreTradeCheck(
 	_ pretrade.Context,
 	_ clientEngineTestOrder,
 	_ tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	return reject.NewSingleItemList(
 		reject.CodeOther,
 		p.Name(),
@@ -479,7 +479,7 @@ func (p *clientEngineTestRejectingMainPolicy) PerformPreTradeCheck(
 	)
 }
 
-func (p *clientEngineTestRejectingMainPolicy) ApplyExecutionReport(clientEngineTestReport) bool {
+func (clientEngineTestRejectingMainPolicy) ApplyExecutionReport(clientEngineTestReport) bool {
 	return false
 }
 
@@ -487,11 +487,11 @@ func orderWithMismatchedPayload(t *testing.T, payload any) model.Order {
 	t.Helper()
 
 	order := model.NewOrder()
-	nativeOrder := order.Native()
+	nativeOrder := order.Handle()
 	handle := cgo.NewHandle(payload)
 	t.Cleanup(handle.Delete)
 	native.OrderSetUserData(&nativeOrder, callback.NewUserDataFromHandle(handle))
-	return model.NewOrderFromNative(nativeOrder)
+	return model.NewOrderFromHandle(nativeOrder)
 }
 
 func TestNewClientPreTradeEngineBuilder(t *testing.T) {
@@ -633,7 +633,7 @@ func TestClientEngineUnsafeFastAccountAdjustmentPolicyUsesFastAdapter(t *testing
 	}
 }
 
-func TestClientPayloadHandleReleaseNilIsNoop(t *testing.T) {
+func TestClientPayloadHandleReleaseNilIsNoop(*testing.T) {
 	var payload *clientPayloadHandle
 	payload.release()
 }

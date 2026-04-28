@@ -27,13 +27,13 @@ type PositionMode native.ParamPositionMode
 
 const (
 	// PositionModeNetting tracks one net position per instrument.
-	PositionModeNetting PositionMode = native.ParamPositionModeHedged
+	PositionModeNetting PositionMode = native.ParamPositionModeNetting
 	// PositionModeHedged tracks independent long and short legs.
 	PositionModeHedged PositionMode = native.ParamPositionModeHedged
 )
 
-func NewPositionModeFromNative(v native.ParamPositionMode) optional.Option[PositionMode] {
-	if v == native.ParamPositionEffectNotSet {
+func NewPositionModeFromHandle(v native.ParamPositionMode) optional.Option[PositionMode] {
+	if v == native.ParamPositionModeNotSet {
 		return optional.None[PositionMode]()
 	}
 	return optional.Some(PositionMode(v))
@@ -46,6 +46,6 @@ func (v PositionMode) String() string {
 	return "hedged"
 }
 
-func (v PositionMode) Native() native.ParamPositionMode {
+func (v PositionMode) Handle() native.ParamPositionMode {
 	return native.ParamPositionMode(v)
 }

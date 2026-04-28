@@ -18,14 +18,16 @@
 #![allow(clippy::missing_safety_doc)]
 
 use openpit::param::{
-    AccountId, CashFlow, Fee, Leverage, Notional, Pnl, PositionEffect, PositionMode, PositionSide,
-    PositionSize, Price, Quantity, RoundingStrategy, Side, TradeAmount, Volume,
+    AccountId, Asset, CashFlow, Fee, Leverage, Notional, Pnl, PositionEffect, PositionMode,
+    PositionSide, PositionSize, Price, Quantity, RoundingStrategy, Side, TradeAmount, Volume,
 };
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use std::cmp::Ordering;
 
-use crate::last_error::{write_error, PitOutError};
+use crate::last_error::{
+    consume_param_error_with_code, write_param_error_unspecified, PitOutParamError,
+};
 use crate::string::PitSharedString;
 use crate::PitStringView;
 
@@ -236,16 +238,16 @@ pub enum PitParamRoundingStrategy {
 
 /// Default rounding strategy alias.
 pub const PIT_PARAM_ROUNDING_STRATEGY_DEFAULT: PitParamRoundingStrategy =
-    PitParamRoundingStrategy::MidpointNearestEven;
+    export_rounding_strategy_const(RoundingStrategy::DEFAULT);
 /// Banker's rounding alias.
 pub const PIT_PARAM_ROUNDING_STRATEGY_BANKER: PitParamRoundingStrategy =
-    PitParamRoundingStrategy::MidpointNearestEven;
+    export_rounding_strategy_const(RoundingStrategy::BANKER);
 /// Conservative profit rounding alias.
 pub const PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT: PitParamRoundingStrategy =
-    PitParamRoundingStrategy::Down;
+    export_rounding_strategy_const(RoundingStrategy::CONSERVATIVE_PROFIT);
 /// Conservative loss rounding alias.
 pub const PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS: PitParamRoundingStrategy =
-    PitParamRoundingStrategy::Down;
+    export_rounding_strategy_const(RoundingStrategy::CONSERVATIVE_LOSS);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -361,6 +363,15 @@ fn import_rounding_strategy(value: PitParamRoundingStrategy) -> RoundingStrategy
     }
 }
 
+const fn export_rounding_strategy_const(s: RoundingStrategy) -> PitParamRoundingStrategy {
+    match s {
+        RoundingStrategy::MidpointNearestEven => PitParamRoundingStrategy::MidpointNearestEven,
+        RoundingStrategy::MidpointAwayFromZero => PitParamRoundingStrategy::MidpointAwayFromZero,
+        RoundingStrategy::Up => PitParamRoundingStrategy::Up,
+        RoundingStrategy::Down => PitParamRoundingStrategy::Down,
+    }
+}
+
 trait IntoParamResult<T> {
     fn into_param_result(self, type_name: &str) -> Result<T, String>;
 }
@@ -429,10 +440,10 @@ macro_rules! define_decimal_param_wrapper {
         pub unsafe extern "C" fn $create_fn(
             value: PitParamDecimal,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
             if out.is_null() {
-                write_error(out_error, "result place pointer is null");
+                write_param_error_unspecified(out_error, "result place pointer is null");
                 return false;
             }
             match $wrapper(value).to_param() {
@@ -441,7 +452,7 @@ macro_rules! define_decimal_param_wrapper {
                     true
                 }
                 Err(msg) => {
-                    write_error(out_error, msg.as_str());
+                    write_param_error_unspecified(out_error, msg.as_str());
                     false
                 }
             }
@@ -527,9 +538,9 @@ define_decimal_param_wrapper!(
     get_decimal_fn = pit_param_notional_get_decimal
 );
 
-fn write_out<T: Copy>(out: *mut T, value: T, out_error: PitOutError) -> bool {
+fn write_out<T: Copy>(out: *mut T, value: T, out_error: PitOutParamError) -> bool {
     if out.is_null() {
-        write_error(out_error, "result place pointer is null");
+        write_param_error_unspecified(out_error, "result place pointer is null");
         return false;
     }
     unsafe {
@@ -570,12 +581,12 @@ macro_rules! define_decimal_param_ffi_common {
         pub unsafe extern "C" fn $from_str_fn(
             value: PitStringView,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
             let text = match unsafe { parse_string_view(value) } {
                 Ok(text) => text,
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     return false;
                 }
             };
@@ -587,7 +598,7 @@ macro_rules! define_decimal_param_ffi_common {
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, &error.to_string());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -597,7 +608,7 @@ macro_rules! define_decimal_param_ffi_common {
         pub unsafe extern "C" fn $from_f64_fn(
             value: f64,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
             match <$domain>::from_f64(value) {
                 Ok(parsed) => write_out(
@@ -606,7 +617,7 @@ macro_rules! define_decimal_param_ffi_common {
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, &error.to_string());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -616,7 +627,7 @@ macro_rules! define_decimal_param_ffi_common {
         pub unsafe extern "C" fn $from_i64_fn(
             value: i64,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
             let new_value: Result<$domain, _> =
                 <$domain>::new(Decimal::from(value)).into_param_result($type_name);
@@ -627,7 +638,7 @@ macro_rules! define_decimal_param_ffi_common {
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     false
                 }
             }
@@ -637,7 +648,7 @@ macro_rules! define_decimal_param_ffi_common {
         pub unsafe extern "C" fn $from_u64_fn(
             value: u64,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
             let new_value: Result<$domain, _> =
                 <$domain>::new(Decimal::from(value)).into_param_result($type_name);
@@ -648,7 +659,7 @@ macro_rules! define_decimal_param_ffi_common {
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     false
                 }
             }
@@ -660,12 +671,12 @@ macro_rules! define_decimal_param_ffi_common {
             scale: u32,
             rounding: PitParamRoundingStrategy,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
             let text = match unsafe { parse_string_view(value) } {
                 Ok(text) => text,
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     return false;
                 }
             };
@@ -681,7 +692,7 @@ macro_rules! define_decimal_param_ffi_common {
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, &error.to_string());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -693,7 +704,7 @@ macro_rules! define_decimal_param_ffi_common {
             scale: u32,
             rounding: PitParamRoundingStrategy,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
             match <$domain>::from_f64_rounded(value, scale, import_rounding_strategy(rounding)) {
                 Ok(parsed) => write_out(
@@ -702,7 +713,7 @@ macro_rules! define_decimal_param_ffi_common {
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, &error.to_string());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -714,12 +725,12 @@ macro_rules! define_decimal_param_ffi_common {
             scale: u32,
             rounding: PitParamRoundingStrategy,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
             let decimal = match import_decimal(value) {
                 Ok(decimal) => decimal,
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     return false;
                 }
             };
@@ -734,7 +745,7 @@ macro_rules! define_decimal_param_ffi_common {
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, &error.to_string());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -744,19 +755,22 @@ macro_rules! define_decimal_param_ffi_common {
         pub unsafe extern "C" fn $to_f64_fn(
             value: $wrapper,
             out: *mut f64,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
             let parsed = match value.to_param() {
                 Ok(parsed) => parsed,
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     return false;
                 }
             };
             let as_f64 = match parsed.to_decimal().to_f64() {
                 Some(value) => value,
                 None => {
-                    write_error(out_error, "decimal cannot be represented as f64");
+                    write_param_error_unspecified(
+                        out_error,
+                        "decimal cannot be represented as f64",
+                    );
                     return false;
                 }
             };
@@ -767,12 +781,12 @@ macro_rules! define_decimal_param_ffi_common {
         pub unsafe extern "C" fn $is_zero_fn(
             value: $wrapper,
             out: *mut bool,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
             let parsed = match value.to_param() {
                 Ok(parsed) => parsed,
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     return false;
                 }
             };
@@ -784,19 +798,19 @@ macro_rules! define_decimal_param_ffi_common {
             lhs: $wrapper,
             rhs: $wrapper,
             out: *mut i8,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
             let lhs = match lhs.to_param() {
                 Ok(parsed) => parsed,
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     return false;
                 }
             };
             let rhs = match rhs.to_param() {
                 Ok(parsed) => parsed,
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     return false;
                 }
             };
@@ -810,12 +824,12 @@ macro_rules! define_decimal_param_ffi_common {
         #[no_mangle]
         pub unsafe extern "C" fn $to_string_fn(
             value: $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> *mut PitSharedString {
             match value.to_param() {
                 Ok(parsed) => PitSharedString::new_handle(parsed.to_string().as_str()),
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     std::ptr::null_mut()
                 }
             }
@@ -826,19 +840,19 @@ macro_rules! define_decimal_param_ffi_common {
             lhs: $wrapper,
             rhs: $wrapper,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
             let lhs = match lhs.to_param() {
                 Ok(value) => value,
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     return false;
                 }
             };
             let rhs = match rhs.to_param() {
                 Ok(value) => value,
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     return false;
                 }
             };
@@ -849,7 +863,7 @@ macro_rules! define_decimal_param_ffi_common {
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, &error.to_string());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -860,19 +874,19 @@ macro_rules! define_decimal_param_ffi_common {
             lhs: $wrapper,
             rhs: $wrapper,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
             let lhs = match lhs.to_param() {
                 Ok(value) => value,
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     return false;
                 }
             };
             let rhs = match rhs.to_param() {
                 Ok(value) => value,
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    write_param_error_unspecified(out_error, error.as_str());
                     return false;
                 }
             };
@@ -883,7 +897,7 @@ macro_rules! define_decimal_param_ffi_common {
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, &error.to_string());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -894,18 +908,23 @@ macro_rules! define_decimal_param_ffi_common {
             value: $wrapper,
             scalar: i64,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
-            match value.to_param().and_then(|parsed| -> Result<$domain, _> {
-                parsed.checked_mul_i64(scalar).into_param_result($type_name)
-            }) {
+            let value = match value.to_param() {
+                Ok(value) => value,
+                Err(error) => {
+                    write_param_error_unspecified(out_error, error.as_str());
+                    return false;
+                }
+            };
+            match value.checked_mul_i64(scalar) {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(PitParamDecimal::from_decimal(parsed.to_decimal())),
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -916,18 +935,23 @@ macro_rules! define_decimal_param_ffi_common {
             value: $wrapper,
             scalar: u64,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
-            match value.to_param().and_then(|parsed| -> Result<$domain, _> {
-                parsed.checked_mul_u64(scalar).into_param_result($type_name)
-            }) {
+            let value = match value.to_param() {
+                Ok(value) => value,
+                Err(error) => {
+                    write_param_error_unspecified(out_error, error.as_str());
+                    return false;
+                }
+            };
+            match value.checked_mul_u64(scalar) {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(PitParamDecimal::from_decimal(parsed.to_decimal())),
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -938,18 +962,23 @@ macro_rules! define_decimal_param_ffi_common {
             value: $wrapper,
             scalar: f64,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
-            match value.to_param().and_then(|parsed| -> Result<$domain, _> {
-                parsed.checked_mul_f64(scalar).into_param_result($type_name)
-            }) {
+            let value = match value.to_param() {
+                Ok(value) => value,
+                Err(error) => {
+                    write_param_error_unspecified(out_error, error.as_str());
+                    return false;
+                }
+            };
+            match value.checked_mul_f64(scalar) {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(PitParamDecimal::from_decimal(parsed.to_decimal())),
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -960,20 +989,23 @@ macro_rules! define_decimal_param_ffi_common {
             value: $wrapper,
             divisor: i64,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
-            match value.to_param().and_then(|parsed| -> Result<$domain, _> {
-                parsed
-                    .checked_div_i64(divisor)
-                    .into_param_result($type_name)
-            }) {
+            let value = match value.to_param() {
+                Ok(value) => value,
+                Err(error) => {
+                    write_param_error_unspecified(out_error, error.as_str());
+                    return false;
+                }
+            };
+            match value.checked_div_i64(divisor) {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(PitParamDecimal::from_decimal(parsed.to_decimal())),
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -984,20 +1016,23 @@ macro_rules! define_decimal_param_ffi_common {
             value: $wrapper,
             divisor: u64,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
-            match value.to_param().and_then(|parsed| -> Result<$domain, _> {
-                parsed
-                    .checked_div_u64(divisor)
-                    .into_param_result($type_name)
-            }) {
+            let value = match value.to_param() {
+                Ok(value) => value,
+                Err(error) => {
+                    write_param_error_unspecified(out_error, error.as_str());
+                    return false;
+                }
+            };
+            match value.checked_div_u64(divisor) {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(PitParamDecimal::from_decimal(parsed.to_decimal())),
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -1008,20 +1043,23 @@ macro_rules! define_decimal_param_ffi_common {
             value: $wrapper,
             divisor: f64,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
-            match value.to_param().and_then(|parsed| -> Result<$domain, _> {
-                parsed
-                    .checked_div_f64(divisor)
-                    .into_param_result($type_name)
-            }) {
+            let value = match value.to_param() {
+                Ok(value) => value,
+                Err(error) => {
+                    write_param_error_unspecified(out_error, error.as_str());
+                    return false;
+                }
+            };
+            match value.checked_div_f64(divisor) {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(PitParamDecimal::from_decimal(parsed.to_decimal())),
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -1032,20 +1070,23 @@ macro_rules! define_decimal_param_ffi_common {
             value: $wrapper,
             divisor: i64,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
-            match value.to_param().and_then(|parsed| -> Result<$domain, _> {
-                parsed
-                    .checked_rem_i64(divisor)
-                    .into_param_result($type_name)
-            }) {
+            let value = match value.to_param() {
+                Ok(value) => value,
+                Err(error) => {
+                    write_param_error_unspecified(out_error, error.as_str());
+                    return false;
+                }
+            };
+            match value.checked_rem_i64(divisor) {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(PitParamDecimal::from_decimal(parsed.to_decimal())),
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -1056,20 +1097,23 @@ macro_rules! define_decimal_param_ffi_common {
             value: $wrapper,
             divisor: u64,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
-            match value.to_param().and_then(|parsed| -> Result<$domain, _> {
-                parsed
-                    .checked_rem_u64(divisor)
-                    .into_param_result($type_name)
-            }) {
+            let value = match value.to_param() {
+                Ok(value) => value,
+                Err(error) => {
+                    write_param_error_unspecified(out_error, error.as_str());
+                    return false;
+                }
+            };
+            match value.checked_rem_u64(divisor) {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(PitParamDecimal::from_decimal(parsed.to_decimal())),
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -1080,20 +1124,23 @@ macro_rules! define_decimal_param_ffi_common {
             value: $wrapper,
             divisor: f64,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
-            match value.to_param().and_then(|parsed| -> Result<$domain, _> {
-                parsed
-                    .checked_rem_f64(divisor)
-                    .into_param_result($type_name)
-            }) {
+            let value = match value.to_param() {
+                Ok(value) => value,
+                Err(error) => {
+                    write_param_error_unspecified(out_error, error.as_str());
+                    return false;
+                }
+            };
+            match value.checked_rem_f64(divisor) {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(PitParamDecimal::from_decimal(parsed.to_decimal())),
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -1112,18 +1159,23 @@ macro_rules! define_decimal_param_ffi_signed {
         pub unsafe extern "C" fn $checked_neg_fn(
             value: $wrapper,
             out: *mut $wrapper,
-            out_error: PitOutError,
+            out_error: PitOutParamError,
         ) -> bool {
-            match value.to_param().and_then(|parsed| -> Result<$domain, _> {
-                parsed.checked_neg().into_param_result($type_name)
-            }) {
+            let value = match value.to_param() {
+                Ok(value) => value,
+                Err(error) => {
+                    write_param_error_unspecified(out_error, error.as_str());
+                    return false;
+                }
+            };
+            match value.checked_neg() {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(PitParamDecimal::from_decimal(parsed.to_decimal())),
                     out_error,
                 ),
                 Err(error) => {
-                    write_error(out_error, error.as_str());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
@@ -1445,19 +1497,19 @@ pub unsafe extern "C" fn pit_param_leverage_calculate_margin_required(
     leverage: PitParamLeverage,
     notional: PitParamNotional,
     out: *mut PitParamNotional,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let leverage = match import_leverage(leverage) {
         Some(lev) => lev,
         None => {
-            write_error(out_error, "leverage is not set");
+            write_param_error_unspecified(out_error, "leverage is not set");
             return false;
         }
     };
     let notional = match notional.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1468,7 +1520,7 @@ pub unsafe extern "C" fn pit_param_leverage_calculate_margin_required(
             out_error,
         ),
         Err(error) => {
-            write_error(out_error, &error.to_string());
+            consume_param_error_with_code(out_error, error);
             false
         }
     }
@@ -1479,19 +1531,19 @@ pub unsafe extern "C" fn pit_param_price_calculate_volume(
     price: PitParamPrice,
     quantity: PitParamQuantity,
     out: *mut PitParamVolume,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let price = match price.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
     let quantity = match quantity.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1502,7 +1554,7 @@ pub unsafe extern "C" fn pit_param_price_calculate_volume(
             out_error,
         ),
         Err(error) => {
-            write_error(out_error, &error.to_string());
+            consume_param_error_with_code(out_error, error);
             false
         }
     }
@@ -1513,19 +1565,19 @@ pub unsafe extern "C" fn pit_param_quantity_calculate_volume(
     quantity: PitParamQuantity,
     price: PitParamPrice,
     out: *mut PitParamVolume,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let quantity = match quantity.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
     let price = match price.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1536,7 +1588,7 @@ pub unsafe extern "C" fn pit_param_quantity_calculate_volume(
             out_error,
         ),
         Err(error) => {
-            write_error(out_error, &error.to_string());
+            consume_param_error_with_code(out_error, error);
             false
         }
     }
@@ -1547,19 +1599,19 @@ pub unsafe extern "C" fn pit_param_volume_calculate_quantity(
     volume: PitParamVolume,
     price: PitParamPrice,
     out: *mut PitParamQuantity,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let volume = match volume.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
     let price = match price.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1570,7 +1622,7 @@ pub unsafe extern "C" fn pit_param_volume_calculate_quantity(
             out_error,
         ),
         Err(error) => {
-            write_error(out_error, &error.to_string());
+            consume_param_error_with_code(out_error, error);
             false
         }
     }
@@ -1580,12 +1632,12 @@ pub unsafe extern "C" fn pit_param_volume_calculate_quantity(
 pub unsafe extern "C" fn pit_param_pnl_to_cash_flow(
     value: PitParamPnl,
     out: *mut PitParamCashFlow,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match value.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1602,12 +1654,12 @@ pub unsafe extern "C" fn pit_param_pnl_to_cash_flow(
 pub unsafe extern "C" fn pit_param_pnl_to_position_size(
     value: PitParamPnl,
     out: *mut PitParamPositionSize,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match value.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1624,12 +1676,12 @@ pub unsafe extern "C" fn pit_param_pnl_to_position_size(
 pub unsafe extern "C" fn pit_param_pnl_from_fee(
     fee: PitParamFee,
     out: *mut PitParamPnl,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match fee.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1646,12 +1698,12 @@ pub unsafe extern "C" fn pit_param_pnl_from_fee(
 pub unsafe extern "C" fn pit_param_cash_flow_from_pnl(
     pnl: PitParamPnl,
     out: *mut PitParamCashFlow,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match pnl.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1668,12 +1720,12 @@ pub unsafe extern "C" fn pit_param_cash_flow_from_pnl(
 pub unsafe extern "C" fn pit_param_cash_flow_from_fee(
     fee: PitParamFee,
     out: *mut PitParamCashFlow,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match fee.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1690,12 +1742,12 @@ pub unsafe extern "C" fn pit_param_cash_flow_from_fee(
 pub unsafe extern "C" fn pit_param_cash_flow_from_volume_inflow(
     volume: PitParamVolume,
     out: *mut PitParamCashFlow,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match volume.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1712,12 +1764,12 @@ pub unsafe extern "C" fn pit_param_cash_flow_from_volume_inflow(
 pub unsafe extern "C" fn pit_param_cash_flow_from_volume_outflow(
     volume: PitParamVolume,
     out: *mut PitParamCashFlow,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match volume.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1734,12 +1786,12 @@ pub unsafe extern "C" fn pit_param_cash_flow_from_volume_outflow(
 pub unsafe extern "C" fn pit_param_fee_to_pnl(
     fee: PitParamFee,
     out: *mut PitParamPnl,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match fee.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1754,12 +1806,12 @@ pub unsafe extern "C" fn pit_param_fee_to_pnl(
 pub unsafe extern "C" fn pit_param_fee_to_position_size(
     fee: PitParamFee,
     out: *mut PitParamPositionSize,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match fee.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1776,12 +1828,12 @@ pub unsafe extern "C" fn pit_param_fee_to_position_size(
 pub unsafe extern "C" fn pit_param_fee_to_cash_flow(
     fee: PitParamFee,
     out: *mut PitParamCashFlow,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match fee.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1798,12 +1850,12 @@ pub unsafe extern "C" fn pit_param_fee_to_cash_flow(
 pub unsafe extern "C" fn pit_param_volume_to_cash_flow_inflow(
     volume: PitParamVolume,
     out: *mut PitParamCashFlow,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match volume.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1820,12 +1872,12 @@ pub unsafe extern "C" fn pit_param_volume_to_cash_flow_inflow(
 pub unsafe extern "C" fn pit_param_volume_to_cash_flow_outflow(
     volume: PitParamVolume,
     out: *mut PitParamCashFlow,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match volume.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1842,12 +1894,12 @@ pub unsafe extern "C" fn pit_param_volume_to_cash_flow_outflow(
 pub unsafe extern "C" fn pit_param_position_size_from_pnl(
     pnl: PitParamPnl,
     out: *mut PitParamPositionSize,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match pnl.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1864,12 +1916,12 @@ pub unsafe extern "C" fn pit_param_position_size_from_pnl(
 pub unsafe extern "C" fn pit_param_position_size_from_fee(
     fee: PitParamFee,
     out: *mut PitParamPositionSize,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match fee.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1887,12 +1939,12 @@ pub unsafe extern "C" fn pit_param_position_size_from_quantity_and_side(
     quantity: PitParamQuantity,
     side: PitParamSide,
     out: *mut PitParamPositionSize,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match quantity.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1911,17 +1963,17 @@ pub unsafe extern "C" fn pit_param_position_size_to_open_quantity(
     value: PitParamPositionSize,
     out_quantity: *mut PitParamQuantity,
     out_side: *mut PitParamSide,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     if out_quantity.is_null() || out_side.is_null() {
-        write_error(out_error, "result place pointer is null");
+        write_param_error_unspecified(out_error, "result place pointer is null");
         return false;
     }
 
     let position_size = match value.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1938,16 +1990,16 @@ pub unsafe extern "C" fn pit_param_position_size_to_close_quantity(
     value: PitParamPositionSize,
     out_quantity: *mut PitParamQuantity,
     out_side: *mut PitParamSide,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     if out_quantity.is_null() || out_side.is_null() {
-        write_error(out_error, "result place pointer is null");
+        write_param_error_unspecified(out_error, "result place pointer is null");
         return false;
     }
     let position_size = match value.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1965,19 +2017,19 @@ pub unsafe extern "C" fn pit_param_position_size_checked_add_quantity(
     quantity: PitParamQuantity,
     side: PitParamSide,
     out: *mut PitParamPositionSize,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let value = match value.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
     let quantity = match quantity.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -1989,7 +2041,7 @@ pub unsafe extern "C" fn pit_param_position_size_checked_add_quantity(
             out_error,
         ),
         Err(error) => {
-            write_error(out_error, &error.to_string());
+            consume_param_error_with_code(out_error, error);
             false
         }
     }
@@ -2000,19 +2052,19 @@ pub unsafe extern "C" fn pit_param_price_calculate_notional(
     price: PitParamPrice,
     quantity: PitParamQuantity,
     out: *mut PitParamNotional,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let price = match price.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
     let quantity = match quantity.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -2023,7 +2075,7 @@ pub unsafe extern "C" fn pit_param_price_calculate_notional(
             out_error,
         ),
         Err(error) => {
-            write_error(out_error, &error.to_string());
+            consume_param_error_with_code(out_error, error);
             false
         }
     }
@@ -2034,19 +2086,19 @@ pub unsafe extern "C" fn pit_param_quantity_calculate_notional(
     quantity: PitParamQuantity,
     price: PitParamPrice,
     out: *mut PitParamNotional,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let quantity = match quantity.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
     let price = match price.to_param() {
         Ok(value) => value,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -2057,7 +2109,7 @@ pub unsafe extern "C" fn pit_param_quantity_calculate_notional(
             out_error,
         ),
         Err(error) => {
-            write_error(out_error, &error.to_string());
+            consume_param_error_with_code(out_error, error);
             false
         }
     }
@@ -2067,12 +2119,12 @@ pub unsafe extern "C" fn pit_param_quantity_calculate_notional(
 pub unsafe extern "C" fn pit_param_notional_from_volume(
     volume: PitParamVolume,
     out: *mut PitParamNotional,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match volume.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -2089,12 +2141,12 @@ pub unsafe extern "C" fn pit_param_notional_from_volume(
 pub unsafe extern "C" fn pit_param_notional_to_volume(
     notional: PitParamNotional,
     out: *mut PitParamVolume,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match notional.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -2112,19 +2164,19 @@ pub unsafe extern "C" fn pit_param_notional_calculate_margin_required(
     notional: PitParamNotional,
     leverage: PitParamLeverage,
     out: *mut PitParamNotional,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let notional = match notional.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
     let leverage = match import_leverage(leverage) {
         Some(lev) => lev,
         None => {
-            write_error(out_error, "leverage is not set");
+            write_param_error_unspecified(out_error, "leverage is not set");
             return false;
         }
     };
@@ -2135,7 +2187,7 @@ pub unsafe extern "C" fn pit_param_notional_calculate_margin_required(
             out_error,
         ),
         Err(error) => {
-            write_error(out_error, &error.to_string());
+            consume_param_error_with_code(out_error, error);
             false
         }
     }
@@ -2145,12 +2197,12 @@ pub unsafe extern "C" fn pit_param_notional_calculate_margin_required(
 pub unsafe extern "C" fn pit_param_volume_from_notional(
     notional: PitParamNotional,
     out: *mut PitParamVolume,
-    out_error: PitOutError,
+    out_error: PitOutParamError,
 ) -> bool {
     let parsed = match notional.to_param() {
         Ok(parsed) => parsed,
         Err(error) => {
-            write_error(out_error, error.as_str());
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -2202,8 +2254,8 @@ pub extern "C" fn pit_create_param_account_id_from_u64(value: u64) -> PitParamAc
 /// `pit_create_param_account_id_from_u64` in the same runtime state.
 ///
 /// Contract:
-/// - returns a stable account identifier value;
-/// - this function always succeeds.
+/// - returns `true` and writes a stable account identifier to `out` on success;
+/// - returns `false` on invalid input and optionally writes `PitParamError`.
 ///
 /// # Safety
 ///
@@ -2211,7 +2263,9 @@ pub extern "C" fn pit_create_param_account_id_from_u64(value: u64) -> PitParamAc
 /// UTF-8 bytes.
 pub unsafe extern "C" fn pit_create_param_account_id_from_str(
     value: PitStringView,
-) -> PitParamAccountId {
+    out: *mut PitParamAccountId,
+    out_error: PitOutParamError,
+) -> bool {
     let bytes: &[u8] = if value.ptr.is_null() || value.len == 0 {
         &[]
     } else {
@@ -2219,7 +2273,43 @@ pub unsafe extern "C" fn pit_create_param_account_id_from_str(
     };
     let utf8 = String::from_utf8_lossy(bytes);
     let s = utf8.as_ref();
-    AccountId::from_str(s).as_u64()
+    match AccountId::from_str(s) {
+        Ok(id) => write_out(out, id.as_u64(), out_error),
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.to_string().as_str());
+            false
+        }
+    }
+}
+
+#[no_mangle]
+/// Validates and copies an asset identifier into a caller-owned shared-string handle.
+///
+/// The returned handle must be destroyed with `pit_destroy_param_asset`.
+pub unsafe extern "C" fn pit_create_param_asset_from_str(
+    value: PitStringView,
+    out_error: PitOutParamError,
+) -> *mut PitSharedString {
+    let text = match unsafe { parse_string_view(value) } {
+        Ok(text) => text,
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.as_str());
+            return std::ptr::null_mut();
+        }
+    };
+    match Asset::new(text.as_str()) {
+        Ok(asset) => PitSharedString::new_handle(asset.as_ref()),
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.to_string().as_str());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+/// Destroys a caller-owned asset handle created by `pit_create_param_asset_from_str`.
+pub extern "C" fn pit_destroy_param_asset(handle: *mut PitSharedString) {
+    crate::string::pit_destroy_shared_string(handle);
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -2231,6 +2321,16 @@ mod tests {
 
     use super::*;
     use openpit::param::{PositionEffect, PositionMode, PositionSide, RoundingStrategy, Side};
+
+    fn view_to_string(view: PitStringView) -> String {
+        if view.ptr.is_null() {
+            return String::new();
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(view.ptr, view.len) };
+        std::str::from_utf8(bytes)
+            .expect("error string must be valid utf-8")
+            .to_owned()
+    }
 
     #[test]
     fn leverage_constants_match_openpit_sdk() {
@@ -2365,20 +2465,67 @@ mod tests {
         };
         assert!(!ok);
         assert!(!out_error.is_null());
-        crate::string::pit_destroy_shared_string(out_error);
+        unsafe { crate::last_error::pit_destroy_param_error(out_error) };
     }
 
     #[test]
     fn account_id_from_str_does_not_collapse_invalid_utf8_to_empty() {
         let bytes = [0xF0_u8, 0x28, 0x8C, 0x28];
-        let id_invalid = unsafe {
-            pit_create_param_account_id_from_str(PitStringView {
-                ptr: bytes.as_ptr(),
-                len: bytes.len(),
-            })
+        let mut id_invalid = 0_u64;
+        let id_invalid_ok = unsafe {
+            pit_create_param_account_id_from_str(
+                PitStringView {
+                    ptr: bytes.as_ptr(),
+                    len: bytes.len(),
+                },
+                &mut id_invalid,
+                std::ptr::null_mut(),
+            )
         };
-        let id_empty = unsafe { pit_create_param_account_id_from_str(PitStringView::not_set()) };
-        assert_ne!(id_invalid, id_empty);
+        assert!(id_invalid_ok);
+
+        let mut out_error = std::ptr::null_mut();
+        let mut id_empty = 0_u64;
+        let id_empty_ok = unsafe {
+            pit_create_param_account_id_from_str(
+                PitStringView::not_set(),
+                &mut id_empty,
+                &mut out_error,
+            )
+        };
+        assert!(!id_empty_ok);
+        assert!(!out_error.is_null());
+        assert_eq!(
+            unsafe { (*out_error).code },
+            crate::last_error::PitParamErrorCode::Unspecified
+        );
+        let error_message = pit_shared_string_view(unsafe { (*out_error).message });
+        assert_eq!(
+            view_to_string(error_message),
+            "account id string must not be empty"
+        );
+        unsafe { crate::last_error::pit_destroy_param_error(out_error) };
+    }
+
+    #[test]
+    fn account_id_from_str_rejects_whitespace() {
+        let mut out = 0_u64;
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            pit_create_param_account_id_from_str(
+                PitStringView::from_utf8("   "),
+                &mut out,
+                &mut out_error,
+            )
+        };
+        assert!(!ok);
+        assert!(!out_error.is_null());
+        let error_message = pit_shared_string_view(unsafe { (*out_error).message });
+        assert_eq!(
+            view_to_string(error_message),
+            "account id string must not be empty"
+        );
+        unsafe { crate::last_error::pit_destroy_param_error(out_error) };
     }
 
     #[test]
@@ -2386,6 +2533,39 @@ mod tests {
         assert_eq!(pit_create_param_account_id_from_u64(0), 0);
         assert_eq!(pit_create_param_account_id_from_u64(7), 7);
         assert_eq!(pit_create_param_account_id_from_u64(u64::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn asset_from_str_returns_owned_handle_when_valid() {
+        let handle = unsafe {
+            pit_create_param_asset_from_str(PitStringView::from_utf8("USD"), std::ptr::null_mut())
+        };
+        assert!(!handle.is_null());
+        let value = view_to_string(pit_shared_string_view(handle));
+        assert_eq!(value, "USD");
+        pit_destroy_param_asset(handle);
+    }
+
+    #[test]
+    fn asset_from_str_rejects_empty_and_whitespace() {
+        let mut out_error = std::ptr::null_mut();
+        let empty =
+            unsafe { pit_create_param_asset_from_str(PitStringView::not_set(), &mut out_error) };
+        assert!(empty.is_null());
+        assert!(!out_error.is_null());
+        let message = view_to_string(pit_shared_string_view(unsafe { (*out_error).message }));
+        assert_eq!(message, "asset must not be empty");
+        unsafe { crate::last_error::pit_destroy_param_error(out_error) };
+
+        let mut out_error = std::ptr::null_mut();
+        let whitespace = unsafe {
+            pit_create_param_asset_from_str(PitStringView::from_utf8("   "), &mut out_error)
+        };
+        assert!(whitespace.is_null());
+        assert!(!out_error.is_null());
+        let message = view_to_string(pit_shared_string_view(unsafe { (*out_error).message }));
+        assert_eq!(message, "asset must not be empty");
+        unsafe { crate::last_error::pit_destroy_param_error(out_error) };
     }
 
     #[test]

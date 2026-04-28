@@ -69,23 +69,23 @@ type Leverage struct {
 // LeverageZero is the zero-value leverage payload (`not set` state).
 var LeverageZero = Leverage{}
 
-// NewLeverageFromNative wraps native leverage payload as Leverage.
+// NewLeverageFromHandle wraps native leverage payload as Leverage.
 //
 // No business validation is performed.
-func NewLeverageFromNative(v native.ParamLeverage) Leverage {
+func NewLeverageFromHandle(v native.ParamLeverage) Leverage {
 	return Leverage{native: v}
 }
 
-// NewLeverageOptionFromNative converts native leverage payload into optional
+// NewLeverageOptionFromHandle converts native leverage payload into optional
 // Leverage.
 //
 // `native.ParamLeverageNotSet` maps to empty option; any other value maps to
 // `Some(Leverage)`.
-func NewLeverageOptionFromNative(v native.ParamLeverage) optional.Option[Leverage] {
+func NewLeverageOptionFromHandle(v native.ParamLeverage) optional.Option[Leverage] {
 	if v == native.ParamLeverageNotSet {
 		return optional.None[Leverage]()
 	}
-	return optional.Some(NewLeverageFromNative(v))
+	return optional.Some(NewLeverageFromHandle(v))
 }
 
 // NewLeverageFromInt builds leverage from integer multiplier.
@@ -140,11 +140,11 @@ func (v Leverage) Value() float32 {
 //
 //	margin = notional / leverage
 func (v Leverage) CalculateMarginRequired(notional Notional) (Notional, error) {
-	result, err := native.ParamLeverageCalculateMarginRequired(v.Native(), notional.Native())
+	result, err := native.ParamLeverageCalculateMarginRequired(v.Handle(), notional.Handle())
 	if err != nil {
 		return Notional{}, err
 	}
-	return NewNotionalFromNative(result), nil
+	return NewNotionalFromHandle(result), nil
 }
 
 // String returns normalized decimal leverage string.
@@ -161,7 +161,7 @@ func (v Leverage) String() string {
 	return strconv.FormatUint(uint64(integer), 10) + "." + strconv.FormatUint(uint64(fractional), 10)
 }
 
-// Native returns underlying native leverage payload.
-func (v Leverage) Native() native.ParamLeverage {
+// Handle returns underlying native leverage payload.
+func (v Leverage) Handle() native.ParamLeverage {
 	return v.native
 }

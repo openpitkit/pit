@@ -30,7 +30,7 @@ import (
 // a per-operation cost. For ultra-low-latency paths that need many
 // intermediate computations, prefer performing the math on primitive types
 // or a custom representation and cross into Quantity only once via
-// NewQuantityFromString / NewQuantityFromDecimal / NewQuantityFromNative.
+// NewQuantityFromString / NewQuantityFromDecimal / NewQuantityFromHandle.
 //
 // This cost exists because the SDK guarantees that the same input produces
 // bit-for-bit identical results across all language bindings (Rust, Go,
@@ -60,7 +60,7 @@ func NewQuantityFromDecimal(v decimal.Decimal) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(nativeValue), nil
+	return NewQuantityFromHandle(nativeValue), nil
 }
 
 func NewQuantityFromString(v string) (Quantity, error) {
@@ -68,7 +68,7 @@ func NewQuantityFromString(v string) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(nativeValue), nil
+	return NewQuantityFromHandle(nativeValue), nil
 }
 
 func NewQuantityFromInt(v int64) (Quantity, error) {
@@ -76,7 +76,7 @@ func NewQuantityFromInt(v int64) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(nativeValue), nil
+	return NewQuantityFromHandle(nativeValue), nil
 }
 
 func NewQuantityFromUint(v uint64) (Quantity, error) {
@@ -84,7 +84,7 @@ func NewQuantityFromUint(v uint64) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(nativeValue), nil
+	return NewQuantityFromHandle(nativeValue), nil
 }
 
 // WARNING: float64 values are inherently imprecise. The same numeric literal
@@ -99,18 +99,18 @@ func NewQuantityFromFloat(v float64) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(nativeValue), nil
+	return NewQuantityFromHandle(nativeValue), nil
 }
 
-func NewQuantityFromNative(v native.ParamQuantity) Quantity {
+func NewQuantityFromHandle(v native.ParamQuantity) Quantity {
 	return Quantity{native: v}
 }
 
-func NewQuantityOptionFromNative(v native.ParamQuantityOptional) optional.Option[Quantity] {
+func NewQuantityOptionFromHandle(v native.ParamQuantityOptional) optional.Option[Quantity] {
 	if !native.ParamQuantityOptionalIsSet(v) {
 		return optional.None[Quantity]()
 	}
-	return optional.Some(NewQuantityFromNative(native.ParamQuantityOptionalGet(v)))
+	return optional.Some(NewQuantityFromHandle(native.ParamQuantityOptionalGet(v)))
 }
 
 func NewQuantityFromStringRounded(
@@ -122,7 +122,7 @@ func NewQuantityFromStringRounded(
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(nativeValue), nil
+	return NewQuantityFromHandle(nativeValue), nil
 }
 
 func NewQuantityFromFloatRounded(
@@ -134,7 +134,7 @@ func NewQuantityFromFloatRounded(
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(nativeValue), nil
+	return NewQuantityFromHandle(nativeValue), nil
 }
 
 // NewQuantityFromDecimalRounded converts a shopspring decimal to a rounded Quantity.
@@ -156,14 +156,14 @@ func NewQuantityFromDecimalRounded(
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(nativeValue), nil
+	return NewQuantityFromHandle(nativeValue), nil
 }
 
 func (v Quantity) Decimal() decimal.Decimal {
-	return newDecimalFromNative(native.ParamQuantityGetDecimal(v.native))
+	return newDecimalFromHandle(native.ParamQuantityGetDecimal(v.native))
 }
 
-func (v Quantity) Native() native.ParamQuantity {
+func (v Quantity) Handle() native.ParamQuantity {
 	return v.native
 }
 
@@ -175,22 +175,27 @@ func (v Quantity) Native() native.ParamQuantity {
 // for parity and test convenience only; cross-platform determinism is NOT
 // guaranteed when construction goes through float64.
 func (v Quantity) Float() float64 {
+	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamQuantityToF64(v.native))
 }
 
 func (v Quantity) String() string {
+	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamQuantityToString(v.native))
 }
 
 func (v Quantity) IsZero() bool {
+	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamQuantityIsZero(v.native))
 }
 
 func (v Quantity) Equal(other Quantity) bool {
+	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamQuantityCompare(v.native, other.native)) == 0
 }
 
 func (v Quantity) Compare(other Quantity) int {
+	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamQuantityCompare(v.native, other.native))
 }
 
@@ -199,7 +204,7 @@ func (v Quantity) CheckedAdd(other Quantity) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(result), nil
+	return NewQuantityFromHandle(result), nil
 }
 
 func (v Quantity) CheckedSub(other Quantity) (Quantity, error) {
@@ -207,7 +212,7 @@ func (v Quantity) CheckedSub(other Quantity) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(result), nil
+	return NewQuantityFromHandle(result), nil
 }
 
 func (v Quantity) CheckedMulInt(scalar int64) (Quantity, error) {
@@ -215,7 +220,7 @@ func (v Quantity) CheckedMulInt(scalar int64) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(result), nil
+	return NewQuantityFromHandle(result), nil
 }
 
 func (v Quantity) CheckedMulUint(scalar uint64) (Quantity, error) {
@@ -223,7 +228,7 @@ func (v Quantity) CheckedMulUint(scalar uint64) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(result), nil
+	return NewQuantityFromHandle(result), nil
 }
 
 func (v Quantity) CheckedMulFloat(scalar float64) (Quantity, error) {
@@ -231,7 +236,7 @@ func (v Quantity) CheckedMulFloat(scalar float64) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(result), nil
+	return NewQuantityFromHandle(result), nil
 }
 
 func (v Quantity) CheckedDivInt(divisor int64) (Quantity, error) {
@@ -239,7 +244,7 @@ func (v Quantity) CheckedDivInt(divisor int64) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(result), nil
+	return NewQuantityFromHandle(result), nil
 }
 
 func (v Quantity) CheckedDivUint(divisor uint64) (Quantity, error) {
@@ -247,7 +252,7 @@ func (v Quantity) CheckedDivUint(divisor uint64) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(result), nil
+	return NewQuantityFromHandle(result), nil
 }
 
 func (v Quantity) CheckedDivFloat(divisor float64) (Quantity, error) {
@@ -255,7 +260,7 @@ func (v Quantity) CheckedDivFloat(divisor float64) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(result), nil
+	return NewQuantityFromHandle(result), nil
 }
 
 func (v Quantity) CheckedRemInt(divisor int64) (Quantity, error) {
@@ -263,7 +268,7 @@ func (v Quantity) CheckedRemInt(divisor int64) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(result), nil
+	return NewQuantityFromHandle(result), nil
 }
 
 func (v Quantity) CheckedRemUint(divisor uint64) (Quantity, error) {
@@ -271,7 +276,7 @@ func (v Quantity) CheckedRemUint(divisor uint64) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(result), nil
+	return NewQuantityFromHandle(result), nil
 }
 
 func (v Quantity) CheckedRemFloat(divisor float64) (Quantity, error) {
@@ -279,7 +284,7 @@ func (v Quantity) CheckedRemFloat(divisor float64) (Quantity, error) {
 	if err != nil {
 		return Quantity{}, err
 	}
-	return NewQuantityFromNative(result), nil
+	return NewQuantityFromHandle(result), nil
 }
 
 func (v Quantity) CalculateVolume(price Price) (Volume, error) {
@@ -287,5 +292,5 @@ func (v Quantity) CalculateVolume(price Price) (Volume, error) {
 	if err != nil {
 		return Volume{}, err
 	}
-	return NewVolumeFromNative(result), nil
+	return NewVolumeFromHandle(result), nil
 }

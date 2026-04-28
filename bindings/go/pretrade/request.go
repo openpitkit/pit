@@ -53,21 +53,21 @@ func (r *Request) Close() {
 //
 // A request can be executed at most once; a second call to Execute
 // returns a transport error.
-func (r *Request) Execute() (*Reservation, reject.List, error) {
+func (r *Request) Execute() (*Reservation, []reject.Reject, error) {
 	reservation, rejects, err := native.PretradePreTradeRequestExecute(r.handle)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	if rejects != nil {
-		reject_result, err := reject.NewListFromHandle(rejects)
+		rejectResult, err := reject.NewListFromHandle(rejects)
 		native.DestroyRejectList(rejects)
 		if err != nil {
 			return nil,
 				nil,
 				fmt.Errorf("failed to create reject list for rejected order: %w", err)
 		}
-		return nil, reject_result, nil
+		return nil, rejectResult, nil
 	}
 
 	return NewReservationFromHandle(reservation), nil, nil

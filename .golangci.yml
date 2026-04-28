@@ -1,0 +1,83 @@
+version: "2"
+
+run:
+  go: "1.22"
+  timeout: 5m
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - gosec
+    - revive
+    - gocritic
+    - misspell
+    - sqlclosecheck
+    - unparam
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - copyloopvar
+    - prealloc
+    - unconvert
+    - whitespace
+
+linters-settings:
+  revive:
+    confidence: 0.8
+    severity: error
+    rules:
+      - name: var-naming
+        arguments:
+          - [ "ID", "API", "SDK", "URL", "HTTP", "JSON" ]
+          - []
+      - name: exported
+      - name: package-comments
+      - name: error-naming
+      - name: error-return
+      - name: error-strings
+      - name: errorf
+      - name: context-as-argument
+      - name: receiver-naming
+      - name: unexported-naming
+      - name: unexported-return
+      - name: unused-parameter
+      - name: unused-receiver
+      - name: unreachable-code
+      - name: unnecessary-stmt
+      - name: identical-branches
+      - name: superfluous-else
+      - name: early-return
+      - name: indent-error-flow
+      - name: range
+      - name: range-val-in-closure
+      - name: range-val-address
+      - name: modifies-parameter
+      - name: modifies-value-receiver
+      - name: blank-imports
+      - name: duplicated-imports
+      - name: atomic
+      - name: bare-return
+      - name: confusing-results
+      - name: get-return
+      - name: string-of-int
+      - name: struct-tag
+      - name: time-naming
+      - name: var-declaration
+      - name: waitgroup-by-value
+      - name: unhandled-error
+        arguments:
+          - fmt.Printf
+          - fmt.Println
+          - builder.WriteString
+
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

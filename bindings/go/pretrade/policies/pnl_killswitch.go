@@ -39,12 +39,12 @@ type PnlKillSwitchBarrier struct {
 // Must be closed with Close.
 func NewPnlKillSwitchPolicy(
 	barriers ...PnlKillSwitchBarrier,
-) (pretrade.CheckPreTradeStartPolicy, error) {
+) (pretrade.BuiltinPolicy, error) {
 	params := make([]native.PretradePoliciesPnlKillSwitchParam, len(barriers))
 	for i, barrier := range barriers {
 		params[i] = native.NewPretradePoliciesPnlKillSwitchParam(
-			barrier.SettlementAsset.Native(),
-			barrier.Barrier.Native(),
+			barrier.SettlementAsset.Handle(),
+			barrier.Barrier.Handle(),
 		)
 	}
 

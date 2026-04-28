@@ -34,20 +34,9 @@ import (
 )
 
 func TestCheckPreTradeStartPolicyConstructorAndBuiltinMethods(t *testing.T) {
-	policy := newCheckPreTradeStartPolicy(
-		func() native.PretradeCheckPreTradeStartPolicy {
-			return native.CreatePretradePoliciesOrderValidationPolicy()
-		},
-	)
+	policy := newCheckStartPolicy(native.CreatePretradePoliciesOrderValidationPolicy)
 	if got := policy.Name(); got != "OrderValidationPolicy" {
 		t.Fatalf("Name() = %q, want %q", got, "OrderValidationPolicy")
-	}
-
-	rejects := policy.CheckPreTradeStart(pretrade.Context{}, newValidOrder(t, "100", "1"))
-	assertSingleBuiltinWrapperReject(t, rejects, "OrderValidationPolicy")
-
-	if policy.ApplyExecutionReport(model.NewExecutionReport()) {
-		t.Fatal("ApplyExecutionReport() = true, want false")
 	}
 
 	policy.Close()
@@ -60,8 +49,8 @@ func TestCheckPreTradeStartPolicyWithErrorSuccessAndFailure(t *testing.T) {
 			params := []native.PretradePoliciesOrderSizeLimitParam{
 				native.NewPretradePoliciesOrderSizeLimitParam(
 					"USD",
-					mustQuantity(t, "10").Native(),
-					mustVolume(t, "1000").Native(),
+					mustQuantity(t, "10").Handle(),
+					mustVolume(t, "1000").Handle(),
 				),
 			}
 			return native.CreatePretradePoliciesOrderSizeLimitPolicy(params)
@@ -86,37 +75,25 @@ func TestCheckPreTradeStartPolicyWithErrorSuccessAndFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "parameter list is empty") {
 		t.Fatalf("error = %q, want to contain %q", err.Error(), "parameter list is empty")
 	}
-	assertPanicContains(
-		t,
-		"built-in policy is already closed",
-		func() { _ = erroredPolicy.Name() },
-	)
+	assertPanicContains(t, func() { _ = erroredPolicy.Name() })
 }
 
 func TestCheckPreTradeStartPolicyTakeNativeTransfersOwnership(t *testing.T) {
-	policy := NewOrderValidation().(*checkPreTradeStartPolicy)
-	handle := policy.TakeNative()
+	policy := NewOrderValidation().(*checkStartPolicy)
+	handle := policy.TakeHandle()
 	if handle == nil {
-		t.Fatal("TakeNative() = nil, want non-nil")
+		t.Fatal("TakeHandle() = nil, want non-nil")
 	}
 
 	policy.Close()
 	native.DestroyPretradeCheckPreTradeStartPolicy(handle)
 
-	assertPanicContains(
-		t,
-		"built-in policy is already closed",
-		func() { policy.TakeNative() },
-	)
-	assertPanicContains(
-		t,
-		"built-in policy is already closed",
-		func() { _ = policy.Name() },
-	)
+	assertPanicContains(t, func() { policy.TakeHandle() })
+	assertPanicContains(t, func() { _ = policy.Name() })
 }
 
 func TestPreTradePolicyWithErrorSuccessAndFailure(t *testing.T) {
-	policy, err := newPreTradePolicyWithError(
+	policy, err := newPolicyWithError(
 		func() (native.PretradePreTradePolicy, error) {
 			return custompolicy.StartPreTrade(
 				&policiesTestNoopMainPolicy{name: "main-policy-adapter"},
@@ -130,21 +107,10 @@ func TestPreTradePolicyWithErrorSuccessAndFailure(t *testing.T) {
 		t.Fatalf("Name() = %q, want %q", got, "main-policy-adapter")
 	}
 
-	rejects := policy.PerformPreTradeCheck(
-		pretrade.Context{},
-		newValidOrder(t, "100", "1"),
-		tx.Mutations{},
-	)
-	assertSingleBuiltinWrapperReject(t, rejects, "main-policy-adapter")
-
-	if policy.ApplyExecutionReport(model.NewExecutionReport()) {
-		t.Fatal("ApplyExecutionReport() = true, want false")
-	}
-
 	policy.Close()
 	policy.Close()
 
-	erroredPolicy, err := newPreTradePolicyWithError(
+	erroredPolicy, err := newPolicyWithError(
 		func() (native.PretradePreTradePolicy, error) {
 			return nil, errors.New("forced construction failure")
 		},
@@ -155,15 +121,11 @@ func TestPreTradePolicyWithErrorSuccessAndFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "forced construction failure") {
 		t.Fatalf("error = %q, want to contain %q", err.Error(), "forced construction failure")
 	}
-	assertPanicContains(
-		t,
-		"built-in policy is already closed",
-		func() { _ = erroredPolicy.Name() },
-	)
+	assertPanicContains(t, func() { _ = erroredPolicy.Name() })
 }
 
 func TestPreTradePolicyTakeNativeTransfersOwnership(t *testing.T) {
-	policy, err := newPreTradePolicyWithError(
+	policy, err := newPolicyWithError(
 		func() (native.PretradePreTradePolicy, error) {
 			return custompolicy.StartPreTrade(
 				&policiesTestNoopMainPolicy{name: "main-policy-take"},
@@ -174,23 +136,15 @@ func TestPreTradePolicyTakeNativeTransfersOwnership(t *testing.T) {
 		t.Fatalf("newPreTradePolicyWithError() error = %v, want nil", err)
 	}
 
-	handle := policy.TakeNative()
+	handle := policy.TakeHandle()
 	if handle == nil {
-		t.Fatal("TakeNative() = nil, want non-nil")
+		t.Fatal("TakeHandle() = nil, want non-nil")
 	}
 	policy.Close()
 	native.DestroyPretradePreTradePolicy(handle)
 
-	assertPanicContains(
-		t,
-		"built-in policy is already closed",
-		func() { policy.TakeNative() },
-	)
-	assertPanicContains(
-		t,
-		"built-in policy is already closed",
-		func() { _ = policy.Name() },
-	)
+	assertPanicContains(t, func() { policy.TakeHandle() })
+	assertPanicContains(t, func() { _ = policy.Name() })
 }
 
 func TestNewOrderValidationPolicyEngineFlow(t *testing.T) {
@@ -294,7 +248,7 @@ func TestNewOrderSizeLimitPolicyValidationAndEngineFlow(t *testing.T) {
 	}
 
 	invalidPolicy, err := NewOrderSizeLimitPolicy(OrderSizeLimit{
-		SettlementAsset: param.NewAsset(""),
+		SettlementAsset: param.Asset{},
 		MaxQuantity:     mustQuantity(t, "10"),
 		MaxNotional:     mustVolume(t, "1000"),
 	})
@@ -309,7 +263,7 @@ func TestNewOrderSizeLimitPolicyValidationAndEngineFlow(t *testing.T) {
 	}
 
 	policy, err := NewOrderSizeLimitPolicy(OrderSizeLimit{
-		SettlementAsset: param.NewAsset("USD"),
+		SettlementAsset: mustPolicyAsset(t, "USD"),
 		MaxQuantity:     mustQuantity(t, "10"),
 		MaxNotional:     mustVolume(t, "1000"),
 	})
@@ -366,7 +320,7 @@ func TestNewPnlKillSwitchPolicyValidationAndEngineFlow(t *testing.T) {
 	}
 
 	nonPositivePolicy, err := NewPnlKillSwitchPolicy(PnlKillSwitchBarrier{
-		SettlementAsset: param.NewAsset("USD"),
+		SettlementAsset: mustPolicyAsset(t, "USD"),
 		Barrier:         mustPnl(t, "0"),
 	})
 	if nonPositivePolicy != nil {
@@ -380,7 +334,7 @@ func TestNewPnlKillSwitchPolicyValidationAndEngineFlow(t *testing.T) {
 	}
 
 	policy, err := NewPnlKillSwitchPolicy(PnlKillSwitchBarrier{
-		SettlementAsset: param.NewAsset("USD"),
+		SettlementAsset: mustPolicyAsset(t, "USD"),
 		Barrier:         mustPnl(t, "500"),
 	})
 	if err != nil {
@@ -438,48 +392,31 @@ func TestNewPnlKillSwitchPolicyValidationAndEngineFlow(t *testing.T) {
 	}
 }
 
-func TestNewPreTradePolicyHolderReturnsError(t *testing.T) {
-	policy, err := NewPreTradePolicyHolder()
-	if policy != nil {
-		policy.Close()
-	}
-	if err == nil {
-		t.Fatal("NewPreTradePolicyHolder() error = nil, want non-nil")
-	}
-	if !strings.Contains(err.Error(), "policy holder is only for internal use") {
-		t.Fatalf(
-			"error = %q, want to contain %q",
-			err.Error(),
-			"policy holder is only for internal use",
-		)
-	}
-}
-
 type policiesTestNoopMainPolicy struct {
 	name string
 }
 
-func (p *policiesTestNoopMainPolicy) Close() {}
+func (policiesTestNoopMainPolicy) Close() {}
 
 func (p *policiesTestNoopMainPolicy) Name() string {
 	return p.name
 }
 
-func (p *policiesTestNoopMainPolicy) PerformPreTradeCheck(
+func (policiesTestNoopMainPolicy) PerformPreTradeCheck(
 	pretrade.Context,
 	model.Order,
 	tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	return nil
 }
 
-func (p *policiesTestNoopMainPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
+func (policiesTestNoopMainPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
 	return false
 }
 
 func newEngineWithStartPolicy(
 	t *testing.T,
-	policy ...pretrade.CheckPreTradeStartPolicy,
+	policy ...pretrade.BuiltinPolicy,
 ) *openpit.Engine {
 	t.Helper()
 
@@ -487,7 +424,7 @@ func newEngineWithStartPolicy(
 	if err != nil {
 		t.Fatalf("NewEngineBuilder() error = %v", err)
 	}
-	builder.CheckPreTradeStartPolicy(policy...)
+	builder.BuiltinCheckPreTradeStartPolicy(policy...)
 
 	engine, err := builder.Build()
 	if err != nil {
@@ -502,7 +439,9 @@ func newValidOrder(t *testing.T, price string, quantity string) model.Order {
 
 	result := model.NewOrder()
 	operation := result.EnsureOperationView()
-	operation.SetInstrument(param.NewInstrument(param.NewAsset("AAPL"), param.NewAsset("USD")))
+	operation.SetInstrument(
+		param.NewInstrument(mustPolicyAsset(t, "AAPL"), mustPolicyAsset(t, "USD")),
+	)
 	operation.SetAccountID(param.NewAccountIDFromInt(99224416))
 	operation.SetSide(param.SideBuy)
 	operation.SetTradeAmount(param.NewQuantityTradeAmount(mustQuantity(t, quantity)))
@@ -515,7 +454,9 @@ func newExecutionReportWithPnl(t *testing.T, pnlValue string) model.ExecutionRep
 
 	result := model.NewExecutionReport()
 	operation := model.NewExecutionReportOperation()
-	operation.SetInstrument(param.NewInstrument(param.NewAsset("AAPL"), param.NewAsset("USD")))
+	operation.SetInstrument(
+		param.NewInstrument(mustPolicyAsset(t, "AAPL"), mustPolicyAsset(t, "USD")),
+	)
 	operation.SetAccountID(param.NewAccountIDFromInt(99224416))
 	operation.SetSide(param.SideBuy)
 	result.SetOperation(operation)
@@ -527,31 +468,10 @@ func newExecutionReportWithPnl(t *testing.T, pnlValue string) model.ExecutionRep
 	return result
 }
 
-func assertSingleBuiltinWrapperReject(t *testing.T, rejects reject.List, policyName string) {
+func assertPanicContains(t *testing.T, fn func()) {
 	t.Helper()
 
-	if len(rejects) != 1 {
-		t.Fatalf("reject len = %d, want 1", len(rejects))
-	}
-	if rejects[0].Code != reject.CodeOther {
-		t.Fatalf("reject code = %v, want %v", rejects[0].Code, reject.CodeOther)
-	}
-	if rejects[0].Policy != policyName {
-		t.Fatalf("reject policy = %q, want %q", rejects[0].Policy, policyName)
-	}
-	if rejects[0].Reason != builtinPolicyOnlyReason {
-		t.Fatalf("reject reason = %q, want %q", rejects[0].Reason, builtinPolicyOnlyReason)
-	}
-	if rejects[0].Details != builtinPolicyOnlyDetails {
-		t.Fatalf("reject details = %q, want %q", rejects[0].Details, builtinPolicyOnlyDetails)
-	}
-	if rejects[0].Scope != reject.ScopeOrder {
-		t.Fatalf("reject scope = %v, want %v", rejects[0].Scope, reject.ScopeOrder)
-	}
-}
-
-func assertPanicContains(t *testing.T, want string, fn func()) {
-	t.Helper()
+	const want = "built-in policy is already closed"
 
 	defer func() {
 		recovered := recover()
@@ -574,6 +494,15 @@ func mustPrice(t *testing.T, source string) param.Price {
 		t.Fatalf("NewPriceFromString(%q) error = %v", source, err)
 	}
 	return value
+}
+
+func mustPolicyAsset(t *testing.T, value string) param.Asset {
+	t.Helper()
+	asset, err := param.NewAsset(value)
+	if err != nil {
+		t.Fatalf("NewAsset(%q) error = %v", value, err)
+	}
+	return asset
 }
 
 func mustQuantity(t *testing.T, source string) param.Quantity {

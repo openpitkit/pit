@@ -33,7 +33,7 @@ type orderFixture struct {
 	side         param.Side
 	positionSide param.PositionSide
 	asset        param.Asset
-	leverage     native.ParamLeverage
+	leverage     param.Leverage
 }
 
 func TestOrderLifecycle(t *testing.T) {
@@ -117,11 +117,11 @@ func TestOrderLifecycle(t *testing.T) {
 	assertOptionalBoolUnset(t, marginView.AutoBorrow())
 
 	marginView.SetLeverage(fixture.leverage)
-	if got := marginView.Leverage(); got != fixture.leverage {
+	if got := marginView.Leverage(); !got.IsSet() || got.MustGet() != fixture.leverage {
 		t.Fatalf("OrderMarginView.Leverage() = %v, want %v", got, fixture.leverage)
 	}
 	marginView.UnsetLeverage()
-	if got := marginView.Leverage(); got != native.ParamLeverageNotSet {
+	if got := marginView.Leverage(); got.IsSet() {
 		t.Fatalf("OrderMarginView.Leverage() = %v, want %v", got, native.ParamLeverageNotSet)
 	}
 
@@ -138,7 +138,7 @@ func TestOrderFromValuesSetValuesAndReset(t *testing.T) {
 	fixture := newOrderFixture(t)
 
 	values := OrderValues{
-		Operation: optional.Some(NewOrderOperationFromValues(OrderOperationParams{
+		Operation: optional.Some(NewOrderOperationFromValues(OrderOperationValues{
 			TradeAmount: optional.Some(fixture.tradeAmount),
 			Instrument:  optional.Some(fixture.instrument),
 			Price:       optional.Some(fixture.price),
@@ -153,7 +153,7 @@ func TestOrderFromValuesSetValuesAndReset(t *testing.T) {
 		Margin: optional.Some(NewOrderMarginFromValues(OrderMarginValues{
 			CollateralAsset: optional.Some(fixture.asset),
 			AutoBorrow:      optional.BoolSome(true),
-			Leverage:        fixture.leverage,
+			Leverage:        optional.Some(fixture.leverage),
 		})),
 	}
 
@@ -171,11 +171,11 @@ func TestOrderFromValuesSetValuesAndReset(t *testing.T) {
 	assertOrderEmpty(t, o)
 }
 
-func TestOrderFromNativeRoundTrip(t *testing.T) {
+func TestOrderFromHandleRoundTrip(t *testing.T) {
 	fixture := newOrderFixture(t)
 
 	source := NewOrderFromValues(OrderValues{
-		Operation: optional.Some(NewOrderOperationFromValues(OrderOperationParams{
+		Operation: optional.Some(NewOrderOperationFromValues(OrderOperationValues{
 			TradeAmount: optional.Some(fixture.tradeAmount),
 			Instrument:  optional.Some(fixture.instrument),
 			Price:       optional.Some(fixture.price),
@@ -190,11 +190,11 @@ func TestOrderFromNativeRoundTrip(t *testing.T) {
 		Margin: optional.Some(NewOrderMarginFromValues(OrderMarginValues{
 			CollateralAsset: optional.Some(fixture.asset),
 			AutoBorrow:      optional.BoolSome(true),
-			Leverage:        fixture.leverage,
+			Leverage:        optional.Some(fixture.leverage),
 		})),
 	})
 
-	roundTripped := NewOrderFromNative(source.Native())
+	roundTripped := NewOrderFromHandle(source.Handle())
 	assertOrderEquivalent(t, source, roundTripped)
 
 	engineOrder := source.EngineOrder()
@@ -291,7 +291,7 @@ func TestOrderOperationFieldRoundTrip(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.name, func(*testing.T) {
 			tc.set(&op)
 			tc.assert(op)
 			tc.unset(&op)
@@ -299,7 +299,7 @@ func TestOrderOperationFieldRoundTrip(t *testing.T) {
 		})
 	}
 
-	op.SetValues(OrderOperationParams{
+	op.SetValues(OrderOperationValues{
 		TradeAmount: optional.Some(fixture.tradeAmount),
 		Instrument:  optional.Some(fixture.instrument),
 		Price:       optional.Some(fixture.price),
@@ -361,18 +361,18 @@ func TestOrderMarginFieldRoundTrip(t *testing.T) {
 	assertOptionalBoolUnset(t, margin.AutoBorrow())
 
 	margin.SetLeverage(fixture.leverage)
-	if got := margin.Leverage(); got != fixture.leverage {
+	if got := margin.Leverage(); !got.IsSet() || got.MustGet() != fixture.leverage {
 		t.Fatalf("OrderMargin.Leverage() = %v, want %v", got, fixture.leverage)
 	}
 	margin.UnsetLeverage()
-	if got := margin.Leverage(); got != native.ParamLeverageNotSet {
+	if got := margin.Leverage(); got.IsSet() {
 		t.Fatalf("OrderMargin.Leverage() = %v, want %v", got, native.ParamLeverageNotSet)
 	}
 
 	margin.SetValues(OrderMarginValues{
 		CollateralAsset: optional.Some(fixture.asset),
 		AutoBorrow:      optional.BoolSome(true),
-		Leverage:        fixture.leverage,
+		Leverage:        optional.Some(fixture.leverage),
 	})
 	assertOrderMarginMatchesFixture(t, margin, fixture)
 	assertOrderMarginValuesMatchFixture(t, margin.Values(), fixture)

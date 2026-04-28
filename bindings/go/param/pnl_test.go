@@ -44,8 +44,8 @@ func TestPnlFromString(t *testing.T) {
 		{name: "invalid", input: "pnl", wantError: true},
 	}
 
-	for _, tt := range tests {
-		tt := tt
+	for _, tt := range tests { //nolint:copyloopvar
+		tt := tt //nolint:copyloopvar
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -79,8 +79,8 @@ func TestPnlFromIntAndUint(t *testing.T) {
 		{name: "zero", input: 0, want: "0"},
 		{name: "positive", input: 7, want: "7"},
 	}
-	for _, tt := range intTests {
-		tt := tt
+	for _, tt := range intTests { //nolint:copyloopvar
+		tt := tt //nolint:copyloopvar
 		t.Run("int-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -102,8 +102,8 @@ func TestPnlFromIntAndUint(t *testing.T) {
 		{name: "zero", input: 0, want: "0"},
 		{name: "positive", input: 7, want: "7"},
 	}
-	for _, tt := range uintTests {
-		tt := tt
+	for _, tt := range uintTests { //nolint:copyloopvar
+		tt := tt //nolint:copyloopvar
 		t.Run("uint-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -129,8 +129,8 @@ func TestPnlFromFloat(t *testing.T) {
 		t.Fatalf("String() = %q, want %q", got, "12.5")
 	}
 
-	for _, input := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
-		input := input
+	for _, input := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} { //nolint:copyloopvar
+		input := input //nolint:copyloopvar
 		t.Run("invalid", func(t *testing.T) {
 			t.Parallel()
 
@@ -215,13 +215,13 @@ func TestPnlRoundedConstructors(t *testing.T) {
 		},
 	}
 
-	for _, ctor := range constructors {
-		ctor := ctor
+	for _, ctor := range constructors { //nolint:copyloopvar
+		ctor := ctor //nolint:copyloopvar
 		t.Run(ctor.name, func(t *testing.T) {
 			t.Parallel()
 
-			for _, tc := range strategyCases {
-				tc := tc
+			for _, tc := range strategyCases { //nolint:copyloopvar
+				tc := tc //nolint:copyloopvar
 				t.Run(tc.name, func(t *testing.T) {
 					t.Parallel()
 
@@ -238,16 +238,16 @@ func TestPnlRoundedConstructors(t *testing.T) {
 	}
 }
 
-func TestNewPnlOptionFromNative(t *testing.T) {
+func TestNewPnlOptionFromHandle(t *testing.T) {
 	t.Parallel()
 
-	unset := NewPnlOptionFromNative(native.ParamPnlOptional{})
+	unset := NewPnlOptionFromHandle(native.ParamPnlOptional{})
 	if unset.IsSet() {
 		t.Fatal("unset native pnl should map to empty option")
 	}
 
 	expected := mustPnlValue(t, pnlCanonicalValue)
-	set := NewPnlOptionFromNative(makeNativePnlOptional(expected))
+	set := NewPnlOptionFromHandle(makeNativePnlOptional(expected))
 	got, ok := set.Get()
 	if !ok {
 		t.Fatal("set native pnl should map to present option")
@@ -261,7 +261,7 @@ func TestNewPnlFromFee(t *testing.T) {
 	t.Parallel()
 
 	fee := newFeeOrPanic(NewFeeFromString("1.25"))
-	value := NewPnlFromFee(fee)
+	value := newPnlOrPanic(NewPnlFromFee(fee))
 	if got := value.String(); got != "-1.25" {
 		t.Fatalf("NewPnlFromFee() = %q, want %q", got, "-1.25")
 	}
@@ -276,9 +276,9 @@ func TestPnlAccessors(t *testing.T) {
 		t.Fatalf("Decimal() = %s, want %s", got.String(), wantDecimal.String())
 	}
 
-	roundTrip := NewPnlFromNative(value.Native())
+	roundTrip := NewPnlFromHandle(value.Handle())
 	if !roundTrip.Equal(value) {
-		t.Fatalf("NewPnlFromNative(Native()) = %v, want %v", roundTrip, value)
+		t.Fatalf("NewPnlFromHandle(Handle()) = %v, want %v", roundTrip, value)
 	}
 
 	if got := value.String(); got != pnlCanonicalValue {
@@ -312,8 +312,8 @@ func TestPnlIsZeroEqualCompare(t *testing.T) {
 	b := mustPnlValue(t, "0")
 	c := mustPnlValue(t, "3")
 
-	if a.Compare(a) != 0 {
-		t.Fatalf("reflexive compare = %d, want 0", a.Compare(a))
+	if a.Compare(a) != 0 { //nolint:gocritic
+		t.Fatalf("reflexive compare = %d, want 0", a.Compare(a)) //nolint:gocritic
 	}
 	if !(a.Compare(b) < 0 && b.Compare(c) < 0 && a.Compare(c) < 0) {
 		t.Fatal("transitive compare contract violated")
@@ -475,12 +475,12 @@ func TestPnlToCashFlowAndPositionSize(t *testing.T) {
 	t.Parallel()
 
 	value := mustPnlValue(t, "2.5")
-	cashFlow := value.CashFlow()
+	cashFlow := newCashFlowOrPanic(value.CashFlow())
 	if got := cashFlow.String(); got != "2.5" {
 		t.Fatalf("CashFlow() = %q, want %q", got, "2.5")
 	}
 
-	positionSize := value.PositionSize()
+	positionSize := newPositionSizeOrPanic(value.PositionSize())
 	if got := positionSize.String(); got != "2.5" {
 		t.Fatalf("PositionSize() = %q, want %q", got, "2.5")
 	}
@@ -505,7 +505,7 @@ func makeNativePnlOptional(value Pnl) native.ParamPnlOptional {
 		IsSet bool
 	}
 
-	layout := pnlOptionalLayout{Value: value.Native(), IsSet: true}
+	layout := pnlOptionalLayout{Value: value.Handle(), IsSet: true}
 	return *(*native.ParamPnlOptional)(unsafe.Pointer(&layout))
 }
 

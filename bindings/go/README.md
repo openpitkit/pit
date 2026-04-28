@@ -56,9 +56,9 @@ go get go.openpit.dev/openpit
 The engine evaluates an order through a deterministic pre-trade pipeline:
 
 - `engine.StartPreTrade(order)` runs start-stage policies; returns
-  `(*pretrade.Request, reject.List, error)`
+  `(*pretrade.Request, []reject.Reject, error)`
 - `request.Execute()` runs main-stage policies; returns
-  `(*pretrade.Reservation, reject.List, error)`
+  `(*pretrade.Reservation, []reject.Reject, error)`
 - `reservation.Commit()` applies reserved state
 - `reservation.Close()` rolls back any uncommitted reservation automatically
 - `engine.ExecutePreTrade(order)` is a shortcut that composes both stages
@@ -108,7 +108,10 @@ import (
 )
 
 func main() {
- usd := param.NewAsset("USD")
+ usd, err := param.NewAsset("USD")
+ if err != nil {
+  log.Fatal(err)
+ }
 
  barrier, err := param.NewPnlFromString("1000")
  if err != nil {
@@ -152,7 +155,7 @@ func main() {
  if err != nil {
   log.Fatal(err)
  }
- builder.CheckPreTradeStartPolicy(
+ builder.BuiltinCheckPreTradeStartPolicy(
   policies.NewOrderValidation(),
   pnlPolicy,
   policies.NewRateLimitPolicy(100, 1),
@@ -167,7 +170,11 @@ func main() {
  // 3. Check an order.
  order := model.NewOrder()
  op := order.EnsureOperationView()
- op.SetInstrument(param.NewInstrument(param.NewAsset("AAPL"), usd))
+ aapl, err := param.NewAsset("AAPL")
+ if err != nil {
+  log.Fatal(err)
+ }
+ op.SetInstrument(param.NewInstrument(aapl, usd))
  op.SetAccountID(param.NewAccountIDFromInt(99224416))
  op.SetSide(param.SideBuy)
  price, _ := param.NewPriceFromString("185")
@@ -215,7 +222,7 @@ func main() {
  // 7. The order goes to the venue and returns with an execution report.
  report := model.NewExecutionReport()
  reportOp := model.NewExecutionReportOperation()
- reportOp.SetInstrument(param.NewInstrument(param.NewAsset("AAPL"), usd))
+ reportOp.SetInstrument(param.NewInstrument(aapl, usd))
  reportOp.SetAccountID(param.NewAccountIDFromInt(99224416))
  reportOp.SetSide(param.SideBuy)
  report.SetOperation(reportOp)
@@ -244,7 +251,7 @@ func main() {
 ## Errors
 
 Policy rejects from `engine.StartPreTrade()` and `request.Execute()` are
-returned as the second return value (`reject.List`). A non-nil list means the
+returned as the second return value (`[]reject.Reject`). A non-nil list means the
 request was rejected; a nil list means the stage passed.
 
 Infrastructure failures and API misuse are returned as the third return value

@@ -268,14 +268,14 @@ type clientPayloadTestPolicy struct {
 
 func (p *clientPayloadTestPolicy) Close() { p.closeCalls++ }
 
-func (p *clientPayloadTestPolicy) Name() string {
+func (clientPayloadTestPolicy) Name() string {
 	return "client-payload-test"
 }
 
 func (p *clientPayloadTestPolicy) CheckPreTradeStart(
 	_ Context,
 	order clientPayloadTestOrder,
-) reject.List {
+) []reject.Reject {
 	p.order = order
 	return nil
 }
@@ -284,7 +284,7 @@ func (p *clientPayloadTestPolicy) PerformPreTradeCheck(
 	_ Context,
 	order clientPayloadTestOrder,
 	_ tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	p.order = order
 	return nil
 }
@@ -297,29 +297,29 @@ func (p *clientPayloadTestPolicy) ApplyExecutionReport(report clientPayloadTestR
 func orderWithPayload(t *testing.T, order clientPayloadTestOrder) model.Order {
 	t.Helper()
 
-	nativeOrder := order.EngineOrder().Native()
+	nativeOrder := order.EngineOrder().Handle()
 	handle := cgo.NewHandle(order)
 	t.Cleanup(handle.Delete)
 	native.OrderSetUserData(&nativeOrder, callback.NewUserDataFromHandle(handle))
-	return model.NewOrderFromNative(nativeOrder)
+	return model.NewOrderFromHandle(nativeOrder)
 }
 
 func reportWithPayload(t *testing.T, report clientPayloadTestReport) model.ExecutionReport {
 	t.Helper()
 
-	nativeReport := report.EngineExecutionReport().Native()
+	nativeReport := report.EngineExecutionReport().Handle()
 	handle := cgo.NewHandle(report)
 	t.Cleanup(handle.Delete)
 	native.ExecutionReportSetUserData(&nativeReport, callback.NewUserDataFromHandle(handle))
-	return model.NewExecutionReportFromNative(nativeReport)
+	return model.NewExecutionReportFromHandle(nativeReport)
 }
 
 func reportWithAnyPayload(t *testing.T, payload any) model.ExecutionReport {
 	t.Helper()
 
-	nativeReport := model.NewExecutionReport().Native()
+	nativeReport := model.NewExecutionReport().Handle()
 	handle := cgo.NewHandle(payload)
 	t.Cleanup(handle.Delete)
 	native.ExecutionReportSetUserData(&nativeReport, callback.NewUserDataFromHandle(handle))
-	return model.NewExecutionReportFromNative(nativeReport)
+	return model.NewExecutionReportFromHandle(nativeReport)
 }

@@ -28,7 +28,10 @@ import (
 // TestReadmeQuickstart mirrors the Usage example in bindings/go/README.md.
 // Keep both in sync.
 func TestReadmeQuickstart(t *testing.T) {
-	usd := param.NewAsset("USD")
+	usd, err := param.NewAsset("USD")
+	if err != nil {
+		t.Fatalf("NewAsset(USD) error = %v", err)
+	}
 
 	barrier, err := param.NewPnlFromString("1000")
 	if err != nil {
@@ -68,7 +71,7 @@ func TestReadmeQuickstart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngineBuilder() error = %v", err)
 	}
-	builder.CheckPreTradeStartPolicy(
+	builder.BuiltinCheckPreTradeStartPolicy(
 		policies.NewOrderValidation(),
 		pnlPolicy,
 		policies.NewRateLimitPolicy(100, 1),
@@ -83,7 +86,11 @@ func TestReadmeQuickstart(t *testing.T) {
 	// 3. Check an order.
 	order := model.NewOrder()
 	op := order.EnsureOperationView()
-	op.SetInstrument(param.NewInstrument(param.NewAsset("AAPL"), usd))
+	aapl, err := param.NewAsset("AAPL")
+	if err != nil {
+		t.Fatalf("NewAsset(AAPL) error = %v", err)
+	}
+	op.SetInstrument(param.NewInstrument(aapl, usd))
 	op.SetAccountID(param.NewAccountIDFromInt(99224416))
 	op.SetSide(param.SideBuy)
 	price, _ := param.NewPriceFromString("185")
@@ -119,7 +126,7 @@ func TestReadmeQuickstart(t *testing.T) {
 	// 7. Apply execution report.
 	report := model.NewExecutionReport()
 	reportOp := model.NewExecutionReportOperation()
-	reportOp.SetInstrument(param.NewInstrument(param.NewAsset("AAPL"), usd))
+	reportOp.SetInstrument(param.NewInstrument(aapl, usd))
 	reportOp.SetAccountID(param.NewAccountIDFromInt(99224416))
 	reportOp.SetSide(param.SideBuy)
 	report.SetOperation(reportOp)

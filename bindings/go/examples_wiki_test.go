@@ -43,14 +43,14 @@ type wikiStrategyReport struct {
 
 type wikiStrategyTagPolicy struct{}
 
-func (p *wikiStrategyTagPolicy) Close() {}
+func (wikiStrategyTagPolicy) Close() {}
 
-func (p *wikiStrategyTagPolicy) Name() string { return "StrategyTagPolicy" }
+func (wikiStrategyTagPolicy) Name() string { return "StrategyTagPolicy" }
 
 func (p *wikiStrategyTagPolicy) CheckPreTradeStart(
 	_ pretrade.Context,
 	order wikiStrategyOrder,
-) reject.List {
+) []reject.Reject {
 	if order.StrategyTag == "blocked" {
 		return reject.NewSingleItemList(
 			reject.CodeComplianceRestriction,
@@ -63,18 +63,84 @@ func (p *wikiStrategyTagPolicy) CheckPreTradeStart(
 	return nil
 }
 
-func (p *wikiStrategyTagPolicy) ApplyExecutionReport(wikiStrategyReport) bool {
+func (wikiStrategyTagPolicy) ApplyExecutionReport(wikiStrategyReport) bool {
 	return false
 }
 
 // --- Shared helpers ---
+
+// Used in: pit.wiki/Domain-Types.md — Create Validated Values.
+// Keep this example synced with the wiki snippet when constructor behavior changes.
+func TestExampleWikiDomainTypesCreateValidatedValues(t *testing.T) {
+	asset, err := param.NewAsset("AAPL")
+	if err != nil {
+		t.Fatalf("NewAsset(AAPL) error = %v", err)
+	}
+	quantity, err := param.NewQuantityFromString("10.5")
+	if err != nil {
+		t.Fatalf("NewQuantityFromString(10.5) error = %v", err)
+	}
+	price, err := param.NewPriceFromString("185")
+	if err != nil {
+		t.Fatalf("NewPriceFromString(185) error = %v", err)
+	}
+	pnl, err := param.NewPnlFromString("-12.5")
+	if err != nil {
+		t.Fatalf("NewPnlFromString(-12.5) error = %v", err)
+	}
+
+	if got := asset.String(); got != "AAPL" {
+		t.Fatalf("asset.String() = %q, want %q", got, "AAPL")
+	}
+	if got := quantity.String(); got != "10.5" {
+		t.Fatalf("quantity.String() = %q, want %q", got, "10.5")
+	}
+	if got := price.String(); got != "185" {
+		t.Fatalf("price.String() = %q, want %q", got, "185")
+	}
+	if got := pnl.String(); got != "-12.5" {
+		t.Fatalf("pnl.String() = %q, want %q", got, "-12.5")
+	}
+}
+
+// Used in: pit.wiki/Domain-Types.md — Create Validated Values.
+// Keep this example synced with wiki snippets when constructor behavior changes.
+func TestExampleWikiDomainTypesAssetValidationError(t *testing.T) {
+	_, err := param.NewAsset("  ")
+	if err == nil {
+		t.Fatal("NewAsset(empty) error = nil, want ErrAssetEmpty")
+	}
+	if err != param.ErrAssetEmpty {
+		t.Fatalf("NewAsset(empty) error = %v, want %v", err, param.ErrAssetEmpty)
+	}
+}
+
+// Used in: pit.wiki/Domain-Types.md — Account Identifiers.
+// Keep this example synced with wiki snippets when constructor behavior changes.
+func TestExampleWikiDomainTypesAccountIDValidationError(t *testing.T) {
+	_, err := param.NewAccountIDFromString("  ")
+	if err == nil {
+		t.Fatal("NewAccountIDFromString(empty) error = nil, want ErrAccountIDEmpty")
+	}
+	if err != param.ErrAccountIDEmpty {
+		t.Fatalf("NewAccountIDFromString(empty) error = %v, want %v", err, param.ErrAccountIDEmpty)
+	}
+}
 
 func wikiExampleOrder(t *testing.T, quantity, price string) model.Order {
 	t.Helper()
 
 	order := model.NewOrder()
 	op := order.EnsureOperationView()
-	op.SetInstrument(param.NewInstrument(param.NewAsset("AAPL"), param.NewAsset("USD")))
+	aapl, err := param.NewAsset("AAPL")
+	if err != nil {
+		t.Fatalf("NewAsset(AAPL) error = %v", err)
+	}
+	usd, err := param.NewAsset("USD")
+	if err != nil {
+		t.Fatalf("NewAsset(USD) error = %v", err)
+	}
+	op.SetInstrument(param.NewInstrument(aapl, usd))
 	op.SetAccountID(param.NewAccountIDFromInt(99224416))
 	op.SetSide(param.SideBuy)
 
@@ -96,7 +162,15 @@ func wikiExampleReport(t *testing.T, pnlStr, feeStr string) model.ExecutionRepor
 
 	report := model.NewExecutionReport()
 	op := model.NewExecutionReportOperation()
-	op.SetInstrument(param.NewInstrument(param.NewAsset("AAPL"), param.NewAsset("USD")))
+	aapl, err := param.NewAsset("AAPL")
+	if err != nil {
+		t.Fatalf("NewAsset(AAPL) error = %v", err)
+	}
+	usd, err := param.NewAsset("USD")
+	if err != nil {
+		t.Fatalf("NewAsset(USD) error = %v", err)
+	}
+	op.SetInstrument(param.NewInstrument(aapl, usd))
 	op.SetAccountID(param.NewAccountIDFromInt(99224416))
 	op.SetSide(param.SideBuy)
 	report.SetOperation(op)
@@ -116,14 +190,14 @@ func wikiExampleReport(t *testing.T, pnlStr, feeStr string) model.ExecutionRepor
 	return report
 }
 
-func wikiExampleEngine(t *testing.T, startPolicies ...pretrade.CheckPreTradeStartPolicy) *Engine {
+func wikiExampleEngine(t *testing.T, startPolicies ...pretrade.BuiltinPolicy) *Engine {
 	t.Helper()
 
 	builder, err := NewEngineBuilder()
 	if err != nil {
 		t.Fatalf("NewEngineBuilder() error = %v", err)
 	}
-	builder.CheckPreTradeStartPolicy(startPolicies...)
+	builder.BuiltinCheckPreTradeStartPolicy(startPolicies...)
 	engine, err := builder.Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -138,15 +212,15 @@ type wikiNotionalCapPolicy struct {
 	MaxAbsNotional param.Volume
 }
 
-func (p *wikiNotionalCapPolicy) Close() {}
+func (wikiNotionalCapPolicy) Close() {}
 
-func (p *wikiNotionalCapPolicy) Name() string { return "NotionalCapPolicy" }
+func (wikiNotionalCapPolicy) Name() string { return "NotionalCapPolicy" }
 
 func (p *wikiNotionalCapPolicy) PerformPreTradeCheck(
 	_ pretrade.Context,
 	order model.Order,
 	_ tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	operation, ok := order.Operation().Get()
 	if !ok {
 		return reject.NewSingleItemList(
@@ -212,7 +286,7 @@ func (p *wikiNotionalCapPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (p *wikiNotionalCapPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
+func (wikiNotionalCapPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
 	return false
 }
 
@@ -223,15 +297,15 @@ type wikiReserveThenValidatePolicy struct {
 	limit    param.Volume
 }
 
-func (p *wikiReserveThenValidatePolicy) Close() {}
+func (wikiReserveThenValidatePolicy) Close() {}
 
-func (p *wikiReserveThenValidatePolicy) Name() string { return "ReserveThenValidatePolicy" }
+func (wikiReserveThenValidatePolicy) Name() string { return "ReserveThenValidatePolicy" }
 
 func (p *wikiReserveThenValidatePolicy) PerformPreTradeCheck(
 	_ pretrade.Context,
 	_ model.Order,
 	mutations tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	prevReserved := p.reserved
 	nextReserved, _ := param.NewVolumeFromString("100")
 	p.reserved = nextReserved
@@ -258,7 +332,7 @@ func (p *wikiReserveThenValidatePolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (p *wikiReserveThenValidatePolicy) ApplyExecutionReport(model.ExecutionReport) bool {
+func (wikiReserveThenValidatePolicy) ApplyExecutionReport(model.ExecutionReport) bool {
 	return false
 }
 
@@ -473,7 +547,10 @@ func TestExampleWikiPolicyRollbackSafety(t *testing.T) {
 
 // Used in: pit.wiki/Getting-Started.md — Build an Engine
 func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
-	usd := param.NewAsset("USD")
+	usd, err := param.NewAsset("USD")
+	if err != nil {
+		t.Fatalf("NewAsset(USD) error = %v", err)
+	}
 
 	barrier, err := param.NewPnlFromString("1000")
 	if err != nil {
@@ -511,7 +588,7 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngineBuilder() error = %v", err)
 	}
-	builder.CheckPreTradeStartPolicy(
+	builder.BuiltinCheckPreTradeStartPolicy(
 		policies.NewOrderValidation(),
 		pnlPolicy,
 		policies.NewRateLimitPolicy(100, 1),
@@ -525,7 +602,11 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 
 	order := model.NewOrder()
 	op := order.EnsureOperationView()
-	op.SetInstrument(param.NewInstrument(param.NewAsset("AAPL"), usd))
+	aapl, err := param.NewAsset("AAPL")
+	if err != nil {
+		t.Fatalf("NewAsset(AAPL) error = %v", err)
+	}
+	op.SetInstrument(param.NewInstrument(aapl, usd))
 	op.SetAccountID(param.NewAccountIDFromInt(99224416))
 	op.SetSide(param.SideBuy)
 	price, _ := param.NewPriceFromString("185")
@@ -555,7 +636,7 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 
 	report := model.NewExecutionReport()
 	reportOp := model.NewExecutionReportOperation()
-	reportOp.SetInstrument(param.NewInstrument(param.NewAsset("AAPL"), usd))
+	reportOp.SetInstrument(param.NewInstrument(aapl, usd))
 	reportOp.SetAccountID(param.NewAccountIDFromInt(99224416))
 	reportOp.SetSide(param.SideBuy)
 	report.SetOperation(reportOp)
@@ -676,6 +757,60 @@ func TestExampleWikiCustomGoModels(t *testing.T) {
 		t.Fatalf("Execute(allowed) error = %v", err)
 	}
 	request.Close()
+	if rejects != nil {
+		t.Fatalf("Execute(allowed) unexpected rejects: %v", rejects)
+	}
+	reservation.CommitAndClose()
+
+	// Blocked order must be rejected by the start stage.
+	blocked := wikiStrategyOrder{Order: model.NewOrder(), StrategyTag: "blocked"}
+	blockedRequest, blockedRejects, err := engine.StartPreTrade(blocked)
+	if err != nil {
+		t.Fatalf("StartPreTrade(blocked) error = %v", err)
+	}
+	if blockedRequest != nil {
+		blockedRequest.Close()
+	}
+	if blockedRejects == nil {
+		t.Fatal("StartPreTrade(blocked) rejects = nil, want non-nil")
+	}
+	if blockedRejects[0].Code != reject.CodeComplianceRestriction {
+		t.Fatalf(
+			"reject code = %v, want %v",
+			blockedRejects[0].Code, reject.CodeComplianceRestriction,
+		)
+	}
+}
+
+// Used in: pit.wiki/Custom-Go-Types.md — Example
+// Keep this example synced with the wiki snippet when the ClientEngine API changes.
+func TestExampleWikiCustomGoTypes(t *testing.T) {
+	builder, err := NewClientPreTradeEngineBuilder[wikiStrategyOrder, wikiStrategyReport]()
+	if err != nil {
+		t.Fatalf("NewClientPreTradeEngineBuilder() error = %v", err)
+	}
+	builder.CheckPreTradeStartPolicy(&wikiStrategyTagPolicy{})
+	engine, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	// Allowed order must pass both stages.
+	allowed := wikiStrategyOrder{Order: model.NewOrder(), StrategyTag: "alpha"}
+	request, rejects, err := engine.StartPreTrade(allowed)
+	if err != nil {
+		t.Fatalf("StartPreTrade(allowed) error = %v", err)
+	}
+	if rejects != nil {
+		t.Fatalf("StartPreTrade(allowed) unexpected rejects: %v", rejects)
+	}
+	defer request.Close()
+
+	reservation, rejects, err := request.Execute()
+	if err != nil {
+		t.Fatalf("Execute(allowed) error = %v", err)
+	}
 	if rejects != nil {
 		t.Fatalf("Execute(allowed) unexpected rejects: %v", rejects)
 	}

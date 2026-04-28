@@ -105,7 +105,7 @@ type clientPayloadTestPolicy struct {
 
 func (p *clientPayloadTestPolicy) Close() { p.closeCalls++ }
 
-func (p *clientPayloadTestPolicy) Name() string {
+func (clientPayloadTestPolicy) Name() string {
 	return "client-payload-test"
 }
 
@@ -114,7 +114,7 @@ func (p *clientPayloadTestPolicy) ApplyAccountAdjustment(
 	_ param.AccountID,
 	adjustment clientPayloadTestAdjustment,
 	_ tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	p.adjustment = adjustment
 	return nil
 }
@@ -162,7 +162,7 @@ func TestSafeAdjustmentPayloadReturnsFalseForInvalidHandlePointer(t *testing.T) 
 	native.AccountAdjustmentSetUserData(&nativeAdjustment, userData)
 
 	adjustment, ok := safeAdjustmentPayload[clientPayloadTestAdjustment](
-		model.NewAccountAdjustmentFromNative(nativeAdjustment),
+		model.NewAccountAdjustmentFromHandle(nativeAdjustment),
 	)
 	if ok {
 		t.Fatal("safeAdjustmentPayload() ok = true, want false")
@@ -178,12 +178,12 @@ func adjustmentWithPayload(
 ) model.AccountAdjustment {
 	t.Helper()
 
-	nativeAdjustment := adjustment.EngineAccountAdjustment().Native()
+	nativeAdjustment := adjustment.EngineAccountAdjustment().Handle()
 	handle := cgo.NewHandle(adjustment)
 	t.Cleanup(handle.Delete)
 	native.AccountAdjustmentSetUserData(
 		&nativeAdjustment,
 		callback.NewUserDataFromHandle(handle),
 	)
-	return model.NewAccountAdjustmentFromNative(nativeAdjustment)
+	return model.NewAccountAdjustmentFromHandle(nativeAdjustment)
 }

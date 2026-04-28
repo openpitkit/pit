@@ -27,10 +27,23 @@ import (
 //------------------------------------------------------------------------------
 // Order
 
-type Order struct{ value native.Order }
+type Order struct {
+	value  native.Order
+	retain orderFieldsRetain
+}
+
+// orderFieldsRetain keeps value objects alive while the C struct's like
+// PitStringView fields point to their C-heap buffers. For example, see
+// param/asset.go and internal/native/string.go for the full explanation.
+type orderFieldsRetain struct {
+	// Instrument from the order operation (holds underlying + settlement assets).
+	OperationInstrument param.Instrument
+	// Collateral asset from the order margin group.
+	MarginCollateralAsset param.Asset
+}
 
 func NewOrder() Order {
-	return NewOrderFromNative(native.NewOrder())
+	return NewOrderFromHandle(native.NewOrder())
 }
 
 type OrderValues struct {
@@ -45,12 +58,13 @@ func NewOrderFromValues(values OrderValues) Order {
 	return o
 }
 
-func NewOrderFromNative(value native.Order) Order {
+func NewOrderFromHandle(value native.Order) Order {
 	return Order{value: value}
 }
 
 func (o *Order) Reset() {
 	native.OrderReset(&o.value)
+	o.retain = orderFieldsRetain{}
 }
 
 func (o Order) Values() OrderValues {
@@ -91,15 +105,20 @@ func (o *Order) EnsureOperationView() OrderOperationView {
 	if !native.OrderOperationOptionalIsSet(*operation) {
 		native.OrderOperationOptionalSet(operation, native.NewOrderOperation())
 	}
-	return newOrderOperationView(native.OrderOperationOptionalGetView(operation))
+	return newOrderOperationView(
+		native.OrderOperationOptionalGetView(operation),
+		&o.retain.OperationInstrument,
+	)
 }
 
 func (o *Order) SetOperation(operation OrderOperation) {
 	native.OrderSetOrderOperation(&o.value, operation.value)
+	o.retain.OperationInstrument = operation.retainInstrument
 }
 
 func (o *Order) UnsetOperation() {
 	native.OrderUnsetOrderOperation(&o.value)
+	o.retain.OperationInstrument = param.Instrument{}
 }
 
 func (o Order) Position() optional.Option[OrderPosition] {
@@ -139,15 +158,20 @@ func (o *Order) EnsureMarginView() OrderMarginView {
 	if !native.OrderMarginOptionalIsSet(*margin) {
 		native.OrderMarginOptionalSet(margin, native.NewOrderMargin())
 	}
-	return newMarginView(native.OrderMarginOptionalGetView(margin))
+	return newMarginView(
+		native.OrderMarginOptionalGetView(margin),
+		&o.retain.MarginCollateralAsset,
+	)
 }
 
 func (o *Order) SetMargin(margin OrderMargin) {
 	native.OrderSetOrderMargin(&o.value, margin.value)
+	o.retain.MarginCollateralAsset = margin.retainCollateralAsset
 }
 
 func (o *Order) UnsetMargin() {
 	native.OrderUnsetOrderMargin(&o.value)
+	o.retain.MarginCollateralAsset = param.Asset{}
 }
 
 // EngineOrder returns this order as the standard engine order view.
@@ -155,20 +179,28 @@ func (o Order) EngineOrder() Order {
 	return o
 }
 
-func (o Order) Native() native.Order {
+func (o Order) Handle() native.Order {
 	return o.value
 }
 
 //------------------------------------------------------------------------------
 // OrderOperation
 
-type OrderOperation struct{ value native.OrderOperation }
+type OrderOperation struct {
+	value native.OrderOperation
+
+	// retainInstrument keeps the Instrument (and its two constituent Assets)
+	// alive while the C struct's PitStringView fields point to their C-heap
+	// buffers.  See param/asset.go for the full explanation of the retain
+	// pattern.
+	retainInstrument param.Instrument
+}
 
 func NewOrderOperation() OrderOperation {
 	return newOrderOperation(native.NewOrderOperation())
 }
 
-type OrderOperationParams struct {
+type OrderOperationValues struct {
 	TradeAmount optional.Option[param.TradeAmount]
 	Instrument  optional.Option[param.Instrument]
 	Price       optional.Option[param.Price]
@@ -176,7 +208,7 @@ type OrderOperationParams struct {
 	Side        optional.Option[param.Side]
 }
 
-func NewOrderOperationFromValues(values OrderOperationParams) OrderOperation {
+func NewOrderOperationFromValues(values OrderOperationValues) OrderOperation {
 	o := NewOrderOperation()
 	o.setValues(values)
 	return o
@@ -188,10 +220,11 @@ func newOrderOperation(v native.OrderOperation) OrderOperation {
 
 func (o *OrderOperation) Reset() {
 	native.OrderOperationReset(&o.value)
+	o.retainInstrument = param.Instrument{}
 }
 
-func (o OrderOperation) Values() OrderOperationParams {
-	return OrderOperationParams{
+func (o OrderOperation) Values() OrderOperationValues {
+	return OrderOperationValues{
 		TradeAmount: o.TradeAmount(),
 		Instrument:  o.Instrument(),
 		Price:       o.Price(),
@@ -200,12 +233,12 @@ func (o OrderOperation) Values() OrderOperationParams {
 	}
 }
 
-func (o *OrderOperation) SetValues(values OrderOperationParams) {
+func (o *OrderOperation) SetValues(values OrderOperationValues) {
 	o.Reset()
 	o.setValues(values)
 }
 
-func (o *OrderOperation) setValues(values OrderOperationParams) {
+func (o *OrderOperation) setValues(values OrderOperationValues) {
 	if value, ok := values.TradeAmount.Get(); ok {
 		o.SetTradeAmount(value)
 	}
@@ -224,11 +257,11 @@ func (o *OrderOperation) setValues(values OrderOperationParams) {
 }
 
 func (o OrderOperation) TradeAmount() optional.Option[param.TradeAmount] {
-	return param.NewTradeAmountFromNative(native.OrderOperationGetTradeAmount(o.value))
+	return param.NewTradeAmountFromHandle(native.OrderOperationGetTradeAmount(o.value))
 }
 
 func (o *OrderOperation) SetTradeAmount(value param.TradeAmount) {
-	native.OrderOperationSetTradeAmount(&o.value, value.Native())
+	native.OrderOperationSetTradeAmount(&o.value, value.Handle())
 }
 
 func (o *OrderOperation) UnsetTradeAmount() {
@@ -236,23 +269,25 @@ func (o *OrderOperation) UnsetTradeAmount() {
 }
 
 func (o OrderOperation) Instrument() optional.Option[param.Instrument] {
-	return param.NewInstrumentFromNative(native.OrderOperationGetInstrument(o.value))
+	return param.NewInstrumentFromHandle(native.OrderOperationGetInstrument(o.value))
 }
 
 func (o *OrderOperation) SetInstrument(instrument param.Instrument) {
-	native.OrderOperationSetInstrument(&o.value, instrument.Native())
+	native.OrderOperationSetInstrument(&o.value, instrument.Handle())
+	o.retainInstrument = instrument
 }
 
 func (o *OrderOperation) UnsetInstrument() {
 	native.OrderOperationUnsetInstrument(&o.value)
+	o.retainInstrument = param.Instrument{}
 }
 
 func (o OrderOperation) Price() optional.Option[param.Price] {
-	return param.NewPriceOptionFromNative(native.OrderOperationGetPrice(o.value))
+	return param.NewPriceOptionFromHandle(native.OrderOperationGetPrice(o.value))
 }
 
 func (o *OrderOperation) SetPrice(price param.Price) {
-	native.OrderOperationSetPrice(&o.value, price.Native())
+	native.OrderOperationSetPrice(&o.value, price.Handle())
 }
 
 func (o *OrderOperation) UnsetPrice() {
@@ -260,11 +295,11 @@ func (o *OrderOperation) UnsetPrice() {
 }
 
 func (o OrderOperation) AccountID() optional.Option[param.AccountID] {
-	return param.NewAccountIDOptionFromNative(native.OrderOperationGetAccountID(o.value))
+	return param.NewAccountIDOptionFromHandle(native.OrderOperationGetAccountID(o.value))
 }
 
 func (o *OrderOperation) SetAccountID(accountID param.AccountID) {
-	native.OrderOperationSetAccountID(&o.value, accountID.Native())
+	native.OrderOperationSetAccountID(&o.value, accountID.Handle())
 }
 
 func (o *OrderOperation) UnsetAccountID() {
@@ -272,85 +307,97 @@ func (o *OrderOperation) UnsetAccountID() {
 }
 
 func (o OrderOperation) Side() optional.Option[param.Side] {
-	return param.NewSideFromNative(native.OrderOperationGetSide(o.value))
+	return param.NewSideFromHandle(native.OrderOperationGetSide(o.value))
 }
 
 func (o *OrderOperation) SetSide(side param.Side) {
-	native.OrderOperationSetSide(&o.value, side.Native())
+	native.OrderOperationSetSide(&o.value, side.Handle())
 }
 
 func (o *OrderOperation) UnsetSide() {
 	native.OrderOperationUnsetSide(&o.value)
 }
 
-type OrderOperationView struct{ ref *native.OrderOperation }
+type OrderOperationView struct {
+	ref *native.OrderOperation
+	// retainInstrument points to the owning Order's retainOperationInstrument
+	// so that SetInstrument/UnsetInstrument on this view propagate retention
+	// to the parent automatically.
+	retainInstrument *param.Instrument
+}
 
-func newOrderOperationView(ref *native.OrderOperation) OrderOperationView {
-	return OrderOperationView{ref: ref}
+func newOrderOperationView(
+	ref *native.OrderOperation,
+	retainInstrument *param.Instrument,
+) OrderOperationView {
+	return OrderOperationView{ref: ref, retainInstrument: retainInstrument}
 }
 
 func (v *OrderOperationView) Reset() {
 	native.OrderOperationReset(v.ref)
+	*v.retainInstrument = param.Instrument{}
 }
 
-func (o OrderOperationView) TradeAmount() optional.Option[param.TradeAmount] {
-	return param.NewTradeAmountFromNative(native.OrderOperationGetTradeAmount(*o.ref))
+func (v OrderOperationView) TradeAmount() optional.Option[param.TradeAmount] {
+	return param.NewTradeAmountFromHandle(native.OrderOperationGetTradeAmount(*v.ref))
 }
 
-func (o *OrderOperationView) SetTradeAmount(value param.TradeAmount) {
-	native.OrderOperationSetTradeAmount(o.ref, value.Native())
+func (v *OrderOperationView) SetTradeAmount(value param.TradeAmount) {
+	native.OrderOperationSetTradeAmount(v.ref, value.Handle())
 }
 
-func (o *OrderOperationView) UnsetTradeAmount() {
-	native.OrderOperationUnsetTradeAmount(o.ref)
+func (v *OrderOperationView) UnsetTradeAmount() {
+	native.OrderOperationUnsetTradeAmount(v.ref)
 }
 
-func (o OrderOperationView) Instrument() optional.Option[param.Instrument] {
-	return param.NewInstrumentFromNative(native.OrderOperationGetInstrument(*o.ref))
+func (v OrderOperationView) Instrument() optional.Option[param.Instrument] {
+	return param.NewInstrumentFromHandle(native.OrderOperationGetInstrument(*v.ref))
 }
 
-func (o *OrderOperationView) SetInstrument(instrument param.Instrument) {
-	native.OrderOperationSetInstrument(o.ref, instrument.Native())
+func (v *OrderOperationView) SetInstrument(instrument param.Instrument) {
+	native.OrderOperationSetInstrument(v.ref, instrument.Handle())
+	*v.retainInstrument = instrument
 }
 
-func (o *OrderOperationView) UnsetInstrument() {
-	native.OrderOperationUnsetInstrument(o.ref)
+func (v *OrderOperationView) UnsetInstrument() {
+	native.OrderOperationUnsetInstrument(v.ref)
+	*v.retainInstrument = param.Instrument{}
 }
 
-func (o OrderOperationView) Price() optional.Option[param.Price] {
-	return param.NewPriceOptionFromNative(native.OrderOperationGetPrice(*o.ref))
+func (v OrderOperationView) Price() optional.Option[param.Price] {
+	return param.NewPriceOptionFromHandle(native.OrderOperationGetPrice(*v.ref))
 }
 
-func (o *OrderOperationView) SetPrice(price param.Price) {
-	native.OrderOperationSetPrice(o.ref, price.Native())
+func (v *OrderOperationView) SetPrice(price param.Price) {
+	native.OrderOperationSetPrice(v.ref, price.Handle())
 }
 
-func (o *OrderOperationView) UnsetPrice() {
-	native.OrderOperationUnsetPrice(o.ref)
+func (v *OrderOperationView) UnsetPrice() {
+	native.OrderOperationUnsetPrice(v.ref)
 }
 
-func (o OrderOperationView) AccountID() optional.Option[param.AccountID] {
-	return param.NewAccountIDOptionFromNative(native.OrderOperationGetAccountID(*o.ref))
+func (v OrderOperationView) AccountID() optional.Option[param.AccountID] {
+	return param.NewAccountIDOptionFromHandle(native.OrderOperationGetAccountID(*v.ref))
 }
 
-func (o *OrderOperationView) SetAccountID(accountID param.AccountID) {
-	native.OrderOperationSetAccountID(o.ref, accountID.Native())
+func (v *OrderOperationView) SetAccountID(accountID param.AccountID) {
+	native.OrderOperationSetAccountID(v.ref, accountID.Handle())
 }
 
-func (o *OrderOperationView) UnsetAccountID() {
-	native.OrderOperationUnsetAccountID(o.ref)
+func (v *OrderOperationView) UnsetAccountID() {
+	native.OrderOperationUnsetAccountID(v.ref)
 }
 
-func (o OrderOperationView) Side() optional.Option[param.Side] {
-	return param.NewSideFromNative(native.OrderOperationGetSide(*o.ref))
+func (v OrderOperationView) Side() optional.Option[param.Side] {
+	return param.NewSideFromHandle(native.OrderOperationGetSide(*v.ref))
 }
 
-func (o *OrderOperationView) SetSide(side param.Side) {
-	native.OrderOperationSetSide(o.ref, side.Native())
+func (v *OrderOperationView) SetSide(side param.Side) {
+	native.OrderOperationSetSide(v.ref, side.Handle())
 }
 
-func (o *OrderOperationView) UnsetSide() {
-	native.OrderOperationUnsetSide(o.ref)
+func (v *OrderOperationView) UnsetSide() {
+	native.OrderOperationUnsetSide(v.ref)
 }
 
 //------------------------------------------------------------------------------
@@ -408,7 +455,7 @@ func (p *OrderPosition) setValues(values OrderPositionValues) {
 }
 
 func (p OrderPosition) Side() optional.Option[param.PositionSide] {
-	return param.NewPositionSideFromNative(native.OrderPositionGetSide(p.value))
+	return param.NewPositionSideFromHandle(native.OrderPositionGetSide(p.value))
 }
 
 func (p *OrderPosition) SetSide(side param.PositionSide) {
@@ -453,46 +500,53 @@ func (v *OrderPositionView) Reset() {
 	native.OrderPositionReset(v.ref)
 }
 
-func (p OrderPositionView) Side() optional.Option[param.PositionSide] {
-	return param.NewPositionSideFromNative(native.OrderPositionGetSide(*p.ref))
+func (v OrderPositionView) Side() optional.Option[param.PositionSide] {
+	return param.NewPositionSideFromHandle(native.OrderPositionGetSide(*v.ref))
 }
 
-func (p *OrderPositionView) SetSide(side param.PositionSide) {
-	native.OrderPositionSetSide(p.ref, native.ParamPositionSide(side))
+func (v *OrderPositionView) SetSide(side param.PositionSide) {
+	native.OrderPositionSetSide(v.ref, native.ParamPositionSide(side))
 }
 
-func (p *OrderPositionView) UnsetSide() {
-	native.OrderPositionUnsetSide(p.ref)
+func (v *OrderPositionView) UnsetSide() {
+	native.OrderPositionUnsetSide(v.ref)
 }
 
-func (p OrderPositionView) ReduceOnly() optional.Bool {
-	return convert.NewBoolOptionFromNative(native.OrderPositionGetReduceOnly(*p.ref))
+func (v OrderPositionView) ReduceOnly() optional.Bool {
+	return convert.NewBoolOptionFromNative(native.OrderPositionGetReduceOnly(*v.ref))
 }
 
-func (p *OrderPositionView) SetReduceOnly(reduceOnly bool) {
-	native.OrderPositionSetReduceOnly(p.ref, convert.NewNativeTriBool(reduceOnly))
+func (v *OrderPositionView) SetReduceOnly(reduceOnly bool) {
+	native.OrderPositionSetReduceOnly(v.ref, convert.NewNativeTriBool(reduceOnly))
 }
 
-func (p *OrderPositionView) UnsetReduceOnly() {
-	native.OrderPositionUnsetReduceOnly(p.ref)
+func (v *OrderPositionView) UnsetReduceOnly() {
+	native.OrderPositionUnsetReduceOnly(v.ref)
 }
 
-func (p OrderPositionView) ClosePosition() optional.Bool {
-	return convert.NewBoolOptionFromNative(native.OrderPositionGetClosePosition(*p.ref))
+func (v OrderPositionView) ClosePosition() optional.Bool {
+	return convert.NewBoolOptionFromNative(native.OrderPositionGetClosePosition(*v.ref))
 }
 
-func (p *OrderPositionView) SetClosePosition(closePosition bool) {
-	native.OrderPositionSetClosePosition(p.ref, convert.NewNativeTriBool(closePosition))
+func (v *OrderPositionView) SetClosePosition(closePosition bool) {
+	native.OrderPositionSetClosePosition(v.ref, convert.NewNativeTriBool(closePosition))
 }
 
-func (p *OrderPositionView) UnsetClosePosition() {
-	native.OrderPositionUnsetClosePosition(p.ref)
+func (v *OrderPositionView) UnsetClosePosition() {
+	native.OrderPositionUnsetClosePosition(v.ref)
 }
 
 //------------------------------------------------------------------------------
 // OrderMargin
 
-type OrderMargin struct{ value native.OrderMargin }
+type OrderMargin struct {
+	value native.OrderMargin
+
+	// retainCollateralAsset keeps the Asset alive while the C struct's
+	// PitStringView points to its C-heap buffer.  See param/asset.go for the
+	// full explanation of the retain pattern.
+	retainCollateralAsset param.Asset
+}
 
 func NewOrderMargin() OrderMargin {
 	return newOrderMargin(native.NewOrderMargin())
@@ -501,7 +555,7 @@ func NewOrderMargin() OrderMargin {
 type OrderMarginValues struct {
 	CollateralAsset optional.Option[param.Asset]
 	AutoBorrow      optional.Bool
-	Leverage        native.ParamLeverage
+	Leverage        optional.Option[param.Leverage]
 }
 
 func NewOrderMarginFromValues(values OrderMarginValues) OrderMargin {
@@ -516,6 +570,7 @@ func newOrderMargin(v native.OrderMargin) OrderMargin {
 
 func (m *OrderMargin) Reset() {
 	native.OrderMarginReset(&m.value)
+	m.retainCollateralAsset = param.Asset{}
 }
 
 func (m OrderMargin) Values() OrderMarginValues {
@@ -538,19 +593,23 @@ func (m *OrderMargin) setValues(values OrderMarginValues) {
 	if value, ok := values.AutoBorrow.Get(); ok {
 		m.SetAutoBorrow(value)
 	}
-	m.SetLeverage(values.Leverage)
+	if value, ok := values.Leverage.Get(); ok {
+		m.SetLeverage(value)
+	}
 }
 
 func (m OrderMargin) CollateralAsset() optional.Option[param.Asset] {
-	return param.NewAssetFromNative(native.OrderMarginGetCollateralAsset(m.value))
+	return param.NewAssetFromHandle(native.OrderMarginGetCollateralAsset(m.value))
 }
 
 func (m *OrderMargin) SetCollateralAsset(asset param.Asset) {
-	native.OrderMarginSetCollateralAsset(&m.value, asset.Native())
+	native.OrderMarginSetCollateralAsset(&m.value, asset.Handle())
+	m.retainCollateralAsset = asset
 }
 
 func (m *OrderMargin) UnsetCollateralAsset() {
 	native.OrderMarginUnsetCollateralAsset(&m.value)
+	m.retainCollateralAsset = param.Asset{}
 }
 
 func (m OrderMargin) AutoBorrow() optional.Bool {
@@ -565,62 +624,71 @@ func (m *OrderMargin) UnsetAutoBorrow() {
 	native.OrderMarginSetAutoBorrow(&m.value, native.TriBoolNotSet)
 }
 
-func (m OrderMargin) Leverage() native.ParamLeverage {
-	return native.OrderMarginGetLeverage(m.value)
+func (m OrderMargin) Leverage() optional.Option[param.Leverage] {
+	return param.NewLeverageOptionFromHandle(native.OrderMarginGetLeverage(m.value))
 }
 
-func (m *OrderMargin) SetLeverage(leverage native.ParamLeverage) {
-	native.OrderMarginSetLeverage(&m.value, leverage)
+func (m *OrderMargin) SetLeverage(leverage param.Leverage) {
+	native.OrderMarginSetLeverage(&m.value, leverage.Handle())
 }
 
 func (m *OrderMargin) UnsetLeverage() {
 	native.OrderMarginSetLeverage(&m.value, native.ParamLeverageNotSet)
 }
 
-type OrderMarginView struct{ ref *native.OrderMargin }
+type OrderMarginView struct {
+	ref *native.OrderMargin
+	// retainCollateralAsset points to the owning Order's
+	// retainMarginCollateralAsset field so that Set/Unset calls on this view
+	// propagate retention to the parent automatically.
+	retainCollateralAsset *param.Asset
+}
 
-func newMarginView(ref *native.OrderMargin) OrderMarginView {
-	return OrderMarginView{ref: ref}
+func newMarginView(ref *native.OrderMargin, retainCollateralAsset *param.Asset) OrderMarginView {
+	return OrderMarginView{ref: ref, retainCollateralAsset: retainCollateralAsset}
 }
 
 func (v *OrderMarginView) Reset() {
 	native.OrderMarginReset(v.ref)
+	*v.retainCollateralAsset = param.Asset{}
 }
 
-func (m OrderMarginView) CollateralAsset() optional.Option[param.Asset] {
-	return param.NewAssetFromNative(native.OrderMarginGetCollateralAsset(*m.ref))
+func (v OrderMarginView) CollateralAsset() optional.Option[param.Asset] {
+	return param.NewAssetFromHandle(native.OrderMarginGetCollateralAsset(*v.ref))
 }
 
-func (m *OrderMarginView) SetCollateralAsset(asset param.Asset) {
-	native.OrderMarginSetCollateralAsset(m.ref, asset.Native())
+func (v *OrderMarginView) SetCollateralAsset(asset param.Asset) {
+	native.OrderMarginSetCollateralAsset(v.ref, asset.Handle())
+	*v.retainCollateralAsset = asset
 }
 
-func (m *OrderMarginView) UnsetCollateralAsset() {
-	native.OrderMarginUnsetCollateralAsset(m.ref)
+func (v *OrderMarginView) UnsetCollateralAsset() {
+	native.OrderMarginUnsetCollateralAsset(v.ref)
+	*v.retainCollateralAsset = param.Asset{}
 }
 
-func (m OrderMarginView) AutoBorrow() optional.Bool {
-	return convert.NewBoolOptionFromNative(native.OrderMarginGetAutoBorrow(*m.ref))
+func (v OrderMarginView) AutoBorrow() optional.Bool {
+	return convert.NewBoolOptionFromNative(native.OrderMarginGetAutoBorrow(*v.ref))
 }
 
-func (m *OrderMarginView) SetAutoBorrow(autoBorrow bool) {
-	native.OrderMarginSetAutoBorrow(m.ref, convert.NewNativeTriBool(autoBorrow))
+func (v *OrderMarginView) SetAutoBorrow(autoBorrow bool) {
+	native.OrderMarginSetAutoBorrow(v.ref, convert.NewNativeTriBool(autoBorrow))
 }
 
-func (m *OrderMarginView) UnsetAutoBorrow() {
-	native.OrderMarginUnsetAutoBorrow(m.ref)
+func (v *OrderMarginView) UnsetAutoBorrow() {
+	native.OrderMarginUnsetAutoBorrow(v.ref)
 }
 
-func (m OrderMarginView) Leverage() native.ParamLeverage {
-	return native.OrderMarginGetLeverage(*m.ref)
+func (v OrderMarginView) Leverage() optional.Option[param.Leverage] {
+	return param.NewLeverageOptionFromHandle(native.OrderMarginGetLeverage(*v.ref))
 }
 
-func (m *OrderMarginView) SetLeverage(leverage native.ParamLeverage) {
-	native.OrderMarginSetLeverage(m.ref, leverage)
+func (v *OrderMarginView) SetLeverage(leverage param.Leverage) {
+	native.OrderMarginSetLeverage(v.ref, leverage.Handle())
 }
 
-func (m *OrderMarginView) UnsetLeverage() {
-	native.OrderMarginUnsetLeverage(m.ref)
+func (v *OrderMarginView) UnsetLeverage() {
+	native.OrderMarginUnsetLeverage(v.ref)
 }
 
 //------------------------------------------------------------------------------

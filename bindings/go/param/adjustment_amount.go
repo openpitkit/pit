@@ -45,7 +45,7 @@ func NewAbsoluteAdjustmentAmount(v PositionSize) AdjustmentAmount {
 	)
 }
 
-func NewAdjustmentAmountFromNative(
+func NewAdjustmentAmountFromHandle(
 	amount native.ParamAdjustmentAmount,
 ) optional.Option[AdjustmentAmount] {
 	if native.ParamAdjustmentAmountGetKind(amount) == native.ParamAdjustmentAmountKindNotSet {
@@ -70,17 +70,17 @@ func (a AdjustmentAmount) MustDelta() PositionSize {
 	if !a.IsDelta() {
 		panic("requested adjustment amount as delta, but it is not")
 	}
-	return NewPositionSizeFromNative(native.ParamAdjustmentAmountGetValue(a.native))
+	return NewPositionSizeFromHandle(native.ParamAdjustmentAmountGetValue(a.native))
 }
 
 func (a AdjustmentAmount) MustAbsolute() PositionSize {
 	if !a.IsAbsolute() {
 		panic("requested adjustment amount as absolute, but it is not")
 	}
-	return NewPositionSizeFromNative(native.ParamAdjustmentAmountGetValue(a.native))
+	return NewPositionSizeFromHandle(native.ParamAdjustmentAmountGetValue(a.native))
 }
 
-func (a AdjustmentAmount) Native() native.ParamAdjustmentAmount {
+func (a AdjustmentAmount) Handle() native.ParamAdjustmentAmount {
 	return a.native
 }
 

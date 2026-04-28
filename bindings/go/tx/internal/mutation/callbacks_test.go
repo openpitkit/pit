@@ -28,7 +28,7 @@ func TestNewCallbacksHandleIsNonNil(t *testing.T) {
 	}
 }
 
-func TestCallbacksCloseReleasesHandle(t *testing.T) {
+func TestCallbacksCloseReleasesHandle(*testing.T) {
 	c := NewCallbacks(func() {}, func() {})
 	// Close must not panic; the cgo runtime detects double-delete.
 	c.Close()
@@ -56,7 +56,7 @@ func TestRollbackCallbackIsInvoked(t *testing.T) {
 	}
 }
 
-func TestFreeCallbackReleasesHandle(t *testing.T) {
+func TestFreeCallbackReleasesHandle(*testing.T) {
 	// pitMutationFree calls Close() internally; do NOT register t.Cleanup(c.Close)
 	// to avoid a double-delete panic.
 	c := NewCallbacks(func() {}, func() {})

@@ -31,19 +31,19 @@ type fakePreTradePolicy struct {
 	name string
 }
 
-func (p *fakePreTradePolicy) Close() {}
+func (fakePreTradePolicy) Close() {}
 
-func (p *fakePreTradePolicy) Name() string { return p.name }
+func (p fakePreTradePolicy) Name() string { return p.name }
 
-func (p *fakePreTradePolicy) PerformPreTradeCheck(
+func (fakePreTradePolicy) PerformPreTradeCheck(
 	_ pretrade.Context,
 	_ model.Order,
 	_ tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	return nil
 }
 
-func (p *fakePreTradePolicy) ApplyExecutionReport(_ model.ExecutionReport) bool {
+func (fakePreTradePolicy) ApplyExecutionReport(_ model.ExecutionReport) bool {
 	return false
 }
 

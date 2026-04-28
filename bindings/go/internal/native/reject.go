@@ -93,7 +93,7 @@ func RejectListLen(list RejectList) int {
 
 func RejectListGet(list RejectList, index int) Reject {
 	var out Reject
-	if !C.pit_reject_list_get(list, C.size_t(index), &out) {
+	if !C.pit_reject_list_get(list, C.size_t(index), &out) { //nolint:gocritic
 		return Reject{}
 	}
 	return out

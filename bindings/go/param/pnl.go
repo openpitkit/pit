@@ -30,7 +30,7 @@ import (
 // a per-operation cost. For ultra-low-latency paths that need many
 // intermediate computations, prefer performing the math on primitive types
 // or a custom representation and cross into Pnl only once via
-// NewPnlFromString / NewPnlFromDecimal / NewPnlFromNative.
+// NewPnlFromString / NewPnlFromDecimal / NewPnlFromHandle.
 //
 // This cost exists because the SDK guarantees that the same input produces
 // bit-for-bit identical results across all language bindings (Rust, Go,
@@ -60,7 +60,7 @@ func NewPnlFromDecimal(v decimal.Decimal) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(nativeValue), nil
+	return NewPnlFromHandle(nativeValue), nil
 }
 
 func NewPnlFromString(v string) (Pnl, error) {
@@ -68,7 +68,7 @@ func NewPnlFromString(v string) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(nativeValue), nil
+	return NewPnlFromHandle(nativeValue), nil
 }
 
 func NewPnlFromInt(v int64) (Pnl, error) {
@@ -76,7 +76,7 @@ func NewPnlFromInt(v int64) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(nativeValue), nil
+	return NewPnlFromHandle(nativeValue), nil
 }
 
 func NewPnlFromUint(v uint64) (Pnl, error) {
@@ -84,7 +84,7 @@ func NewPnlFromUint(v uint64) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(nativeValue), nil
+	return NewPnlFromHandle(nativeValue), nil
 }
 
 // WARNING: float64 values are inherently imprecise. The same numeric literal
@@ -99,18 +99,18 @@ func NewPnlFromFloat(v float64) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(nativeValue), nil
+	return NewPnlFromHandle(nativeValue), nil
 }
 
-func NewPnlFromNative(v native.ParamPnl) Pnl {
+func NewPnlFromHandle(v native.ParamPnl) Pnl {
 	return Pnl{native: v}
 }
 
-func NewPnlOptionFromNative(v native.ParamPnlOptional) optional.Option[Pnl] {
+func NewPnlOptionFromHandle(v native.ParamPnlOptional) optional.Option[Pnl] {
 	if !native.ParamPnlOptionalIsSet(v) {
 		return optional.None[Pnl]()
 	}
-	return optional.Some(NewPnlFromNative(native.ParamPnlOptionalGet(v)))
+	return optional.Some(NewPnlFromHandle(native.ParamPnlOptionalGet(v)))
 }
 
 func NewPnlFromStringRounded(
@@ -122,7 +122,7 @@ func NewPnlFromStringRounded(
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(nativeValue), nil
+	return NewPnlFromHandle(nativeValue), nil
 }
 
 func NewPnlFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy) (Pnl, error) {
@@ -130,7 +130,7 @@ func NewPnlFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy) 
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(nativeValue), nil
+	return NewPnlFromHandle(nativeValue), nil
 }
 
 // NewPnlFromDecimalRounded converts a shopspring decimal to a rounded Pnl.
@@ -152,18 +152,22 @@ func NewPnlFromDecimalRounded(
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(nativeValue), nil
+	return NewPnlFromHandle(nativeValue), nil
 }
 
-func NewPnlFromFee(fee Fee) Pnl {
-	return NewPnlFromNative(newParamValueOrPanic(native.ParamPnlFromFee(fee.native)))
+func NewPnlFromFee(fee Fee) (Pnl, error) {
+	nativeValue, err := native.ParamPnlFromFee(fee.native)
+	if err != nil {
+		return Pnl{}, err
+	}
+	return NewPnlFromHandle(nativeValue), nil
 }
 
 func (v Pnl) Decimal() decimal.Decimal {
-	return newDecimalFromNative(native.ParamPnlGetDecimal(v.native))
+	return newDecimalFromHandle(native.ParamPnlGetDecimal(v.native))
 }
 
-func (v Pnl) Native() native.ParamPnl {
+func (v Pnl) Handle() native.ParamPnl {
 	return v.native
 }
 
@@ -175,22 +179,27 @@ func (v Pnl) Native() native.ParamPnl {
 // for parity and test convenience only; cross-platform determinism is NOT
 // guaranteed when construction goes through float64.
 func (v Pnl) Float() float64 {
+	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamPnlToF64(v.native))
 }
 
 func (v Pnl) String() string {
+	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamPnlToString(v.native))
 }
 
 func (v Pnl) IsZero() bool {
+	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamPnlIsZero(v.native))
 }
 
 func (v Pnl) Equal(other Pnl) bool {
+	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamPnlCompare(v.native, other.native)) == 0
 }
 
 func (v Pnl) Compare(other Pnl) int {
+	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamPnlCompare(v.native, other.native))
 }
 
@@ -199,7 +208,7 @@ func (v Pnl) CheckedAdd(other Pnl) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(result), nil
+	return NewPnlFromHandle(result), nil
 }
 
 func (v Pnl) CheckedSub(other Pnl) (Pnl, error) {
@@ -207,7 +216,7 @@ func (v Pnl) CheckedSub(other Pnl) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(result), nil
+	return NewPnlFromHandle(result), nil
 }
 
 func (v Pnl) CheckedNeg() (Pnl, error) {
@@ -215,7 +224,7 @@ func (v Pnl) CheckedNeg() (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(result), nil
+	return NewPnlFromHandle(result), nil
 }
 
 func (v Pnl) CheckedMulInt(scalar int64) (Pnl, error) {
@@ -223,7 +232,7 @@ func (v Pnl) CheckedMulInt(scalar int64) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(result), nil
+	return NewPnlFromHandle(result), nil
 }
 
 func (v Pnl) CheckedMulUint(scalar uint64) (Pnl, error) {
@@ -231,7 +240,7 @@ func (v Pnl) CheckedMulUint(scalar uint64) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(result), nil
+	return NewPnlFromHandle(result), nil
 }
 
 func (v Pnl) CheckedMulFloat(scalar float64) (Pnl, error) {
@@ -239,7 +248,7 @@ func (v Pnl) CheckedMulFloat(scalar float64) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(result), nil
+	return NewPnlFromHandle(result), nil
 }
 
 func (v Pnl) CheckedDivInt(divisor int64) (Pnl, error) {
@@ -247,7 +256,7 @@ func (v Pnl) CheckedDivInt(divisor int64) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(result), nil
+	return NewPnlFromHandle(result), nil
 }
 
 func (v Pnl) CheckedDivUint(divisor uint64) (Pnl, error) {
@@ -255,7 +264,7 @@ func (v Pnl) CheckedDivUint(divisor uint64) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(result), nil
+	return NewPnlFromHandle(result), nil
 }
 
 func (v Pnl) CheckedDivFloat(divisor float64) (Pnl, error) {
@@ -263,7 +272,7 @@ func (v Pnl) CheckedDivFloat(divisor float64) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(result), nil
+	return NewPnlFromHandle(result), nil
 }
 
 func (v Pnl) CheckedRemInt(divisor int64) (Pnl, error) {
@@ -271,7 +280,7 @@ func (v Pnl) CheckedRemInt(divisor int64) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(result), nil
+	return NewPnlFromHandle(result), nil
 }
 
 func (v Pnl) CheckedRemUint(divisor uint64) (Pnl, error) {
@@ -279,7 +288,7 @@ func (v Pnl) CheckedRemUint(divisor uint64) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(result), nil
+	return NewPnlFromHandle(result), nil
 }
 
 func (v Pnl) CheckedRemFloat(divisor float64) (Pnl, error) {
@@ -287,15 +296,21 @@ func (v Pnl) CheckedRemFloat(divisor float64) (Pnl, error) {
 	if err != nil {
 		return Pnl{}, err
 	}
-	return NewPnlFromNative(result), nil
+	return NewPnlFromHandle(result), nil
 }
 
-func (v Pnl) CashFlow() CashFlow {
-	return NewCashFlowFromNative(newParamValueOrPanic(native.ParamPnlToCashFlow(v.native)))
+func (v Pnl) CashFlow() (CashFlow, error) {
+	nativeValue, err := native.ParamPnlToCashFlow(v.native)
+	if err != nil {
+		return CashFlow{}, err
+	}
+	return NewCashFlowFromHandle(nativeValue), nil
 }
 
-func (v Pnl) PositionSize() PositionSize {
-	return NewPositionSizeFromNative(
-		newParamValueOrPanic(native.ParamPnlToPositionSize(v.native)),
-	)
+func (v Pnl) PositionSize() (PositionSize, error) {
+	nativeValue, err := native.ParamPnlToPositionSize(v.native)
+	if err != nil {
+		return PositionSize{}, err
+	}
+	return NewPositionSizeFromHandle(nativeValue), nil
 }

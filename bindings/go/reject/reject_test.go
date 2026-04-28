@@ -62,14 +62,13 @@ func TestRejectWithUserDataReturnsCopyWithToken(t *testing.T) {
 func TestRejectNewWithUserDataInitialisesAllFields(t *testing.T) {
 	var token byte
 	userData := unsafe.Pointer(&token)
-	rej := NewWithUserData(
+	rej := New(
 		CodeRiskLimitExceeded,
 		"policy-b",
 		"reason-b",
 		"details-b",
 		ScopeAccount,
-		userData,
-	)
+	).WithUserData(userData)
 
 	if rej.Code != CodeRiskLimitExceeded {
 		t.Fatalf("Code = %v, want %v", rej.Code, CodeRiskLimitExceeded)

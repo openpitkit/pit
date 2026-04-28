@@ -122,9 +122,9 @@ pub mod trade;
 pub mod trade_amount;
 pub mod volume;
 
-pub use account_id::AccountId;
+pub use account_id::{AccountId, AccountIdError};
 pub use adjustment_amount::AdjustmentAmount;
-pub use asset::Asset;
+pub use asset::{Asset, AssetError};
 pub use cash_flow::CashFlow;
 pub use fee::Fee;
 pub use fill_type::FillType;
@@ -287,26 +287,73 @@ impl From<RoundingStrategy> for rust_decimal::RoundingStrategy {
     }
 }
 
+/// Stable error code for parameter validation and arithmetic failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u32)]
+#[non_exhaustive]
+pub enum ErrorCode {
+    /// Error code is not specified.
+    Unspecified = 0,
+    /// Value must be non-negative.
+    Negative = 1,
+    /// Division by zero.
+    DivisionByZero = 2,
+    /// Arithmetic overflow.
+    Overflow = 3,
+    /// Arithmetic underflow.
+    Underflow = 4,
+    /// Invalid float value.
+    InvalidFloat = 5,
+    /// Invalid textual format.
+    InvalidFormat = 6,
+    /// Invalid price value.
+    InvalidPrice = 7,
+    /// Invalid leverage value.
+    InvalidLeverage = 8,
+    /// Catch-all code for unknown cases.
+    Other = u32::MAX,
+}
+
 /// Errors for parameter value validation and arithmetic.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[repr(u32)]
 #[non_exhaustive]
 pub enum Error {
     /// Value must be non-negative for this parameter type.
-    Negative { param: ParamKind },
+    Negative { param: ParamKind } = ErrorCode::Negative as u32,
     /// Division by zero.
-    DivisionByZero { param: ParamKind },
+    DivisionByZero { param: ParamKind } = ErrorCode::DivisionByZero as u32,
     /// Arithmetic overflow occurred.
-    Overflow { param: ParamKind },
+    Overflow { param: ParamKind } = ErrorCode::Overflow as u32,
     /// Arithmetic underflow resulted in negative value for unsigned type.
-    Underflow { param: ParamKind },
+    Underflow { param: ParamKind } = ErrorCode::Underflow as u32,
     /// Conversion from `f64` failed.
-    InvalidFloat,
-    /// Price has invalid value.
-    InvalidPrice,
-    /// Leverage has invalid value.
-    InvalidLeverage,
+    InvalidFloat = ErrorCode::InvalidFloat as u32,
     /// Failed to parse string into decimal value.
-    InvalidFormat { param: ParamKind, input: Box<str> },
+    InvalidFormat { param: ParamKind, input: Box<str> } = ErrorCode::InvalidFormat as u32,
+    /// Price has invalid value.
+    InvalidPrice = ErrorCode::InvalidPrice as u32,
+    /// Leverage has invalid value.
+    InvalidLeverage = ErrorCode::InvalidLeverage as u32,
+    /// Catch-all error variant reserved for forward-compatible mapping.
+    Other = ErrorCode::Other as u32,
+}
+
+impl Error {
+    /// Returns stable machine-readable error code.
+    pub const fn code(&self) -> ErrorCode {
+        match self {
+            Self::Negative { .. } => ErrorCode::Negative,
+            Self::DivisionByZero { .. } => ErrorCode::DivisionByZero,
+            Self::Overflow { .. } => ErrorCode::Overflow,
+            Self::Underflow { .. } => ErrorCode::Underflow,
+            Self::InvalidFloat => ErrorCode::InvalidFloat,
+            Self::InvalidFormat { .. } => ErrorCode::InvalidFormat,
+            Self::InvalidPrice => ErrorCode::InvalidPrice,
+            Self::InvalidLeverage => ErrorCode::InvalidLeverage,
+            Self::Other => ErrorCode::Other,
+        }
+    }
 }
 
 impl Display for Error {
@@ -326,6 +373,7 @@ impl Display for Error {
             Self::InvalidFormat { param, input } => {
                 write!(formatter, "invalid format for {param}: '{input}'")
             }
+            Self::Other => formatter.write_str("other parameter error"),
         }
     }
 }
@@ -1259,6 +1307,7 @@ mod tests {
 
     #[test]
     fn rounding_strategy_constants_and_conversion_are_stable() {
+        assert_eq!(RoundingStrategy::DEFAULT, RoundingStrategy::MidpointNearestEven);
         assert_eq!(
             RoundingStrategy::BANKER,
             RoundingStrategy::MidpointNearestEven

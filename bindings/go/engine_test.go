@@ -205,15 +205,15 @@ func (p *engineTestStartPolicy) Close() {
 	p.closeCalls++
 }
 
-func (p *engineTestStartPolicy) Name() string {
+func (p engineTestStartPolicy) Name() string {
 	return p.name
 }
 
-func (p *engineTestStartPolicy) CheckPreTradeStart(pretrade.Context, model.Order) reject.List {
+func (engineTestStartPolicy) CheckPreTradeStart(pretrade.Context, model.Order) []reject.Reject {
 	return nil
 }
 
-func (p *engineTestStartPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
+func (engineTestStartPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
 	return false
 }
 
@@ -221,9 +221,9 @@ type engineTestRejectingAdjustmentPolicy struct {
 	name string
 }
 
-func (p *engineTestRejectingAdjustmentPolicy) Close() {}
+func (engineTestRejectingAdjustmentPolicy) Close() {}
 
-func (p *engineTestRejectingAdjustmentPolicy) Name() string {
+func (p engineTestRejectingAdjustmentPolicy) Name() string {
 	return p.name
 }
 
@@ -232,7 +232,7 @@ func (p *engineTestRejectingAdjustmentPolicy) ApplyAccountAdjustment(
 	param.AccountID,
 	model.AccountAdjustment,
 	tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	return reject.NewSingleItemList(
 		reject.CodeOther,
 		p.name,

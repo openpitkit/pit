@@ -81,6 +81,9 @@ type ParamPrice = C.PitParamPrice
 type ParamPriceOptional = C.PitParamPriceOptional
 type ParamQuantity = C.PitParamQuantity
 type ParamQuantityOptional = C.PitParamQuantityOptional
+type ParamError = *C.PitParamError
+type ParamErrorHandle = *C.PitParamError
+type ParamErrorCode = C.PitParamErrorCode
 type ParamRoundingStrategy = C.uint8_t
 type ParamSide = C.PitParamSide
 type ParamTradeAmount = C.PitParamTradeAmount
@@ -148,10 +151,23 @@ const (
 )
 
 const (
-	ParamRoundingStrategy_Default            = C.PIT_PARAM_ROUNDING_STRATEGY_DEFAULT
-	ParamRoundingStrategy_Banker             = C.PIT_PARAM_ROUNDING_STRATEGY_BANKER
-	ParamRoundingStrategy_ConservativeProfit = C.PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT
-	ParamRoundingStrategy_ConservativeLoss   = C.PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS
+	ParamRoundingStrategyDefault            = C.PIT_PARAM_ROUNDING_STRATEGY_DEFAULT
+	ParamRoundingStrategyBanker             = C.PIT_PARAM_ROUNDING_STRATEGY_BANKER
+	ParamRoundingStrategyConservativeProfit = C.PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT
+	ParamRoundingStrategyConservativeLoss   = C.PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS
+)
+
+const (
+	ParamErrorCodeUnspecified     = C.PitParamErrorCode_Unspecified
+	ParamErrorCodeNegative        = C.PitParamErrorCode_Negative
+	ParamErrorCodeDivisionByZero  = C.PitParamErrorCode_DivisionByZero
+	ParamErrorCodeOverflow        = C.PitParamErrorCode_Overflow
+	ParamErrorCodeUnderflow       = C.PitParamErrorCode_Underflow
+	ParamErrorCodeInvalidFloat    = C.PitParamErrorCode_InvalidFloat
+	ParamErrorCodeInvalidFormat   = C.PitParamErrorCode_InvalidFormat
+	ParamErrorCodeInvalidPrice    = C.PitParamErrorCode_InvalidPrice
+	ParamErrorCodeInvalidLeverage = C.PitParamErrorCode_InvalidLeverage
+	ParamErrorCodeOther           = C.PitParamErrorCode_Other
 )
 
 const (
@@ -178,7 +194,7 @@ const (
 	RejectCodeUnsupportedOrderType        = C.PitRejectCode_UnsupportedOrderType
 	RejectCodeUnsupportedTimeInForce      = C.PitRejectCode_UnsupportedTimeInForce
 	RejectCodeUnsupportedOrderAttribute   = C.PitRejectCode_UnsupportedOrderAttribute
-	RejectCodeDuplicateClientOrderId      = C.PitRejectCode_DuplicateClientOrderId
+	RejectCodeDuplicateClientOrderID      = C.PitRejectCode_DuplicateClientOrderId
 	RejectCodeTooLateToEnter              = C.PitRejectCode_TooLateToEnter
 	RejectCodeExchangeClosed              = C.PitRejectCode_ExchangeClosed
 	RejectCodeUnknownInstrument           = C.PitRejectCode_UnknownInstrument

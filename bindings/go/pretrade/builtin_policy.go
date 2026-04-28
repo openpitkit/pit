@@ -15,25 +15,12 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-package policies
+package pretrade
 
-import (
-	"errors"
-
-	"go.openpit.dev/openpit/internal/native"
-	"go.openpit.dev/openpit/pretrade"
-)
-
-// NewPreTradePolicyHolder always returns an error.
+// BuiltinPolicy is a narrow policy interface for built-in native policies.
 //
-// DO NOT USE!
-//
-// The policy holder is only for internal use and will be removed when 1st
-// built-in pre-trade policy will be exported to Go.
-func NewPreTradePolicyHolder() (pretrade.PreTradePolicy, error) {
-	return newPreTradePolicyWithError(
-		func() (native.PretradePreTradePolicy, error) {
-			return nil, errors.New("policy holder is only for internal use")
-		},
-	)
+// Built-in policies are engine-managed and intended for engine registration.
+type BuiltinPolicy interface {
+	Close()
+	Name() string
 }

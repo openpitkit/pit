@@ -21,8 +21,8 @@
 build:
     cargo build --workspace
 
-# Lint and test.
-check: gen-api-c lint-all test-all
+# Format, generate, and lint and test the result.
+check: fmt-all gen-api-c lint-all test-all
 
 # Lint all.
 lint-all: lint-rust lint-python lint-go
@@ -40,7 +40,7 @@ lint-python:
 lint-go:
     cd bindings/go && gofmt -l . | (! grep .)
     cd bindings/go && go vet -all ./... > /dev/null
-    cd bindings/go && golangci-lint run ./... --out-format=colored-line-number
+    cd bindings/go && golangci-lint run ./...
 
 # Run all tests.
 test-all: test-rust test-python test-go test-go-race
@@ -78,10 +78,10 @@ test-python-integration: python-develop
 
 # Full Go test suite.
 test-go:
-    just _go "go test -q ./..."
+    just _go "go test ./..."
 # Go race test suite.
 test-go-race:
-    just _go "go test -race -q ./..."
+    just _go "go test -race ./..."
 # Go tests with actionable coverage summary.
 test-go-cov:
     just _go "go test -coverprofile=coverage.out -coverpkg=./... ./..."

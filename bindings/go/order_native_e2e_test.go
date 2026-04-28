@@ -33,12 +33,12 @@ func TestOrderNativeE2E_ExecuteAndApplyExecutionReport(t *testing.T) {
 		model.OrderValues{
 			Operation: optional.Some(
 				model.NewOrderOperationFromValues(
-					model.OrderOperationParams{
+					model.OrderOperationValues{
 						TradeAmount: optional.Some(
 							param.NewQuantityTradeAmount(mustOrderNativeQuantity(t, "2")),
 						),
 						Instrument: optional.Some(
-							param.NewInstrument(param.NewAsset("AAPL"), param.NewAsset("USD")),
+							param.NewInstrument(mustOrderNativeAsset(t, "AAPL"), mustOrderNativeAsset(t, "USD")),
 						),
 						Price:     optional.Some(mustOrderNativePrice(t, "182.50")),
 						AccountID: optional.Some(param.NewAccountIDFromInt(9001)),
@@ -58,9 +58,9 @@ func TestOrderNativeE2E_ExecuteAndApplyExecutionReport(t *testing.T) {
 			Margin: optional.Some(
 				model.NewOrderMarginFromValues(
 					model.OrderMarginValues{
-						CollateralAsset: optional.Some(param.NewAsset("USD")),
+						CollateralAsset: optional.Some(mustOrderNativeAsset(t, "USD")),
 						AutoBorrow:      optional.BoolSome(true),
-						Leverage:        param.NewLeverageFromInt(3).Native(),
+						Leverage:        optional.Some(param.NewLeverageFromInt(3)),
 					},
 				),
 			),
@@ -85,7 +85,7 @@ func TestOrderNativeE2E_ExecuteAndApplyExecutionReport(t *testing.T) {
 				model.NewExecutionReportOperationFromValues(
 					model.ExecutionReportOperationValues{
 						Instrument: optional.Some(
-							param.NewInstrument(param.NewAsset("AAPL"), param.NewAsset("USD")),
+							param.NewInstrument(mustOrderNativeAsset(t, "AAPL"), mustOrderNativeAsset(t, "USD")),
 						),
 						AccountID: optional.Some(param.NewAccountIDFromInt(9001)),
 						Side:      optional.Some(param.SideBuy),
@@ -140,6 +140,15 @@ func mustOrderNativePrice(t *testing.T, value string) param.Price {
 	v, err := param.NewPriceFromString(value)
 	if err != nil {
 		t.Fatalf("NewPriceFromString(%q) error = %v", value, err)
+	}
+	return v
+}
+
+func mustOrderNativeAsset(t *testing.T, value string) param.Asset {
+	t.Helper()
+	v, err := param.NewAsset(value)
+	if err != nil {
+		t.Fatalf("NewAsset(%q) error = %v", value, err)
 	}
 	return v
 }

@@ -23,10 +23,13 @@ import (
 	"go.openpit.dev/openpit/pkg/optional"
 )
 
+// Lock is a snapshot of values that the engine has reserved for this request.
+// New fields may be added here in future minor releases; access fields only
+// through Lock methods.
 type Lock struct{ value native.PretradePreTradeLock }
 
 func newLock(value native.PretradePreTradeLock) Lock { return Lock{value: value} }
 
 func (l Lock) Price() optional.Option[param.Price] {
-	return param.NewPriceOptionFromNative(native.PretradePreTradeLockGetPrice(l.value))
+	return param.NewPriceOptionFromHandle(native.PretradePreTradeLockGetPrice(l.value))
 }

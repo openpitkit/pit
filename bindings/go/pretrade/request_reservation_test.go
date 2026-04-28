@@ -30,7 +30,7 @@ func TestRequestExecuteReturnsErrorOnSecondCall(t *testing.T) {
 
 	requestHandle, rejects, err := native.EngineStartPreTrade(
 		engine,
-		newValidOrderForPreTradeTests(t).Native(),
+		newValidOrderForPreTradeTests(t).Handle(),
 	)
 	if err != nil {
 		t.Fatalf("EngineStartPreTrade() error = %v", err)
@@ -107,7 +107,7 @@ func TestReservationRollbackAndCloseAllowsSubsequentRollback(t *testing.T) {
 func TestReservationLockReturnsPrice(t *testing.T) {
 	price := mustPriceForPreTradeTests(t, "125")
 	nativeLock := native.NewPretradePreTradeLock()
-	native.PretradePreTradeLockSetPrice(&nativeLock, price.Native())
+	native.PretradePreTradeLockSetPrice(&nativeLock, price.Handle())
 	lock := newLock(nativeLock)
 
 	lockPrice, ok := lock.Price().Get()
@@ -144,7 +144,7 @@ func newReservationForPreTradeTests(t *testing.T, order model.Order) *Reservatio
 	t.Helper()
 
 	engine := newNativeEngineForPreTradeTests(t)
-	reservationHandle, rejects, err := native.EngineExecutePreTrade(engine, order.Native())
+	reservationHandle, rejects, err := native.EngineExecutePreTrade(engine, order.Handle())
 	if err != nil {
 		t.Fatalf("EngineExecutePreTrade() error = %v", err)
 	}
@@ -178,12 +178,24 @@ func mustQuantityForPreTradeTests(t *testing.T, value string) param.Quantity {
 	return quantity
 }
 
+func mustAssetForPreTradeTests(t *testing.T, value string) param.Asset {
+	t.Helper()
+
+	asset, err := param.NewAsset(value)
+	if err != nil {
+		t.Fatalf("NewAsset(%q) error = %v", value, err)
+	}
+	return asset
+}
+
 func newValidOrderForPreTradeTests(t *testing.T) model.Order {
 	t.Helper()
 
 	order := model.NewOrder()
 	operation := order.EnsureOperationView()
-	operation.SetInstrument(param.NewInstrument(param.NewAsset("AAPL"), param.NewAsset("USD")))
+	operation.SetInstrument(
+		param.NewInstrument(mustAssetForPreTradeTests(t, "AAPL"), mustAssetForPreTradeTests(t, "USD")),
+	)
 	operation.SetAccountID(param.NewAccountIDFromInt(1001))
 	operation.SetSide(param.SideBuy)
 	operation.SetTradeAmount(param.NewQuantityTradeAmount(mustQuantityForPreTradeTests(t, "1")))

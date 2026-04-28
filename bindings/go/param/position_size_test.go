@@ -45,8 +45,8 @@ func TestPositionSizeFromString(t *testing.T) {
 		{name: "invalid", input: "position-size", wantError: true},
 	}
 
-	for _, tt := range tests {
-		tt := tt
+	for _, tt := range tests { //nolint:copyloopvar
+		tt := tt //nolint:copyloopvar
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -80,8 +80,8 @@ func TestPositionSizeFromIntAndUint(t *testing.T) {
 		{name: "zero", input: 0, want: "0"},
 		{name: "positive", input: 7, want: "7"},
 	}
-	for _, tt := range intTests {
-		tt := tt
+	for _, tt := range intTests { //nolint:copyloopvar
+		tt := tt //nolint:copyloopvar
 		t.Run("int-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -103,8 +103,8 @@ func TestPositionSizeFromIntAndUint(t *testing.T) {
 		{name: "zero", input: 0, want: "0"},
 		{name: "positive", input: 7, want: "7"},
 	}
-	for _, tt := range uintTests {
-		tt := tt
+	for _, tt := range uintTests { //nolint:copyloopvar
+		tt := tt //nolint:copyloopvar
 		t.Run("uint-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -130,8 +130,8 @@ func TestPositionSizeFromFloat(t *testing.T) {
 		t.Fatalf("String() = %q, want %q", got, "12.5")
 	}
 
-	for _, input := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
-		input := input
+	for _, input := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} { //nolint:copyloopvar
+		input := input //nolint:copyloopvar
 		t.Run("invalid", func(t *testing.T) {
 			t.Parallel()
 
@@ -216,13 +216,13 @@ func TestPositionSizeRoundedConstructors(t *testing.T) {
 		},
 	}
 
-	for _, ctor := range constructors {
-		ctor := ctor
+	for _, ctor := range constructors { //nolint:copyloopvar
+		ctor := ctor //nolint:copyloopvar
 		t.Run(ctor.name, func(t *testing.T) {
 			t.Parallel()
 
-			for _, tc := range strategyCases {
-				tc := tc
+			for _, tc := range strategyCases { //nolint:copyloopvar
+				tc := tc //nolint:copyloopvar
 				t.Run(tc.name, func(t *testing.T) {
 					t.Parallel()
 
@@ -239,16 +239,16 @@ func TestPositionSizeRoundedConstructors(t *testing.T) {
 	}
 }
 
-func TestNewPositionSizeOptionFromNative(t *testing.T) {
+func TestNewPositionSizeOptionFromHandle(t *testing.T) {
 	t.Parallel()
 
-	unset := NewPositionSizeOptionFromNative(native.ParamPositionSizeOptional{})
+	unset := NewPositionSizeOptionFromHandle(native.ParamPositionSizeOptional{})
 	if unset.IsSet() {
 		t.Fatal("unset native position size should map to empty option")
 	}
 
 	expected := mustPositionSizeValue(t, positionSizeCanonicalValue)
-	set := NewPositionSizeOptionFromNative(makeNativePositionSizeOptional(expected))
+	set := NewPositionSizeOptionFromHandle(makeNativePositionSizeOptional(expected))
 	got, ok := set.Get()
 	if !ok {
 		t.Fatal("set native position size should map to present option")
@@ -262,24 +262,24 @@ func TestPositionSizeConstructorsFromRelatedTypes(t *testing.T) {
 	t.Parallel()
 
 	pnl := mustPnlValue(t, "1.25")
-	fromPnl := NewPositionSizeFromPnl(pnl)
+	fromPnl := newPositionSizeOrPanic(NewPositionSizeFromPnl(pnl))
 	if got := fromPnl.String(); got != "1.25" {
 		t.Fatalf("NewPositionSizeFromPnl() = %q, want %q", got, "1.25")
 	}
 
 	fee := newFeeOrPanic(NewFeeFromString("1.25"))
-	fromFee := NewPositionSizeFromFee(fee)
+	fromFee := newPositionSizeOrPanic(NewPositionSizeFromFee(fee))
 	if got := fromFee.String(); got != "-1.25" {
 		t.Fatalf("NewPositionSizeFromFee() = %q, want %q", got, "-1.25")
 	}
 
 	quantity := mustQuantityForPosition(t, "2")
-	long := NewPositionSizeFromQuantityAndSide(quantity, SideBuy)
+	long := newPositionSizeOrPanic(NewPositionSizeFromQuantityAndSide(quantity, SideBuy))
 	if got := long.String(); got != "2" {
 		t.Fatalf("NewPositionSizeFromQuantityAndSide(buy) = %q, want %q", got, "2")
 	}
 
-	short := NewPositionSizeFromQuantityAndSide(quantity, SideSell)
+	short := newPositionSizeOrPanic(NewPositionSizeFromQuantityAndSide(quantity, SideSell))
 	if got := short.String(); got != "-2" {
 		t.Fatalf("NewPositionSizeFromQuantityAndSide(sell) = %q, want %q", got, "-2")
 	}
@@ -294,9 +294,9 @@ func TestPositionSizeAccessors(t *testing.T) {
 		t.Fatalf("Decimal() = %s, want %s", got.String(), wantDecimal.String())
 	}
 
-	roundTrip := NewPositionSizeFromNative(value.Native())
+	roundTrip := NewPositionSizeFromHandle(value.Handle())
 	if !roundTrip.Equal(value) {
-		t.Fatalf("NewPositionSizeFromNative(Native()) = %v, want %v", roundTrip, value)
+		t.Fatalf("NewPositionSizeFromHandle(Handle()) = %v, want %v", roundTrip, value)
 	}
 
 	if got := value.String(); got != positionSizeCanonicalValue {
@@ -330,8 +330,8 @@ func TestPositionSizeIsZeroEqualCompare(t *testing.T) {
 	b := mustPositionSizeValue(t, "0")
 	c := mustPositionSizeValue(t, "3")
 
-	if a.Compare(a) != 0 {
-		t.Fatalf("reflexive compare = %d, want 0", a.Compare(a))
+	if a.Compare(a) != 0 { //nolint:gocritic
+		t.Fatalf("reflexive compare = %d, want 0", a.Compare(a)) //nolint:gocritic
 	}
 	if !(a.Compare(b) < 0 && b.Compare(c) < 0 && a.Compare(c) < 0) {
 		t.Fatal("transitive compare contract violated")
@@ -456,12 +456,12 @@ func TestPositionSizePanicHelpers(t *testing.T) {
 	})
 
 	quantity := mustQuantityForPosition(t, "2")
-	gotQuantity, gotSide := newPositionSizeQuantitySideOrPanic(quantity.Native(), SideBuy.Native(), nil)
-	if NewQuantityFromNative(gotQuantity).String() != "2" {
-		t.Fatalf("newPositionSizeQuantitySideOrPanic() qty = %q, want %q", NewQuantityFromNative(gotQuantity).String(), "2")
+	gotQuantity, gotSide := newPositionSizeQuantitySideOrPanic(quantity.Handle(), SideBuy.Handle(), nil)
+	if NewQuantityFromHandle(gotQuantity).String() != "2" {
+		t.Fatalf("newPositionSizeQuantitySideOrPanic() qty = %q, want %q", NewQuantityFromHandle(gotQuantity).String(), "2")
 	}
-	if gotSide != SideBuy.Native() {
-		t.Fatalf("newPositionSizeQuantitySideOrPanic() side = %v, want %v", gotSide, SideBuy.Native())
+	if gotSide != SideBuy.Handle() {
+		t.Fatalf("newPositionSizeQuantitySideOrPanic() side = %v, want %v", gotSide, SideBuy.Handle())
 	}
 
 	assertPanicContains(t, "boom", func() {
@@ -479,7 +479,7 @@ func makeNativePositionSizeOptional(value PositionSize) native.ParamPositionSize
 		IsSet bool
 	}
 
-	layout := positionSizeOptionalLayout{Value: value.Native(), IsSet: true}
+	layout := positionSizeOptionalLayout{Value: value.Handle(), IsSet: true}
 	return *(*native.ParamPositionSizeOptional)(unsafe.Pointer(&layout))
 }
 

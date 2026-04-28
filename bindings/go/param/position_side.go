@@ -34,7 +34,7 @@ const (
 	PositionSideShort PositionSide = native.ParamPositionSideShort
 )
 
-func NewPositionSideFromNative(v native.ParamPositionSide) optional.Option[PositionSide] {
+func NewPositionSideFromHandle(v native.ParamPositionSide) optional.Option[PositionSide] {
 	switch v {
 	case native.ParamPositionSideLong:
 		return optional.Some(PositionSideLong)

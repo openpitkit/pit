@@ -25,10 +25,6 @@ import (
 // NewOrderValidation creates a new order-validation policy.
 // Start-stage policy for basic order field validation. Must be closed with
 // Close.
-func NewOrderValidation() pretrade.CheckPreTradeStartPolicy {
-	return newCheckPreTradeStartPolicy(
-		func() native.PretradeCheckPreTradeStartPolicy {
-			return native.CreatePretradePoliciesOrderValidationPolicy()
-		},
-	)
+func NewOrderValidation() pretrade.BuiltinPolicy {
+	return newCheckStartPolicy(native.CreatePretradePoliciesOrderValidationPolicy)
 }

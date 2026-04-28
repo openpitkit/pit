@@ -37,7 +37,7 @@ func BoolSome(v bool) Bool {
 }
 
 // Get returns the stored value and a boolean indicating whether it is set.
-func (b Bool) Get() (bool, bool) {
+func (b Bool) Get() (value bool, isSet bool) {
 	return b == True, b.IsSet()
 }
 

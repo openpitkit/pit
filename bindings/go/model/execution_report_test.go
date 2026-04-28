@@ -59,7 +59,7 @@ func TestExecutionReportLifecycle(t *testing.T) {
 	assertExecutionReportValuesEqual(t, report.EngineExecutionReport().Values(), values)
 	assertExecutionReportValuesEqual(
 		t,
-		NewExecutionReportFromNative(report.Native()).Values(),
+		NewExecutionReportFromHandle(report.Handle()).Values(),
 		values,
 	)
 
@@ -140,7 +140,7 @@ func TestExecutionReportTradeFieldRoundTrip(t *testing.T) {
 
 	assertPriceEqual(
 		t,
-		NewExecutionReportTradeFromNative(trade.value).Price(),
+		NewExecutionReportTradeFromHandle(trade.value).Price(),
 		fixture.lockPrice,
 	)
 }
@@ -214,19 +214,51 @@ func TestExecutionReportPositionImpactFieldRoundTrip(t *testing.T) {
 	assertExecutionReportPositionImpactUnset(t, impact)
 }
 
-func TestNewPositionEffectFromNative(t *testing.T) {
-	if got, ok := newPositionEffectFromNative(native.ParamPositionEffectOpen).Get(); !ok || got != param.PositionEffectOpen {
-		t.Fatalf("newPositionEffectFromNative(open) = (%v, %v), want (%v, true)", got, ok, param.PositionEffectOpen)
+func TestExecutionReportEnsureViews(t *testing.T) {
+	report := NewExecutionReport()
+
+	operation := report.EnsureOperationView()
+	if !report.Operation().IsSet() {
+		t.Fatal("Operation().IsSet() = false, want true after EnsureOperationView")
 	}
-	if got, ok := newPositionEffectFromNative(native.ParamPositionEffectClose).Get(); !ok || got != param.PositionEffectClose {
-		t.Fatalf("newPositionEffectFromNative(close) = (%v, %v), want (%v, true)", got, ok, param.PositionEffectClose)
+	operation.SetSide(param.SideBuy)
+
+	financialImpact := report.EnsureFinancialImpactView()
+	if !report.FinancialImpact().IsSet() {
+		t.Fatal("FinancialImpact().IsSet() = false, want true after EnsureFinancialImpactView")
 	}
-	if newPositionEffectFromNative(native.ParamPositionEffectNotSet).IsSet() {
-		t.Fatal("newPositionEffectFromNative(not-set).IsSet() = true, want false")
+	fee, err := param.NewFeeFromString("0.1")
+	if err != nil {
+		t.Fatalf("NewFeeFromString() error = %v", err)
+	}
+	financialImpact.SetFee(fee)
+
+	fill := report.EnsureFillView()
+	if !report.Fill().IsSet() {
+		t.Fatal("Fill().IsSet() = false, want true after EnsureFillView")
+	}
+	fill.SetTerminal(true)
+
+	positionImpact := report.EnsurePositionImpactView()
+	if !report.PositionImpact().IsSet() {
+		t.Fatal("PositionImpact().IsSet() = false, want true after EnsurePositionImpactView")
+	}
+	positionImpact.SetPositionSide(param.PositionSideLong)
+}
+
+func TestNewPositionEffectFromHandle(t *testing.T) {
+	if got, ok := newPositionEffectFromHandle(native.ParamPositionEffectOpen).Get(); !ok || got != param.PositionEffectOpen {
+		t.Fatalf("newPositionEffectFromHandle(open) = (%v, %v), want (%v, true)", got, ok, param.PositionEffectOpen)
+	}
+	if got, ok := newPositionEffectFromHandle(native.ParamPositionEffectClose).Get(); !ok || got != param.PositionEffectClose {
+		t.Fatalf("newPositionEffectFromHandle(close) = (%v, %v), want (%v, true)", got, ok, param.PositionEffectClose)
+	}
+	if newPositionEffectFromHandle(native.ParamPositionEffectNotSet).IsSet() {
+		t.Fatal("newPositionEffectFromHandle(not-set).IsSet() = true, want false")
 	}
 }
 
-func TestNewPositionEffectFromNativePanicsOnUnknownValue(t *testing.T) {
+func TestNewPositionEffectFromHandlePanicsOnUnknownValue(t *testing.T) {
 	didPanic := false
 	func() {
 		defer func() {
@@ -234,10 +266,10 @@ func TestNewPositionEffectFromNativePanicsOnUnknownValue(t *testing.T) {
 				didPanic = true
 			}
 		}()
-		_ = newPositionEffectFromNative(native.ParamPositionEffect(255))
+		_ = newPositionEffectFromHandle(native.ParamPositionEffect(255))
 	}()
 	if !didPanic {
-		t.Fatal("newPositionEffectFromNative() panic = nil, want non-nil")
+		t.Fatal("newPositionEffectFromHandle() panic = nil, want non-nil")
 	}
 }
 
@@ -276,8 +308,8 @@ func newExecutionReportFixture(t *testing.T) executionReportFixture {
 
 	return executionReportFixture{
 		// Keep same asset on both legs to avoid depending on current
-		// NewInstrumentFromNative settlement-leg mapping behavior.
-		instrument:     param.NewInstrument(param.NewAsset("USD"), param.NewAsset("USD")),
+		// NewInstrumentFromHandle settlement-leg mapping behavior.
+		instrument:     param.NewInstrument(mustModelAsset(t, "USD"), mustModelAsset(t, "USD")),
 		accountID:      param.NewAccountIDFromInt(42),
 		side:           param.SideBuy,
 		pnl:            pnl,

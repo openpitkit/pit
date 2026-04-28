@@ -61,8 +61,10 @@ def test_account_id_constructors() -> None:
     assert openpit.param.AccountId.from_str("my-account").value == from_string.value
     assert from_int.value != from_string.value
 
-    # FNV-1a of the empty string must equal the offset basis.
-    assert openpit.param.AccountId.from_str("").value == 14_695_981_039_346_656_037
+    with pytest.raises(ValueError, match="account id string must not be empty"):
+        openpit.param.AccountId.from_str("")
+    with pytest.raises(ValueError, match="account id string must not be empty"):
+        openpit.param.AccountId.from_str("   ")
 
     # from_u64 and from_str of the same numeric string are NOT equal.
     assert (
@@ -166,7 +168,7 @@ def test_trade_amount_volume_factory_accepts_all_supported_inputs() -> None:
 
 @pytest.mark.unit
 def test_param_directional_and_identifier_wrappers() -> None:
-    asset = "AAPL"
+    asset = openpit.param.Asset("AAPL")
     side = openpit.param.Side.BUY
     position_side = openpit.param.PositionSide.LONG
     position_effect = openpit.param.PositionEffect.OPEN
@@ -198,6 +200,14 @@ def test_param_directional_and_identifier_wrappers() -> None:
         ),
     ):
         openpit.param.FillType("manual")
+
+
+@pytest.mark.unit
+def test_asset_rejects_empty_or_whitespace() -> None:
+    with pytest.raises(openpit.param.AssetError, match="asset must not be empty"):
+        openpit.param.Asset("")
+    with pytest.raises(openpit.param.AssetError, match="asset must not be empty"):
+        openpit.param.Asset("  ")
 
 
 @pytest.mark.unit

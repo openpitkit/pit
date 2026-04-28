@@ -37,13 +37,13 @@ const (
 
 const (
 	// RoundingStrategyDefault is the recommended default strategy.
-	RoundingStrategyDefault RoundingStrategy = native.ParamRoundingStrategy_Default
+	RoundingStrategyDefault RoundingStrategy = native.ParamRoundingStrategyDefault
 	// RoundingStrategyBanker is banker's rounding alias.
-	RoundingStrategyBanker RoundingStrategy = native.ParamRoundingStrategy_Banker
+	RoundingStrategyBanker RoundingStrategy = native.ParamRoundingStrategyBanker
 	// RoundingStrategyConservativeProfit rounds down for conservative profit estimates.
-	RoundingStrategyConservativeProfit RoundingStrategy = native.ParamRoundingStrategy_ConservativeProfit
+	RoundingStrategyConservativeProfit RoundingStrategy = native.ParamRoundingStrategyConservativeProfit
 	// RoundingStrategyConservativeLoss rounds down for conservative loss estimates.
-	RoundingStrategyConservativeLoss RoundingStrategy = native.ParamRoundingStrategy_ConservativeLoss
+	RoundingStrategyConservativeLoss RoundingStrategy = native.ParamRoundingStrategyConservativeLoss
 )
 
 func (r RoundingStrategy) String() string {

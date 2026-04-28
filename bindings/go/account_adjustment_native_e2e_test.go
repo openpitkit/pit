@@ -47,8 +47,8 @@ func TestAccountAdjustmentNativeE2E_BatchAppliesAndInvokesPolicyPerItem(t *testi
 		model.AccountAdjustmentValues{
 			BalanceOperation: optional.Some(
 				model.NewAccountAdjustmentBalanceOperationFromValues(
-					model.AccountAdjustmentBalanceOperationParams{
-						Asset:             optional.Some(param.NewAsset("USD")),
+					model.AccountAdjustmentBalanceOperationValues{
+						Asset:             optional.Some(mustAdjustmentNativeAsset(t, "USD")),
 						AverageEntryPrice: optional.Some(mustAdjustmentNativePrice(t, "101.5")),
 					},
 				),
@@ -76,9 +76,12 @@ func TestAccountAdjustmentNativeE2E_BatchAppliesAndInvokesPolicyPerItem(t *testi
 				model.NewAccountAdjustmentPositionOperationFromValues(
 					model.AccountAdjustmentPositionOperationValues{
 						Instrument: optional.Some(
-							param.NewInstrument(param.NewAsset("AAPL"), param.NewAsset("USD")),
+							param.NewInstrument(
+								mustAdjustmentNativeAsset(t, "AAPL"),
+								mustAdjustmentNativeAsset(t, "USD"),
+							),
 						),
-						CollateralAsset: optional.Some(param.NewAsset("USD")),
+						CollateralAsset: optional.Some(mustAdjustmentNativeAsset(t, "USD")),
 						AverageEntryPrice: optional.Some(
 							mustAdjustmentNativePrice(t, "102.25"),
 						),
@@ -89,7 +92,7 @@ func TestAccountAdjustmentNativeE2E_BatchAppliesAndInvokesPolicyPerItem(t *testi
 			),
 			Bounds: optional.Some(
 				model.NewAccountAdjustmentBoundsFromValues(
-					model.AccountAdjustmentBoundsParams{
+					model.AccountAdjustmentBoundsValues{
 						TotalUpper:   optional.Some(mustAdjustmentNativePositionSize(t, "100")),
 						TotalLower:   optional.Some(mustAdjustmentNativePositionSize(t, "20")),
 						PendingUpper: optional.Some(mustAdjustmentNativePositionSize(t, "50")),
@@ -123,9 +126,9 @@ type accountAdjustmentCountingPolicy struct {
 	calls int
 }
 
-func (p *accountAdjustmentCountingPolicy) Close() {}
+func (accountAdjustmentCountingPolicy) Close() {}
 
-func (p *accountAdjustmentCountingPolicy) Name() string {
+func (p accountAdjustmentCountingPolicy) Name() string {
 	return p.name
 }
 
@@ -134,7 +137,7 @@ func (p *accountAdjustmentCountingPolicy) ApplyAccountAdjustment(
 	param.AccountID,
 	model.AccountAdjustment,
 	tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	p.calls++
 	return nil
 }
@@ -146,6 +149,15 @@ func mustAdjustmentNativePrice(t *testing.T, value string) param.Price {
 		t.Fatalf("NewPriceFromString(%q) error = %v", value, err)
 	}
 	return v
+}
+
+func mustAdjustmentNativeAsset(t *testing.T, value string) param.Asset {
+	t.Helper()
+	asset, err := param.NewAsset(value)
+	if err != nil {
+		t.Fatalf("NewAsset(%q) error = %v", value, err)
+	}
+	return asset
 }
 
 func mustAdjustmentNativePositionSize(t *testing.T, value string) param.PositionSize {

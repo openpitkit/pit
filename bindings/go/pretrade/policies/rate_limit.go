@@ -29,8 +29,8 @@ import (
 // in the window.
 //
 // Must be closed with Close.
-func NewRateLimitPolicy(maxOrders int, windowSeconds uint64) pretrade.CheckPreTradeStartPolicy {
-	return newCheckPreTradeStartPolicy(
+func NewRateLimitPolicy(maxOrders int, windowSeconds uint64) pretrade.BuiltinPolicy {
+	return newCheckStartPolicy(
 		func() native.PretradeCheckPreTradeStartPolicy {
 			return native.CreatePretradePoliciesRateLimitPolicy(maxOrders, windowSeconds)
 		},

@@ -51,8 +51,8 @@ func TestCashFlowFromString(t *testing.T) {
 		{name: "invalid", input: "cash-flow", wantError: true},
 	}
 
-	for _, tt := range tests {
-		tt := tt
+	for _, tt := range tests { //nolint:copyloopvar
+		tt := tt //nolint:copyloopvar
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -86,8 +86,8 @@ func TestCashFlowFromIntAndUint(t *testing.T) {
 		{name: "zero", input: 0, want: "0"},
 		{name: "positive", input: 7, want: "7"},
 	}
-	for _, tt := range intTests {
-		tt := tt
+	for _, tt := range intTests { //nolint:copyloopvar
+		tt := tt //nolint:copyloopvar
 		t.Run("int-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -109,8 +109,8 @@ func TestCashFlowFromIntAndUint(t *testing.T) {
 		{name: "zero", input: 0, want: "0"},
 		{name: "positive", input: 7, want: "7"},
 	}
-	for _, tt := range uintTests {
-		tt := tt
+	for _, tt := range uintTests { //nolint:copyloopvar
+		tt := tt //nolint:copyloopvar
 		t.Run("uint-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -136,8 +136,8 @@ func TestCashFlowFromFloat(t *testing.T) {
 		t.Fatalf("String() = %q, want %q", got, "12.5")
 	}
 
-	for _, input := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
-		input := input
+	for _, input := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} { //nolint:copyloopvar
+		input := input //nolint:copyloopvar
 		t.Run(fmt.Sprintf("invalid-%v", input), func(t *testing.T) {
 			t.Parallel()
 
@@ -222,13 +222,13 @@ func TestCashFlowRoundedConstructors(t *testing.T) {
 		},
 	}
 
-	for _, ctor := range constructors {
-		ctor := ctor
+	for _, ctor := range constructors { //nolint:copyloopvar
+		ctor := ctor //nolint:copyloopvar
 		t.Run(ctor.name, func(t *testing.T) {
 			t.Parallel()
 
-			for _, tc := range strategyCases {
-				tc := tc
+			for _, tc := range strategyCases { //nolint:copyloopvar
+				tc := tc //nolint:copyloopvar
 				t.Run(tc.name, func(t *testing.T) {
 					t.Parallel()
 
@@ -245,16 +245,16 @@ func TestCashFlowRoundedConstructors(t *testing.T) {
 	}
 }
 
-func TestNewCashFlowOptionFromNative(t *testing.T) {
+func TestNewCashFlowOptionFromHandle(t *testing.T) {
 	t.Parallel()
 
-	unset := NewCashFlowOptionFromNative(native.ParamCashFlowOptional{})
+	unset := NewCashFlowOptionFromHandle(native.ParamCashFlowOptional{})
 	if unset.IsSet() {
 		t.Fatal("unset native cash flow should map to empty option")
 	}
 
 	expected := mustCashFlow(t, cashFlowCanonicalValue)
-	set := NewCashFlowOptionFromNative(makeNativeCashFlowOptional(expected))
+	set := NewCashFlowOptionFromHandle(makeNativeCashFlowOptional(expected))
 	got, ok := set.Get()
 	if !ok {
 		t.Fatal("set native cash flow should map to present option")
@@ -268,24 +268,24 @@ func TestCashFlowConstructorsFromRelatedTypes(t *testing.T) {
 	t.Parallel()
 
 	pnl := mustPnlForCashFlow(t, "1.25")
-	fromPnl := NewCashFlowFromPnl(pnl)
+	fromPnl := newCashFlowOrPanic(NewCashFlowFromPnl(pnl))
 	if got := fromPnl.String(); got != "1.25" {
 		t.Fatalf("NewCashFlowFromPnl() = %q, want %q", got, "1.25")
 	}
 
 	fee := newFeeOrPanic(NewFeeFromString("1.25"))
-	fromFee := NewCashFlowFromFee(fee)
+	fromFee := newCashFlowOrPanic(NewCashFlowFromFee(fee))
 	if got := fromFee.String(); got != "-1.25" {
 		t.Fatalf("NewCashFlowFromFee() = %q, want %q", got, "-1.25")
 	}
 
 	volume := newVolumeOrPanic(NewVolumeFromString("1.25"))
-	fromInflow := NewCashFlowFromVolumeInflow(volume)
+	fromInflow := newCashFlowOrPanic(NewCashFlowFromVolumeInflow(volume))
 	if got := fromInflow.String(); got != "1.25" {
 		t.Fatalf("NewCashFlowFromVolumeInflow() = %q, want %q", got, "1.25")
 	}
 
-	fromOutflow := NewCashFlowFromVolumeOutflow(volume)
+	fromOutflow := newCashFlowOrPanic(NewCashFlowFromVolumeOutflow(volume))
 	if got := fromOutflow.String(); got != "-1.25" {
 		t.Fatalf("NewCashFlowFromVolumeOutflow() = %q, want %q", got, "-1.25")
 	}
@@ -300,9 +300,9 @@ func TestCashFlowAccessors(t *testing.T) {
 		t.Fatalf("Decimal() = %s, want %s", got.String(), wantDecimal.String())
 	}
 
-	roundTrip := NewCashFlowFromNative(value.Native())
+	roundTrip := NewCashFlowFromHandle(value.Handle())
 	if !roundTrip.Equal(value) {
-		t.Fatalf("NewCashFlowFromNative(Native()) = %v, want %v", roundTrip, value)
+		t.Fatalf("NewCashFlowFromHandle(Handle()) = %v, want %v", roundTrip, value)
 	}
 
 	if got := value.String(); got != cashFlowCanonicalValue {
@@ -336,8 +336,8 @@ func TestCashFlowIsZeroEqualCompare(t *testing.T) {
 	b := mustCashFlow(t, "0")
 	c := mustCashFlow(t, "3")
 
-	if a.Compare(a) != 0 {
-		t.Fatalf("reflexive compare = %d, want 0", a.Compare(a))
+	if a.Compare(a) != 0 { //nolint:gocritic
+		t.Fatalf("reflexive compare = %d, want 0", a.Compare(a)) //nolint:gocritic
 	}
 	if !(a.Compare(b) < 0 && b.Compare(c) < 0 && a.Compare(c) < 0) {
 		t.Fatal("transitive compare contract violated")
@@ -514,7 +514,7 @@ func makeNativeCashFlowOptional(value CashFlow) native.ParamCashFlowOptional {
 		IsSet bool
 	}
 
-	layout := cashFlowOptionalLayout{Value: value.Native(), IsSet: true}
+	layout := cashFlowOptionalLayout{Value: value.Handle(), IsSet: true}
 	return *(*native.ParamCashFlowOptional)(unsafe.Pointer(&layout))
 }
 

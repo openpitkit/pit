@@ -46,7 +46,7 @@ func NewVolumeTradeAmount(v Volume) TradeAmount {
 	)
 }
 
-func NewTradeAmountFromNative(amount native.ParamTradeAmount) optional.Option[TradeAmount] {
+func NewTradeAmountFromHandle(amount native.ParamTradeAmount) optional.Option[TradeAmount] {
 	if native.ParamTradeAmountGetKind(amount) == native.ParamTradeAmountKindNotSet {
 		return optional.None[TradeAmount]()
 	}
@@ -73,7 +73,7 @@ func (a TradeAmount) MustQuantity() Quantity {
 	if err != nil {
 		panic(fmt.Sprintf("failed to decode quantity trade amount: %v", err))
 	}
-	return NewQuantityFromNative(value)
+	return NewQuantityFromHandle(value)
 }
 
 func (a TradeAmount) MustVolume() Volume {
@@ -84,10 +84,10 @@ func (a TradeAmount) MustVolume() Volume {
 	if err != nil {
 		panic(fmt.Sprintf("failed to decode volume trade amount: %v", err))
 	}
-	return NewVolumeFromNative(value)
+	return NewVolumeFromHandle(value)
 }
 
-func (a TradeAmount) Native() native.ParamTradeAmount {
+func (a TradeAmount) Handle() native.ParamTradeAmount {
 	return a.native
 }
 

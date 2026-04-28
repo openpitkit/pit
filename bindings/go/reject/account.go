@@ -20,23 +20,21 @@ package reject
 import "go.openpit.dev/openpit/internal/native"
 
 type AccountAdjustmentBatchError struct {
-	Rejects               List
-	FailedAdjustmentIndex uint
+	Rejects               []Reject
+	FailedAdjustmentIndex int
 }
 
 func NewAccountAdjustmentBatchErrorFromHandle(
 	reject native.AccountAdjustmentBatchError,
 ) (AccountAdjustmentBatchError, error) {
-	reject_list, err := NewListFromHandle(native.AccountAdjustmentBatchErrorGetRejects(reject))
+	rejectList, err := NewListFromHandle(native.AccountAdjustmentBatchErrorGetRejects(reject))
 	if err != nil {
 		return AccountAdjustmentBatchError{}, err
 	}
 
 	return AccountAdjustmentBatchError{
-			Rejects: reject_list,
-			FailedAdjustmentIndex: uint(
-				native.AccountAdjustmentBatchErrorGetFailedAdjustmentIndex(reject),
-			),
+			Rejects:               rejectList,
+			FailedAdjustmentIndex: native.AccountAdjustmentBatchErrorGetFailedAdjustmentIndex(reject),
 		},
 		nil
 }

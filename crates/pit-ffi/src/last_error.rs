@@ -17,10 +17,50 @@
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-use crate::string::PitSharedString;
+use crate::string::{pit_destroy_shared_string, PitSharedString};
 
 /// Error out-pointer used by fallible FFI calls.
 pub type PitOutError = *mut *mut PitSharedString;
+
+/// Parameter error code transported through FFI.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PitParamErrorCode {
+    /// Error code is not specified.
+    #[default]
+    Unspecified = openpit::param::ErrorCode::Unspecified as u32,
+    /// Value must be non-negative.
+    Negative = openpit::param::ErrorCode::Negative as u32,
+    /// Division by zero.
+    DivisionByZero = openpit::param::ErrorCode::DivisionByZero as u32,
+    /// Arithmetic overflow.
+    Overflow = openpit::param::ErrorCode::Overflow as u32,
+    /// Arithmetic underflow.
+    Underflow = openpit::param::ErrorCode::Underflow as u32,
+    /// Invalid float value.
+    InvalidFloat = openpit::param::ErrorCode::InvalidFloat as u32,
+    /// Invalid textual format.
+    InvalidFormat = openpit::param::ErrorCode::InvalidFormat as u32,
+    /// Invalid price value.
+    InvalidPrice = openpit::param::ErrorCode::InvalidPrice as u32,
+    /// Invalid leverage value.
+    InvalidLeverage = openpit::param::ErrorCode::InvalidLeverage as u32,
+    /// Catch-all code for unknown cases.
+    Other = openpit::param::ErrorCode::Other as u32,
+}
+
+/// Caller-owned parameter error container.
+#[repr(C)]
+#[derive(Debug)]
+pub struct PitParamError {
+    /// Stable machine-readable error code.
+    pub code: PitParamErrorCode,
+    /// Human-readable message allocated as shared string.
+    pub message: *mut PitSharedString,
+}
+
+/// Parameter error out-pointer used by fallible param FFI calls.
+pub type PitOutParamError = *mut *mut PitParamError;
 
 /// Writes a caller-owned shared-string error handle into `out_error`.
 ///
@@ -32,6 +72,56 @@ pub fn write_error(out_error: PitOutError, msg: &str) {
     unsafe {
         *out_error = PitSharedString::new_handle(msg);
     }
+}
+
+fn write_param_error(out_error: PitOutParamError, code: PitParamErrorCode, msg: &str) {
+    if out_error.is_null() {
+        return;
+    }
+    let handle = Box::new(PitParamError {
+        code,
+        message: PitSharedString::new_handle(msg),
+    });
+    unsafe {
+        *out_error = Box::into_raw(handle);
+    }
+}
+
+/// Writes a caller-owned parameter error with unspecified error code.
+pub fn write_param_error_unspecified(out_error: PitOutParamError, msg: &str) {
+    write_param_error(out_error, PitParamErrorCode::Unspecified, msg);
+}
+
+/// Converts core parameter error into a coded FFI parameter error payload.
+pub fn consume_param_error_with_code(out_error: PitOutParamError, code: openpit::param::Error) {
+    let error_code = match code.code() {
+        openpit::param::ErrorCode::Negative => PitParamErrorCode::Negative,
+        openpit::param::ErrorCode::DivisionByZero => PitParamErrorCode::DivisionByZero,
+        openpit::param::ErrorCode::Overflow => PitParamErrorCode::Overflow,
+        openpit::param::ErrorCode::Underflow => PitParamErrorCode::Underflow,
+        openpit::param::ErrorCode::InvalidFloat => PitParamErrorCode::InvalidFloat,
+        openpit::param::ErrorCode::InvalidFormat => PitParamErrorCode::InvalidFormat,
+        openpit::param::ErrorCode::InvalidPrice => PitParamErrorCode::InvalidPrice,
+        openpit::param::ErrorCode::InvalidLeverage => PitParamErrorCode::InvalidLeverage,
+        openpit::param::ErrorCode::Other => PitParamErrorCode::Other,
+        _ => PitParamErrorCode::Other,
+    };
+    write_param_error(out_error, error_code, &code.to_string());
+}
+
+/// Releases a caller-owned parameter error container.
+///
+/// # Safety
+///
+/// `handle` must be either null or a pointer returned by this library through
+/// `PitOutParamError`. The handle must be destroyed at most once.
+#[no_mangle]
+pub unsafe extern "C" fn pit_destroy_param_error(handle: *mut PitParamError) {
+    if handle.is_null() {
+        return;
+    }
+    let error = unsafe { Box::from_raw(handle) };
+    pit_destroy_shared_string(error.message);
 }
 
 #[macro_export]

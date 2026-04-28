@@ -22,7 +22,7 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
-func NewNativeRejectListOrNil(source reject.List) native.RejectList {
+func NewNativeRejectListOrNil(source []reject.Reject) native.RejectList {
 	if len(source) == 0 {
 		return nil
 	}

@@ -239,7 +239,7 @@ def test_example_wiki_domain_types_create_validated_values() -> None:
     import openpit
 
     # Build validated value objects at the integration boundary.
-    asset = "AAPL"
+    asset = openpit.param.Asset("AAPL")
     quantity = openpit.param.Quantity("10.5")
     price = openpit.param.Price(185)
     pnl = openpit.param.Pnl(-12.5)

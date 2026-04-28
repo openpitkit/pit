@@ -46,7 +46,7 @@ func TestAccountAdjustmentValuesCheck(t *testing.T) {
 	fixture := newAccountAdjustmentFixture(t)
 
 	balance := NewAccountAdjustmentBalanceOperationFromValues(
-		AccountAdjustmentBalanceOperationParams{
+		AccountAdjustmentBalanceOperationValues{
 			Asset:             optional.Some(fixture.asset),
 			AverageEntryPrice: optional.Some(fixture.averagePrice),
 		},
@@ -91,7 +91,7 @@ func TestAccountAdjustmentLifecycle(t *testing.T) {
 	assertAccountAdjustmentValuesEqual(t, fromValues.Values(), values)
 	assertAccountAdjustmentValuesEqual(
 		t,
-		NewAccountAdjustmentFromNative(fromValues.Native()).Values(),
+		NewAccountAdjustmentFromHandle(fromValues.Handle()).Values(),
 		values,
 	)
 	assertAccountAdjustmentValuesEqual(t, fromValues.EngineAccountAdjustment().Values(), values)
@@ -108,7 +108,7 @@ func TestAccountAdjustmentSetValuesRejectsConflictingOperations(t *testing.T) {
 		AccountAdjustmentValues{
 			BalanceOperation: optional.Some(
 				NewAccountAdjustmentBalanceOperationFromValues(
-					AccountAdjustmentBalanceOperationParams{
+					AccountAdjustmentBalanceOperationValues{
 						Asset: optional.Some(fixture.asset),
 					},
 				),
@@ -132,7 +132,7 @@ func TestAccountAdjustmentOperationSwitching(t *testing.T) {
 	adjustment := NewAccountAdjustment()
 
 	balance := NewAccountAdjustmentBalanceOperationFromValues(
-		AccountAdjustmentBalanceOperationParams{
+		AccountAdjustmentBalanceOperationValues{
 			Asset:             optional.Some(fixture.asset),
 			AverageEntryPrice: optional.Some(fixture.averagePrice),
 		},
@@ -159,7 +159,7 @@ func TestAccountAdjustmentBalanceOperationView(t *testing.T) {
 	fixture := newAccountAdjustmentFixture(t)
 	adjustment := NewAccountAdjustment()
 
-	view := adjustment.SetBalanceOperationByViewAndUnsetPositionOperation()
+	view := adjustment.EnsureBalanceOperationView()
 	assertAssetOptionUnset(t, view.Asset())
 	assertPriceOptionUnset(t, view.AverageEntryPrice())
 
@@ -184,14 +184,14 @@ func TestAccountAdjustmentBalanceOperationView(t *testing.T) {
 func TestAccountAdjustmentPositionOperationView(t *testing.T) {
 	fixture := newAccountAdjustmentFixture(t)
 	adjustment := NewAccountAdjustment()
-	instrument := param.NewInstrument(param.NewAsset("AAPL"), param.NewAsset("AAPL"))
+	instrument := param.NewInstrument(mustModelAsset(t, "AAPL"), mustModelAsset(t, "AAPL"))
 
-	view := adjustment.SetPositionOperationByViewAndUnsetBalanceOperation()
+	view := adjustment.EnsurePositionOperationView()
 	view.SetInstrument(instrument)
 	view.SetCollateralAsset(fixture.asset)
 	view.SetAverageEntryPrice(fixture.averagePrice)
-	view.SetLeverage(fixture.leverage.Native())
-	view.SetMode(fixture.mode.Native())
+	view.SetLeverage(fixture.leverage)
+	view.SetMode(fixture.mode)
 
 	assertInstrumentOptionEqual(t, view.Instrument(), instrument)
 	assertAssetOptionEqual(t, view.CollateralAsset(), fixture.asset)
@@ -375,9 +375,9 @@ func newAccountAdjustmentFixture(t *testing.T) accountAdjustmentFixture {
 	}
 
 	return accountAdjustmentFixture{
-		asset:          param.NewAsset("USD"),
-		altAsset:       param.NewAsset("USDT"),
-		instrument:     param.NewInstrument(param.NewAsset("AAPL"), param.NewAsset("USD")),
+		asset:          mustModelAsset(t, "USD"),
+		altAsset:       mustModelAsset(t, "USDT"),
+		instrument:     param.NewInstrument(mustModelAsset(t, "AAPL"), mustModelAsset(t, "USD")),
 		averagePrice:   averagePrice,
 		altPrice:       altPrice,
 		leverage:       param.NewLeverageFromInt(5),
@@ -391,6 +391,15 @@ func newAccountAdjustmentFixture(t *testing.T) accountAdjustmentFixture {
 		pendingUpper:   pendingUpper,
 		pendingLower:   pendingLower,
 	}
+}
+
+func mustModelAsset(t *testing.T, value string) param.Asset {
+	t.Helper()
+	asset, err := param.NewAsset(value)
+	if err != nil {
+		t.Fatalf("NewAsset(%q) error = %v", value, err)
+	}
+	return asset
 }
 
 func accountAdjustmentValuesFromFixture(fixture accountAdjustmentFixture) AccountAdjustmentValues {
@@ -423,8 +432,8 @@ func accountAdjustmentValuesFromFixture(fixture accountAdjustmentFixture) Accoun
 
 func accountAdjustmentBoundsValuesFromFixture(
 	fixture accountAdjustmentFixture,
-) AccountAdjustmentBoundsParams {
-	return AccountAdjustmentBoundsParams{
+) AccountAdjustmentBoundsValues {
+	return AccountAdjustmentBoundsValues{
 		TotalUpper:    optional.Some(fixture.totalUpper),
 		TotalLower:    optional.Some(fixture.totalLower),
 		ReservedUpper: optional.Some(fixture.reservedUpper),
@@ -716,8 +725,8 @@ func assertLeverageOptionValuesEqual(
 ) {
 	t.Helper()
 	assertOptionBy(t, "Leverage", got, want, func(gotValue param.Leverage, wantValue param.Leverage) {
-		if gotValue.Native() != wantValue.Native() {
-			t.Fatalf("Leverage.Native() = %v, want %v", gotValue.Native(), wantValue.Native())
+		if gotValue.Handle() != wantValue.Handle() {
+			t.Fatalf("Leverage.Handle() = %v, want %v", gotValue.Handle(), wantValue.Handle())
 		}
 	})
 }

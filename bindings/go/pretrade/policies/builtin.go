@@ -19,38 +19,33 @@ package policies
 
 import (
 	"go.openpit.dev/openpit/internal/native"
-	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/pretrade"
-	"go.openpit.dev/openpit/reject"
-	"go.openpit.dev/openpit/tx"
 )
 
-const (
-	builtinPolicyOnlyReason  = "built-in policy is engine-managed only"
-	builtinPolicyOnlyDetails = "this built-in policy wrapper is intended for engine registration only"
-)
+var _ pretrade.BuiltinPolicy = (*checkStartPolicy)(nil)
+var _ pretrade.BuiltinPolicy = (*policy)(nil)
 
 //------------------------------------------------------------------------------
-// CheckPreTradeStartPolicy
+// CheckStartPolicy
 
-type checkPreTradeStartPolicy struct {
+type checkStartPolicy struct {
 	handle native.PretradeCheckPreTradeStartPolicy
 }
 
-func newCheckPreTradeStartPolicy(
+func newCheckStartPolicy(
 	newPolicy func() native.PretradeCheckPreTradeStartPolicy,
-) *checkPreTradeStartPolicy {
-	return &checkPreTradeStartPolicy{handle: newPolicy()}
+) *checkStartPolicy {
+	return &checkStartPolicy{handle: newPolicy()}
 }
 
 func newCheckPreTradeStartPolicyWithError(
 	newPolicy func() (native.PretradeCheckPreTradeStartPolicy, error),
-) (*checkPreTradeStartPolicy, error) {
+) (*checkStartPolicy, error) {
 	handle, err := newPolicy()
 	if err != nil {
-		return &checkPreTradeStartPolicy{}, err
+		return &checkStartPolicy{}, err
 	}
-	return &checkPreTradeStartPolicy{handle: handle}, nil
+	return &checkStartPolicy{handle: handle}, nil
 }
 
 // Close releases this policy.
@@ -60,7 +55,7 @@ func newCheckPreTradeStartPolicyWithError(
 // remove the policy from the engine.
 //
 // Idempotency: safe to call more than once; subsequent calls are no-ops.
-func (p *checkPreTradeStartPolicy) Close() {
+func (p *checkStartPolicy) Close() {
 	if p.handle == nil {
 		return
 	}
@@ -72,71 +67,40 @@ func (p *checkPreTradeStartPolicy) Close() {
 //
 // Policy names must be unique across all policies registered in the same
 // engine instance.
-func (p checkPreTradeStartPolicy) Name() string {
+func (p checkStartPolicy) Name() string {
 	p.checkHandle()
 	return native.PretradeCheckPreTradeStartPolicyGetName(p.handle).Safe()
 }
 
-// TakeNative returns the native handle and transfers its ownership to the
+// TakeHandle returns the native handle and transfers its ownership to the
 // caller. After the handle has been taken, the wrapper is considered closed;
 // a subsequent Close is a no-op and any other method call panics.
-func (p *checkPreTradeStartPolicy) TakeNative() native.PretradeCheckPreTradeStartPolicy {
+func (p *checkStartPolicy) TakeHandle() native.PretradeCheckPreTradeStartPolicy {
 	p.checkHandle()
 	result := p.handle
 	p.handle = nil
 	return result
 }
 
-// CheckPreTradeStart performs start-stage checks against an order.
-//
-// Built-in policies are executed by the native runtime inside the engine
-// pipeline and are not intended to run through this Go callback path. So
-// this always returns a reject.
-func (p checkPreTradeStartPolicy) CheckPreTradeStart(
-	pretrade.Context,
-	model.Order,
-) reject.List {
-	p.checkHandle()
-	return reject.NewSingleItemList(
-		reject.CodeOther,
-		p.Name(),
-		builtinPolicyOnlyReason,
-		builtinPolicyOnlyDetails,
-		reject.ScopeOrder,
-	)
-}
-
-// ApplyExecutionReport applies post-trade updates from execution reports.
-//
-// Built-in policies are executed by the native runtime inside the engine
-// pipeline and are not intended to run through this Go callback path. So
-// this always returns false.
-func (p checkPreTradeStartPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
-	p.checkHandle()
-	return false
-}
-
-func (p checkPreTradeStartPolicy) checkHandle() {
+func (p checkStartPolicy) checkHandle() {
 	if p.handle == nil {
 		panic("built-in policy is already closed")
 	}
 }
 
 //------------------------------------------------------------------------------
-// PreTradePolicy
+// Policy
 
-type preTradePolicy struct {
+type policy struct {
 	handle native.PretradePreTradePolicy
 }
 
-func newPreTradePolicyWithError(
-	newPolicy func() (native.PretradePreTradePolicy, error),
-) (*preTradePolicy, error) {
+func newPolicyWithError(newPolicy func() (native.PretradePreTradePolicy, error)) (*policy, error) {
 	handle, err := newPolicy()
 	if err != nil {
-		return &preTradePolicy{}, err
+		return &policy{}, err
 	}
-	return &preTradePolicy{handle: handle}, nil
+	return &policy{handle: handle}, nil
 }
 
 // Close releases this policy.
@@ -146,7 +110,7 @@ func newPreTradePolicyWithError(
 // remove the policy from the engine.
 //
 // Idempotency: safe to call more than once; subsequent calls are no-ops.
-func (p *preTradePolicy) Close() {
+func (p *policy) Close() {
 	if p.handle == nil {
 		return
 	}
@@ -158,52 +122,22 @@ func (p *preTradePolicy) Close() {
 //
 // Policy names must be unique across all policies registered in the same
 // engine instance.
-func (p preTradePolicy) Name() string {
+func (p policy) Name() string {
 	p.checkHandle()
 	return native.PretradePreTradePolicyGetName(p.handle).Safe()
 }
 
-// TakeNative returns the native handle and transfers its ownership to the
+// TakeHandle returns the native handle and transfers its ownership to the
 // caller. After the handle has been taken, the wrapper is considered closed;
 // a subsequent Close is a no-op and any other method call panics.
-func (p *preTradePolicy) TakeNative() native.PretradePreTradePolicy {
+func (p *policy) TakeHandle() native.PretradePreTradePolicy {
 	p.checkHandle()
 	result := p.handle
 	p.handle = nil
 	return result
 }
 
-// PerformPreTradeCheck performs main-stage checks and can emit mutations or rejects.
-//
-// Built-in policies are executed by the native runtime inside the engine
-// pipeline and are not intended to run through this Go callback path. So
-// this always returns a reject.
-func (p preTradePolicy) PerformPreTradeCheck(
-	_ pretrade.Context,
-	_ model.Order,
-	_ tx.Mutations,
-) reject.List {
-	p.checkHandle()
-	return reject.NewSingleItemList(
-		reject.CodeOther,
-		p.Name(),
-		builtinPolicyOnlyReason,
-		builtinPolicyOnlyDetails,
-		reject.ScopeOrder,
-	)
-}
-
-// ApplyExecutionReport applies post-trade updates from execution reports.
-//
-// Built-in policies are executed by the native runtime inside the engine
-// pipeline and are not intended to run through this Go callback path. So
-// this always returns false.
-func (p preTradePolicy) ApplyExecutionReport(model.ExecutionReport) bool {
-	p.checkHandle()
-	return false
-}
-
-func (p preTradePolicy) checkHandle() {
+func (p policy) checkHandle() {
 	if p.handle == nil {
 		panic("built-in policy is already closed")
 	}

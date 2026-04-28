@@ -130,7 +130,7 @@ func TestResolveCacheDir_OverrideWhitespace(t *testing.T) {
 
 func TestResolvePath_Override_FileExists(t *testing.T) {
 	overridePath := filepath.Join(t.TempDir(), "pit_ffi")
-	if err := os.WriteFile(overridePath, []byte("fake-runtime"), 0o755); err != nil {
+	if err := os.WriteFile(overridePath, []byte("fake-runtime"), 0o755); err != nil { // nolint
 		t.Fatalf("write override file: %v", err)
 	}
 
@@ -191,7 +191,7 @@ func TestResolvePath_CacheHit(t *testing.T) {
 
 	targetPath := filepath.Join(cacheDir, fileName)
 	originalContent := []byte("already-cached-runtime")
-	if err := os.WriteFile(targetPath, originalContent, 0o755); err != nil {
+	if err := os.WriteFile(targetPath, originalContent, 0o755); err != nil { // nolint
 		t.Fatalf("write cached file: %v", err)
 	}
 
@@ -369,7 +369,7 @@ func TestLoad_ReturnsErrorForCorruptCachedRuntime(t *testing.T) {
 		t.Fatalf("MkdirAll(cacheDir) error = %v", err)
 	}
 	targetPath := filepath.Join(cacheDir, fileName)
-	if err := os.WriteFile(targetPath, []byte("not-a-shared-library"), 0o755); err != nil {
+	if err := os.WriteFile(targetPath, []byte("not-a-shared-library"), 0o755); err != nil { // nolint
 		t.Fatalf("WriteFile(targetPath) error = %v", err)
 	}
 

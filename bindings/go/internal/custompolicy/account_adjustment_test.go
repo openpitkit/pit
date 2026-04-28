@@ -32,16 +32,16 @@ type fakeAccountAdjustmentPolicy struct {
 	name string
 }
 
-func (p *fakeAccountAdjustmentPolicy) Close() {}
+func (fakeAccountAdjustmentPolicy) Close() {}
 
-func (p *fakeAccountAdjustmentPolicy) Name() string { return p.name }
+func (p fakeAccountAdjustmentPolicy) Name() string { return p.name }
 
-func (p *fakeAccountAdjustmentPolicy) ApplyAccountAdjustment(
+func (fakeAccountAdjustmentPolicy) ApplyAccountAdjustment(
 	_ accountadjustment.Context,
 	_ param.AccountID,
 	_ model.AccountAdjustment,
 	_ tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	return nil
 }
 

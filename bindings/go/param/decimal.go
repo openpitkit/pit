@@ -22,7 +22,7 @@ import (
 	"go.openpit.dev/openpit/internal/native"
 )
 
-func newDecimalFromNative(source native.ParamDecimal) decimal.Decimal {
+func newDecimalFromHandle(source native.ParamDecimal) decimal.Decimal {
 	return native.NewDecimalFromNative(source)
 }
 

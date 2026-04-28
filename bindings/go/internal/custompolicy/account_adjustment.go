@@ -83,10 +83,10 @@ func pitAccountAdjustmentPolicyApply(
 			accountadjustment.NewContextFromHandle(
 				native.AccountAdjustmentContext(ctx),
 			),
-			param.NewAccountIDFromNative(
+			param.NewAccountIDFromHandle(
 				native.ParamAccountID(accountID),
 			),
-			model.NewAccountAdjustmentFromNative(
+			model.NewAccountAdjustmentFromHandle(
 				*(*native.AccountAdjustment)(unsafe.Pointer(adjustment)),
 			),
 			tx.NewMutationsFromHandle(

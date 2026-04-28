@@ -1,5 +1,4 @@
 import enum
-from typing import TypeAlias
 
 from . import _enum
 from ._openpit import (
@@ -22,6 +21,7 @@ from ._openpit import (
     Price,
     Quantity,
     Volume,
+    _validate_asset,
 )
 from ._openpit import (
     AdjustmentAmount as _AdjustmentAmount,
@@ -137,7 +137,18 @@ class AssetError(ValueError):
     """Error type for asset validation failures."""
 
 
-Asset: TypeAlias = str
+class Asset(str):
+    """Validated asset identifier string."""
+
+    # @typing.override
+    def __new__(cls, value: str) -> "Asset":
+        if not isinstance(value, str):
+            raise TypeError("asset must be str")
+        try:
+            _validate_asset(value)
+        except ValueError as error:
+            raise AssetError(str(error)) from None
+        return str.__new__(cls, value)
 
 
 class AdjustmentAmount(_AdjustmentAmount):
@@ -315,6 +326,21 @@ class RoundingStrategy(_enum.StrEnum):
     def CONSERVATIVE_LOSS(cls) -> "RoundingStrategy":
         """Conservative rounding direction for loss-sensitive flows."""
         return cls(_ROUNDING_STRATEGY_CONSERVATIVE_LOSS)
+
+
+_native_account_id_from_str = AccountId.from_str
+
+
+def _account_id_from_str(value: str) -> AccountId:
+    try:
+        return _native_account_id_from_str(value)
+    except ValueError as error:
+        if str(error) == "account id string must not be empty":
+            raise ValueError("account id string must not be empty") from None
+        raise
+
+
+AccountId.from_str = staticmethod(_account_id_from_str)
 
 
 AccountId.__doc__ = """

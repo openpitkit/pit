@@ -22,10 +22,10 @@ package native
 */
 import "C"
 
-func NewInstrument(underlying_asset string, settlement_asset string) Instrument {
+func NewInstrument(underlyingAsset string, settlementAsset string) Instrument {
 	return Instrument{
-		underlying_asset: importString(underlying_asset),
-		settlement_asset: importString(settlement_asset),
+		underlying_asset: importString(underlyingAsset),
+		settlement_asset: importString(settlementAsset),
 	}
 }
 

@@ -118,7 +118,7 @@ def test_parse_decimal_macro_ffi_uses_hardcoded_signatures() -> None:
     assert from_str_item.args == [
         ("value", "PitStringView"),
         ("out", "*mut PitParamPnl"),
-        ("out_error", "PitOutError"),
+        ("out_error", "PitOutParamError"),
     ]
 
     checked_mul_f64_item = by_name["pit_param_pnl_checked_mul_f64"]
@@ -127,14 +127,14 @@ def test_parse_decimal_macro_ffi_uses_hardcoded_signatures() -> None:
         ("value", "PitParamPnl"),
         ("multiplier", "f64"),
         ("out", "*mut PitParamPnl"),
-        ("out_error", "PitOutError"),
+        ("out_error", "PitOutParamError"),
     ]
 
     to_string_item = by_name["pit_param_pnl_to_string"]
     assert to_string_item.ret == "*mut PitSharedString"
     assert to_string_item.args == [
         ("value", "PitParamPnl"),
-        ("out_error", "PitOutError"),
+        ("out_error", "PitOutParamError"),
     ]
 
 
@@ -146,3 +146,7 @@ def test_parse_file_includes_pointer_alias_for_out_error() -> None:
     out_error_alias = by_name["PitOutError"]
     assert out_error_alias.kind == "alias"
     assert out_error_alias.alias == "*mut *mut PitSharedString"
+
+    out_param_error_alias = by_name["PitOutParamError"]
+    assert out_param_error_alias.kind == "alias"
+    assert out_param_error_alias.alias == "*mut *mut PitParamError"

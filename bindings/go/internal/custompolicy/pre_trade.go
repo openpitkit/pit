@@ -35,13 +35,11 @@ import (
 )
 
 type PreTrade struct {
-	impl   pretrade.PreTradePolicy
+	impl   pretrade.Policy
 	handle cgo.Handle
 }
 
-func StartPreTrade(
-	impl pretrade.PreTradePolicy,
-) (native.PretradePreTradePolicy, error) {
+func StartPreTrade(impl pretrade.Policy) (native.PretradePreTradePolicy, error) {
 	implHandle := &PreTrade{impl: impl}
 	implHandle.handle = cgo.NewHandle(implHandle)
 
@@ -82,7 +80,7 @@ func pitPretradePreTradePolicyCheckPreTrade(
 			pretrade.NewContextFromHandle(
 				native.PretradeContext(ctx),
 			),
-			model.NewOrderFromNative(*(*native.Order)(unsafe.Pointer(order))),
+			model.NewOrderFromHandle(*(*native.Order)(unsafe.Pointer(order))),
 			tx.NewMutationsFromHandle(
 				native.Mutations(mutations),
 			),
@@ -102,7 +100,7 @@ func pitPretradePreTradePolicyApplyExecutionReport(
 
 	return C.bool(
 		getPreTrade(userData).impl.ApplyExecutionReport(
-			model.NewExecutionReportFromNative(
+			model.NewExecutionReportFromHandle(
 				*(*native.ExecutionReport)(unsafe.Pointer(report)),
 			),
 		),

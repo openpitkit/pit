@@ -35,6 +35,8 @@ _LEVERAGE_MIN: int
 _LEVERAGE_MAX: int
 _LEVERAGE_STEP: float
 
+def _validate_asset(value: str) -> None: ...
+
 class RejectError(Exception):
     """Python exception type exposed by the native module."""
 

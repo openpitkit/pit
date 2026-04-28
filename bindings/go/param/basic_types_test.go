@@ -26,15 +26,24 @@ import (
 func TestNewAccountIDFromStringStable(t *testing.T) {
 	t.Parallel()
 
-	a := NewAccountIDFromString("acc-1")
-	b := NewAccountIDFromString("acc-1")
-	c := NewAccountIDFromString("acc-2")
-
-	if a.Native() != b.Native() {
-		t.Fatalf("same source hash mismatch: %v vs %v", a.Native(), b.Native())
+	a, err := NewAccountIDFromString("acc-1")
+	if err != nil {
+		t.Fatalf("NewAccountIDFromString(acc-1) error = %v", err)
 	}
-	if a.Native() == c.Native() {
-		t.Fatalf("different source hash collision for short inputs: %v", a.Native())
+	b, err := NewAccountIDFromString("acc-1")
+	if err != nil {
+		t.Fatalf("NewAccountIDFromString(acc-1 repeat) error = %v", err)
+	}
+	c, err := NewAccountIDFromString("acc-2")
+	if err != nil {
+		t.Fatalf("NewAccountIDFromString(acc-2) error = %v", err)
+	}
+
+	if a.Handle() != b.Handle() {
+		t.Fatalf("same source hash mismatch: %v vs %v", a.Handle(), b.Handle())
+	}
+	if a.Handle() == c.Handle() {
+		t.Fatalf("different source hash collision for short inputs: %v", a.Handle())
 	}
 	if got := a.String(); got == "" {
 		t.Fatal("String() should not be empty")
@@ -44,12 +53,39 @@ func TestNewAccountIDFromStringStable(t *testing.T) {
 func TestAssetStringAndNative(t *testing.T) {
 	t.Parallel()
 
-	asset := NewAsset("USD")
+	asset, err := NewAsset("USD")
+	if err != nil {
+		t.Fatalf("NewAsset(USD) error = %v", err)
+	}
 	if got := asset.String(); got != "USD" {
 		t.Fatalf("String() = %q, want %q", got, "USD")
 	}
-	if got := asset.Native(); got != "USD" {
-		t.Fatalf("Native() = %q, want %q", got, "USD")
+	if got := asset.Handle(); got != "USD" {
+		t.Fatalf("Handle() = %q, want %q", got, "USD")
+	}
+}
+
+func TestNewAccountIDFromStringRejectsEmpty(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewAccountIDFromString(" \t ")
+	if err == nil {
+		t.Fatal("expected error for empty account id")
+	}
+	if err != ErrAccountIDEmpty {
+		t.Fatalf("error = %v, want %v", err, ErrAccountIDEmpty)
+	}
+}
+
+func TestNewAssetRejectsEmpty(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewAsset("  ")
+	if err == nil {
+		t.Fatal("expected error for empty asset")
+	}
+	if err != ErrAssetEmpty {
+		t.Fatalf("error = %v, want %v", err, ErrAssetEmpty)
 	}
 }
 
@@ -68,8 +104,8 @@ func TestSideHelpers(t *testing.T) {
 	if got := SideBuy.String(); got != "buy" {
 		t.Fatalf("SideBuy.String() = %q, want %q", got, "buy")
 	}
-	if SideBuy.Native() != native.ParamSideBuy {
-		t.Fatalf("SideBuy.Native() = %v, want %v", SideBuy.Native(), native.ParamSideBuy)
+	if SideBuy.Handle() != native.ParamSideBuy {
+		t.Fatalf("SideBuy.Handle() = %v, want %v", SideBuy.Handle(), native.ParamSideBuy)
 	}
 
 	if SideSell.IsBuy() || !SideSell.IsSell() {
@@ -84,20 +120,20 @@ func TestSideHelpers(t *testing.T) {
 	if got := SideSell.String(); got != "sell" {
 		t.Fatalf("SideSell.String() = %q, want %q", got, "sell")
 	}
-	if SideSell.Native() != native.ParamSideSell {
-		t.Fatalf("SideSell.Native() = %v, want %v", SideSell.Native(), native.ParamSideSell)
+	if SideSell.Handle() != native.ParamSideSell {
+		t.Fatalf("SideSell.Handle() = %v, want %v", SideSell.Handle(), native.ParamSideSell)
 	}
 }
 
-func TestNewSideFromNative(t *testing.T) {
+func TestNewSideFromHandle(t *testing.T) {
 	t.Parallel()
 
-	unset := NewSideFromNative(native.ParamSideNotSet)
+	unset := NewSideFromHandle(native.ParamSideNotSet)
 	if unset.IsSet() {
 		t.Fatal("not-set native side should map to empty option")
 	}
 
-	buy, ok := NewSideFromNative(native.ParamSideBuy).Get()
+	buy, ok := NewSideFromHandle(native.ParamSideBuy).Get()
 	if !ok {
 		t.Fatal("buy side should be set")
 	}
@@ -106,7 +142,7 @@ func TestNewSideFromNative(t *testing.T) {
 	}
 }
 
-func TestNewSideFromNativePanicsOnUnknown(t *testing.T) {
+func TestNewSideFromHandlePanicsOnUnknown(t *testing.T) {
 	t.Parallel()
 
 	defer func() {
@@ -115,7 +151,7 @@ func TestNewSideFromNativePanicsOnUnknown(t *testing.T) {
 		}
 	}()
 
-	_ = NewSideFromNative(native.ParamSide(200))
+	_ = NewSideFromHandle(native.ParamSide(200))
 }
 
 func TestPositionSideHelpers(t *testing.T) {
@@ -150,7 +186,7 @@ func TestPositionSideHelpers(t *testing.T) {
 	}
 }
 
-func TestNewPositionSideFromNativePanicsOnUnknown(t *testing.T) {
+func TestNewPositionSideFromHandlePanicsOnUnknown(t *testing.T) {
 	t.Parallel()
 
 	defer func() {
@@ -159,7 +195,7 @@ func TestNewPositionSideFromNativePanicsOnUnknown(t *testing.T) {
 		}
 	}()
 
-	_ = NewPositionSideFromNative(native.ParamPositionSide(200))
+	_ = NewPositionSideFromHandle(native.ParamPositionSide(200))
 }
 
 func TestPositionEffectString(t *testing.T) {

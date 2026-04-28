@@ -40,23 +40,44 @@ use std::fmt::{Display, Formatter};
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use openpit::param::AccountId;
 /// use std::collections::HashMap;
 ///
 /// let numeric = AccountId::from_u64(99224416);
-/// let string  = AccountId::from_str("my-account");
+/// let string  = AccountId::from_str("my-account")?;
 ///
 /// let mut map: HashMap<AccountId, &str> = HashMap::new();
 /// map.insert(numeric, "numeric account");
 /// map.insert(string,  "string account");
 ///
 /// assert_eq!(map[&AccountId::from_u64(99224416)], "numeric account");
-/// assert_eq!(map[&AccountId::from_str("my-account")], "string account");
+/// assert_eq!(map[&AccountId::from_str("my-account")?], "string account");
+/// # Ok(())
+/// # }
 /// ```
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AccountId(u64);
+
+/// Errors returned by [`AccountId`] constructors.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AccountIdError {
+    /// Account identifier string is empty.
+    Empty,
+}
+
+impl Display for AccountIdError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => formatter.write_str("account id string must not be empty"),
+        }
+    }
+}
+
+impl std::error::Error for AccountIdError {}
 
 impl AccountId {
     /// Constructs an account identifier from a 64-bit integer.
@@ -104,19 +125,26 @@ impl AccountId {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use openpit::param::AccountId;
     /// use std::collections::HashMap;
     ///
-    /// let id = AccountId::from_str("trading-account-1");
+    /// let id = AccountId::from_str("trading-account-1")?;
     ///
     /// let mut map: HashMap<AccountId, i32> = HashMap::new();
     /// map.insert(id, 42);
     ///
-    /// assert_eq!(map[&AccountId::from_str("trading-account-1")], 42);
+    /// assert_eq!(map[&AccountId::from_str("trading-account-1")?], 42);
+    /// # Ok(())
+    /// # }
     /// ```
     #[allow(clippy::should_implement_trait)]
-    pub fn from_str(value: impl AsRef<str>) -> Self {
-        Self(fnv1a_64(value.as_ref()))
+    pub fn from_str(value: impl AsRef<str>) -> Result<Self, AccountIdError> {
+        let value = value.as_ref();
+        if value.trim().is_empty() {
+            return Err(AccountIdError::Empty);
+        }
+        Ok(Self(fnv1a_64(value)))
     }
 
     /// Returns the raw 64-bit integer value.
@@ -153,7 +181,7 @@ fn fnv1a_64(s: &str) -> u64 {
 mod tests {
     use std::collections::HashMap;
 
-    use super::AccountId;
+    use super::{AccountId, AccountIdError};
 
     #[test]
     fn from_u64_display_shows_integer() {
@@ -192,7 +220,10 @@ mod tests {
     // UTF-8 bytes of the decimal representation.
     #[test]
     fn from_u64_and_from_str_of_same_numeric_string_differ() {
-        assert_ne!(AccountId::from_u64(42), AccountId::from_str("42"));
+        assert_ne!(
+            AccountId::from_u64(42),
+            AccountId::from_str("42").expect("account id must be valid")
+        );
     }
 
     #[test]
@@ -206,17 +237,28 @@ mod tests {
     #[test]
     fn hashmap_lookup_with_from_str() {
         let mut map: HashMap<AccountId, &str> = HashMap::new();
-        map.insert(AccountId::from_str("beta"), "beta-value");
+        map.insert(
+            AccountId::from_str("beta").expect("account id must be valid"),
+            "beta-value",
+        );
 
-        assert_eq!(map[&AccountId::from_str("beta")], "beta-value");
+        assert_eq!(
+            map[&AccountId::from_str("beta").expect("account id must be valid")],
+            "beta-value"
+        );
     }
 
-    // Regression: FNV-1a of the empty string must equal the offset basis.
     #[test]
-    fn fnv1a_empty_string_equals_offset_basis() {
+    fn from_str_rejects_empty_or_whitespace() {
+        assert_eq!(AccountId::from_str(""), Err(AccountIdError::Empty));
+        assert_eq!(AccountId::from_str("   "), Err(AccountIdError::Empty));
+    }
+
+    #[test]
+    fn account_id_error_display_is_stable() {
         assert_eq!(
-            AccountId::from_str(""),
-            AccountId::from_u64(14_695_981_039_346_656_037)
+            AccountIdError::Empty.to_string(),
+            "account id string must not be empty"
         );
     }
 

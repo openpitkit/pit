@@ -53,7 +53,7 @@ func TestTradeAmountQuantity(t *testing.T) {
 		t.Fatal("Choose() called volume branch unexpectedly")
 	}
 
-	roundTrip, ok := NewTradeAmountFromNative(amount.Native()).Get()
+	roundTrip, ok := NewTradeAmountFromHandle(amount.Handle()).Get()
 	if !ok {
 		t.Fatal("round-trip trade amount should be present")
 	}
@@ -93,10 +93,10 @@ func TestTradeAmountVolume(t *testing.T) {
 	}
 }
 
-func TestTradeAmountFromNativeUnset(t *testing.T) {
+func TestTradeAmountFromHandleUnset(t *testing.T) {
 	t.Parallel()
 
-	if got := NewTradeAmountFromNative(native.ParamTradeAmount{}); got.IsSet() {
+	if got := NewTradeAmountFromHandle(native.ParamTradeAmount{}); got.IsSet() {
 		t.Fatal("unset native trade amount should map to empty option")
 	}
 }

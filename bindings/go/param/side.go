@@ -34,7 +34,7 @@ const (
 	SideSell Side = native.ParamSideSell
 )
 
-func NewSideFromNative(v native.ParamSide) optional.Option[Side] {
+func NewSideFromHandle(v native.ParamSide) optional.Option[Side] {
 	switch v {
 	case native.ParamSideSell:
 		return optional.Some(SideSell)
@@ -80,9 +80,6 @@ func (v Side) String() string {
 	return "sell"
 }
 
-func (v Side) Native() native.ParamSide {
-	if v == SideSell {
-		return native.ParamSideSell
-	}
-	return native.ParamSideBuy
+func (v Side) Handle() native.ParamSide {
+	return native.ParamSide(v)
 }

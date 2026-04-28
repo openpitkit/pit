@@ -30,6 +30,6 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
-func newNativeRejectListOrNil(source reject.List) *C.PitRejectList {
+func newNativeRejectListOrNil(source []reject.Reject) *C.PitRejectList {
 	return (*C.PitRejectList)(unsafe.Pointer(convert.NewNativeRejectListOrNil(source)))
 }

@@ -2525,10 +2525,11 @@ impl PyAccountId {
     /// integer mapping instead. See <http://www.isthe.com/chongo/tech/comp/fnv/> for the algorithm
     /// specification.
     #[staticmethod]
-    fn from_str(value: &str) -> Self {
-        Self {
-            inner: AccountId::from_str(value),
-        }
+    fn from_str(value: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: AccountId::from_str(value)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?,
+        })
     }
 
     #[getter]
@@ -4696,6 +4697,11 @@ fn parse_asset_input(value: &Bound<'_, PyAny>) -> PyResult<Asset> {
     Err(PyTypeError::new_err("asset must be a str"))
 }
 
+#[pyfunction]
+fn _validate_asset(value: &str) -> PyResult<()> {
+    parse_asset(value).map(|_| ())
+}
+
 fn parse_price(value: &str) -> PyResult<Price> {
     Price::from_str(value).map_err(|error| create_param_error(error.to_string()))
 }
@@ -4986,6 +4992,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("_LEVERAGE_MIN", Leverage::MIN)?;
     module.add("_LEVERAGE_MAX", Leverage::MAX)?;
     module.add("_LEVERAGE_STEP", Leverage::STEP)?;
+    module.add_function(wrap_pyfunction!(_validate_asset, module)?)?;
     module.add_class::<PyAccountId>()?;
     module.add_class::<PyQuantity>()?;
     module.add_class::<PyPrice>()?;

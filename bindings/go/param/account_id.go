@@ -18,7 +18,8 @@
 package param
 
 import (
-	"fmt"
+	"errors"
+	"strconv"
 
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/pkg/optional"
@@ -29,9 +30,11 @@ type AccountID struct {
 	native native.ParamAccountID
 }
 
+var ErrAccountIDEmpty = errors.New("account id string must not be empty")
+
 // NewAccountIDFromInt constructs an account identifier from an integer value.
 func NewAccountIDFromInt(source uint64) AccountID {
-	return NewAccountIDFromNative(native.CreateParamAccountIDFromU64(source))
+	return NewAccountIDFromHandle(native.CreateParamAccountIDFromU64(source))
 }
 
 // NewAccountIDFromString constructs an account identifier by hashing input string with FNV-1a
@@ -46,29 +49,36 @@ func NewAccountIDFromInt(source uint64) AccountID {
 //
 // If collision risk is unacceptable, use your own collision-free
 // string-to-integer mapping and construct account identifiers from integers.
-func NewAccountIDFromString(source string) AccountID {
-	return NewAccountIDFromNative(native.CreateParamAccountIDFromStr(source))
+func NewAccountIDFromString(source string) (AccountID, error) {
+	value, err := native.CreateParamAccountIDFromStr(source)
+	if err != nil {
+		if err.Error() == "param: account id string must not be empty" {
+			return AccountID{}, ErrAccountIDEmpty
+		}
+		return AccountID{}, err
+	}
+	return NewAccountIDFromHandle(value), nil
 }
 
-func NewAccountIDFromNative(source native.ParamAccountID) AccountID {
+func NewAccountIDFromHandle(source native.ParamAccountID) AccountID {
 	return AccountID{native: source}
 }
 
-func NewAccountIDOptionFromNative(
+func NewAccountIDOptionFromHandle(
 	source native.ParamAccountIDOptional,
 ) optional.Option[AccountID] {
 	if !native.ParamAccountIDOptionalIsSet(source) {
 		return optional.None[AccountID]()
 	}
-	return optional.Some(NewAccountIDFromNative(native.ParamAccountIDOptionalGet(source)))
+	return optional.Some(NewAccountIDFromHandle(native.ParamAccountIDOptionalGet(source)))
 }
 
 // String formats account identifier as decimal string.
 func (v AccountID) String() string {
-	return fmt.Sprintf("%d", v.native)
+	return strconv.FormatUint(uint64(v.native), 10)
 }
 
-// Native exposes the underlying native account identifier.
-func (v AccountID) Native() native.ParamAccountID {
+// Handle exposes the underlying native account identifier.
+func (v AccountID) Handle() native.ParamAccountID {
 	return v.native
 }

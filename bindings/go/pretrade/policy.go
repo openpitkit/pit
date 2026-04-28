@@ -23,7 +23,7 @@ import (
 	"go.openpit.dev/openpit/tx"
 )
 
-type CheckPreTradeStartPolicy interface {
+type CheckStartPolicy interface {
 	// Close releases any resources held by the policy.
 	Close()
 
@@ -42,7 +42,7 @@ type CheckPreTradeStartPolicy interface {
 	// Implementations must not let panics escape this method. A panic raised
 	// here may propagate across the SDK boundary and terminate the process;
 	// recovering from such panics is the implementer's responsibility.
-	CheckPreTradeStart(Context, model.Order) reject.List
+	CheckPreTradeStart(Context, model.Order) []reject.Reject
 
 	// ApplyExecutionReport applies post-trade updates from execution reports.
 	//
@@ -54,7 +54,7 @@ type CheckPreTradeStartPolicy interface {
 	ApplyExecutionReport(model.ExecutionReport) bool
 }
 
-type PreTradePolicy interface {
+type Policy interface {
 	// Close releases any resources held by the policy.
 	Close()
 
@@ -80,7 +80,7 @@ type PreTradePolicy interface {
 	// Implementations must not let panics escape this method. A panic raised
 	// here may propagate across the SDK boundary and terminate the process;
 	// recovering from such panics is the implementer's responsibility.
-	PerformPreTradeCheck(Context, model.Order, tx.Mutations) reject.List
+	PerformPreTradeCheck(Context, model.Order, tx.Mutations) []reject.Reject
 
 	// ApplyExecutionReport applies post-trade updates from execution reports.
 	//

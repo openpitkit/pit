@@ -23,28 +23,26 @@ import (
 	"go.openpit.dev/openpit/internal/native"
 )
 
-type List = []Reject
-
-func NewList(rejects ...Reject) List {
+func NewList(rejects ...Reject) []Reject {
 	return rejects
 }
 
 func NewSingleItemList(
-	Code Code, // stable machine-readable reject code
-	Policy string, // policy name that produced the reject
-	Reason string, // human-readable reject reason
-	Details string, // case-specific reject details
-	Scope Scope, // reject scope
-) List {
-	return NewList(New(Code, Policy, Reason, Details, Scope))
+	code Code, // stable machine-readable reject code
+	policy string, // policy name that produced the reject
+	reason string, // human-readable reject reason
+	details string, // case-specific reject details
+	scope Scope, // reject scope
+) []Reject {
+	return NewList(New(code, policy, reason, details, scope))
 }
 
-func NewListFromHandle(handle native.RejectList) (List, error) {
+func NewListFromHandle(handle native.RejectList) ([]Reject, error) {
 	len := native.RejectListLen(handle)
 	if len == 0 {
 		return nil, errors.New("reject list is not provided")
 	}
-	result := make(List, len)
+	result := make([]Reject, len)
 	for i := 0; i < len; i++ {
 		result[i] = NewFromHandle(native.RejectListGet(handle, i))
 	}

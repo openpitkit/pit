@@ -40,13 +40,13 @@ func newOrderFixture(t *testing.T) orderFixture {
 
 	return orderFixture{
 		tradeAmount:  param.NewQuantityTradeAmount(quantity),
-		instrument:   param.NewInstrument(param.NewAsset("USD"), param.NewAsset("USD")),
+		instrument:   param.NewInstrument(mustModelAsset(t, "USD"), mustModelAsset(t, "USD")),
 		price:        price,
 		accountID:    param.NewAccountIDFromInt(90210),
 		side:         param.SideBuy,
 		positionSide: param.PositionSideLong,
-		asset:        param.NewAsset("USD"),
-		leverage:     param.NewLeverageFromInt(5).Native(),
+		asset:        mustModelAsset(t, "USD"),
+		leverage:     param.NewLeverageFromInt(5),
 	}
 }
 
@@ -121,7 +121,7 @@ func assertOrderOperationMatchesFixture(t *testing.T, operation OrderOperation, 
 	assertOrderOperationValuesEqual(t, operation.Values(), expectedOrderOperationValues(fixture))
 }
 
-func assertOrderOperationValuesMatchFixture(t *testing.T, values OrderOperationParams, fixture orderFixture) {
+func assertOrderOperationValuesMatchFixture(t *testing.T, values OrderOperationValues, fixture orderFixture) {
 	t.Helper()
 	assertOrderOperationValuesEqual(t, values, expectedOrderOperationValues(fixture))
 }
@@ -144,7 +144,7 @@ func assertOrderOperationViewUnset(t *testing.T, operation OrderOperationView) {
 	assertSideOptionUnset(t, operation.Side())
 }
 
-func assertOrderOperationValuesEqual(t *testing.T, got OrderOperationParams, want OrderOperationParams) {
+func assertOrderOperationValuesEqual(t *testing.T, got OrderOperationValues, want OrderOperationValues) {
 	t.Helper()
 	assertTradeAmountOptionValuesEqual(t, got.TradeAmount, want.TradeAmount)
 	assertInstrumentOptionValuesEqual(t, got.Instrument, want.Instrument)
@@ -198,7 +198,7 @@ func assertOrderMarginUnset(t *testing.T, margin OrderMargin) {
 	t.Helper()
 	assertAssetOptionUnset(t, margin.CollateralAsset())
 	assertOptionalBoolUnset(t, margin.AutoBorrow())
-	if got := margin.Leverage(); got != native.ParamLeverageNotSet {
+	if got := margin.Leverage(); got.IsSet() {
 		t.Fatalf("OrderMargin.Leverage() = %v, want %v", got, native.ParamLeverageNotSet)
 	}
 }
@@ -207,7 +207,7 @@ func assertOrderMarginViewUnset(t *testing.T, margin OrderMarginView) {
 	t.Helper()
 	assertAssetOptionUnset(t, margin.CollateralAsset())
 	assertOptionalBoolUnset(t, margin.AutoBorrow())
-	if got := margin.Leverage(); got != native.ParamLeverageNotSet {
+	if got := margin.Leverage(); got.IsSet() {
 		t.Fatalf("OrderMarginView.Leverage() = %v, want %v", got, native.ParamLeverageNotSet)
 	}
 }
@@ -332,8 +332,8 @@ func assertAccountIDOptionValuesEqual(
 ) {
 	t.Helper()
 	assertOptionBy(t, "AccountID", got, want, func(gotValue param.AccountID, wantValue param.AccountID) {
-		if gotValue.Native() != wantValue.Native() {
-			t.Fatalf("AccountID.Native() = %v, want %v", gotValue.Native(), wantValue.Native())
+		if gotValue.Handle() != wantValue.Handle() {
+			t.Fatalf("AccountID.Handle() = %v, want %v", gotValue.Handle(), wantValue.Handle())
 		}
 	})
 }
@@ -411,7 +411,7 @@ func assertAssetOptionValuesEqual(
 	})
 }
 
-func assertOptionalBoolEqual(t *testing.T, got optional.Bool, want bool) {
+func assertOptionalBoolEqual(t *testing.T, got optional.Bool, want bool) { // nolint
 	t.Helper()
 	assertOptionalBoolValuesEqual(t, got, optional.BoolSome(want))
 }
@@ -454,8 +454,8 @@ func expectedOrderValues(fixture orderFixture) OrderValues {
 	}
 }
 
-func expectedOrderOperationValues(fixture orderFixture) OrderOperationParams {
-	return OrderOperationParams{
+func expectedOrderOperationValues(fixture orderFixture) OrderOperationValues {
+	return OrderOperationValues{
 		TradeAmount: optional.Some(fixture.tradeAmount),
 		Instrument:  optional.Some(fixture.instrument),
 		Price:       optional.Some(fixture.price),
@@ -476,6 +476,6 @@ func expectedOrderMarginValues(fixture orderFixture) OrderMarginValues {
 	return OrderMarginValues{
 		CollateralAsset: optional.Some(fixture.asset),
 		AutoBorrow:      optional.BoolSome(true),
-		Leverage:        fixture.leverage,
+		Leverage:        optional.Some(fixture.leverage),
 	}
 }

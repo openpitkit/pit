@@ -66,6 +66,12 @@ SECTION_INFO = {
     "policy.rs": ("policies", "Policies"),
     "lib.rs": ("runtime", "Runtime and Errors"),
 }
+PARAMS_RUNTIME_DUPLICATES = {
+    "PitParamErrorCode",
+    "PitParamError",
+    "PitOutParamError",
+    "pit_destroy_param_error",
+}
 
 
 @dataclass
@@ -113,7 +119,7 @@ DECIMAL_PARAM_WRAPPER_CREATE_SIGNATURE = (
     [
         ("value", "PitParamDecimal"),
         ("out", "*mut $wrapper"),
-        ("out_error", "PitOutError"),
+        ("out_error", "PitOutParamError"),
     ],
     "bool",
 )
@@ -130,20 +136,20 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
         [
             ("value", "PitStringView"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
     "from_f64_fn": (
-        [("value", "f64"), ("out", "*mut $wrapper"), ("out_error", "PitOutError")],
+        [("value", "f64"), ("out", "*mut $wrapper"), ("out_error", "PitOutParamError")],
         "bool",
     ),
     "from_i64_fn": (
-        [("value", "i64"), ("out", "*mut $wrapper"), ("out_error", "PitOutError")],
+        [("value", "i64"), ("out", "*mut $wrapper"), ("out_error", "PitOutParamError")],
         "bool",
     ),
     "from_u64_fn": (
-        [("value", "u64"), ("out", "*mut $wrapper"), ("out_error", "PitOutError")],
+        [("value", "u64"), ("out", "*mut $wrapper"), ("out_error", "PitOutParamError")],
         "bool",
     ),
     "from_str_rounded_fn": (
@@ -152,7 +158,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("scale", "u32"),
             ("rounding", "PitParamRoundingStrategy"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
@@ -162,7 +168,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("scale", "u32"),
             ("rounding", "PitParamRoundingStrategy"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
@@ -172,16 +178,20 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("scale", "u32"),
             ("rounding", "PitParamRoundingStrategy"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
     "to_f64_fn": (
-        [("value", "$wrapper"), ("out", "*mut f64"), ("out_error", "PitOutError")],
+        [("value", "$wrapper"), ("out", "*mut f64"), ("out_error", "PitOutParamError")],
         "bool",
     ),
     "is_zero_fn": (
-        [("value", "$wrapper"), ("out", "*mut bool"), ("out_error", "PitOutError")],
+        [
+            ("value", "$wrapper"),
+            ("out", "*mut bool"),
+            ("out_error", "PitOutParamError"),
+        ],
         "bool",
     ),
     "compare_fn": (
@@ -189,12 +199,12 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("lhs", "$wrapper"),
             ("rhs", "$wrapper"),
             ("out", "*mut i8"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
     "to_string_fn": (
-        [("value", "$wrapper"), ("out_error", "PitOutError")],
+        [("value", "$wrapper"), ("out_error", "PitOutParamError")],
         "*mut PitSharedString",
     ),
     "checked_add_fn": (
@@ -202,7 +212,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("lhs", "$wrapper"),
             ("rhs", "$wrapper"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
@@ -211,7 +221,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("lhs", "$wrapper"),
             ("rhs", "$wrapper"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
@@ -220,7 +230,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("value", "$wrapper"),
             ("multiplier", "i64"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
@@ -229,7 +239,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("value", "$wrapper"),
             ("multiplier", "u64"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
@@ -238,7 +248,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("value", "$wrapper"),
             ("multiplier", "f64"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
@@ -247,7 +257,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("value", "$wrapper"),
             ("divisor", "i64"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
@@ -256,7 +266,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("value", "$wrapper"),
             ("divisor", "u64"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
@@ -265,7 +275,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("value", "$wrapper"),
             ("divisor", "f64"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
@@ -274,7 +284,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("value", "$wrapper"),
             ("divisor", "i64"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
@@ -283,7 +293,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("value", "$wrapper"),
             ("divisor", "u64"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
@@ -292,7 +302,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
             ("value", "$wrapper"),
             ("divisor", "f64"),
             ("out", "*mut $wrapper"),
-            ("out_error", "PitOutError"),
+            ("out_error", "PitOutParamError"),
         ],
         "bool",
     ),
@@ -302,7 +312,11 @@ DECIMAL_PARAM_FFI_SIGNED_SIGNATURES: dict[
     str, tuple[list[tuple[str, str]], str | None]
 ] = {
     "checked_neg_fn": (
-        [("value", "$wrapper"), ("out", "*mut $wrapper"), ("out_error", "PitOutError")],
+        [
+            ("value", "$wrapper"),
+            ("out", "*mut $wrapper"),
+            ("out_error", "PitOutParamError"),
+        ],
         "bool",
     )
 }
@@ -328,6 +342,7 @@ def load_openpit_leverage_constants() -> dict[str, str]:
 
 
 OPENPIT_LEVERAGE_CONSTS = load_openpit_leverage_constants()
+ENUM_DISCRIMINANT_CACHE: dict[tuple[str, str, str], int] = {}
 
 
 def main() -> None:
@@ -800,7 +815,7 @@ def parse_enum(block: str, docs: list[str], attrs: list[str]) -> Item | None:
         variant_match = re.match(r"(\w+)(?: = ([^,]+))?,", stripped)
         if variant_match:
             if variant_match.group(2):
-                current_value = int(variant_match.group(2).strip())
+                current_value = parse_enum_discriminant(variant_match.group(2).strip())
             else:
                 current_value += 1
             variants.append((variant_match.group(1), current_value, current_docs))
@@ -813,6 +828,72 @@ def parse_enum(block: str, docs: list[str], attrs: list[str]) -> Item | None:
         variants=variants,
         repr_name=parse_repr(attrs),
     )
+
+
+def parse_enum_discriminant(value: str) -> int:
+    normalized = re.sub(r"\s+", "", value).replace("_", "")
+    path_cast_match = re.match(
+        r"((?:[A-Za-z_]\w*::)+)([A-Za-z_]\w*)as(?:u32|u64|usize)$",
+        normalized,
+    )
+    if path_cast_match:
+        path_prefix = path_cast_match.group(1).split("::")
+        if path_prefix and path_prefix[-1] == "":
+            path_prefix = path_prefix[:-1]
+        variant = path_cast_match.group(2)
+        resolved = resolve_enum_path_discriminant(path_prefix, variant)
+        if resolved is not None:
+            return resolved
+    if normalized == "u32::MAX":
+        return 2**32 - 1
+    return int(normalized, 0)
+
+
+def resolve_enum_path_discriminant(path_parts: list[str], variant: str) -> int | None:
+    if len(path_parts) < 3:
+        return None
+    crate_name = path_parts[0]
+    enum_name = path_parts[-1]
+    module_parts = path_parts[1:-1]
+    key = (crate_name, "::".join(module_parts), f"{enum_name}::{variant}")
+    if key in ENUM_DISCRIMINANT_CACHE:
+        return ENUM_DISCRIMINANT_CACHE[key]
+
+    if crate_name != "openpit":
+        return None
+    src_root = ROOT / "crates" / crate_name / "src"
+    module_rs = src_root.joinpath(*module_parts).with_suffix(".rs")
+    module_mod_rs = src_root.joinpath(*module_parts) / "mod.rs"
+    module_path = module_rs if module_rs.exists() else module_mod_rs
+    if not module_path.exists():
+        return None
+
+    text = module_path.read_text(encoding="utf-8")
+    match = re.search(rf"pub enum {re.escape(enum_name)}\s*\{{(.*?)\n\}}", text, re.S)
+    if not match:
+        return None
+
+    body = match.group(1)
+    current_value = -1
+    for raw_line in body.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("//") or stripped.startswith("///"):
+            continue
+        if stripped.startswith("#["):
+            continue
+        variant_match = re.match(r"(\w+)(?: = ([^,]+))?,", stripped)
+        if not variant_match:
+            continue
+        if variant_match.group(2):
+            current_value = parse_enum_discriminant(variant_match.group(2).strip())
+        else:
+            current_value += 1
+        found_variant = variant_match.group(1)
+        ENUM_DISCRIMINANT_CACHE[
+            (crate_name, "::".join(module_parts), f"{enum_name}::{found_variant}")
+        ] = current_value
+
+    return ENUM_DISCRIMINANT_CACHE.get(key)
 
 
 def parse_type_alias(block: str, docs: list[str], attrs: list[str]) -> Item | None:
@@ -1624,6 +1705,17 @@ def render_docs(items: list[Item], source_files: list[str]) -> str:
     grouped: dict[str, list[Item]] = {}
     for item in items:
         grouped.setdefault(item.section, []).append(item)
+    sections_by_slug: dict[str, tuple[str, list[Item]]] = {}
+    section_order: list[str] = []
+    for source in source_files:
+        section_items = grouped.get(source)
+        if not section_items:
+            continue
+        slug, title = section_info(source)
+        if slug not in sections_by_slug:
+            sections_by_slug[slug] = (title, [])
+            section_order.append(slug)
+        sections_by_slug[slug][1].extend(section_items)
 
     outputs: dict[str, str] = {}
     index_lines = [
@@ -1632,23 +1724,28 @@ def render_docs(items: list[Item], source_files: list[str]) -> str:
         f"- Header: `{HEADER_PATH.relative_to(ROOT)}`",
         "- Sections:",
     ]
-    for source in source_files:
-        section_items = grouped.get(source)
-        if not section_items:
-            continue
-        slug, title = section_info(source)
+    for slug in section_order:
+        title, _section_items = sections_by_slug[slug]
         link = f"  - [{title}]({slug}.md)"
         if link not in index_lines:
             index_lines.append(link)
     index_lines.append("")
     outputs["index.md"] = "\n".join(collapse_blank_lines(index_lines))
 
-    for source in source_files:
-        section_items = grouped.get(source)
-        if not section_items:
-            continue
-        slug, title = section_info(source)
+    for slug in section_order:
+        title, section_items = sections_by_slug[slug]
         lines = [f"# {title}", "", "[Back to index](index.md)", ""]
+        if slug == "params":
+            runtime_section = sections_by_slug.get("runtime")
+            if runtime_section:
+                _runtime_title, runtime_items = runtime_section
+                extra = [
+                    item
+                    for item in runtime_items
+                    if item.name in PARAMS_RUNTIME_DUPLICATES
+                ]
+                if extra:
+                    section_items = [*section_items, *extra]
         for item in section_items:
             if item.kind == "opaque" or item.opaque:
                 declaration = format_forward_decl(item.name)

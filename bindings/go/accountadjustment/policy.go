@@ -53,5 +53,5 @@ type Policy interface {
 		param.AccountID,
 		model.AccountAdjustment,
 		tx.Mutations,
-	) reject.List
+	) []reject.Reject
 }

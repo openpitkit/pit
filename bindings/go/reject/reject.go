@@ -30,7 +30,7 @@ const (
 	ScopeAccount Scope = native.RejectScopeAccount
 )
 
-type Code uint32
+type Code native.RejectCode
 
 const (
 	CodeMissingRequiredField        Code = native.RejectCodeMissingRequiredField
@@ -39,7 +39,7 @@ const (
 	CodeUnsupportedOrderType        Code = native.RejectCodeUnsupportedOrderType
 	CodeUnsupportedTimeInForce      Code = native.RejectCodeUnsupportedTimeInForce
 	CodeUnsupportedOrderAttribute   Code = native.RejectCodeUnsupportedOrderAttribute
-	CodeDuplicateClientOrderID      Code = native.RejectCodeDuplicateClientOrderId
+	CodeDuplicateClientOrderID      Code = native.RejectCodeDuplicateClientOrderID
 	CodeTooLateToEnter              Code = native.RejectCodeTooLateToEnter
 	CodeExchangeClosed              Code = native.RejectCodeExchangeClosed
 	CodeUnknownInstrument           Code = native.RejectCodeUnknownInstrument
@@ -107,24 +107,6 @@ func New(
 		Reason:   reason,
 		Details:  details,
 		UserData: nil,
-	}
-}
-
-func NewWithUserData(
-	code Code, // stable machine-readable reject code
-	policy string, // policy name that produced the reject
-	reason string, // human-readable reject reason
-	details string, // case-specific reject details
-	scope Scope, // reject scope
-	userData unsafe.Pointer, // opaque caller-defined payload
-) Reject {
-	return Reject{
-		Code:     code,
-		Scope:    scope,
-		Policy:   policy,
-		Reason:   reason,
-		Details:  details,
-		UserData: userData,
 	}
 }
 

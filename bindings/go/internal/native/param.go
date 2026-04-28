@@ -27,45 +27,60 @@ import "C"
 
 func CreateParamPnl(value ParamDecimal) (ParamPnl, error) {
 	var result ParamPnl
-	var outError SharedString
-	if !C.pit_create_param_pnl(value, &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_pnl failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_pnl(
+		value, &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_pnl failed")
 	}
 	return result, nil
 }
 
 func CreateParamPnlFromStr(v string) (ParamPnl, error) {
 	var result ParamPnl
-	var outError SharedString
-	if !C.pit_create_param_pnl_from_str(importString(v), &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_pnl_from_str failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_pnl_from_str(
+		importString(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_pnl_from_str failed")
 	}
 	return result, nil
 }
 
 func CreateParamPnlFromF64(v float64) (ParamPnl, error) {
 	var result ParamPnl
-	var outError SharedString
-	if !C.pit_create_param_pnl_from_f64(C.double(v), &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_pnl_from_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_pnl_from_f64(
+		C.double(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_pnl_from_f64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamPnlFromI64(v int64) (ParamPnl, error) {
 	var result ParamPnl
-	var outError SharedString
-	if !C.pit_create_param_pnl_from_i64(C.int64_t(v), &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_pnl_from_i64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_pnl_from_i64(
+		C.int64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_pnl_from_i64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamPnlFromU64(v uint64) (ParamPnl, error) {
 	var result ParamPnl
-	var outError SharedString
-	if !C.pit_create_param_pnl_from_u64(C.uint64_t(v), &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_pnl_from_u64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_pnl_from_u64(
+		C.uint64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_pnl_from_u64 failed")
 	}
 	return result, nil
 }
@@ -76,14 +91,16 @@ func CreateParamPnlFromStrRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamPnl, error) {
 	var result ParamPnl
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_pnl_from_str_rounded(
 		importString(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_pnl_from_str_rounded failed")
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result,
+			consumeParamError(paramErr, "pit_create_param_pnl_from_str_rounded failed")
 	}
 	return result, nil
 }
@@ -94,14 +111,16 @@ func CreateParamPnlFromF64Rounded(
 	strategy ParamRoundingStrategy,
 ) (ParamPnl, error) {
 	var result ParamPnl
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_pnl_from_f64_rounded(
 		C.double(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_pnl_from_f64_rounded failed")
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result,
+			consumeParamError(paramErr, "pit_create_param_pnl_from_f64_rounded failed")
 	}
 	return result, nil
 }
@@ -112,15 +131,16 @@ func CreateParamPnlFromDecimalRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamPnl, error) {
 	var result ParamPnl
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_pnl_from_decimal_rounded(
 		v,
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_pnl_from_decimal_rounded failed")
+			consumeParamError(paramErr, "pit_create_param_pnl_from_decimal_rounded failed")
 	}
 	return result, nil
 }
@@ -133,171 +153,241 @@ func ParamPnlGetDecimal(value ParamPnl) ParamDecimal {
 
 func ParamPnlToF64(value ParamPnl) (float64, error) {
 	var out C.double
-	var outError SharedString
-	if !C.pit_param_pnl_to_f64(value, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_pnl_to_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_to_f64(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_pnl_to_f64 failed")
 	}
 	return float64(out), nil
 }
 
 func ParamPnlIsZero(value ParamPnl) (bool, error) {
 	var out C.bool
-	var outError SharedString
-	if !C.pit_param_pnl_is_zero(value, &out, C.PitOutError(&outError)) {
-		return false, consumeSharedStringAsParamError(outError, "pit_param_pnl_is_zero failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_is_zero(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return false, consumeParamError(paramErr, "pit_param_pnl_is_zero failed")
 	}
 	return bool(out), nil
 }
 
 func ParamPnlCompare(lhs ParamPnl, rhs ParamPnl) (int, error) {
 	var out C.int8_t
-	var outError SharedString
-	if !C.pit_param_pnl_compare(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_pnl_compare failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_compare(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_pnl_compare failed")
 	}
 	return int(out), nil
 }
 
 func ParamPnlToString(value ParamPnl) (string, error) {
-	var outError SharedString
-	handle := C.pit_param_pnl_to_string(value, C.PitOutError(&outError))
+	var paramErr ParamErrorHandle
+	handle := C.pit_param_pnl_to_string(value, C.PitOutParamError(&paramErr)) //nolint:gocritic
 	if handle == nil {
-		return "", consumeSharedStringAsParamError(outError, "pit_param_pnl_to_string failed")
+		return "", consumeParamError(paramErr, "pit_param_pnl_to_string failed")
 	}
 	return consumeSharedString(handle), nil
 }
 
 func ParamPnlCheckedAdd(lhs ParamPnl, rhs ParamPnl) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_pnl_checked_add(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_checked_add failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_checked_add(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_checked_add failed")
 	}
 	return out, nil
 }
 
 func ParamPnlCheckedSub(lhs ParamPnl, rhs ParamPnl) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_pnl_checked_sub(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_checked_sub failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_checked_sub(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_checked_sub failed")
 	}
 	return out, nil
 }
 
 func ParamPnlCheckedNeg(value ParamPnl) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_pnl_checked_neg(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_checked_neg failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_checked_neg(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_checked_neg failed")
 	}
 	return out, nil
 }
 
 func ParamPnlCheckedMulI64(value ParamPnl, scalar int64) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_pnl_checked_mul_i64(value, C.int64_t(scalar), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_checked_mul_i64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_checked_mul_i64(
+		value, C.int64_t(scalar), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_checked_mul_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamPnlCheckedMulU64(value ParamPnl, scalar uint64) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_pnl_checked_mul_u64(value, C.uint64_t(scalar), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_checked_mul_u64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_checked_mul_u64(
+		value,
+		C.uint64_t(scalar),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_checked_mul_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamPnlCheckedMulF64(value ParamPnl, scalar float64) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_pnl_checked_mul_f64(value, C.double(scalar), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_checked_mul_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_checked_mul_f64(
+		value,
+		C.double(scalar),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_checked_mul_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamPnlCheckedDivI64(value ParamPnl, divisor int64) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_pnl_checked_div_i64(value, C.int64_t(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_checked_div_i64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_checked_div_i64(
+		value,
+		C.int64_t(divisor),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_checked_div_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamPnlCheckedDivU64(value ParamPnl, divisor uint64) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_pnl_checked_div_u64(value, C.uint64_t(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_checked_div_u64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_checked_div_u64(
+		value,
+		C.uint64_t(divisor),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_checked_div_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamPnlCheckedDivF64(value ParamPnl, divisor float64) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_pnl_checked_div_f64(value, C.double(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_checked_div_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_checked_div_f64(
+		value,
+		C.double(divisor),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_checked_div_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamPnlCheckedRemI64(value ParamPnl, divisor int64) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_pnl_checked_rem_i64(value, C.int64_t(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_checked_rem_i64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_checked_rem_i64(
+		value,
+		C.int64_t(divisor),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_checked_rem_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamPnlCheckedRemU64(value ParamPnl, divisor uint64) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_pnl_checked_rem_u64(value, C.uint64_t(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_checked_rem_u64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_checked_rem_u64(
+		value,
+		C.uint64_t(divisor),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_checked_rem_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamPnlCheckedRemF64(value ParamPnl, divisor float64) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_pnl_checked_rem_f64(value, C.double(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_checked_rem_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_checked_rem_f64(
+		value,
+		C.double(divisor),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_checked_rem_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamPnlToCashFlow(value ParamPnl) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
-	if !C.pit_param_pnl_to_cash_flow(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_to_cash_flow failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_to_cash_flow(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_to_cash_flow failed")
 	}
 	return out, nil
 }
 
 func ParamPnlToPositionSize(value ParamPnl) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
-	if !C.pit_param_pnl_to_position_size(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_to_position_size failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_to_position_size(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_to_position_size failed")
 	}
 	return out, nil
 }
 
 func ParamPnlFromFee(fee ParamFee) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_pnl_from_fee(fee, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_pnl_from_fee failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_pnl_from_fee(
+		fee, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_pnl_from_fee failed")
 	}
 	return out, nil
 }
@@ -315,45 +405,64 @@ func ParamPnlOptionalGet(value ParamPnlOptional) ParamPnl {
 
 func CreateParamPrice(value ParamDecimal) (ParamPrice, error) {
 	var result ParamPrice
-	var outError SharedString
-	if !C.pit_create_param_price(value, &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_price failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_price(
+		value, &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_price failed")
 	}
 	return result, nil
 }
 
 func CreateParamPriceFromStr(v string) (ParamPrice, error) {
 	var result ParamPrice
-	var outError SharedString
-	if !C.pit_create_param_price_from_str(importString(v), &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_price_from_str failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_price_from_str(
+		importString(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result,
+			consumeParamError(paramErr, "pit_create_param_price_from_str failed")
 	}
 	return result, nil
 }
 
 func CreateParamPriceFromF64(v float64) (ParamPrice, error) {
 	var result ParamPrice
-	var outError SharedString
-	if !C.pit_create_param_price_from_f64(C.double(v), &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_price_from_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_price_from_f64(
+		C.double(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result,
+			consumeParamError(paramErr, "pit_create_param_price_from_f64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamPriceFromI64(v int64) (ParamPrice, error) {
 	var result ParamPrice
-	var outError SharedString
-	if !C.pit_create_param_price_from_i64(C.int64_t(v), &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_price_from_i64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_price_from_i64(
+		C.int64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result,
+			consumeParamError(paramErr, "pit_create_param_price_from_i64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamPriceFromU64(v uint64) (ParamPrice, error) {
 	var result ParamPrice
-	var outError SharedString
-	if !C.pit_create_param_price_from_u64(C.uint64_t(v), &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_price_from_u64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_price_from_u64(
+		C.uint64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result,
+			consumeParamError(paramErr, "pit_create_param_price_from_u64 failed")
 	}
 	return result, nil
 }
@@ -364,15 +473,16 @@ func CreateParamPriceFromStrRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamPrice, error) {
 	var result ParamPrice
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_price_from_str_rounded(
 		importString(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_price_from_str_rounded failed")
+			consumeParamError(paramErr, "pit_create_param_price_from_str_rounded failed")
 	}
 	return result, nil
 }
@@ -383,15 +493,16 @@ func CreateParamPriceFromF64Rounded(
 	strategy ParamRoundingStrategy,
 ) (ParamPrice, error) {
 	var result ParamPrice
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_price_from_f64_rounded(
 		C.double(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_price_from_f64_rounded failed")
+			consumeParamError(paramErr, "pit_create_param_price_from_f64_rounded failed")
 	}
 	return result, nil
 }
@@ -402,16 +513,17 @@ func CreateParamPriceFromDecimalRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamPrice, error) {
 	var result ParamPrice
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_price_from_decimal_rounded(
 		v,
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(
-				outError,
+			consumeParamError(
+				paramErr,
 				"pit_create_param_price_from_decimal_rounded failed",
 			)
 	}
@@ -426,163 +538,219 @@ func ParamPriceGetDecimal(value ParamPrice) ParamDecimal {
 
 func ParamPriceToF64(value ParamPrice) (float64, error) {
 	var out C.double
-	var outError SharedString
-	if !C.pit_param_price_to_f64(value, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_price_to_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_to_f64(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_price_to_f64 failed")
 	}
 	return float64(out), nil
 }
 
 func ParamPriceIsZero(value ParamPrice) (bool, error) {
 	var out C.bool
-	var outError SharedString
-	if !C.pit_param_price_is_zero(value, &out, C.PitOutError(&outError)) {
-		return false, consumeSharedStringAsParamError(outError, "pit_param_price_is_zero failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_is_zero(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return false, consumeParamError(paramErr, "pit_param_price_is_zero failed")
 	}
 	return bool(out), nil
 }
 
 func ParamPriceCompare(lhs ParamPrice, rhs ParamPrice) (int, error) {
 	var out C.int8_t
-	var outError SharedString
-	if !C.pit_param_price_compare(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_price_compare failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_compare(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_price_compare failed")
 	}
 	return int(out), nil
 }
 
 func ParamPriceToString(value ParamPrice) (string, error) {
-	var outError SharedString
-	handle := C.pit_param_price_to_string(value, C.PitOutError(&outError))
+	var paramErr ParamErrorHandle
+	handle := C.pit_param_price_to_string(value, C.PitOutParamError(&paramErr)) //nolint:gocritic
 	if handle == nil {
-		return "", consumeSharedStringAsParamError(outError, "pit_param_price_to_string failed")
+		return "", consumeParamError(paramErr, "pit_param_price_to_string failed")
 	}
 	return consumeSharedString(handle), nil
 }
 
 func ParamPriceCheckedAdd(lhs ParamPrice, rhs ParamPrice) (ParamPrice, error) {
 	var out ParamPrice
-	var outError SharedString
-	if !C.pit_param_price_checked_add(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_price_checked_add failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_checked_add(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_price_checked_add failed")
 	}
 	return out, nil
 }
 
 func ParamPriceCheckedSub(lhs ParamPrice, rhs ParamPrice) (ParamPrice, error) {
 	var out ParamPrice
-	var outError SharedString
-	if !C.pit_param_price_checked_sub(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_price_checked_sub failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_checked_sub(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_price_checked_sub failed")
 	}
 	return out, nil
 }
 
 func ParamPriceCheckedNeg(value ParamPrice) (ParamPrice, error) {
 	var out ParamPrice
-	var outError SharedString
-	if !C.pit_param_price_checked_neg(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_price_checked_neg failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_checked_neg(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_price_checked_neg failed")
 	}
 	return out, nil
 }
 
 func ParamPriceCheckedMulI64(value ParamPrice, scalar int64) (ParamPrice, error) {
 	var out ParamPrice
-	var outError SharedString
-	if !C.pit_param_price_checked_mul_i64(value, C.int64_t(scalar), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_price_checked_mul_i64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_checked_mul_i64(
+		value,
+		C.int64_t(scalar),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_price_checked_mul_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamPriceCheckedMulU64(value ParamPrice, scalar uint64) (ParamPrice, error) {
 	var out ParamPrice
-	var outError SharedString
-	if !C.pit_param_price_checked_mul_u64(value, C.uint64_t(scalar), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_price_checked_mul_u64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_checked_mul_u64(
+		value,
+		C.uint64_t(scalar),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_price_checked_mul_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamPriceCheckedMulF64(value ParamPrice, scalar float64) (ParamPrice, error) {
 	var out ParamPrice
-	var outError SharedString
-	if !C.pit_param_price_checked_mul_f64(value, C.double(scalar), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_price_checked_mul_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_checked_mul_f64(
+		value,
+		C.double(scalar),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_price_checked_mul_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamPriceCheckedDivI64(value ParamPrice, divisor int64) (ParamPrice, error) {
 	var out ParamPrice
-	var outError SharedString
-	if !C.pit_param_price_checked_div_i64(value, C.int64_t(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_price_checked_div_i64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_checked_div_i64(
+		value,
+		C.int64_t(divisor),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_price_checked_div_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamPriceCheckedDivU64(value ParamPrice, divisor uint64) (ParamPrice, error) {
 	var out ParamPrice
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_price_checked_div_u64(
 		value,
 		C.uint64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_price_checked_div_u64 failed")
+		return out, consumeParamError(paramErr, "pit_param_price_checked_div_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamPriceCheckedDivF64(value ParamPrice, divisor float64) (ParamPrice, error) {
 	var out ParamPrice
-	var outError SharedString
-	if !C.pit_param_price_checked_div_f64(value, C.double(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_price_checked_div_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_checked_div_f64(
+		value,
+		C.double(divisor),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_price_checked_div_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamPriceCheckedRemI64(value ParamPrice, divisor int64) (ParamPrice, error) {
 	var out ParamPrice
-	var outError SharedString
-	if !C.pit_param_price_checked_rem_i64(value, C.int64_t(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_price_checked_rem_i64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_checked_rem_i64(
+		value,
+		C.int64_t(divisor),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_price_checked_rem_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamPriceCheckedRemU64(value ParamPrice, divisor uint64) (ParamPrice, error) {
 	var out ParamPrice
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_price_checked_rem_u64(
 		value,
 		C.uint64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_price_checked_rem_u64 failed")
+		return out, consumeParamError(paramErr, "pit_param_price_checked_rem_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamPriceCheckedRemF64(value ParamPrice, divisor float64) (ParamPrice, error) {
 	var out ParamPrice
-	var outError SharedString
-	if !C.pit_param_price_checked_rem_f64(value, C.double(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_price_checked_rem_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_checked_rem_f64(
+		value,
+		C.double(divisor),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_price_checked_rem_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamPriceCalculateVolume(price ParamPrice, quantity ParamQuantity) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
-	if !C.pit_param_price_calculate_volume(price, quantity, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_price_calculate_volume failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_calculate_volume(
+		price, quantity, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_price_calculate_volume failed")
 	}
 	return out, nil
 }
@@ -600,49 +768,64 @@ func ParamPriceOptionalGet(value ParamPriceOptional) ParamPrice {
 
 func CreateParamQuantity(value ParamDecimal) (ParamQuantity, error) {
 	var result ParamQuantity
-	var outError SharedString
-	if !C.pit_create_param_quantity(value, &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_quantity failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_quantity(
+		value, &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_quantity failed")
 	}
 	return result, nil
 }
 
 func CreateParamQuantityFromStr(v string) (ParamQuantity, error) {
 	var result ParamQuantity
-	var outError SharedString
-	if !C.pit_create_param_quantity_from_str(importString(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_quantity_from_str(
+		importString(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_quantity_from_str failed")
+			consumeParamError(paramErr, "pit_create_param_quantity_from_str failed")
 	}
 	return result, nil
 }
 
 func CreateParamQuantityFromF64(v float64) (ParamQuantity, error) {
 	var result ParamQuantity
-	var outError SharedString
-	if !C.pit_create_param_quantity_from_f64(C.double(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_quantity_from_f64(
+		C.double(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_quantity_from_f64 failed")
+			consumeParamError(paramErr, "pit_create_param_quantity_from_f64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamQuantityFromI64(v int64) (ParamQuantity, error) {
 	var result ParamQuantity
-	var outError SharedString
-	if !C.pit_create_param_quantity_from_i64(C.int64_t(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_quantity_from_i64(
+		C.int64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_quantity_from_i64 failed")
+			consumeParamError(paramErr, "pit_create_param_quantity_from_i64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamQuantityFromU64(v uint64) (ParamQuantity, error) {
 	var result ParamQuantity
-	var outError SharedString
-	if !C.pit_create_param_quantity_from_u64(C.uint64_t(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_quantity_from_u64(
+		C.uint64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_quantity_from_u64 failed")
+			consumeParamError(paramErr, "pit_create_param_quantity_from_u64 failed")
 	}
 	return result, nil
 }
@@ -653,15 +836,16 @@ func CreateParamQuantityFromStrRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamQuantity, error) {
 	var result ParamQuantity
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_quantity_from_str_rounded(
 		importString(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_quantity_from_str_rounded failed")
+			consumeParamError(paramErr, "pit_create_param_quantity_from_str_rounded failed")
 	}
 	return result, nil
 }
@@ -672,15 +856,16 @@ func CreateParamQuantityFromF64Rounded(
 	strategy ParamRoundingStrategy,
 ) (ParamQuantity, error) {
 	var result ParamQuantity
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_quantity_from_f64_rounded(
 		C.double(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_quantity_from_f64_rounded failed")
+			consumeParamError(paramErr, "pit_create_param_quantity_from_f64_rounded failed")
 	}
 	return result, nil
 }
@@ -691,16 +876,17 @@ func CreateParamQuantityFromDecimalRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamQuantity, error) {
 	var result ParamQuantity
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_quantity_from_decimal_rounded(
 		v,
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(
-				outError,
+			consumeParamError(
+				paramErr,
 				"pit_create_param_quantity_from_decimal_rounded failed",
 			)
 	}
@@ -715,199 +901,217 @@ func ParamQuantityGetDecimal(value ParamQuantity) ParamDecimal {
 
 func ParamQuantityToF64(value ParamQuantity) (float64, error) {
 	var out C.double
-	var outError SharedString
-	if !C.pit_param_quantity_to_f64(value, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_quantity_to_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_quantity_to_f64(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_quantity_to_f64 failed")
 	}
 	return float64(out), nil
 }
 
 func ParamQuantityIsZero(value ParamQuantity) (bool, error) {
 	var out C.bool
-	var outError SharedString
-	if !C.pit_param_quantity_is_zero(value, &out, C.PitOutError(&outError)) {
-		return false, consumeSharedStringAsParamError(outError, "pit_param_quantity_is_zero failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_quantity_is_zero(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return false, consumeParamError(paramErr, "pit_param_quantity_is_zero failed")
 	}
 	return bool(out), nil
 }
 
 func ParamQuantityCompare(lhs ParamQuantity, rhs ParamQuantity) (int, error) {
 	var out C.int8_t
-	var outError SharedString
-	if !C.pit_param_quantity_compare(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_quantity_compare failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_quantity_compare(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_quantity_compare failed")
 	}
 	return int(out), nil
 }
 
 func ParamQuantityToString(value ParamQuantity) (string, error) {
-	var outError SharedString
-	handle := C.pit_param_quantity_to_string(value, C.PitOutError(&outError))
+	var paramErr ParamErrorHandle
+	handle := C.pit_param_quantity_to_string(value, C.PitOutParamError(&paramErr)) //nolint:gocritic
 	if handle == nil {
-		return "", consumeSharedStringAsParamError(outError, "pit_param_quantity_to_string failed")
+		return "", consumeParamError(paramErr, "pit_param_quantity_to_string failed")
 	}
 	return consumeSharedString(handle), nil
 }
 
 func ParamQuantityCheckedAdd(lhs ParamQuantity, rhs ParamQuantity) (ParamQuantity, error) {
 	var out ParamQuantity
-	var outError SharedString
-	if !C.pit_param_quantity_checked_add(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_quantity_checked_add failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_quantity_checked_add(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_quantity_checked_add failed")
 	}
 	return out, nil
 }
 
 func ParamQuantityCheckedSub(lhs ParamQuantity, rhs ParamQuantity) (ParamQuantity, error) {
 	var out ParamQuantity
-	var outError SharedString
-	if !C.pit_param_quantity_checked_sub(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_quantity_checked_sub failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_quantity_checked_sub(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_quantity_checked_sub failed")
 	}
 	return out, nil
 }
 
 func ParamQuantityCheckedMulI64(value ParamQuantity, scalar int64) (ParamQuantity, error) {
 	var out ParamQuantity
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_quantity_checked_mul_i64(
 		value,
 		C.int64_t(scalar),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_quantity_checked_mul_i64 failed")
+			consumeParamError(paramErr, "pit_param_quantity_checked_mul_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamQuantityCheckedMulU64(value ParamQuantity, scalar uint64) (ParamQuantity, error) {
 	var out ParamQuantity
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_quantity_checked_mul_u64(
 		value,
 		C.uint64_t(scalar),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_quantity_checked_mul_u64 failed")
+			consumeParamError(paramErr, "pit_param_quantity_checked_mul_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamQuantityCheckedMulF64(value ParamQuantity, scalar float64) (ParamQuantity, error) {
 	var out ParamQuantity
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_quantity_checked_mul_f64(
 		value,
 		C.double(scalar),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_quantity_checked_mul_f64 failed")
+			consumeParamError(paramErr, "pit_param_quantity_checked_mul_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamQuantityCheckedDivI64(value ParamQuantity, divisor int64) (ParamQuantity, error) {
 	var out ParamQuantity
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_quantity_checked_div_i64(
 		value,
 		C.int64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_quantity_checked_div_i64 failed")
+			consumeParamError(paramErr, "pit_param_quantity_checked_div_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamQuantityCheckedDivU64(value ParamQuantity, divisor uint64) (ParamQuantity, error) {
 	var out ParamQuantity
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_quantity_checked_div_u64(
 		value,
 		C.uint64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_quantity_checked_div_u64 failed")
+			consumeParamError(paramErr, "pit_param_quantity_checked_div_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamQuantityCheckedDivF64(value ParamQuantity, divisor float64) (ParamQuantity, error) {
 	var out ParamQuantity
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_quantity_checked_div_f64(
 		value,
 		C.double(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_quantity_checked_div_f64 failed")
+			consumeParamError(paramErr, "pit_param_quantity_checked_div_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamQuantityCheckedRemI64(value ParamQuantity, divisor int64) (ParamQuantity, error) {
 	var out ParamQuantity
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_quantity_checked_rem_i64(
 		value,
 		C.int64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_quantity_checked_rem_i64 failed")
+			consumeParamError(paramErr, "pit_param_quantity_checked_rem_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamQuantityCheckedRemU64(value ParamQuantity, divisor uint64) (ParamQuantity, error) {
 	var out ParamQuantity
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_quantity_checked_rem_u64(
 		value,
 		C.uint64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_quantity_checked_rem_u64 failed")
+			consumeParamError(paramErr, "pit_param_quantity_checked_rem_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamQuantityCheckedRemF64(value ParamQuantity, divisor float64) (ParamQuantity, error) {
 	var out ParamQuantity
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_quantity_checked_rem_f64(
 		value,
 		C.double(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_quantity_checked_rem_f64 failed")
+			consumeParamError(paramErr, "pit_param_quantity_checked_rem_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamQuantityCalculateVolume(quantity ParamQuantity, price ParamPrice) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
-	if !C.pit_param_quantity_calculate_volume(quantity, price, &out, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_param_quantity_calculate_volume(
+		quantity, price, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_quantity_calculate_volume failed")
+			consumeParamError(paramErr, "pit_param_quantity_calculate_volume failed")
 	}
 	return out, nil
 }
@@ -925,49 +1129,64 @@ func ParamQuantityOptionalGet(value ParamQuantityOptional) ParamQuantity {
 
 func CreateParamVolume(value ParamDecimal) (ParamVolume, error) {
 	var result ParamVolume
-	var outError SharedString
-	if !C.pit_create_param_volume(value, &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_volume failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_volume(
+		value, &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_volume failed")
 	}
 	return result, nil
 }
 
 func CreateParamVolumeFromStr(v string) (ParamVolume, error) {
 	var result ParamVolume
-	var outError SharedString
-	if !C.pit_create_param_volume_from_str(importString(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_volume_from_str(
+		importString(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_volume_from_str failed")
+			consumeParamError(paramErr, "pit_create_param_volume_from_str failed")
 	}
 	return result, nil
 }
 
 func CreateParamVolumeFromF64(v float64) (ParamVolume, error) {
 	var result ParamVolume
-	var outError SharedString
-	if !C.pit_create_param_volume_from_f64(C.double(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_volume_from_f64(
+		C.double(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_volume_from_f64 failed")
+			consumeParamError(paramErr, "pit_create_param_volume_from_f64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamVolumeFromI64(v int64) (ParamVolume, error) {
 	var result ParamVolume
-	var outError SharedString
-	if !C.pit_create_param_volume_from_i64(C.int64_t(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_volume_from_i64(
+		C.int64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_volume_from_i64 failed")
+			consumeParamError(paramErr, "pit_create_param_volume_from_i64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamVolumeFromU64(v uint64) (ParamVolume, error) {
 	var result ParamVolume
-	var outError SharedString
-	if !C.pit_create_param_volume_from_u64(C.uint64_t(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_volume_from_u64(
+		C.uint64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_volume_from_u64 failed")
+			consumeParamError(paramErr, "pit_create_param_volume_from_u64 failed")
 	}
 	return result, nil
 }
@@ -978,15 +1197,16 @@ func CreateParamVolumeFromStrRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamVolume, error) {
 	var result ParamVolume
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_volume_from_str_rounded(
 		importString(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_volume_from_str_rounded failed")
+			consumeParamError(paramErr, "pit_create_param_volume_from_str_rounded failed")
 	}
 	return result, nil
 }
@@ -997,15 +1217,16 @@ func CreateParamVolumeFromF64Rounded(
 	strategy ParamRoundingStrategy,
 ) (ParamVolume, error) {
 	var result ParamVolume
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_volume_from_f64_rounded(
 		C.double(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_volume_from_f64_rounded failed")
+			consumeParamError(paramErr, "pit_create_param_volume_from_f64_rounded failed")
 	}
 	return result, nil
 }
@@ -1016,16 +1237,17 @@ func CreateParamVolumeFromDecimalRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamVolume, error) {
 	var result ParamVolume
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_volume_from_decimal_rounded(
 		v,
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(
-				outError,
+			consumeParamError(
+				paramErr,
 				"pit_create_param_volume_from_decimal_rounded failed",
 			)
 	}
@@ -1040,179 +1262,212 @@ func ParamVolumeGetDecimal(value ParamVolume) ParamDecimal {
 
 func ParamVolumeToF64(value ParamVolume) (float64, error) {
 	var out C.double
-	var outError SharedString
-	if !C.pit_param_volume_to_f64(value, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_volume_to_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_volume_to_f64(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_volume_to_f64 failed")
 	}
 	return float64(out), nil
 }
 
 func ParamVolumeIsZero(value ParamVolume) (bool, error) {
 	var out C.bool
-	var outError SharedString
-	if !C.pit_param_volume_is_zero(value, &out, C.PitOutError(&outError)) {
-		return false, consumeSharedStringAsParamError(outError, "pit_param_volume_is_zero failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_volume_is_zero(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return false, consumeParamError(paramErr, "pit_param_volume_is_zero failed")
 	}
 	return bool(out), nil
 }
 
 func ParamVolumeCompare(lhs ParamVolume, rhs ParamVolume) (int, error) {
 	var out C.int8_t
-	var outError SharedString
-	if !C.pit_param_volume_compare(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_volume_compare failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_volume_compare(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_volume_compare failed")
 	}
 	return int(out), nil
 }
 
 func ParamVolumeToString(value ParamVolume) (string, error) {
-	var outError SharedString
-	handle := C.pit_param_volume_to_string(value, C.PitOutError(&outError))
+	var paramErr ParamErrorHandle
+	handle := C.pit_param_volume_to_string(value, C.PitOutParamError(&paramErr)) //nolint:gocritic
 	if handle == nil {
-		return "", consumeSharedStringAsParamError(outError, "pit_param_volume_to_string failed")
+		return "", consumeParamError(paramErr, "pit_param_volume_to_string failed")
 	}
 	return consumeSharedString(handle), nil
 }
 
 func ParamVolumeCheckedAdd(lhs ParamVolume, rhs ParamVolume) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
-	if !C.pit_param_volume_checked_add(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_volume_checked_add failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_volume_checked_add(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_volume_checked_add failed")
 	}
 	return out, nil
 }
 
 func ParamVolumeCheckedSub(lhs ParamVolume, rhs ParamVolume) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
-	if !C.pit_param_volume_checked_sub(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_volume_checked_sub failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_volume_checked_sub(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_volume_checked_sub failed")
 	}
 	return out, nil
 }
 
 func ParamVolumeCheckedMulI64(value ParamVolume, scalar int64) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
-	if !C.pit_param_volume_checked_mul_i64(value, C.int64_t(scalar), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_volume_checked_mul_i64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_volume_checked_mul_i64(
+		value, C.int64_t(scalar), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_volume_checked_mul_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamVolumeCheckedMulU64(value ParamVolume, scalar uint64) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_volume_checked_mul_u64(
 		value,
 		C.uint64_t(scalar),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_volume_checked_mul_u64 failed")
+		return out, consumeParamError(paramErr, "pit_param_volume_checked_mul_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamVolumeCheckedMulF64(value ParamVolume, scalar float64) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
-	if !C.pit_param_volume_checked_mul_f64(value, C.double(scalar), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_volume_checked_mul_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_volume_checked_mul_f64(
+		value, C.double(scalar), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_volume_checked_mul_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamVolumeCheckedDivI64(value ParamVolume, divisor int64) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_volume_checked_div_i64(
 		value,
 		C.int64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_volume_checked_div_i64 failed")
+		return out, consumeParamError(paramErr, "pit_param_volume_checked_div_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamVolumeCheckedDivU64(value ParamVolume, divisor uint64) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_volume_checked_div_u64(
 		value,
 		C.uint64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_volume_checked_div_u64 failed")
+		return out, consumeParamError(paramErr, "pit_param_volume_checked_div_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamVolumeCheckedDivF64(value ParamVolume, divisor float64) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
-	if !C.pit_param_volume_checked_div_f64(value, C.double(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_volume_checked_div_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_volume_checked_div_f64(
+		value, C.double(divisor), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_volume_checked_div_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamVolumeCheckedRemI64(value ParamVolume, divisor int64) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_volume_checked_rem_i64(
 		value,
 		C.int64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_volume_checked_rem_i64 failed")
+		return out, consumeParamError(paramErr, "pit_param_volume_checked_rem_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamVolumeCheckedRemU64(value ParamVolume, divisor uint64) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_volume_checked_rem_u64(
 		value,
 		C.uint64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_volume_checked_rem_u64 failed")
+		return out, consumeParamError(paramErr, "pit_param_volume_checked_rem_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamVolumeCheckedRemF64(value ParamVolume, divisor float64) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
-	if !C.pit_param_volume_checked_rem_f64(value, C.double(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_volume_checked_rem_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_volume_checked_rem_f64(
+		value, C.double(divisor), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_volume_checked_rem_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamVolumeCalculateQuantity(volume ParamVolume, price ParamPrice) (ParamQuantity, error) {
 	var out ParamQuantity
-	var outError SharedString
-	if !C.pit_param_volume_calculate_quantity(volume, price, &out, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_param_volume_calculate_quantity(
+		volume, price, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_volume_calculate_quantity failed")
+			consumeParamError(paramErr, "pit_param_volume_calculate_quantity failed")
 	}
 	return out, nil
 }
 
 func ParamVolumeToCashFlowInflow(value ParamVolume) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
-	if !C.pit_param_volume_to_cash_flow_inflow(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError,
+	var paramErr ParamErrorHandle
+	if !C.pit_param_volume_to_cash_flow_inflow(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr,
 			"pit_param_volume_to_cash_flow_inflow failed",
 		)
 	}
@@ -1221,9 +1476,12 @@ func ParamVolumeToCashFlowInflow(value ParamVolume) (ParamCashFlow, error) {
 
 func ParamVolumeToCashFlowOutflow(value ParamVolume) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
-	if !C.pit_param_volume_to_cash_flow_outflow(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError,
+	var paramErr ParamErrorHandle
+	if !C.pit_param_volume_to_cash_flow_outflow(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr,
 			"pit_param_volume_to_cash_flow_outflow failed",
 		)
 	}
@@ -1243,49 +1501,64 @@ func ParamVolumeOptionalGet(value ParamVolumeOptional) ParamVolume {
 
 func CreateParamNotional(value ParamDecimal) (ParamNotional, error) {
 	var result ParamNotional
-	var outError SharedString
-	if !C.pit_create_param_notional(value, &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_notional failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_notional(
+		value, &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_notional failed")
 	}
 	return result, nil
 }
 
 func CreateParamNotionalFromStr(v string) (ParamNotional, error) {
 	var result ParamNotional
-	var outError SharedString
-	if !C.pit_create_param_notional_from_str(importString(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_notional_from_str(
+		importString(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_notional_from_str failed")
+			consumeParamError(paramErr, "pit_create_param_notional_from_str failed")
 	}
 	return result, nil
 }
 
 func CreateParamNotionalFromF64(v float64) (ParamNotional, error) {
 	var result ParamNotional
-	var outError SharedString
-	if !C.pit_create_param_notional_from_f64(C.double(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_notional_from_f64(
+		C.double(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_notional_from_f64 failed")
+			consumeParamError(paramErr, "pit_create_param_notional_from_f64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamNotionalFromI64(v int64) (ParamNotional, error) {
 	var result ParamNotional
-	var outError SharedString
-	if !C.pit_create_param_notional_from_i64(C.int64_t(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_notional_from_i64(
+		C.int64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_notional_from_i64 failed")
+			consumeParamError(paramErr, "pit_create_param_notional_from_i64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamNotionalFromU64(v uint64) (ParamNotional, error) {
 	var result ParamNotional
-	var outError SharedString
-	if !C.pit_create_param_notional_from_u64(C.uint64_t(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_notional_from_u64(
+		C.uint64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_notional_from_u64 failed")
+			consumeParamError(paramErr, "pit_create_param_notional_from_u64 failed")
 	}
 	return result, nil
 }
@@ -1296,15 +1569,16 @@ func CreateParamNotionalFromStrRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamNotional, error) {
 	var result ParamNotional
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_notional_from_str_rounded(
 		importString(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_notional_from_str_rounded failed")
+			consumeParamError(paramErr, "pit_create_param_notional_from_str_rounded failed")
 	}
 	return result, nil
 }
@@ -1315,15 +1589,16 @@ func CreateParamNotionalFromF64Rounded(
 	strategy ParamRoundingStrategy,
 ) (ParamNotional, error) {
 	var result ParamNotional
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_notional_from_f64_rounded(
 		C.double(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_notional_from_f64_rounded failed")
+			consumeParamError(paramErr, "pit_create_param_notional_from_f64_rounded failed")
 	}
 	return result, nil
 }
@@ -1334,16 +1609,17 @@ func CreateParamNotionalFromDecimalRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamNotional, error) {
 	var result ParamNotional
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_notional_from_decimal_rounded(
 		v,
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(
-				outError,
+			consumeParamError(
+				paramErr,
 				"pit_create_param_notional_from_decimal_rounded failed",
 			)
 	}
@@ -1356,201 +1632,229 @@ func ParamNotionalGetDecimal(value ParamNotional) ParamDecimal {
 
 func ParamNotionalToF64(value ParamNotional) (float64, error) {
 	var out C.double
-	var outError SharedString
-	if !C.pit_param_notional_to_f64(value, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_notional_to_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_notional_to_f64(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_notional_to_f64 failed")
 	}
 	return float64(out), nil
 }
 
 func ParamNotionalIsZero(value ParamNotional) (bool, error) {
 	var out C.bool
-	var outError SharedString
-	if !C.pit_param_notional_is_zero(value, &out, C.PitOutError(&outError)) {
-		return false, consumeSharedStringAsParamError(outError, "pit_param_notional_is_zero failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_notional_is_zero(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return false, consumeParamError(paramErr, "pit_param_notional_is_zero failed")
 	}
 	return bool(out), nil
 }
 
 func ParamNotionalCompare(lhs ParamNotional, rhs ParamNotional) (int, error) {
 	var out C.int8_t
-	var outError SharedString
-	if !C.pit_param_notional_compare(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_notional_compare failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_notional_compare(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_notional_compare failed")
 	}
 	return int(out), nil
 }
 
 func ParamNotionalToString(value ParamNotional) (string, error) {
-	var outError SharedString
-	handle := C.pit_param_notional_to_string(value, C.PitOutError(&outError))
+	var paramErr ParamErrorHandle
+	handle := C.pit_param_notional_to_string(value, C.PitOutParamError(&paramErr)) //nolint:gocritic
 	if handle == nil {
-		return "", consumeSharedStringAsParamError(outError, "pit_param_notional_to_string failed")
+		return "", consumeParamError(paramErr, "pit_param_notional_to_string failed")
 	}
 	return consumeSharedString(handle), nil
 }
 
 func ParamNotionalCheckedAdd(lhs ParamNotional, rhs ParamNotional) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
-	if !C.pit_param_notional_checked_add(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_notional_checked_add failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_notional_checked_add(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_notional_checked_add failed")
 	}
 	return out, nil
 }
 
 func ParamNotionalCheckedSub(lhs ParamNotional, rhs ParamNotional) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
-	if !C.pit_param_notional_checked_sub(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_notional_checked_sub failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_notional_checked_sub(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_notional_checked_sub failed")
 	}
 	return out, nil
 }
 
 func ParamNotionalCheckedMulI64(value ParamNotional, scalar int64) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_notional_checked_mul_i64(
 		value,
 		C.int64_t(scalar),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_notional_checked_mul_i64 failed")
+			consumeParamError(paramErr, "pit_param_notional_checked_mul_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamNotionalCheckedMulU64(value ParamNotional, scalar uint64) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_notional_checked_mul_u64(
 		value,
 		C.uint64_t(scalar),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_notional_checked_mul_u64 failed")
+			consumeParamError(paramErr, "pit_param_notional_checked_mul_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamNotionalCheckedMulF64(value ParamNotional, scalar float64) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_notional_checked_mul_f64(
 		value,
 		C.double(scalar),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_notional_checked_mul_f64 failed")
+			consumeParamError(paramErr, "pit_param_notional_checked_mul_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamNotionalCheckedDivI64(value ParamNotional, divisor int64) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_notional_checked_div_i64(
 		value,
 		C.int64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_notional_checked_div_i64 failed")
+			consumeParamError(paramErr, "pit_param_notional_checked_div_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamNotionalCheckedDivU64(value ParamNotional, divisor uint64) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_notional_checked_div_u64(
 		value,
 		C.uint64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_notional_checked_div_u64 failed")
+			consumeParamError(paramErr, "pit_param_notional_checked_div_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamNotionalCheckedDivF64(value ParamNotional, divisor float64) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_notional_checked_div_f64(
 		value,
 		C.double(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_notional_checked_div_f64 failed")
+			consumeParamError(paramErr, "pit_param_notional_checked_div_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamNotionalCheckedRemI64(value ParamNotional, divisor int64) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_notional_checked_rem_i64(
 		value,
 		C.int64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_notional_checked_rem_i64 failed")
+			consumeParamError(paramErr, "pit_param_notional_checked_rem_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamNotionalCheckedRemU64(value ParamNotional, divisor uint64) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
-	if !C.pit_param_notional_checked_rem_u64(value, C.uint64_t(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_notional_checked_rem_u64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_notional_checked_rem_u64(
+		value,
+		C.uint64_t(divisor),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out,
+			consumeParamError(paramErr, "pit_param_notional_checked_rem_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamNotionalCheckedRemF64(value ParamNotional, divisor float64) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_notional_checked_rem_f64(
 		value,
 		C.double(divisor),
 		&out,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_notional_checked_rem_f64 failed")
+			consumeParamError(paramErr, "pit_param_notional_checked_rem_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamNotionalFromVolume(volume ParamVolume) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
-	if !C.pit_param_notional_from_volume(volume, &out, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_param_notional_from_volume(
+		volume, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_notional_from_volume failed")
+			consumeParamError(paramErr, "pit_param_notional_from_volume failed")
 	}
 	return out, nil
 }
 
 func ParamNotionalToVolume(notional ParamNotional) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
-	if !C.pit_param_notional_to_volume(notional, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_notional_to_volume failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_notional_to_volume(
+		notional, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_notional_to_volume failed")
 	}
 	return out, nil
 }
@@ -1560,16 +1864,16 @@ func ParamNotionalCalculateMarginRequired(
 	leverage ParamLeverage,
 ) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_notional_calculate_margin_required(
 		notional,
 		leverage,
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(
-				outError,
+			consumeParamError(
+				paramErr,
 				"pit_param_notional_calculate_margin_required failed",
 			)
 	}
@@ -1586,10 +1890,13 @@ func ParamNotionalOptionalGet(value ParamNotionalOptional) ParamNotional {
 
 func ParamPriceCalculateNotional(price ParamPrice, quantity ParamQuantity) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
-	if !C.pit_param_price_calculate_notional(price, quantity, &out, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_param_price_calculate_notional(
+		price, quantity, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_price_calculate_notional failed")
+			consumeParamError(paramErr, "pit_param_price_calculate_notional failed")
 	}
 	return out, nil
 }
@@ -1599,19 +1906,25 @@ func ParamQuantityCalculateNotional(
 	price ParamPrice,
 ) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
-	if !C.pit_param_quantity_calculate_notional(quantity, price, &out, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_param_quantity_calculate_notional(
+		quantity, price, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_quantity_calculate_notional failed")
+			consumeParamError(paramErr, "pit_param_quantity_calculate_notional failed")
 	}
 	return out, nil
 }
 
 func ParamVolumeFromNotional(notional ParamNotional) (ParamVolume, error) {
 	var out ParamVolume
-	var outError SharedString
-	if !C.pit_param_volume_from_notional(notional, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_volume_from_notional failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_volume_from_notional(
+		notional, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_volume_from_notional failed")
 	}
 	return out, nil
 }
@@ -1621,49 +1934,64 @@ func ParamVolumeFromNotional(notional ParamNotional) (ParamVolume, error) {
 
 func CreateParamCashFlow(value ParamDecimal) (ParamCashFlow, error) {
 	var result ParamCashFlow
-	var outError SharedString
-	if !C.pit_create_param_cash_flow(value, &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_cash_flow failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_cash_flow(
+		value, &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_cash_flow failed")
 	}
 	return result, nil
 }
 
 func CreateParamCashFlowFromStr(v string) (ParamCashFlow, error) {
 	var result ParamCashFlow
-	var outError SharedString
-	if !C.pit_create_param_cash_flow_from_str(importString(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_cash_flow_from_str(
+		importString(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_cash_flow_from_str failed")
+			consumeParamError(paramErr, "pit_create_param_cash_flow_from_str failed")
 	}
 	return result, nil
 }
 
 func CreateParamCashFlowFromF64(v float64) (ParamCashFlow, error) {
 	var result ParamCashFlow
-	var outError SharedString
-	if !C.pit_create_param_cash_flow_from_f64(C.double(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_cash_flow_from_f64(
+		C.double(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_cash_flow_from_f64 failed")
+			consumeParamError(paramErr, "pit_create_param_cash_flow_from_f64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamCashFlowFromI64(v int64) (ParamCashFlow, error) {
 	var result ParamCashFlow
-	var outError SharedString
-	if !C.pit_create_param_cash_flow_from_i64(C.int64_t(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_cash_flow_from_i64(
+		C.int64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_cash_flow_from_i64 failed")
+			consumeParamError(paramErr, "pit_create_param_cash_flow_from_i64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamCashFlowFromU64(v uint64) (ParamCashFlow, error) {
 	var result ParamCashFlow
-	var outError SharedString
-	if !C.pit_create_param_cash_flow_from_u64(C.uint64_t(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_cash_flow_from_u64(
+		C.uint64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_cash_flow_from_u64 failed")
+			consumeParamError(paramErr, "pit_create_param_cash_flow_from_u64 failed")
 	}
 	return result, nil
 }
@@ -1674,16 +2002,17 @@ func CreateParamCashFlowFromStrRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamCashFlow, error) {
 	var result ParamCashFlow
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_cash_flow_from_str_rounded(
 		importString(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(
-				outError,
+			consumeParamError(
+				paramErr,
 				"pit_create_param_cash_flow_from_str_rounded failed",
 			)
 	}
@@ -1696,16 +2025,17 @@ func CreateParamCashFlowFromF64Rounded(
 	strategy ParamRoundingStrategy,
 ) (ParamCashFlow, error) {
 	var result ParamCashFlow
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_cash_flow_from_f64_rounded(
 		C.double(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(
-				outError,
+			consumeParamError(
+				paramErr,
 				"pit_create_param_cash_flow_from_f64_rounded failed",
 			)
 	}
@@ -1718,14 +2048,15 @@ func CreateParamCashFlowFromDecimalRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamCashFlow, error) {
 	var result ParamCashFlow
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_cash_flow_from_decimal_rounded(
 		v,
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr,
 			"pit_create_param_cash_flow_from_decimal_rounded failed",
 		)
 	}
@@ -1740,226 +2071,253 @@ func ParamCashFlowGetDecimal(value ParamCashFlow) ParamDecimal {
 
 func ParamCashFlowToF64(value ParamCashFlow) (float64, error) {
 	var out C.double
-	var outError SharedString
-	if !C.pit_param_cash_flow_to_f64(value, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_cash_flow_to_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_cash_flow_to_f64(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_cash_flow_to_f64 failed")
 	}
 	return float64(out), nil
 }
 
 func ParamCashFlowIsZero(value ParamCashFlow) (bool, error) {
 	var out C.bool
-	var outError SharedString
-	if !C.pit_param_cash_flow_is_zero(value, &out, C.PitOutError(&outError)) {
-		return false, consumeSharedStringAsParamError(outError, "pit_param_cash_flow_is_zero failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_cash_flow_is_zero(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return false, consumeParamError(paramErr, "pit_param_cash_flow_is_zero failed")
 	}
 	return bool(out), nil
 }
 
 func ParamCashFlowCompare(lhs ParamCashFlow, rhs ParamCashFlow) (int, error) {
 	var out C.int8_t
-	var outError SharedString
-	if !C.pit_param_cash_flow_compare(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_cash_flow_compare failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_cash_flow_compare(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_cash_flow_compare failed")
 	}
 	return int(out), nil
 }
 
 func ParamCashFlowToString(value ParamCashFlow) (string, error) {
-	var outError SharedString
-	handle := C.pit_param_cash_flow_to_string(value, C.PitOutError(&outError))
+	var paramErr ParamErrorHandle
+	handle := C.pit_param_cash_flow_to_string(value, C.PitOutParamError(&paramErr)) //nolint:gocritic
 	if handle == nil {
-		return "", consumeSharedStringAsParamError(outError, "pit_param_cash_flow_to_string failed")
+		return "", consumeParamError(paramErr, "pit_param_cash_flow_to_string failed")
 	}
 	return consumeSharedString(handle), nil
 }
 
 func ParamCashFlowCheckedAdd(lhs ParamCashFlow, rhs ParamCashFlow) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
-	if !C.pit_param_cash_flow_checked_add(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_cash_flow_checked_add failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_cash_flow_checked_add(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_cash_flow_checked_add failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowCheckedSub(lhs ParamCashFlow, rhs ParamCashFlow) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
-	if !C.pit_param_cash_flow_checked_sub(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_cash_flow_checked_sub failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_cash_flow_checked_sub(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_cash_flow_checked_sub failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowCheckedNeg(value ParamCashFlow) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
-	if !C.pit_param_cash_flow_checked_neg(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_cash_flow_checked_neg failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_cash_flow_checked_neg(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_cash_flow_checked_neg failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowCheckedMulI64(value ParamCashFlow, scalar int64) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_cash_flow_checked_mul_i64(
 		value,
 		C.int64_t(scalar),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_cash_flow_checked_mul_i64 failed")
+			consumeParamError(paramErr, "pit_param_cash_flow_checked_mul_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowCheckedMulU64(value ParamCashFlow, scalar uint64) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_cash_flow_checked_mul_u64(
 		value,
 		C.uint64_t(scalar),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_cash_flow_checked_mul_u64 failed")
+			consumeParamError(paramErr, "pit_param_cash_flow_checked_mul_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowCheckedMulF64(value ParamCashFlow, scalar float64) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_cash_flow_checked_mul_f64(
 		value,
 		C.double(scalar),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_cash_flow_checked_mul_f64 failed")
+			consumeParamError(paramErr, "pit_param_cash_flow_checked_mul_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowCheckedDivI64(value ParamCashFlow, divisor int64) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_cash_flow_checked_div_i64(
 		value,
 		C.int64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_cash_flow_checked_div_i64 failed")
+			consumeParamError(paramErr, "pit_param_cash_flow_checked_div_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowCheckedDivU64(value ParamCashFlow, divisor uint64) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_cash_flow_checked_div_u64(
 		value,
 		C.uint64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_cash_flow_checked_div_u64 failed")
+			consumeParamError(paramErr, "pit_param_cash_flow_checked_div_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowCheckedDivF64(value ParamCashFlow, divisor float64) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_cash_flow_checked_div_f64(
 		value,
 		C.double(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_cash_flow_checked_div_f64 failed")
+			consumeParamError(paramErr, "pit_param_cash_flow_checked_div_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowCheckedRemI64(value ParamCashFlow, divisor int64) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_cash_flow_checked_rem_i64(
 		value,
 		C.int64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_cash_flow_checked_rem_i64 failed")
+			consumeParamError(paramErr, "pit_param_cash_flow_checked_rem_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowCheckedRemU64(value ParamCashFlow, divisor uint64) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_cash_flow_checked_rem_u64(
 		value,
 		C.uint64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_cash_flow_checked_rem_u64 failed")
+			consumeParamError(paramErr, "pit_param_cash_flow_checked_rem_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowCheckedRemF64(value ParamCashFlow, divisor float64) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_cash_flow_checked_rem_f64(
 		value,
 		C.double(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_cash_flow_checked_rem_f64 failed")
+			consumeParamError(paramErr, "pit_param_cash_flow_checked_rem_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowFromPnl(value ParamPnl) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
-	if !C.pit_param_cash_flow_from_pnl(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_cash_flow_from_pnl failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_cash_flow_from_pnl(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_cash_flow_from_pnl failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowFromFee(value ParamFee) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
-	if !C.pit_param_cash_flow_from_fee(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_cash_flow_from_fee failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_cash_flow_from_fee(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_cash_flow_from_fee failed")
 	}
 	return out, nil
 }
 
 func ParamCashFlowFromVolumeInflow(value ParamVolume) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
-	if !C.pit_param_cash_flow_from_volume_inflow(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(
-			outError,
+	var paramErr ParamErrorHandle
+	if !C.pit_param_cash_flow_from_volume_inflow(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(
+			paramErr,
 			"pit_param_cash_flow_from_volume_inflow failed",
 		)
 	}
@@ -1968,10 +2326,13 @@ func ParamCashFlowFromVolumeInflow(value ParamVolume) (ParamCashFlow, error) {
 
 func ParamCashFlowFromVolumeOutflow(value ParamVolume) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
-	if !C.pit_param_cash_flow_from_volume_outflow(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(
-			outError,
+	var paramErr ParamErrorHandle
+	if !C.pit_param_cash_flow_from_volume_outflow(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(
+			paramErr,
 			"pit_param_cash_flow_from_volume_outflow failed",
 		)
 	}
@@ -1991,54 +2352,66 @@ func ParamCashFlowOptionalGet(value ParamCashFlowOptional) ParamCashFlow {
 
 func CreateParamPositionSize(value ParamDecimal) (ParamPositionSize, error) {
 	var result ParamPositionSize
-	var outError SharedString
-	if !C.pit_create_param_position_size(value, &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_position_size(
+		value, &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_position_size failed")
+			consumeParamError(paramErr, "pit_create_param_position_size failed")
 	}
 	return result, nil
 }
 
 func CreateParamPositionSizeFromStr(v string) (ParamPositionSize, error) {
 	var result ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_position_size_from_str(
 		importString(v),
 		&result,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_position_size_from_str failed")
+			consumeParamError(paramErr, "pit_create_param_position_size_from_str failed")
 	}
 	return result, nil
 }
 
 func CreateParamPositionSizeFromF64(v float64) (ParamPositionSize, error) {
 	var result ParamPositionSize
-	var outError SharedString
-	if !C.pit_create_param_position_size_from_f64(C.double(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_position_size_from_f64(
+		C.double(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_position_size_from_f64 failed")
+			consumeParamError(paramErr, "pit_create_param_position_size_from_f64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamPositionSizeFromI64(v int64) (ParamPositionSize, error) {
 	var result ParamPositionSize
-	var outError SharedString
-	if !C.pit_create_param_position_size_from_i64(C.int64_t(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_position_size_from_i64(
+		C.int64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_position_size_from_i64 failed")
+			consumeParamError(paramErr, "pit_create_param_position_size_from_i64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamPositionSizeFromU64(v uint64) (ParamPositionSize, error) {
 	var result ParamPositionSize
-	var outError SharedString
-	if !C.pit_create_param_position_size_from_u64(C.uint64_t(v), &result, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_position_size_from_u64(
+		C.uint64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_position_size_from_u64 failed")
+			consumeParamError(paramErr, "pit_create_param_position_size_from_u64 failed")
 	}
 	return result, nil
 }
@@ -2049,14 +2422,15 @@ func CreateParamPositionSizeFromStrRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamPositionSize, error) {
 	var result ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_position_size_from_str_rounded(
 		importString(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr,
 			"pit_create_param_position_size_from_str_rounded failed",
 		)
 	}
@@ -2069,14 +2443,15 @@ func CreateParamPositionSizeFromF64Rounded(
 	strategy ParamRoundingStrategy,
 ) (ParamPositionSize, error) {
 	var result ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_position_size_from_f64_rounded(
 		C.double(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr,
 			"pit_create_param_position_size_from_f64_rounded failed",
 		)
 	}
@@ -2089,14 +2464,15 @@ func CreateParamPositionSizeFromDecimalRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamPositionSize, error) {
 	var result ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_position_size_from_decimal_rounded(
 		v,
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr,
 			"pit_create_param_position_size_from_decimal_rounded failed",
 		)
 	}
@@ -2111,18 +2487,24 @@ func ParamPositionSizeGetDecimal(value ParamPositionSize) ParamDecimal {
 
 func ParamPositionSizeToF64(value ParamPositionSize) (float64, error) {
 	var out C.double
-	var outError SharedString
-	if !C.pit_param_position_size_to_f64(value, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_position_size_to_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_position_size_to_f64(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_position_size_to_f64 failed")
 	}
 	return float64(out), nil
 }
 
 func ParamPositionSizeIsZero(value ParamPositionSize) (bool, error) {
 	var out C.bool
-	var outError SharedString
-	if !C.pit_param_position_size_is_zero(value, &out, C.PitOutError(&outError)) {
-		return false, consumeSharedStringAsParamError(outError,
+	var paramErr ParamErrorHandle
+	if !C.pit_param_position_size_is_zero(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return false, consumeParamError(paramErr,
 			"pit_param_position_size_is_zero failed",
 		)
 	}
@@ -2134,18 +2516,21 @@ func ParamPositionSizeCompare(
 	rhs ParamPositionSize,
 ) (int, error) {
 	var out C.int8_t
-	var outError SharedString
-	if !C.pit_param_position_size_compare(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_position_size_compare failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_position_size_compare(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_position_size_compare failed")
 	}
 	return int(out), nil
 }
 
 func ParamPositionSizeToString(value ParamPositionSize) (string, error) {
-	var outError SharedString
-	handle := C.pit_param_position_size_to_string(value, C.PitOutError(&outError))
+	var paramErr ParamErrorHandle
+	handle := C.pit_param_position_size_to_string(value, C.PitOutParamError(&paramErr)) //nolint:gocritic
 	if handle == nil {
-		return "", consumeSharedStringAsParamError(outError, "pit_param_position_size_to_string failed")
+		return "", consumeParamError(paramErr, "pit_param_position_size_to_string failed")
 	}
 	return consumeSharedString(handle), nil
 }
@@ -2155,10 +2540,13 @@ func ParamPositionSizeCheckedAdd(
 	rhs ParamPositionSize,
 ) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
-	if !C.pit_param_position_size_checked_add(lhs, rhs, &out, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_param_position_size_checked_add(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_position_size_checked_add failed")
+			consumeParamError(paramErr, "pit_param_position_size_checked_add failed")
 	}
 	return out, nil
 }
@@ -2168,20 +2556,26 @@ func ParamPositionSizeCheckedSub(
 	rhs ParamPositionSize,
 ) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
-	if !C.pit_param_position_size_checked_sub(lhs, rhs, &out, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_param_position_size_checked_sub(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_position_size_checked_sub failed")
+			consumeParamError(paramErr, "pit_param_position_size_checked_sub failed")
 	}
 	return out, nil
 }
 
 func ParamPositionSizeCheckedNeg(value ParamPositionSize) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
-	if !C.pit_param_position_size_checked_neg(value, &out, C.PitOutError(&outError)) {
+	var paramErr ParamErrorHandle
+	if !C.pit_param_position_size_checked_neg(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_position_size_checked_neg failed")
+			consumeParamError(paramErr, "pit_param_position_size_checked_neg failed")
 	}
 	return out, nil
 }
@@ -2191,15 +2585,15 @@ func ParamPositionSizeCheckedMulI64(
 	scalar int64,
 ) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_position_size_checked_mul_i64(
 		value,
 		C.int64_t(scalar),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_position_size_checked_mul_i64 failed")
+			consumeParamError(paramErr, "pit_param_position_size_checked_mul_i64 failed")
 	}
 	return out, nil
 }
@@ -2209,15 +2603,15 @@ func ParamPositionSizeCheckedMulU64(
 	scalar uint64,
 ) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_position_size_checked_mul_u64(
 		value,
 		C.uint64_t(scalar),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_position_size_checked_mul_u64 failed")
+			consumeParamError(paramErr, "pit_param_position_size_checked_mul_u64 failed")
 	}
 	return out, nil
 }
@@ -2227,15 +2621,15 @@ func ParamPositionSizeCheckedMulF64(
 	scalar float64,
 ) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_position_size_checked_mul_f64(
 		value,
 		C.double(scalar),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_position_size_checked_mul_f64 failed")
+			consumeParamError(paramErr, "pit_param_position_size_checked_mul_f64 failed")
 	}
 	return out, nil
 }
@@ -2245,15 +2639,15 @@ func ParamPositionSizeCheckedDivI64(
 	divisor int64,
 ) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_position_size_checked_div_i64(
 		value,
 		C.int64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_position_size_checked_div_i64 failed")
+			consumeParamError(paramErr, "pit_param_position_size_checked_div_i64 failed")
 	}
 	return out, nil
 }
@@ -2263,15 +2657,15 @@ func ParamPositionSizeCheckedDivU64(
 	divisor uint64,
 ) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_position_size_checked_div_u64(
 		value,
 		C.uint64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_position_size_checked_div_u64 failed")
+			consumeParamError(paramErr, "pit_param_position_size_checked_div_u64 failed")
 	}
 	return out, nil
 }
@@ -2281,15 +2675,15 @@ func ParamPositionSizeCheckedDivF64(
 	divisor float64,
 ) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_position_size_checked_div_f64(
 		value,
 		C.double(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_position_size_checked_div_f64 failed")
+			consumeParamError(paramErr, "pit_param_position_size_checked_div_f64 failed")
 	}
 	return out, nil
 }
@@ -2299,15 +2693,15 @@ func ParamPositionSizeCheckedRemI64(
 	divisor int64,
 ) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_position_size_checked_rem_i64(
 		value,
 		C.int64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_position_size_checked_rem_i64 failed")
+			consumeParamError(paramErr, "pit_param_position_size_checked_rem_i64 failed")
 	}
 	return out, nil
 }
@@ -2317,15 +2711,15 @@ func ParamPositionSizeCheckedRemU64(
 	divisor uint64,
 ) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_position_size_checked_rem_u64(
 		value,
 		C.uint64_t(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_position_size_checked_rem_u64 failed")
+			consumeParamError(paramErr, "pit_param_position_size_checked_rem_u64 failed")
 	}
 	return out, nil
 }
@@ -2335,33 +2729,39 @@ func ParamPositionSizeCheckedRemF64(
 	divisor float64,
 ) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_position_size_checked_rem_f64(
 		value,
 		C.double(divisor),
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(outError, "pit_param_position_size_checked_rem_f64 failed")
+			consumeParamError(paramErr, "pit_param_position_size_checked_rem_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamPositionSizeFromPnl(value ParamPnl) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
-	if !C.pit_param_position_size_from_pnl(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_position_size_from_pnl failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_position_size_from_pnl(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_position_size_from_pnl failed")
 	}
 	return out, nil
 }
 
 func ParamPositionSizeFromFee(value ParamFee) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
-	if !C.pit_param_position_size_from_fee(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_position_size_from_fee failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_position_size_from_fee(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_position_size_from_fee failed")
 	}
 	return out, nil
 }
@@ -2371,14 +2771,14 @@ func ParamPositionSizeFromQuantityAndSide(
 	side ParamSide,
 ) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_position_size_from_quantity_and_side(
 		quantity,
 		side,
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
-		return out, consumeSharedStringAsParamError(outError,
+		return out, consumeParamError(paramErr,
 			"pit_param_position_size_from_quantity_and_side failed",
 		)
 	}
@@ -2390,14 +2790,14 @@ func ParamPositionSizeToOpenQuantity(
 ) (ParamQuantity, ParamSide, error) {
 	var quantity ParamQuantity
 	var side ParamSide
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_position_size_to_open_quantity(
 		value,
 		&quantity,
 		&side,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
-		return quantity, side, consumeSharedStringAsParamError(outError,
+		return quantity, side, consumeParamError(paramErr,
 			"pit_param_position_size_to_open_quantity failed",
 		)
 	}
@@ -2409,17 +2809,17 @@ func ParamPositionSizeToCloseQuantity(
 ) (ParamQuantity, ParamSide, error) {
 	var quantity ParamQuantity
 	var side ParamSide
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_position_size_to_close_quantity(
 		value,
 		&quantity,
 		&side,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return quantity,
 			side,
-			consumeSharedStringAsParamError(
-				outError,
+			consumeParamError(
+				paramErr,
 				"pit_param_position_size_to_close_quantity failed",
 			)
 	}
@@ -2432,17 +2832,17 @@ func ParamPositionSizeCheckedAddQuantity(
 	side ParamSide,
 ) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_position_size_checked_add_quantity(
 		value,
 		quantity,
 		side,
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(
-				outError,
+			consumeParamError(
+				paramErr,
 				"pit_param_position_size_checked_add_quantity failed",
 			)
 	}
@@ -2462,45 +2862,60 @@ func ParamPositionSizeOptionalGet(value ParamPositionSizeOptional) ParamPosition
 
 func CreateParamFee(value ParamDecimal) (ParamFee, error) {
 	var result ParamFee
-	var outError SharedString
-	if !C.pit_create_param_fee(value, &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_fee failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_fee(
+		value, &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_fee failed")
 	}
 	return result, nil
 }
 
 func CreateParamFeeFromStr(v string) (ParamFee, error) {
 	var result ParamFee
-	var outError SharedString
-	if !C.pit_create_param_fee_from_str(importString(v), &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_fee_from_str failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_fee_from_str(
+		importString(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_fee_from_str failed")
 	}
 	return result, nil
 }
 
 func CreateParamFeeFromF64(v float64) (ParamFee, error) {
 	var result ParamFee
-	var outError SharedString
-	if !C.pit_create_param_fee_from_f64(C.double(v), &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_fee_from_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_fee_from_f64(
+		C.double(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_fee_from_f64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamFeeFromI64(v int64) (ParamFee, error) {
 	var result ParamFee
-	var outError SharedString
-	if !C.pit_create_param_fee_from_i64(C.int64_t(v), &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_fee_from_i64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_fee_from_i64(
+		C.int64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_fee_from_i64 failed")
 	}
 	return result, nil
 }
 
 func CreateParamFeeFromU64(v uint64) (ParamFee, error) {
 	var result ParamFee
-	var outError SharedString
-	if !C.pit_create_param_fee_from_u64(C.uint64_t(v), &result, C.PitOutError(&outError)) {
-		return result, consumeSharedStringAsParamError(outError, "pit_create_param_fee_from_u64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_fee_from_u64(
+		C.uint64_t(v), &result,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return result, consumeParamError(paramErr, "pit_create_param_fee_from_u64 failed")
 	}
 	return result, nil
 }
@@ -2511,15 +2926,16 @@ func CreateParamFeeFromStrRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamFee, error) {
 	var result ParamFee
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_fee_from_str_rounded(
 		importString(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_fee_from_str_rounded failed")
+			consumeParamError(paramErr, "pit_create_param_fee_from_str_rounded failed")
 	}
 	return result, nil
 }
@@ -2530,15 +2946,16 @@ func CreateParamFeeFromF64Rounded(
 	strategy ParamRoundingStrategy,
 ) (ParamFee, error) {
 	var result ParamFee
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_fee_from_f64_rounded(
 		C.double(v),
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_fee_from_f64_rounded failed")
+			consumeParamError(paramErr, "pit_create_param_fee_from_f64_rounded failed")
 	}
 	return result, nil
 }
@@ -2549,15 +2966,16 @@ func CreateParamFeeFromDecimalRounded(
 	strategy ParamRoundingStrategy,
 ) (ParamFee, error) {
 	var result ParamFee
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_create_param_fee_from_decimal_rounded(
 		v,
 		C.uint32_t(scale),
-		C.uint8_t(strategy),
+		strategy,
 		&result,
-		C.PitOutError(&outError)) {
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
 		return result,
-			consumeSharedStringAsParamError(outError, "pit_create_param_fee_from_decimal_rounded failed")
+			consumeParamError(paramErr, "pit_create_param_fee_from_decimal_rounded failed")
 	}
 	return result, nil
 }
@@ -2570,171 +2988,225 @@ func ParamFeeGetDecimal(value ParamFee) ParamDecimal {
 
 func ParamFeeToF64(value ParamFee) (float64, error) {
 	var out C.double
-	var outError SharedString
-	if !C.pit_param_fee_to_f64(value, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_fee_to_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_to_f64(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_fee_to_f64 failed")
 	}
 	return float64(out), nil
 }
 
 func ParamFeeIsZero(value ParamFee) (bool, error) {
 	var out C.bool
-	var outError SharedString
-	if !C.pit_param_fee_is_zero(value, &out, C.PitOutError(&outError)) {
-		return false, consumeSharedStringAsParamError(outError, "pit_param_fee_is_zero failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_is_zero(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return false, consumeParamError(paramErr, "pit_param_fee_is_zero failed")
 	}
 	return bool(out), nil
 }
 
 func ParamFeeCompare(lhs ParamFee, rhs ParamFee) (int, error) {
 	var out C.int8_t
-	var outError SharedString
-	if !C.pit_param_fee_compare(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return 0, consumeSharedStringAsParamError(outError, "pit_param_fee_compare failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_compare(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return 0, consumeParamError(paramErr, "pit_param_fee_compare failed")
 	}
 	return int(out), nil
 }
 
 func ParamFeeToString(value ParamFee) (string, error) {
-	var outError SharedString
-	handle := C.pit_param_fee_to_string(value, C.PitOutError(&outError))
+	var paramErr ParamErrorHandle
+	handle := C.pit_param_fee_to_string(value, C.PitOutParamError(&paramErr)) //nolint:gocritic
 	if handle == nil {
-		return "", consumeSharedStringAsParamError(outError, "pit_param_fee_to_string failed")
+		return "", consumeParamError(paramErr, "pit_param_fee_to_string failed")
 	}
 	return consumeSharedString(handle), nil
 }
 
 func ParamFeeCheckedAdd(lhs ParamFee, rhs ParamFee) (ParamFee, error) {
 	var out ParamFee
-	var outError SharedString
-	if !C.pit_param_fee_checked_add(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_checked_add failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_checked_add(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_checked_add failed")
 	}
 	return out, nil
 }
 
 func ParamFeeCheckedSub(lhs ParamFee, rhs ParamFee) (ParamFee, error) {
 	var out ParamFee
-	var outError SharedString
-	if !C.pit_param_fee_checked_sub(lhs, rhs, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_checked_sub failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_checked_sub(
+		lhs, rhs, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_checked_sub failed")
 	}
 	return out, nil
 }
 
 func ParamFeeCheckedNeg(value ParamFee) (ParamFee, error) {
 	var out ParamFee
-	var outError SharedString
-	if !C.pit_param_fee_checked_neg(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_checked_neg failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_checked_neg(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_checked_neg failed")
 	}
 	return out, nil
 }
 
 func ParamFeeCheckedMulI64(value ParamFee, scalar int64) (ParamFee, error) {
 	var out ParamFee
-	var outError SharedString
-	if !C.pit_param_fee_checked_mul_i64(value, C.int64_t(scalar), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_checked_mul_i64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_checked_mul_i64(
+		value, C.int64_t(scalar), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_checked_mul_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamFeeCheckedMulU64(value ParamFee, scalar uint64) (ParamFee, error) {
 	var out ParamFee
-	var outError SharedString
-	if !C.pit_param_fee_checked_mul_u64(value, C.uint64_t(scalar), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_checked_mul_u64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_checked_mul_u64(
+		value, C.uint64_t(scalar), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_checked_mul_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamFeeCheckedMulF64(value ParamFee, scalar float64) (ParamFee, error) {
 	var out ParamFee
-	var outError SharedString
-	if !C.pit_param_fee_checked_mul_f64(value, C.double(scalar), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_checked_mul_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_checked_mul_f64(
+		value, C.double(scalar), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_checked_mul_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamFeeCheckedDivI64(value ParamFee, divisor int64) (ParamFee, error) {
 	var out ParamFee
-	var outError SharedString
-	if !C.pit_param_fee_checked_div_i64(value, C.int64_t(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_checked_div_i64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_checked_div_i64(
+		value, C.int64_t(divisor), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_checked_div_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamFeeCheckedDivU64(value ParamFee, divisor uint64) (ParamFee, error) {
 	var out ParamFee
-	var outError SharedString
-	if !C.pit_param_fee_checked_div_u64(value, C.uint64_t(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_checked_div_u64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_checked_div_u64(
+		value, C.uint64_t(divisor), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_checked_div_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamFeeCheckedDivF64(value ParamFee, divisor float64) (ParamFee, error) {
 	var out ParamFee
-	var outError SharedString
-	if !C.pit_param_fee_checked_div_f64(value, C.double(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_checked_div_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_checked_div_f64(
+		value, C.double(divisor), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_checked_div_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamFeeCheckedRemI64(value ParamFee, divisor int64) (ParamFee, error) {
 	var out ParamFee
-	var outError SharedString
-	if !C.pit_param_fee_checked_rem_i64(value, C.int64_t(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_checked_rem_i64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_checked_rem_i64(
+		value, C.int64_t(divisor), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_checked_rem_i64 failed")
 	}
 	return out, nil
 }
 
 func ParamFeeCheckedRemU64(value ParamFee, divisor uint64) (ParamFee, error) {
 	var out ParamFee
-	var outError SharedString
-	if !C.pit_param_fee_checked_rem_u64(value, C.uint64_t(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_checked_rem_u64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_checked_rem_u64(
+		value, C.uint64_t(divisor), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_checked_rem_u64 failed")
 	}
 	return out, nil
 }
 
 func ParamFeeCheckedRemF64(value ParamFee, divisor float64) (ParamFee, error) {
 	var out ParamFee
-	var outError SharedString
-	if !C.pit_param_fee_checked_rem_f64(value, C.double(divisor), &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_checked_rem_f64 failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_checked_rem_f64(
+		value, C.double(divisor), &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_checked_rem_f64 failed")
 	}
 	return out, nil
 }
 
 func ParamFeeToPnl(value ParamFee) (ParamPnl, error) {
 	var out ParamPnl
-	var outError SharedString
-	if !C.pit_param_fee_to_pnl(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_to_pnl failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_to_pnl(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_to_pnl failed")
 	}
 	return out, nil
 }
 
 func ParamFeeToPositionSize(value ParamFee) (ParamPositionSize, error) {
 	var out ParamPositionSize
-	var outError SharedString
-	if !C.pit_param_fee_to_position_size(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_to_position_size failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_to_position_size(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_to_position_size failed")
 	}
 	return out, nil
 }
 
 func ParamFeeToCashFlow(value ParamFee) (ParamCashFlow, error) {
 	var out ParamCashFlow
-	var outError SharedString
-	if !C.pit_param_fee_to_cash_flow(value, &out, C.PitOutError(&outError)) {
-		return out, consumeSharedStringAsParamError(outError, "pit_param_fee_to_cash_flow failed")
+	var paramErr ParamErrorHandle
+	if !C.pit_param_fee_to_cash_flow(
+		value, &out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_param_fee_to_cash_flow failed")
 	}
 	return out, nil
 }
@@ -2754,8 +3226,17 @@ func CreateParamAccountIDFromU64(value uint64) ParamAccountID {
 	return C.pit_create_param_account_id_from_u64(C.uint64_t(value))
 }
 
-func CreateParamAccountIDFromStr(value string) ParamAccountID {
-	return C.pit_create_param_account_id_from_str(importString(value))
+func CreateParamAccountIDFromStr(value string) (ParamAccountID, error) {
+	var out ParamAccountID
+	var paramErr ParamErrorHandle
+	if !C.pit_create_param_account_id_from_str(
+		importString(value),
+		&out,
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	) {
+		return out, consumeParamError(paramErr, "pit_create_param_account_id_from_str failed")
+	}
+	return out, nil
 }
 
 func ParamAccountIDOptionalIsSet(value ParamAccountIDOptional) bool {
@@ -2764,6 +3245,20 @@ func ParamAccountIDOptionalIsSet(value ParamAccountIDOptional) bool {
 
 func ParamAccountIDOptionalGet(value ParamAccountIDOptional) ParamAccountID {
 	return value.value
+}
+
+func CreateParamAssetFromStr(value string) (string, error) {
+	var paramErr ParamErrorHandle
+	handle := C.pit_create_param_asset_from_str(
+		importString(value),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
+	)
+	if handle == nil {
+		return "", consumeParamError(paramErr, "pit_create_param_asset_from_str failed")
+	}
+	result := newStringView(C.pit_shared_string_view(handle)).Safe()
+	C.pit_destroy_param_asset(handle)
+	return result, nil
 }
 
 //------------------------------------------------------------------------------
@@ -2810,16 +3305,16 @@ func ParamLeverageCalculateMarginRequired(
 	notional ParamNotional,
 ) (ParamNotional, error) {
 	var out ParamNotional
-	var outError SharedString
+	var paramErr ParamErrorHandle
 	if !C.pit_param_leverage_calculate_margin_required(
 		leverage,
 		notional,
 		&out,
-		C.PitOutError(&outError),
+		C.PitOutParamError(&paramErr), //nolint:gocritic
 	) {
 		return out,
-			consumeSharedStringAsParamError(
-				outError,
+			consumeParamError(
+				paramErr,
 				"pit_param_leverage_calculate_margin_required failed",
 			)
 	}

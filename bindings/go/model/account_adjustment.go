@@ -28,10 +28,25 @@ import (
 //------------------------------------------------------------------------------
 // AccountAdjustment
 
-type AccountAdjustment struct{ value native.AccountAdjustment }
+type AccountAdjustment struct {
+	value  native.AccountAdjustment
+	retain retainAccountAdjustment
+}
+
+// retainAccountAdjustment keeps value objects alive while the C struct's like
+// PitStringView fields point to their C-heap buffers. For example, see
+// param/asset.go and internal/native/string.go for the full explanation.
+type retainAccountAdjustment struct {
+	// Balance-operation asset.
+	BalanceOperationAsset param.Asset
+	// Position-operation instrument (holds two assets: underlying + settlement).
+	PositionOperationInstrument param.Instrument
+	// Position-operation collateral asset.
+	PositionOperationCollateralAsset param.Asset
+}
 
 func NewAccountAdjustment() AccountAdjustment {
-	return NewAccountAdjustmentFromNative(native.NewAccountAdjustment())
+	return NewAccountAdjustmentFromHandle(native.NewAccountAdjustment())
 }
 
 type AccountAdjustmentValues struct {
@@ -57,12 +72,13 @@ func NewAccountAdjustmentFromValues(values AccountAdjustmentValues) (AccountAdju
 	return a, nil
 }
 
-func NewAccountAdjustmentFromNative(handle native.AccountAdjustment) AccountAdjustment {
+func NewAccountAdjustmentFromHandle(handle native.AccountAdjustment) AccountAdjustment {
 	return AccountAdjustment{value: handle}
 }
 
 func (a *AccountAdjustment) Reset() {
 	native.AccountAdjustmentReset(&a.value)
+	a.retain = retainAccountAdjustment{}
 }
 
 func (a AccountAdjustment) Values() AccountAdjustmentValues {
@@ -110,15 +126,23 @@ func (a AccountAdjustment) BalanceOperation() optional.Option[AccountAdjustmentB
 	)
 }
 
-func (
-	a *AccountAdjustment,
-) SetBalanceOperationByViewAndUnsetPositionOperation() AccountAdjustmentBalanceOperationView {
+// EnsureBalanceOperationView ensures the balance operation exists, unsets the
+// position operation, and returns a mutable balance operation view.
+func (a *AccountAdjustment) EnsureBalanceOperationView() AccountAdjustmentBalanceOperationView {
+	operation := native.AccountAdjustmentGetBalanceOperationView(&a.value)
+	if !native.AccountAdjustmentBalanceOperationOptionalIsSet(*operation) {
+		native.AccountAdjustmentBalanceOperationOptionalSet(
+			operation,
+			native.NewAccountAdjustmentBalanceOperation(),
+		)
+	}
 	result := newAccountAdjustmentBalanceOperationView(
-		native.AccountAdjustmentBalanceOperationOptionalGetView(
-			native.AccountAdjustmentGetBalanceOperationView(&a.value),
-		),
+		native.AccountAdjustmentBalanceOperationOptionalGetView(operation),
+		&a.retain.BalanceOperationAsset,
 	)
 	native.AccountAdjustmentUnsetPositionOperation(&a.value)
+	a.retain.PositionOperationInstrument = param.Instrument{}
+	a.retain.PositionOperationCollateralAsset = param.Asset{}
 	return result
 }
 
@@ -126,10 +150,16 @@ func (a *AccountAdjustment) SetBalanceOperationAndUnsetPositionOperation(
 	operation AccountAdjustmentBalanceOperation,
 ) {
 	native.AccountAdjustmentSetBalanceOperationAndUnsetPositionOperation(&a.value, operation.value)
+	// Propagate asset retention from the inner value struct so the C buffer
+	// stays alive even after the caller's local `operation` is collected.
+	a.retain.BalanceOperationAsset = operation.retainAsset
+	a.retain.PositionOperationInstrument = param.Instrument{}
+	a.retain.PositionOperationCollateralAsset = param.Asset{}
 }
 
 func (a *AccountAdjustment) UnsetBalanceOperation() {
 	native.AccountAdjustmentUnsetBalanceOperation(&a.value)
+	a.retain.BalanceOperationAsset = param.Asset{}
 }
 
 func (a AccountAdjustment) PositionOperation() optional.Option[AccountAdjustmentPositionOperation] {
@@ -144,15 +174,23 @@ func (a AccountAdjustment) PositionOperation() optional.Option[AccountAdjustment
 	)
 }
 
-func (
-	a *AccountAdjustment,
-) SetPositionOperationByViewAndUnsetBalanceOperation() AccountAdjustmentPositionOperationView {
+// EnsurePositionOperationView ensures the position operation exists, unsets the
+// balance operation, and returns a mutable position operation view.
+func (a *AccountAdjustment) EnsurePositionOperationView() AccountAdjustmentPositionOperationView {
+	operation := native.AccountAdjustmentGetPositionOperationView(&a.value)
+	if !native.AccountAdjustmentPositionOperationOptionalIsSet(*operation) {
+		native.AccountAdjustmentPositionOperationOptionalSet(
+			operation,
+			native.NewAccountAdjustmentPositionOperation(),
+		)
+	}
 	result := newAccountAdjustmentPositionOperationView(
-		native.AccountAdjustmentPositionOperationOptionalGetView(
-			native.AccountAdjustmentGetPositionOperationView(&a.value),
-		),
+		native.AccountAdjustmentPositionOperationOptionalGetView(operation),
+		&a.retain.PositionOperationInstrument,
+		&a.retain.PositionOperationCollateralAsset,
 	)
 	native.AccountAdjustmentUnsetBalanceOperation(&a.value)
+	a.retain.BalanceOperationAsset = param.Asset{}
 	return result
 }
 
@@ -160,10 +198,17 @@ func (a *AccountAdjustment) SetPositionOperationAndUnsetBalanceOperation(
 	operation AccountAdjustmentPositionOperation,
 ) {
 	native.AccountAdjustmentSetPositionOperationAndUnsetBalanceOperation(&a.value, operation.value)
+	// Propagate asset retention from the inner value struct so C buffers
+	// stay alive even after the caller's local `operation` is collected.
+	a.retain.PositionOperationInstrument = operation.retainInstrument
+	a.retain.PositionOperationCollateralAsset = operation.retainCollateralAsset
+	a.retain.BalanceOperationAsset = param.Asset{}
 }
 
 func (a *AccountAdjustment) UnsetPositionOperation() {
 	native.AccountAdjustmentUnsetPositionOperation(&a.value)
+	a.retain.PositionOperationInstrument = param.Instrument{}
+	a.retain.PositionOperationCollateralAsset = param.Asset{}
 }
 
 func (a AccountAdjustment) Amount() optional.Option[AccountAdjustmentAmount] {
@@ -224,7 +269,7 @@ func (a AccountAdjustment) EngineAccountAdjustment() AccountAdjustment {
 	return a
 }
 
-func (a AccountAdjustment) Native() native.AccountAdjustment {
+func (a AccountAdjustment) Handle() native.AccountAdjustment {
 	return a.value
 }
 
@@ -233,9 +278,14 @@ func (a AccountAdjustment) Native() native.AccountAdjustment {
 
 type AccountAdjustmentBalanceOperation struct {
 	value native.AccountAdjustmentBalanceOperation
+
+	// retainAsset keeps the Asset alive while the C struct's PitStringView
+	// points to its C-heap buffer.  See AccountAdjustment for the full
+	// explanation of the retain pattern.
+	retainAsset param.Asset
 }
 
-type AccountAdjustmentBalanceOperationParams struct {
+type AccountAdjustmentBalanceOperationValues struct {
 	Asset             optional.Option[param.Asset]
 	AverageEntryPrice optional.Option[param.Price]
 }
@@ -245,7 +295,7 @@ func NewAccountAdjustmentBalanceOperation() AccountAdjustmentBalanceOperation {
 }
 
 func NewAccountAdjustmentBalanceOperationFromValues(
-	values AccountAdjustmentBalanceOperationParams,
+	values AccountAdjustmentBalanceOperationValues,
 ) AccountAdjustmentBalanceOperation {
 	o := NewAccountAdjustmentBalanceOperation()
 	o.setValues(values)
@@ -260,24 +310,25 @@ func newAccountAdjustmentBalanceOperation(
 
 func (o *AccountAdjustmentBalanceOperation) Reset() {
 	native.AccountAdjustmentBalanceOperationReset(&o.value)
+	o.retainAsset = param.Asset{}
 }
 
-func (o AccountAdjustmentBalanceOperation) Values() AccountAdjustmentBalanceOperationParams {
-	return AccountAdjustmentBalanceOperationParams{
+func (o AccountAdjustmentBalanceOperation) Values() AccountAdjustmentBalanceOperationValues {
+	return AccountAdjustmentBalanceOperationValues{
 		Asset:             o.Asset(),
 		AverageEntryPrice: o.AverageEntryPrice(),
 	}
 }
 
 func (o *AccountAdjustmentBalanceOperation) SetValues(
-	values AccountAdjustmentBalanceOperationParams,
+	values AccountAdjustmentBalanceOperationValues,
 ) {
 	o.Reset()
 	o.setValues(values)
 }
 
 func (o *AccountAdjustmentBalanceOperation) setValues(
-	values AccountAdjustmentBalanceOperationParams,
+	values AccountAdjustmentBalanceOperationValues,
 ) {
 	if value, ok := values.Asset.Get(); ok {
 		o.SetAsset(value)
@@ -288,25 +339,27 @@ func (o *AccountAdjustmentBalanceOperation) setValues(
 }
 
 func (o AccountAdjustmentBalanceOperation) Asset() optional.Option[param.Asset] {
-	return param.NewAssetFromNative(native.AccountAdjustmentBalanceOperationGetAsset(o.value))
+	return param.NewAssetFromHandle(native.AccountAdjustmentBalanceOperationGetAsset(o.value))
 }
 
 func (o *AccountAdjustmentBalanceOperation) SetAsset(asset param.Asset) {
-	native.AccountAdjustmentBalanceOperationSetAsset(&o.value, asset.Native())
+	native.AccountAdjustmentBalanceOperationSetAsset(&o.value, asset.Handle())
+	o.retainAsset = asset
 }
 
 func (o *AccountAdjustmentBalanceOperation) UnsetAsset() {
 	native.AccountAdjustmentBalanceOperationUnsetAsset(&o.value)
+	o.retainAsset = param.Asset{}
 }
 
 func (o AccountAdjustmentBalanceOperation) AverageEntryPrice() optional.Option[param.Price] {
-	return param.NewPriceOptionFromNative(
+	return param.NewPriceOptionFromHandle(
 		native.AccountAdjustmentBalanceOperationGetAverageEntryPrice(o.value),
 	)
 }
 
 func (o *AccountAdjustmentBalanceOperation) SetAverageEntryPrice(price param.Price) {
-	native.AccountAdjustmentBalanceOperationSetAverageEntryPrice(&o.value, price.Native())
+	native.AccountAdjustmentBalanceOperationSetAverageEntryPrice(&o.value, price.Handle())
 }
 
 func (o *AccountAdjustmentBalanceOperation) UnsetAverageEntryPrice() {
@@ -315,38 +368,47 @@ func (o *AccountAdjustmentBalanceOperation) UnsetAverageEntryPrice() {
 
 type AccountAdjustmentBalanceOperationView struct {
 	ref *native.AccountAdjustmentBalanceOperation
+	// retainAsset points to the owning AccountAdjustment's
+	// retainBalanceOperationAsset field so that SetAsset/UnsetAsset on the
+	// view propagate retention to the parent without requiring the caller to
+	// hold the Asset separately.
+	retainAsset *param.Asset
 }
 
 func newAccountAdjustmentBalanceOperationView(
 	ref *native.AccountAdjustmentBalanceOperation,
+	retainAsset *param.Asset,
 ) AccountAdjustmentBalanceOperationView {
-	return AccountAdjustmentBalanceOperationView{ref: ref}
+	return AccountAdjustmentBalanceOperationView{ref: ref, retainAsset: retainAsset}
 }
 
 func (o *AccountAdjustmentBalanceOperationView) Reset() {
 	native.AccountAdjustmentBalanceOperationReset(o.ref)
+	*o.retainAsset = param.Asset{}
 }
 
 func (o AccountAdjustmentBalanceOperationView) Asset() optional.Option[param.Asset] {
-	return param.NewAssetFromNative(native.AccountAdjustmentBalanceOperationGetAsset(*o.ref))
+	return param.NewAssetFromHandle(native.AccountAdjustmentBalanceOperationGetAsset(*o.ref))
 }
 
 func (o *AccountAdjustmentBalanceOperationView) SetAsset(asset param.Asset) {
-	native.AccountAdjustmentBalanceOperationSetAsset(o.ref, asset.Native())
+	native.AccountAdjustmentBalanceOperationSetAsset(o.ref, asset.Handle())
+	*o.retainAsset = asset
 }
 
 func (o *AccountAdjustmentBalanceOperationView) UnsetAsset() {
 	native.AccountAdjustmentBalanceOperationUnsetAsset(o.ref)
+	*o.retainAsset = param.Asset{}
 }
 
 func (o AccountAdjustmentBalanceOperationView) AverageEntryPrice() optional.Option[param.Price] {
-	return param.NewPriceOptionFromNative(
+	return param.NewPriceOptionFromHandle(
 		native.AccountAdjustmentBalanceOperationGetAverageEntryPrice(*o.ref),
 	)
 }
 
 func (o *AccountAdjustmentBalanceOperationView) SetAverageEntryPrice(price param.Price) {
-	native.AccountAdjustmentBalanceOperationSetAverageEntryPrice(o.ref, price.Native())
+	native.AccountAdjustmentBalanceOperationSetAverageEntryPrice(o.ref, price.Handle())
 }
 
 func (o *AccountAdjustmentBalanceOperationView) UnsetAverageEntryPrice() {
@@ -358,6 +420,12 @@ func (o *AccountAdjustmentBalanceOperationView) UnsetAverageEntryPrice() {
 
 type AccountAdjustmentPositionOperation struct {
 	value native.AccountAdjustmentPositionOperation
+
+	// retainInstrument and retainCollateralAsset keep the Assets alive while
+	// the C struct's PitStringView fields point to their C-heap buffers.
+	// See AccountAdjustment for the full explanation of the retain pattern.
+	retainInstrument      param.Instrument
+	retainCollateralAsset param.Asset
 }
 
 type AccountAdjustmentPositionOperationValues struct {
@@ -388,17 +456,19 @@ func newAccountAdjustmentPositionOperation(
 
 func (o *AccountAdjustmentPositionOperation) Reset() {
 	native.AccountAdjustmentPositionOperationReset(&o.value)
+	o.retainInstrument = param.Instrument{}
+	o.retainCollateralAsset = param.Asset{}
 }
 
 func (
-	operation AccountAdjustmentPositionOperation,
+	o AccountAdjustmentPositionOperation,
 ) Values() AccountAdjustmentPositionOperationValues {
 	return AccountAdjustmentPositionOperationValues{
-		Instrument:        operation.Instrument(),
-		CollateralAsset:   operation.CollateralAsset(),
-		AverageEntryPrice: operation.AverageEntryPrice(),
-		Leverage:          operation.Leverage(),
-		Mode:              operation.Mode(),
+		Instrument:        o.Instrument(),
+		CollateralAsset:   o.CollateralAsset(),
+		AverageEntryPrice: o.AverageEntryPrice(),
+		Leverage:          o.Leverage(),
+		Mode:              o.Mode(),
 	}
 }
 
@@ -425,46 +495,50 @@ func (o *AccountAdjustmentPositionOperation) setValues(
 		o.SetLeverage(value)
 	}
 	if value, ok := values.Mode.Get(); ok {
-		o.SetMode(value.Native())
+		o.SetMode(value)
 	}
 }
 
 func (o AccountAdjustmentPositionOperation) Instrument() optional.Option[param.Instrument] {
-	return param.NewInstrumentFromNative(
+	return param.NewInstrumentFromHandle(
 		native.AccountAdjustmentPositionOperationGetInstrument(o.value),
 	)
 }
 
 func (o *AccountAdjustmentPositionOperation) SetInstrument(instrument param.Instrument) {
-	native.AccountAdjustmentPositionOperationSetInstrument(&o.value, instrument.Native())
+	native.AccountAdjustmentPositionOperationSetInstrument(&o.value, instrument.Handle())
+	o.retainInstrument = instrument
 }
 
 func (o *AccountAdjustmentPositionOperation) UnsetInstrument() {
 	native.AccountAdjustmentPositionOperationUnsetInstrument(&o.value)
+	o.retainInstrument = param.Instrument{}
 }
 
 func (o AccountAdjustmentPositionOperation) CollateralAsset() optional.Option[param.Asset] {
-	return param.NewAssetFromNative(
+	return param.NewAssetFromHandle(
 		native.AccountAdjustmentPositionOperationGetCollateralAsset(o.value),
 	)
 }
 
 func (o *AccountAdjustmentPositionOperation) SetCollateralAsset(asset param.Asset) {
-	native.AccountAdjustmentPositionOperationSetCollateralAsset(&o.value, asset.Native())
+	native.AccountAdjustmentPositionOperationSetCollateralAsset(&o.value, asset.Handle())
+	o.retainCollateralAsset = asset
 }
 
 func (o *AccountAdjustmentPositionOperation) UnsetCollateralAsset() {
 	native.AccountAdjustmentPositionOperationUnsetCollateralAsset(&o.value)
+	o.retainCollateralAsset = param.Asset{}
 }
 
 func (o AccountAdjustmentPositionOperation) AverageEntryPrice() optional.Option[param.Price] {
-	return param.NewPriceOptionFromNative(
+	return param.NewPriceOptionFromHandle(
 		native.AccountAdjustmentPositionOperationGetAverageEntryPrice(o.value),
 	)
 }
 
 func (o *AccountAdjustmentPositionOperation) SetAverageEntryPrice(price param.Price) {
-	native.AccountAdjustmentPositionOperationSetAverageEntryPrice(&o.value, price.Native())
+	native.AccountAdjustmentPositionOperationSetAverageEntryPrice(&o.value, price.Handle())
 }
 
 func (o *AccountAdjustmentPositionOperation) UnsetAverageEntryPrice() {
@@ -472,13 +546,13 @@ func (o *AccountAdjustmentPositionOperation) UnsetAverageEntryPrice() {
 }
 
 func (o AccountAdjustmentPositionOperation) Leverage() optional.Option[param.Leverage] {
-	return param.NewLeverageOptionFromNative(
+	return param.NewLeverageOptionFromHandle(
 		native.AccountAdjustmentPositionOperationGetLeverage(o.value),
 	)
 }
 
 func (o *AccountAdjustmentPositionOperation) SetLeverage(leverage param.Leverage) {
-	native.AccountAdjustmentPositionOperationSetLeverage(&o.value, leverage.Native())
+	native.AccountAdjustmentPositionOperationSetLeverage(&o.value, leverage.Handle())
 }
 
 func (o *AccountAdjustmentPositionOperation) UnsetLeverage() {
@@ -486,11 +560,11 @@ func (o *AccountAdjustmentPositionOperation) UnsetLeverage() {
 }
 
 func (o AccountAdjustmentPositionOperation) Mode() optional.Option[param.PositionMode] {
-	return param.NewPositionModeFromNative(native.AccountAdjustmentPositionOperationGetMode(o.value))
+	return param.NewPositionModeFromHandle(native.AccountAdjustmentPositionOperationGetMode(o.value))
 }
 
-func (operation *AccountAdjustmentPositionOperation) SetMode(mode native.ParamPositionMode) {
-	native.AccountAdjustmentPositionOperationSetMode(&operation.value, mode)
+func (o *AccountAdjustmentPositionOperation) SetMode(mode param.PositionMode) {
+	native.AccountAdjustmentPositionOperationSetMode(&o.value, mode.Handle())
 }
 
 func (o *AccountAdjustmentPositionOperation) UnsetMode() {
@@ -499,53 +573,71 @@ func (o *AccountAdjustmentPositionOperation) UnsetMode() {
 
 type AccountAdjustmentPositionOperationView struct {
 	ref *native.AccountAdjustmentPositionOperation
+	// retainInstrument and retainCollateralAsset point to the owning
+	// AccountAdjustment's corresponding retain fields so that Set/Unset calls
+	// on this view propagate retention to the parent automatically.
+	retainInstrument      *param.Instrument
+	retainCollateralAsset *param.Asset
 }
 
-func newAccountAdjustmentPositionOperationView(ref *native.AccountAdjustmentPositionOperation,
+func newAccountAdjustmentPositionOperationView(
+	ref *native.AccountAdjustmentPositionOperation,
+	retainInstrument *param.Instrument,
+	retainCollateralAsset *param.Asset,
 ) AccountAdjustmentPositionOperationView {
-	return AccountAdjustmentPositionOperationView{ref: ref}
+	return AccountAdjustmentPositionOperationView{
+		ref:                   ref,
+		retainInstrument:      retainInstrument,
+		retainCollateralAsset: retainCollateralAsset,
+	}
 }
 
 func (o *AccountAdjustmentPositionOperationView) Reset() {
 	native.AccountAdjustmentPositionOperationReset(o.ref)
+	*o.retainInstrument = param.Instrument{}
+	*o.retainCollateralAsset = param.Asset{}
 }
 
 func (o AccountAdjustmentPositionOperationView) Instrument() optional.Option[param.Instrument] {
-	return param.NewInstrumentFromNative(
+	return param.NewInstrumentFromHandle(
 		native.AccountAdjustmentPositionOperationGetInstrument(*o.ref),
 	)
 }
 
 func (o *AccountAdjustmentPositionOperationView) SetInstrument(instrument param.Instrument) {
-	native.AccountAdjustmentPositionOperationSetInstrument(o.ref, instrument.Native())
+	native.AccountAdjustmentPositionOperationSetInstrument(o.ref, instrument.Handle())
+	*o.retainInstrument = instrument
 }
 
 func (o *AccountAdjustmentPositionOperationView) UnsetInstrument() {
 	native.AccountAdjustmentPositionOperationUnsetInstrument(o.ref)
+	*o.retainInstrument = param.Instrument{}
 }
 
 func (o AccountAdjustmentPositionOperationView) CollateralAsset() optional.Option[param.Asset] {
-	return param.NewAssetFromNative(
+	return param.NewAssetFromHandle(
 		native.AccountAdjustmentPositionOperationGetCollateralAsset(*o.ref),
 	)
 }
 
 func (o *AccountAdjustmentPositionOperationView) SetCollateralAsset(asset param.Asset) {
-	native.AccountAdjustmentPositionOperationSetCollateralAsset(o.ref, asset.Native())
+	native.AccountAdjustmentPositionOperationSetCollateralAsset(o.ref, asset.Handle())
+	*o.retainCollateralAsset = asset
 }
 
 func (o *AccountAdjustmentPositionOperationView) UnsetCollateralAsset() {
 	native.AccountAdjustmentPositionOperationUnsetCollateralAsset(o.ref)
+	*o.retainCollateralAsset = param.Asset{}
 }
 
 func (o AccountAdjustmentPositionOperationView) AverageEntryPrice() optional.Option[param.Price] {
-	return param.NewPriceOptionFromNative(
+	return param.NewPriceOptionFromHandle(
 		native.AccountAdjustmentPositionOperationGetAverageEntryPrice(*o.ref),
 	)
 }
 
 func (o *AccountAdjustmentPositionOperationView) SetAverageEntryPrice(price param.Price) {
-	native.AccountAdjustmentPositionOperationSetAverageEntryPrice(o.ref, price.Native())
+	native.AccountAdjustmentPositionOperationSetAverageEntryPrice(o.ref, price.Handle())
 }
 
 func (o *AccountAdjustmentPositionOperationView) UnsetAverageEntryPrice() {
@@ -553,13 +645,13 @@ func (o *AccountAdjustmentPositionOperationView) UnsetAverageEntryPrice() {
 }
 
 func (o AccountAdjustmentPositionOperationView) Leverage() optional.Option[param.Leverage] {
-	return param.NewLeverageOptionFromNative(
+	return param.NewLeverageOptionFromHandle(
 		native.AccountAdjustmentPositionOperationGetLeverage(*o.ref),
 	)
 }
 
-func (o *AccountAdjustmentPositionOperationView) SetLeverage(leverage native.ParamLeverage) {
-	native.AccountAdjustmentPositionOperationSetLeverage(o.ref, leverage)
+func (o *AccountAdjustmentPositionOperationView) SetLeverage(leverage param.Leverage) {
+	native.AccountAdjustmentPositionOperationSetLeverage(o.ref, leverage.Handle())
 }
 
 func (o *AccountAdjustmentPositionOperationView) UnsetLeverage() {
@@ -567,11 +659,11 @@ func (o *AccountAdjustmentPositionOperationView) UnsetLeverage() {
 }
 
 func (o AccountAdjustmentPositionOperationView) Mode() optional.Option[param.PositionMode] {
-	return param.NewPositionModeFromNative(native.AccountAdjustmentPositionOperationGetMode(*o.ref))
+	return param.NewPositionModeFromHandle(native.AccountAdjustmentPositionOperationGetMode(*o.ref))
 }
 
-func (o *AccountAdjustmentPositionOperationView) SetMode(mode native.ParamPositionMode) {
-	native.AccountAdjustmentPositionOperationSetMode(o.ref, mode)
+func (o *AccountAdjustmentPositionOperationView) SetMode(mode param.PositionMode) {
+	native.AccountAdjustmentPositionOperationSetMode(o.ref, mode.Handle())
 }
 
 func (o *AccountAdjustmentPositionOperationView) UnsetMode() {
@@ -637,11 +729,11 @@ func (a AccountAdjustmentAmount) Values() AccountAdjustmentAmountValues {
 }
 
 func (a AccountAdjustmentAmount) Total() optional.Option[param.AdjustmentAmount] {
-	return param.NewAdjustmentAmountFromNative(native.AccountAdjustmentAmountGetTotal(a.value))
+	return param.NewAdjustmentAmountFromHandle(native.AccountAdjustmentAmountGetTotal(a.value))
 }
 
 func (a *AccountAdjustmentAmount) SetTotal(value param.AdjustmentAmount) {
-	native.AccountAdjustmentAmountSetTotal(&a.value, value.Native())
+	native.AccountAdjustmentAmountSetTotal(&a.value, value.Handle())
 }
 
 func (a *AccountAdjustmentAmount) UnsetTotal() {
@@ -649,11 +741,11 @@ func (a *AccountAdjustmentAmount) UnsetTotal() {
 }
 
 func (a AccountAdjustmentAmount) Reserved() optional.Option[param.AdjustmentAmount] {
-	return param.NewAdjustmentAmountFromNative(native.AccountAdjustmentAmountGetReserved(a.value))
+	return param.NewAdjustmentAmountFromHandle(native.AccountAdjustmentAmountGetReserved(a.value))
 }
 
 func (a *AccountAdjustmentAmount) SetReserved(value param.AdjustmentAmount) {
-	native.AccountAdjustmentAmountSetReserved(&a.value, value.Native())
+	native.AccountAdjustmentAmountSetReserved(&a.value, value.Handle())
 }
 
 func (a *AccountAdjustmentAmount) UnsetReserved() {
@@ -661,11 +753,11 @@ func (a *AccountAdjustmentAmount) UnsetReserved() {
 }
 
 func (a AccountAdjustmentAmount) Pending() optional.Option[param.AdjustmentAmount] {
-	return param.NewAdjustmentAmountFromNative(native.AccountAdjustmentAmountGetPending(a.value))
+	return param.NewAdjustmentAmountFromHandle(native.AccountAdjustmentAmountGetPending(a.value))
 }
 
 func (a *AccountAdjustmentAmount) SetPending(value param.AdjustmentAmount) {
-	native.AccountAdjustmentAmountSetPending(&a.value, value.Native())
+	native.AccountAdjustmentAmountSetPending(&a.value, value.Handle())
 }
 
 func (a *AccountAdjustmentAmount) UnsetPending() {
@@ -687,11 +779,11 @@ func (a *AccountAdjustmentAmountView) Reset() {
 }
 
 func (a AccountAdjustmentAmountView) Total() optional.Option[param.AdjustmentAmount] {
-	return param.NewAdjustmentAmountFromNative(native.AccountAdjustmentAmountGetTotal(*a.ref))
+	return param.NewAdjustmentAmountFromHandle(native.AccountAdjustmentAmountGetTotal(*a.ref))
 }
 
 func (a *AccountAdjustmentAmountView) SetTotal(value param.AdjustmentAmount) {
-	native.AccountAdjustmentAmountSetTotal(a.ref, value.Native())
+	native.AccountAdjustmentAmountSetTotal(a.ref, value.Handle())
 }
 
 func (a *AccountAdjustmentAmountView) UnsetTotal() {
@@ -699,11 +791,11 @@ func (a *AccountAdjustmentAmountView) UnsetTotal() {
 }
 
 func (a AccountAdjustmentAmountView) Reserved() optional.Option[param.AdjustmentAmount] {
-	return param.NewAdjustmentAmountFromNative(native.AccountAdjustmentAmountGetReserved(*a.ref))
+	return param.NewAdjustmentAmountFromHandle(native.AccountAdjustmentAmountGetReserved(*a.ref))
 }
 
 func (a *AccountAdjustmentAmountView) SetReserved(value param.AdjustmentAmount) {
-	native.AccountAdjustmentAmountSetReserved(a.ref, value.Native())
+	native.AccountAdjustmentAmountSetReserved(a.ref, value.Handle())
 }
 
 func (a *AccountAdjustmentAmountView) UnsetReserved() {
@@ -711,11 +803,11 @@ func (a *AccountAdjustmentAmountView) UnsetReserved() {
 }
 
 func (a AccountAdjustmentAmountView) Pending() optional.Option[param.AdjustmentAmount] {
-	return param.NewAdjustmentAmountFromNative(native.AccountAdjustmentAmountGetPending(*a.ref))
+	return param.NewAdjustmentAmountFromHandle(native.AccountAdjustmentAmountGetPending(*a.ref))
 }
 
 func (a *AccountAdjustmentAmountView) SetPending(value param.AdjustmentAmount) {
-	native.AccountAdjustmentAmountSetPending(a.ref, value.Native())
+	native.AccountAdjustmentAmountSetPending(a.ref, value.Handle())
 }
 
 func (a *AccountAdjustmentAmountView) UnsetPending() {
@@ -733,7 +825,7 @@ func NewAccountAdjustmentBounds() AccountAdjustmentBounds {
 	return newAccountAdjustmentBounds(native.NewAccountAdjustmentBounds())
 }
 
-type AccountAdjustmentBoundsParams struct {
+type AccountAdjustmentBoundsValues struct {
 	TotalUpper    optional.Option[param.PositionSize]
 	TotalLower    optional.Option[param.PositionSize]
 	ReservedUpper optional.Option[param.PositionSize]
@@ -743,7 +835,7 @@ type AccountAdjustmentBoundsParams struct {
 }
 
 func NewAccountAdjustmentBoundsFromValues(
-	values AccountAdjustmentBoundsParams,
+	values AccountAdjustmentBoundsValues,
 ) AccountAdjustmentBounds {
 	b := NewAccountAdjustmentBounds()
 	b.setValues(values)
@@ -758,8 +850,8 @@ func (b *AccountAdjustmentBounds) Reset() {
 	native.AccountAdjustmentBoundsReset(&b.value)
 }
 
-func (b AccountAdjustmentBounds) Values() AccountAdjustmentBoundsParams {
-	return AccountAdjustmentBoundsParams{
+func (b AccountAdjustmentBounds) Values() AccountAdjustmentBoundsValues {
+	return AccountAdjustmentBoundsValues{
 		TotalUpper:    b.TotalUpper(),
 		TotalLower:    b.TotalLower(),
 		ReservedUpper: b.ReservedUpper(),
@@ -769,12 +861,12 @@ func (b AccountAdjustmentBounds) Values() AccountAdjustmentBoundsParams {
 	}
 }
 
-func (b AccountAdjustmentBounds) SetValues(values AccountAdjustmentBoundsParams) {
+func (b *AccountAdjustmentBounds) SetValues(values AccountAdjustmentBoundsValues) {
 	b.Reset()
 	b.setValues(values)
 }
 
-func (b AccountAdjustmentBounds) setValues(values AccountAdjustmentBoundsParams) {
+func (b AccountAdjustmentBounds) setValues(values AccountAdjustmentBoundsValues) {
 	if value, ok := values.TotalUpper.Get(); ok {
 		b.SetTotalUpper(value)
 	}
@@ -796,13 +888,13 @@ func (b AccountAdjustmentBounds) setValues(values AccountAdjustmentBoundsParams)
 }
 
 func (b AccountAdjustmentBounds) TotalUpper() optional.Option[param.PositionSize] {
-	return param.NewPositionSizeOptionFromNative(
+	return param.NewPositionSizeOptionFromHandle(
 		native.AccountAdjustmentBoundsGetTotalUpper(b.value),
 	)
 }
 
 func (b *AccountAdjustmentBounds) SetTotalUpper(bound param.PositionSize) {
-	native.AccountAdjustmentBoundsSetTotalUpper(&b.value, bound.Native())
+	native.AccountAdjustmentBoundsSetTotalUpper(&b.value, bound.Handle())
 }
 
 func (b *AccountAdjustmentBounds) UnsetTotalUpper() {
@@ -810,13 +902,13 @@ func (b *AccountAdjustmentBounds) UnsetTotalUpper() {
 }
 
 func (b AccountAdjustmentBounds) TotalLower() optional.Option[param.PositionSize] {
-	return param.NewPositionSizeOptionFromNative(
+	return param.NewPositionSizeOptionFromHandle(
 		native.AccountAdjustmentBoundsGetTotalLower(b.value),
 	)
 }
 
 func (b *AccountAdjustmentBounds) SetTotalLower(bound param.PositionSize) {
-	native.AccountAdjustmentBoundsSetTotalLower(&b.value, bound.Native())
+	native.AccountAdjustmentBoundsSetTotalLower(&b.value, bound.Handle())
 }
 
 func (b *AccountAdjustmentBounds) UnsetTotalLower() {
@@ -824,13 +916,13 @@ func (b *AccountAdjustmentBounds) UnsetTotalLower() {
 }
 
 func (b AccountAdjustmentBounds) ReservedUpper() optional.Option[param.PositionSize] {
-	return param.NewPositionSizeOptionFromNative(
+	return param.NewPositionSizeOptionFromHandle(
 		native.AccountAdjustmentBoundsGetReservedUpper(b.value),
 	)
 }
 
 func (b *AccountAdjustmentBounds) SetReservedUpper(bound param.PositionSize) {
-	native.AccountAdjustmentBoundsSetReservedUpper(&b.value, bound.Native())
+	native.AccountAdjustmentBoundsSetReservedUpper(&b.value, bound.Handle())
 }
 
 func (b *AccountAdjustmentBounds) UnsetReservedUpper() {
@@ -838,13 +930,13 @@ func (b *AccountAdjustmentBounds) UnsetReservedUpper() {
 }
 
 func (b AccountAdjustmentBounds) ReservedLower() optional.Option[param.PositionSize] {
-	return param.NewPositionSizeOptionFromNative(
+	return param.NewPositionSizeOptionFromHandle(
 		native.AccountAdjustmentBoundsGetReservedLower(b.value),
 	)
 }
 
 func (b *AccountAdjustmentBounds) SetReservedLower(bound param.PositionSize) {
-	native.AccountAdjustmentBoundsSetReservedLower(&b.value, bound.Native())
+	native.AccountAdjustmentBoundsSetReservedLower(&b.value, bound.Handle())
 }
 
 func (b *AccountAdjustmentBounds) UnsetReservedLower() {
@@ -852,13 +944,13 @@ func (b *AccountAdjustmentBounds) UnsetReservedLower() {
 }
 
 func (b AccountAdjustmentBounds) PendingUpper() optional.Option[param.PositionSize] {
-	return param.NewPositionSizeOptionFromNative(
+	return param.NewPositionSizeOptionFromHandle(
 		native.AccountAdjustmentBoundsGetPendingUpper(b.value),
 	)
 }
 
 func (b *AccountAdjustmentBounds) SetPendingUpper(bound param.PositionSize) {
-	native.AccountAdjustmentBoundsSetPendingUpper(&b.value, bound.Native())
+	native.AccountAdjustmentBoundsSetPendingUpper(&b.value, bound.Handle())
 }
 
 func (b *AccountAdjustmentBounds) UnsetPendingUpper() {
@@ -866,13 +958,13 @@ func (b *AccountAdjustmentBounds) UnsetPendingUpper() {
 }
 
 func (b AccountAdjustmentBounds) PendingLower() optional.Option[param.PositionSize] {
-	return param.NewPositionSizeOptionFromNative(
+	return param.NewPositionSizeOptionFromHandle(
 		native.AccountAdjustmentBoundsGetPendingLower(b.value),
 	)
 }
 
 func (b *AccountAdjustmentBounds) SetPendingLower(bound param.PositionSize) {
-	native.AccountAdjustmentBoundsSetPendingLower(&b.value, bound.Native())
+	native.AccountAdjustmentBoundsSetPendingLower(&b.value, bound.Handle())
 }
 
 func (b *AccountAdjustmentBounds) UnsetPendingLower() {
@@ -894,13 +986,13 @@ func (b *AccountAdjustmentBoundsView) Reset() {
 }
 
 func (b AccountAdjustmentBoundsView) TotalUpper() optional.Option[param.PositionSize] {
-	return param.NewPositionSizeOptionFromNative(
+	return param.NewPositionSizeOptionFromHandle(
 		native.AccountAdjustmentBoundsGetTotalUpper(*b.ref),
 	)
 }
 
 func (b *AccountAdjustmentBoundsView) SetTotalUpper(bound param.PositionSize) {
-	native.AccountAdjustmentBoundsSetTotalUpper(b.ref, bound.Native())
+	native.AccountAdjustmentBoundsSetTotalUpper(b.ref, bound.Handle())
 }
 
 func (b *AccountAdjustmentBoundsView) UnsetTotalUpper() {
@@ -908,13 +1000,13 @@ func (b *AccountAdjustmentBoundsView) UnsetTotalUpper() {
 }
 
 func (b AccountAdjustmentBoundsView) TotalLower() optional.Option[param.PositionSize] {
-	return param.NewPositionSizeOptionFromNative(
+	return param.NewPositionSizeOptionFromHandle(
 		native.AccountAdjustmentBoundsGetTotalLower(*b.ref),
 	)
 }
 
 func (b *AccountAdjustmentBoundsView) SetTotalLower(bound param.PositionSize) {
-	native.AccountAdjustmentBoundsSetTotalLower(b.ref, bound.Native())
+	native.AccountAdjustmentBoundsSetTotalLower(b.ref, bound.Handle())
 }
 
 func (b *AccountAdjustmentBoundsView) UnsetTotalLower() {
@@ -922,13 +1014,13 @@ func (b *AccountAdjustmentBoundsView) UnsetTotalLower() {
 }
 
 func (b AccountAdjustmentBoundsView) ReservedUpper() optional.Option[param.PositionSize] {
-	return param.NewPositionSizeOptionFromNative(
+	return param.NewPositionSizeOptionFromHandle(
 		native.AccountAdjustmentBoundsGetReservedUpper(*b.ref),
 	)
 }
 
 func (b *AccountAdjustmentBoundsView) SetReservedUpper(bound param.PositionSize) {
-	native.AccountAdjustmentBoundsSetReservedUpper(b.ref, bound.Native())
+	native.AccountAdjustmentBoundsSetReservedUpper(b.ref, bound.Handle())
 }
 
 func (b *AccountAdjustmentBoundsView) UnsetReservedUpper() {
@@ -936,13 +1028,13 @@ func (b *AccountAdjustmentBoundsView) UnsetReservedUpper() {
 }
 
 func (b AccountAdjustmentBoundsView) ReservedLower() optional.Option[param.PositionSize] {
-	return param.NewPositionSizeOptionFromNative(
+	return param.NewPositionSizeOptionFromHandle(
 		native.AccountAdjustmentBoundsGetReservedLower(*b.ref),
 	)
 }
 
 func (b *AccountAdjustmentBoundsView) SetReservedLower(bound param.PositionSize) {
-	native.AccountAdjustmentBoundsSetReservedLower(b.ref, bound.Native())
+	native.AccountAdjustmentBoundsSetReservedLower(b.ref, bound.Handle())
 }
 
 func (b *AccountAdjustmentBoundsView) UnsetReservedLower() {
@@ -950,13 +1042,13 @@ func (b *AccountAdjustmentBoundsView) UnsetReservedLower() {
 }
 
 func (b AccountAdjustmentBoundsView) PendingUpper() optional.Option[param.PositionSize] {
-	return param.NewPositionSizeOptionFromNative(
+	return param.NewPositionSizeOptionFromHandle(
 		native.AccountAdjustmentBoundsGetPendingUpper(*b.ref),
 	)
 }
 
 func (b *AccountAdjustmentBoundsView) SetPendingUpper(bound param.PositionSize) {
-	native.AccountAdjustmentBoundsSetPendingUpper(b.ref, bound.Native())
+	native.AccountAdjustmentBoundsSetPendingUpper(b.ref, bound.Handle())
 }
 
 func (b *AccountAdjustmentBoundsView) UnsetPendingUpper() {
@@ -964,13 +1056,13 @@ func (b *AccountAdjustmentBoundsView) UnsetPendingUpper() {
 }
 
 func (b AccountAdjustmentBoundsView) PendingLower() optional.Option[param.PositionSize] {
-	return param.NewPositionSizeOptionFromNative(
+	return param.NewPositionSizeOptionFromHandle(
 		native.AccountAdjustmentBoundsGetPendingLower(*b.ref),
 	)
 }
 
 func (b *AccountAdjustmentBoundsView) SetPendingLower(bound param.PositionSize) {
-	native.AccountAdjustmentBoundsSetPendingLower(b.ref, bound.Native())
+	native.AccountAdjustmentBoundsSetPendingLower(b.ref, bound.Handle())
 }
 
 func (b *AccountAdjustmentBoundsView) UnsetPendingLower() {

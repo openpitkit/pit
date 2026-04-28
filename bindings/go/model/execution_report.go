@@ -28,10 +28,18 @@ import (
 //------------------------------------------------------------------------------
 // ExecutionReport
 
-type ExecutionReport struct{ value native.ExecutionReport }
+type ExecutionReport struct {
+	value native.ExecutionReport
+
+	// retainOperationInstrument keeps the Instrument (and its two constituent
+	// Assets) alive while the C struct's PitStringView fields point to their
+	// C-heap buffers.  See param/asset.go and internal/native/asset_buf.go
+	// for the full explanation of the retain pattern.
+	retainOperationInstrument param.Instrument
+}
 
 func NewExecutionReport() ExecutionReport {
-	return NewExecutionReportFromNative(native.NewExecutionReport())
+	return NewExecutionReportFromHandle(native.NewExecutionReport())
 }
 
 type ExecutionReportValues struct {
@@ -47,12 +55,13 @@ func NewExecutionReportFromValues(values ExecutionReportValues) ExecutionReport 
 	return report
 }
 
-func NewExecutionReportFromNative(value native.ExecutionReport) ExecutionReport {
+func NewExecutionReportFromHandle(value native.ExecutionReport) ExecutionReport {
 	return ExecutionReport{value: value}
 }
 
 func (r *ExecutionReport) Reset() {
 	native.ExecutionReportReset(&r.value)
+	r.retainOperationInstrument = param.Instrument{}
 }
 
 func (r ExecutionReport) Values() ExecutionReportValues {
@@ -96,10 +105,23 @@ func (r ExecutionReport) Operation() optional.Option[ExecutionReportOperation] {
 
 func (r *ExecutionReport) SetOperation(operation ExecutionReportOperation) {
 	native.ExecutionReportSetOperation(&r.value, operation.value)
+	r.retainOperationInstrument = operation.retainInstrument
+}
+
+func (r *ExecutionReport) EnsureOperationView() ExecutionReportOperationView {
+	operation := native.ExecutionReportGetOperationView(&r.value)
+	if !native.ExecutionReportOperationOptionalIsSet(*operation) {
+		native.ExecutionReportOperationOptionalSet(operation, native.NewExecutionReportOperation())
+	}
+	return newExecutionReportOperationView(
+		native.ExecutionReportOperationOptionalGetView(operation),
+		&r.retainOperationInstrument,
+	)
 }
 
 func (r *ExecutionReport) UnsetOperation() {
 	native.ExecutionReportUnsetOperation(&r.value)
+	r.retainOperationInstrument = param.Instrument{}
 }
 
 func (r ExecutionReport) FinancialImpact() optional.Option[ExecutionReportFinancialImpact] {
@@ -116,6 +138,14 @@ func (r *ExecutionReport) SetFinancialImpact(financialImpact ExecutionReportFina
 	native.ExecutionReportSetFinancialImpact(&r.value, financialImpact.value)
 }
 
+func (r *ExecutionReport) EnsureFinancialImpactView() ExecutionReportFinancialImpactView {
+	financialImpact := native.ExecutionReportGetFinancialImpactView(&r.value)
+	if !native.FinancialImpactOptionalIsSet(*financialImpact) {
+		native.FinancialImpactOptionalSet(financialImpact, native.NewFinancialImpact())
+	}
+	return newExecutionReportFinancialImpactView(native.FinancialImpactOptionalGetView(financialImpact))
+}
+
 func (r *ExecutionReport) UnsetFinancialImpact() {
 	native.ExecutionReportUnsetFinancialImpact(&r.value)
 }
@@ -130,6 +160,14 @@ func (r ExecutionReport) Fill() optional.Option[ExecutionReportFill] {
 
 func (r *ExecutionReport) SetFill(fill ExecutionReportFill) {
 	native.ExecutionReportSetFill(&r.value, fill.value)
+}
+
+func (r *ExecutionReport) EnsureFillView() ExecutionReportFillView {
+	fill := native.ExecutionReportGetFillView(&r.value)
+	if !native.ExecutionReportFillOptionalIsSet(*fill) {
+		native.ExecutionReportFillOptionalSet(fill, native.NewExecutionReportFill())
+	}
+	return newExecutionReportFillView(native.ExecutionReportFillOptionalGetView(fill))
 }
 
 func (r *ExecutionReport) UnsetFill() {
@@ -152,6 +190,19 @@ func (r *ExecutionReport) SetPositionImpact(positionImpact ExecutionReportPositi
 	native.ExecutionReportSetPositionImpact(&r.value, positionImpact.value)
 }
 
+func (r *ExecutionReport) EnsurePositionImpactView() ExecutionReportPositionImpactView {
+	positionImpact := native.ExecutionReportGetPositionImpactView(&r.value)
+	if !native.ExecutionReportPositionImpactOptionalIsSet(*positionImpact) {
+		native.ExecutionReportPositionImpactOptionalSet(
+			positionImpact,
+			native.NewExecutionReportPositionImpact(),
+		)
+	}
+	return newExecutionReportPositionImpactView(
+		native.ExecutionReportPositionImpactOptionalGetView(positionImpact),
+	)
+}
+
 func (r *ExecutionReport) UnsetPositionImpact() {
 	native.ExecutionReportUnsetPositionImpact(&r.value)
 }
@@ -161,7 +212,7 @@ func (r ExecutionReport) EngineExecutionReport() ExecutionReport {
 	return r
 }
 
-func (r ExecutionReport) Native() native.ExecutionReport {
+func (r ExecutionReport) Handle() native.ExecutionReport {
 	return r.value
 }
 
@@ -170,6 +221,11 @@ func (r ExecutionReport) Native() native.ExecutionReport {
 
 type ExecutionReportOperation struct {
 	value native.ExecutionReportOperation
+
+	// retainInstrument keeps the Instrument (and its two constituent Assets)
+	// alive while the C struct's PitStringView fields point to their C-heap
+	// buffers.  See param/asset.go for the full explanation.
+	retainInstrument param.Instrument
 }
 
 type ExecutionReportOperationValues struct {
@@ -196,6 +252,7 @@ func newExecutionReportOperation(value native.ExecutionReportOperation) Executio
 
 func (o *ExecutionReportOperation) Reset() {
 	native.ExecutionReportOperationReset(&o.value)
+	o.retainInstrument = param.Instrument{}
 }
 
 func (o ExecutionReportOperation) Values() ExecutionReportOperationValues {
@@ -224,23 +281,25 @@ func (o *ExecutionReportOperation) setValues(values ExecutionReportOperationValu
 }
 
 func (o ExecutionReportOperation) Instrument() optional.Option[param.Instrument] {
-	return param.NewInstrumentFromNative(native.ExecutionReportOperationGetInstrument(o.value))
+	return param.NewInstrumentFromHandle(native.ExecutionReportOperationGetInstrument(o.value))
 }
 
 func (o *ExecutionReportOperation) SetInstrument(instrument param.Instrument) {
-	native.ExecutionReportOperationSetInstrument(&o.value, instrument.Native())
+	native.ExecutionReportOperationSetInstrument(&o.value, instrument.Handle())
+	o.retainInstrument = instrument
 }
 
 func (o *ExecutionReportOperation) UnsetInstrument() {
 	native.ExecutionReportOperationUnsetInstrument(&o.value)
+	o.retainInstrument = param.Instrument{}
 }
 
 func (o ExecutionReportOperation) AccountID() optional.Option[param.AccountID] {
-	return param.NewAccountIDOptionFromNative(native.ExecutionReportOperationGetAccountID(o.value))
+	return param.NewAccountIDOptionFromHandle(native.ExecutionReportOperationGetAccountID(o.value))
 }
 
 func (o *ExecutionReportOperation) SetAccountID(accountID param.AccountID) {
-	native.ExecutionReportOperationSetAccountID(&o.value, accountID.Native())
+	native.ExecutionReportOperationSetAccountID(&o.value, accountID.Handle())
 }
 
 func (o *ExecutionReportOperation) UnsetAccountID() {
@@ -248,15 +307,73 @@ func (o *ExecutionReportOperation) UnsetAccountID() {
 }
 
 func (o ExecutionReportOperation) Side() optional.Option[param.Side] {
-	return param.NewSideFromNative(native.ExecutionReportOperationGetSide(o.value))
+	return param.NewSideFromHandle(native.ExecutionReportOperationGetSide(o.value))
 }
 
 func (o *ExecutionReportOperation) SetSide(side param.Side) {
-	native.ExecutionReportOperationSetSide(&o.value, side.Native())
+	native.ExecutionReportOperationSetSide(&o.value, side.Handle())
 }
 
 func (o *ExecutionReportOperation) UnsetSide() {
 	native.ExecutionReportOperationUnsetSide(&o.value)
+}
+
+type ExecutionReportOperationView struct {
+	ref *native.ExecutionReportOperation
+	// retainInstrument points to the owning ExecutionReport's
+	// retainOperationInstrument field so that Set/Unset calls on this view
+	// propagate retention to the parent automatically.
+	retainInstrument *param.Instrument
+}
+
+func newExecutionReportOperationView(
+	ref *native.ExecutionReportOperation,
+	retainInstrument *param.Instrument,
+) ExecutionReportOperationView {
+	return ExecutionReportOperationView{ref: ref, retainInstrument: retainInstrument}
+}
+
+func (v *ExecutionReportOperationView) Reset() {
+	native.ExecutionReportOperationReset(v.ref)
+	*v.retainInstrument = param.Instrument{}
+}
+
+func (v ExecutionReportOperationView) Instrument() optional.Option[param.Instrument] {
+	return param.NewInstrumentFromHandle(native.ExecutionReportOperationGetInstrument(*v.ref))
+}
+
+func (v *ExecutionReportOperationView) SetInstrument(instrument param.Instrument) {
+	native.ExecutionReportOperationSetInstrument(v.ref, instrument.Handle())
+	*v.retainInstrument = instrument
+}
+
+func (v *ExecutionReportOperationView) UnsetInstrument() {
+	native.ExecutionReportOperationUnsetInstrument(v.ref)
+	*v.retainInstrument = param.Instrument{}
+}
+
+func (v ExecutionReportOperationView) AccountID() optional.Option[param.AccountID] {
+	return param.NewAccountIDOptionFromHandle(native.ExecutionReportOperationGetAccountID(*v.ref))
+}
+
+func (v *ExecutionReportOperationView) SetAccountID(accountID param.AccountID) {
+	native.ExecutionReportOperationSetAccountID(v.ref, accountID.Handle())
+}
+
+func (v *ExecutionReportOperationView) UnsetAccountID() {
+	native.ExecutionReportOperationUnsetAccountID(v.ref)
+}
+
+func (v ExecutionReportOperationView) Side() optional.Option[param.Side] {
+	return param.NewSideFromHandle(native.ExecutionReportOperationGetSide(*v.ref))
+}
+
+func (v *ExecutionReportOperationView) SetSide(side param.Side) {
+	native.ExecutionReportOperationSetSide(v.ref, side.Handle())
+}
+
+func (v *ExecutionReportOperationView) UnsetSide() {
+	native.ExecutionReportOperationUnsetSide(v.ref)
 }
 
 //------------------------------------------------------------------------------
@@ -313,11 +430,11 @@ func (i *ExecutionReportFinancialImpact) setValues(values ExecutionReportFinanci
 }
 
 func (i ExecutionReportFinancialImpact) Pnl() optional.Option[param.Pnl] {
-	return param.NewPnlOptionFromNative(native.FinancialImpactGetPnl(i.value))
+	return param.NewPnlOptionFromHandle(native.FinancialImpactGetPnl(i.value))
 }
 
 func (i *ExecutionReportFinancialImpact) SetPnl(pnl param.Pnl) {
-	native.FinancialImpactSetPnl(&i.value, pnl.Native())
+	native.FinancialImpactSetPnl(&i.value, pnl.Handle())
 }
 
 func (i *ExecutionReportFinancialImpact) UnsetPnl() {
@@ -325,15 +442,51 @@ func (i *ExecutionReportFinancialImpact) UnsetPnl() {
 }
 
 func (i ExecutionReportFinancialImpact) Fee() optional.Option[param.Fee] {
-	return param.NewFeeOptionFromNative(native.FinancialImpactGetFee(i.value))
+	return param.NewFeeOptionFromHandle(native.FinancialImpactGetFee(i.value))
 }
 
 func (i *ExecutionReportFinancialImpact) SetFee(fee param.Fee) {
-	native.FinancialImpactSetFee(&i.value, fee.Native())
+	native.FinancialImpactSetFee(&i.value, fee.Handle())
 }
 
 func (i *ExecutionReportFinancialImpact) UnsetFee() {
 	native.FinancialImpactUnsetFee(&i.value)
+}
+
+type ExecutionReportFinancialImpactView struct{ ref *native.FinancialImpact }
+
+func newExecutionReportFinancialImpactView(
+	ref *native.FinancialImpact,
+) ExecutionReportFinancialImpactView {
+	return ExecutionReportFinancialImpactView{ref: ref}
+}
+
+func (v *ExecutionReportFinancialImpactView) Reset() {
+	native.FinancialImpactReset(v.ref)
+}
+
+func (v ExecutionReportFinancialImpactView) Pnl() optional.Option[param.Pnl] {
+	return param.NewPnlOptionFromHandle(native.FinancialImpactGetPnl(*v.ref))
+}
+
+func (v *ExecutionReportFinancialImpactView) SetPnl(pnl param.Pnl) {
+	native.FinancialImpactSetPnl(v.ref, pnl.Handle())
+}
+
+func (v *ExecutionReportFinancialImpactView) UnsetPnl() {
+	native.FinancialImpactUnsetPnl(v.ref)
+}
+
+func (v ExecutionReportFinancialImpactView) Fee() optional.Option[param.Fee] {
+	return param.NewFeeOptionFromHandle(native.FinancialImpactGetFee(*v.ref))
+}
+
+func (v *ExecutionReportFinancialImpactView) SetFee(fee param.Fee) {
+	native.FinancialImpactSetFee(v.ref, fee.Handle())
+}
+
+func (v *ExecutionReportFinancialImpactView) UnsetFee() {
+	native.FinancialImpactUnsetFee(v.ref)
 }
 
 //------------------------------------------------------------------------------
@@ -348,7 +501,7 @@ func NewExecutionReportTrade(price param.Price, quantity param.Quantity) Executi
 	return trade
 }
 
-func NewExecutionReportTradeFromNative(value native.ExecutionReportTrade) ExecutionReportTrade {
+func NewExecutionReportTradeFromHandle(value native.ExecutionReportTrade) ExecutionReportTrade {
 	return ExecutionReportTrade{value: value}
 }
 
@@ -357,19 +510,19 @@ func (t *ExecutionReportTrade) Reset() {
 }
 
 func (t ExecutionReportTrade) Price() param.Price {
-	return param.NewPriceFromNative(native.ExecutionReportTradeGetPrice(t.value))
+	return param.NewPriceFromHandle(native.ExecutionReportTradeGetPrice(t.value))
 }
 
 func (t *ExecutionReportTrade) SetPrice(price param.Price) {
-	native.ExecutionReportTradeSetPrice(&t.value, price.Native())
+	native.ExecutionReportTradeSetPrice(&t.value, price.Handle())
 }
 
 func (t ExecutionReportTrade) Quantity() param.Quantity {
-	return param.NewQuantityFromNative(native.ExecutionReportTradeGetQuantity(t.value))
+	return param.NewQuantityFromHandle(native.ExecutionReportTradeGetQuantity(t.value))
 }
 
 func (t *ExecutionReportTrade) SetQuantity(quantity param.Quantity) {
-	native.ExecutionReportTradeSetQuantity(&t.value, quantity.Native())
+	native.ExecutionReportTradeSetQuantity(&t.value, quantity.Handle())
 }
 
 //------------------------------------------------------------------------------
@@ -435,7 +588,7 @@ func (f ExecutionReportFill) LastTrade() optional.Option[ExecutionReportTrade] {
 		return optional.None[ExecutionReportTrade]()
 	}
 	return optional.Some(
-		NewExecutionReportTradeFromNative(native.ExecutionReportTradeOptionalGet(trade)),
+		NewExecutionReportTradeFromHandle(native.ExecutionReportTradeOptionalGet(trade)),
 	)
 }
 
@@ -448,11 +601,11 @@ func (f *ExecutionReportFill) UnsetLastTrade() {
 }
 
 func (f ExecutionReportFill) LeavesQuantity() optional.Option[param.Quantity] {
-	return param.NewQuantityOptionFromNative(native.ExecutionReportFillGetLeavesQuantity(f.value))
+	return param.NewQuantityOptionFromHandle(native.ExecutionReportFillGetLeavesQuantity(f.value))
 }
 
 func (f *ExecutionReportFill) SetLeavesQuantity(quantity param.Quantity) {
-	native.ExecutionReportFillSetLeavesQuantity(&f.value, quantity.Native())
+	native.ExecutionReportFillSetLeavesQuantity(&f.value, quantity.Handle())
 }
 
 func (f *ExecutionReportFill) UnsetLeavesQuantity() {
@@ -460,11 +613,11 @@ func (f *ExecutionReportFill) UnsetLeavesQuantity() {
 }
 
 func (f ExecutionReportFill) LockPrice() optional.Option[param.Price] {
-	return param.NewPriceOptionFromNative(native.ExecutionReportFillGetLockPrice(f.value))
+	return param.NewPriceOptionFromHandle(native.ExecutionReportFillGetLockPrice(f.value))
 }
 
 func (f *ExecutionReportFill) SetLockPrice(price param.Price) {
-	native.ExecutionReportFillSetLockPrice(&f.value, price.Native())
+	native.ExecutionReportFillSetLockPrice(&f.value, price.Handle())
 }
 
 func (f *ExecutionReportFill) UnsetLockPrice() {
@@ -477,6 +630,64 @@ func (f ExecutionReportFill) Terminal() bool {
 
 func (f *ExecutionReportFill) SetTerminal(isTerminal bool) {
 	native.ExecutionReportFillSetTerminal(&f.value, isTerminal)
+}
+
+type ExecutionReportFillView struct{ ref *native.ExecutionReportFill }
+
+func newExecutionReportFillView(ref *native.ExecutionReportFill) ExecutionReportFillView {
+	return ExecutionReportFillView{ref: ref}
+}
+
+func (v *ExecutionReportFillView) Reset() {
+	native.ExecutionReportFillReset(v.ref)
+}
+
+func (v ExecutionReportFillView) LastTrade() optional.Option[ExecutionReportTrade] {
+	trade := native.ExecutionReportFillGetLastTrade(*v.ref)
+	if !native.ExecutionReportTradeOptionalIsSet(trade) {
+		return optional.None[ExecutionReportTrade]()
+	}
+	return optional.Some(NewExecutionReportTradeFromHandle(native.ExecutionReportTradeOptionalGet(trade)))
+}
+
+func (v *ExecutionReportFillView) SetLastTrade(trade ExecutionReportTrade) {
+	native.ExecutionReportFillSetLastTrade(v.ref, trade.value)
+}
+
+func (v *ExecutionReportFillView) UnsetLastTrade() {
+	native.ExecutionReportFillUnsetLastTrade(v.ref)
+}
+
+func (v ExecutionReportFillView) LeavesQuantity() optional.Option[param.Quantity] {
+	return param.NewQuantityOptionFromHandle(native.ExecutionReportFillGetLeavesQuantity(*v.ref))
+}
+
+func (v *ExecutionReportFillView) SetLeavesQuantity(quantity param.Quantity) {
+	native.ExecutionReportFillSetLeavesQuantity(v.ref, quantity.Handle())
+}
+
+func (v *ExecutionReportFillView) UnsetLeavesQuantity() {
+	native.ExecutionReportFillUnsetLeavesQuantity(v.ref)
+}
+
+func (v ExecutionReportFillView) LockPrice() optional.Option[param.Price] {
+	return param.NewPriceOptionFromHandle(native.ExecutionReportFillGetLockPrice(*v.ref))
+}
+
+func (v *ExecutionReportFillView) SetLockPrice(price param.Price) {
+	native.ExecutionReportFillSetLockPrice(v.ref, price.Handle())
+}
+
+func (v *ExecutionReportFillView) UnsetLockPrice() {
+	native.ExecutionReportFillUnsetLockPrice(v.ref)
+}
+
+func (v ExecutionReportFillView) Terminal() bool {
+	return native.ExecutionReportFillGetTerminal(*v.ref)
+}
+
+func (v *ExecutionReportFillView) SetTerminal(isTerminal bool) {
+	native.ExecutionReportFillSetTerminal(v.ref, isTerminal)
 }
 
 //------------------------------------------------------------------------------
@@ -535,7 +746,7 @@ func (p *ExecutionReportPositionImpact) setValues(values ExecutionReportPosition
 }
 
 func (p ExecutionReportPositionImpact) PositionEffect() optional.Option[param.PositionEffect] {
-	return newPositionEffectFromNative(native.ExecutionReportPositionImpactGetPositionEffect(p.value))
+	return newPositionEffectFromHandle(native.ExecutionReportPositionImpactGetPositionEffect(p.value))
 }
 
 func (p *ExecutionReportPositionImpact) SetPositionEffect(effect param.PositionEffect) {
@@ -550,7 +761,7 @@ func (p *ExecutionReportPositionImpact) UnsetPositionEffect() {
 }
 
 func (p ExecutionReportPositionImpact) PositionSide() optional.Option[param.PositionSide] {
-	return param.NewPositionSideFromNative(
+	return param.NewPositionSideFromHandle(
 		native.ExecutionReportPositionImpactGetPositionSide(p.value),
 	)
 }
@@ -566,7 +777,45 @@ func (p *ExecutionReportPositionImpact) UnsetPositionSide() {
 	native.ExecutionReportPositionImpactUnsetPositionSide(&p.value)
 }
 
-func newPositionEffectFromNative(
+type ExecutionReportPositionImpactView struct {
+	ref *native.ExecutionReportPositionImpact
+}
+
+func newExecutionReportPositionImpactView(
+	ref *native.ExecutionReportPositionImpact,
+) ExecutionReportPositionImpactView {
+	return ExecutionReportPositionImpactView{ref: ref}
+}
+
+func (v *ExecutionReportPositionImpactView) Reset() {
+	native.ExecutionReportPositionImpactReset(v.ref)
+}
+
+func (v ExecutionReportPositionImpactView) PositionEffect() optional.Option[param.PositionEffect] {
+	return newPositionEffectFromHandle(native.ExecutionReportPositionImpactGetPositionEffect(*v.ref))
+}
+
+func (v *ExecutionReportPositionImpactView) SetPositionEffect(effect param.PositionEffect) {
+	native.ExecutionReportPositionImpactSetPositionEffect(v.ref, native.ParamPositionEffect(effect))
+}
+
+func (v *ExecutionReportPositionImpactView) UnsetPositionEffect() {
+	native.ExecutionReportPositionImpactUnsetPositionEffect(v.ref)
+}
+
+func (v ExecutionReportPositionImpactView) PositionSide() optional.Option[param.PositionSide] {
+	return param.NewPositionSideFromHandle(native.ExecutionReportPositionImpactGetPositionSide(*v.ref))
+}
+
+func (v *ExecutionReportPositionImpactView) SetPositionSide(side param.PositionSide) {
+	native.ExecutionReportPositionImpactSetPositionSide(v.ref, native.ParamPositionSide(side))
+}
+
+func (v *ExecutionReportPositionImpactView) UnsetPositionSide() {
+	native.ExecutionReportPositionImpactUnsetPositionSide(v.ref)
+}
+
+func newPositionEffectFromHandle(
 	value native.ParamPositionEffect,
 ) optional.Option[param.PositionEffect] {
 	switch value {

@@ -48,7 +48,7 @@ type ClientPolicy[Adjustment ClientAccountAdjustment] interface {
 		param.AccountID,
 		Adjustment,
 		tx.Mutations,
-	) reject.List
+	) []reject.Reject
 }
 
 // NewSafeClientPolicy adapts a client typed account-adjustment policy to the
@@ -89,7 +89,7 @@ func (p *safeClientPolicy[Adjustment]) ApplyAccountAdjustment(
 	accountID param.AccountID,
 	engineAdjustment model.AccountAdjustment,
 	mutations tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	adjustment, ok := safeAdjustmentPayload[Adjustment](engineAdjustment)
 	if !ok {
 		return clientPayloadMismatchReject[Adjustment](p.Name())
@@ -114,7 +114,7 @@ func (p *unsafeFastClientPolicy[Adjustment]) ApplyAccountAdjustment(
 	accountID param.AccountID,
 	engineAdjustment model.AccountAdjustment,
 	mutations tx.Mutations,
-) reject.List {
+) []reject.Reject {
 	return p.policy.ApplyAccountAdjustment(
 		ctx,
 		accountID,
@@ -126,7 +126,7 @@ func (p *unsafeFastClientPolicy[Adjustment]) ApplyAccountAdjustment(
 func safeAdjustmentPayload[Adjustment ClientAccountAdjustment](
 	adjustment model.AccountAdjustment,
 ) (value Adjustment, ok bool) {
-	userData := native.AccountAdjustmentGetUserData(adjustment.Native())
+	userData := native.AccountAdjustmentGetUserData(adjustment.Handle())
 	if userData == nil {
 		return value, false
 	}
@@ -146,11 +146,13 @@ func unsafeFastAdjustmentPayload[Adjustment ClientAccountAdjustment](
 	adjustment model.AccountAdjustment,
 ) Adjustment {
 	return callback.NewHandleFromUserData(
-		native.AccountAdjustmentGetUserData(adjustment.Native()),
+		native.AccountAdjustmentGetUserData(adjustment.Handle()),
 	).Value().(Adjustment)
 }
 
-func clientPayloadMismatchReject[Adjustment ClientAccountAdjustment](policyName string) reject.List {
+func clientPayloadMismatchReject[Adjustment ClientAccountAdjustment](
+	policyName string,
+) []reject.Reject {
 	return reject.NewSingleItemList(
 		reject.CodeOther,
 		policyName,

@@ -30,7 +30,7 @@ import (
 // a per-operation cost. For ultra-low-latency paths that need many
 // intermediate computations, prefer performing the math on primitive types
 // or a custom representation and cross into Price only once via
-// NewPriceFromString / NewPriceFromDecimal / NewPriceFromNative.
+// NewPriceFromString / NewPriceFromDecimal / NewPriceFromHandle.
 //
 // This cost exists because the SDK guarantees that the same input produces
 // bit-for-bit identical results across all language bindings (Rust, Go,
@@ -60,7 +60,7 @@ func NewPriceFromDecimal(v decimal.Decimal) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(nativeValue), nil
+	return NewPriceFromHandle(nativeValue), nil
 }
 
 func NewPriceFromString(v string) (Price, error) {
@@ -68,7 +68,7 @@ func NewPriceFromString(v string) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(nativeValue), nil
+	return NewPriceFromHandle(nativeValue), nil
 }
 
 func NewPriceFromInt(v int64) (Price, error) {
@@ -76,7 +76,7 @@ func NewPriceFromInt(v int64) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(nativeValue), nil
+	return NewPriceFromHandle(nativeValue), nil
 }
 
 func NewPriceFromUint(v uint64) (Price, error) {
@@ -84,7 +84,7 @@ func NewPriceFromUint(v uint64) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(nativeValue), nil
+	return NewPriceFromHandle(nativeValue), nil
 }
 
 // WARNING: float64 values are inherently imprecise. The same numeric literal
@@ -99,18 +99,18 @@ func NewPriceFromFloat(v float64) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(nativeValue), nil
+	return NewPriceFromHandle(nativeValue), nil
 }
 
-func NewPriceFromNative(v native.ParamPrice) Price {
+func NewPriceFromHandle(v native.ParamPrice) Price {
 	return Price{native: v}
 }
 
-func NewPriceOptionFromNative(v native.ParamPriceOptional) optional.Option[Price] {
+func NewPriceOptionFromHandle(v native.ParamPriceOptional) optional.Option[Price] {
 	if !native.ParamPriceOptionalIsSet(v) {
 		return optional.None[Price]()
 	}
-	return optional.Some(NewPriceFromNative(native.ParamPriceOptionalGet(v)))
+	return optional.Some(NewPriceFromHandle(native.ParamPriceOptionalGet(v)))
 }
 
 func NewPriceFromStringRounded(
@@ -122,7 +122,7 @@ func NewPriceFromStringRounded(
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(nativeValue), nil
+	return NewPriceFromHandle(nativeValue), nil
 }
 
 func NewPriceFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy) (Price, error) {
@@ -130,7 +130,7 @@ func NewPriceFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(nativeValue), nil
+	return NewPriceFromHandle(nativeValue), nil
 }
 
 // NewPriceFromDecimalRounded converts a shopspring decimal to a rounded Price.
@@ -152,14 +152,14 @@ func NewPriceFromDecimalRounded(
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(nativeValue), nil
+	return NewPriceFromHandle(nativeValue), nil
 }
 
 func (v Price) Decimal() decimal.Decimal {
-	return newDecimalFromNative(native.ParamPriceGetDecimal(v.native))
+	return newDecimalFromHandle(native.ParamPriceGetDecimal(v.native))
 }
 
-func (v Price) Native() native.ParamPrice {
+func (v Price) Handle() native.ParamPrice {
 	return v.native
 }
 
@@ -171,22 +171,27 @@ func (v Price) Native() native.ParamPrice {
 // for parity and test convenience only; cross-platform determinism is NOT
 // guaranteed when construction goes through float64.
 func (v Price) Float() float64 {
+	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamPriceToF64(v.native))
 }
 
 func (v Price) String() string {
+	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamPriceToString(v.native))
 }
 
 func (v Price) IsZero() bool {
+	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamPriceIsZero(v.native))
 }
 
 func (v Price) Equal(other Price) bool {
+	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamPriceCompare(v.native, other.native)) == 0
 }
 
 func (v Price) Compare(other Price) int {
+	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamPriceCompare(v.native, other.native))
 }
 
@@ -195,7 +200,7 @@ func (v Price) CheckedAdd(other Price) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(result), nil
+	return NewPriceFromHandle(result), nil
 }
 
 func (v Price) CheckedSub(other Price) (Price, error) {
@@ -203,7 +208,7 @@ func (v Price) CheckedSub(other Price) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(result), nil
+	return NewPriceFromHandle(result), nil
 }
 
 func (v Price) CheckedNeg() (Price, error) {
@@ -211,7 +216,7 @@ func (v Price) CheckedNeg() (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(result), nil
+	return NewPriceFromHandle(result), nil
 }
 
 func (v Price) CheckedMulInt(scalar int64) (Price, error) {
@@ -219,7 +224,7 @@ func (v Price) CheckedMulInt(scalar int64) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(result), nil
+	return NewPriceFromHandle(result), nil
 }
 
 func (v Price) CheckedMulUint(scalar uint64) (Price, error) {
@@ -227,7 +232,7 @@ func (v Price) CheckedMulUint(scalar uint64) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(result), nil
+	return NewPriceFromHandle(result), nil
 }
 
 func (v Price) CheckedMulFloat(scalar float64) (Price, error) {
@@ -235,7 +240,7 @@ func (v Price) CheckedMulFloat(scalar float64) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(result), nil
+	return NewPriceFromHandle(result), nil
 }
 
 func (v Price) CheckedDivInt(divisor int64) (Price, error) {
@@ -243,7 +248,7 @@ func (v Price) CheckedDivInt(divisor int64) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(result), nil
+	return NewPriceFromHandle(result), nil
 }
 
 func (v Price) CheckedDivUint(divisor uint64) (Price, error) {
@@ -251,7 +256,7 @@ func (v Price) CheckedDivUint(divisor uint64) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(result), nil
+	return NewPriceFromHandle(result), nil
 }
 
 func (v Price) CheckedDivFloat(divisor float64) (Price, error) {
@@ -259,7 +264,7 @@ func (v Price) CheckedDivFloat(divisor float64) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(result), nil
+	return NewPriceFromHandle(result), nil
 }
 
 func (v Price) CheckedRemInt(divisor int64) (Price, error) {
@@ -267,7 +272,7 @@ func (v Price) CheckedRemInt(divisor int64) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(result), nil
+	return NewPriceFromHandle(result), nil
 }
 
 func (v Price) CheckedRemUint(divisor uint64) (Price, error) {
@@ -275,7 +280,7 @@ func (v Price) CheckedRemUint(divisor uint64) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(result), nil
+	return NewPriceFromHandle(result), nil
 }
 
 func (v Price) CheckedRemFloat(divisor float64) (Price, error) {
@@ -283,7 +288,7 @@ func (v Price) CheckedRemFloat(divisor float64) (Price, error) {
 	if err != nil {
 		return Price{}, err
 	}
-	return NewPriceFromNative(result), nil
+	return NewPriceFromHandle(result), nil
 }
 
 func (v Price) CalculateVolume(quantity Quantity) (Volume, error) {
@@ -291,5 +296,5 @@ func (v Price) CalculateVolume(quantity Quantity) (Volume, error) {
 	if err != nil {
 		return Volume{}, err
 	}
-	return NewVolumeFromNative(result), nil
+	return NewVolumeFromHandle(result), nil
 }

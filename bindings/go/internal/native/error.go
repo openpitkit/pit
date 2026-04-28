@@ -25,7 +25,6 @@ import "C"
 import (
 	"errors"
 	"fmt"
-	"strings"
 )
 
 var (
@@ -39,6 +38,17 @@ var (
 	ErrInvalidLeverage = errors.New("param: invalid leverage value")
 )
 
+var paramErrorByCode = map[ParamErrorCode]error{
+	ParamErrorCodeNegative:        ErrNegative,
+	ParamErrorCodeDivisionByZero:  ErrDivisionByZero,
+	ParamErrorCodeOverflow:        ErrOverflow,
+	ParamErrorCodeUnderflow:       ErrUnderflow,
+	ParamErrorCodeInvalidFloat:    ErrInvalidFloat,
+	ParamErrorCodeInvalidFormat:   ErrInvalidFormat,
+	ParamErrorCodeInvalidPrice:    ErrInvalidPrice,
+	ParamErrorCodeInvalidLeverage: ErrInvalidLeverage,
+}
+
 func consumeSharedStringAsError(handle SharedString, fallback string, args ...any) error {
 	msg := consumeSharedString(handle)
 	if msg != "" {
@@ -47,33 +57,26 @@ func consumeSharedStringAsError(handle SharedString, fallback string, args ...an
 	return fmt.Errorf(fallback, args...)
 }
 
-func consumeSharedStringAsParamError(handle SharedString, fallback string, args ...any) error {
-	msg := consumeSharedString(handle)
-	if msg == "" {
+func consumeParamError(handle ParamErrorHandle, fallback string, args ...any) error {
+	if handle == nil {
 		return fmt.Errorf(fallback, args...)
 	}
-	return mapParamErrorMessage(msg)
-}
+	code := handle.code
+	msg := ""
+	if handle.message != nil {
+		msg = newStringView(C.pit_shared_string_view(handle.message)).Safe()
+	}
+	C.pit_destroy_param_error(handle)
 
-func mapParamErrorMessage(msg string) error {
-	switch {
-	case strings.Contains(msg, "value must be non-negative"):
-		return ErrNegative
-	case strings.Contains(msg, "division by zero"):
-		return ErrDivisionByZero
-	case strings.Contains(msg, "arithmetic overflow"):
-		return ErrOverflow
-	case strings.Contains(msg, "arithmetic underflow"):
-		return ErrUnderflow
-	case strings.Contains(msg, "invalid float value"):
-		return ErrInvalidFloat
-	case strings.Contains(msg, "invalid format"):
-		return ErrInvalidFormat
-	case strings.Contains(msg, "invalid price value"):
-		return ErrInvalidPrice
-	case strings.Contains(msg, "invalid leverage value"):
-		return ErrInvalidLeverage
-	default:
+	sentinel := paramErrorByCode[code]
+	if sentinel != nil {
+		if msg != "" {
+			return fmt.Errorf("%w: %s", sentinel, msg)
+		}
+		return sentinel
+	}
+	if msg != "" {
 		return fmt.Errorf("param: %s", msg)
 	}
+	return fmt.Errorf(fallback, args...)
 }

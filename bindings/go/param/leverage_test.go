@@ -27,8 +27,8 @@ func TestLeverageZeroValueUsesNotSetSentinel(t *testing.T) {
 	t.Parallel()
 
 	var leverage Leverage
-	if leverage.Native() != native.ParamLeverageNotSet {
-		t.Fatalf("zero leverage native = %d, want %d", leverage.Native(), native.ParamLeverageNotSet)
+	if leverage.Handle() != native.ParamLeverageNotSet {
+		t.Fatalf("zero leverage native = %d, want %d", leverage.Handle(), native.ParamLeverageNotSet)
 	}
 	if leverage.IsSet() {
 		t.Fatal("zero leverage should not be set")
@@ -38,12 +38,12 @@ func TestLeverageZeroValueUsesNotSetSentinel(t *testing.T) {
 	}
 }
 
-func TestNewLeverageFromNativeRoundTrip(t *testing.T) {
+func TestNewLeverageFromHandleRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	leverage := NewLeverageFromNative(1005)
-	if leverage.Native() != 1005 {
-		t.Fatalf("Native() = %d, want %d", leverage.Native(), 1005)
+	leverage := NewLeverageFromHandle(1005)
+	if leverage.Handle() != 1005 {
+		t.Fatalf("Handle() = %d, want %d", leverage.Handle(), 1005)
 	}
 	if leverage.Raw() != 1005 {
 		t.Fatalf("Raw() = %d, want %d", leverage.Raw(), 1005)
@@ -53,7 +53,7 @@ func TestNewLeverageFromNativeRoundTrip(t *testing.T) {
 	}
 }
 
-func TestLeverageConstantsAreSourcedFromNative(t *testing.T) {
+func TestLeverageConstantsAreSourcedFromHandle(t *testing.T) {
 	t.Parallel()
 
 	if LeverageScale != native.ParamLeverageScale {
@@ -70,21 +70,21 @@ func TestLeverageConstantsAreSourcedFromNative(t *testing.T) {
 	}
 }
 
-func TestNewLeverageOptionFromNative(t *testing.T) {
+func TestNewLeverageOptionFromHandle(t *testing.T) {
 	t.Parallel()
 
-	none := NewLeverageOptionFromNative(native.ParamLeverageNotSet)
+	none := NewLeverageOptionFromHandle(native.ParamLeverageNotSet)
 	if none.IsSet() {
 		t.Fatal("not-set native leverage should map to empty option")
 	}
 
-	some := NewLeverageOptionFromNative(11)
+	some := NewLeverageOptionFromHandle(11)
 	value, ok := some.Get()
 	if !ok {
 		t.Fatal("set native leverage should map to present option")
 	}
-	if value.Native() != 11 {
-		t.Fatalf("option value native = %d, want %d", value.Native(), 11)
+	if value.Handle() != 11 {
+		t.Fatalf("option value native = %d, want %d", value.Handle(), 11)
 	}
 }
 
@@ -92,8 +92,8 @@ func TestNewLeverageFromIntEncodesFixedPoint(t *testing.T) {
 	t.Parallel()
 
 	leverage := NewLeverageFromInt(100)
-	if leverage.Native() != 1000 {
-		t.Fatalf("Native() = %d, want %d", leverage.Native(), 1000)
+	if leverage.Handle() != 1000 {
+		t.Fatalf("Handle() = %d, want %d", leverage.Handle(), 1000)
 	}
 	if got := leverage.String(); got != "100" {
 		t.Fatalf("String() = %q, want %q", got, "100")
@@ -104,8 +104,8 @@ func TestNewLeverageFromFloat32EncodesFixedPoint(t *testing.T) {
 	t.Parallel()
 
 	leverage := NewLeverageFromFloat32(100.5)
-	if leverage.Native() != 1005 {
-		t.Fatalf("Native() = %d, want %d", leverage.Native(), 1005)
+	if leverage.Handle() != 1005 {
+		t.Fatalf("Handle() = %d, want %d", leverage.Handle(), 1005)
 	}
 	if got := leverage.String(); got != "100.5" {
 		t.Fatalf("String() = %q, want %q", got, "100.5")

@@ -79,7 +79,7 @@ func (e *ClientEngine[Order, Report, Adjustment]) Stop() {
 // before StartPreTrade returns.
 func (e *ClientEngine[Order, Report, Adjustment]) StartPreTrade(
 	order Order,
-) (*ClientRequest, reject.List, error) {
+) (*ClientRequest, []reject.Reject, error) {
 	engineOrder, payload := newClientOrderPayload(order)
 	request, rejects, err := e.engine.StartPreTrade(engineOrder)
 	if err != nil || rejects != nil {
@@ -95,7 +95,7 @@ func (e *ClientEngine[Order, Report, Adjustment]) StartPreTrade(
 // order callbacks have completed by then.
 func (e *ClientEngine[Order, Report, Adjustment]) ExecutePreTrade(
 	order Order,
-) (*pretrade.Reservation, reject.List, error) {
+) (*pretrade.Reservation, []reject.Reject, error) {
 	engineOrder, payload := newClientOrderPayload(order)
 	defer payload.release()
 	return e.engine.ExecutePreTrade(engineOrder)
@@ -272,7 +272,7 @@ func (r *ClientRequest) Close() {
 //
 // Execute does not close the underlying request; call Close after Execute just
 // as with a standard pretrade.Request.
-func (r *ClientRequest) Execute() (*pretrade.Reservation, reject.List, error) {
+func (r *ClientRequest) Execute() (*pretrade.Reservation, []reject.Reject, error) {
 	reservation, rejects, err := r.request.Execute()
 	r.payload.release()
 	return reservation, rejects, err
@@ -306,20 +306,20 @@ func newClientOrderPayload[Order pretrade.ClientOrder](
 	order Order,
 ) (model.Order, *clientPayloadHandle) {
 	engineOrder := order.EngineOrder()
-	nativeOrder := engineOrder.Native()
+	nativeOrder := engineOrder.Handle()
 	payload := newClientPayloadHandle(order)
 	native.OrderSetUserData(&nativeOrder, callback.NewUserDataFromHandle(payload.handle))
-	return model.NewOrderFromNative(nativeOrder), payload
+	return model.NewOrderFromHandle(nativeOrder), payload
 }
 
 func newClientReportPayload[Report pretrade.ClientExecutionReport](
 	report Report,
 ) (model.ExecutionReport, *clientPayloadHandle) {
 	engineReport := report.EngineExecutionReport()
-	nativeReport := engineReport.Native()
+	nativeReport := engineReport.Handle()
 	payload := newClientPayloadHandle(report)
 	native.ExecutionReportSetUserData(&nativeReport, callback.NewUserDataFromHandle(payload.handle))
-	return model.NewExecutionReportFromNative(nativeReport), payload
+	return model.NewExecutionReportFromHandle(nativeReport), payload
 }
 
 func newClientAdjustmentPayloads[Adjustment accountadjustment.ClientAccountAdjustment](
@@ -337,11 +337,11 @@ func newClientAdjustmentPayload[Adjustment accountadjustment.ClientAccountAdjust
 	adjustment Adjustment,
 ) (model.AccountAdjustment, *clientPayloadHandle) {
 	engineAdjustment := adjustment.EngineAccountAdjustment()
-	nativeAdjustment := engineAdjustment.Native()
+	nativeAdjustment := engineAdjustment.Handle()
 	payload := newClientPayloadHandle(adjustment)
 	native.AccountAdjustmentSetUserData(
 		&nativeAdjustment,
 		callback.NewUserDataFromHandle(payload.handle),
 	)
-	return model.NewAccountAdjustmentFromNative(nativeAdjustment), payload
+	return model.NewAccountAdjustmentFromHandle(nativeAdjustment), payload
 }

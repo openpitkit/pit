@@ -52,9 +52,11 @@ func newEngineFromHandle(handle native.Engine) *Engine {
 	return &Engine{handle: handle}
 }
 
-// Stop releases the engine and all resources it owns.
+// Stop signals the engine to halt internal evaluation, releases policies
+// registered on the engine, and frees the underlying native resources.
 //
-// After Stop returns, the engine must no longer be passed to any other
+// After Stop returns, the engine handle is no longer valid for any operation.
+// The engine must no longer be passed to any other
 // method (StartPreTrade, ExecutePreTrade, ApplyExecutionReport,
 // ApplyAccountAdjustment); doing so is undefined behavior.
 //
@@ -74,22 +76,22 @@ func (e *Engine) Stop() {
 //   - on accept, returns a non-nil *pretrade.Request; the caller takes
 //     ownership and must release it with Request.Close when done (Execute
 //     does not close the request — see Request.Execute);
-//   - on reject, returns a non-nil reject.List; no Request is produced;
+//   - on reject, returns a non-nil []reject.Reject; no Request is produced;
 //   - on transport error, returns a Go error; no Request is produced.
-func (e *Engine) StartPreTrade(order model.Order) (*pretrade.Request, reject.List, error) {
-	request, start_reject, err := native.EngineStartPreTrade(e.handle, order.Native())
+func (e *Engine) StartPreTrade(order model.Order) (*pretrade.Request, []reject.Reject, error) {
+	request, startReject, err := native.EngineStartPreTrade(e.handle, order.Handle())
 	if err != nil {
 		return nil, nil, err
 	}
-	if start_reject != nil {
-		reject_result, err := reject.NewListFromHandle(start_reject)
-		native.DestroyRejectList(start_reject)
+	if startReject != nil {
+		rejectResult, err := reject.NewListFromHandle(startReject)
+		native.DestroyRejectList(startReject)
 		if err != nil {
 			return nil,
 				nil,
 				fmt.Errorf("failed to create reject list for rejected pre-trade start: %w", err)
 		}
-		return nil, reject_result, nil
+		return nil, rejectResult, nil
 	}
 	return pretrade.NewRequestFromHandle(request), nil, nil
 }
@@ -102,30 +104,39 @@ func (e *Engine) StartPreTrade(order model.Order) (*pretrade.Request, reject.Lis
 //     ownership and must resolve it exactly once via CommitAndClose,
 //     RollbackAndClose, or Close (which rolls back any pending mutations
 //     implicitly);
-//   - on reject, returns a non-nil reject.List; no Reservation is produced;
+//   - on reject, returns a non-nil []reject.Reject; no Reservation is produced;
 //   - on transport error, returns a Go error; no Reservation is produced.
-func (e *Engine) ExecutePreTrade(order model.Order) (*pretrade.Reservation, reject.List, error) {
-	reservation, exec_rejects, err := native.EngineExecutePreTrade(e.handle, order.Native())
+func (e *Engine) ExecutePreTrade(order model.Order) (*pretrade.Reservation, []reject.Reject, error) {
+	reservation, execRejects, err := native.EngineExecutePreTrade(e.handle, order.Handle())
 	if err != nil {
 		return nil, nil, err
 	}
-	if exec_rejects != nil {
-		reject_result, err := reject.NewListFromHandle(exec_rejects)
-		native.DestroyRejectList(exec_rejects)
+	if execRejects != nil {
+		rejectResult, err := reject.NewListFromHandle(execRejects)
+		native.DestroyRejectList(execRejects)
 		if err != nil {
 			return nil,
 				nil,
 				fmt.Errorf("failed to create reject list for rejected order: %w", err)
 		}
-		return nil, reject_result, nil
+		return nil, rejectResult, nil
 	}
 	return pretrade.NewReservationFromHandle(reservation), nil, nil
 }
 
-type PostTradeResult = native.PretradePostTradeResult
+type PostTradeResult struct {
+	KillSwitchTriggered bool
+}
 
 func (e *Engine) ApplyExecutionReport(report model.ExecutionReport) (PostTradeResult, error) {
-	return native.EngineApplyExecutionReport(e.handle, report.Native())
+	result, err := native.EngineApplyExecutionReport(e.handle, report.Handle())
+	if err != nil {
+		return PostTradeResult{}, err
+	}
+
+	return PostTradeResult{
+		KillSwitchTriggered: result.KillSwitchTriggered,
+	}, nil
 }
 
 func (e *Engine) ApplyAccountAdjustment(
@@ -134,26 +145,26 @@ func (e *Engine) ApplyAccountAdjustment(
 ) (optional.Option[reject.AccountAdjustmentBatchError], error) {
 	nativeAdjustments := make([]native.AccountAdjustment, len(adjustments))
 	for i, adjustment := range adjustments {
-		nativeAdjustments[i] = adjustment.Native()
+		nativeAdjustments[i] = adjustment.Handle()
 	}
 
-	adjustment_reject, err := native.EngineApplyAccountAdjustment(
+	adjustmentReject, err := native.EngineApplyAccountAdjustment(
 		e.handle,
-		accountID.Native(),
+		accountID.Handle(),
 		nativeAdjustments,
 	)
 	if err != nil {
 		return optional.None[reject.AccountAdjustmentBatchError](), err
 	}
 
-	if adjustment_reject != nil {
-		reject_result, err := reject.NewAccountAdjustmentBatchErrorFromHandle(adjustment_reject)
-		native.DestroyAccountAdjustmentBatchError(adjustment_reject)
+	if adjustmentReject != nil {
+		rejectResult, err := reject.NewAccountAdjustmentBatchErrorFromHandle(adjustmentReject)
+		native.DestroyAccountAdjustmentBatchError(adjustmentReject)
 		if err != nil {
 			return optional.None[reject.AccountAdjustmentBatchError](),
 				fmt.Errorf("failed to create reject list for rejected account adjustment: %w", err)
 		}
-		return optional.Some(reject_result), nil
+		return optional.Some(rejectResult), nil
 	}
 
 	return optional.None[reject.AccountAdjustmentBatchError](), nil
@@ -219,7 +230,7 @@ func (b *EngineBuilder) Build() (*Engine, error) {
 }
 
 func (b *EngineBuilder) CheckPreTradeStartPolicy(
-	policy ...pretrade.CheckPreTradeStartPolicy,
+	policy ...pretrade.CheckStartPolicy,
 ) *EngineBuilder {
 	for _, p := range policy {
 		// Every policy must go through addPolicy even after a previous failure
@@ -229,12 +240,26 @@ func (b *EngineBuilder) CheckPreTradeStartPolicy(
 	return b
 }
 
-func (b *EngineBuilder) PreTradePolicy(policy ...pretrade.PreTradePolicy) *EngineBuilder {
+func (b *EngineBuilder) BuiltinCheckPreTradeStartPolicy(
+	policy ...pretrade.BuiltinPolicy,
+) *EngineBuilder {
+	for _, p := range policy {
+		b.addBuiltinCheckPreTradeStartPolicy(p)
+	}
+	return b
+}
+
+func (b *EngineBuilder) PreTradePolicy(policy ...pretrade.Policy) *EngineBuilder {
 	for _, p := range policy {
 		// Every policy must go through addPolicy even after a previous failure
 		// so that the builder takes responsibility for releasing it.
 		b.addPreTradePolicy(p)
 	}
+	return b
+}
+
+func (b *EngineBuilder) BuiltinPreTradePolicy(policy ...pretrade.BuiltinPolicy) *EngineBuilder {
+	_ = policy
 	return b
 }
 
@@ -247,7 +272,14 @@ func (b *EngineBuilder) AccountAdjustmentPolicy(policy ...accountadjustment.Poli
 	return b
 }
 
-func (b *EngineBuilder) addCheckPreTradeStartPolicy(policy pretrade.CheckPreTradeStartPolicy) {
+func (b *EngineBuilder) BuiltinAccountAdjustmentPolicy(
+	policy ...pretrade.BuiltinPolicy,
+) *EngineBuilder {
+	_ = policy
+	return b
+}
+
+func (b *EngineBuilder) addCheckPreTradeStartPolicy(policy pretrade.CheckStartPolicy) {
 	addPolicy(
 		b,
 		policy,
@@ -257,7 +289,17 @@ func (b *EngineBuilder) addCheckPreTradeStartPolicy(policy pretrade.CheckPreTrad
 	)
 }
 
-func (b *EngineBuilder) addPreTradePolicy(policy pretrade.PreTradePolicy) {
+func (b *EngineBuilder) addBuiltinCheckPreTradeStartPolicy(policy pretrade.BuiltinPolicy) {
+	addPolicy(
+		b,
+		policy,
+		nil,
+		native.DestroyPretradeCheckPreTradeStartPolicy,
+		native.EngineBuilderAddCheckPreTradeStartPolicy,
+	)
+}
+
+func (b *EngineBuilder) addPreTradePolicy(policy pretrade.Policy) {
 	addPolicy(
 		b,
 		policy,
@@ -299,7 +341,7 @@ func addPolicy[
 	if builtinPolicy, isBuiltin := any(policy).(builtinPolicyWithNative[Handle]); isBuiltin {
 		// Ownership of the native handle is transferred out of the built-in
 		// wrapper; after this point a later Close on the wrapper is a no-op.
-		handle = builtinPolicy.TakeNative()
+		handle = builtinPolicy.TakeHandle()
 	} else {
 		var err error
 		if handle, err = startCustomPolicy(policy); err != nil {
@@ -341,7 +383,7 @@ func (e engineBuilderPolicyAddError) Error() string {
 }
 
 type builtinPolicyWithNative[Handle any] interface {
-	TakeNative() Handle
+	TakeHandle() Handle
 }
 
 //------------------------------------------------------------------------------

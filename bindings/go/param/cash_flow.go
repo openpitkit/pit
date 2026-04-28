@@ -30,7 +30,7 @@ import (
 // a per-operation cost. For ultra-low-latency paths that need many
 // intermediate computations, prefer performing the math on primitive types
 // or a custom representation and cross into CashFlow only once via
-// NewCashFlowFromString / NewCashFlowFromDecimal / NewCashFlowFromNative.
+// NewCashFlowFromString / NewCashFlowFromDecimal / NewCashFlowFromHandle.
 //
 // This cost exists because the SDK guarantees that the same input produces
 // bit-for-bit identical results across all language bindings (Rust, Go,
@@ -60,7 +60,7 @@ func NewCashFlowFromDecimal(v decimal.Decimal) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(nativeValue), nil
+	return NewCashFlowFromHandle(nativeValue), nil
 }
 
 func NewCashFlowFromString(v string) (CashFlow, error) {
@@ -68,7 +68,7 @@ func NewCashFlowFromString(v string) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(nativeValue), nil
+	return NewCashFlowFromHandle(nativeValue), nil
 }
 
 func NewCashFlowFromInt(v int64) (CashFlow, error) {
@@ -76,7 +76,7 @@ func NewCashFlowFromInt(v int64) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(nativeValue), nil
+	return NewCashFlowFromHandle(nativeValue), nil
 }
 
 func NewCashFlowFromUint(v uint64) (CashFlow, error) {
@@ -84,7 +84,7 @@ func NewCashFlowFromUint(v uint64) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(nativeValue), nil
+	return NewCashFlowFromHandle(nativeValue), nil
 }
 
 // WARNING: float64 values are inherently imprecise. The same numeric literal
@@ -99,20 +99,20 @@ func NewCashFlowFromFloat(v float64) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(nativeValue), nil
+	return NewCashFlowFromHandle(nativeValue), nil
 }
 
-func NewCashFlowFromNative(v native.ParamCashFlow) CashFlow {
+func NewCashFlowFromHandle(v native.ParamCashFlow) CashFlow {
 	return CashFlow{native: v}
 }
 
-func NewCashFlowOptionFromNative(
+func NewCashFlowOptionFromHandle(
 	v native.ParamCashFlowOptional,
 ) optional.Option[CashFlow] {
 	if !native.ParamCashFlowOptionalIsSet(v) {
 		return optional.None[CashFlow]()
 	}
-	return optional.Some(NewCashFlowFromNative(native.ParamCashFlowOptionalGet(v)))
+	return optional.Some(NewCashFlowFromHandle(native.ParamCashFlowOptionalGet(v)))
 }
 
 func NewCashFlowFromStringRounded(
@@ -124,7 +124,7 @@ func NewCashFlowFromStringRounded(
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(nativeValue), nil
+	return NewCashFlowFromHandle(nativeValue), nil
 }
 
 func NewCashFlowFromFloatRounded(
@@ -136,7 +136,7 @@ func NewCashFlowFromFloatRounded(
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(nativeValue), nil
+	return NewCashFlowFromHandle(nativeValue), nil
 }
 
 // NewCashFlowFromDecimalRounded converts a shopspring decimal to a rounded CashFlow.
@@ -158,34 +158,46 @@ func NewCashFlowFromDecimalRounded(
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(nativeValue), nil
+	return NewCashFlowFromHandle(nativeValue), nil
 }
 
-func NewCashFlowFromPnl(pnl Pnl) CashFlow {
-	return NewCashFlowFromNative(newParamValueOrPanic(native.ParamCashFlowFromPnl(pnl.native)))
+func NewCashFlowFromPnl(pnl Pnl) (CashFlow, error) {
+	nativeValue, err := native.ParamCashFlowFromPnl(pnl.native)
+	if err != nil {
+		return CashFlow{}, err
+	}
+	return NewCashFlowFromHandle(nativeValue), nil
 }
 
-func NewCashFlowFromFee(fee Fee) CashFlow {
-	return NewCashFlowFromNative(newParamValueOrPanic(native.ParamCashFlowFromFee(fee.native)))
+func NewCashFlowFromFee(fee Fee) (CashFlow, error) {
+	nativeValue, err := native.ParamCashFlowFromFee(fee.native)
+	if err != nil {
+		return CashFlow{}, err
+	}
+	return NewCashFlowFromHandle(nativeValue), nil
 }
 
-func NewCashFlowFromVolumeInflow(volume Volume) CashFlow {
-	return NewCashFlowFromNative(
-		newParamValueOrPanic(native.ParamCashFlowFromVolumeInflow(volume.native)),
-	)
+func NewCashFlowFromVolumeInflow(volume Volume) (CashFlow, error) {
+	nativeValue, err := native.ParamCashFlowFromVolumeInflow(volume.native)
+	if err != nil {
+		return CashFlow{}, err
+	}
+	return NewCashFlowFromHandle(nativeValue), nil
 }
 
-func NewCashFlowFromVolumeOutflow(volume Volume) CashFlow {
-	return NewCashFlowFromNative(
-		newParamValueOrPanic(native.ParamCashFlowFromVolumeOutflow(volume.native)),
-	)
+func NewCashFlowFromVolumeOutflow(volume Volume) (CashFlow, error) {
+	nativeValue, err := native.ParamCashFlowFromVolumeOutflow(volume.native)
+	if err != nil {
+		return CashFlow{}, err
+	}
+	return NewCashFlowFromHandle(nativeValue), nil
 }
 
 func (v CashFlow) Decimal() decimal.Decimal {
-	return newDecimalFromNative(native.ParamCashFlowGetDecimal(v.native))
+	return newDecimalFromHandle(native.ParamCashFlowGetDecimal(v.native))
 }
 
-func (v CashFlow) Native() native.ParamCashFlow {
+func (v CashFlow) Handle() native.ParamCashFlow {
 	return v.native
 }
 
@@ -197,22 +209,27 @@ func (v CashFlow) Native() native.ParamCashFlow {
 // for parity and test convenience only; cross-platform determinism is NOT
 // guaranteed when construction goes through float64.
 func (v CashFlow) Float() float64 {
+	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamCashFlowToF64(v.native))
 }
 
 func (v CashFlow) String() string {
+	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamCashFlowToString(v.native))
 }
 
 func (v CashFlow) IsZero() bool {
+	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamCashFlowIsZero(v.native))
 }
 
 func (v CashFlow) Equal(other CashFlow) bool {
+	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamCashFlowCompare(v.native, other.native)) == 0
 }
 
 func (v CashFlow) Compare(other CashFlow) int {
+	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamCashFlowCompare(v.native, other.native))
 }
 
@@ -221,7 +238,7 @@ func (v CashFlow) CheckedAdd(other CashFlow) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(result), nil
+	return NewCashFlowFromHandle(result), nil
 }
 
 func (v CashFlow) CheckedSub(other CashFlow) (CashFlow, error) {
@@ -229,7 +246,7 @@ func (v CashFlow) CheckedSub(other CashFlow) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(result), nil
+	return NewCashFlowFromHandle(result), nil
 }
 
 func (v CashFlow) CheckedNeg() (CashFlow, error) {
@@ -237,7 +254,7 @@ func (v CashFlow) CheckedNeg() (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(result), nil
+	return NewCashFlowFromHandle(result), nil
 }
 
 func (v CashFlow) CheckedMulInt(scalar int64) (CashFlow, error) {
@@ -245,7 +262,7 @@ func (v CashFlow) CheckedMulInt(scalar int64) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(result), nil
+	return NewCashFlowFromHandle(result), nil
 }
 
 func (v CashFlow) CheckedMulUint(scalar uint64) (CashFlow, error) {
@@ -253,7 +270,7 @@ func (v CashFlow) CheckedMulUint(scalar uint64) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(result), nil
+	return NewCashFlowFromHandle(result), nil
 }
 
 func (v CashFlow) CheckedMulFloat(scalar float64) (CashFlow, error) {
@@ -261,7 +278,7 @@ func (v CashFlow) CheckedMulFloat(scalar float64) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(result), nil
+	return NewCashFlowFromHandle(result), nil
 }
 
 func (v CashFlow) CheckedDivInt(divisor int64) (CashFlow, error) {
@@ -269,7 +286,7 @@ func (v CashFlow) CheckedDivInt(divisor int64) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(result), nil
+	return NewCashFlowFromHandle(result), nil
 }
 
 func (v CashFlow) CheckedDivUint(divisor uint64) (CashFlow, error) {
@@ -277,7 +294,7 @@ func (v CashFlow) CheckedDivUint(divisor uint64) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(result), nil
+	return NewCashFlowFromHandle(result), nil
 }
 
 func (v CashFlow) CheckedDivFloat(divisor float64) (CashFlow, error) {
@@ -285,7 +302,7 @@ func (v CashFlow) CheckedDivFloat(divisor float64) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(result), nil
+	return NewCashFlowFromHandle(result), nil
 }
 
 func (v CashFlow) CheckedRemInt(divisor int64) (CashFlow, error) {
@@ -293,7 +310,7 @@ func (v CashFlow) CheckedRemInt(divisor int64) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(result), nil
+	return NewCashFlowFromHandle(result), nil
 }
 
 func (v CashFlow) CheckedRemUint(divisor uint64) (CashFlow, error) {
@@ -301,7 +318,7 @@ func (v CashFlow) CheckedRemUint(divisor uint64) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(result), nil
+	return NewCashFlowFromHandle(result), nil
 }
 
 func (v CashFlow) CheckedRemFloat(divisor float64) (CashFlow, error) {
@@ -309,5 +326,5 @@ func (v CashFlow) CheckedRemFloat(divisor float64) (CashFlow, error) {
 	if err != nil {
 		return CashFlow{}, err
 	}
-	return NewCashFlowFromNative(result), nil
+	return NewCashFlowFromHandle(result), nil
 }
