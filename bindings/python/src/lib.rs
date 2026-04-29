@@ -2578,6 +2578,25 @@ impl PyAccountId {
     fn __repr__(&self) -> String {
         format!("AccountId(value={:?})", self.value())
     }
+
+    fn __richcmp__(&self, other: &Bound<'_, PyAny>, op: CompareOp) -> PyResult<PyObject> {
+        let py = other.py();
+        if let Ok(other) = other.extract::<PyRef<'_, Self>>() {
+            let result = match op {
+                CompareOp::Eq => self.inner == other.inner,
+                CompareOp::Ne => self.inner != other.inner,
+                _ => return Ok(py.NotImplemented().into()),
+            };
+            return Ok(result.into_py(py));
+        }
+        Ok(py.NotImplemented().into())
+    }
+
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.inner.as_u64().hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 macro_rules! impl_decimal_pymethods {
