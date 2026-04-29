@@ -1,5 +1,3 @@
-version: "2"
-
 run:
   go: "1.22"
   timeout: 5m

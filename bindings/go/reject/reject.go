@@ -136,6 +136,13 @@ func (r Reject) NewHandle() native.Reject {
 	)
 }
 
+// WithUserData returns a copy of Reject with updated UserData.
+//
+// Uses copy-on-write semantics. Original instance is unchanged.
+//
+// Caller manages lifetime of userData.
+//
+//nolint:revive // intentional copy-on-write
 func (r Reject) WithUserData(userData unsafe.Pointer) Reject {
 	r.UserData = userData
 	return r

@@ -43,57 +43,83 @@ from .policy import (
 RejectCode.__module__ = __name__
 RejectScope.__module__ = __name__
 
+
+PreTradeContext.__doc__ = """
+Opaque context object passed to Python policy callbacks.
+
+The object identifies the current engine evaluation context. Treat it as
+read-only. Future releases may expose additional query methods on this object;
+policies should not create instances directly.
+"""
+
 ExecuteResult.__doc__ = """
 Result of ``PreTradeRequest.execute`` or ``Engine.execute_pre_trade``.
 
-This object reports whether main-stage policies accepted the request and, on
-success, carries the single-use reservation handle that must later be committed
-or rolled back.
+Attributes:
+    ok: ``True`` when all evaluated stages accepted the order.
+    reservation: ``PreTradeReservation`` on success, otherwise ``None``.
+    rejects: Ordered list of business rejects when ``ok`` is ``False``.
+
+Successful results must be finalized by committing or rolling back the
+reservation. Failed results never contain a reservation.
 """
 
 PostTradeResult.__doc__ = """
 Result of ``openpit.Engine.apply_execution_report``.
 
-It currently reports whether any policy considers an account-level kill switch
-to be active after the report has been applied.
+Attributes:
+    kill_switch_triggered: ``True`` when at least one policy reports that new
+        requests for the account should be blocked after processing the report.
 """
 
 Reject.__doc__ = """
 Business reject returned by start-stage or main-stage checks.
 
-Rejects are normal policy outcomes, not exceptional failures. They carry a
-stable code, human-readable reason, details, policy name, scope, and opaque
-caller-defined integer ``user_data`` token (``0`` when unset). The SDK never
-inspects this token; lifetime and thread-safety are caller-managed (see
-``pit.wiki/Threading-Contract.md``).
+Rejects are normal policy outcomes, not exceptional failures.
+
+Attributes:
+    code: Stable machine-readable reject code.
+    reason: Short human-readable reason.
+    details: Diagnostic text intended for logs and operators.
+    policy: Name of the policy that produced the reject.
+    scope: ``RejectScope.ORDER`` or ``RejectScope.ACCOUNT``.
+    user_data: Opaque caller-defined integer token copied from custom rejects.
 """
 
 PreTradeRequest.__doc__ = """
 Deferred main-stage request handle produced by ``Engine.start_pre_trade``.
 
-The handle is single-use: calling ``execute`` more than once is a lifecycle
-error.
+The handle is single-use. Calling ``execute`` more than once raises
+``RuntimeError``. Keep the handle only while the caller is ready to enter the
+main stage; it represents a snapshot of the submitted order.
 """
 
 PreTradeReservation.__doc__ = """
 Single-use reservation handle returned by successful main-stage execution.
 
-Exactly one of ``commit`` or ``rollback`` must be called to finalize the
-reserved state.
+Call ``commit`` only after the order has been accepted by the downstream venue
+or transport. Call ``rollback`` when submission fails or the caller decides not
+to send the order. Calling either finalizer more than once raises
+``RuntimeError``.
 """
 
 StartPreTradeResult.__doc__ = """
 Result of ``Engine.start_pre_trade``.
 
-On success it exposes a deferred request handle; on failure it exposes the
-merged reject list from all rejecting start-stage policies.
+Attributes:
+    ok: ``True`` when start-stage policies accepted the order.
+    request: Deferred ``PreTradeRequest`` on success, otherwise ``None``.
+    rejects: Merged start-stage reject list when ``ok`` is ``False``.
 """
 
 AccountAdjustmentBatchResult.__doc__ = """
 Result of ``Engine.apply_account_adjustment``.
 
-This object reports whether the full batch passed atomically and, on failure,
-contains the failing element index and reject list.
+Attributes:
+    ok: ``True`` when the whole adjustment batch passed.
+    failed_index: Zero-based index of the first rejected adjustment, or
+        ``None`` on success.
+    rejects: Reject list returned for the failed adjustment.
 """
 
 Rejects = list[Reject]

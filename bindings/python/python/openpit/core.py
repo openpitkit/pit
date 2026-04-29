@@ -49,6 +49,13 @@ from .param import (
 if typing.TYPE_CHECKING:
     from .pretrade import PreTradeLock
 
+AccountAdjustmentContext.__doc__ = """
+Opaque context object passed to account-adjustment policy callbacks.
+
+The object identifies the current account-adjustment evaluation context. Treat
+it as read-only and do not instantiate it directly.
+"""
+
 
 def _require_instance(
     value: typing.Any,

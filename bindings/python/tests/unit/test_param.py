@@ -79,6 +79,18 @@ def test_account_id_constructors() -> None:
 
 
 @pytest.mark.unit
+def test_account_id_equality_uses_domain_value() -> None:
+    account = openpit.param.AccountId.from_u64(12345)
+    same_account = openpit.param.AccountId.from_u64(12345)
+    other_account = openpit.param.AccountId.from_u64(54321)
+
+    assert account == same_account
+    assert account != other_account
+    assert account != 12345
+    assert len({account, same_account, other_account}) == 2
+
+
+@pytest.mark.unit
 def test_param_types_have_rust_like_module_paths() -> None:
     assert openpit.param.AccountId.__module__ == "openpit.param"
     assert openpit.param.Side.__module__ == "openpit.param"

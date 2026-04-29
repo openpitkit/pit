@@ -53,7 +53,11 @@ jobs:
           # all github.com URLs. Unset it so the PAT embedded in PIT_GO_URL is
           # used instead; otherwise GitHub identifies the pusher as
           # github-actions[bot] and denies access to pit-go.
+          unset GITHUB_TOKEN
+          git config --global --unset-all "http.https://github.com/.extraheader" || true
           git config --global --unset-all "http.https://github.com/.extraHeader" || true
+          git config --unset-all "http.https://github.com/.extraheader" || true
+          git config --unset-all "http.https://github.com/.extraHeader" || true
 
           (
             cd "${WORKTREE}"

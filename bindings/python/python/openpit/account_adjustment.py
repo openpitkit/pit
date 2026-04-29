@@ -47,9 +47,19 @@ if typing.TYPE_CHECKING:
 
 
 class AccountAdjustmentPolicy(abc.ABC):
+    """Interface for account-adjustment validation policies.
+
+    Account-adjustment policies run inside ``Engine.apply_account_adjustment``.
+    They receive every adjustment in a batch in order and may return normal
+    business rejects, rollback mutations, or ``None`` for success without
+    mutations.
+    """
+
     @property
     @abc.abstractmethod
-    def name(self) -> str: ...
+    def name(self) -> str:
+        """Stable policy name unique within one engine configuration."""
+        ...
 
     @abc.abstractmethod
     def apply_account_adjustment(
@@ -57,9 +67,20 @@ class AccountAdjustmentPolicy(abc.ABC):
         ctx: AccountAdjustmentContext,
         account_id: AccountId,
         adjustment: AccountAdjustment,
-    ) -> (
-        PolicyDecision | typing.Iterable[PolicyReject] | tuple[Mutation, ...] | None
-    ): ...
+    ) -> PolicyDecision | typing.Iterable[PolicyReject] | tuple[Mutation, ...] | None:
+        """Evaluate one account adjustment from an atomic batch.
+
+        Args:
+            ctx: Read-only engine context for the current batch operation.
+            account_id: Account affected by the batch.
+            adjustment: Current adjustment item.
+
+        Returns:
+            ``None`` for success, an iterable of ``PolicyReject`` objects for
+            business rejection, or a tuple of ``Mutation`` objects to register
+            rollback work.
+        """
+        ...
 
 
 def _require_instance(

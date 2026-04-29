@@ -20,15 +20,14 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 PYTHON_BINDINGS_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = PYTHON_BINDINGS_ROOT.parents[1]
 PYTHON_SOURCE = PYTHON_BINDINGS_ROOT / "python"
 
-if PYTHON_SOURCE.exists():
-    import sys
-
+if os.environ.get("OPENPIT_DOCS_USE_SOURCE_PATH") == "1" and PYTHON_SOURCE.exists():
     sys.path.insert(0, str(PYTHON_SOURCE))
 
 project = "openpit Python API"
@@ -68,6 +67,7 @@ source_suffix = {
 }
 
 master_doc = "index"
+myst_heading_anchors = 3
 html_theme = "furo"
 html_title = f"openpit Python API {release}"
 html_static_path = []

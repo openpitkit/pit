@@ -9,6 +9,8 @@ risk checks into trading systems from Python.
 
 For an overview and links to all resources, see
 the project website [openpit.dev](https://openpit.dev/).
+For the Python API guide and generated reference, see
+[openpit.readthedocs.io](https://openpit.readthedocs.io/).
 For full project documentation, see
 [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
 For conceptual and architectural pages, see

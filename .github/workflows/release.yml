@@ -801,6 +801,7 @@ jobs:
           find "${WORKTREE}/internal/runtime" -name .gitkeep -delete
 
           # Remove any injected GitHub Actions auth headers (case variations and scopes)
+          unset GITHUB_TOKEN
           git config --global --unset-all "http.https://github.com/.extraheader" || true
           git config --global --unset-all "http.https://github.com/.extraHeader" || true
           git config --unset-all "http.https://github.com/.extraheader" || true
