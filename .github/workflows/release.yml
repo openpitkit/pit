@@ -864,13 +864,15 @@ jobs:
               # No tag is created so dry-run cannot pollute the version space.
               git -c http.extraheader= push --force "${PIT_GO_URL}" "HEAD:${PIT_GO_REF}"
             else
-              git tag "v${VERSION}"
               # main is force-pushed because every release rewrites it to the
               # latest release commit; this is by design for the mirror.
               git -c http.extraheader= push --force "${PIT_GO_URL}" HEAD:main
-              # Tag push is NOT forced: re-releasing the same version must
-              # fail loudly, consistent with crates.io and PyPI semantics.
-              git -c http.extraheader= push "${PIT_GO_URL}" "v${VERSION}"
+              # Push the split commit directly to the pit-go tag ref. The
+              # monorepo checkout already has v${VERSION}, so creating a local
+              # tag here would conflict before the remote repository is checked.
+              # Tag push is NOT forced: re-releasing the same pit-go version
+              # must fail loudly, consistent with crates.io and PyPI semantics.
+              git -c http.extraheader= push "${PIT_GO_URL}" "HEAD:refs/tags/v${VERSION}"
             fi
           )
 
