@@ -101,12 +101,7 @@ fmt-go:
 
 # Prepare new release (kind is patch, minor or major).
 release kind: check
-    if [ -n "$(git status --porcelain)" ]; then \
-        echo "Working tree is dirty. Commit changes before release."; \
-        git status; \
-        exit 1; \
-    fi
-    cargo release {{ kind }} --execute
+    cargo release {{ kind }} --execute --no-confirm
 # Push the current HEAD to the dry-run branch and start the staging release workflow.
 release-dry:
     git push --force-with-lease origin HEAD:release-dry-run
