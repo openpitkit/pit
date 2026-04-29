@@ -246,7 +246,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "openpit"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "openpit-derive",
  "rust_decimal",
@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "openpit-derive"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -266,7 +266,7 @@ dependencies = [
 
 [[package]]
 name = "openpit-python"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "openpit",
  "pit-interop",
@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "pit-ffi"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "openpit",
  "pit-interop",
@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "pit-interop"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "openpit",
 ]

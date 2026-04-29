@@ -28,7 +28,7 @@ import (
 	pitruntime "go.openpit.dev/openpit/internal/runtime"
 )
 
-const version = "0.2.4"
+const version = "0.2.5"
 
 const (
 	envRuntimePath  = "OPENPIT_RUNTIME_LIBRARY_PATH"

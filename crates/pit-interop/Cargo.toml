@@ -1,6 +1,6 @@
 [package]
 name = "pit-interop"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 publish = false
 license = "Apache-2.0"
@@ -8,4 +8,4 @@ repository = "https://github.com/openpitkit/pit"
 description = "Runtime interoperability layer for Pit language bindings"
 
 [dependencies]
-openpit = { version = "0.2.4", path = "../openpit" }
+openpit = { version = "0.2.5", path = "../openpit" }
