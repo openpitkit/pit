@@ -526,6 +526,50 @@ jobs:
       - name: Build sdist
         run: maturin sdist --manifest-path bindings/python/Cargo.toml --out dist
 
+      - name: Validate sdist license files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import email
+          import tarfile
+          from pathlib import Path
+
+          sdists = sorted(Path("dist").glob("*.tar.gz"))
+          if len(sdists) != 1:
+              raise SystemExit(f"expected exactly one sdist, found {len(sdists)}")
+
+          with tarfile.open(sdists[0], "r:gz") as archive:
+              names = set(archive.getnames())
+              pkg_info_name = next(
+                  (
+                      name
+                      for name in names
+                      if name.count("/") == 1 and name.endswith("/PKG-INFO")
+                  ),
+                  None,
+              )
+              if pkg_info_name is None:
+                  raise SystemExit(f"{sdists[0]} has no top-level PKG-INFO")
+
+              root = pkg_info_name.rsplit("/", 1)[0]
+              pkg_info = archive.extractfile(pkg_info_name)
+              if pkg_info is None:
+                  raise SystemExit(f"{pkg_info_name} cannot be read")
+
+              metadata = email.message_from_bytes(pkg_info.read())
+              missing = [
+                  license_file
+                  for license_file in metadata.get_all("License-File", [])
+                  if f"{root}/{license_file}" not in names
+              ]
+              if missing:
+                  raise SystemExit(
+                      "sdist declares missing License-File entries: "
+                      + ", ".join(missing)
+                  )
+          PY
+
       - name: Validate sdist metadata
         shell: bash
         run: twine check dist/*
