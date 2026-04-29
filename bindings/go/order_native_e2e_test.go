@@ -111,7 +111,7 @@ func TestOrderNativeE2E_ExecuteAndApplyExecutionReport(t *testing.T) {
 						),
 						LeavesQuantity: optional.Some(mustOrderNativeQuantity(t, "0")),
 						LockPrice:      optional.Some(mustOrderNativePrice(t, "182.40")),
-						Terminal:       true,
+						IsFinal:        optional.BoolSome(true),
 					},
 				),
 			),

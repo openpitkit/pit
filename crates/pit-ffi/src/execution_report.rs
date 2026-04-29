@@ -22,7 +22,7 @@ use std::ffi::c_void;
 use openpit::param::{AccountId, Quantity, Trade};
 use openpit::pretrade::PreTradeLock;
 use openpit::ExecutionReportPositionImpact;
-use openpit::{HasFee, HasInstrument, HasPnl, RequestFieldAccessError};
+use openpit::{HasExecutionReportIsFinal, HasFee, HasInstrument, HasPnl, RequestFieldAccessError};
 use pit_interop::{
     ExecutionReportOperationAccess, FinancialImpactAccess, PopulatedExecutionReportOperation,
     PopulatedFinancialImpact,
@@ -79,8 +79,9 @@ pub struct PitExecutionReportFill {
     pub leaves_quantity: PitParamQuantityOptional,
     /// Optional lock price associated with the report.
     pub lock_price: PitParamPriceOptional,
-    /// Whether this report ends the report stream for the order.
-    pub is_terminal: bool,
+    /// Whether this report closes the order's report stream.
+    /// The order is filled, cancelled, or rejected.
+    pub is_final: PitExecutionReportIsFinalOptional,
 }
 
 #[repr(C)]
@@ -105,6 +106,7 @@ define_optional!(
     optional = PitExecutionReportTradeOptional,
     value = PitExecutionReportTrade
 );
+define_optional!(optional = PitExecutionReportIsFinalOptional, value = bool);
 define_optional!(
     optional = PitExecutionReportFillOptional,
     value = PitExecutionReportFill
@@ -205,9 +207,9 @@ fn import_fill(value: PitExecutionReportFillOptional) -> Result<Option<FillDetai
     }
 
     let leaves_quantity = if value.value.leaves_quantity.is_set {
-        value.value.leaves_quantity.value.to_param()?
+        Some(value.value.leaves_quantity.value.to_param()?)
     } else {
-        return Err("execution_report.fill.leaves_quantity is not set".to_string());
+        None
     };
 
     let lock = if value.value.lock_price.is_set {
@@ -220,7 +222,11 @@ fn import_fill(value: PitExecutionReportFillOptional) -> Result<Option<FillDetai
         last_trade: import_last_trade(value.value.last_trade)?,
         leaves_quantity,
         lock,
-        is_terminal: value.value.is_terminal,
+        is_final: if value.value.is_final.is_set {
+            Some(value.value.is_final.value)
+        } else {
+            None
+        },
     }))
 }
 
@@ -318,9 +324,12 @@ fn export_fill(value: &Option<FillDetailsData>) -> PitExecutionReportFillOptiona
             is_set: true,
             value: PitExecutionReportFill {
                 last_trade: export_last_trade(fill.last_trade),
-                leaves_quantity: PitParamQuantityOptional {
-                    is_set: true,
-                    value: PitParamQuantity(fill.leaves_quantity.to_decimal().into()),
+                leaves_quantity: match fill.leaves_quantity {
+                    Some(leaves_quantity) => PitParamQuantityOptional {
+                        is_set: true,
+                        value: PitParamQuantity(leaves_quantity.to_decimal().into()),
+                    },
+                    None => PitParamQuantityOptional::default(),
                 },
                 lock_price: match fill.lock.price() {
                     Some(price) => PitParamPriceOptional {
@@ -329,7 +338,13 @@ fn export_fill(value: &Option<FillDetailsData>) -> PitExecutionReportFillOptiona
                     },
                     None => PitParamPriceOptional::default(),
                 },
-                is_terminal: fill.is_terminal,
+                is_final: match fill.is_final {
+                    Some(value) => PitExecutionReportIsFinalOptional {
+                        value,
+                        is_set: true,
+                    },
+                    None => PitExecutionReportIsFinalOptional::default(),
+                },
             },
         },
         None => PitExecutionReportFillOptional::default(),
@@ -390,13 +405,13 @@ pub struct FillDetailsData {
     pub last_trade: Option<Trade>,
 
     /// Remaining quantity after this report.
-    pub leaves_quantity: Quantity,
+    pub leaves_quantity: Option<Quantity>,
 
     /// PreTradeReservation lock payload.
     pub lock: PreTradeLock,
 
     /// Whether this report closes the report stream for the order.
-    pub is_terminal: bool,
+    pub is_final: Option<bool>,
 }
 
 /// Position-impact payload carrying validated domain values.
@@ -452,15 +467,25 @@ impl HasFee for ExecutionReport {
     }
 }
 
+impl HasExecutionReportIsFinal for ExecutionReport {
+    fn is_final(&self) -> Result<bool, RequestFieldAccessError> {
+        self.fill
+            .as_ref()
+            .and_then(|fill| fill.is_final)
+            .ok_or_else(|| RequestFieldAccessError::new("fill.is_final"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         export_execution_report, import_execution_report, ExecutionReport, FillDetailsData,
         PitExecutionReport, PitExecutionReportFill, PitExecutionReportFillOptional,
-        PitExecutionReportOperation, PitExecutionReportOperationOptional,
-        PitExecutionReportPositionImpact, PitExecutionReportPositionImpactOptional,
-        PitExecutionReportTrade, PitExecutionReportTradeOptional, PitFinancialImpact,
-        PitFinancialImpactOptional, PositionImpactData,
+        PitExecutionReportIsFinalOptional, PitExecutionReportOperation,
+        PitExecutionReportOperationOptional, PitExecutionReportPositionImpact,
+        PitExecutionReportPositionImpactOptional, PitExecutionReportTrade,
+        PitExecutionReportTradeOptional, PitFinancialImpact, PitFinancialImpactOptional,
+        PositionImpactData,
     };
     use crate::instrument::PitInstrument;
     use crate::param::{
@@ -475,7 +500,7 @@ mod tests {
     use openpit::pretrade::PreTradeLock;
     use openpit::ExecutionReportPositionImpact;
     use openpit::Instrument;
-    use openpit::{HasFee, HasInstrument, HasPnl};
+    use openpit::{HasExecutionReportIsFinal, HasFee, HasInstrument, HasPnl};
     use pit_interop::{
         ExecutionReportOperationAccess, FinancialImpactAccess, PopulatedExecutionReportOperation,
         PopulatedFinancialImpact,
@@ -522,9 +547,9 @@ mod tests {
                     price: Price::from_str("101").expect("price must be valid"),
                     quantity: Quantity::from_str("3").expect("quantity must be valid"),
                 }),
-                leaves_quantity: Quantity::from_str("1").expect("quantity must be valid"),
+                leaves_quantity: Some(Quantity::from_str("1").expect("quantity must be valid")),
                 lock: PreTradeLock::new(Some(Price::from_str("101").expect("price must be valid"))),
-                is_terminal: true,
+                is_final: Some(true),
             }),
             position_impact: Some(PositionImpactData {
                 value: ExecutionReportPositionImpact {
@@ -548,13 +573,7 @@ mod tests {
         } else {
             panic!("expected populated financial impact");
         }
-        assert!(
-            report
-                .fill
-                .as_ref()
-                .expect("fill must be present")
-                .is_terminal
-        );
+        assert!(report.is_final().expect("is_final"));
         assert_eq!(
             report
                 .position_impact
@@ -588,7 +607,7 @@ mod tests {
     }
 
     #[test]
-    fn import_execution_report_rejects_fill_without_leaves_quantity() {
+    fn import_execution_report_preserves_unset_leaves_quantity() {
         let report = PitExecutionReport {
             operation: PitExecutionReportOperationOptional::default(),
             financial_impact: PitFinancialImpactOptional::default(),
@@ -598,15 +617,55 @@ mod tests {
                     last_trade: PitExecutionReportTradeOptional::default(),
                     leaves_quantity: PitParamQuantityOptional::default(),
                     lock_price: PitParamPriceOptional::default(),
-                    is_terminal: false,
+                    is_final: PitExecutionReportIsFinalOptional::default(),
                 },
             },
             position_impact: PitExecutionReportPositionImpactOptional::default(),
             user_data: std::ptr::null_mut(),
         };
 
-        let error = import_execution_report(&report).expect_err("import must fail");
-        assert_eq!(error, "execution_report.fill.leaves_quantity is not set");
+        let imported = import_execution_report(&report).expect("import");
+        let fill = imported.fill.as_ref().expect("fill must be present");
+        assert!(fill.leaves_quantity.is_none());
+        assert!(imported.is_final().is_err());
+    }
+
+    #[test]
+    fn import_execution_report_preserves_unset_is_final() {
+        let report = PitExecutionReport {
+            operation: PitExecutionReportOperationOptional::default(),
+            financial_impact: PitFinancialImpactOptional::default(),
+            fill: PitExecutionReportFillOptional {
+                is_set: true,
+                value: PitExecutionReportFill {
+                    last_trade: PitExecutionReportTradeOptional::default(),
+                    leaves_quantity: PitParamQuantityOptional {
+                        is_set: true,
+                        value: PitParamQuantity(
+                            Quantity::from_str("1")
+                                .expect("quantity")
+                                .to_decimal()
+                                .into(),
+                        ),
+                    },
+                    lock_price: PitParamPriceOptional::default(),
+                    is_final: PitExecutionReportIsFinalOptional::default(),
+                },
+            },
+            position_impact: PitExecutionReportPositionImpactOptional::default(),
+            user_data: std::ptr::null_mut(),
+        };
+
+        let imported = import_execution_report(&report).expect("import");
+        assert!(imported.is_final().is_err());
+        assert_eq!(
+            imported
+                .fill
+                .as_ref()
+                .expect("fill must be present")
+                .is_final,
+            None
+        );
     }
 
     #[test]
@@ -692,7 +751,10 @@ mod tests {
                             Price::from_str("101").expect("price").to_decimal().into(),
                         ),
                     },
-                    is_terminal: true,
+                    is_final: PitExecutionReportIsFinalOptional {
+                        value: true,
+                        is_set: true,
+                    },
                 },
             },
             position_impact: PitExecutionReportPositionImpactOptional {

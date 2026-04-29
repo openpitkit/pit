@@ -40,6 +40,7 @@ type EngineBuilder = *C.PitEngineBuilder
 type ExecutionReport = C.PitExecutionReport
 type ExecutionReportFill = C.PitExecutionReportFill
 type ExecutionReportFillOptional = C.PitExecutionReportFillOptional
+type ExecutionReportIsFinalOptional = C.PitExecutionReportIsFinalOptional
 type ExecutionReportOperation = C.PitExecutionReportOperation
 type ExecutionReportOperationOptional = C.PitExecutionReportOperationOptional
 type ExecutionReportPositionImpact = C.PitExecutionReportPositionImpact

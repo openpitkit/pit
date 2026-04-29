@@ -136,7 +136,7 @@ has_request_field_trait!(HasOrderCollateralAsset, collateral_asset -> Option<&As
 
 has_request_field_trait!(HasExecutionReportLastTrade, last_trade -> Option<Trade>);
 
-has_request_field_trait!(HasExecutionReportIsTerminal, is_terminal -> bool);
+has_request_field_trait!(HasExecutionReportIsFinal, is_final -> bool);
 
 has_request_field_trait!(
     HasExecutionReportPositionEffect,

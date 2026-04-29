@@ -55,6 +55,8 @@ typedef struct PitEngineBuilder PitEngineBuilder;
 typedef struct PitExecutionReport PitExecutionReport;
 typedef struct PitExecutionReportFill PitExecutionReportFill;
 typedef struct PitExecutionReportFillOptional PitExecutionReportFillOptional;
+typedef struct PitExecutionReportIsFinalOptional
+    PitExecutionReportIsFinalOptional;
 typedef struct PitExecutionReportOperation PitExecutionReportOperation;
 typedef struct PitExecutionReportOperationOptional
     PitExecutionReportOperationOptional;
@@ -824,6 +826,11 @@ struct PitExecutionReportTradeOptional {
     bool is_set;
 };
 
+struct PitExecutionReportIsFinalOptional {
+    bool value;
+    bool is_set;
+};
+
 struct PitExecutionReportPositionImpactOptional {
     PitExecutionReportPositionImpact value;
     bool is_set;
@@ -1041,9 +1048,10 @@ struct PitExecutionReportFill {
      */
     PitParamPriceOptional lock_price;
     /**
-     * Whether this report ends the report stream for the order.
+     * Whether this report closes the order's report stream.
+     * The order is filled, cancelled, or rejected.
      */
-    bool is_terminal;
+    PitExecutionReportIsFinalOptional is_final;
 };
 
 struct PitExecutionReportFillOptional {

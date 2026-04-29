@@ -20,23 +20,22 @@
 use openpit::param::{Quantity, Trade};
 use openpit::pretrade::PreTradeLock;
 use openpit::{
-    HasExecutionReportIsTerminal, HasExecutionReportLastTrade, HasLeavesQuantity, HasLock,
+    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasLeavesQuantity, HasLock,
     RequestFieldAccessError,
 };
 
 /// Populated execution-report fill group.
-///
-/// The boolean `is_terminal` is always set when the group is present.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PopulatedExecutionReportFill {
     /// Actual execution trade, or `None` if not yet filled.
     pub last_trade: Option<Trade>,
     /// Remaining order quantity after this fill.
-    pub leaves_quantity: Quantity,
+    pub leaves_quantity: Option<Quantity>,
     /// Order lock payload.
     pub lock: PreTradeLock,
     /// Whether this report closes the order's report stream.
-    pub is_terminal: bool,
+    /// The order is filled, cancelled, or rejected.
+    pub is_final: Option<bool>,
 }
 
 impl HasExecutionReportLastTrade for PopulatedExecutionReportFill {
@@ -45,15 +44,17 @@ impl HasExecutionReportLastTrade for PopulatedExecutionReportFill {
     }
 }
 
-impl HasExecutionReportIsTerminal for PopulatedExecutionReportFill {
-    fn is_terminal(&self) -> Result<bool, RequestFieldAccessError> {
-        Ok(self.is_terminal)
+impl HasExecutionReportIsFinal for PopulatedExecutionReportFill {
+    fn is_final(&self) -> Result<bool, RequestFieldAccessError> {
+        self.is_final
+            .ok_or_else(|| RequestFieldAccessError::new("fill.is_final"))
     }
 }
 
 impl HasLeavesQuantity for PopulatedExecutionReportFill {
     fn leaves_quantity(&self) -> Result<Quantity, RequestFieldAccessError> {
-        Ok(self.leaves_quantity)
+        self.leaves_quantity
+            .ok_or_else(|| RequestFieldAccessError::new("fill.leaves_quantity"))
     }
 }
 
@@ -84,11 +85,11 @@ impl HasExecutionReportLastTrade for ExecutionReportFillAccess {
     }
 }
 
-impl HasExecutionReportIsTerminal for ExecutionReportFillAccess {
-    fn is_terminal(&self) -> Result<bool, RequestFieldAccessError> {
+impl HasExecutionReportIsFinal for ExecutionReportFillAccess {
+    fn is_final(&self) -> Result<bool, RequestFieldAccessError> {
         match self {
-            Self::Populated(f) => f.is_terminal(),
-            Self::Absent => Err(RequestFieldAccessError::new("fill.is_terminal")),
+            Self::Populated(f) => f.is_final(),
+            Self::Absent => Err(RequestFieldAccessError::new("fill.is_final")),
         }
     }
 }
@@ -119,14 +120,36 @@ mod tests {
     fn populated_returns_values() {
         let access = ExecutionReportFillAccess::Populated(PopulatedExecutionReportFill {
             last_trade: None,
-            leaves_quantity: Quantity::ZERO,
+            leaves_quantity: Some(Quantity::ZERO),
             lock: PreTradeLock::new(None),
-            is_terminal: true,
+            is_final: Some(true),
         });
         assert_eq!(access.last_trade().unwrap(), None);
         assert_eq!(access.leaves_quantity().unwrap(), Quantity::ZERO);
         assert_eq!(access.lock().unwrap(), PreTradeLock::new(None));
-        assert!(access.is_terminal().unwrap());
+        assert!(access.is_final().unwrap());
+    }
+
+    #[test]
+    fn populated_without_is_final_returns_err() {
+        let access = ExecutionReportFillAccess::Populated(PopulatedExecutionReportFill {
+            last_trade: None,
+            leaves_quantity: Some(Quantity::ZERO),
+            lock: PreTradeLock::new(None),
+            is_final: None,
+        });
+        assert!(access.is_final().is_err());
+    }
+
+    #[test]
+    fn populated_without_leaves_quantity_returns_err() {
+        let access = ExecutionReportFillAccess::Populated(PopulatedExecutionReportFill {
+            last_trade: None,
+            leaves_quantity: None,
+            lock: PreTradeLock::new(None),
+            is_final: Some(true),
+        });
+        assert!(access.leaves_quantity().is_err());
     }
 
     #[test]
@@ -138,8 +161,8 @@ mod tests {
     }
 
     #[test]
-    fn absent_is_terminal_returns_err() {
-        assert!(ExecutionReportFillAccess::Absent.is_terminal().is_err());
+    fn absent_is_final_returns_err() {
+        assert!(ExecutionReportFillAccess::Absent.is_final().is_err());
     }
 
     #[test]

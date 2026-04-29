@@ -47,7 +47,7 @@ use openpit::{
     HasAccountAdjustmentReservedLowerBound, HasAccountAdjustmentReservedUpperBound,
     HasAccountAdjustmentTotal, HasAccountAdjustmentTotalLowerBound,
     HasAccountAdjustmentTotalUpperBound, HasAccountId, HasAutoBorrow, HasAverageEntryPrice,
-    HasBalanceAsset, HasClosePosition, HasCollateralAsset, HasExecutionReportIsTerminal,
+    HasBalanceAsset, HasClosePosition, HasCollateralAsset, HasExecutionReportIsFinal,
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
     HasFee, HasInstrument, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
     HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode, HasReduceOnly, HasSide,
@@ -226,9 +226,9 @@ impl HasExecutionReportLastTrade for ExecutionReport {
     }
 }
 
-impl HasExecutionReportIsTerminal for ExecutionReport {
-    fn is_terminal(&self) -> Result<bool, RequestFieldAccessError> {
-        self.fill.is_terminal()
+impl HasExecutionReportIsFinal for ExecutionReport {
+    fn is_final(&self) -> Result<bool, RequestFieldAccessError> {
+        self.fill.is_final()
     }
 }
 
@@ -1165,7 +1165,7 @@ fn extract_python_execution_report(obj: &Bound<'_, PyAny>) -> PyResult<Execution
                 last_trade: f.last_trade,
                 leaves_quantity: f.leaves_quantity,
                 lock: f.lock,
-                is_terminal: f.is_terminal,
+                is_final: f.is_final,
             })
         }
     };
@@ -4190,20 +4190,20 @@ impl PyFinancialImpact {
 #[derive(Clone)]
 struct PyExecutionReportFillDetails {
     last_trade: Option<Trade>,
-    leaves_quantity: Quantity,
+    leaves_quantity: Option<Quantity>,
     lock: PreTradeLock,
-    is_terminal: bool,
+    is_final: Option<bool>,
 }
 
 #[pymethods]
 impl PyExecutionReportFillDetails {
     #[new]
-    #[pyo3(signature = (*, last_trade = None, leaves_quantity, lock, is_terminal = false))]
+    #[pyo3(signature = (*, last_trade = None, leaves_quantity = None, lock, is_final = None))]
     fn new(
         last_trade: Option<&Bound<'_, PyAny>>,
-        leaves_quantity: &Bound<'_, PyAny>,
+        leaves_quantity: Option<&Bound<'_, PyAny>>,
         lock: &Bound<'_, PyAny>,
-        is_terminal: bool,
+        is_final: Option<bool>,
     ) -> PyResult<Self> {
         Ok(Self {
             last_trade: last_trade
@@ -4213,9 +4213,9 @@ impl PyExecutionReportFillDetails {
                         .map(|value| value.inner)
                 })
                 .transpose()?,
-            leaves_quantity: parse_quantity_input(leaves_quantity)?,
+            leaves_quantity: leaves_quantity.map(parse_quantity_input).transpose()?,
             lock: lock.extract::<PyRef<'_, PyPreTradeLock>>()?.inner,
-            is_terminal,
+            is_final,
         })
     }
 
@@ -4237,15 +4237,13 @@ impl PyExecutionReportFillDetails {
     }
 
     #[getter]
-    fn leaves_quantity(&self) -> PyQuantity {
-        PyQuantity {
-            inner: self.leaves_quantity,
-        }
+    fn leaves_quantity(&self) -> Option<PyQuantity> {
+        self.leaves_quantity.map(|inner| PyQuantity { inner })
     }
 
     #[setter]
-    fn set_leaves_quantity(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.leaves_quantity = parse_quantity_input(value)?;
+    fn set_leaves_quantity(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.leaves_quantity = value.map(parse_quantity_input).transpose()?;
         Ok(())
     }
 
@@ -4261,22 +4259,24 @@ impl PyExecutionReportFillDetails {
     }
 
     #[getter]
-    fn is_terminal(&self) -> bool {
-        self.is_terminal
+    /// Whether this report closes the order's report stream.
+    /// The order is filled, cancelled, or rejected.
+    fn is_final(&self) -> Option<bool> {
+        self.is_final
     }
 
     #[setter]
-    fn set_is_terminal(&mut self, value: bool) {
-        self.is_terminal = value;
+    fn set_is_final(&mut self, value: Option<bool>) {
+        self.is_final = value;
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "ExecutionReportFillDetails(last_trade={:?}, leaves_quantity={:?}, lock={:?}, is_terminal={:?})",
+            "ExecutionReportFillDetails(last_trade={:?}, leaves_quantity={:?}, lock={:?}, is_final={:?})",
             self.last_trade().map(|trade| trade.__repr__()),
-            self.leaves_quantity().inner.to_string(),
+            self.leaves_quantity().map(|quantity| quantity.inner.to_string()),
             self.lock().__repr__(),
-            self.is_terminal(),
+            self.is_final(),
         )
     }
 }

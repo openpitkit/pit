@@ -209,16 +209,16 @@ class ExecutionReportFillDetails:
         self,
         *,
         last_trade: Trade | None = None,
-        leaves_quantity: Quantity,
+        leaves_quantity: Quantity | None = None,
         lock: PreTradeLock,
-        is_terminal: bool = False,
+        is_final: bool | None = None,
     ) -> None: ...
     @property
     def last_trade(self) -> Trade | None:
         """Actual execution trade."""
 
     @property
-    def leaves_quantity(self) -> Quantity:
+    def leaves_quantity(self) -> Quantity | None:
         """Remaining order quantity after this fill."""
 
     @property
@@ -226,8 +226,11 @@ class ExecutionReportFillDetails:
         """Order lock payload."""
 
     @property
-    def is_terminal(self) -> bool:
-        """Whether the report closes the venue report stream for the order."""
+    def is_final(self) -> bool | None:
+        """Whether this report closes the order's report stream.
+
+        The order is filled, cancelled, or rejected.
+        """
 
 class ExecutionReportPositionImpact:
     """Position impact parameters reported by the execution."""

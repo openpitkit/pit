@@ -534,7 +534,7 @@ type ExecutionReportFillValues struct {
 	LastTrade      optional.Option[ExecutionReportTrade]
 	LeavesQuantity optional.Option[param.Quantity]
 	LockPrice      optional.Option[param.Price]
-	Terminal       bool
+	IsFinal        optional.Bool
 }
 
 func NewExecutionReportFill() ExecutionReportFill {
@@ -560,7 +560,7 @@ func (f ExecutionReportFill) Values() ExecutionReportFillValues {
 		LastTrade:      f.LastTrade(),
 		LeavesQuantity: f.LeavesQuantity(),
 		LockPrice:      f.LockPrice(),
-		Terminal:       f.Terminal(),
+		IsFinal:        f.IsFinal(),
 	}
 }
 
@@ -579,7 +579,9 @@ func (f *ExecutionReportFill) setValues(values ExecutionReportFillValues) {
 	if value, ok := values.LockPrice.Get(); ok {
 		f.SetLockPrice(value)
 	}
-	f.SetTerminal(values.Terminal)
+	if value, ok := values.IsFinal.Get(); ok {
+		f.SetIsFinal(value)
+	}
 }
 
 func (f ExecutionReportFill) LastTrade() optional.Option[ExecutionReportTrade] {
@@ -624,12 +626,19 @@ func (f *ExecutionReportFill) UnsetLockPrice() {
 	native.ExecutionReportFillUnsetLockPrice(&f.value)
 }
 
-func (f ExecutionReportFill) Terminal() bool {
-	return native.ExecutionReportFillGetTerminal(f.value)
+// IsFinal reports whether the order is closed out by this fill.
+func (f ExecutionReportFill) IsFinal() optional.Bool {
+	return executionReportIsFinalOption(native.ExecutionReportFillGetFinal(f.value))
 }
 
-func (f *ExecutionReportFill) SetTerminal(isTerminal bool) {
-	native.ExecutionReportFillSetTerminal(&f.value, isTerminal)
+// SetIsFinal marks the fill as closing the order's report stream.
+func (f *ExecutionReportFill) SetIsFinal(isFinal bool) {
+	native.ExecutionReportFillSetFinal(&f.value, isFinal)
+}
+
+// UnsetIsFinal clears the "is final" flag.
+func (f *ExecutionReportFill) UnsetIsFinal() {
+	native.ExecutionReportFillUnsetFinal(&f.value)
 }
 
 type ExecutionReportFillView struct{ ref *native.ExecutionReportFill }
@@ -682,12 +691,26 @@ func (v *ExecutionReportFillView) UnsetLockPrice() {
 	native.ExecutionReportFillUnsetLockPrice(v.ref)
 }
 
-func (v ExecutionReportFillView) Terminal() bool {
-	return native.ExecutionReportFillGetTerminal(*v.ref)
+// IsFinal reports whether the order is closed out by this fill.
+func (v ExecutionReportFillView) IsFinal() optional.Bool {
+	return executionReportIsFinalOption(native.ExecutionReportFillGetFinal(*v.ref))
 }
 
-func (v *ExecutionReportFillView) SetTerminal(isTerminal bool) {
-	native.ExecutionReportFillSetTerminal(v.ref, isTerminal)
+// SetIsFinal marks the fill as closing the order's report stream.
+func (v *ExecutionReportFillView) SetIsFinal(isFinal bool) {
+	native.ExecutionReportFillSetFinal(v.ref, isFinal)
+}
+
+// UnsetIsFinal clears the "is final" flag.
+func (v *ExecutionReportFillView) UnsetIsFinal() {
+	native.ExecutionReportFillUnsetFinal(v.ref)
+}
+
+func executionReportIsFinalOption(value native.ExecutionReportIsFinalOptional) optional.Bool {
+	if !native.ExecutionReportIsFinalOptionalIsSet(value) {
+		return optional.BoolNone
+	}
+	return optional.BoolSome(native.ExecutionReportIsFinalOptionalGet(value))
 }
 
 //------------------------------------------------------------------------------

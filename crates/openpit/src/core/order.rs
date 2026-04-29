@@ -19,7 +19,7 @@ use crate::param::{AccountId, Asset, Leverage, PositionSide, Price, Side, TradeA
 use crate::{impl_request_has_field, impl_request_has_field_passthrough};
 
 use crate::{
-    HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
+    HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsFinal,
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
     HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
     HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,
@@ -72,7 +72,7 @@ impl_request_has_field_passthrough!(
     HasOrderLeverage, leverage, Option<Leverage>;
     HasOrderCollateralAsset, collateral_asset, Option<&Asset>;
     HasExecutionReportLastTrade, last_trade, Option<crate::param::Trade>;
-    HasExecutionReportIsTerminal, is_terminal, bool;
+    HasExecutionReportIsFinal, is_final, bool;
     HasExecutionReportPositionEffect, position_effect, Option<crate::param::PositionEffect>;
     HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
@@ -105,7 +105,7 @@ impl_request_has_field_passthrough!(
     HasOrderLeverage, leverage, Option<Leverage>;
     HasOrderCollateralAsset, collateral_asset, Option<&Asset>;
     HasExecutionReportLastTrade, last_trade, Option<crate::param::Trade>;
-    HasExecutionReportIsTerminal, is_terminal, bool;
+    HasExecutionReportIsFinal, is_final, bool;
     HasExecutionReportPositionEffect, position_effect, Option<crate::param::PositionEffect>;
     HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
@@ -214,7 +214,7 @@ impl_request_has_field_passthrough!(
     HasLeavesQuantity, leaves_quantity, crate::param::Quantity;
     HasLock, lock, crate::pretrade::PreTradeLock;
     HasExecutionReportLastTrade, last_trade, Option<crate::param::Trade>;
-    HasExecutionReportIsTerminal, is_terminal, bool;
+    HasExecutionReportIsFinal, is_final, bool;
     HasExecutionReportPositionEffect, position_effect, Option<crate::param::PositionEffect>;
     HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );

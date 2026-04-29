@@ -57,7 +57,7 @@ pub use core::{
     HasAccountAdjustmentReservedLowerBound, HasAccountAdjustmentReservedUpperBound,
     HasAccountAdjustmentTotal, HasAccountAdjustmentTotalLowerBound,
     HasAccountAdjustmentTotalUpperBound, HasAccountId, HasAutoBorrow, HasAverageEntryPrice,
-    HasBalanceAsset, HasClosePosition, HasCollateralAsset, HasExecutionReportIsTerminal,
+    HasBalanceAsset, HasClosePosition, HasCollateralAsset, HasExecutionReportIsFinal,
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
     HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
     HasOrderPositionSide, HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode,

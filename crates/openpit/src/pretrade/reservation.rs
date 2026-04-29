@@ -26,12 +26,12 @@ use super::PreTradeLock;
 /// The lock is part of the reservation contract. It is the policy context that
 /// describes what was actually locked and which values must survive beyond the
 /// synchronous pre-trade phase. This matters when later reconciliation depends
-/// on execution-report details, especially partial fills and terminal reports.
+/// on execution-report details, especially partial fills and final reports.
 ///
 /// If a policy needs trade execution report fill details to finalize reserved
 /// state, the caller must persist [`PreTradeReservation::lock`] together with the order
 /// and keep it until the last execution report for that order has been
-/// processed. A terminal order state alone is not sufficient if the policy also
+/// processed. A final order state alone is not sufficient if the policy also
 /// needs fill-by-fill data to determine how much of the reservation was truly
 /// consumed and how much must be released.
 ///

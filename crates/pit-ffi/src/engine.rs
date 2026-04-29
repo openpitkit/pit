@@ -777,9 +777,9 @@ mod tests {
     use crate::account_adjustment::PitAccountAdjustmentApplyStatus;
     use crate::engine::PitPretradeStatus;
     use crate::execution_report::{
-        PitExecutionReport, PitExecutionReportFill, PitExecutionReportFillOptional,
-        PitExecutionReportOperationOptional, PitExecutionReportPositionImpactOptional,
-        PitFinancialImpactOptional, PitPretradePostTradeResult,
+        PitExecutionReport, PitExecutionReportOperation, PitExecutionReportOperationOptional,
+        PitExecutionReportPositionImpactOptional, PitFinancialImpactOptional,
+        PitPretradePostTradeResult,
     };
     use crate::order::PitOrder;
     use crate::policy::{
@@ -1692,12 +1692,18 @@ mod tests {
         assert!(!post.post_trade_result.kill_switch_triggered);
 
         let invalid = PitExecutionReport {
-            operation: PitExecutionReportOperationOptional::default(),
-            financial_impact: PitFinancialImpactOptional::default(),
-            fill: PitExecutionReportFillOptional {
+            operation: PitExecutionReportOperationOptional {
                 is_set: true,
-                value: PitExecutionReportFill::default(),
+                value: PitExecutionReportOperation {
+                    instrument: crate::instrument::PitInstrument {
+                        underlying_asset: PitStringView::from_utf8("AAPL"),
+                        settlement_asset: PitStringView::default(),
+                    },
+                    ..PitExecutionReportOperation::default()
+                },
             },
+            financial_impact: PitFinancialImpactOptional::default(),
+            fill: crate::execution_report::PitExecutionReportFillOptional::default(),
             position_impact: PitExecutionReportPositionImpactOptional::default(),
             user_data: std::ptr::null_mut(),
         };

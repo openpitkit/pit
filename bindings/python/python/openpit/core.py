@@ -454,14 +454,14 @@ class ExecutionReportFillDetails(_ExecutionReportFillDetails):
         self,
         *,
         last_trade: Trade | None = None,
-        leaves_quantity: Quantity,
+        leaves_quantity: Quantity | None = None,
         lock: PreTradeLock,
-        is_terminal: bool = False,
+        is_final: bool | None = None,
     ) -> None:
         _ExecutionReportFillDetails.last_trade.__set__(self, last_trade)
         _ExecutionReportFillDetails.leaves_quantity.__set__(self, leaves_quantity)
         _ExecutionReportFillDetails.lock.__set__(self, lock)
-        _ExecutionReportFillDetails.is_terminal.__set__(self, is_terminal)
+        _ExecutionReportFillDetails.is_final.__set__(self, is_final)
 
     # @typing.override
     @property
@@ -474,7 +474,7 @@ class ExecutionReportFillDetails(_ExecutionReportFillDetails):
 
     # @typing.override
     @property
-    def leaves_quantity(self) -> Quantity:
+    def leaves_quantity(self) -> Quantity | None:
         """Remaining order quantity after this fill."""
         return _ExecutionReportFillDetails.leaves_quantity.__get__(self, type(self))
 
@@ -490,9 +490,12 @@ class ExecutionReportFillDetails(_ExecutionReportFillDetails):
 
     # @typing.override
     @property
-    def is_terminal(self) -> bool:
-        """Whether this report closes the report stream for the order."""
-        return _ExecutionReportFillDetails.is_terminal.__get__(self, type(self))
+    def is_final(self) -> bool | None:
+        """Whether this report closes the order's report stream.
+
+        The order is filled, cancelled, or rejected.
+        """
+        return _ExecutionReportFillDetails.is_final.__get__(self, type(self))
 
     def __repr__(self) -> str:
         return _ExecutionReportFillDetails.__repr__(self)

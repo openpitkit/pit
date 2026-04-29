@@ -166,20 +166,18 @@ func TestExecutionReportFillFieldRoundTrip(t *testing.T) {
 	fill.UnsetLockPrice()
 	assertPriceOptionUnset(t, fill.LockPrice())
 
-	fill.SetTerminal(true)
-	if !fill.Terminal() {
-		t.Fatal("Fill.Terminal() = false, want true")
-	}
-	fill.SetTerminal(false)
-	if fill.Terminal() {
-		t.Fatal("Fill.Terminal() = true, want false")
-	}
+	fill.SetIsFinal(true)
+	assertOptionalBoolEqual(t, fill.IsFinal(), true)
+	fill.SetIsFinal(false)
+	assertOptionalBoolEqual(t, fill.IsFinal(), false)
+	fill.UnsetIsFinal()
+	assertOptionalBoolUnset(t, fill.IsFinal())
 
 	values := ExecutionReportFillValues{
 		LastTrade:      optional.Some(lastTrade),
 		LeavesQuantity: optional.Some(fixture.leavesQuantity),
 		LockPrice:      optional.Some(fixture.lockPrice),
-		Terminal:       true,
+		IsFinal:        optional.BoolSome(true),
 	}
 	fill.SetValues(values)
 	assertExecutionReportFillValuesEqual(t, fill.Values(), values)
@@ -237,7 +235,7 @@ func TestExecutionReportEnsureViews(t *testing.T) {
 	if !report.Fill().IsSet() {
 		t.Fatal("Fill().IsSet() = false, want true after EnsureFillView")
 	}
-	fill.SetTerminal(true)
+	fill.SetIsFinal(true)
 
 	positionImpact := report.EnsurePositionImpactView()
 	if !report.PositionImpact().IsSet() {
@@ -346,7 +344,7 @@ func executionReportValuesFromFixture(fixture executionReportFixture) ExecutionR
 			),
 			LeavesQuantity: optional.Some(fixture.leavesQuantity),
 			LockPrice:      optional.Some(fixture.lockPrice),
-			Terminal:       true,
+			IsFinal:        optional.BoolSome(true),
 		},
 	)
 
@@ -443,9 +441,7 @@ func assertExecutionReportFillUnset(t *testing.T, fill ExecutionReportFill) {
 	assertExecutionReportTradeOptionUnset(t, fill.LastTrade())
 	assertQuantityOptionUnset(t, fill.LeavesQuantity())
 	assertPriceOptionUnset(t, fill.LockPrice())
-	if fill.Terminal() {
-		t.Fatal("ExecutionReportFill.Terminal() = true, want false")
-	}
+	assertOptionalBoolUnset(t, fill.IsFinal())
 }
 
 func assertExecutionReportFillValuesEqual(
@@ -457,9 +453,7 @@ func assertExecutionReportFillValuesEqual(
 	assertExecutionReportTradeOptionValuesEqual(t, got.LastTrade, want.LastTrade)
 	assertQuantityOptionValuesEqual(t, got.LeavesQuantity, want.LeavesQuantity)
 	assertPriceOptionValuesEqual(t, got.LockPrice, want.LockPrice)
-	if got.Terminal != want.Terminal {
-		t.Fatalf("ExecutionReportFillValues.Terminal = %v, want %v", got.Terminal, want.Terminal)
-	}
+	assertOptionalBoolValuesEqual(t, got.IsFinal, want.IsFinal)
 }
 
 func assertExecutionReportPositionImpactUnset(

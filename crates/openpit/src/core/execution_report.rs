@@ -22,7 +22,7 @@ use crate::param::{AccountId, Fee, Pnl, PositionEffect, PositionSide, Quantity, 
 use crate::pretrade::PreTradeLock;
 
 use super::{
-    HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsTerminal,
+    HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsFinal,
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
     HasFee, HasInstrument, HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage,
     HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,
@@ -72,7 +72,7 @@ impl_request_has_field_passthrough!(
     HasOrderLeverage, leverage, Option<crate::param::Leverage>;
     HasOrderCollateralAsset, collateral_asset, Option<&crate::param::Asset>;
     HasExecutionReportLastTrade, last_trade, Option<Trade>;
-    HasExecutionReportIsTerminal, is_terminal, bool;
+    HasExecutionReportIsFinal, is_final, bool;
     HasExecutionReportPositionEffect, position_effect, Option<PositionEffect>;
     HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
@@ -104,7 +104,7 @@ impl_request_has_field_passthrough!(
     HasOrderLeverage, leverage, Option<crate::param::Leverage>;
     HasOrderCollateralAsset, collateral_asset, Option<&crate::param::Asset>;
     HasExecutionReportLastTrade, last_trade, Option<Trade>;
-    HasExecutionReportIsTerminal, is_terminal, bool;
+    HasExecutionReportIsFinal, is_final, bool;
     HasExecutionReportPositionEffect, position_effect, Option<PositionEffect>;
     HasExecutionReportPositionSide, position_side, Option<PositionSide>;
 );
@@ -179,8 +179,9 @@ pub struct ExecutionReportFillDetails {
     pub leaves_quantity: Quantity,
     /// Order lock payload.
     pub lock: PreTradeLock,
-    /// Whether this report closes the report stream for the order.
-    pub is_terminal: bool,
+    /// Whether this report closes the order's report stream.
+    /// The order is filled, cancelled, or rejected.
+    pub is_final: bool,
 }
 
 /// Adds financial impact parameters reported by the execution.
@@ -199,7 +200,7 @@ impl_request_has_field!(
     HasExecutionReportLastTrade, last_trade, Option<Trade>, last_trade;
     HasLeavesQuantity, leaves_quantity, Quantity, leaves_quantity;
     HasLock, lock, PreTradeLock, lock;
-    HasExecutionReportIsTerminal, is_terminal, bool, is_terminal;
+    HasExecutionReportIsFinal, is_final, bool, is_final;
 );
 impl_request_has_field_passthrough!(
     WithExecutionReportPositionImpact,
@@ -224,7 +225,7 @@ impl_request_has_field_passthrough!(
     HasOrderLeverage, leverage, Option<crate::param::Leverage>;
     HasOrderCollateralAsset, collateral_asset, Option<&crate::param::Asset>;
     HasExecutionReportLastTrade, last_trade, Option<Trade>;
-    HasExecutionReportIsTerminal, is_terminal, bool;
+    HasExecutionReportIsFinal, is_final, bool;
 );
 
 //--------------------------------------------------------------------------------------------------
@@ -273,7 +274,7 @@ mod tests {
             last_trade: None,
             leaves_quantity: Quantity::from_str("0").expect("must be valid"),
             lock: PreTradeLock::default(),
-            is_terminal: false,
+            is_final: false,
         }
     }
 
@@ -310,6 +311,6 @@ mod tests {
             Quantity::from_str("0").expect("must be valid")
         );
         assert_eq!(f.lock, PreTradeLock::default());
-        assert!(!f.is_terminal);
+        assert!(!f.is_final);
     }
 }

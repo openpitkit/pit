@@ -45,7 +45,7 @@ typedef struct PitExecutionReportFill {
     PitExecutionReportTradeOptional last_trade;
     PitParamQuantityOptional leaves_quantity;
     PitParamPriceOptional lock_price;
-    bool is_terminal;
+    PitExecutionReportIsFinalOptional is_final;
 } PitExecutionReportFill;
 ```
 
@@ -85,6 +85,15 @@ typedef struct PitExecutionReportTradeOptional {
     PitExecutionReportTrade value;
     bool is_set;
 } PitExecutionReportTradeOptional;
+```
+
+## `PitExecutionReportIsFinalOptional`
+
+```c
+typedef struct PitExecutionReportIsFinalOptional {
+    bool value;
+    bool is_set;
+} PitExecutionReportIsFinalOptional;
 ```
 
 ## `PitExecutionReportFillOptional`

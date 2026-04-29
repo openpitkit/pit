@@ -753,12 +753,12 @@ class ExecutionReportFillDetails:
         self,
         *,
         last_trade: Trade | None = None,
-        leaves_quantity: param.Quantity,
+        leaves_quantity: param.Quantity | None = None,
         lock: PreTradeLock,
-        is_terminal: bool = False,
+        is_final: bool | None = None,
     ) -> None:
         """Create a fill details group."""
-        _ = (last_trade, leaves_quantity, lock, is_terminal)
+        _ = (last_trade, leaves_quantity, lock, is_final)
 
     @property
     def last_trade(self) -> Trade | None:
@@ -767,11 +767,11 @@ class ExecutionReportFillDetails:
     @last_trade.setter
     def last_trade(self, value: Trade | None) -> None: ...
     @property
-    def leaves_quantity(self) -> param.Quantity:
+    def leaves_quantity(self) -> param.Quantity | None:
         """Remaining order quantity."""
 
     @leaves_quantity.setter
-    def leaves_quantity(self, value: param.Quantity) -> None: ...
+    def leaves_quantity(self, value: param.Quantity | None) -> None: ...
     @property
     def lock(self) -> PreTradeLock:
         """Order lock payload."""
@@ -779,11 +779,14 @@ class ExecutionReportFillDetails:
     @lock.setter
     def lock(self, value: PreTradeLock) -> None: ...
     @property
-    def is_terminal(self) -> bool:
-        """Whether this is a terminal report."""
+    def is_final(self) -> bool | None:
+        """Whether this report closes the order's report stream.
 
-    @is_terminal.setter
-    def is_terminal(self, value: bool) -> None: ...
+        The order is filled, cancelled, or rejected.
+        """
+
+    @is_final.setter
+    def is_final(self, value: bool | None) -> None: ...
 
 class ExecutionReportPositionImpact:
     """Position-impact data group."""

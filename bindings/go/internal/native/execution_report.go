@@ -450,12 +450,30 @@ func ExecutionReportFillUnsetLockPrice(fill *ExecutionReportFill) {
 	fill.lock_price = ParamPriceOptional{}
 }
 
-func ExecutionReportFillGetTerminal(fill ExecutionReportFill) bool {
-	return bool(fill.is_terminal)
+// ExecutionReportFillGetFinal returns the final flag when it is set.
+func ExecutionReportFillGetFinal(fill ExecutionReportFill) ExecutionReportIsFinalOptional {
+	return fill.is_final
 }
 
-func ExecutionReportFillSetTerminal(fill *ExecutionReportFill, isTerminal bool) {
-	fill.is_terminal = C.bool(isTerminal)
+// ExecutionReportFillSetFinal marks the fill as closing the report stream.
+func ExecutionReportFillSetFinal(fill *ExecutionReportFill, isFinal bool) {
+	fill.is_final.value = C.bool(isFinal)
+	fill.is_final.is_set = true
+}
+
+// ExecutionReportFillUnsetFinal clears the final flag.
+func ExecutionReportFillUnsetFinal(fill *ExecutionReportFill) {
+	fill.is_final = ExecutionReportIsFinalOptional{}
+}
+
+// ExecutionReportIsFinalOptionalIsSet reports whether the final flag is set.
+func ExecutionReportIsFinalOptionalIsSet(value ExecutionReportIsFinalOptional) bool {
+	return bool(value.is_set)
+}
+
+// ExecutionReportIsFinalOptionalGet returns the stored final flag value.
+func ExecutionReportIsFinalOptionalGet(value ExecutionReportIsFinalOptional) bool {
+	return bool(value.value)
 }
 
 //------------------------------------------------------------------------------
