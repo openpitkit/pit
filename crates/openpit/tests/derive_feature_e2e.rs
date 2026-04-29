@@ -1,7 +1,7 @@
 #![cfg(feature = "derive")]
 
 use openpit::param::{Asset, Fee, Pnl};
-use openpit::pretrade::policies::PnlKillSwitchPolicy;
+use openpit::pretrade::policies::{PnlBoundsBarrier, PnlBoundsKillSwitchPolicy};
 use openpit::{
     Engine, HasFee, HasInstrument, HasPnl, Instrument, RequestFieldAccessError, RequestFields,
 };
@@ -112,11 +112,13 @@ fn derive_feature_reexport_builds_wrappers_and_engine_smoke_path() {
         Ok(Fee::from_str("-1").expect("must be valid"))
     );
 
-    let pnl_policy = PnlKillSwitchPolicy::new(
-        (
-            Asset::new("USD").expect("must be valid"),
-            Pnl::from_str("500").expect("must be valid"),
-        ),
+    let pnl_policy = PnlBoundsKillSwitchPolicy::new(
+        PnlBoundsBarrier {
+            settlement_asset: Asset::new("USD").expect("must be valid"),
+            lower_bound: Some(Pnl::from_str("-500").expect("must be valid")),
+            upper_bound: None,
+            initial_pnl: Pnl::ZERO,
+        },
         [],
     )
     .expect("must build policy");

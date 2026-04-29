@@ -1231,26 +1231,32 @@ class PreTradeContext:
 class AccountAdjustmentContext:
     """Context of the current account-adjustment operation."""
 
-class PnlKillSwitchPolicy:
-    """Built-in start-stage kill-switch policy based on PnL threshold."""
+class PnlBoundsKillSwitchPolicy:
+    """Built-in start-stage kill-switch policy based on PnL bounds."""
 
     NAME: typing.ClassVar[str]
 
     def __init__(
         self,
+        *,
         settlement_asset: param.Asset,
-        barrier: param.Pnl,
+        lower_bound: param.Pnl | None = None,
+        upper_bound: param.Pnl | None = None,
+        initial_pnl: param.Pnl,
     ) -> None:
-        """Create policy with the first barrier."""
-        _ = (settlement_asset, barrier)
+        """Create policy with the first per-settlement bounds barrier."""
+        _ = (settlement_asset, lower_bound, upper_bound, initial_pnl)
 
     def set_barrier(
         self,
+        *,
         settlement_asset: param.Asset,
-        barrier: param.Pnl,
+        lower_bound: param.Pnl | None = None,
+        upper_bound: param.Pnl | None = None,
+        initial_pnl: param.Pnl,
     ) -> None:
-        """Add or update barrier for a settlement asset."""
-        _ = (settlement_asset, barrier)
+        """Add or update bounds for a settlement asset."""
+        _ = (settlement_asset, lower_bound, upper_bound, initial_pnl)
 
     def reset_pnl(self, settlement_asset: param.Asset) -> None:
         """Reset accumulated PnL for a settlement asset."""
@@ -1307,7 +1313,7 @@ class EngineBuilder:
         policy: (
             CheckPreTradeStartPolicy
             | OrderValidationPolicy
-            | PnlKillSwitchPolicy
+            | PnlBoundsKillSwitchPolicy
             | RateLimitPolicy
             | OrderSizeLimitPolicy
         ),

@@ -124,13 +124,14 @@ pit_create_pretrade_policies_rate_limit_policy(
 );
 ```
 
-## `PitPretradePoliciesPnlKillSwitchParam`
+## `PitPretradePoliciesPnlBoundsBarrier`
 
-One barrier definition for `pit_create_pretrade_policies_pnl_killswitch_policy`.
+One barrier definition for
+`pit_create_pretrade_policies_pnl_bounds_killswitch_policy`.
 
 What it describes:
 
-- A settlement asset and the loss threshold attached to it.
+- A settlement asset and its lower/upper P&L bounds.
 
 Contract:
 
@@ -138,24 +139,26 @@ Contract:
 
 duration of the call.
 
-- `barrier` must contain a valid PnL threshold value.
+- `initial_pnl` must contain a valid PnL value.
 - The array passed to the create function may contain multiple entries.
 
 ```c
-typedef struct PitPretradePoliciesPnlKillSwitchParam {
+typedef struct PitPretradePoliciesPnlBoundsBarrier {
     PitStringView settlement_asset;
-    PitParamPnl barrier;
-} PitPretradePoliciesPnlKillSwitchParam;
+    PitParamPnlOptional lower_bound;
+    PitParamPnlOptional upper_bound;
+    PitParamPnl initial_pnl;
+} PitPretradePoliciesPnlBoundsBarrier;
 ```
 
-## `pit_create_pretrade_policies_pnl_killswitch_policy`
+## `pit_create_pretrade_policies_pnl_bounds_killswitch_policy`
 
-Creates a built-in start-stage policy that rejects new orders once a loss
-threshold is reached.
+Creates a built-in start-stage policy that rejects new orders when
+accumulated P&L is outside configured bounds.
 
 Why it exists:
 
-- Use it as a kill switch per settlement asset.
+- Use it as a P&L bounds kill switch per settlement asset.
 
 Arguments:
 
@@ -195,8 +198,8 @@ longer needed locally.
 
 ```c
 PitPretradeCheckPreTradeStartPolicy *
-pit_create_pretrade_policies_pnl_killswitch_policy(
-    const PitPretradePoliciesPnlKillSwitchParam * params,
+pit_create_pretrade_policies_pnl_bounds_killswitch_policy(
+    const PitPretradePoliciesPnlBoundsBarrier * params,
     size_t params_len,
     PitOutError out_error
 );

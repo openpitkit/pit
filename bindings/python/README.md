@@ -75,7 +75,7 @@ rejects and run rollback mutations in reverse order when any reject is produced.
 Built-in policies currently include:
 
 - `OrderValidationPolicy`
-- `PnlKillSwitchPolicy`
+- `PnlBoundsKillSwitchPolicy`
 - `RateLimitPolicy`
 - `OrderSizeLimitPolicy`
 
@@ -100,9 +100,10 @@ across callback boundaries, so Python policies execute on the calling thread.
 import openpit
 
 # 1. Configure policies.
-pnl_policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
+pnl_policy = openpit.pretrade.policies.PnlBoundsKillSwitchPolicy(
     settlement_asset="USD",
-    barrier=openpit.param.Pnl("1000"),
+    lower_bound=openpit.param.Pnl("-1000"),
+    initial_pnl=openpit.param.Pnl("0"),
 )
 
 rate_limit_policy = openpit.pretrade.policies.RateLimitPolicy(

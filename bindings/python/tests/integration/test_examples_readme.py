@@ -30,9 +30,10 @@ def test_readme_quickstart() -> None:
     # Keep README and wiki versions of this example in sync.
 
     # 1. Configure policies.
-    pnl_policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
+    pnl_policy = openpit.pretrade.policies.PnlBoundsKillSwitchPolicy(
         settlement_asset="USD",
-        barrier=openpit.param.Pnl("1000"),
+        lower_bound=openpit.param.Pnl("-1000"),
+        initial_pnl=openpit.param.Pnl("0"),
     )
 
     rate_limit_policy = openpit.pretrade.policies.RateLimitPolicy(

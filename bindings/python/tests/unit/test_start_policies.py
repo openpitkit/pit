@@ -26,9 +26,10 @@ def test_rate_limit_rejects_second_order_in_window() -> None:
 
 @pytest.mark.unit
 def test_pnl_kill_switch_can_be_reset_after_trigger() -> None:
-    policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
+    policy = openpit.pretrade.policies.PnlBoundsKillSwitchPolicy(
         settlement_asset="USD",
-        barrier=openpit.param.Pnl("100"),
+        lower_bound=openpit.param.Pnl("-100"),
+        initial_pnl=openpit.param.Pnl("0"),
     )
     engine = (
         openpit.Engine.builder().check_pre_trade_start_policy(policy=policy).build()
@@ -168,21 +169,36 @@ def test_order_size_limit_requires_asset_string() -> None:
 @pytest.mark.unit
 def test_pnl_kill_switch_requires_asset_string() -> None:
     with pytest.raises(TypeError, match="asset must be a str"):
-        openpit.pretrade.policies.PnlKillSwitchPolicy(
+        openpit.pretrade.policies.PnlBoundsKillSwitchPolicy(
             settlement_asset=123,  # type: ignore[arg-type]
-            barrier=openpit.param.Pnl(100),
+            lower_bound=openpit.param.Pnl(-100),
+            initial_pnl=openpit.param.Pnl(0),
         )
 
 
 @pytest.mark.unit
 def test_pnl_kill_switch_set_barrier_requires_asset_string() -> None:
-    policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
+    policy = openpit.pretrade.policies.PnlBoundsKillSwitchPolicy(
         settlement_asset="USD",
-        barrier=openpit.param.Pnl(100),
+        lower_bound=openpit.param.Pnl(-100),
+        initial_pnl=openpit.param.Pnl(0),
     )
 
     with pytest.raises(TypeError, match="asset must be a str"):
         policy.set_barrier(
             settlement_asset=123,  # type: ignore[arg-type]
-            barrier=openpit.param.Pnl(200),
+            lower_bound=openpit.param.Pnl(-200),
+            initial_pnl=openpit.param.Pnl(0),
+        )
+
+
+@pytest.mark.unit
+def test_pnl_kill_switch_requires_at_least_one_bound() -> None:
+    with pytest.raises(
+        ValueError,
+        match="at least one of lower_bound or upper_bound must be provided",
+    ):
+        openpit.pretrade.policies.PnlBoundsKillSwitchPolicy(
+            settlement_asset="USD",
+            initial_pnl=openpit.param.Pnl(0),
         )

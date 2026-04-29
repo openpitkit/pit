@@ -224,9 +224,10 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         return
 
     if case == "kill_switch_reset_resume":
-        pnl_policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
+        pnl_policy = openpit.pretrade.policies.PnlBoundsKillSwitchPolicy(
             settlement_asset="USD",
-            barrier=openpit.param.Pnl("500"),
+            lower_bound=openpit.param.Pnl("-500"),
+            initial_pnl=openpit.param.Pnl("0"),
         )
         engine = (
             openpit.Engine.builder()

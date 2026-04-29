@@ -271,14 +271,14 @@ func assertInstrumentOptionValuesEqual(
 ) {
 	t.Helper()
 	assertOptionBy(t, "Instrument", got, want, func(gotValue param.Instrument, wantValue param.Instrument) {
-		if gotValue.UnderlyingAsset != wantValue.UnderlyingAsset {
+		if !gotValue.UnderlyingAsset.Equal(wantValue.UnderlyingAsset) {
 			t.Fatalf(
 				"Instrument.UnderlyingAsset = %s, want %s",
 				gotValue.UnderlyingAsset,
 				wantValue.UnderlyingAsset,
 			)
 		}
-		if gotValue.SettlementAsset != wantValue.SettlementAsset {
+		if !gotValue.SettlementAsset.Equal(wantValue.SettlementAsset) {
 			t.Fatalf(
 				"Instrument.SettlementAsset = %s, want %s",
 				gotValue.SettlementAsset,
@@ -405,7 +405,7 @@ func assertAssetOptionValuesEqual(
 ) {
 	t.Helper()
 	assertOptionBy(t, "Asset", got, want, func(gotValue param.Asset, wantValue param.Asset) {
-		if gotValue != wantValue {
+		if !gotValue.Equal(wantValue) {
 			t.Fatalf("Asset = %v, want %v", gotValue, wantValue)
 		}
 	})

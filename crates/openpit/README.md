@@ -62,7 +62,7 @@ produced.
 Built-in start-stage policies currently include:
 
 - `OrderValidationPolicy`
-- `PnlKillSwitchPolicy`
+- `PnlBoundsKillSwitchPolicy`
 - `RateLimitPolicy`
 - `OrderSizeLimitPolicy`
 
@@ -108,7 +108,7 @@ use openpit::param::{
 };
 use openpit::pretrade::policies::{OrderSizeLimit, OrderSizeLimitPolicy};
 use openpit::pretrade::policies::OrderValidationPolicy;
-use openpit::pretrade::policies::PnlKillSwitchPolicy;
+use openpit::pretrade::policies::{PnlBoundsBarrier, PnlBoundsKillSwitchPolicy};
 use openpit::pretrade::policies::RateLimitPolicy;
 use openpit::{Engine, Instrument};
 
@@ -116,8 +116,13 @@ use openpit::{Engine, Instrument};
 let usd = Asset::new("USD")?;
 
 // 1. Configure policies.
-let pnl_policy = PnlKillSwitchPolicy::new(
-    (usd.clone(), Pnl::from_str("1000")?),
+let pnl_policy = PnlBoundsKillSwitchPolicy::new(
+    PnlBoundsBarrier {
+        settlement_asset: usd.clone(),
+        lower_bound: Some(Pnl::from_str("-1000")?),
+        upper_bound: None,
+        initial_pnl: Pnl::ZERO,
+    },
     [],
 )?;
 

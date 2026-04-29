@@ -1307,7 +1307,10 @@ mod tests {
 
     #[test]
     fn rounding_strategy_constants_and_conversion_are_stable() {
-        assert_eq!(RoundingStrategy::DEFAULT, RoundingStrategy::MidpointNearestEven);
+        assert_eq!(
+            RoundingStrategy::DEFAULT,
+            RoundingStrategy::MidpointNearestEven
+        );
         assert_eq!(
             RoundingStrategy::BANKER,
             RoundingStrategy::MidpointNearestEven

@@ -23,9 +23,10 @@ use std::time::Duration;
 
 use openpit::param::TradeAmount;
 use openpit::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side, Volume};
-use openpit::pretrade::policies::pnl_killswitch::PnlKillSwitchError;
+use openpit::pretrade::policies::pnl_bounds_killswitch::PnlBoundsKillSwitchPolicyError;
 use openpit::pretrade::policies::OrderValidationPolicy;
-use openpit::pretrade::policies::PnlKillSwitchPolicy;
+use openpit::pretrade::policies::PnlBoundsBarrier;
+use openpit::pretrade::policies::PnlBoundsKillSwitchPolicy;
 use openpit::pretrade::policies::RateLimitPolicy;
 use openpit::pretrade::policies::{OrderSizeLimit, OrderSizeLimitPolicy};
 use openpit::pretrade::{
@@ -70,8 +71,11 @@ impl HasFee for TestReport {
 fn integration_scenario_rate_limit_then_kill_switch_then_reset_resume() {
     let usd = Asset::new("USD").expect("asset code must be valid");
     let shared_pnl = Rc::new(
-        PnlKillSwitchPolicy::new((usd.clone(), pnl("500")), [])
-            .expect("pnl policy must be configured"),
+        PnlBoundsKillSwitchPolicy::new(
+            pnl_bounds_barrier(usd.clone(), Some(pnl("-500")), None, Pnl::ZERO),
+            [],
+        )
+        .expect("pnl policy must be configured"),
     );
 
     let engine = Engine::<TestOrder, TestReport>::builder()
@@ -109,13 +113,10 @@ fn integration_scenario_rate_limit_then_kill_switch_then_reset_resume() {
     assert_eq!(kill_switch_reject.scope, RejectScope::Account);
     assert_eq!(kill_switch_reject.code, RejectCode::PnlKillSwitchTriggered);
     assert_eq!(kill_switch_reject.reason, "pnl kill switch triggered");
-    assert_eq!(
-        kill_switch_reject.details,
-        "realized pnl -600, max allowed loss: 500, settlement asset USD"
-    );
+    assert!(kill_switch_reject.details.contains("lower bound breached"));
 
     shared_pnl.reset_pnl(&usd);
-    assert_eq!(shared_pnl.realized_pnl(&usd), pnl("0"));
+    assert_eq!(shared_pnl.realized_pnl(&usd), Pnl::ZERO);
 
     thread::sleep(Duration::from_millis(700));
 
@@ -476,20 +477,24 @@ fn integration_engine_builder_defaults_and_guardrails() {
 
     let duplicate_start = Engine::<TestOrder, TestReport>::builder()
         .check_pre_trade_start_policy(
-            PnlKillSwitchPolicy::new(
-                (
+            PnlBoundsKillSwitchPolicy::new(
+                pnl_bounds_barrier(
                     Asset::new("USD").expect("asset code must be valid"),
-                    pnl("100"),
+                    Some(pnl("-100")),
+                    None,
+                    Pnl::ZERO,
                 ),
                 vec![],
             )
             .expect("policy config must be valid"),
         )
         .check_pre_trade_start_policy(
-            PnlKillSwitchPolicy::new(
-                (
+            PnlBoundsKillSwitchPolicy::new(
+                pnl_bounds_barrier(
                     Asset::new("USD").expect("asset code must be valid"),
-                    pnl("100"),
+                    Some(pnl("-100")),
+                    None,
+                    Pnl::ZERO,
                 ),
                 vec![],
             )
@@ -498,7 +503,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
         .build();
     assert!(matches!(
         duplicate_start,
-        Err(EngineBuildError::DuplicatePolicyName { name }) if name == "PnlKillSwitchPolicy"
+        Err(EngineBuildError::DuplicatePolicyName { name }) if name == "PnlBoundsKillSwitchPolicy"
     ));
 
     let duplicate_main = Engine::<TestOrder, TestReport>::builder()
@@ -551,22 +556,24 @@ fn integration_engine_builder_defaults_and_guardrails() {
         .expect("without rejecting policies the request must execute");
     reservation.rollback();
 
-    let pnl_policy = PnlKillSwitchPolicy::new(
-        (
+    let pnl_policy = PnlBoundsKillSwitchPolicy::new(
+        pnl_bounds_barrier(
             Asset::new("EUR").expect("asset code must be valid"),
-            pnl("100"),
+            Some(pnl("-100")),
+            None,
+            Pnl::ZERO,
         ),
         vec![],
     )
     .expect("policy config must be valid");
-    assert!(!<PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
+    assert!(!<PnlBoundsKillSwitchPolicy as CheckPreTradeStartPolicy<
         TestOrder,
         TestReport,
     >>::apply_execution_report(
         &pnl_policy,
         &execution_report_spx_usd("-10")
     ));
-    let missing_barrier = <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
+    let missing_barrier = <PnlBoundsKillSwitchPolicy as CheckPreTradeStartPolicy<
         TestOrder,
         TestReport,
     >>::check_pre_trade_start(
@@ -578,24 +585,32 @@ fn integration_engine_builder_defaults_and_guardrails() {
     let missing_barrier = &missing_barrier[0];
     assert_eq!(missing_barrier.scope, RejectScope::Order);
     assert_eq!(missing_barrier.code, RejectCode::RiskConfigurationMissing);
-    assert_eq!(missing_barrier.reason, "pnl barrier missing");
+    assert_eq!(missing_barrier.reason, "pnl bounds barrier missing");
     assert_eq!(
         missing_barrier.details,
-        "settlement asset USD has no configured loss barrier"
+        "settlement asset USD has no configured pnl bounds barrier"
     );
 
     let usd = Asset::new("USD").expect("asset code must be valid");
-    let overflow_policy = PnlKillSwitchPolicy::new((usd.clone(), pnl("100")), vec![])
-        .expect("policy config must be valid");
+    let overflow_policy = PnlBoundsKillSwitchPolicy::new(
+        pnl_bounds_barrier(usd.clone(), Some(pnl("-100")), None, Pnl::ZERO),
+        vec![],
+    )
+    .expect("policy config must be valid");
     overflow_policy
-        .set_barrier(&usd, pnl("90"))
-        .expect("set_barrier must accept positive values");
+        .set_barrier(pnl_bounds_barrier(
+            usd.clone(),
+            Some(pnl("-90")),
+            None,
+            Pnl::ZERO,
+        ))
+        .expect("set_barrier must accept non-empty bounds");
     let set_barrier_error = overflow_policy
-        .set_barrier(&usd, pnl("0"))
-        .expect_err("set_barrier must reject non-positive values");
+        .set_barrier(pnl_bounds_barrier(usd.clone(), None, None, Pnl::ZERO))
+        .expect_err("set_barrier must reject when both bounds are unset");
     assert_eq!(
         set_barrier_error.to_string(),
-        "barrier must be positive for settlement asset USD, got 0"
+        "at least one of lower_bound or upper_bound must be configured for settlement asset USD"
     );
     overflow_policy
         .report_realized_pnl(&usd, Pnl::new(Decimal::MAX))
@@ -605,7 +620,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
         .expect_err("second accumulation must overflow");
     assert_eq!(
         overflow,
-        PnlKillSwitchError::PnlAccumulationOverflow { settlement: usd }
+        PnlBoundsKillSwitchPolicyError::PnlAccumulationOverflow { settlement: usd }
     );
     assert_eq!(
         overflow.to_string(),
@@ -903,18 +918,20 @@ impl PreTradePolicy<TestOrder, TestReport> for NotionalCapPolicy {
 }
 
 struct SharedPnlPolicy {
-    inner: Rc<PnlKillSwitchPolicy>,
+    inner: Rc<PnlBoundsKillSwitchPolicy>,
 }
 
 impl SharedPnlPolicy {
-    fn new(inner: Rc<PnlKillSwitchPolicy>) -> Self {
+    fn new(inner: Rc<PnlBoundsKillSwitchPolicy>) -> Self {
         Self { inner }
     }
 }
 
 impl CheckPreTradeStartPolicy<TestOrder, TestReport> for SharedPnlPolicy {
     fn name(&self) -> &str {
-        <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<TestOrder, TestReport>>::name(&self.inner)
+        <PnlBoundsKillSwitchPolicy as CheckPreTradeStartPolicy<TestOrder, TestReport>>::name(
+            &self.inner,
+        )
     }
 
     fn check_pre_trade_start(
@@ -922,14 +939,14 @@ impl CheckPreTradeStartPolicy<TestOrder, TestReport> for SharedPnlPolicy {
         _ctx: &PreTradeContext,
         order: &TestOrder,
     ) -> Result<(), Rejects> {
-        <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
+        <PnlBoundsKillSwitchPolicy as CheckPreTradeStartPolicy<
             TestOrder,
             TestReport,
         >>::check_pre_trade_start(&self.inner, &PreTradeContext::new(), order)
     }
 
     fn apply_execution_report(&self, report: &TestReport) -> bool {
-        <PnlKillSwitchPolicy as CheckPreTradeStartPolicy<
+        <PnlBoundsKillSwitchPolicy as CheckPreTradeStartPolicy<
             TestOrder,
             TestReport,
         >>::apply_execution_report(&self.inner, report)
@@ -972,6 +989,20 @@ fn pnl(value: &str) -> Pnl {
 
 fn volume(value: &str) -> Volume {
     Volume::from_str(value).expect("volume literal must be valid")
+}
+
+fn pnl_bounds_barrier(
+    settlement_asset: Asset,
+    lower_bound: Option<Pnl>,
+    upper_bound: Option<Pnl>,
+    initial_pnl: Pnl,
+) -> PnlBoundsBarrier {
+    PnlBoundsBarrier {
+        settlement_asset,
+        lower_bound,
+        upper_bound,
+        initial_pnl,
+    }
 }
 
 fn order_size_limit_usd(max_quantity: &str, max_notional: &str) -> OrderSizeLimit {

@@ -238,16 +238,16 @@ pub enum PitParamRoundingStrategy {
 
 /// Default rounding strategy alias.
 pub const PIT_PARAM_ROUNDING_STRATEGY_DEFAULT: PitParamRoundingStrategy =
-    export_rounding_strategy_const(RoundingStrategy::DEFAULT);
+    PitParamRoundingStrategy::MidpointNearestEven;
 /// Banker's rounding alias.
 pub const PIT_PARAM_ROUNDING_STRATEGY_BANKER: PitParamRoundingStrategy =
-    export_rounding_strategy_const(RoundingStrategy::BANKER);
+    PitParamRoundingStrategy::MidpointNearestEven;
 /// Conservative profit rounding alias.
 pub const PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT: PitParamRoundingStrategy =
-    export_rounding_strategy_const(RoundingStrategy::CONSERVATIVE_PROFIT);
+    PitParamRoundingStrategy::Down;
 /// Conservative loss rounding alias.
 pub const PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS: PitParamRoundingStrategy =
-    export_rounding_strategy_const(RoundingStrategy::CONSERVATIVE_LOSS);
+    PitParamRoundingStrategy::Down;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -360,15 +360,6 @@ fn import_rounding_strategy(value: PitParamRoundingStrategy) -> RoundingStrategy
         PitParamRoundingStrategy::MidpointAwayFromZero => RoundingStrategy::MidpointAwayFromZero,
         PitParamRoundingStrategy::Up => RoundingStrategy::Up,
         PitParamRoundingStrategy::Down => RoundingStrategy::Down,
-    }
-}
-
-const fn export_rounding_strategy_const(s: RoundingStrategy) -> PitParamRoundingStrategy {
-    match s {
-        RoundingStrategy::MidpointNearestEven => PitParamRoundingStrategy::MidpointNearestEven,
-        RoundingStrategy::MidpointAwayFromZero => PitParamRoundingStrategy::MidpointAwayFromZero,
-        RoundingStrategy::Up => PitParamRoundingStrategy::Up,
-        RoundingStrategy::Down => PitParamRoundingStrategy::Down,
     }
 }
 

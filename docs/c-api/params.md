@@ -211,7 +211,7 @@ Default rounding strategy alias.
 
 ```c
 #define PIT_PARAM_ROUNDING_STRATEGY_DEFAULT \
-    ((PitParamRoundingStrategy) export_rounding_strategy_const(RoundingStrategy_DEFAULT))
+    ((PitParamRoundingStrategy) PitParamRoundingStrategy_MidpointNearestEven)
 ```
 
 ## `PIT_PARAM_ROUNDING_STRATEGY_BANKER`
@@ -220,7 +220,7 @@ Banker's rounding alias.
 
 ```c
 #define PIT_PARAM_ROUNDING_STRATEGY_BANKER \
-    ((PitParamRoundingStrategy) export_rounding_strategy_const(RoundingStrategy_BANKER))
+    ((PitParamRoundingStrategy) PitParamRoundingStrategy_MidpointNearestEven)
 ```
 
 ## `PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT`
@@ -229,7 +229,7 @@ Conservative profit rounding alias.
 
 ```c
 #define PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT \
-    ((PitParamRoundingStrategy) export_rounding_strategy_const(RoundingStrategy_CONSERVATIVE_PROFIT))
+    ((PitParamRoundingStrategy) PitParamRoundingStrategy_Down)
 ```
 
 ## `PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS`
@@ -238,7 +238,7 @@ Conservative loss rounding alias.
 
 ```c
 #define PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS \
-    ((PitParamRoundingStrategy) export_rounding_strategy_const(RoundingStrategy_CONSERVATIVE_LOSS))
+    ((PitParamRoundingStrategy) PitParamRoundingStrategy_Down)
 ```
 
 ## `PitParamTradeAmount`

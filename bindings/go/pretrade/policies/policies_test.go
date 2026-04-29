@@ -28,6 +28,7 @@ import (
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/reject"
 	"go.openpit.dev/openpit/tx"
@@ -310,38 +311,43 @@ func TestNewOrderSizeLimitPolicyValidationAndEngineFlow(t *testing.T) {
 	}
 }
 
-func TestNewPnlKillSwitchPolicyValidationAndEngineFlow(t *testing.T) {
-	_, err := NewPnlKillSwitchPolicy()
+func TestNewPnlBoundsKillSwitchPolicyValidationAndEngineFlow(t *testing.T) {
+	_, err := NewPnlBoundsKillSwitchPolicy()
 	if err == nil {
-		t.Fatal("NewPnlKillSwitchPolicy() error = nil, want non-nil")
+		t.Fatal("NewPnlBoundsKillSwitchPolicy() error = nil, want non-nil")
 	}
 	if !strings.Contains(err.Error(), "parameter list is empty") {
 		t.Fatalf("error = %q, want to contain %q", err.Error(), "parameter list is empty")
 	}
 
-	nonPositivePolicy, err := NewPnlKillSwitchPolicy(PnlKillSwitchBarrier{
+	invalidPolicy, err := NewPnlBoundsKillSwitchPolicy(PnlBoundsBarrier{
 		SettlementAsset: mustPolicyAsset(t, "USD"),
-		Barrier:         mustPnl(t, "0"),
+		InitialPnl:      mustPnl(t, "0"),
 	})
-	if nonPositivePolicy != nil {
-		nonPositivePolicy.Close()
+	if invalidPolicy != nil {
+		invalidPolicy.Close()
 	}
 	if err == nil {
-		t.Fatal("NewPnlKillSwitchPolicy(non-positive) error = nil, want non-nil")
+		t.Fatal("NewPnlBoundsKillSwitchPolicy(no-bounds) error = nil, want non-nil")
 	}
-	if !strings.Contains(err.Error(), "barrier must be positive") {
-		t.Fatalf("error = %q, want to contain %q", err.Error(), "barrier must be positive")
+	if !strings.Contains(err.Error(), "at least one of lower_bound or upper_bound") {
+		t.Fatalf(
+			"error = %q, want to contain %q",
+			err.Error(),
+			"at least one of lower_bound or upper_bound",
+		)
 	}
 
-	policy, err := NewPnlKillSwitchPolicy(PnlKillSwitchBarrier{
+	policy, err := NewPnlBoundsKillSwitchPolicy(PnlBoundsBarrier{
 		SettlementAsset: mustPolicyAsset(t, "USD"),
-		Barrier:         mustPnl(t, "500"),
+		LowerBound:      optional.Some(mustPnl(t, "-500")),
+		InitialPnl:      mustPnl(t, "0"),
 	})
 	if err != nil {
-		t.Fatalf("NewPnlKillSwitchPolicy(valid) error = %v", err)
+		t.Fatalf("NewPnlBoundsKillSwitchPolicy(valid) error = %v", err)
 	}
-	if got := policy.Name(); got != "PnlKillSwitchPolicy" {
-		t.Fatalf("Name() = %q, want %q", got, "PnlKillSwitchPolicy")
+	if got := policy.Name(); got != "PnlBoundsKillSwitchPolicy" {
+		t.Fatalf("Name() = %q, want %q", got, "PnlBoundsKillSwitchPolicy")
 	}
 	t.Cleanup(policy.Close)
 
@@ -387,8 +393,12 @@ func TestNewPnlKillSwitchPolicyValidationAndEngineFlow(t *testing.T) {
 	if rejects[0].Reason != "pnl kill switch triggered" {
 		t.Fatalf("reject reason = %q, want %q", rejects[0].Reason, "pnl kill switch triggered")
 	}
-	if !strings.Contains(rejects[0].Details, "max allowed loss: 500") {
-		t.Fatalf("reject details = %q, want to contain %q", rejects[0].Details, "max allowed loss: 500")
+	if !strings.Contains(rejects[0].Details, "lower bound breached") {
+		t.Fatalf(
+			"reject details = %q, want to contain %q",
+			rejects[0].Details,
+			"lower bound breached",
+		)
 	}
 }
 

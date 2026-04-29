@@ -29,8 +29,8 @@ use std::time::Duration;
 
 use openpit::param::{Asset, Quantity, Volume};
 use openpit::pretrade::policies::{
-    OrderSizeLimit, OrderSizeLimitPolicy, OrderValidationPolicy, PnlKillSwitchPolicy,
-    RateLimitPolicy,
+    OrderSizeLimit, OrderSizeLimitPolicy, OrderValidationPolicy, PnlBoundsBarrier,
+    PnlBoundsKillSwitchPolicy, RateLimitPolicy,
 };
 use openpit::pretrade::{CheckPreTradeStartPolicy, PreTradeContext, PreTradePolicy, Rejects};
 use openpit::{AccountAdjustmentContext, AccountAdjustmentPolicy, Mutation, Mutations};
@@ -42,7 +42,9 @@ use crate::reject::PitRejectList;
 use crate::PitStringView;
 use crate::{AccountAdjustment, ExecutionReport, Order};
 
-use crate::param::{PitParamAccountId, PitParamPnl, PitParamQuantity, PitParamVolume};
+use crate::param::{
+    PitParamAccountId, PitParamPnl, PitParamPnlOptional, PitParamQuantity, PitParamVolume,
+};
 
 use crate::last_error::{write_error, PitOutError};
 use crate::write_error_format;
@@ -190,31 +192,35 @@ pub extern "C" fn pit_create_pretrade_policies_rate_limit_policy(
     )))
 }
 
-/// One barrier definition for `pit_create_pretrade_policies_pnl_killswitch_policy`.
+/// One barrier definition for `pit_create_pretrade_policies_pnl_bounds_killswitch_policy`.
 ///
 /// What it describes:
-/// - A settlement asset and the loss threshold attached to it.
+/// - A settlement asset and its lower/upper P&L bounds.
 ///
 /// Contract:
 /// - `settlement_asset` must point to a valid, null-terminated string for the
 ///   duration of the call.
-/// - `barrier` must contain a valid PnL threshold value.
+/// - `initial_pnl` must contain a valid PnL value.
 /// - The array passed to the create function may contain multiple entries.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PitPretradePoliciesPnlKillSwitchParam {
-    /// Settlement asset whose accumulated loss is being monitored.
+pub struct PitPretradePoliciesPnlBoundsBarrier {
+    /// Settlement asset whose accumulated P&L is being monitored.
     pub settlement_asset: PitStringView,
-    /// Loss barrier for that settlement asset.
-    pub barrier: PitParamPnl,
+    /// Optional lower bound for accumulated P&L.
+    pub lower_bound: PitParamPnlOptional,
+    /// Optional upper bound for accumulated P&L.
+    pub upper_bound: PitParamPnlOptional,
+    /// Initial accumulated P&L value.
+    pub initial_pnl: PitParamPnl,
 }
 
 #[no_mangle]
-/// Creates a built-in start-stage policy that rejects new orders once a loss
-/// threshold is reached.
+/// Creates a built-in start-stage policy that rejects new orders when
+/// accumulated P&L is outside configured bounds.
 ///
 /// Why it exists:
-/// - Use it as a kill switch per settlement asset.
+/// - Use it as a P&L bounds kill switch per settlement asset.
 ///
 /// Arguments:
 /// - `params`: pointer to an array of barrier definitions.
@@ -241,20 +247,20 @@ pub struct PitPretradePoliciesPnlKillSwitchParam {
 /// - The caller must still release its own pointer with
 ///   `pit_destroy_pretrade_check_pre_trade_start_policy` after the pointer is no
 ///   longer needed locally.
-pub unsafe extern "C" fn pit_create_pretrade_policies_pnl_killswitch_policy(
-    params: *const PitPretradePoliciesPnlKillSwitchParam,
+pub unsafe extern "C" fn pit_create_pretrade_policies_pnl_bounds_killswitch_policy(
+    params: *const PitPretradePoliciesPnlBoundsBarrier,
     params_len: usize,
     out_error: PitOutError,
 ) -> *mut PitPretradeCheckPreTradeStartPolicy {
     if params_len == 0 {
         write_error(
             out_error,
-            "pnl_killswitch_policy requires at least one barrier",
+            "pnl_bounds_killswitch_policy requires at least one barrier",
         );
         return std::ptr::null_mut();
     }
     if params.is_null() {
-        write_error(out_error, "pnl_killswitch_policy params is null");
+        write_error(out_error, "pnl_bounds_killswitch_policy params is null");
         return std::ptr::null_mut();
     }
 
@@ -279,14 +285,41 @@ pub unsafe extern "C" fn pit_create_pretrade_policies_pnl_killswitch_policy(
             }
         };
 
-        let barrier = match param.barrier.to_param() {
+        let lower_bound = if param.lower_bound.is_set {
+            match param.lower_bound.value.to_param() {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    write_error_format!(out_error, "param[{index}] lower_bound is invalid: {}", e);
+                    return std::ptr::null_mut();
+                }
+            }
+        } else {
+            None
+        };
+        let upper_bound = if param.upper_bound.is_set {
+            match param.upper_bound.value.to_param() {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    write_error_format!(out_error, "param[{index}] upper_bound is invalid: {}", e);
+                    return std::ptr::null_mut();
+                }
+            }
+        } else {
+            None
+        };
+        let initial_pnl = match param.initial_pnl.to_param() {
             Ok(v) => v,
             Err(e) => {
-                write_error_format!(out_error, "param[{index}] barrier is invalid: {}", e);
+                write_error_format!(out_error, "param[{index}] initial_pnl is invalid: {}", e);
                 return std::ptr::null_mut();
             }
         };
-        barriers.push((settlement, barrier));
+        barriers.push(PnlBoundsBarrier {
+            settlement_asset: settlement,
+            lower_bound,
+            upper_bound,
+            initial_pnl,
+        });
     }
 
     let (initial_barrier, additional_barriers) = match barriers.split_first() {
@@ -297,7 +330,7 @@ pub unsafe extern "C" fn pit_create_pretrade_policies_pnl_killswitch_policy(
         }
     };
 
-    let policy = match PnlKillSwitchPolicy::new(
+    let policy = match PnlBoundsKillSwitchPolicy::new(
         initial_barrier.clone(),
         additional_barriers.iter().cloned(),
     ) {
@@ -1436,6 +1469,16 @@ mod tests {
         })
     }
 
+    fn pnl_optional(value: Option<PitParamPnl>) -> PitParamPnlOptional {
+        match value {
+            Some(v) => PitParamPnlOptional {
+                is_set: true,
+                value: v,
+            },
+            None => PitParamPnlOptional::default(),
+        }
+    }
+
     fn quantity_param(mantissa: i128, scale: i32) -> PitParamQuantity {
         PitParamQuantity(PitParamDecimal {
             mantissa_lo: mantissa as i64,
@@ -1782,21 +1825,25 @@ mod tests {
     }
 
     #[test]
-    fn pnl_killswitch_create_accepts_multiple_params() {
+    fn pnl_bounds_killswitch_create_accepts_multiple_params() {
         let usd = PitStringView::from_utf8("USD");
         let eur = PitStringView::from_utf8("EUR");
         let params = [
-            PitPretradePoliciesPnlKillSwitchParam {
+            PitPretradePoliciesPnlBoundsBarrier {
                 settlement_asset: usd,
-                barrier: pnl_param(1000, 0),
+                lower_bound: pnl_optional(Some(pnl_param(-1000, 0))),
+                upper_bound: pnl_optional(Some(pnl_param(1000, 0))),
+                initial_pnl: pnl_param(0, 0),
             },
-            PitPretradePoliciesPnlKillSwitchParam {
+            PitPretradePoliciesPnlBoundsBarrier {
                 settlement_asset: eur,
-                barrier: pnl_param(500, 0),
+                lower_bound: pnl_optional(Some(pnl_param(-500, 0))),
+                upper_bound: pnl_optional(None),
+                initial_pnl: pnl_param(0, 0),
             },
         ];
         let pointer = unsafe {
-            pit_create_pretrade_policies_pnl_killswitch_policy(
+            pit_create_pretrade_policies_pnl_bounds_killswitch_policy(
                 params.as_ptr(),
                 params.len(),
                 std::ptr::null_mut(),
@@ -1834,15 +1881,19 @@ mod tests {
     }
 
     #[test]
-    fn pnl_killswitch_create_rejects_zero_len_params() {
+    fn pnl_bounds_killswitch_create_rejects_zero_len_params() {
         let mut out_error = std::ptr::null_mut();
         let pointer = unsafe {
-            pit_create_pretrade_policies_pnl_killswitch_policy(std::ptr::null(), 0, &mut out_error)
+            pit_create_pretrade_policies_pnl_bounds_killswitch_policy(
+                std::ptr::null(),
+                0,
+                &mut out_error,
+            )
         };
         assert!(pointer.is_null());
         assert_eq!(
             cstr_to_string(out_error),
-            "pnl_killswitch_policy requires at least one barrier"
+            "pnl_bounds_killswitch_policy requires at least one barrier"
         );
     }
 
@@ -1864,15 +1915,19 @@ mod tests {
     }
 
     #[test]
-    fn pnl_killswitch_create_rejects_null_params_with_positive_len() {
+    fn pnl_bounds_killswitch_create_rejects_null_params_with_positive_len() {
         let mut out_error = std::ptr::null_mut();
         let pointer = unsafe {
-            pit_create_pretrade_policies_pnl_killswitch_policy(std::ptr::null(), 1, &mut out_error)
+            pit_create_pretrade_policies_pnl_bounds_killswitch_policy(
+                std::ptr::null(),
+                1,
+                &mut out_error,
+            )
         };
         assert!(pointer.is_null());
         assert_eq!(
             cstr_to_string(out_error),
-            "pnl_killswitch_policy params is null"
+            "pnl_bounds_killswitch_policy params is null"
         );
     }
 
@@ -1894,22 +1949,26 @@ mod tests {
     }
 
     #[test]
-    fn pnl_killswitch_create_reports_indexed_settlement_error() {
+    fn pnl_bounds_killswitch_create_reports_indexed_settlement_error() {
         let usd = PitStringView::from_utf8("USD");
         let invalid = PitStringView::from_utf8("");
         let params = [
-            PitPretradePoliciesPnlKillSwitchParam {
+            PitPretradePoliciesPnlBoundsBarrier {
                 settlement_asset: usd,
-                barrier: pnl_param(1000, 0),
+                lower_bound: pnl_optional(Some(pnl_param(-1000, 0))),
+                upper_bound: pnl_optional(None),
+                initial_pnl: pnl_param(0, 0),
             },
-            PitPretradePoliciesPnlKillSwitchParam {
+            PitPretradePoliciesPnlBoundsBarrier {
                 settlement_asset: invalid,
-                barrier: pnl_param(100, 0),
+                lower_bound: pnl_optional(Some(pnl_param(-100, 0))),
+                upper_bound: pnl_optional(None),
+                initial_pnl: pnl_param(0, 0),
             },
         ];
         let mut out_error = std::ptr::null_mut();
         let pointer = unsafe {
-            pit_create_pretrade_policies_pnl_killswitch_policy(
+            pit_create_pretrade_policies_pnl_bounds_killswitch_policy(
                 params.as_ptr(),
                 params.len(),
                 &mut out_error,
@@ -1958,15 +2017,17 @@ mod tests {
     }
 
     #[test]
-    fn pnl_killswitch_create_reports_indexed_barrier_error() {
+    fn pnl_bounds_killswitch_create_reports_indexed_lower_bound_error() {
         let usd = PitStringView::from_utf8("USD");
-        let params = [PitPretradePoliciesPnlKillSwitchParam {
+        let params = [PitPretradePoliciesPnlBoundsBarrier {
             settlement_asset: usd,
-            barrier: pnl_param(1000, -1),
+            lower_bound: pnl_optional(Some(pnl_param(1000, -1))),
+            upper_bound: pnl_optional(None),
+            initial_pnl: pnl_param(0, 0),
         }];
         let mut out_error = std::ptr::null_mut();
         let pointer = unsafe {
-            pit_create_pretrade_policies_pnl_killswitch_policy(
+            pit_create_pretrade_policies_pnl_bounds_killswitch_policy(
                 params.as_ptr(),
                 params.len(),
                 &mut out_error,
@@ -1975,7 +2036,33 @@ mod tests {
         assert!(pointer.is_null());
         let error = cstr_to_string(out_error);
         assert!(
-            error.contains("param[0] barrier is invalid"),
+            error.contains("param[0] lower_bound is invalid"),
+            "actual error: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn pnl_bounds_killswitch_create_rejects_when_no_bounds_configured() {
+        let usd = PitStringView::from_utf8("USD");
+        let params = [PitPretradePoliciesPnlBoundsBarrier {
+            settlement_asset: usd,
+            lower_bound: pnl_optional(None),
+            upper_bound: pnl_optional(None),
+            initial_pnl: pnl_param(0, 0),
+        }];
+        let mut out_error = std::ptr::null_mut();
+        let pointer = unsafe {
+            pit_create_pretrade_policies_pnl_bounds_killswitch_policy(
+                params.as_ptr(),
+                params.len(),
+                &mut out_error,
+            )
+        };
+        assert!(pointer.is_null());
+        let error = cstr_to_string(out_error);
+        assert!(
+            error.contains("at least one of lower_bound or upper_bound must be configured"),
             "actual error: {}",
             error
         );
@@ -2035,17 +2122,21 @@ mod tests {
     fn create_functions_accept_duplicate_settlement_entries() {
         let usd = PitStringView::from_utf8("USD");
         let pnl_params = [
-            PitPretradePoliciesPnlKillSwitchParam {
+            PitPretradePoliciesPnlBoundsBarrier {
                 settlement_asset: usd,
-                barrier: pnl_param(1000, 0),
+                lower_bound: pnl_optional(Some(pnl_param(-1000, 0))),
+                upper_bound: pnl_optional(None),
+                initial_pnl: pnl_param(0, 0),
             },
-            PitPretradePoliciesPnlKillSwitchParam {
+            PitPretradePoliciesPnlBoundsBarrier {
                 settlement_asset: usd,
-                barrier: pnl_param(900, 0),
+                lower_bound: pnl_optional(Some(pnl_param(-900, 0))),
+                upper_bound: pnl_optional(None),
+                initial_pnl: pnl_param(0, 0),
             },
         ];
         let pnl_handle = unsafe {
-            pit_create_pretrade_policies_pnl_killswitch_policy(
+            pit_create_pretrade_policies_pnl_bounds_killswitch_policy(
                 pnl_params.as_ptr(),
                 pnl_params.len(),
                 std::ptr::null_mut(),

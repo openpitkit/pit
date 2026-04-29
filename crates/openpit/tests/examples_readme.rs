@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use openpit::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume};
 use openpit::pretrade::policies::{
-    OrderSizeLimit, OrderSizeLimitPolicy, OrderValidationPolicy, PnlKillSwitchPolicy,
-    RateLimitPolicy,
+    OrderSizeLimit, OrderSizeLimitPolicy, OrderValidationPolicy, PnlBoundsBarrier,
+    PnlBoundsKillSwitchPolicy, RateLimitPolicy,
 };
 use openpit::{Engine, Instrument};
 use openpit::{
@@ -36,7 +36,15 @@ fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
     let usd = Asset::new("USD")?;
 
     // 1. Configure policies.
-    let pnl_policy = PnlKillSwitchPolicy::new((usd.clone(), Pnl::from_str("1000")?), [])?;
+    let pnl_policy = PnlBoundsKillSwitchPolicy::new(
+        PnlBoundsBarrier {
+            settlement_asset: usd.clone(),
+            lower_bound: Some(Pnl::from_str("-1000")?),
+            upper_bound: None,
+            initial_pnl: Pnl::ZERO,
+        },
+        [],
+    )?;
 
     let rate_limit_policy = RateLimitPolicy::new(100, Duration::from_secs(1));
 

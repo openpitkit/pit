@@ -31,7 +31,8 @@ use openpit::param::{
     TradeAmount, Volume,
 };
 use openpit::pretrade::policies::OrderValidationPolicy;
-use openpit::pretrade::policies::PnlKillSwitchPolicy;
+use openpit::pretrade::policies::PnlBoundsBarrier;
+use openpit::pretrade::policies::PnlBoundsKillSwitchPolicy;
 use openpit::pretrade::policies::RateLimitPolicy;
 use openpit::pretrade::policies::{OrderSizeLimit, OrderSizeLimitPolicy};
 use openpit::pretrade::{
@@ -1494,7 +1495,7 @@ fn parse_reject_code(value: &str) -> PyResult<RejectCode> {
 impl PyEngineBuilder {
     fn push_start_policy(&self, policy: &Bound<'_, PyAny>) -> PyResult<()> {
         let rust_policy: Box<dyn CheckPreTradeStartPolicy<Order, ExecutionReport>> =
-            if let Ok(policy) = policy.extract::<PyRef<'_, PyPnlKillSwitchPolicy>>() {
+            if let Ok(policy) = policy.extract::<PyRef<'_, PyPnlBoundsKillSwitchPolicy>>() {
                 Box::new(SharedStartPolicy {
                     policy: policy.policy_for_engine(),
                 })
@@ -1631,18 +1632,45 @@ impl PyEngineBuilder {
     }
 }
 
-fn build_pnl_kill_switch_policy(barriers: &[(String, String)]) -> PyResult<PnlKillSwitchPolicy> {
+fn parse_optional_pnl_input(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Pnl>> {
+    match value {
+        Some(value) if value.is_none() => Ok(None),
+        Some(value) => Ok(Some(parse_pnl_input(value)?)),
+        None => Ok(None),
+    }
+}
+
+fn create_pnl_bounds_barrier(
+    settlement_asset: &Bound<'_, PyAny>,
+    lower_bound: Option<&Bound<'_, PyAny>>,
+    upper_bound: Option<&Bound<'_, PyAny>>,
+    initial_pnl: &Bound<'_, PyAny>,
+) -> PyResult<PnlBoundsBarrier> {
+    let lower_bound = parse_optional_pnl_input(lower_bound)?;
+    let upper_bound = parse_optional_pnl_input(upper_bound)?;
+    if lower_bound.is_none() && upper_bound.is_none() {
+        return Err(PyValueError::new_err(
+            "at least one of lower_bound or upper_bound must be provided",
+        ));
+    }
+
+    Ok(PnlBoundsBarrier {
+        settlement_asset: parse_asset_input(settlement_asset)?,
+        lower_bound,
+        upper_bound,
+        initial_pnl: parse_pnl_input(initial_pnl)?,
+    })
+}
+
+fn build_pnl_kill_switch_policy(
+    barriers: &[PnlBoundsBarrier],
+) -> PyResult<PnlBoundsKillSwitchPolicy> {
     let (first, rest) = barriers.split_first().ok_or_else(|| {
-        PyValueError::new_err("PnlKillSwitchPolicy requires at least one barrier")
+        PyValueError::new_err("PnlBoundsKillSwitchPolicy requires at least one barrier")
     })?;
-    let first_barrier = (parse_asset(first.0.as_str())?, parse_pnl(&first.1)?);
-    let rest_barriers = rest
-        .iter()
-        .map(|(settlement_asset, barrier)| {
-            Ok((parse_asset(settlement_asset.as_str())?, parse_pnl(barrier)?))
-        })
-        .collect::<PyResult<Vec<_>>>()?;
-    PnlKillSwitchPolicy::new(first_barrier, rest_barriers)
+    let first_barrier = first.clone();
+    let rest_barriers = rest.to_vec();
+    PnlBoundsKillSwitchPolicy::new(first_barrier, rest_barriers)
         .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
@@ -1671,27 +1699,35 @@ fn build_order_size_limit_policy(
 }
 
 #[pyclass(
-    name = "PnlKillSwitchPolicy",
+    name = "PnlBoundsKillSwitchPolicy",
     module = "openpit.pretrade.policies",
     unsendable
 )]
-struct PyPnlKillSwitchPolicy {
-    barriers: RefCell<Vec<(String, String)>>,
-    inner: RefCell<Rc<PnlKillSwitchPolicy>>,
+struct PyPnlBoundsKillSwitchPolicy {
+    barriers: RefCell<Vec<PnlBoundsBarrier>>,
+    inner: RefCell<Rc<PnlBoundsKillSwitchPolicy>>,
     bound_to_engine: Cell<bool>,
 }
 
 #[pymethods]
-impl PyPnlKillSwitchPolicy {
+impl PyPnlBoundsKillSwitchPolicy {
     #[classattr]
-    const NAME: &'static str = PnlKillSwitchPolicy::NAME;
+    const NAME: &'static str = PnlBoundsKillSwitchPolicy::NAME;
 
     #[new]
-    #[pyo3(signature = (settlement_asset, barrier))]
-    fn new(settlement_asset: &Bound<'_, PyAny>, barrier: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let settlement_asset = parse_asset_input(settlement_asset)?.to_string();
-        let barrier = parse_pnl_input(barrier)?.to_string();
-        let barriers = vec![(settlement_asset, barrier)];
+    #[pyo3(signature = (*, settlement_asset, lower_bound = None, upper_bound = None, initial_pnl))]
+    fn new(
+        settlement_asset: &Bound<'_, PyAny>,
+        lower_bound: Option<&Bound<'_, PyAny>>,
+        upper_bound: Option<&Bound<'_, PyAny>>,
+        initial_pnl: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let barriers = vec![create_pnl_bounds_barrier(
+            settlement_asset,
+            lower_bound,
+            upper_bound,
+            initial_pnl,
+        )?];
         let policy = build_pnl_kill_switch_policy(&barriers)?;
 
         Ok(Self {
@@ -1701,11 +1737,13 @@ impl PyPnlKillSwitchPolicy {
         })
     }
 
-    #[pyo3(signature = (settlement_asset, barrier))]
+    #[pyo3(signature = (*, settlement_asset, lower_bound = None, upper_bound = None, initial_pnl))]
     fn set_barrier(
         &self,
         settlement_asset: &Bound<'_, PyAny>,
-        barrier: &Bound<'_, PyAny>,
+        lower_bound: Option<&Bound<'_, PyAny>>,
+        upper_bound: Option<&Bound<'_, PyAny>>,
+        initial_pnl: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         if self.bound_to_engine.get() {
             return Err(PyRuntimeError::new_err(
@@ -1713,17 +1751,17 @@ impl PyPnlKillSwitchPolicy {
             ));
         }
 
-        let settlement_asset = parse_asset_input(settlement_asset)?.to_string();
-        let barrier = parse_pnl_input(barrier)?.to_string();
+        let barrier =
+            create_pnl_bounds_barrier(settlement_asset, lower_bound, upper_bound, initial_pnl)?;
 
         let mut barriers = self.barriers.borrow_mut();
         if let Some(existing) = barriers
             .iter_mut()
-            .find(|(asset, _)| asset == settlement_asset.as_str())
+            .find(|existing| existing.settlement_asset == barrier.settlement_asset)
         {
-            existing.1 = barrier;
+            *existing = barrier.clone();
         } else {
-            barriers.push((settlement_asset, barrier));
+            barriers.push(barrier);
         }
         let policy = build_pnl_kill_switch_policy(&barriers)?;
         self.inner.replace(Rc::new(policy));
@@ -1739,8 +1777,8 @@ impl PyPnlKillSwitchPolicy {
     }
 }
 
-impl PyPnlKillSwitchPolicy {
-    fn policy_for_engine(&self) -> Rc<PnlKillSwitchPolicy> {
+impl PyPnlBoundsKillSwitchPolicy {
+    fn policy_for_engine(&self) -> Rc<PnlBoundsKillSwitchPolicy> {
         self.bound_to_engine.set(true);
         Rc::clone(&self.inner.borrow())
     }
@@ -5031,7 +5069,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyAccountAdjustment>()?;
     module.add_class::<PyPostTradeResult>()?;
     module.add_class::<PyPreTradeLock>()?;
-    module.add_class::<PyPnlKillSwitchPolicy>()?;
+    module.add_class::<PyPnlBoundsKillSwitchPolicy>()?;
     module.add_class::<PyRateLimitPolicy>()?;
     module.add_class::<PyOrderValidationPolicy>()?;
     module.add_class::<PyOrderSizeLimit>()?;
@@ -5193,17 +5231,24 @@ class AdjustmentPolicy:
 
             let pnl_policy = Py::new(
                 py,
-                PyPnlKillSwitchPolicy::new(
+                PyPnlBoundsKillSwitchPolicy::new(
                     &PyString::new_bound(py, "USD").into_any(),
-                    &Py::new(
-                        py,
-                        PyPnl {
-                            inner: Pnl::from_str("500").expect("pnl must be valid"),
-                        },
-                    )?
-                    .bind(py)
-                    .clone()
-                    .into_any(),
+                    Some(
+                        &Py::new(
+                            py,
+                            PyPnl {
+                                inner: Pnl::from_str("-500").expect("pnl must be valid"),
+                            },
+                        )?
+                        .bind(py)
+                        .clone()
+                        .into_any(),
+                    ),
+                    None,
+                    &Py::new(py, PyPnl { inner: Pnl::ZERO })?
+                        .bind(py)
+                        .clone()
+                        .into_any(),
                 )?,
             )?;
             builder.push_start_policy(&pnl_policy.bind(py).clone().into_any())?;

@@ -19,10 +19,12 @@
 
 pub mod order_size_limit;
 pub mod order_validation;
-pub mod pnl_killswitch;
+pub mod pnl_bounds_killswitch;
 pub mod rate_limit;
 
 pub use order_size_limit::{OrderSizeLimit, OrderSizeLimitPolicy};
 pub use order_validation::OrderValidationPolicy;
-pub use pnl_killswitch::PnlKillSwitchPolicy;
+pub use pnl_bounds_killswitch::{
+    PnlBoundsBarrier, PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchPolicyError,
+};
 pub use rate_limit::RateLimitPolicy;

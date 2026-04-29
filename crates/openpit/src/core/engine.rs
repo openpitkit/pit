@@ -280,18 +280,20 @@ impl<O: 'static, R: 'static, A: 'static> Engine<O, R, A> {
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use std::time::Duration;
 /// use openpit::{WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation};
-/// use openpit::pretrade::policies::{PnlKillSwitchPolicy, RateLimitPolicy};
+/// use openpit::pretrade::policies::{PnlBoundsBarrier, PnlBoundsKillSwitchPolicy, RateLimitPolicy};
 /// use openpit::Engine;
 /// use openpit::param::{Asset, Pnl};
 ///
 /// type MyOrder = WithOrderOperation<()>;
 /// type MyReport = WithFinancialImpact<WithExecutionReportOperation<()>>;
 ///
-/// let pnl_policy = PnlKillSwitchPolicy::new(
-///     (
-///         Asset::new("USD")?,
-///         Pnl::from_str("500")?,
-///     ),
+/// let pnl_policy = PnlBoundsKillSwitchPolicy::new(
+///     PnlBoundsBarrier {
+///         settlement_asset: Asset::new("USD")?,
+///         lower_bound: Some(Pnl::from_str("-500")?),
+///         upper_bound: None,
+///         initial_pnl: Pnl::ZERO,
+///     },
 ///     [],
 /// )?;
 ///

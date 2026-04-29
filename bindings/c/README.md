@@ -266,7 +266,7 @@ int main(void) {
     bool reservation_committed = false;
 
     /* 1. Configure policies. */
-    PitPretradePoliciesPnlKillSwitchParam pnl_barrier = {0};
+    PitPretradePoliciesPnlBoundsBarrier pnl_barrier = {0};
     PitPretradePoliciesOrderSizeLimitParam order_size_limit = {0};
     PitPretradeCheckPreTradeStartPolicy *validation_policy = NULL;
     PitPretradeCheckPreTradeStartPolicy *pnl_policy = NULL;
@@ -283,7 +283,11 @@ int main(void) {
     PitExecutionReport report = {0};
 
     pnl_barrier.settlement_asset = "USD";
-    if (make_pnl(1000, 0, &pnl_barrier.barrier) != 0) {
+    if (make_pnl(-1000, 0, &pnl_barrier.lower_bound.value) != 0) {
+        goto cleanup;
+    }
+    pnl_barrier.lower_bound.is_set = true;
+    if (make_pnl(0, 0, &pnl_barrier.initial_pnl) != 0) {
         goto cleanup;
     }
 
@@ -302,9 +306,11 @@ int main(void) {
     }
 
     pnl_policy =
-        pit_create_pretrade_pnl_killswitch_policy(&pnl_barrier, 1, &error);
+        pit_create_pretrade_policies_pnl_bounds_killswitch_policy(
+            &pnl_barrier, 1, &error);
     if (pnl_policy == NULL) {
-        report_out_error("pit_create_pretrade_pnl_killswitch_policy", error);
+        report_out_error(
+            "pit_create_pretrade_policies_pnl_bounds_killswitch_policy", error);
         error = NULL;
         goto cleanup;
     }

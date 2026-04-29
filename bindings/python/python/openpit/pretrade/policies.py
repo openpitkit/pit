@@ -2,7 +2,7 @@ from .._openpit import (
     OrderSizeLimit,
     OrderSizeLimitPolicy,
     OrderValidationPolicy,
-    PnlKillSwitchPolicy,
+    PnlBoundsKillSwitchPolicy,
     RateLimitPolicy,
 )
 
@@ -28,11 +28,20 @@ Use this as the first start-stage policy when the engine should reject missing
 required fields or malformed values before any strategy-specific logic runs.
 """
 
-PnlKillSwitchPolicy.__doc__ = """
-Built-in start-stage kill-switch policy driven by realized settlement P&L.
+PnlBoundsKillSwitchPolicy.__doc__ = """
+Built-in start-stage kill-switch policy driven by accumulated settlement P&L.
 
-The policy tracks realized outcome by settlement asset and blocks new requests
-once the configured loss barrier is reached or crossed.
+The policy tracks accumulated outcome per settlement asset and blocks new
+requests when P&L moves outside configured bounds.
+
+`lower_bound` is typically negative and represents the loss limit.
+`upper_bound` is typically positive and represents the profit-taking limit.
+The constructor does not validate signs, ordering, or whether `initial_pnl` is
+inside bounds.
+If `initial_pnl` is outside the band, the first `start_pre_trade` is rejected.
+If `lower_bound > upper_bound`, `start_pre_trade` keeps rejecting until
+`apply_execution_report` moves the accumulator into bounds or the engine
+instance is rebuilt.
 """
 
 RateLimitPolicy.__doc__ = """
@@ -46,6 +55,6 @@ __all__ = [
     "OrderSizeLimit",
     "OrderSizeLimitPolicy",
     "OrderValidationPolicy",
-    "PnlKillSwitchPolicy",
+    "PnlBoundsKillSwitchPolicy",
     "RateLimitPolicy",
 ]

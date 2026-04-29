@@ -30,12 +30,12 @@ def test_pretrade_entities_have_rust_like_module_paths() -> None:
 def test_builtins_policies_have_rust_like_module_paths() -> None:
     assert not hasattr(openpit, "OrderValidationPolicy")
     assert not hasattr(openpit, "RateLimitPolicy")
-    assert not hasattr(openpit, "PnlKillSwitchPolicy")
+    assert not hasattr(openpit, "PnlBoundsKillSwitchPolicy")
     assert not hasattr(openpit, "OrderSizeLimit")
     assert not hasattr(openpit, "OrderSizeLimitPolicy")
 
     assert policies.OrderValidationPolicy.__module__ == "openpit.pretrade.policies"
     assert policies.RateLimitPolicy.__module__ == "openpit.pretrade.policies"
-    assert policies.PnlKillSwitchPolicy.__module__ == "openpit.pretrade.policies"
+    assert policies.PnlBoundsKillSwitchPolicy.__module__ == "openpit.pretrade.policies"
     assert policies.OrderSizeLimit.__module__ == "openpit.pretrade.policies"
     assert policies.OrderSizeLimitPolicy.__module__ == "openpit.pretrade.policies"

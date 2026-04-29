@@ -101,8 +101,8 @@ typedef struct PitPretradeCheckPreTradeStartPolicy
 typedef struct PitPretradeContext PitPretradeContext;
 typedef struct PitPretradePoliciesOrderSizeLimitParam
     PitPretradePoliciesOrderSizeLimitParam;
-typedef struct PitPretradePoliciesPnlKillSwitchParam
-    PitPretradePoliciesPnlKillSwitchParam;
+typedef struct PitPretradePoliciesPnlBoundsBarrier
+    PitPretradePoliciesPnlBoundsBarrier;
 typedef struct PitPretradePostTradeResult PitPretradePostTradeResult;
 typedef struct PitPretradePreTradeLock PitPretradePreTradeLock;
 typedef struct PitPretradePreTradePolicy PitPretradePreTradePolicy;
@@ -181,25 +181,25 @@ typedef PitParamError ** PitOutParamError;
  * Default rounding strategy alias.
  */
 #define PIT_PARAM_ROUNDING_STRATEGY_DEFAULT \
-    ((PitParamRoundingStrategy) export_rounding_strategy_const(RoundingStrategy_DEFAULT))
+    ((PitParamRoundingStrategy) PitParamRoundingStrategy_MidpointNearestEven)
 
 /**
  * Banker's rounding alias.
  */
 #define PIT_PARAM_ROUNDING_STRATEGY_BANKER \
-    ((PitParamRoundingStrategy) export_rounding_strategy_const(RoundingStrategy_BANKER))
+    ((PitParamRoundingStrategy) PitParamRoundingStrategy_MidpointNearestEven)
 
 /**
  * Conservative profit rounding alias.
  */
 #define PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT \
-    ((PitParamRoundingStrategy) export_rounding_strategy_const(RoundingStrategy_CONSERVATIVE_PROFIT))
+    ((PitParamRoundingStrategy) PitParamRoundingStrategy_Down)
 
 /**
  * Conservative loss rounding alias.
  */
 #define PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS \
-    ((PitParamRoundingStrategy) export_rounding_strategy_const(RoundingStrategy_CONSERVATIVE_LOSS))
+    ((PitParamRoundingStrategy) PitParamRoundingStrategy_Down)
 
 /**
  * Order side.
@@ -1103,26 +1103,34 @@ struct PitReject {
 
 /**
  * One barrier definition for
- * `pit_create_pretrade_policies_pnl_killswitch_policy`.
+ * `pit_create_pretrade_policies_pnl_bounds_killswitch_policy`.
  *
  * What it describes:
- * - A settlement asset and the loss threshold attached to it.
+ * - A settlement asset and its lower/upper P&L bounds.
  *
  * Contract:
  * - `settlement_asset` must point to a valid, null-terminated string for the
  * duration of the call.
- * - `barrier` must contain a valid PnL threshold value.
+ * - `initial_pnl` must contain a valid PnL value.
  * - The array passed to the create function may contain multiple entries.
  */
-struct PitPretradePoliciesPnlKillSwitchParam {
+struct PitPretradePoliciesPnlBoundsBarrier {
     /**
-     * Settlement asset whose accumulated loss is being monitored.
+     * Settlement asset whose accumulated P&L is being monitored.
      */
     PitStringView settlement_asset;
     /**
-     * Loss barrier for that settlement asset.
+     * Optional lower bound for accumulated P&L.
      */
-    PitParamPnl barrier;
+    PitParamPnlOptional lower_bound;
+    /**
+     * Optional upper bound for accumulated P&L.
+     */
+    PitParamPnlOptional upper_bound;
+    /**
+     * Initial accumulated P&L value.
+     */
+    PitParamPnl initial_pnl;
 };
 
 /**
@@ -3753,11 +3761,11 @@ pit_create_pretrade_policies_rate_limit_policy(
 );
 
 /**
- * Creates a built-in start-stage policy that rejects new orders once a loss
- * threshold is reached.
+ * Creates a built-in start-stage policy that rejects new orders when
+ * accumulated P&L is outside configured bounds.
  *
  * Why it exists:
- * - Use it as a kill switch per settlement asset.
+ * - Use it as a P&L bounds kill switch per settlement asset.
  *
  * Arguments:
  * - `params`: pointer to an array of barrier definitions.
@@ -3786,8 +3794,8 @@ pit_create_pretrade_policies_rate_limit_policy(
  * longer needed locally.
  */
 PitPretradeCheckPreTradeStartPolicy *
-pit_create_pretrade_policies_pnl_killswitch_policy(
-    const PitPretradePoliciesPnlKillSwitchParam * params,
+pit_create_pretrade_policies_pnl_bounds_killswitch_policy(
+    const PitPretradePoliciesPnlBoundsBarrier * params,
     size_t params_len,
     PitOutError out_error
 );

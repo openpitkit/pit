@@ -71,7 +71,7 @@ produced.
 Built-in start-stage policies currently include:
 
 - `policies.NewOrderValidation()`
-- `policies.NewPnlKillSwitchPolicy(...)`
+- `policies.NewPnlBoundsKillSwitchPolicy(...)`
 - `policies.NewRateLimitPolicy(...)`
 - `policies.NewOrderSizeLimitPolicy(...)`
 
@@ -104,6 +104,7 @@ import (
  "go.openpit.dev/openpit"
  "go.openpit.dev/openpit/model"
  "go.openpit.dev/openpit/param"
+ "go.openpit.dev/openpit/pkg/optional"
  "go.openpit.dev/openpit/pretrade/policies"
 )
 
@@ -113,7 +114,7 @@ func main() {
   log.Fatal(err)
  }
 
- barrier, err := param.NewPnlFromString("1000")
+ lowerBound, err := param.NewPnlFromString("-1000")
  if err != nil {
   log.Fatal(err)
  }
@@ -127,10 +128,11 @@ func main() {
  }
 
  // 1. Configure policies.
- pnlPolicy, err := policies.NewPnlKillSwitchPolicy(
-  policies.PnlKillSwitchBarrier{
+ pnlPolicy, err := policies.NewPnlBoundsKillSwitchPolicy(
+  policies.PnlBoundsBarrier{
    SettlementAsset: usd,
-   Barrier:         barrier,
+   LowerBound:      optional.Some(lowerBound),
+   InitialPnl:      param.PnlZero,
   },
  )
  if err != nil {
@@ -260,7 +262,7 @@ Infrastructure failures and API misuse are returned as the third return value
 - `error` from `engine.StartPreTrade()`, `request.Execute()`, or
   `engine.ApplyExecutionReport()` indicates a transport-level or lifecycle
   failure, not a business reject
-- `error` from policy constructors such as `policies.NewPnlKillSwitchPolicy()`
+- `error` from policy constructors such as `policies.NewPnlBoundsKillSwitchPolicy()`
   indicates an invalid configuration
 
 Business rejects use stable codes, for example

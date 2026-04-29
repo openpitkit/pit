@@ -23,6 +23,7 @@ import (
 
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
@@ -552,9 +553,9 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 		t.Fatalf("NewAsset(USD) error = %v", err)
 	}
 
-	barrier, err := param.NewPnlFromString("1000")
+	lowerBound, err := param.NewPnlFromString("-1000")
 	if err != nil {
-		t.Fatalf("NewPnlFromString() error = %v", err)
+		t.Fatalf("NewPnlFromString(-1000) error = %v", err)
 	}
 	maxQty, err := param.NewQuantityFromString("500")
 	if err != nil {
@@ -565,12 +566,13 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 		t.Fatalf("NewVolumeFromString() error = %v", err)
 	}
 
-	pnlPolicy, err := policies.NewPnlKillSwitchPolicy(policies.PnlKillSwitchBarrier{
+	pnlPolicy, err := policies.NewPnlBoundsKillSwitchPolicy(policies.PnlBoundsBarrier{
 		SettlementAsset: usd,
-		Barrier:         barrier,
+		LowerBound:      optional.Some(lowerBound),
+		InitialPnl:      param.PnlZero,
 	})
 	if err != nil {
-		t.Fatalf("NewPnlKillSwitchPolicy() error = %v", err)
+		t.Fatalf("NewPnlBoundsKillSwitchPolicy() error = %v", err)
 	}
 	defer pnlPolicy.Close()
 

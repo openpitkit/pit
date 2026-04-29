@@ -48,28 +48,39 @@ func CreatePretradePoliciesRateLimitPolicy(
 }
 
 //------------------------------------------------------------------------------
-// PnlKillSwitchPolicy
+// PnlBoundsKillSwitchPolicy
 
-func NewPretradePoliciesPnlKillSwitchParam(
+func NewParamPnlOptional(value ParamPnl) ParamPnlOptional {
+	var out ParamPnlOptional
+	out.value = value
+	out.is_set = true
+	return out
+}
+
+func NewPretradePoliciesPnlBoundsBarrier(
 	settlementAsset string,
-	barrier ParamPnl,
-) PretradePoliciesPnlKillSwitchParam {
-	return PretradePoliciesPnlKillSwitchParam{
+	lowerBound ParamPnlOptional,
+	upperBound ParamPnlOptional,
+	initialPnl ParamPnl,
+) PretradePoliciesPnlBoundsBarrier {
+	return PretradePoliciesPnlBoundsBarrier{
 		settlement_asset: importString(settlementAsset),
-		barrier:          barrier,
+		lower_bound:      lowerBound,
+		upper_bound:      upperBound,
+		initial_pnl:      initialPnl,
 	}
 }
 
-func CreatePretradePoliciesPnlKillSwitchPolicy(
-	params []PretradePoliciesPnlKillSwitchParam,
+func CreatePretradePoliciesPnlBoundsKillSwitchPolicy(
+	params []PretradePoliciesPnlBoundsBarrier,
 ) (PretradeCheckPreTradeStartPolicy, error) {
 	if len(params) == 0 {
 		return nil, errors.New("parameter list is empty")
 	}
 
 	var outError SharedString
-	p := C.pit_create_pretrade_policies_pnl_killswitch_policy(
-		(*PretradePoliciesPnlKillSwitchParam)(unsafe.Pointer(&params[0])),
+	p := C.pit_create_pretrade_policies_pnl_bounds_killswitch_policy(
+		(*PretradePoliciesPnlBoundsBarrier)(unsafe.Pointer(&params[0])),
 		C.size_t(len(params)),
 		C.PitOutError(&outError), //nolint:gocritic
 	)
@@ -77,7 +88,7 @@ func CreatePretradePoliciesPnlKillSwitchPolicy(
 		return nil,
 			consumeSharedStringAsError(
 				outError,
-				"pit_create_pretrade_policies_pnl_killswitch_policy failed",
+				"pit_create_pretrade_policies_pnl_bounds_killswitch_policy failed",
 			)
 	}
 	return p, nil

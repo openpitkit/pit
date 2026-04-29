@@ -26,9 +26,10 @@ def test_start_pre_trade_order_without_operation_produces_missing_field_reject()
 
 @pytest.mark.unit
 def test_start_pre_trade_pnl_kill_switch_without_operation_rejects() -> None:
-    policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
+    policy = openpit.pretrade.policies.PnlBoundsKillSwitchPolicy(
         settlement_asset="USD",
-        barrier=openpit.param.Pnl("500"),
+        lower_bound=openpit.param.Pnl("-500"),
+        initial_pnl=openpit.param.Pnl("0"),
     )
     engine = (
         openpit.Engine.builder().check_pre_trade_start_policy(policy=policy).build()
@@ -47,9 +48,10 @@ def test_apply_execution_report_without_financial_impact_does_not_panic() -> Non
 
     Kill switch must not trigger.
     """
-    policy = openpit.pretrade.policies.PnlKillSwitchPolicy(
+    policy = openpit.pretrade.policies.PnlBoundsKillSwitchPolicy(
         settlement_asset="USD",
-        barrier=openpit.param.Pnl("500"),
+        lower_bound=openpit.param.Pnl("-500"),
+        initial_pnl=openpit.param.Pnl("0"),
     )
     engine = (
         openpit.Engine.builder().check_pre_trade_start_policy(policy=policy).build()
