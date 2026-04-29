@@ -53,6 +53,14 @@ typedef uint32_t PitParamErrorCode;
  */
 #define PitParamErrorCode_InvalidLeverage ((PitParamErrorCode) 8)
 /**
+ * Asset identifier is empty.
+ */
+#define PitParamErrorCode_AssetEmpty ((PitParamErrorCode) 9)
+/**
+ * Account identifier string is empty.
+ */
+#define PitParamErrorCode_AccountIdEmpty ((PitParamErrorCode) 10)
+/**
  * Catch-all code for unknown cases.
  */
 #define PitParamErrorCode_Other ((PitParamErrorCode) 4294967295)

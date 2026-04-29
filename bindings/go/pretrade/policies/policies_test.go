@@ -259,8 +259,8 @@ func TestNewOrderSizeLimitPolicyValidationAndEngineFlow(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewOrderSizeLimitPolicy(invalid) error = nil, want non-nil")
 	}
-	if !strings.Contains(err.Error(), "settlement asset is invalid") {
-		t.Fatalf("error = %q, want to contain %q", err.Error(), "settlement asset is invalid")
+	if !strings.Contains(err.Error(), "settlement asset is not set") {
+		t.Fatalf("error = %q, want to contain %q", err.Error(), "settlement asset is not set")
 	}
 
 	policy, err := NewOrderSizeLimitPolicy(OrderSizeLimit{

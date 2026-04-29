@@ -18,7 +18,6 @@
 package param
 
 import (
-	"errors"
 	"hash/fnv"
 
 	"go.openpit.dev/openpit/internal/native"
@@ -68,16 +67,13 @@ type Asset struct {
 	buf *native.String
 }
 
-var ErrAssetEmpty = errors.New("asset must not be empty")
+var ErrAssetEmpty = native.ErrAssetEmpty
 
 // NewAsset validates v and creates an Asset whose bytes live in a C-heap
 // buffer freed automatically by the GC.
 func NewAsset(v string) (Asset, error) {
 	validated, err := native.CreateParamAssetFromStr(v)
 	if err != nil {
-		if err.Error() == "param: asset must not be empty" {
-			return Asset{}, ErrAssetEmpty
-		}
 		return Asset{}, err
 	}
 	return Asset{buf: native.NewString(validated)}, nil

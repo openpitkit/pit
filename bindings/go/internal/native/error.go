@@ -36,6 +36,8 @@ var (
 	ErrInvalidFormat   = errors.New("param: invalid format")
 	ErrInvalidPrice    = errors.New("param: invalid price value")
 	ErrInvalidLeverage = errors.New("param: invalid leverage value")
+	ErrAssetEmpty      = errors.New("param: asset must not be empty")
+	ErrAccountIdEmpty  = errors.New("param: account id string must not be empty")
 )
 
 var paramErrorByCode = map[ParamErrorCode]error{
@@ -47,6 +49,8 @@ var paramErrorByCode = map[ParamErrorCode]error{
 	ParamErrorCodeInvalidFormat:   ErrInvalidFormat,
 	ParamErrorCodeInvalidPrice:    ErrInvalidPrice,
 	ParamErrorCodeInvalidLeverage: ErrInvalidLeverage,
+	ParamErrorCodeAssetEmpty:      ErrAssetEmpty,
+	ParamErrorCodeAccountIdEmpty:  ErrAccountIdEmpty,
 }
 
 func consumeSharedStringAsError(handle SharedString, fallback string, args ...any) error {

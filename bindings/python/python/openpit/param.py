@@ -137,6 +137,10 @@ class AssetError(ValueError):
     """Error type for asset validation failures."""
 
 
+class AccountIdError(ValueError):
+    """Error type for account identifier validation failures."""
+
+
 class Asset(str):
     """Validated asset identifier string."""
 
@@ -336,7 +340,7 @@ def _account_id_from_str(value: str) -> AccountId:
         return _native_account_id_from_str(value)
     except ValueError as error:
         if str(error) == "account id string must not be empty":
-            raise ValueError("account id string must not be empty") from None
+            raise AccountIdError("account id string must not be empty") from None
         raise
 
 
@@ -587,6 +591,7 @@ Netting vs hedged position mode.
 
 __all__ = [
     "AccountId",
+    "AccountIdError",
     "AdjustmentAmount",
     "Asset",
     "AssetError",

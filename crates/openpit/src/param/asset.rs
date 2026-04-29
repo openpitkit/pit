@@ -60,6 +60,14 @@ impl Display for AssetError {
 
 impl std::error::Error for AssetError {}
 
+impl From<AssetError> for crate::param::Error {
+    fn from(error: AssetError) -> Self {
+        match error {
+            AssetError::Empty => Self::AssetEmpty,
+        }
+    }
+}
+
 impl Asset {
     /// Creates a validated asset identifier.
     ///

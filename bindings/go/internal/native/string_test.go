@@ -22,10 +22,10 @@ import (
 	"unsafe"
 )
 
-func TestImportStringEmptyUsesNonNilPointerWithZeroLength(t *testing.T) {
+func TestImportStringEmptyReturnsNilPointerWithZeroLength(t *testing.T) {
 	view := importString("")
-	if unsafe.Pointer(view.ptr) == nil {
-		t.Fatal(`importString("").ptr = nil, want non-nil`)
+	if unsafe.Pointer(view.ptr) != nil {
+		t.Fatal(`importString("").ptr != nil, want nil`)
 	}
 	if view.len != 0 {
 		t.Fatalf(`importString("").len = %d, want 0`, view.len)

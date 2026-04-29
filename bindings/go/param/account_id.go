@@ -18,7 +18,6 @@
 package param
 
 import (
-	"errors"
 	"strconv"
 
 	"go.openpit.dev/openpit/internal/native"
@@ -30,7 +29,7 @@ type AccountID struct {
 	native native.ParamAccountID
 }
 
-var ErrAccountIDEmpty = errors.New("account id string must not be empty")
+var ErrAccountIDEmpty = native.ErrAccountIdEmpty
 
 // NewAccountIDFromInt constructs an account identifier from an integer value.
 func NewAccountIDFromInt(source uint64) AccountID {
@@ -52,9 +51,6 @@ func NewAccountIDFromInt(source uint64) AccountID {
 func NewAccountIDFromString(source string) (AccountID, error) {
 	value, err := native.CreateParamAccountIDFromStr(source)
 	if err != nil {
-		if err.Error() == "param: account id string must not be empty" {
-			return AccountID{}, ErrAccountIDEmpty
-		}
 		return AccountID{}, err
 	}
 	return NewAccountIDFromHandle(value), nil

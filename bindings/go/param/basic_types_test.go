@@ -18,6 +18,7 @@
 package param
 
 import (
+	"errors"
 	"testing"
 
 	"go.openpit.dev/openpit/internal/native"
@@ -72,7 +73,7 @@ func TestNewAccountIDFromStringRejectsEmpty(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty account id")
 	}
-	if err != ErrAccountIDEmpty {
+	if !errors.Is(err, ErrAccountIDEmpty) {
 		t.Fatalf("error = %v, want %v", err, ErrAccountIDEmpty)
 	}
 }
@@ -84,7 +85,7 @@ func TestNewAssetRejectsEmpty(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty asset")
 	}
-	if err != ErrAssetEmpty {
+	if !errors.Is(err, ErrAssetEmpty) {
 		t.Fatalf("error = %v, want %v", err, ErrAssetEmpty)
 	}
 }

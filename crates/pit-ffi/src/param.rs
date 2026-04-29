@@ -249,6 +249,23 @@ pub const PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT: PitParamRoundingStrat
 pub const PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS: PitParamRoundingStrategy =
     PitParamRoundingStrategy::Down;
 
+const _: () = assert!(
+    PIT_PARAM_ROUNDING_STRATEGY_DEFAULT as u8
+        == export_rounding_strategy(RoundingStrategy::DEFAULT) as u8
+);
+const _: () = assert!(
+    PIT_PARAM_ROUNDING_STRATEGY_BANKER as u8
+        == export_rounding_strategy(RoundingStrategy::BANKER) as u8
+);
+const _: () = assert!(
+    PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT as u8
+        == export_rounding_strategy(RoundingStrategy::CONSERVATIVE_PROFIT) as u8
+);
+const _: () = assert!(
+    PIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS as u8
+        == export_rounding_strategy(RoundingStrategy::CONSERVATIVE_LOSS) as u8
+);
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 /// One trade-amount value plus its interpretation mode.
@@ -360,6 +377,15 @@ fn import_rounding_strategy(value: PitParamRoundingStrategy) -> RoundingStrategy
         PitParamRoundingStrategy::MidpointAwayFromZero => RoundingStrategy::MidpointAwayFromZero,
         PitParamRoundingStrategy::Up => RoundingStrategy::Up,
         PitParamRoundingStrategy::Down => RoundingStrategy::Down,
+    }
+}
+
+const fn export_rounding_strategy(value: RoundingStrategy) -> PitParamRoundingStrategy {
+    match value {
+        RoundingStrategy::MidpointNearestEven => PitParamRoundingStrategy::MidpointNearestEven,
+        RoundingStrategy::MidpointAwayFromZero => PitParamRoundingStrategy::MidpointAwayFromZero,
+        RoundingStrategy::Up => PitParamRoundingStrategy::Up,
+        RoundingStrategy::Down => PitParamRoundingStrategy::Down,
     }
 }
 
@@ -2267,7 +2293,7 @@ pub unsafe extern "C" fn pit_create_param_account_id_from_str(
     match AccountId::from_str(s) {
         Ok(id) => write_out(out, id.as_u64(), out_error),
         Err(error) => {
-            write_param_error_unspecified(out_error, error.to_string().as_str());
+            consume_param_error_with_code(out_error, error.into());
             false
         }
     }
@@ -2291,7 +2317,7 @@ pub unsafe extern "C" fn pit_create_param_asset_from_str(
     match Asset::new(text.as_str()) {
         Ok(asset) => PitSharedString::new_handle(asset.as_ref()),
         Err(error) => {
-            write_param_error_unspecified(out_error, error.to_string().as_str());
+            consume_param_error_with_code(out_error, error.into());
             std::ptr::null_mut()
         }
     }
@@ -2488,7 +2514,7 @@ mod tests {
         assert!(!out_error.is_null());
         assert_eq!(
             unsafe { (*out_error).code },
-            crate::last_error::PitParamErrorCode::Unspecified
+            crate::last_error::PitParamErrorCode::AccountIdEmpty
         );
         let error_message = pit_shared_string_view(unsafe { (*out_error).message });
         assert_eq!(
@@ -2511,6 +2537,10 @@ mod tests {
         };
         assert!(!ok);
         assert!(!out_error.is_null());
+        assert_eq!(
+            unsafe { (*out_error).code },
+            crate::last_error::PitParamErrorCode::AccountIdEmpty
+        );
         let error_message = pit_shared_string_view(unsafe { (*out_error).message });
         assert_eq!(
             view_to_string(error_message),
@@ -2544,6 +2574,10 @@ mod tests {
             unsafe { pit_create_param_asset_from_str(PitStringView::not_set(), &mut out_error) };
         assert!(empty.is_null());
         assert!(!out_error.is_null());
+        assert_eq!(
+            unsafe { (*out_error).code },
+            crate::last_error::PitParamErrorCode::AssetEmpty
+        );
         let message = view_to_string(pit_shared_string_view(unsafe { (*out_error).message }));
         assert_eq!(message, "asset must not be empty");
         unsafe { crate::last_error::pit_destroy_param_error(out_error) };
@@ -2554,6 +2588,10 @@ mod tests {
         };
         assert!(whitespace.is_null());
         assert!(!out_error.is_null());
+        assert_eq!(
+            unsafe { (*out_error).code },
+            crate::last_error::PitParamErrorCode::AssetEmpty
+        );
         let message = view_to_string(pit_shared_string_view(unsafe { (*out_error).message }));
         assert_eq!(message, "asset must not be empty");
         unsafe { crate::last_error::pit_destroy_param_error(out_error) };

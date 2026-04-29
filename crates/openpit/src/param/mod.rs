@@ -310,6 +310,10 @@ pub enum ErrorCode {
     InvalidPrice = 7,
     /// Invalid leverage value.
     InvalidLeverage = 8,
+    /// Asset identifier is empty.
+    AssetEmpty = 9,
+    /// Account identifier string is empty.
+    AccountIdEmpty = 10,
     /// Catch-all code for unknown cases.
     Other = u32::MAX,
 }
@@ -335,6 +339,10 @@ pub enum Error {
     InvalidPrice = ErrorCode::InvalidPrice as u32,
     /// Leverage has invalid value.
     InvalidLeverage = ErrorCode::InvalidLeverage as u32,
+    /// Asset identifier is empty.
+    AssetEmpty = ErrorCode::AssetEmpty as u32,
+    /// Account identifier string is empty.
+    AccountIdEmpty = ErrorCode::AccountIdEmpty as u32,
     /// Catch-all error variant reserved for forward-compatible mapping.
     Other = ErrorCode::Other as u32,
 }
@@ -351,6 +359,8 @@ impl Error {
             Self::InvalidFormat { .. } => ErrorCode::InvalidFormat,
             Self::InvalidPrice => ErrorCode::InvalidPrice,
             Self::InvalidLeverage => ErrorCode::InvalidLeverage,
+            Self::AssetEmpty => ErrorCode::AssetEmpty,
+            Self::AccountIdEmpty => ErrorCode::AccountIdEmpty,
             Self::Other => ErrorCode::Other,
         }
     }
@@ -370,6 +380,8 @@ impl Display for Error {
             Self::InvalidFloat => formatter.write_str("invalid float value"),
             Self::InvalidPrice => formatter.write_str("invalid price value"),
             Self::InvalidLeverage => formatter.write_str("invalid leverage value"),
+            Self::AssetEmpty => formatter.write_str("asset must not be empty"),
+            Self::AccountIdEmpty => formatter.write_str("account id string must not be empty"),
             Self::InvalidFormat { param, input } => {
                 write!(formatter, "invalid format for {param}: '{input}'")
             }

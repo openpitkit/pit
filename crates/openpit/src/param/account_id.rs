@@ -79,6 +79,14 @@ impl Display for AccountIdError {
 
 impl std::error::Error for AccountIdError {}
 
+impl From<AccountIdError> for crate::param::Error {
+    fn from(error: AccountIdError) -> Self {
+        match error {
+            AccountIdError::Empty => Self::AccountIdEmpty,
+        }
+    }
+}
+
 impl AccountId {
     /// Constructs an account identifier from a 64-bit integer.
     ///

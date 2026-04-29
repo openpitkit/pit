@@ -45,6 +45,10 @@ pub enum PitParamErrorCode {
     InvalidPrice = openpit::param::ErrorCode::InvalidPrice as u32,
     /// Invalid leverage value.
     InvalidLeverage = openpit::param::ErrorCode::InvalidLeverage as u32,
+    /// Asset identifier is empty.
+    AssetEmpty = openpit::param::ErrorCode::AssetEmpty as u32,
+    /// Account identifier string is empty.
+    AccountIdEmpty = openpit::param::ErrorCode::AccountIdEmpty as u32,
     /// Catch-all code for unknown cases.
     Other = openpit::param::ErrorCode::Other as u32,
 }
@@ -103,6 +107,8 @@ pub fn consume_param_error_with_code(out_error: PitOutParamError, code: openpit:
         openpit::param::ErrorCode::InvalidFormat => PitParamErrorCode::InvalidFormat,
         openpit::param::ErrorCode::InvalidPrice => PitParamErrorCode::InvalidPrice,
         openpit::param::ErrorCode::InvalidLeverage => PitParamErrorCode::InvalidLeverage,
+        openpit::param::ErrorCode::AssetEmpty => PitParamErrorCode::AssetEmpty,
+        openpit::param::ErrorCode::AccountIdEmpty => PitParamErrorCode::AccountIdEmpty,
         openpit::param::ErrorCode::Other => PitParamErrorCode::Other,
         _ => PitParamErrorCode::Other,
     };

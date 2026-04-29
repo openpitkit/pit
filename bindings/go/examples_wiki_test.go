@@ -18,6 +18,7 @@
 package openpit
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -111,7 +112,7 @@ func TestExampleWikiDomainTypesAssetValidationError(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewAsset(empty) error = nil, want ErrAssetEmpty")
 	}
-	if err != param.ErrAssetEmpty {
+	if !errors.Is(err, param.ErrAssetEmpty) {
 		t.Fatalf("NewAsset(empty) error = %v, want %v", err, param.ErrAssetEmpty)
 	}
 }
@@ -123,7 +124,7 @@ func TestExampleWikiDomainTypesAccountIDValidationError(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewAccountIDFromString(empty) error = nil, want ErrAccountIDEmpty")
 	}
-	if err != param.ErrAccountIDEmpty {
+	if !errors.Is(err, param.ErrAccountIDEmpty) {
 		t.Fatalf("NewAccountIDFromString(empty) error = %v, want %v", err, param.ErrAccountIDEmpty)
 	}
 }

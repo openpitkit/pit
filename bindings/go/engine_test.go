@@ -217,6 +217,31 @@ func (engineTestStartPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
 	return false
 }
 
+func TestBuiltinCheckPreTradeStartPolicyRejectsUnknownBuiltin(t *testing.T) {
+	builder, err := NewEngineBuilder()
+	if err != nil {
+		t.Fatalf("NewEngineBuilder() error = %v", err)
+	}
+
+	builder.BuiltinCheckPreTradeStartPolicy(&engineTestFakeBuiltinPolicy{name: "fake-builtin"})
+
+	_, err = builder.Build()
+	if err == nil {
+		t.Fatal("Build() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "not a recognized built-in") {
+		t.Fatalf("Build() error = %q, want to contain %q", err.Error(), "not a recognized built-in")
+	}
+}
+
+type engineTestFakeBuiltinPolicy struct {
+	name string
+}
+
+func (engineTestFakeBuiltinPolicy) Close() {}
+
+func (p engineTestFakeBuiltinPolicy) Name() string { return p.name }
+
 type engineTestRejectingAdjustmentPolicy struct {
 	name string
 }

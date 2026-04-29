@@ -167,6 +167,8 @@ const (
 	ParamErrorCodeInvalidFormat   = C.PitParamErrorCode_InvalidFormat
 	ParamErrorCodeInvalidPrice    = C.PitParamErrorCode_InvalidPrice
 	ParamErrorCodeInvalidLeverage = C.PitParamErrorCode_InvalidLeverage
+	ParamErrorCodeAssetEmpty      = C.PitParamErrorCode_AssetEmpty
+	ParamErrorCodeAccountIdEmpty  = C.PitParamErrorCode_AccountIdEmpty
 	ParamErrorCodeOther           = C.PitParamErrorCode_Other
 )
 

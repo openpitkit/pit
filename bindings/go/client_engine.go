@@ -18,6 +18,7 @@
 package openpit
 
 import (
+	"runtime"
 	"runtime/cgo"
 	"sync"
 
@@ -82,6 +83,7 @@ func (e *ClientEngine[Order, Report, Adjustment]) StartPreTrade(
 ) (*ClientRequest, []reject.Reject, error) {
 	engineOrder, payload := newClientOrderPayload(order)
 	request, rejects, err := e.engine.StartPreTrade(engineOrder)
+	runtime.KeepAlive(order)
 	if err != nil || rejects != nil {
 		payload.release()
 		return nil, rejects, err
@@ -98,7 +100,9 @@ func (e *ClientEngine[Order, Report, Adjustment]) ExecutePreTrade(
 ) (*pretrade.Reservation, []reject.Reject, error) {
 	engineOrder, payload := newClientOrderPayload(order)
 	defer payload.release()
-	return e.engine.ExecutePreTrade(engineOrder)
+	reservation, rejects, err := e.engine.ExecutePreTrade(engineOrder)
+	runtime.KeepAlive(order)
+	return reservation, rejects, err
 }
 
 // ApplyExecutionReport applies a client execution report payload.
@@ -110,7 +114,9 @@ func (e *ClientEngine[Order, Report, Adjustment]) ApplyExecutionReport(
 ) (PostTradeResult, error) {
 	engineReport, payload := newClientReportPayload(report)
 	defer payload.release()
-	return e.engine.ApplyExecutionReport(engineReport)
+	result, err := e.engine.ApplyExecutionReport(engineReport)
+	runtime.KeepAlive(report)
+	return result, err
 }
 
 // ApplyAccountAdjustment applies client account-adjustment payloads.
@@ -123,7 +129,9 @@ func (e *ClientEngine[Order, Report, Adjustment]) ApplyAccountAdjustment(
 ) (optional.Option[reject.AccountAdjustmentBatchError], error) {
 	engineAdjustments, payloads := newClientAdjustmentPayloads(adjustments)
 	defer payloads.release()
-	return e.engine.ApplyAccountAdjustment(accountID, engineAdjustments)
+	rejects, err := e.engine.ApplyAccountAdjustment(accountID, engineAdjustments)
+	runtime.KeepAlive(adjustments)
+	return rejects, err
 }
 
 type ClientEngineBuilder[

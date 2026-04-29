@@ -37,7 +37,6 @@ import (
 var (
 	stringViewNone = StringView{}
 	stringEmpty    = ""
-	stringEmptySet = [1]byte{0}
 )
 
 // StringView is a string-backed view without ownership.
@@ -56,10 +55,7 @@ func newStringView(v C.PitStringView) StringView {
 
 func importString(source string) C.PitStringView {
 	if len(source) == 0 {
-		return C.PitStringView{
-			ptr: (*C.uint8_t)(unsafe.Pointer(&stringEmptySet[0])),
-			len: 0,
-		}
+		return C.PitStringView{}
 	}
 	return C.PitStringView{
 		ptr: (*C.uint8_t)(unsafe.Pointer(unsafe.StringData(source))),

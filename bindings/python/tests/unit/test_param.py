@@ -8,6 +8,7 @@ import pytest
 def test_param_types_are_exported_from_openpit_and_param_module() -> None:
     names = [
         "AccountId",
+        "AccountIdError",
         "Asset",
         "Side",
         "PositionSide",
@@ -61,9 +62,13 @@ def test_account_id_constructors() -> None:
     assert openpit.param.AccountId.from_str("my-account").value == from_string.value
     assert from_int.value != from_string.value
 
-    with pytest.raises(ValueError, match="account id string must not be empty"):
+    with pytest.raises(
+        openpit.param.AccountIdError, match="account id string must not be empty"
+    ):
         openpit.param.AccountId.from_str("")
-    with pytest.raises(ValueError, match="account id string must not be empty"):
+    with pytest.raises(
+        openpit.param.AccountIdError, match="account id string must not be empty"
+    ):
         openpit.param.AccountId.from_str("   ")
 
     # from_u64 and from_str of the same numeric string are NOT equal.

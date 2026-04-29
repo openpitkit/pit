@@ -30,7 +30,9 @@
 package openpit
 
 import (
+	"errors"
 	"fmt"
+	"runtime"
 
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/internal/custompolicy"
@@ -80,6 +82,7 @@ func (e *Engine) Stop() {
 //   - on transport error, returns a Go error; no Request is produced.
 func (e *Engine) StartPreTrade(order model.Order) (*pretrade.Request, []reject.Reject, error) {
 	request, startReject, err := native.EngineStartPreTrade(e.handle, order.Handle())
+	runtime.KeepAlive(order)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -108,6 +111,7 @@ func (e *Engine) StartPreTrade(order model.Order) (*pretrade.Request, []reject.R
 //   - on transport error, returns a Go error; no Reservation is produced.
 func (e *Engine) ExecutePreTrade(order model.Order) (*pretrade.Reservation, []reject.Reject, error) {
 	reservation, execRejects, err := native.EngineExecutePreTrade(e.handle, order.Handle())
+	runtime.KeepAlive(order)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -130,6 +134,7 @@ type PostTradeResult struct {
 
 func (e *Engine) ApplyExecutionReport(report model.ExecutionReport) (PostTradeResult, error) {
 	result, err := native.EngineApplyExecutionReport(e.handle, report.Handle())
+	runtime.KeepAlive(report)
 	if err != nil {
 		return PostTradeResult{}, err
 	}
@@ -153,6 +158,7 @@ func (e *Engine) ApplyAccountAdjustment(
 		accountID.Handle(),
 		nativeAdjustments,
 	)
+	runtime.KeepAlive(adjustments)
 	if err != nil {
 		return optional.None[reject.AccountAdjustmentBatchError](), err
 	}
@@ -258,24 +264,12 @@ func (b *EngineBuilder) PreTradePolicy(policy ...pretrade.Policy) *EngineBuilder
 	return b
 }
 
-func (b *EngineBuilder) BuiltinPreTradePolicy(policy ...pretrade.BuiltinPolicy) *EngineBuilder {
-	_ = policy
-	return b
-}
-
 func (b *EngineBuilder) AccountAdjustmentPolicy(policy ...accountadjustment.Policy) *EngineBuilder {
 	for _, p := range policy {
 		// Every policy must go through addPolicy even after a previous failure
 		// so that the builder takes responsibility for releasing it.
 		b.addAccountAdjustmentPolicy(p)
 	}
-	return b
-}
-
-func (b *EngineBuilder) BuiltinAccountAdjustmentPolicy(
-	policy ...pretrade.BuiltinPolicy,
-) *EngineBuilder {
-	_ = policy
 	return b
 }
 
@@ -343,6 +337,14 @@ func addPolicy[
 		// wrapper; after this point a later Close on the wrapper is a no-op.
 		handle = builtinPolicy.TakeHandle()
 	} else {
+		if startCustomPolicy == nil {
+			builder.err = newEngineBuilderPolicyAddError(
+				errors.New("policy is not a recognized built-in"),
+				policy.Name(),
+			)
+			builder.scheduleClose(policy)
+			return
+		}
 		var err error
 		if handle, err = startCustomPolicy(policy); err != nil {
 			builder.err = newEngineBuilderPolicyAddError(err, policy.Name())
