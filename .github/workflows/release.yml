@@ -775,6 +775,7 @@ jobs:
   publish-go-sources:
     name: Publish pit-go sources
     needs:
+      - publish-rust
       - publish-sdist
       - build-runtime-artifacts
       - verify-tag
@@ -870,9 +871,46 @@ jobs:
               # Push the split commit directly to the pit-go tag ref. The
               # monorepo checkout already has v${VERSION}, so creating a local
               # tag here would conflict before the remote repository is checked.
-              # Tag push is NOT forced: re-releasing the same pit-go version
-              # must fail loudly, consistent with crates.io and PyPI semantics.
-              git -c http.extraheader= push "${PIT_GO_URL}" "HEAD:refs/tags/v${VERSION}"
+              # Tag push is NOT forced: a conflicting pit-go tag must fail
+              # loudly, consistent with crates.io and PyPI semantics. If the
+              # tag already points at this exact release commit, continue so a
+              # rerun can repair missing GitHub release metadata.
+              LOCAL_SHA="$(git rev-parse HEAD)"
+              REMOTE_TAG_SHA="$(git -c http.extraheader= ls-remote --tags "${PIT_GO_URL}" "refs/tags/v${VERSION}" | awk '{print $1}')"
+              if [[ -z "${REMOTE_TAG_SHA}" ]]; then
+                git -c http.extraheader= push "${PIT_GO_URL}" "HEAD:refs/tags/v${VERSION}"
+              elif [[ "${REMOTE_TAG_SHA}" != "${LOCAL_SHA}" ]]; then
+                echo "::error::pit-go tag v${VERSION} already exists at ${REMOTE_TAG_SHA}, expected ${LOCAL_SHA}"
+                exit 1
+              else
+                echo "pit-go tag v${VERSION} already exists at ${LOCAL_SHA}; continuing"
+              fi
+
+              BODY_FILE="$(mktemp)"
+              printf '%s\n' \
+                "Go SDK source mirror for Pit v${VERSION}." \
+                "" \
+                "Install:" \
+                "" \
+                '```sh' \
+                "go get go.openpit.dev/openpit@v${VERSION}" \
+                '```' \
+                "" \
+                "This release contains the split Go bindings plus the runtime" \
+                "binaries embedded under internal/runtime." \
+                > "${BODY_FILE}"
+
+              # No --generate-notes: pit-go main is force-pushed every release,
+              # so the auto-generated commit summary would be empty or noise.
+              if GH_TOKEN="${PIT_GO_PUSH_TOKEN}" gh release view "v${VERSION}" --repo openpitkit/pit-go >/dev/null 2>&1; then
+                echo "pit-go release v${VERSION} already exists; leaving it unchanged"
+              else
+                GH_TOKEN="${PIT_GO_PUSH_TOKEN}" gh release create "v${VERSION}" \
+                  --repo openpitkit/pit-go \
+                  --title "v${VERSION}" \
+                  --notes-file "${BODY_FILE}" \
+                  --latest
+              fi
             fi
           )
 
@@ -882,6 +920,7 @@ jobs:
   publish-github-release:
     name: Publish GitHub release metadata
     needs:
+      - publish-rust
       - publish-sdist
       - build-runtime-artifacts
       - verify-tag
@@ -930,8 +969,7 @@ jobs:
     needs:
       - publish-github-release
       - verify-tag
-    if: ${{ needs.publish-github-release.result == 'success' }}
-    continue-on-error: true
+    if: ${{ always() && needs.publish-github-release.result == 'success' }}
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -965,7 +1003,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{
+            github.run_id }}
           VERSION: ${{ needs.verify-tag.outputs.version }}
         run: |
           set -euo pipefail
