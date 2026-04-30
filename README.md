@@ -2,7 +2,11 @@
 
 [![Pit](docs/assets/pit-readme-banner.png)](https://openpit.dev/)
 <!-- markdownlint-disable MD013 -->
-[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![Rust](https://img.shields.io/badge/rust-1.75+-orange)](https://crates.io/crates/openpit) [![Python versions](https://img.shields.io/pypi/pyversions/openpit)](https://pypi.org/project/openpit/) [![crates.io](https://img.shields.io/crates/v/openpit)](https://crates.io/crates/openpit) [![PyPI](https://img.shields.io/pypi/v/openpit)](https://pypi.org/project/openpit/) [![C API](https://img.shields.io/badge/C%20API-header%20%2B%20docs-4b5563)](docs/c-api/index.md) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![Go version](https://img.shields.io/badge/go-1.22%2B-00ADD8)](https://go.dev/) [![Module](https://img.shields.io/badge/module-go.openpit.dev%2Fopenpit-00ADD8)](https://go.openpit.dev/openpit)
+[![Python versions](https://img.shields.io/pypi/pyversions/openpit)](https://pypi.org/project/openpit/) [![PyPI](https://img.shields.io/pypi/v/openpit)](https://pypi.org/project/openpit/)
+[![Rust](https://img.shields.io/badge/rust-1.75+-orange)](https://crates.io/crates/openpit) [![crates.io](https://img.shields.io/crates/v/openpit)](https://crates.io/crates/openpit)
+[![C API](https://img.shields.io/badge/C%20API-header%20%2B%20docs-4b5563)](docs/c-api/index.md)
 <!-- markdownlint-enable MD013 -->
 
 Pit is a workspace for embeddable pre-trade risk components.
