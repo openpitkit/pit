@@ -8,14 +8,16 @@ import (
 )
 
 func TestBuildEngineFromPublicModule(t *testing.T) {
-	_, err := openpit.NewEngine(func(builder *openpit.EngineBuilder) {
-		builder.CheckPreTradeStartPolicy(&policies.OrderValidationPolicy{})
-	})
-	if err == nil {
+	builder, err := openpit.NewEngineBuilder()
+	if err != nil {
+		t.Logf("engine builder returned error (acceptable in offline mode): %v", err)
 		return
 	}
-	// Runtime download may be unavailable in CI/offline mode.
-	// The e2e check is primarily validating module resolution and API shape.
-	t.Logf("engine build returned error (acceptable in offline mode): %v", err)
-}
+	builder.BuiltinCheckPreTradeStartPolicy(policies.NewOrderValidation())
 
+	engine, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+}

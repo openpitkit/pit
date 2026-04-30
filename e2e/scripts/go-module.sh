@@ -23,14 +23,36 @@ set -euo pipefail
 rm -rf /tmp/openpit-go-consumer
 mkdir -p /tmp/openpit-go-consumer
 cp -R /opt/e2e/go-consumer/. /tmp/openpit-go-consumer
-mkdir -p /tmp/openpit-go-consumer/tests
-cp -R /opt/e2e/go-integration-tests /tmp/openpit-go-consumer/tests/integration
 
 cd /tmp/openpit-go-consumer
 sed "s/__OPENPIT_VERSION__/${OPENPIT_VERSION}/g" go.mod.in > go.mod
 rm go.mod.in
-find ./tests/integration -type f -name "*.go" -exec \
-  sed -i "s|github.com/openpitkit/pit/bindings/go|go.openpit.dev/openpit|g" {} +
+
+go mod download go.openpit.dev/openpit
+module_dir="$(go list -m -f '{{.Dir}}' go.openpit.dev/openpit)"
+goos="$(go env GOOS)"
+goarch="$(go env GOARCH)"
+case "${goos}" in
+  linux)
+    runtime_lib="libpit_ffi.so"
+    ;;
+  darwin)
+    runtime_lib="libpit_ffi.dylib"
+    ;;
+  *)
+    echo "unsupported Go release e2e platform: ${goos}/${goarch}" >&2
+    exit 1
+    ;;
+esac
+runtime_dir="${module_dir}/internal/runtime/${goos}-${goarch}"
+runtime_path="${runtime_dir}/${runtime_lib}"
+if [[ ! -f "${runtime_path}" ]]; then
+  echo "published Go module runtime library not found: ${runtime_path}" >&2
+  exit 1
+fi
+
+export CGO_LDFLAGS="-L${runtime_dir} -lpit_ffi -Wl,-rpath,${runtime_dir}"
+export OPENPIT_RUNTIME_LIBRARY_PATH="${runtime_path}"
 
 go mod tidy
 go test ./...

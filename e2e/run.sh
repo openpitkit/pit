@@ -46,13 +46,13 @@ run_case() {
     "${build_args[@]}" \
     --tag "${image}" \
     --file "${dockerfile}" \
-    "${ROOT_DIR}"
+    "${ROOT_DIR}" || return
 
   echo "==> Running ${name} checks"
   docker run --rm \
     "${run_args[@]}" \
     --env OPENPIT_VERSION="${VERSION}" \
-    "${image}"
+    "${image}" || return
 }
 
 failures=0

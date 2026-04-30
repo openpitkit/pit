@@ -21,7 +21,6 @@ WORKDIR /opt/e2e
 
 COPY e2e/scripts/go-module.sh /usr/local/bin/run-release-e2e
 COPY e2e/clients/go /opt/e2e/go-consumer
-COPY bindings/go/tests/integration /opt/e2e/go-integration-tests
 
 RUN chmod +x /usr/local/bin/run-release-e2e
 

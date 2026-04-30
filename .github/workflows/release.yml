@@ -931,9 +931,11 @@ jobs:
       - publish-github-release
       - verify-tag
     if: ${{ needs.publish-github-release.result == 'success' }}
+    continue-on-error: true
     runs-on: ubuntu-22.04
     permissions:
       contents: read
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -943,12 +945,11 @@ jobs:
 
       - name: Run release e2e
         id: release-e2e
-        continue-on-error: true
         shell: bash
         run: ./e2e/run.sh "${{ needs.verify-tag.outputs.version }}"
 
       - name: Summarize release e2e success
-        if: ${{ steps.release-e2e.outcome == 'success' }}
+        if: ${{ success() }}
         shell: bash
         env:
           VERSION: ${{ needs.verify-tag.outputs.version }}
@@ -959,8 +960,43 @@ jobs:
           Release e2e passed for \`openpit ${VERSION}\`.
           EOF
 
+      - name: Open release e2e advisory issue
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          title="Release e2e failed for openpit ${VERSION}"
+          existing="$(
+            gh issue list \
+              --state open \
+              --search "${title} in:title" \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+
+          if [[ -n "${existing}" ]]; then
+            gh issue comment "${existing}" --body "Release e2e failed again for \`openpit ${VERSION}\`: ${RUN_URL}"
+            exit 0
+          fi
+
+          body_file="$(mktemp)"
+          printf '%s\n\n%s\n\n%s\n' \
+            "Release e2e failed for \`openpit ${VERSION}\`." \
+            "The release has already been published. This issue is advisory and exists so the failure is visible and notifies repository subscribers." \
+            "Workflow run: ${RUN_URL}" \
+            > "${body_file}"
+
+          gh issue create \
+            --title "${title}" \
+            --body-file "${body_file}"
+
       - name: Summarize release e2e advisory failure
-        if: ${{ steps.release-e2e.outcome == 'failure' }}
+        if: ${{ failure() }}
         shell: bash
         env:
           VERSION: ${{ needs.verify-tag.outputs.version }}

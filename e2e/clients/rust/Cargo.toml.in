@@ -4,5 +4,12 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+default = ["derive"]
+derive = ["openpit/derive"]
+
 [dependencies]
-openpit = { version = "=__OPENPIT_VERSION__", features = ["derive"] }
+openpit = { version = "=__OPENPIT_VERSION__" }
+
+[dev-dependencies]
+rust_decimal = "1.41"
