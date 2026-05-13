@@ -114,8 +114,8 @@ class RateLimitReadyBuilder:
 
     Obtain an instance via :func:`build_rate_limit` and one of its axis
     methods.  All axis methods return ``self`` so they can be chained.
-    Pass to :meth:`~openpit.SyncedEngineBuilder.builtin` or
-    :meth:`~openpit.ReadyEngineBuilder.builtin` to register on an engine.
+    Pass to ``SyncedEngineBuilder.builtin()`` or
+    ``ReadyEngineBuilder.builtin()`` to register on an engine.
     """
 
     def __init__(self) -> None:
@@ -279,8 +279,7 @@ class OrderSizeLimitReadyBuilder:
     Obtain via :func:`build_order_size_limit` followed by
     :meth:`~OrderSizeLimitBuilder.broker_barrier`.  All axis methods
     return ``self`` for chaining.  Pass to
-    :meth:`~openpit.SyncedEngineBuilder.builtin` or
-    :meth:`~openpit.ReadyEngineBuilder.builtin`.
+    ``SyncedEngineBuilder.builtin()`` or ``ReadyEngineBuilder.builtin()``.
     """
 
     def __init__(self) -> None:
@@ -406,8 +405,7 @@ class PnlBoundsKillswitchReadyBuilder:
 
     Obtain via :func:`build_pnl_bounds_killswitch` and one axis method.
     All axis methods return ``self`` for chaining.  Pass to
-    :meth:`~openpit.SyncedEngineBuilder.builtin` or
-    :meth:`~openpit.ReadyEngineBuilder.builtin`.
+    ``SyncedEngineBuilder.builtin()`` or ``ReadyEngineBuilder.builtin()``.
     """
 
     def __init__(self) -> None:
@@ -473,8 +471,8 @@ def build_pnl_bounds_killswitch() -> PnlBoundsKillswitchBuilder:
 class OrderValidationBuilder:
     """Order-validation policy builder.
 
-    Pass to :meth:`~openpit.SyncedEngineBuilder.builtin` or
-    :meth:`~openpit.ReadyEngineBuilder.builtin` to register on an engine.
+    Pass to ``SyncedEngineBuilder.builtin()`` or
+    ``ReadyEngineBuilder.builtin()`` to register on an engine.
     """
 
     def _build(self, builder: typing.Any) -> None:

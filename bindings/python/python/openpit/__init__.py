@@ -118,7 +118,7 @@ policy to obtain a :class:`ReadyEngineBuilder`.
 
 ReadyEngineBuilder.__doc__ = """
 Third stage of the engine builder (at least one policy registered). Accepts additional
-policies and builds the engine via :meth:`build`.
+policies and builds the engine via ``build()``.
 
 Policy names must be unique across start-stage and main-stage pre-trade policies.
 """

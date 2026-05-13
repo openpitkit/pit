@@ -89,6 +89,7 @@ autodoc_mock_imports = [
 nitpick_ignore = [
     ("py:class", "abc.ABC"),
     ("py:class", "collections.abc.Iterable"),
+    ("py:class", "datetime.timedelta"),
     ("py:class", "enum.StrEnum"),
     ("py:class", "Mutation"),
     ("py:class", "openpit.Order"),

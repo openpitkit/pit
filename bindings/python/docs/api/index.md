@@ -25,6 +25,12 @@ Use these import paths in application code:
 .. autoclass:: openpit.EngineBuilder
    :members:
 
+.. autoclass:: openpit.SyncedEngineBuilder
+   :members:
+
+.. autoclass:: openpit.ReadyEngineBuilder
+   :members:
+
 .. autoclass:: openpit.RejectError
    :members:
 ```
