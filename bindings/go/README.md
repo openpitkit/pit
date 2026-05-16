@@ -40,7 +40,7 @@ and architecture notes.
 
 ## Examples
 
-Runnable end-to-end examples live in the monorepo under: [`examples/go/`](https://github.com/openpitkit/pit/tree/main/examples/go).
+Runnable end-to-end examples: [`examples/go/`](https://github.com/openpitkit/pit/tree/main/examples/go).
 
 ## Install
 

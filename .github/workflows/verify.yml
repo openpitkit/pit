@@ -106,6 +106,9 @@ jobs:
       - name: Run Python tests
         run: python -m pytest bindings/python/tests
 
+      - name: Run Python workspace examples
+        run: python -m pytest examples/python/rate_pnl_killswitch
+
   c:
     name: C checks
     runs-on: ubuntu-22.04

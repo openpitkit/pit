@@ -40,3 +40,12 @@ python -c "import importlib.metadata as m; version = m.version('openpit'); print
 
 cd /opt/e2e/tests
 pytest integration/
+
+# Run each workspace example against the installed published sdist. This
+# exercises exactly what an SDK consumer sees when they copy the example
+# from the repository.
+for example_dir in /opt/e2e/examples/*/; do
+  name="$(basename "${example_dir}")"
+  echo "==> Testing example ${name} against installed openpit ${OPENPIT_VERSION}"
+  pytest "${example_dir}"
+done

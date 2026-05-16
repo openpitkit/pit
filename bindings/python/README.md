@@ -36,6 +36,10 @@ evolution during the pre‑stable phase.
 
 Visit the [PyPI package](https://pypi.org/project/openpit/).
 
+## Examples
+
+Runnable end-to-end examples: [`examples/python/`](https://github.com/openpitkit/pit/tree/main/examples/python).
+
 ## Install
 
 For normal end-user installation, use the published

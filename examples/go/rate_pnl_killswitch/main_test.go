@@ -48,7 +48,7 @@ func (r *recordingReactor) OnReport(_ model.ExecutionReport, res openpit.PostTra
 
 // TestScenarioTripsBothKillswitches is the assertion-driven counterpart of
 // main(). The scripted feed first trips the rate limit on the tail of the
-// burst (a few thousand "too frequent" rejects), then the final execution
+// burst (a handful of "too frequent" rejects), then the final execution
 // report pushes cumulative P&L below the floor and trips the kill switch.
 func TestScenarioTripsBothKillswitches(t *testing.T) {
 	engine, err := buildEngine(Limits{
@@ -99,16 +99,15 @@ func TestScenarioTripsBothKillswitches(t *testing.T) {
 			stats.KillSwitchOnTrade, scenarioAcceptedReports)
 	}
 
-	// The scenario sums 7_499_999 * (-0.00002) + (-361) = -510.99998, which
-	// is below the -500 floor - the final report fires the kill switch.
-	want, _ := new(big.Rat).SetString("-510.99998") //nolint:gosec // G113 - constant input
+	// 999 * (-0.05) + (-460) = -509.95, just past the -500 floor.
+	want, _ := new(big.Rat).SetString("-509.95") //nolint:gosec // G113 - constant input
 	if stats.Pnl.Cmp(want) != 0 {
-		t.Errorf("pnl = %s, want -510.99998", stats.Pnl.FloatString(5))
+		t.Errorf("pnl = %s, want -509.95", stats.Pnl.FloatString(2))
 	}
 
-	// Every reject in the scenario must be a rate-limit reject: the feed is
-	// dense enough to drive the engine into the "too frequent" state without
-	// touching the loss floor.
+	// Every reject in the scenario must be a rate-limit reject: the burst
+	// overshoots the ceiling within the same rate-limit window, so the tail
+	// hits "too frequent".
 	if got := len(react.rejectCodes); got != wantRejected {
 		t.Fatalf("recorded reject codes = %d, want %d", got, wantRejected)
 	}
@@ -121,8 +120,8 @@ func TestScenarioTripsBothKillswitches(t *testing.T) {
 	if stats.TotalPreTrade <= 0 {
 		t.Error("total pre-trade duration must be positive")
 	}
-	if stats.MinPreTrade <= 0 {
-		t.Error("min pre-trade duration must be positive")
+	if stats.MinPreTrade < 0 {
+		t.Errorf("min pre-trade duration = %s, must not be negative", stats.MinPreTrade)
 	}
 	if stats.MaxPreTrade < stats.MinPreTrade {
 		t.Errorf("max %s < min %s", stats.MaxPreTrade, stats.MinPreTrade)

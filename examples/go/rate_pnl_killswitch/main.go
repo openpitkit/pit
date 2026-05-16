@@ -25,7 +25,8 @@
 //   - building an engine with two killswitch policies side-by-side
 //   - feeding the engine via a single Event stream (orders + fills)
 //   - separating venue/strategy side-effects behind a Reactor interface
-//   - aggregating pre-trade latency and P&L statistics over the run
+//   - aggregating accepted/rejected counts, pre-trade latency, and
+//     cumulative P&L over the run
 //
 // Audience: an algo trader who wants an independent supervisor that prevents
 // the strategy from "going crazy".
@@ -33,7 +34,7 @@
 // What you typically change to adapt this example to your own application:
 //
 //  1. Engine policies and limits - see buildEngine() below.
-//  2. The order/report stream - the sliceStream in main() is a one-shot
+//  2. The order/report stream - the scenarioStream in main() is a one-shot
 //     replay; real systems plug in a goroutine driven by venue and strategy
 //     events.
 //  3. The Reactor implementation - replace loggingReactor with code that
@@ -75,7 +76,7 @@ type Event struct {
 //
 //   - production: wrap a select over the strategy's order channel and the
 //     venue's execution-report channel into a single Next() call;
-//   - test: back it by a slice, as sliceStream below does.
+//   - test: back it by a scripted state machine, as scenarioStream below does.
 type EventStream interface {
 	// Next yields the next event. Returning ok=false ends the loop.
 	Next() (Event, bool)
@@ -271,27 +272,26 @@ func runReport(engine *openpit.Engine, ev Event, stats *Stats, react Reactor) er
 
 // =============================================================================
 // Section 4 - The scenario.
-// A dense, table-driven feed that exercises the kill-switch policies. In your
-// own application this is the place you delete entirely - your real strategy
+// A scripted feed that exercises the kill-switch policies. In your own
+// application this is the place you delete entirely - your real strategy
 // produces events.
 // =============================================================================
 
 const (
-	// scenarioAttempts is sized so the rate limit fires on the tail of the
-	// burst (the last scenarioAttempts - scenarioMaxOrdersBurst attempts are
-	// rejected) and so the total pre-trade time spans a few seconds on a
-	// typical host, which produces meaningful min/avg/max latency statistics.
-	scenarioAttempts        = 7_510_000
-	scenarioMaxOrdersBurst  = 7_500_000
-	scenarioAcceptedReports = 7_500_000
+	// The burst overshoots the rate-limit ceiling by a few orders so the
+	// policy rejects the tail of the burst. The accepted orders then
+	// produce a stream of small-loss reports, and the final report
+	// contributes a large loss that pushes cumulative P&L past the lower
+	// bound and trips the kill switch on the last trade.
+	scenarioAttempts        = 1_005
+	scenarioMaxOrdersBurst  = 1_000
+	scenarioAcceptedReports = 1_000
 	scenarioAccount         = uint64(99_224_416)
-	// All reports except the last apply a tiny loss; the cumulative P&L stays
-	// well inside the -500 floor: 7_499_999 * (-0.00002) = -149.99998. The
-	// last report contributes a much larger loss that pushes the cumulative
-	// value past the floor and trips the kill switch on the final trade.
-	//   -149.99998 + (-361) = -510.99998 < -500
-	scenarioReportPnl      = "-0.00002"
-	scenarioFinalReportPnl = "-361"
+	// 999 * (-0.05) + (-460) = -509.95 < -500 - the kill switch fires on
+	// the final report; every earlier report keeps cumulative P&L well
+	// inside the corridor (-49.95 at worst).
+	scenarioReportPnl      = "-0.05"
+	scenarioFinalReportPnl = "-460"
 	scenarioLowerBound     = "-500"
 	scenarioUpperBound     = "500"
 	scenarioRateWindow     = 10 * time.Second
@@ -339,12 +339,10 @@ func buildReport(pnl string) model.ExecutionReport {
 	return report
 }
 
-// scenarioStream is the dense, table-driven feed expressed as a small state
-// machine instead of a literal slice: 15 million pre-built Event structs
-// would otherwise allocate hundreds of megabytes. The "table" lives in three
-// counters - attempts, then small-loss reports, then one kill-switch
-// report - which the stream walks in order. Replace this implementation with
-// a channel-driven stream that selects over your strategy and venue feeds.
+// scenarioStream is the scripted feed expressed as a small state machine:
+// three counters walked in order - order attempts, then small-loss reports,
+// then one kill-switch report. Replace this implementation with a
+// channel-driven stream that selects over your strategy and venue feeds.
 type scenarioStream struct {
 	order       *model.Order
 	smallReport *model.ExecutionReport
@@ -400,8 +398,8 @@ func (*loggingReactor) OnAccepted(_ model.Order) {
 }
 
 func (r *loggingReactor) OnRejected(_ model.Order, rj []reject.Reject) {
-	// Cap noisy outputs so the example stays readable when thousands of
-	// orders are rate-limited in a row.
+	// Cap noisy outputs in case a real run produces a long burst of
+	// rate-limit rejects.
 	if r.rejectsPrinted >= r.rejectCap {
 		return
 	}

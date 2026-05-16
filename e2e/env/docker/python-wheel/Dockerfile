@@ -22,6 +22,7 @@ WORKDIR /opt/e2e
 COPY bindings/python/pyproject.toml /opt/e2e/pyproject.toml
 COPY bindings/python/tests/conftest.py /opt/e2e/tests/conftest.py
 COPY bindings/python/tests/integration /opt/e2e/tests/integration
+COPY examples/python /opt/e2e/examples
 COPY e2e/scripts/python-wheel.sh /usr/local/bin/run-release-e2e
 
 RUN python -m pip install --upgrade pip pytest \

@@ -26,7 +26,10 @@ build-go:
     cd bindings/go && go build
 
 # Format, generate, and lint and test the result.
-check: fmt-all gen-api-c lint-all test-all
+check: fmt-all gen-api-c lint-all test-all run-examples
+
+# Run all examples.
+run-examples: run-examples-go run-examples-python
 
 # Lint all.
 lint-all: lint-rust lint-python lint-go
@@ -73,15 +76,19 @@ test-release-e2e version:
 _pytest args:
     # shellcheck disable=SC1083
     python -m pytest -q {{ args }}
-# Full Python test suite.
+# Full Python test suite
 test-python: python-develop
     just _pytest bindings/python/tests
+    just _pytest examples/python/rate_pnl_killswitch
 # Python unit tests only.
 test-python-unit: python-develop
     just _pytest bindings/python/tests/unit
 # Python integration test only.
 test-python-integration: python-develop
     just _pytest bindings/python/tests/integration
+# Run a workspace Python example from examples/python against local sources.
+run-examples-python: python-develop
+    python examples/python/rate_pnl_killswitch/main.py
 
 # Full Go test suite (bindings + workspace examples).
 test-go:
@@ -96,7 +103,7 @@ test-go-cov:
     just _go "go test -coverprofile=coverage.out -coverpkg=./... ./..."
     cd bindings/go && go tool cover -func=coverage.out | grep -v '100.0%'
 # Run a workspace Go examples from examples/go against local sources.
-run-go-examples:
+run-examples-go:
     just _go-in examples/go/rate_pnl_killswitch "go run ."
 
 # Compile C examples embedded in public README files.

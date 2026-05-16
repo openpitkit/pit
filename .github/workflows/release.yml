@@ -750,7 +750,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist -Force | Out-Null
           $src = "target/${{ matrix.target }}/release/${{ matrix.lib_name }}"
-          $dst = "dist/openpit-ffi-:VERSION-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.lib_name }}"
+          $dst = "dist/openpit-ffi--${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.lib_name }}"
           Copy-Item $src $dst -Force
           Copy-Item bindings/c/pit.h dist/pit.h -Force
           Copy-Item LICENSE dist/LICENSE -Force
@@ -802,6 +802,15 @@ jobs:
           path: /tmp/runtime-dl
           merge-multiple: true
 
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.CI_GO }}
+
       - name: Split bindings/go and publish release commit to pit-go
         shell: bash
         env:
@@ -847,6 +856,11 @@ jobs:
           # internal/runtime/.gitignore excludes *.so/*.dylib/*.dll in the
           # monorepo; -f below pierces that ignore inside the mirror only.
           find "${WORKTREE}/internal/runtime" -name .gitkeep -delete
+
+          (
+            cd "${WORKTREE}"
+            env -u OPENPIT_RUNTIME_LIBRARY_PATH -u OPENPIT_RUNTIME_CACHE_DIR go test ./...
+          )
 
           # Remove any injected GitHub Actions auth headers (case variations and scopes)
           unset GITHUB_TOKEN
