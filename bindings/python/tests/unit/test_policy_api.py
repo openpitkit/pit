@@ -115,4 +115,4 @@ def test_custom_start_check_post_trade_hook_is_supported() -> None:
     result = engine.apply_execution_report(
         report=conftest.make_report(pnl=openpit.param.Pnl("1"))
     )
-    assert result.kill_switch_triggered
+    assert result.account_blocks

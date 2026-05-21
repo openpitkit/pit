@@ -208,8 +208,8 @@ func (engineTestStartPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (engineTestStartPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
-	return false
+func (engineTestStartPolicy) ApplyExecutionReport(model.ExecutionReport) []reject.AccountBlock {
+	return nil
 }
 
 func (engineTestStartPolicy) ApplyAccountAdjustment(
@@ -234,8 +234,8 @@ func (engineTestNoopStartPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (engineTestNoopStartPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
-	return false
+func (engineTestNoopStartPolicy) ApplyExecutionReport(model.ExecutionReport) []reject.AccountBlock {
+	return nil
 }
 
 func (engineTestNoopStartPolicy) ApplyAccountAdjustment(
@@ -266,8 +266,8 @@ func (engineTestRejectingAdjustmentPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (engineTestRejectingAdjustmentPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
-	return false
+func (engineTestRejectingAdjustmentPolicy) ApplyExecutionReport(model.ExecutionReport) []reject.AccountBlock {
+	return nil
 }
 
 func (p *engineTestRejectingAdjustmentPolicy) ApplyAccountAdjustment(

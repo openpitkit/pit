@@ -17,7 +17,7 @@
 
 use crate::core::HasTradeAmount;
 use crate::param::TradeAmount;
-use crate::pretrade::policy::request_field_access_pre_trade_reject;
+use crate::pretrade::policy::{missing_required_field_reject, PolicyName};
 use crate::pretrade::{PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects};
 
 /// Start-stage policy for basic order field validation.
@@ -37,6 +37,12 @@ impl OrderValidationPolicy {
     }
 }
 
+impl PolicyName for OrderValidationPolicy {
+    fn policy_name(&self) -> &str {
+        Self::NAME
+    }
+}
+
 impl<Order, ExecutionReport, AccountAdjustment>
     PreTradePolicy<Order, ExecutionReport, AccountAdjustment> for OrderValidationPolicy
 where
@@ -49,7 +55,7 @@ where
     fn check_pre_trade_start(&self, _ctx: &PreTradeContext, order: &Order) -> Result<(), Rejects> {
         match order
             .trade_amount()
-            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?
+            .map_err(|e| Rejects::from(missing_required_field_reject(self, "trade amount", &e)))?
         {
             TradeAmount::Quantity(quantity) if quantity.is_zero() => {
                 return Err(Reject::new(
@@ -76,8 +82,11 @@ where
         Ok(())
     }
 
-    fn apply_execution_report(&self, _report: &ExecutionReport) -> bool {
-        false
+    fn apply_execution_report(
+        &self,
+        _report: &ExecutionReport,
+    ) -> Vec<crate::pretrade::AccountBlock> {
+        vec![]
     }
 }
 
@@ -244,10 +253,13 @@ mod tests {
             price: Some(Price::from_str("10").expect("price must be valid")),
         };
 
-        assert!(!<OrderValidationPolicy as PreTradePolicy<
-            OrderOperation,
-            (),
-        >>::apply_execution_report(&policy, &()));
+        assert!(
+            <OrderValidationPolicy as PreTradePolicy<OrderOperation, ()>>::apply_execution_report(
+                &policy,
+                &()
+            )
+            .is_empty()
+        );
         assert!(
             <OrderValidationPolicy as PreTradePolicy<OrderOperation, ()>>::check_pre_trade_start(
                 &policy,
@@ -279,7 +291,10 @@ mod tests {
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
-        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(
+            reject.reason,
+            "failed to access required field 'trade amount'"
+        );
         assert_eq!(reject.details, "failed to access field 'trade_amount'");
     }
 }

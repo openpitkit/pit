@@ -21,22 +21,22 @@ package custompolicy
 #cgo CFLAGS: -I${SRCDIR}/../native
 #include "openpit.h"
 
-extern OpenPitRejectList* pitPretradePreTradePolicyCheckPreTradeStart(
+extern OpenPitPretradeRejectList* pitPretradePreTradePolicyCheckPreTradeStart(
     const OpenPitPretradeContext* ctx,
     const OpenPitOrder* order,
     void* user_data);
 
-extern OpenPitRejectList* pitPretradePreTradePolicyPerformPreTradeCheck(
+extern OpenPitPretradeRejectList* pitPretradePreTradePolicyPerformPreTradeCheck(
     const OpenPitPretradeContext* ctx,
     const OpenPitOrder* order,
     OpenPitMutations* mutations,
     void* user_data);
 
-extern bool pitPretradePreTradePolicyApplyExecutionReport(
+extern OpenPitPretradeAccountBlockList* pitPretradePreTradePolicyApplyExecutionReport(
     const OpenPitExecutionReport* report,
     void* user_data);
 
-extern OpenPitRejectList* pitPretradePreTradePolicyApplyAccountAdjustment(
+extern OpenPitPretradeRejectList* pitPretradePreTradePolicyApplyAccountAdjustment(
     const OpenPitAccountAdjustmentContext* ctx,
     OpenPitParamAccountId account_id,
     const OpenPitAccountAdjustment* adjustment,

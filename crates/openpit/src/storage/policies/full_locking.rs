@@ -48,6 +48,9 @@ pub struct FullLocking;
 impl LockingPolicyFactory for FullLocking {
     type Policy = FullLockingPolicy;
 
+    /// Multi-thread regime; `AtomicBool` provides lock-free synchronization.
+    type IndexFlag = std::sync::atomic::AtomicBool;
+
     fn create_policy(&self) -> Self::Policy {
         FullLockingPolicy {
             index: RwLock::new(()),

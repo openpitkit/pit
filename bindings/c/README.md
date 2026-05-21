@@ -246,7 +246,7 @@ static const char *view_to_cstr(OpenPitStringView view, char *buf, size_t cap) {
     return buf;
 }
 
-static void print_reject(const OpenPitReject *reject) {
+static void print_reject(const OpenPitPretradeReject *reject) {
     char policy[128];
     char reason[256];
     char details[256];
@@ -259,12 +259,12 @@ static void print_reject(const OpenPitReject *reject) {
         view_to_cstr(reject->details, details, sizeof(details)));
 }
 
-static void print_reject_list(const OpenPitRejectList *rejects) {
+static void print_reject_list(const OpenPitPretradeRejectList *rejects) {
     size_t i = 0;
-    size_t len = openpit_reject_list_len(rejects);
+    size_t len = openpit_pretrade_reject_list_len(rejects);
     for (i = 0; i < len; ++i) {
-        OpenPitReject item = {0};
-        if (openpit_reject_list_get(rejects, i, &item)) {
+        OpenPitPretradeReject item = {0};
+        if (openpit_pretrade_reject_list_get(rejects, i, &item)) {
             print_reject(&item);
         }
     }
@@ -283,9 +283,9 @@ int main(void) {
     OpenPitEngine *engine = NULL;
     OpenPitPretradePreTradeRequest *request = NULL;
     OpenPitPretradePreTradeReservation *reservation = NULL;
-    OpenPitRejectList *start_rejects = NULL;
-    OpenPitRejectList *execute_rejects = NULL;
-    OpenPitEngineApplyExecutionReportResult apply_result = {0};
+    OpenPitPretradeRejectList *start_rejects = NULL;
+    OpenPitPretradeRejectList *execute_rejects = NULL;
+    OpenPitPretradeAccountBlockList *account_blocks = NULL;
     OpenPitOrder order = {0};
     OpenPitExecutionReport report = {0};
 
@@ -428,16 +428,17 @@ int main(void) {
     report.financial_impact.value.fee.is_set = true;
     report.financial_impact.value.fee.value = fee;
 
-    apply_result = openpit_engine_apply_execution_report(engine, &report, &error);
-    if (apply_result.is_error) {
+    if (!openpit_engine_apply_execution_report(engine, &report, &account_blocks, &error)) {
         report_out_error("openpit_engine_apply_execution_report", error);
         error = NULL;
         goto cleanup;
     }
 
     /* 8. After each execution report, kill-switch state may change. */
-    if (apply_result.post_trade_result.kill_switch_triggered) {
+    if (account_blocks != NULL) {
         fprintf(stderr, "kill switch triggered\n");
+        openpit_pretrade_destroy_account_block_list(account_blocks);
+        account_blocks = NULL;
     }
 
     rc = 0;
@@ -453,10 +454,10 @@ cleanup:
         openpit_destroy_pretrade_pre_trade_request(request);
     }
     if (execute_rejects != NULL) {
-        openpit_destroy_reject_list(execute_rejects);
+        openpit_pretrade_destroy_reject_list(execute_rejects);
     }
     if (start_rejects != NULL) {
-        openpit_destroy_reject_list(start_rejects);
+        openpit_pretrade_destroy_reject_list(start_rejects);
     }
     openpit_destroy_engine(engine);
     openpit_destroy_engine_builder(builder);
@@ -480,7 +481,7 @@ For the full type and ownership reference, use the generated C manual:
 
 ## Errors
 
-Business rejects are returned through `OpenPitRejectList*` and related APIs such
+Business rejects are returned through `OpenPitPretradeRejectList*` and related APIs such
 as `openpit_engine_start_pre_trade(...)` and
 `openpit_pretrade_pre_trade_request_execute(...)`.
 
@@ -491,7 +492,7 @@ Input validation errors and API misuse are reported through two channels:
 - out-pointer: pass `OpenPitSharedString **out_error` where supported; read the
   message with `openpit_shared_string_view()`, then release with
   `openpit_destroy_shared_string()`
-- read `OpenPitRejectCode` for stable machine-readable business reject categories
+- read `OpenPitPretradeRejectCode` for stable machine-readable business reject categories
 - use the generated C docs for ownership and lifetime rules of every returned
   pointer
 

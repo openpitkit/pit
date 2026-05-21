@@ -236,7 +236,7 @@ def test_custom_execution_report_model_reaches_start_and_main_callbacks() -> Non
 
     post_trade = engine.apply_execution_report(report=report)
 
-    assert post_trade.kill_switch_triggered is False
+    assert not post_trade.account_blocks
     assert start_check.reports == [report]
     assert start_check.reports[0] is report
     assert start_check.report_tags == ["fill-1"]

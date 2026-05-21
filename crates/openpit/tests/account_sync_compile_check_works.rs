@@ -16,7 +16,7 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 //! Smoke test that the built-in stateful policies remain compatible with
-//! [`AccountSyncPolicy`](openpit::AccountSyncPolicy) after the storage
+//! [`AccountSync`](openpit::AccountSync) after the storage
 //! layer's `IndexLocking<KeyBound>` parameterisation. Failure here means a
 //! built-in policy stopped using an account-shaped storage key, which the
 //! account-sync compile-time bound now forbids.
@@ -28,7 +28,7 @@ use openpit::pretrade::policies::{
     PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy, RateLimit,
     RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitBrokerBarrier, RateLimitPolicy,
 };
-use openpit::{Engine, OrderOperation, WithExecutionReportOperation, WithFinancialImpact};
+use openpit::{Engine, WithExecutionReportOperation, WithFinancialImpact};
 
 type Report = WithExecutionReportOperation<WithFinancialImpact<()>>;
 
@@ -37,7 +37,7 @@ fn account_sync_engine_with_rate_limit_and_pnl_bounds_builds() {
     let usd = Asset::new("USD").expect("asset");
     let account = AccountId::from_u64(1);
 
-    let builder = Engine::<OrderOperation, Report>::builder().account_sync();
+    let builder = Engine::builder::<openpit::OrderOperation, Report, ()>().account_sync();
 
     let rate_limit = RateLimitPolicy::new(
         Some(RateLimitBrokerBarrier {

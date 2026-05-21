@@ -36,7 +36,7 @@ func TestRequestExecuteReturnsErrorOnSecondCall(t *testing.T) {
 		t.Fatalf("EngineStartPreTrade() error = %v", err)
 	}
 	if rejects != nil {
-		native.DestroyRejectList(rejects)
+		native.DestroyPretradeRejectList(rejects)
 		t.Fatalf("EngineStartPreTrade() rejects = %v, want nil", rejects)
 	}
 
@@ -79,7 +79,7 @@ func TestRequestExecuteAfterCloseReturnsError(t *testing.T) {
 		t.Fatalf("EngineStartPreTrade() error = %v", err)
 	}
 	if rejects != nil {
-		native.DestroyRejectList(rejects)
+		native.DestroyPretradeRejectList(rejects)
 		t.Fatalf("EngineStartPreTrade() rejects = %v, want nil", rejects)
 	}
 
@@ -187,7 +187,7 @@ func newReservationForPreTradeTests(t *testing.T, order model.Order) *Reservatio
 		t.Fatalf("EngineExecutePreTrade() error = %v", err)
 	}
 	if rejects != nil {
-		native.DestroyRejectList(rejects)
+		native.DestroyPretradeRejectList(rejects)
 		t.Fatalf("EngineExecutePreTrade() rejects = %v, want nil", rejects)
 	}
 

@@ -79,7 +79,7 @@ already been finalized raises `RuntimeError`.
 
 ```python
 post_trade = engine.apply_execution_report(report=report)
-if post_trade.kill_switch_triggered:
+if post_trade.account_blocks:
     print("halt new orders until the blocked state is cleared")
 ```
 

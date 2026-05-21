@@ -41,7 +41,7 @@ use openpit::{AccountAdjustmentContext, Mutation, Mutations};
 use crate::account_adjustment::{export_account_adjustment, OpenPitAccountAdjustment};
 use crate::execution_report::{export_execution_report, OpenPitExecutionReport};
 use crate::order::{export_order, OpenPitOrder};
-use crate::reject::OpenPitRejectList;
+use crate::reject::{OpenPitPretradeAccountBlockList, OpenPitPretradeRejectList};
 use crate::OpenPitStringView;
 use crate::{AccountAdjustment, ExecutionReport, Order};
 
@@ -268,7 +268,7 @@ pub struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier {
 
 fn policy_storage(
     builder: &crate::engine::OpenPitEngineBuilder,
-) -> Option<&StorageBuilder<openpit_interop::sync_policy::StorageLockingPolicyFactory>> {
+) -> Option<&StorageBuilder<openpit_interop::StorageLockingPolicyFactory>> {
     match builder.inner.as_ref()? {
         crate::engine::BuilderState::Synced(builder) => Some(builder.storage_builder()),
         crate::engine::BuilderState::Ready(builder) => Some(builder.storage_builder()),
@@ -1105,7 +1105,7 @@ pub unsafe extern "C" fn openpit_mutations_push(
 /// - A rejected order must set explicit `code` and `scope` values in every
 ///   list item.
 /// - The returned list ownership is transferred to the engine; create it with
-///   `openpit_create_reject_list`.
+///   `openpit_pretrade_create_reject_list`.
 /// - Every reject payload is copied into internal storage before the callback
 ///   returns.
 /// - `user_data` is passed through unchanged from policy creation.
@@ -1114,7 +1114,7 @@ pub type OpenPitPretradePreTradePolicyCheckPreTradeStartFn =
         ctx: *const OpenPitPretradeContext,
         order: *const OpenPitOrder,
         user_data: *mut c_void,
-    ) -> *mut OpenPitRejectList;
+    ) -> *mut OpenPitPretradeRejectList;
 
 /// Callback used by a custom pre-trade policy to perform a main-stage check.
 ///
@@ -1133,7 +1133,7 @@ pub type OpenPitPretradePreTradePolicyCheckPreTradeStartFn =
 /// - Return a non-empty reject list to reject the order.
 /// - Every returned reject must contain explicit `code` and `scope` values.
 /// - The returned list ownership is transferred to the engine; create it with
-///   `openpit_create_reject_list`.
+///   `openpit_pretrade_create_reject_list`.
 /// - Every reject payload is copied into internal storage before this callback
 ///   returns.
 /// - `user_data` is passed through unchanged from policy creation.
@@ -1143,7 +1143,7 @@ pub type OpenPitPretradePreTradePolicyPerformPreTradeCheckFn =
         order: *const OpenPitOrder,
         mutations: *mut OpenPitMutations,
         user_data: *mut c_void,
-    ) -> *mut OpenPitRejectList;
+    ) -> *mut OpenPitPretradeRejectList;
 
 /// Callback used by a custom pre-trade policy to observe an execution report.
 ///
@@ -1154,11 +1154,18 @@ pub type OpenPitPretradePreTradePolicyPerformPreTradeCheckFn =
 ///   callback runs.
 /// - If the callback wants to keep any data from `report`, it must copy that
 ///   data before returning.
-/// - Return `true` when this policy reports a kill-switch trigger.
-/// - Return `false` otherwise.
+/// - Return a non-null account-block list when this policy reports a
+///   kill-switch trigger. The returned list ownership is transferred to the
+///   engine; create it with `openpit_pretrade_create_account_block_list`.
+/// - Return null to indicate no kill-switch condition.
+/// - A null `apply_execution_report_fn` means that hook returns an empty list
+///   (no kill switch).
 /// - `user_data` is passed through unchanged from policy creation.
 pub type OpenPitPretradePreTradePolicyApplyExecutionReportFn =
-    unsafe extern "C" fn(report: *const OpenPitExecutionReport, user_data: *mut c_void) -> bool;
+    unsafe extern "C" fn(
+        report: *const OpenPitExecutionReport,
+        user_data: *mut c_void,
+    ) -> *mut OpenPitPretradeAccountBlockList;
 
 /// Callback used by a custom pre-trade policy to validate one account
 /// adjustment.
@@ -1187,7 +1194,7 @@ pub type OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn =
         adjustment: *const OpenPitAccountAdjustment,
         mutations: *mut OpenPitMutations,
         user_data: *mut c_void,
-    ) -> *mut OpenPitRejectList;
+    ) -> *mut OpenPitPretradeRejectList;
 
 /// Callback invoked when the last reference to a custom pre-trade policy is
 /// released and the policy object is about to be destroyed.
@@ -1237,7 +1244,10 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment> for DynPreTradePo
         self.inner.perform_pre_trade_check(ctx, order, mutations)
     }
 
-    fn apply_execution_report(&self, report: &ExecutionReport) -> bool {
+    fn apply_execution_report(
+        &self,
+        report: &ExecutionReport,
+    ) -> Vec<openpit::pretrade::AccountBlock> {
         self.inner.apply_execution_report(report)
     }
 
@@ -1318,12 +1328,20 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment> for CustomPreTrad
         import_reject_list_result(rejects)
     }
 
-    fn apply_execution_report(&self, report: &ExecutionReport) -> bool {
+    fn apply_execution_report(
+        &self,
+        report: &ExecutionReport,
+    ) -> Vec<openpit::pretrade::AccountBlock> {
         let Some(apply_fn) = self.apply_execution_report_fn else {
-            return false;
+            return vec![];
         };
         let input = export_execution_report(report);
-        unsafe { apply_fn(&input, self.user_data) }
+        let raw = unsafe { apply_fn(&input, self.user_data) };
+        if raw.is_null() {
+            return vec![];
+        }
+        let list = unsafe { Box::from_raw(raw) };
+        list.items
     }
 
     fn apply_account_adjustment(
@@ -1386,7 +1404,7 @@ unsafe fn parse_policy_name(
     Some(value.to_owned())
 }
 
-fn import_reject_list_result(rejects: *mut OpenPitRejectList) -> Result<(), Rejects> {
+fn import_reject_list_result(rejects: *mut OpenPitPretradeRejectList) -> Result<(), Rejects> {
     if rejects.is_null() {
         return Ok(());
     }
@@ -1407,7 +1425,7 @@ fn import_reject_list_result(rejects: *mut OpenPitRejectList) -> Result<(), Reje
 ///   `apply_execution_report_fn`, and `apply_account_adjustment_fn` may be null.
 /// - A null `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`, or
 ///   `apply_account_adjustment_fn` means that hook accepts by default.
-/// - A null `apply_execution_report_fn` means that hook returns `false`.
+/// - A null `apply_execution_report_fn` means that hook returns an empty list (no kill switch).
 /// - Non-null callbacks and `free_user_data_fn` must remain callable for as long
 ///   as the policy may still be used by either the caller pointer or the engine.
 /// - Custom main-stage and account-adjustment callbacks can register
@@ -1494,21 +1512,21 @@ mod tests {
     use super::*;
 
     use crate::param::{OpenPitParamDecimal, OpenPitParamPnl};
-    use crate::reject::OpenPitRejectList;
+    use crate::reject::{OpenPitPretradeAccountBlockList, OpenPitPretradeRejectList};
 
     unsafe extern "C" fn custom_check_fn(
         _ctx: *const OpenPitPretradeContext,
         _order: *const OpenPitOrder,
         _user_data: *mut c_void,
-    ) -> *mut OpenPitRejectList {
+    ) -> *mut OpenPitPretradeRejectList {
         std::ptr::null_mut()
     }
 
     unsafe extern "C" fn custom_apply_report_fn(
         _report: *const OpenPitExecutionReport,
         _user_data: *mut c_void,
-    ) -> bool {
-        false
+    ) -> *mut OpenPitPretradeAccountBlockList {
+        std::ptr::null_mut()
     }
 
     unsafe extern "C" fn custom_free_user_data_fn(_user_data: *mut c_void) {}
@@ -1517,7 +1535,7 @@ mod tests {
         _order: *const OpenPitOrder,
         _mutations: *mut OpenPitMutations,
         _user_data: *mut c_void,
-    ) -> *mut OpenPitRejectList {
+    ) -> *mut OpenPitPretradeRejectList {
         std::ptr::null_mut()
     }
 
@@ -1527,7 +1545,7 @@ mod tests {
         _adjustment: *const OpenPitAccountAdjustment,
         _mutations: *mut OpenPitMutations,
         _user_data: *mut c_void,
-    ) -> *mut OpenPitRejectList {
+    ) -> *mut OpenPitPretradeRejectList {
         std::ptr::null_mut()
     }
 
@@ -1675,8 +1693,8 @@ mod tests {
         check_fn: OpenPitPretradePreTradePolicyPerformPreTradeCheckFn,
         user_data: *mut c_void,
     ) -> openpit::pretrade::PreTradeReservation {
-        let engine = openpit::Engine::<Order, ExecutionReport, AccountAdjustment>::builder()
-            .sync(openpit::LocalSyncPolicy)
+        let engine = openpit::EngineBuilder::<Order, ExecutionReport, AccountAdjustment>::new()
+            .sync(openpit::LocalSync)
             .pre_trade(CustomPreTradePolicy {
                 name: "ffi.custom".to_owned(),
                 check_pre_trade_start_fn: None,
@@ -1719,7 +1737,7 @@ mod tests {
         _order: *const OpenPitOrder,
         mutations: *mut OpenPitMutations,
         user_data: *mut c_void,
-    ) -> *mut OpenPitRejectList {
+    ) -> *mut OpenPitPretradeRejectList {
         let ctx = unsafe { &*(user_data as *const MutationPushContext) };
         for entry in &ctx.entries {
             let ok = unsafe {
@@ -1840,7 +1858,7 @@ mod tests {
             _order: *const OpenPitOrder,
             mutations: *mut OpenPitMutations,
             user_data: *mut c_void,
-        ) -> *mut OpenPitRejectList {
+        ) -> *mut OpenPitPretradeRejectList {
             let ctx = unsafe { &*(user_data as *const MutationPushContext) };
             let ok = unsafe {
                 openpit_mutations_push(
@@ -2284,12 +2302,12 @@ mod tests {
         crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
 
         let report = crate::execution_report::OpenPitExecutionReport::default();
-        let post = crate::engine::openpit_engine_apply_execution_report(
+        assert!(crate::engine::openpit_engine_apply_execution_report(
             engine,
             &report,
             std::ptr::null_mut(),
-        );
-        assert!(!post.is_error);
+            std::ptr::null_mut(),
+        ));
         crate::engine::openpit_destroy_engine(engine);
         crate::engine::openpit_destroy_engine_builder(builder);
     }
@@ -2370,12 +2388,12 @@ mod tests {
         crate::engine::openpit_destroy_pretrade_pre_trade_reservation(out_reservation);
 
         let report = crate::execution_report::OpenPitExecutionReport::default();
-        let post = crate::engine::openpit_engine_apply_execution_report(
+        assert!(crate::engine::openpit_engine_apply_execution_report(
             engine,
             &report,
             std::ptr::null_mut(),
-        );
-        assert!(!post.is_error);
+            std::ptr::null_mut(),
+        ));
 
         let adjustment = crate::account_adjustment::OpenPitAccountAdjustment::default();
         let batch = [adjustment];

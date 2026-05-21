@@ -20,7 +20,7 @@ use std::fmt::{Display, Formatter};
 
 use crate::core::HasAccountId;
 use crate::param::{AccountId, Asset, Price, Quantity, TradeAmount, Volume};
-use crate::pretrade::policy::request_field_access_pre_trade_reject;
+use crate::pretrade::policy::{missing_required_field_reject, PolicyName};
 use crate::pretrade::{PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects};
 use crate::HasInstrument;
 use crate::{HasOrderPrice, HasTradeAmount};
@@ -137,7 +137,7 @@ impl std::error::Error for OrderSizeLimitPolicyError {}
 ///     [],
 /// )?;
 ///
-/// let engine = Engine::<OrderOperation>::builder()
+/// let engine = Engine::builder::<OrderOperation, (), ()>()
 ///     .no_sync()
 ///     .pre_trade(policy)
 ///     .build()?;
@@ -196,6 +196,12 @@ impl OrderSizeLimitPolicy {
     }
 }
 
+impl PolicyName for OrderSizeLimitPolicy {
+    fn policy_name(&self) -> &str {
+        Self::NAME
+    }
+}
+
 impl<Order, ExecutionReport, AccountAdjustment>
     PreTradePolicy<Order, ExecutionReport, AccountAdjustment> for OrderSizeLimitPolicy
 where
@@ -208,16 +214,16 @@ where
     fn check_pre_trade_start(&self, _ctx: &PreTradeContext, order: &Order) -> Result<(), Rejects> {
         let instrument = order
             .instrument()
-            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
+            .map_err(|e| Rejects::from(missing_required_field_reject(self, "instrument", &e)))?;
         let account_id = order
             .account_id()
-            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
+            .map_err(|e| Rejects::from(missing_required_field_reject(self, "account ID", &e)))?;
         let trade_amount = order
             .trade_amount()
-            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
+            .map_err(|e| Rejects::from(missing_required_field_reject(self, "trade amount", &e)))?;
         let price = order
             .price()
-            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
+            .map_err(|e| Rejects::from(missing_required_field_reject(self, "price", &e)))?;
 
         let settlement = instrument.settlement_asset();
 
@@ -258,8 +264,11 @@ where
         Ok(())
     }
 
-    fn apply_execution_report(&self, _report: &ExecutionReport) -> bool {
-        false
+    fn apply_execution_report(
+        &self,
+        _report: &ExecutionReport,
+    ) -> Vec<crate::pretrade::AccountBlock> {
+        vec![]
     }
 }
 
@@ -712,10 +721,11 @@ mod tests {
         let policy =
             OrderSizeLimitPolicy::new(None, [asset_barrier("USD", "10", "1000")], []).unwrap();
         assert!(
-            !<OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::apply_execution_report(
+            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::apply_execution_report(
                 &policy,
                 &()
             )
+            .is_empty()
         );
     }
 
@@ -881,7 +891,10 @@ mod tests {
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
-        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(
+            reject.reason,
+            "failed to access required field 'instrument'"
+        );
         assert_eq!(reject.details, "failed to access field 'instrument'");
     }
 
@@ -930,7 +943,10 @@ mod tests {
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
-        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(
+            reject.reason,
+            "failed to access required field 'trade amount'"
+        );
         assert_eq!(reject.details, "failed to access field 'trade_amount'");
     }
 
@@ -979,7 +995,7 @@ mod tests {
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
-        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(reject.reason, "failed to access required field 'price'");
         assert_eq!(reject.details, "failed to access field 'price'");
     }
 }

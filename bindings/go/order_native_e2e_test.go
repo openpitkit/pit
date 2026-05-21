@@ -134,8 +134,8 @@ func TestOrderNativeE2E_ExecuteAndApplyExecutionReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport() error = %v", err)
 	}
-	if result.KillSwitchTriggered {
-		t.Fatal("ApplyExecutionReport().KillSwitchTriggered = true, want false")
+	if len(result.AccountBlocks) > 0 {
+		t.Fatalf("ApplyExecutionReport() AccountBlocks = %v, want none", result.AccountBlocks)
 	}
 }
 
@@ -209,8 +209,10 @@ func (orderNativeE2ENoopStartPolicy) PerformPreTradeCheck(pretrade.Context, mode
 	return nil
 }
 
-func (orderNativeE2ENoopStartPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
-	return false
+func (orderNativeE2ENoopStartPolicy) ApplyExecutionReport(
+	model.ExecutionReport,
+) []reject.AccountBlock {
+	return nil
 }
 
 func (orderNativeE2ENoopStartPolicy) ApplyAccountAdjustment(

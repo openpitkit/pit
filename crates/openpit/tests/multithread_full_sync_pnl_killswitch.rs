@@ -122,9 +122,10 @@ fn check_start(
 }
 
 fn apply_report(policy: &TestPolicy, report: &TestReport) -> bool {
-    <TestPolicy as PreTradePolicy<OrderOperation, TestReport>>::apply_execution_report(
+    !<TestPolicy as PreTradePolicy<OrderOperation, TestReport>>::apply_execution_report(
         policy, report,
     )
+    .is_empty()
 }
 
 // Verifies that apply_execution_report does not lose or duplicate updates when
@@ -150,7 +151,7 @@ fn pnl_full_sync_no_lost_updates_under_concurrent_apply() {
     // realized == 401 DOES.  This lets all 40 reports pass, then the probe fires.
     let upper_bound_str = expected_total.to_string();
 
-    let builder = Engine::<OrderOperation, TestReport>::builder().full_sync();
+    let builder = Engine::builder::<OrderOperation, TestReport, ()>().full_sync();
     let policy: Arc<TestPolicy> = Arc::new(
         PnlBoundsKillSwitchPolicy::new(
             [PnlBoundsBrokerBarrier {
@@ -207,7 +208,7 @@ fn pnl_full_sync_no_lost_updates_under_concurrent_apply() {
 fn pnl_full_sync_kill_switch_is_monotonic_and_visible_to_subsequent_checks() {
     // Tight upper bound: guaranteed to be exceeded during concurrent execution.
     // TOTAL_THREADS * PER_THREAD_REPORTS * PNL_PER_REPORT = 400 >> 50.
-    let builder = Engine::<OrderOperation, TestReport>::builder().full_sync();
+    let builder = Engine::builder::<OrderOperation, TestReport, ()>().full_sync();
     let policy: Arc<TestPolicy> = Arc::new(
         PnlBoundsKillSwitchPolicy::new(
             [PnlBoundsBrokerBarrier {

@@ -166,6 +166,12 @@ pub trait LockingPolicyFactory {
     /// Concrete policy produced by this factory.
     type Policy: LockingPolicy;
 
+    /// Bool-cell whose synchronization matches this factory's locking
+    /// regime. Used by engine-internal book-keeping that needs to
+    /// publish a single bit across the same observer set as the
+    /// storage index domain.
+    type IndexFlag: super::IndexFlag;
+
     /// Builds a fresh policy for a new storage instance.
     fn create_policy(&self) -> Self::Policy;
 }

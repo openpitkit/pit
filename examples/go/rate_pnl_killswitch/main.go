@@ -39,7 +39,7 @@
 //     events.
 //  3. The Reactor implementation - replace loggingReactor with code that
 //     actually submits orders to the venue, updates your strategy book, and
-//     halts the strategy when KillSwitchTriggered fires.
+//     halts the strategy when a kill switch account block is returned.
 package main
 
 import (
@@ -94,9 +94,9 @@ type Reactor interface {
 	OnRejected(order model.Order, rejects []reject.Reject)
 
 	// OnReport fires after the engine has consumed a venue execution report.
-	// When result.KillSwitchTriggered is true, the engine has permanently
-	// blocked this account for this asset - your strategy must stop sending
-	// orders for it until operators clear the state.
+	// When result.AccountBlocks is non-empty, the engine has permanently
+	// blocked this account - your strategy must stop sending orders for it
+	// until operators clear the state.
 	OnReport(report model.ExecutionReport, result openpit.PostTradeResult)
 }
 
@@ -262,7 +262,7 @@ func runReport(engine *openpit.Engine, ev Event, stats *Stats, react Reactor) er
 			stats.Pnl.Add(stats.Pnl, r)
 		}
 	}
-	if result.KillSwitchTriggered && !stats.KillSwitch {
+	if len(result.AccountBlocks) > 0 && !stats.KillSwitch {
 		stats.KillSwitch = true
 		stats.KillSwitchOnTrade = stats.Reports
 	}
@@ -414,7 +414,7 @@ func (r *loggingReactor) OnRejected(_ model.Order, rj []reject.Reject) {
 }
 
 func (*loggingReactor) OnReport(_ model.ExecutionReport, res openpit.PostTradeResult) {
-	if res.KillSwitchTriggered {
+	if len(res.AccountBlocks) > 0 {
 		fmt.Println("kill switch triggered - halt new orders until cleared")
 	}
 }

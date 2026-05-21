@@ -72,7 +72,7 @@ func pitPretradePreTradePolicyCheckPreTradeStart(
 	ctx *C.OpenPitPretradeContext,
 	order *C.OpenPitOrder,
 	userData unsafe.Pointer,
-) *C.OpenPitRejectList {
+) *C.OpenPitPretradeRejectList {
 	// Panics from the user implementation are deliberately allowed to propagate.
 	// A panic unwinding across the FFI boundary may terminate the process;
 	// containing it is the implementer's responsibility, as stated on the Policy
@@ -94,7 +94,7 @@ func pitPretradePreTradePolicyPerformPreTradeCheck(
 	order *C.OpenPitOrder,
 	mutations *C.OpenPitMutations,
 	userData unsafe.Pointer,
-) *C.OpenPitRejectList {
+) *C.OpenPitPretradeRejectList {
 	// Panics from the user implementation are deliberately allowed to propagate.
 	// A panic unwinding across the FFI boundary may terminate the process;
 	// containing it is the implementer's responsibility, as stated on the Policy
@@ -117,13 +117,13 @@ func pitPretradePreTradePolicyPerformPreTradeCheck(
 func pitPretradePreTradePolicyApplyExecutionReport(
 	report *C.OpenPitExecutionReport,
 	userData unsafe.Pointer,
-) C.bool {
+) *C.OpenPitPretradeAccountBlockList {
 	// Panics from the user implementation are deliberately allowed to
 	// propagate. A panic unwinding across the FFI boundary may terminate the
 	// process; containing it is the implementer's responsibility, as stated
 	// on the Policy interface.
 
-	return C.bool(
+	return newNativeAccountBlockListOrNil(
 		getPreTrade(userData).impl.ApplyExecutionReport(
 			model.NewExecutionReportFromHandle(
 				*(*native.ExecutionReport)(unsafe.Pointer(report)),
@@ -139,7 +139,7 @@ func pitPretradePreTradePolicyApplyAccountAdjustment(
 	adjustment *C.OpenPitAccountAdjustment,
 	mutations *C.OpenPitMutations,
 	userData unsafe.Pointer,
-) *C.OpenPitRejectList {
+) *C.OpenPitPretradeRejectList {
 	// Panics from the user implementation are deliberately allowed to propagate.
 	// A panic unwinding across the FFI boundary may terminate the process;
 	// containing it is the implementer's responsibility, as stated on the Policy

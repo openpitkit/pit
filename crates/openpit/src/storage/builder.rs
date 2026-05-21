@@ -39,9 +39,9 @@ use super::storage::Storage;
 ///    [`Storage::with_mut`](super::Storage::with_mut).
 ///
 /// The synchronization mode is then entirely determined by the engine's
-/// synchronization policy, not by the policy. Switching from no-sync to
+/// synchronization mode, not by the policy. Switching from no-sync to
 /// fully-synchronized execution only requires changing the engine builder's
-/// sync policy - the policy logic is untouched.
+/// sync mode - the policy logic is untouched.
 ///
 /// # Lifetime discipline
 ///
@@ -61,7 +61,7 @@ use super::storage::Storage;
 /// ```
 /// use openpit::Engine;
 ///
-/// let engine_builder = Engine::<(), ()>::builder().full_sync();
+/// let engine_builder = Engine::builder::<(), (), ()>().full_sync();
 /// let users = engine_builder.storage_builder().create::<u64, String>();
 /// let orders = engine_builder.storage_builder().create::<u64, Vec<u8>>();
 /// // `users` and `orders` are unrelated storages; locking one does

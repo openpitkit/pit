@@ -15,10 +15,18 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
+use super::reject::AccountBlock;
+
 /// Aggregated post-trade processing result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// A non-empty `account_blocks` list means at least one policy entered a
+/// blocked state. The engine merges blocks from all policies in registration
+/// order.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PostTradeResult {
-    /// Indicates that at least one registered policy entered a blocked state
-    /// after the execution report was applied.
-    pub kill_switch_triggered: bool,
+    /// Account blocks reported by policies.
+    ///
+    /// Non-empty when at least one policy entered a blocked state. The engine
+    /// merges blocks from all policies in registration order.
+    pub account_blocks: Vec<AccountBlock>,
 }

@@ -497,13 +497,13 @@ Contract:
 - A rejected order must set explicit `code` and `scope` values in every list
   item.
 - The returned list ownership is transferred to the engine; create it with
-  `openpit_create_reject_list`.
+  `openpit_pretrade_create_reject_list`.
 - Every reject payload is copied into internal storage before the callback
   returns.
 - `user_data` is passed through unchanged from policy creation.
 
 ```c
-typedef OpenPitRejectList *
+typedef OpenPitPretradeRejectList *
 (*OpenPitPretradePreTradePolicyCheckPreTradeStartFn)(
     const OpenPitPretradeContext * ctx,
     const OpenPitOrder * order,
@@ -531,13 +531,13 @@ Contract:
 - Return a non-empty reject list to reject the order.
 - Every returned reject must contain explicit `code` and `scope` values.
 - The returned list ownership is transferred to the engine; create it with
-  `openpit_create_reject_list`.
+  `openpit_pretrade_create_reject_list`.
 - Every reject payload is copied into internal storage before this callback
   returns.
 - `user_data` is passed through unchanged from policy creation.
 
 ```c
-typedef OpenPitRejectList *
+typedef OpenPitPretradeRejectList *
 (*OpenPitPretradePreTradePolicyPerformPreTradeCheckFn)(
     const OpenPitPretradeContext * ctx,
     const OpenPitOrder * order,
@@ -558,12 +558,17 @@ Contract:
   runs.
 - If the callback wants to keep any data from `report`, it must copy that data
   before returning.
-- Return `true` when this policy reports a kill-switch trigger.
-- Return `false` otherwise.
+- Return a non-null account-block list when this policy reports a kill-switch
+  trigger. The returned list ownership is transferred to the engine; create it
+  with `openpit_pretrade_create_account_block_list`.
+- Return null to indicate no kill-switch condition.
+- A null `apply_execution_report_fn` means that hook returns an empty list (no
+  kill switch).
 - `user_data` is passed through unchanged from policy creation.
 
 ```c
-typedef bool (*OpenPitPretradePreTradePolicyApplyExecutionReportFn)(
+typedef OpenPitPretradeAccountBlockList *
+(*OpenPitPretradePreTradePolicyApplyExecutionReportFn)(
     const OpenPitExecutionReport * report,
     void * user_data
 );
@@ -593,7 +598,7 @@ Contract:
 - `user_data` is passed through unchanged from policy creation.
 
 ```c
-typedef OpenPitRejectList *
+typedef OpenPitPretradeRejectList *
 (*OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn)(
     const OpenPitAccountAdjustmentContext * ctx,
     OpenPitParamAccountId account_id,
@@ -634,7 +639,8 @@ Contract:
   `apply_execution_report_fn`, and `apply_account_adjustment_fn` may be null.
 - A null `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`, or
   `apply_account_adjustment_fn` means that hook accepts by default.
-- A null `apply_execution_report_fn` means that hook returns `false`.
+- A null `apply_execution_report_fn` means that hook returns an empty list (no
+  kill switch).
 - Non-null callbacks and `free_user_data_fn` must remain callable for as long
   as the policy may still be used by either the caller pointer or the engine.
 - Custom main-stage and account-adjustment callbacks can register

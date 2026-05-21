@@ -234,7 +234,7 @@ result = engine.apply_execution_report(report=report)
 # 8. After each execution report is applied, the system may report that it has
 # been determined in advance that all subsequent requests will be rejected if
 # the account status does not change.
-assert result.kill_switch_triggered is False
+assert not result.account_blocks
 ```
 
 ## Errors

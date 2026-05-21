@@ -24,12 +24,12 @@ use std::marker::PhantomData;
 
 type RequestExecutor = Box<dyn FnOnce() -> Result<PreTradeReservation, Rejects>>;
 
-pub(crate) struct RequestHandleImpl<O> {
+pub(crate) struct RequestHandleImpl<Order> {
     execute: RequestExecutor,
-    marker: PhantomData<fn(O)>,
+    marker: PhantomData<fn(Order)>,
 }
 
-impl<O> RequestHandleImpl<O> {
+impl<Order> RequestHandleImpl<Order> {
     pub(crate) fn new(execute: RequestExecutor) -> Self {
         Self {
             execute,
@@ -38,7 +38,7 @@ impl<O> RequestHandleImpl<O> {
     }
 }
 
-impl<O> RequestHandle<O> for RequestHandleImpl<O> {
+impl<Order> RequestHandle<Order> for RequestHandleImpl<Order> {
     fn execute(self: Box<Self>) -> Result<PreTradeReservation, Rejects> {
         let this = *self;
         (this.execute)()

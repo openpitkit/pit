@@ -125,7 +125,7 @@ fn derive_feature_reexport_builds_wrappers_and_engine_smoke_path() {
         Ok(Fee::from_str("-1").expect("must be valid"))
     );
 
-    let builder = Engine::<DerivedOrder, DerivedReport>::builder().no_sync();
+    let builder = Engine::builder::<DerivedOrder, DerivedReport, ()>().no_sync();
     let pnl_policy = PnlBoundsKillSwitchPolicy::new(
         [PnlBoundsBrokerBarrier {
             settlement_asset: Asset::new("USD").expect("must be valid"),
@@ -147,5 +147,5 @@ fn derive_feature_reexport_builds_wrappers_and_engine_smoke_path() {
     let _reservation = request.execute().expect("main stage must accept order");
     let post_trade = engine.apply_execution_report(&report);
 
-    assert!(!post_trade.kill_switch_triggered);
+    assert!(post_trade.account_blocks.is_empty());
 }

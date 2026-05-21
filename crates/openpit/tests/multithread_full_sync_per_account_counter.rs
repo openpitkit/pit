@@ -66,7 +66,7 @@ fn rate_limit_full_sync_per_account_counter_isolated_under_concurrent_load() {
         })
         .collect();
 
-    let builder = Engine::<OrderOperation, ()>::builder().full_sync();
+    let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
     let policy: Arc<TestPolicy> = Arc::new(
         RateLimitPolicy::<FullLocking>::new(
             None,

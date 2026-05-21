@@ -41,7 +41,7 @@ func (r *recordingReactor) OnRejected(_ model.Order, rj []reject.Reject) {
 	}
 }
 func (r *recordingReactor) OnReport(_ model.ExecutionReport, res openpit.PostTradeResult) {
-	if res.KillSwitchTriggered {
+	if len(res.AccountBlocks) > 0 {
 		r.killSwitched = true
 	}
 }

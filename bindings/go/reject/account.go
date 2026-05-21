@@ -17,7 +17,63 @@
 
 package reject
 
-import "go.openpit.dev/openpit/internal/native"
+import (
+	"unsafe"
+
+	"go.openpit.dev/openpit/internal/native"
+)
+
+// AccountBlock is a kill-switch block record returned by policy callbacks.
+type AccountBlock struct {
+	// Human-readable reject reason.
+	Reason string
+	// Case-specific reject details.
+	Details string
+	// Policy name that produced the block.
+	Policy string
+	// Opaque caller-defined payload. Nil means "not set".
+	UserData unsafe.Pointer
+	// Stable machine-readable reject code.
+	Code Code
+}
+
+// NewAccountBlock creates an account block.
+func NewAccountBlock(code Code, policy, reason, details string) AccountBlock {
+	return AccountBlock{
+		Code:    code,
+		Policy:  policy,
+		Reason:  reason,
+		Details: details,
+	}
+}
+
+// NewAccountBlockFromHandle creates an AccountBlock from a native handle.
+func NewAccountBlockFromHandle(handle native.PretradeAccountBlock) AccountBlock {
+	return AccountBlock{
+		Code:     Code(native.PretradeAccountBlockGetCode(handle)),
+		Policy:   native.PretradeAccountBlockGetPolicy(handle).Safe(),
+		Reason:   native.PretradeAccountBlockGetReason(handle).Safe(),
+		Details:  native.PretradeAccountBlockGetDetails(handle).Safe(),
+		UserData: native.PretradeAccountBlockGetUserData(handle),
+	}
+}
+
+// NewHandle returns a native handle for this account block.
+func (b AccountBlock) NewHandle() native.PretradeAccountBlock {
+	return native.CreatePretradeAccountBlock(
+		native.PretradeRejectCode(b.Code),
+		native.NewStringView(b.Policy),
+		native.NewStringView(b.Reason),
+		native.NewStringView(b.Details),
+		b.UserData,
+	)
+}
+
+// WithUserData returns a copy of this block with updated UserData.
+func (b AccountBlock) WithUserData(userData unsafe.Pointer) AccountBlock {
+	b.UserData = userData
+	return b
+}
 
 type AccountAdjustmentBatchError struct {
 	Rejects               []Reject

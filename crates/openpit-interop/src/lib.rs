@@ -32,9 +32,12 @@
 pub mod request;
 pub use request::{AccountAdjustment, ExecutionReport, Order, RequestWithPayload};
 
-pub mod sync_policy;
+mod sync_mode;
 
-pub use sync_policy::{EngineHandle, EngineHandleWeak, EngineLocking, SyncMode, SyncPolicy};
+pub use sync_mode::{
+    EngineHandle, EngineHandleWeak, EngineLocking, InteropEngineTrait, StorageLockingPolicyFactory,
+    SyncMode,
+};
 
 pub mod account_adjustment_amount;
 pub mod account_adjustment_bounds;

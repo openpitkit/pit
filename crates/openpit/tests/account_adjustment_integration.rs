@@ -22,12 +22,12 @@ use openpit::param::AccountId;
 use openpit::pretrade::PreTradePolicy;
 use openpit::pretrade::{Reject, RejectCode, RejectScope, Rejects};
 use openpit::{
-    AccountAdjustmentBalanceOperation, AccountAdjustmentContext, Engine, HasBalanceAsset, Mutation,
-    Mutations,
+    AccountAdjustmentBalanceOperation, AccountAdjustmentContext, Engine, HasBalanceAsset,
+    LocalEngine, Mutation, Mutations,
 };
 
 type TestAdjustment = AccountAdjustmentBalanceOperation;
-type TestEngine = Engine<(), (), TestAdjustment>;
+type TestEngine = LocalEngine<(), (), TestAdjustment>;
 type EngineWithRecorders = (
     TestEngine,
     Rc<RefCell<Vec<AccountId>>>,
@@ -148,7 +148,7 @@ fn balance_adjustment(asset_code: &str) -> AccountAdjustmentBalanceOperation {
 fn make_engine(reject_on_asset: Option<&str>) -> EngineWithRecorders {
     let seen_ids = Rc::new(RefCell::new(Vec::new()));
     let seen_assets = Rc::new(RefCell::new(Vec::new()));
-    let engine = Engine::<(), (), TestAdjustment>::builder()
+    let engine = Engine::builder()
         .no_sync()
         .pre_trade(RecordingAdjustmentPolicy {
             name: "RecordingAdjustmentPolicy",
@@ -164,7 +164,7 @@ fn make_engine(reject_on_asset: Option<&str>) -> EngineWithRecorders {
 fn make_rollback_engine(reject_on_asset: Option<&str>) -> RollbackEngine {
     let committed = Rc::new(RefCell::new(Vec::new()));
     let rollback_order = Rc::new(RefCell::new(Vec::new()));
-    let engine = Engine::<(), (), TestAdjustment>::builder()
+    let engine = Engine::builder()
         .no_sync()
         .pre_trade(MutatingRecordingPolicy {
             name: "MutatingRecordingPolicy",

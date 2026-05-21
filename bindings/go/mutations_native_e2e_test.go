@@ -147,8 +147,8 @@ func (mutationTrackingPolicy) CheckPreTradeStart(pretrade.Context, model.Order) 
 	return nil
 }
 
-func (mutationTrackingPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
-	return false
+func (mutationTrackingPolicy) ApplyExecutionReport(model.ExecutionReport) []reject.AccountBlock {
+	return nil
 }
 
 func (mutationTrackingPolicy) ApplyAccountAdjustment(

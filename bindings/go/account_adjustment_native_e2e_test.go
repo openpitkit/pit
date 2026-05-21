@@ -142,8 +142,10 @@ func (accountAdjustmentCountingPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (accountAdjustmentCountingPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
-	return false
+func (accountAdjustmentCountingPolicy) ApplyExecutionReport(
+	model.ExecutionReport,
+) []reject.AccountBlock {
+	return nil
 }
 
 func (p *accountAdjustmentCountingPolicy) ApplyAccountAdjustment(

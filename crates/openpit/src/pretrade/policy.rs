@@ -15,7 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::{PreTradeContext, Reject, RejectCode, RejectScope, Rejects};
+use super::{AccountBlock, PreTradeContext, Reject, RejectCode, RejectScope, Rejects};
 use crate::param::AccountId;
 use crate::{AccountAdjustmentContext, Mutations};
 
@@ -109,9 +109,13 @@ pub trait PreTradePolicy<Order, ExecutionReport, AccountAdjustment = ()> {
     /// The engine calls this hook from [`crate::Engine::apply_execution_report`]
     /// so that a main-stage policy can maintain post-trade state.
     ///
-    /// Returns `true` when this policy reports kill-switch trigger.
-    fn apply_execution_report(&self, _report: &ExecutionReport) -> bool {
-        false
+    /// Returns account blocks representing the kill-switch state.
+    ///
+    /// An empty list means no kill-switch condition. A non-empty list means this
+    /// policy entered a blocked state after the report was applied. The engine
+    /// merges blocks from all policies into a single list.
+    fn apply_execution_report(&self, _report: &ExecutionReport) -> Vec<AccountBlock> {
+        vec![]
     }
 
     /// Validates a single account adjustment.
@@ -139,16 +143,36 @@ pub trait PreTradePolicy<Order, ExecutionReport, AccountAdjustment = ()> {
     }
 }
 
-pub(crate) fn request_field_access_pre_trade_reject(
-    policy_name: &str,
-    err: &crate::RequestFieldAccessError,
+/// Exposes a policy's stable name to error builders without coupling them to
+/// the generic [`PreTradePolicy`] trait.
+pub(crate) trait PolicyName {
+    fn policy_name(&self) -> &str;
+}
+
+pub(crate) fn missing_required_field_reject<Policy: PolicyName + ?Sized>(
+    policy: &Policy,
+    field_name: &str,
+    error: &crate::RequestFieldAccessError,
 ) -> Reject {
     Reject::new(
-        policy_name,
+        policy.policy_name(),
         RejectScope::Order,
         RejectCode::MissingRequiredField,
-        "failed to access required field",
-        err.to_string(),
+        format!("failed to access required field '{field_name}'"),
+        error.to_string(),
+    )
+}
+
+pub(crate) fn missing_required_field_account_block<Policy: PolicyName + ?Sized>(
+    policy: &Policy,
+    field_name: &str,
+    error: &crate::RequestFieldAccessError,
+) -> AccountBlock {
+    AccountBlock::new(
+        policy.policy_name(),
+        RejectCode::MissingRequiredField,
+        format!("failed to access required field '{field_name}'"),
+        error.to_string(),
     )
 }
 
@@ -162,7 +186,7 @@ mod tests {
     use crate::pretrade::{RejectCode, RejectScope, Rejects};
     use crate::{Mutations, RequestFieldAccessError};
 
-    use super::{request_field_access_pre_trade_reject, PreTradeContext, PreTradePolicy};
+    use super::{missing_required_field_reject, PolicyName, PreTradeContext, PreTradePolicy};
 
     type TestOrder = OrderOperation;
     type TestReport = WithExecutionReportOperation<WithFinancialImpact<()>>;
@@ -219,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_execution_report_hook_returns_false_for_noop_main_policy() {
+    fn apply_execution_report_hook_returns_empty_for_noop_main_policy() {
         let report = WithExecutionReportOperation {
             inner: WithFinancialImpact {
                 inner: (),
@@ -238,11 +262,11 @@ mod tests {
             },
         };
 
-        assert!(!MainPolicyNoop.apply_execution_report(&report));
+        assert!(MainPolicyNoop.apply_execution_report(&report).is_empty());
     }
 
     #[test]
-    fn apply_execution_report_hook_returns_false_for_noop_start_policy() {
+    fn apply_execution_report_hook_returns_empty_for_noop_start_policy() {
         let report = WithExecutionReportOperation {
             inner: WithFinancialImpact {
                 inner: (),
@@ -261,7 +285,7 @@ mod tests {
             },
         };
 
-        assert!(!StartPolicyNoop.apply_execution_report(&report));
+        assert!(StartPolicyNoop.apply_execution_report(&report).is_empty());
     }
 
     #[test]
@@ -327,14 +351,24 @@ mod tests {
     }
 
     #[test]
-    fn request_field_access_error_is_mapped_to_reject_payload() {
-        let err = RequestFieldAccessError::new("instrument");
-        let reject = request_field_access_pre_trade_reject("TestPolicy", &err);
+    fn missing_required_field_reject_builds_payload_from_policy_field_and_error() {
+        struct TestPolicyTag;
+        impl PolicyName for TestPolicyTag {
+            fn policy_name(&self) -> &str {
+                "TestPolicy"
+            }
+        }
+
+        let error = RequestFieldAccessError::new("instrument");
+        let reject = missing_required_field_reject(&TestPolicyTag, "instrument", &error);
 
         assert_eq!(reject.policy, "TestPolicy");
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
-        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(
+            reject.reason,
+            "failed to access required field 'instrument'"
+        );
         assert_eq!(reject.details, "failed to access field 'instrument'");
     }
 }

@@ -70,7 +70,7 @@ report = openpit.ExecutionReport(
 )
 
 post_trade = engine.apply_execution_report(report=report)
-assert post_trade.kill_switch_triggered is False
+assert not post_trade.account_blocks
 ```
 
 Use `engine.execute_pre_trade(order=...)` when the caller does not need to keep

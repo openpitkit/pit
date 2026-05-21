@@ -138,7 +138,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         post_trade = engine.apply_execution_report(
             report=conftest.make_report(pnl=openpit.param.Pnl("4.5"))
         )
-        assert post_trade.kill_switch_triggered is False
+        assert not post_trade.account_blocks
         assert strategy.journal[-1] == ("AAPL", "USD", "4.5")
         return
 
@@ -258,7 +258,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         post_trade = engine.apply_execution_report(
             report=conftest.make_report(pnl=openpit.param.Pnl("-600"))
         )
-        assert post_trade.kill_switch_triggered
+        assert post_trade.account_blocks
 
         blocked = engine.start_pre_trade(
             order=conftest.make_order(price=openpit.param.Price("99.5"))

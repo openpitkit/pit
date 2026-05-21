@@ -61,7 +61,7 @@ func (r *Request) Execute() (*Reservation, []reject.Reject, error) {
 
 	if rejects != nil {
 		rejectResult, err := reject.NewListFromHandle(rejects)
-		native.DestroyRejectList(rejects)
+		native.DestroyPretradeRejectList(rejects)
 		if err != nil {
 			return nil,
 				nil,

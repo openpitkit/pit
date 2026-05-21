@@ -54,7 +54,7 @@ fn build_order(account_id: AccountId) -> OrderOperation {
 #[test]
 fn rate_limit_full_sync_broker_counter_not_lost_under_concurrent_load() {
     let total_calls = TOTAL_THREADS * PER_THREAD;
-    let builder = Engine::<OrderOperation, ()>::builder().full_sync();
+    let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
     let policy: Arc<TestPolicy> = Arc::new(
         RateLimitPolicy::<FullLocking>::new(
             Some(RateLimitBrokerBarrier {

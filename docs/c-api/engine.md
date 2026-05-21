@@ -244,11 +244,11 @@ Cleanup:
 
 Reject ownership contract:
 
-- on `Rejected`, a non-null `OpenPitRejectList` pointer is written to
+- on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
   `out_rejects` if it is not null;
 - the caller takes ownership and MUST release it with
-  `openpit_destroy_reject_list`; failing to do so leaks the heap allocation
-  made inside this call;
+  `openpit_pretrade_destroy_reject_list`; failing to do so leaks the heap
+  allocation made inside this call;
 - no thread-local state is involved, and the returned pointer is safe to read
   on any thread;
 - on `Passed` and `Error`, null is written to `out_rejects`, and the caller
@@ -265,7 +265,7 @@ OpenPitPretradeStatus openpit_engine_start_pre_trade(
     OpenPitEngine * engine,
     const OpenPitOrder * order,
     OpenPitPretradePreTradeRequest ** out_request,
-    OpenPitRejectList ** out_rejects,
+    OpenPitPretradeRejectList ** out_rejects,
     OpenPitOutError out_error
 );
 ```
@@ -296,11 +296,11 @@ Cleanup:
 
 Reject ownership contract:
 
-- on `Rejected`, a non-null `OpenPitRejectList` pointer is written to
+- on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
   `out_rejects` if it is not null;
 - the caller takes ownership and MUST release it with
-  `openpit_destroy_reject_list`; failing to do so leaks the heap allocation
-  made inside this call;
+  `openpit_pretrade_destroy_reject_list`; failing to do so leaks the heap
+  allocation made inside this call;
 - no thread-local state is involved, and the returned pointer is safe to read
   on any thread;
 - on `Passed` and `Error`, null is written to `out_rejects`, and the caller
@@ -317,7 +317,7 @@ OpenPitPretradeStatus openpit_engine_execute_pre_trade(
     OpenPitEngine * engine,
     const OpenPitOrder * order,
     OpenPitPretradePreTradeReservation ** out_reservation,
-    OpenPitRejectList ** out_rejects,
+    OpenPitPretradeRejectList ** out_rejects,
     OpenPitOutError out_error
 );
 ```
@@ -348,11 +348,11 @@ Ownership:
 
 Reject ownership contract:
 
-- on `Rejected`, a non-null `OpenPitRejectList` pointer is written to
+- on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
   `out_rejects` if it is not null;
 - the caller takes ownership and MUST release it with
-  `openpit_destroy_reject_list`; failing to do so leaks the heap allocation
-  made inside this call;
+  `openpit_pretrade_destroy_reject_list`; failing to do so leaks the heap
+  allocation made inside this call;
 - no thread-local state is involved, and the returned pointer is safe to read
   on any thread;
 - on `Passed` and `Error`, null is written to `out_rejects`, and the caller
@@ -362,7 +362,7 @@ Reject ownership contract:
 OpenPitPretradeStatus openpit_pretrade_pre_trade_request_execute(
     OpenPitPretradePreTradeRequest * request,
     OpenPitPretradePreTradeReservation ** out_reservation,
-    OpenPitRejectList ** out_rejects,
+    OpenPitPretradeRejectList ** out_rejects,
     OpenPitOutError out_error
 );
 ```
@@ -457,33 +457,26 @@ void openpit_destroy_pretrade_pre_trade_reservation(
 );
 ```
 
-## `OpenPitEngineApplyExecutionReportResult`
-
-Result of `openpit_engine_apply_execution_report`.
-
-```c
-typedef struct OpenPitEngineApplyExecutionReportResult {
-    OpenPitPretradePostTradeResult post_trade_result;
-    bool is_error;
-} OpenPitEngineApplyExecutionReportResult;
-```
-
 ## `openpit_engine_apply_execution_report`
 
 Applies an execution report to engine state.
 
+Returns `true` on success, `false` on error.
+
 Success:
 
-- returns `OpenPitEngineApplyExecutionReportResult { is_error = false, ... }`.
+- returns `true`;
+- if `out_blocks` is not null and at least one policy entered a blocked state,
+  writes a caller-owned `OpenPitPretradeAccountBlockList` pointer; release it
+  with `openpit_pretrade_destroy_account_block_list`;
+- if `out_blocks` is not null and no policy blocked, writes null.
 
 Error:
 
-- returns `OpenPitEngineApplyExecutionReportResult { is_error = true, post_trade_result = { kill_switch_triggered = false } }` when input pointers
-  are invalid or the report payload cannot be decoded;
+- returns `false` when input pointers are invalid or the report payload cannot
+  be decoded;
 - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
-  error handle that MUST be released with `openpit_destroy_shared_string`;
-- when `is_error` is `true`, do not trust any other fields beyond the fact
-  that the call failed.
+  error handle that MUST be released with `openpit_destroy_shared_string`.
 
 Lifetime contract:
 
@@ -492,9 +485,10 @@ Lifetime contract:
   function returns.
 
 ```c
-OpenPitEngineApplyExecutionReportResult openpit_engine_apply_execution_report(
+bool openpit_engine_apply_execution_report(
     OpenPitEngine * engine,
     const OpenPitExecutionReport * report,
+    OpenPitPretradeAccountBlockList ** out_blocks,
     OpenPitOutError out_error
 );
 ```
@@ -542,7 +536,8 @@ Contract:
 - violating the pointer contract aborts the call.
 
 ```c
-const OpenPitRejectList * openpit_account_adjustment_batch_error_get_rejects(
+const OpenPitPretradeRejectList *
+openpit_account_adjustment_batch_error_get_rejects(
     const OpenPitAccountAdjustmentBatchError * batch_error
 );
 ```

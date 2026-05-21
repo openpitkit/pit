@@ -144,14 +144,6 @@ pub struct OpenPitExecutionReport {
     pub user_data: *mut c_void,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-/// Aggregated post-trade processing result.
-pub struct OpenPitPretradePostTradeResult {
-    /// Whether the report triggered some kill-switch policy.
-    pub kill_switch_triggered: bool,
-}
-
 fn import_operation(
     value: OpenPitExecutionReportOperationOptional,
 ) -> Result<ExecutionReportOperationAccess, String> {

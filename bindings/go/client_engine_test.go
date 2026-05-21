@@ -114,8 +114,8 @@ func TestClientEnginePassesClientExecutionReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport() error = %v", err)
 	}
-	if !result.KillSwitchTriggered {
-		t.Fatal("KillSwitchTriggered = false, want true")
+	if len(result.AccountBlocks) == 0 || result.AccountBlocks[0].Code != reject.CodePnlKillSwitchTriggered {
+		t.Fatalf("AccountBlocks = %v, want kill switch block", result.AccountBlocks)
 	}
 	if policy.report.VenueExecID != report.VenueExecID {
 		t.Fatalf(
@@ -340,9 +340,12 @@ func (clientEngineTestStartPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (p *clientEngineTestStartPolicy) ApplyExecutionReport(report clientEngineTestReport) bool {
+func (p *clientEngineTestStartPolicy) ApplyExecutionReport(report clientEngineTestReport) []reject.AccountBlock {
 	p.report = report
-	return p.killSwitch
+	if p.killSwitch {
+		return []reject.AccountBlock{reject.NewAccountBlock(reject.CodePnlKillSwitchTriggered, "test", "kill switch", "")}
+	}
+	return nil
 }
 
 func (clientEngineTestStartPolicy) ApplyAccountAdjustment(
@@ -380,8 +383,8 @@ func (p *clientEngineTestMainPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (clientEngineTestMainPolicy) ApplyExecutionReport(clientEngineTestReport) bool {
-	return false
+func (clientEngineTestMainPolicy) ApplyExecutionReport(clientEngineTestReport) []reject.AccountBlock {
+	return nil
 }
 
 func (clientEngineTestMainPolicy) ApplyAccountAdjustment(
@@ -418,8 +421,8 @@ func (clientEngineTestAdjustmentPreTradePolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (clientEngineTestAdjustmentPreTradePolicy) ApplyExecutionReport(clientEngineTestReport) bool {
-	return false
+func (clientEngineTestAdjustmentPreTradePolicy) ApplyExecutionReport(clientEngineTestReport) []reject.AccountBlock {
+	return nil
 }
 
 func (p *clientEngineTestAdjustmentPreTradePolicy) ApplyAccountAdjustment(
@@ -461,8 +464,8 @@ func (clientEngineTestRejectingStartPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (clientEngineTestRejectingStartPolicy) ApplyExecutionReport(clientEngineTestReport) bool {
-	return false
+func (clientEngineTestRejectingStartPolicy) ApplyExecutionReport(clientEngineTestReport) []reject.AccountBlock {
+	return nil
 }
 
 func (clientEngineTestRejectingStartPolicy) ApplyAccountAdjustment(
@@ -503,8 +506,8 @@ func (p *clientEngineTestRejectingMainPolicy) PerformPreTradeCheck(
 	)
 }
 
-func (clientEngineTestRejectingMainPolicy) ApplyExecutionReport(clientEngineTestReport) bool {
-	return false
+func (clientEngineTestRejectingMainPolicy) ApplyExecutionReport(clientEngineTestReport) []reject.AccountBlock {
+	return nil
 }
 
 func (clientEngineTestRejectingMainPolicy) ApplyAccountAdjustment(

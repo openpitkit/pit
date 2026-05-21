@@ -38,7 +38,7 @@ fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Build the engine builder.
     type Report = WithExecutionReportOperation<WithFinancialImpact<()>>;
-    let engine_builder = Engine::<OrderOperation, Report>::builder().no_sync();
+    let builder = Engine::builder::<OrderOperation, Report, ()>().no_sync();
 
     // 2. Configure policies.
     let pnl_policy = PnlBoundsKillSwitchPolicy::new(
@@ -48,7 +48,7 @@ fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
             upper_bound: None,
         }],
         [],
-        engine_builder.storage_builder(),
+        builder.storage_builder(),
     )?;
 
     let rate_limit_policy = RateLimitPolicy::new(
@@ -61,7 +61,7 @@ fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
         [],
         [],
         [],
-        engine_builder.storage_builder(),
+        builder.storage_builder(),
     )?;
 
     let size_policy = OrderSizeLimitPolicy::new(
@@ -77,7 +77,7 @@ fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // 3. Build the engine (one time at the platform initialization).
-    let engine = engine_builder
+    let engine = builder
         .pre_trade(OrderValidationPolicy::new())
         .pre_trade(pnl_policy)
         .pre_trade(rate_limit_policy)
@@ -133,6 +133,6 @@ fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
     // 6. After each execution report is applied, the system may report that it has
     // been determined in advance that all subsequent requests will be rejected if
     // the account status does not change.
-    assert!(!result.kill_switch_triggered);
+    assert!(result.account_blocks.is_empty());
     Ok(())
 }

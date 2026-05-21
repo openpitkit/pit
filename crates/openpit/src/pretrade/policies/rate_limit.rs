@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use crate::core::{HasAccountId, HasInstrument};
 use crate::param::{AccountId, Asset};
-use crate::pretrade::policy::request_field_access_pre_trade_reject;
+use crate::pretrade::policy::{missing_required_field_reject, PolicyName};
 use crate::pretrade::start_pre_trade_time::start_pre_trade_now;
 use crate::pretrade::{PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects};
 use crate::storage::{Storage, StorageBuilder};
@@ -188,7 +188,7 @@ impl AtomicWindowCounter {
 /// use openpit::OrderOperation;
 /// use openpit::param::TradeAmount;
 ///
-/// let builder = Engine::<OrderOperation>::builder().no_sync();
+/// let builder = Engine::builder::<OrderOperation, (), ()>().no_sync();
 /// let policy = RateLimitPolicy::new(
 ///     Some(RateLimitBrokerBarrier {
 ///         limit: RateLimit { max_orders: 2, window: Duration::from_secs(60) },
@@ -243,7 +243,7 @@ where
     ///
     /// `storage_builder` must be obtained from the engine builder so that the
     /// per-account and per-(account, asset) timestamp storages share the factory
-    /// type with the engine's synchronization policy.
+    /// type with the engine's synchronization mode.
     ///
     /// At least one barrier must be provided across all four axes. If all are
     /// `None` or empty, returns [`RateLimitPolicyError::NoBarriersConfigured`].
@@ -315,6 +315,15 @@ where
     }
 }
 
+impl<LockingPolicyFactory> PolicyName for RateLimitPolicy<LockingPolicyFactory>
+where
+    LockingPolicyFactory: crate::storage::LockingPolicyFactory,
+{
+    fn policy_name(&self) -> &str {
+        Self::NAME
+    }
+}
+
 impl<Order, ExecutionReport, AccountAdjustment, LockingPolicyFactory>
     PreTradePolicy<Order, ExecutionReport, AccountAdjustment>
     for RateLimitPolicy<LockingPolicyFactory>
@@ -333,7 +342,7 @@ where
                     order
                         .instrument()
                         .map_err(|e| {
-                            Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e))
+                            Rejects::from(missing_required_field_reject(self, "instrument", &e))
                         })?
                         .settlement_asset()
                         .clone(),
@@ -344,7 +353,7 @@ where
         let account_id_opt: Option<AccountId> =
             if self.per_account_timestamps.is_some() || !self.account_asset_barriers.is_empty() {
                 Some(order.account_id().map_err(|e| {
-                    Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e))
+                    Rejects::from(missing_required_field_reject(self, "account ID", &e))
                 })?)
             } else {
                 None
@@ -458,8 +467,11 @@ where
         Ok(())
     }
 
-    fn apply_execution_report(&self, _report: &ExecutionReport) -> bool {
-        false
+    fn apply_execution_report(
+        &self,
+        _report: &ExecutionReport,
+    ) -> Vec<crate::pretrade::AccountBlock> {
+        vec![]
     }
 }
 
@@ -521,9 +533,8 @@ mod tests {
 
     type TestPolicy = RateLimitPolicy<NoLocking>;
 
-    fn test_builder() -> crate::SyncedEngineBuilder<OrderOperation, (), (), crate::LocalSyncPolicy>
-    {
-        crate::Engine::<OrderOperation>::builder().no_sync()
+    fn test_builder() -> crate::SyncedEngineBuilder<OrderOperation, (), (), crate::LocalSync> {
+        crate::Engine::builder().no_sync()
     }
 
     // ── constructor validation ─────────────────────────────────────────────
@@ -901,7 +912,10 @@ mod tests {
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
-        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(
+            reject.reason,
+            "failed to access required field 'account ID'"
+        );
         assert_eq!(reject.details, "failed to access field 'account_id'");
     }
 
@@ -950,7 +964,10 @@ mod tests {
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
-        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(
+            reject.reason,
+            "failed to access required field 'instrument'"
+        );
         assert_eq!(reject.details, "failed to access field 'instrument'");
     }
 

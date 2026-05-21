@@ -67,8 +67,8 @@ PostTradeResult.__doc__ = """
 Result of ``openpit.Engine.apply_execution_report``.
 
 Attributes:
-    kill_switch_triggered: ``True`` when at least one policy reports that new
-        requests for the account should be blocked after processing the report.
+    account_blocks: List of account blocks reported by policies. Non-empty
+        when at least one policy entered a blocked state after the report.
 """
 
 Reject.__doc__ = """

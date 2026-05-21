@@ -91,8 +91,8 @@ func TestRejectNewWithUserDataInitialisesAllFields(t *testing.T) {
 }
 
 func TestNewListFromHandleReturnsErrorForEmptyList(t *testing.T) {
-	handle := native.CreateRejectList(0)
-	t.Cleanup(func() { native.DestroyRejectList(handle) })
+	handle := native.CreatePretradeRejectList(0)
+	t.Cleanup(func() { native.DestroyPretradeRejectList(handle) })
 
 	list, err := NewListFromHandle(handle)
 	if list != nil {

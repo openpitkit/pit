@@ -113,7 +113,7 @@ report = openpit.ExecutionReport(
         fee=openpit.param.Fee("3.4"),
     ),
 )
-assert engine.apply_execution_report(report=report).kill_switch_triggered is False
+assert not engine.apply_execution_report(report=report).account_blocks
 ```
 
 ## Domain value types

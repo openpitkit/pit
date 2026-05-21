@@ -83,7 +83,7 @@ impl<T1, T2, T3> AccountKey for (AccountId, T1, T2, T3) {
 ///
 /// Used as the `KeyBound` parameter of
 /// [`IndexLocking`](crate::storage::IndexLocking) under
-/// [`AccountSyncPolicy`](crate::AccountSyncPolicy). Storages built through
+/// [`AccountSync`](crate::AccountSync). Storages built through
 /// the [`account_sync`](crate::EngineBuilder::account_sync) flow
 /// inherit this bound, which forces every key type used by registered
 /// trading policies to satisfy [`AccountKey`] at compile time.
@@ -94,7 +94,7 @@ impl<T1, T2, T3> AccountKey for (AccountId, T1, T2, T3) {
 /// use openpit::param::{AccountId, Asset};
 /// use openpit::Engine;
 ///
-/// let builder = Engine::<()>::builder().account_sync();
+/// let builder = Engine::builder::<(), (), ()>().account_sync();
 /// let _ = builder.storage_builder().create::<AccountId, u64>();
 /// let _ = builder.storage_builder().create::<(AccountId, Asset), u64>();
 /// ```
@@ -108,7 +108,7 @@ impl<T1, T2, T3> AccountKey for (AccountId, T1, T2, T3) {
 ///
 /// // `u32` does not implement `AccountKey`, so account-sync mode
 /// // refuses to create a storage keyed by it.
-/// let builder = Engine::<()>::builder().account_sync();
+/// let builder = Engine::builder::<(), (), ()>().account_sync();
 /// let _ = builder.storage_builder().create::<u32, u64>();
 /// ```
 #[derive(Debug, Default, Clone, Copy)]

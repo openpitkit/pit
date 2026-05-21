@@ -30,7 +30,7 @@ const (
 	ScopeAccount Scope = native.RejectScopeAccount
 )
 
-type Code native.RejectCode
+type Code native.PretradeRejectCode
 
 const (
 	CodeMissingRequiredField        Code = native.RejectCodeMissingRequiredField
@@ -112,23 +112,23 @@ func New(
 
 // NewFromHandle creates a Reject from a Reject handle with data copied from
 // the handle.
-func NewFromHandle(handle native.Reject) Reject {
+func NewFromHandle(handle native.PretradeReject) Reject {
 	return Reject{
-		Code:     Code(native.RejectGetCode(handle)),
-		Scope:    Scope(native.RejectGetScope(handle)),
-		Policy:   native.RejectGetPolicy(handle).Safe(),
-		Reason:   native.RejectGetReason(handle).Safe(),
-		Details:  native.RejectGetDetails(handle).Safe(),
-		UserData: native.RejectGetUserData(handle),
+		Code:     Code(native.PretradeRejectGetCode(handle)),
+		Scope:    Scope(native.PretradeRejectGetScope(handle)),
+		Policy:   native.PretradeRejectGetPolicy(handle).Safe(),
+		Reason:   native.PretradeRejectGetReason(handle).Safe(),
+		Details:  native.PretradeRejectGetDetails(handle).Safe(),
+		UserData: native.PretradeRejectGetUserData(handle),
 	}
 }
 
 // NewHandle returns a native Reject handle that refers to the current Reject
 // data.
-func (r Reject) NewHandle() native.Reject {
-	return native.CreateReject(
-		native.RejectCode(r.Code),
-		native.RejectScope(r.Scope),
+func (r Reject) NewHandle() native.PretradeReject {
+	return native.CreatePretradeReject(
+		native.PretradeRejectCode(r.Code),
+		native.PretradeRejectScope(r.Scope),
 		native.NewStringView(r.Policy),
 		native.NewStringView(r.Reason),
 		native.NewStringView(r.Details),

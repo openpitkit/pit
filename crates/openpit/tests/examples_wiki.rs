@@ -113,8 +113,8 @@ impl<O, R> PreTradePolicy<O, R> for ReserveThenValidatePolicy {
         Ok(())
     }
 
-    fn apply_execution_report(&self, _report: &R) -> bool {
-        false
+    fn apply_execution_report(&self, _report: &R) -> Vec<openpit::pretrade::AccountBlock> {
+        vec![]
     }
 }
 
@@ -217,8 +217,8 @@ where
         Ok(())
     }
 
-    fn apply_execution_report(&self, _report: &R) -> bool {
-        false
+    fn apply_execution_report(&self, _report: &R) -> Vec<openpit::pretrade::AccountBlock> {
+        vec![]
     }
 }
 
@@ -277,7 +277,7 @@ fn example_wiki_domain_types_leverage() -> Result<(), Box<dyn std::error::Error>
 fn example_wiki_pipeline_start_stage_reject() -> Result<(), Box<dyn std::error::Error>> {
     // Wiki example: pit.wiki/Pre-trade-Pipeline.md — Handle a Start-Stage Reservation
     // Keep this example in sync with the matching wiki example.
-    let engine = Engine::<OrderOperation, PitExecutionReport>::builder()
+    let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
         .pre_trade(OrderValidationPolicy::new())
         .build()?;
@@ -305,7 +305,7 @@ fn example_wiki_pipeline_start_stage_reject() -> Result<(), Box<dyn std::error::
 fn example_wiki_pipeline_main_stage_finalize() -> Result<(), Box<dyn std::error::Error>> {
     // Wiki example: pit.wiki/Pre-trade-Pipeline.md — Execute the Main Stage and Finalize the Reservation
     // Keep this example in sync with the matching wiki example.
-    let engine = Engine::<OrderOperation, PitExecutionReport>::builder()
+    let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
         .pre_trade(OrderValidationPolicy::new())
         .build()?;
@@ -338,7 +338,7 @@ fn example_wiki_pipeline_shortcut_start_and_main() -> Result<(), Box<dyn std::er
     // Wiki example: pit.wiki/Pre-trade-Pipeline.md — Shortcut for Start + Main Stages
     // Wiki example: pit.wiki/Getting-Started.md — Shortcut for Start + Main Stages
     // Keep this example in sync with the matching wiki example.
-    let engine = Engine::<OrderOperation, PitExecutionReport>::builder()
+    let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
         .pre_trade(OrderValidationPolicy::new())
         .build()?;
@@ -366,7 +366,7 @@ fn example_wiki_pipeline_shortcut_start_and_main() -> Result<(), Box<dyn std::er
 fn example_wiki_pipeline_apply_post_trade_feedback() -> Result<(), Box<dyn std::error::Error>> {
     // Wiki example: pit.wiki/Pre-trade-Pipeline.md — Apply Post-Trade Feedback
     // Keep this example in sync with the matching wiki example.
-    let engine = Engine::<OrderOperation, PitExecutionReport>::builder()
+    let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
         .pre_trade(OrderValidationPolicy::new())
         .build()?;
@@ -374,10 +374,10 @@ fn example_wiki_pipeline_apply_post_trade_feedback() -> Result<(), Box<dyn std::
 
     // Execution reports feed realized outcomes back into cumulative policy state.
     let result = engine.apply_execution_report(&report);
-    if result.kill_switch_triggered {
+    if !result.account_blocks.is_empty() {
         eprintln!("halt new orders until the blocked state is cleared");
     }
-    assert!(!result.kill_switch_triggered);
+    assert!(result.account_blocks.is_empty());
 
     Ok(())
 }
@@ -437,14 +437,13 @@ fn example_wiki_account_adjustments() -> Result<(), Box<dyn std::error::Error>> 
         },
     ];
 
-    // The engine validates the whole batch atomically.
     struct AcceptAllAdjustments;
-    impl<Order, ExecutionReport> PreTradePolicy<Order, ExecutionReport, AccountAdjustment>
-        for AcceptAllAdjustments
-    {
+
+    impl openpit::pretrade::PreTradePolicy<(), (), AccountAdjustment> for AcceptAllAdjustments {
         fn name(&self) -> &'static str {
             "AcceptAllAdjustments"
         }
+
         fn apply_account_adjustment(
             &self,
             _ctx: &openpit::AccountAdjustmentContext,
@@ -455,7 +454,9 @@ fn example_wiki_account_adjustments() -> Result<(), Box<dyn std::error::Error>> 
             Ok(())
         }
     }
-    let engine = Engine::<(), (), AccountAdjustment>::builder()
+
+    // The engine validates the whole batch atomically.
+    let engine = Engine::builder()
         .no_sync()
         .pre_trade(AcceptAllAdjustments)
         .build()?;
@@ -572,7 +573,7 @@ fn example_wiki_account_adjustments_balance_limit_policy() -> Result<(), Box<dyn
     }
 
     let policy = BalanceLimitPolicy::new(Volume::from_str("1000000")?);
-    let engine = Engine::<(), (), SimpleAdjustment>::builder()
+    let engine = Engine::builder::<(), (), SimpleAdjustment>()
         .no_sync()
         .pre_trade(policy)
         .build()?;
@@ -600,7 +601,7 @@ fn example_wiki_policy_rollback_safety() -> Result<(), Box<dyn std::error::Error
         limit: Volume::from_str("50")?,
     };
 
-    let engine = Engine::<OrderOperation, PitExecutionReport>::builder()
+    let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
         .pre_trade(reserve_policy)
         .build()?;
@@ -619,7 +620,7 @@ fn example_wiki_policy_rollback_safety() -> Result<(), Box<dyn std::error::Error
 fn example_wiki_policy_notional_cap() -> Result<(), Box<dyn std::error::Error>> {
     // Wiki example: pit.wiki/Policy-API.md — Custom Main-Stage Policy → Rust
     // Keep this example in sync with the matching wiki example.
-    let engine = Engine::<OrderOperation, PitExecutionReport>::builder()
+    let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
         .pre_trade(NotionalCapPolicy {
             max_abs_notional: Volume::from_str("1000")?,
@@ -744,7 +745,7 @@ fn example_wiki_policies_order_validation() -> Result<(), Box<dyn std::error::Er
     // Keep this example in sync with the matching wiki example.
     use openpit::pretrade::policies::OrderValidationPolicy;
 
-    let engine = Engine::<OrderOperation, PitExecutionReport>::builder()
+    let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
         .pre_trade(OrderValidationPolicy::new())
         .build()?;
@@ -762,7 +763,7 @@ fn example_wiki_policies_rate_limit() -> Result<(), Box<dyn std::error::Error>> 
 
     use openpit::pretrade::policies::{RateLimit, RateLimitBrokerBarrier, RateLimitPolicy};
 
-    let builder = Engine::<OrderOperation, PitExecutionReport>::builder().no_sync();
+    let builder = Engine::builder::<OrderOperation, PitExecutionReport, ()>().no_sync();
     let policy = RateLimitPolicy::new(
         Some(RateLimitBrokerBarrier {
             limit: RateLimit {
@@ -803,7 +804,7 @@ fn example_wiki_policies_order_size_limit() -> Result<(), Box<dyn std::error::Er
         [],
     )?;
 
-    let engine = Engine::<OrderOperation, PitExecutionReport>::builder()
+    let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
         .pre_trade(policy)
         .build()?;
@@ -820,7 +821,7 @@ fn example_wiki_policies_pnl_bounds_killswitch() -> Result<(), Box<dyn std::erro
     use openpit::param::{Asset, Pnl};
     use openpit::pretrade::policies::{PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy};
 
-    let builder = Engine::<OrderOperation, PitExecutionReport>::builder().no_sync();
+    let builder = Engine::builder::<OrderOperation, PitExecutionReport, ()>().no_sync();
     let policy = PnlBoundsKillSwitchPolicy::new(
         [PnlBoundsBrokerBarrier {
             settlement_asset: Asset::new("USD")?,

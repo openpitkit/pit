@@ -20,7 +20,7 @@ package native
 /*
 #include "openpit.h"
 
-extern const OpenPitRejectList * openpit_account_adjustment_batch_error_get_rejects(
+extern const OpenPitPretradeRejectList * openpit_account_adjustment_batch_error_get_rejects(
     const OpenPitAccountAdjustmentBatchError * batch_error
 );
 */
@@ -202,9 +202,12 @@ func DestroyEngine(engine Engine) {
 	C.openpit_destroy_engine(engine)
 }
 
-func EngineStartPreTrade(engine Engine, order Order) (PretradePreTradeRequest, RejectList, error) {
+func EngineStartPreTrade(
+	engine Engine,
+	order Order,
+) (PretradePreTradeRequest, PretradeRejectList, error) {
 	var request PretradePreTradeRequest
-	var rejects RejectList
+	var rejects PretradeRejectList
 	var outError SharedString
 	status := C.openpit_engine_start_pre_trade(
 		engine,
@@ -226,7 +229,7 @@ func EngineStartPreTrade(engine Engine, order Order) (PretradePreTradeRequest, R
 		return nil, nil, consumeSharedStringAsError(outError, "openpit_engine_start_pre_trade failed")
 	default:
 		DestroyPretradePreTradeRequest(request)
-		DestroyRejectList(rejects)
+		DestroyPretradeRejectList(rejects)
 		DestroySharedString(outError)
 		return nil,
 			nil,
@@ -237,9 +240,9 @@ func EngineStartPreTrade(engine Engine, order Order) (PretradePreTradeRequest, R
 func EngineExecutePreTrade(
 	engine Engine,
 	order Order,
-) (PretradePreTradeReservation, RejectList, error) {
+) (PretradePreTradeReservation, PretradeRejectList, error) {
 	var reservation PretradePreTradeReservation
-	var rejects RejectList
+	var rejects PretradeRejectList
 	var outError SharedString
 	status := C.openpit_engine_execute_pre_trade(
 		engine,
@@ -261,7 +264,7 @@ func EngineExecutePreTrade(
 		return nil, nil, consumeSharedStringAsError(outError, "openpit_engine_execute_pre_trade failed")
 	default:
 		DestroyPretradePreTradeReservation(reservation)
-		DestroyRejectList(rejects)
+		DestroyPretradeRejectList(rejects)
 		DestroySharedString(outError)
 		return nil,
 			nil,
@@ -270,7 +273,7 @@ func EngineExecutePreTrade(
 }
 
 type PretradePostTradeResult struct {
-	KillSwitchTriggered bool
+	AccountBlocks []PretradeAccountBlock
 }
 
 func EngineApplyExecutionReport(
@@ -278,15 +281,28 @@ func EngineApplyExecutionReport(
 	report ExecutionReport,
 ) (PretradePostTradeResult, error) {
 	var outError SharedString
-	result := C.openpit_engine_apply_execution_report(engine, &report, C.OpenPitOutError(&outError)) //nolint:gocritic
-	if result.is_error {
+	var outBlocks PretradeAccountBlockList
+	if !C.openpit_engine_apply_execution_report(
+		engine,
+		&report,
+		&outBlocks,
+		C.OpenPitOutError(&outError), //nolint:gocritic
+	) {
 		return PretradePostTradeResult{},
 			consumeSharedStringAsError(outError, "openpit_engine_apply_execution_report failed")
 	}
-	return PretradePostTradeResult{
-			KillSwitchTriggered: bool(result.post_trade_result.kill_switch_triggered),
-		},
-		nil
+
+	var blocks []PretradeAccountBlock
+	if outBlocks != nil {
+		n := PretradeAccountBlockListLen(outBlocks)
+		blocks = make([]PretradeAccountBlock, n)
+		for i := range blocks {
+			blocks[i] = PretradeAccountBlockListGet(outBlocks, i)
+		}
+		DestroyPretradeAccountBlockList(outBlocks)
+	}
+
+	return PretradePostTradeResult{AccountBlocks: blocks}, nil
 }
 
 func EngineApplyAccountAdjustment(
@@ -330,9 +346,9 @@ func EngineApplyAccountAdjustment(
 
 func PretradePreTradeRequestExecute(
 	request PretradePreTradeRequest,
-) (PretradePreTradeReservation, RejectList, error) {
+) (PretradePreTradeReservation, PretradeRejectList, error) {
 	var reservation PretradePreTradeReservation
-	var rejects RejectList
+	var rejects PretradeRejectList
 	var outError SharedString
 	status := C.openpit_pretrade_pre_trade_request_execute(
 		request,
@@ -356,7 +372,7 @@ func PretradePreTradeRequestExecute(
 	default:
 		DestroyPretradePreTradeReservation(reservation)
 		DestroyPretradePreTradeRequest(request)
-		DestroyRejectList(rejects)
+		DestroyPretradeRejectList(rejects)
 		DestroySharedString(outError)
 		return nil,
 			nil,
@@ -426,7 +442,7 @@ func AccountAdjustmentBatchErrorGetFailedAdjustmentIndex(
 	return int(C.openpit_account_adjustment_batch_error_get_failed_adjustment_index(handle))
 }
 
-func AccountAdjustmentBatchErrorGetRejects(handle AccountAdjustmentBatchError) RejectList {
+func AccountAdjustmentBatchErrorGetRejects(handle AccountAdjustmentBatchError) PretradeRejectList {
 	return C.openpit_account_adjustment_batch_error_get_rejects(handle)
 }
 

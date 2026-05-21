@@ -93,7 +93,7 @@ func (e *Engine) StartPreTrade(order model.Order) (*pretrade.Request, []reject.R
 	}
 	if startReject != nil {
 		rejectResult, err := reject.NewListFromHandle(startReject)
-		native.DestroyRejectList(startReject)
+		native.DestroyPretradeRejectList(startReject)
 		if err != nil {
 			return nil,
 				nil,
@@ -124,7 +124,7 @@ func (e *Engine) ExecutePreTrade(
 	}
 	if execRejects != nil {
 		rejectResult, err := reject.NewListFromHandle(execRejects)
-		native.DestroyRejectList(execRejects)
+		native.DestroyPretradeRejectList(execRejects)
 		if err != nil {
 			return nil,
 				nil,
@@ -136,7 +136,7 @@ func (e *Engine) ExecutePreTrade(
 }
 
 type PostTradeResult struct {
-	KillSwitchTriggered bool
+	AccountBlocks []reject.AccountBlock
 }
 
 func (e *Engine) ApplyExecutionReport(report model.ExecutionReport) (PostTradeResult, error) {
@@ -146,9 +146,12 @@ func (e *Engine) ApplyExecutionReport(report model.ExecutionReport) (PostTradeRe
 		return PostTradeResult{}, err
 	}
 
-	return PostTradeResult{
-		KillSwitchTriggered: result.KillSwitchTriggered,
-	}, nil
+	accountBlocks := make([]reject.AccountBlock, len(result.AccountBlocks))
+	for i, b := range result.AccountBlocks {
+		accountBlocks[i] = reject.NewAccountBlockFromHandle(b)
+	}
+
+	return PostTradeResult{AccountBlocks: accountBlocks}, nil
 }
 
 func (e *Engine) ApplyAccountAdjustment(

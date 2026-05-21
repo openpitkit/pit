@@ -58,7 +58,7 @@ type ClientPreTradePolicy[Order ClientOrder, Report ClientExecutionReport] inter
 	Name() string
 	CheckPreTradeStart(Context, Order) []reject.Reject
 	PerformPreTradeCheck(Context, Order, tx.Mutations) []reject.Reject
-	ApplyExecutionReport(Report) bool
+	ApplyExecutionReport(Report) []reject.AccountBlock
 	ApplyAccountAdjustment(accountadjustment.Context, param.AccountID, model.AccountAdjustment, tx.Mutations) []reject.Reject
 }
 
@@ -130,10 +130,10 @@ func (p *safeClientPreTradePolicy[Order, Report]) PerformPreTradeCheck(
 
 func (p *safeClientPreTradePolicy[Order, Report]) ApplyExecutionReport(
 	engineReport model.ExecutionReport,
-) bool {
+) []reject.AccountBlock {
 	report, ok := safeReportPayload[Report](engineReport)
 	if !ok {
-		return false
+		return nil
 	}
 	return p.policy.ApplyExecutionReport(report)
 }
@@ -179,7 +179,7 @@ func (p *unsafeFastClientPreTradePolicy[Order, Report]) PerformPreTradeCheck(
 
 func (p *unsafeFastClientPreTradePolicy[Order, Report]) ApplyExecutionReport(
 	engineReport model.ExecutionReport,
-) bool {
+) []reject.AccountBlock {
 	return p.policy.ApplyExecutionReport(unsafeFastReportPayload[Report](engineReport))
 }
 

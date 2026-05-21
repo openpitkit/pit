@@ -52,8 +52,8 @@ func (fakePreTradePolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (fakePreTradePolicy) ApplyExecutionReport(_ model.ExecutionReport) bool {
-	return false
+func (fakePreTradePolicy) ApplyExecutionReport(_ model.ExecutionReport) []reject.AccountBlock {
+	return nil
 }
 
 func (fakePreTradePolicy) ApplyAccountAdjustment(

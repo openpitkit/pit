@@ -49,8 +49,6 @@ typedef struct OpenPitAccountAdjustmentPositionOperation
 typedef struct OpenPitAccountAdjustmentPositionOperationOptional
     OpenPitAccountAdjustmentPositionOperationOptional;
 typedef struct OpenPitEngine OpenPitEngine;
-typedef struct OpenPitEngineApplyExecutionReportResult
-    OpenPitEngineApplyExecutionReportResult;
 typedef struct OpenPitEngineBuilder OpenPitEngineBuilder;
 typedef struct OpenPitExecutionReport OpenPitExecutionReport;
 typedef struct OpenPitExecutionReportFill OpenPitExecutionReportFill;
@@ -101,6 +99,8 @@ typedef struct OpenPitParamQuantityOptional OpenPitParamQuantityOptional;
 typedef struct OpenPitParamTradeAmount OpenPitParamTradeAmount;
 typedef struct OpenPitParamVolume OpenPitParamVolume;
 typedef struct OpenPitParamVolumeOptional OpenPitParamVolumeOptional;
+typedef struct OpenPitPretradeAccountBlock OpenPitPretradeAccountBlock;
+typedef struct OpenPitPretradeAccountBlockList OpenPitPretradeAccountBlockList;
 typedef struct OpenPitPretradeContext OpenPitPretradeContext;
 typedef struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier
     OpenPitPretradePoliciesOrderSizeAccountAssetBarrier;
@@ -122,14 +122,13 @@ typedef struct OpenPitPretradePoliciesRateLimitAssetBarrier
     OpenPitPretradePoliciesRateLimitAssetBarrier;
 typedef struct OpenPitPretradePoliciesRateLimitBrokerBarrier
     OpenPitPretradePoliciesRateLimitBrokerBarrier;
-typedef struct OpenPitPretradePostTradeResult OpenPitPretradePostTradeResult;
 typedef struct OpenPitPretradePreTradeLock OpenPitPretradePreTradeLock;
 typedef struct OpenPitPretradePreTradePolicy OpenPitPretradePreTradePolicy;
 typedef struct OpenPitPretradePreTradeRequest OpenPitPretradePreTradeRequest;
 typedef struct OpenPitPretradePreTradeReservation
     OpenPitPretradePreTradeReservation;
-typedef struct OpenPitReject OpenPitReject;
-typedef struct OpenPitRejectList OpenPitRejectList;
+typedef struct OpenPitPretradeReject OpenPitPretradeReject;
+typedef struct OpenPitPretradeRejectList OpenPitPretradeRejectList;
 typedef struct OpenPitSharedString OpenPitSharedString;
 typedef struct OpenPitStringView OpenPitStringView;
 
@@ -392,182 +391,219 @@ typedef uint8_t OpenPitAccountAdjustmentApplyStatus;
  * Valid values: `Order` (1), `Account` (2). Zero is not a valid scope value;
  * the caller must always set this field explicitly.
  */
-typedef uint8_t OpenPitRejectScope;
+typedef uint8_t OpenPitPretradeRejectScope;
 /**
  * The reject applies to one order or order-like request.
  */
-#define OpenPitRejectScope_Order ((OpenPitRejectScope) 1)
+#define OpenPitPretradeRejectScope_Order ((OpenPitPretradeRejectScope) 1)
 /**
  * The reject applies to account state rather than to one order only.
  */
-#define OpenPitRejectScope_Account ((OpenPitRejectScope) 2)
+#define OpenPitPretradeRejectScope_Account ((OpenPitPretradeRejectScope) 2)
 
 /**
  * Stable classification code for a reject.
  *
  * Read this first when you need machine-readable handling. The textual fields
- * in [`OpenPitReject`] provide operator-facing explanation and extra context.
+ * in [`OpenPitPretradeReject`] provide operator-facing explanation and extra
+ * context.
  *
  * Valid codes are `1..=39` and `255` (`Other`). Unknown incoming codes are
  * mapped to `Other` (`255`).
  */
-typedef uint16_t OpenPitRejectCode;
+typedef uint16_t OpenPitPretradeRejectCode;
 /**
  * A required field is absent.
  */
-#define OpenPitRejectCode_MissingRequiredField ((OpenPitRejectCode) 1)
+#define OpenPitPretradeRejectCode_MissingRequiredField \
+    ((OpenPitPretradeRejectCode) 1)
 /**
  * A field cannot be parsed from the supplied wire value.
  */
-#define OpenPitRejectCode_InvalidFieldFormat ((OpenPitRejectCode) 2)
+#define OpenPitPretradeRejectCode_InvalidFieldFormat \
+    ((OpenPitPretradeRejectCode) 2)
 /**
  * A field is syntactically valid but semantically unacceptable.
  */
-#define OpenPitRejectCode_InvalidFieldValue ((OpenPitRejectCode) 3)
+#define OpenPitPretradeRejectCode_InvalidFieldValue \
+    ((OpenPitPretradeRejectCode) 3)
 /**
  * The requested order type is not supported.
  */
-#define OpenPitRejectCode_UnsupportedOrderType ((OpenPitRejectCode) 4)
+#define OpenPitPretradeRejectCode_UnsupportedOrderType \
+    ((OpenPitPretradeRejectCode) 4)
 /**
  * The requested time-in-force is not supported.
  */
-#define OpenPitRejectCode_UnsupportedTimeInForce ((OpenPitRejectCode) 5)
+#define OpenPitPretradeRejectCode_UnsupportedTimeInForce \
+    ((OpenPitPretradeRejectCode) 5)
 /**
  * Another order attribute is unsupported.
  */
-#define OpenPitRejectCode_UnsupportedOrderAttribute ((OpenPitRejectCode) 6)
+#define OpenPitPretradeRejectCode_UnsupportedOrderAttribute \
+    ((OpenPitPretradeRejectCode) 6)
 /**
  * The client order identifier duplicates an active order.
  */
-#define OpenPitRejectCode_DuplicateClientOrderId ((OpenPitRejectCode) 7)
+#define OpenPitPretradeRejectCode_DuplicateClientOrderId \
+    ((OpenPitPretradeRejectCode) 7)
 /**
  * The order arrived after the allowed entry deadline.
  */
-#define OpenPitRejectCode_TooLateToEnter ((OpenPitRejectCode) 8)
+#define OpenPitPretradeRejectCode_TooLateToEnter ((OpenPitPretradeRejectCode) 8)
 /**
  * Trading is closed for the relevant venue or session.
  */
-#define OpenPitRejectCode_ExchangeClosed ((OpenPitRejectCode) 9)
+#define OpenPitPretradeRejectCode_ExchangeClosed ((OpenPitPretradeRejectCode) 9)
 /**
  * The instrument cannot be resolved.
  */
-#define OpenPitRejectCode_UnknownInstrument ((OpenPitRejectCode) 10)
+#define OpenPitPretradeRejectCode_UnknownInstrument \
+    ((OpenPitPretradeRejectCode) 10)
 /**
  * The account cannot be resolved.
  */
-#define OpenPitRejectCode_UnknownAccount ((OpenPitRejectCode) 11)
+#define OpenPitPretradeRejectCode_UnknownAccount \
+    ((OpenPitPretradeRejectCode) 11)
 /**
  * The venue cannot be resolved.
  */
-#define OpenPitRejectCode_UnknownVenue ((OpenPitRejectCode) 12)
+#define OpenPitPretradeRejectCode_UnknownVenue ((OpenPitPretradeRejectCode) 12)
 /**
  * The clearing account cannot be resolved.
  */
-#define OpenPitRejectCode_UnknownClearingAccount ((OpenPitRejectCode) 13)
+#define OpenPitPretradeRejectCode_UnknownClearingAccount \
+    ((OpenPitPretradeRejectCode) 13)
 /**
  * The collateral asset cannot be resolved.
  */
-#define OpenPitRejectCode_UnknownCollateralAsset ((OpenPitRejectCode) 14)
+#define OpenPitPretradeRejectCode_UnknownCollateralAsset \
+    ((OpenPitPretradeRejectCode) 14)
 /**
  * Available balance is insufficient.
  */
-#define OpenPitRejectCode_InsufficientFunds ((OpenPitRejectCode) 15)
+#define OpenPitPretradeRejectCode_InsufficientFunds \
+    ((OpenPitPretradeRejectCode) 15)
 /**
  * Available margin is insufficient.
  */
-#define OpenPitRejectCode_InsufficientMargin ((OpenPitRejectCode) 16)
+#define OpenPitPretradeRejectCode_InsufficientMargin \
+    ((OpenPitPretradeRejectCode) 16)
 /**
  * Available position is insufficient.
  */
-#define OpenPitRejectCode_InsufficientPosition ((OpenPitRejectCode) 17)
+#define OpenPitPretradeRejectCode_InsufficientPosition \
+    ((OpenPitPretradeRejectCode) 17)
 /**
  * A credit limit was exceeded.
  */
-#define OpenPitRejectCode_CreditLimitExceeded ((OpenPitRejectCode) 18)
+#define OpenPitPretradeRejectCode_CreditLimitExceeded \
+    ((OpenPitPretradeRejectCode) 18)
 /**
  * A risk limit was exceeded.
  */
-#define OpenPitRejectCode_RiskLimitExceeded ((OpenPitRejectCode) 19)
+#define OpenPitPretradeRejectCode_RiskLimitExceeded \
+    ((OpenPitPretradeRejectCode) 19)
 /**
  * The order exceeds a generic configured limit.
  */
-#define OpenPitRejectCode_OrderExceedsLimit ((OpenPitRejectCode) 20)
+#define OpenPitPretradeRejectCode_OrderExceedsLimit \
+    ((OpenPitPretradeRejectCode) 20)
 /**
  * The order quantity exceeds a configured limit.
  */
-#define OpenPitRejectCode_OrderQtyExceedsLimit ((OpenPitRejectCode) 21)
+#define OpenPitPretradeRejectCode_OrderQtyExceedsLimit \
+    ((OpenPitPretradeRejectCode) 21)
 /**
  * The order notional exceeds a configured limit.
  */
-#define OpenPitRejectCode_OrderNotionalExceedsLimit ((OpenPitRejectCode) 22)
+#define OpenPitPretradeRejectCode_OrderNotionalExceedsLimit \
+    ((OpenPitPretradeRejectCode) 22)
 /**
  * The resulting position exceeds a configured limit.
  */
-#define OpenPitRejectCode_PositionLimitExceeded ((OpenPitRejectCode) 23)
+#define OpenPitPretradeRejectCode_PositionLimitExceeded \
+    ((OpenPitPretradeRejectCode) 23)
 /**
  * Concentration constraints were violated.
  */
-#define OpenPitRejectCode_ConcentrationLimitExceeded ((OpenPitRejectCode) 24)
+#define OpenPitPretradeRejectCode_ConcentrationLimitExceeded \
+    ((OpenPitPretradeRejectCode) 24)
 /**
  * Leverage constraints were violated.
  */
-#define OpenPitRejectCode_LeverageLimitExceeded ((OpenPitRejectCode) 25)
+#define OpenPitPretradeRejectCode_LeverageLimitExceeded \
+    ((OpenPitPretradeRejectCode) 25)
 /**
  * The request rate exceeded a configured limit.
  */
-#define OpenPitRejectCode_RateLimitExceeded ((OpenPitRejectCode) 26)
+#define OpenPitPretradeRejectCode_RateLimitExceeded \
+    ((OpenPitPretradeRejectCode) 26)
 /**
  * A loss barrier has blocked further risk-taking.
  */
-#define OpenPitRejectCode_PnlKillSwitchTriggered ((OpenPitRejectCode) 27)
+#define OpenPitPretradeRejectCode_PnlKillSwitchTriggered \
+    ((OpenPitPretradeRejectCode) 27)
 /**
  * The account is blocked.
  */
-#define OpenPitRejectCode_AccountBlocked ((OpenPitRejectCode) 28)
+#define OpenPitPretradeRejectCode_AccountBlocked \
+    ((OpenPitPretradeRejectCode) 28)
 /**
  * The account is not authorized for this action.
  */
-#define OpenPitRejectCode_AccountNotAuthorized ((OpenPitRejectCode) 29)
+#define OpenPitPretradeRejectCode_AccountNotAuthorized \
+    ((OpenPitPretradeRejectCode) 29)
 /**
  * A compliance restriction blocked the action.
  */
-#define OpenPitRejectCode_ComplianceRestriction ((OpenPitRejectCode) 30)
+#define OpenPitPretradeRejectCode_ComplianceRestriction \
+    ((OpenPitPretradeRejectCode) 30)
 /**
  * The instrument is restricted.
  */
-#define OpenPitRejectCode_InstrumentRestricted ((OpenPitRejectCode) 31)
+#define OpenPitPretradeRejectCode_InstrumentRestricted \
+    ((OpenPitPretradeRejectCode) 31)
 /**
  * A jurisdiction restriction blocked the action.
  */
-#define OpenPitRejectCode_JurisdictionRestriction ((OpenPitRejectCode) 32)
+#define OpenPitPretradeRejectCode_JurisdictionRestriction \
+    ((OpenPitPretradeRejectCode) 32)
 /**
  * The action would violate wash-trade prevention.
  */
-#define OpenPitRejectCode_WashTradePrevention ((OpenPitRejectCode) 33)
+#define OpenPitPretradeRejectCode_WashTradePrevention \
+    ((OpenPitPretradeRejectCode) 33)
 /**
  * The action would violate self-match prevention.
  */
-#define OpenPitRejectCode_SelfMatchPrevention ((OpenPitRejectCode) 34)
+#define OpenPitPretradeRejectCode_SelfMatchPrevention \
+    ((OpenPitPretradeRejectCode) 34)
 /**
  * Short-sale restriction blocked the action.
  */
-#define OpenPitRejectCode_ShortSaleRestriction ((OpenPitRejectCode) 35)
+#define OpenPitPretradeRejectCode_ShortSaleRestriction \
+    ((OpenPitPretradeRejectCode) 35)
 /**
  * Required risk configuration is missing.
  */
-#define OpenPitRejectCode_RiskConfigurationMissing ((OpenPitRejectCode) 36)
+#define OpenPitPretradeRejectCode_RiskConfigurationMissing \
+    ((OpenPitPretradeRejectCode) 36)
 /**
  * Required reference data is unavailable.
  */
-#define OpenPitRejectCode_ReferenceDataUnavailable ((OpenPitRejectCode) 37)
+#define OpenPitPretradeRejectCode_ReferenceDataUnavailable \
+    ((OpenPitPretradeRejectCode) 37)
 /**
  * The system could not compute an order value needed for validation.
  */
-#define OpenPitRejectCode_OrderValueCalculationFailed ((OpenPitRejectCode) 38)
+#define OpenPitPretradeRejectCode_OrderValueCalculationFailed \
+    ((OpenPitPretradeRejectCode) 38)
 /**
  * A required service or subsystem is unavailable.
  */
-#define OpenPitRejectCode_SystemUnavailable ((OpenPitRejectCode) 39)
+#define OpenPitPretradeRejectCode_SystemUnavailable \
+    ((OpenPitPretradeRejectCode) 39)
 /**
  * Reserved discriminant for caller-defined reject classes.
  *
@@ -575,11 +611,11 @@ typedef uint16_t OpenPitRejectCode;
  * payload that the receiving code can decode. The SDK does not interpret this
  * code beyond mapping it to FFI value 254.
  */
-#define OpenPitRejectCode_Custom ((OpenPitRejectCode) 254)
+#define OpenPitPretradeRejectCode_Custom ((OpenPitPretradeRejectCode) 254)
 /**
  * A catch-all code for rejects that do not fit a more specific class.
  */
-#define OpenPitRejectCode_Other ((OpenPitRejectCode) 255)
+#define OpenPitPretradeRejectCode_Other ((OpenPitPretradeRejectCode) 255)
 
 /**
  * Parameter error code transported through FFI.
@@ -881,16 +917,6 @@ struct OpenPitExecutionReportPositionImpactOptional {
 };
 
 /**
- * Aggregated post-trade processing result.
- */
-struct OpenPitPretradePostTradeResult {
-    /**
-     * Whether the report triggered some kill-switch policy.
-     */
-    bool kill_switch_triggered;
-};
-
-/**
  * One amount component inside an account adjustment.
  *
  * The numeric value is interpreted according to `kind`:
@@ -992,20 +1018,6 @@ struct OpenPitPretradePreTradeLock {
      * Optional reserved price.
      */
     OpenPitParamPriceOptional price;
-};
-
-/**
- * Result of `openpit_engine_apply_execution_report`.
- */
-struct OpenPitEngineApplyExecutionReportResult {
-    /**
-     * The result of the post-trade processing if no error occurred.
-     */
-    OpenPitPretradePostTradeResult post_trade_result;
-    /**
-     * Whether the call failed at the transport level.
-     */
-    bool is_error;
 };
 
 /**
@@ -1185,7 +1197,7 @@ struct OpenPitAccountAdjustmentBalanceOperationOptional {
 /**
  * Single rejection record returned by checks.
  */
-struct OpenPitReject {
+struct OpenPitPretradeReject {
     /**
      * Policy name that produced the reject.
      */
@@ -1213,11 +1225,42 @@ struct OpenPitReject {
     /**
      * Stable machine-readable reject code.
      */
-    OpenPitRejectCode code;
+    OpenPitPretradeRejectCode code;
     /**
      * Reject scope.
      */
-    OpenPitRejectScope scope;
+    OpenPitPretradeRejectScope scope;
+};
+
+/**
+ * Single account-block record returned by kill-switch checks.
+ */
+struct OpenPitPretradeAccountBlock {
+    /**
+     * Policy name that produced the block.
+     */
+    OpenPitStringView policy;
+    /**
+     * Human-readable reject reason.
+     */
+    OpenPitStringView reason;
+    /**
+     * Case-specific reject details.
+     */
+    OpenPitStringView details;
+    /**
+     * Opaque caller-defined token.
+     *
+     * The SDK never inspects, dereferences, or frees this value. Its meaning,
+     * lifetime, and thread-safety are the caller's responsibility. `0` / null
+     * means "not set". See the project Threading Contract for the full lifetime
+     * model.
+     */
+    void * user_data;
+    /**
+     * Stable machine-readable reject code.
+     */
+    OpenPitPretradeRejectCode code;
 };
 
 /**
@@ -1603,12 +1646,12 @@ typedef void (*OpenPitMutationFreeFn)(
  * - A rejected order must set explicit `code` and `scope` values in every
  *   list item.
  * - The returned list ownership is transferred to the engine; create it with
- *   `openpit_create_reject_list`.
+ *   `openpit_pretrade_create_reject_list`.
  * - Every reject payload is copied into internal storage before the callback
  *   returns.
  * - `user_data` is passed through unchanged from policy creation.
  */
-typedef OpenPitRejectList *
+typedef OpenPitPretradeRejectList *
 (*OpenPitPretradePreTradePolicyCheckPreTradeStartFn)(
     const OpenPitPretradeContext * ctx,
     const OpenPitOrder * order,
@@ -1634,12 +1677,12 @@ typedef OpenPitRejectList *
  * - Return a non-empty reject list to reject the order.
  * - Every returned reject must contain explicit `code` and `scope` values.
  * - The returned list ownership is transferred to the engine; create it with
- *   `openpit_create_reject_list`.
+ *   `openpit_pretrade_create_reject_list`.
  * - Every reject payload is copied into internal storage before this
  *   callback returns.
  * - `user_data` is passed through unchanged from policy creation.
  */
-typedef OpenPitRejectList *
+typedef OpenPitPretradeRejectList *
 (*OpenPitPretradePreTradePolicyPerformPreTradeCheckFn)(
     const OpenPitPretradeContext * ctx,
     const OpenPitOrder * order,
@@ -1657,11 +1700,16 @@ typedef OpenPitRejectList *
  *   callback runs.
  * - If the callback wants to keep any data from `report`, it must copy that
  *   data before returning.
- * - Return `true` when this policy reports a kill-switch trigger.
- * - Return `false` otherwise.
+ * - Return a non-null account-block list when this policy reports a
+ *   kill-switch trigger. The returned list ownership is transferred to the
+ *   engine; create it with `openpit_pretrade_create_account_block_list`.
+ * - Return null to indicate no kill-switch condition.
+ * - A null `apply_execution_report_fn` means that hook returns an empty list
+ *   (no kill switch).
  * - `user_data` is passed through unchanged from policy creation.
  */
-typedef bool (*OpenPitPretradePreTradePolicyApplyExecutionReportFn)(
+typedef OpenPitPretradeAccountBlockList *
+(*OpenPitPretradePreTradePolicyApplyExecutionReportFn)(
     const OpenPitExecutionReport * report,
     void * user_data
 );
@@ -1689,7 +1737,7 @@ typedef bool (*OpenPitPretradePreTradePolicyApplyExecutionReportFn)(
  * - Returned reject list ownership is transferred to the callee.
  * - `user_data` is passed through unchanged from policy creation.
  */
-typedef OpenPitRejectList *
+typedef OpenPitPretradeRejectList *
 (*OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn)(
     const OpenPitAccountAdjustmentContext * ctx,
     OpenPitParamAccountId account_id,
@@ -3406,10 +3454,10 @@ void openpit_destroy_param_asset(
  *
  * Contract:
  * - returns a new caller-owned list;
- * - release it with `openpit_destroy_reject_list`;
+ * - release it with `openpit_pretrade_destroy_reject_list`;
  * - this function always succeeds.
  */
-OpenPitRejectList * openpit_create_reject_list(
+OpenPitPretradeRejectList * openpit_pretrade_create_reject_list(
     size_t reserve
 );
 
@@ -3420,8 +3468,8 @@ OpenPitRejectList * openpit_create_reject_list(
  * - passing null is allowed;
  * - this function always succeeds.
  */
-void openpit_destroy_reject_list(
-    OpenPitRejectList * rejects
+void openpit_pretrade_destroy_reject_list(
+    OpenPitPretradeRejectList * rejects
 );
 
 /**
@@ -3433,9 +3481,9 @@ void openpit_destroy_reject_list(
  * - this function never fails;
  * - violating the pointer contract aborts the call.
  */
-void openpit_reject_list_push(
-    OpenPitRejectList * list,
-    OpenPitReject reject
+void openpit_pretrade_reject_list_push(
+    OpenPitPretradeRejectList * list,
+    OpenPitPretradeReject reject
 );
 
 /**
@@ -3446,8 +3494,8 @@ void openpit_reject_list_push(
  * - this function never fails;
  * - violating the pointer contract aborts the call.
  */
-size_t openpit_reject_list_len(
-    const OpenPitRejectList * list
+size_t openpit_pretrade_reject_list_len(
+    const OpenPitPretradeRejectList * list
 );
 
 /**
@@ -3465,10 +3513,82 @@ size_t openpit_reject_list_len(
  * - this function never fails;
  * - violating the pointer contract aborts the call.
  */
-bool openpit_reject_list_get(
-    const OpenPitRejectList * list,
+bool openpit_pretrade_reject_list_get(
+    const OpenPitPretradeRejectList * list,
     size_t index,
-    OpenPitReject * out_reject
+    OpenPitPretradeReject * out_reject
+);
+
+/**
+ * Creates a caller-owned account-block list with preallocated capacity.
+ *
+ * `reserve` is the requested number of elements to preallocate.
+ *
+ * Contract:
+ * - returns a new caller-owned list;
+ * - release it with `openpit_pretrade_destroy_account_block_list`;
+ * - this function always succeeds.
+ */
+OpenPitPretradeAccountBlockList * openpit_pretrade_create_account_block_list(
+    size_t reserve
+);
+
+/**
+ * Releases a caller-owned account-block list.
+ *
+ * Contract:
+ * - passing null is allowed;
+ * - this function always succeeds.
+ */
+void openpit_pretrade_destroy_account_block_list(
+    OpenPitPretradeAccountBlockList * blocks
+);
+
+/**
+ * Appends one account block to the list by copying its payload.
+ *
+ * Contract:
+ * - `list` must be a valid non-null pointer;
+ * - string views in `block` are copied before this function returns;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+void openpit_pretrade_account_block_list_push(
+    OpenPitPretradeAccountBlockList * list,
+    OpenPitPretradeAccountBlock block
+);
+
+/**
+ * Returns the number of account blocks in the list.
+ *
+ * Contract:
+ * - `list` must be a valid non-null pointer;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+size_t openpit_pretrade_account_block_list_len(
+    const OpenPitPretradeAccountBlockList * list
+);
+
+/**
+ * Copies a non-owning account-block view at `index` into `out_block`.
+ *
+ * The copied view borrows string memory from `list`.
+ *
+ * Contract:
+ * - `list` must be a valid non-null pointer;
+ * - `out_block` must be a valid non-null pointer;
+ * - returns `true` when a value exists and was copied;
+ * - returns `false` when `index` is out of bounds and does not write
+ *   `out_block`;
+ * - the copied view remains valid while `list` is alive and unchanged;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+bool openpit_pretrade_account_block_list_get(
+    const OpenPitPretradeAccountBlockList * list,
+    size_t index,
+    OpenPitPretradeAccountBlock * out_block
 );
 
 /**
@@ -3576,10 +3696,10 @@ void openpit_destroy_engine(
  *   `openpit_destroy_pretrade_pre_trade_request`.
  *
  * Reject ownership contract:
- * - on `Rejected`, a non-null `OpenPitRejectList` pointer is written to
- *   `out_rejects` if it is not null;
+ * - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written
+ *   to `out_rejects` if it is not null;
  * - the caller takes ownership and MUST release it with
- *   `openpit_destroy_reject_list`; failing to do so leaks the heap
+ *   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the heap
  *   allocation made inside this call;
  * - no thread-local state is involved, and the returned pointer is safe to
  *   read on any thread;
@@ -3595,7 +3715,7 @@ OpenPitPretradeStatus openpit_engine_start_pre_trade(
     OpenPitEngine * engine,
     const OpenPitOrder * order,
     OpenPitPretradePreTradeRequest ** out_request,
-    OpenPitRejectList ** out_rejects,
+    OpenPitPretradeRejectList ** out_rejects,
     OpenPitOutError out_error
 );
 
@@ -3621,10 +3741,10 @@ OpenPitPretradeStatus openpit_engine_start_pre_trade(
  *   `openpit_destroy_pretrade_pre_trade_reservation`.
  *
  * Reject ownership contract:
- * - on `Rejected`, a non-null `OpenPitRejectList` pointer is written to
- *   `out_rejects` if it is not null;
+ * - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written
+ *   to `out_rejects` if it is not null;
  * - the caller takes ownership and MUST release it with
- *   `openpit_destroy_reject_list`; failing to do so leaks the heap
+ *   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the heap
  *   allocation made inside this call;
  * - no thread-local state is involved, and the returned pointer is safe to
  *   read on any thread;
@@ -3640,7 +3760,7 @@ OpenPitPretradeStatus openpit_engine_execute_pre_trade(
     OpenPitEngine * engine,
     const OpenPitOrder * order,
     OpenPitPretradePreTradeReservation ** out_reservation,
-    OpenPitRejectList ** out_rejects,
+    OpenPitPretradeRejectList ** out_rejects,
     OpenPitOutError out_error
 );
 
@@ -3666,10 +3786,10 @@ OpenPitPretradeStatus openpit_engine_execute_pre_trade(
  *   cannot be executed again.
  *
  * Reject ownership contract:
- * - on `Rejected`, a non-null `OpenPitRejectList` pointer is written to
- *   `out_rejects` if it is not null;
+ * - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written
+ *   to `out_rejects` if it is not null;
  * - the caller takes ownership and MUST release it with
- *   `openpit_destroy_reject_list`; failing to do so leaks the heap
+ *   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the heap
  *   allocation made inside this call;
  * - no thread-local state is involved, and the returned pointer is safe to
  *   read on any thread;
@@ -3679,7 +3799,7 @@ OpenPitPretradeStatus openpit_engine_execute_pre_trade(
 OpenPitPretradeStatus openpit_pretrade_pre_trade_request_execute(
     OpenPitPretradePreTradeRequest * request,
     OpenPitPretradePreTradeReservation ** out_reservation,
-    OpenPitRejectList ** out_rejects,
+    OpenPitPretradeRejectList ** out_rejects,
     OpenPitOutError out_error
 );
 
@@ -3757,27 +3877,30 @@ void openpit_destroy_pretrade_pre_trade_reservation(
 /**
  * Applies an execution report to engine state.
  *
+ * Returns `true` on success, `false` on error.
+ *
  * Success:
- * - returns `OpenPitEngineApplyExecutionReportResult { is_error = false, ...
- *   }`.
+ * - returns `true`;
+ * - if `out_blocks` is not null and at least one policy entered a blocked
+ *   state, writes a caller-owned `OpenPitPretradeAccountBlockList` pointer;
+ *   release it with `openpit_pretrade_destroy_account_block_list`;
+ * - if `out_blocks` is not null and no policy blocked, writes null.
  *
  * Error:
- * - returns `OpenPitEngineApplyExecutionReportResult { is_error = true,
- *   post_trade_result = { kill_switch_triggered = false } }` when input
- *   pointers are invalid or the report payload cannot be decoded;
+ * - returns `false` when input pointers are invalid or the report payload
+ *   cannot be decoded;
  * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
- *   error handle that MUST be released with `openpit_destroy_shared_string`;
- * - when `is_error` is `true`, do not trust any other fields beyond the fact
- *   that the call failed.
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
  *
  * Lifetime contract:
  * - `report` is read as a borrowed view during this call only;
  * - the operation does not retain any pointer into source memory after this
  *   function returns.
  */
-OpenPitEngineApplyExecutionReportResult openpit_engine_apply_execution_report(
+bool openpit_engine_apply_execution_report(
     OpenPitEngine * engine,
     const OpenPitExecutionReport * report,
+    OpenPitPretradeAccountBlockList ** out_blocks,
     OpenPitOutError out_error
 );
 
@@ -3813,7 +3936,8 @@ size_t openpit_account_adjustment_batch_error_get_failed_adjustment_index(
  * - this function never fails;
  * - violating the pointer contract aborts the call.
  */
-const OpenPitRejectList * openpit_account_adjustment_batch_error_get_rejects(
+const OpenPitPretradeRejectList *
+openpit_account_adjustment_batch_error_get_rejects(
     const OpenPitAccountAdjustmentBatchError * batch_error
 );
 
@@ -4073,7 +4197,8 @@ bool openpit_mutations_push(
  *   null.
  * - A null `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`, or
  *   `apply_account_adjustment_fn` means that hook accepts by default.
- * - A null `apply_execution_report_fn` means that hook returns `false`.
+ * - A null `apply_execution_report_fn` means that hook returns an empty list
+ *   (no kill switch).
  * - Non-null callbacks and `free_user_data_fn` must remain callable for as
  *   long as the policy may still be used by either the caller pointer or the
  *   engine.

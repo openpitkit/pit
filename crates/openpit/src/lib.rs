@@ -48,8 +48,10 @@ pub mod pretrade;
 pub mod storage;
 
 pub use core::engine::{
-    AccountAdjustmentBatchError, Engine, EngineBuildError, EngineBuilder, LocalEngine,
-    SequentialEngine, SyncedEngine,
+    AccountAdjustmentBatchError, AccountSyncEngine, Engine, FullSyncEngine, LocalEngine,
+};
+pub use core::engine_builder::{
+    EngineBuildError, EngineBuilder, IntoPolicyObject, ReadyEngineBuilder, SyncedEngineBuilder,
 };
 pub use core::{
     AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
@@ -73,33 +75,12 @@ pub use core::{
     WithOrderMargin, WithOrderOperation, WithOrderPosition,
 };
 pub use core::{
-    AccountSyncPolicy, FullSyncPolicy, LocalSyncPolicy, ReadyEngineBuilder, SyncPolicy,
-    SyncedEngineBuilder,
-};
-pub use core::{
-    EngineLockingPolicy, LocalEngineLocking, SequentialEngineLocking, SyncedEngineLocking,
+    AccountSync, AccountSyncHandle, AccountSyncHandleWeak, EngineTrait, EngineTraitOf, FullSync,
+    LocalSync, SyncMode,
 };
 #[cfg(feature = "derive")]
 pub use openpit_derive::RequestFields;
 pub use param::{AdjustmentAmount, PositionMode};
 pub use pretrade::PostTradeResult;
+pub use storage::IndexFlag;
 pub use storage::StorageBuilder;
-
-/// Workspace-private re-exports. NOT part of the public API.
-///
-/// Workspace crates (e.g. `pit-interop`) that need to extend the
-/// engine's locking strategy with their own `EngineLockingPolicy`
-/// impl reach internal openpit traits through this module. Out-of-
-/// workspace consumers should not depend on this path; its contents
-/// are unstable and undocumented.
-#[doc(hidden)]
-pub mod __private {
-    pub use crate::core::engine::EnginePolicies;
-
-    /// Internal sealed-trait marker. Not part of the public API.
-    ///
-    /// Workspace crates implementing a custom [`super::EngineLockingPolicy`] must
-    /// add `impl openpit::__private::Sealed for MyType {}` to opt in. External
-    /// crates cannot reach this trait.
-    pub trait Sealed {}
-}

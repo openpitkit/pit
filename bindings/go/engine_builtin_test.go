@@ -491,8 +491,8 @@ func TestBuiltinPnlBoundsKillswitchBrokerOnlyTriggersAndBlocksAccount(t *testing
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport() error = %v", err)
 	}
-	if !result.KillSwitchTriggered {
-		t.Fatal("KillSwitchTriggered = false, want true")
+	if len(result.AccountBlocks) == 0 || result.AccountBlocks[0].Code != reject.CodePnlKillSwitchTriggered {
+		t.Fatalf("AccountBlocks = %v, want kill switch block", result.AccountBlocks)
 	}
 
 	_, rejects, err = engine.StartPreTrade(pnlTestOrder(t, 1))
@@ -502,16 +502,10 @@ func TestBuiltinPnlBoundsKillswitchBrokerOnlyTriggersAndBlocksAccount(t *testing
 	if len(rejects) != 1 {
 		t.Fatalf("post-kill reject len = %d, want 1", len(rejects))
 	}
-	if rejects[0].Code != reject.CodePnlKillSwitchTriggered {
+	if rejects[0].Code != reject.CodeAccountBlocked {
 		t.Fatalf(
 			"reject code = %v, want %v",
-			rejects[0].Code, reject.CodePnlKillSwitchTriggered,
-		)
-	}
-	if rejects[0].Reason != "pnl kill switch triggered: account blocked" {
-		t.Fatalf(
-			"reject reason = %q, want %q",
-			rejects[0].Reason, "pnl kill switch triggered: account blocked",
+			rejects[0].Code, reject.CodeAccountBlocked,
 		)
 	}
 }
@@ -541,8 +535,8 @@ func TestBuiltinPnlBoundsKillswitchAccountBarrierIndependentOfOtherAccounts(
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport() error = %v", err)
 	}
-	if !result.KillSwitchTriggered {
-		t.Fatal("KillSwitchTriggered = false, want true for account 1001")
+	if len(result.AccountBlocks) == 0 || result.AccountBlocks[0].Code != reject.CodePnlKillSwitchTriggered {
+		t.Fatalf("AccountBlocks = %v, want kill switch block for account 1001", result.AccountBlocks)
 	}
 
 	_, rejects, err := engine.StartPreTrade(pnlTestOrder(t, 1001))
@@ -552,10 +546,10 @@ func TestBuiltinPnlBoundsKillswitchAccountBarrierIndependentOfOtherAccounts(
 	if len(rejects) != 1 {
 		t.Fatalf("acct 1001 reject len = %d, want 1", len(rejects))
 	}
-	if rejects[0].Code != reject.CodePnlKillSwitchTriggered {
+	if rejects[0].Code != reject.CodeAccountBlocked {
 		t.Fatalf(
 			"reject code = %v, want %v",
-			rejects[0].Code, reject.CodePnlKillSwitchTriggered,
+			rejects[0].Code, reject.CodeAccountBlocked,
 		)
 	}
 

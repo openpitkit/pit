@@ -42,6 +42,6 @@ pub use context::PreTradeContext;
 pub use lock::PreTradeLock;
 pub use policy::PreTradePolicy;
 pub use post_trade_result::PostTradeResult;
-pub use reject::{Reject, RejectCode, RejectScope, Rejects};
+pub use reject::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
 pub use request::PreTradeRequest;
 pub use reservation::PreTradeReservation;

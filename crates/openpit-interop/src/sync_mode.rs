@@ -96,22 +96,33 @@ unsafe impl<T: ?Sized + Send> Sync for EngineHandleWeak<T> {}
 
 // ─── EngineLocking ───────────────────────────────────────────────────────────
 
-/// `EngineLockingPolicy` for engines constructed through the binding
-/// layer.
+/// `openpit::SyncMode` for engines constructed through the binding layer.
 ///
 /// The resulting engine handle is `Send + Sync` regardless of the
 /// runtime-selected `SyncMode`. Pure Rust SDK clients should use
-/// `openpit::LocalEngineLocking`, `openpit::SequentialEngineLocking`,
-/// or `openpit::SyncedEngineLocking` directly via the SDK's
-/// `with_*_sync()` chain; this type is for the binding layer only.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct EngineLocking;
+/// `openpit::LocalSync`, `openpit::AccountSync`, or `openpit::FullSync`
+/// directly via `EngineBuilder::no_sync`, `EngineBuilder::full_sync`, or
+/// `EngineBuilder::account_sync`; this type is for the binding layer only.
+pub struct EngineLocking {
+    pub(crate) mode: SyncMode,
+}
 
-impl openpit::__private::Sealed for EngineLocking {}
+impl EngineLocking {
+    /// Creates a binding-layer synchronization mode.
+    pub fn new(mode: SyncMode) -> Self {
+        Self { mode }
+    }
+}
 
-impl openpit::EngineLockingPolicy for EngineLocking {
+impl openpit::SyncMode for EngineLocking {
     type Strong<T: 'static> = EngineHandle<T>;
     type Weak<T: 'static> = EngineHandleWeak<T>;
+    type StorageLockingPolicyFactory = StorageLockingPolicyFactory;
+    type PreTradePolicyObject<
+        Order: 'static,
+        ExecutionReport: 'static,
+        AccountAdjustment: 'static,
+    > = dyn openpit::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment> + Send;
 
     fn new_strong<T: 'static>(inner: T) -> Self::Strong<T> {
         EngineHandle(Arc::new(inner))
@@ -124,14 +135,10 @@ impl openpit::EngineLockingPolicy for EngineLocking {
     fn upgrade<T: 'static>(w: &Self::Weak<T>) -> Option<Self::Strong<T>> {
         w.0.upgrade().map(EngineHandle)
     }
-}
 
-impl<Order: 'static, ExecutionReport: 'static, AccountAdjustment: 'static>
-    openpit::__private::EnginePolicies<Order, ExecutionReport, AccountAdjustment>
-    for EngineLocking
-{
-    type PreTrade =
-        dyn openpit::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment> + Send;
+    fn storage_locking_policy_factory(&self) -> Self::StorageLockingPolicyFactory {
+        StorageLockingPolicyFactory { mode: self.mode }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -255,7 +262,7 @@ unsafe impl LockingPolicy for StorageLockingPolicy {
 
 // ─── LockingPolicyFactory ─────────────────────────────────────────────────────
 
-/// Factory of [`StorageLockingPolicy`] instances.
+/// Factory of `StorageLockingPolicy` instances.
 ///
 /// Constructs a runtime-selected locking policy for the chosen [`SyncMode`].
 /// Storage created through this factory is restricted to [`AccountKey`] keys.
@@ -267,6 +274,7 @@ pub struct StorageLockingPolicyFactory {
 
 impl LockingPolicyFactory for StorageLockingPolicyFactory {
     type Policy = StorageLockingPolicy;
+    type IndexFlag = std::sync::atomic::AtomicBool;
 
     fn create_policy(&self) -> StorageLockingPolicy {
         let inner = match self.mode {
@@ -294,73 +302,57 @@ impl<Key> openpit::storage::CreateStorageFor<Key> for StorageLockingPolicyFactor
 {
 }
 
-// ─── SyncPolicy ──────────────────────────────────────────────────────────────
+// ─── InteropEngineTrait ───────────────────────────────────────────────────────
 
-/// Runtime `openpit::SyncPolicy` for language bindings.
+/// [`openpit::EngineTrait`] alias for engines constructed through the binding layer.
 ///
-/// Storage created through this policy is restricted to [`AccountKey`] keys.
-///
-/// [`AccountKey`]: openpit::AccountKey
-pub struct SyncPolicy {
-    mode: SyncMode,
-}
-
-impl SyncPolicy {
-    pub fn new(mode: SyncMode) -> Self {
-        Self { mode }
-    }
-}
-
-impl openpit::SyncPolicy for SyncPolicy {
-    type StorageLockingPolicyFactory = StorageLockingPolicyFactory;
-    type EngineLocking = EngineLocking;
-
-    fn create_locking_factory(&self) -> StorageLockingPolicyFactory {
-        StorageLockingPolicyFactory { mode: self.mode }
-    }
-}
+/// Generic over the binding-supplied order, execution-report, and
+/// account-adjustment types; the synchronization mode is fixed to
+/// [`EngineLocking`], the runtime-mode dispatcher.
+pub type InteropEngineTrait<Order, ExecutionReport, AccountAdjustment> =
+    openpit::EngineTraitOf<Order, ExecutionReport, AccountAdjustment, EngineLocking>;
 
 #[cfg(test)]
 mod tests {
     use openpit::pretrade::policies::OrderValidationPolicy;
 
-    use super::{EngineLocking, SyncMode, SyncPolicy};
+    use super::{EngineLocking, InteropEngineTrait, SyncMode};
 
-    type Engine = openpit::Engine<openpit::OrderOperation, (), (), EngineLocking>;
+    type Engine = openpit::Engine<InteropEngineTrait<openpit::OrderOperation, (), ()>>;
 
     fn build_engine(mode: SyncMode) -> Result<Engine, openpit::EngineBuildError> {
-        Engine::builder()
-            .sync(SyncPolicy::new(mode))
+        openpit::EngineBuilder::<openpit::OrderOperation, (), ()>::new()
+            .sync(EngineLocking::new(mode))
             .pre_trade(OrderValidationPolicy::new())
             .build()
     }
 
     #[test]
-    fn sync_policy_new_full_builds_engine() {
+    fn engine_locking_new_full_builds_engine() {
         assert!(build_engine(SyncMode::Full).is_ok());
     }
 
     #[test]
-    fn sync_policy_new_local_builds_engine() {
+    fn engine_locking_new_local_builds_engine() {
         assert!(build_engine(SyncMode::Local).is_ok());
     }
 
     #[test]
-    fn sync_policy_new_account_builds_engine() {
+    fn engine_locking_new_account_builds_engine() {
         assert!(build_engine(SyncMode::Account).is_ok());
     }
 
     #[test]
-    fn sync_policy_add_check_pre_trade_start_policy_builds_engine() {
-        let result = Engine::builder()
-            .sync(SyncPolicy::new(SyncMode::Full))
+    fn engine_locking_add_check_pre_trade_start_policy_builds_engine() {
+        let result = openpit::EngineBuilder::<openpit::OrderOperation, (), ()>::new()
+            .sync(EngineLocking::new(SyncMode::Full))
             .pre_trade(OrderValidationPolicy::new())
             .build();
         assert!(result.is_ok());
     }
 
     #[test]
-    fn sync_policy_engine_executes_pre_trade() {
+    fn engine_locking_engine_executes_pre_trade() {
         let engine = build_engine(SyncMode::Full).expect("engine build");
         let result = engine.execute_pre_trade(openpit::OrderOperation {
             instrument: openpit::Instrument::new(

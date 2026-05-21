@@ -129,13 +129,3 @@ typedef struct OpenPitExecutionReport {
     void * user_data;
 } OpenPitExecutionReport;
 ```
-
-## `OpenPitPretradePostTradeResult`
-
-Aggregated post-trade processing result.
-
-```c
-typedef struct OpenPitPretradePostTradeResult {
-    bool kill_switch_triggered;
-} OpenPitPretradePostTradeResult;
-```

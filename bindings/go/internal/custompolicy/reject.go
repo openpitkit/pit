@@ -30,6 +30,16 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
-func newNativeRejectListOrNil(source []reject.Reject) *C.OpenPitRejectList {
-	return (*C.OpenPitRejectList)(unsafe.Pointer(convert.NewNativeRejectListOrNil(source)))
+func newNativeRejectListOrNil(source []reject.Reject) *C.OpenPitPretradeRejectList {
+	return (*C.OpenPitPretradeRejectList)(unsafe.Pointer(convert.NewNativeRejectListOrNil(source)))
+}
+
+func newNativeAccountBlockListOrNil(
+	source []reject.AccountBlock,
+) *C.OpenPitPretradeAccountBlockList {
+	return (*C.OpenPitPretradeAccountBlockList)(
+		unsafe.Pointer(
+			convert.NewNativeAccountBlockListOrNil(source),
+		),
+	)
 }

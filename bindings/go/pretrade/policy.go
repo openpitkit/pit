@@ -67,12 +67,14 @@ type Policy interface {
 
 	// ApplyExecutionReport applies post-trade updates from execution reports.
 	//
-	// Returns `true` when this policy reports kill-switch trigger.
+	// Returns account blocks representing the kill-switch state. An empty list
+	// means no kill switch. A non-empty list means this policy entered a
+	// blocked state after the report was applied.
 	//
 	// Implementations must not let panics escape this method. A panic raised
 	// here may propagate across the SDK boundary and terminate the process;
 	// recovering from such panics is the implementer's responsibility.
-	ApplyExecutionReport(model.ExecutionReport) bool
+	ApplyExecutionReport(model.ExecutionReport) []reject.AccountBlock
 
 	// ApplyAccountAdjustment validates one account adjustment.
 	//

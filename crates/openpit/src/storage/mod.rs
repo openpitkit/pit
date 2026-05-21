@@ -62,7 +62,7 @@
 //! ```
 //! use openpit::Engine;
 //!
-//! let builder = Engine::<(), ()>::builder().full_sync();
+//! let builder = Engine::builder::<(), (), ()>().full_sync();
 //! let storage = builder.storage_builder().create::<&'static str, u64>();
 //!
 //! // Insert.
@@ -97,6 +97,7 @@
 //! through a `match`; that layer is not part of this module.
 
 mod builder;
+mod index_flag;
 mod key_bound;
 mod policies;
 mod policy;
@@ -107,6 +108,7 @@ mod storage;
 mod tests;
 
 pub use builder::StorageBuilder;
+pub use index_flag::IndexFlag;
 pub use key_bound::{AnyKey, CreateStorageFor, IndexKeyBound};
 pub use policies::{FullLocking, IndexLocking, NoLocking};
 pub use policy::{FullySynchronized, LockingPolicy, LockingPolicyFactory};

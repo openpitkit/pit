@@ -62,7 +62,7 @@ def test_pnl_kill_switch_triggers_when_pnl_outside_bounds() -> None:
     post_trade = engine.apply_execution_report(
         report=conftest.make_report(pnl=openpit.param.Pnl("-120"))
     )
-    assert post_trade.kill_switch_triggered
+    assert post_trade.account_blocks
 
     blocked = engine.start_pre_trade(order=conftest.make_order())
     assert not blocked.ok

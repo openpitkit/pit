@@ -1217,17 +1217,36 @@ class AccountAdjustmentBatchResult:
     def __bool__(self) -> bool:
         """Boolean convenience alias for ``ok``."""
 
+class AccountBlock:
+    """An account-level block record returned by a policy callback."""
+
+    @property
+    def code(self) -> str:
+        """Stable machine-readable reject code."""
+
+    @property
+    def policy(self) -> str:
+        """Policy name that produced the block."""
+
+    @property
+    def reason(self) -> str:
+        """Human-readable reject reason."""
+
+    @property
+    def details(self) -> str:
+        """Case-specific reject details."""
+
 class PostTradeResult:
     """
     Result of ``Engine.apply_execution_report``.
 
-    Reports whether any policy considers an account-level kill switch to be
-    active after the report has been applied.
+    A non-empty ``account_blocks`` list means at least one policy entered a
+    blocked state after the report was applied.
     """
 
     @property
-    def kill_switch_triggered(self) -> bool:
-        """Whether any policy reported an active kill switch."""
+    def account_blocks(self) -> list[AccountBlock]:
+        """Account blocks reported by policies. Non-empty when a kill switch fired."""
 
 class Context:
     """Context of the current pre-trade operation."""

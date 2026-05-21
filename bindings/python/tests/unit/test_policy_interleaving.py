@@ -336,7 +336,7 @@ def test_policy_callbacks_preserve_original_objects_across_interleaving(
 
     for report_index in case.report_order:
         post_trade = engine.apply_execution_report(report=reports[report_index])
-        assert post_trade.kill_switch_triggered is False
+        assert not post_trade.account_blocks
 
     expected_execute_orders = [orders[index] for index in case.execute_order]
     expected_reports = [reports[index] for index in case.report_order]

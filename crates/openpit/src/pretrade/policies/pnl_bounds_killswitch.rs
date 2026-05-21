@@ -20,8 +20,12 @@ use std::fmt::{Display, Formatter};
 
 use crate::core::{HasAccountId, HasFee, HasInstrument, HasPnl};
 use crate::param::{AccountId, Asset, Pnl};
-use crate::pretrade::policy::request_field_access_pre_trade_reject;
-use crate::pretrade::{PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects};
+use crate::pretrade::policy::{
+    missing_required_field_account_block, missing_required_field_reject, PolicyName,
+};
+use crate::pretrade::{
+    AccountBlock, PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects,
+};
 use crate::storage::{Storage, StorageBuilder};
 
 /// Per-settlement P&L bounds configuration for the broker barrier.
@@ -62,10 +66,21 @@ pub struct PnlBoundsAccountAssetBarrier {
     pub initial_pnl: Pnl,
 }
 
-/// Tracks accumulated P&L per `(account, settlement_asset)`. Two configurable
-/// barrier kinds — broker per settlement asset, and per `(account, settlement)`
-/// (account+asset barrier). A check rejects when **either** breaches; if
-/// neither is configured for the `(account, settlement)` pair, the order passes.
+/// P&L kill switch with per-settlement-asset bounds.
+///
+/// Accumulates realized P&L (`pnl + fee` from execution reports) per
+/// `(account, settlement asset)` and blocks the account when the running
+/// total crosses a configured lower or upper bound.
+///
+/// Two barrier kinds can be configured, independently or together:
+/// - **broker barrier** — one set of bounds per settlement asset, applied to
+///   every account trading that asset;
+/// - **account+asset barrier** — tighter bounds for a specific
+///   `(account, settlement asset)` pair, with an explicit starting P&L.
+///
+/// An order is blocked when the realized P&L on its settlement asset is
+/// outside **either** applicable barrier. If neither barrier covers the
+/// `(account, settlement)` pair, the order passes.
 ///
 /// Constructor rules:
 /// - at least one barrier (broker or account+asset) must be configured;
@@ -73,28 +88,15 @@ pub struct PnlBoundsAccountAssetBarrier {
 ///   each barrier;
 /// - constructor does not validate signs of bounds;
 /// - constructor does not validate ordering (`lower_bound <= upper_bound`).
-///
-/// Runtime notes:
-/// - once a breach or arithmetic overflow is detected — either in
-///   `check_pre_trade_start` or in `apply_execution_report` — the account is
-///   permanently blocked for that settlement asset; all subsequent
-///   `check_pre_trade_start` calls reject with
-///   `RejectCode::PnlKillSwitchTriggered` and `apply_execution_report` always
-///   returns `true` until the engine is rebuilt;
-/// - when `check_pre_trade_start` detects the breach itself (before any
-///   `apply_execution_report` has triggered it), the reject carries the
-///   specific barrier reason (`broker barrier` or `account+asset barrier`); once
-///   the account is blocked, subsequent checks report `account blocked`.
 pub struct PnlBoundsKillSwitchPolicy<LockingPolicyFactory>
 where
     LockingPolicyFactory: crate::storage::LockingPolicyFactory,
 {
     broker_barriers: HashMap<Asset, PnlBoundsBrokerBarrier>,
     account_barriers: HashMap<AccountId, HashMap<Asset, PnlBoundsAccountAssetBarrier>>,
-    // None = permanently blocked; Some(pnl) = current accumulated P&L.
     realized: Storage<
         (AccountId, Asset),
-        Option<Pnl>,
+        Pnl,
         <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy,
     >,
 }
@@ -137,7 +139,7 @@ where
     ///
     /// `storage_builder` must be obtained from the engine builder so that the
     /// per-account P&L storage shares the factory type with the engine's
-    /// synchronization policy.
+    /// synchronization mode.
     ///
     /// At least one barrier must be provided across `broker_barriers` and
     /// `account_barriers`; if both are empty, returns `NoBarriersConfigured`.
@@ -183,9 +185,9 @@ where
             for (settlement_asset, barrier) in by_settlement {
                 realized.with_mut(
                     (*account_id, settlement_asset.clone()),
-                    || Some(Pnl::ZERO),
+                    || Pnl::ZERO,
                     |entry, _is_new| {
-                        *entry = Some(barrier.initial_pnl);
+                        *entry = barrier.initial_pnl;
                     },
                 );
             }
@@ -212,6 +214,15 @@ where
     }
 }
 
+impl<LockingPolicyFactory> PolicyName for PnlBoundsKillSwitchPolicy<LockingPolicyFactory>
+where
+    LockingPolicyFactory: crate::storage::LockingPolicyFactory,
+{
+    fn policy_name(&self) -> &str {
+        Self::NAME
+    }
+}
+
 impl<Order, ExecutionReport, AccountAdjustment, LockingPolicyFactory>
     PreTradePolicy<Order, ExecutionReport, AccountAdjustment>
     for PnlBoundsKillSwitchPolicy<LockingPolicyFactory>
@@ -227,141 +238,67 @@ where
     fn check_pre_trade_start(&self, _ctx: &PreTradeContext, order: &Order) -> Result<(), Rejects> {
         let instrument = order
             .instrument()
-            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
+            .map_err(|e| Rejects::from(missing_required_field_reject(self, "instrument", &e)))?;
         let account_id = order
             .account_id()
-            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
+            .map_err(|e| Rejects::from(missing_required_field_reject(self, "account ID", &e)))?;
 
         let settlement = instrument.settlement_asset();
 
-        // Fast path: read-only check (violation is rare; happy path skips write lock).
-        // The closure returns `Result<Option<Pnl>, Rejects>`:
-        // - `Ok(Some(pnl))` => continue with `pnl` as current value;
-        // - `Ok(None)`      => no breach to evaluate, return `Ok(())`;
-        // - `Err(...)`      => account already blocked, return `Err(...)`.
-        let fast_path_pnl: Result<Option<Pnl>, Rejects> =
-            match self
-                .realized
-                .with(&(account_id, settlement.clone()), |entry| match *entry {
-                    None => Err(pnl_account_blocked_reject(
-                        Self::NAME,
-                        settlement,
-                        account_id,
-                    )),
-                    Some(pnl) => Ok(Some(pnl)),
-                }) {
-                Some(result) => result,
-                None => {
-                    // No stored entry for this (account, settlement).
-                    if !self.broker_barriers.contains_key(settlement) {
-                        // Not tracked at all: no broker barrier covers this settlement.
-                        Ok(None)
-                    } else if !is_outside_bounds(
-                        &self.broker_barriers,
-                        &self.account_barriers,
-                        Pnl::ZERO,
-                        settlement,
-                        account_id,
-                    ) {
-                        // Within bounds; do not create a storage entry on the read fast path.
-                        Ok(None)
-                    } else {
-                        // Outside bounds: fall through to slow path with `Pnl::ZERO` as starting point.
-                        Ok(Some(Pnl::ZERO))
-                    }
-                }
-            };
+        let broker_barrier = self.broker_barriers.get(settlement);
+        let account_barrier = self
+            .account_barriers
+            .get(&account_id)
+            .and_then(|m| m.get(settlement));
 
-        let current_pnl = match fast_path_pnl? {
-            Some(pnl) => pnl,
-            None => return Ok(()),
-        };
-
-        if !is_outside_bounds(
-            &self.broker_barriers,
-            &self.account_barriers,
-            current_pnl,
-            settlement,
-            account_id,
-        ) {
+        if broker_barrier.is_none() && account_barrier.is_none() {
             return Ok(());
         }
 
-        // Breach detected — take write lock and re-check after acquiring it,
-        // because the value may have changed between the read and write.
-        self.realized.with_mut(
-            (account_id, settlement.clone()),
-            || Some(Pnl::ZERO),
-            |entry, _is_new| {
-                let current_pnl = match *entry {
-                    None => {
-                        return Err(pnl_account_blocked_reject(
-                            Self::NAME,
-                            settlement,
-                            account_id,
-                        ));
-                    }
-                    Some(pnl) => pnl,
-                };
+        let current_pnl = self
+            .realized
+            .with(&(account_id, settlement.clone()), |entry| *entry)
+            .unwrap_or(Pnl::ZERO);
 
-                if let Some(broker_barrier) = self.broker_barriers.get(settlement) {
-                    let broker_breached = breached_sides(
-                        broker_barrier.lower_bound,
-                        broker_barrier.upper_bound,
-                        current_pnl,
-                    );
-                    if !broker_breached.is_empty() {
-                        *entry = None;
-                        let desc = broker_breached.join(" and ");
-                        return Err(Reject::new(
-                            Self::NAME,
-                            RejectScope::Account,
-                            RejectCode::PnlKillSwitchTriggered,
-                            "pnl kill switch triggered: broker barrier",
-                            format!(
-                                "{desc} bound breached: realized pnl {current_pnl}, \
-                                 lower_bound {:?}, upper_bound {:?}, \
-                                 settlement asset {settlement}, account {account_id}",
-                                broker_barrier.lower_bound, broker_barrier.upper_bound,
-                            ),
-                        )
-                        .into());
-                    }
-                }
+        if let Some(broker_barrier) = broker_barrier {
+            let breached = breached_sides(
+                broker_barrier.lower_bound,
+                broker_barrier.upper_bound,
+                current_pnl,
+            );
+            if !breached.is_empty() {
+                return Err(barrier_breach_reject(
+                    self,
+                    "pnl kill switch triggered: broker barrier",
+                    &breached,
+                    broker_barrier,
+                    current_pnl,
+                    account_id,
+                )
+                .into());
+            }
+        }
 
-                if let Some(account_barrier) = self
-                    .account_barriers
-                    .get(&account_id)
-                    .and_then(|m| m.get(settlement))
-                {
-                    let account_breached = breached_sides(
-                        account_barrier.barrier.lower_bound,
-                        account_barrier.barrier.upper_bound,
-                        current_pnl,
-                    );
-                    if !account_breached.is_empty() {
-                        *entry = None;
-                        let desc = account_breached.join(" and ");
-                        return Err(Reject::new(
-                            Self::NAME,
-                            RejectScope::Account,
-                            RejectCode::PnlKillSwitchTriggered,
-                            "pnl kill switch triggered: account+asset barrier",
-                            format!(
-                                "{desc} bound breached: realized pnl {current_pnl}, \
-                                 lower_bound {:?}, upper_bound {:?}, \
-                                 settlement asset {settlement}, account {account_id}",
-                                account_barrier.barrier.lower_bound,
-                                account_barrier.barrier.upper_bound,
-                            ),
-                        )
-                        .into());
-                    }
-                }
+        if let Some(account_barrier) = account_barrier {
+            let breached = breached_sides(
+                account_barrier.barrier.lower_bound,
+                account_barrier.barrier.upper_bound,
+                current_pnl,
+            );
+            if !breached.is_empty() {
+                return Err(barrier_breach_reject(
+                    self,
+                    "pnl kill switch triggered: account + asset barrier",
+                    &breached,
+                    &account_barrier.barrier,
+                    current_pnl,
+                    account_id,
+                )
+                .into());
+            }
+        }
 
-                Ok(())
-            },
-        )
+        Ok(())
     }
 
     /// Applies a post-trade report to the accumulated realized P&L for the
@@ -372,22 +309,26 @@ where
     ///
     /// The accumulation is performed under a single write lock; no intermediate
     /// reads from the realized storage are issued.
-    fn apply_execution_report(&self, report: &ExecutionReport) -> bool {
+    ///
+    /// Returns an [`AccountBlock`] when any required report field cannot be
+    /// accessed, when `pnl + fee` or the accumulated value overflows, or when
+    /// the new accumulated value breaches a configured barrier.
+    fn apply_execution_report(&self, report: &ExecutionReport) -> Vec<AccountBlock> {
         let instrument = match report.instrument() {
             Ok(i) => i,
-            Err(_) => return false,
+            Err(e) => return vec![missing_required_field_account_block(self, "instrument", &e)],
         };
         let account_id = match report.account_id() {
             Ok(id) => id,
-            Err(_) => return false,
+            Err(e) => return vec![missing_required_field_account_block(self, "account ID", &e)],
         };
         let pnl_delta = match report.pnl() {
             Ok(p) => p,
-            Err(_) => return false,
+            Err(e) => return vec![missing_required_field_account_block(self, "P&L", &e)],
         };
         let fee = match report.fee() {
             Ok(f) => f,
-            Err(_) => return false,
+            Err(e) => return vec![missing_required_field_account_block(self, "fee", &e)],
         };
 
         let settlement = instrument.settlement_asset();
@@ -399,72 +340,102 @@ where
                 .get(&account_id)
                 .is_some_and(|m| m.contains_key(settlement));
         if !has_barrier {
-            return false;
+            return vec![];
         }
 
         let pnl_with_fee = match pnl_delta.checked_add(fee.to_pnl()) {
-            Ok(value) => value,
+            Ok(v) => v,
             Err(_) => {
-                self.realized.with_mut(
-                    (account_id, settlement.clone()),
-                    || Some(Pnl::ZERO),
-                    |entry, _is_new| {
-                        *entry = None;
-                    },
-                );
-                return true;
+                return vec![pnl_calculation_failed_block(
+                    self,
+                    format!(
+                        "pnl + fee overflow: pnl {pnl_delta}, fee {fee}, \
+                         settlement asset {settlement}, account {account_id}"
+                    ),
+                )];
             }
         };
 
-        self.realized.with_mut(
+        let block: Option<AccountBlock> = self.realized.with_mut(
             (account_id, settlement.clone()),
-            || Some(Pnl::ZERO),
+            || Pnl::ZERO,
             |entry, _is_new| {
-                let previous = match *entry {
-                    None => return true,
-                    Some(pnl) => pnl,
-                };
-
+                let previous = *entry;
                 let updated = match previous.checked_add(pnl_with_fee) {
                     Ok(value) => value,
                     Err(_) => {
-                        *entry = None;
-                        return true;
+                        return Some(pnl_calculation_failed_block(
+                            self,
+                            format!(
+                                "realized pnl + pnl_with_fee overflow: \
+                                 previous {previous}, increment {pnl_with_fee}, \
+                                 settlement asset {settlement}, account {account_id}"
+                            ),
+                        ));
                     }
                 };
-
-                // Branch is predictable; HashMap::get already dominates this path.
-                let breach = is_outside_bounds(
+                *entry = updated;
+                if is_outside_bounds(
                     &self.broker_barriers,
                     &self.account_barriers,
                     updated,
                     settlement,
                     account_id,
-                );
-                if breach {
-                    *entry = None;
+                ) {
+                    Some(AccountBlock::new(
+                        self.policy_name(),
+                        RejectCode::PnlKillSwitchTriggered,
+                        "pnl kill switch triggered",
+                        format!(
+                            "realized pnl {updated}, settlement asset {settlement}, \
+                             account {account_id}"
+                        ),
+                    ))
                 } else {
-                    *entry = Some(updated);
+                    None
                 }
-                breach
             },
-        )
+        );
+
+        block.into_iter().collect()
     }
 }
 
-fn pnl_account_blocked_reject(
-    name: &'static str,
-    settlement: &Asset,
+fn barrier_breach_reject<Policy: PolicyName + ?Sized>(
+    policy: &Policy,
+    reason: &'static str,
+    breached_sides: &[&'static str],
+    barrier: &PnlBoundsBrokerBarrier,
+    realized: Pnl,
     account_id: AccountId,
-) -> Rejects {
+) -> Reject {
+    let desc = breached_sides.join(" and ");
+    let settlement = &barrier.settlement_asset;
+    let lower_bound = barrier.lower_bound;
+    let upper_bound = barrier.upper_bound;
     Reject::new(
-        name,
+        policy.policy_name(),
         RejectScope::Account,
         RejectCode::PnlKillSwitchTriggered,
-        "pnl kill switch triggered: account blocked",
-        format!("settlement asset {settlement}, account {account_id}"),
+        reason,
+        format!(
+            "{desc} bound breached: realized pnl {realized}, \
+             lower_bound {lower_bound:?}, upper_bound {upper_bound:?}, \
+             settlement asset {settlement}, account {account_id}"
+        ),
     )
-    .into()
+}
+
+fn pnl_calculation_failed_block<Policy: PolicyName + ?Sized>(
+    policy: &Policy,
+    details: String,
+) -> AccountBlock {
+    AccountBlock::new(
+        policy.policy_name(),
+        RejectCode::OrderValueCalculationFailed,
+        "pnl accumulation overflow",
+        details,
+    )
 }
 
 fn is_outside_bounds(
@@ -526,9 +497,9 @@ mod tests {
 
     type TestPolicy = PnlBoundsKillSwitchPolicy<NoLocking>;
 
-    fn test_builder(
-    ) -> crate::SyncedEngineBuilder<OrderOperation, TestReport, (), crate::LocalSyncPolicy> {
-        crate::Engine::<OrderOperation, TestReport>::builder().no_sync()
+    fn test_builder() -> crate::SyncedEngineBuilder<OrderOperation, TestReport, (), crate::LocalSync>
+    {
+        crate::Engine::builder().no_sync()
     }
 
     struct TestReport {
@@ -589,32 +560,40 @@ mod tests {
 
     // ── global bound breaches ───────────────────────────────────────────────
 
-    // apply_execution_report detects breach → blocks → check sees "account blocked".
+    // apply_execution_report detects a breach → returns AccountBlock and the
+    // stored realized P&L stays at the breaching value, so subsequent
+    // check_pre_trade_start re-reports the breach.
     #[test]
-    fn apply_breach_permanently_blocks_account_lower_bound() {
+    fn apply_breach_blocks_account_lower_bound() {
         let policy = policy_usd(Some(pnl("-100")), Some(pnl("50")));
-        let triggered = apply_report(&policy, &report("USD", account(1), pnl("-101")));
-        assert!(triggered);
+        let blocks = apply_report_blocks(&policy, &report("USD", account(1), pnl("-101")));
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].code, RejectCode::PnlKillSwitchTriggered);
+        assert_eq!(blocks[0].reason, "pnl kill switch triggered");
+
         let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Account);
         assert_eq!(reject.code, RejectCode::PnlKillSwitchTriggered);
-        assert_eq!(reject.reason, "pnl kill switch triggered: account blocked");
+        assert_eq!(reject.reason, "pnl kill switch triggered: broker barrier");
     }
 
     #[test]
-    fn apply_breach_permanently_blocks_account_upper_bound() {
+    fn apply_breach_blocks_account_upper_bound() {
         let policy = policy_usd(Some(pnl("-100")), Some(pnl("50")));
-        let triggered = apply_report(&policy, &report("USD", account(1), pnl("51")));
-        assert!(triggered);
+        let blocks = apply_report_blocks(&policy, &report("USD", account(1), pnl("51")));
+        assert_eq!(blocks.len(), 1);
+
         let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
         assert_eq!(
             reject[0].reason,
-            "pnl kill switch triggered: account blocked"
+            "pnl kill switch triggered: broker barrier"
         );
     }
 
-    // check_pre_trade_start detects breach on first call → specific barrier reason → then blocks.
+    // check_pre_trade_start detects breach using the current stored P&L; the
+    // reason always carries the specific barrier (broker / account+asset),
+    // because the policy no longer maintains an internal "blocked" sentinel.
     #[test]
     fn check_detects_lower_bound_breach_with_specific_reason() {
         // Use initial_pnl to place PnL outside bounds before any apply.
@@ -634,11 +613,11 @@ mod tests {
         assert_eq!(reject.code, RejectCode::PnlKillSwitchTriggered);
         assert_eq!(reject.reason, "pnl kill switch triggered: broker barrier");
         assert!(reject.details.contains("lower bound breached"));
-        // Second check: account is now blocked permanently.
+        // Second check: policy is stateless, returns the same breach reason.
         let reject2 = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
         assert_eq!(
             reject2[0].reason,
-            "pnl kill switch triggered: account blocked"
+            "pnl kill switch triggered: broker barrier"
         );
     }
 
@@ -723,13 +702,13 @@ mod tests {
         assert_eq!(reject.code, RejectCode::PnlKillSwitchTriggered);
         assert_eq!(
             reject.reason,
-            "pnl kill switch triggered: account+asset barrier"
+            "pnl kill switch triggered: account + asset barrier"
         );
         assert!(reject.details.contains("lower bound breached"));
     }
 
     #[test]
-    fn account_barrier_apply_breach_blocks_permanently() {
+    fn account_barrier_apply_breach_blocks() {
         let policy: TestPolicy = PnlBoundsKillSwitchPolicy::new(
             [barrier_usd(Some(pnl("-500")), None)],
             [PnlBoundsAccountAssetBarrier {
@@ -742,12 +721,12 @@ mod tests {
         .expect("policy must be valid");
 
         // -200 violates account bound [-100], apply detects and blocks.
-        let triggered = apply_report(&policy, &report("USD", account(1), pnl("-200")));
-        assert!(triggered);
+        let blocks = apply_report_blocks(&policy, &report("USD", account(1), pnl("-200")));
+        assert_eq!(blocks.len(), 1);
         let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
         assert_eq!(
             reject[0].reason,
-            "pnl kill switch triggered: account blocked"
+            "pnl kill switch triggered: account + asset barrier"
         );
     }
 
@@ -765,13 +744,13 @@ mod tests {
         .expect("policy must be valid");
 
         // -200 is within account bound [-500] but violates global [-100].
-        let triggered = apply_report(&policy, &report("USD", account(1), pnl("-200")));
-        assert!(triggered);
+        let blocks = apply_report_blocks(&policy, &report("USD", account(1), pnl("-200")));
+        assert_eq!(blocks.len(), 1);
         let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
         assert_eq!(reject[0].code, RejectCode::PnlKillSwitchTriggered);
         assert_eq!(
             reject[0].reason,
-            "pnl kill switch triggered: account blocked"
+            "pnl kill switch triggered: broker barrier"
         );
     }
 
@@ -897,71 +876,75 @@ mod tests {
         assert!(check_start(&policy, &order("EUR", account(1))).is_ok());
     }
 
-    // ── kill-switch permanence ───────────────────────────────────────────────
+    // ── repeated reports ─────────────────────────────────────────────────────
 
+    // The policy is stateless about blocking: it reports a block on every
+    // apply where the resulting accumulated P&L is outside bounds, and no
+    // block when the running total falls back inside. The engine is the one
+    // that latches the account-level block after the first AccountBlock.
     #[test]
-    fn kill_switch_is_permanently_latched_after_breach() {
+    fn repeated_reports_track_running_total() {
         let policy = policy_usd(Some(pnl("-100")), Some(pnl("50")));
 
-        let triggered = apply_report(&policy, &report("USD", account(1), pnl("-101")));
-        assert!(triggered);
+        let blocks = apply_report_blocks(&policy, &report("USD", account(1), pnl("-101")));
+        assert_eq!(blocks.len(), 1);
         assert!(check_start(&policy, &order("USD", account(1))).is_err());
 
-        // Subsequent apply also returns true (account is blocked); no unblocking.
-        let still_triggered = apply_report(&policy, &report("USD", account(1), pnl("5")));
-        assert!(still_triggered);
-        assert!(check_start(&policy, &order("USD", account(1))).is_err());
+        // -101 + 5 = -96, which is back inside [-100, 50], so the policy
+        // itself stops reporting a block. The engine remains responsible for
+        // keeping the account latched.
+        let blocks = apply_report_blocks(&policy, &report("USD", account(1), pnl("5")));
+        assert!(blocks.is_empty());
+        assert!(check_start(&policy, &order("USD", account(1))).is_ok());
     }
 
     // ── overflow ─────────────────────────────────────────────────────────────
 
     #[test]
-    fn overflow_permanently_blocks_account() {
+    fn accumulator_overflow_reports_calculation_failure() {
         use rust_decimal::Decimal;
         let policy = policy_usd(Some(pnl("-100")), None);
 
-        // First MAX: stores Some(MAX), within [-100, ∞) — no block.
-        assert!(!apply_report(
-            &policy,
-            &report("USD", account(1), Pnl::new(Decimal::MAX))
-        ));
-        // Second MAX: overflows, sets None — permanently blocked.
-        assert!(apply_report(
-            &policy,
-            &report("USD", account(1), Pnl::new(Decimal::MAX))
-        ));
-        let reject = check_start(&policy, &order("USD", account(1))).expect_err("must be blocked");
-        assert_eq!(reject[0].code, RejectCode::PnlKillSwitchTriggered);
-        assert_eq!(
-            reject[0].reason,
-            "pnl kill switch triggered: account blocked"
-        );
+        // First MAX: stores MAX, within [-100, ∞) — no block.
+        let first =
+            apply_report_blocks(&policy, &report("USD", account(1), Pnl::new(Decimal::MAX)));
+        assert!(first.is_empty());
+
+        // Second MAX: previous (MAX) + MAX overflows the accumulator and is
+        // surfaced as OrderValueCalculationFailed; the engine receives the
+        // AccountBlock and latches the account itself.
+        let second =
+            apply_report_blocks(&policy, &report("USD", account(1), Pnl::new(Decimal::MAX)));
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].code, RejectCode::OrderValueCalculationFailed);
+        assert_eq!(second[0].reason, "pnl accumulation overflow");
+        assert!(second[0]
+            .details
+            .contains("realized pnl + pnl_with_fee overflow"));
     }
 
     #[test]
-    fn negative_overflow_permanently_blocks_account() {
+    fn negative_accumulator_overflow_reports_calculation_failure() {
         use rust_decimal::Decimal;
         let policy = policy_usd(None, Some(pnl("100")));
 
-        assert!(!apply_report(
-            &policy,
-            &report("USD", account(1), Pnl::new(Decimal::MIN))
-        ));
-        assert!(apply_report(
-            &policy,
-            &report("USD", account(1), Pnl::new(Decimal::MIN))
-        ));
-        assert!(check_start(&policy, &order("USD", account(1))).is_err());
+        let first =
+            apply_report_blocks(&policy, &report("USD", account(1), Pnl::new(Decimal::MIN)));
+        assert!(first.is_empty());
+        let second =
+            apply_report_blocks(&policy, &report("USD", account(1), Pnl::new(Decimal::MIN)));
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].code, RejectCode::OrderValueCalculationFailed);
     }
 
-    // pnl + fee overflow latches the kill switch permanently.
-    // Fee is a rebate (negative fee), so fee.to_pnl() = +1; MAX + 1 overflows.
+    // Fee is a rebate (negative fee), so fee.to_pnl() = +1; MAX + 1 overflows
+    // at the pnl + fee stage, before the accumulator is even touched.
     #[test]
-    fn pnl_plus_fee_overflow_permanently_blocks_account() {
+    fn pnl_plus_fee_overflow_reports_calculation_failure() {
         use rust_decimal::Decimal;
         let policy = policy_usd(None, Some(Pnl::new(Decimal::MAX)));
 
-        let triggered = apply_report(
+        let blocks = apply_report_blocks(
             &policy,
             &report_with_fee(
                 "USD",
@@ -970,22 +953,20 @@ mod tests {
                 Fee::new(-Decimal::ONE),
             ),
         );
-        assert!(triggered, "overflow pnl+fee should trigger kill switch");
-
-        let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
-        assert_eq!(reject[0].code, RejectCode::PnlKillSwitchTriggered);
-        assert_eq!(
-            reject[0].reason,
-            "pnl kill switch triggered: account blocked"
-        );
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].code, RejectCode::OrderValueCalculationFailed);
+        assert_eq!(blocks[0].reason, "pnl accumulation overflow");
+        assert!(blocks[0].details.contains("pnl + fee overflow"));
     }
 
+    // The accumulator is not corrupted on overflow: subsequent reports are
+    // evaluated against the last known good value (or zero if none).
     #[test]
-    fn overflow_latch_persists_across_subsequent_reports() {
+    fn overflow_does_not_corrupt_subsequent_reports() {
         use rust_decimal::Decimal;
         let policy = policy_usd(None, Some(Pnl::new(Decimal::MAX)));
 
-        let first = apply_report(
+        let first = apply_report_blocks(
             &policy,
             &report_with_fee(
                 "USD",
@@ -994,10 +975,12 @@ mod tests {
                 Fee::new(-Decimal::ONE),
             ),
         );
-        assert!(first);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].code, RejectCode::OrderValueCalculationFailed);
 
-        let second = apply_report(&policy, &report("USD", account(1), Pnl::ZERO));
-        assert!(second, "after overflow, account should remain blocked");
+        // ZERO + ZERO accumulates cleanly and stays within bounds.
+        let second = apply_report_blocks(&policy, &report("USD", account(1), Pnl::ZERO));
+        assert!(second.is_empty());
     }
 
     #[test]
@@ -1037,14 +1020,14 @@ mod tests {
         )
         .expect("policy must be valid");
 
-        // apply detects breach → blocks account(1) for USD.
-        let triggered = apply_report(&policy, &report("USD", account(1), pnl("-150")));
-        assert!(triggered);
+        // apply detects breach → returns AccountBlock for account(1) USD.
+        let blocks = apply_report_blocks(&policy, &report("USD", account(1), pnl("-150")));
+        assert_eq!(blocks.len(), 1);
         let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
         assert_eq!(reject[0].code, RejectCode::PnlKillSwitchTriggered);
         assert_eq!(
             reject[0].reason,
-            "pnl kill switch triggered: account blocked"
+            "pnl kill switch triggered: account + asset barrier"
         );
 
         // Other account, same settlement: no barrier → passes.
@@ -1082,7 +1065,10 @@ mod tests {
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
-        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(
+            reject.reason,
+            "failed to access required field 'instrument'"
+        );
         assert_eq!(reject.details, "failed to access field 'instrument'");
     }
 
@@ -1100,6 +1086,13 @@ mod tests {
     }
 
     fn apply_report(policy: &TestPolicy, report: &TestReport) -> bool {
+        !apply_report_blocks(policy, report).is_empty()
+    }
+
+    fn apply_report_blocks(
+        policy: &TestPolicy,
+        report: &TestReport,
+    ) -> Vec<crate::pretrade::AccountBlock> {
         <TestPolicy as PreTradePolicy<OrderOperation, TestReport>>::apply_execution_report(
             policy, report,
         )
@@ -1180,6 +1173,197 @@ mod tests {
 
     fn pnl(value: &str) -> Pnl {
         Pnl::from_str(value).expect("pnl literal must be valid")
+    }
+
+    // ── missing report fields ────────────────────────────────────────────────
+
+    #[test]
+    fn missing_instrument_in_report_returns_account_block() {
+        struct NoInstrument {
+            account_id: AccountId,
+            pnl: Pnl,
+            fee: Fee,
+        }
+        impl HasInstrument for NoInstrument {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("instrument"))
+            }
+        }
+        impl HasAccountId for NoInstrument {
+            fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+                Ok(self.account_id)
+            }
+        }
+        impl HasPnl for NoInstrument {
+            fn pnl(&self) -> Result<Pnl, RequestFieldAccessError> {
+                Ok(self.pnl)
+            }
+        }
+        impl HasFee for NoInstrument {
+            fn fee(&self) -> Result<Fee, RequestFieldAccessError> {
+                Ok(self.fee)
+            }
+        }
+
+        let policy = policy_usd(Some(pnl("-100")), Some(pnl("50")));
+        let report = NoInstrument {
+            account_id: account(1),
+            pnl: pnl("0"),
+            fee: Fee::ZERO,
+        };
+        let blocks =
+            <TestPolicy as PreTradePolicy<OrderOperation, NoInstrument>>::apply_execution_report(
+                &policy, &report,
+            );
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].code, RejectCode::MissingRequiredField);
+        assert_eq!(
+            blocks[0].reason,
+            "failed to access required field 'instrument'"
+        );
+        assert_eq!(blocks[0].details, "failed to access field 'instrument'");
+    }
+
+    #[test]
+    fn missing_account_id_in_report_returns_account_block() {
+        struct NoAccount {
+            instrument: Instrument,
+            pnl: Pnl,
+            fee: Fee,
+        }
+        impl HasInstrument for NoAccount {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Ok(&self.instrument)
+            }
+        }
+        impl HasAccountId for NoAccount {
+            fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("account_id"))
+            }
+        }
+        impl HasPnl for NoAccount {
+            fn pnl(&self) -> Result<Pnl, RequestFieldAccessError> {
+                Ok(self.pnl)
+            }
+        }
+        impl HasFee for NoAccount {
+            fn fee(&self) -> Result<Fee, RequestFieldAccessError> {
+                Ok(self.fee)
+            }
+        }
+
+        let policy = policy_usd(Some(pnl("-100")), Some(pnl("50")));
+        let report = NoAccount {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("must be valid"),
+                Asset::new("USD").expect("must be valid"),
+            ),
+            pnl: pnl("0"),
+            fee: Fee::ZERO,
+        };
+        let blocks =
+            <TestPolicy as PreTradePolicy<OrderOperation, NoAccount>>::apply_execution_report(
+                &policy, &report,
+            );
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].code, RejectCode::MissingRequiredField);
+        assert_eq!(
+            blocks[0].reason,
+            "failed to access required field 'account ID'"
+        );
+        assert_eq!(blocks[0].details, "failed to access field 'account_id'");
+    }
+
+    #[test]
+    fn missing_pnl_in_report_returns_account_block() {
+        struct NoPnl {
+            instrument: Instrument,
+            account_id: AccountId,
+            fee: Fee,
+        }
+        impl HasInstrument for NoPnl {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Ok(&self.instrument)
+            }
+        }
+        impl HasAccountId for NoPnl {
+            fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+                Ok(self.account_id)
+            }
+        }
+        impl HasPnl for NoPnl {
+            fn pnl(&self) -> Result<Pnl, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("pnl"))
+            }
+        }
+        impl HasFee for NoPnl {
+            fn fee(&self) -> Result<Fee, RequestFieldAccessError> {
+                Ok(self.fee)
+            }
+        }
+
+        let policy = policy_usd(Some(pnl("-100")), Some(pnl("50")));
+        let report = NoPnl {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("must be valid"),
+                Asset::new("USD").expect("must be valid"),
+            ),
+            account_id: account(1),
+            fee: Fee::ZERO,
+        };
+        let blocks = <TestPolicy as PreTradePolicy<OrderOperation, NoPnl>>::apply_execution_report(
+            &policy, &report,
+        );
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].code, RejectCode::MissingRequiredField);
+        assert_eq!(blocks[0].reason, "failed to access required field 'P&L'");
+        assert_eq!(blocks[0].details, "failed to access field 'pnl'");
+    }
+
+    #[test]
+    fn missing_fee_in_report_returns_account_block() {
+        struct NoFee {
+            instrument: Instrument,
+            account_id: AccountId,
+            pnl: Pnl,
+        }
+        impl HasInstrument for NoFee {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Ok(&self.instrument)
+            }
+        }
+        impl HasAccountId for NoFee {
+            fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+                Ok(self.account_id)
+            }
+        }
+        impl HasPnl for NoFee {
+            fn pnl(&self) -> Result<Pnl, RequestFieldAccessError> {
+                Ok(self.pnl)
+            }
+        }
+        impl HasFee for NoFee {
+            fn fee(&self) -> Result<Fee, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("fee"))
+            }
+        }
+
+        let policy = policy_usd(Some(pnl("-100")), Some(pnl("50")));
+        let report = NoFee {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("must be valid"),
+                Asset::new("USD").expect("must be valid"),
+            ),
+            account_id: account(1),
+            pnl: pnl("0"),
+        };
+        let blocks = <TestPolicy as PreTradePolicy<OrderOperation, NoFee>>::apply_execution_report(
+            &policy, &report,
+        );
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].code, RejectCode::MissingRequiredField);
+        assert_eq!(blocks[0].reason, "failed to access required field 'fee'");
+        assert_eq!(blocks[0].details, "failed to access field 'fee'");
     }
 
     // ── fast-path bug fix coverage ───────────────────────────────────────────

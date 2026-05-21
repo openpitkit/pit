@@ -60,7 +60,7 @@ impl<Order> PreTradeRequest<Order> {
     /// use openpit::param::TradeAmount;
     ///
     /// use openpit::pretrade::policies::OrderValidationPolicy;
-    /// let engine = Engine::<OrderOperation>::builder()
+    /// let engine = Engine::builder::<OrderOperation, (), ()>()
     ///     .no_sync()
     ///     .pre_trade(OrderValidationPolicy::new())
     ///     .build()?;

@@ -150,7 +150,7 @@ func TestReadmeQuickstart(t *testing.T) {
 	}
 
 	// 6. Kill switch must not be triggered after a small loss.
-	if result.KillSwitchTriggered {
-		t.Fatal("KillSwitchTriggered = true, want false")
+	if len(result.AccountBlocks) > 0 {
+		t.Fatalf("AccountBlocks = %v, want none after small loss", result.AccountBlocks)
 	}
 }

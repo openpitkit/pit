@@ -16,7 +16,7 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 use crate::OpenPitStringView;
-use openpit::pretrade::{Reject, RejectCode, RejectScope, Rejects};
+use openpit::pretrade::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
 use std::ffi::c_void;
 
 #[repr(u8)]
@@ -25,7 +25,7 @@ use std::ffi::c_void;
 ///
 /// Valid values: `Order` (1), `Account` (2). Zero is not a valid scope value;
 /// the caller must always set this field explicitly.
-pub enum OpenPitRejectScope {
+pub enum OpenPitPretradeRejectScope {
     /// The reject applies to one order or order-like request.
     Order = 1,
     /// The reject applies to account state rather than to one order only.
@@ -37,11 +37,11 @@ pub enum OpenPitRejectScope {
 /// Stable classification code for a reject.
 ///
 /// Read this first when you need machine-readable handling. The textual fields
-/// in [`OpenPitReject`] provide operator-facing explanation and extra context.
+/// in [`OpenPitPretradeReject`] provide operator-facing explanation and extra context.
 ///
 /// Valid codes are `1..=39` and `255` (`Other`). Unknown incoming codes are
 /// mapped to `Other` (`255`).
-pub enum OpenPitRejectCode {
+pub enum OpenPitPretradeRejectCode {
     /// A required field is absent.
     MissingRequiredField = 1,
     /// A field cannot be parsed from the supplied wire value.
@@ -133,7 +133,7 @@ pub enum OpenPitRejectCode {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Single rejection record returned by checks.
-pub struct OpenPitReject {
+pub struct OpenPitPretradeReject {
     /// Policy name that produced the reject.
     pub policy: OpenPitStringView,
     /// Human-readable reject reason.
@@ -152,19 +152,19 @@ pub struct OpenPitReject {
     /// `Clone`.
     pub user_data: *mut c_void,
     /// Stable machine-readable reject code.
-    pub code: OpenPitRejectCode,
+    pub code: OpenPitPretradeRejectCode,
     /// Reject scope.
-    pub scope: OpenPitRejectScope,
+    pub scope: OpenPitPretradeRejectScope,
 }
 
-impl OpenPitReject {
+impl OpenPitPretradeReject {
     pub(crate) fn from_reject(inner: &Reject) -> Self {
         Self {
             policy: OpenPitStringView::from_utf8(inner.policy.as_str()),
             reason: OpenPitStringView::from_utf8(inner.reason.as_str()),
             details: OpenPitStringView::from_utf8(inner.details.as_str()),
             user_data: inner.user_data as *mut c_void,
-            code: OpenPitRejectCode::from(inner.code),
+            code: OpenPitPretradeRejectCode::from(inner.code),
             scope: export_reject_scope(inner.scope.clone()),
         }
     }
@@ -182,59 +182,63 @@ impl OpenPitReject {
 }
 
 /// Caller-owned list of rejects.
-pub struct OpenPitRejectList {
+pub struct OpenPitPretradeRejectList {
     pub(crate) items: Vec<Reject>,
 }
 
-impl From<OpenPitRejectCode> for RejectCode {
-    fn from(value: OpenPitRejectCode) -> Self {
+impl From<OpenPitPretradeRejectCode> for RejectCode {
+    fn from(value: OpenPitPretradeRejectCode) -> Self {
         match value {
-            OpenPitRejectCode::MissingRequiredField => Self::MissingRequiredField,
-            OpenPitRejectCode::InvalidFieldFormat => Self::InvalidFieldFormat,
-            OpenPitRejectCode::InvalidFieldValue => Self::InvalidFieldValue,
-            OpenPitRejectCode::UnsupportedOrderType => Self::UnsupportedOrderType,
-            OpenPitRejectCode::UnsupportedTimeInForce => Self::UnsupportedTimeInForce,
-            OpenPitRejectCode::UnsupportedOrderAttribute => Self::UnsupportedOrderAttribute,
-            OpenPitRejectCode::DuplicateClientOrderId => Self::DuplicateClientOrderId,
-            OpenPitRejectCode::TooLateToEnter => Self::TooLateToEnter,
-            OpenPitRejectCode::ExchangeClosed => Self::ExchangeClosed,
-            OpenPitRejectCode::UnknownInstrument => Self::UnknownInstrument,
-            OpenPitRejectCode::UnknownAccount => Self::UnknownAccount,
-            OpenPitRejectCode::UnknownVenue => Self::UnknownVenue,
-            OpenPitRejectCode::UnknownClearingAccount => Self::UnknownClearingAccount,
-            OpenPitRejectCode::UnknownCollateralAsset => Self::UnknownCollateralAsset,
-            OpenPitRejectCode::InsufficientFunds => Self::InsufficientFunds,
-            OpenPitRejectCode::InsufficientMargin => Self::InsufficientMargin,
-            OpenPitRejectCode::InsufficientPosition => Self::InsufficientPosition,
-            OpenPitRejectCode::CreditLimitExceeded => Self::CreditLimitExceeded,
-            OpenPitRejectCode::RiskLimitExceeded => Self::RiskLimitExceeded,
-            OpenPitRejectCode::OrderExceedsLimit => Self::OrderExceedsLimit,
-            OpenPitRejectCode::OrderQtyExceedsLimit => Self::OrderQtyExceedsLimit,
-            OpenPitRejectCode::OrderNotionalExceedsLimit => Self::OrderNotionalExceedsLimit,
-            OpenPitRejectCode::PositionLimitExceeded => Self::PositionLimitExceeded,
-            OpenPitRejectCode::ConcentrationLimitExceeded => Self::ConcentrationLimitExceeded,
-            OpenPitRejectCode::LeverageLimitExceeded => Self::LeverageLimitExceeded,
-            OpenPitRejectCode::RateLimitExceeded => Self::RateLimitExceeded,
-            OpenPitRejectCode::PnlKillSwitchTriggered => Self::PnlKillSwitchTriggered,
-            OpenPitRejectCode::AccountBlocked => Self::AccountBlocked,
-            OpenPitRejectCode::AccountNotAuthorized => Self::AccountNotAuthorized,
-            OpenPitRejectCode::ComplianceRestriction => Self::ComplianceRestriction,
-            OpenPitRejectCode::InstrumentRestricted => Self::InstrumentRestricted,
-            OpenPitRejectCode::JurisdictionRestriction => Self::JurisdictionRestriction,
-            OpenPitRejectCode::WashTradePrevention => Self::WashTradePrevention,
-            OpenPitRejectCode::SelfMatchPrevention => Self::SelfMatchPrevention,
-            OpenPitRejectCode::ShortSaleRestriction => Self::ShortSaleRestriction,
-            OpenPitRejectCode::RiskConfigurationMissing => Self::RiskConfigurationMissing,
-            OpenPitRejectCode::ReferenceDataUnavailable => Self::ReferenceDataUnavailable,
-            OpenPitRejectCode::OrderValueCalculationFailed => Self::OrderValueCalculationFailed,
-            OpenPitRejectCode::SystemUnavailable => Self::SystemUnavailable,
-            OpenPitRejectCode::Custom => Self::Custom,
-            OpenPitRejectCode::Other => Self::Other,
+            OpenPitPretradeRejectCode::MissingRequiredField => Self::MissingRequiredField,
+            OpenPitPretradeRejectCode::InvalidFieldFormat => Self::InvalidFieldFormat,
+            OpenPitPretradeRejectCode::InvalidFieldValue => Self::InvalidFieldValue,
+            OpenPitPretradeRejectCode::UnsupportedOrderType => Self::UnsupportedOrderType,
+            OpenPitPretradeRejectCode::UnsupportedTimeInForce => Self::UnsupportedTimeInForce,
+            OpenPitPretradeRejectCode::UnsupportedOrderAttribute => Self::UnsupportedOrderAttribute,
+            OpenPitPretradeRejectCode::DuplicateClientOrderId => Self::DuplicateClientOrderId,
+            OpenPitPretradeRejectCode::TooLateToEnter => Self::TooLateToEnter,
+            OpenPitPretradeRejectCode::ExchangeClosed => Self::ExchangeClosed,
+            OpenPitPretradeRejectCode::UnknownInstrument => Self::UnknownInstrument,
+            OpenPitPretradeRejectCode::UnknownAccount => Self::UnknownAccount,
+            OpenPitPretradeRejectCode::UnknownVenue => Self::UnknownVenue,
+            OpenPitPretradeRejectCode::UnknownClearingAccount => Self::UnknownClearingAccount,
+            OpenPitPretradeRejectCode::UnknownCollateralAsset => Self::UnknownCollateralAsset,
+            OpenPitPretradeRejectCode::InsufficientFunds => Self::InsufficientFunds,
+            OpenPitPretradeRejectCode::InsufficientMargin => Self::InsufficientMargin,
+            OpenPitPretradeRejectCode::InsufficientPosition => Self::InsufficientPosition,
+            OpenPitPretradeRejectCode::CreditLimitExceeded => Self::CreditLimitExceeded,
+            OpenPitPretradeRejectCode::RiskLimitExceeded => Self::RiskLimitExceeded,
+            OpenPitPretradeRejectCode::OrderExceedsLimit => Self::OrderExceedsLimit,
+            OpenPitPretradeRejectCode::OrderQtyExceedsLimit => Self::OrderQtyExceedsLimit,
+            OpenPitPretradeRejectCode::OrderNotionalExceedsLimit => Self::OrderNotionalExceedsLimit,
+            OpenPitPretradeRejectCode::PositionLimitExceeded => Self::PositionLimitExceeded,
+            OpenPitPretradeRejectCode::ConcentrationLimitExceeded => {
+                Self::ConcentrationLimitExceeded
+            }
+            OpenPitPretradeRejectCode::LeverageLimitExceeded => Self::LeverageLimitExceeded,
+            OpenPitPretradeRejectCode::RateLimitExceeded => Self::RateLimitExceeded,
+            OpenPitPretradeRejectCode::PnlKillSwitchTriggered => Self::PnlKillSwitchTriggered,
+            OpenPitPretradeRejectCode::AccountBlocked => Self::AccountBlocked,
+            OpenPitPretradeRejectCode::AccountNotAuthorized => Self::AccountNotAuthorized,
+            OpenPitPretradeRejectCode::ComplianceRestriction => Self::ComplianceRestriction,
+            OpenPitPretradeRejectCode::InstrumentRestricted => Self::InstrumentRestricted,
+            OpenPitPretradeRejectCode::JurisdictionRestriction => Self::JurisdictionRestriction,
+            OpenPitPretradeRejectCode::WashTradePrevention => Self::WashTradePrevention,
+            OpenPitPretradeRejectCode::SelfMatchPrevention => Self::SelfMatchPrevention,
+            OpenPitPretradeRejectCode::ShortSaleRestriction => Self::ShortSaleRestriction,
+            OpenPitPretradeRejectCode::RiskConfigurationMissing => Self::RiskConfigurationMissing,
+            OpenPitPretradeRejectCode::ReferenceDataUnavailable => Self::ReferenceDataUnavailable,
+            OpenPitPretradeRejectCode::OrderValueCalculationFailed => {
+                Self::OrderValueCalculationFailed
+            }
+            OpenPitPretradeRejectCode::SystemUnavailable => Self::SystemUnavailable,
+            OpenPitPretradeRejectCode::Custom => Self::Custom,
+            OpenPitPretradeRejectCode::Other => Self::Other,
         }
     }
 }
 
-impl From<RejectCode> for OpenPitRejectCode {
+impl From<RejectCode> for OpenPitPretradeRejectCode {
     fn from(value: RejectCode) -> Self {
         match value {
             RejectCode::MissingRequiredField => Self::MissingRequiredField,
@@ -283,17 +287,17 @@ impl From<RejectCode> for OpenPitRejectCode {
     }
 }
 
-fn export_reject_scope(value: RejectScope) -> OpenPitRejectScope {
+fn export_reject_scope(value: RejectScope) -> OpenPitPretradeRejectScope {
     match value {
-        RejectScope::Order => OpenPitRejectScope::Order,
-        RejectScope::Account => OpenPitRejectScope::Account,
+        RejectScope::Order => OpenPitPretradeRejectScope::Order,
+        RejectScope::Account => OpenPitPretradeRejectScope::Account,
     }
 }
 
-fn import_reject_scope(value: OpenPitRejectScope) -> RejectScope {
+fn import_reject_scope(value: OpenPitPretradeRejectScope) -> RejectScope {
     match value {
-        OpenPitRejectScope::Order => RejectScope::Order,
-        OpenPitRejectScope::Account => RejectScope::Account,
+        OpenPitPretradeRejectScope::Order => RejectScope::Order,
+        OpenPitPretradeRejectScope::Account => RejectScope::Account,
     }
 }
 
@@ -306,12 +310,12 @@ fn import_string(ptr: OpenPitStringView) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-pub(crate) fn rejects_to_list_owned(values: Rejects) -> OpenPitRejectList {
+pub(crate) fn rejects_to_list_owned(values: Rejects) -> OpenPitPretradeRejectList {
     let mut out = Vec::with_capacity(values.len());
     for reject in values.iter().cloned() {
         out.push(reject);
     }
-    OpenPitRejectList { items: out }
+    OpenPitPretradeRejectList { items: out }
 }
 
 #[no_mangle]
@@ -321,10 +325,12 @@ pub(crate) fn rejects_to_list_owned(values: Rejects) -> OpenPitRejectList {
 ///
 /// Contract:
 /// - returns a new caller-owned list;
-/// - release it with `openpit_destroy_reject_list`;
+/// - release it with `openpit_pretrade_destroy_reject_list`;
 /// - this function always succeeds.
-pub extern "C" fn openpit_create_reject_list(reserve: usize) -> *mut OpenPitRejectList {
-    Box::into_raw(Box::new(OpenPitRejectList {
+pub extern "C" fn openpit_pretrade_create_reject_list(
+    reserve: usize,
+) -> *mut OpenPitPretradeRejectList {
+    Box::into_raw(Box::new(OpenPitPretradeRejectList {
         items: Vec::with_capacity(reserve),
     }))
 }
@@ -335,7 +341,7 @@ pub extern "C" fn openpit_create_reject_list(reserve: usize) -> *mut OpenPitReje
 /// Contract:
 /// - passing null is allowed;
 /// - this function always succeeds.
-pub extern "C" fn openpit_destroy_reject_list(rejects: *mut OpenPitRejectList) {
+pub extern "C" fn openpit_pretrade_destroy_reject_list(rejects: *mut OpenPitPretradeRejectList) {
     if rejects.is_null() {
         return;
     }
@@ -350,7 +356,10 @@ pub extern "C" fn openpit_destroy_reject_list(rejects: *mut OpenPitRejectList) {
 /// - string views in `reject` are copied before this function returns;
 /// - this function never fails;
 /// - violating the pointer contract aborts the call.
-pub extern "C" fn openpit_reject_list_push(list: *mut OpenPitRejectList, reject: OpenPitReject) {
+pub extern "C" fn openpit_pretrade_reject_list_push(
+    list: *mut OpenPitPretradeRejectList,
+    reject: OpenPitPretradeReject,
+) {
     assert!(!list.is_null(), "reject list pointer is null");
     let list = unsafe { &mut *list };
     list.items.push(reject.to_reject());
@@ -363,7 +372,9 @@ pub extern "C" fn openpit_reject_list_push(list: *mut OpenPitRejectList, reject:
 /// - `list` must be a valid non-null pointer;
 /// - this function never fails;
 /// - violating the pointer contract aborts the call.
-pub extern "C" fn openpit_reject_list_len(list: *const OpenPitRejectList) -> usize {
+pub extern "C" fn openpit_pretrade_reject_list_len(
+    list: *const OpenPitPretradeRejectList,
+) -> usize {
     assert!(!list.is_null(), "reject list pointer is null");
     let list = unsafe { &*list };
     list.items.len()
@@ -383,10 +394,10 @@ pub extern "C" fn openpit_reject_list_len(list: *const OpenPitRejectList) -> usi
 /// - the copied view remains valid while `list` is alive and unchanged;
 /// - this function never fails;
 /// - violating the pointer contract aborts the call.
-pub extern "C" fn openpit_reject_list_get(
-    list: *const OpenPitRejectList,
+pub extern "C" fn openpit_pretrade_reject_list_get(
+    list: *const OpenPitPretradeRejectList,
     index: usize,
-    out_reject: *mut OpenPitReject,
+    out_reject: *mut OpenPitPretradeReject,
 ) -> bool {
     assert!(!list.is_null(), "reject list pointer is null");
     assert!(!out_reject.is_null(), "reject output pointer is null");
@@ -394,20 +405,161 @@ pub extern "C" fn openpit_reject_list_get(
     let Some(reject) = list.items.get(index) else {
         return false;
     };
-    unsafe { *out_reject = OpenPitReject::from_reject(reject) };
+    unsafe { *out_reject = OpenPitPretradeReject::from_reject(reject) };
+    true
+}
+
+/// Single account-block record returned by kill-switch checks.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenPitPretradeAccountBlock {
+    /// Policy name that produced the block.
+    pub policy: OpenPitStringView,
+    /// Human-readable reject reason.
+    pub reason: OpenPitStringView,
+    /// Case-specific reject details.
+    pub details: OpenPitStringView,
+    /// Opaque caller-defined token.
+    ///
+    /// The SDK never inspects, dereferences, or frees this value. Its meaning,
+    /// lifetime, and thread-safety are the caller's responsibility. `0` / null
+    /// means "not set". See the project Threading Contract for the full lifetime
+    /// model.
+    pub user_data: *mut c_void,
+    /// Stable machine-readable reject code.
+    pub code: OpenPitPretradeRejectCode,
+}
+
+impl OpenPitPretradeAccountBlock {
+    pub(crate) fn from_block(inner: &AccountBlock) -> Self {
+        Self {
+            policy: OpenPitStringView::from_utf8(inner.policy.as_str()),
+            reason: OpenPitStringView::from_utf8(inner.reason.as_str()),
+            details: OpenPitStringView::from_utf8(inner.details.as_str()),
+            user_data: inner.user_data as *mut c_void,
+            code: OpenPitPretradeRejectCode::from(inner.code),
+        }
+    }
+
+    pub(crate) fn to_block(self) -> AccountBlock {
+        AccountBlock::new(
+            import_string(self.policy),
+            RejectCode::from(self.code),
+            import_string(self.reason),
+            import_string(self.details),
+        )
+        .with_user_data(self.user_data as usize)
+    }
+}
+
+/// Caller-owned list of account blocks.
+pub struct OpenPitPretradeAccountBlockList {
+    pub(crate) items: Vec<AccountBlock>,
+}
+
+pub(crate) fn blocks_to_list_owned(values: Vec<AccountBlock>) -> OpenPitPretradeAccountBlockList {
+    OpenPitPretradeAccountBlockList { items: values }
+}
+
+#[no_mangle]
+/// Creates a caller-owned account-block list with preallocated capacity.
+///
+/// `reserve` is the requested number of elements to preallocate.
+///
+/// Contract:
+/// - returns a new caller-owned list;
+/// - release it with `openpit_pretrade_destroy_account_block_list`;
+/// - this function always succeeds.
+pub extern "C" fn openpit_pretrade_create_account_block_list(
+    reserve: usize,
+) -> *mut OpenPitPretradeAccountBlockList {
+    Box::into_raw(Box::new(OpenPitPretradeAccountBlockList {
+        items: Vec::with_capacity(reserve),
+    }))
+}
+
+#[no_mangle]
+/// Releases a caller-owned account-block list.
+///
+/// Contract:
+/// - passing null is allowed;
+/// - this function always succeeds.
+pub extern "C" fn openpit_pretrade_destroy_account_block_list(
+    blocks: *mut OpenPitPretradeAccountBlockList,
+) {
+    if blocks.is_null() {
+        return;
+    }
+    unsafe { drop(Box::from_raw(blocks)) };
+}
+
+#[no_mangle]
+/// Appends one account block to the list by copying its payload.
+///
+/// Contract:
+/// - `list` must be a valid non-null pointer;
+/// - string views in `block` are copied before this function returns;
+/// - this function never fails;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_pretrade_account_block_list_push(
+    list: *mut OpenPitPretradeAccountBlockList,
+    block: OpenPitPretradeAccountBlock,
+) {
+    assert!(!list.is_null(), "account block list pointer is null");
+    let list = unsafe { &mut *list };
+    list.items.push(block.to_block());
+}
+
+#[no_mangle]
+/// Returns the number of account blocks in the list.
+///
+/// Contract:
+/// - `list` must be a valid non-null pointer;
+/// - this function never fails;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_pretrade_account_block_list_len(
+    list: *const OpenPitPretradeAccountBlockList,
+) -> usize {
+    assert!(!list.is_null(), "account block list pointer is null");
+    let list = unsafe { &*list };
+    list.items.len()
+}
+
+#[no_mangle]
+/// Copies a non-owning account-block view at `index` into `out_block`.
+///
+/// The copied view borrows string memory from `list`.
+///
+/// Contract:
+/// - `list` must be a valid non-null pointer;
+/// - `out_block` must be a valid non-null pointer;
+/// - returns `true` when a value exists and was copied;
+/// - returns `false` when `index` is out of bounds and does not write
+///   `out_block`;
+/// - the copied view remains valid while `list` is alive and unchanged;
+/// - this function never fails;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_pretrade_account_block_list_get(
+    list: *const OpenPitPretradeAccountBlockList,
+    index: usize,
+    out_block: *mut OpenPitPretradeAccountBlock,
+) -> bool {
+    assert!(!list.is_null(), "account block list pointer is null");
+    assert!(!out_block.is_null(), "account block output pointer is null");
+    let list = unsafe { &*list };
+    let Some(block) = list.items.get(index) else {
+        return false;
+    };
+    unsafe { *out_block = OpenPitPretradeAccountBlock::from_block(block) };
     true
 }
 
 #[cfg(test)]
 mod tests {
     use crate::OpenPitStringView;
-    use openpit::pretrade::{Reject, RejectCode, RejectScope};
+    use openpit::pretrade::{AccountBlock, Reject, RejectCode, RejectScope};
 
-    use super::{
-        openpit_create_reject_list, openpit_destroy_reject_list, openpit_reject_list_get,
-        openpit_reject_list_len, openpit_reject_list_push, OpenPitReject, OpenPitRejectCode,
-        OpenPitRejectScope,
-    };
+    use super::*;
 
     fn string_view_to_string(view: OpenPitStringView) -> String {
         if view.ptr.is_null() {
@@ -419,7 +571,7 @@ mod tests {
 
     #[test]
     fn reject_list_destroy_is_null_safe() {
-        openpit_destroy_reject_list(std::ptr::null_mut());
+        openpit_pretrade_destroy_reject_list(std::ptr::null_mut());
     }
 
     #[test]
@@ -431,7 +583,7 @@ mod tests {
             "reason".to_string(),
             "details".to_string(),
         );
-        let exported = OpenPitReject::from_reject(&reject);
+        let exported = OpenPitPretradeReject::from_reject(&reject);
         assert_eq!(string_view_to_string(exported.policy), "test_policy");
         assert_eq!(string_view_to_string(exported.reason), "reason");
         assert_eq!(string_view_to_string(exported.details), "details");
@@ -440,44 +592,44 @@ mod tests {
 
     #[test]
     fn reject_list_push_len_get_roundtrip() {
-        let list = openpit_create_reject_list(1);
-        let reject = OpenPitReject {
+        let list = openpit_pretrade_create_reject_list(1);
+        let reject = OpenPitPretradeReject {
             policy: OpenPitStringView::from_utf8("policy"),
             reason: OpenPitStringView::from_utf8("reason"),
             details: OpenPitStringView::from_utf8("details"),
             user_data: 55usize as *mut std::ffi::c_void,
-            code: OpenPitRejectCode::Other,
-            scope: OpenPitRejectScope::Order,
+            code: OpenPitPretradeRejectCode::Other,
+            scope: OpenPitPretradeRejectScope::Order,
         };
-        openpit_reject_list_push(list, reject);
-        assert_eq!(openpit_reject_list_len(list), 1);
+        openpit_pretrade_reject_list_push(list, reject);
+        assert_eq!(openpit_pretrade_reject_list_len(list), 1);
         let stored = unsafe { &*list };
         assert_eq!(stored.items[0].user_data, 55usize);
-        let mut first = OpenPitReject {
+        let mut first = OpenPitPretradeReject {
             policy: OpenPitStringView::not_set(),
             reason: OpenPitStringView::not_set(),
             details: OpenPitStringView::not_set(),
             user_data: std::ptr::null_mut(),
-            code: OpenPitRejectCode::Other,
-            scope: OpenPitRejectScope::Order,
+            code: OpenPitPretradeRejectCode::Other,
+            scope: OpenPitPretradeRejectScope::Order,
         };
-        assert!(openpit_reject_list_get(list, 0, &mut first));
-        assert_eq!(first.code, OpenPitRejectCode::Other);
+        assert!(openpit_pretrade_reject_list_get(list, 0, &mut first));
+        assert_eq!(first.code, OpenPitPretradeRejectCode::Other);
         assert_eq!(first.user_data, 55usize as *mut std::ffi::c_void);
         assert_eq!(string_view_to_string(first.policy), "policy");
-        assert!(!openpit_reject_list_get(list, 1, &mut first));
-        openpit_destroy_reject_list(list);
+        assert!(!openpit_pretrade_reject_list_get(list, 1, &mut first));
+        openpit_pretrade_destroy_reject_list(list);
     }
 
     #[test]
     fn import_reject_copies_view_payload() {
-        let view = OpenPitReject {
+        let view = OpenPitPretradeReject {
             policy: OpenPitStringView::from_utf8("policy"),
             reason: OpenPitStringView::from_utf8("reason"),
             details: OpenPitStringView::from_utf8("details"),
             user_data: 77usize as *mut std::ffi::c_void,
-            code: OpenPitRejectCode::RateLimitExceeded,
-            scope: OpenPitRejectScope::Account,
+            code: OpenPitPretradeRejectCode::RateLimitExceeded,
+            scope: OpenPitPretradeRejectScope::Account,
         };
         let imported = view.to_reject();
         assert_eq!(imported.policy, "policy");
@@ -491,52 +643,127 @@ mod tests {
     #[test]
     fn reject_code_roundtrip_covers_all_ffi_variants() {
         let all = [
-            OpenPitRejectCode::MissingRequiredField,
-            OpenPitRejectCode::InvalidFieldFormat,
-            OpenPitRejectCode::InvalidFieldValue,
-            OpenPitRejectCode::UnsupportedOrderType,
-            OpenPitRejectCode::UnsupportedTimeInForce,
-            OpenPitRejectCode::UnsupportedOrderAttribute,
-            OpenPitRejectCode::DuplicateClientOrderId,
-            OpenPitRejectCode::TooLateToEnter,
-            OpenPitRejectCode::ExchangeClosed,
-            OpenPitRejectCode::UnknownInstrument,
-            OpenPitRejectCode::UnknownAccount,
-            OpenPitRejectCode::UnknownVenue,
-            OpenPitRejectCode::UnknownClearingAccount,
-            OpenPitRejectCode::UnknownCollateralAsset,
-            OpenPitRejectCode::InsufficientFunds,
-            OpenPitRejectCode::InsufficientMargin,
-            OpenPitRejectCode::InsufficientPosition,
-            OpenPitRejectCode::CreditLimitExceeded,
-            OpenPitRejectCode::RiskLimitExceeded,
-            OpenPitRejectCode::OrderExceedsLimit,
-            OpenPitRejectCode::OrderQtyExceedsLimit,
-            OpenPitRejectCode::OrderNotionalExceedsLimit,
-            OpenPitRejectCode::PositionLimitExceeded,
-            OpenPitRejectCode::ConcentrationLimitExceeded,
-            OpenPitRejectCode::LeverageLimitExceeded,
-            OpenPitRejectCode::RateLimitExceeded,
-            OpenPitRejectCode::PnlKillSwitchTriggered,
-            OpenPitRejectCode::AccountBlocked,
-            OpenPitRejectCode::AccountNotAuthorized,
-            OpenPitRejectCode::ComplianceRestriction,
-            OpenPitRejectCode::InstrumentRestricted,
-            OpenPitRejectCode::JurisdictionRestriction,
-            OpenPitRejectCode::WashTradePrevention,
-            OpenPitRejectCode::SelfMatchPrevention,
-            OpenPitRejectCode::ShortSaleRestriction,
-            OpenPitRejectCode::RiskConfigurationMissing,
-            OpenPitRejectCode::ReferenceDataUnavailable,
-            OpenPitRejectCode::OrderValueCalculationFailed,
-            OpenPitRejectCode::SystemUnavailable,
-            OpenPitRejectCode::Custom,
-            OpenPitRejectCode::Other,
+            OpenPitPretradeRejectCode::MissingRequiredField,
+            OpenPitPretradeRejectCode::InvalidFieldFormat,
+            OpenPitPretradeRejectCode::InvalidFieldValue,
+            OpenPitPretradeRejectCode::UnsupportedOrderType,
+            OpenPitPretradeRejectCode::UnsupportedTimeInForce,
+            OpenPitPretradeRejectCode::UnsupportedOrderAttribute,
+            OpenPitPretradeRejectCode::DuplicateClientOrderId,
+            OpenPitPretradeRejectCode::TooLateToEnter,
+            OpenPitPretradeRejectCode::ExchangeClosed,
+            OpenPitPretradeRejectCode::UnknownInstrument,
+            OpenPitPretradeRejectCode::UnknownAccount,
+            OpenPitPretradeRejectCode::UnknownVenue,
+            OpenPitPretradeRejectCode::UnknownClearingAccount,
+            OpenPitPretradeRejectCode::UnknownCollateralAsset,
+            OpenPitPretradeRejectCode::InsufficientFunds,
+            OpenPitPretradeRejectCode::InsufficientMargin,
+            OpenPitPretradeRejectCode::InsufficientPosition,
+            OpenPitPretradeRejectCode::CreditLimitExceeded,
+            OpenPitPretradeRejectCode::RiskLimitExceeded,
+            OpenPitPretradeRejectCode::OrderExceedsLimit,
+            OpenPitPretradeRejectCode::OrderQtyExceedsLimit,
+            OpenPitPretradeRejectCode::OrderNotionalExceedsLimit,
+            OpenPitPretradeRejectCode::PositionLimitExceeded,
+            OpenPitPretradeRejectCode::ConcentrationLimitExceeded,
+            OpenPitPretradeRejectCode::LeverageLimitExceeded,
+            OpenPitPretradeRejectCode::RateLimitExceeded,
+            OpenPitPretradeRejectCode::PnlKillSwitchTriggered,
+            OpenPitPretradeRejectCode::AccountBlocked,
+            OpenPitPretradeRejectCode::AccountNotAuthorized,
+            OpenPitPretradeRejectCode::ComplianceRestriction,
+            OpenPitPretradeRejectCode::InstrumentRestricted,
+            OpenPitPretradeRejectCode::JurisdictionRestriction,
+            OpenPitPretradeRejectCode::WashTradePrevention,
+            OpenPitPretradeRejectCode::SelfMatchPrevention,
+            OpenPitPretradeRejectCode::ShortSaleRestriction,
+            OpenPitPretradeRejectCode::RiskConfigurationMissing,
+            OpenPitPretradeRejectCode::ReferenceDataUnavailable,
+            OpenPitPretradeRejectCode::OrderValueCalculationFailed,
+            OpenPitPretradeRejectCode::SystemUnavailable,
+            OpenPitPretradeRejectCode::Custom,
+            OpenPitPretradeRejectCode::Other,
         ];
         for code in all {
             let domain = RejectCode::from(code);
-            let ffi = OpenPitRejectCode::from(domain);
+            let ffi = OpenPitPretradeRejectCode::from(domain);
             assert_eq!(ffi, code);
         }
+    }
+
+    #[test]
+    fn account_block_list_destroy_is_null_safe() {
+        openpit_pretrade_destroy_account_block_list(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn account_block_list_push_len_get_roundtrip() {
+        use super::{
+            openpit_pretrade_account_block_list_get, openpit_pretrade_account_block_list_len,
+            openpit_pretrade_account_block_list_push,
+        };
+
+        let list = openpit_pretrade_create_account_block_list(1);
+        let block = OpenPitPretradeAccountBlock {
+            policy: OpenPitStringView::from_utf8("policy"),
+            reason: OpenPitStringView::from_utf8("reason"),
+            details: OpenPitStringView::from_utf8("details"),
+            user_data: 42usize as *mut std::ffi::c_void,
+            code: OpenPitPretradeRejectCode::PnlKillSwitchTriggered,
+        };
+        openpit_pretrade_account_block_list_push(list, block);
+        assert_eq!(openpit_pretrade_account_block_list_len(list), 1);
+        let stored = unsafe { &*list };
+        assert_eq!(stored.items[0].user_data, 42usize);
+        let mut out = OpenPitPretradeAccountBlock {
+            policy: OpenPitStringView::not_set(),
+            reason: OpenPitStringView::not_set(),
+            details: OpenPitStringView::not_set(),
+            user_data: std::ptr::null_mut(),
+            code: OpenPitPretradeRejectCode::Other,
+        };
+        assert!(openpit_pretrade_account_block_list_get(list, 0, &mut out));
+        assert_eq!(out.code, OpenPitPretradeRejectCode::PnlKillSwitchTriggered);
+        assert_eq!(out.user_data, 42usize as *mut std::ffi::c_void);
+        assert_eq!(string_view_to_string(out.policy), "policy");
+        assert!(!openpit_pretrade_account_block_list_get(list, 1, &mut out));
+        openpit_pretrade_destroy_account_block_list(list);
+    }
+
+    #[test]
+    fn account_block_roundtrip_preserves_all_fields() {
+        use super::OpenPitPretradeAccountBlock;
+
+        let block = AccountBlock::new(
+            "PnlKillSwitch",
+            RejectCode::PnlKillSwitchTriggered,
+            "daily loss limit breached",
+            "loss exceeded configured threshold",
+        )
+        .with_user_data(99usize);
+
+        let exported = OpenPitPretradeAccountBlock::from_block(&block);
+        assert_eq!(string_view_to_string(exported.policy), "PnlKillSwitch");
+        assert_eq!(
+            string_view_to_string(exported.reason),
+            "daily loss limit breached"
+        );
+        assert_eq!(
+            string_view_to_string(exported.details),
+            "loss exceeded configured threshold"
+        );
+        assert_eq!(exported.user_data, 99usize as *mut std::ffi::c_void);
+        assert_eq!(
+            exported.code,
+            OpenPitPretradeRejectCode::PnlKillSwitchTriggered
+        );
+
+        let imported = exported.to_block();
+        assert_eq!(imported.policy, "PnlKillSwitch");
+        assert_eq!(imported.reason, "daily loss limit breached");
+        assert_eq!(imported.details, "loss exceeded configured threshold");
+        assert_eq!(imported.user_data, 99usize);
+        assert_eq!(imported.code, RejectCode::PnlKillSwitchTriggered);
     }
 }

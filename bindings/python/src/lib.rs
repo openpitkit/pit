@@ -48,7 +48,7 @@ use openpit::storage::StorageBuilder;
 use openpit::AccountAdjustmentContext;
 use openpit::{
     AccountAdjustmentBalanceOperation, AccountAdjustmentPositionOperation, Engine,
-    EngineBuildError, Instrument, Mutation, Mutations, PostTradeResult,
+    EngineBuildError, EngineBuilder, Instrument, Mutation, Mutations, PostTradeResult,
 };
 use openpit_interop::{
     AccountAdjustmentAmountAccess, AccountAdjustmentBoundsAccess, AccountAdjustmentOperationAccess,
@@ -114,9 +114,11 @@ type ExecutionReport =
 type AccountAdjustment =
     openpit_interop::RequestWithPayload<openpit_interop::AccountAdjustment, Py<PyAny>>;
 
+type PyEngineTrait = openpit_interop::InteropEngineTrait<Order, ExecutionReport, AccountAdjustment>;
+
 #[pyclass(name = "Engine", module = "openpit")]
 struct PyEngine {
-    inner: Engine<Order, ExecutionReport, AccountAdjustment, openpit_interop::EngineLocking>,
+    inner: Engine<PyEngineTrait>,
 }
 
 #[pymethods]
@@ -458,7 +460,10 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment> for BoxedPreTrade
         self.inner.perform_pre_trade_check(ctx, order, mutations)
     }
 
-    fn apply_execution_report(&self, report: &ExecutionReport) -> bool {
+    fn apply_execution_report(
+        &self,
+        report: &ExecutionReport,
+    ) -> Vec<openpit::pretrade::AccountBlock> {
         self.inner.apply_execution_report(report)
     }
 
@@ -552,12 +557,15 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment> for PythonPreTrad
         })
     }
 
-    fn apply_execution_report(&self, report: &ExecutionReport) -> bool {
+    fn apply_execution_report(
+        &self,
+        report: &ExecutionReport,
+    ) -> Vec<openpit::pretrade::AccountBlock> {
         Python::with_gil(|py| {
             let kwargs = PyDict::new_bound(py);
             if let Err(error) = kwargs.set_item("report", report.payload.clone_ref(py)) {
                 set_python_callback_error(error);
-                return false;
+                return vec![];
             }
 
             let result =
@@ -569,15 +577,21 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment> for PythonPreTrad
                     Ok(result) => result,
                     Err(error) => {
                         set_python_callback_error(error);
-                        return false;
+                        return vec![];
                     }
                 };
 
             match result.extract::<bool>() {
-                Ok(value) => value,
+                Ok(true) => vec![openpit::pretrade::AccountBlock::new(
+                    &self.name,
+                    openpit::pretrade::RejectCode::PnlKillSwitchTriggered,
+                    "kill switch triggered",
+                    "",
+                )],
+                Ok(false) => vec![],
                 Err(error) => {
                     set_python_callback_error(error);
-                    false
+                    vec![]
                 }
             }
         })
@@ -1166,7 +1180,7 @@ enum PyBuilderState {
             Order,
             ExecutionReport,
             AccountAdjustment,
-            openpit_interop::SyncPolicy,
+            openpit_interop::EngineLocking,
         >,
     ),
     Ready(
@@ -1174,15 +1188,13 @@ enum PyBuilderState {
             Order,
             ExecutionReport,
             AccountAdjustment,
-            openpit_interop::SyncPolicy,
+            openpit_interop::EngineLocking,
         >,
     ),
 }
 
 impl PyBuilderState {
-    fn storage_builder(
-        &self,
-    ) -> &StorageBuilder<openpit_interop::sync_policy::StorageLockingPolicyFactory> {
+    fn storage_builder(&self) -> &StorageBuilder<openpit_interop::StorageLockingPolicyFactory> {
         match self {
             Self::Synced(builder) => builder.storage_builder(),
             Self::Ready(builder) => builder.storage_builder(),
@@ -1248,8 +1260,8 @@ impl PyReadyEngineBuilder {
     fn new(sync_policy: PySyncPolicy) -> Self {
         PyReadyEngineBuilder {
             state: RefCell::new(Some(PyBuilderState::Synced(
-                Engine::<Order, ExecutionReport, AccountAdjustment>::builder()
-                    .sync(openpit_interop::SyncPolicy::new(sync_policy)),
+                EngineBuilder::<Order, ExecutionReport, AccountAdjustment>::new()
+                    .sync(openpit_interop::EngineLocking::new(sync_policy)),
             ))),
         }
     }
@@ -1478,7 +1490,7 @@ fn parse_rate_limit_barriers(
 }
 
 fn make_rate_limit_start_check(
-    storage_builder: &StorageBuilder<openpit_interop::sync_policy::StorageLockingPolicyFactory>,
+    storage_builder: &StorageBuilder<openpit_interop::StorageLockingPolicyFactory>,
     broker: Option<(usize, u64)>,
     asset_barriers: Vec<(String, usize, u64)>,
     account_barriers: Vec<(u64, usize, u64)>,
@@ -1606,7 +1618,7 @@ fn parse_pnl_killswitch_barriers<'py>(
 }
 
 fn make_pnl_killswitch_start_check(
-    storage_builder: &StorageBuilder<openpit_interop::sync_policy::StorageLockingPolicyFactory>,
+    storage_builder: &StorageBuilder<openpit_interop::StorageLockingPolicyFactory>,
     broker_barriers: Vec<Bound<'_, PyAny>>,
     account_barriers: Vec<Bound<'_, PyAny>>,
 ) -> PyResult<BoxedPreTradePolicy> {
@@ -4259,24 +4271,68 @@ impl PyExecutionReport {
     }
 }
 
+#[pyclass(name = "AccountBlock", module = "openpit.pretrade")]
+struct PyAccountBlock {
+    code: String,
+    policy: String,
+    reason: String,
+    details: String,
+}
+
+#[pymethods]
+impl PyAccountBlock {
+    #[getter]
+    fn code(&self) -> String {
+        self.code.clone()
+    }
+
+    #[getter]
+    fn policy(&self) -> String {
+        self.policy.clone()
+    }
+
+    #[getter]
+    fn reason(&self) -> String {
+        self.reason.clone()
+    }
+
+    #[getter]
+    fn details(&self) -> String {
+        self.details.clone()
+    }
+}
+
+fn convert_account_block(block: &openpit::pretrade::AccountBlock) -> PyAccountBlock {
+    PyAccountBlock {
+        code: block.code.as_str().to_owned(),
+        policy: block.policy.clone(),
+        reason: block.reason.clone(),
+        details: block.details.clone(),
+    }
+}
+
 #[pyclass(name = "PostTradeResult", module = "openpit.pretrade")]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PyPostTradeResult {
     inner: PostTradeResult,
 }
 
 #[pymethods]
 impl PyPostTradeResult {
-    #[getter]
-    fn kill_switch_triggered(&self) -> bool {
-        self.inner.kill_switch_triggered
-    }
-
     fn __repr__(&self) -> String {
         format!(
-            "PostTradeResult(kill_switch_triggered={})",
-            self.kill_switch_triggered()
+            "PostTradeResult(account_blocks={})",
+            self.inner.account_blocks.len()
         )
+    }
+
+    #[getter]
+    fn account_blocks(&self) -> Vec<PyAccountBlock> {
+        self.inner
+            .account_blocks
+            .iter()
+            .map(convert_account_block)
+            .collect()
     }
 }
 
@@ -4759,6 +4815,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyLeverage>()?;
     module.add_class::<PyEngine>()?; // "Engine"
     module.add_class::<PyReject>()?;
+    module.add_class::<PyAccountBlock>()?;
     module.add_class::<PyStartPreTradeResult>()?;
     module.add_class::<PyExecuteResult>()?;
     module.add_class::<PyAccountAdjustmentBatchResult>()?;

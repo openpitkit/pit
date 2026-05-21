@@ -37,14 +37,14 @@ func NewSingleItemList(
 	return NewList(New(code, policy, reason, details, scope))
 }
 
-func NewListFromHandle(handle native.RejectList) ([]Reject, error) {
-	len := native.RejectListLen(handle)
+func NewListFromHandle(handle native.PretradeRejectList) ([]Reject, error) {
+	len := native.PretradeRejectListLen(handle)
 	if len == 0 {
 		return nil, errors.New("reject list is not provided")
 	}
 	result := make([]Reject, len)
 	for i := 0; i < len; i++ {
-		result[i] = NewFromHandle(native.RejectListGet(handle, i))
+		result[i] = NewFromHandle(native.PretradeRejectListGet(handle, i))
 	}
 	return result, nil
 }

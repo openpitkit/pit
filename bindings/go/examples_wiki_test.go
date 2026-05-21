@@ -75,8 +75,8 @@ func (wikiStrategyTagPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (wikiStrategyTagPolicy) ApplyExecutionReport(wikiStrategyReport) bool {
-	return false
+func (wikiStrategyTagPolicy) ApplyExecutionReport(wikiStrategyReport) []reject.AccountBlock {
+	return nil
 }
 
 func (wikiStrategyTagPolicy) ApplyAccountAdjustment(
@@ -309,8 +309,8 @@ func (p *wikiNotionalCapPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (wikiNotionalCapPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
-	return false
+func (wikiNotionalCapPolicy) ApplyExecutionReport(model.ExecutionReport) []reject.AccountBlock {
+	return nil
 }
 
 func (wikiNotionalCapPolicy) ApplyAccountAdjustment(
@@ -368,8 +368,8 @@ func (p *wikiReserveThenValidatePolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (wikiReserveThenValidatePolicy) ApplyExecutionReport(model.ExecutionReport) bool {
-	return false
+func (wikiReserveThenValidatePolicy) ApplyExecutionReport(model.ExecutionReport) []reject.AccountBlock {
+	return nil
 }
 
 func (wikiReserveThenValidatePolicy) ApplyAccountAdjustment(
@@ -468,8 +468,8 @@ func TestExampleWikiPipelineApplyPostTrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport() error = %v", err)
 	}
-	if result.KillSwitchTriggered {
-		t.Fatal("KillSwitchTriggered = true, want false")
+	if len(result.AccountBlocks) > 0 {
+		t.Fatalf("AccountBlocks = %v, want none", result.AccountBlocks)
 	}
 }
 
@@ -698,8 +698,8 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport() error = %v", err)
 	}
-	if result.KillSwitchTriggered {
-		t.Fatal("KillSwitchTriggered = true, want false")
+	if len(result.AccountBlocks) > 0 {
+		t.Fatalf("AccountBlocks = %v, want none", result.AccountBlocks)
 	}
 }
 
@@ -771,8 +771,8 @@ func TestExampleWikiGettingStartedApplyPostTrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport() error = %v", err)
 	}
-	if result.KillSwitchTriggered {
-		t.Fatal("KillSwitchTriggered = true, want false")
+	if len(result.AccountBlocks) > 0 {
+		t.Fatalf("AccountBlocks = %v, want none", result.AccountBlocks)
 	}
 }
 

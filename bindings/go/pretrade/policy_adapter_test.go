@@ -98,8 +98,8 @@ func TestSafeClientPreTradePolicyCastsOrderPayload(t *testing.T) {
 func TestSafeClientPreTradePolicyApplyExecutionReportIgnoresMissingPayload(t *testing.T) {
 	wrapped := NewSafeClientPreTradePolicy(&clientPayloadTestPolicy{killSwitch: true})
 
-	if wrapped.ApplyExecutionReport(model.NewExecutionReport()) {
-		t.Fatal("ApplyExecutionReport() = true, want false")
+	if len(wrapped.ApplyExecutionReport(model.NewExecutionReport())) != 0 {
+		t.Fatal("ApplyExecutionReport() returned blocks, want empty")
 	}
 }
 
@@ -157,8 +157,8 @@ func TestUnsafeFastClientPreTradePolicyApplyExecutionReportCastsReport(t *testin
 		VenueExecID:     "unsafe-main-report",
 	}
 
-	if !wrapped.ApplyExecutionReport(reportWithPayload(t, report)) {
-		t.Fatal("ApplyExecutionReport() = false, want true")
+	if len(wrapped.ApplyExecutionReport(reportWithPayload(t, report))) == 0 {
+		t.Fatal("ApplyExecutionReport() returned empty, want non-empty blocks")
 	}
 	if policy.report.VenueExecID != report.VenueExecID {
 		t.Fatalf("report venue id = %q, want %q", policy.report.VenueExecID, report.VenueExecID)
@@ -226,8 +226,8 @@ func TestSafePayloadReturnsFalseForInvalidHandlePointer(t *testing.T) {
 func TestSafeClientPreTradePolicyApplyExecutionReportReturnsFalseOnMismatchedPayload(t *testing.T) {
 	wrapped := NewSafeClientPreTradePolicy(&clientPayloadTestPolicy{killSwitch: true})
 
-	if wrapped.ApplyExecutionReport(reportWithAnyPayload(t, 42)) {
-		t.Fatal("ApplyExecutionReport() = true, want false")
+	if len(wrapped.ApplyExecutionReport(reportWithAnyPayload(t, 42))) != 0 {
+		t.Fatal("ApplyExecutionReport() returned blocks, want empty")
 	}
 }
 
@@ -262,9 +262,12 @@ func (p *clientPayloadTestPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (p *clientPayloadTestPolicy) ApplyExecutionReport(report clientPayloadTestReport) bool {
+func (p *clientPayloadTestPolicy) ApplyExecutionReport(report clientPayloadTestReport) []reject.AccountBlock {
 	p.report = report
-	return p.killSwitch
+	if p.killSwitch {
+		return []reject.AccountBlock{reject.NewAccountBlock(reject.CodePnlKillSwitchTriggered, "test", "kill switch", "")}
+	}
+	return nil
 }
 
 func (p *clientPayloadTestPolicy) ApplyAccountAdjustment(

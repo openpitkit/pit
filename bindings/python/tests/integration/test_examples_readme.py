@@ -190,7 +190,7 @@ def test_readme_quickstart() -> None:
     # 7. After each execution report is applied, the system may report that it has
     # been determined in advance that all subsequent requests will be rejected if
     # the account status does not change.
-    assert result.kill_switch_triggered is False
+    assert not result.account_blocks
 
 
 class BlockedAccountPolicy(openpit.pretrade.Policy):
@@ -445,7 +445,7 @@ def test_docs_guides_engine_apply_post_trade_reports() -> None:
     report = _aapl_usd_report()
 
     post_trade = engine.apply_execution_report(report=report)
-    if post_trade.kill_switch_triggered:
+    if post_trade.account_blocks:
         print("halt new orders until the blocked state is cleared")
 
-    assert post_trade.kill_switch_triggered is False
+    assert not post_trade.account_blocks
