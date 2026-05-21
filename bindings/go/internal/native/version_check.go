@@ -24,6 +24,7 @@ import (
 )
 
 func init() {
+	loadNativeSymbols()
 	runtimeVersion := GetRuntimeVersion().Safe()
 	if runtimeVersion != loader.SDKVersion {
 		panic(&loader.RuntimeLoadError{

@@ -532,7 +532,7 @@ func TestRuntimeLoadError_FieldsAndUnwrap(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLoadRuntimeLibraryReturnsErrorForInvalidPath(t *testing.T) {
-	err := loadRuntimeLibrary(filepath.Join(t.TempDir(), "missing-runtime"))
+	_, err := loadRuntimeLibrary(filepath.Join(t.TempDir(), "missing-runtime"))
 	if err == nil {
 		t.Fatal("loadRuntimeLibrary() error = nil, want non-nil")
 	}
@@ -540,7 +540,7 @@ func TestLoadRuntimeLibraryReturnsErrorForInvalidPath(t *testing.T) {
 
 func TestLoadRuntimeLibraryLoadsResolvedPath(t *testing.T) {
 	if forcedPath, usingOverride := runtimeOverridePathIfEmbeddedUnavailable(t); usingOverride {
-		if err := loadRuntimeLibrary(forcedPath); err != nil {
+		if _, err := loadRuntimeLibrary(forcedPath); err != nil {
 			t.Fatalf("loadRuntimeLibrary(%q) error = %v", forcedPath, err)
 		}
 		return
@@ -554,7 +554,7 @@ func TestLoadRuntimeLibraryLoadsResolvedPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolvePath() error = %v", err)
 	}
-	if err := loadRuntimeLibrary(path); err != nil {
+	if _, err := loadRuntimeLibrary(path); err != nil {
 		t.Fatalf("loadRuntimeLibrary(%q) error = %v", path, err)
 	}
 }
@@ -566,6 +566,7 @@ func TestLoadRuntimeLibraryLoadsResolvedPath(t *testing.T) {
 func resetLoaderStateForTest() {
 	loadOnce = sync.Once{}
 	loadedPath = ""
+	loadedHandle = nil
 }
 
 func recoverLoad(t *testing.T) (out *RuntimeLoadError) {

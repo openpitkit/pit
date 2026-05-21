@@ -17,9 +17,26 @@
 
 package native
 
+//go:generate python3 ../../../../scripts/generate_api_c_dlsym.py
+
+/*
+const char *openpit_native_init(void *handle);
+*/
+import "C"
+
 import (
-	// Blank import keeps loader.init ahead of every cgo init in this package
-	// so the native runtime is dlopen'd before any pit_* symbol can be
-	// resolved.
-	_ "go.openpit.dev/openpit/internal/loader"
+	"fmt"
+
+	"go.openpit.dev/openpit/internal/loader"
 )
+
+func loadNativeSymbols() {
+	missing := C.openpit_native_init(loader.LoadedHandle())
+	if missing != nil {
+		panic(&loader.RuntimeLoadError{
+			Reason: loader.ReasonSymbolNotFound,
+			Path:   loader.LoadedPath(),
+			Cause:  fmt.Errorf("symbol %q not found in runtime library", C.GoString(missing)),
+		})
+	}
+}

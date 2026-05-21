@@ -28,6 +28,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"sync"
+	"unsafe"
 
 	pitruntime "go.openpit.dev/openpit/internal/runtime"
 )
@@ -55,6 +56,7 @@ const (
 	ReasonCacheWriteFailed   = "runtime cache write failed"
 	ReasonMagicCheckFailed   = "shared library magic check failed"
 	ReasonDlopenFailed       = "dlopen failed"
+	ReasonSymbolNotFound     = "runtime symbol not found"
 	ReasonVersionMismatch    = "runtime version mismatch"
 )
 
@@ -108,8 +110,9 @@ func reasonForResolveError(err error) string {
 }
 
 var (
-	loadOnce   sync.Once
-	loadedPath string
+	loadOnce     sync.Once
+	loadedPath   string
+	loadedHandle unsafe.Pointer
 )
 
 func init() {
@@ -123,12 +126,20 @@ func LoadedPath() string {
 	return loadedPath
 }
 
+// LoadedHandle returns the dlopen handle of the runtime library that the
+// loader opened during package initialization. Used by the native package to
+// resolve openpit_* symbols via dlsym instead of relying on PLT entries.
+func LoadedHandle() unsafe.Pointer {
+	return loadedHandle
+}
+
 func load() {
 	path, err := resolvePath()
 	if err != nil {
 		panic(&RuntimeLoadError{Reason: reasonForResolveError(err), Path: path, Cause: err})
 	}
-	if err := loadRuntimeLibrary(path); err != nil {
+	handle, err := loadRuntimeLibrary(path)
+	if err != nil {
 		reason := ReasonDlopenFailed
 		if errors.Is(err, errMagicCheckFailed) {
 			reason = ReasonMagicCheckFailed
@@ -136,6 +147,7 @@ func load() {
 		panic(&RuntimeLoadError{Reason: reason, Path: path, Cause: err})
 	}
 	loadedPath = path
+	loadedHandle = handle
 }
 
 func resolvePath() (string, error) {

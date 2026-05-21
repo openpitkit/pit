@@ -22,8 +22,9 @@ package loader
 import (
 	"fmt"
 	goruntime "runtime"
+	"unsafe"
 )
 
-func loadRuntimeLibrary(path string) error {
-	return fmt.Errorf("unsupported platform %s/%s", goruntime.GOOS, goruntime.GOARCH)
+func loadRuntimeLibrary(path string) (unsafe.Pointer, error) {
+	return nil, fmt.Errorf("unsupported platform %s/%s", goruntime.GOOS, goruntime.GOARCH)
 }

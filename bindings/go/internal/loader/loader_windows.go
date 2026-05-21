@@ -19,13 +19,20 @@
 
 package loader
 
-import "syscall"
+import (
+	"fmt"
+	"syscall"
+	"unsafe"
+)
 
-func loadRuntimeLibrary(path string) error {
+func loadRuntimeLibrary(path string) (unsafe.Pointer, error) {
+	if err := validateSharedLibraryMagic(path); err != nil {
+		return nil, fmt.Errorf("%w: %w", errMagicCheckFailed, err)
+	}
+
 	handle, err := syscall.LoadLibrary(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_ = handle
-	return nil
+	return unsafe.Pointer(uintptr(handle)), nil
 }
