@@ -17,7 +17,6 @@
  * Please see https://github.com/openpitkit and the OWNERS file for details.
  *
  * Generated file. Do not edit manually.
- * Regenerate with: go generate ./internal/native/
  */
 
 #include "openpit.h"

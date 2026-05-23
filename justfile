@@ -141,7 +141,6 @@ python-develop-release:
 # Generate the C header and Markdown docs for the FFI crate.
 gen-api-c:
     python3 scripts/generate_api_c.py
-    python3 scripts/generate_api_c_dlsym.py
 
 # Build FFI.
 _build-ffi:

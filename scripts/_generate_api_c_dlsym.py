@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright The Pit Project Owners. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -15,15 +14,18 @@
 # limitations under the License.
 #
 # Please see https://github.com/openpitkit and the OWNERS file for details.
-#
-# Generates openpit_dlsym.c from openpit.h.
-# Run via: go generate ./internal/native/
 
+from __future__ import annotations
+
+import contextlib
 import re
-import sys
 from pathlib import Path
 
-LICENSE = """\
+ROOT = Path(__file__).resolve().parents[1]
+DLSYM_HEADER_PATH = ROOT / "bindings" / "go" / "internal" / "native" / "openpit.h"
+DLSYM_OUTPUT_PATH = ROOT / "bindings" / "go" / "internal" / "native" / "openpit_dlsym.c"
+
+DLSYM_LICENSE = """\
 /*
  * Copyright The Pit Project Owners. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -43,11 +45,9 @@ LICENSE = """\
  * Please see https://github.com/openpitkit and the OWNERS file for details.
  *
  * Generated file. Do not edit manually.
- * Regenerate with: go generate ./internal/native/
  */"""
 
-
-PLATFORM_PROLOGUE = """\
+DLSYM_PLATFORM_PROLOGUE = """\
 #include "openpit.h"
 
 #ifdef _WIN32
@@ -63,21 +63,20 @@ static void *openpit_dlsym(void *handle, const char *name) {
 #endif"""
 
 
-def _prev_code_line(lines: list, before: int) -> str:
-    """Return the nearest non-blank, non-comment line before index `before`."""
-    for j in range(before - 1, -1, -1):
-        s = lines[j].strip()
-        if s and not s.startswith("*") and not s.startswith("/"):
-            return s
+def previous_code_line(lines: list[str], before: int) -> str:
+    for index in range(before - 1, -1, -1):
+        line = lines[index].strip()
+        if line and not line.startswith("*") and not line.startswith("/"):
+            return line
     return ""
 
 
-def collect_declarations(text: str) -> list:
+def collect_declarations(text: str) -> list[str]:
     lines = text.splitlines()
-    decls = []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
+    declarations = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
         if (
             re.match(r"^[A-Za-z]", line)
             and "openpit_" in line
@@ -85,45 +84,47 @@ def collect_declarations(text: str) -> list:
             and not line.startswith("struct")
             and not line.startswith("#")
         ):
-            # When the function name starts at column 0, the return type may
-            # be on the previous line (e.g. "const Foo *\nopenpit_bar(...)").
             prefix = ""
             if re.match(r"^openpit_", line):
-                prev = _prev_code_line(lines, i)
-                if prev and not prev.endswith("{") and not prev.endswith("}"):
-                    prefix = prev + " "
+                previous = previous_code_line(lines, index)
+                if (
+                    previous
+                    and not previous.endswith("{")
+                    and not previous.endswith("}")
+                ):
+                    prefix = previous + " "
 
             start = prefix + line
             if start.rstrip().endswith(");"):
-                decls.append(start.rstrip().rstrip(";"))
+                declarations.append(start.rstrip().rstrip(";"))
             else:
                 parts = [start]
-                i += 1
-                while i < len(lines):
-                    parts.append(lines[i])
-                    if lines[i].rstrip() == ");":
+                index += 1
+                while index < len(lines):
+                    parts.append(lines[index])
+                    if lines[index].rstrip() == ");":
                         break
-                    i += 1
-                joined = " ".join(p.strip() for p in parts).rstrip()
+                    index += 1
+                joined = " ".join(part.strip() for part in parts).rstrip()
                 if joined.endswith(";"):
                     joined = joined[:-1]
-                decls.append(joined)
-        i += 1
-    return decls
+                declarations.append(joined)
+        index += 1
+    return declarations
 
 
-def parse_decl(decl: str):
-    paren = decl.index("(")
-    before = decl[:paren].strip()
-    params_raw = decl[paren + 1 :].rstrip().rstrip(")")
+def parse_decl(declaration: str) -> tuple[str, str, list[str]]:
+    paren = declaration.index("(")
+    before = declaration[:paren].strip()
+    params_raw = declaration[paren + 1 :].rstrip().rstrip(")")
     parts = before.rsplit(None, 1)
     ret_type = parts[0].strip() if len(parts) == 2 else before
     name = parts[1].strip() if len(parts) == 2 else ""
-    params = [p.strip() for p in params_raw.split(",") if p.strip()]
+    params = [param.strip() for param in params_raw.split(",") if param.strip()]
     return ret_type, name, params
 
 
-def split_type_name(param: str):
+def split_type_name(param: str) -> tuple[str, str | None]:
     param = param.strip()
     if not param or param == "void":
         return "void", None
@@ -133,27 +134,49 @@ def split_type_name(param: str):
     return parts[0].strip(), parts[1].strip()
 
 
-def generate(header_path: Path, output_path: Path) -> None:
-    text = header_path.read_text()
-    decls = collect_declarations(text)
-
+def parse_dlsym_functions(
+    header_text: str,
+) -> list[tuple[str, str, list[tuple[str, str | None]]]]:
     functions = []
-    for decl in decls:
-        ret_type, name, raw_params = parse_decl(decl)
+    for declaration in collect_declarations(header_text):
+        ret_type, name, raw_params = parse_decl(declaration)
         if not name.startswith("openpit_"):
             continue
-        params = [split_type_name(p) for p in raw_params]
+        params = [split_type_name(param) for param in raw_params]
         functions.append((ret_type, name, params))
+    return functions
 
-    out = [LICENSE, "", PLATFORM_PROLOGUE, ""]
+
+def dlsym_param_types(params: list[tuple[str, str | None]]) -> str:
+    if not params or (len(params) == 1 and params[0] == ("void", None)):
+        return "void"
+    return ", ".join(param_type for param_type, _ in params)
+
+
+def dlsym_signature_params(params: list[tuple[str, str | None]]) -> tuple[str, str]:
+    if not params or (len(params) == 1 and params[0] == ("void", None)):
+        return "void", ""
+
+    sig_parts = []
+    call_parts = []
+    for param_type, param_name in params:
+        sig_parts.append(f"{param_type} {param_name}" if param_name else param_type)
+        if param_name:
+            call_parts.append(param_name)
+    return ", ".join(sig_parts), ", ".join(call_parts)
+
+
+def render_dlsym_source(
+    functions: list[tuple[str, str, list[tuple[str, str | None]]]],
+) -> str:
+    out = [DLSYM_LICENSE, "", DLSYM_PLATFORM_PROLOGUE, ""]
     out += [
         "/* Function pointers resolved via openpit_dlsym after the runtime"
         " is loaded. */",
     ]
 
     for ret_type, name, params in functions:
-        void_only = not params or (len(params) == 1 and params[0] == ("void", None))
-        ptr_types = "void" if void_only else ", ".join(t for t, _ in params)
+        ptr_types = dlsym_param_types(params)
         out.append(f"static {ret_type} (*_fn_{name})({ptr_types}) = NULL;")
 
     out += [
@@ -167,8 +190,7 @@ def generate(header_path: Path, output_path: Path) -> None:
         "const char *openpit_native_init(void *handle) {",
     ]
     for ret_type, name, params in functions:
-        void_only = not params or (len(params) == 1 and params[0] == ("void", None))
-        ptr_types = "void" if void_only else ", ".join(t for t, _ in params)
+        ptr_types = dlsym_param_types(params)
         cast = f"({ret_type} (*)({ptr_types}))"
         out += [
             f'    _fn_{name} = {cast}openpit_dlsym(handle, "{name}");',
@@ -180,19 +202,7 @@ def generate(header_path: Path, output_path: Path) -> None:
     ]
 
     for ret_type, name, params in functions:
-        void_only = not params or (len(params) == 1 and params[0] == ("void", None))
-        if void_only:
-            sig_params = "void"
-            call_args = ""
-        else:
-            sig_parts, call_parts = [], []
-            for t, n in params:
-                sig_parts.append(f"{t} {n}" if n else t)
-                if n:
-                    call_parts.append(n)
-            sig_params = ", ".join(sig_parts)
-            call_args = ", ".join(call_parts)
-
+        sig_params, call_args = dlsym_signature_params(params)
         ret_stmt = "" if ret_type.strip() == "void" else "return "
         out += [
             "",
@@ -200,16 +210,14 @@ def generate(header_path: Path, output_path: Path) -> None:
             f"    {ret_stmt}_fn_{name}({call_args});",
             "}",
         ]
-
-    output_path.write_text("\n".join(out) + "\n")
-    print(f"Generated {len(functions)} wrappers -> {output_path}", file=sys.stderr)
+    return "\n".join(out) + "\n"
 
 
-if __name__ == "__main__":
-    if len(sys.argv) == 3:
-        generate(Path(sys.argv[1]), Path(sys.argv[2]))
-    else:
-        native = (
-            Path(__file__).parent.parent / "bindings" / "go" / "internal" / "native"
-        )
-        generate(native / "openpit.h", native / "openpit_dlsym.c")
+def generate(
+    header_path: Path = DLSYM_HEADER_PATH, output_path: Path = DLSYM_OUTPUT_PATH
+) -> None:
+    functions = parse_dlsym_functions(header_path.read_text(encoding="utf-8"))
+    output_path.write_text(render_dlsym_source(functions), encoding="utf-8")
+    with contextlib.suppress(ValueError):
+        output_path = output_path.relative_to(ROOT)
+    print(f"Generated {len(functions)} wrappers -> {output_path}")

@@ -17,8 +17,6 @@
 
 package native
 
-//go:generate python3 ../../../../scripts/generate_api_c_dlsym.py
-
 /*
 const char *openpit_native_init(void *handle);
 */

@@ -709,7 +709,6 @@ jobs:
         run: |
           set -euo pipefail
           export RUSTFLAGS="--remap-path-prefix=$(pwd)=."
-          python scripts/generate_api_c.py
           cargo build -p openpit-ffi --release --locked --target "${{ matrix.target }}"
 
       - name: Package artifact (unix)

@@ -15,8 +15,9 @@
  * language governing permissions and limitations under the
  * License.
  *
- * Generated file. Do not edit manually.
  * Please see https://github.com/openpitkit and the OWNERS file for details.
+ *
+ * Generated file. Do not edit manually.
  */
 
 #ifndef OPENPIT_H
