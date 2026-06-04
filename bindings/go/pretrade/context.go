@@ -18,7 +18,12 @@
 // Package pretrade provides pre-trade risk checking types and interfaces.
 package pretrade
 
-import "go.openpit.dev/openpit/internal/native"
+import (
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
+	"go.openpit.dev/openpit/reject"
+)
 
 // Context carries engine-provided context passed to policy callbacks.
 type Context struct{ handle native.PretradeContext }
@@ -26,4 +31,27 @@ type Context struct{ handle native.PretradeContext }
 // NewContextFromHandle creates a Context from a native handle.
 func NewContextFromHandle(handle native.PretradeContext) Context {
 	return Context{handle: handle}
+}
+
+// AccountControl returns the account-control handle bound to this main-stage
+// pre-trade context.
+//
+// The present flag is false when the context carries no account control because
+// no account could be bound to the request, in which case the returned handle is
+// nil and must not be used. The returned handle is valid to use only within the
+// pre-trade transaction of this request — through the commit or rollback of its
+// reservation (so it may be captured into a mutation commit/rollback callback
+// for deferred blocking); using it afterwards is unspecified. Its memory is
+// reclaimed by the garbage collector; callers do not manage its lifetime.
+func (c Context) AccountControl() (*reject.AccountControl, bool) {
+	control := reject.NewAccountControlFromHandle(native.PretradeContextGetAccountControl(c.handle))
+	return control, control != nil
+}
+
+// AccountGroup returns the account-group identifier for the account bound to
+// this pre-trade context. The option is empty when the account is not assigned
+// to any group.
+func (c Context) AccountGroup() optional.Option[param.AccountGroupID] {
+	id, ok := native.PretradeContextGetAccountGroup(c.handle)
+	return optional.From(param.NewAccountGroupIDFromHandle(id), ok)
 }

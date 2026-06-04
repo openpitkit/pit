@@ -22,8 +22,9 @@ use std::time::{Duration, Instant};
 
 use crate::core::{HasAccountId, HasInstrument};
 use crate::param::{AccountId, Asset};
-use crate::pretrade::policy::{missing_required_field_reject, PolicyName};
+use crate::pretrade::policy::{missing_required_field_reject, PolicyGroupId, PolicyName};
 use crate::pretrade::start_pre_trade_time::start_pre_trade_now;
+use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
 use crate::pretrade::{PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects};
 use crate::storage::{Storage, StorageBuilder};
 
@@ -230,6 +231,7 @@ where
     account_asset_barriers: HashMap<(AccountId, Asset), RateLimit>,
     per_account_asset_timestamps:
         Option<TimestampStorage<(AccountId, Asset), LockingPolicyFactory>>,
+    group_id: PolicyGroupId,
 }
 
 impl<LockingPolicyFactory> RateLimitPolicy<LockingPolicyFactory>
@@ -311,7 +313,16 @@ where
             per_account_asset_timestamps: (!account_asset_barriers_map.is_empty())
                 .then(|| storage_builder.create()),
             account_asset_barriers: account_asset_barriers_map,
+            group_id: DEFAULT_POLICY_GROUP_ID,
         })
+    }
+
+    /// Assigns a group tag to this policy instance.
+    ///
+    /// See [`PolicyGroupId`] and [`DEFAULT_POLICY_GROUP_ID`] for details.
+    pub fn with_policy_group_id(mut self, id: PolicyGroupId) -> Self {
+        self.group_id = id;
+        self
     }
 }
 
@@ -324,18 +335,27 @@ where
     }
 }
 
-impl<Order, ExecutionReport, AccountAdjustment, LockingPolicyFactory>
-    PreTradePolicy<Order, ExecutionReport, AccountAdjustment>
+impl<Order, ExecutionReport, AccountAdjustment, LockingPolicyFactory, Sync>
+    PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
     for RateLimitPolicy<LockingPolicyFactory>
 where
     Order: HasAccountId + HasInstrument,
     LockingPolicyFactory: crate::storage::LockingPolicyFactory,
+    Sync: crate::core::SyncMode,
 {
     fn name(&self) -> &str {
         Self::NAME
     }
 
-    fn check_pre_trade_start(&self, _ctx: &PreTradeContext, order: &Order) -> Result<(), Rejects> {
+    fn policy_group_id(&self) -> PolicyGroupId {
+        self.group_id
+    }
+
+    fn check_pre_trade_start(
+        &self,
+        _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+        order: &Order,
+    ) -> Result<(), Rejects> {
         let settlement_opt: Option<Asset> =
             if !self.asset_counters.is_empty() || !self.account_asset_barriers.is_empty() {
                 Some(
@@ -465,13 +485,6 @@ where
         }
 
         Ok(())
-    }
-
-    fn apply_execution_report(
-        &self,
-        _report: &ExecutionReport,
-    ) -> Vec<crate::pretrade::AccountBlock> {
-        vec![]
     }
 }
 
@@ -766,10 +779,13 @@ mod tests {
             account_id: account(1),
         };
 
-        let result = <TestPolicy as PreTradePolicy<NoInstrumentOrder, ()>>::check_pre_trade_start(
-            &policy,
-            &PreTradeContext::new(),
-            &order,
+        let result = <TestPolicy as PreTradePolicy<
+            NoInstrumentOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy, &PreTradeContext::<NoLocking>::new(None), &order
         );
 
         assert!(result.is_ok());
@@ -782,10 +798,13 @@ mod tests {
             account_id: account(1),
         };
 
-        let result = <TestPolicy as PreTradePolicy<NoInstrumentOrder, ()>>::check_pre_trade_start(
-            &policy,
-            &PreTradeContext::new(),
-            &order,
+        let result = <TestPolicy as PreTradePolicy<
+            NoInstrumentOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy, &PreTradeContext::<NoLocking>::new(None), &order
         );
 
         assert!(result.is_ok());
@@ -903,9 +922,9 @@ mod tests {
         }
 
         let policy = account_policy(account(1), 10, Duration::from_secs(60));
-        let reject = <TestPolicy as PreTradePolicy<NoAccountId, ()>>::check_pre_trade_start(
+        let reject = <TestPolicy as PreTradePolicy<NoAccountId, (), (), crate::core::LocalSync>>::check_pre_trade_start(
             &policy,
-            &PreTradeContext::new(),
+            &PreTradeContext::<NoLocking>::new(None),
             &NoAccountId,
         )
         .expect_err("missing account_id must reject");
@@ -939,9 +958,9 @@ mod tests {
 
         let policy = broker_policy(10, Duration::from_secs(60));
         assert!(
-            <TestPolicy as PreTradePolicy<NoAccountId, ()>>::check_pre_trade_start(
+            <TestPolicy as PreTradePolicy<NoAccountId, (), (), crate::core::LocalSync>>::check_pre_trade_start(
                 &policy,
-                &PreTradeContext::new(),
+                &PreTradeContext::<NoLocking>::new(None),
                 &NoAccountId,
             )
             .is_ok()
@@ -955,10 +974,13 @@ mod tests {
             account_id: account(1),
         };
 
-        let reject = <TestPolicy as PreTradePolicy<NoInstrumentOrder, ()>>::check_pre_trade_start(
-            &policy,
-            &PreTradeContext::new(),
-            &order,
+        let reject = <TestPolicy as PreTradePolicy<
+            NoInstrumentOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy, &PreTradeContext::<NoLocking>::new(None), &order
         )
         .expect_err("asset-axis policy must require instrument");
         let reject = &reject[0];
@@ -991,9 +1013,9 @@ mod tests {
 
     fn check_at(policy: &TestPolicy, order: &OrderOperation, now: Instant) -> Result<(), Rejects> {
         with_start_pre_trade_now(now, || {
-            <TestPolicy as PreTradePolicy<OrderOperation, ()>>::check_pre_trade_start(
+            <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::core::LocalSync>>::check_pre_trade_start(
                 policy,
-                &PreTradeContext::new(),
+                &PreTradeContext::<NoLocking>::new(None),
                 order,
             )
         })

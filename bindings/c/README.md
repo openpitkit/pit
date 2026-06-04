@@ -8,14 +8,10 @@
 policy-driven risk checks into trading systems from C and other environments
 that consume a C ABI.
 
-For an overview and links to all resources, see
-the project website [openpit.dev](https://openpit.dev/).
-For full project documentation, see
-[the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
-For conceptual and architectural pages, see
-[the project wiki](https://github.com/openpitkit/pit/wiki).
-For the split C reference manual, see
-[the C API docs](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
+For an overview and links to all resources, see the project website [openpit.dev](https://openpit.dev/).
+For full project documentation, see [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
+For conceptual and architectural pages, see [the project wiki](https://github.com/openpitkit/pit/wiki).
+For the split C reference manual, see [the C API docs](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
 
 ## Versioning Policy (Pre‑1.0)
 
@@ -31,13 +27,11 @@ phase.
 
 ## Getting Started
 
-Visit the
-[C API documentation](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
+Visit the [C API documentation](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
 
 ## Install
 
-For normal end-user installation, use the published
-[GitHub release assets](https://github.com/openpitkit/pit/releases):
+For normal end-user installation, use the published [GitHub release assets](https://github.com/openpitkit/pit/releases):
 
 - `openpit.h`
 - `libopenpit_ffi.so` on Linux
@@ -52,7 +46,7 @@ header plus the reference docs.
 With [Just](https://just.systems/):
 
 ```bash
-just ffi-c-api
+just gen-api-c
 ```
 
 Manual:
@@ -91,35 +85,49 @@ The engine evaluates an order through a deterministic pre-trade pipeline:
   deferred request
 - `openpit_pretrade_pre_trade_request_execute(...)` runs main-stage check
   policies
+- `openpit_engine_execute_pre_trade(...)` runs the start and main stages in a
+  single call
 - `openpit_pretrade_pre_trade_reservation_commit(...)` applies reserved state
 - `openpit_pretrade_pre_trade_reservation_rollback(...)` reverts reserved state
 - `openpit_engine_apply_execution_report(...)` updates post-trade policy state
+- `openpit_engine_apply_account_adjustment(...)` validates and applies account
+  adjustments
 
-Start-stage policies aggregate rejects from all registered policies.
-Main-stage policies aggregate rejects and run rollback mutations in
-reverse order when any reject is produced.
+Start-stage policies aggregate rejects from all registered policies. Main-stage
+policies aggregate rejects and run rollback mutations in reverse order when any
+reject is produced.
 
 Built-in policies:
 
-- order validation
-- P&L kill switch
-- sliding-window rate limit
-- per-settlement order size limits
+- [Spot Funds](https://github.com/openpitkit/pit/wiki/Spot-Funds) - per-account
+  solvency gate over spendable funds.
+- [Order Validation](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
+  \- structural integrity checks on every order.
+- [Rate Limit](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
+  \- throttle order flow per broker, asset, or account.
+- [Order Size Limit](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
+  \- fat-finger caps on quantity and notional.
+- [P&L Kill Switch](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
+  \- halt an account when realized P&L breaches bounds.
+- plus your own via the [policy SDK](https://github.com/openpitkit/pit/wiki/Policy-API).
 
-The primary integration model is to build project-specific policies against
-the public C API:
-[the C API docs](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
+The primary integration model is to build project-specific policies against the
+public C API: [the C API docs](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
 
-Two types of rejections are supported: a full kill switch for the account
-and a rejection of only the current request. Kill switches are intended
-for algorithmic trading where automatic order submission must be halted
-until the situation is analyzed.
+Two types of rejections are supported: a full kill switch for the account and a
+rejection of only the current request. Kill switches are intended for
+algorithmic trading where automatic order submission must be halted until the
+situation is analyzed.
 
-Built-in policies that maintain state across calls use the SDK's
-[Storage](https://github.com/openpitkit/pit/wiki/Storage) abstraction
-internally. The runtime library handles the necessary memory
-synchronization for policy state; the C consumer is responsible only for
-the threading contract on the SDK handle.
+Built-in policies that maintain state across calls use the SDK's [Storage](https://github.com/openpitkit/pit/wiki/Storage)
+abstraction internally. The runtime library handles the necessary memory
+synchronization for policy state; the C consumer is responsible only for the
+threading contract on the SDK handle.
+
+Policies that need live prices (such as spot funds) read quotes from a
+market-data service built with `openpit_create_marketdata_builder(...)` and
+updated through the `openpit_marketdata_service_*` functions; one service handle
+can be shared between a quote feed and the engine.
 
 ## Usage
 
@@ -313,7 +321,7 @@ int main(void) {
     }
 
     if (!openpit_engine_builder_add_builtin_order_validation_policy(
-            builder, &error)) {
+            builder, 0, &error)) {  /* group id 0 = default group */
         report_out_error(
             "openpit_engine_builder_add_builtin_order_validation_policy",
             error);
@@ -321,7 +329,7 @@ int main(void) {
         goto cleanup;
     }
     if (!openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
-            builder, &pnl_barrier, 1, NULL, 0, &error)) {
+            builder, 0, &pnl_barrier, 1, NULL, 0, &error)) {
         report_out_error(
             "openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy",
             error);
@@ -329,7 +337,7 @@ int main(void) {
         goto cleanup;
     }
     if (!openpit_engine_builder_add_builtin_rate_limit_policy(
-            builder, &rate_limit, NULL, 0, NULL, 0, NULL, 0, &error)) {
+            builder, 0, &rate_limit, NULL, 0, NULL, 0, NULL, 0, &error)) {
         report_out_error(
             "openpit_engine_builder_add_builtin_rate_limit_policy",
             error);
@@ -337,7 +345,7 @@ int main(void) {
         goto cleanup;
     }
     if (!openpit_engine_builder_add_builtin_order_size_limit_policy(
-            builder, &order_size_limit, NULL, 0, NULL, 0, &error)) {
+            builder, 0, &order_size_limit, NULL, 0, NULL, 0, &error)) {
         report_out_error(
             "openpit_engine_builder_add_builtin_order_size_limit_policy",
             error);
@@ -345,10 +353,19 @@ int main(void) {
         goto cleanup;
     }
 
-    engine = openpit_engine_builder_build(builder, &error);
+    /*
+     * On a domain build failure (for example, a duplicate policy name or group
+     * id) the structured error is written to out_build_error and out_error is
+     * left untouched. This example passes NULL for out_build_error to stay
+     * minimal, so it must not read error on failure; use a generic message.
+     */
+    engine = openpit_engine_builder_build(builder, NULL, &error);
     if (engine == NULL) {
-        report_out_error("openpit_engine_builder_build", error);
-        error = NULL;
+        report_last_error("openpit_engine_builder_build");
+        if (error != NULL) {
+            openpit_destroy_shared_string(error);
+            error = NULL;
+        }
         goto cleanup;
     }
 
@@ -428,7 +445,7 @@ int main(void) {
     report.financial_impact.value.fee.value = fee;
 
     if (!openpit_engine_apply_execution_report(
-            engine, &report, &account_blocks, &error)) {
+            engine, &report, &account_blocks, NULL, &error)) {
         report_out_error("openpit_engine_apply_execution_report", error);
         error = NULL;
         goto cleanup;
@@ -509,7 +526,7 @@ Recommended local flow:
 With [Just](https://just.systems/):
 
 ```bash
-just ffi-c-api
+just gen-api-c
 just build
 cc -xc -fsyntax-only -include bindings/c/openpit.h /dev/null
 ```

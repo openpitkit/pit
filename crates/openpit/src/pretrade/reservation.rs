@@ -16,6 +16,7 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 use super::PreTradeLock;
+use crate::core::account_outcome::AccountAdjustmentOutcome;
 
 /// Opaque capability object representing reserved state.
 ///
@@ -79,7 +80,7 @@ use super::PreTradeLock;
 ///     price: Some(Price::from_str("185")?),
 /// };
 /// let mut reservation = engine.start_pre_trade(order)?.execute()?;
-/// let lock = *reservation.lock();
+/// let lock = reservation.lock().clone();
 ///
 /// // Send order to venue. On success commit, on failure rollback.
 /// reservation.commit(); // or reservation.rollback()
@@ -93,24 +94,51 @@ use super::PreTradeLock;
 pub struct PreTradeReservation {
     inner: Option<Box<dyn ReservationHandle>>,
     lock: PreTradeLock,
+    account_adjustments: Vec<AccountAdjustmentOutcome>,
 }
 
 /// Internal capability interface used by [`PreTradeReservation`].
 ///
-/// Implementations provide both finalization actions and the lock context that
-/// must be exposed to the caller once reservation succeeds.
+/// Provides only finalization: commit or rollback. Lock context and account
+/// adjustments are passed directly to [`PreTradeReservation::from_handle`] so
+/// they are not stored twice.
 pub(crate) trait ReservationHandle {
     /// Finalizes the reservation by applying commit mutations.
     fn commit(self: Box<Self>);
     /// Finalizes the reservation by applying rollback mutations.
     fn rollback(self: Box<Self>);
-    /// Returns the lock context attached to the reservation.
-    fn lock(&self) -> PreTradeLock;
 }
 
 impl PreTradeReservation {
     /// Finalizes by applying commit mutations.
-    /// Panics if the reservation has already been consumed.
+    ///
+    /// The reservation owns its commit/rollback capability exactly once.
+    /// After `commit` returns, the reservation is consumed and any further
+    /// finalization call other than [`Self::rollback`] (which is a no-op
+    /// after consumption) is a programmer error.
+    ///
+    /// # Panics
+    ///
+    /// Panics with `"pre-trade reservation already consumed"` if `commit`
+    /// is called when the reservation has already been finalized. This
+    /// happens when:
+    ///
+    /// - `commit` is called twice on the same reservation;
+    /// - `commit` is called after [`Self::rollback`] has consumed the
+    ///   reservation;
+    /// - `commit` is called on a reservation whose
+    ///   [`Drop`](std::ops::Drop) glue has already run the implicit
+    ///   rollback (only reachable from raw FFI paths that retain a
+    ///   pointer past the Rust scope).
+    ///
+    /// The panic is the API contract: each reservation must be finalized
+    /// at most once and the caller is responsible for tracking ownership.
+    /// Language bindings (Python, Go, C) that expose this method MUST
+    /// wrap the call in [`std::panic::catch_unwind`] and translate the
+    /// resulting unwind into the host language's idiomatic error type
+    /// (Python: `RuntimeError` or a custom exception; Go: returned
+    /// `error`; C: an out-parameter error code). Letting the panic
+    /// propagate across the language boundary is undefined behaviour.
     pub fn commit(&mut self) {
         self.inner
             .take()
@@ -119,7 +147,28 @@ impl PreTradeReservation {
     }
 
     /// Finalizes by applying rollback mutations.
-    /// Does nothing if the reservation has already been consumed.
+    ///
+    /// Unlike [`Self::commit`], calling `rollback` after the reservation
+    /// has already been finalized is a no-op rather than a panic. This
+    /// asymmetry is intentional: the destructor implicitly performs the
+    /// same rollback when a reservation is dropped without explicit
+    /// finalization, and a subsequent explicit `rollback` call by the
+    /// owner must be safe so callers can defensively roll back without
+    /// tracking whether they have already done so.
+    ///
+    /// # Panics
+    ///
+    /// This method does not panic on its own. Panics can only originate
+    /// from inside individual rollback mutation closures registered by
+    /// policies (for example, a deliberate `unreachable!` in a closure).
+    /// The reservation API itself imposes no panic on double-rollback or
+    /// rollback-after-commit; both are silent no-ops.
+    ///
+    /// Language bindings (Python, Go, C) that expose this method should
+    /// still wrap the call in [`std::panic::catch_unwind`] because a
+    /// misbehaving policy mutation closure can still unwind. Letting the
+    /// panic propagate across the language boundary is undefined
+    /// behaviour.
     pub fn rollback(&mut self) {
         if let Some(inner) = self.inner.take() {
             inner.rollback();
@@ -135,11 +184,24 @@ impl PreTradeReservation {
         &self.lock
     }
 
-    pub(crate) fn from_handle(inner: Box<dyn ReservationHandle>) -> Self {
-        let lock = inner.lock();
+    /// Returns account position modifications grouped by [`super::PolicyGroupId`].
+    ///
+    /// Contains zero or more entries. Policies that share a group tag contribute
+    /// to the same entry; policies that report nothing do not create an entry.
+    /// Order within a group follows policy registration order.
+    pub fn account_adjustments(&self) -> &[AccountAdjustmentOutcome] {
+        &self.account_adjustments
+    }
+
+    pub(crate) fn from_handle(
+        inner: Box<dyn ReservationHandle>,
+        lock: PreTradeLock,
+        account_adjustments: Vec<AccountAdjustmentOutcome>,
+    ) -> Self {
         Self {
             inner: Some(inner),
             lock,
+            account_adjustments,
         }
     }
 }
@@ -158,6 +220,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::{PreTradeLock, PreTradeReservation, ReservationHandle};
+    use crate::core::DEFAULT_POLICY_GROUP_ID;
     use crate::param::Price;
     use crate::pretrade::handle::ReservationHandleImpl;
     use crate::{Mutation, Mutations};
@@ -167,7 +230,7 @@ mod tests {
     #[test]
     fn drop_without_explicit_finalize_rolls_back() {
         let calls = Rc::new(RefCell::new(Vec::new()));
-        let mut mutations = Mutations::new();
+        let mut mutations = Mutations::with_capacity(2);
         let r1 = Rc::clone(&calls);
         mutations.push(Mutation::new(noop_action, move || {
             r1.borrow_mut().push("m1");
@@ -177,8 +240,11 @@ mod tests {
             r2.borrow_mut().push("m2");
         }));
 
-        let reservation =
-            PreTradeReservation::from_handle(Box::new(ReservationHandleImpl::new(mutations)));
+        let reservation = PreTradeReservation::from_handle(
+            Box::new(ReservationHandleImpl::new(mutations)),
+            PreTradeLock::default(),
+            Vec::new(),
+        );
 
         drop(reservation);
 
@@ -188,15 +254,18 @@ mod tests {
     #[test]
     fn drop_without_explicit_finalize_can_ignore_non_kill_switch_mutations() {
         let calls = Rc::new(RefCell::new(Vec::new()));
-        let mut mutations = Mutations::new();
+        let mut mutations = Mutations::with_capacity(2);
         let rollback_calls = Rc::clone(&calls);
         mutations.push(Mutation::new(noop_action, move || {
             rollback_calls.borrow_mut().push("rollback");
         }));
         mutations.push(Mutation::new(noop_action, noop_action));
 
-        let reservation =
-            PreTradeReservation::from_handle(Box::new(ReservationHandleImpl::new(mutations)));
+        let reservation = PreTradeReservation::from_handle(
+            Box::new(ReservationHandleImpl::new(mutations)),
+            PreTradeLock::default(),
+            Vec::new(),
+        );
 
         drop(reservation);
 
@@ -209,6 +278,7 @@ mod tests {
         let mut reservation = PreTradeReservation {
             inner: None,
             lock: PreTradeLock::default(),
+            account_adjustments: Vec::new(),
         };
         reservation.commit();
     }
@@ -218,41 +288,56 @@ mod tests {
         let mut reservation = PreTradeReservation {
             inner: None,
             lock: PreTradeLock::default(),
+            account_adjustments: Vec::new(),
         };
         reservation.rollback();
     }
 
     #[test]
     fn commit_with_locked_reservation_handle() {
-        let mut reservation = PreTradeReservation::from_handle(Box::new(LockedReservationHandle {
-            lock: PreTradeLock::new(None),
-        }));
+        let mut reservation = PreTradeReservation::from_handle(
+            Box::new(LockedReservationHandle),
+            PreTradeLock::new(),
+            Vec::new(),
+        );
         reservation.commit();
     }
 
     #[test]
-    fn lock_returns_handle_lock_with_some_price() {
+    fn lock_returns_reservation_lock_with_some_price() {
         let price = Price::from_str("185").expect("price must be valid");
-        let reservation = PreTradeReservation::from_handle(Box::new(LockedReservationHandle {
-            lock: PreTradeLock::new(Some(price)),
-        }));
+        let reservation = PreTradeReservation::from_handle(
+            Box::new(LockedReservationHandle),
+            PreTradeLock::from_entries([(DEFAULT_POLICY_GROUP_ID, price)]),
+            Vec::new(),
+        );
 
-        assert_eq!(reservation.lock().price(), Some(price));
+        let prices: Vec<_> = reservation
+            .lock()
+            .prices_of(DEFAULT_POLICY_GROUP_ID)
+            .collect();
+        assert_eq!(prices, vec![price]);
     }
 
     #[test]
-    fn lock_returns_handle_lock_with_none_price() {
-        let reservation = PreTradeReservation::from_handle(Box::new(LockedReservationHandle {
-            lock: PreTradeLock::new(None),
-        }));
+    fn lock_returns_reservation_lock_with_none_price() {
+        let reservation = PreTradeReservation::from_handle(
+            Box::new(LockedReservationHandle),
+            PreTradeLock::new(),
+            Vec::new(),
+        );
 
-        assert_eq!(reservation.lock().price(), None);
+        assert!(reservation
+            .lock()
+            .prices_of(DEFAULT_POLICY_GROUP_ID)
+            .next()
+            .is_none());
     }
 
     #[test]
     fn commit_executes_commit_mutations() {
         let calls = Rc::new(RefCell::new(Vec::new()));
-        let mut mutations = Mutations::new();
+        let mut mutations = Mutations::with_capacity(1);
         let commit_calls = Rc::clone(&calls);
         mutations.push(Mutation::new(
             move || {
@@ -261,8 +346,11 @@ mod tests {
             noop_action,
         ));
 
-        let mut reservation =
-            PreTradeReservation::from_handle(Box::new(ReservationHandleImpl::new(mutations)));
+        let mut reservation = PreTradeReservation::from_handle(
+            Box::new(ReservationHandleImpl::new(mutations)),
+            PreTradeLock::default(),
+            Vec::new(),
+        );
         reservation.commit();
 
         assert_eq!(&*calls.borrow(), &["commit"]);
@@ -271,30 +359,27 @@ mod tests {
     #[test]
     fn rollback_executes_rollback_mutations() {
         let calls = Rc::new(RefCell::new(Vec::new()));
-        let mut mutations = Mutations::new();
+        let mut mutations = Mutations::with_capacity(1);
         let rollback_calls = Rc::clone(&calls);
         mutations.push(Mutation::new(noop_action, move || {
             rollback_calls.borrow_mut().push("rollback");
         }));
 
-        let mut reservation =
-            PreTradeReservation::from_handle(Box::new(ReservationHandleImpl::new(mutations)));
+        let mut reservation = PreTradeReservation::from_handle(
+            Box::new(ReservationHandleImpl::new(mutations)),
+            PreTradeLock::default(),
+            Vec::new(),
+        );
         reservation.rollback();
 
         assert_eq!(&*calls.borrow(), &["rollback"]);
     }
 
-    struct LockedReservationHandle {
-        lock: PreTradeLock,
-    }
+    struct LockedReservationHandle;
 
     impl ReservationHandle for LockedReservationHandle {
         fn commit(self: Box<Self>) {}
 
         fn rollback(self: Box<Self>) {}
-
-        fn lock(&self) -> PreTradeLock {
-            self.lock
-        }
     }
 }

@@ -106,6 +106,38 @@ where
         Storage::with_locking_policy(self.locking_policy_factory.create_policy())
     }
 
+    /// Creates a fresh standalone [`LockingPolicy`](super::LockingPolicy)
+    /// instance from this builder's factory, independent of any storage.
+    ///
+    /// Engine-internal facilities that must serialize a multi-key mutation
+    /// as a single all-or-nothing section use the returned policy's index
+    /// domain as a whole-map guard: the guard is a zero-cost no-op under the
+    /// single-thread regime and a real reader-writer lock under the
+    /// fully-synchronized regime, matching the engine's synchronization mode
+    /// without introducing a separate lock primitive.
+    #[inline]
+    pub(crate) fn create_policy(&self) -> LockingPolicyFactory::Policy {
+        self.locking_policy_factory.create_policy()
+    }
+
+    /// Creates an empty storage wrapped in a [`LockingPolicyFactory::Shared`](crate::storage::LockingPolicyFactory::Shared)
+    /// handle.
+    ///
+    /// Equivalent to `Factory::new_shared(self.create::<Key, Value>())`.
+    /// Use this when the storage needs to be shared across clones of the
+    /// same policy.
+    #[inline]
+    pub fn create_shared<Key, Value>(
+        &self,
+    ) -> LockingPolicyFactory::Shared<Storage<Key, Value, LockingPolicyFactory::Policy>>
+    where
+        LockingPolicyFactory: CreateStorageFor<Key>,
+    {
+        <LockingPolicyFactory as super::policy::LockingPolicyFactory>::new_shared(
+            self.create::<Key, Value>(),
+        )
+    }
+
     /// Creates an empty storage with an initial capacity hint for the
     /// underlying map.
     ///

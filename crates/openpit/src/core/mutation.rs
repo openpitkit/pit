@@ -82,7 +82,7 @@ impl Mutation {
 /// use openpit::{Mutation, Mutations};
 ///
 /// let state = Rc::new(RefCell::new(false));
-/// let mut mutations = Mutations::new();
+/// let mut mutations = Mutations::with_capacity(2);
 ///
 /// let c = Rc::clone(&state);
 /// let r = Rc::clone(&state);
@@ -97,10 +97,17 @@ pub struct Mutations {
 }
 
 impl Mutations {
-    /// Creates an empty collector.
+    /// Creates an empty collector with no pre-allocated capacity.
     pub fn new() -> Self {
         Self {
             mutations: Vec::new(),
+        }
+    }
+
+    /// Creates a collector pre-allocated for `capacity` mutations.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            mutations: Vec::with_capacity(capacity),
         }
     }
 
@@ -141,7 +148,7 @@ mod tests {
     #[test]
     fn commit_all_applies_in_registration_order() {
         let calls = Rc::new(RefCell::new(Vec::new()));
-        let mut mutations = Mutations::new();
+        let mut mutations = Mutations::with_capacity(3);
         for id in ["a", "b", "c"] {
             let c = Rc::clone(&calls);
             mutations.push(Mutation::new(
@@ -159,7 +166,7 @@ mod tests {
     #[test]
     fn rollback_all_applies_in_reverse_order() {
         let calls = Rc::new(RefCell::new(Vec::new()));
-        let mut mutations = Mutations::new();
+        let mut mutations = Mutations::with_capacity(3);
         for id in ["a", "b", "c"] {
             let r = Rc::clone(&calls);
             mutations.push(Mutation::new(noop_action, move || {
@@ -174,6 +181,12 @@ mod tests {
     #[test]
     fn default_creates_empty_mutations() {
         let mutations = Mutations::default();
+        assert!(mutations.is_empty());
+    }
+
+    #[test]
+    fn new_creates_empty_mutations() {
+        let mutations = Mutations::new();
         assert!(mutations.is_empty());
     }
 

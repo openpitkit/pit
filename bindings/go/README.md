@@ -36,7 +36,14 @@ and architecture notes.
 
 ## Examples
 
-Runnable end-to-end examples: [`examples/go/`](https://github.com/openpitkit/pit/tree/main/examples/go).
+Runnable end-to-end examples live in [`examples/go/`](https://github.com/openpitkit/pit/tree/main/examples/go):
+
+- [`spot_funds`](https://github.com/openpitkit/pit/tree/main/examples/go/spot_funds)
+  \- simplest SpotFunds policy integration (limit-only).
+- [`spot_table`](https://github.com/openpitkit/pit/tree/main/examples/go/spot_table)
+  \- table-driven test runner for the SpotFunds policy.
+- [`rate_pnl_killswitch`](https://github.com/openpitkit/pit/tree/main/examples/go/rate_pnl_killswitch)
+  \- rate-limit + P&L kill-switch supervisor.
 
 ## Install
 
@@ -63,12 +70,19 @@ Start-stage policies aggregate rejects from all registered policies.
 Main-stage policies aggregate rejects and roll back registered mutations
 in reverse order when any reject is produced.
 
-Built-in start-stage policies:
+Built-in policies:
 
-- `policies.BuildOrderValidation()`
-- `policies.BuildPnlBoundsKillswitch()...`
-- `policies.BuildRateLimit()...`
-- `policies.BuildOrderSizeLimit()...`
+- [Spot Funds](https://github.com/openpitkit/pit/wiki/Spot-Funds) - per-account
+  solvency gate over spendable funds.
+- [Order Validation](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
+  \- structural integrity checks on every order.
+- [Rate Limit](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
+  \- throttle order flow per broker, asset, or account.
+- [Order Size Limit](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
+  \- fat-finger caps on quantity and notional.
+- [P&L Kill Switch](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
+  \- halt an account when realized P&L breaches bounds.
+- plus your own via the [policy SDK](https://github.com/openpitkit/pit/wiki/Policy-API#go-interface).
 
 The primary integration model is to write project-specific policies against
 the public Go policy API:
@@ -187,7 +201,7 @@ func main() {
   log.Fatal(err)
  }
  op.SetInstrument(param.NewInstrument(aapl, usd))
- op.SetAccountID(param.NewAccountIDFromInt(99224416))
+ op.SetAccountID(param.NewAccountIDFromUint64(99224416))
  op.SetSide(param.SideBuy)
  price, _ := param.NewPriceFromString("185")
  qty, _ := param.NewQuantityFromString("100")
@@ -235,7 +249,7 @@ func main() {
  report := model.NewExecutionReport()
  reportOp := model.NewExecutionReportOperation()
  reportOp.SetInstrument(param.NewInstrument(aapl, usd))
- reportOp.SetAccountID(param.NewAccountIDFromInt(99224416))
+ reportOp.SetAccountID(param.NewAccountIDFromUint64(99224416))
  reportOp.SetSide(param.SideBuy)
  report.SetOperation(reportOp)
 

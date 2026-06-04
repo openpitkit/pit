@@ -42,7 +42,11 @@ type PositionSize struct {
 	native native.ParamPositionSize
 }
 
-var newPositionSizeZero = sync.OnceValue(func() PositionSize { return newPositionSizeOrPanic(NewPositionSizeFromInt(0)) })
+var newPositionSizeZero = sync.OnceValue(
+	func() PositionSize {
+		return newPositionSizeOrPanic(NewPositionSizeFromInt64(0))
+	},
+)
 
 // NewPositionSizeZero returns the canonical zero value of PositionSize.
 func NewPositionSizeZero() PositionSize { return newPositionSizeZero() }
@@ -83,25 +87,25 @@ func NewPositionSizeFromDecimal(v decimal.Decimal) (PositionSize, error) {
 
 // NewPositionSizeFromString creates a PositionSize from a decimal string.
 func NewPositionSizeFromString(v string) (PositionSize, error) {
-	nativeValue, err := native.CreateParamPositionSizeFromStr(v)
+	nativeValue, err := native.CreateParamPositionSizeFromString(v)
 	if err != nil {
 		return PositionSize{}, err
 	}
 	return NewPositionSizeFromHandle(nativeValue), nil
 }
 
-// NewPositionSizeFromInt creates a PositionSize from a signed integer.
-func NewPositionSizeFromInt(v int64) (PositionSize, error) {
-	nativeValue, err := native.CreateParamPositionSizeFromI64(v)
+// NewPositionSizeFromInt64 creates a PositionSize from a signed integer.
+func NewPositionSizeFromInt64(v int64) (PositionSize, error) {
+	nativeValue, err := native.CreateParamPositionSizeFromInt64(v)
 	if err != nil {
 		return PositionSize{}, err
 	}
 	return NewPositionSizeFromHandle(nativeValue), nil
 }
 
-// NewPositionSizeFromUint creates a PositionSize from an unsigned integer.
-func NewPositionSizeFromUint(v uint64) (PositionSize, error) {
-	nativeValue, err := native.CreateParamPositionSizeFromU64(v)
+// NewPositionSizeFromUint64 creates a PositionSize from an unsigned integer.
+func NewPositionSizeFromUint64(v uint64) (PositionSize, error) {
+	nativeValue, err := native.CreateParamPositionSizeFromUint64(v)
 	if err != nil {
 		return PositionSize{}, err
 	}
@@ -146,7 +150,7 @@ func NewPositionSizeFromStringRounded(
 	scale uint32,
 	strategy RoundingStrategy,
 ) (PositionSize, error) {
-	nativeValue, err := native.CreateParamPositionSizeFromStrRounded(v, scale, strategy.native())
+	nativeValue, err := native.CreateParamPositionSizeFromStringRounded(v, scale, strategy.native())
 	if err != nil {
 		return PositionSize{}, err
 	}

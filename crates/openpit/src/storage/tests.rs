@@ -372,6 +372,32 @@ where
 }
 
 #[test]
+fn with_mut_if_present_returns_none_and_does_not_insert_on_miss() {
+    let storage = StorageBuilder::new(FullLocking).create::<&'static str, u32>();
+    let result = storage.with_mut_if_present(&"missing", |v| {
+        *v += 1;
+        *v
+    });
+    assert!(result.is_none());
+    assert!(
+        storage.is_empty(),
+        "no entry must be created for a missing key"
+    );
+}
+
+#[test]
+fn with_mut_if_present_mutates_existing_entry() {
+    let storage = StorageBuilder::new(FullLocking).create::<&'static str, u32>();
+    storage.with_mut("k", || 10u32, |_, _| {});
+    let result = storage.with_mut_if_present(&"k", |v| {
+        *v += 5;
+        *v
+    });
+    assert_eq!(result, Some(15));
+    assert_eq!(storage.with(&"k", |v| *v), Some(15));
+}
+
+#[test]
 fn with_mut_round_trip() {
     let storage = StorageBuilder::new(FullLocking).create::<&'static str, Vec<u32>>();
     storage.with_mut("v", Vec::new, |entry, _| {

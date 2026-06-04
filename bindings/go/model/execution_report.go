@@ -616,8 +616,11 @@ type ExecutionReportFill struct{ value native.ExecutionReportFill }
 type ExecutionReportFillValues struct {
 	LastTrade      optional.Option[ExecutionReportTrade]
 	LeavesQuantity optional.Option[param.Quantity]
-	LockPrice      optional.Option[param.Price]
-	IsFinal        optional.Bool
+	// Lock carries the raw pre-trade lock representation, or nil when no lock is
+	// set. These bytes round-trip with pretrade.Lock via pretrade.NewLockFromBytes
+	// and Lock.Bytes.
+	Lock    []byte
+	IsFinal optional.Bool
 }
 
 // NewExecutionReportFill creates a new zeroed ExecutionReportFill.
@@ -646,7 +649,7 @@ func (f ExecutionReportFill) Values() ExecutionReportFillValues {
 	return ExecutionReportFillValues{
 		LastTrade:      f.LastTrade(),
 		LeavesQuantity: f.LeavesQuantity(),
-		LockPrice:      f.LockPrice(),
+		Lock:           f.Lock(),
 		IsFinal:        f.IsFinal(),
 	}
 }
@@ -664,8 +667,8 @@ func (f *ExecutionReportFill) setValues(values ExecutionReportFillValues) {
 	if value, ok := values.LeavesQuantity.Get(); ok {
 		f.SetLeavesQuantity(value)
 	}
-	if value, ok := values.LockPrice.Get(); ok {
-		f.SetLockPrice(value)
+	if values.Lock != nil {
+		f.SetLock(values.Lock)
 	}
 	if value, ok := values.IsFinal.Get(); ok {
 		f.SetIsFinal(value)
@@ -708,19 +711,23 @@ func (f *ExecutionReportFill) UnsetLeavesQuantity() {
 	native.ExecutionReportFillUnsetLeavesQuantity(&f.value)
 }
 
-// LockPrice returns the optional lock price of the fill.
-func (f ExecutionReportFill) LockPrice() optional.Option[param.Price] {
-	return param.NewPriceOptionFromHandle(native.ExecutionReportFillGetLockPrice(f.value))
+// Lock returns the raw pre-trade lock attached to the fill, or nil when none is
+// set. The bytes round-trip with pretrade.Lock via pretrade.NewLockFromBytes and
+// Lock.Bytes.
+func (f ExecutionReportFill) Lock() []byte {
+	return executionReportFillLockBytes(native.ExecutionReportFillGetLock(f.value))
 }
 
-// SetLockPrice sets the lock price on the fill.
-func (f *ExecutionReportFill) SetLockPrice(price param.Price) {
-	native.ExecutionReportFillSetLockPrice(&f.value, price.Handle())
+// SetLock attaches a pre-trade lock to the fill from its raw bytes. The bytes
+// must come from pretrade.Lock.Bytes within the same library build; an empty or
+// nil slice clears the lock. The fill owns the stored lock.
+func (f *ExecutionReportFill) SetLock(lock []byte) {
+	setExecutionReportFillLock(&f.value, lock)
 }
 
-// UnsetLockPrice clears the lock price on the fill.
-func (f *ExecutionReportFill) UnsetLockPrice() {
-	native.ExecutionReportFillUnsetLockPrice(&f.value)
+// UnsetLock clears the pre-trade lock on the fill, releasing the stored lock.
+func (f *ExecutionReportFill) UnsetLock() {
+	unsetExecutionReportFillLock(&f.value)
 }
 
 // IsFinal reports whether the order is closed out by this fill.
@@ -784,19 +791,23 @@ func (v *ExecutionReportFillView) UnsetLeavesQuantity() {
 	native.ExecutionReportFillUnsetLeavesQuantity(v.ref)
 }
 
-// LockPrice returns the optional lock price from the view.
-func (v ExecutionReportFillView) LockPrice() optional.Option[param.Price] {
-	return param.NewPriceOptionFromHandle(native.ExecutionReportFillGetLockPrice(*v.ref))
+// Lock returns the raw pre-trade lock attached to the view, or nil when none is
+// set. The bytes round-trip with pretrade.Lock via pretrade.NewLockFromBytes and
+// Lock.Bytes.
+func (v ExecutionReportFillView) Lock() []byte {
+	return executionReportFillLockBytes(native.ExecutionReportFillGetLock(*v.ref))
 }
 
-// SetLockPrice sets the lock price on the view.
-func (v *ExecutionReportFillView) SetLockPrice(price param.Price) {
-	native.ExecutionReportFillSetLockPrice(v.ref, price.Handle())
+// SetLock attaches a pre-trade lock to the view from its raw bytes. The bytes
+// must come from pretrade.Lock.Bytes within the same library build; an empty or
+// nil slice clears the lock. The fill owns the stored lock.
+func (v *ExecutionReportFillView) SetLock(lock []byte) {
+	setExecutionReportFillLock(v.ref, lock)
 }
 
-// UnsetLockPrice clears the lock price on the view.
-func (v *ExecutionReportFillView) UnsetLockPrice() {
-	native.ExecutionReportFillUnsetLockPrice(v.ref)
+// UnsetLock clears the pre-trade lock on the view, releasing the stored lock.
+func (v *ExecutionReportFillView) UnsetLock() {
+	unsetExecutionReportFillLock(v.ref)
 }
 
 // IsFinal reports whether the order is closed out by this fill.
@@ -819,6 +830,41 @@ func executionReportIsFinalOption(value native.ExecutionReportIsFinalOptional) o
 		return optional.BoolNone
 	}
 	return optional.BoolSome(native.ExecutionReportIsFinalOptionalGet(value))
+}
+
+// executionReportFillLockBytes converts the fill's stored lock handle to its raw
+// byte representation, returning nil when no lock is attached.
+func executionReportFillLockBytes(lock native.PretradePreTradeLock) []byte {
+	if lock == nil {
+		return nil
+	}
+	raw := native.PretradePreTradeLockToRaw(lock)
+	value := native.CloneBytes(native.SharedBytesView(raw))
+	native.DestroySharedBytes(raw)
+	return value
+}
+
+// setExecutionReportFillLock replaces the fill's stored lock with one decoded
+// from the raw bytes. Empty bytes clear the lock. The fill owns the stored
+// handle (the C struct's lock field; null means no lock).
+func setExecutionReportFillLock(fill *native.ExecutionReportFill, lock []byte) {
+	unsetExecutionReportFillLock(fill)
+	if len(lock) == 0 {
+		return
+	}
+	handle, err := native.CreatePretradePreTradeLockFromRaw(lock)
+	if err != nil {
+		panic(fmt.Sprintf("failed to decode pre-trade lock bytes: %v", err))
+	}
+	native.ExecutionReportFillSetLock(fill, handle)
+}
+
+// unsetExecutionReportFillLock clears and frees the fill's stored lock handle.
+func unsetExecutionReportFillLock(fill *native.ExecutionReportFill) {
+	if existing := native.ExecutionReportFillGetLock(*fill); existing != nil {
+		native.DestroyPretradePreTradeLock(existing)
+	}
+	native.ExecutionReportFillUnsetLock(fill)
 }
 
 //------------------------------------------------------------------------------

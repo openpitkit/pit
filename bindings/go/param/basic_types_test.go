@@ -250,3 +250,34 @@ func TestTradeString(t *testing.T) {
 		t.Fatalf("Trade.String() = %q, want %q", got, "2 @ 123.45")
 	}
 }
+
+func TestNewAccountGroupIDFromUint32(t *testing.T) {
+	t.Parallel()
+
+	group, err := NewAccountGroupIDFromUint32(7)
+	if err != nil {
+		t.Fatalf("NewAccountGroupIDFromUint32(7) error = %v", err)
+	}
+	if got := group.String(); got != "7" {
+		t.Fatalf("String() = %q, want %q", got, "7")
+	}
+}
+
+func TestNewAccountGroupIDFromUint32RejectsDefault(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewAccountGroupIDFromUint32(0); err == nil {
+		t.Fatal("NewAccountGroupIDFromUint32(0) error = nil, want non-nil")
+	}
+}
+
+func TestDefaultAccountGroup(t *testing.T) {
+	t.Parallel()
+
+	if got := DefaultAccountGroup.String(); got != "0" {
+		t.Fatalf("DefaultAccountGroup.String() = %q, want %q", got, "0")
+	}
+	if got := DefaultAccountGroup.Handle(); got != native.DefaultAccountGroup {
+		t.Fatalf("DefaultAccountGroup.Handle() = %v, want %v", got, native.DefaultAccountGroup)
+	}
+}

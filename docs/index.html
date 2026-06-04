@@ -6,24 +6,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OpenPit - Embeddable pre-trade risk SDK for trading systems</title>
   <meta name="description"
-    content="OpenPit is an open-source, embeddable pre-trade risk SDK and engine for algorithmic and electronic trading systems. Deterministic, in-memory, policy-driven Rust core with Go, Python, and C bindings." />
+    content="OpenPit is an open-source, embeddable pre-trade risk SDK and engine for algorithmic and electronic trading systems. Built-in spot funds solvency control and a policy SDK for building your own custom pre-trade checks; deterministic, in-memory Rust core with Go, Python, and C bindings." />
   <link rel="canonical" href="https://openpit.dev/" />
   <meta name="robots" content="index, follow" />
 
-  <!-- Open Graph -->
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="OpenPit" />
   <meta property="og:title" content="OpenPit - Embeddable pre-trade risk SDK for trading systems" />
   <meta property="og:description"
-    content="Open-source, deterministic pre-trade risk engine for algorithmic and electronic trading systems. Embeddable Rust core with Go, Python, and C bindings." />
+    content="Open-source, deterministic pre-trade risk engine for algorithmic and electronic trading systems. Built-in spot funds solvency control and a policy SDK for your own custom checks. Embeddable Rust core with Go, Python, and C bindings." />
   <meta property="og:url" content="https://openpit.dev/" />
   <meta property="og:locale" content="en_US" />
 
-  <!-- Twitter -->
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="OpenPit - Embeddable pre-trade risk SDK for trading systems" />
   <meta name="twitter:description"
-    content="Open-source, deterministic pre-trade risk engine for algorithmic and electronic trading systems. Embeddable Rust core with Go, Python, and C bindings." />
+    content="Open-source, deterministic pre-trade risk engine for algorithmic and electronic trading systems. Built-in spot funds solvency control and a policy SDK for your own custom checks. Embeddable Rust core with Go, Python, and C bindings." />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -31,9 +29,11 @@
     rel="stylesheet" />
   <link rel="stylesheet" href="/assets/styles.css" />
 
-  <link rel="icon" href="/favicon.ico">
-  <link rel="icon" href="/favicon-light.svg" media="(prefers-color-scheme: light)">
-  <link rel="icon" href="/favicon-dark.svg" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" type="image/svg+xml" href="/favicon-light.svg" media="(prefers-color-scheme: light)">
+  <link rel="icon" type="image/svg+xml" href="/favicon-dark.svg" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f6f3ec" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0a0d12" media="(prefers-color-scheme: dark)">
 
   <script type="application/ld+json">
   {
@@ -44,7 +44,7 @@
         "@id": "https://openpit.dev/#website",
         "url": "https://openpit.dev/",
         "name": "OpenPit",
-        "description": "Open-source, embeddable pre-trade risk SDK and engine for algorithmic and electronic trading systems."
+        "description": "Open-source, embeddable pre-trade risk SDK and engine for algorithmic and electronic trading systems, with built-in spot funds solvency control and a policy SDK for building your own custom pre-trade checks."
       },
       {
         "@type": "SoftwareSourceCode",
@@ -52,10 +52,10 @@
         "name": "OpenPit",
         "url": "https://openpit.dev/",
         "codeRepository": "https://github.com/openpitkit/pit",
-        "description": "Embeddable, deterministic, in-memory, policy-driven pre-trade risk engine for algorithmic and electronic trading systems. Rust core with Go, Python, and C bindings.",
+        "description": "Embeddable, deterministic, in-memory, policy-driven pre-trade risk engine for algorithmic and electronic trading systems. Ships a built-in spot funds solvency policy and a policy SDK for building your own custom pre-trade checks. Rust core with Go, Python, and C bindings.",
         "programmingLanguage": ["Rust", "Go", "Python", "C"],
         "license": "https://www.apache.org/licenses/LICENSE-2.0",
-        "keywords": "pre-trade risk, pre-trade risk SDK, trading systems, algorithmic trading, electronic trading, risk engine, embeddable, deterministic, in-memory, policy-driven",
+        "keywords": "pre-trade risk, pre-trade risk SDK, trading systems, algorithmic trading, electronic trading, risk engine, embeddable, deterministic, in-memory, policy-driven, spot funds, spot funds policy, solvency check, custom policy, custom pre-trade policy, policy SDK",
         "author": {
           "@type": "Person",
           "name": "Eugene V. Palchukovsky",
@@ -81,7 +81,6 @@
   <div class="container-tight"
     style="max-width: 860px; margin: 0 auto; padding: 48px 24px 48px; display: flex; flex-direction: column; flex: 1;">
 
-    <!-- ── Hero ────────────────────────────────────────────────── -->
     <header style="text-align: center; margin-bottom: 28px;">
       <div style="margin-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
         <div style="display: flex; align-items: center; gap: 16px;">
@@ -128,35 +127,52 @@
       </p>
     </header>
 
-    <!-- ── About ───────────────────────────────────────────────── -->
-    <section aria-label="About OpenPit"
-      style="max-width: 640px; margin: 0 auto 32px; font-size: 0.95rem; line-height: 1.6; color: var(--muted-lt); text-align: center;">
-      <p style="margin-bottom: 0.75em;">
-        <strong style="color: var(--text);">OpenPit</strong> is an open-source
-        <strong>pre-trade risk SDK</strong> and engine for algorithmic and electronic
-        <strong>trading systems</strong>. The core is a deterministic, in-memory Rust
-        library that validates orders against limits, exposures, and policies in-process,
-        with bindings for Go, Python, and C.
+    <section aria-label="Built-in pre-trade risk policies" class="pol-section" style="margin-bottom: 32px;">
+      <h2 class="visually-hidden">OpenPit built-in pre-trade risk policies</h2>
+      <p class="visually-hidden">
+        OpenPit ships built-in pre-trade risk policies — spot funds solvency, order validation, rate limiting,
+        order size limits, and a P&amp;L kill switch — and lets you compose custom policies with the
+        Rust, Go, Python, and C SDK.
       </p>
-      <p style="margin: 0; font-size: 0.85rem; color: var(--muted);">
-        Distributed under Apache-2.0 on
-        <a href="https://github.com/openpitkit/pit" target="_blank" rel="noopener"
-          style="color: inherit; text-decoration: underline;">GitHub</a>,
-        <a href="https://crates.io/crates/openpit" target="_blank" rel="noopener"
-          style="color: inherit; text-decoration: underline;">crates.io</a>,
-        <a href="https://pypi.org/project/openpit/" target="_blank" rel="noopener"
-          style="color: inherit; text-decoration: underline;">PyPI</a>, and
-        <a href="https://github.com/openpitkit/pit-go" target="_blank" rel="noopener"
-          style="color: inherit; text-decoration: underline;">go.openpit.dev</a>.
-      </p>
+
+      <div class="pol-chips">
+        <a class="pol-chip" href="https://github.com/openpitkit/pit/wiki/Spot-Funds" target="_blank" rel="noopener"
+          title="Spot Funds — per-account solvency gate">
+          <span class="dot" aria-hidden="true"></span>Spot Funds
+        </a>
+        <a class="pol-chip" href="https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy" target="_blank"
+          rel="noopener" title="Order Validation — structural sanity checks">
+          <span class="dot" aria-hidden="true"></span>Order Validation
+        </a>
+        <a class="pol-chip" href="https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy" target="_blank"
+          rel="noopener" title="Rate Limit — throttle order flow per broker, asset, or account">
+          <span class="dot" aria-hidden="true"></span>Rate Limit
+        </a>
+        <a class="pol-chip" href="https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy" target="_blank"
+          rel="noopener" title="Order Size Limit — fat-finger caps on quantity and notional">
+          <span class="dot" aria-hidden="true"></span>Order Size Limit
+        </a>
+        <a class="pol-chip" href="https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy"
+          target="_blank" rel="noopener"
+          title="P&amp;L Kill Switch — halt an account when realized P&amp;L breaches bounds">
+          <span class="dot" aria-hidden="true"></span>P&amp;L Kill Switch
+        </a>
+        <a class="pol-chip pol-chip--sdk" href="https://github.com/openpitkit/pit/wiki/Policy-API" target="_blank"
+          rel="noopener" title="Build a custom pre-trade policy with the OpenPit SDK">
+          + your own via SDK
+        </a>
+      </div>
     </section>
 
-    <!-- ── Navigation cards ────────────────────────────────────── -->
+    <p style="text-align: center; font-size: 0.8rem; color: var(--muted); letter-spacing: 0.04em; margin-bottom: 32px;">
+      Scope&nbsp;anything.&nbsp;Global,&nbsp;per&nbsp;account, or&nbsp;per&nbsp;account&nbsp;group.
+    </p>
+
     <main style="flex: 1;">
+      <h2 class="visually-hidden">OpenPit packages, SDKs, and resources</h2>
       <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px;">
 
-        <!-- Go module -->
-        <a href="https://github.com/openpitkit/pit-go" target="_blank" rel="noopener" class="card"
+        <a href="https://pkg.go.dev/go.openpit.dev/openpit" target="_blank" rel="noopener" class="card"
           style="border-top: 2px solid #ff7a00;">
           <div class="card-icon">
             <img class="brand-icon" src="https://cdn.simpleicons.org/go/7d8590" alt="Go logo" />
@@ -166,14 +182,12 @@
             Public Go module for embedding OpenPit into Go services.
             <br /><code class="card-cmd">go get go.openpit.dev/openpit</code>
           </div>
-          <div class="card-link">→ github.com/openpitkit/pit-go</div>
+          <div class="card-link">→ go.openpit.dev/openpit</div>
         </a>
 
-        <!-- PyPI -->
         <a href="https://pypi.org/project/openpit/" target="_blank" rel="noopener" class="card"
           style="border-top: 2px solid #ff7a00;">
           <div class="card-icon">
-            <!-- Python logo -->
             <svg width="24" height="24" viewBox="0 0 128 128" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
               <path
                 d="M63.39 1.988c-4.222.02-8.252.379-11.8 1.007C41.14 4.841 39.244 8.705 39.244 15.832v9.411h24.693v3.137H29.978C22.8 28.38 16.517 32.693 14.552 40.9c-2.268 9.405-2.368 15.275 0 25.096 1.755 7.311 5.947 12.519 13.124 12.519h8.491V67.234c0-8.151 7.051-15.34 15.426-15.34h24.665c6.866 0 12.346-5.654 12.346-12.548V15.832c0-6.693-5.646-11.72-12.346-12.837-4.244-.706-8.645-1.027-12.866-1.008zM50.171 9.557a4.643 4.643 0 0 1 4.633 4.721 4.643 4.643 0 0 1-4.633 4.69 4.634 4.634 0 0 1-4.634-4.69 4.634 4.634 0 0 1 4.634-4.721z" />
@@ -189,11 +203,9 @@
           <div class="card-link">→ pypi.org/project/openpit/</div>
         </a>
 
-        <!-- crates.io -->
         <a href="https://crates.io/crates/openpit" target="_blank" rel="noopener" class="card"
           style="border-top: 2px solid #ff7a00;">
           <div class="card-icon">
-            <!-- Rust gear logo -->
             <img class="brand-icon" src="https://cdn.simpleicons.org/rust/7d8590" alt="Rust logo" />
           </div>
           <div class="card-title">crates.io</div>
@@ -204,7 +216,6 @@
           <div class="card-link">→ crates.io/crates/openpit</div>
         </a>
 
-        <!-- C API -->
         <a href="https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md" target="_blank" rel="noopener"
           class="card">
           <div class="card-icon">
@@ -223,10 +234,8 @@
           <div class="card-link">→ github.com/openpitkit/pit/blob/main/docs/c-api/index.md</div>
         </a>
 
-        <!-- Repository -->
         <a href="https://github.com/openpitkit/pit" target="_blank" rel="noopener" class="card">
           <div class="card-icon">
-            <!-- git branch icon -->
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
               stroke-linecap="round" stroke-linejoin="round">
               <line x1="6" y1="3" x2="6" y2="15" />
@@ -243,10 +252,8 @@
           <div class="card-link">→ github.com/openpitkit/pit</div>
         </a>
 
-        <!-- Wiki -->
         <a href="https://github.com/openpitkit/pit/wiki" target="_blank" rel="noopener" class="card">
           <div class="card-icon">
-            <!-- document icon -->
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
               stroke-linecap="round" stroke-linejoin="round">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -263,10 +270,8 @@
           <div class="card-link">→ github.com/openpitkit/pit/wiki</div>
         </a>
 
-        <!-- Discussions -->
         <a href="https://github.com/openpitkit/pit/discussions" target="_blank" rel="noopener" class="card">
           <div class="card-icon">
-            <!-- speech bubble icon -->
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
               stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
@@ -283,7 +288,6 @@
       </div>
     </main>
 
-    <!-- ── Footer ──────────────────────────────────────────────── -->
     <footer style="margin-top: 72px; padding-top: 24px; border-top: 1px solid var(--border);">
       <div style="display: flex; justify-content: space-between; align-items: center;
                   flex-wrap: wrap; gap: 12px; font-size: 0.7rem; color: var(--muted);">
@@ -320,7 +324,6 @@
     </footer>
 
   </div>
-  <script src="/assets/app.js"></script>
 </body>
 
 </html>

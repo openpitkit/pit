@@ -15,9 +15,27 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::{AccountBlock, PreTradeContext, Reject, RejectCode, RejectScope, Rejects};
+use crate::core::account_outcome::AccountOutcomeEntry;
+pub use crate::core::{PolicyGroupId, DEFAULT_POLICY_GROUP_ID};
+
+use super::{
+    AccountBlock, PolicyPreTradeResult, PostTradeContext, PostTradeResult, PreTradeContext, Reject,
+    RejectCode, RejectScope, Rejects,
+};
+use crate::core::SyncMode;
 use crate::param::AccountId;
 use crate::{AccountAdjustmentContext, Mutations};
+
+// Note: each built-in policy carries its own `group_id: PolicyGroupId` field plus a
+// `with_policy_group_id` fluent setter and a `fn policy_group_id(&self) -> PolicyGroupId` trait
+// override. A declarative macro was considered to factor out only the getter
+// (the setter cannot be macroified because it returns `Self` and the concrete
+// type varies), but the saving would be three lines per struct while adding
+// the macro definition plus the call site. Furthermore, every policy embeds
+// the getter inside a generic `impl<O, E, A, ...> PreTradePolicy<...>` block,
+// so a macro would either need to wrap the entire impl block or duplicate the
+// generics at each call site. The boilerplate is therefore kept explicit so
+// every policy structure stays self-contained and trivially inspectable.
 
 /// Pre-trade policy contract.
 ///
@@ -48,39 +66,60 @@ use crate::{AccountAdjustmentContext, Mutations};
 /// state is never visible to external systems (venues, risk aggregators), so
 /// rollback by absolute value is safe there.
 ///
-/// `O` is the order contract type visible in callbacks. `R` is the
-/// execution report contract type used for post-trade updates. `A` is the
+/// `Order` is the order contract type visible in callbacks. `ExecutionReport` is the
+/// execution report contract type used for post-trade updates. `AccountAdjustment` is the
 /// account-adjustment contract type visible to account-adjustment hooks.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use openpit::pretrade::{PreTradeContext, PreTradePolicy, Rejects};
-/// use openpit::Mutations;
+/// use openpit::SyncMode;
 ///
 /// struct NoopPolicy;
 ///
-/// impl<Order, ExecutionReport, AccountAdjustment>
-///     PreTradePolicy<Order, ExecutionReport, AccountAdjustment> for NoopPolicy
+/// impl<Order, ExecutionReport, AccountAdjustment, Sync>
+///     PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> for NoopPolicy
+/// where
+///     Sync: SyncMode,
 /// {
 ///     fn name(&self) -> &str {
 ///         "NoopPolicy"
 ///     }
 /// }
 /// ```
-pub trait PreTradePolicy<Order, ExecutionReport, AccountAdjustment = ()> {
+pub trait PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
+where
+    Sync: SyncMode + ?Sized,
+{
     /// Stable policy name.
     ///
     /// Policy names must be unique across all policies registered in the same
     /// engine instance.
     fn name(&self) -> &str;
 
+    /// Returns the group tag assigned to this policy instance.
+    ///
+    /// The engine embeds this value in every [`crate::AccountAdjustmentOutcome`]
+    /// produced by this policy so callers can filter or route outcomes without
+    /// inspecting policy names. A single tag may be shared by multiple policies
+    /// to form a logical group.
+    ///
+    /// The default implementation returns [`DEFAULT_POLICY_GROUP_ID`].
+    fn policy_group_id(&self) -> PolicyGroupId {
+        DEFAULT_POLICY_GROUP_ID
+    }
+
     /// Performs start-stage checks against an order.
     ///
     /// Returning `Ok(())` allows the engine to continue building the deferred
     /// request. Returning [`Rejects`] contributes rejects to the start-stage
     /// reject result.
-    fn check_pre_trade_start(&self, _ctx: &PreTradeContext, _order: &Order) -> Result<(), Rejects> {
+    fn check_pre_trade_start(
+        &self,
+        _ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        _order: &Order,
+    ) -> Result<(), Rejects> {
         Ok(())
     }
 
@@ -97,25 +136,29 @@ pub trait PreTradePolicy<Order, ExecutionReport, AccountAdjustment = ()> {
     /// captured at registration time.
     fn perform_pre_trade_check(
         &self,
-        _ctx: &PreTradeContext,
+        _ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         _order: &Order,
         _mutations: &mut Mutations,
-    ) -> Result<(), Rejects> {
-        Ok(())
+    ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+        Ok(None)
     }
 
     /// Applies post-trade updates from execution reports.
     ///
     /// The engine calls this hook from [`crate::Engine::apply_execution_report`]
-    /// so that a main-stage policy can maintain post-trade state.
+    /// so that a main-stage policy can maintain post-trade state. `ctx` exposes
+    /// the report account's [`AccountGroupId`](crate::param::AccountGroupId)
+    /// through [`PostTradeContext::account_group`].
     ///
-    /// Returns account blocks representing the kill-switch state.
-    ///
-    /// An empty list means no kill-switch condition. A non-empty list means this
-    /// policy entered a blocked state after the report was applied. The engine
-    /// merges blocks from all policies into a single list.
-    fn apply_execution_report(&self, _report: &ExecutionReport) -> Vec<AccountBlock> {
-        vec![]
+    /// Returns `Some(`[`PostTradeResult`]`)` when this policy produced account
+    /// blocks or account adjustments, or `None` when the report caused no
+    /// state change. The engine only merges results that are `Some`.
+    fn apply_execution_report(
+        &self,
+        _ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        _report: &ExecutionReport,
+    ) -> Option<PostTradeResult> {
+        None
     }
 
     /// Validates a single account adjustment.
@@ -134,12 +177,12 @@ pub trait PreTradePolicy<Order, ExecutionReport, AccountAdjustment = ()> {
     /// Returns [`Rejects`] when the adjustment violates policy constraints.
     fn apply_account_adjustment(
         &self,
-        _ctx: &AccountAdjustmentContext,
+        _ctx: &AccountAdjustmentContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         _account_id: AccountId,
         _adjustment: &AccountAdjustment,
         _mutations: &mut Mutations,
-    ) -> Result<(), Rejects> {
-        Ok(())
+    ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
+        Ok(vec![])
     }
 }
 
@@ -159,6 +202,34 @@ pub(crate) fn missing_required_field_reject<Policy: PolicyName + ?Sized>(
         RejectScope::Order,
         RejectCode::MissingRequiredField,
         format!("failed to access required field '{field_name}'"),
+        error.to_string(),
+    )
+}
+
+pub(crate) fn missing_required_field_account_adjustment_reject<Policy: PolicyName + ?Sized>(
+    policy: &Policy,
+    field_name: &str,
+    error: &crate::RequestFieldAccessError,
+) -> Reject {
+    Reject::new(
+        policy.policy_name(),
+        RejectScope::Account,
+        RejectCode::MissingRequiredField,
+        format!("failed to access required field '{field_name}'"),
+        error.to_string(),
+    )
+}
+
+pub(crate) fn field_access_error_account_adjustment_reject<Policy: PolicyName + ?Sized>(
+    policy: &Policy,
+    field_name: &str,
+    error: &crate::RequestFieldAccessError,
+) -> Reject {
+    Reject::new(
+        policy.policy_name(),
+        RejectScope::Account,
+        RejectCode::InvalidFieldFormat,
+        format!("failed to access field '{field_name}'"),
         error.to_string(),
     )
 }
@@ -183,10 +254,16 @@ mod tests {
         WithFinancialImpact,
     };
     use crate::param::{AccountId, Asset, Fee, Pnl, Quantity, Side, TradeAmount};
-    use crate::pretrade::{RejectCode, RejectScope, Rejects};
-    use crate::{Mutations, RequestFieldAccessError};
+    use crate::pretrade::{PolicyPreTradeResult, RejectCode, RejectScope, Rejects};
+    use crate::{AccountOutcomeEntry, Mutations, RequestFieldAccessError};
 
-    use super::{missing_required_field_reject, PolicyName, PreTradeContext, PreTradePolicy};
+    use crate::core::{LocalSync, SyncMode};
+    use crate::storage::NoLocking;
+
+    use super::{
+        missing_required_field_reject, PolicyName, PostTradeContext, PreTradeContext,
+        PreTradePolicy,
+    };
 
     type TestOrder = OrderOperation;
     type TestReport = WithExecutionReportOperation<WithFinancialImpact<()>>;
@@ -197,48 +274,48 @@ mod tests {
 
     struct AccountAdjustmentHookNoop;
 
-    impl PreTradePolicy<TestOrder, TestReport> for StartPolicyNoop {
+    impl<Sync: SyncMode> PreTradePolicy<TestOrder, TestReport, (), Sync> for StartPolicyNoop {
         fn name(&self) -> &str {
             "StartPolicyNoop"
         }
 
         fn check_pre_trade_start(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
             _order: &TestOrder,
         ) -> Result<(), Rejects> {
             Ok(())
         }
     }
 
-    impl PreTradePolicy<TestOrder, TestReport> for MainPolicyNoop {
+    impl<Sync: SyncMode> PreTradePolicy<TestOrder, TestReport, (), Sync> for MainPolicyNoop {
         fn name(&self) -> &str {
             "MainPolicyNoop"
         }
 
         fn perform_pre_trade_check(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
             _order: &TestOrder,
             _mutations: &mut Mutations,
-        ) -> Result<(), Rejects> {
-            Ok(())
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+            Ok(None)
         }
     }
 
-    impl PreTradePolicy<TestOrder, TestReport> for AccountAdjustmentHookNoop {
+    impl<Sync: SyncMode> PreTradePolicy<TestOrder, TestReport, (), Sync> for AccountAdjustmentHookNoop {
         fn name(&self) -> &str {
             "AccountAdjustmentHookNoop"
         }
 
         fn apply_account_adjustment(
             &self,
-            _ctx: &crate::AccountAdjustmentContext,
+            _ctx: &crate::AccountAdjustmentContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
             _account_id: AccountId,
             _adjustment: &(),
             _mutations: &mut Mutations,
-        ) -> Result<(), Rejects> {
-            Ok(())
+        ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
+            Ok(vec![])
         }
     }
 
@@ -262,7 +339,14 @@ mod tests {
             },
         };
 
-        assert!(MainPolicyNoop.apply_execution_report(&report).is_empty());
+        assert!(
+            <MainPolicyNoop as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::apply_execution_report(
+                &MainPolicyNoop,
+                &PostTradeContext::new(),
+                &report,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -285,7 +369,14 @@ mod tests {
             },
         };
 
-        assert!(StartPolicyNoop.apply_execution_report(&report).is_empty());
+        assert!(
+            <StartPolicyNoop as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::apply_execution_report(
+                &StartPolicyNoop,
+                &PostTradeContext::new(),
+                &report,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -304,9 +395,18 @@ mod tests {
         };
         let mut mutations = Mutations::new();
 
-        assert_eq!(MainPolicyNoop.name(), "MainPolicyNoop");
-        let result =
-            MainPolicyNoop.perform_pre_trade_check(&PreTradeContext::new(), &order, &mut mutations);
+        assert_eq!(
+            <MainPolicyNoop as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::name(
+                &MainPolicyNoop
+            ),
+            "MainPolicyNoop"
+        );
+        let result = <MainPolicyNoop as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::perform_pre_trade_check(
+            &MainPolicyNoop,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order,
+            &mut mutations,
+        );
         assert!(mutations.is_empty());
         assert!(result.is_ok());
     }
@@ -326,10 +426,20 @@ mod tests {
             price: None,
         };
 
-        assert_eq!(StartPolicyNoop.name(), "StartPolicyNoop");
-        assert!(StartPolicyNoop
-            .check_pre_trade_start(&PreTradeContext::new(), &order)
-            .is_ok());
+        assert_eq!(
+            <StartPolicyNoop as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::name(
+                &StartPolicyNoop
+            ),
+            "StartPolicyNoop"
+        );
+        assert!(
+            <StartPolicyNoop as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::check_pre_trade_start(
+                &StartPolicyNoop,
+                &PreTradeContext::<NoLocking>::new(None),
+                &order,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -337,11 +447,26 @@ mod tests {
         let mut mutations = Mutations::new();
 
         assert_eq!(
-            AccountAdjustmentHookNoop.name(),
+            <AccountAdjustmentHookNoop as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::name(
+                &AccountAdjustmentHookNoop
+            ),
             "AccountAdjustmentHookNoop"
         );
-        let result = AccountAdjustmentHookNoop.apply_account_adjustment(
-            &crate::AccountAdjustmentContext::new(),
+        use crate::core::account_control::BlockedAccounts;
+        use crate::core::{AccountBlockHandle, AccountControl};
+        use crate::storage::{LockingPolicyFactory, NoLocking, StorageBuilder};
+        let builder = StorageBuilder::new(NoLocking);
+        let handle =
+            AccountBlockHandle::from_inner(NoLocking::new_shared(BlockedAccounts::new(&builder)));
+        let ctrl = AccountControl::new(handle, AccountId::from_u64(99224416));
+        let result = <AccountAdjustmentHookNoop as PreTradePolicy<
+            TestOrder,
+            TestReport,
+            (),
+            LocalSync,
+        >>::apply_account_adjustment(
+            &AccountAdjustmentHookNoop,
+            &crate::AccountAdjustmentContext::new_test(ctrl),
             AccountId::from_u64(99224416),
             &(),
             &mut mutations,

@@ -21,15 +21,17 @@ use crate::account_adjustment::{
     import_account_adjustment, AccountAdjustment, OpenPitAccountAdjustment,
     OpenPitAccountAdjustmentApplyStatus,
 };
+use crate::account_outcome::{outcomes_to_list_owned, OpenPitAccountAdjustmentOutcomeList};
 use crate::execution_report::{import_execution_report, ExecutionReport, OpenPitExecutionReport};
 use crate::last_error::{write_error, OpenPitOutError};
 use crate::order::{import_order, OpenPitOrder, Order};
-use crate::param::{OpenPitParamAccountId, OpenPitParamPrice, OpenPitParamPriceOptional};
+use crate::param::OpenPitParamAccountId;
 use crate::reject::{
     blocks_to_list_owned, rejects_to_list_owned, OpenPitPretradeAccountBlockList,
     OpenPitPretradeRejectList,
 };
 use crate::write_error_format;
+use crate::OpenPitStringView;
 use openpit::param::AccountId;
 
 //--------------------------------------------------------------------------------------------------
@@ -63,7 +65,7 @@ pub use openpit_interop::SyncMode as OpenPitSyncPolicy;
 // Threading:
 // The SDK never spawns OS threads: each public call executes on the OS thread
 // that invoked it. Full sync permits concurrent public calls on the same
-// handle. Local sync keeps the handle on the OS thread that created it. Account
+// handle. No-sync keeps the handle on the OS thread that created it. Account
 // sync permits sequential cross-thread access, but the caller must pin each
 // account to a single processing chain and must not invoke public methods on
 // the same handle concurrently. In Go bindings, goroutine migration during one
@@ -79,6 +81,11 @@ pub use openpit_interop::SyncMode as OpenPitSyncPolicy;
 /// - consumed by `openpit_engine_builder_build`.
 pub struct OpenPitEngineBuilder {
     pub(crate) inner: Option<BuilderState>,
+    /// The synchronization mode chosen at creation time.
+    ///
+    /// The market-data builder reads this to inherit the correct MD mode
+    /// without requiring the caller to pass it again.
+    pub(crate) sync_mode: openpit_interop::SyncMode,
 }
 
 /// Opaque engine pointer.
@@ -107,13 +114,7 @@ pub struct OpenPitPretradePreTradeReservation {
     inner: openpit::pretrade::PreTradeReservation,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-/// Price-lock snapshot returned from a reservation.
-pub struct OpenPitPretradePreTradeLock {
-    /// Optional reserved price.
-    pub price: OpenPitParamPriceOptional,
-}
+pub use crate::pre_trade_lock::OpenPitPretradePreTradeLock;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,12 +141,74 @@ pub struct OpenPitAccountAdjustmentBatchError {
     failed_adjustment_index: usize,
 }
 
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Machine-readable discriminant describing why building an engine failed.
+///
+/// Each value identifies a distinct failure category. There is no success
+/// value: a build-error object exists only when a build did not produce an
+/// engine.
+pub enum OpenPitEngineBuildErrorCode {
+    /// Two or more registered policies declare the same name.
+    DuplicatePolicyName = 0,
+    /// Two or more registered policies declare the same non-default group id.
+    DuplicatePolicyGroupId = 1,
+    /// A failure category not covered by the above. Forward-compatible
+    /// catch-all; no structured payload is available.
+    Other = 2,
+}
+
+/// Structured build-failure details returned by engine construction.
+///
+/// Ownership:
+/// - created by `openpit_engine_builder_build` when building does not produce
+///   an engine;
+/// - owned by the caller;
+/// - released with `openpit_destroy_engine_build_error`.
+pub struct OpenPitEngineBuildError {
+    /// Machine-readable failure category.
+    code: OpenPitEngineBuildErrorCode,
+    /// Offending policy name for the duplicate-policy-name category; empty
+    /// otherwise. Stored here so a view handed out by an accessor stays valid
+    /// while this object is alive.
+    policy_name: String,
+    /// Offending policy group id for the duplicate-policy-group-id category;
+    /// zero otherwise.
+    policy_group_id: u16,
+}
+
+impl OpenPitEngineBuildError {
+    fn new(err: openpit::EngineBuildError) -> Self {
+        match err {
+            openpit::EngineBuildError::DuplicatePolicyName { name } => Self {
+                code: OpenPitEngineBuildErrorCode::DuplicatePolicyName,
+                policy_name: name,
+                policy_group_id: 0,
+            },
+            openpit::EngineBuildError::DuplicatePolicyGroupId { policy_group_id } => Self {
+                code: OpenPitEngineBuildErrorCode::DuplicatePolicyGroupId,
+                policy_name: String::new(),
+                policy_group_id: policy_group_id.value(),
+            },
+            _ => Self {
+                code: OpenPitEngineBuildErrorCode::Other,
+                policy_name: String::new(),
+                policy_group_id: 0,
+            },
+        }
+    }
+}
+
 //--------------------------------------------------------------------------------------------------
 
 pub(crate) fn add_pre_trade_policy_to_builder(
     builder: &mut OpenPitEngineBuilder,
-    policy: impl openpit::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment>
-        + Send
+    policy: impl openpit::pretrade::PreTradePolicy<
+            Order,
+            ExecutionReport,
+            AccountAdjustment,
+            openpit_interop::EngineLocking,
+        > + Send
         + 'static,
 ) -> Result<(), String> {
     let state = builder
@@ -168,16 +231,10 @@ impl OpenPitAccountAdjustmentBatchError {
     }
 }
 
-fn export_pre_trade_lock(lock: &openpit::pretrade::PreTradeLock) -> OpenPitPretradePreTradeLock {
-    OpenPitPretradePreTradeLock {
-        price: match lock.price() {
-            Some(v) => OpenPitParamPriceOptional {
-                is_set: true,
-                value: OpenPitParamPrice(v.to_decimal().into()),
-            },
-            None => OpenPitParamPriceOptional::default(),
-        },
-    }
+fn export_pre_trade_lock(
+    lock: &openpit::pretrade::PreTradeLock,
+) -> *mut OpenPitPretradePreTradeLock {
+    OpenPitPretradePreTradeLock::from_inner(lock.clone())
 }
 
 #[no_mangle]
@@ -187,8 +244,8 @@ fn export_pre_trade_lock(lock: &openpit::pretrade::PreTradeLock) -> OpenPitPretr
 /// - returns a non-null caller-owned builder object.
 ///
 /// Error:
-/// - returns null when `sync_policy` is not one of `OpenPitSyncPolicy_Full` (0),
-///   `OpenPitSyncPolicy_Local` (1), or `OpenPitSyncPolicy_Account` (2);
+/// - returns null when `sync_policy` is not one of `OpenPitSyncPolicy_None` (0),
+///   `OpenPitSyncPolicy_Full` (1), or `OpenPitSyncPolicy_Account` (2);
 /// - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
 ///   error handle that MUST be released with `openpit_destroy_shared_string`.
 ///
@@ -208,8 +265,8 @@ pub extern "C" fn openpit_create_engine_builder(
     // fact via `if x > 2` would already be too late. We accept the primitive
     // and translate via `match` here, where the input has no invariants yet.
     let mode = match sync_policy {
-        0 => openpit_interop::SyncMode::Full,
-        1 => openpit_interop::SyncMode::Local,
+        0 => openpit_interop::SyncMode::None,
+        1 => openpit_interop::SyncMode::Full,
         2 => openpit_interop::SyncMode::Account,
         invalid => {
             write_error_format!(
@@ -225,7 +282,10 @@ pub extern "C" fn openpit_create_engine_builder(
         openpit::EngineBuilder::<Order, ExecutionReport, AccountAdjustment>::new()
             .sync(openpit_interop::EngineLocking::new(mode)),
     );
-    Box::into_raw(Box::new(OpenPitEngineBuilder { inner: Some(state) }))
+    Box::into_raw(Box::new(OpenPitEngineBuilder {
+        inner: Some(state),
+        sync_mode: mode,
+    }))
 }
 
 #[no_mangle]
@@ -250,18 +310,33 @@ pub extern "C" fn openpit_destroy_engine_builder(builder: *mut OpenPitEngineBuil
 ///
 /// Error:
 /// - returns null when `builder` is null, the builder was already consumed, or
-///   configuration is invalid;
-/// - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
-///   error handle that MUST be released with `openpit_destroy_shared_string`.
+///   no policies were registered;
+/// - for those non-domain failures, if `out_error` is not null, writes a
+///   caller-owned `OpenPitSharedString` error handle that MUST be released with
+///   `openpit_destroy_shared_string`, and writes null to `out_build_error` if it
+///   is not null;
+/// - returns null when the configuration is rejected during building (for
+///   example, duplicate policy names or duplicate group ids); in that case, if
+///   `out_build_error` is not null, writes a caller-owned
+///   `OpenPitEngineBuildError` pointer that carries the machine-readable failure
+///   code and the offending value, and MUST be released with
+///   `openpit_destroy_engine_build_error`; `out_error` is left untouched for
+///   this domain failure.
 ///
 /// Ownership:
 /// - on success the returned engine pointer is owned by the caller and must be
-///   released with `openpit_destroy_engine`;
+///   released with `openpit_destroy_engine`; on success, null is written to
+///   `out_build_error` if it is not null;
 /// - the builder becomes consumed regardless of success and must not be reused.
 pub extern "C" fn openpit_engine_builder_build(
     builder: *mut OpenPitEngineBuilder,
+    out_build_error: *mut *mut OpenPitEngineBuildError,
     out_error: OpenPitOutError,
 ) -> *mut OpenPitEngine {
+    if !out_build_error.is_null() {
+        unsafe { *out_build_error = std::ptr::null_mut() };
+    }
+
     if builder.is_null() {
         write_error(out_error, "engine builder is null");
         return std::ptr::null_mut();
@@ -285,10 +360,76 @@ pub extern "C" fn openpit_engine_builder_build(
     match result {
         Ok(engine) => Box::into_raw(Box::new(OpenPitEngine { inner: engine })),
         Err(err) => {
-            write_error(out_error, &err.to_string());
+            if !out_build_error.is_null() {
+                unsafe {
+                    *out_build_error = Box::into_raw(Box::new(OpenPitEngineBuildError::new(err)))
+                };
+            }
             std::ptr::null_mut()
         }
     }
+}
+
+#[no_mangle]
+/// Releases a build-error object returned by engine construction.
+///
+/// Contract:
+/// - passing null is allowed;
+/// - this function always succeeds.
+pub extern "C" fn openpit_destroy_engine_build_error(build_error: *mut OpenPitEngineBuildError) {
+    if build_error.is_null() {
+        return;
+    }
+    unsafe { drop(Box::from_raw(build_error)) };
+}
+
+#[no_mangle]
+/// Returns the machine-readable failure category of a build error.
+///
+/// Contract:
+/// - `build_error` must be a valid non-null pointer;
+/// - this function never fails;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_engine_build_error_get_code(
+    build_error: *const OpenPitEngineBuildError,
+) -> OpenPitEngineBuildErrorCode {
+    assert!(!build_error.is_null(), "build error pointer is null");
+    unsafe { &*build_error }.code
+}
+
+#[no_mangle]
+/// Returns a non-owning view of the offending policy name from a build error.
+///
+/// Contract:
+/// - `build_error` must be a valid non-null pointer;
+/// - the returned view points into memory owned by `build_error` and is valid
+///   while `build_error` is alive; it must not be used after the build error is
+///   destroyed;
+/// - the view is empty unless the failure category is the duplicate-policy-name
+///   category;
+/// - this function never fails;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_engine_build_error_get_policy_name(
+    build_error: *const OpenPitEngineBuildError,
+) -> OpenPitStringView {
+    assert!(!build_error.is_null(), "build error pointer is null");
+    OpenPitStringView::from_utf8(unsafe { &*build_error }.policy_name.as_str())
+}
+
+#[no_mangle]
+/// Returns the offending policy group id from a build error.
+///
+/// Contract:
+/// - `build_error` must be a valid non-null pointer;
+/// - the value is zero unless the failure category is the
+///   duplicate-policy-group-id category;
+/// - this function never fails;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_engine_build_error_get_policy_group_id(
+    build_error: *const OpenPitEngineBuildError,
+) -> u16 {
+    assert!(!build_error.is_null(), "build error pointer is null");
+    unsafe { &*build_error }.policy_group_id
 }
 
 #[no_mangle]
@@ -330,7 +471,7 @@ pub extern "C" fn openpit_destroy_engine(engine: *mut OpenPitEngine) {
 /// - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to `out_rejects`
 ///   if it is not null;
 /// - the caller takes ownership and MUST release it with
-///   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the heap allocation made
+///   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the memory allocated
 ///   inside this call;
 /// - no thread-local state is involved, and the returned pointer is safe to
 ///   read on any thread;
@@ -413,7 +554,7 @@ pub extern "C" fn openpit_engine_start_pre_trade(
 /// - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
 ///   `out_rejects` if it is not null;
 /// - the caller takes ownership and MUST release it with
-///   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the heap allocation made
+///   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the memory allocated
 ///   inside this call;
 /// - no thread-local state is involved, and the returned pointer is safe to
 ///   read on any thread;
@@ -494,7 +635,7 @@ pub extern "C" fn openpit_engine_execute_pre_trade(
 /// - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
 ///   `out_rejects` if it is not null;
 /// - the caller takes ownership and MUST release it with
-///   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the heap allocation made
+///   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the memory allocated
 ///   inside this call;
 /// - no thread-local state is involved, and the returned pointer is safe to
 ///   read on any thread;
@@ -608,9 +749,33 @@ pub extern "C" fn openpit_pretrade_pre_trade_reservation_rollback(
 /// - the returned snapshot is detached from the reservation state.
 pub extern "C" fn openpit_pretrade_pre_trade_reservation_get_lock(
     reservation: *const OpenPitPretradePreTradeReservation,
-) -> OpenPitPretradePreTradeLock {
+) -> *mut OpenPitPretradePreTradeLock {
     assert!(!reservation.is_null());
     export_pre_trade_lock(unsafe { &*reservation }.inner.lock())
+}
+
+#[no_mangle]
+/// Returns the account-adjustment outcomes collected by the reservation.
+///
+/// Contract:
+/// - `reservation` must be a valid non-null pointer;
+/// - violating the pointer contract aborts the call;
+/// - this function never fails;
+/// - always returns a caller-owned `OpenPitAccountAdjustmentOutcomeList`
+///   (possibly empty); release it with
+///   `openpit_destroy_account_adjustment_outcome_list`.
+///
+/// Lifetime contract:
+/// - the returned list is detached from the reservation state.
+pub extern "C" fn openpit_pretrade_pre_trade_reservation_get_account_adjustments(
+    reservation: *const OpenPitPretradePreTradeReservation,
+) -> *mut OpenPitAccountAdjustmentOutcomeList {
+    assert!(!reservation.is_null());
+    let outcomes = unsafe { &*reservation }
+        .inner
+        .account_adjustments()
+        .to_vec();
+    Box::into_raw(Box::new(outcomes_to_list_owned(outcomes)))
 }
 
 #[no_mangle]
@@ -643,6 +808,11 @@ pub extern "C" fn openpit_destroy_pretrade_pre_trade_reservation(
 ///   state, writes a caller-owned `OpenPitPretradeAccountBlockList` pointer;
 ///   release it with `openpit_pretrade_destroy_account_block_list`;
 /// - if `out_blocks` is not null and no policy blocked, writes null.
+/// - if `out_adjustments` is not null and at least one policy produced an
+///   account-adjustment outcome, writes a caller-owned
+///   `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
+///   `openpit_destroy_account_adjustment_outcome_list`;
+/// - if `out_adjustments` is not null and no outcome was produced, writes null.
 ///
 /// Error:
 /// - returns `false` when input pointers are invalid or the report payload
@@ -658,6 +828,7 @@ pub extern "C" fn openpit_engine_apply_execution_report(
     engine: *mut OpenPitEngine,
     report: *const OpenPitExecutionReport,
     out_blocks: *mut *mut OpenPitPretradeAccountBlockList,
+    out_adjustments: *mut *mut OpenPitAccountAdjustmentOutcomeList,
     out_error: OpenPitOutError,
 ) -> bool {
     if engine.is_null() {
@@ -685,6 +856,15 @@ pub extern "C" fn openpit_engine_apply_execution_report(
             unsafe { *out_blocks = Box::into_raw(Box::new(list)) };
         } else {
             unsafe { *out_blocks = std::ptr::null_mut() };
+        }
+    }
+
+    if !out_adjustments.is_null() {
+        if !result.account_adjustments.is_empty() {
+            let list = outcomes_to_list_owned(result.account_adjustments);
+            unsafe { *out_adjustments = Box::into_raw(Box::new(list)) };
+        } else {
+            unsafe { *out_adjustments = std::ptr::null_mut() };
         }
     }
 
@@ -754,6 +934,11 @@ pub extern "C" fn openpit_account_adjustment_batch_error_get_rejects(
 ///
 /// Result handling:
 /// - `Applied` means there is no reject object to clean up;
+/// - on `Applied`, if `out_outcomes` is not null and at least one policy
+///   produced an account-adjustment outcome, writes a caller-owned
+///   `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
+///   `openpit_destroy_account_adjustment_outcome_list`; if no outcome was
+///   produced, writes null;
 /// - `Rejected` stores batch error details in `out_reject`, the caller must
 ///   release a returned object with `openpit_destroy_account_adjustment_batch_error`;
 /// - rejects returned by `openpit_account_adjustment_batch_error_get_rejects`
@@ -773,6 +958,7 @@ pub extern "C" fn openpit_engine_apply_account_adjustment(
     adjustments: *const OpenPitAccountAdjustment,
     adjustments_len: usize,
     out_reject: *mut *mut OpenPitAccountAdjustmentBatchError,
+    out_outcomes: *mut *mut OpenPitAccountAdjustmentOutcomeList,
     out_error: OpenPitOutError,
 ) -> OpenPitAccountAdjustmentApplyStatus {
     if engine.is_null() {
@@ -806,7 +992,17 @@ pub extern "C" fn openpit_engine_apply_account_adjustment(
         .inner
         .apply_account_adjustment(AccountId::from_u64(account_id), &adjustments)
     {
-        Ok(()) => OpenPitAccountAdjustmentApplyStatus::Applied,
+        Ok(batch) => {
+            if !out_outcomes.is_null() {
+                if !batch.outcomes.is_empty() {
+                    let list = outcomes_to_list_owned(batch.outcomes);
+                    unsafe { *out_outcomes = Box::into_raw(Box::new(list)) };
+                } else {
+                    unsafe { *out_outcomes = std::ptr::null_mut() };
+                }
+            }
+            OpenPitAccountAdjustmentApplyStatus::Applied
+        }
         Err(err) => {
             if !out_reject.is_null() {
                 unsafe {
@@ -816,6 +1012,332 @@ pub extern "C" fn openpit_engine_apply_account_adjustment(
             }
             OpenPitAccountAdjustmentApplyStatus::Rejected
         }
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+
+/// Structured error returned by account-group registry operations.
+///
+/// Ownership:
+/// - created by `openpit_engine_register_account_group` and
+///   `openpit_engine_unregister_account_group` on failure;
+/// - owned by the caller;
+/// - released with `openpit_destroy_account_group_error`.
+pub struct OpenPitAccountGroupError {
+    /// Human-readable error message.
+    message: String,
+    /// Offending account identifier.
+    account: openpit::param::AccountId,
+    /// Existing group of the offending account, or `u32::MAX` when absent.
+    current_group: u32,
+    /// Whether `current_group` is present.
+    current_group_is_set: bool,
+}
+
+impl OpenPitAccountGroupError {
+    fn new(err: openpit::AccountGroupError) -> Self {
+        match &err {
+            openpit::AccountGroupError::AlreadyRegistered {
+                account,
+                current_group,
+            } => Self {
+                message: err.to_string(),
+                account: *account,
+                current_group: current_group.as_u32(),
+                current_group_is_set: true,
+            },
+            openpit::AccountGroupError::NotInGroup {
+                account,
+                current_group,
+                ..
+            } => Self {
+                message: err.to_string(),
+                account: *account,
+                current_group: current_group.map(|g| g.as_u32()).unwrap_or(0),
+                current_group_is_set: current_group.is_some(),
+            },
+            _ => Self {
+                message: err.to_string(),
+                account: openpit::param::AccountId::from_u64(0),
+                current_group: 0,
+                current_group_is_set: false,
+            },
+        }
+    }
+}
+
+#[no_mangle]
+/// Releases a caller-owned account-group error.
+///
+/// Contract:
+/// - call exactly once per pointer returned by a registry function;
+/// - passing null is allowed and has no effect.
+pub extern "C" fn openpit_destroy_account_group_error(err: *mut OpenPitAccountGroupError) {
+    if err.is_null() {
+        return;
+    }
+    unsafe { drop(Box::from_raw(err)) };
+}
+
+#[no_mangle]
+/// Returns the human-readable error message from an account-group error.
+///
+/// Contract:
+/// - `err` must be a valid non-null pointer;
+/// - the returned view borrows from the error object and is valid while the
+///   error is alive;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_account_group_error_get_message(
+    err: *const OpenPitAccountGroupError,
+) -> crate::OpenPitStringView {
+    assert!(!err.is_null(), "account group error pointer is null");
+    crate::OpenPitStringView::from_utf8(unsafe { &(*err).message })
+}
+
+#[no_mangle]
+/// Returns the offending account identifier from an account-group error.
+///
+/// Contract:
+/// - `err` must be a valid non-null pointer;
+/// - this function never fails;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_account_group_error_get_account(
+    err: *const OpenPitAccountGroupError,
+) -> crate::param::OpenPitParamAccountId {
+    assert!(!err.is_null(), "account group error pointer is null");
+    unsafe { (*err).account.as_u64() }
+}
+
+#[no_mangle]
+/// Returns the current group of the offending account from an account-group
+/// error, or writes zero and returns `false` when no group is present.
+///
+/// Contract:
+/// - `err` must be a valid non-null pointer;
+/// - `out_group` must be a valid non-null pointer;
+/// - returns `true` when the account belongs to a group and writes that group
+///   to `out_group`;
+/// - returns `false` when the account belongs to no group; `out_group` is
+///   written to only when the return value is `true`;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_account_group_error_get_current_group(
+    err: *const OpenPitAccountGroupError,
+    out_group: *mut crate::account_group_id::OpenPitParamAccountGroupId,
+) -> bool {
+    assert!(!err.is_null(), "account group error pointer is null");
+    assert!(!out_group.is_null(), "out_group pointer is null");
+    let err = unsafe { &*err };
+    if err.current_group_is_set {
+        unsafe { *out_group = err.current_group };
+        true
+    } else {
+        false
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+
+#[no_mangle]
+/// Atomically registers every account in `accounts` into `group`.
+///
+/// The operation is all-or-nothing: if any listed account is already a member
+/// of any group (including `group`), no account is registered.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer;
+/// - `accounts` must point to an array of at least `accounts_len` account
+///   identifiers, or may be null when `accounts_len` is zero;
+/// - `group` is the target group and must not be the reserved
+///   `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
+///
+/// Success:
+/// - returns `true`; all listed accounts are now members of `group`.
+///
+/// Error:
+/// - returns `false` when `engine` is null, `accounts` is null with non-zero
+///   length, `group` is the reserved default group, or any listed account is
+///   already registered;
+/// - for pointer/argument errors, if `out_error` is not null, writes a
+///   caller-owned `OpenPitSharedString` error handle that MUST be released
+///   with `openpit_destroy_shared_string`;
+/// - for domain errors (reserved target group, or account already
+///   registered), if `out_group_error` is not null, writes a caller-owned
+///   `OpenPitAccountGroupError` pointer that MUST be released with
+///   `openpit_destroy_account_group_error`; `out_error` is left untouched for
+///   domain failures.
+pub extern "C" fn openpit_engine_register_account_group(
+    engine: *mut OpenPitEngine,
+    accounts: *const crate::param::OpenPitParamAccountId,
+    accounts_len: usize,
+    group: crate::account_group_id::OpenPitParamAccountGroupId,
+    out_group_error: *mut *mut OpenPitAccountGroupError,
+    out_error: OpenPitOutError,
+) -> bool {
+    if !out_group_error.is_null() {
+        unsafe { *out_group_error = std::ptr::null_mut() };
+    }
+    if engine.is_null() {
+        write_error(out_error, "engine is null");
+        return false;
+    }
+    if accounts_len > 0 && accounts.is_null() {
+        write_error(out_error, "accounts is null");
+        return false;
+    }
+    let account_ids: Vec<openpit::param::AccountId> = if accounts_len == 0 {
+        vec![]
+    } else {
+        unsafe { std::slice::from_raw_parts(accounts, accounts_len) }
+            .iter()
+            .map(|&id| openpit::param::AccountId::from_u64(id))
+            .collect()
+    };
+    let group = match openpit::param::AccountGroupId::from_u32(group) {
+        Ok(group) => group,
+        Err(_) => {
+            if !out_group_error.is_null() {
+                unsafe {
+                    *out_group_error = Box::into_raw(Box::new(OpenPitAccountGroupError::new(
+                        openpit::AccountGroupError::ReservedGroup,
+                    )))
+                };
+            }
+            return false;
+        }
+    };
+    match unsafe { &*engine }
+        .inner
+        .accounts()
+        .register_group(&account_ids, group)
+    {
+        Ok(()) => true,
+        Err(err) => {
+            if !out_group_error.is_null() {
+                unsafe {
+                    *out_group_error = Box::into_raw(Box::new(OpenPitAccountGroupError::new(err)))
+                };
+            }
+            false
+        }
+    }
+}
+
+#[no_mangle]
+/// Atomically removes every account in `accounts` from `group`.
+///
+/// The operation is all-or-nothing: if any listed account is not currently a
+/// member of `group`, no account is removed.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer;
+/// - `accounts` must point to an array of at least `accounts_len` account
+///   identifiers, or may be null when `accounts_len` is zero;
+/// - `group` is the group to remove accounts from and must not be the reserved
+///   `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
+///
+/// Success:
+/// - returns `true`; all listed accounts are now removed from `group`.
+///
+/// Error:
+/// - returns `false` when `engine` is null, `accounts` is null with non-zero
+///   length, `group` is the reserved default group, or any listed account is
+///   not in `group`;
+/// - for pointer/argument errors, if `out_error` is not null, writes a
+///   caller-owned `OpenPitSharedString` error handle that MUST be released
+///   with `openpit_destroy_shared_string`;
+/// - for domain errors (reserved target group, or account not in group), if
+///   `out_group_error` is not null, writes a caller-owned
+///   `OpenPitAccountGroupError` pointer that MUST be released with
+///   `openpit_destroy_account_group_error`; `out_error` is left untouched for
+///   domain failures.
+pub extern "C" fn openpit_engine_unregister_account_group(
+    engine: *mut OpenPitEngine,
+    accounts: *const crate::param::OpenPitParamAccountId,
+    accounts_len: usize,
+    group: crate::account_group_id::OpenPitParamAccountGroupId,
+    out_group_error: *mut *mut OpenPitAccountGroupError,
+    out_error: OpenPitOutError,
+) -> bool {
+    if !out_group_error.is_null() {
+        unsafe { *out_group_error = std::ptr::null_mut() };
+    }
+    if engine.is_null() {
+        write_error(out_error, "engine is null");
+        return false;
+    }
+    if accounts_len > 0 && accounts.is_null() {
+        write_error(out_error, "accounts is null");
+        return false;
+    }
+    let account_ids: Vec<openpit::param::AccountId> = if accounts_len == 0 {
+        vec![]
+    } else {
+        unsafe { std::slice::from_raw_parts(accounts, accounts_len) }
+            .iter()
+            .map(|&id| openpit::param::AccountId::from_u64(id))
+            .collect()
+    };
+    let group = match openpit::param::AccountGroupId::from_u32(group) {
+        Ok(group) => group,
+        Err(_) => {
+            if !out_group_error.is_null() {
+                unsafe {
+                    *out_group_error = Box::into_raw(Box::new(OpenPitAccountGroupError::new(
+                        openpit::AccountGroupError::ReservedGroup,
+                    )))
+                };
+            }
+            return false;
+        }
+    };
+    match unsafe { &*engine }
+        .inner
+        .accounts()
+        .unregister_group(&account_ids, group)
+    {
+        Ok(()) => true,
+        Err(err) => {
+            if !out_group_error.is_null() {
+                unsafe {
+                    *out_group_error = Box::into_raw(Box::new(OpenPitAccountGroupError::new(err)))
+                };
+            }
+            false
+        }
+    }
+}
+
+#[no_mangle]
+/// Returns the account-group membership of a single account.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer;
+/// - `account` is the account identifier to look up;
+/// - `out_group` must be a valid non-null pointer.
+///
+/// Success:
+/// - returns `true` when the account belongs to a group and writes that group
+///   identifier to `out_group`;
+/// - returns `false` when the account belongs to no group; `out_group` is not
+///   written to when the return value is `false`.
+///
+/// Error:
+/// - aborts the call when `engine` or `out_group` is null.
+pub extern "C" fn openpit_engine_account_group(
+    engine: *const OpenPitEngine,
+    account: crate::param::OpenPitParamAccountId,
+    out_group: *mut crate::account_group_id::OpenPitParamAccountGroupId,
+) -> bool {
+    assert!(!engine.is_null(), "engine is null");
+    assert!(!out_group.is_null(), "out_group is null");
+    let account = openpit::param::AccountId::from_u64(account);
+    match unsafe { &*engine }.inner.accounts().group_of(account) {
+        Some(group) => {
+            unsafe { *out_group = group.as_u32() };
+            true
+        }
+        None => false,
     }
 }
 
@@ -854,14 +1376,16 @@ mod tests {
         openpit_account_adjustment_batch_error_get_failed_adjustment_index,
         openpit_account_adjustment_batch_error_get_rejects, openpit_create_engine_builder,
         openpit_destroy_account_adjustment_batch_error, openpit_destroy_engine,
-        openpit_destroy_engine_builder, openpit_destroy_pretrade_pre_trade_request,
-        openpit_destroy_pretrade_pre_trade_reservation, openpit_engine_apply_account_adjustment,
-        openpit_engine_apply_execution_report, openpit_engine_builder_build,
+        openpit_destroy_engine_build_error, openpit_destroy_engine_builder,
+        openpit_destroy_pretrade_pre_trade_request, openpit_destroy_pretrade_pre_trade_reservation,
+        openpit_engine_apply_account_adjustment, openpit_engine_apply_execution_report,
+        openpit_engine_build_error_get_code, openpit_engine_build_error_get_policy_group_id,
+        openpit_engine_build_error_get_policy_name, openpit_engine_builder_build,
         openpit_engine_execute_pre_trade, openpit_engine_start_pre_trade,
         openpit_pretrade_pre_trade_request_execute, openpit_pretrade_pre_trade_reservation_commit,
         openpit_pretrade_pre_trade_reservation_get_lock,
         openpit_pretrade_pre_trade_reservation_rollback, OpenPitAccountAdjustmentBatchError,
-        OpenPitPretradePreTradeLock,
+        OpenPitEngineBuildError, OpenPitEngineBuildErrorCode,
     };
 
     struct AlwaysRejectStart;
@@ -871,6 +1395,7 @@ mod tests {
             crate::order::Order,
             crate::execution_report::ExecutionReport,
             crate::account_adjustment::AccountAdjustment,
+            openpit_interop::EngineLocking,
         > for AlwaysRejectStart
     {
         fn name(&self) -> &str {
@@ -879,7 +1404,7 @@ mod tests {
 
         fn check_pre_trade_start(
             &self,
-            _ctx: &openpit::pretrade::PreTradeContext,
+            _ctx: &openpit::pretrade::PreTradeContext<openpit_interop::StorageLockingPolicyFactory>,
             _order: &crate::order::Order,
         ) -> Result<(), Rejects> {
             Err(Rejects::from(Reject::new(
@@ -890,13 +1415,6 @@ mod tests {
                 "for coverage",
             )))
         }
-
-        fn apply_execution_report(
-            &self,
-            _report: &crate::execution_report::ExecutionReport,
-        ) -> Vec<openpit::pretrade::AccountBlock> {
-            vec![]
-        }
     }
 
     unsafe extern "C" fn always_reject_apply(
@@ -904,6 +1422,7 @@ mod tests {
         _account_id: crate::param::OpenPitParamAccountId,
         _adjustment: *const OpenPitAccountAdjustment,
         _mutations: *mut crate::policy::OpenPitMutations,
+        _out_outcomes: *mut crate::account_outcome::OpenPitAccountOutcomeEntryList,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList {
         let rejects = openpit_pretrade_create_reject_list(1);
@@ -953,6 +1472,7 @@ mod tests {
         _ctx: *const crate::policy::OpenPitPretradeContext,
         _order: *const crate::order::OpenPitOrder,
         _mutations: *mut crate::policy::OpenPitMutations,
+        _out_result: *mut crate::account_outcome::OpenPitPretradePreTradeResult,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList {
         let rejects = openpit_pretrade_create_reject_list(1);
@@ -969,7 +1489,9 @@ mod tests {
     }
 
     unsafe extern "C" fn null_apply_report(
+        _ctx: *const crate::policy::custom::OpenPitPostTradeContext,
         _report: *const crate::execution_report::OpenPitExecutionReport,
+        _out_adjustments: *mut crate::account_outcome::OpenPitPostTradeAdjustmentList,
         _user_data: *mut c_void,
     ) -> *mut crate::reject::OpenPitPretradeAccountBlockList {
         std::ptr::null_mut()
@@ -988,6 +1510,7 @@ mod tests {
         unsafe {
             openpit_create_pretrade_custom_pre_trade_policy(
                 name,
+                0,
                 Some(check_fn),
                 None,
                 Some(apply_execution_report_fn),
@@ -1009,6 +1532,7 @@ mod tests {
         unsafe {
             openpit_create_pretrade_custom_pre_trade_policy(
                 name,
+                0,
                 None,
                 None,
                 None,
@@ -1037,7 +1561,8 @@ mod tests {
         let ok = openpit_engine_builder_add_pre_trade_policy(builder, policy, std::ptr::null_mut());
         assert!(ok, "failed to add policy");
         openpit_destroy_pretrade_pre_trade_policy(policy);
-        let engine = openpit_engine_builder_build(builder, std::ptr::null_mut());
+        let engine =
+            openpit_engine_builder_build(builder, std::ptr::null_mut(), std::ptr::null_mut());
         assert!(!engine.is_null(), "engine build failed");
         engine
     }
@@ -1049,6 +1574,7 @@ mod tests {
         let policy = unsafe {
             crate::policy::openpit_create_pretrade_custom_pre_trade_policy(
                 name,
+                0,
                 None,
                 Some(always_reject_pre_trade),
                 Some(null_apply_report),
@@ -1066,7 +1592,8 @@ mod tests {
         );
         assert!(ok, "failed to add policy");
         crate::policy::openpit_destroy_pretrade_pre_trade_policy(policy);
-        let engine = openpit_engine_builder_build(builder, std::ptr::null_mut());
+        let engine =
+            openpit_engine_builder_build(builder, std::ptr::null_mut(), std::ptr::null_mut());
         assert!(!engine.is_null(), "engine build failed");
         engine
     }
@@ -1089,7 +1616,8 @@ mod tests {
         let ok = openpit_engine_builder_add_pre_trade_policy(builder, policy, std::ptr::null_mut());
         assert!(ok, "failed to add policy");
         openpit_destroy_pretrade_pre_trade_policy(policy);
-        let engine = openpit_engine_builder_build(builder, std::ptr::null_mut());
+        let engine =
+            openpit_engine_builder_build(builder, std::ptr::null_mut(), std::ptr::null_mut());
         assert!(!engine.is_null(), "engine build failed");
         engine
     }
@@ -1112,7 +1640,8 @@ mod tests {
         let ok = openpit_engine_builder_add_pre_trade_policy(builder, policy, std::ptr::null_mut());
         assert!(ok, "failed to add policy");
         openpit_destroy_pretrade_pre_trade_policy(policy);
-        let engine = openpit_engine_builder_build(builder, std::ptr::null_mut());
+        let engine =
+            openpit_engine_builder_build(builder, std::ptr::null_mut(), std::ptr::null_mut());
         assert!(!engine.is_null(), "engine build failed");
         engine
     }
@@ -1137,7 +1666,8 @@ mod tests {
             "failed to add passthrough policy"
         );
         openpit_destroy_pretrade_pre_trade_policy(policy);
-        let engine = openpit_engine_builder_build(builder, std::ptr::null_mut());
+        let engine =
+            openpit_engine_builder_build(builder, std::ptr::null_mut(), std::ptr::null_mut());
         assert!(!engine.is_null(), "engine build failed");
         engine
     }
@@ -1183,8 +1713,8 @@ mod tests {
     #[test]
     fn create_engine_builder_accepts_valid_sync_policies() {
         for byte in [
+            OpenPitSyncPolicy::None as u8,
             OpenPitSyncPolicy::Full as u8,
-            OpenPitSyncPolicy::Local as u8,
             OpenPitSyncPolicy::Account as u8,
         ] {
             let mut error: *mut crate::string::OpenPitSharedString = std::ptr::null_mut();
@@ -1197,7 +1727,11 @@ mod tests {
 
     #[test]
     fn engine_builder_build_reports_null_consumed_and_validation_errors() {
-        let engine = openpit_engine_builder_build(std::ptr::null_mut(), std::ptr::null_mut());
+        let engine = openpit_engine_builder_build(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
         assert!(engine.is_null());
 
         let builder =
@@ -1219,10 +1753,12 @@ mod tests {
             std::ptr::null_mut()
         ));
         openpit_destroy_pretrade_pre_trade_policy(pass_policy);
-        let built = openpit_engine_builder_build(builder, std::ptr::null_mut());
+        let built =
+            openpit_engine_builder_build(builder, std::ptr::null_mut(), std::ptr::null_mut());
         assert!(!built.is_null());
         openpit_destroy_engine(built);
-        let consumed = openpit_engine_builder_build(builder, std::ptr::null_mut());
+        let consumed =
+            openpit_engine_builder_build(builder, std::ptr::null_mut(), std::ptr::null_mut());
         assert!(consumed.is_null());
         openpit_destroy_engine_builder(builder);
 
@@ -1263,8 +1799,25 @@ mod tests {
         openpit_destroy_pretrade_pre_trade_policy(first);
         openpit_destroy_pretrade_pre_trade_policy(second);
 
-        let invalid = openpit_engine_builder_build(dup_builder, std::ptr::null_mut());
+        let mut build_error: *mut OpenPitEngineBuildError = std::ptr::null_mut();
+        let invalid =
+            openpit_engine_builder_build(dup_builder, &mut build_error, std::ptr::null_mut());
         assert!(invalid.is_null());
+        assert!(!build_error.is_null());
+        assert_eq!(
+            openpit_engine_build_error_get_code(build_error),
+            OpenPitEngineBuildErrorCode::DuplicatePolicyName
+        );
+        assert_eq!(
+            string_view_to_string(openpit_engine_build_error_get_policy_name(build_error)),
+            "dup.start"
+        );
+        assert_eq!(
+            openpit_engine_build_error_get_policy_group_id(build_error),
+            0
+        );
+        openpit_destroy_engine_build_error(build_error);
+        openpit_destroy_engine_build_error(std::ptr::null_mut());
         openpit_destroy_engine_builder(dup_builder);
     }
 
@@ -1289,7 +1842,8 @@ mod tests {
             std::ptr::null_mut()
         ));
         openpit_destroy_pretrade_pre_trade_policy(pass_policy);
-        let engine = openpit_engine_builder_build(builder, std::ptr::null_mut());
+        let engine =
+            openpit_engine_builder_build(builder, std::ptr::null_mut(), std::ptr::null_mut());
         assert!(!engine.is_null());
         openpit_destroy_engine(engine);
 
@@ -1554,6 +2108,7 @@ mod tests {
             0,
             &mut out_reject,
             std::ptr::null_mut(),
+            std::ptr::null_mut(),
         );
 
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Applied);
@@ -1573,6 +2128,7 @@ mod tests {
             1,
             &mut out_reject,
             std::ptr::null_mut(),
+            std::ptr::null_mut(),
         );
 
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Error);
@@ -1584,18 +2140,21 @@ mod tests {
     fn apply_account_adjustment_reports_import_error_for_incomplete_payload() {
         let engine = build_passthrough_engine();
 
+        // A half-set instrument (one asset provided, the other absent) is
+        // rejected at import time — "both or neither" is the rule.
         let invalid = crate::account_adjustment::OpenPitAccountAdjustment {
-            balance_operation:
-                crate::account_adjustment::OpenPitAccountAdjustmentBalanceOperationOptional::default(
-                ),
-            position_operation:
-                crate::account_adjustment::OpenPitAccountAdjustmentPositionOperationOptional {
-                    value: crate::account_adjustment::OpenPitAccountAdjustmentPositionOperation {
-                        mode: crate::param::OpenPitParamPositionMode::Hedged,
-                        ..Default::default()
+            operation: crate::account_adjustment::OpenPitAccountAdjustmentOperation {
+                kind: crate::account_adjustment::OpenPitAccountAdjustmentOperationKind::Position,
+                position: crate::account_adjustment::OpenPitAccountAdjustmentPositionOperation {
+                    instrument: crate::instrument::OpenPitInstrument {
+                        underlying_asset: OpenPitStringView::from_utf8("SPX"),
+                        settlement_asset: OpenPitStringView::not_set(),
                     },
-                    is_set: true,
+                    mode: crate::param::OpenPitParamPositionMode::Hedged,
+                    ..Default::default()
                 },
+                ..Default::default()
+            },
             amount: crate::account_adjustment::OpenPitAccountAdjustmentAmountOptional::default(),
             bounds: crate::account_adjustment::OpenPitAccountAdjustmentBoundsOptional::default(),
             user_data: std::ptr::null_mut(),
@@ -1608,6 +2167,7 @@ mod tests {
             batch.as_ptr(),
             batch.len(),
             &mut out_reject,
+            std::ptr::null_mut(),
             std::ptr::null_mut(),
         );
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Error);
@@ -1624,14 +2184,20 @@ mod tests {
             0,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
+            std::ptr::null_mut(),
         );
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Error);
     }
 
     #[test]
-    fn lock_snapshot_defaults_to_absent_price() {
-        let detached = OpenPitPretradePreTradeLock::default();
-        assert!(!detached.price.is_set);
+    fn lock_create_is_empty_handle() {
+        let detached = crate::pre_trade_lock::openpit_create_pretrade_pre_trade_lock();
+        assert!(!detached.is_null());
+        assert_eq!(
+            crate::pre_trade_lock::openpit_pretrade_pre_trade_lock_len(detached),
+            0
+        );
+        crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(detached);
     }
 
     #[test]
@@ -1652,11 +2218,21 @@ mod tests {
         assert!(out_rejects.is_null());
 
         let lock = openpit_pretrade_pre_trade_reservation_get_lock(out_reservation);
-        assert!(!lock.price.is_set);
+        assert!(!lock.is_null());
+        assert_eq!(
+            crate::pre_trade_lock::openpit_pretrade_pre_trade_lock_len(lock),
+            0
+        );
+        crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(lock);
 
         openpit_pretrade_pre_trade_reservation_commit(out_reservation);
         let committed_lock = openpit_pretrade_pre_trade_reservation_get_lock(out_reservation);
-        assert!(!committed_lock.price.is_set);
+        assert!(!committed_lock.is_null());
+        assert_eq!(
+            crate::pre_trade_lock::openpit_pretrade_pre_trade_lock_len(committed_lock),
+            0
+        );
+        crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(committed_lock);
 
         openpit_destroy_pretrade_pre_trade_reservation(out_reservation);
         openpit_destroy_engine(engine);
@@ -1676,6 +2252,7 @@ mod tests {
             batch.as_ptr(),
             1,
             &mut out_reject,
+            std::ptr::null_mut(),
             std::ptr::null_mut(),
         );
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Rejected);
@@ -1714,6 +2291,7 @@ mod tests {
             batch.as_ptr(),
             1,
             &mut out_reject,
+            std::ptr::null_mut(),
             std::ptr::null_mut(),
         );
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Rejected);
@@ -1763,6 +2341,7 @@ mod tests {
             1,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
+            std::ptr::null_mut(),
         );
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Rejected);
 
@@ -1779,6 +2358,7 @@ mod tests {
             std::ptr::null(),
             1,
             &mut out_reject,
+            std::ptr::null_mut(),
             std::ptr::null_mut(),
         );
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Error);
@@ -1854,6 +2434,7 @@ mod tests {
             &report,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
+            std::ptr::null_mut(),
         );
         assert!(ok);
 
@@ -1867,6 +2448,7 @@ mod tests {
             std::ptr::null(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
+            std::ptr::null_mut(),
         ));
 
         let engine = build_passthrough_engine();
@@ -1874,6 +2456,7 @@ mod tests {
         assert!(!openpit_engine_apply_execution_report(
             engine,
             std::ptr::null(),
+            std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
         ));
@@ -1899,6 +2482,7 @@ mod tests {
             &invalid,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
+            std::ptr::null_mut(),
         ));
         openpit_destroy_engine(engine);
 
@@ -1907,6 +2491,7 @@ mod tests {
         assert!(openpit_engine_apply_execution_report(
             callback_engine,
             &report,
+            std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
         ));
@@ -1945,7 +2530,9 @@ mod tests {
             crate::execution_report::ExecutionReport,
             crate::account_adjustment::AccountAdjustment,
         >::new()
-        .no_sync()
+        .sync(openpit_interop::EngineLocking::new(
+            openpit_interop::SyncMode::None,
+        ))
         .pre_trade(AlwaysRejectStart)
         .build()
         .expect("engine");

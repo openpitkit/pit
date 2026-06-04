@@ -42,30 +42,6 @@ type accountAdjustmentFixture struct {
 	incomingLower  param.PositionSize
 }
 
-func TestAccountAdjustmentValuesCheck(t *testing.T) {
-	fixture := newAccountAdjustmentFixture(t)
-
-	balance := NewAccountAdjustmentBalanceOperationFromValues(
-		AccountAdjustmentBalanceOperationValues{
-			Asset:             optional.Some(fixture.asset),
-			AverageEntryPrice: optional.Some(fixture.averagePrice),
-		},
-	)
-	position := NewAccountAdjustmentPositionOperationFromValues(
-		AccountAdjustmentPositionOperationValues{
-			Instrument: optional.Some(fixture.instrument),
-		},
-	)
-
-	err := (AccountAdjustmentValues{
-		BalanceOperation:  optional.Some(balance),
-		PositionOperation: optional.Some(position),
-	}).Check()
-	if err == nil {
-		t.Fatal("AccountAdjustmentValues.Check() error = nil, want non-nil")
-	}
-}
-
 func TestAccountAdjustmentLifecycle(t *testing.T) {
 	fixture := newAccountAdjustmentFixture(t)
 	values := accountAdjustmentValuesFromFixture(fixture)
@@ -100,10 +76,12 @@ func TestAccountAdjustmentLifecycle(t *testing.T) {
 	assertAccountAdjustmentUnset(t, fromValues)
 }
 
-func TestAccountAdjustmentSetValuesRejectsConflictingOperations(t *testing.T) {
+func TestAccountAdjustmentSetValuesOperationsAreMutuallyExclusive(t *testing.T) {
 	fixture := newAccountAdjustmentFixture(t)
 	adjustment := NewAccountAdjustment()
 
+	// The discriminated operation makes a conflicting balance/position pair
+	// structurally impossible: applying both leaves only the last one set.
 	err := adjustment.SetValues(
 		AccountAdjustmentValues{
 			BalanceOperation: optional.Some(
@@ -122,9 +100,19 @@ func TestAccountAdjustmentSetValuesRejectsConflictingOperations(t *testing.T) {
 			),
 		},
 	)
-	if err == nil {
-		t.Fatal("AccountAdjustment.SetValues() error = nil, want non-nil")
+	if err != nil {
+		t.Fatalf("AccountAdjustment.SetValues() error = %v", err)
 	}
+	assertAccountAdjustmentBalanceOperationOptionUnset(t, adjustment.BalanceOperation())
+	assertAccountAdjustmentPositionOperationOptionEqual(
+		t,
+		adjustment.PositionOperation(),
+		NewAccountAdjustmentPositionOperationFromValues(
+			AccountAdjustmentPositionOperationValues{
+				Instrument: optional.Some(fixture.instrument),
+			},
+		),
+	)
 }
 
 func TestAccountAdjustmentOperationSwitching(t *testing.T) {
@@ -380,7 +368,7 @@ func newAccountAdjustmentFixture(t *testing.T) accountAdjustmentFixture {
 		instrument:     param.NewInstrument(mustModelAsset(t, "AAPL"), mustModelAsset(t, "USD")),
 		averagePrice:   averagePrice,
 		altPrice:       altPrice,
-		leverage:       param.NewLeverageFromInt(5),
+		leverage:       param.NewLeverageFromUint16(5),
 		mode:           param.PositionModeHedged,
 		deltaAmount:    param.NewDeltaAdjustmentAmount(balanceUpper),
 		absoluteAmount: param.NewAbsoluteAdjustmentAmount(balanceLower),

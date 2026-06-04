@@ -19,9 +19,9 @@ use std::time::Duration;
 
 use openpit::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume};
 use openpit::pretrade::policies::{
-    OrderSizeAssetBarrier, OrderSizeLimit, OrderSizeLimitPolicy, OrderValidationPolicy,
-    PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy, RateLimit, RateLimitBrokerBarrier,
-    RateLimitPolicy,
+    OrderSizeAssetBarrier, OrderSizeBrokerBarrier, OrderSizeLimit, OrderSizeLimitPolicy,
+    OrderValidationPolicy, PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy, RateLimit,
+    RateLimitBrokerBarrier, RateLimitPolicy,
 };
 use openpit::{Engine, Instrument};
 use openpit::{
@@ -36,7 +36,7 @@ use openpit::{
 
 #[test]
 fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
-    // Source: crates/openpit/README.md — Usage
+    // Source: crates/openpit/README.md - Usage
     // Shared with: pit.wiki/Getting-Started.md
     // Keep README and wiki versions of this example in sync.
     let usd = Asset::new("USD")?;
@@ -70,7 +70,12 @@ fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let size_policy = OrderSizeLimitPolicy::new(
-        None,
+        Some(OrderSizeBrokerBarrier {
+            limit: OrderSizeLimit {
+                max_quantity: Quantity::from_str("500")?,
+                max_notional: Volume::from_str("100000")?,
+            },
+        }),
         [OrderSizeAssetBarrier {
             limit: OrderSizeLimit {
                 max_quantity: Quantity::from_str("500")?,

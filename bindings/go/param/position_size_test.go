@@ -83,9 +83,9 @@ func TestPositionSizeFromIntAndUint(t *testing.T) {
 		t.Run("int-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			value, err := NewPositionSizeFromInt(tt.input)
+			value, err := NewPositionSizeFromInt64(tt.input)
 			if err != nil {
-				t.Fatalf("NewPositionSizeFromInt(%d) error = %v", tt.input, err)
+				t.Fatalf("NewPositionSizeFromInt64(%d) error = %v", tt.input, err)
 			}
 			if got := value.String(); got != tt.want {
 				t.Fatalf("String() = %q, want %q", got, tt.want)
@@ -105,9 +105,9 @@ func TestPositionSizeFromIntAndUint(t *testing.T) {
 		t.Run("uint-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			value, err := NewPositionSizeFromUint(tt.input)
+			value, err := NewPositionSizeFromUint64(tt.input)
 			if err != nil {
-				t.Fatalf("NewPositionSizeFromUint(%d) error = %v", tt.input, err)
+				t.Fatalf("NewPositionSizeFromUint64(%d) error = %v", tt.input, err)
 			}
 			if got := value.String(); got != tt.want {
 				t.Fatalf("String() = %q, want %q", got, tt.want)

@@ -22,6 +22,7 @@ import traceback
 
 import _generate_api_c_dlsym as dlsym
 import _generate_api_c_h as header
+import _generate_api_c_sitemap as sitemap
 
 
 def main(*, dlsym_only: bool = False) -> None:
@@ -30,6 +31,7 @@ def main(*, dlsym_only: bool = False) -> None:
         return
 
     header.main()
+    sitemap.generate()
     dlsym.generate()
 
 

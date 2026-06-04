@@ -15,10 +15,13 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use openpit::marketdata::sealed::Sealed as MarketDataSealed;
+use openpit::marketdata::RuntimeLock;
 use openpit::storage::{FullLocking, IndexLocking, LockingPolicy, LockingPolicyFactory};
-use openpit::{AccountKey, AccountKeyConstraint};
+use openpit::{AccountKey, AccountKeyConstraint, MarketDataSync};
 
 // ─── Engine handle types ──────────────────────────────────────────────────────
 
@@ -61,7 +64,7 @@ impl<T: ?Sized> std::ops::Deref for EngineHandle<T> {
 //   observing `&EngineInner` concurrently see data-race-free state at
 //   runtime even though the Rust type system would conservatively reject
 //   `T: !Sync` shared across threads.
-// - Under `SyncMode::Local` and `SyncMode::Account`, the binding caller
+// - Under `SyncMode::None` and `SyncMode::Account`, the binding caller
 //   serialises per-handle invocation per the SDK threading contract
 //   documented in Threading-Contract.md and the `SyncMode` enum's variant
 //   docs. Only one binding thread observes `&EngineInner` at a time; no
@@ -103,6 +106,7 @@ unsafe impl<T: ?Sized + Send> Sync for EngineHandleWeak<T> {}
 /// `openpit::LocalSync`, `openpit::AccountSync`, or `openpit::FullSync`
 /// directly via `EngineBuilder::no_sync`, `EngineBuilder::full_sync`, or
 /// `EngineBuilder::account_sync`; this type is for the binding layer only.
+#[derive(Clone, Copy)]
 pub struct EngineLocking {
     pub(crate) mode: SyncMode,
 }
@@ -122,7 +126,8 @@ impl openpit::SyncMode for EngineLocking {
         Order: 'static,
         ExecutionReport: 'static,
         AccountAdjustment: 'static,
-    > = dyn openpit::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment> + Send;
+    > = dyn openpit::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
+        + Send;
 
     fn new_strong<T: 'static>(inner: T) -> Self::Strong<T> {
         EngineHandle(Arc::new(inner))
@@ -141,19 +146,54 @@ impl openpit::SyncMode for EngineLocking {
     }
 }
 
+// ─── MarketDataSync ────────────────────────────────────────────────────────────
+
+impl MarketDataSealed for EngineLocking {}
+
+// The market-data service handle is `EngineHandle<T>` (`Arc`-backed, claimed
+// `Send + Sync` under the binding threading contract) and the internal locks
+// are a runtime-branched `RuntimeLock<T>`: a genuine no-op in no-sync mode and
+// a real `parking_lot::RwLock` in `Full`/`Account` mode. This mirrors the
+// `StorageLockingPolicy` runtime dispatch and lets the bindings pick the mode
+// at runtime while the service stays `Send`, so it can be embedded in interop
+// pre-trade policies.
+impl MarketDataSync for EngineLocking {
+    type Shared<T: 'static> = EngineHandle<T>;
+    type Lock<T> = RuntimeLock<T>;
+    // Always atomic, even in no-sync mode: the service handle is the
+    // `Send + Sync` `EngineHandle`, so the gate must stay thread-safe. A
+    // runtime-branched (enum) gate would add a match on the hot read path,
+    // costing more than the direct atomic load it would try to avoid.
+    type Gate = AtomicBool;
+
+    fn new_shared<T: 'static>(&self, inner: T) -> EngineHandle<T> {
+        EngineHandle(Arc::new(inner))
+    }
+
+    fn new_lock<T>(&self, inner: T) -> RuntimeLock<T> {
+        match self.mode {
+            // SAFETY note: no-sync (`None`) mode constrains the service to
+            // single-threaded use at the binding layer, so the no-op lock is
+            // sound. `Full`/`Account` use a real reader-writer lock.
+            SyncMode::None => RuntimeLock::noop(inner),
+            SyncMode::Full | SyncMode::Account => RuntimeLock::locked(inner),
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Runtime selector for the engine's storage synchronization policy.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SyncMode {
+    /// The handle stays on the OS thread that created it. Use this for
+    /// single-threaded embeddings where synchronization overhead must be zero.
+    None = 0,
     /// Concurrent invocation of public methods on the same handle is safe.
     /// Sequential cross-thread access is also safe. Use this when the engine
     /// is shared across threads.
-    Full = 0,
-    /// The handle stays on the OS thread that created it. Use this for
-    /// single-threaded embeddings where synchronization overhead must be zero.
-    Local = 1,
+    Full = 1,
     /// Sequential cross-thread access on the same handle is safe; the caller
     /// pins each account to a single processing chain (one queue or one
     /// worker at a time). Concurrent invocation on the same handle is not
@@ -275,11 +315,16 @@ pub struct StorageLockingPolicyFactory {
 impl LockingPolicyFactory for StorageLockingPolicyFactory {
     type Policy = StorageLockingPolicy;
     type IndexFlag = std::sync::atomic::AtomicBool;
+    type Shared<T: 'static> = EngineHandle<T>;
+
+    fn new_shared<T: 'static>(value: T) -> EngineHandle<T> {
+        EngineHandle(Arc::new(value))
+    }
 
     fn create_policy(&self) -> StorageLockingPolicy {
         let inner = match self.mode {
+            SyncMode::None => PolicyImpl::Local,
             SyncMode::Full => PolicyImpl::Full(FullLocking.create_policy()),
-            SyncMode::Local => PolicyImpl::Local,
             SyncMode::Account => {
                 PolicyImpl::Account(IndexLocking::<AccountKeyConstraint>::default().create_policy())
             }
@@ -316,7 +361,7 @@ pub type InteropEngineTrait<Order, ExecutionReport, AccountAdjustment> =
 mod tests {
     use openpit::pretrade::policies::OrderValidationPolicy;
 
-    use super::{EngineLocking, InteropEngineTrait, SyncMode};
+    use super::{EngineHandle, EngineLocking, InteropEngineTrait, SyncMode};
 
     type Engine = openpit::Engine<InteropEngineTrait<openpit::OrderOperation, (), ()>>;
 
@@ -334,7 +379,7 @@ mod tests {
 
     #[test]
     fn engine_locking_new_local_builds_engine() {
-        assert!(build_engine(SyncMode::Local).is_ok());
+        assert!(build_engine(SyncMode::None).is_ok());
     }
 
     #[test]
@@ -367,5 +412,93 @@ mod tests {
             price: None,
         });
         assert!(result.is_ok());
+    }
+
+    // ── Market-data MarketDataSync impl ────────────────────────────────────────
+
+    use openpit::param::{AccountGroupId, AccountId, Asset, Price};
+    use openpit::pretrade::policies::SpotFundsPolicy;
+    use openpit::pretrade::{SpotFundsMarketData, SpotFundsPricingSource};
+    use openpit::{
+        Instrument, MarketDataBuilder, MarketDataService, Quote, QuoteResolution, QuoteTtl,
+    };
+
+    fn assert_send<T: Send>() {}
+
+    fn build_md_service(mode: SyncMode) -> EngineHandle<MarketDataService<EngineLocking>> {
+        MarketDataBuilder::with_sync(EngineLocking::new(mode), QuoteTtl::Infinite).build()
+    }
+
+    #[test]
+    fn engine_locking_market_data_local_push_get() {
+        let service = build_md_service(SyncMode::None);
+        let id = service
+            .register(Instrument::new(
+                Asset::new("AAPL").expect("asset"),
+                Asset::new("USD").expect("asset"),
+            ))
+            .expect("register");
+        service
+            .push(
+                id,
+                Quote::new().with_mark(Price::from_str("150").expect("price")),
+            )
+            .expect("push");
+        assert!(service
+            .get(
+                id,
+                AccountId::from_u64(1),
+                &None::<AccountGroupId>,
+                QuoteResolution::AccountThenGroupThenDefault,
+            )
+            .is_some());
+    }
+
+    #[test]
+    fn engine_locking_market_data_full_push_get() {
+        let service = build_md_service(SyncMode::Full);
+        let id = service
+            .register(Instrument::new(
+                Asset::new("AAPL").expect("asset"),
+                Asset::new("USD").expect("asset"),
+            ))
+            .expect("register");
+        service
+            .push(
+                id,
+                Quote::new().with_mark(Price::from_str("150").expect("price")),
+            )
+            .expect("push");
+        assert!(service
+            .get(
+                id,
+                AccountId::from_u64(1),
+                &None::<AccountGroupId>,
+                QuoteResolution::AccountThenGroupThenDefault,
+            )
+            .is_some());
+    }
+
+    #[test]
+    fn engine_locking_market_data_types_are_send() {
+        // The interop service handle and the spot-funds bundle/policy built on
+        // top of it must be `Send` so they can be embedded in the `+ Send`
+        // interop pre-trade policy objects.
+        assert_send::<EngineHandle<MarketDataService<EngineLocking>>>();
+        assert_send::<SpotFundsMarketData<EngineLocking>>();
+        assert_send::<SpotFundsPolicy<EngineLocking, EngineLocking>>();
+    }
+
+    #[test]
+    fn engine_locking_spot_funds_market_data_builds() {
+        let service = build_md_service(SyncMode::Full);
+        let bundle: SpotFundsMarketData<EngineLocking> = SpotFundsMarketData::new(
+            service,
+            10,
+            SpotFundsPricingSource::Mark,
+            std::iter::empty(),
+        )
+        .expect("bundle");
+        let _ = bundle;
     }
 }

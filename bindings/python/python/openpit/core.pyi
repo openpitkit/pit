@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import collections.abc
 
+from ._openpit import AccountGroupId
 from .account_adjustment import (
     Adjustment as AccountAdjustment,
 )
@@ -52,6 +53,9 @@ from .pretrade import Lock
 
 class AccountAdjustmentContext:
     """Context of the current account-adjustment operation."""
+
+    @property
+    def account_group(self) -> AccountGroupId | None: ...
 
 class Mutation:
     """Commit/rollback action pair registered by a policy."""

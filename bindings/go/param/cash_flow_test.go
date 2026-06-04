@@ -89,9 +89,9 @@ func TestCashFlowFromIntAndUint(t *testing.T) {
 		t.Run("int-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			value, err := NewCashFlowFromInt(tt.input)
+			value, err := NewCashFlowFromInt64(tt.input)
 			if err != nil {
-				t.Fatalf("NewCashFlowFromInt(%d) error = %v", tt.input, err)
+				t.Fatalf("NewCashFlowFromInt64(%d) error = %v", tt.input, err)
 			}
 			if got := value.String(); got != tt.want {
 				t.Fatalf("String() = %q, want %q", got, tt.want)
@@ -111,9 +111,9 @@ func TestCashFlowFromIntAndUint(t *testing.T) {
 		t.Run("uint-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			value, err := NewCashFlowFromUint(tt.input)
+			value, err := NewCashFlowFromUint64(tt.input)
 			if err != nil {
-				t.Fatalf("NewCashFlowFromUint(%d) error = %v", tt.input, err)
+				t.Fatalf("NewCashFlowFromUint64(%d) error = %v", tt.input, err)
 			}
 			if got := value.String(); got != tt.want {
 				t.Fatalf("String() = %q, want %q", got, tt.want)

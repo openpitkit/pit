@@ -18,18 +18,21 @@
 use std::fmt::{Display, Formatter};
 use std::time::Instant;
 
+use super::account_control::{AccountBlockHandle, AccountControl};
+use super::account_groups::{AccountGroupsHandle, Accounts};
+use super::account_outcome::{AccountAdjustmentBatchResult, AccountAdjustmentOutcome};
 use super::engine_builder::EngineBuilder;
 use super::engine_trait::{EngineTrait, EngineTraitOf};
 use super::sync_mode::{AccountSync, FullSync, LocalSync, SyncMode};
-use super::BlockedAccounts;
-use crate::core::HasAccountId;
+use super::{AccountGroups, BlockedAccounts, HasAccountId};
 use crate::param::AccountId;
 use crate::pretrade::handle::{RequestHandleImpl, ReservationHandleImpl};
 use crate::pretrade::start_pre_trade_time::with_start_pre_trade_now;
+use crate::pretrade::PostTradeContext;
 use crate::pretrade::PreTradePolicy;
 use crate::pretrade::{
-    AccountBlock, PostTradeResult, PreTradeContext, PreTradeRequest, PreTradeReservation, Reject,
-    RejectCode, RejectScope, Rejects,
+    AccountBlock, PolicyPreTradeResult, PostTradeResult, PreTradeContext, PreTradeLock,
+    PreTradeRequest, PreTradeReservation, Reject, RejectCode, RejectScope, Rejects,
 };
 use crate::{AccountAdjustmentContext, Mutations};
 
@@ -44,8 +47,14 @@ pub(crate) struct EngineInner<Trait: EngineTrait> {
             >,
         >,
     >,
-    pub(crate) blocked_accounts:
+    pub(crate) blocked_accounts: <<Trait::Sync as SyncMode>::StorageLockingPolicyFactory
+        as crate::storage::LockingPolicyFactory>::Shared<
         BlockedAccounts<<Trait::Sync as SyncMode>::StorageLockingPolicyFactory>,
+    >,
+    pub(crate) account_groups: <<Trait::Sync as SyncMode>::StorageLockingPolicyFactory
+        as crate::storage::LockingPolicyFactory>::Shared<
+        AccountGroups<<Trait::Sync as SyncMode>::StorageLockingPolicyFactory>,
+    >,
 }
 
 /// Error returned when account-adjustment batch validation fails.
@@ -140,6 +149,17 @@ impl<Trait: EngineTrait> Engine<Trait> {
     pub(crate) fn from_inner(inner: <Trait::Sync as SyncMode>::Strong<EngineInner<Trait>>) -> Self {
         Self { inner }
     }
+
+    /// Returns a handle to the engine's account-group registry.
+    ///
+    /// The returned [`Accounts`] handle shares the engine's single registry;
+    /// register or unregister account-group membership through it. The handle
+    /// is cloneable and inherits the engine's synchronization mode.
+    pub fn accounts(&self) -> Accounts<<Trait::Sync as SyncMode>::StorageLockingPolicyFactory> {
+        Accounts::new(AccountGroupsHandle::from_inner(
+            self.inner.account_groups.clone(),
+        ))
+    }
 }
 
 /// Single-threaded engine type alias.
@@ -214,31 +234,44 @@ impl<Trait: EngineTrait> Engine<Trait> {
         }
 
         let now: Instant = Instant::now();
-        let ctx = PreTradeContext::new();
-        let (start_rejects, account_cause) = with_start_pre_trade_now(now, || {
-            let mut lists = Vec::new();
-            let mut len = 0;
-            let mut cause: Option<AccountBlock> = None;
+        let account = order.account_id().ok();
+        let account_control = account.map(|id| {
+            let handle = AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone());
+            AccountControl::new(handle, id)
+        });
+        let account_groups = AccountGroupsHandle::from_inner(self.inner.account_groups.clone());
+        let ctx = PreTradeContext::with_groups(account_control, account_groups, account);
+        let (start_rejects, account_block) = with_start_pre_trade_now(now, || {
+            let mut rejects_collection = Vec::new();
+            let mut total_rejects_len = 0;
+            let mut account_block: Option<AccountBlock> = None;
             for policy in &self.inner.pre_trade_policies {
                 if let Err(rejects) = policy.check_pre_trade_start(&ctx, &order) {
-                    len += rejects.len();
-                    if cause.is_none() {
-                        cause = rejects
+                    debug_assert!(
+                        !rejects.is_empty(),
+                        "policy returned Err with empty Rejects"
+                    );
+                    total_rejects_len += rejects.len();
+                    if account_block.is_none() {
+                        account_block = rejects
                             .iter()
                             .find(|r| r.scope == RejectScope::Account)
                             .map(|r| r.account_block_with_code(RejectCode::AccountBlocked));
                     }
-                    lists.push(rejects);
+                    rejects_collection.push(rejects);
                 }
             }
-            debug_assert!(cause.is_none() || len > 0);
-            (merge_reject_lists(lists, len), cause)
+            debug_assert!(account_block.is_none() || total_rejects_len > 0);
+            (
+                merge_reject_lists(rejects_collection, total_rejects_len),
+                account_block,
+            )
         });
 
-        debug_assert!(account_cause.is_none() || start_rejects.is_some());
+        debug_assert!(account_block.is_none() || start_rejects.is_some());
         if let Some(rejects) = start_rejects {
-            if let Some(cause) = account_cause {
-                self.inner.blocked_accounts.record(&order, cause);
+            if let Some(block) = account_block {
+                self.inner.blocked_accounts.record(&order, block);
             }
             return Err(rejects);
         }
@@ -267,19 +300,38 @@ impl<Trait: EngineTrait> Engine<Trait> {
             .and_then(PreTradeRequest::execute)
     }
 
-    /// Applies post-trade updates across all policies and returns aggregated account blocks.
+    /// Applies post-trade updates across all policies and returns aggregated result.
+    ///
+    /// Each policy applies its state changes immediately and directly to storage.
+    /// Processing is **not atomic**: if one policy sets an account block, the
+    /// state changes already applied by earlier policies are not rolled back.
     ///
     /// A non-empty [`PostTradeResult::account_blocks`] means at least one policy entered a
-    /// blocked state after the report was applied.
+    /// blocked state after the report was applied. This does **not** imply that
+    /// [`PostTradeResult::account_adjustments`] were undone — they reflect storage
+    /// that has already been mutated and must be propagated by the caller.
+    ///
+    /// [`PostTradeResult::account_adjustments`] contains zero or more account position
+    /// modifications in policy registration order. A single asset may appear more than once;
+    /// the exact content depends on which policies the engine was configured with and how
+    /// those policies choose to report.
     pub fn apply_execution_report(&self, report: &Trait::ExecutionReport) -> PostTradeResult
     where
         Trait::ExecutionReport: HasAccountId,
     {
         let inner: &EngineInner<Trait> = &self.inner;
-        let mut blocks = Vec::new();
+        let mut blocks: Vec<AccountBlock> = Vec::new();
+        let mut account_adjustments = Vec::new();
+
+        let account_groups = AccountGroupsHandle::from_inner(inner.account_groups.clone());
+        let ctx = PostTradeContext::with_groups(account_groups, report.account_id().ok());
 
         for policy in &inner.pre_trade_policies {
-            blocks.extend(policy.apply_execution_report(report));
+            let Some(result) = policy.apply_execution_report(&ctx, report) else {
+                continue;
+            };
+            blocks.extend(result.account_blocks);
+            account_adjustments.extend(result.account_adjustments);
         }
 
         if let Some(first) = blocks.first() {
@@ -288,13 +340,24 @@ impl<Trait: EngineTrait> Engine<Trait> {
 
         PostTradeResult {
             account_blocks: blocks,
+            account_adjustments,
         }
     }
 
-    /// Validates an account-adjustment batch atomically.
+    /// Applies an account-adjustment batch as a sequence with compensation
+    /// rollback on failure: each adjustment is applied through policy storage
+    /// immediately, so concurrent readers may observe partial batch state
+    /// between adjustments. On rejection, applied mutations are rolled back
+    /// through inverse deltas (best-effort).
     ///
     /// Policies are evaluated in registration order for each adjustment, and
     /// adjustments are traversed in slice order.
+    ///
+    /// On success returns [`crate::AccountAdjustmentBatchResult`] whose `outcomes` field is a
+    /// flat list of [`crate::AccountAdjustmentOutcome`] in policy registration order.
+    /// Each entry carries the [`crate::PolicyGroupId`] of the policy that produced it.
+    /// A single asset may appear more than once. Policies that report nothing contribute no
+    /// entries.
     ///
     /// # Errors
     ///
@@ -304,29 +367,44 @@ impl<Trait: EngineTrait> Engine<Trait> {
         &self,
         account_id: AccountId,
         adjustments: &[Trait::AccountAdjustment],
-    ) -> Result<(), AccountAdjustmentBatchError> {
+    ) -> Result<AccountAdjustmentBatchResult, AccountAdjustmentBatchError> {
         if adjustments.is_empty() {
-            return Ok(());
+            return Ok(AccountAdjustmentBatchResult::default());
         }
 
         let inner: &EngineInner<Trait> = &self.inner;
-        let mut mutations = Mutations::new();
+        let mut mutations = Mutations::with_capacity(adjustments.len());
         let mut batch_error: Option<AccountAdjustmentBatchError> = None;
-        let ctx = AccountAdjustmentContext::new();
+        let mut outcomes: Vec<AccountAdjustmentOutcome> = Vec::new();
+        let handle = AccountBlockHandle::from_inner(inner.blocked_accounts.clone());
+        let account_control = AccountControl::new(handle, account_id);
+        let account_groups = AccountGroupsHandle::from_inner(inner.account_groups.clone());
+        let ctx =
+            AccountAdjustmentContext::with_groups(account_control, account_groups, account_id);
 
         'outer: for (index, adjustment) in adjustments.iter().enumerate() {
             for policy in &inner.pre_trade_policies {
-                if let Err(rejects) =
-                    policy.apply_account_adjustment(&ctx, account_id, adjustment, &mut mutations)
+                match policy.apply_account_adjustment(&ctx, account_id, adjustment, &mut mutations)
                 {
-                    if rejects.is_empty() {
-                        continue;
+                    Ok(items) if !items.is_empty() => {
+                        let policy_group_id = policy.policy_group_id();
+                        outcomes.extend(items.into_iter().map(|e| AccountAdjustmentOutcome {
+                            policy_group_id,
+                            entry: e,
+                        }));
                     }
-                    batch_error = Some(AccountAdjustmentBatchError {
-                        failed_adjustment_index: index,
-                        rejects,
-                    });
-                    break 'outer;
+                    Ok(_) => {}
+                    Err(rejects) => {
+                        debug_assert!(
+                            !rejects.is_empty(),
+                            "policy returned Err with empty Rejects"
+                        );
+                        batch_error = Some(AccountAdjustmentBatchError {
+                            failed_adjustment_index: index,
+                            rejects,
+                        });
+                        break 'outer;
+                    }
                 }
             }
         }
@@ -337,13 +415,13 @@ impl<Trait: EngineTrait> Engine<Trait> {
         }
 
         mutations.commit_all();
-        Ok(())
+        Ok(AccountAdjustmentBatchResult { outcomes })
     }
 }
 
 fn execute_pre_trade_request<Trait: EngineTrait>(
     engine: <Trait::Sync as SyncMode>::Weak<EngineInner<Trait>>,
-    ctx: PreTradeContext,
+    ctx: PreTradeContext<<Trait::Sync as SyncMode>::StorageLockingPolicyFactory>,
     order: Trait::Order,
 ) -> Result<PreTradeReservation, Rejects>
 where
@@ -364,36 +442,62 @@ where
         return Err(rejects);
     }
 
-    let mut mutations = Mutations::new();
-    let mut lists = Vec::new();
-    let mut len = 0;
-    let mut account_cause: Option<AccountBlock> = None;
+    let policy_count = inner.pre_trade_policies.len();
+    let mut mutations = Mutations::with_capacity(policy_count);
+    let mut rejects_collection = Vec::new();
+    let mut total_rejects_len = 0;
+    let mut outcomes: Vec<AccountAdjustmentOutcome> = Vec::new();
+    let mut lock = PreTradeLock::new();
+    let mut first_account_block: Option<AccountBlock> = None;
     for policy in &inner.pre_trade_policies {
-        if let Err(rejects) = policy.perform_pre_trade_check(&ctx, &order, &mut mutations) {
-            len += rejects.len();
-            if account_cause.is_none() {
-                account_cause = rejects
-                    .iter()
-                    .find(|r| r.scope == RejectScope::Account)
-                    .map(|r| r.account_block_with_code(RejectCode::AccountBlocked));
+        match policy.perform_pre_trade_check(&ctx, &order, &mut mutations) {
+            Ok(None) => {}
+            Ok(Some(outcome)) => {
+                let PolicyPreTradeResult {
+                    account_adjustments,
+                    lock_prices,
+                } = outcome;
+                let policy_group_id = policy.policy_group_id();
+                lock.push_many(policy_group_id, lock_prices);
+                outcomes.extend(account_adjustments.into_iter().map(|entry| {
+                    AccountAdjustmentOutcome {
+                        policy_group_id,
+                        entry,
+                    }
+                }));
             }
-            lists.push(rejects);
+            Err(rejects) => {
+                debug_assert!(
+                    !rejects.is_empty(),
+                    "policy returned Err with empty Rejects"
+                );
+                total_rejects_len += rejects.len();
+                if first_account_block.is_none() {
+                    first_account_block = rejects
+                        .iter()
+                        .find(|r| r.scope == RejectScope::Account)
+                        .map(|r| r.account_block_with_code(RejectCode::AccountBlocked));
+                }
+                rejects_collection.push(rejects);
+            }
         }
     }
 
-    debug_assert!(account_cause.is_none() || len > 0);
-    if let Some(rejects) = merge_reject_lists(lists, len) {
-        if let Some(cause) = account_cause {
-            inner.blocked_accounts.record(&order, cause);
+    debug_assert!(first_account_block.is_none() || total_rejects_len > 0);
+    if let Some(rejects) = merge_reject_lists(rejects_collection, total_rejects_len) {
+        if let Some(block) = first_account_block {
+            inner.blocked_accounts.record(&order, block);
         }
         mutations.rollback_all();
         return Err(rejects);
     }
 
     let reservation_handle = ReservationHandleImpl::new(mutations);
-    Ok(PreTradeReservation::from_handle(Box::new(
-        reservation_handle,
-    )))
+    Ok(PreTradeReservation::from_handle(
+        Box::new(reservation_handle),
+        lock,
+        outcomes,
+    ))
 }
 
 fn merge_reject_lists(lists: Vec<Rejects>, len: usize) -> Option<Rejects> {
@@ -418,10 +522,13 @@ mod tests {
     };
     use crate::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume};
     use crate::pretrade::{
-        PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects,
+        PolicyPreTradeResult, PostTradeResult, PreTradeContext, PreTradePolicy, Reject, RejectCode,
+        RejectScope, Rejects,
     };
+    use crate::storage::NoLocking;
     use crate::{
-        AccountAdjustmentContext, HasAccountId, Mutation, Mutations, RequestFieldAccessError,
+        AccountAdjustmentContext, AccountOutcomeEntry, HasAccountId, Mutation, Mutations,
+        RequestFieldAccessError,
     };
 
     use super::{AccountAdjustmentBatchError, Engine, FullSyncEngine, LocalEngine};
@@ -456,19 +563,32 @@ mod tests {
 
     struct NoopPolicy {
         name: &'static str,
+        group_id: crate::core::PolicyGroupId,
     }
 
     impl NoopPolicy {
         fn new(name: &'static str) -> Self {
-            Self { name }
+            Self {
+                name,
+                group_id: crate::core::DEFAULT_POLICY_GROUP_ID,
+            }
+        }
+
+        fn with_policy_group_id(mut self, group_id: crate::core::PolicyGroupId) -> Self {
+            self.group_id = group_id;
+            self
         }
     }
 
-    impl<Order, ExecutionReport, AccountAdjustment>
-        PreTradePolicy<Order, ExecutionReport, AccountAdjustment> for NoopPolicy
+    impl<Order, ExecutionReport, AccountAdjustment, Sync: crate::core::SyncMode>
+        PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> for NoopPolicy
     {
         fn name(&self) -> &str {
             self.name
+        }
+
+        fn policy_group_id(&self) -> crate::core::PolicyGroupId {
+            self.group_id
         }
     }
 
@@ -498,6 +618,32 @@ mod tests {
             result,
             Err(EngineBuildError::DuplicatePolicyName { name }) if name == "dup"
         ));
+    }
+
+    #[test]
+    fn build_rejects_duplicate_non_default_group_ids() {
+        let group_id = crate::core::PolicyGroupId::new(7);
+        let result = Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(NoopPolicy::new("a").with_policy_group_id(group_id))
+            .pre_trade(NoopPolicy::new("b").with_policy_group_id(group_id))
+            .build();
+
+        assert!(matches!(
+            result,
+            Err(EngineBuildError::DuplicatePolicyGroupId { policy_group_id: gid }) if gid == group_id
+        ));
+    }
+
+    #[test]
+    fn build_allows_multiple_policies_sharing_default_group_id() {
+        let result = Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(NoopPolicy::new("a"))
+            .pre_trade(NoopPolicy::new("b"))
+            .build();
+
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1300,6 +1446,54 @@ mod tests {
     }
 
     #[test]
+    fn apply_execution_report_exposes_report_account_group_to_policy() {
+        use crate::param::AccountGroupId;
+        use crate::pretrade::PostTradeContext;
+
+        struct GroupCapturePolicy {
+            seen: Rc<Cell<Option<AccountGroupId>>>,
+        }
+
+        impl<Order, ExecutionReport, AccountAdjustment, Sync: crate::core::SyncMode>
+            PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> for GroupCapturePolicy
+        {
+            fn name(&self) -> &str {
+                "GroupCapturePolicy"
+            }
+
+            fn apply_execution_report(
+                &self,
+                ctx: &PostTradeContext<
+                    <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+                >,
+                _report: &ExecutionReport,
+            ) -> Option<PostTradeResult> {
+                self.seen.set(ctx.account_group());
+                None
+            }
+        }
+
+        let seen = Rc::new(Cell::new(None));
+        let engine = Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(GroupCapturePolicy {
+                seen: Rc::clone(&seen),
+            })
+            .build()
+            .expect("engine must build");
+
+        // The execution_report helper carries account 99224416.
+        let group = AccountGroupId::from_u32(42).expect("account group id must be valid");
+        engine
+            .accounts()
+            .register_group(&[AccountId::from_u64(99224416)], group)
+            .expect("registration must succeed");
+
+        engine.apply_execution_report(&execution_report("USD"));
+        assert_eq!(seen.get(), Some(group));
+    }
+
+    #[test]
     fn request_returns_system_unavailable_when_engine_is_dropped() {
         let request = {
             let engine: LocalEngine<TestOrder> = Engine::builder()
@@ -2009,9 +2203,14 @@ mod tests {
             },
         };
         let mut mutations = Mutations::default();
-        let _ = <ReserveNotionalPolicy as PreTradePolicy<TestOrder, TestReport, TestAdjustment>>::perform_pre_trade_check(
+        let _ = <ReserveNotionalPolicy as PreTradePolicy<
+            TestOrder,
+            TestReport,
+            TestAdjustment,
+            crate::core::LocalSync,
+        >>::perform_pre_trade_check(
             &policy,
-            &PreTradeContext::new(),
+            &PreTradeContext::<NoLocking>::new(None),
             &order,
             &mut mutations,
         );
@@ -2041,9 +2240,14 @@ mod tests {
             },
         };
         let mut mutations = Mutations::default();
-        let _ = <ReserveNotionalPolicy as PreTradePolicy<TestOrder, TestReport, TestAdjustment>>::perform_pre_trade_check(
+        let _ = <ReserveNotionalPolicy as PreTradePolicy<
+            TestOrder,
+            TestReport,
+            TestAdjustment,
+            crate::core::LocalSync,
+        >>::perform_pre_trade_check(
             &policy,
-            &PreTradeContext::new(),
+            &PreTradeContext::<NoLocking>::new(None),
             &order,
             &mut mutations,
         );
@@ -2147,14 +2351,17 @@ mod tests {
         }
     }
 
-    impl PreTradePolicy<TaggedOrder, TaggedReport, TestAdjustment> for CaptureTaggedStartPolicy {
+    impl<Sync: crate::core::SyncMode>
+        PreTradePolicy<TaggedOrder, TaggedReport, TestAdjustment, Sync>
+        for CaptureTaggedStartPolicy
+    {
         fn name(&self) -> &str {
             self.name
         }
 
         fn check_pre_trade_start(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
             order: &TaggedOrder,
         ) -> Result<(), Rejects> {
             self.seen_orders.borrow_mut().push(order.tag);
@@ -2166,13 +2373,16 @@ mod tests {
 
         fn apply_execution_report(
             &self,
+            _ctx: &crate::pretrade::PostTradeContext<
+                <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+            >,
             report: &TaggedReport,
-        ) -> Vec<crate::pretrade::AccountBlock> {
+        ) -> Option<PostTradeResult> {
             self.seen_reports.borrow_mut().push(report.tag);
             self.journal
                 .borrow_mut()
                 .push(format!("report-start:{}:{}", self.name, report.tag));
-            vec![]
+            None
         }
     }
 
@@ -2187,14 +2397,17 @@ mod tests {
         }
     }
 
-    impl PreTradePolicy<TaggedOrder, TaggedReport, TestAdjustment> for SequenceFenceStartPolicy {
+    impl<Sync: crate::core::SyncMode>
+        PreTradePolicy<TaggedOrder, TaggedReport, TestAdjustment, Sync>
+        for SequenceFenceStartPolicy
+    {
         fn name(&self) -> &str {
             self.name
         }
 
         fn check_pre_trade_start(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
             order: &TaggedOrder,
         ) -> Result<(), Rejects> {
             self.journal
@@ -2205,12 +2418,15 @@ mod tests {
 
         fn apply_execution_report(
             &self,
+            _ctx: &crate::pretrade::PostTradeContext<
+                <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+            >,
             report: &TaggedReport,
-        ) -> Vec<crate::pretrade::AccountBlock> {
+        ) -> Option<PostTradeResult> {
             self.journal
                 .borrow_mut()
                 .push(format!("report-start:{}:{}", self.name, report.tag));
-            vec![]
+            None
         }
     }
 
@@ -2237,33 +2453,39 @@ mod tests {
         }
     }
 
-    impl PreTradePolicy<TaggedOrder, TaggedReport, TestAdjustment> for CaptureTaggedMainPolicy {
+    impl<Sync: crate::core::SyncMode>
+        PreTradePolicy<TaggedOrder, TaggedReport, TestAdjustment, Sync>
+        for CaptureTaggedMainPolicy
+    {
         fn name(&self) -> &str {
             self.name
         }
 
         fn perform_pre_trade_check(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
             order: &TaggedOrder,
             _mutations: &mut Mutations,
-        ) -> Result<(), Rejects> {
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
             self.seen_orders.borrow_mut().push(order.tag);
             self.journal
                 .borrow_mut()
                 .push(format!("execute:{}:{}", self.name, order.tag));
-            Ok(())
+            Ok(None)
         }
 
         fn apply_execution_report(
             &self,
+            _ctx: &crate::pretrade::PostTradeContext<
+                <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+            >,
             report: &TaggedReport,
-        ) -> Vec<crate::pretrade::AccountBlock> {
+        ) -> Option<PostTradeResult> {
             self.seen_reports.borrow_mut().push(report.tag);
             self.journal
                 .borrow_mut()
                 .push(format!("report-main:{}:{}", self.name, report.tag));
-            vec![]
+            None
         }
     }
 
@@ -2278,31 +2500,37 @@ mod tests {
         }
     }
 
-    impl PreTradePolicy<TaggedOrder, TaggedReport, TestAdjustment> for SequenceFenceMainPolicy {
+    impl<Sync: crate::core::SyncMode>
+        PreTradePolicy<TaggedOrder, TaggedReport, TestAdjustment, Sync>
+        for SequenceFenceMainPolicy
+    {
         fn name(&self) -> &str {
             self.name
         }
 
         fn perform_pre_trade_check(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
             order: &TaggedOrder,
             _mutations: &mut Mutations,
-        ) -> Result<(), Rejects> {
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
             self.journal
                 .borrow_mut()
                 .push(format!("execute:{}:{}", self.name, order.tag));
-            Ok(())
+            Ok(None)
         }
 
         fn apply_execution_report(
             &self,
+            _ctx: &crate::pretrade::PostTradeContext<
+                <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+            >,
             report: &TaggedReport,
-        ) -> Vec<crate::pretrade::AccountBlock> {
+        ) -> Option<PostTradeResult> {
             self.journal
                 .borrow_mut()
                 .push(format!("report-main:{}:{}", self.name, report.tag));
-            vec![]
+            None
         }
     }
 
@@ -2310,14 +2538,17 @@ mod tests {
         name: &'static str,
     }
 
-    impl PreTradePolicy<TaggedOrder, TaggedReport, TestAdjustment> for RejectTaggedStartPolicyMock {
+    impl<Sync: crate::core::SyncMode>
+        PreTradePolicy<TaggedOrder, TaggedReport, TestAdjustment, Sync>
+        for RejectTaggedStartPolicyMock
+    {
         fn name(&self) -> &str {
             self.name
         }
 
         fn check_pre_trade_start(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
             _order: &TaggedOrder,
         ) -> Result<(), Rejects> {
             Err(Rejects::from(Reject::new(
@@ -2331,9 +2562,12 @@ mod tests {
 
         fn apply_execution_report(
             &self,
+            _ctx: &crate::pretrade::PostTradeContext<
+                <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+            >,
             _report: &TaggedReport,
-        ) -> Vec<crate::pretrade::AccountBlock> {
-            vec![]
+        ) -> Option<PostTradeResult> {
+            None
         }
     }
 
@@ -2343,17 +2577,20 @@ mod tests {
         reject: bool,
     }
 
-    impl PreTradePolicy<TaggedOrder, TaggedReport, TestAdjustment> for TaggedMutationPolicyMock {
+    impl<Sync: crate::core::SyncMode>
+        PreTradePolicy<TaggedOrder, TaggedReport, TestAdjustment, Sync>
+        for TaggedMutationPolicyMock
+    {
         fn name(&self) -> &str {
             self.name
         }
 
         fn perform_pre_trade_check(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
             _order: &TaggedOrder,
             mutations: &mut Mutations,
-        ) -> Result<(), Rejects> {
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
             if let Some(on_apply) = &self.on_apply {
                 on_apply(mutations);
             }
@@ -2367,14 +2604,17 @@ mod tests {
                     "tagged mutation policy rejected the order",
                 )));
             }
-            Ok(())
+            Ok(None)
         }
 
         fn apply_execution_report(
             &self,
+            _ctx: &crate::pretrade::PostTradeContext<
+                <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+            >,
             _report: &TaggedReport,
-        ) -> Vec<crate::pretrade::AccountBlock> {
-            vec![]
+        ) -> Option<PostTradeResult> {
+            None
         }
     }
 
@@ -2383,14 +2623,16 @@ mod tests {
         reject: bool,
     }
 
-    impl PreTradePolicy<NoAccountOrder, TestReport, TestAdjustment> for CoreStartPolicyMock {
+    impl<Sync: crate::core::SyncMode>
+        PreTradePolicy<NoAccountOrder, TestReport, TestAdjustment, Sync> for CoreStartPolicyMock
+    {
         fn name(&self) -> &str {
             self.name
         }
 
         fn check_pre_trade_start(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
             _order: &NoAccountOrder,
         ) -> Result<(), Rejects> {
             if self.reject {
@@ -2407,9 +2649,12 @@ mod tests {
 
         fn apply_execution_report(
             &self,
+            _ctx: &crate::pretrade::PostTradeContext<
+                <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+            >,
             _report: &TestReport,
-        ) -> Vec<crate::pretrade::AccountBlock> {
-            vec![]
+        ) -> Option<PostTradeResult> {
+            None
         }
     }
 
@@ -2419,17 +2664,19 @@ mod tests {
         reject: bool,
     }
 
-    impl PreTradePolicy<NoAccountOrder, TestReport, TestAdjustment> for CoreMainPolicyMock {
+    impl<Sync: crate::core::SyncMode>
+        PreTradePolicy<NoAccountOrder, TestReport, TestAdjustment, Sync> for CoreMainPolicyMock
+    {
         fn name(&self) -> &str {
             self.name
         }
 
         fn perform_pre_trade_check(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
             _order: &NoAccountOrder,
             mutations: &mut Mutations,
-        ) -> Result<(), Rejects> {
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
             if let Some(on_apply) = &self.on_apply {
                 on_apply(mutations);
             }
@@ -2443,14 +2690,17 @@ mod tests {
                     "order core main policy rejected the order",
                 )));
             }
-            Ok(())
+            Ok(None)
         }
 
         fn apply_execution_report(
             &self,
+            _ctx: &crate::pretrade::PostTradeContext<
+                <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+            >,
             _report: &TestReport,
-        ) -> Vec<crate::pretrade::AccountBlock> {
-            vec![]
+        ) -> Option<PostTradeResult> {
+            None
         }
     }
 
@@ -2559,14 +2809,16 @@ mod tests {
         }
     }
 
-    impl PreTradePolicy<TestOrder, TestReport, TestAdjustment> for StartPolicyMock {
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for StartPolicyMock
+    {
         fn name(&self) -> &str {
             self.name
         }
 
         fn check_pre_trade_start(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
             _order: &TestOrder,
         ) -> Result<(), Rejects> {
             self.calls.set(self.calls.get() + 1);
@@ -2598,17 +2850,22 @@ mod tests {
 
         fn apply_execution_report(
             &self,
+            _ctx: &crate::pretrade::PostTradeContext<
+                <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+            >,
             _report: &TestReport,
-        ) -> Vec<crate::pretrade::AccountBlock> {
+        ) -> Option<PostTradeResult> {
             if self.post_trade_trigger {
-                vec![crate::pretrade::AccountBlock::new(
-                    self.name,
-                    crate::pretrade::RejectCode::PnlKillSwitchTriggered,
-                    "kill switch triggered",
-                    "",
-                )]
+                Some(PostTradeResult::blocks_only(vec![
+                    crate::pretrade::AccountBlock::new(
+                        self.name,
+                        crate::pretrade::RejectCode::PnlKillSwitchTriggered,
+                        "kill switch triggered",
+                        "",
+                    ),
+                ]))
             } else {
-                vec![]
+                None
             }
         }
     }
@@ -2687,17 +2944,19 @@ mod tests {
         }
     }
 
-    impl PreTradePolicy<TestOrder, TestReport, TestAdjustment> for MainPolicyMock {
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for MainPolicyMock
+    {
         fn name(&self) -> &str {
             self.name
         }
 
         fn perform_pre_trade_check(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
             order: &TestOrder,
             mutations: &mut Mutations,
-        ) -> Result<(), Rejects> {
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
             self.calls.set(self.calls.get() + 1);
             if let Some(seen_settlement) = &self.seen_settlement {
                 seen_settlement
@@ -2718,22 +2977,27 @@ mod tests {
                     "mock main-stage policy rejected the order",
                 )));
             }
-            Ok(())
+            Ok(None)
         }
 
         fn apply_execution_report(
             &self,
+            _ctx: &crate::pretrade::PostTradeContext<
+                <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+            >,
             _report: &TestReport,
-        ) -> Vec<crate::pretrade::AccountBlock> {
+        ) -> Option<PostTradeResult> {
             if self.post_trade_trigger {
-                vec![crate::pretrade::AccountBlock::new(
-                    self.name,
-                    crate::pretrade::RejectCode::PnlKillSwitchTriggered,
-                    "kill switch triggered",
-                    "",
-                )]
+                Some(PostTradeResult::blocks_only(vec![
+                    crate::pretrade::AccountBlock::new(
+                        self.name,
+                        crate::pretrade::RejectCode::PnlKillSwitchTriggered,
+                        "kill switch triggered",
+                        "",
+                    ),
+                ]))
             } else {
-                vec![]
+                None
             }
         }
     }
@@ -2788,18 +3052,22 @@ mod tests {
         }
     }
 
-    impl PreTradePolicy<TestOrder, TestReport, TestAdjustment> for AdjustmentPolicyMock {
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for AdjustmentPolicyMock
+    {
         fn name(&self) -> &str {
             self.name
         }
 
         fn apply_account_adjustment(
             &self,
-            _ctx: &AccountAdjustmentContext,
+            _ctx: &AccountAdjustmentContext<
+                <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+            >,
             _account_id: AccountId,
             adjustment: &MockAdjustment,
             mutations: &mut Mutations,
-        ) -> Result<(), Rejects> {
+        ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
             self.seen.borrow_mut().push(*adjustment);
             if let Some(ref on_apply) = self.on_apply {
                 on_apply(mutations);
@@ -2813,7 +3081,7 @@ mod tests {
                     "mock account adjustment policy rejected the adjustment",
                 )));
             }
-            Ok(())
+            Ok(Vec::new())
         }
     }
 
@@ -2843,17 +3111,19 @@ mod tests {
         }
     }
 
-    impl PreTradePolicy<TestOrder, TestReport, TestAdjustment> for ReserveNotionalPolicy {
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for ReserveNotionalPolicy
+    {
         fn name(&self) -> &str {
             "ReserveNotionalPolicy"
         }
 
         fn perform_pre_trade_check(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
             order: &TestOrder,
             mutations: &mut Mutations,
-        ) -> Result<(), Rejects> {
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
             use crate::core::{HasOrderPrice, HasTradeAmount};
             assert_eq!(order.operation.side, Side::Sell);
             assert_eq!(
@@ -2883,14 +3153,17 @@ mod tests {
                     *rollback_store.borrow_mut() = Some(Volume::ZERO);
                 },
             ));
-            Ok(())
+            Ok(None)
         }
 
         fn apply_execution_report(
             &self,
+            _ctx: &crate::pretrade::PostTradeContext<
+                <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+            >,
             _report: &TestReport,
-        ) -> Vec<crate::pretrade::AccountBlock> {
-            vec![]
+        ) -> Option<PostTradeResult> {
+            None
         }
     }
 
@@ -2918,5 +3191,11 @@ mod tests {
             .pre_trade(StartPolicyMock::pass("local_policy"))
             .build()
             .expect("engine with !Send policy must build in local mode");
+    }
+
+    #[test]
+    fn account_sync_engine_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<super::AccountSyncEngine<OrderOperation>>();
     }
 }

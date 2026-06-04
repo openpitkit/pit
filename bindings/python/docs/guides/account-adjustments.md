@@ -19,7 +19,7 @@ adjustment = openpit.AccountAdjustment(
 
 engine = openpit.Engine.builder().build()
 result = engine.apply_account_adjustment(
-    account_id=openpit.param.AccountId.from_u64(99224416),
+    account_id=openpit.param.AccountId.from_int(99224416),
     adjustments=[adjustment],
 )
 assert result.ok

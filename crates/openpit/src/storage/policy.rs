@@ -172,8 +172,20 @@ pub trait LockingPolicyFactory {
     /// storage index domain.
     type IndexFlag: super::IndexFlag;
 
+    /// Sync-mode-aware shared handle for values that need to be
+    /// shared across clones (e.g. a policy's internal storage).
+    ///
+    /// Under `NoLocking` this is `Rc<T>` (single-threaded); under
+    /// `FullLocking` this is `Arc<T>` (fully thread-safe); under
+    /// `IndexLocking` this is `IndexShared<T>` (`Send` but `!Sync`,
+    /// matching the `AccountSync` engine contract).
+    type Shared<T: 'static>: Clone + std::ops::Deref<Target = T>;
+
     /// Builds a fresh policy for a new storage instance.
     fn create_policy(&self) -> Self::Policy;
+
+    /// Wraps `value` in the sync-mode-appropriate shared handle.
+    fn new_shared<T: 'static>(value: T) -> Self::Shared<T>;
 }
 
 /// Marker that opts a type out of [`Send`] and [`Sync`].

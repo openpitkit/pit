@@ -41,7 +41,7 @@ Quickstart::
     order = openpit.Order(
         operation=openpit.OrderOperation(
             instrument=openpit.Instrument("AAPL", "USD"),
-            account_id=openpit.param.AccountId.from_u64(99224416),
+            account_id=openpit.param.AccountId.from_int(99224416),
             side=openpit.param.Side.BUY,
             trade_amount=openpit.param.TradeAmount.quantity(100.0),
             price=openpit.param.Price(185.0),
@@ -67,8 +67,11 @@ selected at builder time:
 from contextlib import suppress
 
 from . import core as core
+from . import marketdata as marketdata
 from . import param, pretrade
 from ._openpit import (
+    AccountGroupRegistrationError,
+    Accounts,
     Engine,
     EngineBuilder,
     ReadyEngineBuilder,
@@ -82,6 +85,7 @@ from .core import (
     AccountAdjustmentBounds,
     AccountAdjustmentContext,
     AccountAdjustmentPositionOperation,
+    AccountControl,
     ExecutionReport,
     ExecutionReportFillDetails,
     ExecutionReportOperation,
@@ -144,6 +148,14 @@ post-trade feedback, and account-adjustment validation through
 _set_doc(SyncedEngineBuilder.pre_trade, _PRE_TRADE_DOC)
 _set_doc(ReadyEngineBuilder.pre_trade, _PRE_TRADE_DOC)
 
+_MARKET_DATA_DOC = """Create a market-data service builder.
+
+The returned builder produces a shared ``openpit.marketdata.MarketDataService``
+handle that can be passed to built-in policies and updated by quote producers.
+    """
+_set_doc(SyncedEngineBuilder.market_data, _MARKET_DATA_DOC)
+_set_doc(ReadyEngineBuilder.market_data, _MARKET_DATA_DOC)
+
 _set_doc(
     ReadyEngineBuilder.build,
     """Build an engine from the registered policies.
@@ -202,8 +214,9 @@ Args:
     report: :class:`openpit.ExecutionReport` or subclass.
 
 Returns:
-    openpit.pretrade.PostTradeResult: Reports whether any policy considers
-    an account-level kill switch active after processing the report.
+    openpit.pretrade.PostTradeResult: Carries any account blocks raised by
+    policies and the per-asset ``account_adjustments`` outcomes produced
+    while processing the report.
     """,
 )
 _set_doc(
@@ -222,8 +235,70 @@ The batch is atomic from the policy contract perspective: mutation rollbacks
 are invoked when a later policy or adjustment rejects.
     """,
 )
+_set_doc(
+    Engine.accounts,
+    """Return a handle to the engine's account-group registry.
+
+Returns:
+    Accounts: Handle for registering, unregistering, and reading account-group
+    membership. The handle shares the engine's single registry, so changes are
+    visible to every other handle and to running policies; it inherits the
+    engine's synchronization mode.
+
+Every account starts in :data:`openpit.param.DEFAULT_ACCOUNT_GROUP` and joins
+another group only through ``register_group``.
+    """,
+)
+_set_doc(
+    Accounts.register_group,
+    """Assign accounts to an account group.
+
+Args:
+    accounts: Iterable of :class:`openpit.param.AccountId` to place in the
+        group.
+    group: :class:`openpit.param.AccountGroupId` the accounts join. Must not be
+        :data:`openpit.param.DEFAULT_ACCOUNT_GROUP`.
+
+Raises:
+    AccountGroupRegistrationError: If any listed account already belongs to a
+        different group, or if ``group`` is the reserved default group. The
+        registration is atomic: on failure no account is moved.
+    """,
+)
+_set_doc(
+    Accounts.unregister_group,
+    """Remove accounts from an account group.
+
+Args:
+    accounts: Iterable of :class:`openpit.param.AccountId` to remove. Every
+        listed account must currently belong to ``group``.
+    group: :class:`openpit.param.AccountGroupId` the accounts leave. Must not be
+        :data:`openpit.param.DEFAULT_ACCOUNT_GROUP`.
+
+Raises:
+    AccountGroupRegistrationError: If any listed account is not a member of
+        ``group``, or if ``group`` is the reserved default group. The removal is
+        atomic: on failure no account is moved. Removed accounts fall back to
+        :data:`openpit.param.DEFAULT_ACCOUNT_GROUP`.
+    """,
+)
+_set_doc(
+    Accounts.group_of,
+    """Return the group an account belongs to.
+
+Args:
+    account: :class:`openpit.param.AccountId` to look up.
+
+Returns:
+    openpit.param.AccountGroupId | None: The account's group, or ``None`` when
+    the account has not been assigned to any group (its membership is the
+    reserved :data:`openpit.param.DEFAULT_ACCOUNT_GROUP`).
+    """,
+)
 
 __all__ = [
+    "AccountGroupRegistrationError",
+    "Accounts",
     "Engine",
     "EngineBuilder",
     "SyncedEngineBuilder",
@@ -234,6 +309,7 @@ __all__ = [
     "AccountAdjustmentBounds",
     "AccountAdjustmentContext",
     "AccountAdjustmentPositionOperation",
+    "AccountControl",
     "AdjustmentAmount",
     "ExecutionReport",
     "ExecutionReportFillDetails",
@@ -250,6 +326,7 @@ __all__ = [
     "PostTradeResult",
     "PositionMode",
     "RejectError",
+    "marketdata",
     "param",
     "pretrade",
 ]

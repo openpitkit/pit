@@ -53,8 +53,8 @@ assert position_side.opposite() is openpit.param.PositionSide.SHORT
 
 Use exactly one account-id source model per runtime:
 
-- `AccountId.from_u64(...)` for numeric IDs assigned by the caller.
-- `AccountId.from_str(...)` when only string IDs are available.
+- `AccountId.from_int(...)` for numeric IDs assigned by the caller.
+- `AccountId.from_string(...)` when only string IDs are available.
 
 Do not mix both models in one runtime state. A hashed string-derived ID can equal
 a direct numeric ID.

@@ -19,11 +19,40 @@
 
 use openpit::param::{Asset, Leverage, PositionMode, Price};
 use openpit::{
-    AccountAdjustmentBalanceOperation, AccountAdjustmentPositionOperation,
     HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentPositionLeverage,
     HasAverageEntryPrice, HasBalanceAsset, HasCollateralAsset, HasPositionInstrument,
     HasPositionMode, Instrument, RequestFieldAccessError,
 };
+
+/// Populated balance-adjustment operation with individually-optional fields.
+///
+/// Each field is stored as [`Option`]. A `Some` value returns `Ok`; a `None`
+/// required field returns `Err(RequestFieldAccessError)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PopulatedBalanceOperation {
+    /// Balance asset (required).
+    pub asset: Option<Asset>,
+    /// Average entry price (optional).
+    pub average_entry_price: Option<Price>,
+}
+
+/// Populated position-adjustment operation with individually-optional fields.
+///
+/// Each field is stored as [`Option`]. A `Some` value returns `Ok`; a `None`
+/// required field returns `Err(RequestFieldAccessError)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PopulatedPositionOperation {
+    /// Position instrument (required).
+    pub instrument: Option<Instrument>,
+    /// Position collateral asset (required).
+    pub collateral_asset: Option<Asset>,
+    /// Position average entry price (required).
+    pub average_entry_price: Option<Price>,
+    /// Position mode (required).
+    pub mode: Option<PositionMode>,
+    /// Leverage (optional).
+    pub leverage: Option<Leverage>,
+}
 
 /// Populated account-adjustment operation group.
 ///
@@ -33,15 +62,18 @@ use openpit::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PopulatedAccountAdjustmentOperation {
     /// Physical-balance adjustment operation.
-    Balance(AccountAdjustmentBalanceOperation),
+    Balance(PopulatedBalanceOperation),
     /// Derivatives-position adjustment operation.
-    Position(AccountAdjustmentPositionOperation),
+    Position(PopulatedPositionOperation),
 }
 
 impl HasBalanceAsset for PopulatedAccountAdjustmentOperation {
     fn balance_asset(&self) -> Result<&Asset, RequestFieldAccessError> {
         match self {
-            Self::Balance(op) => Ok(&op.asset),
+            Self::Balance(op) => op
+                .asset
+                .as_ref()
+                .ok_or_else(|| RequestFieldAccessError::new("operation.balance_asset")),
             Self::Position(_) => Err(RequestFieldAccessError::new("operation.balance_asset")),
         }
     }
@@ -61,7 +93,10 @@ impl HasAccountAdjustmentBalanceAverageEntryPrice for PopulatedAccountAdjustment
 impl HasPositionInstrument for PopulatedAccountAdjustmentOperation {
     fn position_instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
         match self {
-            Self::Position(op) => Ok(&op.instrument),
+            Self::Position(op) => op
+                .instrument
+                .as_ref()
+                .ok_or_else(|| RequestFieldAccessError::new("operation.position_instrument")),
             Self::Balance(_) => Err(RequestFieldAccessError::new(
                 "operation.position_instrument",
             )),
@@ -72,7 +107,10 @@ impl HasPositionInstrument for PopulatedAccountAdjustmentOperation {
 impl HasCollateralAsset for PopulatedAccountAdjustmentOperation {
     fn collateral_asset(&self) -> Result<&Asset, RequestFieldAccessError> {
         match self {
-            Self::Position(op) => Ok(&op.collateral_asset),
+            Self::Position(op) => op
+                .collateral_asset
+                .as_ref()
+                .ok_or_else(|| RequestFieldAccessError::new("operation.collateral_asset")),
             Self::Balance(_) => Err(RequestFieldAccessError::new("operation.collateral_asset")),
         }
     }
@@ -81,7 +119,9 @@ impl HasCollateralAsset for PopulatedAccountAdjustmentOperation {
 impl HasAverageEntryPrice for PopulatedAccountAdjustmentOperation {
     fn average_entry_price(&self) -> Result<Price, RequestFieldAccessError> {
         match self {
-            Self::Position(op) => Ok(op.average_entry_price),
+            Self::Position(op) => op
+                .average_entry_price
+                .ok_or_else(|| RequestFieldAccessError::new("operation.average_entry_price")),
             Self::Balance(_) => Err(RequestFieldAccessError::new(
                 "operation.average_entry_price",
             )),
@@ -92,7 +132,9 @@ impl HasAverageEntryPrice for PopulatedAccountAdjustmentOperation {
 impl HasPositionMode for PopulatedAccountAdjustmentOperation {
     fn position_mode(&self) -> Result<PositionMode, RequestFieldAccessError> {
         match self {
-            Self::Position(op) => Ok(op.mode),
+            Self::Position(op) => op
+                .mode
+                .ok_or_else(|| RequestFieldAccessError::new("operation.position_mode")),
             Self::Balance(_) => Err(RequestFieldAccessError::new("operation.position_mode")),
         }
     }
@@ -191,28 +233,25 @@ impl HasAccountAdjustmentPositionLeverage for AccountAdjustmentOperationAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openpit::param::{Asset, PositionMode};
-    use openpit::{
-        AccountAdjustmentBalanceOperation, AccountAdjustmentPositionOperation, Instrument,
-    };
+    use openpit::param::{Asset, PositionMode, Price};
+    use openpit::Instrument;
 
-    fn balance_op() -> AccountAdjustmentBalanceOperation {
-        AccountAdjustmentBalanceOperation {
-            asset: Asset::new("USD").expect("valid"),
+    fn balance_op() -> PopulatedBalanceOperation {
+        PopulatedBalanceOperation {
+            asset: Some(Asset::new("USD").expect("valid")),
             average_entry_price: None,
         }
     }
 
-    fn position_op() -> AccountAdjustmentPositionOperation {
-        use openpit::param::Price;
-        AccountAdjustmentPositionOperation {
-            instrument: Instrument::new(
+    fn position_op() -> PopulatedPositionOperation {
+        PopulatedPositionOperation {
+            instrument: Some(Instrument::new(
                 Asset::new("SPX").expect("valid"),
                 Asset::new("USD").expect("valid"),
-            ),
-            collateral_asset: Asset::new("EUR").expect("valid"),
-            average_entry_price: Price::from_str("50000").expect("valid"),
-            mode: PositionMode::Netting,
+            )),
+            collateral_asset: Some(Asset::new("EUR").expect("valid")),
+            average_entry_price: Some(Price::from_str("50000").expect("valid")),
+            mode: Some(PositionMode::Netting),
             leverage: None,
         }
     }
@@ -243,6 +282,36 @@ mod tests {
         assert!(access.position_leverage().is_ok());
         assert!(access.balance_asset().is_err());
         assert!(access.balance_average_entry_price().is_err());
+    }
+
+    #[test]
+    fn balance_missing_required_returns_err() {
+        let access = AccountAdjustmentOperationAccess::Populated(
+            PopulatedAccountAdjustmentOperation::Balance(PopulatedBalanceOperation {
+                asset: None,
+                average_entry_price: None,
+            }),
+        );
+        assert!(access.balance_asset().is_err());
+        assert_eq!(access.balance_average_entry_price().unwrap(), None);
+    }
+
+    #[test]
+    fn position_missing_required_returns_err() {
+        let access = AccountAdjustmentOperationAccess::Populated(
+            PopulatedAccountAdjustmentOperation::Position(PopulatedPositionOperation {
+                instrument: None,
+                collateral_asset: None,
+                average_entry_price: None,
+                mode: None,
+                leverage: None,
+            }),
+        );
+        assert!(access.position_instrument().is_err());
+        assert!(access.collateral_asset().is_err());
+        assert!(access.average_entry_price().is_err());
+        assert!(access.position_mode().is_err());
+        assert_eq!(access.position_leverage().unwrap(), None);
     }
 
     #[test]

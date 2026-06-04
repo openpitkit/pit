@@ -28,8 +28,9 @@ use openpit::{
 /// Use [`AccountAdjustmentAmountAccess::Populated`] when the group is present,
 /// [`AccountAdjustmentAmountAccess::Absent`] when it is not.
 ///
-/// When absent, all three traits return `Err`; within a populated group, each
-/// individual amount is `Option<AdjustmentAmount>` and may be `None`.
+/// The amount group is optional, mirroring the native `AccountAdjustment`.
+/// When absent, all three traits return `Ok(None)`; within a populated group,
+/// each individual amount is `Option<AdjustmentAmount>` and may be `None`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccountAdjustmentAmountAccess {
     /// The amount group is present.
@@ -42,7 +43,7 @@ impl HasAccountAdjustmentBalance for AccountAdjustmentAmountAccess {
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         match self {
             Self::Populated(a) => Ok(a.balance),
-            Self::Absent => Err(RequestFieldAccessError::new("amount.balance")),
+            Self::Absent => Ok(None),
         }
     }
 }
@@ -51,7 +52,7 @@ impl HasAccountAdjustmentHeld for AccountAdjustmentAmountAccess {
     fn held(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         match self {
             Self::Populated(a) => Ok(a.held),
-            Self::Absent => Err(RequestFieldAccessError::new("amount.held")),
+            Self::Absent => Ok(None),
         }
     }
 }
@@ -60,7 +61,7 @@ impl HasAccountAdjustmentIncoming for AccountAdjustmentAmountAccess {
     fn incoming(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         match self {
             Self::Populated(a) => Ok(a.incoming),
-            Self::Absent => Err(RequestFieldAccessError::new("amount.incoming")),
+            Self::Absent => Ok(None),
         }
     }
 }
@@ -86,10 +87,10 @@ mod tests {
     }
 
     #[test]
-    fn absent_returns_err() {
+    fn absent_returns_none() {
         let access = AccountAdjustmentAmountAccess::Absent;
-        assert!(access.balance().is_err());
-        assert!(access.held().is_err());
-        assert!(access.incoming().is_err());
+        assert_eq!(access.balance(), Ok(None));
+        assert_eq!(access.held(), Ok(None));
+        assert_eq!(access.incoming(), Ok(None));
     }
 }

@@ -296,7 +296,7 @@ def build_order() -> openpit.Order:
     return openpit.Order(
         operation=openpit.OrderOperation(
             instrument=openpit.Instrument(SCENARIO_ASSET_TRADED, SCENARIO_ASSET_SETTLE),
-            account_id=openpit.param.AccountId.from_u64(SCENARIO_ACCOUNT),
+            account_id=openpit.param.AccountId.from_int(SCENARIO_ACCOUNT),
             side=openpit.param.Side.BUY,
             trade_amount=openpit.param.TradeAmount.quantity(SCENARIO_ORDER_QTY),
             price=openpit.param.Price(SCENARIO_ORDER_PRICE),
@@ -311,7 +311,7 @@ def build_report(pnl: Decimal) -> openpit.ExecutionReport:
     return openpit.ExecutionReport(
         operation=openpit.ExecutionReportOperation(
             instrument=openpit.Instrument(SCENARIO_ASSET_TRADED, SCENARIO_ASSET_SETTLE),
-            account_id=openpit.param.AccountId.from_u64(SCENARIO_ACCOUNT),
+            account_id=openpit.param.AccountId.from_int(SCENARIO_ACCOUNT),
             side=openpit.param.Side.BUY,
         ),
         financial_impact=openpit.FinancialImpact(

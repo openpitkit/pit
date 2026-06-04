@@ -67,10 +67,16 @@ impl LockingPolicyFactory for NoLocking {
     /// Single-thread regime; `Cell<bool>` needs no synchronization.
     type IndexFlag = std::cell::Cell<bool>;
 
+    type Shared<T: 'static> = std::rc::Rc<T>;
+
     fn create_policy(&self) -> Self::Policy {
         NoLockingPolicy {
             _not_thread_safe: PhantomData,
         }
+    }
+
+    fn new_shared<T: 'static>(value: T) -> std::rc::Rc<T> {
+        std::rc::Rc::new(value)
     }
 }
 

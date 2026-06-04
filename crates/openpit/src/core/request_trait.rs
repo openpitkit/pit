@@ -109,7 +109,7 @@ has_request_field_trait!(
     /// This is not generic user metadata. It is policy-produced context that
     /// must be preserved across the order lifecycle when later execution-report
     /// handling depends on reservation-time details.
-    HasLock,
+    HasPreTradeLock,
     lock -> PreTradeLock
 );
 

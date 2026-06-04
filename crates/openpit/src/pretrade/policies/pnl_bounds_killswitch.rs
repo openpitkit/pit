@@ -21,10 +21,12 @@ use std::fmt::{Display, Formatter};
 use crate::core::{HasAccountId, HasFee, HasInstrument, HasPnl};
 use crate::param::{AccountId, Asset, Pnl};
 use crate::pretrade::policy::{
-    missing_required_field_account_block, missing_required_field_reject, PolicyName,
+    missing_required_field_account_block, missing_required_field_reject, PolicyGroupId, PolicyName,
 };
+use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
 use crate::pretrade::{
-    AccountBlock, PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects,
+    AccountBlock, PostTradeResult, PreTradeContext, PreTradePolicy, Reject, RejectCode,
+    RejectScope, Rejects,
 };
 use crate::storage::{Storage, StorageBuilder};
 
@@ -94,6 +96,7 @@ where
 {
     broker_barriers: HashMap<Asset, PnlBoundsBrokerBarrier>,
     account_barriers: HashMap<AccountId, HashMap<Asset, PnlBoundsAccountAssetBarrier>>,
+    group_id: PolicyGroupId,
     realized: Storage<
         (AccountId, Asset),
         Pnl,
@@ -197,7 +200,16 @@ where
             broker_barriers: broker,
             account_barriers: account,
             realized,
+            group_id: DEFAULT_POLICY_GROUP_ID,
         })
+    }
+
+    /// Assigns a group tag to this policy instance.
+    ///
+    /// See [`PolicyGroupId`] and [`DEFAULT_POLICY_GROUP_ID`] for details.
+    pub fn with_policy_group_id(mut self, id: PolicyGroupId) -> Self {
+        self.group_id = id;
+        self
     }
 
     fn validate_bounds(
@@ -223,19 +235,28 @@ where
     }
 }
 
-impl<Order, ExecutionReport, AccountAdjustment, LockingPolicyFactory>
-    PreTradePolicy<Order, ExecutionReport, AccountAdjustment>
+impl<Order, ExecutionReport, AccountAdjustment, LockingPolicyFactory, Sync>
+    PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
     for PnlBoundsKillSwitchPolicy<LockingPolicyFactory>
 where
     Order: HasInstrument + HasAccountId,
     ExecutionReport: HasInstrument + HasPnl + HasFee + HasAccountId,
     LockingPolicyFactory: crate::storage::LockingPolicyFactory,
+    Sync: crate::core::SyncMode,
 {
     fn name(&self) -> &str {
         Self::NAME
     }
 
-    fn check_pre_trade_start(&self, _ctx: &PreTradeContext, order: &Order) -> Result<(), Rejects> {
+    fn policy_group_id(&self) -> PolicyGroupId {
+        self.group_id
+    }
+
+    fn check_pre_trade_start(
+        &self,
+        _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+        order: &Order,
+    ) -> Result<(), Rejects> {
         let instrument = order
             .instrument()
             .map_err(|e| Rejects::from(missing_required_field_reject(self, "instrument", &e)))?;
@@ -313,22 +334,44 @@ where
     /// Returns an [`AccountBlock`] when any required report field cannot be
     /// accessed, when `pnl + fee` or the accumulated value overflows, or when
     /// the new accumulated value breaches a configured barrier.
-    fn apply_execution_report(&self, report: &ExecutionReport) -> Vec<AccountBlock> {
+    fn apply_execution_report(
+        &self,
+        _ctx: &crate::pretrade::PostTradeContext<
+            <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
+        >,
+        report: &ExecutionReport,
+    ) -> Option<PostTradeResult> {
         let instrument = match report.instrument() {
             Ok(i) => i,
-            Err(e) => return vec![missing_required_field_account_block(self, "instrument", &e)],
+            Err(e) => {
+                return Some(PostTradeResult::blocks_only(vec![
+                    missing_required_field_account_block(self, "instrument", &e),
+                ]))
+            }
         };
         let account_id = match report.account_id() {
             Ok(id) => id,
-            Err(e) => return vec![missing_required_field_account_block(self, "account ID", &e)],
+            Err(e) => {
+                return Some(PostTradeResult::blocks_only(vec![
+                    missing_required_field_account_block(self, "account ID", &e),
+                ]))
+            }
         };
         let pnl_delta = match report.pnl() {
             Ok(p) => p,
-            Err(e) => return vec![missing_required_field_account_block(self, "P&L", &e)],
+            Err(e) => {
+                return Some(PostTradeResult::blocks_only(vec![
+                    missing_required_field_account_block(self, "P&L", &e),
+                ]))
+            }
         };
         let fee = match report.fee() {
             Ok(f) => f,
-            Err(e) => return vec![missing_required_field_account_block(self, "fee", &e)],
+            Err(e) => {
+                return Some(PostTradeResult::blocks_only(vec![
+                    missing_required_field_account_block(self, "fee", &e),
+                ]))
+            }
         };
 
         let settlement = instrument.settlement_asset();
@@ -340,19 +383,21 @@ where
                 .get(&account_id)
                 .is_some_and(|m| m.contains_key(settlement));
         if !has_barrier {
-            return vec![];
+            return None;
         }
 
         let pnl_with_fee = match pnl_delta.checked_add(fee.to_pnl()) {
             Ok(v) => v,
             Err(_) => {
-                return vec![pnl_calculation_failed_block(
-                    self,
-                    format!(
-                        "pnl + fee overflow: pnl {pnl_delta}, fee {fee}, \
+                return Some(PostTradeResult::blocks_only(vec![
+                    pnl_calculation_failed_block(
+                        self,
+                        format!(
+                            "pnl + fee overflow: pnl {pnl_delta}, fee {fee}, \
                          settlement asset {settlement}, account {account_id}"
+                        ),
                     ),
-                )];
+                ]));
             }
         };
 
@@ -397,7 +442,7 @@ where
             },
         );
 
-        block.into_iter().collect()
+        block.map(|b| PostTradeResult::blocks_only(vec![b]))
     }
 }
 
@@ -1055,13 +1100,17 @@ mod tests {
         }
 
         let policy = policy_usd(Some(pnl("-100")), Some(pnl("50")));
-        let reject =
-            <TestPolicy as PreTradePolicy<InvalidOrder, TestReport>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &InvalidOrder,
-            )
-            .expect_err("field access error must reject");
+        let reject = <TestPolicy as PreTradePolicy<
+            InvalidOrder,
+            TestReport,
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &InvalidOrder,
+        )
+        .expect_err("field access error must reject");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
@@ -1078,9 +1127,9 @@ mod tests {
         policy: &TestPolicy,
         order: &OrderOperation,
     ) -> Result<(), crate::pretrade::Rejects> {
-        <TestPolicy as PreTradePolicy<OrderOperation, TestReport>>::check_pre_trade_start(
+        <TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), crate::core::LocalSync>>::check_pre_trade_start(
             policy,
-            &PreTradeContext::new(),
+            &PreTradeContext::<NoLocking>::new(None),
             order,
         )
     }
@@ -1093,9 +1142,13 @@ mod tests {
         policy: &TestPolicy,
         report: &TestReport,
     ) -> Vec<crate::pretrade::AccountBlock> {
-        <TestPolicy as PreTradePolicy<OrderOperation, TestReport>>::apply_execution_report(
-            policy, report,
+        <TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), crate::core::LocalSync>>::apply_execution_report(
+            policy,
+            &crate::pretrade::PostTradeContext::new(),
+            report,
         )
+        .map(|r| r.account_blocks)
+        .unwrap_or_default()
     }
 
     fn report(settlement: &str, account_id: AccountId, pnl_val: Pnl) -> TestReport {
@@ -1211,10 +1264,16 @@ mod tests {
             pnl: pnl("0"),
             fee: Fee::ZERO,
         };
-        let blocks =
-            <TestPolicy as PreTradePolicy<OrderOperation, NoInstrument>>::apply_execution_report(
-                &policy, &report,
-            );
+        let blocks = <TestPolicy as PreTradePolicy<
+            OrderOperation,
+            NoInstrument,
+            (),
+            crate::core::LocalSync,
+        >>::apply_execution_report(
+            &policy, &crate::pretrade::PostTradeContext::new(), &report
+        )
+        .map(|r| r.account_blocks)
+        .unwrap_or_default();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].code, RejectCode::MissingRequiredField);
         assert_eq!(
@@ -1261,10 +1320,16 @@ mod tests {
             pnl: pnl("0"),
             fee: Fee::ZERO,
         };
-        let blocks =
-            <TestPolicy as PreTradePolicy<OrderOperation, NoAccount>>::apply_execution_report(
-                &policy, &report,
-            );
+        let blocks = <TestPolicy as PreTradePolicy<
+            OrderOperation,
+            NoAccount,
+            (),
+            crate::core::LocalSync,
+        >>::apply_execution_report(
+            &policy, &crate::pretrade::PostTradeContext::new(), &report
+        )
+        .map(|r| r.account_blocks)
+        .unwrap_or_default();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].code, RejectCode::MissingRequiredField);
         assert_eq!(
@@ -1311,9 +1376,16 @@ mod tests {
             account_id: account(1),
             fee: Fee::ZERO,
         };
-        let blocks = <TestPolicy as PreTradePolicy<OrderOperation, NoPnl>>::apply_execution_report(
-            &policy, &report,
-        );
+        let blocks = <TestPolicy as PreTradePolicy<
+            OrderOperation,
+            NoPnl,
+            (),
+            crate::core::LocalSync,
+        >>::apply_execution_report(
+            &policy, &crate::pretrade::PostTradeContext::new(), &report
+        )
+        .map(|r| r.account_blocks)
+        .unwrap_or_default();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].code, RejectCode::MissingRequiredField);
         assert_eq!(blocks[0].reason, "failed to access required field 'P&L'");
@@ -1357,9 +1429,16 @@ mod tests {
             account_id: account(1),
             pnl: pnl("0"),
         };
-        let blocks = <TestPolicy as PreTradePolicy<OrderOperation, NoFee>>::apply_execution_report(
-            &policy, &report,
-        );
+        let blocks = <TestPolicy as PreTradePolicy<
+            OrderOperation,
+            NoFee,
+            (),
+            crate::core::LocalSync,
+        >>::apply_execution_report(
+            &policy, &crate::pretrade::PostTradeContext::new(), &report
+        )
+        .map(|r| r.account_blocks)
+        .unwrap_or_default();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].code, RejectCode::MissingRequiredField);
         assert_eq!(blocks[0].reason, "failed to access required field 'fee'");

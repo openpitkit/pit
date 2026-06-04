@@ -19,8 +19,6 @@
 package model
 
 import (
-	"errors"
-
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
@@ -53,6 +51,11 @@ func NewAccountAdjustment() AccountAdjustment {
 }
 
 // AccountAdjustmentValues holds the optional fields of an AccountAdjustment.
+//
+// The operation is a faithful sum: BalanceOperation and PositionOperation are
+// mutually exclusive — at most one is ever set, the other being Absent. The
+// native discriminated operation enforces this structurally, so supplying both
+// is not representable and the last one applied wins.
 type AccountAdjustmentValues struct {
 	BalanceOperation  optional.Option[AccountAdjustmentBalanceOperation]
 	PositionOperation optional.Option[AccountAdjustmentPositionOperation]
@@ -60,19 +63,12 @@ type AccountAdjustmentValues struct {
 	Bounds            optional.Option[AccountAdjustmentBounds]
 }
 
-// Check validates that at most one of BalanceOperation and PositionOperation is set.
-func (v AccountAdjustmentValues) Check() error {
-	if v.BalanceOperation.IsSet() && v.PositionOperation.IsSet() {
-		return errors.New("cannot set both BalanceOperation and PositionOperation")
-	}
-	return nil
-}
-
 // NewAccountAdjustmentFromValues creates an AccountAdjustment from the given values.
+//
+// The error result is retained for API stability; it is always nil because the
+// discriminated operation makes a conflicting balance/position pair structurally
+// impossible.
 func NewAccountAdjustmentFromValues(values AccountAdjustmentValues) (AccountAdjustment, error) {
-	if err := values.Check(); err != nil {
-		return AccountAdjustment{}, err
-	}
 	a := NewAccountAdjustment()
 	a.setValues(values)
 	return a, nil
@@ -100,10 +96,11 @@ func (a AccountAdjustment) Values() AccountAdjustmentValues {
 }
 
 // SetValues resets the adjustment and applies the provided values.
+//
+// The error result is retained for API stability; it is always nil because the
+// discriminated operation makes a conflicting balance/position pair structurally
+// impossible.
 func (a *AccountAdjustment) SetValues(values AccountAdjustmentValues) error {
-	if err := values.Check(); err != nil {
-		return err
-	}
 	a.Reset()
 	a.setValues(values)
 	return nil
@@ -124,15 +121,15 @@ func (a *AccountAdjustment) setValues(values AccountAdjustmentValues) {
 	}
 }
 
-// BalanceOperation returns the optional balance operation.
+// BalanceOperation returns the optional balance operation. It is set only when
+// the discriminated operation selects the balance kind.
 func (a AccountAdjustment) BalanceOperation() optional.Option[AccountAdjustmentBalanceOperation] {
-	operation := native.AccountAdjustmentGetBalanceOperation(a.value)
-	if !native.AccountAdjustmentBalanceOperationOptionalIsSet(operation) {
+	if native.AccountAdjustmentGetOperationKind(a.value) != native.AccountAdjustmentOperationKindBalance {
 		return optional.None[AccountAdjustmentBalanceOperation]()
 	}
 	return optional.Some(
 		newAccountAdjustmentBalanceOperation(
-			native.AccountAdjustmentBalanceOperationOptionalGet(operation),
+			native.AccountAdjustmentGetBalanceOperation(a.value),
 		),
 	)
 }
@@ -140,18 +137,11 @@ func (a AccountAdjustment) BalanceOperation() optional.Option[AccountAdjustmentB
 // EnsureBalanceOperationView ensures the balance operation exists, unsets the
 // position operation, and returns a mutable balance operation view.
 func (a *AccountAdjustment) EnsureBalanceOperationView() AccountAdjustmentBalanceOperationView {
-	operation := native.AccountAdjustmentGetBalanceOperationView(&a.value)
-	if !native.AccountAdjustmentBalanceOperationOptionalIsSet(*operation) {
-		native.AccountAdjustmentBalanceOperationOptionalSet(
-			operation,
-			native.NewAccountAdjustmentBalanceOperation(),
-		)
-	}
+	native.AccountAdjustmentSelectBalanceOperationAndUnsetPositionOperation(&a.value)
 	result := newAccountAdjustmentBalanceOperationView(
-		native.AccountAdjustmentBalanceOperationOptionalGetView(operation),
+		native.AccountAdjustmentGetBalanceOperationView(&a.value),
 		&a.retain.BalanceOperationAsset,
 	)
-	native.AccountAdjustmentUnsetPositionOperation(&a.value)
 	a.retain.PositionOperationInstrument = param.Instrument{}
 	a.retain.PositionOperationCollateralAsset = param.Asset{}
 	return result
@@ -175,15 +165,15 @@ func (a *AccountAdjustment) UnsetBalanceOperation() {
 	a.retain.BalanceOperationAsset = param.Asset{}
 }
 
-// PositionOperation returns the optional position operation.
+// PositionOperation returns the optional position operation. It is set only when
+// the discriminated operation selects the position kind.
 func (a AccountAdjustment) PositionOperation() optional.Option[AccountAdjustmentPositionOperation] {
-	operation := native.AccountAdjustmentGetPositionOperation(a.value)
-	if !native.AccountAdjustmentPositionOperationOptionalIsSet(operation) {
+	if native.AccountAdjustmentGetOperationKind(a.value) != native.AccountAdjustmentOperationKindPosition {
 		return optional.None[AccountAdjustmentPositionOperation]()
 	}
 	return optional.Some(
 		newAccountAdjustmentPositionOperation(
-			native.AccountAdjustmentPositionOperationOptionalGet(operation),
+			native.AccountAdjustmentGetPositionOperation(a.value),
 		),
 	)
 }
@@ -191,19 +181,12 @@ func (a AccountAdjustment) PositionOperation() optional.Option[AccountAdjustment
 // EnsurePositionOperationView ensures the position operation exists, unsets the
 // balance operation, and returns a mutable position operation view.
 func (a *AccountAdjustment) EnsurePositionOperationView() AccountAdjustmentPositionOperationView {
-	operation := native.AccountAdjustmentGetPositionOperationView(&a.value)
-	if !native.AccountAdjustmentPositionOperationOptionalIsSet(*operation) {
-		native.AccountAdjustmentPositionOperationOptionalSet(
-			operation,
-			native.NewAccountAdjustmentPositionOperation(),
-		)
-	}
+	native.AccountAdjustmentSelectPositionOperationAndUnsetBalanceOperation(&a.value)
 	result := newAccountAdjustmentPositionOperationView(
-		native.AccountAdjustmentPositionOperationOptionalGetView(operation),
+		native.AccountAdjustmentGetPositionOperationView(&a.value),
 		&a.retain.PositionOperationInstrument,
 		&a.retain.PositionOperationCollateralAsset,
 	)
-	native.AccountAdjustmentUnsetBalanceOperation(&a.value)
 	a.retain.BalanceOperationAsset = param.Asset{}
 	return result
 }

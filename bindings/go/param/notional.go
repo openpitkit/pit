@@ -47,7 +47,11 @@ type Notional struct {
 	native native.ParamNotional
 }
 
-var newNotionalZero = sync.OnceValue(func() Notional { return newNotionalOrPanic(NewNotionalFromInt(0)) })
+var newNotionalZero = sync.OnceValue(
+	func() Notional {
+		return newNotionalOrPanic(NewNotionalFromInt64(0))
+	},
+)
 
 // NewNotionalZero returns the canonical zero value of Notional.
 func NewNotionalZero() Notional { return newNotionalZero() }
@@ -75,25 +79,25 @@ func NewNotionalFromDecimal(v decimal.Decimal) (Notional, error) {
 
 // NewNotionalFromString creates a Notional from a decimal string.
 func NewNotionalFromString(v string) (Notional, error) {
-	nativeValue, err := native.CreateParamNotionalFromStr(v)
+	nativeValue, err := native.CreateParamNotionalFromString(v)
 	if err != nil {
 		return Notional{}, err
 	}
 	return NewNotionalFromHandle(nativeValue), nil
 }
 
-// NewNotionalFromInt creates a Notional from a signed integer.
-func NewNotionalFromInt(v int64) (Notional, error) {
-	nativeValue, err := native.CreateParamNotionalFromI64(v)
+// NewNotionalFromInt64 creates a Notional from a signed integer.
+func NewNotionalFromInt64(v int64) (Notional, error) {
+	nativeValue, err := native.CreateParamNotionalFromInt64(v)
 	if err != nil {
 		return Notional{}, err
 	}
 	return NewNotionalFromHandle(nativeValue), nil
 }
 
-// NewNotionalFromUint creates a Notional from an unsigned integer.
-func NewNotionalFromUint(v uint64) (Notional, error) {
-	nativeValue, err := native.CreateParamNotionalFromU64(v)
+// NewNotionalFromUint64 creates a Notional from an unsigned integer.
+func NewNotionalFromUint64(v uint64) (Notional, error) {
+	nativeValue, err := native.CreateParamNotionalFromUint64(v)
 	if err != nil {
 		return Notional{}, err
 	}
@@ -136,7 +140,7 @@ func NewNotionalFromStringRounded(
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Notional, error) {
-	nativeValue, err := native.CreateParamNotionalFromStrRounded(v, scale, strategy.native())
+	nativeValue, err := native.CreateParamNotionalFromStringRounded(v, scale, strategy.native())
 	if err != nil {
 		return Notional{}, err
 	}

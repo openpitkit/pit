@@ -23,6 +23,7 @@ from pathlib import Path
 
 C_API_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "_generate_api_c_h.py"
 DLSYM_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "_generate_api_c_dlsym.py"
+SITEMAP_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "_generate_api_c_sitemap.py"
 PARAM_RS_PATH = (
     Path(__file__).resolve().parents[2] / "crates" / "openpit-ffi" / "src" / "param.rs"
 )
@@ -51,6 +52,11 @@ def load_c_api_module():
 
 def load_dlsym_module():
     return load_module(DLSYM_SCRIPT_PATH, "_generate_api_c_dlsym")
+
+
+def load_sitemap_module():
+    load_c_api_module()
+    return load_module(SITEMAP_SCRIPT_PATH, "_generate_api_c_sitemap")
 
 
 def collect_named_block(module, lines: list[str], prefix: str) -> str:
@@ -126,9 +132,9 @@ def test_parse_decimal_macro_ffi_uses_hardcoded_signatures() -> None:
     items = module.parse_decimal_ffi_common(invocation_block, specs)
     by_name = {item.name: item for item in items}
 
-    from_str_item = by_name["openpit_create_param_pnl_from_str"]
-    assert from_str_item.ret == "bool"
-    assert from_str_item.args == [
+    from_string_item = by_name["openpit_create_param_pnl_from_string"]
+    assert from_string_item.ret == "bool"
+    assert from_string_item.args == [
         ("value", "OpenPitStringView"),
         ("out", "*mut OpenPitParamPnl"),
         ("out_error", "OpenPitOutParamError"),
@@ -149,6 +155,31 @@ def test_parse_decimal_macro_ffi_uses_hardcoded_signatures() -> None:
         ("value", "OpenPitParamPnl"),
         ("out_error", "OpenPitOutParamError"),
     ]
+
+
+def test_parse_fn_pointer_unwraps_nullable_option_callback() -> None:
+    module = load_c_api_module()
+
+    bare = 'extern "C" fn(user_data: *mut c_void) -> bool'
+    nullable = (
+        "Option<\n"
+        '    extern "C" fn(\n'
+        "        user_data: *mut c_void,\n"
+        "        out_account_group_id: *mut OpenPitParamAccountGroupId,\n"
+        "    ) -> bool,\n"
+        ">"
+    )
+
+    bare_args, bare_ret = module.parse_fn_pointer(" ".join(bare.split()))
+    assert bare_args == [("user_data", "*mut c_void")]
+    assert bare_ret == "bool"
+
+    nullable_args, nullable_ret = module.parse_fn_pointer(" ".join(nullable.split()))
+    assert nullable_args == [
+        ("user_data", "*mut c_void"),
+        ("out_account_group_id", "*mut OpenPitParamAccountGroupId"),
+    ]
+    assert nullable_ret == "bool"
 
 
 def test_parse_file_includes_pointer_alias_for_out_error() -> None:
@@ -271,4 +302,102 @@ def test_generate_dlsym_writes_output(tmp_path: Path) -> None:
         "OpenPitStringView openpit_get_runtime_version(void) {\n"
         "    return _fn_openpit_get_runtime_version();\n"
         "}\n"
+    )
+
+
+def test_sitemap_build_canonical_urls_includes_static_and_section_pages() -> None:
+    module = load_sitemap_module()
+
+    urls = module.build_canonical_urls()
+
+    assert urls[0] == f"{module.SITE_BASE}/"
+    assert urls[1] == f"{module.SITE_BASE}/c-api/"
+    section_urls = urls[2:]
+    expected_prefix = f"{module.SITE_BASE}/c-api/"
+    for url in section_urls:
+        assert url.startswith(expected_prefix)
+        assert url.endswith(module.PAGE_SUFFIX)
+    assert len(urls) == len(set(urls))
+
+
+def test_sitemap_parse_existing_urls_extracts_loc_values() -> None:
+    module = load_sitemap_module()
+    text = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        "  <url><loc>https://openpit.dev/</loc></url>\n"
+        "  <url>\n    <loc>https://openpit.dev/c-api/</loc>\n  </url>\n"
+        "</urlset>\n"
+    )
+
+    urls = module.parse_existing_urls(text)
+
+    assert urls == [
+        "https://openpit.dev/",
+        "https://openpit.dev/c-api/",
+    ]
+
+
+def test_sitemap_render_matches_parse_round_trip() -> None:
+    module = load_sitemap_module()
+    urls = [
+        "https://openpit.dev/",
+        "https://openpit.dev/c-api/",
+        "https://openpit.dev/c-api/orders.html",
+    ]
+
+    rendered = module.render_sitemap(urls)
+
+    assert rendered.startswith('<?xml version="1.0" encoding="UTF-8"?>\n')
+    assert rendered.endswith("</urlset>\n")
+    assert module.parse_existing_urls(rendered) == urls
+
+
+def test_sitemap_generate_writes_file_when_missing(tmp_path: Path, monkeypatch) -> None:
+    module = load_sitemap_module()
+    target = tmp_path / "sitemap.xml"
+    monkeypatch.setattr(module, "SITEMAP_PATH", target)
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+
+    module.generate()
+
+    assert target.exists()
+    written = target.read_text(encoding="utf-8")
+    assert module.parse_existing_urls(written) == module.build_canonical_urls()
+
+
+def test_sitemap_generate_is_noop_when_urls_unchanged(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_sitemap_module()
+    target = tmp_path / "sitemap.xml"
+    monkeypatch.setattr(module, "SITEMAP_PATH", target)
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+
+    module.generate()
+    first_mtime = target.stat().st_mtime_ns
+    first_content = target.read_text(encoding="utf-8")
+
+    module.generate()
+
+    assert target.stat().st_mtime_ns == first_mtime
+    assert target.read_text(encoding="utf-8") == first_content
+
+
+def test_sitemap_generate_rewrites_when_url_set_changes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_sitemap_module()
+    target = tmp_path / "sitemap.xml"
+    monkeypatch.setattr(module, "SITEMAP_PATH", target)
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    target.write_text(
+        module.render_sitemap([f"{module.SITE_BASE}/"]),
+        encoding="utf-8",
+    )
+
+    module.generate()
+
+    assert module.parse_existing_urls(target.read_text(encoding="utf-8")) == (
+        module.build_canonical_urls()
     )

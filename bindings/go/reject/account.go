@@ -22,6 +22,7 @@ import (
 	"unsafe"
 
 	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/param"
 )
 
 // AccountBlock is a kill-switch block record returned by policy callbacks.
@@ -96,4 +97,41 @@ func NewAccountAdjustmentBatchErrorFromHandle(
 			FailedAdjustmentIndex: native.AccountAdjustmentBatchErrorGetFailedAdjustmentIndex(reject),
 		},
 		nil
+}
+
+// AccountGroupError is returned when an Accounts.RegisterGroup or
+// Accounts.UnregisterGroup call fails due to a group conflict or a reserved
+// default-group target.
+type AccountGroupError struct {
+	// Message is the human-readable error description.
+	Message string
+	// Account is the identifier of the conflicting account.
+	Account param.AccountID
+	// CurrentGroup is set to the group the account currently belongs to
+	// when the conflict is a duplicate-registration error. It is nil when
+	// the conflict is an unregister error (account not in the given group).
+	CurrentGroup *param.AccountGroupID
+}
+
+// Error implements the error interface.
+func (e *AccountGroupError) Error() string {
+	return e.Message
+}
+
+// NewAccountGroupErrorFromHandle creates an AccountGroupError from a native
+// handle and releases it.
+func NewAccountGroupErrorFromHandle(handle native.AccountGroupError) *AccountGroupError {
+	msg := native.AccountGroupErrorGetMessage(handle)
+	account := param.NewAccountIDFromHandle(native.AccountGroupErrorGetAccount(handle))
+	group, hasGroup := native.AccountGroupErrorGetCurrentGroup(handle)
+	native.DestroyAccountGroupError(handle)
+	err := &AccountGroupError{
+		Message: msg,
+		Account: account,
+	}
+	if hasGroup {
+		g := param.NewAccountGroupIDFromHandle(group)
+		err.CurrentGroup = &g
+	}
+	return err
 }

@@ -37,14 +37,14 @@ func CreateParamPnl(value ParamDecimal) (ParamPnl, error) {
 	return result, nil
 }
 
-func CreateParamPnlFromStr(v string) (ParamPnl, error) {
+func CreateParamPnlFromString(v string) (ParamPnl, error) {
 	var result ParamPnl
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_pnl_from_str(
+	if !C.openpit_create_param_pnl_from_string(
 		importString(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
-		return result, consumeParamError(paramErr, "openpit_create_param_pnl_from_str failed")
+		return result, consumeParamError(paramErr, "openpit_create_param_pnl_from_string failed")
 	}
 	return result, nil
 }
@@ -61,38 +61,38 @@ func CreateParamPnlFromF64(v float64) (ParamPnl, error) {
 	return result, nil
 }
 
-func CreateParamPnlFromI64(v int64) (ParamPnl, error) {
+func CreateParamPnlFromInt64(v int64) (ParamPnl, error) {
 	var result ParamPnl
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_pnl_from_i64(
+	if !C.openpit_create_param_pnl_from_int64(
 		C.int64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
-		return result, consumeParamError(paramErr, "openpit_create_param_pnl_from_i64 failed")
+		return result, consumeParamError(paramErr, "openpit_create_param_pnl_from_int64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamPnlFromU64(v uint64) (ParamPnl, error) {
+func CreateParamPnlFromUint64(v uint64) (ParamPnl, error) {
 	var result ParamPnl
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_pnl_from_u64(
+	if !C.openpit_create_param_pnl_from_uint64(
 		C.uint64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
-		return result, consumeParamError(paramErr, "openpit_create_param_pnl_from_u64 failed")
+		return result, consumeParamError(paramErr, "openpit_create_param_pnl_from_uint64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamPnlFromStrRounded(
+func CreateParamPnlFromStringRounded(
 	v string,
 	scale uint32,
 	strategy ParamRoundingStrategy,
 ) (ParamPnl, error) {
 	var result ParamPnl
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_pnl_from_str_rounded(
+	if !C.openpit_create_param_pnl_from_string_rounded(
 		importString(v),
 		C.uint32_t(scale),
 		strategy,
@@ -100,7 +100,7 @@ func CreateParamPnlFromStrRounded(
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_pnl_from_str_rounded failed")
+			consumeParamError(paramErr, "openpit_create_param_pnl_from_string_rounded failed")
 	}
 	return result, nil
 }
@@ -380,6 +380,30 @@ func ParamPnlToPositionSize(value ParamPnl) (ParamPositionSize, error) {
 	return out, nil
 }
 
+func ParamQuantityToPositionSize(value ParamQuantity) (ParamPositionSize, error) {
+	var out ParamPositionSize
+	var paramErr ParamErrorHandle
+	if !C.openpit_param_quantity_to_position_size(
+		value, &out,
+		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return out, consumeParamError(paramErr, "openpit_param_quantity_to_position_size failed")
+	}
+	return out, nil
+}
+
+func ParamVolumeToPositionSize(value ParamVolume) (ParamPositionSize, error) {
+	var out ParamPositionSize
+	var paramErr ParamErrorHandle
+	if !C.openpit_param_volume_to_position_size(
+		value, &out,
+		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return out, consumeParamError(paramErr, "openpit_param_volume_to_position_size failed")
+	}
+	return out, nil
+}
+
 func ParamPnlFromFee(fee ParamFee) (ParamPnl, error) {
 	var out ParamPnl
 	var paramErr ParamErrorHandle
@@ -415,15 +439,15 @@ func CreateParamPrice(value ParamDecimal) (ParamPrice, error) {
 	return result, nil
 }
 
-func CreateParamPriceFromStr(v string) (ParamPrice, error) {
+func CreateParamPriceFromString(v string) (ParamPrice, error) {
 	var result ParamPrice
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_price_from_str(
+	if !C.openpit_create_param_price_from_string(
 		importString(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_price_from_str failed")
+			consumeParamError(paramErr, "openpit_create_param_price_from_string failed")
 	}
 	return result, nil
 }
@@ -441,40 +465,40 @@ func CreateParamPriceFromF64(v float64) (ParamPrice, error) {
 	return result, nil
 }
 
-func CreateParamPriceFromI64(v int64) (ParamPrice, error) {
+func CreateParamPriceFromInt64(v int64) (ParamPrice, error) {
 	var result ParamPrice
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_price_from_i64(
+	if !C.openpit_create_param_price_from_int64(
 		C.int64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_price_from_i64 failed")
+			consumeParamError(paramErr, "openpit_create_param_price_from_int64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamPriceFromU64(v uint64) (ParamPrice, error) {
+func CreateParamPriceFromUint64(v uint64) (ParamPrice, error) {
 	var result ParamPrice
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_price_from_u64(
+	if !C.openpit_create_param_price_from_uint64(
 		C.uint64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_price_from_u64 failed")
+			consumeParamError(paramErr, "openpit_create_param_price_from_uint64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamPriceFromStrRounded(
+func CreateParamPriceFromStringRounded(
 	v string,
 	scale uint32,
 	strategy ParamRoundingStrategy,
 ) (ParamPrice, error) {
 	var result ParamPrice
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_price_from_str_rounded(
+	if !C.openpit_create_param_price_from_string_rounded(
 		importString(v),
 		C.uint32_t(scale),
 		strategy,
@@ -482,7 +506,7 @@ func CreateParamPriceFromStrRounded(
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_price_from_str_rounded failed")
+			consumeParamError(paramErr, "openpit_create_param_price_from_string_rounded failed")
 	}
 	return result, nil
 }
@@ -755,6 +779,22 @@ func ParamPriceCalculateVolume(price ParamPrice, quantity ParamQuantity) (ParamV
 	return out, nil
 }
 
+func ParamPriceCalculatePositionSize(
+	price ParamPrice,
+	quantity ParamQuantity,
+) (ParamPositionSize, error) {
+	var out ParamPositionSize
+	var paramErr ParamErrorHandle
+	if !C.openpit_param_price_calculate_position_size(
+		price, quantity, &out,
+		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return out,
+			consumeParamError(paramErr, "openpit_param_price_calculate_position_size failed")
+	}
+	return out, nil
+}
+
 func ParamPriceOptionalIsSet(value ParamPriceOptional) bool {
 	return bool(value.is_set)
 }
@@ -778,15 +818,15 @@ func CreateParamQuantity(value ParamDecimal) (ParamQuantity, error) {
 	return result, nil
 }
 
-func CreateParamQuantityFromStr(v string) (ParamQuantity, error) {
+func CreateParamQuantityFromString(v string) (ParamQuantity, error) {
 	var result ParamQuantity
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_quantity_from_str(
+	if !C.openpit_create_param_quantity_from_string(
 		importString(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_quantity_from_str failed")
+			consumeParamError(paramErr, "openpit_create_param_quantity_from_string failed")
 	}
 	return result, nil
 }
@@ -804,40 +844,40 @@ func CreateParamQuantityFromF64(v float64) (ParamQuantity, error) {
 	return result, nil
 }
 
-func CreateParamQuantityFromI64(v int64) (ParamQuantity, error) {
+func CreateParamQuantityFromInt64(v int64) (ParamQuantity, error) {
 	var result ParamQuantity
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_quantity_from_i64(
+	if !C.openpit_create_param_quantity_from_int64(
 		C.int64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_quantity_from_i64 failed")
+			consumeParamError(paramErr, "openpit_create_param_quantity_from_int64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamQuantityFromU64(v uint64) (ParamQuantity, error) {
+func CreateParamQuantityFromUint64(v uint64) (ParamQuantity, error) {
 	var result ParamQuantity
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_quantity_from_u64(
+	if !C.openpit_create_param_quantity_from_uint64(
 		C.uint64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_quantity_from_u64 failed")
+			consumeParamError(paramErr, "openpit_create_param_quantity_from_uint64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamQuantityFromStrRounded(
+func CreateParamQuantityFromStringRounded(
 	v string,
 	scale uint32,
 	strategy ParamRoundingStrategy,
 ) (ParamQuantity, error) {
 	var result ParamQuantity
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_quantity_from_str_rounded(
+	if !C.openpit_create_param_quantity_from_string_rounded(
 		importString(v),
 		C.uint32_t(scale),
 		strategy,
@@ -845,7 +885,7 @@ func CreateParamQuantityFromStrRounded(
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_quantity_from_str_rounded failed")
+			consumeParamError(paramErr, "openpit_create_param_quantity_from_string_rounded failed")
 	}
 	return result, nil
 }
@@ -1139,15 +1179,15 @@ func CreateParamVolume(value ParamDecimal) (ParamVolume, error) {
 	return result, nil
 }
 
-func CreateParamVolumeFromStr(v string) (ParamVolume, error) {
+func CreateParamVolumeFromString(v string) (ParamVolume, error) {
 	var result ParamVolume
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_volume_from_str(
+	if !C.openpit_create_param_volume_from_string(
 		importString(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_volume_from_str failed")
+			consumeParamError(paramErr, "openpit_create_param_volume_from_string failed")
 	}
 	return result, nil
 }
@@ -1165,40 +1205,40 @@ func CreateParamVolumeFromF64(v float64) (ParamVolume, error) {
 	return result, nil
 }
 
-func CreateParamVolumeFromI64(v int64) (ParamVolume, error) {
+func CreateParamVolumeFromInt64(v int64) (ParamVolume, error) {
 	var result ParamVolume
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_volume_from_i64(
+	if !C.openpit_create_param_volume_from_int64(
 		C.int64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_volume_from_i64 failed")
+			consumeParamError(paramErr, "openpit_create_param_volume_from_int64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamVolumeFromU64(v uint64) (ParamVolume, error) {
+func CreateParamVolumeFromUint64(v uint64) (ParamVolume, error) {
 	var result ParamVolume
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_volume_from_u64(
+	if !C.openpit_create_param_volume_from_uint64(
 		C.uint64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_volume_from_u64 failed")
+			consumeParamError(paramErr, "openpit_create_param_volume_from_uint64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamVolumeFromStrRounded(
+func CreateParamVolumeFromStringRounded(
 	v string,
 	scale uint32,
 	strategy ParamRoundingStrategy,
 ) (ParamVolume, error) {
 	var result ParamVolume
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_volume_from_str_rounded(
+	if !C.openpit_create_param_volume_from_string_rounded(
 		importString(v),
 		C.uint32_t(scale),
 		strategy,
@@ -1206,7 +1246,7 @@ func CreateParamVolumeFromStrRounded(
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_volume_from_str_rounded failed")
+			consumeParamError(paramErr, "openpit_create_param_volume_from_string_rounded failed")
 	}
 	return result, nil
 }
@@ -1511,15 +1551,15 @@ func CreateParamNotional(value ParamDecimal) (ParamNotional, error) {
 	return result, nil
 }
 
-func CreateParamNotionalFromStr(v string) (ParamNotional, error) {
+func CreateParamNotionalFromString(v string) (ParamNotional, error) {
 	var result ParamNotional
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_notional_from_str(
+	if !C.openpit_create_param_notional_from_string(
 		importString(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_notional_from_str failed")
+			consumeParamError(paramErr, "openpit_create_param_notional_from_string failed")
 	}
 	return result, nil
 }
@@ -1537,40 +1577,40 @@ func CreateParamNotionalFromF64(v float64) (ParamNotional, error) {
 	return result, nil
 }
 
-func CreateParamNotionalFromI64(v int64) (ParamNotional, error) {
+func CreateParamNotionalFromInt64(v int64) (ParamNotional, error) {
 	var result ParamNotional
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_notional_from_i64(
+	if !C.openpit_create_param_notional_from_int64(
 		C.int64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_notional_from_i64 failed")
+			consumeParamError(paramErr, "openpit_create_param_notional_from_int64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamNotionalFromU64(v uint64) (ParamNotional, error) {
+func CreateParamNotionalFromUint64(v uint64) (ParamNotional, error) {
 	var result ParamNotional
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_notional_from_u64(
+	if !C.openpit_create_param_notional_from_uint64(
 		C.uint64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_notional_from_u64 failed")
+			consumeParamError(paramErr, "openpit_create_param_notional_from_uint64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamNotionalFromStrRounded(
+func CreateParamNotionalFromStringRounded(
 	v string,
 	scale uint32,
 	strategy ParamRoundingStrategy,
 ) (ParamNotional, error) {
 	var result ParamNotional
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_notional_from_str_rounded(
+	if !C.openpit_create_param_notional_from_string_rounded(
 		importString(v),
 		C.uint32_t(scale),
 		strategy,
@@ -1578,7 +1618,7 @@ func CreateParamNotionalFromStrRounded(
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_notional_from_str_rounded failed")
+			consumeParamError(paramErr, "openpit_create_param_notional_from_string_rounded failed")
 	}
 	return result, nil
 }
@@ -1944,15 +1984,15 @@ func CreateParamCashFlow(value ParamDecimal) (ParamCashFlow, error) {
 	return result, nil
 }
 
-func CreateParamCashFlowFromStr(v string) (ParamCashFlow, error) {
+func CreateParamCashFlowFromString(v string) (ParamCashFlow, error) {
 	var result ParamCashFlow
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_cash_flow_from_str(
+	if !C.openpit_create_param_cash_flow_from_string(
 		importString(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_cash_flow_from_str failed")
+			consumeParamError(paramErr, "openpit_create_param_cash_flow_from_string failed")
 	}
 	return result, nil
 }
@@ -1970,40 +2010,40 @@ func CreateParamCashFlowFromF64(v float64) (ParamCashFlow, error) {
 	return result, nil
 }
 
-func CreateParamCashFlowFromI64(v int64) (ParamCashFlow, error) {
+func CreateParamCashFlowFromInt64(v int64) (ParamCashFlow, error) {
 	var result ParamCashFlow
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_cash_flow_from_i64(
+	if !C.openpit_create_param_cash_flow_from_int64(
 		C.int64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_cash_flow_from_i64 failed")
+			consumeParamError(paramErr, "openpit_create_param_cash_flow_from_int64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamCashFlowFromU64(v uint64) (ParamCashFlow, error) {
+func CreateParamCashFlowFromUint64(v uint64) (ParamCashFlow, error) {
 	var result ParamCashFlow
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_cash_flow_from_u64(
+	if !C.openpit_create_param_cash_flow_from_uint64(
 		C.uint64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_cash_flow_from_u64 failed")
+			consumeParamError(paramErr, "openpit_create_param_cash_flow_from_uint64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamCashFlowFromStrRounded(
+func CreateParamCashFlowFromStringRounded(
 	v string,
 	scale uint32,
 	strategy ParamRoundingStrategy,
 ) (ParamCashFlow, error) {
 	var result ParamCashFlow
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_cash_flow_from_str_rounded(
+	if !C.openpit_create_param_cash_flow_from_string_rounded(
 		importString(v),
 		C.uint32_t(scale),
 		strategy,
@@ -2013,7 +2053,7 @@ func CreateParamCashFlowFromStrRounded(
 		return result,
 			consumeParamError(
 				paramErr,
-				"openpit_create_param_cash_flow_from_str_rounded failed",
+				"openpit_create_param_cash_flow_from_string_rounded failed",
 			)
 	}
 	return result, nil
@@ -2363,16 +2403,16 @@ func CreateParamPositionSize(value ParamDecimal) (ParamPositionSize, error) {
 	return result, nil
 }
 
-func CreateParamPositionSizeFromStr(v string) (ParamPositionSize, error) {
+func CreateParamPositionSizeFromString(v string) (ParamPositionSize, error) {
 	var result ParamPositionSize
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_position_size_from_str(
+	if !C.openpit_create_param_position_size_from_string(
 		importString(v),
 		&result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_position_size_from_str failed")
+			consumeParamError(paramErr, "openpit_create_param_position_size_from_string failed")
 	}
 	return result, nil
 }
@@ -2390,40 +2430,40 @@ func CreateParamPositionSizeFromF64(v float64) (ParamPositionSize, error) {
 	return result, nil
 }
 
-func CreateParamPositionSizeFromI64(v int64) (ParamPositionSize, error) {
+func CreateParamPositionSizeFromInt64(v int64) (ParamPositionSize, error) {
 	var result ParamPositionSize
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_position_size_from_i64(
+	if !C.openpit_create_param_position_size_from_int64(
 		C.int64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_position_size_from_i64 failed")
+			consumeParamError(paramErr, "openpit_create_param_position_size_from_int64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamPositionSizeFromU64(v uint64) (ParamPositionSize, error) {
+func CreateParamPositionSizeFromUint64(v uint64) (ParamPositionSize, error) {
 	var result ParamPositionSize
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_position_size_from_u64(
+	if !C.openpit_create_param_position_size_from_uint64(
 		C.uint64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_position_size_from_u64 failed")
+			consumeParamError(paramErr, "openpit_create_param_position_size_from_uint64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamPositionSizeFromStrRounded(
+func CreateParamPositionSizeFromStringRounded(
 	v string,
 	scale uint32,
 	strategy ParamRoundingStrategy,
 ) (ParamPositionSize, error) {
 	var result ParamPositionSize
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_position_size_from_str_rounded(
+	if !C.openpit_create_param_position_size_from_string_rounded(
 		importString(v),
 		C.uint32_t(scale),
 		strategy,
@@ -2431,7 +2471,7 @@ func CreateParamPositionSizeFromStrRounded(
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result, consumeParamError(paramErr,
-			"openpit_create_param_position_size_from_str_rounded failed",
+			"openpit_create_param_position_size_from_string_rounded failed",
 		)
 	}
 	return result, nil
@@ -2872,14 +2912,14 @@ func CreateParamFee(value ParamDecimal) (ParamFee, error) {
 	return result, nil
 }
 
-func CreateParamFeeFromStr(v string) (ParamFee, error) {
+func CreateParamFeeFromString(v string) (ParamFee, error) {
 	var result ParamFee
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_fee_from_str(
+	if !C.openpit_create_param_fee_from_string(
 		importString(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
-		return result, consumeParamError(paramErr, "openpit_create_param_fee_from_str failed")
+		return result, consumeParamError(paramErr, "openpit_create_param_fee_from_string failed")
 	}
 	return result, nil
 }
@@ -2896,38 +2936,38 @@ func CreateParamFeeFromF64(v float64) (ParamFee, error) {
 	return result, nil
 }
 
-func CreateParamFeeFromI64(v int64) (ParamFee, error) {
+func CreateParamFeeFromInt64(v int64) (ParamFee, error) {
 	var result ParamFee
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_fee_from_i64(
+	if !C.openpit_create_param_fee_from_int64(
 		C.int64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
-		return result, consumeParamError(paramErr, "openpit_create_param_fee_from_i64 failed")
+		return result, consumeParamError(paramErr, "openpit_create_param_fee_from_int64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamFeeFromU64(v uint64) (ParamFee, error) {
+func CreateParamFeeFromUint64(v uint64) (ParamFee, error) {
 	var result ParamFee
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_fee_from_u64(
+	if !C.openpit_create_param_fee_from_uint64(
 		C.uint64_t(v), &result,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
-		return result, consumeParamError(paramErr, "openpit_create_param_fee_from_u64 failed")
+		return result, consumeParamError(paramErr, "openpit_create_param_fee_from_uint64 failed")
 	}
 	return result, nil
 }
 
-func CreateParamFeeFromStrRounded(
+func CreateParamFeeFromStringRounded(
 	v string,
 	scale uint32,
 	strategy ParamRoundingStrategy,
 ) (ParamFee, error) {
 	var result ParamFee
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_fee_from_str_rounded(
+	if !C.openpit_create_param_fee_from_string_rounded(
 		importString(v),
 		C.uint32_t(scale),
 		strategy,
@@ -2935,7 +2975,7 @@ func CreateParamFeeFromStrRounded(
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return result,
-			consumeParamError(paramErr, "openpit_create_param_fee_from_str_rounded failed")
+			consumeParamError(paramErr, "openpit_create_param_fee_from_string_rounded failed")
 	}
 	return result, nil
 }
@@ -3222,19 +3262,19 @@ func ParamFeeOptionalGet(value ParamFeeOptional) ParamFee {
 //------------------------------------------------------------------------------
 // AccountID
 
-func CreateParamAccountIDFromU64(value uint64) ParamAccountID {
-	return C.openpit_create_param_account_id_from_u64(C.uint64_t(value))
+func CreateParamAccountIDFromUint64(value uint64) ParamAccountID {
+	return C.openpit_create_param_account_id_from_uint64(C.uint64_t(value))
 }
 
-func CreateParamAccountIDFromStr(value string) (ParamAccountID, error) {
+func CreateParamAccountIDFromString(value string) (ParamAccountID, error) {
 	var out ParamAccountID
 	var paramErr ParamErrorHandle
-	if !C.openpit_create_param_account_id_from_str(
+	if !C.openpit_create_param_account_id_from_string(
 		importString(value),
 		&out,
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
-		return out, consumeParamError(paramErr, "openpit_create_param_account_id_from_str failed")
+		return out, consumeParamError(paramErr, "openpit_create_param_account_id_from_string failed")
 	}
 	return out, nil
 }
@@ -3247,14 +3287,14 @@ func ParamAccountIDOptionalGet(value ParamAccountIDOptional) ParamAccountID {
 	return value.value
 }
 
-func CreateParamAssetFromStr(value string) (string, error) {
+func CreateParamAssetFromString(value string) (string, error) {
 	var paramErr ParamErrorHandle
-	handle := C.openpit_create_param_asset_from_str(
+	handle := C.openpit_create_param_asset_from_string(
 		importString(value),
 		C.OpenPitOutParamError(&paramErr), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
 	if handle == nil {
-		return "", consumeParamError(paramErr, "openpit_create_param_asset_from_str failed")
+		return "", consumeParamError(paramErr, "openpit_create_param_asset_from_string failed")
 	}
 	result := newStringView(C.openpit_shared_string_view(handle)).Safe()
 	C.openpit_destroy_param_asset(handle)

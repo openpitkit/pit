@@ -74,8 +74,8 @@ pub(crate) fn export_leverage(value: Option<Leverage>) -> OpenPitParamLeverage {
 ///
 /// WARNING:
 /// Use exactly one account-id source model per runtime:
-/// - either purely numeric IDs (`openpit_create_param_account_id_from_u64`),
-/// - or purely string-derived IDs (`openpit_create_param_account_id_from_str`).
+/// - either purely numeric IDs (`openpit_create_param_account_id_from_uint64`),
+/// - or purely string-derived IDs (`openpit_create_param_account_id_from_string`).
 ///
 /// Do not mix both models in the same runtime state. A hashed string value can
 /// coincide with a direct numeric ID, and then two distinct accounts become one
@@ -411,6 +411,26 @@ impl<T, E: std::fmt::Display> IntoParamResult<T> for Result<T, E> {
     }
 }
 
+/// Abstracts over the two shapes of `<$domain>::new(Decimal)`:
+/// infallible (signed types return `Self`) and fallible (unsigned types
+/// return `Result<Self, openpit::param::Error>`), preserving the typed SDK
+/// error in the fallible case.
+trait IntoTypedParamResult<T> {
+    fn into_typed_param_result(self) -> Result<T, openpit::param::Error>;
+}
+
+impl<T> IntoTypedParamResult<T> for T {
+    fn into_typed_param_result(self) -> Result<T, openpit::param::Error> {
+        Ok(self)
+    }
+}
+
+impl<T> IntoTypedParamResult<T> for Result<T, openpit::param::Error> {
+    fn into_typed_param_result(self) -> Result<T, openpit::param::Error> {
+        self
+    }
+}
+
 macro_rules! define_decimal_param_wrapper {
     (
         wrapper = $wrapper:ident,
@@ -446,6 +466,25 @@ macro_rules! define_decimal_param_wrapper {
                 let decimal = Decimal::from_i128_with_scale(self.0.to_mantissa(), scale);
                 <$domain>::new(decimal).into_param_result(stringify!($domain))
             }
+
+            #[doc = concat!(
+                                                                "Converts validated `",
+                                                                stringify!($domain),
+                                                                "` wrapper into the semantic value, preserving the typed SDK error."
+                                                            )]
+            ///
+            /// The scale transport failure has no SDK `Error` counterpart, so it
+            /// is reported as `Err(None)`; an SDK validation failure is reported
+            /// as `Err(Some(error))`.
+            pub(crate) fn to_param_typed(
+                self,
+            ) -> Result<$domain, Option<openpit::param::Error>> {
+                let scale: u32 = self.0.scale.try_into().map_err(|_| None)?;
+                let decimal = Decimal::from_i128_with_scale(self.0.to_mantissa(), scale);
+                let result: Result<$domain, openpit::param::Error> =
+                    <$domain>::new(decimal).into_typed_param_result();
+                result.map_err(Some)
+            }
         }
 
         #[doc = concat!("Validates a decimal and returns a `", stringify!($domain), "` wrapper.")]
@@ -469,13 +508,20 @@ macro_rules! define_decimal_param_wrapper {
                 write_param_error_unspecified(out_error, "result place pointer is null");
                 return false;
             }
-            match $wrapper(value).to_param() {
+            match $wrapper(value).to_param_typed() {
                 Ok(_) => {
                     unsafe { *out = $wrapper(value) };
                     true
                 }
-                Err(msg) => {
-                    write_param_error_unspecified(out_error, msg.as_str());
+                Err(Some(error)) => {
+                    consume_param_error_with_code(out_error, error);
+                    false
+                }
+                Err(None) => {
+                    write_param_error_unspecified(
+                        out_error,
+                        "invalid decimal scale for typed param",
+                    );
                     false
                 }
             }
@@ -577,11 +623,11 @@ macro_rules! define_decimal_param_ffi_common {
         wrapper = $wrapper:ident,
         domain = $domain:ty,
         type_name = $type_name:literal,
-        from_str_fn = $from_str_fn:ident,
+        from_string_fn = $from_string_fn:ident,
         from_f64_fn = $from_f64_fn:ident,
-        from_i64_fn = $from_i64_fn:ident,
-        from_u64_fn = $from_u64_fn:ident,
-        from_str_rounded_fn = $from_str_rounded_fn:ident,
+        from_int64_fn = $from_int64_fn:ident,
+        from_uint64_fn = $from_uint64_fn:ident,
+        from_string_rounded_fn = $from_string_rounded_fn:ident,
         from_f64_rounded_fn = $from_f64_rounded_fn:ident,
         from_decimal_rounded_fn = $from_decimal_rounded_fn:ident,
         to_f64_fn = $to_f64_fn:ident,
@@ -601,7 +647,7 @@ macro_rules! define_decimal_param_ffi_common {
         checked_rem_f64_fn = $checked_rem_f64_fn:ident
     ) => {
         #[no_mangle]
-        pub unsafe extern "C" fn $from_str_fn(
+        pub unsafe extern "C" fn $from_string_fn(
             value: OpenPitStringView,
             out: *mut $wrapper,
             out_error: OpenPitOutParamError,
@@ -647,49 +693,49 @@ macro_rules! define_decimal_param_ffi_common {
         }
 
         #[no_mangle]
-        pub unsafe extern "C" fn $from_i64_fn(
+        pub unsafe extern "C" fn $from_int64_fn(
             value: i64,
             out: *mut $wrapper,
             out_error: OpenPitOutParamError,
         ) -> bool {
-            let new_value: Result<$domain, _> =
-                <$domain>::new(Decimal::from(value)).into_param_result($type_name);
-            match new_value {
+            let result: Result<$domain, openpit::param::Error> =
+                <$domain>::new(Decimal::from(value)).into_typed_param_result();
+            match result {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(OpenPitParamDecimal::from_decimal(parsed.to_decimal())),
                     out_error,
                 ),
                 Err(error) => {
-                    write_param_error_unspecified(out_error, error.as_str());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
         }
 
         #[no_mangle]
-        pub unsafe extern "C" fn $from_u64_fn(
+        pub unsafe extern "C" fn $from_uint64_fn(
             value: u64,
             out: *mut $wrapper,
             out_error: OpenPitOutParamError,
         ) -> bool {
-            let new_value: Result<$domain, _> =
-                <$domain>::new(Decimal::from(value)).into_param_result($type_name);
-            match new_value {
+            let result: Result<$domain, openpit::param::Error> =
+                <$domain>::new(Decimal::from(value)).into_typed_param_result();
+            match result {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(OpenPitParamDecimal::from_decimal(parsed.to_decimal())),
                     out_error,
                 ),
                 Err(error) => {
-                    write_param_error_unspecified(out_error, error.as_str());
+                    consume_param_error_with_code(out_error, error);
                     false
                 }
             }
         }
 
         #[no_mangle]
-        pub unsafe extern "C" fn $from_str_rounded_fn(
+        pub unsafe extern "C" fn $from_string_rounded_fn(
             value: OpenPitStringView,
             scale: u32,
             rounding: OpenPitParamRoundingStrategy,
@@ -1210,11 +1256,11 @@ define_decimal_param_ffi_common!(
     wrapper = OpenPitParamPnl,
     domain = Pnl,
     type_name = "Pnl",
-    from_str_fn = openpit_create_param_pnl_from_str,
+    from_string_fn = openpit_create_param_pnl_from_string,
     from_f64_fn = openpit_create_param_pnl_from_f64,
-    from_i64_fn = openpit_create_param_pnl_from_i64,
-    from_u64_fn = openpit_create_param_pnl_from_u64,
-    from_str_rounded_fn = openpit_create_param_pnl_from_str_rounded,
+    from_int64_fn = openpit_create_param_pnl_from_int64,
+    from_uint64_fn = openpit_create_param_pnl_from_uint64,
+    from_string_rounded_fn = openpit_create_param_pnl_from_string_rounded,
     from_f64_rounded_fn = openpit_create_param_pnl_from_f64_rounded,
     from_decimal_rounded_fn = openpit_create_param_pnl_from_decimal_rounded,
     to_f64_fn = openpit_param_pnl_to_f64,
@@ -1244,11 +1290,11 @@ define_decimal_param_ffi_common!(
     wrapper = OpenPitParamPrice,
     domain = Price,
     type_name = "Price",
-    from_str_fn = openpit_create_param_price_from_str,
+    from_string_fn = openpit_create_param_price_from_string,
     from_f64_fn = openpit_create_param_price_from_f64,
-    from_i64_fn = openpit_create_param_price_from_i64,
-    from_u64_fn = openpit_create_param_price_from_u64,
-    from_str_rounded_fn = openpit_create_param_price_from_str_rounded,
+    from_int64_fn = openpit_create_param_price_from_int64,
+    from_uint64_fn = openpit_create_param_price_from_uint64,
+    from_string_rounded_fn = openpit_create_param_price_from_string_rounded,
     from_f64_rounded_fn = openpit_create_param_price_from_f64_rounded,
     from_decimal_rounded_fn = openpit_create_param_price_from_decimal_rounded,
     to_f64_fn = openpit_param_price_to_f64,
@@ -1278,11 +1324,11 @@ define_decimal_param_ffi_common!(
     wrapper = OpenPitParamQuantity,
     domain = Quantity,
     type_name = "Quantity",
-    from_str_fn = openpit_create_param_quantity_from_str,
+    from_string_fn = openpit_create_param_quantity_from_string,
     from_f64_fn = openpit_create_param_quantity_from_f64,
-    from_i64_fn = openpit_create_param_quantity_from_i64,
-    from_u64_fn = openpit_create_param_quantity_from_u64,
-    from_str_rounded_fn = openpit_create_param_quantity_from_str_rounded,
+    from_int64_fn = openpit_create_param_quantity_from_int64,
+    from_uint64_fn = openpit_create_param_quantity_from_uint64,
+    from_string_rounded_fn = openpit_create_param_quantity_from_string_rounded,
     from_f64_rounded_fn = openpit_create_param_quantity_from_f64_rounded,
     from_decimal_rounded_fn = openpit_create_param_quantity_from_decimal_rounded,
     to_f64_fn = openpit_param_quantity_to_f64,
@@ -1306,11 +1352,11 @@ define_decimal_param_ffi_common!(
     wrapper = OpenPitParamVolume,
     domain = Volume,
     type_name = "Volume",
-    from_str_fn = openpit_create_param_volume_from_str,
+    from_string_fn = openpit_create_param_volume_from_string,
     from_f64_fn = openpit_create_param_volume_from_f64,
-    from_i64_fn = openpit_create_param_volume_from_i64,
-    from_u64_fn = openpit_create_param_volume_from_u64,
-    from_str_rounded_fn = openpit_create_param_volume_from_str_rounded,
+    from_int64_fn = openpit_create_param_volume_from_int64,
+    from_uint64_fn = openpit_create_param_volume_from_uint64,
+    from_string_rounded_fn = openpit_create_param_volume_from_string_rounded,
     from_f64_rounded_fn = openpit_create_param_volume_from_f64_rounded,
     from_decimal_rounded_fn = openpit_create_param_volume_from_decimal_rounded,
     to_f64_fn = openpit_param_volume_to_f64,
@@ -1334,11 +1380,11 @@ define_decimal_param_ffi_common!(
     wrapper = OpenPitParamCashFlow,
     domain = CashFlow,
     type_name = "CashFlow",
-    from_str_fn = openpit_create_param_cash_flow_from_str,
+    from_string_fn = openpit_create_param_cash_flow_from_string,
     from_f64_fn = openpit_create_param_cash_flow_from_f64,
-    from_i64_fn = openpit_create_param_cash_flow_from_i64,
-    from_u64_fn = openpit_create_param_cash_flow_from_u64,
-    from_str_rounded_fn = openpit_create_param_cash_flow_from_str_rounded,
+    from_int64_fn = openpit_create_param_cash_flow_from_int64,
+    from_uint64_fn = openpit_create_param_cash_flow_from_uint64,
+    from_string_rounded_fn = openpit_create_param_cash_flow_from_string_rounded,
     from_f64_rounded_fn = openpit_create_param_cash_flow_from_f64_rounded,
     from_decimal_rounded_fn = openpit_create_param_cash_flow_from_decimal_rounded,
     to_f64_fn = openpit_param_cash_flow_to_f64,
@@ -1368,11 +1414,11 @@ define_decimal_param_ffi_common!(
     wrapper = OpenPitParamPositionSize,
     domain = PositionSize,
     type_name = "PositionSize",
-    from_str_fn = openpit_create_param_position_size_from_str,
+    from_string_fn = openpit_create_param_position_size_from_string,
     from_f64_fn = openpit_create_param_position_size_from_f64,
-    from_i64_fn = openpit_create_param_position_size_from_i64,
-    from_u64_fn = openpit_create_param_position_size_from_u64,
-    from_str_rounded_fn = openpit_create_param_position_size_from_str_rounded,
+    from_int64_fn = openpit_create_param_position_size_from_int64,
+    from_uint64_fn = openpit_create_param_position_size_from_uint64,
+    from_string_rounded_fn = openpit_create_param_position_size_from_string_rounded,
     from_f64_rounded_fn = openpit_create_param_position_size_from_f64_rounded,
     from_decimal_rounded_fn = openpit_create_param_position_size_from_decimal_rounded,
     to_f64_fn = openpit_param_position_size_to_f64,
@@ -1402,11 +1448,11 @@ define_decimal_param_ffi_common!(
     wrapper = OpenPitParamFee,
     domain = Fee,
     type_name = "Fee",
-    from_str_fn = openpit_create_param_fee_from_str,
+    from_string_fn = openpit_create_param_fee_from_string,
     from_f64_fn = openpit_create_param_fee_from_f64,
-    from_i64_fn = openpit_create_param_fee_from_i64,
-    from_u64_fn = openpit_create_param_fee_from_u64,
-    from_str_rounded_fn = openpit_create_param_fee_from_str_rounded,
+    from_int64_fn = openpit_create_param_fee_from_int64,
+    from_uint64_fn = openpit_create_param_fee_from_uint64,
+    from_string_rounded_fn = openpit_create_param_fee_from_string_rounded,
     from_f64_rounded_fn = openpit_create_param_fee_from_f64_rounded,
     from_decimal_rounded_fn = openpit_create_param_fee_from_decimal_rounded,
     to_f64_fn = openpit_param_fee_to_f64,
@@ -1436,11 +1482,11 @@ define_decimal_param_ffi_common!(
     wrapper = OpenPitParamNotional,
     domain = Notional,
     type_name = "Notional",
-    from_str_fn = openpit_create_param_notional_from_str,
+    from_string_fn = openpit_create_param_notional_from_string,
     from_f64_fn = openpit_create_param_notional_from_f64,
-    from_i64_fn = openpit_create_param_notional_from_i64,
-    from_u64_fn = openpit_create_param_notional_from_u64,
-    from_str_rounded_fn = openpit_create_param_notional_from_str_rounded,
+    from_int64_fn = openpit_create_param_notional_from_int64,
+    from_uint64_fn = openpit_create_param_notional_from_uint64,
+    from_string_rounded_fn = openpit_create_param_notional_from_string_rounded,
     from_f64_rounded_fn = openpit_create_param_notional_from_f64_rounded,
     from_decimal_rounded_fn = openpit_create_param_notional_from_decimal_rounded,
     to_f64_fn = openpit_param_notional_to_f64,
@@ -1590,6 +1636,42 @@ pub unsafe extern "C" fn openpit_param_price_calculate_volume(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn openpit_param_price_calculate_position_size(
+    price: OpenPitParamPrice,
+    quantity: OpenPitParamQuantity,
+    out: *mut OpenPitParamPositionSize,
+    out_error: OpenPitOutParamError,
+) -> bool {
+    let price = match price.to_param() {
+        Ok(value) => value,
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.as_str());
+            return false;
+        }
+    };
+    let quantity = match quantity.to_param() {
+        Ok(value) => value,
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.as_str());
+            return false;
+        }
+    };
+    match price.calculate_position_size(quantity) {
+        Ok(position_size) => write_out(
+            out,
+            OpenPitParamPositionSize(OpenPitParamDecimal::from_decimal(
+                position_size.to_decimal(),
+            )),
+            out_error,
+        ),
+        Err(error) => {
+            consume_param_error_with_code(out_error, error);
+            false
+        }
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn openpit_param_quantity_calculate_volume(
     quantity: OpenPitParamQuantity,
     price: OpenPitParamPrice,
@@ -1682,6 +1764,50 @@ pub unsafe extern "C" fn openpit_param_pnl_to_cash_flow(
 #[no_mangle]
 pub unsafe extern "C" fn openpit_param_pnl_to_position_size(
     value: OpenPitParamPnl,
+    out: *mut OpenPitParamPositionSize,
+    out_error: OpenPitOutParamError,
+) -> bool {
+    let parsed = match value.to_param() {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.as_str());
+            return false;
+        }
+    };
+    write_out(
+        out,
+        OpenPitParamPositionSize(OpenPitParamDecimal::from_decimal(
+            parsed.to_position_size().to_decimal(),
+        )),
+        out_error,
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn openpit_param_quantity_to_position_size(
+    value: OpenPitParamQuantity,
+    out: *mut OpenPitParamPositionSize,
+    out_error: OpenPitOutParamError,
+) -> bool {
+    let parsed = match value.to_param() {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.as_str());
+            return false;
+        }
+    };
+    write_out(
+        out,
+        OpenPitParamPositionSize(OpenPitParamDecimal::from_decimal(
+            parsed.to_position_size().to_decimal(),
+        )),
+        out_error,
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn openpit_param_volume_to_position_size(
+    value: OpenPitParamVolume,
     out: *mut OpenPitParamPositionSize,
     out_error: OpenPitOutParamError,
 ) -> bool {
@@ -1979,7 +2105,13 @@ pub unsafe extern "C" fn openpit_param_position_size_from_quantity_and_side(
             return false;
         }
     };
-    let parsed_side = import_side(side).unwrap_or(Side::Buy);
+    let parsed_side = match import_side(side) {
+        Some(side) => side,
+        None => {
+            write_param_error_unspecified(out_error, "side is not set");
+            return false;
+        }
+    };
     write_out(
         out,
         OpenPitParamPositionSize(OpenPitParamDecimal::from_decimal(
@@ -2066,7 +2198,13 @@ pub unsafe extern "C" fn openpit_param_position_size_checked_add_quantity(
             return false;
         }
     };
-    let side = import_side(side).unwrap_or(Side::Buy);
+    let side = match import_side(side) {
+        Some(side) => side,
+        None => {
+            write_param_error_unspecified(out_error, "side is not set");
+            return false;
+        }
+    };
     match value.checked_add_quantity(quantity, side) {
         Ok(position) => write_out(
             out,
@@ -2257,12 +2395,12 @@ pub unsafe extern "C" fn openpit_param_volume_from_notional(
 ///
 /// WARNING:
 /// Do not mix IDs produced by this function with IDs produced by
-/// `openpit_create_param_account_id_from_str` in the same runtime state.
+/// `openpit_create_param_account_id_from_string` in the same runtime state.
 ///
 /// Contract:
 /// - returns a stable account identifier value;
 /// - this function always succeeds.
-pub extern "C" fn openpit_create_param_account_id_from_u64(value: u64) -> OpenPitParamAccountId {
+pub extern "C" fn openpit_create_param_account_id_from_uint64(value: u64) -> OpenPitParamAccountId {
     AccountId::from_u64(value).as_u64()
 }
 
@@ -2277,14 +2415,14 @@ pub extern "C" fn openpit_create_param_account_id_from_u64(value: u64) -> OpenPi
 /// - for `n` distinct account strings the probability of at least one collision
 ///   is approximately `n^2 / 2^65`.
 /// - if collision risk is unacceptable, keep your own collision-free
-///   string-to-integer mapping and use `openpit_create_param_account_id_from_u64`.
+///   string-to-integer mapping and use `openpit_create_param_account_id_from_uint64`.
 ///
 /// The previous sentence is why this helper is suitable for stable adapter-side
 /// mapping, but not for workflows that require guaranteed uniqueness.
 ///
 /// WARNING:
 /// Do not mix IDs produced by this function with IDs produced by
-/// `openpit_create_param_account_id_from_u64` in the same runtime state.
+/// `openpit_create_param_account_id_from_uint64` in the same runtime state.
 ///
 /// Contract:
 /// - returns `true` and writes a stable account identifier to `out` on success;
@@ -2294,7 +2432,7 @@ pub extern "C" fn openpit_create_param_account_id_from_u64(value: u64) -> OpenPi
 ///
 /// `value.ptr` must be non-null and point to at least `value.len` readable
 /// UTF-8 bytes.
-pub unsafe extern "C" fn openpit_create_param_account_id_from_str(
+pub unsafe extern "C" fn openpit_create_param_account_id_from_string(
     value: OpenPitStringView,
     out: *mut OpenPitParamAccountId,
     out_error: OpenPitOutParamError,
@@ -2319,7 +2457,7 @@ pub unsafe extern "C" fn openpit_create_param_account_id_from_str(
 /// Validates and copies an asset identifier into a caller-owned shared-string handle.
 ///
 /// The returned handle must be destroyed with `openpit_destroy_param_asset`.
-pub unsafe extern "C" fn openpit_create_param_asset_from_str(
+pub unsafe extern "C" fn openpit_create_param_asset_from_string(
     value: OpenPitStringView,
     out_error: OpenPitOutParamError,
 ) -> *mut OpenPitSharedString {
@@ -2340,9 +2478,115 @@ pub unsafe extern "C" fn openpit_create_param_asset_from_str(
 }
 
 #[no_mangle]
-/// Destroys a caller-owned asset handle created by `openpit_create_param_asset_from_str`.
+/// Destroys a caller-owned asset handle created by `openpit_create_param_asset_from_string`.
 pub extern "C" fn openpit_destroy_param_asset(handle: *mut OpenPitSharedString) {
     crate::string::openpit_destroy_shared_string(handle);
+}
+
+//--------------------------------------------------------------------------------------------------
+
+/// Renders an order side into a caller-owned shared string.
+///
+/// Returns null and writes `out_error` when the side is not set.
+#[no_mangle]
+pub unsafe extern "C" fn openpit_param_side_to_string(
+    value: OpenPitParamSide,
+    out_error: OpenPitOutParamError,
+) -> *mut OpenPitSharedString {
+    match import_side(value) {
+        Some(side) => OpenPitSharedString::new_handle(side.to_string().as_str()),
+        None => {
+            write_param_error_unspecified(out_error, "side is not set");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Renders a position side into a caller-owned shared string.
+///
+/// Returns null and writes `out_error` when the position side is not set.
+#[no_mangle]
+pub unsafe extern "C" fn openpit_param_position_side_to_string(
+    value: OpenPitParamPositionSide,
+    out_error: OpenPitOutParamError,
+) -> *mut OpenPitSharedString {
+    match import_position_side(value) {
+        Some(position_side) => OpenPitSharedString::new_handle(position_side.to_string().as_str()),
+        None => {
+            write_param_error_unspecified(out_error, "position side is not set");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Renders a position effect into a caller-owned shared string.
+///
+/// Returns null and writes `out_error` when the position effect is not set.
+#[no_mangle]
+pub unsafe extern "C" fn openpit_param_position_effect_to_string(
+    value: OpenPitParamPositionEffect,
+    out_error: OpenPitOutParamError,
+) -> *mut OpenPitSharedString {
+    match import_position_effect(value) {
+        Some(position_effect) => {
+            OpenPitSharedString::new_handle(position_effect.to_string().as_str())
+        }
+        None => {
+            write_param_error_unspecified(out_error, "position effect is not set");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Renders a position mode into a caller-owned shared string.
+///
+/// Returns null and writes `out_error` when the position mode is not set.
+#[no_mangle]
+pub unsafe extern "C" fn openpit_param_position_mode_to_string(
+    value: OpenPitParamPositionMode,
+    out_error: OpenPitOutParamError,
+) -> *mut OpenPitSharedString {
+    match import_position_mode(value) {
+        Some(position_mode) => OpenPitSharedString::new_handle(position_mode.to_string().as_str()),
+        None => {
+            write_param_error_unspecified(out_error, "position mode is not set");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Renders an account identifier into a caller-owned shared string.
+///
+/// This conversion always succeeds.
+#[no_mangle]
+pub extern "C" fn openpit_param_account_id_to_string(
+    value: OpenPitParamAccountId,
+) -> *mut OpenPitSharedString {
+    OpenPitSharedString::new_handle(AccountId::from_u64(value).to_string().as_str())
+}
+
+/// Renders a trade amount into a caller-owned shared string.
+///
+/// Returns null and writes `out_error` when the trade amount is not set or its
+/// numeric value cannot be decoded.
+#[no_mangle]
+pub unsafe extern "C" fn openpit_param_trade_amount_to_string(
+    value: OpenPitParamTradeAmount,
+    out_error: OpenPitOutParamError,
+) -> *mut OpenPitSharedString {
+    match import_trade_amount(value) {
+        Ok(Some(trade_amount)) => {
+            OpenPitSharedString::new_handle(trade_amount.to_string().as_str())
+        }
+        Ok(None) => {
+            write_param_error_unspecified(out_error, "trade amount is not set");
+            std::ptr::null_mut()
+        }
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.as_str());
+            std::ptr::null_mut()
+        }
+    }
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -2502,11 +2746,11 @@ mod tests {
     }
 
     #[test]
-    fn account_id_from_str_does_not_collapse_invalid_utf8_to_empty() {
+    fn account_id_from_string_does_not_collapse_invalid_utf8_to_empty() {
         let bytes = [0xF0_u8, 0x28, 0x8C, 0x28];
         let mut id_invalid = 0_u64;
         let id_invalid_ok = unsafe {
-            openpit_create_param_account_id_from_str(
+            openpit_create_param_account_id_from_string(
                 OpenPitStringView {
                     ptr: bytes.as_ptr(),
                     len: bytes.len(),
@@ -2520,7 +2764,7 @@ mod tests {
         let mut out_error = std::ptr::null_mut();
         let mut id_empty = 0_u64;
         let id_empty_ok = unsafe {
-            openpit_create_param_account_id_from_str(
+            openpit_create_param_account_id_from_string(
                 OpenPitStringView::not_set(),
                 &mut id_empty,
                 &mut out_error,
@@ -2541,11 +2785,11 @@ mod tests {
     }
 
     #[test]
-    fn account_id_from_str_rejects_whitespace() {
+    fn account_id_from_string_rejects_whitespace() {
         let mut out = 0_u64;
         let mut out_error = std::ptr::null_mut();
         let ok = unsafe {
-            openpit_create_param_account_id_from_str(
+            openpit_create_param_account_id_from_string(
                 OpenPitStringView::from_utf8("   "),
                 &mut out,
                 &mut out_error,
@@ -2566,16 +2810,19 @@ mod tests {
     }
 
     #[test]
-    fn account_id_from_u64_is_stable_passthrough() {
-        assert_eq!(openpit_create_param_account_id_from_u64(0), 0);
-        assert_eq!(openpit_create_param_account_id_from_u64(7), 7);
-        assert_eq!(openpit_create_param_account_id_from_u64(u64::MAX), u64::MAX);
+    fn account_id_from_uint64_is_stable_passthrough() {
+        assert_eq!(openpit_create_param_account_id_from_uint64(0), 0);
+        assert_eq!(openpit_create_param_account_id_from_uint64(7), 7);
+        assert_eq!(
+            openpit_create_param_account_id_from_uint64(u64::MAX),
+            u64::MAX
+        );
     }
 
     #[test]
-    fn asset_from_str_returns_owned_handle_when_valid() {
+    fn asset_from_string_returns_owned_handle_when_valid() {
         let handle = unsafe {
-            openpit_create_param_asset_from_str(
+            openpit_create_param_asset_from_string(
                 OpenPitStringView::from_utf8("USD"),
                 std::ptr::null_mut(),
             )
@@ -2587,10 +2834,10 @@ mod tests {
     }
 
     #[test]
-    fn asset_from_str_rejects_empty_and_whitespace() {
+    fn asset_from_string_rejects_empty_and_whitespace() {
         let mut out_error = std::ptr::null_mut();
         let empty = unsafe {
-            openpit_create_param_asset_from_str(OpenPitStringView::not_set(), &mut out_error)
+            openpit_create_param_asset_from_string(OpenPitStringView::not_set(), &mut out_error)
         };
         assert!(empty.is_null());
         assert!(!out_error.is_null());
@@ -2604,7 +2851,10 @@ mod tests {
 
         let mut out_error = std::ptr::null_mut();
         let whitespace = unsafe {
-            openpit_create_param_asset_from_str(OpenPitStringView::from_utf8("   "), &mut out_error)
+            openpit_create_param_asset_from_string(
+                OpenPitStringView::from_utf8("   "),
+                &mut out_error,
+            )
         };
         assert!(whitespace.is_null());
         assert!(!out_error.is_null());
@@ -2779,11 +3029,11 @@ mod tests {
     macro_rules! exercise_signed_surface {
         (
             wrapper = $wrapper:ident,
-            from_str = $from_str:ident,
+            from_string = $from_str:ident,
             from_f64 = $from_f64:ident,
-            from_i64 = $from_i64:ident,
-            from_u64 = $from_u64:ident,
-            from_str_rounded = $from_str_rounded:ident,
+            from_int64 = $from_i64:ident,
+            from_uint64 = $from_u64:ident,
+            from_string_rounded = $from_str_rounded:ident,
             from_f64_rounded = $from_f64_rounded:ident,
             from_decimal_rounded = $from_decimal_rounded:ident,
             to_f64 = $to_f64:ident,
@@ -2874,11 +3124,11 @@ mod tests {
     macro_rules! exercise_unsigned_surface {
         (
             wrapper = $wrapper:ident,
-            from_str = $from_str:ident,
+            from_string = $from_str:ident,
             from_f64 = $from_f64:ident,
-            from_i64 = $from_i64:ident,
-            from_u64 = $from_u64:ident,
-            from_str_rounded = $from_str_rounded:ident,
+            from_int64 = $from_i64:ident,
+            from_uint64 = $from_u64:ident,
+            from_string_rounded = $from_str_rounded:ident,
             from_f64_rounded = $from_f64_rounded:ident,
             from_decimal_rounded = $from_decimal_rounded:ident,
             to_f64 = $to_f64:ident,
@@ -2968,11 +3218,11 @@ mod tests {
     fn typed_param_ffi_signed_surface_happy_path() {
         exercise_signed_surface!(
             wrapper = OpenPitParamPnl,
-            from_str = openpit_create_param_pnl_from_str,
+            from_string = openpit_create_param_pnl_from_string,
             from_f64 = openpit_create_param_pnl_from_f64,
-            from_i64 = openpit_create_param_pnl_from_i64,
-            from_u64 = openpit_create_param_pnl_from_u64,
-            from_str_rounded = openpit_create_param_pnl_from_str_rounded,
+            from_int64 = openpit_create_param_pnl_from_int64,
+            from_uint64 = openpit_create_param_pnl_from_uint64,
+            from_string_rounded = openpit_create_param_pnl_from_string_rounded,
             from_f64_rounded = openpit_create_param_pnl_from_f64_rounded,
             from_decimal_rounded = openpit_create_param_pnl_from_decimal_rounded,
             to_f64 = openpit_param_pnl_to_f64,
@@ -2994,11 +3244,11 @@ mod tests {
         );
         exercise_signed_surface!(
             wrapper = OpenPitParamPrice,
-            from_str = openpit_create_param_price_from_str,
+            from_string = openpit_create_param_price_from_string,
             from_f64 = openpit_create_param_price_from_f64,
-            from_i64 = openpit_create_param_price_from_i64,
-            from_u64 = openpit_create_param_price_from_u64,
-            from_str_rounded = openpit_create_param_price_from_str_rounded,
+            from_int64 = openpit_create_param_price_from_int64,
+            from_uint64 = openpit_create_param_price_from_uint64,
+            from_string_rounded = openpit_create_param_price_from_string_rounded,
             from_f64_rounded = openpit_create_param_price_from_f64_rounded,
             from_decimal_rounded = openpit_create_param_price_from_decimal_rounded,
             to_f64 = openpit_param_price_to_f64,
@@ -3020,11 +3270,11 @@ mod tests {
         );
         exercise_signed_surface!(
             wrapper = OpenPitParamCashFlow,
-            from_str = openpit_create_param_cash_flow_from_str,
+            from_string = openpit_create_param_cash_flow_from_string,
             from_f64 = openpit_create_param_cash_flow_from_f64,
-            from_i64 = openpit_create_param_cash_flow_from_i64,
-            from_u64 = openpit_create_param_cash_flow_from_u64,
-            from_str_rounded = openpit_create_param_cash_flow_from_str_rounded,
+            from_int64 = openpit_create_param_cash_flow_from_int64,
+            from_uint64 = openpit_create_param_cash_flow_from_uint64,
+            from_string_rounded = openpit_create_param_cash_flow_from_string_rounded,
             from_f64_rounded = openpit_create_param_cash_flow_from_f64_rounded,
             from_decimal_rounded = openpit_create_param_cash_flow_from_decimal_rounded,
             to_f64 = openpit_param_cash_flow_to_f64,
@@ -3046,11 +3296,11 @@ mod tests {
         );
         exercise_signed_surface!(
             wrapper = OpenPitParamPositionSize,
-            from_str = openpit_create_param_position_size_from_str,
+            from_string = openpit_create_param_position_size_from_string,
             from_f64 = openpit_create_param_position_size_from_f64,
-            from_i64 = openpit_create_param_position_size_from_i64,
-            from_u64 = openpit_create_param_position_size_from_u64,
-            from_str_rounded = openpit_create_param_position_size_from_str_rounded,
+            from_int64 = openpit_create_param_position_size_from_int64,
+            from_uint64 = openpit_create_param_position_size_from_uint64,
+            from_string_rounded = openpit_create_param_position_size_from_string_rounded,
             from_f64_rounded = openpit_create_param_position_size_from_f64_rounded,
             from_decimal_rounded = openpit_create_param_position_size_from_decimal_rounded,
             to_f64 = openpit_param_position_size_to_f64,
@@ -3072,11 +3322,11 @@ mod tests {
         );
         exercise_signed_surface!(
             wrapper = OpenPitParamFee,
-            from_str = openpit_create_param_fee_from_str,
+            from_string = openpit_create_param_fee_from_string,
             from_f64 = openpit_create_param_fee_from_f64,
-            from_i64 = openpit_create_param_fee_from_i64,
-            from_u64 = openpit_create_param_fee_from_u64,
-            from_str_rounded = openpit_create_param_fee_from_str_rounded,
+            from_int64 = openpit_create_param_fee_from_int64,
+            from_uint64 = openpit_create_param_fee_from_uint64,
+            from_string_rounded = openpit_create_param_fee_from_string_rounded,
             from_f64_rounded = openpit_create_param_fee_from_f64_rounded,
             from_decimal_rounded = openpit_create_param_fee_from_decimal_rounded,
             to_f64 = openpit_param_fee_to_f64,
@@ -3102,11 +3352,11 @@ mod tests {
     fn typed_param_ffi_unsigned_surface_happy_path() {
         exercise_unsigned_surface!(
             wrapper = OpenPitParamQuantity,
-            from_str = openpit_create_param_quantity_from_str,
+            from_string = openpit_create_param_quantity_from_string,
             from_f64 = openpit_create_param_quantity_from_f64,
-            from_i64 = openpit_create_param_quantity_from_i64,
-            from_u64 = openpit_create_param_quantity_from_u64,
-            from_str_rounded = openpit_create_param_quantity_from_str_rounded,
+            from_int64 = openpit_create_param_quantity_from_int64,
+            from_uint64 = openpit_create_param_quantity_from_uint64,
+            from_string_rounded = openpit_create_param_quantity_from_string_rounded,
             from_f64_rounded = openpit_create_param_quantity_from_f64_rounded,
             from_decimal_rounded = openpit_create_param_quantity_from_decimal_rounded,
             to_f64 = openpit_param_quantity_to_f64,
@@ -3127,11 +3377,11 @@ mod tests {
         );
         exercise_unsigned_surface!(
             wrapper = OpenPitParamVolume,
-            from_str = openpit_create_param_volume_from_str,
+            from_string = openpit_create_param_volume_from_string,
             from_f64 = openpit_create_param_volume_from_f64,
-            from_i64 = openpit_create_param_volume_from_i64,
-            from_u64 = openpit_create_param_volume_from_u64,
-            from_str_rounded = openpit_create_param_volume_from_str_rounded,
+            from_int64 = openpit_create_param_volume_from_int64,
+            from_uint64 = openpit_create_param_volume_from_uint64,
+            from_string_rounded = openpit_create_param_volume_from_string_rounded,
             from_f64_rounded = openpit_create_param_volume_from_f64_rounded,
             from_decimal_rounded = openpit_create_param_volume_from_decimal_rounded,
             to_f64 = openpit_param_volume_to_f64,
@@ -3162,22 +3412,22 @@ mod tests {
         let mut position = OpenPitParamPositionSize::default();
 
         assert!(unsafe {
-            openpit_create_param_price_from_str(sv("10"), &mut price, std::ptr::null_mut())
+            openpit_create_param_price_from_string(sv("10"), &mut price, std::ptr::null_mut())
         });
         assert!(unsafe {
-            openpit_create_param_quantity_from_str(sv("2"), &mut quantity, std::ptr::null_mut())
+            openpit_create_param_quantity_from_string(sv("2"), &mut quantity, std::ptr::null_mut())
         });
         assert!(unsafe {
-            openpit_create_param_volume_from_str(sv("20"), &mut volume, std::ptr::null_mut())
+            openpit_create_param_volume_from_string(sv("20"), &mut volume, std::ptr::null_mut())
         });
         assert!(unsafe {
-            openpit_create_param_pnl_from_str(sv("5"), &mut pnl, std::ptr::null_mut())
+            openpit_create_param_pnl_from_string(sv("5"), &mut pnl, std::ptr::null_mut())
         });
         assert!(unsafe {
-            openpit_create_param_fee_from_str(sv("1"), &mut fee, std::ptr::null_mut())
+            openpit_create_param_fee_from_string(sv("1"), &mut fee, std::ptr::null_mut())
         });
         assert!(unsafe {
-            openpit_create_param_position_size_from_str(
+            openpit_create_param_position_size_from_string(
                 sv("3"),
                 &mut position,
                 std::ptr::null_mut(),

@@ -55,14 +55,16 @@ pub trait SyncMode: 'static {
     type Weak<T: 'static>: 'static;
 
     /// Factory used for every storage created by this engine.
-    type StorageLockingPolicyFactory: LockingPolicyFactory + storage::CreateStorageFor<AccountId>;
+    type StorageLockingPolicyFactory: LockingPolicyFactory
+        + storage::CreateStorageFor<AccountId>
+        + 'static;
 
     /// Trait-object shape required for registered pre-trade policies.
     type PreTradePolicyObject<
         Order: 'static,
         ExecutionReport: 'static,
         AccountAdjustment: 'static,
-    >: PreTradePolicy<Order, ExecutionReport, AccountAdjustment>
+    >: PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Self>
         + ?Sized
         + 'static;
 
@@ -131,7 +133,7 @@ impl SyncMode for LocalSync {
         Order: 'static,
         ExecutionReport: 'static,
         AccountAdjustment: 'static,
-    > = dyn PreTradePolicy<Order, ExecutionReport, AccountAdjustment>;
+    > = dyn PreTradePolicy<Order, ExecutionReport, AccountAdjustment, LocalSync>;
 
     fn new_strong<T: 'static>(inner: T) -> Self::Strong<T> {
         std::rc::Rc::new(inner)
@@ -185,7 +187,7 @@ impl SyncMode for FullSync {
         Order: 'static,
         ExecutionReport: 'static,
         AccountAdjustment: 'static,
-    > = dyn PreTradePolicy<Order, ExecutionReport, AccountAdjustment> + Send + Sync;
+    > = dyn PreTradePolicy<Order, ExecutionReport, AccountAdjustment, FullSync> + Send + Sync;
 
     fn new_strong<T: 'static>(inner: T) -> Self::Strong<T> {
         std::sync::Arc::new(inner)
@@ -295,7 +297,7 @@ impl SyncMode for AccountSync {
         Order: 'static,
         ExecutionReport: 'static,
         AccountAdjustment: 'static,
-    > = dyn PreTradePolicy<Order, ExecutionReport, AccountAdjustment> + Send;
+    > = dyn PreTradePolicy<Order, ExecutionReport, AccountAdjustment, AccountSync> + Send;
 
     fn new_strong<T: 'static>(inner: T) -> Self::Strong<T> {
         AccountSyncHandle(std::sync::Arc::new(inner), std::marker::PhantomData)

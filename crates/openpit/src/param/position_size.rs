@@ -158,6 +158,14 @@ impl PositionSize {
     }
 }
 
+impl std::ops::Neg for PositionSize {
+    type Output = Self;
+
+    fn neg(self) -> Self {
+        Self::new(-self.to_decimal())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::PositionSize;

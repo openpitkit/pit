@@ -128,7 +128,7 @@ func TestEngineApplyAccountAdjustmentEmptyBatchIsNoop(t *testing.T) {
 	engine := newEngineForTests(t)
 	defer engine.Stop()
 
-	rejects, err := engine.ApplyAccountAdjustment(param.NewAccountIDFromInt(1), nil)
+	rejects, _, err := engine.ApplyAccountAdjustment(param.NewAccountIDFromUint64(1), nil)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v, want nil", err)
 	}
@@ -147,8 +147,8 @@ func TestEngineApplyAccountAdjustmentReturnsBatchReject(t *testing.T) {
 	}
 	defer engine.Stop()
 
-	rejects, err := engine.ApplyAccountAdjustment(
-		param.NewAccountIDFromInt(1),
+	rejects, _, err := engine.ApplyAccountAdjustment(
+		param.NewAccountIDFromUint64(1),
 		[]model.AccountAdjustment{model.NewAccountAdjustment()},
 	)
 	if err != nil {
@@ -198,22 +198,25 @@ func (p engineTestStartPolicy) Name() string {
 	return p.name
 }
 
+func (engineTestStartPolicy) PolicyGroupID() model.PolicyGroupID { return model.DefaultPolicyGroupID }
+
 func (engineTestStartPolicy) CheckPreTradeStart(pretrade.Context, model.Order) []reject.Reject {
 	return nil
 }
 
 func (engineTestStartPolicy) PerformPreTradeCheck(
-	pretrade.Context, model.Order, tx.Mutations,
+	pretrade.Context, model.Order, tx.Mutations, pretrade.Result,
 ) []reject.Reject {
 	return nil
 }
 
-func (engineTestStartPolicy) ApplyExecutionReport(model.ExecutionReport) []reject.AccountBlock {
+func (engineTestStartPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ model.ExecutionReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
 	return nil
 }
 
 func (engineTestStartPolicy) ApplyAccountAdjustment(
 	accountadjustment.Context, param.AccountID, model.AccountAdjustment, tx.Mutations,
+	pretrade.AccountOutcomes,
 ) []reject.Reject {
 	return nil
 }
@@ -224,22 +227,27 @@ func (engineTestNoopStartPolicy) Close() {}
 
 func (engineTestNoopStartPolicy) Name() string { return "noop" }
 
+func (engineTestNoopStartPolicy) PolicyGroupID() model.PolicyGroupID {
+	return model.DefaultPolicyGroupID
+}
+
 func (engineTestNoopStartPolicy) CheckPreTradeStart(pretrade.Context, model.Order) []reject.Reject {
 	return nil
 }
 
 func (engineTestNoopStartPolicy) PerformPreTradeCheck(
-	pretrade.Context, model.Order, tx.Mutations,
+	pretrade.Context, model.Order, tx.Mutations, pretrade.Result,
 ) []reject.Reject {
 	return nil
 }
 
-func (engineTestNoopStartPolicy) ApplyExecutionReport(model.ExecutionReport) []reject.AccountBlock {
+func (engineTestNoopStartPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ model.ExecutionReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
 	return nil
 }
 
 func (engineTestNoopStartPolicy) ApplyAccountAdjustment(
 	accountadjustment.Context, param.AccountID, model.AccountAdjustment, tx.Mutations,
+	pretrade.AccountOutcomes,
 ) []reject.Reject {
 	return nil
 }
@@ -254,6 +262,10 @@ func (p engineTestRejectingAdjustmentPolicy) Name() string {
 	return p.name
 }
 
+func (engineTestRejectingAdjustmentPolicy) PolicyGroupID() model.PolicyGroupID {
+	return model.DefaultPolicyGroupID
+}
+
 func (engineTestRejectingAdjustmentPolicy) CheckPreTradeStart(
 	pretrade.Context, model.Order,
 ) []reject.Reject {
@@ -261,12 +273,12 @@ func (engineTestRejectingAdjustmentPolicy) CheckPreTradeStart(
 }
 
 func (engineTestRejectingAdjustmentPolicy) PerformPreTradeCheck(
-	pretrade.Context, model.Order, tx.Mutations,
+	pretrade.Context, model.Order, tx.Mutations, pretrade.Result,
 ) []reject.Reject {
 	return nil
 }
 
-func (engineTestRejectingAdjustmentPolicy) ApplyExecutionReport(model.ExecutionReport) []reject.AccountBlock {
+func (engineTestRejectingAdjustmentPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ model.ExecutionReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
 	return nil
 }
 
@@ -275,6 +287,7 @@ func (p *engineTestRejectingAdjustmentPolicy) ApplyAccountAdjustment(
 	param.AccountID,
 	model.AccountAdjustment,
 	tx.Mutations,
+	pretrade.AccountOutcomes,
 ) []reject.Reject {
 	return reject.NewSingleItemList(
 		reject.CodeOther,

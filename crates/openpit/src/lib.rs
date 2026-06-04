@@ -43,6 +43,7 @@
 //! with the caller.
 
 mod core;
+pub mod marketdata;
 pub mod param;
 pub mod pretrade;
 pub mod storage;
@@ -54,8 +55,9 @@ pub use core::engine_builder::{
     EngineBuildError, EngineBuilder, IntoPolicyObject, ReadyEngineBuilder, SyncedEngineBuilder,
 };
 pub use core::{
-    AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
-    AccountAdjustmentContext, AccountAdjustmentPositionOperation, AccountKey, AccountKeyConstraint,
+    AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBatchResult,
+    AccountAdjustmentBounds, AccountAdjustmentContext, AccountAdjustmentOutcome,
+    AccountAdjustmentPositionOperation, AccountKey, AccountKeyConstraint, AccountOutcomeEntry,
     ExecutionReportFillDetails, ExecutionReportOperation, ExecutionReportPositionImpact,
     FinancialImpact, HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
     HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
@@ -65,22 +67,33 @@ pub use core::{
     HasAccountAdjustmentPositionLeverage, HasAccountId, HasAutoBorrow, HasAverageEntryPrice,
     HasBalanceAsset, HasClosePosition, HasCollateralAsset, HasExecutionReportIsFinal,
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
-    HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
+    HasFee, HasInstrument, HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage,
     HasOrderPositionSide, HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode,
-    HasReduceOnly, HasSide, HasTradeAmount, Instrument, Mutation, Mutations, OrderMargin,
-    OrderOperation, OrderPosition, RequestFieldAccessError, WithAccountAdjustmentAmount,
-    WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
-    WithAccountAdjustmentPositionOperation, WithExecutionReportFillDetails,
-    WithExecutionReportOperation, WithExecutionReportPositionImpact, WithFinancialImpact,
-    WithOrderMargin, WithOrderOperation, WithOrderPosition,
+    HasPreTradeLock, HasReduceOnly, HasSide, HasTradeAmount, Instrument, Mutation, Mutations,
+    OrderMargin, OrderOperation, OrderPosition, OutcomeAmount, RequestFieldAccessError,
+    WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
+    WithAccountAdjustmentBounds, WithAccountAdjustmentPositionOperation,
+    WithExecutionReportFillDetails, WithExecutionReportOperation,
+    WithExecutionReportPositionImpact, WithFinancialImpact, WithOrderMargin, WithOrderOperation,
+    WithOrderPosition,
 };
 pub use core::{
-    AccountSync, AccountSyncHandle, AccountSyncHandleWeak, EngineTrait, EngineTraitOf, FullSync,
-    LocalSync, SyncMode,
+    AccountBlockHandle, AccountControl, AccountGroupError, AccountSync, AccountSyncHandle,
+    AccountSyncHandleWeak, Accounts, EngineTrait, EngineTraitOf, FullSync, LocalSync, SyncMode,
+};
+pub use core::{PolicyGroupId, DEFAULT_POLICY_GROUP_ID};
+pub use marketdata::{
+    AccountInfo, AlreadyRegistered, InstrumentId, LocalTtlGate, MarketDataBuilder, MarketDataError,
+    MarketDataLock, MarketDataService, MarketDataSync, NoopLock, PushForError, Quote,
+    QuoteResolution, QuoteTtl, RegistrationError, ServiceTtlGate, UnknownInstrumentId,
 };
 #[cfg(feature = "derive")]
 pub use openpit_derive::RequestFields;
 pub use param::{AdjustmentAmount, PositionMode};
 pub use pretrade::PostTradeResult;
+pub use pretrade::{
+    SpotFundsConfigError, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
+    SpotFundsPricingSource,
+};
 pub use storage::IndexFlag;
 pub use storage::StorageBuilder;

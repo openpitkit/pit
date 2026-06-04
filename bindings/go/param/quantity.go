@@ -42,7 +42,11 @@ type Quantity struct {
 	native native.ParamQuantity
 }
 
-var newQuantityZero = sync.OnceValue(func() Quantity { return newQuantityOrPanic(NewQuantityFromInt(0)) })
+var newQuantityZero = sync.OnceValue(
+	func() Quantity {
+		return newQuantityOrPanic(NewQuantityFromInt64(0))
+	},
+)
 
 // NewQuantityZero returns the canonical zero value of Quantity.
 func NewQuantityZero() Quantity { return newQuantityZero() }
@@ -70,25 +74,25 @@ func NewQuantityFromDecimal(v decimal.Decimal) (Quantity, error) {
 
 // NewQuantityFromString creates a Quantity from a decimal string.
 func NewQuantityFromString(v string) (Quantity, error) {
-	nativeValue, err := native.CreateParamQuantityFromStr(v)
+	nativeValue, err := native.CreateParamQuantityFromString(v)
 	if err != nil {
 		return Quantity{}, err
 	}
 	return NewQuantityFromHandle(nativeValue), nil
 }
 
-// NewQuantityFromInt creates a Quantity from a signed integer.
-func NewQuantityFromInt(v int64) (Quantity, error) {
-	nativeValue, err := native.CreateParamQuantityFromI64(v)
+// NewQuantityFromInt64 creates a Quantity from a signed integer.
+func NewQuantityFromInt64(v int64) (Quantity, error) {
+	nativeValue, err := native.CreateParamQuantityFromInt64(v)
 	if err != nil {
 		return Quantity{}, err
 	}
 	return NewQuantityFromHandle(nativeValue), nil
 }
 
-// NewQuantityFromUint creates a Quantity from an unsigned integer.
-func NewQuantityFromUint(v uint64) (Quantity, error) {
-	nativeValue, err := native.CreateParamQuantityFromU64(v)
+// NewQuantityFromUint64 creates a Quantity from an unsigned integer.
+func NewQuantityFromUint64(v uint64) (Quantity, error) {
+	nativeValue, err := native.CreateParamQuantityFromUint64(v)
 	if err != nil {
 		return Quantity{}, err
 	}
@@ -131,7 +135,7 @@ func NewQuantityFromStringRounded(
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Quantity, error) {
-	nativeValue, err := native.CreateParamQuantityFromStrRounded(v, scale, strategy.native())
+	nativeValue, err := native.CreateParamQuantityFromStringRounded(v, scale, strategy.native())
 	if err != nil {
 		return Quantity{}, err
 	}
@@ -329,4 +333,10 @@ func (v Quantity) CalculateVolume(price Price) (Volume, error) {
 		return Volume{}, err
 	}
 	return NewVolumeFromHandle(result), nil
+}
+
+// ToPositionSize returns the quantity as a PositionSize.
+func (v Quantity) ToPositionSize() PositionSize {
+	// invariant: native value already validated on construction; conversion cannot fail.
+	return NewPositionSizeFromHandle(newParamValueOrPanic(native.ParamQuantityToPositionSize(v.native)))
 }

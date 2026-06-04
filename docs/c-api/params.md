@@ -69,8 +69,9 @@ Stable account identifier type for FFI payloads.
 
 WARNING: Use exactly one account-id source model per runtime:
 
-- either purely numeric IDs (`openpit_create_param_account_id_from_u64`),
-- or purely string-derived IDs (`openpit_create_param_account_id_from_str`).
+- either purely numeric IDs (`openpit_create_param_account_id_from_uint64`),
+- or purely string-derived IDs
+  (`openpit_create_param_account_id_from_string`).
 
 Do not mix both models in the same runtime state. A hashed string value can
 coincide with a direct numeric ID, and then two distinct accounts become one
@@ -667,10 +668,10 @@ OpenPitParamDecimal openpit_param_notional_get_decimal(
 );
 ```
 
-## `openpit_create_param_pnl_from_str`
+## `openpit_create_param_pnl_from_string`
 
 ```c
-bool openpit_create_param_pnl_from_str(
+bool openpit_create_param_pnl_from_string(
     OpenPitStringView value,
     OpenPitParamPnl * out,
     OpenPitOutParamError out_error
@@ -687,30 +688,30 @@ bool openpit_create_param_pnl_from_f64(
 );
 ```
 
-## `openpit_create_param_pnl_from_i64`
+## `openpit_create_param_pnl_from_int64`
 
 ```c
-bool openpit_create_param_pnl_from_i64(
+bool openpit_create_param_pnl_from_int64(
     int64_t value,
     OpenPitParamPnl * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_pnl_from_u64`
+## `openpit_create_param_pnl_from_uint64`
 
 ```c
-bool openpit_create_param_pnl_from_u64(
+bool openpit_create_param_pnl_from_uint64(
     uint64_t value,
     OpenPitParamPnl * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_pnl_from_str_rounded`
+## `openpit_create_param_pnl_from_string_rounded`
 
 ```c
-bool openpit_create_param_pnl_from_str_rounded(
+bool openpit_create_param_pnl_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -914,10 +915,10 @@ bool openpit_param_pnl_checked_neg(
 );
 ```
 
-## `openpit_create_param_price_from_str`
+## `openpit_create_param_price_from_string`
 
 ```c
-bool openpit_create_param_price_from_str(
+bool openpit_create_param_price_from_string(
     OpenPitStringView value,
     OpenPitParamPrice * out,
     OpenPitOutParamError out_error
@@ -934,30 +935,30 @@ bool openpit_create_param_price_from_f64(
 );
 ```
 
-## `openpit_create_param_price_from_i64`
+## `openpit_create_param_price_from_int64`
 
 ```c
-bool openpit_create_param_price_from_i64(
+bool openpit_create_param_price_from_int64(
     int64_t value,
     OpenPitParamPrice * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_price_from_u64`
+## `openpit_create_param_price_from_uint64`
 
 ```c
-bool openpit_create_param_price_from_u64(
+bool openpit_create_param_price_from_uint64(
     uint64_t value,
     OpenPitParamPrice * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_price_from_str_rounded`
+## `openpit_create_param_price_from_string_rounded`
 
 ```c
-bool openpit_create_param_price_from_str_rounded(
+bool openpit_create_param_price_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -1161,10 +1162,10 @@ bool openpit_param_price_checked_neg(
 );
 ```
 
-## `openpit_create_param_quantity_from_str`
+## `openpit_create_param_quantity_from_string`
 
 ```c
-bool openpit_create_param_quantity_from_str(
+bool openpit_create_param_quantity_from_string(
     OpenPitStringView value,
     OpenPitParamQuantity * out,
     OpenPitOutParamError out_error
@@ -1181,30 +1182,30 @@ bool openpit_create_param_quantity_from_f64(
 );
 ```
 
-## `openpit_create_param_quantity_from_i64`
+## `openpit_create_param_quantity_from_int64`
 
 ```c
-bool openpit_create_param_quantity_from_i64(
+bool openpit_create_param_quantity_from_int64(
     int64_t value,
     OpenPitParamQuantity * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_quantity_from_u64`
+## `openpit_create_param_quantity_from_uint64`
 
 ```c
-bool openpit_create_param_quantity_from_u64(
+bool openpit_create_param_quantity_from_uint64(
     uint64_t value,
     OpenPitParamQuantity * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_quantity_from_str_rounded`
+## `openpit_create_param_quantity_from_string_rounded`
 
 ```c
-bool openpit_create_param_quantity_from_str_rounded(
+bool openpit_create_param_quantity_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -1398,10 +1399,10 @@ bool openpit_param_quantity_checked_rem_f64(
 );
 ```
 
-## `openpit_create_param_volume_from_str`
+## `openpit_create_param_volume_from_string`
 
 ```c
-bool openpit_create_param_volume_from_str(
+bool openpit_create_param_volume_from_string(
     OpenPitStringView value,
     OpenPitParamVolume * out,
     OpenPitOutParamError out_error
@@ -1418,30 +1419,30 @@ bool openpit_create_param_volume_from_f64(
 );
 ```
 
-## `openpit_create_param_volume_from_i64`
+## `openpit_create_param_volume_from_int64`
 
 ```c
-bool openpit_create_param_volume_from_i64(
+bool openpit_create_param_volume_from_int64(
     int64_t value,
     OpenPitParamVolume * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_volume_from_u64`
+## `openpit_create_param_volume_from_uint64`
 
 ```c
-bool openpit_create_param_volume_from_u64(
+bool openpit_create_param_volume_from_uint64(
     uint64_t value,
     OpenPitParamVolume * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_volume_from_str_rounded`
+## `openpit_create_param_volume_from_string_rounded`
 
 ```c
-bool openpit_create_param_volume_from_str_rounded(
+bool openpit_create_param_volume_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -1635,10 +1636,10 @@ bool openpit_param_volume_checked_rem_f64(
 );
 ```
 
-## `openpit_create_param_cash_flow_from_str`
+## `openpit_create_param_cash_flow_from_string`
 
 ```c
-bool openpit_create_param_cash_flow_from_str(
+bool openpit_create_param_cash_flow_from_string(
     OpenPitStringView value,
     OpenPitParamCashFlow * out,
     OpenPitOutParamError out_error
@@ -1655,30 +1656,30 @@ bool openpit_create_param_cash_flow_from_f64(
 );
 ```
 
-## `openpit_create_param_cash_flow_from_i64`
+## `openpit_create_param_cash_flow_from_int64`
 
 ```c
-bool openpit_create_param_cash_flow_from_i64(
+bool openpit_create_param_cash_flow_from_int64(
     int64_t value,
     OpenPitParamCashFlow * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_cash_flow_from_u64`
+## `openpit_create_param_cash_flow_from_uint64`
 
 ```c
-bool openpit_create_param_cash_flow_from_u64(
+bool openpit_create_param_cash_flow_from_uint64(
     uint64_t value,
     OpenPitParamCashFlow * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_cash_flow_from_str_rounded`
+## `openpit_create_param_cash_flow_from_string_rounded`
 
 ```c
-bool openpit_create_param_cash_flow_from_str_rounded(
+bool openpit_create_param_cash_flow_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -1882,10 +1883,10 @@ bool openpit_param_cash_flow_checked_neg(
 );
 ```
 
-## `openpit_create_param_position_size_from_str`
+## `openpit_create_param_position_size_from_string`
 
 ```c
-bool openpit_create_param_position_size_from_str(
+bool openpit_create_param_position_size_from_string(
     OpenPitStringView value,
     OpenPitParamPositionSize * out,
     OpenPitOutParamError out_error
@@ -1902,30 +1903,30 @@ bool openpit_create_param_position_size_from_f64(
 );
 ```
 
-## `openpit_create_param_position_size_from_i64`
+## `openpit_create_param_position_size_from_int64`
 
 ```c
-bool openpit_create_param_position_size_from_i64(
+bool openpit_create_param_position_size_from_int64(
     int64_t value,
     OpenPitParamPositionSize * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_position_size_from_u64`
+## `openpit_create_param_position_size_from_uint64`
 
 ```c
-bool openpit_create_param_position_size_from_u64(
+bool openpit_create_param_position_size_from_uint64(
     uint64_t value,
     OpenPitParamPositionSize * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_position_size_from_str_rounded`
+## `openpit_create_param_position_size_from_string_rounded`
 
 ```c
-bool openpit_create_param_position_size_from_str_rounded(
+bool openpit_create_param_position_size_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -2129,10 +2130,10 @@ bool openpit_param_position_size_checked_neg(
 );
 ```
 
-## `openpit_create_param_fee_from_str`
+## `openpit_create_param_fee_from_string`
 
 ```c
-bool openpit_create_param_fee_from_str(
+bool openpit_create_param_fee_from_string(
     OpenPitStringView value,
     OpenPitParamFee * out,
     OpenPitOutParamError out_error
@@ -2149,30 +2150,30 @@ bool openpit_create_param_fee_from_f64(
 );
 ```
 
-## `openpit_create_param_fee_from_i64`
+## `openpit_create_param_fee_from_int64`
 
 ```c
-bool openpit_create_param_fee_from_i64(
+bool openpit_create_param_fee_from_int64(
     int64_t value,
     OpenPitParamFee * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_fee_from_u64`
+## `openpit_create_param_fee_from_uint64`
 
 ```c
-bool openpit_create_param_fee_from_u64(
+bool openpit_create_param_fee_from_uint64(
     uint64_t value,
     OpenPitParamFee * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_fee_from_str_rounded`
+## `openpit_create_param_fee_from_string_rounded`
 
 ```c
-bool openpit_create_param_fee_from_str_rounded(
+bool openpit_create_param_fee_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -2376,10 +2377,10 @@ bool openpit_param_fee_checked_neg(
 );
 ```
 
-## `openpit_create_param_notional_from_str`
+## `openpit_create_param_notional_from_string`
 
 ```c
-bool openpit_create_param_notional_from_str(
+bool openpit_create_param_notional_from_string(
     OpenPitStringView value,
     OpenPitParamNotional * out,
     OpenPitOutParamError out_error
@@ -2396,30 +2397,30 @@ bool openpit_create_param_notional_from_f64(
 );
 ```
 
-## `openpit_create_param_notional_from_i64`
+## `openpit_create_param_notional_from_int64`
 
 ```c
-bool openpit_create_param_notional_from_i64(
+bool openpit_create_param_notional_from_int64(
     int64_t value,
     OpenPitParamNotional * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_notional_from_u64`
+## `openpit_create_param_notional_from_uint64`
 
 ```c
-bool openpit_create_param_notional_from_u64(
+bool openpit_create_param_notional_from_uint64(
     uint64_t value,
     OpenPitParamNotional * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_notional_from_str_rounded`
+## `openpit_create_param_notional_from_string_rounded`
 
 ```c
-bool openpit_create_param_notional_from_str_rounded(
+bool openpit_create_param_notional_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -2716,6 +2717,17 @@ bool openpit_param_price_calculate_volume(
 );
 ```
 
+## `openpit_param_price_calculate_position_size`
+
+```c
+bool openpit_param_price_calculate_position_size(
+    OpenPitParamPrice price,
+    OpenPitParamQuantity quantity,
+    OpenPitParamPositionSize * out,
+    OpenPitOutParamError out_error
+);
+```
+
 ## `openpit_param_quantity_calculate_volume`
 
 ```c
@@ -2753,6 +2765,26 @@ bool openpit_param_pnl_to_cash_flow(
 ```c
 bool openpit_param_pnl_to_position_size(
     OpenPitParamPnl value,
+    OpenPitParamPositionSize * out,
+    OpenPitOutParamError out_error
+);
+```
+
+## `openpit_param_quantity_to_position_size`
+
+```c
+bool openpit_param_quantity_to_position_size(
+    OpenPitParamQuantity value,
+    OpenPitParamPositionSize * out,
+    OpenPitOutParamError out_error
+);
+```
+
+## `openpit_param_volume_to_position_size`
+
+```c
+bool openpit_param_volume_to_position_size(
+    OpenPitParamVolume value,
     OpenPitParamPositionSize * out,
     OpenPitOutParamError out_error
 );
@@ -2986,14 +3018,14 @@ bool openpit_param_volume_from_notional(
 );
 ```
 
-## `openpit_create_param_account_id_from_u64`
+## `openpit_create_param_account_id_from_uint64`
 
 Constructs an account identifier from a 64-bit integer.
 
 This is a direct numeric mapping with no collision risk.
 
 WARNING: Do not mix IDs produced by this function with IDs produced by
-`openpit_create_param_account_id_from_str` in the same runtime state.
+`openpit_create_param_account_id_from_string` in the same runtime state.
 
 Contract:
 
@@ -3001,12 +3033,12 @@ Contract:
 - this function always succeeds.
 
 ```c
-OpenPitParamAccountId openpit_create_param_account_id_from_u64(
+OpenPitParamAccountId openpit_create_param_account_id_from_uint64(
     uint64_t value
 );
 ```
 
-## `openpit_create_param_account_id_from_str`
+## `openpit_create_param_account_id_from_string`
 
 Constructs an account identifier from a UTF-8 byte sequence.
 
@@ -3020,13 +3052,13 @@ Collision note:
   is approximately `n^2 / 2^65`.
 - if collision risk is unacceptable, keep your own collision-free
   string-to-integer mapping and use
-  `openpit_create_param_account_id_from_u64`.
+  `openpit_create_param_account_id_from_uint64`.
 
 The previous sentence is why this helper is suitable for stable adapter-side
 mapping, but not for workflows that require guaranteed uniqueness.
 
 WARNING: Do not mix IDs produced by this function with IDs produced by
-`openpit_create_param_account_id_from_u64` in the same runtime state.
+`openpit_create_param_account_id_from_uint64` in the same runtime state.
 
 Contract:
 
@@ -3039,14 +3071,14 @@ Contract:
 bytes.
 
 ```c
-bool openpit_create_param_account_id_from_str(
+bool openpit_create_param_account_id_from_string(
     OpenPitStringView value,
     OpenPitParamAccountId * out,
     OpenPitOutParamError out_error
 );
 ```
 
-## `openpit_create_param_asset_from_str`
+## `openpit_create_param_asset_from_string`
 
 Validates and copies an asset identifier into a caller-owned shared-string
 handle.
@@ -3054,7 +3086,7 @@ handle.
 The returned handle must be destroyed with `openpit_destroy_param_asset`.
 
 ```c
-OpenPitSharedString * openpit_create_param_asset_from_str(
+OpenPitSharedString * openpit_create_param_asset_from_string(
     OpenPitStringView value,
     OpenPitOutParamError out_error
 );
@@ -3063,11 +3095,89 @@ OpenPitSharedString * openpit_create_param_asset_from_str(
 ## `openpit_destroy_param_asset`
 
 Destroys a caller-owned asset handle created by
-`openpit_create_param_asset_from_str`.
+`openpit_create_param_asset_from_string`.
 
 ```c
 void openpit_destroy_param_asset(
     OpenPitSharedString * handle
+);
+```
+
+## `openpit_param_side_to_string`
+
+Renders an order side into a caller-owned shared string.
+
+Returns null and writes `out_error` when the side is not set.
+
+```c
+OpenPitSharedString * openpit_param_side_to_string(
+    OpenPitParamSide value,
+    OpenPitOutParamError out_error
+);
+```
+
+## `openpit_param_position_side_to_string`
+
+Renders a position side into a caller-owned shared string.
+
+Returns null and writes `out_error` when the position side is not set.
+
+```c
+OpenPitSharedString * openpit_param_position_side_to_string(
+    OpenPitParamPositionSide value,
+    OpenPitOutParamError out_error
+);
+```
+
+## `openpit_param_position_effect_to_string`
+
+Renders a position effect into a caller-owned shared string.
+
+Returns null and writes `out_error` when the position effect is not set.
+
+```c
+OpenPitSharedString * openpit_param_position_effect_to_string(
+    OpenPitParamPositionEffect value,
+    OpenPitOutParamError out_error
+);
+```
+
+## `openpit_param_position_mode_to_string`
+
+Renders a position mode into a caller-owned shared string.
+
+Returns null and writes `out_error` when the position mode is not set.
+
+```c
+OpenPitSharedString * openpit_param_position_mode_to_string(
+    OpenPitParamPositionMode value,
+    OpenPitOutParamError out_error
+);
+```
+
+## `openpit_param_account_id_to_string`
+
+Renders an account identifier into a caller-owned shared string.
+
+This conversion always succeeds.
+
+```c
+OpenPitSharedString * openpit_param_account_id_to_string(
+    OpenPitParamAccountId value
+);
+```
+
+## `openpit_param_trade_amount_to_string`
+
+Renders a trade amount into a caller-owned shared string.
+
+Returns null and writes `out_error` when the trade amount is not set or its
+numeric value cannot be decoded.
+
+```c
+OpenPitSharedString * openpit_param_trade_amount_to_string(
+    OpenPitParamTradeAmount value,
+    OpenPitOutParamError out_error
 );
 ```
 

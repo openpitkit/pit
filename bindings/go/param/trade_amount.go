@@ -100,6 +100,18 @@ func (a TradeAmount) Handle() native.ParamTradeAmount {
 	return a.native
 }
 
+// String returns a human-readable representation of the trade amount.
+func (a TradeAmount) String() string {
+	switch native.ParamTradeAmountGetKind(a.native) {
+	case native.ParamTradeAmountKindQuantity:
+		return "qty: " + a.MustQuantity().String()
+	case native.ParamTradeAmountKindVolume:
+		return "vol: " + a.MustVolume().String()
+	default:
+		return "not set"
+	}
+}
+
 // Choose calls getQuantity or getVolume depending on the trade amount kind.
 func (a TradeAmount) Choose(getQuantity func(Quantity), getVolume func(Volume)) {
 	if a.IsQuantity() {

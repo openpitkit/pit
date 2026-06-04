@@ -33,10 +33,10 @@ class DualRejectPolicy(openpit.pretrade.Policy):
 
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
     ) -> bool:
-        _ = report
+        _ = ctx, report
         return False
 
 

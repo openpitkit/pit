@@ -42,7 +42,11 @@ type CashFlow struct {
 	native native.ParamCashFlow
 }
 
-var newCashFlowZero = sync.OnceValue(func() CashFlow { return newCashFlowOrPanic(NewCashFlowFromInt(0)) })
+var newCashFlowZero = sync.OnceValue(
+	func() CashFlow {
+		return newCashFlowOrPanic(NewCashFlowFromInt64(0))
+	},
+)
 
 // NewCashFlowZero returns the canonical zero value of CashFlow.
 func NewCashFlowZero() CashFlow { return newCashFlowZero() }
@@ -70,25 +74,25 @@ func NewCashFlowFromDecimal(v decimal.Decimal) (CashFlow, error) {
 
 // NewCashFlowFromString creates a CashFlow from a decimal string.
 func NewCashFlowFromString(v string) (CashFlow, error) {
-	nativeValue, err := native.CreateParamCashFlowFromStr(v)
+	nativeValue, err := native.CreateParamCashFlowFromString(v)
 	if err != nil {
 		return CashFlow{}, err
 	}
 	return NewCashFlowFromHandle(nativeValue), nil
 }
 
-// NewCashFlowFromInt creates a CashFlow from a signed integer.
-func NewCashFlowFromInt(v int64) (CashFlow, error) {
-	nativeValue, err := native.CreateParamCashFlowFromI64(v)
+// NewCashFlowFromInt64 creates a CashFlow from a signed integer.
+func NewCashFlowFromInt64(v int64) (CashFlow, error) {
+	nativeValue, err := native.CreateParamCashFlowFromInt64(v)
 	if err != nil {
 		return CashFlow{}, err
 	}
 	return NewCashFlowFromHandle(nativeValue), nil
 }
 
-// NewCashFlowFromUint creates a CashFlow from an unsigned integer.
-func NewCashFlowFromUint(v uint64) (CashFlow, error) {
-	nativeValue, err := native.CreateParamCashFlowFromU64(v)
+// NewCashFlowFromUint64 creates a CashFlow from an unsigned integer.
+func NewCashFlowFromUint64(v uint64) (CashFlow, error) {
+	nativeValue, err := native.CreateParamCashFlowFromUint64(v)
 	if err != nil {
 		return CashFlow{}, err
 	}
@@ -133,7 +137,7 @@ func NewCashFlowFromStringRounded(
 	scale uint32,
 	strategy RoundingStrategy,
 ) (CashFlow, error) {
-	nativeValue, err := native.CreateParamCashFlowFromStrRounded(v, scale, strategy.native())
+	nativeValue, err := native.CreateParamCashFlowFromStringRounded(v, scale, strategy.native())
 	if err != nil {
 		return CashFlow{}, err
 	}

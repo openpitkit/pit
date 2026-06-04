@@ -83,7 +83,7 @@ engine = (
 order = openpit.Order(
     operation=openpit.OrderOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.TradeAmount.quantity("100"),
         price=openpit.param.Price("185"),
@@ -105,7 +105,7 @@ else:
 report = openpit.ExecutionReport(
     operation=openpit.ExecutionReportOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
     ),
     financial_impact=openpit.FinancialImpact(
@@ -187,7 +187,7 @@ engine = (
 order = openpit.Order(
     operation=openpit.OrderOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.TradeAmount.quantity("100"),
         price=openpit.param.Price("185"),
@@ -213,7 +213,7 @@ engine = openpit.Engine.builder().build()
 order = openpit.Order(
     operation=openpit.OrderOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.TradeAmount.quantity("100"),
         price=openpit.param.Price("185"),
@@ -240,7 +240,7 @@ engine = openpit.Engine.builder().build()
 order = openpit.Order(
     operation=openpit.OrderOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.TradeAmount.quantity("100"),
         price=openpit.param.Price("185"),
@@ -259,7 +259,7 @@ Use account adjustments for non-trading balance or position state changes.
 ```python
 import openpit
 
-account_id = openpit.param.AccountId.from_u64(99224416)
+account_id = openpit.param.AccountId.from_int(99224416)
 adjustments = [
     openpit.AccountAdjustment(
         operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
@@ -343,7 +343,7 @@ adjustment = openpit.AccountAdjustment(
     operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
 )
 result = engine.apply_account_adjustment(
-    account_id=openpit.param.AccountId.from_u64(99224416),
+    account_id=openpit.param.AccountId.from_int(99224416),
     adjustments=[adjustment],
 )
 assert result.ok
@@ -402,7 +402,7 @@ engine = openpit.Engine.builder().pre_trade(policy=policy).build()
 order = openpit.Order(
     operation=openpit.OrderOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.TradeAmount.quantity("10"),
         price=openpit.param.Price("25"),
@@ -465,7 +465,7 @@ def make_order(quantity: str) -> openpit.Order:
     return openpit.Order(
         operation=openpit.OrderOperation(
             instrument=openpit.Instrument("AAPL", "USD"),
-            account_id=openpit.param.AccountId.from_u64(99224416),
+            account_id=openpit.param.AccountId.from_int(99224416),
             side=openpit.param.Side.BUY,
             trade_amount=openpit.param.TradeAmount.quantity(quantity),
             price=openpit.param.Price("25"),
@@ -544,7 +544,7 @@ engine = (
 order = StrategyOrder(
     operation=openpit.OrderOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.TradeAmount.quantity("10"),
         price=openpit.param.Price("25"),

@@ -30,7 +30,7 @@ Stable classification code for a reject.
 Read this first when you need machine-readable handling. The textual fields in
 [`OpenPitPretradeReject`] provide operator-facing explanation and extra context.
 
-Valid codes are `1..=39` and `255` (`Other`). Unknown incoming codes are mapped
+Valid codes are `1..=42` and `255` (`Other`). Unknown incoming codes are mapped
 to `Other` (`255`).
 
 ```c
@@ -227,6 +227,21 @@ typedef uint16_t OpenPitPretradeRejectCode;
  */
 #define OpenPitPretradeRejectCode_SystemUnavailable \
     ((OpenPitPretradeRejectCode) 39)
+/**
+ * Required mark price is unavailable.
+ */
+#define OpenPitPretradeRejectCode_MarkPriceUnavailable \
+    ((OpenPitPretradeRejectCode) 40)
+/**
+ * Account adjustment would violate configured bounds.
+ */
+#define OpenPitPretradeRejectCode_AccountAdjustmentBoundsExceeded \
+    ((OpenPitPretradeRejectCode) 41)
+/**
+ * Underlying decimal arithmetic overflowed during evaluation.
+ */
+#define OpenPitPretradeRejectCode_ArithmeticOverflow \
+    ((OpenPitPretradeRejectCode) 42)
 /**
  * Reserved discriminant for caller-defined reject classes.
  *

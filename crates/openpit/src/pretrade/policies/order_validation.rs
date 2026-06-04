@@ -17,7 +17,8 @@
 
 use crate::core::HasTradeAmount;
 use crate::param::TradeAmount;
-use crate::pretrade::policy::{missing_required_field_reject, PolicyName};
+use crate::pretrade::policy::{missing_required_field_reject, PolicyGroupId, PolicyName};
+use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
 use crate::pretrade::{PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects};
 
 /// Start-stage policy for basic order field validation.
@@ -25,7 +26,9 @@ use crate::pretrade::{PreTradeContext, PreTradePolicy, Reject, RejectCode, Rejec
 /// The current implementation validates only explicitly provided fields:
 /// `trade_amount` must be non-zero when present.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct OrderValidationPolicy;
+pub struct OrderValidationPolicy {
+    group_id: PolicyGroupId,
+}
 
 impl OrderValidationPolicy {
     /// Stable policy name.
@@ -33,7 +36,17 @@ impl OrderValidationPolicy {
 
     /// Creates a new order validation policy.
     pub fn new() -> Self {
-        Self
+        Self {
+            group_id: DEFAULT_POLICY_GROUP_ID,
+        }
+    }
+
+    /// Assigns a group tag to this policy instance.
+    ///
+    /// See [`PolicyGroupId`] and [`DEFAULT_POLICY_GROUP_ID`] for details.
+    pub fn with_policy_group_id(mut self, id: PolicyGroupId) -> Self {
+        self.group_id = id;
+        self
     }
 }
 
@@ -43,16 +56,25 @@ impl PolicyName for OrderValidationPolicy {
     }
 }
 
-impl<Order, ExecutionReport, AccountAdjustment>
-    PreTradePolicy<Order, ExecutionReport, AccountAdjustment> for OrderValidationPolicy
+impl<Order, ExecutionReport, AccountAdjustment, Sync>
+    PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> for OrderValidationPolicy
 where
     Order: HasTradeAmount,
+    Sync: crate::core::SyncMode,
 {
     fn name(&self) -> &str {
         Self::NAME
     }
 
-    fn check_pre_trade_start(&self, _ctx: &PreTradeContext, order: &Order) -> Result<(), Rejects> {
+    fn policy_group_id(&self) -> PolicyGroupId {
+        self.group_id
+    }
+
+    fn check_pre_trade_start(
+        &self,
+        _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+        order: &Order,
+    ) -> Result<(), Rejects> {
         match order
             .trade_amount()
             .map_err(|e| Rejects::from(missing_required_field_reject(self, "trade amount", &e)))?
@@ -81,13 +103,6 @@ where
         }
         Ok(())
     }
-
-    fn apply_execution_report(
-        &self,
-        _report: &ExecutionReport,
-    ) -> Vec<crate::pretrade::AccountBlock> {
-        vec![]
-    }
 }
 
 #[cfg(test)]
@@ -95,6 +110,7 @@ mod tests {
     use crate::core::{Instrument, OrderOperation};
     use crate::param::{AccountId, Asset, Price, Quantity, Side, TradeAmount, Volume};
     use crate::pretrade::{PreTradeContext, PreTradePolicy, RejectCode, RejectScope};
+    use crate::storage::NoLocking;
     use crate::RequestFieldAccessError;
 
     use super::OrderValidationPolicy;
@@ -113,13 +129,15 @@ mod tests {
             price: Some(Price::from_str("10").expect("price must be valid")),
         };
 
-        let reject =
-            <OrderValidationPolicy as PreTradePolicy<OrderOperation, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order,
-            )
-            .expect_err("zero quantity must be rejected");
+        let reject = <OrderValidationPolicy as PreTradePolicy<
+            OrderOperation,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy, &PreTradeContext::<NoLocking>::new(None), &order
+        )
+        .expect_err("zero quantity must be rejected");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::InvalidFieldValue);
@@ -141,13 +159,15 @@ mod tests {
             price: None,
         };
 
-        let reject =
-            <OrderValidationPolicy as PreTradePolicy<OrderOperation, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order,
-            )
-            .expect_err("zero volume must be rejected");
+        let reject = <OrderValidationPolicy as PreTradePolicy<
+            OrderOperation,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy, &PreTradeContext::<NoLocking>::new(None), &order
+        )
+        .expect_err("zero volume must be rejected");
         let reject = &reject[0];
         assert_eq!(reject.code, RejectCode::InvalidFieldValue);
         assert_eq!(reject.reason, "order volume must be non-zero");
@@ -169,14 +189,15 @@ mod tests {
             price: None,
         };
 
-        assert!(
-            <OrderValidationPolicy as PreTradePolicy<OrderOperation, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order
-            )
-            .is_ok()
-        );
+        assert!(<OrderValidationPolicy as PreTradePolicy<
+            OrderOperation,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy, &PreTradeContext::<NoLocking>::new(None), &order
+        )
+        .is_ok());
     }
 
     #[test]
@@ -195,14 +216,17 @@ mod tests {
             price: Some(Price::ZERO),
         };
 
-        assert!(
-            <OrderValidationPolicy as PreTradePolicy<OrderOperation, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &zero_price_order
-            )
-            .is_ok()
-        );
+        assert!(<OrderValidationPolicy as PreTradePolicy<
+            OrderOperation,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &zero_price_order
+        )
+        .is_ok());
 
         let negative_price_order = OrderOperation {
             instrument: Instrument::new(
@@ -217,14 +241,17 @@ mod tests {
             price: Some(Price::from_str("-5").expect("price must be valid")),
         };
 
-        assert!(
-            <OrderValidationPolicy as PreTradePolicy<OrderOperation, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &negative_price_order
-            )
-            .is_ok()
-        );
+        assert!(<OrderValidationPolicy as PreTradePolicy<
+            OrderOperation,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &negative_price_order
+        )
+        .is_ok());
     }
 
     #[test]
@@ -232,7 +259,12 @@ mod tests {
         let policy = OrderValidationPolicy::new();
 
         assert_eq!(
-            <OrderValidationPolicy as PreTradePolicy<OrderOperation, ()>>::name(&policy),
+            <OrderValidationPolicy as PreTradePolicy<
+                OrderOperation,
+                (),
+                (),
+                crate::core::LocalSync,
+            >>::name(&policy),
             OrderValidationPolicy::NAME
         );
     }
@@ -253,21 +285,24 @@ mod tests {
             price: Some(Price::from_str("10").expect("price must be valid")),
         };
 
-        assert!(
-            <OrderValidationPolicy as PreTradePolicy<OrderOperation, ()>>::apply_execution_report(
-                &policy,
-                &()
-            )
-            .is_empty()
-        );
-        assert!(
-            <OrderValidationPolicy as PreTradePolicy<OrderOperation, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order
-            )
-            .is_ok()
-        );
+        assert!(<OrderValidationPolicy as PreTradePolicy<
+            OrderOperation,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::apply_execution_report(
+            &policy, &crate::pretrade::PostTradeContext::new(), &()
+        )
+        .is_none());
+        assert!(<OrderValidationPolicy as PreTradePolicy<
+            OrderOperation,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy, &PreTradeContext::<NoLocking>::new(None), &order
+        )
+        .is_ok());
     }
 
     #[test]
@@ -281,13 +316,17 @@ mod tests {
         }
 
         let policy = OrderValidationPolicy::new();
-        let reject =
-            <OrderValidationPolicy as PreTradePolicy<InvalidOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &InvalidOrder,
-            )
-            .expect_err("field access error must reject");
+        let reject = <OrderValidationPolicy as PreTradePolicy<
+            InvalidOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &InvalidOrder,
+        )
+        .expect_err("field access error must reject");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);

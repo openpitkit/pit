@@ -54,6 +54,7 @@ pub use account_adjustment_amount::AccountAdjustmentAmountAccess;
 pub use account_adjustment_bounds::AccountAdjustmentBoundsAccess;
 pub use account_adjustment_operation::{
     AccountAdjustmentOperationAccess, PopulatedAccountAdjustmentOperation,
+    PopulatedBalanceOperation, PopulatedPositionOperation,
 };
 pub use execution_report_fill::{ExecutionReportFillAccess, PopulatedExecutionReportFill};
 pub use execution_report_operation::{

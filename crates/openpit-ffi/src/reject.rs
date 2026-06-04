@@ -39,7 +39,7 @@ pub enum OpenPitPretradeRejectScope {
 /// Read this first when you need machine-readable handling. The textual fields
 /// in [`OpenPitPretradeReject`] provide operator-facing explanation and extra context.
 ///
-/// Valid codes are `1..=39` and `255` (`Other`). Unknown incoming codes are
+/// Valid codes are `1..=42` and `255` (`Other`). Unknown incoming codes are
 /// mapped to `Other` (`255`).
 pub enum OpenPitPretradeRejectCode {
     /// A required field is absent.
@@ -120,6 +120,12 @@ pub enum OpenPitPretradeRejectCode {
     OrderValueCalculationFailed = 38,
     /// A required service or subsystem is unavailable.
     SystemUnavailable = 39,
+    /// Required mark price is unavailable.
+    MarkPriceUnavailable = 40,
+    /// Account adjustment would violate configured bounds.
+    AccountAdjustmentBoundsExceeded = 41,
+    /// Underlying decimal arithmetic overflowed during evaluation.
+    ArithmeticOverflow = 42,
     /// Reserved discriminant for caller-defined reject classes.
     ///
     /// Use together with `Reject::with_user_data` to attach a caller-defined
@@ -232,6 +238,11 @@ impl From<OpenPitPretradeRejectCode> for RejectCode {
                 Self::OrderValueCalculationFailed
             }
             OpenPitPretradeRejectCode::SystemUnavailable => Self::SystemUnavailable,
+            OpenPitPretradeRejectCode::MarkPriceUnavailable => Self::MarkPriceUnavailable,
+            OpenPitPretradeRejectCode::AccountAdjustmentBoundsExceeded => {
+                Self::AccountAdjustmentBoundsExceeded
+            }
+            OpenPitPretradeRejectCode::ArithmeticOverflow => Self::ArithmeticOverflow,
             OpenPitPretradeRejectCode::Custom => Self::Custom,
             OpenPitPretradeRejectCode::Other => Self::Other,
         }
@@ -280,6 +291,9 @@ impl From<RejectCode> for OpenPitPretradeRejectCode {
             RejectCode::ReferenceDataUnavailable => Self::ReferenceDataUnavailable,
             RejectCode::OrderValueCalculationFailed => Self::OrderValueCalculationFailed,
             RejectCode::SystemUnavailable => Self::SystemUnavailable,
+            RejectCode::MarkPriceUnavailable => Self::MarkPriceUnavailable,
+            RejectCode::AccountAdjustmentBoundsExceeded => Self::AccountAdjustmentBoundsExceeded,
+            RejectCode::ArithmeticOverflow => Self::ArithmeticOverflow,
             RejectCode::Custom => Self::Custom,
             RejectCode::Other => Self::Other,
             _ => Self::Other,
@@ -682,6 +696,9 @@ mod tests {
             OpenPitPretradeRejectCode::ReferenceDataUnavailable,
             OpenPitPretradeRejectCode::OrderValueCalculationFailed,
             OpenPitPretradeRejectCode::SystemUnavailable,
+            OpenPitPretradeRejectCode::MarkPriceUnavailable,
+            OpenPitPretradeRejectCode::AccountAdjustmentBoundsExceeded,
+            OpenPitPretradeRejectCode::ArithmeticOverflow,
             OpenPitPretradeRejectCode::Custom,
             OpenPitPretradeRejectCode::Other,
         ];

@@ -29,9 +29,12 @@
 
 mod context;
 pub(crate) mod handle;
+pub mod holdings;
 mod lock;
 pub mod policies;
 mod policy;
+mod policy_result;
+mod post_trade_context;
 mod post_trade_result;
 mod reject;
 mod request;
@@ -40,7 +43,13 @@ pub(crate) mod start_pre_trade_time;
 
 pub use context::PreTradeContext;
 pub use lock::PreTradeLock;
-pub use policy::PreTradePolicy;
+pub use policies::{
+    SpotFundsConfigError, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
+    SpotFundsPricingSource,
+};
+pub use policy::{PolicyGroupId, PreTradePolicy, DEFAULT_POLICY_GROUP_ID};
+pub use policy_result::PolicyPreTradeResult;
+pub use post_trade_context::PostTradeContext;
 pub use post_trade_result::PostTradeResult;
 pub use reject::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
 pub use request::PreTradeRequest;

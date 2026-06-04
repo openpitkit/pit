@@ -21,12 +21,16 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import enum
 import typing
 
+from .. import _enum, marketdata
 from .._openpit import OrderSizeLimit
 
 if typing.TYPE_CHECKING:
     from .. import param
+
+DEFAULT_POLICY_GROUP_ID = 0
 
 OrderSizeLimit.__doc__ = """
 Order-size limits (quantity and notional cap).
@@ -123,6 +127,12 @@ class RateLimitReadyBuilder:
         self._asset: list[RateLimitAssetBarrier] = []
         self._account: list[RateLimitAccountBarrier] = []
         self._account_asset: list[RateLimitAccountAssetBarrier] = []
+        self._policy_group_id = DEFAULT_POLICY_GROUP_ID
+
+    def with_policy_group_id(self, policy_group_id: int) -> RateLimitReadyBuilder:
+        """Assign the policy group tag."""
+        self._policy_group_id = policy_group_id
+        return self
 
     def broker_barrier(self, barrier: RateLimitBrokerBarrier) -> RateLimitReadyBuilder:
         """Set or replace the broker-wide rate limit."""
@@ -164,6 +174,7 @@ class RateLimitReadyBuilder:
             )
 
         builder._add_builtin_rate_limit(
+            policy_group_id=self._policy_group_id,
             broker=broker,
             asset_barriers=[
                 (
@@ -202,6 +213,11 @@ class RateLimitBuilder:
 
     def __init__(self) -> None:
         self._ready = RateLimitReadyBuilder()
+
+    def with_policy_group_id(self, policy_group_id: int) -> RateLimitBuilder:
+        """Assign the policy group tag."""
+        self._ready.with_policy_group_id(policy_group_id)
+        return self
 
     def broker_barrier(self, barrier: RateLimitBrokerBarrier) -> RateLimitReadyBuilder:
         """Set the broker-wide rate limit and return a ready builder."""
@@ -286,6 +302,12 @@ class OrderSizeLimitReadyBuilder:
         self._broker: OrderSizeBrokerBarrier | None = None
         self._asset: list[OrderSizeAssetBarrier] = []
         self._account_asset: list[OrderSizeAccountAssetBarrier] = []
+        self._policy_group_id = DEFAULT_POLICY_GROUP_ID
+
+    def with_policy_group_id(self, policy_group_id: int) -> OrderSizeLimitReadyBuilder:
+        """Assign the policy group tag."""
+        self._policy_group_id = policy_group_id
+        return self
 
     def broker_barrier(
         self, barrier: OrderSizeBrokerBarrier
@@ -311,6 +333,7 @@ class OrderSizeLimitReadyBuilder:
     def _build(self, builder: typing.Any) -> None:
         """Contract hook invoked by ``builtin()`` to register this policy."""
         builder._add_builtin_order_size_limit(
+            policy_group_id=self._policy_group_id,
             broker=self._broker.limit if self._broker is not None else None,
             asset_barriers=[(b.limit, b.settlement_asset) for b in self._asset],
             account_asset_barriers=[
@@ -332,6 +355,11 @@ class OrderSizeLimitBuilder:
 
     def __init__(self) -> None:
         self._ready = OrderSizeLimitReadyBuilder()
+
+    def with_policy_group_id(self, policy_group_id: int) -> OrderSizeLimitBuilder:
+        """Assign the policy group tag."""
+        self._ready.with_policy_group_id(policy_group_id)
+        return self
 
     def broker_barrier(
         self, barrier: OrderSizeBrokerBarrier
@@ -411,6 +439,14 @@ class PnlBoundsKillswitchReadyBuilder:
     def __init__(self) -> None:
         self._broker: list[PnlBoundsBrokerBarrier] = []
         self._account: list[PnlBoundsAccountAssetBarrier] = []
+        self._policy_group_id = DEFAULT_POLICY_GROUP_ID
+
+    def with_policy_group_id(
+        self, policy_group_id: int
+    ) -> PnlBoundsKillswitchReadyBuilder:
+        """Assign the policy group tag."""
+        self._policy_group_id = policy_group_id
+        return self
 
     def broker_barriers(
         self, *barriers: PnlBoundsBrokerBarrier
@@ -429,6 +465,7 @@ class PnlBoundsKillswitchReadyBuilder:
     def _build(self, builder: typing.Any) -> None:
         """Contract hook invoked by ``builtin()`` to register this policy."""
         builder._add_builtin_pnl_bounds_killswitch(
+            policy_group_id=self._policy_group_id,
             broker_barriers=self._broker,
             account_barriers=self._account,
         )
@@ -444,6 +481,11 @@ class PnlBoundsKillswitchBuilder:
 
     def __init__(self) -> None:
         self._ready = PnlBoundsKillswitchReadyBuilder()
+
+    def with_policy_group_id(self, policy_group_id: int) -> PnlBoundsKillswitchBuilder:
+        """Assign the policy group tag."""
+        self._ready.with_policy_group_id(policy_group_id)
+        return self
 
     def broker_barriers(
         self, *barriers: PnlBoundsBrokerBarrier
@@ -464,6 +506,148 @@ def build_pnl_bounds_killswitch() -> PnlBoundsKillswitchBuilder:
 
 
 # ---------------------------------------------------------------------------
+# Spot funds
+# ---------------------------------------------------------------------------
+
+
+@enum.unique
+class SpotFundsPricingSource(_enum.StrEnum):
+    """Market-data quote field used for market-order pricing."""
+
+    MARK = "Mark"
+    BOOK_TOP = "BookTop"
+
+
+@dataclasses.dataclass(frozen=True)
+class SpotFundsOverride:
+    """Spot-funds slippage override for a registered instrument, optionally
+    narrowed to a single account or an account group (mutually exclusive).
+
+    When ``slippage_bps`` is ``None`` the entry is ignored. Resolution order:
+    (instrument, account_id) -> (instrument, account_group_id) -> (instrument)
+    -> global.
+    """
+
+    instrument: marketdata.InstrumentId
+    account_id: param.AccountId | None = None
+    account_group_id: param.AccountGroupId | None = None
+    slippage_bps: int | None = None
+
+
+class SpotFundsReadyBuilder:
+    """Fully-configured spot funds policy builder.
+
+    Obtain via :func:`build_spot_funds`.  Pass to
+    ``SyncedEngineBuilder.builtin()`` or ``ReadyEngineBuilder.builtin()``
+    to register on an engine.
+
+    Initial balances are seeded through the account-adjustment pipeline,
+    not via the builder.
+    """
+
+    def __init__(self) -> None:
+        self._market_data: marketdata.MarketDataService | None = None
+        self._default_slippage_bps: int | None = None
+        self._pricing_source: SpotFundsPricingSource = SpotFundsPricingSource.MARK
+        self._overrides: tuple[SpotFundsOverride, ...] = ()
+        self._policy_group_id = DEFAULT_POLICY_GROUP_ID
+
+    def with_policy_group_id(self, policy_group_id: int) -> SpotFundsReadyBuilder:
+        """Assign the policy group tag."""
+        self._policy_group_id = policy_group_id
+        return self
+
+    def market_data(
+        self,
+        service: marketdata.MarketDataService,
+        default_slippage_bps: int,
+        pricing_source: SpotFundsPricingSource = SpotFundsPricingSource.MARK,
+        overrides: typing.Iterable[SpotFundsOverride] = (),
+    ) -> SpotFundsReadyBuilder:
+        """Enable market orders through a live market-data service.
+
+        Overrides narrow slippage per instrument, optionally scoped to an
+        account or account group (mutually exclusive). Resolution order:
+        (instrument, account_id) -> (instrument, account_group_id) ->
+        (instrument) -> global.
+
+        Calling it more than once replaces the service handle and all
+        market-data bundle parameters.
+        """
+        self._market_data = service
+        self._default_slippage_bps = default_slippage_bps
+        self._pricing_source = SpotFundsPricingSource(pricing_source)
+        self._overrides = tuple(overrides)
+        return self
+
+    def _build(self, builder: typing.Any) -> None:
+        """Contract hook invoked by ``builtin()`` to register this policy."""
+        builder._add_builtin_spot_funds(
+            policy_group_id=self._policy_group_id,
+            market_data=self._market_data,
+            default_slippage_bps=self._default_slippage_bps,
+            pricing_source=(
+                None if self._market_data is None else self._pricing_source.value
+            ),
+            overrides=[
+                (o.instrument, o.account_id, o.account_group_id, o.slippage_bps)
+                for o in self._overrides
+            ],
+        )
+
+
+class SpotFundsBuilder:
+    """Entry point for the spot funds policy.
+
+    By default, market orders (orders without a limit price, executed at
+    the prevailing market price) are rejected with
+    ``UnsupportedOrderType`` and the policy operates in limit-only mode.
+    Call :meth:`market_data` to enable market orders through a live
+    market-data service.
+    """
+
+    def __init__(self) -> None:
+        self._ready = SpotFundsReadyBuilder()
+
+    def with_policy_group_id(self, policy_group_id: int) -> SpotFundsBuilder:
+        """Assign the policy group tag."""
+        self._ready.with_policy_group_id(policy_group_id)
+        return self
+
+    def market_data(
+        self,
+        service: marketdata.MarketDataService,
+        default_slippage_bps: int,
+        pricing_source: SpotFundsPricingSource = SpotFundsPricingSource.MARK,
+        overrides: typing.Iterable[SpotFundsOverride] = (),
+    ) -> SpotFundsReadyBuilder:
+        """Enable market orders through a live market-data service.
+
+        Overrides narrow slippage per instrument, optionally scoped to an
+        account or account group (mutually exclusive).
+        """
+        return self._ready.market_data(
+            service,
+            default_slippage_bps,
+            pricing_source,
+            overrides,
+        )
+
+    def _build(self, builder: typing.Any) -> None:
+        """Contract hook invoked by ``builtin()`` to register this policy."""
+        self._ready._build(builder)
+
+
+def build_spot_funds() -> SpotFundsBuilder:
+    """Return a new spot funds policy builder.
+
+    Initial balances are seeded through the account-adjustment pipeline,
+    not via the builder.
+    """
+    return SpotFundsBuilder()
+
+
+# ---------------------------------------------------------------------------
 # Order validation
 # ---------------------------------------------------------------------------
 
@@ -475,9 +659,17 @@ class OrderValidationBuilder:
     ``ReadyEngineBuilder.builtin()`` to register on an engine.
     """
 
+    def __init__(self) -> None:
+        self._policy_group_id = DEFAULT_POLICY_GROUP_ID
+
+    def with_policy_group_id(self, policy_group_id: int) -> OrderValidationBuilder:
+        """Assign the policy group tag."""
+        self._policy_group_id = policy_group_id
+        return self
+
     def _build(self, builder: typing.Any) -> None:
         """Contract hook invoked by ``builtin()`` to register this policy."""
-        builder._add_builtin_order_validation()
+        builder._add_builtin_order_validation(policy_group_id=self._policy_group_id)
 
 
 def build_order_validation() -> OrderValidationBuilder:
@@ -500,6 +692,11 @@ __all__ = [
     "PnlBoundsKillswitchReadyBuilder",
     "PnlBoundsKillswitchBuilder",
     "build_pnl_bounds_killswitch",
+    "SpotFundsPricingSource",
+    "SpotFundsOverride",
+    "SpotFundsReadyBuilder",
+    "SpotFundsBuilder",
+    "build_spot_funds",
     "RateLimit",
     "RateLimitBrokerBarrier",
     "RateLimitAssetBarrier",

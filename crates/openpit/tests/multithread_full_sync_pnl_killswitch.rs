@@ -36,9 +36,9 @@ use openpit::param::{AccountId, Asset, Fee, Pnl, Quantity, Side, TradeAmount};
 use openpit::pretrade::policies::{
     PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy,
 };
-use openpit::pretrade::{PreTradeContext, PreTradePolicy, RejectCode};
+use openpit::pretrade::{PostTradeContext, PreTradeContext, PreTradePolicy, RejectCode};
 use openpit::storage::FullLocking;
-use openpit::{Engine, Instrument, OrderOperation, RequestFieldAccessError};
+use openpit::{Engine, FullSync, Instrument, OrderOperation, RequestFieldAccessError};
 
 type TestPolicy = PnlBoundsKillSwitchPolicy<FullLocking>;
 
@@ -114,18 +114,20 @@ fn check_start(
     policy: &TestPolicy,
     order: &OrderOperation,
 ) -> Result<(), openpit::pretrade::Rejects> {
-    <TestPolicy as PreTradePolicy<OrderOperation, TestReport>>::check_pre_trade_start(
+    <TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), FullSync>>::check_pre_trade_start(
         policy,
-        &PreTradeContext::new(),
+        &PreTradeContext::new(None),
         order,
     )
 }
 
 fn apply_report(policy: &TestPolicy, report: &TestReport) -> bool {
-    !<TestPolicy as PreTradePolicy<OrderOperation, TestReport>>::apply_execution_report(
-        policy, report,
+    !<TestPolicy as PreTradePolicy<OrderOperation, TestReport, (), FullSync>>::apply_execution_report(
+        policy,
+        &PostTradeContext::<FullLocking>::new(),
+        report,
     )
-    .is_empty()
+    .map_or(true, |r| r.is_empty())
 }
 
 // Verifies that apply_execution_report does not lose or duplicate updates when

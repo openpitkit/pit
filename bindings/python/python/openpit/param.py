@@ -10,6 +10,7 @@ from ._openpit import (
     _ROUNDING_STRATEGY_CONSERVATIVE_LOSS,
     _ROUNDING_STRATEGY_CONSERVATIVE_PROFIT,
     _ROUNDING_STRATEGY_DEFAULT,
+    AccountGroupId,
     AccountId,
     CashFlow,
     Fee,
@@ -38,13 +39,13 @@ from ._openpit import (
 class Side(_enum.StrEnum):
     """Trade direction for orders and execution reports."""
 
-    BUY = "buy"
-    SELL = "sell"
+    BUY = "BUY"
+    SELL = "SELL"
 
     # @typing.override
     @classmethod
     def _missing_(cls, value: object) -> "Side | None":
-        raise ValueError("expected 'buy' or 'sell'")
+        raise ValueError("expected 'BUY' or 'SELL'")
 
     def is_buy(self) -> bool:
         """Return ``True`` when the side is buy."""
@@ -67,13 +68,13 @@ class Side(_enum.StrEnum):
 class PositionSide(_enum.StrEnum):
     """Hedge-mode leg for derivatives positions."""
 
-    LONG = "long"
-    SHORT = "short"
+    LONG = "LONG"
+    SHORT = "SHORT"
 
     # @typing.override
     @classmethod
     def _missing_(cls, value: object) -> "PositionSide | None":
-        raise ValueError("expected 'long' or 'short'")
+        raise ValueError("expected 'LONG' or 'SHORT'")
 
     def is_long(self) -> bool:
         """Return ``True`` when the position side is long."""
@@ -92,13 +93,13 @@ class PositionSide(_enum.StrEnum):
 class PositionEffect(_enum.StrEnum):
     """Whether an execution opens or closes exposure."""
 
-    OPEN = "open"
-    CLOSE = "close"
+    OPEN = "OPEN"
+    CLOSE = "CLOSE"
 
     # @typing.override
     @classmethod
     def _missing_(cls, value: object) -> "PositionEffect | None":
-        raise ValueError("expected 'open' or 'close'")
+        raise ValueError("expected 'OPEN' or 'CLOSE'")
 
 
 @enum.unique
@@ -332,39 +333,67 @@ class RoundingStrategy(_enum.StrEnum):
         return cls(_ROUNDING_STRATEGY_CONSERVATIVE_LOSS)
 
 
-_native_account_id_from_str = AccountId.from_str
+_native_account_id_from_string = AccountId.from_string
 
 
-def _account_id_from_str(value: str) -> AccountId:
+def _account_id_from_string(value: str) -> AccountId:
     try:
-        return _native_account_id_from_str(value)
+        return _native_account_id_from_string(value)
     except ValueError as error:
         if str(error) == "account id string must not be empty":
             raise AccountIdError("account id string must not be empty") from None
         raise
 
 
-AccountId.from_str = staticmethod(_account_id_from_str)
+AccountId.from_string = staticmethod(_account_id_from_string)
 
+AccountGroupId.__doc__ = """
+Type-safe account-group identifier (32-bit).
+
+Use :meth:`from_int` when group IDs are already numeric - zero cost, zero
+collision risk. The value ``0`` is reserved for :data:`DEFAULT_ACCOUNT_GROUP`,
+so ``from_int(0)`` raises ``ValueError``.
+
+Use :meth:`from_string` when only a string identifier is available. The string
+is hashed with FNV-1a 32-bit. Collisions are possible; for n distinct group
+strings the probability of at least one collision is approximately n² / (2 × 2³²).
+If that risk is unacceptable, maintain a collision-free string-to-integer
+mapping and use :meth:`from_int`.
+
+WARNING:
+Do not mix IDs created with ``from_int`` and ``from_string`` in the same runtime
+state. A hashed string-derived ID can equal a direct numeric ID.
+"""
+
+DEFAULT_ACCOUNT_GROUP: AccountGroupId = AccountGroupId.DEFAULT
+"""The account group an account belongs to until assigned to another.
+
+Reserved identifier (value ``0``). Every account starts in this group; it
+becomes a member of another group only through
+``engine.accounts().register_group(...)``. No constructor produces it -
+``AccountGroupId.from_int(0)`` raises and ``AccountGroupId.from_string`` never
+hashes to it - so this constant (also exposed as ``AccountGroupId.DEFAULT``) is
+the only way to name it.
+"""
 
 AccountId.__doc__ = """
 Type-safe account identifier.
 
-Use :meth:`from_u64` when the broker or venue assigns numeric account IDs —
+Use :meth:`from_int` when the broker or venue assigns numeric account IDs —
 zero cost, zero collision risk.
 
-Use :meth:`from_str` when only a string identifier is available. The string is
-hashed with FNV-1a 64-bit, so hash collisions are theoretically possible.
+Use :meth:`from_string` when only a string identifier is available. The string
+is hashed with FNV-1a 64-bit, so hash collisions are theoretically possible.
 For n distinct account strings the probability of at least one collision is
 approximately n² / 2⁶⁵. If that risk is unacceptable, maintain a
 collision-free string-to-integer mapping on your side and use
-:meth:`from_u64`. See <http://www.isthe.com/chongo/tech/comp/fnv/> for the algorithm
+:meth:`from_int`. See <http://www.isthe.com/chongo/tech/comp/fnv/> for the algorithm
 specification.
 
 WARNING:
 Use exactly one source model per runtime:
-- either only ``AccountId.from_u64(...)``,
-- or only ``AccountId.from_str(...)``.
+- either only ``AccountId.from_int(...)``,
+- or only ``AccountId.from_string(...)``.
 Do not mix both in one runtime state. A hashed string-derived ID can equal a
 direct numeric ID, and then two distinct accounts become one logical key.
 """
@@ -590,12 +619,14 @@ Netting vs hedged position mode.
 
 
 __all__ = [
+    "AccountGroupId",
     "AccountId",
     "AccountIdError",
     "AdjustmentAmount",
     "Asset",
     "AssetError",
     "CashFlow",
+    "DEFAULT_ACCOUNT_GROUP",
     "Fee",
     "FillType",
     "Kind",

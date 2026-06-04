@@ -31,22 +31,26 @@ use super::{
 /// Grouped balance/held/incoming adjustment payload.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountAdjustmentAmount {
-    /// Settled balance/position after applying the adjustment.
-    /// Includes only fully finalized amounts. Cash balance for cash accounts,
-    /// position for instruments.
+    /// Free (available) funds after applying the adjustment. Written directly
+    /// to the `available` bucket of the internal holdings slot; does not
+    /// include amounts reserved in `held`.
+    ///
+    /// For cash accounts this is the spendable cash balance; for instrument
+    /// accounts it is the unencumbered position size.
     pub balance: Option<AdjustmentAmount>,
 
-    /// Portion of `balance` reserved against future outgoing flow and
-    /// unavailable for new commitments.
-    /// Covers both:
-    /// - working orders that, if filled, would deduct from balance;
-    /// - filled trades awaiting outgoing settlement (T+N).
+    /// Funds reserved in pending orders and not available for new
+    /// commitments. Written to the `held` bucket, which is separate from
+    /// `balance`. A manager-initiated adjustment may set `held` to any value,
+    /// including negative (indicating a venue-side shortfall).
+    ///
+    /// This is not a component of `balance`: `balance` and `held` are tracked
+    /// independently.
     pub held: Option<AdjustmentAmount>,
 
-    /// Expected future inflow into `balance`, not yet finalized.
-    /// Covers both:
-    /// - working orders that, if filled, would add to balance;
-    /// - filled trades awaiting incoming settlement (T+N).
+    /// Expected future inflow not yet settled into `balance`. Covers both
+    /// working buy orders that would add to `balance` on fill and trades
+    /// awaiting incoming settlement (T+N).
     pub incoming: Option<AdjustmentAmount>,
 }
 

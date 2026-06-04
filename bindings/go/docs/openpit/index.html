@@ -72,16 +72,16 @@
     <main style="flex: 1;">
       <div style="display: flex; flex-direction: column; gap: 14px;">
 
-        <!-- Go SDK copies the install command to the clipboard. -->
-        <button id="go-sdk-card" class="card" type="button" style="border-top: 2px solid #ff7a00;">
+        <!-- Go SDK -->
+        <a class="card" href="https://pkg.go.dev/go.openpit.dev/openpit" target="_blank" rel="noopener"
+          style="border-top: 2px solid #ff7a00;">
           <div class="card-title">Go SDK</div>
           <div class="card-desc">
-            Public Go module for embedding OpenPit into Go services. Click to copy the install command.
+            Public Go module for embedding OpenPit into Go services.
             <br /><code class="card-cmd">go get go.openpit.dev/openpit</code>
           </div>
           <div class="card-link">→ go.openpit.dev/openpit</div>
-          <div class="card-toast">go get copied to clipboard</div>
-        </button>
+        </a>
 
         <a href="https://github.com/openpitkit/pit-go" target="_blank" rel="noopener" class="card">
           <div class="card-title">Source</div>
@@ -140,7 +140,6 @@
     </footer>
 
   </div>
-  <script src="https://openpit.dev/assets/app.js"></script>
 </body>
 
 </html>

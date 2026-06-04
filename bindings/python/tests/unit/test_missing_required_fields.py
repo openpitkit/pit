@@ -74,7 +74,7 @@ def test_apply_execution_report_without_financial_impact_does_not_panic() -> Non
                 "USD",
             ),
             side=openpit.param.Side.BUY,
-            account_id=openpit.param.AccountId.from_u64(99224416),
+            account_id=openpit.param.AccountId.from_int(99224416),
         ),
     )
     post = engine.apply_execution_report(report=report)

@@ -55,15 +55,16 @@ Start-stage policies aggregate rejects from all registered policies.
 Main-stage policies aggregate rejects and roll back registered mutations
 in reverse order when any reject is produced.
 
-Built-in start-stage policies:
+Built-in policies:
 
-- `OrderValidationPolicy`
-- `PnlBoundsKillSwitchPolicy`
-- `RateLimitPolicy`
-- `OrderSizeLimitPolicy`
+- `SpotFundsPolicy` - [per-account solvency gate over spendable funds](https://github.com/openpitkit/pit/wiki/Spot-Funds)
+- `OrderValidationPolicy` - [structural integrity checks on every order](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
+- `RateLimitPolicy` - [throttle order flow per broker, asset, or account](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
+- `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
+- `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
 
 The primary integration model is to write project-specific policies against
-the public Rust policy API: [Custom Rust policies](https://github.com/openpitkit/pit/wiki/Policies#rust-custom-policy-api).
+the public Rust policy API: [Custom Rust policies](https://github.com/openpitkit/pit/wiki/Policy-API#rust-interface).
 
 Two types of rejections are supported: a full kill switch for the account
 and a rejection of only the current request. Kill switches are intended
@@ -108,7 +109,7 @@ use openpit::param::{
     AccountId, Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume,
 };
 use openpit::pretrade::policies::{
-    OrderSizeAssetBarrier, OrderSizeLimit, OrderSizeLimitPolicy,
+    OrderSizeAssetBarrier, OrderSizeBrokerBarrier, OrderSizeLimit, OrderSizeLimitPolicy,
     OrderValidationPolicy,
     PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy,
     RateLimit, RateLimitBrokerBarrier, RateLimitPolicy,
@@ -118,9 +119,11 @@ use openpit::{Engine, Instrument};
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 let usd = Asset::new("USD")?;
 
-// 1. Configure policies.
-let builder = Engine::builder().no_sync();
+// 1. Build the engine builder.
+type Report = WithExecutionReportOperation<WithFinancialImpact<()>>;
+let builder = Engine::builder::<OrderOperation, Report, ()>().no_sync();
 
+// 2. Configure policies.
 let pnl_policy = PnlBoundsKillSwitchPolicy::new(
     [PnlBoundsBrokerBarrier {
         settlement_asset: usd.clone(),
@@ -145,7 +148,12 @@ let rate_limit_policy = RateLimitPolicy::new(
 )?;
 
 let size_policy = OrderSizeLimitPolicy::new(
-    None,
+    Some(OrderSizeBrokerBarrier {
+        limit: OrderSizeLimit {
+            max_quantity: Quantity::from_str("500")?,
+            max_notional: Volume::from_str("100000")?,
+        },
+    }),
     [OrderSizeAssetBarrier {
         limit: OrderSizeLimit {
             max_quantity: Quantity::from_str("500")?,
@@ -156,7 +164,7 @@ let size_policy = OrderSizeLimitPolicy::new(
     [],
 )?;
 
-// 2. Build the engine (one time at the platform initialization).
+// 3. Build the engine (one time at the platform initialization).
 let engine = builder
     .pre_trade(OrderValidationPolicy::new())
     .pre_trade(pnl_policy)

@@ -16,7 +16,8 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 use super::{
-    define_non_negative_value_type, CashFlow, Error, Notional, ParamKind, Price, Quantity,
+    define_non_negative_value_type, CashFlow, Error, Notional, ParamKind, PositionSize, Price,
+    Quantity,
 };
 
 define_non_negative_value_type!(
@@ -43,6 +44,14 @@ impl Volume {
     /// Converts volume into a cash flow outflow.
     pub fn to_cash_flow_outflow(self) -> CashFlow {
         CashFlow::new(-self.to_decimal())
+    }
+
+    /// Converts this volume into a [`PositionSize`], preserving its non-negative value.
+    ///
+    /// Used when a notional volume must be expressed as a position-management magnitude
+    /// (hold amount, release amount) without directional context.
+    pub fn to_position_size(self) -> PositionSize {
+        PositionSize::new(self.to_decimal())
     }
 
     /// Calculates quantity from volume and price.

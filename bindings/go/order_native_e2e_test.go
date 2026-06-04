@@ -45,7 +45,7 @@ func TestOrderNativeE2E_ExecuteAndApplyExecutionReport(t *testing.T) {
 							param.NewInstrument(mustOrderNativeAsset(t, "AAPL"), mustOrderNativeAsset(t, "USD")),
 						),
 						Price:     optional.Some(mustOrderNativePrice(t, "182.50")),
-						AccountID: optional.Some(param.NewAccountIDFromInt(9001)),
+						AccountID: optional.Some(param.NewAccountIDFromUint64(9001)),
 						Side:      optional.Some(param.SideBuy),
 					},
 				),
@@ -64,7 +64,7 @@ func TestOrderNativeE2E_ExecuteAndApplyExecutionReport(t *testing.T) {
 					model.OrderMarginValues{
 						CollateralAsset: optional.Some(mustOrderNativeAsset(t, "USD")),
 						AutoBorrow:      optional.BoolSome(true),
-						Leverage:        optional.Some(param.NewLeverageFromInt(3)),
+						Leverage:        optional.Some(param.NewLeverageFromUint16(3)),
 					},
 				),
 			),
@@ -91,7 +91,7 @@ func TestOrderNativeE2E_ExecuteAndApplyExecutionReport(t *testing.T) {
 						Instrument: optional.Some(
 							param.NewInstrument(mustOrderNativeAsset(t, "AAPL"), mustOrderNativeAsset(t, "USD")),
 						),
-						AccountID: optional.Some(param.NewAccountIDFromInt(9001)),
+						AccountID: optional.Some(param.NewAccountIDFromUint64(9001)),
 						Side:      optional.Some(param.SideBuy),
 					},
 				),
@@ -114,7 +114,7 @@ func TestOrderNativeE2E_ExecuteAndApplyExecutionReport(t *testing.T) {
 							),
 						),
 						LeavesQuantity: optional.Some(mustOrderNativeQuantity(t, "0")),
-						LockPrice:      optional.Some(mustOrderNativePrice(t, "182.40")),
+						Lock:           mustOrderNativeLockBytes(t, mustOrderNativePrice(t, "182.40")),
 						IsFinal:        optional.BoolSome(true),
 					},
 				),
@@ -184,6 +184,17 @@ func mustOrderNativeFee(t *testing.T, value string) param.Fee {
 	return v
 }
 
+func mustOrderNativeLockBytes(t *testing.T, price param.Price) []byte {
+	t.Helper()
+	lock, err := pretrade.NewLockFromEntries([]pretrade.Entry{
+		{PolicyGroupID: model.DefaultPolicyGroupID, Price: price},
+	})
+	if err != nil {
+		t.Fatalf("NewLockFromEntries error = %v", err)
+	}
+	return lock.Bytes()
+}
+
 func newEngineForOrderNativeE2ETest(t *testing.T) *Engine {
 	t.Helper()
 	engine, err := NewEngineBuilder().FullSync().
@@ -201,16 +212,22 @@ func (orderNativeE2ENoopStartPolicy) Close() {}
 
 func (orderNativeE2ENoopStartPolicy) Name() string { return "noop" }
 
+func (orderNativeE2ENoopStartPolicy) PolicyGroupID() model.PolicyGroupID {
+	return model.DefaultPolicyGroupID
+}
+
 func (orderNativeE2ENoopStartPolicy) CheckPreTradeStart(pretrade.Context, model.Order) []reject.Reject {
 	return nil
 }
 
-func (orderNativeE2ENoopStartPolicy) PerformPreTradeCheck(pretrade.Context, model.Order, tx.Mutations) []reject.Reject {
+func (orderNativeE2ENoopStartPolicy) PerformPreTradeCheck(pretrade.Context, model.Order, tx.Mutations, pretrade.Result) []reject.Reject {
 	return nil
 }
 
 func (orderNativeE2ENoopStartPolicy) ApplyExecutionReport(
-	model.ExecutionReport,
+	_ pretrade.PostTradeContext,
+	_ model.ExecutionReport,
+	_ pretrade.PostTradeAdjustments,
 ) []reject.AccountBlock {
 	return nil
 }
@@ -220,6 +237,7 @@ func (orderNativeE2ENoopStartPolicy) ApplyAccountAdjustment(
 	param.AccountID,
 	model.AccountAdjustment,
 	tx.Mutations,
+	pretrade.AccountOutcomes,
 ) []reject.Reject {
 	return nil
 }

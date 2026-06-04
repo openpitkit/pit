@@ -42,7 +42,7 @@ type Fee struct {
 	native native.ParamFee
 }
 
-var newFeeZero = sync.OnceValue(func() Fee { return newFeeOrPanic(NewFeeFromInt(0)) })
+var newFeeZero = sync.OnceValue(func() Fee { return newFeeOrPanic(NewFeeFromInt64(0)) })
 
 // NewFeeZero returns the canonical zero value of Fee.
 func NewFeeZero() Fee { return newFeeZero() }
@@ -70,25 +70,25 @@ func NewFeeFromDecimal(v decimal.Decimal) (Fee, error) {
 
 // NewFeeFromString creates a Fee from a decimal string.
 func NewFeeFromString(v string) (Fee, error) {
-	nativeValue, err := native.CreateParamFeeFromStr(v)
+	nativeValue, err := native.CreateParamFeeFromString(v)
 	if err != nil {
 		return Fee{}, err
 	}
 	return NewFeeFromHandle(nativeValue), nil
 }
 
-// NewFeeFromInt creates a Fee from a signed integer.
-func NewFeeFromInt(v int64) (Fee, error) {
-	nativeValue, err := native.CreateParamFeeFromI64(v)
+// NewFeeFromInt64 creates a Fee from a signed integer.
+func NewFeeFromInt64(v int64) (Fee, error) {
+	nativeValue, err := native.CreateParamFeeFromInt64(v)
 	if err != nil {
 		return Fee{}, err
 	}
 	return NewFeeFromHandle(nativeValue), nil
 }
 
-// NewFeeFromUint creates a Fee from an unsigned integer.
-func NewFeeFromUint(v uint64) (Fee, error) {
-	nativeValue, err := native.CreateParamFeeFromU64(v)
+// NewFeeFromUint64 creates a Fee from an unsigned integer.
+func NewFeeFromUint64(v uint64) (Fee, error) {
+	nativeValue, err := native.CreateParamFeeFromUint64(v)
 	if err != nil {
 		return Fee{}, err
 	}
@@ -131,7 +131,7 @@ func NewFeeFromStringRounded(
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Fee, error) {
-	nativeValue, err := native.CreateParamFeeFromStrRounded(v, scale, strategy.native())
+	nativeValue, err := native.CreateParamFeeFromStringRounded(v, scale, strategy.native())
 	if err != nil {
 		return Fee{}, err
 	}

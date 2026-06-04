@@ -42,7 +42,7 @@ type Price struct {
 	native native.ParamPrice
 }
 
-var newPriceZero = sync.OnceValue(func() Price { return newPriceOrPanic(NewPriceFromInt(0)) })
+var newPriceZero = sync.OnceValue(func() Price { return newPriceOrPanic(NewPriceFromInt64(0)) })
 
 // NewPriceZero returns the canonical zero value of Price.
 func NewPriceZero() Price { return newPriceZero() }
@@ -70,25 +70,25 @@ func NewPriceFromDecimal(v decimal.Decimal) (Price, error) {
 
 // NewPriceFromString creates a Price from a decimal string.
 func NewPriceFromString(v string) (Price, error) {
-	nativeValue, err := native.CreateParamPriceFromStr(v)
+	nativeValue, err := native.CreateParamPriceFromString(v)
 	if err != nil {
 		return Price{}, err
 	}
 	return NewPriceFromHandle(nativeValue), nil
 }
 
-// NewPriceFromInt creates a Price from a signed integer.
-func NewPriceFromInt(v int64) (Price, error) {
-	nativeValue, err := native.CreateParamPriceFromI64(v)
+// NewPriceFromInt64 creates a Price from a signed integer.
+func NewPriceFromInt64(v int64) (Price, error) {
+	nativeValue, err := native.CreateParamPriceFromInt64(v)
 	if err != nil {
 		return Price{}, err
 	}
 	return NewPriceFromHandle(nativeValue), nil
 }
 
-// NewPriceFromUint creates a Price from an unsigned integer.
-func NewPriceFromUint(v uint64) (Price, error) {
-	nativeValue, err := native.CreateParamPriceFromU64(v)
+// NewPriceFromUint64 creates a Price from an unsigned integer.
+func NewPriceFromUint64(v uint64) (Price, error) {
+	nativeValue, err := native.CreateParamPriceFromUint64(v)
 	if err != nil {
 		return Price{}, err
 	}
@@ -131,7 +131,7 @@ func NewPriceFromStringRounded(
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Price, error) {
-	nativeValue, err := native.CreateParamPriceFromStrRounded(v, scale, strategy.native())
+	nativeValue, err := native.CreateParamPriceFromStringRounded(v, scale, strategy.native())
 	if err != nil {
 		return Price{}, err
 	}
@@ -334,4 +334,13 @@ func (v Price) CalculateVolume(quantity Quantity) (Volume, error) {
 		return Volume{}, err
 	}
 	return NewVolumeFromHandle(result), nil
+}
+
+// CalculatePositionSize returns the position size equivalent to price × quantity.
+func (v Price) CalculatePositionSize(quantity Quantity) (PositionSize, error) {
+	result, err := native.ParamPriceCalculatePositionSize(v.native, quantity.native)
+	if err != nil {
+		return PositionSize{}, err
+	}
+	return NewPositionSizeFromHandle(result), nil
 }

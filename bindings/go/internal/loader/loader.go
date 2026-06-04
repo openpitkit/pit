@@ -170,11 +170,19 @@ func resolvePath() (string, error) {
 		return "", fmt.Errorf("%w: %w", errEmbedNotFound, err)
 	}
 
+	// Key the cache on the embedded artifact's content hash so that a changed
+	// artifact under the same SDK version maps to a fresh location and a stale
+	// extraction is never reused.
+	contentHash, err := pitruntime.Hash()
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errEmbedNotFound, err)
+	}
+
 	cacheDir, err := resolveCacheDir(SDKVersion)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", errCacheResolveFailed, err)
 	}
-	targetPath := filepath.Join(cacheDir, fileName)
+	targetPath := filepath.Join(cacheDir, contentHash, fileName)
 	if err := ensureVersionedPath(SDKVersion, targetPath); err != nil {
 		return targetPath, fmt.Errorf("%w: %w", errCacheResolveFailed, err)
 	}
@@ -201,9 +209,10 @@ func resolvePath() (string, error) {
 			errEmbedNotFound, fileName, embeddedName)
 	}
 
-	if err := os.MkdirAll(cacheDir, cacheDirMode); err != nil {
+	targetDir := filepath.Dir(targetPath)
+	if err := os.MkdirAll(targetDir, cacheDirMode); err != nil {
 		return targetPath, fmt.Errorf("%w: failed to create cache dir %q: %w",
-			errCacheWriteFailed, cacheDir, err)
+			errCacheWriteFailed, targetDir, err)
 	}
 
 	if err := write(targetPath, data, cacheFileMode); err != nil {

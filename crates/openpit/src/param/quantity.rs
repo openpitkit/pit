@@ -15,7 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::{define_non_negative_value_type, Error, ParamKind, Price, Volume};
+use super::{define_non_negative_value_type, Error, ParamKind, PositionSize, Price, Volume};
 
 define_non_negative_value_type!(
     /// Quantity of an instrument.
@@ -33,6 +33,14 @@ impl Quantity {
     /// Returns [`Error::Overflow`] with [`ParamKind::Price`] if multiplication overflows.
     pub fn calculate_volume(self, price: Price) -> Result<Volume, Error> {
         price.calculate_volume(self)
+    }
+
+    /// Converts this quantity into a [`PositionSize`], preserving its non-negative value.
+    ///
+    /// Used when a quantity must be expressed as a magnitude in position-management
+    /// operations (holds, releases) where no directional context is needed.
+    pub fn to_position_size(self) -> PositionSize {
+        PositionSize::new(self.to_decimal())
     }
 }
 

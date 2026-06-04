@@ -82,7 +82,7 @@ func TestNotionalCalculateMarginRequired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNotionalFromString failed: %v", err)
 	}
-	leverage := NewLeverageFromInt(100)
+	leverage := NewLeverageFromUint16(100)
 
 	margin, err := notional.CalculateMarginRequired(leverage)
 	if err != nil {

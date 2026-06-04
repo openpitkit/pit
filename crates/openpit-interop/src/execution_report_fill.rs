@@ -20,7 +20,7 @@
 use openpit::param::{Quantity, Trade};
 use openpit::pretrade::PreTradeLock;
 use openpit::{
-    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasLeavesQuantity, HasLock,
+    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasLeavesQuantity, HasPreTradeLock,
     RequestFieldAccessError,
 };
 
@@ -58,9 +58,9 @@ impl HasLeavesQuantity for PopulatedExecutionReportFill {
     }
 }
 
-impl HasLock for PopulatedExecutionReportFill {
+impl HasPreTradeLock for PopulatedExecutionReportFill {
     fn lock(&self) -> Result<PreTradeLock, RequestFieldAccessError> {
-        Ok(self.lock)
+        Ok(self.lock.clone())
     }
 }
 
@@ -103,7 +103,7 @@ impl HasLeavesQuantity for ExecutionReportFillAccess {
     }
 }
 
-impl HasLock for ExecutionReportFillAccess {
+impl HasPreTradeLock for ExecutionReportFillAccess {
     fn lock(&self) -> Result<PreTradeLock, RequestFieldAccessError> {
         match self {
             Self::Populated(f) => f.lock(),
@@ -121,12 +121,12 @@ mod tests {
         let access = ExecutionReportFillAccess::Populated(PopulatedExecutionReportFill {
             last_trade: None,
             leaves_quantity: Some(Quantity::ZERO),
-            lock: PreTradeLock::new(None),
+            lock: PreTradeLock::new(),
             is_final: Some(true),
         });
         assert_eq!(access.last_trade().unwrap(), None);
         assert_eq!(access.leaves_quantity().unwrap(), Quantity::ZERO);
-        assert_eq!(access.lock().unwrap(), PreTradeLock::new(None));
+        assert_eq!(access.lock().unwrap(), PreTradeLock::new());
         assert!(access.is_final().unwrap());
     }
 
@@ -135,7 +135,7 @@ mod tests {
         let access = ExecutionReportFillAccess::Populated(PopulatedExecutionReportFill {
             last_trade: None,
             leaves_quantity: Some(Quantity::ZERO),
-            lock: PreTradeLock::new(None),
+            lock: PreTradeLock::new(),
             is_final: None,
         });
         assert!(access.is_final().is_err());
@@ -146,7 +146,7 @@ mod tests {
         let access = ExecutionReportFillAccess::Populated(PopulatedExecutionReportFill {
             last_trade: None,
             leaves_quantity: None,
-            lock: PreTradeLock::new(None),
+            lock: PreTradeLock::new(),
             is_final: Some(true),
         });
         assert!(access.leaves_quantity().is_err());

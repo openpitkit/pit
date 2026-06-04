@@ -40,14 +40,26 @@ The current implementation focuses on the pre-trade pipeline, a small set
 of built-in controls, and an API for building project-specific strategy and
 risk policies. Built-ins:
 
-- P&L kill switch
-- sliding-window rate limit
-- per-settlement order size limits
+- [Spot Funds](https://github.com/openpitkit/pit/wiki/Spot-Funds) - per-account
+  solvency gate over spendable funds.
+- [Order Validation](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
+  \- structural integrity checks on every order.
+- [Rate Limit](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
+  \- throttle order flow per broker, asset, or account.
+- [Order Size Limit](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
+  \- fat-finger caps on quantity and notional.
+- [P&L Kill Switch](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
+  \- halt an account when realized P&L breaches bounds.
+- plus your own via the [policy SDK](https://github.com/openpitkit/pit/wiki/Policy-API).
 
 Custom policies that maintain state across calls can use the built-in
 [Storage](https://github.com/openpitkit/pit/wiki/Storage) abstraction.
 Synchronization is selected once at engine construction and applied
 transparently, with no overhead in single-threaded embeddings.
+
+Controls can act both by account and by group of accounts: register accounts
+under a compact identifier with [Account Groups](https://github.com/openpitkit/pit/wiki/Account-Groups)
+and let a policy branch on the group instead of an enumerated account list.
 
 The engine is intentionally in-memory and deterministic, designed to be
 embedded into a larger trading system rather than replace one. For custom
@@ -93,7 +105,7 @@ constraints that tolerate API evolution during the pre-stable phase.
 - Go `1.22` if you build or test Go bindings
 
 ```bash
-python3 -m venv .venv
+python3.10 -m venv .venv
 source .venv/bin/activate
 pip install -r ./requirements.txt
 ```

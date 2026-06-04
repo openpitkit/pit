@@ -42,7 +42,7 @@ type Volume struct {
 	native native.ParamVolume
 }
 
-var newVolumeZero = sync.OnceValue(func() Volume { return newVolumeOrPanic(NewVolumeFromInt(0)) })
+var newVolumeZero = sync.OnceValue(func() Volume { return newVolumeOrPanic(NewVolumeFromInt64(0)) })
 
 // NewVolumeZero returns the canonical zero value of Volume.
 func NewVolumeZero() Volume { return newVolumeZero() }
@@ -70,25 +70,25 @@ func NewVolumeFromDecimal(v decimal.Decimal) (Volume, error) {
 
 // NewVolumeFromString creates a Volume from a decimal string.
 func NewVolumeFromString(v string) (Volume, error) {
-	nativeValue, err := native.CreateParamVolumeFromStr(v)
+	nativeValue, err := native.CreateParamVolumeFromString(v)
 	if err != nil {
 		return Volume{}, err
 	}
 	return NewVolumeFromHandle(nativeValue), nil
 }
 
-// NewVolumeFromInt creates a Volume from a signed integer.
-func NewVolumeFromInt(v int64) (Volume, error) {
-	nativeValue, err := native.CreateParamVolumeFromI64(v)
+// NewVolumeFromInt64 creates a Volume from a signed integer.
+func NewVolumeFromInt64(v int64) (Volume, error) {
+	nativeValue, err := native.CreateParamVolumeFromInt64(v)
 	if err != nil {
 		return Volume{}, err
 	}
 	return NewVolumeFromHandle(nativeValue), nil
 }
 
-// NewVolumeFromUint creates a Volume from an unsigned integer.
-func NewVolumeFromUint(v uint64) (Volume, error) {
-	nativeValue, err := native.CreateParamVolumeFromU64(v)
+// NewVolumeFromUint64 creates a Volume from an unsigned integer.
+func NewVolumeFromUint64(v uint64) (Volume, error) {
+	nativeValue, err := native.CreateParamVolumeFromUint64(v)
 	if err != nil {
 		return Volume{}, err
 	}
@@ -131,7 +131,7 @@ func NewVolumeFromStringRounded(
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Volume, error) {
-	nativeValue, err := native.CreateParamVolumeFromStrRounded(v, scale, strategy.native())
+	nativeValue, err := native.CreateParamVolumeFromStringRounded(v, scale, strategy.native())
 	if err != nil {
 		return Volume{}, err
 	}
@@ -337,4 +337,10 @@ func (v Volume) CalculateQuantity(price Price) (Quantity, error) {
 		return Quantity{}, err
 	}
 	return NewQuantityFromHandle(result), nil
+}
+
+// ToPositionSize returns the volume as a PositionSize.
+func (v Volume) ToPositionSize() PositionSize {
+	// invariant: native value already validated on construction; conversion cannot fail.
+	return NewPositionSizeFromHandle(newParamValueOrPanic(native.ParamVolumeToPositionSize(v.native)))
 }

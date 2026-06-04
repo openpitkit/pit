@@ -22,6 +22,7 @@ import (
 	"runtime"
 
 	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/ptr"
 )
@@ -70,11 +71,32 @@ type OrderSizeLimitReadyBuilder struct {
 	broker               *native.PretradePoliciesOrderSizeBrokerBarrier
 	assetBarriers        []native.PretradePoliciesOrderSizeAssetBarrier
 	accountAssetBarriers []native.PretradePoliciesOrderSizeAccountAssetBarrier
+	policyGroupID        model.PolicyGroupID
 }
 
 // BuildOrderSizeLimit returns a new order-size-limit policy builder.
 func BuildOrderSizeLimit() *OrderSizeLimitBuilder {
-	return &OrderSizeLimitBuilder{builder: &OrderSizeLimitReadyBuilder{}}
+	return &OrderSizeLimitBuilder{
+		builder: &OrderSizeLimitReadyBuilder{policyGroupID: model.DefaultPolicyGroupID},
+	}
+}
+
+// PolicyGroupID assigns the policy to a pricing group and returns a ready
+// builder. When not set the policy uses model.DefaultPolicyGroupID.
+func (b *OrderSizeLimitBuilder) PolicyGroupID(
+	groupID model.PolicyGroupID,
+) *OrderSizeLimitReadyBuilder {
+	b.builder.PolicyGroupID(groupID)
+	return b.builder
+}
+
+// PolicyGroupID assigns the policy to a pricing group. When not set the
+// policy uses model.DefaultPolicyGroupID.
+func (b *OrderSizeLimitReadyBuilder) PolicyGroupID(
+	groupID model.PolicyGroupID,
+) *OrderSizeLimitReadyBuilder {
+	b.policyGroupID = groupID
+	return b
 }
 
 // BrokerBarrier sets the broker-wide size limit and returns a ready
@@ -160,10 +182,11 @@ func (b *OrderSizeLimitReadyBuilder) AccountAssetBarriers(
 }
 
 // Build marshals the configuration and registers the built-in
-// order-size-limit policy on the given engine builder.
+// order-PolicyGroupIDmit policy on the given engine builder.
 func (b *OrderSizeLimitReadyBuilder) Build(builder native.EngineBuilder) error {
 	err := native.EngineBuilderAddBuiltinOrderSizeLimit(
 		builder,
+		native.PolicyGroupID(b.policyGroupID),
 		b.broker,
 		b.assetBarriers,
 		b.accountAssetBarriers,

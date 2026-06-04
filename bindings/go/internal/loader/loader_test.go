@@ -47,7 +47,7 @@ func TestSDKVersionMatchesOpenpitCrateVersionAndReleaseReplacement(t *testing.T)
 	cargoTomlPath := filepath.Join("..", "..", "..", "..", "crates", "openpit", "Cargo.toml")
 	cargoToml, err := os.ReadFile(cargoTomlPath) //nolint:gosec // path is a known repository-relative literal
 	if err != nil {
-		t.Fatalf("read %s: %v", cargoTomlPath, err)
+		t.Skipf("Cargo.toml not found (standalone repo context): %v", err)
 	}
 
 	crateVersionMatch := regexp.MustCompile(`(?m)^version = "([^"]+)"`).FindSubmatch(cargoToml)
@@ -238,15 +238,21 @@ func TestResolvePath_CacheHit(t *testing.T) {
 	t.Setenv(envRuntimePath, "")
 	t.Setenv(envRuntimeCache, cacheRoot)
 
+	contentHash, err := pitruntime.Hash()
+	if err != nil {
+		t.Fatalf("pitruntime.Hash: %v", err)
+	}
+
 	cacheDir, err := resolveCacheDir(SDKVersion)
 	if err != nil {
 		t.Fatalf("resolveCacheDir: %v", err)
 	}
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil { //nolint:gosec // test setup, exact mode not security-sensitive
+	hashDir := filepath.Join(cacheDir, contentHash)
+	if err := os.MkdirAll(hashDir, 0o755); err != nil { //nolint:gosec // test setup, exact mode not security-sensitive
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	targetPath := filepath.Join(cacheDir, fileName)
+	targetPath := filepath.Join(hashDir, fileName)
 	originalContent := []byte("already-cached-runtime")
 	if err := os.WriteFile(targetPath, originalContent, 0o755); err != nil { //nolint:gosec // test fixture, permission bits intentional
 		t.Fatalf("write cached file: %v", err)
@@ -422,14 +428,20 @@ func TestLoad_PanicsForCorruptCachedRuntime(t *testing.T) {
 	t.Setenv(envRuntimePath, "")
 	t.Setenv(envRuntimeCache, cacheRoot)
 
+	contentHash, err := pitruntime.Hash()
+	if err != nil {
+		t.Fatalf("pitruntime.Hash() error = %v", err)
+	}
+
 	cacheDir, err := resolveCacheDir(SDKVersion)
 	if err != nil {
 		t.Fatalf("resolveCacheDir() error = %v", err)
 	}
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil { //nolint:gosec // test setup, exact mode not security-sensitive
-		t.Fatalf("MkdirAll(cacheDir) error = %v", err)
+	hashDir := filepath.Join(cacheDir, contentHash)
+	if err := os.MkdirAll(hashDir, 0o755); err != nil { //nolint:gosec // test setup, exact mode not security-sensitive
+		t.Fatalf("MkdirAll(hashDir) error = %v", err)
 	}
-	targetPath := filepath.Join(cacheDir, fileName)
+	targetPath := filepath.Join(hashDir, fileName)
 	if err := os.WriteFile(targetPath, []byte("not-a-shared-library"), 0o755); err != nil { //nolint:gosec // test fixture, permission bits intentional
 		t.Fatalf("WriteFile(targetPath) error = %v", err)
 	}

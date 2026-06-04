@@ -81,7 +81,7 @@ func TestAccountAdjustmentNativeE2E_BatchAppliesAndInvokesPolicyPerItem(t *testi
 						AverageEntryPrice: optional.Some(
 							mustAdjustmentNativePrice(t, "102.25"),
 						),
-						Leverage: optional.Some(param.NewLeverageFromInt(4)),
+						Leverage: optional.Some(param.NewLeverageFromUint16(4)),
 						Mode:     optional.Some(param.PositionModeHedged),
 					},
 				),
@@ -102,8 +102,8 @@ func TestAccountAdjustmentNativeE2E_BatchAppliesAndInvokesPolicyPerItem(t *testi
 		t.Fatalf("NewAccountAdjustmentFromValues(second) error = %v", err)
 	}
 
-	rejects, err := engine.ApplyAccountAdjustment(
-		param.NewAccountIDFromInt(77),
+	rejects, _, err := engine.ApplyAccountAdjustment(
+		param.NewAccountIDFromUint64(77),
 		[]model.AccountAdjustment{first, second},
 	)
 	if err != nil {
@@ -128,6 +128,10 @@ func (p accountAdjustmentCountingPolicy) Name() string {
 	return p.name
 }
 
+func (accountAdjustmentCountingPolicy) PolicyGroupID() model.PolicyGroupID {
+	return model.DefaultPolicyGroupID
+}
+
 func (accountAdjustmentCountingPolicy) CheckPreTradeStart(
 	pretrade.Context,
 	model.Order,
@@ -139,12 +143,15 @@ func (accountAdjustmentCountingPolicy) PerformPreTradeCheck(
 	pretrade.Context,
 	model.Order,
 	tx.Mutations,
+	pretrade.Result,
 ) []reject.Reject {
 	return nil
 }
 
 func (accountAdjustmentCountingPolicy) ApplyExecutionReport(
-	model.ExecutionReport,
+	_ pretrade.PostTradeContext,
+	_ model.ExecutionReport,
+	_ pretrade.PostTradeAdjustments,
 ) []reject.AccountBlock {
 	return nil
 }
@@ -154,6 +161,7 @@ func (p *accountAdjustmentCountingPolicy) ApplyAccountAdjustment(
 	param.AccountID,
 	model.AccountAdjustment,
 	tx.Mutations,
+	pretrade.AccountOutcomes,
 ) []reject.Reject {
 	p.calls++
 	return nil

@@ -47,6 +47,7 @@ func StartPreTrade(impl pretrade.Policy) (native.PretradePreTradePolicy, error) 
 
 	policyHandle, err := native.CreatePretradeCustomPreTradePolicy(
 		impl.Name(),
+		native.PolicyGroupID(impl.PolicyGroupID()),
 		PreTradePolicyCheckPreTradeStartFnAddr(),
 		PreTradePolicyPerformPreTradeCheckFnAddr(),
 		PreTradePolicyApplyReportFnAddr(),
@@ -93,6 +94,7 @@ func pitPretradePreTradePolicyPerformPreTradeCheck(
 	ctx *C.OpenPitPretradeContext,
 	order *C.OpenPitOrder,
 	mutations *C.OpenPitMutations,
+	outResult *C.OpenPitPretradePreTradeResult,
 	userData unsafe.Pointer,
 ) *C.OpenPitPretradeRejectList {
 	// Panics from the user implementation are deliberately allowed to propagate.
@@ -109,13 +111,18 @@ func pitPretradePreTradePolicyPerformPreTradeCheck(
 			tx.NewMutationsFromHandle(
 				native.Mutations(mutations),
 			),
+			pretrade.NewPreTradeResultFromHandle(
+				native.PretradePreTradeResult(outResult),
+			),
 		),
 	)
 }
 
 //export pitPretradePreTradePolicyApplyExecutionReport
 func pitPretradePreTradePolicyApplyExecutionReport(
+	ctx *C.OpenPitPostTradeContext,
 	report *C.OpenPitExecutionReport,
+	outAdjustments *C.OpenPitPostTradeAdjustmentList,
 	userData unsafe.Pointer,
 ) *C.OpenPitPretradeAccountBlockList {
 	// Panics from the user implementation are deliberately allowed to
@@ -125,8 +132,14 @@ func pitPretradePreTradePolicyApplyExecutionReport(
 
 	return newNativeAccountBlockListOrNil(
 		getPreTrade(userData).impl.ApplyExecutionReport(
+			pretrade.NewPostTradeContextFromHandle(
+				native.PostTradeContext(ctx),
+			),
 			model.NewExecutionReportFromHandle(
 				*(*native.ExecutionReport)(unsafe.Pointer(report)),
+			),
+			pretrade.NewPostTradeAdjustmentsFromHandle(
+				native.PostTradeAdjustmentList(outAdjustments),
 			),
 		),
 	)
@@ -138,6 +151,7 @@ func pitPretradePreTradePolicyApplyAccountAdjustment(
 	accountID C.OpenPitParamAccountId,
 	adjustment *C.OpenPitAccountAdjustment,
 	mutations *C.OpenPitMutations,
+	outOutcomes *C.OpenPitAccountOutcomeEntryList,
 	userData unsafe.Pointer,
 ) *C.OpenPitPretradeRejectList {
 	// Panics from the user implementation are deliberately allowed to propagate.
@@ -158,6 +172,9 @@ func pitPretradePreTradePolicyApplyAccountAdjustment(
 			),
 			tx.NewMutationsFromHandle(
 				native.Mutations(mutations),
+			),
+			pretrade.NewAccountOutcomesFromHandle(
+				native.AccountOutcomeEntryList(outOutcomes),
 			),
 		),
 	)

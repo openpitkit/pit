@@ -24,7 +24,7 @@ class BlockedAccountPolicy(openpit.pretrade.Policy):
     ) -> tuple[openpit.pretrade.PolicyReject, ...]:
         del ctx
         assert order.operation is not None
-        if order.operation.account_id == openpit.param.AccountId.from_u64(1):
+        if order.operation.account_id == openpit.param.AccountId.from_int(1):
             return (
                 openpit.pretrade.PolicyReject(
                     code=openpit.pretrade.RejectCode.ACCOUNT_BLOCKED,

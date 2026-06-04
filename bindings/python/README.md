@@ -10,7 +10,7 @@ risk checks into trading systems from Python.
 For an overview and links to all resources, see
 the project website [openpit.dev](https://openpit.dev/).
 For the Python API guide and generated reference, see
-[openpit.readthedocs.io](https://openpit.readthedocs.io/).
+[openpit.readthedocs.io](https://openpit.readthedocs.io/en/stable/).
 For full project documentation, see
 [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
 For conceptual and architectural pages, see
@@ -34,7 +34,14 @@ Visit the [PyPI package](https://pypi.org/project/openpit/).
 
 ## Examples
 
-Runnable end-to-end examples: [`examples/python/`](https://github.com/openpitkit/pit/tree/main/examples/python).
+Runnable end-to-end examples live in [`examples/python/`](https://github.com/openpitkit/pit/tree/main/examples/python):
+
+- [`spot_funds`](https://github.com/openpitkit/pit/tree/main/examples/python/spot_funds)
+  \- simplest SpotFunds policy integration (limit-only).
+- [`spot_table`](https://github.com/openpitkit/pit/tree/main/examples/python/spot_table)
+  \- table-driven test runner for the SpotFunds policy.
+- [`rate_pnl_killswitch`](https://github.com/openpitkit/pit/tree/main/examples/python/rate_pnl_killswitch)
+  \- rate-limit + P&L kill-switch supervisor.
 
 ## Install
 
@@ -77,19 +84,16 @@ order when any reject is produced.
 
 Built-in policies:
 
-- `OrderValidationPolicy`
-- `PnlBoundsKillSwitchPolicy`
-- `RateLimitPolicy`
-- `OrderSizeLimitPolicy`
+- `SpotFundsPolicy` -
+  [per-account solvency gate over spendable funds](https://github.com/openpitkit/pit/wiki/Spot-Funds)
+- `OrderValidationPolicy` - [structural integrity checks on every order](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
+- `RateLimitPolicy` - [throttle order flow per broker, asset, or account](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
+- `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
+- `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
 
 The primary integration model is to write project-specific policies against
 the public Python policy API:
-[Custom Python policies](https://github.com/openpitkit/pit/wiki/Policies#python-custom-policy-api).
-
-Two types of rejections are supported: a full kill switch for the account
-and a rejection of only the current request. Kill switches are intended
-for algorithmic trading where automatic order submission must be halted
-until the situation is analyzed.
+[Custom Python policies](https://github.com/openpitkit/pit/wiki/Policy-API#python-interface).
 
 ## Threading
 
@@ -108,9 +112,7 @@ engine is genuinely shared across OS threads.
 
 ## Usage
 
-<!--
-Test mirror: pit/bindings/python/tests/integration/test_examples_readme.py
--->
+<!-- Test mirror: pit/bindings/python/tests/integration/test_examples_readme.py -->
 ```python
 import datetime
 import openpit
@@ -139,13 +141,23 @@ rate_limit_policy = (
     )
 )
 
+max_qty = openpit.param.Quantity("500")
+max_notional = openpit.param.Volume("100000")
 order_size_policy = (
     openpit.pretrade.policies.build_order_size_limit()
+    .broker_barrier(
+        openpit.pretrade.policies.OrderSizeBrokerBarrier(
+            limit=openpit.pretrade.policies.OrderSizeLimit(
+                max_quantity=max_qty,
+                max_notional=max_notional,
+            ),
+        )
+    )
     .asset_barriers(
         openpit.pretrade.policies.OrderSizeAssetBarrier(
             limit=openpit.pretrade.policies.OrderSizeLimit(
-                max_quantity=openpit.param.Quantity("500"),
-                max_notional=openpit.param.Volume("100000"),
+                max_quantity=max_qty,
+                max_notional=max_notional,
             ),
             settlement_asset="USD",
         ),
@@ -167,7 +179,7 @@ engine = (
 order = openpit.Order(
     operation=openpit.OrderOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.TradeAmount.quantity(100.0),
         price=openpit.param.Price(185.0),
@@ -220,7 +232,7 @@ reservation.commit()
 report = openpit.ExecutionReport(
     operation=openpit.ExecutionReportOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
     ),
     financial_impact=openpit.FinancialImpact(

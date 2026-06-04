@@ -26,6 +26,116 @@ use crate::param::AccountId;
 use crate::pretrade::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
 use crate::storage::{self, IndexFlag, Storage, StorageBuilder};
 
+// ─── AccountControl ──────────────────────────────────────────────────────────
+
+/// Per-account handle to the engine's `BlockedAccounts` facility.
+///
+/// Carries a specific [`AccountId`] so callers invoke [`AccountControl::block`]
+/// without repeating the account argument. Obtained from
+/// [`PreTradeContext::account_control`](crate::pretrade::PreTradeContext::account_control)
+/// or [`AccountAdjustmentContext::account_control`](crate::AccountAdjustmentContext::account_control).
+pub struct AccountControl<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    handle: AccountBlockHandle<StorageFactory>,
+    account_id: AccountId,
+}
+
+impl<StorageFactory> Clone for AccountControl<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            handle: self.handle.clone(),
+            account_id: self.account_id,
+        }
+    }
+}
+
+impl<StorageFactory> AccountControl<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    pub(crate) fn new(handle: AccountBlockHandle<StorageFactory>, account_id: AccountId) -> Self {
+        Self { handle, account_id }
+    }
+
+    /// Records `block` against the bound account on the engine's shared
+    /// `BlockedAccounts`. The first cause for the account wins.
+    pub fn block(&self, block: AccountBlock) {
+        self.handle.record(self.account_id, block);
+    }
+}
+
+// ─── AccountBlockHandle ──────────────────────────────────────────────────────
+
+/// Public, opaque handle to the engine's `BlockedAccounts` facility.
+///
+/// A policy that detects a fixation-time failure (for example, an arithmetic
+/// overflow inside a rollback or commit closure) has no return value through
+/// which to surface an [`AccountBlock`]. Such failures must still translate to
+/// a blocked account, so the engine builder hands the policy a clone of this
+/// handle at construction time. Recording a block through the handle lands it
+/// on the very same `BlockedAccounts` storage the engine uses for normal
+/// kill-switch events.
+///
+/// # Thread-safety
+///
+/// The handle's auto-traits derive from `StorageFactory::Shared<...>` — the
+/// sync-mode-aware wrapper chosen by [`LockingPolicyFactory::Shared`](crate::storage::LockingPolicyFactory::Shared):
+///
+/// - Under [`FullSync`](crate::core::FullSync) this is `Arc<...>`:
+///   `Send + Sync`.
+/// - Under [`LocalSync`](crate::core::LocalSync) this is `Rc<...>`:
+///   `!Send + !Sync`.
+/// - Under [`AccountSync`](crate::core::AccountSync) this is `IndexShared<...>`:
+///   `Send + !Sync`, matching the account-sharded engine handle.
+///
+/// The factory type parameter mirrors the engine's
+/// [`StorageLockingPolicyFactory`](crate::core::SyncMode::StorageLockingPolicyFactory),
+/// exactly as a policy's `holdings` store does.
+pub struct AccountBlockHandle<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    inner: StorageFactory::Shared<BlockedAccounts<StorageFactory>>,
+}
+
+impl<StorageFactory> Clone for AccountBlockHandle<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<StorageFactory> AccountBlockHandle<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    /// Wraps a shared [`BlockedAccounts`] in a handle.
+    ///
+    /// Used by the engine builder so that the engine and every policy share
+    /// one [`BlockedAccounts`] instance.
+    pub(crate) fn from_inner(
+        inner: StorageFactory::Shared<BlockedAccounts<StorageFactory>>,
+    ) -> Self {
+        Self { inner }
+    }
+
+    /// Records `block` against `account_id` on the shared
+    /// [`BlockedAccounts`]. The first cause for an account wins; later calls
+    /// for the same account are no-ops.
+    pub(crate) fn record(&self, account_id: AccountId, block: AccountBlock) {
+        self.inner.block_account(account_id, block);
+    }
+}
+
 // ─── Reject helpers ──────────────────────────────────────────────────────────
 
 fn new_account_blocked_rejects() -> Rejects {
@@ -62,7 +172,7 @@ fn new_unverifiable_blocked_rejects(scope: RejectScope) -> Rejects {
 ///   matching the engine's synchronization mode.
 pub(crate) struct BlockedAccounts<StorageFactory>
 where
-    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId>,
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
 {
     any_flag: <StorageFactory as storage::LockingPolicyFactory>::IndexFlag,
     all_flag: <StorageFactory as storage::LockingPolicyFactory>::IndexFlag,
@@ -139,7 +249,7 @@ where
         }
     }
 
-    fn block_account(&self, id: AccountId, cause: AccountBlock) {
+    pub(crate) fn block_account(&self, id: AccountId, cause: AccountBlock) {
         self.accounts.with_mut(id, || cause, |_, _| ());
         self.any_flag.store(true);
     }

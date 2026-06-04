@@ -33,7 +33,7 @@ use crate::param::{
     export_position_effect, export_position_side, export_side, import_position_effect,
     import_position_side, import_side, OpenPitParamAccountIdOptional, OpenPitParamFee,
     OpenPitParamFeeOptional, OpenPitParamPnl, OpenPitParamPnlOptional, OpenPitParamPositionEffect,
-    OpenPitParamPositionSide, OpenPitParamPrice, OpenPitParamPriceOptional, OpenPitParamQuantity,
+    OpenPitParamPositionSide, OpenPitParamPrice, OpenPitParamQuantity,
     OpenPitParamQuantityOptional, OpenPitParamSide,
 };
 
@@ -70,18 +70,37 @@ pub struct OpenPitExecutionReportTrade {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Populated fill-details group for an execution report.
 pub struct OpenPitExecutionReportFill {
     /// Optional latest trade payload.
     pub last_trade: OpenPitExecutionReportTradeOptional,
     /// Remaining quantity after applying this report.
     pub leaves_quantity: OpenPitParamQuantityOptional,
-    /// Optional lock price associated with the report.
-    pub lock_price: OpenPitParamPriceOptional,
+    /// Pre-trade lock attached to the order.
+    ///
+    /// Ownership contract:
+    /// - the caller owns the pointer when present (build it through
+    ///   `openpit_pretrade_lock_*` functions) and remains responsible for
+    ///   releasing it with `openpit_destroy_pretrade_pre_trade_lock`;
+    /// - null is equivalent to an empty lock; passing null does *not* mean
+    ///   "default group" - no record is created on import unless the caller
+    ///   supplied one through this pointer.
+    pub lock: *const crate::pre_trade_lock::OpenPitPretradePreTradeLock,
     /// Whether this report closes the order's report stream.
     /// The order is filled, cancelled, or rejected.
     pub is_final: OpenPitExecutionReportIsFinalOptional,
+}
+
+impl Default for OpenPitExecutionReportFill {
+    fn default() -> Self {
+        Self {
+            last_trade: OpenPitExecutionReportTradeOptional::default(),
+            leaves_quantity: OpenPitParamQuantityOptional::default(),
+            lock: std::ptr::null(),
+            is_final: OpenPitExecutionReportIsFinalOptional::default(),
+        }
+    }
 }
 
 #[repr(C)]
@@ -209,10 +228,10 @@ fn import_fill(
         None
     };
 
-    let lock = if value.value.lock_price.is_set {
-        PreTradeLock::new(Some(value.value.lock_price.value.to_param()?))
+    let lock = if value.value.lock.is_null() {
+        PreTradeLock::new()
     } else {
-        PreTradeLock::new(None)
+        unsafe { &*value.value.lock }.inner_clone()
     };
 
     Ok(ExecutionReportFillAccess::Populated(
@@ -332,13 +351,9 @@ fn export_fill(value: &ExecutionReportFillAccess) -> OpenPitExecutionReportFillO
                     },
                     None => OpenPitParamQuantityOptional::default(),
                 },
-                lock_price: match fill.lock.price() {
-                    Some(price) => OpenPitParamPriceOptional {
-                        is_set: true,
-                        value: OpenPitParamPrice(price.to_decimal().into()),
-                    },
-                    None => OpenPitParamPriceOptional::default(),
-                },
+                lock: crate::pre_trade_lock::OpenPitPretradePreTradeLock::from_inner(
+                    fill.lock.clone(),
+                ),
                 is_final: match fill.is_final {
                     Some(value) => OpenPitExecutionReportIsFinalOptional {
                         value,
@@ -430,8 +445,7 @@ mod tests {
     use crate::param::{
         OpenPitParamAccountIdOptional, OpenPitParamFee, OpenPitParamFeeOptional, OpenPitParamPnl,
         OpenPitParamPnlOptional, OpenPitParamPositionEffect, OpenPitParamPositionSide,
-        OpenPitParamPrice, OpenPitParamPriceOptional, OpenPitParamQuantity,
-        OpenPitParamQuantityOptional, OpenPitParamSide,
+        OpenPitParamPrice, OpenPitParamQuantity, OpenPitParamQuantityOptional, OpenPitParamSide,
     };
     use crate::OpenPitStringView;
     use openpit::param::{
@@ -492,9 +506,10 @@ mod tests {
                         quantity: Quantity::from_str("3").expect("quantity must be valid"),
                     }),
                     leaves_quantity: Some(Quantity::from_str("1").expect("quantity must be valid")),
-                    lock: PreTradeLock::new(Some(
+                    lock: PreTradeLock::from_entries([(
+                        openpit::DEFAULT_POLICY_GROUP_ID,
                         Price::from_str("101").expect("price must be valid"),
-                    )),
+                    )]),
                     is_final: Some(true),
                 }),
                 position_impact: ExecutionReportPositionImpactAccess::Populated(
@@ -568,7 +583,7 @@ mod tests {
                 value: OpenPitExecutionReportFill {
                     last_trade: OpenPitExecutionReportTradeOptional::default(),
                     leaves_quantity: OpenPitParamQuantityOptional::default(),
-                    lock_price: OpenPitParamPriceOptional::default(),
+                    lock: std::ptr::null(),
                     is_final: OpenPitExecutionReportIsFinalOptional::default(),
                 },
             },
@@ -603,7 +618,7 @@ mod tests {
                                 .into(),
                         ),
                     },
-                    lock_price: OpenPitParamPriceOptional::default(),
+                    lock: std::ptr::null(),
                     is_final: OpenPitExecutionReportIsFinalOptional::default(),
                 },
             },
@@ -703,12 +718,12 @@ mod tests {
                                 .into(),
                         ),
                     },
-                    lock_price: OpenPitParamPriceOptional {
-                        is_set: true,
-                        value: OpenPitParamPrice(
-                            Price::from_str("101").expect("price").to_decimal().into(),
-                        ),
-                    },
+                    lock: crate::pre_trade_lock::OpenPitPretradePreTradeLock::from_inner(
+                        PreTradeLock::from_entries([(
+                            openpit::PolicyGroupId::new(7),
+                            Price::from_str("101").expect("price must be valid"),
+                        )]),
+                    ),
                     is_final: OpenPitExecutionReportIsFinalOptional {
                         value: true,
                         is_set: true,
@@ -732,5 +747,12 @@ mod tests {
         assert!(exported.financial_impact.is_set);
         assert!(exported.fill.is_set);
         assert!(exported.position_impact.is_set);
+
+        crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(
+            report.fill.value.lock as *mut _,
+        );
+        crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(
+            exported.fill.value.lock as *mut _,
+        );
     }
 }

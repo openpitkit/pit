@@ -18,13 +18,16 @@
 package openpit
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/future"
 	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
 )
@@ -42,7 +45,7 @@ func multithreadTestOrder(t *testing.T, accountID uint64) model.Order {
 	order := model.NewOrder()
 	op := order.EnsureOperationView()
 	op.SetInstrument(param.NewInstrument(underlying, settlement))
-	op.SetAccountID(param.NewAccountIDFromInt(accountID))
+	op.SetAccountID(param.NewAccountIDFromUint64(accountID))
 	op.SetSide(param.SideBuy)
 	qty, err := param.NewQuantityFromString("1")
 	if err != nil {
@@ -78,7 +81,7 @@ func buildFullSyncAccountRateLimitEngine(t *testing.T, maxOrders uint, accounts 
 				MaxOrders: maxOrders,
 				Window:    time.Minute,
 			},
-			AccountID: param.NewAccountIDFromInt(uint64(i)),
+			AccountID: param.NewAccountIDFromUint64(uint64(i)),
 		}
 	}
 	engine, err := NewEngineBuilder().FullSync().
@@ -99,7 +102,7 @@ func buildAccountSyncAccountRateLimitEngine(t *testing.T, maxOrders uint, accoun
 				MaxOrders: maxOrders,
 				Window:    time.Minute,
 			},
-			AccountID: param.NewAccountIDFromInt(uint64(i)),
+			AccountID: param.NewAccountIDFromUint64(uint64(i)),
 		}
 	}
 	engine, err := NewEngineBuilder().AccountSync().
@@ -304,6 +307,13 @@ func TestEngineFullSyncConcurrentAccountRateLimitIsSafe(t *testing.T) {
 // AccountSync engine configuration when the client routes orders through
 // account-sharded queues: calls for the same account are sequential, while
 // different shards invoke the same engine concurrently.
+//
+// The dispatch is hand-rolled here (one channel per shard) to keep the
+// test independent of the asyncengine helper. Production code is free to
+// use the same pattern, but the bundled asyncengine subpackage already
+// implements it with idle cleanup, observability hooks, and graceful or
+// hard stop modes - see TestRateLimitAccountSyncConcurrentLoadViaAsyncEngine
+// for the equivalent flow that delegates dispatch to asyncengine.
 func TestRateLimitAccountSyncConcurrentLoad(t *testing.T) {
 	const shards = 4
 	const perAccount = 1_000
@@ -319,5 +329,112 @@ func TestRateLimitAccountSyncConcurrentLoad(t *testing.T) {
 	runAccountShardedStartPreTradeLoad(t, engine, orders, perAccount, shards)
 	for i := 0; i < multithreadAccounts; i++ {
 		assertRateLimitProbeRejects(t, engine, uint64(i))
+	}
+}
+
+// TestRateLimitAccountSyncConcurrentLoadViaAsyncEngine is the same scenario
+// as TestRateLimitAccountSyncConcurrentLoad but driven through the
+// asyncengine helper. Compared with the hand-rolled sharded test, the
+// dispatch, lifecycle management, and per-account serialization are all
+// delegated to asyncengine.AsyncEngine.
+func TestRateLimitAccountSyncConcurrentLoadViaAsyncEngine(t *testing.T) {
+	const perAccount = 1_000
+
+	engine := buildAccountSyncAccountRateLimitEngine(
+		t, uint(perAccount), multithreadAccounts,
+	)
+	asyncEngine, err := asyncengine.NewBuilder(engine).Sharded(4).Build()
+	if err != nil {
+		t.Fatalf("Sharded.Build() error = %v", err)
+	}
+
+	orders := make([]model.Order, multithreadAccounts)
+	for i := 0; i < multithreadAccounts; i++ {
+		orders[i] = multithreadTestOrder(t, uint64(i))
+	}
+
+	runAsyncStartPreTradeLoad(t, asyncEngine, orders, perAccount)
+	for i := 0; i < multithreadAccounts; i++ {
+		assertAsyncRateLimitProbeRejects(t, asyncEngine, uint64(i))
+	}
+
+	if err := asyncEngine.StopGraceful(context.Background()); err != nil {
+		t.Fatalf("StopGraceful() error = %v", err)
+	}
+	engine.Stop()
+}
+
+// runAsyncStartPreTradeLoad submits perAccount start-stage calls per order
+// through the AsyncEngine in parallel and awaits every future.
+func runAsyncStartPreTradeLoad(
+	t *testing.T,
+	async *asyncengine.AsyncEngine,
+	orders []model.Order,
+	perAccount int,
+) {
+	t.Helper()
+	type pending struct {
+		fut  *future.Future2[*asyncengine.AsyncRequest, []reject.Reject]
+		acc  int
+		call int
+	}
+	pendings := make([]pending, 0, len(orders)*perAccount)
+	for accIdx, order := range orders {
+		for call := 0; call < perAccount; call++ {
+			pendings = append(pendings, pending{
+				fut:  async.StartPreTrade(context.Background(), order),
+				acc:  accIdx,
+				call: call,
+			})
+		}
+	}
+	for _, p := range pendings {
+		request, rejects, err := p.fut.Await(context.Background())
+		if err != nil {
+			t.Errorf(
+				"acc=%d call=%d Await() error = %v", p.acc, p.call, err,
+			)
+			continue
+		}
+		if len(rejects) != 0 {
+			t.Errorf(
+				"acc=%d call=%d unexpected rejects = %v",
+				p.acc, p.call, rejects,
+			)
+			continue
+		}
+		if request != nil {
+			if _, err := request.Close(
+				context.Background(),
+			).Await(context.Background()); err != nil {
+				t.Errorf(
+					"acc=%d call=%d Close() error = %v",
+					p.acc, p.call, err,
+				)
+			}
+		}
+	}
+}
+
+// assertAsyncRateLimitProbeRejects probes the rate-limit policy through the
+// AsyncEngine, mirroring assertRateLimitProbeRejects.
+func assertAsyncRateLimitProbeRejects(
+	t *testing.T, async *asyncengine.AsyncEngine, accountID uint64,
+) {
+	t.Helper()
+	_, rejects, err := async.StartPreTrade(
+		context.Background(), multithreadTestOrder(t, accountID),
+	).Await(context.Background())
+	if err != nil {
+		t.Fatalf("probe StartPreTrade() error = %v", err)
+	}
+	if len(rejects) == 0 {
+		t.Fatal("probe must reject")
+	}
+	if rejects[0].Code != reject.CodeRateLimitExceeded {
+		t.Fatalf(
+			"reject code = %v, want %v",
+			rejects[0].Code, reject.CodeRateLimitExceeded,
+		)
 	}
 }

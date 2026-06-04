@@ -54,35 +54,35 @@ def test_param_types_are_exported_from_openpit_and_param_module() -> None:
 
 @pytest.mark.unit
 def test_account_id_constructors() -> None:
-    from_int = openpit.param.AccountId.from_u64(12345)
-    from_string = openpit.param.AccountId.from_str("my-account")
+    from_int = openpit.param.AccountId.from_int(12345)
+    from_string = openpit.param.AccountId.from_string("my-account")
 
     assert from_int.value == 12345
-    assert openpit.param.AccountId.from_u64(12345).value == from_int.value
-    assert openpit.param.AccountId.from_str("my-account").value == from_string.value
+    assert openpit.param.AccountId.from_int(12345).value == from_int.value
+    assert openpit.param.AccountId.from_string("my-account").value == from_string.value
     assert from_int.value != from_string.value
 
     with pytest.raises(
         openpit.param.AccountIdError, match="account id string must not be empty"
     ):
-        openpit.param.AccountId.from_str("")
+        openpit.param.AccountId.from_string("")
     with pytest.raises(
         openpit.param.AccountIdError, match="account id string must not be empty"
     ):
-        openpit.param.AccountId.from_str("   ")
+        openpit.param.AccountId.from_string("   ")
 
-    # from_u64 and from_str of the same numeric string are NOT equal.
+    # from_int and from_string of the same numeric string are NOT equal.
     assert (
-        openpit.param.AccountId.from_u64(42).value
-        != openpit.param.AccountId.from_str("42").value
+        openpit.param.AccountId.from_int(42).value
+        != openpit.param.AccountId.from_string("42").value
     )
 
 
 @pytest.mark.unit
 def test_account_id_equality_uses_domain_value() -> None:
-    account = openpit.param.AccountId.from_u64(12345)
-    same_account = openpit.param.AccountId.from_u64(12345)
-    other_account = openpit.param.AccountId.from_u64(54321)
+    account = openpit.param.AccountId.from_int(12345)
+    same_account = openpit.param.AccountId.from_int(12345)
+    other_account = openpit.param.AccountId.from_int(54321)
 
     assert account == same_account
     assert account != other_account
@@ -193,21 +193,21 @@ def test_param_directional_and_identifier_wrappers() -> None:
 
     assert asset == "AAPL"
     assert isinstance(asset, openpit.param.Asset)
-    assert side.value == "buy"
+    assert side.value == "BUY"
     assert isinstance(side, str)
     assert side.is_buy()
-    assert side.opposite().value == "sell"
+    assert side.opposite().value == "SELL"
     assert side.sign() == 1
-    assert position_side.value == "long"
-    assert position_side.opposite().value == "short"
-    assert position_effect.value == "open"
+    assert position_side.value == "LONG"
+    assert position_side.opposite().value == "SHORT"
+    assert position_effect.value == "OPEN"
     assert fill_type.value == "TRADE"
 
-    with pytest.raises(ValueError, match="expected 'buy' or 'sell'"):
+    with pytest.raises(ValueError, match="expected 'BUY' or 'SELL'"):
         openpit.param.Side("hold")
-    with pytest.raises(ValueError, match="expected 'long' or 'short'"):
+    with pytest.raises(ValueError, match="expected 'LONG' or 'SHORT'"):
         openpit.param.PositionSide("flat")
-    with pytest.raises(ValueError, match="expected 'open' or 'close'"):
+    with pytest.raises(ValueError, match="expected 'OPEN' or 'CLOSE'"):
         openpit.param.PositionEffect("flip")
     with pytest.raises(
         ValueError,
@@ -329,10 +329,9 @@ def test_param_hash() -> None:
 
 
 @pytest.mark.unit
-def test_param_signed_neg_abs() -> None:
+def test_param_signed_neg() -> None:
     pnl = openpit.param.Pnl("-50")
     assert str(-pnl) == "50"
-    assert str(abs(pnl)) == "50"
 
 
 @pytest.mark.unit
@@ -422,24 +421,24 @@ def test_param_domain_conversion_methods() -> None:
 @pytest.mark.unit
 def test_param_position_size_domain_methods() -> None:
     position_size = openpit.param.PositionSize.from_quantity_and_side(
-        openpit.param.Quantity("2"), "buy"
+        openpit.param.Quantity("2"), "BUY"
     )
     assert str(position_size) == "2"
 
     position_size_sell = openpit.param.PositionSize.from_quantity_and_side(
-        openpit.param.Quantity("2"), "sell"
+        openpit.param.Quantity("2"), "SELL"
     )
     assert str(position_size_sell) == "-2"
 
     quantity, side = position_size.to_open_quantity()
     assert str(quantity) == "2"
-    assert side == "buy"
+    assert side == "BUY"
 
     quantity, side = position_size_sell.to_close_quantity()
     assert str(quantity) == "2"
-    assert side == "buy"
+    assert side == "BUY"
 
-    result = position_size.checked_add_quantity(openpit.param.Quantity("1"), "sell")
+    result = position_size.checked_add_quantity(openpit.param.Quantity("1"), "SELL")
     assert str(result) == "1"
 
 
@@ -452,3 +451,52 @@ def test_param_constant_classes_expose_stable_names() -> None:
     assert openpit.param.RoundingStrategy.BANKER == "MidpointNearestEven"
     assert openpit.param.RoundingStrategy.CONSERVATIVE_PROFIT == "Down"
     assert openpit.param.RoundingStrategy.CONSERVATIVE_LOSS == "Down"
+
+
+@pytest.mark.unit
+def test_account_group_id_from_int() -> None:
+    g = openpit.param.AccountGroupId.from_int(42)
+    assert g.value == 42
+    assert repr(g) == "AccountGroupId(value=42)"
+
+
+@pytest.mark.unit
+def test_account_group_id_from_int_rejects_reserved_default() -> None:
+    with pytest.raises(ValueError):
+        openpit.param.AccountGroupId.from_int(0)
+
+
+@pytest.mark.unit
+def test_account_group_id_from_int_rejects_out_of_range() -> None:
+    with pytest.raises(OverflowError):
+        openpit.param.AccountGroupId.from_int(-1)
+    with pytest.raises(OverflowError):
+        openpit.param.AccountGroupId.from_int(2**32)  # 4294967296
+
+
+@pytest.mark.unit
+def test_account_group_id_default_is_reserved_group() -> None:
+    assert openpit.param.DEFAULT_ACCOUNT_GROUP.value == 0
+    assert openpit.param.DEFAULT_ACCOUNT_GROUP == openpit.param.AccountGroupId.DEFAULT
+
+
+@pytest.mark.unit
+def test_account_group_id_from_string() -> None:
+    g = openpit.param.AccountGroupId.from_string("desk-1")
+    assert isinstance(g.value, int)
+    assert g.value > 0
+
+    with pytest.raises(ValueError):
+        openpit.param.AccountGroupId.from_string("")
+
+
+@pytest.mark.unit
+def test_account_group_id_equality_and_hash() -> None:
+    g1 = openpit.param.AccountGroupId.from_int(10)
+    g2 = openpit.param.AccountGroupId.from_int(10)
+    g3 = openpit.param.AccountGroupId.from_int(99)
+
+    assert g1 == g2
+    assert g1 != g3
+    assert hash(g1) == hash(g2)
+    assert hash(g1) != hash(g3)

@@ -24,9 +24,51 @@ use std::marker::PhantomData;
 use super::engine::{Engine, EngineInner};
 use super::engine_trait::EngineTraitOf;
 use super::sync_mode::{AccountSync, FullSync, LocalSync, SyncMode};
-use super::BlockedAccounts;
+use super::{AccountGroups, BlockedAccounts};
+use crate::marketdata::MarketDataSync;
 use crate::pretrade::PreTradePolicy;
-use crate::storage::StorageBuilder;
+use crate::storage::{LockingPolicyFactory, StorageBuilder};
+
+// ─── MarketDataSyncOf ────────────────────────────────────────────────────────
+
+/// Maps each engine [`SyncMode`] to the appropriate market-data sync level.
+///
+/// `AccountSync` engines share market data across accounts and therefore
+/// require `FullSync` access; `LocalSync` and `FullSync` engines keep the
+/// market-data sync level aligned with their own.
+mod market_data_sync_of {
+    use super::{AccountSync, FullSync, LocalSync, MarketDataSync};
+
+    pub trait MarketDataSyncOf {
+        type Sync: MarketDataSync;
+
+        /// Builds the market-data sync instance for this engine mode.
+        fn market_data_sync() -> Self::Sync;
+    }
+
+    impl MarketDataSyncOf for LocalSync {
+        type Sync = LocalSync;
+
+        fn market_data_sync() -> LocalSync {
+            LocalSync
+        }
+    }
+    impl MarketDataSyncOf for FullSync {
+        type Sync = FullSync;
+
+        fn market_data_sync() -> FullSync {
+            FullSync
+        }
+    }
+    impl MarketDataSyncOf for AccountSync {
+        type Sync = FullSync;
+
+        fn market_data_sync() -> FullSync {
+            FullSync
+        }
+    }
+}
+use market_data_sync_of::MarketDataSyncOf;
 
 // ─── IntoPolicyObject ────────────────────────────────────────────────────────
 
@@ -52,31 +94,16 @@ impl<
         Order: 'static,
         ExecutionReport: 'static,
         AccountAdjustment: 'static,
-        Policy: crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment> + 'static,
-    >
-    IntoPolicyObject<dyn crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment>>
-    for Policy
-{
-    fn into_policy_object(
-        self,
-    ) -> Box<dyn crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment>> {
-        Box::new(self)
-    }
-}
-
-impl<
-        Order: 'static,
-        ExecutionReport: 'static,
-        AccountAdjustment: 'static,
-        Policy: crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment> + Send + 'static,
+        Sync: SyncMode,
+        PreTradePolicy: crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> + 'static,
     >
     IntoPolicyObject<
-        dyn crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment> + Send,
-    > for Policy
+        dyn crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>,
+    > for PreTradePolicy
 {
     fn into_policy_object(
         self,
-    ) -> Box<dyn crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment> + Send>
+    ) -> Box<dyn crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>>
     {
         Box::new(self)
     }
@@ -86,23 +113,46 @@ impl<
         Order: 'static,
         ExecutionReport: 'static,
         AccountAdjustment: 'static,
-        Policy: crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment>
+        Sync: SyncMode,
+        PreTradePolicy: crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
             + Send
-            + Sync
             + 'static,
     >
     IntoPolicyObject<
-        dyn crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment>
-            + Send
-            + Sync,
-    > for Policy
+        dyn crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> + Send,
+    > for PreTradePolicy
 {
     fn into_policy_object(
         self,
     ) -> Box<
-        dyn crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment>
+        dyn crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> + Send,
+    > {
+        Box::new(self)
+    }
+}
+
+impl<
+        Order: 'static,
+        ExecutionReport: 'static,
+        AccountAdjustment: 'static,
+        Sync: SyncMode,
+        PreTradePolicy: crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
             + Send
-            + Sync,
+            + std::marker::Sync
+            + 'static,
+    >
+    IntoPolicyObject<
+        dyn crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
+            + Send
+            + std::marker::Sync,
+    > for PreTradePolicy
+{
+    fn into_policy_object(
+        self,
+    ) -> Box<
+        dyn crate::pretrade::PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
+            + Send
+            + std::marker::Sync,
     > {
         Box::new(self)
     }
@@ -116,6 +166,14 @@ impl<
 pub enum EngineBuildError {
     /// Duplicate policy name across registered policy sets.
     DuplicatePolicyName { name: String },
+    /// Duplicate non-default `policy_group_id` across registered policies.
+    ///
+    /// Multiple policies may share [`crate::DEFAULT_POLICY_GROUP_ID`], but every
+    /// explicit group identifier must be unique so that downstream consumers
+    /// can route outcomes by group without ambiguity.
+    DuplicatePolicyGroupId {
+        policy_group_id: crate::core::PolicyGroupId,
+    },
 }
 
 impl Display for EngineBuildError {
@@ -123,6 +181,13 @@ impl Display for EngineBuildError {
         match self {
             Self::DuplicatePolicyName { name } => {
                 write!(formatter, "duplicate policy name: {name}")
+            }
+            Self::DuplicatePolicyGroupId { policy_group_id } => {
+                write!(
+                    formatter,
+                    "duplicate non-default policy_group_id: {value}",
+                    value = policy_group_id.value()
+                )
             }
         }
     }
@@ -222,9 +287,26 @@ impl<Order: 'static, ExecutionReport: 'static, AccountAdjustment: 'static>
     where
         Sync: SyncMode,
     {
+        let storage_builder = StorageBuilder::new(sync.storage_locking_policy_factory());
+        // Create the engine's blocked-accounts storage eagerly so the SAME
+        // instance can be handed to policy constructors before `build()` and
+        // moved into `EngineInner` at `build()`. The engine and every policy
+        // therefore share exactly one instance.
+        let blocked_accounts =
+            <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::new_shared(
+                BlockedAccounts::new(&storage_builder),
+            );
+        // Same lifecycle as `blocked_accounts`: one shared account-group
+        // registry, created eagerly and moved into `EngineInner` at `build()`.
+        let account_groups =
+            <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::new_shared(
+                AccountGroups::new(&storage_builder),
+            );
         SyncedEngineBuilder {
             pre_trade_policies: Vec::new(),
-            storage_builder: StorageBuilder::new(sync.storage_locking_policy_factory()),
+            storage_builder,
+            blocked_accounts,
+            account_groups,
             _marker: PhantomData,
         }
     }
@@ -304,6 +386,14 @@ pub struct SyncedEngineBuilder<
         Box<<Sync as SyncMode>::PreTradePolicyObject<Order, ExecutionReport, AccountAdjustment>>,
     >,
     storage_builder: StorageBuilder<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+    blocked_accounts:
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
+            BlockedAccounts<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        >,
+    account_groups:
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
+            AccountGroups<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        >,
     _marker: PhantomData<(Order, ExecutionReport, AccountAdjustment)>,
 }
 
@@ -320,6 +410,35 @@ where
         &self,
     ) -> &StorageBuilder<<Sync as SyncMode>::StorageLockingPolicyFactory> {
         &self.storage_builder
+    }
+}
+
+impl<Order: 'static, ExecutionReport: 'static, AccountAdjustment: 'static, Sync>
+    SyncedEngineBuilder<Order, ExecutionReport, AccountAdjustment, Sync>
+where
+    Sync: SyncMode + MarketDataSyncOf,
+{
+    /// Creates a market-data service builder whose handle wrapper matches
+    /// the engine's threading mode.
+    ///
+    /// The returned builder's `Sync` parameter controls both the handle
+    /// wrapper distributed by the produced service ([`Rc`](std::rc::Rc) for
+    /// [`LocalSync`], [`Arc`](std::sync::Arc) for [`FullSync`] and
+    /// [`AccountSync`]) and the internal lock primitive. Under [`LocalSync`]
+    /// the service is strictly single-threaded with no-op internal locks; a
+    /// concurrent producer thread is **not** supported. [`FullSync`] and
+    /// [`AccountSync`] engines map to a [`FullSync`] market-data service with
+    /// real internal locks that does support a concurrent feed.
+    ///
+    /// `default_ttl` sets the service-wide quote lifetime; pick
+    /// [`QuoteTtl::Infinite`](crate::QuoteTtl::Infinite) for never-expiring
+    /// quotes or [`QuoteTtl::Within(d)`](crate::QuoteTtl::Within) to drop
+    /// stale snapshots after `d`.
+    pub fn market_data(
+        &self,
+        default_ttl: crate::QuoteTtl,
+    ) -> crate::marketdata::MarketDataBuilder<<Sync as MarketDataSyncOf>::Sync> {
+        crate::marketdata::MarketDataBuilder::with_sync(Sync::market_data_sync(), default_ttl)
     }
 }
 
@@ -350,6 +469,8 @@ where
         ReadyEngineBuilder {
             pre_trade_policies: self.pre_trade_policies,
             storage_builder: self.storage_builder,
+            blocked_accounts: self.blocked_accounts,
+            account_groups: self.account_groups,
             _marker: PhantomData,
         }
     }
@@ -378,6 +499,14 @@ pub struct ReadyEngineBuilder<
         Box<<Sync as SyncMode>::PreTradePolicyObject<Order, ExecutionReport, AccountAdjustment>>,
     >,
     storage_builder: StorageBuilder<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+    blocked_accounts:
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
+            BlockedAccounts<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        >,
+    account_groups:
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
+            AccountGroups<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        >,
     _marker: PhantomData<(Order, ExecutionReport, AccountAdjustment)>,
 }
 
@@ -394,6 +523,20 @@ where
         &self,
     ) -> &StorageBuilder<<Sync as SyncMode>::StorageLockingPolicyFactory> {
         &self.storage_builder
+    }
+}
+
+impl<Order: 'static, ExecutionReport: 'static, AccountAdjustment: 'static, Sync>
+    ReadyEngineBuilder<Order, ExecutionReport, AccountAdjustment, Sync>
+where
+    Sync: SyncMode + MarketDataSyncOf,
+{
+    /// See [`SyncedEngineBuilder::market_data`].
+    pub fn market_data(
+        &self,
+        default_ttl: crate::QuoteTtl,
+    ) -> crate::marketdata::MarketDataBuilder<<Sync as MarketDataSyncOf>::Sync> {
+        crate::marketdata::MarketDataBuilder::with_sync(Sync::market_data_sync(), default_ttl)
     }
 }
 
@@ -421,11 +564,12 @@ where
         EngineBuildError,
     > {
         ensure_unique_policy_names(self.pre_trade_policies.iter().map(|p| p.name()))?;
-        let blocked_accounts = BlockedAccounts::new(&self.storage_builder);
+        ensure_unique_group_ids(self.pre_trade_policies.iter().map(|p| p.policy_group_id()))?;
         Ok(Engine::from_inner(<Sync as SyncMode>::new_strong(
             EngineInner {
                 pre_trade_policies: self.pre_trade_policies,
-                blocked_accounts,
+                blocked_accounts: self.blocked_accounts,
+                account_groups: self.account_groups,
             },
         )))
     }
@@ -440,6 +584,22 @@ fn ensure_unique_policy_names<'a>(
             return Err(EngineBuildError::DuplicatePolicyName {
                 name: name.to_owned(),
             });
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_unique_group_ids(
+    group_ids: impl Iterator<Item = crate::core::PolicyGroupId>,
+) -> Result<(), EngineBuildError> {
+    let mut unique = HashSet::new();
+    for policy_group_id in group_ids {
+        if policy_group_id == crate::core::DEFAULT_POLICY_GROUP_ID {
+            continue;
+        }
+        if !unique.insert(policy_group_id) {
+            return Err(EngineBuildError::DuplicatePolicyGroupId { policy_group_id });
         }
     }
 

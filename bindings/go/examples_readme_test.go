@@ -105,7 +105,7 @@ func TestReadmeQuickstart(t *testing.T) {
 		t.Fatalf("NewAsset(AAPL) error = %v", err)
 	}
 	op.SetInstrument(param.NewInstrument(aapl, usd))
-	op.SetAccountID(param.NewAccountIDFromInt(99224416))
+	op.SetAccountID(param.NewAccountIDFromUint64(99224416))
 	op.SetSide(param.SideBuy)
 	price, _ := param.NewPriceFromString("185")
 	qty, _ := param.NewQuantityFromString("100")
@@ -138,7 +138,7 @@ func TestReadmeQuickstart(t *testing.T) {
 	report := model.NewExecutionReport()
 	reportOp := model.NewExecutionReportOperation()
 	reportOp.SetInstrument(param.NewInstrument(aapl, usd))
-	reportOp.SetAccountID(param.NewAccountIDFromInt(99224416))
+	reportOp.SetAccountID(param.NewAccountIDFromUint64(99224416))
 	reportOp.SetSide(param.SideBuy)
 	report.SetOperation(reportOp)
 

@@ -103,6 +103,16 @@ nitpick_ignore = [
     ("py:class", "Lock"),
     ("py:class", "Context"),
     ("py:meth", "Policy.perform_pre_trade_check"),
+    # Re-export aliases: canonical path differs from the re-export path used in
+    # docstrings.
+    ("py:class", "openpit.Mutation"),
+    ("py:class", "AccountControl"),
+    ("py:class", "openpit.pretrade.AccountControl"),
+    # Bare names from type annotations resolved by autodoc in description mode.
+    ("py:class", "AccountOutcomeEntry"),
+    ("py:class", "PostTradeContext"),
+    # Relative module alias used in SpotFundsOverride.instrument type annotation.
+    ("py:class", "marketdata.InstrumentId"),
 ]
 
 

@@ -63,7 +63,7 @@ SECTION_INFO = {
     "reject.rs": ("rejects", "Rejects"),
     "last_error.rs": ("runtime", "Runtime and Errors"),
     "engine.rs": ("engine", "Engine"),
-    "policy.rs": ("policies", "Policies"),
+    "policy": ("policies", "Policies"),
     "lib.rs": ("runtime", "Runtime and Errors"),
 }
 PARAMS_RUNTIME_DUPLICATES = {
@@ -132,7 +132,7 @@ DECIMAL_PARAM_WRAPPER_GET_DECIMAL_SIGNATURE = (
 DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
     str, tuple[list[tuple[str, str]], str | None]
 ] = {
-    "from_str_fn": (
+    "from_string_fn": (
         [
             ("value", "OpenPitStringView"),
             ("out", "*mut $wrapper"),
@@ -148,7 +148,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
         ],
         "bool",
     ),
-    "from_i64_fn": (
+    "from_int64_fn": (
         [
             ("value", "i64"),
             ("out", "*mut $wrapper"),
@@ -156,7 +156,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
         ],
         "bool",
     ),
-    "from_u64_fn": (
+    "from_uint64_fn": (
         [
             ("value", "u64"),
             ("out", "*mut $wrapper"),
@@ -164,7 +164,7 @@ DECIMAL_PARAM_FFI_COMMON_SIGNATURES: dict[
         ],
         "bool",
     ),
-    "from_str_rounded_fn": (
+    "from_string_rounded_fn": (
         [
             ("value", "OpenPitStringView"),
             ("scale", "u32"),
@@ -365,10 +365,16 @@ def main() -> None:
     source_files = list_source_files()
     items = []
     for rel in source_files:
-        parsed = parse_file(SRC_DIR / rel)
-        for item in parsed:
-            item.section = rel
-        items.extend(parsed)
+        section_path = SRC_DIR / rel
+        if section_path.is_dir():
+            paths = sorted(section_path.glob("*.rs"))
+        else:
+            paths = [section_path]
+        for path in paths:
+            parsed = parse_file(path)
+            for item in parsed:
+                item.section = rel
+            items.extend(parsed)
 
     items = dedupe_items(items)
     header = render_header(items)
@@ -433,10 +439,13 @@ def should_export(item: Item) -> bool:
 
 
 def list_source_files() -> list[str]:
-    files = [path.name for path in SRC_DIR.glob("*.rs") if path.is_file()]
+    keys = [path.name for path in SRC_DIR.glob("*.rs") if path.is_file()]
+    for entry in SRC_DIR.iterdir():
+        if entry.is_dir() and (entry / "mod.rs").exists():
+            keys.append(entry.name)
     section_order = {name: idx for idx, name in enumerate(SECTION_INFO)}
     return sorted(
-        files, key=lambda name: (section_order.get(name, len(section_order)), name)
+        keys, key=lambda name: (section_order.get(name, len(section_order)), name)
     )
 
 
@@ -1286,12 +1295,20 @@ def parse_decimal_ffi_signed(block: str, specs: list[MacroFnSpec]) -> list[Item]
 
 
 def parse_fn_pointer(rhs: str) -> tuple[list[tuple[str, str]], str | None]:
-    match = re.match(r"(?:unsafe )?extern \"C\" fn\((.*)\)(?: -> (.+))?", rhs)
+    rhs = rhs.strip()
+    # A nullable callback is declared as `Option<extern "C" fn(..)>`; in C this
+    # is just an ordinary (null-able) function pointer, so unwrap the `Option`
+    # before parsing the underlying signature.
+    option_match = re.fullmatch(r"Option<\s*(.+?)\s*,?\s*>", rhs)
+    if option_match:
+        rhs = option_match.group(1).strip()
+    match = re.match(r"(?:unsafe )?extern \"C\" fn\((.*)\)\s*(?:-> (.+))?", rhs)
     if not match:
         return [], None
-    return parse_args(match.group(1)), (
-        match.group(2).strip() if match.group(2) else None
-    )
+    ret = match.group(2)
+    if ret is not None:
+        ret = ret.strip().rstrip(",").strip()
+    return parse_args(match.group(1)), (ret if ret else None)
 
 
 def parse_args(arg_text: str) -> list[tuple[str, str]]:

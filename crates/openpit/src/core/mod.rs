@@ -17,8 +17,10 @@
 
 pub(crate) mod account_adjustment;
 pub(crate) mod account_adjustment_context;
+pub(crate) mod account_control;
+pub(crate) mod account_groups;
 pub(crate) mod account_key;
-pub(crate) mod blocked_accounts;
+pub(crate) mod account_outcome;
 pub(crate) mod engine;
 pub(crate) mod engine_builder;
 pub(crate) mod engine_trait;
@@ -38,8 +40,14 @@ pub use account_adjustment::{
     WithAccountAdjustmentPositionOperation,
 };
 pub use account_adjustment_context::AccountAdjustmentContext;
+pub(crate) use account_control::BlockedAccounts;
+pub use account_control::{AccountBlockHandle, AccountControl};
+pub use account_groups::{AccountGroupError, Accounts};
+pub(crate) use account_groups::{AccountGroups, AccountGroupsHandle, GroupLookup};
 pub use account_key::{AccountKey, AccountKeyConstraint};
-pub(crate) use blocked_accounts::BlockedAccounts;
+pub use account_outcome::{
+    AccountAdjustmentBatchResult, AccountAdjustmentOutcome, AccountOutcomeEntry, OutcomeAmount,
+};
 pub use engine_trait::{EngineTrait, EngineTraitOf};
 pub use execution_report::{
     ExecutionReportFillDetails, ExecutionReportOperation, ExecutionReportPositionImpact,
@@ -61,10 +69,36 @@ pub use request_trait::{
     HasAccountAdjustmentPositionLeverage, HasAccountId, HasAutoBorrow, HasAverageEntryPrice,
     HasBalanceAsset, HasClosePosition, HasCollateralAsset, HasExecutionReportIsFinal,
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
-    HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
+    HasFee, HasInstrument, HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage,
     HasOrderPositionSide, HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode,
-    HasReduceOnly, HasSide, HasTradeAmount, RequestFieldAccessError,
+    HasPreTradeLock, HasReduceOnly, HasSide, HasTradeAmount, RequestFieldAccessError,
 };
 pub use sync_mode::{
     AccountSync, AccountSyncHandle, AccountSyncHandleWeak, FullSync, LocalSync, SyncMode,
 };
+
+/// Policy-group tag used when the caller does not assign one.
+pub const DEFAULT_POLICY_GROUP_ID: PolicyGroupId = PolicyGroupId::new(0);
+
+/// Opaque policy-group tag attached to an abstract business entity.
+///
+/// A single value may be shared across multiple business entity instances so the caller
+/// can associate outcomes with a logical group rather than a specific
+/// implementation. The value is assigned at policy construction time and
+/// carried unchanged through every operation.
+///
+/// Use [`DEFAULT_POLICY_GROUP_ID`] when grouping is not needed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct PolicyGroupId(u16);
+
+impl PolicyGroupId {
+    /// Creates a `PolicyGroupId` from a raw `u16` value.
+    pub const fn new(value: u16) -> Self {
+        Self(value)
+    }
+
+    /// Returns the raw `u16` value.
+    pub const fn value(self) -> u16 {
+        self.0
+    }
+}

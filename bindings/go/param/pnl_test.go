@@ -82,9 +82,9 @@ func TestPnlFromIntAndUint(t *testing.T) {
 		t.Run("int-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			value, err := NewPnlFromInt(tt.input)
+			value, err := NewPnlFromInt64(tt.input)
 			if err != nil {
-				t.Fatalf("NewPnlFromInt(%d) error = %v", tt.input, err)
+				t.Fatalf("NewPnlFromInt64(%d) error = %v", tt.input, err)
 			}
 			if got := value.String(); got != tt.want {
 				t.Fatalf("String() = %q, want %q", got, tt.want)
@@ -104,9 +104,9 @@ func TestPnlFromIntAndUint(t *testing.T) {
 		t.Run("uint-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			value, err := NewPnlFromUint(tt.input)
+			value, err := NewPnlFromUint64(tt.input)
 			if err != nil {
-				t.Fatalf("NewPnlFromUint(%d) error = %v", tt.input, err)
+				t.Fatalf("NewPnlFromUint64(%d) error = %v", tt.input, err)
 			}
 			if got := value.String(); got != tt.want {
 				t.Fatalf("String() = %q, want %q", got, tt.want)

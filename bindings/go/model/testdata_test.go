@@ -42,11 +42,11 @@ func newOrderFixture(t *testing.T) orderFixture {
 		tradeAmount:  param.NewQuantityTradeAmount(quantity),
 		instrument:   param.NewInstrument(mustModelAsset(t, "USD"), mustModelAsset(t, "USD")),
 		price:        price,
-		accountID:    param.NewAccountIDFromInt(90210),
+		accountID:    param.NewAccountIDFromUint64(90210),
 		side:         param.SideBuy,
 		positionSide: param.PositionSideLong,
 		asset:        mustModelAsset(t, "USD"),
-		leverage:     param.NewLeverageFromInt(5),
+		leverage:     param.NewLeverageFromUint16(5),
 	}
 }
 

@@ -15,6 +15,9 @@ on:
 permissions:
   contents: read
 
+env:
+  JUSTFILE: ${{ github.workspace }}/pipeline.just
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -34,6 +37,9 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+
+      - name: Setup just
+        uses: extractions/setup-just@v3
 
       - name: Resolve release mode and version
         id: resolve-context
@@ -87,77 +93,12 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF#refs/tags/v}"
-          for MANIFEST in crates/openpit/Cargo.toml crates/openpit-derive/Cargo.toml crates/openpit-ffi/Cargo.toml bindings/python/Cargo.toml; do
-            CARGO_VERSION="$(grep -m1 '^version\s*=' "${MANIFEST}" | sed 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/')"
-            if [[ "${CARGO_VERSION}" != "${VERSION}" ]]; then
-              echo "::error::Tag version ${VERSION} does not match ${MANIFEST} version ${CARGO_VERSION}"
-              exit 1
-            fi
-            echo "${MANIFEST}: ${CARGO_VERSION} OK"
-          done
+          just --justfile "$JUSTFILE" check-cargo-versions "$VERSION"
 
       - name: Validate monotonic version bump
         if: ${{ steps.resolve-context.outputs.release_mode == 'production' }}
         shell: bash
-        run: |
-          set -euo pipefail
-
-          CURRENT_TAG="${GITHUB_REF_NAME}"
-          CURRENT_VERSION="${CURRENT_TAG#v}"
-          PREVIOUS_TAG="$(
-            git tag -l 'v*' \
-              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-              | grep -vx "${CURRENT_TAG}" \
-              | sort -V \
-              | tail -n 1 || true
-          )"
-
-          if [[ -z "${PREVIOUS_TAG}" ]]; then
-            echo "No previous release tag found, skipping monotonic check"
-            exit 0
-          fi
-
-          PREVIOUS_VERSION="${PREVIOUS_TAG#v}"
-
-          IFS='.' read -r CUR_MAJOR CUR_MINOR CUR_PATCH <<< "${CURRENT_VERSION}"
-          IFS='.' read -r PREV_MAJOR PREV_MINOR PREV_PATCH <<< "${PREVIOUS_VERSION}"
-
-          if (( CUR_MAJOR < PREV_MAJOR )); then
-            echo "::error::Major version decreased: ${CURRENT_VERSION} < ${PREVIOUS_VERSION}"
-            exit 1
-          fi
-
-          if (( CUR_MAJOR > PREV_MAJOR )); then
-            if (( CUR_MINOR != 0 || CUR_PATCH != 0 )); then
-              echo "::error::Major version bump requires minor and patch to be 0 (got ${CURRENT_VERSION}, previous ${PREVIOUS_VERSION})"
-              exit 1
-            fi
-            echo "Valid major version bump: ${PREVIOUS_VERSION} -> ${CURRENT_VERSION}"
-            exit 0
-          fi
-
-          # major equal
-          if (( CUR_MINOR < PREV_MINOR )); then
-            echo "::error::Minor version decreased: ${CURRENT_VERSION} < ${PREVIOUS_VERSION}"
-            exit 1
-          fi
-
-          if (( CUR_MINOR > PREV_MINOR )); then
-            if (( CUR_PATCH != 0 )); then
-              echo "::error::Minor version bump requires patch to be 0 (got ${CURRENT_VERSION}, previous ${PREVIOUS_VERSION})"
-              exit 1
-            fi
-            echo "Valid minor version bump: ${PREVIOUS_VERSION} -> ${CURRENT_VERSION}"
-            exit 0
-          fi
-
-          # major and minor equal
-          if (( CUR_PATCH <= PREV_PATCH )); then
-            echo "::error::Patch version must increase: ${CURRENT_VERSION} <= ${PREVIOUS_VERSION}"
-            exit 1
-          fi
-
-          echo "Valid patch version bump: ${PREVIOUS_VERSION} -> ${CURRENT_VERSION}"
+        run: just --justfile "$JUSTFILE" check-version-bump "$GITHUB_REF_NAME"
 
   verify:
     name: Verify (Rust + Python)
@@ -179,6 +120,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
       - name: Load CI versions
         shell: bash
         run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
@@ -196,28 +140,7 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.verify-tag.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          for CRATE in openpit-derive openpit; do
-            URL="https://crates.io/api/v1/crates/${CRATE}/${VERSION}"
-            HTTP_CODE="$(curl -H "User-Agent: openpit-release-ci" --retry 3 --retry-delay 2 -sS -o "/tmp/${CRATE}-crates-version.json" -w '%{http_code}' "${URL}")"
-
-            case "${HTTP_CODE}" in
-              200)
-                echo "::error::${CRATE} version ${VERSION} already exists on crates.io"
-                exit 1
-                ;;
-              404)
-                echo "${CRATE} version ${VERSION} is not published on crates.io yet"
-                ;;
-              *)
-                echo "::error::Failed to query crates.io for ${CRATE} (HTTP ${HTTP_CODE})"
-                cat "/tmp/${CRATE}-crates-version.json" || true
-                exit 1
-                ;;
-            esac
-          done
+        run: just --justfile "$JUSTFILE" check-crate-unpublished "$VERSION"
 
       - name: Publish or dry-run crates
         shell: bash
@@ -273,6 +196,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
       - name: Load CI versions
         shell: bash
         run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
@@ -301,28 +227,11 @@ jobs:
         shell: bash
         env:
           STAGING_VERSION: ${{ needs.verify-tag.outputs.version }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import os
-
-          path = Path("bindings/python/Cargo.toml")
-          lines = path.read_text().splitlines()
-          for index, line in enumerate(lines):
-              if line.startswith("version = "):
-                  lines[index] = f'version = "{os.environ["STAGING_VERSION"]}"'
-                  break
-          else:
-              raise SystemExit("version field not found in bindings/python/Cargo.toml")
-          path.write_text("\n".join(lines) + "\n")
-          PY
+        run: just --justfile "$JUSTFILE" apply-staging-version "$STAGING_VERSION"
 
       - name: Copy monorepo LICENSE and OWNERS into Python package
         shell: bash
-        run: |
-          cp LICENSE bindings/python/LICENSE
-          cp OWNERS bindings/python/OWNERS
+        run: just --justfile "$JUSTFILE" copy-python-metadata
 
       - name: Build Linux wheel
         if: startsWith(matrix.os, 'ubuntu')
@@ -350,50 +259,8 @@ jobs:
           VERSION: ${{ needs.verify-tag.outputs.version }}
         run: |
           set -euo pipefail
-          CANDIDATE_DIRS=(
-            "bindings/python/dist"
-            "dist"
-            "bindings/python/target/wheels"
-            "target/wheels"
-          )
-
-          WHEELS=()
-          for DIR in "${CANDIDATE_DIRS[@]}"; do
-            if [[ -d "${DIR}" ]]; then
-              while IFS= read -r FILE; do
-                WHEELS+=("${FILE}")
-              done < <(find "${DIR}" -maxdepth 1 -type f -name "openpit-*.whl" | sort)
-            fi
-          done
-
-          if [[ ${#WHEELS[@]} -eq 0 ]]; then
-            echo "::error::No wheel files found in expected directories"
-            exit 1
-          fi
-
-          VERSION_MATCH=()
-          for FILE in "${WHEELS[@]}"; do
-            BASE="$(basename "${FILE}")"
-            if [[ "${BASE}" == openpit-"${VERSION}"*".whl" ]]; then
-              VERSION_MATCH+=("${FILE}")
-            fi
-          done
-
-          if [[ ${#VERSION_MATCH[@]} -eq 1 ]]; then
-            WHEEL="${VERSION_MATCH[0]}"
-          elif [[ ${#VERSION_MATCH[@]} -gt 1 ]]; then
-            echo "::error::Expected exactly one wheel for version ${VERSION}, found ${#VERSION_MATCH[@]}"
-            printf '%s\n' "${VERSION_MATCH[@]}"
-            exit 1
-          elif [[ ${#WHEELS[@]} -eq 1 ]]; then
-            WHEEL="${WHEELS[0]}"
-          else
-            echo "::error::Could not uniquely resolve wheel path"
-            printf '%s\n' "${WHEELS[@]}"
-            exit 1
-          fi
-
-          echo "WHEEL_PATH=${WHEEL}" >> "$GITHUB_ENV"
+          WHEEL_PATH="$(just --justfile "$JUSTFILE" resolve-wheel "$VERSION")"
+          echo "WHEEL_PATH=${WHEEL_PATH}" >> "$GITHUB_ENV"
 
       - name: Install built wheel
         if:
@@ -410,33 +277,18 @@ jobs:
           BASE_VERSION: ${{ needs.verify-tag.outputs.base_version }}
           RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
           VERSION: ${{ needs.verify-tag.outputs.version }}
-        run: |
-          python -c "import openpit"
-          python - <<'PY'
-          import importlib.metadata as metadata
-          import os
-
-          version = metadata.version("openpit")
-          print(version)
-
-          if os.environ["RELEASE_MODE"] == "production":
-              expected = os.environ["VERSION"]
-              assert version == expected, f"expected {expected}, got {version}"
-          else:
-              base_version = os.environ["BASE_VERSION"]
-              assert version != base_version, f"expected staging version, got production version {version}"
-              assert version.startswith(base_version), f"expected version starting with {base_version}, got {version}"
-          PY
+        run: just --justfile "$JUSTFILE" verify-wheel-version "$RELEASE_MODE" "$VERSION" "$BASE_VERSION"
 
       - name: Run wheel tests
         if:
           matrix.name == 'linux-x86_64-manylinux2014' || !startsWith(matrix.os,
           'ubuntu')
-        run: python -m pytest bindings/python/tests
+        shell: bash
+        run: just --justfile "$JUSTFILE" test-wheel
 
       - name: Validate wheel metadata
         shell: bash
-        run: twine check "${WHEEL_PATH}"
+        run: just --justfile "$JUSTFILE" check-wheel "$WHEEL_PATH"
 
       - name: Upload wheel artifact
         if: ${{ needs.verify-tag.outputs.release_mode == 'dry-run' }}
@@ -475,6 +327,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
       - name: Load CI versions
         shell: bash
         run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
@@ -503,79 +358,22 @@ jobs:
         shell: bash
         env:
           STAGING_VERSION: ${{ needs.verify-tag.outputs.version }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import os
-
-          path = Path("bindings/python/Cargo.toml")
-          lines = path.read_text().splitlines()
-          for index, line in enumerate(lines):
-              if line.startswith("version = "):
-                  lines[index] = f'version = "{os.environ["STAGING_VERSION"]}"'
-                  break
-          else:
-              raise SystemExit("version field not found in bindings/python/Cargo.toml")
-          path.write_text("\n".join(lines) + "\n")
-          PY
+        run: just --justfile "$JUSTFILE" apply-staging-version "$STAGING_VERSION"
 
       - name: Copy monorepo LICENSE and OWNERS into Python package
         shell: bash
-        run: |
-          cp LICENSE bindings/python/LICENSE
-          cp OWNERS bindings/python/OWNERS
+        run: just --justfile "$JUSTFILE" copy-python-metadata
 
       - name: Build sdist
-        run: maturin sdist --manifest-path bindings/python/Cargo.toml --out dist
+        run: just --justfile "$JUSTFILE" build-sdist
 
       - name: Validate sdist license files
         shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import email
-          import tarfile
-          from pathlib import Path
-
-          sdists = sorted(Path("dist").glob("*.tar.gz"))
-          if len(sdists) != 1:
-              raise SystemExit(f"expected exactly one sdist, found {len(sdists)}")
-
-          with tarfile.open(sdists[0], "r:gz") as archive:
-              names = set(archive.getnames())
-              pkg_info_name = next(
-                  (
-                      name
-                      for name in names
-                      if name.count("/") == 1 and name.endswith("/PKG-INFO")
-                  ),
-                  None,
-              )
-              if pkg_info_name is None:
-                  raise SystemExit(f"{sdists[0]} has no top-level PKG-INFO")
-
-              root = pkg_info_name.rsplit("/", 1)[0]
-              pkg_info = archive.extractfile(pkg_info_name)
-              if pkg_info is None:
-                  raise SystemExit(f"{pkg_info_name} cannot be read")
-
-              metadata = email.message_from_bytes(pkg_info.read())
-              missing = [
-                  license_file
-                  for license_file in metadata.get_all("License-File", [])
-                  if f"{root}/{license_file}" not in names
-              ]
-              if missing:
-                  raise SystemExit(
-                      "sdist declares missing License-File entries: "
-                      + ", ".join(missing)
-                  )
-          PY
+        run: just --justfile "$JUSTFILE" validate-sdist-license
 
       - name: Validate sdist metadata
         shell: bash
-        run: twine check dist/*
+        run: just --justfile "$JUSTFILE" check-sdist
 
       - name: Smoke-test sdist install
         shell: bash
@@ -583,29 +381,7 @@ jobs:
           BASE_VERSION: ${{ needs.verify-tag.outputs.base_version }}
           RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
           VERSION: ${{ needs.verify-tag.outputs.version }}
-        run: |
-          set -euo pipefail
-          python -m venv /tmp/openpit-sdist-smoke
-          source /tmp/openpit-sdist-smoke/bin/activate
-          python -m pip install --upgrade pip
-          python -m pip install maturin
-          python -m pip install dist/*.tar.gz
-          python -c "import openpit"
-          python - <<'PY'
-          import importlib.metadata as metadata
-          import os
-
-          version = metadata.version("openpit")
-          print(version)
-
-          if os.environ["RELEASE_MODE"] == "production":
-              expected = os.environ["VERSION"]
-              assert version == expected, f"expected {expected}, got {version}"
-          else:
-              base_version = os.environ["BASE_VERSION"]
-              assert version != base_version, f"expected staging version, got production version {version}"
-              assert version.startswith(base_version), f"expected version starting with {base_version}, got {version}"
-          PY
+        run: just --justfile "$JUSTFILE" smoke-sdist "$RELEASE_MODE" "$VERSION" "$BASE_VERSION"
 
       - name: Upload sdist artifact
         if: ${{ needs.verify-tag.outputs.release_mode == 'dry-run' }}
@@ -678,6 +454,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
       - name: Load CI versions
         shell: bash
         run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
@@ -706,40 +485,14 @@ jobs:
         shell: bash
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: |
-          set -euo pipefail
-          export RUSTFLAGS="--remap-path-prefix=$(pwd)=."
-          cargo build -p openpit-ffi --release --locked --target "${{ matrix.target }}"
+        run: just --justfile "$JUSTFILE" build-ffi-target "${{ matrix.target }}"
 
       - name: Package artifact (unix)
         if: runner.os != 'Windows'
         shell: bash
         env:
           VERSION: ${{ needs.verify-tag.outputs.version }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          SRC="target/${{ matrix.target }}/release/${{ matrix.lib_name }}"
-
-          if command -v strip >/dev/null 2>&1; then
-            if strip --help 2>&1 | grep -q -- '--strip-unneeded'; then
-              strip --strip-unneeded "${SRC}" || true
-            else
-              strip -x "${SRC}" || true
-            fi
-          fi
-
-          DST="dist/openpit-ffi--${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.lib_name }}"
-          cp "${SRC}" "${DST}"
-          cp bindings/c/pit.h dist/pit.h
-          cp LICENSE dist/LICENSE
-          cp OWNERS dist/OWNERS
-
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "${DST}" | awk '{print $1}' > "${DST}.sha256"
-          else
-            shasum -a 256 "${DST}" | awk '{print $1}' > "${DST}.sha256"
-          fi
+        run: just --justfile "$JUSTFILE" package-runtime "${{ matrix.target }}" "${{ matrix.goos }}" "${{ matrix.goarch }}" "${{ matrix.lib_name }}"
 
       - name: Package artifact (windows)
         if: runner.os == 'Windows'
@@ -751,7 +504,7 @@ jobs:
           $src = "target/${{ matrix.target }}/release/${{ matrix.lib_name }}"
           $dst = "dist/openpit-ffi--${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.lib_name }}"
           Copy-Item $src $dst -Force
-          Copy-Item bindings/c/pit.h dist/pit.h -Force
+          Copy-Item bindings/c/openpit.h dist/openpit.h -Force
           Copy-Item LICENSE dist/LICENSE -Force
           Copy-Item OWNERS dist/OWNERS -Force
           $hash = (Get-FileHash -Path $dst -Algorithm SHA256).Hash.ToLower()
@@ -805,6 +558,9 @@ jobs:
         shell: bash
         run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
 
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -856,10 +612,7 @@ jobs:
           # monorepo; -f below pierces that ignore inside the mirror only.
           find "${WORKTREE}/internal/runtime" -name .gitkeep -delete
 
-          (
-            cd "${WORKTREE}"
-            env -u OPENPIT_RUNTIME_LIBRARY_PATH -u OPENPIT_RUNTIME_CACHE_DIR go test ./...
-          )
+          just --justfile "$JUSTFILE" test-go-split "${WORKTREE}"
 
           # Remove any injected GitHub Actions auth headers (case variations and scopes)
           unset GITHUB_TOKEN
@@ -994,13 +747,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
 
       - name: Run release e2e
         id: release-e2e
         shell: bash
-        run: ./e2e/run.sh "${{ needs.verify-tag.outputs.version }}"
+        run: just --justfile "$JUSTFILE" test-release-e2e "${{ needs.verify-tag.outputs.version }}"
 
       - name: Summarize release e2e success
         if: ${{ success() }}

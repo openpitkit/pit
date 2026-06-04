@@ -26,7 +26,7 @@ engine = (
 order = openpit.Order(
     operation=openpit.OrderOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.TradeAmount.quantity("100"),
         price=openpit.param.Price("185"),
@@ -61,7 +61,7 @@ else:
 report = openpit.ExecutionReport(
     operation=openpit.ExecutionReportOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
     ),
     financial_impact=openpit.FinancialImpact(

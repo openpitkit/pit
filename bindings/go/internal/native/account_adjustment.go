@@ -34,52 +34,86 @@ func AccountAdjustmentReset(adjustment *AccountAdjustment) {
 	*adjustment = NewAccountAdjustment()
 }
 
+func AccountAdjustmentGetOperationKind(
+	adjustment AccountAdjustment,
+) AccountAdjustmentOperationKind {
+	return adjustment.operation.kind
+}
+
 func AccountAdjustmentGetBalanceOperation(
 	adjustment AccountAdjustment,
-) AccountAdjustmentBalanceOperationOptional {
-	return adjustment.balance_operation
+) AccountAdjustmentBalanceOperation {
+	return adjustment.operation.balance
 }
 
 func AccountAdjustmentGetBalanceOperationView(
 	adjustment *AccountAdjustment,
-) *AccountAdjustmentBalanceOperationOptional {
-	return &adjustment.balance_operation
+) *AccountAdjustmentBalanceOperation {
+	return &adjustment.operation.balance
 }
 
 func AccountAdjustmentSetBalanceOperationAndUnsetPositionOperation(
 	adjustment *AccountAdjustment,
 	operation AccountAdjustmentBalanceOperation,
 ) {
-	AccountAdjustmentBalanceOperationOptionalSet(&adjustment.balance_operation, operation)
-	AccountAdjustmentPositionOperationOptionalReset(&adjustment.position_operation)
+	adjustment.operation.kind = AccountAdjustmentOperationKindBalance
+	adjustment.operation.balance = operation
+	AccountAdjustmentPositionOperationReset(&adjustment.operation.position)
+}
+
+func AccountAdjustmentSelectBalanceOperationAndUnsetPositionOperation(
+	adjustment *AccountAdjustment,
+) {
+	if adjustment.operation.kind != AccountAdjustmentOperationKindBalance {
+		AccountAdjustmentBalanceOperationReset(&adjustment.operation.balance)
+	}
+	adjustment.operation.kind = AccountAdjustmentOperationKindBalance
+	AccountAdjustmentPositionOperationReset(&adjustment.operation.position)
 }
 
 func AccountAdjustmentUnsetBalanceOperation(adjustment *AccountAdjustment) {
-	AccountAdjustmentBalanceOperationOptionalReset(&adjustment.balance_operation)
+	if adjustment.operation.kind == AccountAdjustmentOperationKindBalance {
+		adjustment.operation.kind = AccountAdjustmentOperationKindAbsent
+	}
+	AccountAdjustmentBalanceOperationReset(&adjustment.operation.balance)
 }
 
 func AccountAdjustmentGetPositionOperation(
 	adjustment AccountAdjustment,
-) AccountAdjustmentPositionOperationOptional {
-	return adjustment.position_operation
+) AccountAdjustmentPositionOperation {
+	return adjustment.operation.position
 }
 
 func AccountAdjustmentGetPositionOperationView(
 	adjustment *AccountAdjustment,
-) *AccountAdjustmentPositionOperationOptional {
-	return &adjustment.position_operation
+) *AccountAdjustmentPositionOperation {
+	return &adjustment.operation.position
 }
 
 func AccountAdjustmentSetPositionOperationAndUnsetBalanceOperation(
 	adjustment *AccountAdjustment,
 	operation AccountAdjustmentPositionOperation,
 ) {
-	AccountAdjustmentPositionOperationOptionalSet(&adjustment.position_operation, operation)
-	AccountAdjustmentBalanceOperationOptionalReset(&adjustment.balance_operation)
+	adjustment.operation.kind = AccountAdjustmentOperationKindPosition
+	adjustment.operation.position = operation
+	AccountAdjustmentBalanceOperationReset(&adjustment.operation.balance)
+}
+
+func AccountAdjustmentSelectPositionOperationAndUnsetBalanceOperation(
+	adjustment *AccountAdjustment,
+) {
+	if adjustment.operation.kind != AccountAdjustmentOperationKindPosition {
+		AccountAdjustmentPositionOperationReset(&adjustment.operation.position)
+	}
+	adjustment.operation.kind = AccountAdjustmentOperationKindPosition
+	AccountAdjustmentBalanceOperationReset(&adjustment.operation.balance)
 }
 
 func AccountAdjustmentUnsetPositionOperation(adjustment *AccountAdjustment) {
-	AccountAdjustmentPositionOperationOptionalReset(&adjustment.position_operation)
+	if adjustment.operation.kind == AccountAdjustmentOperationKindPosition {
+		adjustment.operation.kind = AccountAdjustmentOperationKindAbsent
+	}
+	AccountAdjustmentPositionOperationReset(&adjustment.operation.position)
 }
 
 func AccountAdjustmentGetAmount(adjustment AccountAdjustment) AccountAdjustmentAmountOptional {
@@ -124,86 +158,6 @@ func AccountAdjustmentGetUserData(adjustment AccountAdjustment) unsafe.Pointer {
 
 func AccountAdjustmentSetUserData(adjustment *AccountAdjustment, userData unsafe.Pointer) {
 	adjustment.user_data = userData
-}
-
-//------------------------------------------------------------------------------
-// AccountAdjustmentBalanceOperationOptional
-
-func NewAccountAdjustmentBalanceOperationOptional() AccountAdjustmentBalanceOperationOptional {
-	return AccountAdjustmentBalanceOperationOptional{}
-}
-
-func AccountAdjustmentBalanceOperationOptionalReset(
-	operation *AccountAdjustmentBalanceOperationOptional,
-) {
-	AccountAdjustmentBalanceOperationReset(&operation.value)
-	operation.is_set = false
-}
-
-func AccountAdjustmentBalanceOperationOptionalIsSet(
-	value AccountAdjustmentBalanceOperationOptional,
-) bool {
-	return bool(value.is_set)
-}
-
-func AccountAdjustmentBalanceOperationOptionalGet(
-	value AccountAdjustmentBalanceOperationOptional,
-) AccountAdjustmentBalanceOperation {
-	return value.value
-}
-
-func AccountAdjustmentBalanceOperationOptionalGetView(
-	value *AccountAdjustmentBalanceOperationOptional,
-) *AccountAdjustmentBalanceOperation {
-	return &value.value
-}
-
-func AccountAdjustmentBalanceOperationOptionalSet(
-	value *AccountAdjustmentBalanceOperationOptional,
-	operation AccountAdjustmentBalanceOperation,
-) {
-	value.value = operation
-	value.is_set = true
-}
-
-//------------------------------------------------------------------------------
-// AccountAdjustmentPositionOperationOptional
-
-func NewAccountAdjustmentPositionOperationOptional() AccountAdjustmentPositionOperationOptional {
-	return AccountAdjustmentPositionOperationOptional{}
-}
-
-func AccountAdjustmentPositionOperationOptionalReset(
-	operation *AccountAdjustmentPositionOperationOptional,
-) {
-	AccountAdjustmentPositionOperationReset(&operation.value)
-	operation.is_set = false
-}
-
-func AccountAdjustmentPositionOperationOptionalIsSet(
-	value AccountAdjustmentPositionOperationOptional,
-) bool {
-	return bool(value.is_set)
-}
-
-func AccountAdjustmentPositionOperationOptionalGet(
-	value AccountAdjustmentPositionOperationOptional,
-) AccountAdjustmentPositionOperation {
-	return value.value
-}
-
-func AccountAdjustmentPositionOperationOptionalGetView(
-	value *AccountAdjustmentPositionOperationOptional,
-) *AccountAdjustmentPositionOperation {
-	return &value.value
-}
-
-func AccountAdjustmentPositionOperationOptionalSet(
-	value *AccountAdjustmentPositionOperationOptional,
-	operation AccountAdjustmentPositionOperation,
-) {
-	value.value = operation
-	value.is_set = true
 }
 
 //------------------------------------------------------------------------------

@@ -35,7 +35,7 @@ class StrategyOrder(openpit.Order):
                     "USD",
                 ),
                 side=openpit.param.Side.BUY,
-                account_id=openpit.param.AccountId.from_u64(99224416),
+                account_id=openpit.param.AccountId.from_int(99224416),
                 trade_amount=openpit.param.TradeAmount.quantity(10),
                 price=openpit.param.Price(25),
             ),
@@ -57,7 +57,7 @@ class StrategyReport(openpit.ExecutionReport):
                     "USD",
                 ),
                 side=openpit.param.Side.BUY,
-                account_id=openpit.param.AccountId.from_u64(99224416),
+                account_id=openpit.param.AccountId.from_int(99224416),
             ),
             financial_impact=openpit.FinancialImpact(
                 pnl=openpit.param.Pnl(5),
@@ -94,10 +94,11 @@ class CaptureStrategyOrderStartCheck(openpit.pretrade.Policy):
     # @typing.override
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
     ) -> bool:
         strategy_report = typing.cast(StrategyReport, report)
+        _ = ctx
         self.reports.append(report)
         self.report_tags.append(strategy_report.report_tag)
         return False
@@ -143,10 +144,11 @@ class StrategyTagPolicy(openpit.pretrade.Policy):
     # @typing.override
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
     ) -> bool:
         strategy_report = typing.cast(StrategyReport, report)
+        _ = ctx
         self.reports.append(report)
         self.report_tags.append(strategy_report.report_tag)
         return False

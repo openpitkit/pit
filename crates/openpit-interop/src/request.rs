@@ -28,9 +28,9 @@ use openpit::{
     HasAccountAdjustmentPositionLeverage, HasAccountId, HasAutoBorrow, HasAverageEntryPrice,
     HasBalanceAsset, HasClosePosition, HasCollateralAsset, HasExecutionReportIsFinal,
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
-    HasFee, HasInstrument, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
-    HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode, HasReduceOnly, HasSide,
-    HasTradeAmount, Instrument, RequestFieldAccessError,
+    HasFee, HasInstrument, HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage,
+    HasOrderPositionSide, HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode,
+    HasPreTradeLock, HasReduceOnly, HasSide, HasTradeAmount, Instrument, RequestFieldAccessError,
 };
 
 use crate::{
@@ -197,6 +197,24 @@ impl HasExecutionReportPositionSide for ExecutionReport {
     }
 }
 
+impl HasLeavesQuantity for ExecutionReport {
+    fn leaves_quantity(&self) -> Result<openpit::param::Quantity, RequestFieldAccessError> {
+        self.fill.leaves_quantity()
+    }
+}
+
+impl HasPreTradeLock for ExecutionReport {
+    fn lock(&self) -> Result<openpit::pretrade::PreTradeLock, RequestFieldAccessError> {
+        self.fill.lock()
+    }
+}
+
+impl HasOrderPrice for ExecutionReport {
+    fn price(&self) -> Result<Option<openpit::param::Price>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+
 /// Root account-adjustment aggregate carrying access groups for all adjustment fields.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountAdjustment {
@@ -341,218 +359,252 @@ impl<Request: Default, Payload: Default> Default for RequestWithPayload<Request,
     }
 }
 
-impl<R: HasInstrument, P> HasInstrument for RequestWithPayload<R, P> {
+impl<Request: HasInstrument, Payload> HasInstrument for RequestWithPayload<Request, Payload> {
     fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
         self.request.instrument()
     }
 }
 
-impl<R: HasSide, P> HasSide for RequestWithPayload<R, P> {
+impl<Request: HasSide, Payload> HasSide for RequestWithPayload<Request, Payload> {
     fn side(&self) -> Result<Side, RequestFieldAccessError> {
         self.request.side()
     }
 }
 
-impl<R: HasAccountId, P> HasAccountId for RequestWithPayload<R, P> {
+impl<Request: HasAccountId, Payload> HasAccountId for RequestWithPayload<Request, Payload> {
     fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
         self.request.account_id()
     }
 }
 
-impl<R: HasTradeAmount, P> HasTradeAmount for RequestWithPayload<R, P> {
+impl<Request: HasTradeAmount, Payload> HasTradeAmount for RequestWithPayload<Request, Payload> {
     fn trade_amount(&self) -> Result<TradeAmount, RequestFieldAccessError> {
         self.request.trade_amount()
     }
 }
 
-impl<R: HasOrderPrice, P> HasOrderPrice for RequestWithPayload<R, P> {
+impl<Request: HasOrderPrice, Payload> HasOrderPrice for RequestWithPayload<Request, Payload> {
     fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
         self.request.price()
     }
 }
 
-impl<R: HasOrderPositionSide, P> HasOrderPositionSide for RequestWithPayload<R, P> {
+impl<Request: HasOrderPositionSide, Payload> HasOrderPositionSide
+    for RequestWithPayload<Request, Payload>
+{
     fn position_side(&self) -> Result<Option<PositionSide>, RequestFieldAccessError> {
         self.request.position_side()
     }
 }
 
-impl<R: HasReduceOnly, P> HasReduceOnly for RequestWithPayload<R, P> {
+impl<Request: HasReduceOnly, Payload> HasReduceOnly for RequestWithPayload<Request, Payload> {
     fn reduce_only(&self) -> Result<bool, RequestFieldAccessError> {
         self.request.reduce_only()
     }
 }
 
-impl<R: HasClosePosition, P> HasClosePosition for RequestWithPayload<R, P> {
+impl<Request: HasClosePosition, Payload> HasClosePosition for RequestWithPayload<Request, Payload> {
     fn close_position(&self) -> Result<bool, RequestFieldAccessError> {
         self.request.close_position()
     }
 }
 
-impl<R: HasOrderLeverage, P> HasOrderLeverage for RequestWithPayload<R, P> {
+impl<Request: HasOrderLeverage, Payload> HasOrderLeverage for RequestWithPayload<Request, Payload> {
     fn leverage(&self) -> Result<Option<Leverage>, RequestFieldAccessError> {
         self.request.leverage()
     }
 }
 
-impl<R: HasOrderCollateralAsset, P> HasOrderCollateralAsset for RequestWithPayload<R, P> {
+impl<Request: HasOrderCollateralAsset, Payload> HasOrderCollateralAsset
+    for RequestWithPayload<Request, Payload>
+{
     fn collateral_asset(&self) -> Result<Option<&Asset>, RequestFieldAccessError> {
         self.request.collateral_asset()
     }
 }
 
-impl<R: HasAutoBorrow, P> HasAutoBorrow for RequestWithPayload<R, P> {
+impl<Request: HasAutoBorrow, Payload> HasAutoBorrow for RequestWithPayload<Request, Payload> {
     fn auto_borrow(&self) -> Result<bool, RequestFieldAccessError> {
         self.request.auto_borrow()
     }
 }
 
-impl<R: HasPnl, P> HasPnl for RequestWithPayload<R, P> {
+impl<Request: HasPnl, Payload> HasPnl for RequestWithPayload<Request, Payload> {
     fn pnl(&self) -> Result<Pnl, RequestFieldAccessError> {
         self.request.pnl()
     }
 }
 
-impl<R: HasFee, P> HasFee for RequestWithPayload<R, P> {
+impl<Request: HasFee, Payload> HasFee for RequestWithPayload<Request, Payload> {
     fn fee(&self) -> Result<Fee, RequestFieldAccessError> {
         self.request.fee()
     }
 }
 
-impl<R: HasExecutionReportLastTrade, P> HasExecutionReportLastTrade for RequestWithPayload<R, P> {
+impl<Request: HasLeavesQuantity, Payload> HasLeavesQuantity
+    for RequestWithPayload<Request, Payload>
+{
+    fn leaves_quantity(&self) -> Result<openpit::param::Quantity, RequestFieldAccessError> {
+        self.request.leaves_quantity()
+    }
+}
+
+impl<Request: HasPreTradeLock, Payload> HasPreTradeLock for RequestWithPayload<Request, Payload> {
+    fn lock(&self) -> Result<openpit::pretrade::PreTradeLock, RequestFieldAccessError> {
+        self.request.lock()
+    }
+}
+
+impl<Request: HasExecutionReportLastTrade, Payload> HasExecutionReportLastTrade
+    for RequestWithPayload<Request, Payload>
+{
     fn last_trade(&self) -> Result<Option<Trade>, RequestFieldAccessError> {
         self.request.last_trade()
     }
 }
 
-impl<R: HasExecutionReportIsFinal, P> HasExecutionReportIsFinal for RequestWithPayload<R, P> {
+impl<Request: HasExecutionReportIsFinal, Payload> HasExecutionReportIsFinal
+    for RequestWithPayload<Request, Payload>
+{
     fn is_final(&self) -> Result<bool, RequestFieldAccessError> {
         self.request.is_final()
     }
 }
 
-impl<R: HasExecutionReportPositionEffect, P> HasExecutionReportPositionEffect
-    for RequestWithPayload<R, P>
+impl<Request: HasExecutionReportPositionEffect, Payload> HasExecutionReportPositionEffect
+    for RequestWithPayload<Request, Payload>
 {
     fn position_effect(&self) -> Result<Option<PositionEffect>, RequestFieldAccessError> {
         self.request.position_effect()
     }
 }
 
-impl<R: HasExecutionReportPositionSide, P> HasExecutionReportPositionSide
-    for RequestWithPayload<R, P>
+impl<Request: HasExecutionReportPositionSide, Payload> HasExecutionReportPositionSide
+    for RequestWithPayload<Request, Payload>
 {
     fn position_side(&self) -> Result<Option<PositionSide>, RequestFieldAccessError> {
         self.request.position_side()
     }
 }
 
-impl<R: HasBalanceAsset, P> HasBalanceAsset for RequestWithPayload<R, P> {
+impl<Request: HasBalanceAsset, Payload> HasBalanceAsset for RequestWithPayload<Request, Payload> {
     fn balance_asset(&self) -> Result<&Asset, RequestFieldAccessError> {
         self.request.balance_asset()
     }
 }
 
-impl<R: HasAccountAdjustmentBalanceAverageEntryPrice, P>
-    HasAccountAdjustmentBalanceAverageEntryPrice for RequestWithPayload<R, P>
+impl<Request: HasAccountAdjustmentBalanceAverageEntryPrice, Payload>
+    HasAccountAdjustmentBalanceAverageEntryPrice for RequestWithPayload<Request, Payload>
 {
     fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
         self.request.balance_average_entry_price()
     }
 }
 
-impl<R: HasPositionInstrument, P> HasPositionInstrument for RequestWithPayload<R, P> {
+impl<Request: HasPositionInstrument, Payload> HasPositionInstrument
+    for RequestWithPayload<Request, Payload>
+{
     fn position_instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
         self.request.position_instrument()
     }
 }
 
-impl<R: HasCollateralAsset, P> HasCollateralAsset for RequestWithPayload<R, P> {
+impl<Request: HasCollateralAsset, Payload> HasCollateralAsset
+    for RequestWithPayload<Request, Payload>
+{
     fn collateral_asset(&self) -> Result<&Asset, RequestFieldAccessError> {
         self.request.collateral_asset()
     }
 }
 
-impl<R: HasAverageEntryPrice, P> HasAverageEntryPrice for RequestWithPayload<R, P> {
+impl<Request: HasAverageEntryPrice, Payload> HasAverageEntryPrice
+    for RequestWithPayload<Request, Payload>
+{
     fn average_entry_price(&self) -> Result<Price, RequestFieldAccessError> {
         self.request.average_entry_price()
     }
 }
 
-impl<R: HasPositionMode, P> HasPositionMode for RequestWithPayload<R, P> {
+impl<Request: HasPositionMode, Payload> HasPositionMode for RequestWithPayload<Request, Payload> {
     fn position_mode(&self) -> Result<PositionMode, RequestFieldAccessError> {
         self.request.position_mode()
     }
 }
 
-impl<R: HasAccountAdjustmentPositionLeverage, P> HasAccountAdjustmentPositionLeverage
-    for RequestWithPayload<R, P>
+impl<Request: HasAccountAdjustmentPositionLeverage, Payload> HasAccountAdjustmentPositionLeverage
+    for RequestWithPayload<Request, Payload>
 {
     fn position_leverage(&self) -> Result<Option<Leverage>, RequestFieldAccessError> {
         self.request.position_leverage()
     }
 }
 
-impl<R: HasAccountAdjustmentBalance, P> HasAccountAdjustmentBalance for RequestWithPayload<R, P> {
+impl<Request: HasAccountAdjustmentBalance, Payload> HasAccountAdjustmentBalance
+    for RequestWithPayload<Request, Payload>
+{
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         self.request.balance()
     }
 }
 
-impl<R: HasAccountAdjustmentHeld, P> HasAccountAdjustmentHeld for RequestWithPayload<R, P> {
+impl<Request: HasAccountAdjustmentHeld, Payload> HasAccountAdjustmentHeld
+    for RequestWithPayload<Request, Payload>
+{
     fn held(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         self.request.held()
     }
 }
 
-impl<R: HasAccountAdjustmentIncoming, P> HasAccountAdjustmentIncoming for RequestWithPayload<R, P> {
+impl<Request: HasAccountAdjustmentIncoming, Payload> HasAccountAdjustmentIncoming
+    for RequestWithPayload<Request, Payload>
+{
     fn incoming(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         self.request.incoming()
     }
 }
 
-impl<R: HasAccountAdjustmentBalanceUpperBound, P> HasAccountAdjustmentBalanceUpperBound
-    for RequestWithPayload<R, P>
+impl<Request: HasAccountAdjustmentBalanceUpperBound, Payload> HasAccountAdjustmentBalanceUpperBound
+    for RequestWithPayload<Request, Payload>
 {
     fn balance_upper(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
         self.request.balance_upper()
     }
 }
 
-impl<R: HasAccountAdjustmentBalanceLowerBound, P> HasAccountAdjustmentBalanceLowerBound
-    for RequestWithPayload<R, P>
+impl<Request: HasAccountAdjustmentBalanceLowerBound, Payload> HasAccountAdjustmentBalanceLowerBound
+    for RequestWithPayload<Request, Payload>
 {
     fn balance_lower(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
         self.request.balance_lower()
     }
 }
 
-impl<R: HasAccountAdjustmentHeldUpperBound, P> HasAccountAdjustmentHeldUpperBound
-    for RequestWithPayload<R, P>
+impl<Request: HasAccountAdjustmentHeldUpperBound, Payload> HasAccountAdjustmentHeldUpperBound
+    for RequestWithPayload<Request, Payload>
 {
     fn held_upper(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
         self.request.held_upper()
     }
 }
 
-impl<R: HasAccountAdjustmentHeldLowerBound, P> HasAccountAdjustmentHeldLowerBound
-    for RequestWithPayload<R, P>
+impl<Request: HasAccountAdjustmentHeldLowerBound, Payload> HasAccountAdjustmentHeldLowerBound
+    for RequestWithPayload<Request, Payload>
 {
     fn held_lower(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
         self.request.held_lower()
     }
 }
 
-impl<R: HasAccountAdjustmentIncomingUpperBound, P> HasAccountAdjustmentIncomingUpperBound
-    for RequestWithPayload<R, P>
+impl<Request: HasAccountAdjustmentIncomingUpperBound, Payload>
+    HasAccountAdjustmentIncomingUpperBound for RequestWithPayload<Request, Payload>
 {
     fn incoming_upper(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
         self.request.incoming_upper()
     }
 }
 
-impl<R: HasAccountAdjustmentIncomingLowerBound, P> HasAccountAdjustmentIncomingLowerBound
-    for RequestWithPayload<R, P>
+impl<Request: HasAccountAdjustmentIncomingLowerBound, Payload>
+    HasAccountAdjustmentIncomingLowerBound for RequestWithPayload<Request, Payload>
 {
     fn incoming_lower(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
         self.request.incoming_lower()
@@ -668,7 +720,7 @@ mod tests {
         };
         let wrapped = RequestWithPayload::new(adjustment, ());
         assert!(wrapped.balance_asset().is_err());
-        assert!(wrapped.balance().is_err());
-        assert!(wrapped.balance_upper().is_err());
+        assert_eq!(wrapped.balance(), Ok(None));
+        assert_eq!(wrapped.balance_upper(), Ok(None));
     }
 }

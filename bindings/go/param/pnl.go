@@ -42,7 +42,7 @@ type Pnl struct {
 	native native.ParamPnl
 }
 
-var newPnlZero = sync.OnceValue(func() Pnl { return newPnlOrPanic(NewPnlFromInt(0)) })
+var newPnlZero = sync.OnceValue(func() Pnl { return newPnlOrPanic(NewPnlFromInt64(0)) })
 
 // NewPnlZero returns the canonical zero value of Pnl.
 func NewPnlZero() Pnl { return newPnlZero() }
@@ -70,25 +70,25 @@ func NewPnlFromDecimal(v decimal.Decimal) (Pnl, error) {
 
 // NewPnlFromString creates a Pnl from a decimal string.
 func NewPnlFromString(v string) (Pnl, error) {
-	nativeValue, err := native.CreateParamPnlFromStr(v)
+	nativeValue, err := native.CreateParamPnlFromString(v)
 	if err != nil {
 		return Pnl{}, err
 	}
 	return NewPnlFromHandle(nativeValue), nil
 }
 
-// NewPnlFromInt creates a Pnl from a signed integer.
-func NewPnlFromInt(v int64) (Pnl, error) {
-	nativeValue, err := native.CreateParamPnlFromI64(v)
+// NewPnlFromInt64 creates a Pnl from a signed integer.
+func NewPnlFromInt64(v int64) (Pnl, error) {
+	nativeValue, err := native.CreateParamPnlFromInt64(v)
 	if err != nil {
 		return Pnl{}, err
 	}
 	return NewPnlFromHandle(nativeValue), nil
 }
 
-// NewPnlFromUint creates a Pnl from an unsigned integer.
-func NewPnlFromUint(v uint64) (Pnl, error) {
-	nativeValue, err := native.CreateParamPnlFromU64(v)
+// NewPnlFromUint64 creates a Pnl from an unsigned integer.
+func NewPnlFromUint64(v uint64) (Pnl, error) {
+	nativeValue, err := native.CreateParamPnlFromUint64(v)
 	if err != nil {
 		return Pnl{}, err
 	}
@@ -131,7 +131,7 @@ func NewPnlFromStringRounded(
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Pnl, error) {
-	nativeValue, err := native.CreateParamPnlFromStrRounded(v, scale, strategy.native())
+	nativeValue, err := native.CreateParamPnlFromStringRounded(v, scale, strategy.native())
 	if err != nil {
 		return Pnl{}, err
 	}

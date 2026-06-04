@@ -128,6 +128,19 @@ pub enum RejectCode {
     OrderValueCalculationFailed,
     /// Risk system is temporarily unavailable.
     SystemUnavailable,
+    /// Mark price required for order evaluation is unavailable.
+    MarkPriceUnavailable,
+    /// Account adjustment would violate its configured bounds.
+    AccountAdjustmentBoundsExceeded,
+    /// Underlying decimal arithmetic overflowed during evaluation.
+    ///
+    /// Distinct from [`Self::OrderValueCalculationFailed`]: that code
+    /// signals that an order value could not be produced for any
+    /// reason (missing input, invalid result, division by zero),
+    /// while this code is reserved for the specific case where a
+    /// `checked_add`/`checked_sub`/`checked_mul` exceeded the value
+    /// range of the underlying decimal representation.
+    ArithmeticOverflow,
     /// Reserved discriminant for caller-defined reject classes.
     ///
     /// Use together with `Reject::with_user_data` to attach a caller-defined
@@ -181,6 +194,9 @@ impl RejectCode {
             Self::ReferenceDataUnavailable => "ReferenceDataUnavailable",
             Self::OrderValueCalculationFailed => "OrderValueCalculationFailed",
             Self::SystemUnavailable => "SystemUnavailable",
+            Self::MarkPriceUnavailable => "MarkPriceUnavailable",
+            Self::AccountAdjustmentBoundsExceeded => "AccountAdjustmentBoundsExceeded",
+            Self::ArithmeticOverflow => "ArithmeticOverflow",
             Self::Custom => "Custom",
             Self::Other => "Other",
         }
@@ -480,6 +496,12 @@ mod tests {
                 "OrderValueCalculationFailed",
             ),
             (RejectCode::SystemUnavailable, "SystemUnavailable"),
+            (RejectCode::MarkPriceUnavailable, "MarkPriceUnavailable"),
+            (
+                RejectCode::AccountAdjustmentBoundsExceeded,
+                "AccountAdjustmentBoundsExceeded",
+            ),
+            (RejectCode::ArithmeticOverflow, "ArithmeticOverflow"),
             (RejectCode::Custom, "Custom"),
             (RejectCode::Other, "Other"),
         ];

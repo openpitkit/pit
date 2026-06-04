@@ -37,6 +37,8 @@ func (fakePreTradePolicy) Close() {}
 
 func (p fakePreTradePolicy) Name() string { return p.name }
 
+func (fakePreTradePolicy) PolicyGroupID() model.PolicyGroupID { return model.DefaultPolicyGroupID }
+
 func (fakePreTradePolicy) CheckPreTradeStart(
 	_ pretrade.Context,
 	_ model.Order,
@@ -48,11 +50,16 @@ func (fakePreTradePolicy) PerformPreTradeCheck(
 	_ pretrade.Context,
 	_ model.Order,
 	_ tx.Mutations,
+	_ pretrade.Result,
 ) []reject.Reject {
 	return nil
 }
 
-func (fakePreTradePolicy) ApplyExecutionReport(_ model.ExecutionReport) []reject.AccountBlock {
+func (fakePreTradePolicy) ApplyExecutionReport(
+	_ pretrade.PostTradeContext,
+	_ model.ExecutionReport,
+	_ pretrade.PostTradeAdjustments,
+) []reject.AccountBlock {
 	return nil
 }
 
@@ -61,6 +68,7 @@ func (fakePreTradePolicy) ApplyAccountAdjustment(
 	_ param.AccountID,
 	_ model.AccountAdjustment,
 	_ tx.Mutations,
+	_ pretrade.AccountOutcomes,
 ) []reject.Reject {
 	return nil
 }

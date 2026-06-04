@@ -47,8 +47,10 @@ struct RecordingAdjustmentPolicy {
     reject_on_asset: Option<String>,
 }
 
-impl<Order, ExecutionReport> PreTradePolicy<Order, ExecutionReport, TestAdjustment>
+impl<Order, ExecutionReport, Sync> PreTradePolicy<Order, ExecutionReport, TestAdjustment, Sync>
     for RecordingAdjustmentPolicy
+where
+    Sync: openpit::SyncMode,
 {
     fn name(&self) -> &'static str {
         self.name
@@ -56,11 +58,11 @@ impl<Order, ExecutionReport> PreTradePolicy<Order, ExecutionReport, TestAdjustme
 
     fn apply_account_adjustment(
         &self,
-        _ctx: &AccountAdjustmentContext,
+        _ctx: &AccountAdjustmentContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
         account_id: AccountId,
         adjustment: &TestAdjustment,
         _mutations: &mut Mutations,
-    ) -> Result<(), Rejects> {
+    ) -> Result<Vec<openpit::AccountOutcomeEntry>, Rejects> {
         self.seen_account_ids.borrow_mut().push(account_id);
         let asset_code = adjustment
             .balance_asset()
@@ -76,7 +78,7 @@ impl<Order, ExecutionReport> PreTradePolicy<Order, ExecutionReport, TestAdjustme
                 format!("asset {} blocked by test policy", asset_code),
             )));
         }
-        Ok(())
+        Ok(Vec::new())
     }
 }
 
@@ -91,8 +93,10 @@ struct MutatingRecordingPolicy {
     reject_on_asset: Option<String>,
 }
 
-impl<Order, ExecutionReport> PreTradePolicy<Order, ExecutionReport, TestAdjustment>
+impl<Order, ExecutionReport, Sync> PreTradePolicy<Order, ExecutionReport, TestAdjustment, Sync>
     for MutatingRecordingPolicy
+where
+    Sync: openpit::SyncMode,
 {
     fn name(&self) -> &'static str {
         self.name
@@ -100,11 +104,11 @@ impl<Order, ExecutionReport> PreTradePolicy<Order, ExecutionReport, TestAdjustme
 
     fn apply_account_adjustment(
         &self,
-        _ctx: &AccountAdjustmentContext,
+        _ctx: &AccountAdjustmentContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
         _account_id: AccountId,
         adjustment: &TestAdjustment,
         mutations: &mut Mutations,
-    ) -> Result<(), Rejects> {
+    ) -> Result<Vec<openpit::AccountOutcomeEntry>, Rejects> {
         let asset = adjustment
             .balance_asset()
             .expect("balance_asset must be accessible")
@@ -134,7 +138,7 @@ impl<Order, ExecutionReport> PreTradePolicy<Order, ExecutionReport, TestAdjustme
             },
         ));
 
-        Ok(())
+        Ok(Vec::new())
     }
 }
 

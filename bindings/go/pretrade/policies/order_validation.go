@@ -17,20 +17,35 @@
 
 package policies
 
-import "go.openpit.dev/openpit/internal/native"
+import (
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/model"
+)
 
 // OrderValidationBuilder configures the built-in order-validation
-// policy. No parameters are required; the engine accepts it directly.
-type OrderValidationBuilder struct{}
+// policy. No barriers are required; the engine accepts it directly.
+type OrderValidationBuilder struct {
+	policyGroupID model.PolicyGroupID
+}
 
 // BuildOrderValidation returns an order-validation policy builder ready
 // to be passed to the engine.
 func BuildOrderValidation() OrderValidationBuilder {
-	return OrderValidationBuilder{}
+	return OrderValidationBuilder{policyGroupID: model.DefaultPolicyGroupID}
+}
+
+// PolicyGroupID assigns the policy to a pricing group. When not set the
+// policy uses model.DefaultPolicyGroupID.
+func (b OrderValidationBuilder) PolicyGroupID(groupID model.PolicyGroupID) OrderValidationBuilder {
+	b.policyGroupID = groupID
+	return b
 }
 
 // Build registers the built-in order-validation policy on the given
 // engine builder.
-func (OrderValidationBuilder) Build(builder native.EngineBuilder) error {
-	return native.EngineBuilderAddBuiltinOrderValidation(builder)
+func (b OrderValidationBuilder) Build(builder native.EngineBuilder) error {
+	return native.EngineBuilderAddBuiltinOrderValidation(
+		builder,
+		native.PolicyGroupID(b.policyGroupID),
+	)
 }

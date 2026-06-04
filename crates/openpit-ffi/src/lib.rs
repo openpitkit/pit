@@ -16,15 +16,22 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 pub mod account_adjustment;
+pub mod account_control;
+pub mod account_group_id;
+pub mod account_outcome;
+pub mod bytes;
 pub(crate) mod engine;
 pub mod execution_report;
+pub mod group_id;
 pub mod instrument;
 pub mod last_error;
 #[macro_use]
 mod macros;
+pub mod marketdata;
 pub mod order;
 pub mod param;
 pub(crate) mod policy;
+pub mod pre_trade_lock;
 pub(crate) mod reject;
 pub mod string;
 

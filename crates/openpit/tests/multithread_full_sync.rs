@@ -23,7 +23,7 @@ use openpit::param::{AccountId, Asset, Quantity, Side, TradeAmount};
 use openpit::pretrade::policies::{RateLimit, RateLimitBrokerBarrier, RateLimitPolicy};
 use openpit::pretrade::{PreTradeContext, PreTradePolicy};
 use openpit::storage::FullLocking;
-use openpit::{Engine, Instrument, OrderOperation};
+use openpit::{Engine, FullSync, Instrument, OrderOperation};
 
 type TestPolicy = RateLimitPolicy<FullLocking>;
 
@@ -77,9 +77,9 @@ fn rate_limit_full_sync_broker_counter_not_lost_under_concurrent_load() {
             s.spawn(move || {
                 let order = build_order(AccountId::from_u64(tid as u64));
                 for _ in 0..PER_THREAD {
-                    <TestPolicy as PreTradePolicy<OrderOperation, ()>>::check_pre_trade_start(
+                    <TestPolicy as PreTradePolicy<OrderOperation, (), (), FullSync>>::check_pre_trade_start(
                         &policy,
-                        &PreTradeContext::new(),
+                        &PreTradeContext::new(None),
                         &order,
                     )
                     .expect("all calls within limit must pass");
@@ -89,9 +89,9 @@ fn rate_limit_full_sync_broker_counter_not_lost_under_concurrent_load() {
     });
 
     let overflow_order = build_order(AccountId::from_u64(99));
-    <TestPolicy as PreTradePolicy<OrderOperation, ()>>::check_pre_trade_start(
+    <TestPolicy as PreTradePolicy<OrderOperation, (), (), FullSync>>::check_pre_trade_start(
         &policy,
-        &PreTradeContext::new(),
+        &PreTradeContext::new(None),
         &overflow_order,
     )
     .expect_err("call after exhausting limit must be rejected");

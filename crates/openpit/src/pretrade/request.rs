@@ -39,7 +39,7 @@ pub(crate) trait RequestHandle<Order> {
     fn execute(self: Box<Self>) -> Result<PreTradeReservation, Rejects>;
 }
 
-impl<O> std::fmt::Debug for PreTradeRequest<O> {
+impl<Order> std::fmt::Debug for PreTradeRequest<Order> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreTradeRequest").finish_non_exhaustive()
     }
@@ -101,15 +101,17 @@ impl<Order> PreTradeRequest<Order> {
 mod tests {
     use super::PreTradeRequest;
     use crate::pretrade::handle::RequestHandleImpl;
-    use crate::pretrade::PreTradeReservation;
+    use crate::pretrade::{PreTradeLock, PreTradeReservation};
 
     #[test]
     fn execute_consumes_request_and_delegates_to_handle() {
         let request =
             PreTradeRequest::<()>::from_handle(Box::new(RequestHandleImpl::new(Box::new(|| {
-                Ok(PreTradeReservation::from_handle(Box::new(
-                    NoopReservationHandle,
-                )))
+                Ok(PreTradeReservation::from_handle(
+                    Box::new(NoopReservationHandle),
+                    PreTradeLock::default(),
+                    Vec::new(),
+                ))
             }))));
 
         let mut reservation = request.execute().expect("request execution must succeed");
@@ -120,9 +122,11 @@ mod tests {
     fn execute_can_finalize_returned_reservation_with_rollback() {
         let request =
             PreTradeRequest::<()>::from_handle(Box::new(RequestHandleImpl::new(Box::new(|| {
-                Ok(PreTradeReservation::from_handle(Box::new(
-                    NoopReservationHandle,
-                )))
+                Ok(PreTradeReservation::from_handle(
+                    Box::new(NoopReservationHandle),
+                    PreTradeLock::default(),
+                    Vec::new(),
+                ))
             }))));
 
         let mut reservation = request.execute().expect("request execution must succeed");
@@ -133,9 +137,11 @@ mod tests {
     fn debug_format_is_opaque() {
         let request =
             PreTradeRequest::<()>::from_handle(Box::new(RequestHandleImpl::new(Box::new(|| {
-                Ok(PreTradeReservation::from_handle(Box::new(
-                    NoopReservationHandle,
-                )))
+                Ok(PreTradeReservation::from_handle(
+                    Box::new(NoopReservationHandle),
+                    PreTradeLock::default(),
+                    Vec::new(),
+                ))
             }))));
         assert!(format!("{request:?}").contains("PreTradeRequest"));
         drop(request.execute());
@@ -147,9 +153,5 @@ mod tests {
         fn commit(self: Box<Self>) {}
 
         fn rollback(self: Box<Self>) {}
-
-        fn lock(&self) -> crate::pretrade::PreTradeLock {
-            crate::pretrade::PreTradeLock::default()
-        }
     }
 }

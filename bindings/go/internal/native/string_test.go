@@ -70,9 +70,9 @@ func TestStringViewSafeAndUnsafeRoundTrip(t *testing.T) {
 }
 
 func TestConsumeSharedStringSuccessPath(t *testing.T) {
-	price, err := CreateParamPriceFromStr("123.45")
+	price, err := CreateParamPriceFromString("123.45")
 	if err != nil {
-		t.Fatalf("CreateParamPriceFromStr() error = %v", err)
+		t.Fatalf("CreateParamPriceFromString() error = %v", err)
 	}
 
 	text, err := ParamPriceToString(price)

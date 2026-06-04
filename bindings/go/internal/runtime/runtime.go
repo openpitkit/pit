@@ -18,6 +18,8 @@
 package runtime
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"runtime"
 )
@@ -33,3 +35,17 @@ func GetName() (string, error) {
 // Load returns the embedded FFI runtime library for the current platform.
 // Returns library bytes, expected filename, and error if unavailable.
 func Load() ([]byte, string, error) { return load() }
+
+// Hash returns the lowercase hex SHA-256 digest of the embedded FFI runtime
+// library for the current platform. The loader keys its extraction cache on
+// this value so that a changed embedded artifact maps to a distinct cache
+// location and a stale extraction is never reused. Computed per process from
+// the embedded bytes; returns an error on unsupported platforms.
+func Hash() (string, error) {
+	data, _, err := load()
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}

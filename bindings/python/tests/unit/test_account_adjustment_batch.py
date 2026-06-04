@@ -103,7 +103,7 @@ def test_pre_trade_passes_when_none_returned() -> None:
     )
 
     result = engine.apply_account_adjustment(
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         adjustments=[_make_adjustment()],
     )
 
@@ -123,7 +123,7 @@ def test_pre_trade_rejects_batch() -> None:
     )
 
     result = engine.apply_account_adjustment(
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         adjustments=[_make_adjustment(pending="2")],
     )
 
@@ -141,7 +141,7 @@ def test_account_adjustment_batch_stops_on_first_reject() -> None:
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
 
     result = engine.apply_account_adjustment(
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         adjustments=[
             _make_adjustment(pending="1"),
             _make_adjustment(pending="2"),
@@ -164,7 +164,7 @@ def test_pre_trade_passes_with_mutations() -> None:
     )
 
     result = engine.apply_account_adjustment(
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         adjustments=[_make_adjustment()],
     )
 
@@ -183,7 +183,7 @@ def test_pre_trade_none_and_mutations_interleaved() -> None:
     )
 
     result = engine.apply_account_adjustment(
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         adjustments=[_make_adjustment()],
     )
 
@@ -202,7 +202,7 @@ def test_account_adjustment_mutations_do_not_prevent_reject() -> None:
     )
 
     result = engine.apply_account_adjustment(
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         adjustments=[_make_adjustment(pending="2")],
     )
 

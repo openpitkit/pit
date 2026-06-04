@@ -10,6 +10,9 @@ on:
 permissions:
   contents: read
 
+env:
+  JUSTFILE: ${{ github.workspace }}/pipeline.just
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -35,25 +38,14 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - name: Setup just
+        uses: extractions/setup-just@v3
 
-      - name: Lint
-        run: cargo clippy --workspace --all-targets --no-default-features --locked -- -D warnings
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
 
-      - name: Lint (all features)
-        run: cargo clippy -p openpit --all-targets --all-features --locked -- -D warnings
-
-      - name: Build documentation
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --workspace --no-deps --all-features --locked
-
-      - name: Test
-        run: cargo test --workspace --locked
-
-      - name: Test (all features)
-        run: cargo test -p openpit --all-features --locked
+      - name: Check Rust
+        run: just --justfile "$JUSTFILE" check-rust-dry
 
   python:
     name: Python checks
@@ -86,28 +78,25 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Create virtual environment
+        run: |
+          python -m venv .venv
+          echo "VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv" >> "$GITHUB_ENV"
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+
       - name: Install Python dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Check Python formatting
-        run: python -m black . --check
+      - name: Setup just
+        uses: extractions/setup-just@v3
 
-      - name: Lint Python
-        run: python -m ruff check .
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
 
-      - name: Install Python bindings
-        run: pip install bindings/python/
-
-      - name: Run Python bindings Rust tests
-        run: cargo test -p openpit-python --locked
-
-      - name: Run Python tests
-        run: python -m pytest bindings/python/tests
-
-      - name: Run Python workspace examples
-        run: python -m pytest examples/python/rate_pnl_killswitch
+      - name: Check Python
+        run: just --justfile "$JUSTFILE" check-python-dry
 
   c:
     name: C checks
@@ -116,17 +105,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify C bindings README example
-        run: |
-          awk 'BEGIN { in_block = 0; first_block = 1 } /^```c$/ { in_block = 1; if (!first_block) print ""; first_block = 0; next } /^```$/ && in_block { in_block = 0; next } in_block { print }' bindings/c/README.md > /tmp/openpit_readme_example.c
-          cc -std=c11 -fsyntax-only -I bindings/c /tmp/openpit_readme_example.c
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
+      - name: Check C
+        run: just --justfile "$JUSTFILE" test-c-examples
 
   go:
     name: Go checks
     runs-on: ubuntu-22.04
-    defaults:
-      run:
-        working-directory: bindings/go
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -148,53 +135,14 @@ jobs:
         with:
           go-version: ${{ env.CI_GO }}
 
-      - name: Build native runtime for Go integration tests
-        run: cargo build -p openpit-ffi --release --locked --manifest-path ../../Cargo.toml
-
-      - name: Export runtime library path
+      - name: Install golangci-lint
         run: |
-          echo "OPENPIT_RUNTIME_LIBRARY_PATH=${GITHUB_WORKSPACE}/target/release/libopenpit_ffi.so" >> "$GITHUB_ENV"
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" "v${CI_GOLANGCI_LINT}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Check formatting
-        run: |
-          test -z "$(gofmt -l .)"
+      - name: Setup just
+        uses: extractions/setup-just@v3
 
-      - name: Vet
-        run: go vet -all ./...
-
-      - name: Lint
-        uses: golangci/golangci-lint-action@v7
-        with:
-          version: v${{ env.CI_GOLANGCI_LINT }}
-          working-directory: bindings/go
-          args: --timeout=5m
-
-      - name: Test
-        run: go test ./...
-
-      - name: Test (race)
-        run: go test -race ./...
-
-      - name: Check workspace Go examples formatting
-        working-directory: examples/go/rate_pnl_killswitch
-        run: |
-          test -z "$(gofmt -l .)"
-
-      - name: Vet workspace Go examples
-        working-directory: examples/go/rate_pnl_killswitch
-        run: go vet -all ./...
-
-      - name: Lint workspace Go examples
-        uses: golangci/golangci-lint-action@v7
-        with:
-          version: v${{ env.CI_GOLANGCI_LINT }}
-          working-directory: examples/go/rate_pnl_killswitch
-          args: --timeout=5m
-
-      - name: Test workspace Go examples
-        working-directory: examples/go/rate_pnl_killswitch
-        run: go test ./...
-
-      - name: Test workspace Go examples (race)
-        working-directory: examples/go/rate_pnl_killswitch
-        run: go test -race ./...
+      - name: Check Go
+        run: just --justfile "$JUSTFILE" check-go-dry

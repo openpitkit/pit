@@ -15,35 +15,86 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-/// Context of the current trade operation.
+use crate::core::{AccountControl, AccountGroups, AccountGroupsHandle, GroupLookup};
+use crate::param::{AccountGroupId, AccountId};
+use crate::storage::{self, StorageBuilder};
+
+/// Context of the current pre-trade operation.
 ///
-/// Operation arguments (order/account data) are passed as explicit method
+/// Carries an [`AccountControl`] bound to the order's account so rollback
+/// closures can record overflow blocks without repeating the account
+/// identifier. The control is `None` when the order carries no recognizable
+/// account identifier; in that case rollback closures must not call
+/// [`AccountControl::block`].
+///
+/// Also exposes the order account's
+/// [`AccountGroupId`](crate::param::AccountGroupId) through
+/// [`account_group`](Self::account_group).
+///
+/// Operation arguments (order data, mutations) are passed as explicit method
 /// arguments and intentionally do not live inside this context.
-pub struct PreTradeContext;
+pub struct PreTradeContext<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    /// Per-account control bound to the order's account, or `None` when the
+    /// account identifier could not be extracted from the order.
+    pub account_control: Option<AccountControl<StorageFactory>>,
+    group_lookup: GroupLookup<StorageFactory>,
+}
 
-impl PreTradeContext {
-    pub fn new() -> Self {
-        Self
+impl<StorageFactory> PreTradeContext<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    pub(crate) fn with_groups(
+        account_control: Option<AccountControl<StorageFactory>>,
+        account_groups: AccountGroupsHandle<StorageFactory>,
+        account: Option<AccountId>,
+    ) -> Self {
+        Self {
+            account_control,
+            group_lookup: GroupLookup::new(account_groups, account),
+        }
+    }
+
+    /// Creates a standalone context for testing a [`PreTradePolicy`] outside an
+    /// engine.
+    ///
+    /// The context is backed by an empty, private account-group registry and no
+    /// bound account, so [`account_group`](Self::account_group) returns `None`.
+    /// Inside the engine the registry is the engine's shared one; this
+    /// constructor exists so policy authors can drive a policy's hooks directly
+    /// in unit tests.
+    ///
+    /// [`PreTradePolicy`]: crate::pretrade::PreTradePolicy
+    pub fn new(account_control: Option<AccountControl<StorageFactory>>) -> Self
+    where
+        StorageFactory: Default,
+    {
+        let builder = StorageBuilder::new(StorageFactory::default());
+        let handle = AccountGroupsHandle::from_inner(StorageFactory::new_shared(
+            AccountGroups::new(&builder),
+        ));
+        Self::with_groups(account_control, handle, None)
+    }
+
+    /// Returns the group of the order's account, or `None` when the account is
+    /// absent or unregistered.
+    ///
+    /// The lookup is performed once and cached for the lifetime of this context.
+    pub fn account_group(&self) -> Option<AccountGroupId> {
+        self.group_lookup.group()
     }
 }
 
-impl Default for PreTradeContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::PreTradeContext;
-
-    #[test]
-    fn new_constructs_context() {
-        let _ctx = PreTradeContext::new();
-    }
-
-    #[test]
-    fn default_constructs_context() {
-        let _ctx = PreTradeContext;
+impl<StorageFactory> crate::marketdata::AccountInfo for PreTradeContext<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    /// Delegates to [`PreTradeContext::account_group`]; the order account's
+    /// group is the source consulted for group-level quote/TTL resolution.
+    fn group(&self) -> Option<AccountGroupId> {
+        self.account_group()
     }
 }

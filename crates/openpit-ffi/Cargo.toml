@@ -11,6 +11,9 @@ description = "OpenPit FFI bindings"
 crate-type = ["cdylib"]
 
 [dependencies]
-openpit = { version = "0.3.0", path = "../openpit" }
+openpit = { version = "0.3.0", path = "../openpit", features = ["serde"] }
 openpit-interop = { version = "0.3.0", path = "../openpit-interop" }
 rust_decimal = "1"
+serde_json = "1"
+rmp-serde = "1"
+ciborium = "0.2"
