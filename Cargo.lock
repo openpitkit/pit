@@ -331,7 +331,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "openpit"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "openpit-derive",
  "parking_lot",
@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "openpit-derive"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "openpit-ffi"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ciborium",
  "openpit",
@@ -366,14 +366,14 @@ dependencies = [
 
 [[package]]
 name = "openpit-interop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "openpit",
 ]
 
 [[package]]
 name = "openpit-python"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ciborium",
  "openpit",

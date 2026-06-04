@@ -1,6 +1,6 @@
 [package]
 name = "openpit-python"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.78"
 publish = false
@@ -17,8 +17,8 @@ name = "_openpit"
 crate-type = ["cdylib"]
 
 [dependencies]
-openpit = { version = "0.3.0", path = "../../crates/openpit", features = ["serde"] }
-openpit-interop = { version = "0.3.0", path = "../../crates/openpit-interop" }
+openpit = { version = "0.4.0", path = "../../crates/openpit", features = ["serde"] }
+openpit-interop = { version = "0.4.0", path = "../../crates/openpit-interop" }
 pyo3 = { version = "0.22", features = [
   "abi3-py310",
   "generate-import-lib",
