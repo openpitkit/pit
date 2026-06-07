@@ -55,6 +55,17 @@ python -m pytest examples/python/spot_table                           # run the 
 
 Running with no `--table` prints a short usage message.
 
+### Standalone (against the published package)
+
+To run the example on its own, without the repository-root tooling, install
+its self-contained dependencies from this directory and run it:
+
+```sh
+pip install -r requirements.txt                        # openpit (published wheel) + pytest
+python main.py --table ../../tables/spot/coverage.md   # run once
+python -m pytest .                                     # run the test
+```
+
 ## Tests
 
 - **`test_fast`** - the quick check (well under a second). It runs the coverage

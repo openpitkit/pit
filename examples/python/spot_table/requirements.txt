@@ -1,0 +1,7 @@
+# Self-contained dependency set for running this example and its smoke test
+# without the repository-root requirements.txt.
+#
+# The release flow bumps the openpit lower bound to the published version so
+# the example exercises exactly what an SDK consumer sees.
+openpit>=0.4.0
+pytest

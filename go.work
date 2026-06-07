@@ -1,0 +1,9 @@
+go 1.26.3
+
+use (
+	./bindings/go
+	./examples/go/rate_pnl_killswitch
+	./examples/go/spot_funds
+	./examples/go/spot_loadtest
+	./examples/go/spot_table
+)

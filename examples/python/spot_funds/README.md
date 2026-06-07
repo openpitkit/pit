@@ -38,6 +38,17 @@ python main.py          # run the scenario
 python -m pytest .      # run the smoke test
 ```
 
+### Standalone (against the published package)
+
+To run the example on its own, without the repository-root tooling, install
+its self-contained dependencies from this directory and run it:
+
+```sh
+pip install -r requirements.txt   # openpit (published wheel) + pytest
+python main.py                    # run the scenario
+python -m pytest .                # run the smoke test
+```
+
 ## See also
 
 - [SpotFunds wiki page](https://github.com/openpitkit/pit/wiki/Spot-Funds) -
