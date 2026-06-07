@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * Please see https://github.com/openpitkit and the OWNERS file for details.
+ * Please see https://openpit.dev and the OWNERS file for details.
  *
  * Generated file. Do not edit manually.
  */
@@ -324,6 +324,7 @@ static bool (*_fn_openpit_engine_builder_add_builtin_pnl_bounds_killswitch_polic
 static bool (*_fn_openpit_engine_builder_add_builtin_rate_limit_policy)(OpenPitEngineBuilder *, uint16_t, const OpenPitPretradePoliciesRateLimitBrokerBarrier *, const OpenPitPretradePoliciesRateLimitAssetBarrier *, size_t, const OpenPitPretradePoliciesRateLimitAccountBarrier *, size_t, const OpenPitPretradePoliciesRateLimitAccountAssetBarrier *, size_t, OpenPitOutError) = NULL;
 static bool (*_fn_openpit_engine_builder_add_builtin_spot_funds_policy)(OpenPitEngineBuilder *, const OpenPitMarketDataService *, const uint16_t *, uint8_t, const OpenPitPretradePoliciesSpotFundsOverride *, size_t, uint16_t, OpenPitOutError) = NULL;
 static OpenPitStringView (*_fn_openpit_get_runtime_version)(void) = NULL;
+static OpenPitStringView (*_fn_openpit_get_runtime_build_profile)(void) = NULL;
 static void (*_fn_openpit_account_control_block)(const OpenPitAccountControl *, OpenPitPretradeAccountBlock) = NULL;
 static OpenPitAccountControl * (*_fn_openpit_account_control_clone)(const OpenPitAccountControl *) = NULL;
 static void (*_fn_openpit_destroy_account_control)(OpenPitAccountControl *) = NULL;
@@ -988,6 +989,8 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_engine_builder_add_builtin_spot_funds_policy == NULL) return "openpit_engine_builder_add_builtin_spot_funds_policy";
     _fn_openpit_get_runtime_version = (OpenPitStringView (*)(void))openpit_dlsym(handle, "openpit_get_runtime_version");
     if (_fn_openpit_get_runtime_version == NULL) return "openpit_get_runtime_version";
+    _fn_openpit_get_runtime_build_profile = (OpenPitStringView (*)(void))openpit_dlsym(handle, "openpit_get_runtime_build_profile");
+    if (_fn_openpit_get_runtime_build_profile == NULL) return "openpit_get_runtime_build_profile";
     _fn_openpit_account_control_block = (void (*)(const OpenPitAccountControl *, OpenPitPretradeAccountBlock))openpit_dlsym(handle, "openpit_account_control_block");
     if (_fn_openpit_account_control_block == NULL) return "openpit_account_control_block";
     _fn_openpit_account_control_clone = (OpenPitAccountControl * (*)(const OpenPitAccountControl *))openpit_dlsym(handle, "openpit_account_control_clone");
@@ -2301,6 +2304,10 @@ bool openpit_engine_builder_add_builtin_spot_funds_policy(OpenPitEngineBuilder *
 
 OpenPitStringView openpit_get_runtime_version(void) {
     return _fn_openpit_get_runtime_version();
+}
+
+OpenPitStringView openpit_get_runtime_build_profile(void) {
+    return _fn_openpit_get_runtime_build_profile();
 }
 
 void openpit_account_control_block(const OpenPitAccountControl * control, OpenPitPretradeAccountBlock block) {

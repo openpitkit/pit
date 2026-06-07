@@ -15,7 +15,7 @@
  * language governing permissions and limitations under the
  * License.
  *
- * Please see https://github.com/openpitkit and the OWNERS file for details.
+ * Please see https://openpit.dev and the OWNERS file for details.
  *
  * Generated file. Do not edit manually.
  */
@@ -5143,6 +5143,23 @@ bool openpit_engine_builder_add_builtin_spot_funds_policy(
  * process lifetime. The caller must not release it.
  */
 OpenPitStringView openpit_get_runtime_version(void);
+
+/**
+ * Returns the build profile of the linked OpenPit runtime.
+ *
+ * This function never fails.
+ *
+ * The value is a stable, machine-parseable `key=value;`-delimited string (keys
+ * `version`, `profile`, `opt_level`, `debug_assertions`, `target`,
+ * `target_cpu`, `lto`). It lets a consumer reliably distinguish a debug core
+ * from a release core, for example to refuse latency-sensitive work on a debug
+ * build. The `target_cpu` and `lto` fields report the literal `unknown` when
+ * they cannot be determined at build time.
+ *
+ * The returned view is read-only, never null, and remains valid for the entire
+ * process lifetime. The caller must not release it.
+ */
+OpenPitStringView openpit_get_runtime_build_profile(void);
 
 /**
  * Records a block against the account bound to an account-control handle.

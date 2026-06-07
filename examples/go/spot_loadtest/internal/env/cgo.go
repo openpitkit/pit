@@ -15,17 +15,8 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-package native
+//go:build cgo
 
-/*
-#include "openpit.h"
-*/
-import "C"
+package env
 
-func GetRuntimeVersion() StringView {
-	return newStringView(C.openpit_get_runtime_version())
-}
-
-func GetRuntimeBuildProfile() StringView {
-	return newStringView(C.openpit_get_runtime_build_profile())
-}
+func cgoEnabled() bool { return true }

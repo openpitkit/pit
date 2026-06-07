@@ -1,0 +1,281 @@
+========================================================================
+ILLUSTRATIVE SAMPLE — numbers are from a past snapshot; regenerate to
+get current figures:
+
+  cd pit && cargo build --release
+  export OPENPIT_RUNTIME_LIBRARY_PATH=$(pwd)/target/release/libopenpit_ffi.dylib   # macOS
+  # export OPENPIT_RUNTIME_LIBRARY_PATH=$(pwd)/target/release/libopenpit_ffi.so    # Linux
+  cd examples/go/spot_loadtest && go build ./...
+  ./spot_loadtest -config configs/baseline.ini
+========================================================================
+
+=== Headline: Open-Loop Order-Check Latency (intended arrival -> decision) ===
+
+  Open-loop latency-under-load: t0 is the event's intended arrival on the
+  virtual causal timeline (NOT the actual submit instant), so queueing and
+  stalls under load are counted, not omitted (coordinated-omission defence).
+
+  Steady-state definition : windows 2-21 (window 1 excluded as warmup: JIT + cache + engine ramp-up)
+
+  Order-check p50 (steady-state, open-loop): 24.1µs
+  Order-check p99 (steady-state, open-loop): 64.5µs
+
+  Full tail (steady-state, so no warmup spike is hidden):
+    p99   : 64.5µs
+    p99.9 : 98.3µs
+    max   : 1.842ms
+
+  All-run merged (includes warmup window — full picture):
+    p50   : 24.1µs
+    p99   : 65.0µs
+    p99.9 : 102.4µs
+    max   : 3.211ms
+
+  Throughput (decided ops/s, separate saturation metric): 97468 ops/s
+  Max in-flight (open-loop depth witness)               : 47
+
+=== Environment ===
+
+Host:
+  cpu model  : Apple M3 Max
+  cores      : 14
+  ram        : 36.0 GiB
+  os         : darwin 26.5
+  kernel     : darwin 25.5.0
+
+Go runtime:
+  version    : go1.26.3
+  goos       : darwin
+  goarch     : arm64
+  cgo        : true
+
+Pit repository:
+  commit     : 12ecdbff80c7cc8f6d5c31c4bfb330b585edcad4 (clean)
+
+Core (native runtime):
+  version    : 0.3.0
+  profile    : release
+  opt_level  : 3
+  debug_assertions : false
+  target     : aarch64-apple-darwin
+  target_cpu : unknown
+  lto        : unknown
+  build_profile_raw : version=0.3.0;profile=release;opt_level=3;debug_assertions=false;target=aarch64-apple-darwin;target_cpu=unknown;lto=unknown
+
+Run config:
+  config path: /Users/you/pit/examples/go/spot_loadtest/configs/baseline.ini
+  config hash: 47c4beee78936932f021a71dab1e8dacf159e8875bc3f8665ff9359dcac22b55 (SHA-256)
+  seed       : 0xC0FFEE
+  total_ops  : 2000000
+  window     : 100000 ops
+  observer   : true
+
+=== Workload ===
+
+  Total resolved ops      : 3900000
+  Order-checks            : 2000000
+    accepts               : 1900000
+    rejects               : 100000
+  Settlements             : 1900000
+    accepts               : 1900000
+    blocked               : 0
+  Funding adjustments     : 2500 (accepted 2500 / rejected 0)
+
+  Concurrency model (bounded active working set):
+    population (total accounts)   : 10000
+    active working set (max hot)  : 1024
+    active fraction of population : 10.2%
+
+  Engine dispatch sizing (resource knob, NOT sync semantics):
+    strategy                      : dynamic
+    max_queues (Dynamic capacity) : unlimited (0)
+    idle_cleanup (queue retire)   : 5s
+    queue_capacity (per-queue buf): default (1024)
+    slow_submit_threshold         : default (1m)
+
+  Backpressure (ErrQueueLimit submits): 0 (healthy — dispatch held the load)
+  Handoff stalls: 0 (healthy — submit schedule never throttled by harness)
+  Submit->collector overflow (max depth): 0 (collectors kept up with submission)
+
+  Achieved reject rate    : 0.0500 (5.00%)
+  Target reject rate      : 0.0500 (5.00%)
+  Rate deviation          : 0.0000 (tolerance ±0.0050)
+
+  Generator stream summary (pre-run predictions):
+    order-checks  : 2000000
+    accepts       : 1900000
+    rejects       : 100000
+    settlements   : 1900000
+    fundings      : 12500
+    forced rejects: 100000
+    natural rej.  : 0
+    predicted rej rate: 0.0500
+
+  Cohorts:
+    [chatty] weight=0.20 (20.0%), activity=0.90, reject_propensity=0.70, burst_len=4
+    [dormant] weight=0.30 (30.0%), activity=0.10, reject_propensity=0.05, burst_len=1
+    [steady] weight=0.50 (50.0%), activity=0.50, reject_propensity=0.25, burst_len=2
+
+  Wall time (first submit to last resolve): 40.013s
+
+=== Trajectory (per-window percentiles) ===
+
+  Order-check (open-loop: intended arrival -> decision, stage 1->2):
+  win  | ops   | p50        | p99        | p99.9      | wall
+  -------------------------------------------------------------------
+     1w| 100000| 25.6µs     | 78.3µs     | 312.4µs    | 02:12:52-02:12:54
+     2 | 100000| 24.1µs     | 63.0µs     | 93.7µs     | 02:12:54-02:12:56
+     3 | 100000| 24.1µs     | 64.0µs     | 96.8µs     | 02:12:56-02:12:58
+     4 | 100000| 23.6µs     | 64.5µs     | 95.7µs     | 02:12:58-02:13:00
+     5 | 100000| 24.1µs     | 64.0µs     | 99.3µs     | 02:13:00-02:13:02
+     6 | 100000| 23.6µs     | 65.0µs     | 110.1µs    | 02:13:02-02:13:04
+     7 | 100000| 24.1µs     | 64.0µs     | 97.8µs     | 02:13:04-02:13:06
+     8 | 100000| 24.6µs     | 65.5µs     | 101.4µs    | 02:13:06-02:13:08
+     9 | 100000| 24.1µs     | 64.0µs     | 94.7µs     | 02:13:08-02:13:10
+    10 | 100000| 23.6µs     | 63.5µs     | 96.8µs     | 02:13:10-02:13:12
+    11 | 100000| 24.1µs     | 64.5µs     | 98.3µs     | 02:13:12-02:13:14
+    12 | 100000| 24.1µs     | 65.0µs     | 100.4µs    | 02:13:14-02:13:16
+    13 | 100000| 23.6µs     | 63.5µs     | 95.7µs     | 02:13:16-02:13:18
+    14 | 100000| 24.1µs     | 64.0µs     | 97.8µs     | 02:13:18-02:13:20
+    15 | 100000| 24.6µs     | 65.5µs     | 102.4µs    | 02:13:20-02:13:22
+    16 | 100000| 24.1µs     | 64.0µs     | 96.8µs     | 02:13:22-02:13:24
+    17 | 100000| 23.6µs     | 63.5µs     | 94.7µs     | 02:13:24-02:13:26
+    18 | 100000| 24.1µs     | 64.5µs     | 98.3µs     | 02:13:26-02:13:28
+    19 | 100000| 24.1µs     | 64.0µs     | 97.8µs     | 02:13:28-02:13:30
+    20 | 100000| 24.6µs     | 65.0µs     | 99.3µs     | 02:13:30-02:13:32
+    21 | 0     | 511ns      | 511ns      | 511ns      | 02:13:32-02:13:32
+  (w = warmup window, excluded from steady-state headline)
+
+  Settlement (open-loop: intended arrival -> decision, stage 3->4):
+  win  | ops   | p50        | p99        | p99.9
+  ----------------------------------------------------------
+     1w| 94892 | 26.6µs     | 79.4µs     | 298.1µs
+     2 | 94986 | 25.6µs     | 64.5µs     | 94.7µs
+     3 | 95007 | 25.6µs     | 65.0µs     | 97.8µs
+     4 | 95014 | 25.1µs     | 65.5µs     | 96.8µs
+     5 | 94986 | 25.6µs     | 65.0µs     | 100.4µs
+     6 | 95012 | 25.1µs     | 66.0µs     | 111.6µs
+     7 | 94988 | 25.6µs     | 65.0µs     | 98.8µs
+     8 | 95045 | 26.1µs     | 66.5µs     | 102.4µs
+     9 | 94972 | 25.6µs     | 65.0µs     | 95.7µs
+    10 | 94976 | 25.1µs     | 64.5µs     | 97.8µs
+    11 | 95010 | 25.6µs     | 65.5µs     | 99.3µs
+    12 | 95002 | 25.6µs     | 66.0µs     | 101.4µs
+    13 | 95002 | 25.1µs     | 64.5µs     | 96.8µs
+    14 | 95011 | 25.6µs     | 65.0µs     | 98.8µs
+    15 | 94990 | 26.1µs     | 66.5µs     | 103.5µs
+    16 | 95006 | 25.6µs     | 65.0µs     | 97.8µs
+    17 | 94985 | 25.1µs     | 64.5µs     | 95.7µs
+    18 | 95008 | 25.6µs     | 65.5µs     | 99.3µs
+    19 | 94988 | 25.6µs     | 65.0µs     | 98.8µs
+    20 | 95119 | 26.1µs     | 66.0µs     | 100.4µs
+    21 | 2     | 355.3µs    | 401.9µs    | 401.9µs
+
+=== Distribution (final merged, all windows) ===
+
+  Order-check latency (stage 1->2, open-loop intended arrival -> decision, incl. queue):
+    samples: 2000000
+    p50    : 24.1µs
+    p90    : 41.7µs
+    p99    : 65.0µs
+    p99.9  : 102.4µs
+    max    : 3.211ms
+
+  Settlement latency (stage 3->4, open-loop intended arrival -> decision):
+    samples: 1900000
+    p50    : 25.6µs
+    p90    : 43.3µs
+    p99    : 66.0µs
+    p99.9  : 104.4µs
+    max    : 3.288ms
+
+  Harness self-overhead (adjustment-path FFI+queue floor, quiescent engine):
+    NOTE: probed via ApplyAccountAdjustment, NOT ExecutePreTrade; read it
+    as the bare FFI+queue floor, not the order-check overhead.
+    probes : 200
+    p50    : 3.1µs
+    p99    : 17.9µs
+    p99.9  : 81.4µs
+    max    : 81.4µs
+
+  Clamped samples (> hist max): 0
+
+  Anti-DCE checksum: 0x0000000015D22D96  (proof every decision was consumed)
+
+=== Diagnostics (decomposition, NOT the headline) ===
+
+  Service-time (resolve - ACTUAL submit), order-check:
+    DIAGNOSTIC, NOT the headline. It discounts queue wait before the actual
+    submit, so it hides the saturation tail; the headline is the open-loop
+    latency-under-load (intended arrival -> decision).
+    samples: 2000000
+    p50    : 7.7µs
+    p99    : 31.2µs
+    p99.9  : 64.0µs
+    max    : 1.227ms
+
+  NOTE: these are per-account AGGREGATE distributions, not per-order.
+  The residual is an approximation (aggregate, not per-op subtraction).
+
+  Queue wait (time a task spent in the async engine queue):
+    callbacks: 5802700
+    p50      : 2.0µs
+    p99      : 21.0µs
+    p99.9    : 54.0µs
+    max      : 1.049ms
+
+  Engine compute (wall time of the engine call inside the queue):
+    callbacks: 5802700
+    p50      : 2.0µs
+    p99      : 17.9µs
+    p99.9    : 48.0µs
+    max      : 612.0µs
+
+  Aggregate FFI+handoff residual (APPROXIMATE — aggregate arithmetic,
+  NOT per-op subtraction; interpret with care):
+    residual p50 = order_check.p50 - (queue_wait.p50 + engine_compute.p50)
+               = 24.1µs - (2.0µs + 2.0µs) = 20.1µs
+    residual p99 = 65.0µs - (21.0µs + 17.9µs) = 26.1µs
+
+  Queue lifecycle:
+    queues created: 11411
+    queues removed: 3840
+
+=== Disclaimer ===
+
+What IS measured (HEADLINE = open-loop latency-under-load):
+  intended-arrival -> decision latency for the pre-trade order-check
+  (ExecutePreTrade), including the per-account async queue wait, through the
+  Go FFI boundary. Both order-check (stage 1->2) and report-settlement
+  (stage 3->4) are measured this way.
+
+  The harness is TRUE OPEN-LOOP. The generator assigns every event a virtual
+  arrival time on an offline CAUSAL timeline: order-check arrivals follow the
+  offered process; a settlement is its order's arrival plus a report-return
+  delay; a causally-dependent order follows its dependency's hold/fill. The
+  driver paces each event to its virtual arrival and submits without ever
+  blocking on a decision, so submissions pipeline (many ops in flight per
+  account). t0 is that virtual arrival, stamped independently of the actual
+  submit, so any queueing or stall under load is COUNTED, not omitted
+  (coordinated-omission defence). The per-op oracle stays strict: the engine
+  is FIFO-per-account with in-place holds, so the single live run reproduces
+  the shadow's offline-ordered decisions exactly.
+
+  The Diagnostics section also reports a SERVICE-TIME figure (resolve -
+  ACTUAL submit). That is a diagnostic only and is NEVER the headline: it
+  discounts the pre-submit queue wait and so hides the saturation tail.
+
+What is NOT measured:
+  client or TS network latency, serialization beyond the Go binding boundary,
+  OS scheduling jitter beyond what time.Now() already captures,
+  and any TS-side processing other than the pit core.
+
+Reproduction recipe:
+  cd <repo>
+  cargo build --release
+  export OPENPIT_RUNTIME_LIBRARY_PATH=$(pwd)/target/release/libopenpit_ffi.<dylib|so>
+  cd examples/go/spot_loadtest
+  go build ./...
+  ./spot_loadtest -config configs/baseline.ini
+
+------------------------------------------------------------------------

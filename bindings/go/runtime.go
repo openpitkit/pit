@@ -5,7 +5,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,17 +15,16 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-package native
+package openpit
 
-/*
-#include "openpit.h"
-*/
-import "C"
+import "go.openpit.dev/openpit/internal/native"
 
-func GetRuntimeVersion() StringView {
-	return newStringView(C.openpit_get_runtime_version())
+// GetVersion returns the version of the OpenPit.
+func GetVersion() string {
+	return native.GetRuntimeVersion().Safe()
 }
 
-func GetRuntimeBuildProfile() StringView {
-	return newStringView(C.openpit_get_runtime_build_profile())
+// GetBuildProfile returns the build profile of the OpenPit.
+func GetBuildProfile() string {
+	return native.GetRuntimeBuildProfile().Safe()
 }
