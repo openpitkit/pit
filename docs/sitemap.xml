@@ -1,13 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>https://openpit.dev/</loc>
-    <changefreq>monthly</changefreq>
-    <priority>1.0</priority>
-  </url>
-  <url>
-    <loc>https://openpit.dev/c-api/</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.8</priority>
-  </url>
+  <url><loc>https://openpit.dev/</loc></url>
+  <url><loc>https://openpit.dev/c-api/</loc></url>
+  <url><loc>https://openpit.dev/c-api/params.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/orders.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/execution-reports.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/account-adjustments.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/rejects.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/runtime.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/engine.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/policies.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/account-control.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/account-group-id.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/account-outcome.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/bytes.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/group-id.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/instrument.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/marketdata.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/pre-trade-lock.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/string.html</loc></url>
 </urlset>

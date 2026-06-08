@@ -18,13 +18,16 @@
 package pretrade
 
 import (
+	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/internal/native"
 )
 
+// Reservation holds a successfully validated pre-trade state reservation.
 type Reservation struct {
 	handle native.PretradePreTradeReservation
 }
 
+// NewReservationFromHandle creates a Reservation from a native handle.
 func NewReservationFromHandle(handle native.PretradePreTradeReservation) *Reservation {
 	return &Reservation{handle: handle}
 }
@@ -38,6 +41,8 @@ func NewReservationFromHandle(handle native.PretradePreTradeReservation) *Reserv
 // Idempotency: safe to call more than once; subsequent calls are no-ops.
 func (r *Reservation) Close() {
 	if r.handle == nil {
+		// It's a normal scenario to set safe `defer Rollback()`, and it's cheaper
+		// to check it here than call the API.
 		return
 	}
 	native.DestroyPretradePreTradeReservation(r.handle)
@@ -76,6 +81,8 @@ func (r *Reservation) CommitAndClose() {
 // RollbackAndClose.
 func (r *Reservation) Rollback() {
 	if r.handle == nil {
+		// It's a normal scenario to set safe `defer Rollback()`, and it's cheaper
+		// to check it here than call the API.
 		return
 	}
 	native.PretradePreTradeReservationRollback(r.handle)
@@ -95,5 +102,22 @@ func (r Reservation) Lock() Lock {
 	if r.handle == nil {
 		panic("pre-trade reservation already closed")
 	}
-	return newLock(native.PretradePreTradeReservationGetLock(r.handle))
+	handle := native.PretradePreTradeReservationGetLock(r.handle)
+	result := newLockFromHandle(handle)
+	native.DestroyPretradePreTradeLock(handle)
+	return result
+}
+
+// AccountAdjustments returns the account-adjustment outcomes produced by the
+// reservation.
+//
+// Panics if the reservation is already closed.
+func (r Reservation) AccountAdjustments() []accountadjustment.Outcome {
+	if r.handle == nil {
+		panic("pre-trade reservation already closed")
+	}
+	handle := native.PretradePreTradeReservationGetAccountAdjustments(r.handle)
+	result := accountadjustment.NewListFromHandle(handle)
+	native.DestroyAccountAdjustmentOutcomeList(handle)
+	return result
 }

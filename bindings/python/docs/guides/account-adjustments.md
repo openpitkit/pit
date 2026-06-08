@@ -11,7 +11,7 @@ import openpit
 adjustment = openpit.AccountAdjustment(
     operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
     amount=openpit.AccountAdjustmentAmount(
-        total=openpit.param.AdjustmentAmount.absolute(
+        balance=openpit.param.AdjustmentAmount.absolute(
             openpit.param.PositionSize("10000"),
         ),
     ),
@@ -19,7 +19,7 @@ adjustment = openpit.AccountAdjustment(
 
 engine = openpit.Engine.builder().build()
 result = engine.apply_account_adjustment(
-    account_id=openpit.param.AccountId.from_u64(99224416),
+    account_id=openpit.param.AccountId.from_int(99224416),
     adjustments=[adjustment],
 )
 assert result.ok
@@ -36,7 +36,7 @@ adjustment = openpit.AccountAdjustment(
         mode=openpit.param.PositionMode.HEDGED,
     ),
     amount=openpit.AccountAdjustmentAmount(
-        total=openpit.param.AdjustmentAmount.absolute(
+        balance=openpit.param.AdjustmentAmount.absolute(
             openpit.param.PositionSize("-3"),
         ),
     ),

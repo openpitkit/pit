@@ -34,36 +34,12 @@ type accountAdjustmentFixture struct {
 	mode           param.PositionMode
 	deltaAmount    param.AdjustmentAmount
 	absoluteAmount param.AdjustmentAmount
-	totalUpper     param.PositionSize
-	totalLower     param.PositionSize
-	reservedUpper  param.PositionSize
-	reservedLower  param.PositionSize
-	pendingUpper   param.PositionSize
-	pendingLower   param.PositionSize
-}
-
-func TestAccountAdjustmentValuesCheck(t *testing.T) {
-	fixture := newAccountAdjustmentFixture(t)
-
-	balance := NewAccountAdjustmentBalanceOperationFromValues(
-		AccountAdjustmentBalanceOperationValues{
-			Asset:             optional.Some(fixture.asset),
-			AverageEntryPrice: optional.Some(fixture.averagePrice),
-		},
-	)
-	position := NewAccountAdjustmentPositionOperationFromValues(
-		AccountAdjustmentPositionOperationValues{
-			Instrument: optional.Some(fixture.instrument),
-		},
-	)
-
-	err := (AccountAdjustmentValues{
-		BalanceOperation:  optional.Some(balance),
-		PositionOperation: optional.Some(position),
-	}).Check()
-	if err == nil {
-		t.Fatal("AccountAdjustmentValues.Check() error = nil, want non-nil")
-	}
+	balanceUpper   param.PositionSize
+	balanceLower   param.PositionSize
+	heldUpper      param.PositionSize
+	heldLower      param.PositionSize
+	incomingUpper  param.PositionSize
+	incomingLower  param.PositionSize
 }
 
 func TestAccountAdjustmentLifecycle(t *testing.T) {
@@ -100,10 +76,12 @@ func TestAccountAdjustmentLifecycle(t *testing.T) {
 	assertAccountAdjustmentUnset(t, fromValues)
 }
 
-func TestAccountAdjustmentSetValuesRejectsConflictingOperations(t *testing.T) {
+func TestAccountAdjustmentSetValuesOperationsAreMutuallyExclusive(t *testing.T) {
 	fixture := newAccountAdjustmentFixture(t)
 	adjustment := NewAccountAdjustment()
 
+	// The discriminated operation makes a conflicting balance/position pair
+	// structurally impossible: applying both leaves only the last one set.
 	err := adjustment.SetValues(
 		AccountAdjustmentValues{
 			BalanceOperation: optional.Some(
@@ -122,9 +100,19 @@ func TestAccountAdjustmentSetValuesRejectsConflictingOperations(t *testing.T) {
 			),
 		},
 	)
-	if err == nil {
-		t.Fatal("AccountAdjustment.SetValues() error = nil, want non-nil")
+	if err != nil {
+		t.Fatalf("AccountAdjustment.SetValues() error = %v", err)
 	}
+	assertAccountAdjustmentBalanceOperationOptionUnset(t, adjustment.BalanceOperation())
+	assertAccountAdjustmentPositionOperationOptionEqual(
+		t,
+		adjustment.PositionOperation(),
+		NewAccountAdjustmentPositionOperationFromValues(
+			AccountAdjustmentPositionOperationValues{
+				Instrument: optional.Some(fixture.instrument),
+			},
+		),
+	)
 }
 
 func TestAccountAdjustmentOperationSwitching(t *testing.T) {
@@ -223,43 +211,43 @@ func TestAccountAdjustmentAmountLifecycle(t *testing.T) {
 	amount := NewAccountAdjustmentAmount()
 	assertAccountAdjustmentAmountUnset(t, amount)
 
-	amount.SetTotal(fixture.deltaAmount)
-	assertAdjustmentAmountOptionEqual(t, amount.Total(), fixture.deltaAmount)
-	amount.UnsetTotal()
-	assertAdjustmentAmountOptionUnset(t, amount.Total())
+	amount.SetBalance(fixture.deltaAmount)
+	assertAdjustmentAmountOptionEqual(t, amount.Balance(), fixture.deltaAmount)
+	amount.UnsetBalance()
+	assertAdjustmentAmountOptionUnset(t, amount.Balance())
 
-	amount.SetReserved(fixture.absoluteAmount)
-	assertAdjustmentAmountOptionEqual(t, amount.Reserved(), fixture.absoluteAmount)
-	amount.UnsetReserved()
-	assertAdjustmentAmountOptionUnset(t, amount.Reserved())
+	amount.SetHeld(fixture.absoluteAmount)
+	assertAdjustmentAmountOptionEqual(t, amount.Held(), fixture.absoluteAmount)
+	amount.UnsetHeld()
+	assertAdjustmentAmountOptionUnset(t, amount.Held())
 
-	amount.SetPending(fixture.deltaAmount)
-	assertAdjustmentAmountOptionEqual(t, amount.Pending(), fixture.deltaAmount)
-	amount.UnsetPending()
-	assertAdjustmentAmountOptionUnset(t, amount.Pending())
+	amount.SetIncoming(fixture.deltaAmount)
+	assertAdjustmentAmountOptionEqual(t, amount.Incoming(), fixture.deltaAmount)
+	amount.UnsetIncoming()
+	assertAdjustmentAmountOptionUnset(t, amount.Incoming())
 
 	values := AccountAdjustmentAmountValues{
-		Total:    optional.Some(fixture.deltaAmount),
-		Reserved: optional.Some(fixture.absoluteAmount),
-		Pending:  optional.Some(fixture.deltaAmount),
+		Balance:  optional.Some(fixture.deltaAmount),
+		Held:     optional.Some(fixture.absoluteAmount),
+		Incoming: optional.Some(fixture.deltaAmount),
 	}
 	amount.SetValues(values)
 	assertAccountAdjustmentAmountValuesEqual(t, amount.Values(), values)
 
 	adjustment := NewAccountAdjustment()
 	view := adjustment.EnsureAmountView()
-	view.SetTotal(fixture.deltaAmount)
-	view.SetReserved(fixture.absoluteAmount)
-	view.SetPending(fixture.deltaAmount)
+	view.SetBalance(fixture.deltaAmount)
+	view.SetHeld(fixture.absoluteAmount)
+	view.SetIncoming(fixture.deltaAmount)
 	assertAccountAdjustmentAmountOptionEqual(
 		t,
 		adjustment.Amount(),
 		NewAccountAdjustmentAmountFromValues(values),
 	)
 	view.Reset()
-	assertAdjustmentAmountOptionUnset(t, view.Total())
-	assertAdjustmentAmountOptionUnset(t, view.Reserved())
-	assertAdjustmentAmountOptionUnset(t, view.Pending())
+	assertAdjustmentAmountOptionUnset(t, view.Balance())
+	assertAdjustmentAmountOptionUnset(t, view.Held())
+	assertAdjustmentAmountOptionUnset(t, view.Incoming())
 
 	amount.Reset()
 	assertAccountAdjustmentAmountUnset(t, amount)
@@ -271,35 +259,35 @@ func TestAccountAdjustmentBoundsLifecycle(t *testing.T) {
 	bounds := NewAccountAdjustmentBounds()
 	assertAccountAdjustmentBoundsUnset(t, bounds)
 
-	bounds.SetTotalUpper(fixture.totalUpper)
-	assertPositionSizeOptionEqual(t, bounds.TotalUpper(), fixture.totalUpper)
-	bounds.UnsetTotalUpper()
-	assertPositionSizeOptionUnset(t, bounds.TotalUpper())
+	bounds.SetBalanceUpper(fixture.balanceUpper)
+	assertPositionSizeOptionEqual(t, bounds.BalanceUpper(), fixture.balanceUpper)
+	bounds.UnsetBalanceUpper()
+	assertPositionSizeOptionUnset(t, bounds.BalanceUpper())
 
-	bounds.SetTotalLower(fixture.totalLower)
-	assertPositionSizeOptionEqual(t, bounds.TotalLower(), fixture.totalLower)
-	bounds.UnsetTotalLower()
-	assertPositionSizeOptionUnset(t, bounds.TotalLower())
+	bounds.SetBalanceLower(fixture.balanceLower)
+	assertPositionSizeOptionEqual(t, bounds.BalanceLower(), fixture.balanceLower)
+	bounds.UnsetBalanceLower()
+	assertPositionSizeOptionUnset(t, bounds.BalanceLower())
 
-	bounds.SetReservedUpper(fixture.reservedUpper)
-	assertPositionSizeOptionEqual(t, bounds.ReservedUpper(), fixture.reservedUpper)
-	bounds.UnsetReservedUpper()
-	assertPositionSizeOptionUnset(t, bounds.ReservedUpper())
+	bounds.SetHeldUpper(fixture.heldUpper)
+	assertPositionSizeOptionEqual(t, bounds.HeldUpper(), fixture.heldUpper)
+	bounds.UnsetHeldUpper()
+	assertPositionSizeOptionUnset(t, bounds.HeldUpper())
 
-	bounds.SetReservedLower(fixture.reservedLower)
-	assertPositionSizeOptionEqual(t, bounds.ReservedLower(), fixture.reservedLower)
-	bounds.UnsetReservedLower()
-	assertPositionSizeOptionUnset(t, bounds.ReservedLower())
+	bounds.SetHeldLower(fixture.heldLower)
+	assertPositionSizeOptionEqual(t, bounds.HeldLower(), fixture.heldLower)
+	bounds.UnsetHeldLower()
+	assertPositionSizeOptionUnset(t, bounds.HeldLower())
 
-	bounds.SetPendingUpper(fixture.pendingUpper)
-	assertPositionSizeOptionEqual(t, bounds.PendingUpper(), fixture.pendingUpper)
-	bounds.UnsetPendingUpper()
-	assertPositionSizeOptionUnset(t, bounds.PendingUpper())
+	bounds.SetIncomingUpper(fixture.incomingUpper)
+	assertPositionSizeOptionEqual(t, bounds.IncomingUpper(), fixture.incomingUpper)
+	bounds.UnsetIncomingUpper()
+	assertPositionSizeOptionUnset(t, bounds.IncomingUpper())
 
-	bounds.SetPendingLower(fixture.pendingLower)
-	assertPositionSizeOptionEqual(t, bounds.PendingLower(), fixture.pendingLower)
-	bounds.UnsetPendingLower()
-	assertPositionSizeOptionUnset(t, bounds.PendingLower())
+	bounds.SetIncomingLower(fixture.incomingLower)
+	assertPositionSizeOptionEqual(t, bounds.IncomingLower(), fixture.incomingLower)
+	bounds.UnsetIncomingLower()
+	assertPositionSizeOptionUnset(t, bounds.IncomingLower())
 
 	// Keep this direct call to exercise SetValues path without changing
 	// production behavior assumptions in this test session.
@@ -307,31 +295,31 @@ func TestAccountAdjustmentBoundsLifecycle(t *testing.T) {
 
 	adjustment := NewAccountAdjustment()
 	view := adjustment.EnsureBoundsView()
-	view.SetTotalUpper(fixture.totalUpper)
-	view.SetTotalLower(fixture.totalLower)
-	view.SetReservedUpper(fixture.reservedUpper)
-	view.SetReservedLower(fixture.reservedLower)
-	view.SetPendingUpper(fixture.pendingUpper)
-	view.SetPendingLower(fixture.pendingLower)
+	view.SetBalanceUpper(fixture.balanceUpper)
+	view.SetBalanceLower(fixture.balanceLower)
+	view.SetHeldUpper(fixture.heldUpper)
+	view.SetHeldLower(fixture.heldLower)
+	view.SetIncomingUpper(fixture.incomingUpper)
+	view.SetIncomingLower(fixture.incomingLower)
 	expectedBounds := NewAccountAdjustmentBounds()
-	expectedBounds.SetTotalUpper(fixture.totalUpper)
-	expectedBounds.SetTotalLower(fixture.totalLower)
-	expectedBounds.SetReservedUpper(fixture.reservedUpper)
-	expectedBounds.SetReservedLower(fixture.reservedLower)
-	expectedBounds.SetPendingUpper(fixture.pendingUpper)
-	expectedBounds.SetPendingLower(fixture.pendingLower)
+	expectedBounds.SetBalanceUpper(fixture.balanceUpper)
+	expectedBounds.SetBalanceLower(fixture.balanceLower)
+	expectedBounds.SetHeldUpper(fixture.heldUpper)
+	expectedBounds.SetHeldLower(fixture.heldLower)
+	expectedBounds.SetIncomingUpper(fixture.incomingUpper)
+	expectedBounds.SetIncomingLower(fixture.incomingLower)
 	assertAccountAdjustmentBoundsOptionEqual(
 		t,
 		adjustment.Bounds(),
 		expectedBounds,
 	)
 	view.Reset()
-	assertPositionSizeOptionUnset(t, view.TotalUpper())
-	assertPositionSizeOptionUnset(t, view.TotalLower())
-	assertPositionSizeOptionUnset(t, view.ReservedUpper())
-	assertPositionSizeOptionUnset(t, view.ReservedLower())
-	assertPositionSizeOptionUnset(t, view.PendingUpper())
-	assertPositionSizeOptionUnset(t, view.PendingLower())
+	assertPositionSizeOptionUnset(t, view.BalanceUpper())
+	assertPositionSizeOptionUnset(t, view.BalanceLower())
+	assertPositionSizeOptionUnset(t, view.HeldUpper())
+	assertPositionSizeOptionUnset(t, view.HeldLower())
+	assertPositionSizeOptionUnset(t, view.IncomingUpper())
+	assertPositionSizeOptionUnset(t, view.IncomingLower())
 
 	bounds.Reset()
 	assertAccountAdjustmentBoundsUnset(t, bounds)
@@ -349,27 +337,27 @@ func newAccountAdjustmentFixture(t *testing.T) accountAdjustmentFixture {
 		t.Fatalf("NewPriceFromString() error = %v", err)
 	}
 
-	totalUpper, err := param.NewPositionSizeFromString("100")
+	balanceUpper, err := param.NewPositionSizeFromString("100")
 	if err != nil {
 		t.Fatalf("NewPositionSizeFromString() error = %v", err)
 	}
-	totalLower, err := param.NewPositionSizeFromString("10")
+	balanceLower, err := param.NewPositionSizeFromString("10")
 	if err != nil {
 		t.Fatalf("NewPositionSizeFromString() error = %v", err)
 	}
-	reservedUpper, err := param.NewPositionSizeFromString("50")
+	heldUpper, err := param.NewPositionSizeFromString("50")
 	if err != nil {
 		t.Fatalf("NewPositionSizeFromString() error = %v", err)
 	}
-	reservedLower, err := param.NewPositionSizeFromString("5")
+	heldLower, err := param.NewPositionSizeFromString("5")
 	if err != nil {
 		t.Fatalf("NewPositionSizeFromString() error = %v", err)
 	}
-	pendingUpper, err := param.NewPositionSizeFromString("30")
+	incomingUpper, err := param.NewPositionSizeFromString("30")
 	if err != nil {
 		t.Fatalf("NewPositionSizeFromString() error = %v", err)
 	}
-	pendingLower, err := param.NewPositionSizeFromString("3")
+	incomingLower, err := param.NewPositionSizeFromString("3")
 	if err != nil {
 		t.Fatalf("NewPositionSizeFromString() error = %v", err)
 	}
@@ -380,16 +368,16 @@ func newAccountAdjustmentFixture(t *testing.T) accountAdjustmentFixture {
 		instrument:     param.NewInstrument(mustModelAsset(t, "AAPL"), mustModelAsset(t, "USD")),
 		averagePrice:   averagePrice,
 		altPrice:       altPrice,
-		leverage:       param.NewLeverageFromInt(5),
+		leverage:       param.NewLeverageFromUint16(5),
 		mode:           param.PositionModeHedged,
-		deltaAmount:    param.NewDeltaAdjustmentAmount(totalUpper),
-		absoluteAmount: param.NewAbsoluteAdjustmentAmount(totalLower),
-		totalUpper:     totalUpper,
-		totalLower:     totalLower,
-		reservedUpper:  reservedUpper,
-		reservedLower:  reservedLower,
-		pendingUpper:   pendingUpper,
-		pendingLower:   pendingLower,
+		deltaAmount:    param.NewDeltaAdjustmentAmount(balanceUpper),
+		absoluteAmount: param.NewAbsoluteAdjustmentAmount(balanceLower),
+		balanceUpper:   balanceUpper,
+		balanceLower:   balanceLower,
+		heldUpper:      heldUpper,
+		heldLower:      heldLower,
+		incomingUpper:  incomingUpper,
+		incomingLower:  incomingLower,
 	}
 }
 
@@ -418,9 +406,9 @@ func accountAdjustmentValuesFromFixture(fixture accountAdjustmentFixture) Accoun
 		Amount: optional.Some(
 			NewAccountAdjustmentAmountFromValues(
 				AccountAdjustmentAmountValues{
-					Total:    optional.Some(fixture.deltaAmount),
-					Reserved: optional.Some(fixture.absoluteAmount),
-					Pending:  optional.Some(fixture.deltaAmount),
+					Balance:  optional.Some(fixture.deltaAmount),
+					Held:     optional.Some(fixture.absoluteAmount),
+					Incoming: optional.Some(fixture.deltaAmount),
 				},
 			),
 		),
@@ -434,12 +422,12 @@ func accountAdjustmentBoundsValuesFromFixture(
 	fixture accountAdjustmentFixture,
 ) AccountAdjustmentBoundsValues {
 	return AccountAdjustmentBoundsValues{
-		TotalUpper:    optional.Some(fixture.totalUpper),
-		TotalLower:    optional.Some(fixture.totalLower),
-		ReservedUpper: optional.Some(fixture.reservedUpper),
-		ReservedLower: optional.Some(fixture.reservedLower),
-		PendingUpper:  optional.Some(fixture.pendingUpper),
-		PendingLower:  optional.Some(fixture.pendingLower),
+		BalanceUpper:  optional.Some(fixture.balanceUpper),
+		BalanceLower:  optional.Some(fixture.balanceLower),
+		HeldUpper:     optional.Some(fixture.heldUpper),
+		HeldLower:     optional.Some(fixture.heldLower),
+		IncomingUpper: optional.Some(fixture.incomingUpper),
+		IncomingLower: optional.Some(fixture.incomingLower),
 	}
 }
 
@@ -570,9 +558,9 @@ func assertAccountAdjustmentAmountOptionValuesEqual(
 
 func assertAccountAdjustmentAmountUnset(t *testing.T, amount AccountAdjustmentAmount) {
 	t.Helper()
-	assertAdjustmentAmountOptionUnset(t, amount.Total())
-	assertAdjustmentAmountOptionUnset(t, amount.Reserved())
-	assertAdjustmentAmountOptionUnset(t, amount.Pending())
+	assertAdjustmentAmountOptionUnset(t, amount.Balance())
+	assertAdjustmentAmountOptionUnset(t, amount.Held())
+	assertAdjustmentAmountOptionUnset(t, amount.Incoming())
 }
 
 func assertAccountAdjustmentAmountValuesEqual(
@@ -581,9 +569,9 @@ func assertAccountAdjustmentAmountValuesEqual(
 	want AccountAdjustmentAmountValues,
 ) {
 	t.Helper()
-	assertAdjustmentAmountOptionValuesEqual(t, got.Total, want.Total)
-	assertAdjustmentAmountOptionValuesEqual(t, got.Reserved, want.Reserved)
-	assertAdjustmentAmountOptionValuesEqual(t, got.Pending, want.Pending)
+	assertAdjustmentAmountOptionValuesEqual(t, got.Balance, want.Balance)
+	assertAdjustmentAmountOptionValuesEqual(t, got.Held, want.Held)
+	assertAdjustmentAmountOptionValuesEqual(t, got.Incoming, want.Incoming)
 }
 
 func assertAccountAdjustmentBoundsOptionEqual(
@@ -610,23 +598,23 @@ func assertAccountAdjustmentBoundsOptionValuesEqual(
 ) {
 	t.Helper()
 	assertOptionBy(t, "Bounds", got, want, func(gotValue AccountAdjustmentBounds, wantValue AccountAdjustmentBounds) {
-		assertPositionSizeOptionValuesEqual(t, gotValue.TotalUpper(), wantValue.TotalUpper())
-		assertPositionSizeOptionValuesEqual(t, gotValue.TotalLower(), wantValue.TotalLower())
-		assertPositionSizeOptionValuesEqual(t, gotValue.ReservedUpper(), wantValue.ReservedUpper())
-		assertPositionSizeOptionValuesEqual(t, gotValue.ReservedLower(), wantValue.ReservedLower())
-		assertPositionSizeOptionValuesEqual(t, gotValue.PendingUpper(), wantValue.PendingUpper())
-		assertPositionSizeOptionValuesEqual(t, gotValue.PendingLower(), wantValue.PendingLower())
+		assertPositionSizeOptionValuesEqual(t, gotValue.BalanceUpper(), wantValue.BalanceUpper())
+		assertPositionSizeOptionValuesEqual(t, gotValue.BalanceLower(), wantValue.BalanceLower())
+		assertPositionSizeOptionValuesEqual(t, gotValue.HeldUpper(), wantValue.HeldUpper())
+		assertPositionSizeOptionValuesEqual(t, gotValue.HeldLower(), wantValue.HeldLower())
+		assertPositionSizeOptionValuesEqual(t, gotValue.IncomingUpper(), wantValue.IncomingUpper())
+		assertPositionSizeOptionValuesEqual(t, gotValue.IncomingLower(), wantValue.IncomingLower())
 	})
 }
 
 func assertAccountAdjustmentBoundsUnset(t *testing.T, bounds AccountAdjustmentBounds) {
 	t.Helper()
-	assertPositionSizeOptionUnset(t, bounds.TotalUpper())
-	assertPositionSizeOptionUnset(t, bounds.TotalLower())
-	assertPositionSizeOptionUnset(t, bounds.ReservedUpper())
-	assertPositionSizeOptionUnset(t, bounds.ReservedLower())
-	assertPositionSizeOptionUnset(t, bounds.PendingUpper())
-	assertPositionSizeOptionUnset(t, bounds.PendingLower())
+	assertPositionSizeOptionUnset(t, bounds.BalanceUpper())
+	assertPositionSizeOptionUnset(t, bounds.BalanceLower())
+	assertPositionSizeOptionUnset(t, bounds.HeldUpper())
+	assertPositionSizeOptionUnset(t, bounds.HeldLower())
+	assertPositionSizeOptionUnset(t, bounds.IncomingUpper())
+	assertPositionSizeOptionUnset(t, bounds.IncomingLower())
 }
 
 func assertAdjustmentAmountOptionEqual(

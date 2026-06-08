@@ -20,7 +20,8 @@ use std::fmt::{Display, Formatter};
 
 use crate::core::HasAccountId;
 use crate::param::{AccountId, Asset, Price, Quantity, TradeAmount, Volume};
-use crate::pretrade::policy::request_field_access_pre_trade_reject;
+use crate::pretrade::policy::{missing_required_field_reject, PolicyGroupId, PolicyName};
+use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
 use crate::pretrade::{PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects};
 use crate::HasInstrument;
 use crate::{HasOrderPrice, HasTradeAmount};
@@ -137,7 +138,7 @@ impl std::error::Error for OrderSizeLimitPolicyError {}
 ///     [],
 /// )?;
 ///
-/// let engine = Engine::<OrderOperation>::builder()
+/// let engine = Engine::builder::<OrderOperation, (), ()>()
 ///     .no_sync()
 ///     .pre_trade(policy)
 ///     .build()?;
@@ -157,6 +158,7 @@ pub struct OrderSizeLimitPolicy {
     broker: Option<OrderSizeBrokerBarrier>,
     asset_limits: HashMap<Asset, OrderSizeLimit>,
     account_asset_limits: HashMap<(AccountId, Asset), OrderSizeLimit>,
+    group_id: PolicyGroupId,
 }
 
 impl OrderSizeLimitPolicy {
@@ -192,32 +194,56 @@ impl OrderSizeLimitPolicy {
             broker,
             asset_limits,
             account_asset_limits,
+            group_id: DEFAULT_POLICY_GROUP_ID,
         })
+    }
+
+    /// Assigns a group tag to this policy instance.
+    ///
+    /// See [`PolicyGroupId`] and [`DEFAULT_POLICY_GROUP_ID`] for details.
+    pub fn with_policy_group_id(mut self, id: PolicyGroupId) -> Self {
+        self.group_id = id;
+        self
     }
 }
 
-impl<Order, ExecutionReport, AccountAdjustment>
-    PreTradePolicy<Order, ExecutionReport, AccountAdjustment> for OrderSizeLimitPolicy
+impl PolicyName for OrderSizeLimitPolicy {
+    fn policy_name(&self) -> &str {
+        Self::NAME
+    }
+}
+
+impl<Order, ExecutionReport, AccountAdjustment, Sync>
+    PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> for OrderSizeLimitPolicy
 where
     Order: HasInstrument + HasTradeAmount + HasOrderPrice + HasAccountId,
+    Sync: crate::core::SyncMode,
 {
     fn name(&self) -> &str {
         Self::NAME
     }
 
-    fn check_pre_trade_start(&self, _ctx: &PreTradeContext, order: &Order) -> Result<(), Rejects> {
+    fn policy_group_id(&self) -> PolicyGroupId {
+        self.group_id
+    }
+
+    fn check_pre_trade_start(
+        &self,
+        _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+        order: &Order,
+    ) -> Result<(), Rejects> {
         let instrument = order
             .instrument()
-            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
+            .map_err(|e| Rejects::from(missing_required_field_reject(self, "instrument", &e)))?;
         let account_id = order
             .account_id()
-            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
+            .map_err(|e| Rejects::from(missing_required_field_reject(self, "account ID", &e)))?;
         let trade_amount = order
             .trade_amount()
-            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
+            .map_err(|e| Rejects::from(missing_required_field_reject(self, "trade amount", &e)))?;
         let price = order
             .price()
-            .map_err(|e| Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e)))?;
+            .map_err(|e| Rejects::from(missing_required_field_reject(self, "price", &e)))?;
 
         let settlement = instrument.settlement_asset();
 
@@ -256,10 +282,6 @@ where
         }
 
         Ok(())
-    }
-
-    fn apply_execution_report(&self, _report: &ExecutionReport) -> bool {
-        false
     }
 }
 
@@ -362,6 +384,7 @@ mod tests {
     use crate::param::TradeAmount;
     use crate::param::{AccountId, Asset, Price, Quantity, Side, Volume};
     use crate::pretrade::{PreTradeContext, PreTradePolicy, RejectCode, RejectScope};
+    use crate::storage::NoLocking;
     use crate::{HasInstrument, HasOrderPrice, HasTradeAmount, RequestFieldAccessError};
     use rust_decimal::Decimal;
 
@@ -443,13 +466,17 @@ mod tests {
         let policy =
             OrderSizeLimitPolicy::new(None, [asset_barrier("USD", "10", "1000")], []).unwrap();
 
-        let reject =
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order("USD", "11", "90"),
-            )
-            .expect_err("quantity must be rejected");
+        let reject = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order("USD", "11", "90"),
+        )
+        .expect_err("quantity must be rejected");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::OrderQtyExceedsLimit);
@@ -462,13 +489,17 @@ mod tests {
         let policy =
             OrderSizeLimitPolicy::new(None, [asset_barrier("USD", "10", "1000")], []).unwrap();
 
-        let reject =
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order("USD", "10", "101"),
-            )
-            .expect_err("notional must be rejected");
+        let reject = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order("USD", "10", "101"),
+        )
+        .expect_err("notional must be rejected");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::OrderNotionalExceedsLimit);
@@ -481,13 +512,17 @@ mod tests {
         let policy =
             OrderSizeLimitPolicy::new(None, [asset_barrier("USD", "10", "1000")], []).unwrap();
 
-        let reject =
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order("USD", "11", "100"),
-            )
-            .expect_err("quantity and notional must be rejected");
+        let reject = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order("USD", "11", "100"),
+        )
+        .expect_err("quantity and notional must be rejected");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::OrderExceedsLimit);
@@ -503,9 +538,14 @@ mod tests {
         let policy =
             OrderSizeLimitPolicy::new(None, [asset_barrier("EUR", "10", "1000")], []).unwrap();
 
-        let result = <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
+        let result = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
             &policy,
-            &PreTradeContext::new(),
+            &PreTradeContext::<NoLocking>::new(None),
             &order("USD", "1", "1"),
         );
         assert!(result.is_ok());
@@ -516,9 +556,14 @@ mod tests {
         let policy =
             OrderSizeLimitPolicy::new(None, [asset_barrier("USD", "10", "1000")], []).unwrap();
 
-        let result = <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
+        let result = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
             &policy,
-            &PreTradeContext::new(),
+            &PreTradeContext::<NoLocking>::new(None),
             &order("USD", "10", "100"),
         );
         assert!(result.is_ok());
@@ -531,23 +576,31 @@ mod tests {
         let policy = OrderSizeLimitPolicy::new(Some(broker_barrier("5", "500")), [], []).unwrap();
 
         // Broker limit applies to any settlement
-        let reject =
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order("USD", "6", "10"),
-            )
-            .expect_err("broker barrier must reject over-quantity order");
+        let reject = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order("USD", "6", "10"),
+        )
+        .expect_err("broker barrier must reject over-quantity order");
         assert_eq!(reject[0].scope, RejectScope::Order);
         assert_eq!(reject[0].code, RejectCode::OrderQtyExceedsLimit);
 
-        let reject2 =
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order("EUR", "6", "10"),
-            )
-            .expect_err("broker barrier applies to EUR too");
+        let reject2 = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order("EUR", "6", "10"),
+        )
+        .expect_err("broker barrier applies to EUR too");
         assert_eq!(reject2[0].scope, RejectScope::Order);
     }
 
@@ -568,13 +621,17 @@ mod tests {
         )
         .unwrap();
 
-        let reject =
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order("USD", "6", "10"),
-            )
-            .expect_err("account+asset barrier (max 5) must override asset barrier (max 10)");
+        let reject = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order("USD", "6", "10"),
+        )
+        .expect_err("account+asset barrier (max 5) must override asset barrier (max 10)");
         assert_eq!(reject[0].scope, RejectScope::Account);
         assert_eq!(reject[0].code, RejectCode::OrderQtyExceedsLimit);
     }
@@ -592,22 +649,29 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order_for_account("USD", "10", "10", AccountId::from_u64(99224416)),
-            )
-            .is_ok()
-        );
+        assert!(<OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order_for_account("USD", "10", "10", AccountId::from_u64(99224416)),
+        )
+        .is_ok());
 
-        let reject =
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order_for_account("USD", "10", "10", AccountId::from_u64(2)),
-            )
-            .expect_err("asset baseline must reject unmatched account");
+        let reject = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order_for_account("USD", "10", "10", AccountId::from_u64(2)),
+        )
+        .expect_err("asset baseline must reject unmatched account");
         assert_eq!(reject[0].scope, RejectScope::Order);
         assert_eq!(reject[0].code, RejectCode::OrderQtyExceedsLimit);
     }
@@ -617,9 +681,14 @@ mod tests {
         let policy =
             OrderSizeLimitPolicy::new(None, [asset_barrier("EUR", "10", "1000")], []).unwrap();
 
-        let result = <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
+        let result = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
             &policy,
-            &PreTradeContext::new(),
+            &PreTradeContext::<NoLocking>::new(None),
             &order("USD", "1", "1"),
         );
         assert!(result.is_ok());
@@ -636,13 +705,17 @@ mod tests {
         )
         .unwrap();
 
-        let reject =
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order("USD", "6", "10"),
-            )
-            .expect_err("must reject");
+        let reject = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order("USD", "6", "10"),
+        )
+        .expect_err("must reject");
         // Asset axis breach is reported first
         assert_eq!(reject[0].scope, RejectScope::Order);
         assert_eq!(reject[0].code, RejectCode::OrderQtyExceedsLimit);
@@ -667,30 +740,40 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order("EUR", "5", "100")
-            )
-            .is_ok()
-        );
-        assert!(
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order("GBP", "3", "100")
-            )
-            .is_ok()
-        );
+        assert!(<OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order("EUR", "5", "100")
+        )
+        .is_ok());
+        assert!(<OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order("GBP", "3", "100")
+        )
+        .is_ok());
 
-        let reject =
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order("EUR", "6", "10"),
-            )
-            .expect_err("exceeding EUR limit must reject");
+        let reject = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order("EUR", "6", "10"),
+        )
+        .expect_err("exceeding EUR limit must reject");
         assert_eq!(reject[0].code, RejectCode::OrderQtyExceedsLimit);
         assert_eq!(reject[0].details, "requested 6, max allowed: 5");
     }
@@ -702,7 +785,7 @@ mod tests {
         let policy =
             OrderSizeLimitPolicy::new(None, [asset_barrier("USD", "10", "1000")], []).unwrap();
         assert_eq!(
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::name(&policy),
+            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, (), (), crate::core::LocalSync>>::name(&policy),
             OrderSizeLimitPolicy::NAME
         );
     }
@@ -711,12 +794,15 @@ mod tests {
     fn apply_execution_report_returns_false() {
         let policy =
             OrderSizeLimitPolicy::new(None, [asset_barrier("USD", "10", "1000")], []).unwrap();
-        assert!(
-            !<OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::apply_execution_report(
-                &policy,
-                &()
-            )
-        );
+        assert!(<OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::apply_execution_report(
+            &policy, &crate::pretrade::PostTradeContext::new(), &()
+        )
+        .is_none());
     }
 
     // ── resolve helpers ────────────────────────────────────────────────────
@@ -763,13 +849,17 @@ mod tests {
             ),
             price: None,
         };
-        let reject =
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order_val,
-            )
-            .expect_err("volume order without price must reject");
+        let reject = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order_val,
+        )
+        .expect_err("volume order without price must reject");
         let reject = &reject[0];
         assert_eq!(reject.code, RejectCode::OrderValueCalculationFailed);
     }
@@ -822,13 +912,17 @@ mod tests {
             price: Some(crate::param::Price::new(Decimal::MAX)),
         };
 
-        let reject =
-            <OrderSizeLimitPolicy as PreTradePolicy<TestOrder, ()>>::check_pre_trade_start(
-                &policy,
-                &PreTradeContext::new(),
-                &order_val,
-            )
-            .expect_err("overflow must be treated as calculation failed");
+        let reject = <OrderSizeLimitPolicy as PreTradePolicy<
+            TestOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order_val,
+        )
+        .expect_err("overflow must be treated as calculation failed");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::OrderValueCalculationFailed);
@@ -876,12 +970,21 @@ mod tests {
         let reject = <OrderSizeLimitPolicy as PreTradePolicy<
             InstrumentAccessErrorOrder,
             (),
-        >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order_val)
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order_val,
+        )
         .expect_err("field access error must reject");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
-        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(
+            reject.reason,
+            "failed to access required field 'instrument'"
+        );
         assert_eq!(reject.details, "failed to access field 'instrument'");
     }
 
@@ -925,12 +1028,21 @@ mod tests {
         let reject = <OrderSizeLimitPolicy as PreTradePolicy<
             TradeAmountAccessErrorOrder,
             (),
-        >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order_val)
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order_val,
+        )
         .expect_err("field access error must reject");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
-        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(
+            reject.reason,
+            "failed to access required field 'trade amount'"
+        );
         assert_eq!(reject.details, "failed to access field 'trade_amount'");
     }
 
@@ -974,12 +1086,18 @@ mod tests {
         let reject = <OrderSizeLimitPolicy as PreTradePolicy<
             PriceAccessErrorOrder,
             (),
-        >>::check_pre_trade_start(&policy, &PreTradeContext::new(), &order_val)
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy,
+            &PreTradeContext::<NoLocking>::new(None),
+            &order_val,
+        )
         .expect_err("field access error must reject");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
-        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(reject.reason, "failed to access required field 'price'");
         assert_eq!(reject.details, "failed to access field 'price'");
     }
 }

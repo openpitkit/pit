@@ -27,14 +27,17 @@ type AccountAdjustmentAmount = C.OpenPitAccountAdjustmentAmount
 type AccountAdjustmentAmountOptional = C.OpenPitAccountAdjustmentAmountOptional
 type AccountAdjustmentApplyStatus = C.OpenPitAccountAdjustmentApplyStatus
 type AccountAdjustmentBalanceOperation = C.OpenPitAccountAdjustmentBalanceOperation
-type AccountAdjustmentBalanceOperationOptional = C.OpenPitAccountAdjustmentBalanceOperationOptional
 type AccountAdjustmentBatchError = *C.OpenPitAccountAdjustmentBatchError
 type AccountAdjustmentBounds = C.OpenPitAccountAdjustmentBounds
 type AccountAdjustmentBoundsOptional = C.OpenPitAccountAdjustmentBoundsOptional
 type AccountAdjustmentContext = *C.OpenPitAccountAdjustmentContext
+type AccountAdjustmentOperation = C.OpenPitAccountAdjustmentOperation
+type AccountAdjustmentOperationKind = C.OpenPitAccountAdjustmentOperationKind
 type AccountAdjustmentPositionOperation = C.OpenPitAccountAdjustmentPositionOperation
-type AccountAdjustmentPositionOperationOptional = C.OpenPitAccountAdjustmentPositionOperationOptional
+type AccountControl = *C.OpenPitAccountControl
 type Engine = *C.OpenPitEngine
+type EngineBuildError = *C.OpenPitEngineBuildError
+type EngineBuildErrorCode = C.OpenPitEngineBuildErrorCode
 type EngineBuilder = *C.OpenPitEngineBuilder
 type ExecutionReport = C.OpenPitExecutionReport
 type ExecutionReportFill = C.OpenPitExecutionReportFill
@@ -97,21 +100,99 @@ type PretradePoliciesOrderSizeBrokerBarrier = C.OpenPitPretradePoliciesOrderSize
 type PretradePoliciesOrderSizeLimit = C.OpenPitPretradePoliciesOrderSizeLimit
 type PretradePoliciesPnlBoundsAccountBarrier = C.OpenPitPretradePoliciesPnlBoundsAccountBarrier
 type PretradePoliciesPnlBoundsBarrier = C.OpenPitPretradePoliciesPnlBoundsBarrier
+type PretradePoliciesSpotFundsOverride = C.OpenPitPretradePoliciesSpotFundsOverride
 type PretradePoliciesRateLimitAccountAssetBarrier = C.OpenPitPretradePoliciesRateLimitAccountAssetBarrier
 type PretradePoliciesRateLimitAccountBarrier = C.OpenPitPretradePoliciesRateLimitAccountBarrier
 type PretradePoliciesRateLimitAssetBarrier = C.OpenPitPretradePoliciesRateLimitAssetBarrier
 type PretradePoliciesRateLimitBrokerBarrier = C.OpenPitPretradePoliciesRateLimitBrokerBarrier
-type PretradePreTradeLock = C.OpenPitPretradePreTradeLock
+type PretradePreTradeLock = *C.OpenPitPretradePreTradeLock
+type PretradePreTradeLockPrices = *C.OpenPitPretradePreTradeLockPrices
+type PretradePreTradeLockPricesStatus = C.OpenPitPretradePreTradeLockPricesStatus
+type PretradePreTradeLockPricesView = C.OpenPitPretradePreTradeLockPricesView
 type PretradePreTradePolicy = *C.OpenPitPretradePreTradePolicy
 type PretradePreTradeRequest = *C.OpenPitPretradePreTradeRequest
 type PretradePreTradeReservation = *C.OpenPitPretradePreTradeReservation
-type Reject = C.OpenPitReject
-type RejectCode = C.OpenPitRejectCode
-type RejectList = *C.OpenPitRejectList
-type RejectScope = C.OpenPitRejectScope
+type PretradeAccountBlock = C.OpenPitPretradeAccountBlock
+type PretradeAccountBlockList = *C.OpenPitPretradeAccountBlockList
+type PretradeReject = C.OpenPitPretradeReject
+type PretradeRejectCode = C.OpenPitPretradeRejectCode
+type PretradeRejectList = *C.OpenPitPretradeRejectList
+type PretradeRejectScope = C.OpenPitPretradeRejectScope
 type SharedString = *C.OpenPitSharedString
+type SharedBytes = *C.OpenPitSharedBytes
+type BytesView = C.OpenPitBytesView
+type PolicyGroupID = C.uint16_t
+type ParamAccountGroupID = C.OpenPitParamAccountGroupId
+type PostTradeContext = *C.OpenPitPostTradeContext
+type AccountGroupError = *C.OpenPitAccountGroupError
+
+type MarketDataService = *C.OpenPitMarketDataService
+type MarketDataQuote = C.OpenPitMarketDataQuote
+type MarketDataQuoteTTL = C.OpenPitMarketDataQuoteTtl
+type MarketDataInstrumentID = C.OpenPitMarketDataInstrumentId
+type MarketDataGetStatus = C.OpenPitMarketDataGetStatus
+type MarketDataRegisterStatus = C.OpenPitMarketDataRegisterStatus
+type MarketDataQuoteResolution = C.OpenPitMarketDataQuoteResolution
+
+type PretradePreTradeResult = *C.OpenPitPretradePreTradeResult
+type PostTradeAdjustmentList = *C.OpenPitPostTradeAdjustmentList
+type AccountOutcomeEntryList = *C.OpenPitAccountOutcomeEntryList
+type AccountOutcomeEntry = C.OpenPitAccountOutcomeEntry
+type OutcomeAmount = C.OpenPitOutcomeAmount
+type OutcomeAmountOptional = C.OpenPitOutcomeAmountOptional
+type AccountAdjustmentOutcome = C.OpenPitAccountAdjustmentOutcome
+type AccountAdjustmentOutcomeList = *C.OpenPitAccountAdjustmentOutcomeList
+
+type PretradePreTradeLockEntry = C.OpenPitPretradePreTradeLockEntry
+type PretradePreTradeLockEntries = *C.OpenPitPretradePreTradeLockEntries
+type PretradePreTradeLockEntriesView = C.OpenPitPretradePreTradeLockEntriesView
 
 const ParamLeverageNotSet = C.OPENPIT_PARAM_LEVERAGE_NOT_SET
+
+const DefaultPolicyGroupID PolicyGroupID = C.OPENPIT_DEFAULT_POLICY_GROUP_ID
+
+const DefaultAccountGroup ParamAccountGroupID = C.OPENPIT_DEFAULT_ACCOUNT_GROUP
+
+const (
+	PretradePreTradeLockPricesStatusError PretradePreTradeLockPricesStatus = C.OpenPitPretradePreTradeLockPricesStatus_Error
+	PretradePreTradeLockPricesStatusEmpty PretradePreTradeLockPricesStatus = C.OpenPitPretradePreTradeLockPricesStatus_Empty
+	PretradePreTradeLockPricesStatusOne   PretradePreTradeLockPricesStatus = C.OpenPitPretradePreTradeLockPricesStatus_One
+	PretradePreTradeLockPricesStatusList  PretradePreTradeLockPricesStatus = C.OpenPitPretradePreTradeLockPricesStatus_List
+)
+
+const (
+	MarketDataGetStatusFound             MarketDataGetStatus = C.OpenPitMarketDataGetStatus_Found
+	MarketDataGetStatusUnavailable       MarketDataGetStatus = C.OpenPitMarketDataGetStatus_Unavailable
+	MarketDataGetStatusUnknownInstrument MarketDataGetStatus = C.OpenPitMarketDataGetStatus_UnknownInstrument
+)
+
+const (
+	AccountAdjustmentOperationKindAbsent   AccountAdjustmentOperationKind = C.OpenPitAccountAdjustmentOperationKind_Absent
+	AccountAdjustmentOperationKindBalance  AccountAdjustmentOperationKind = C.OpenPitAccountAdjustmentOperationKind_Balance
+	AccountAdjustmentOperationKindPosition AccountAdjustmentOperationKind = C.OpenPitAccountAdjustmentOperationKind_Position
+)
+
+const (
+	EngineBuildErrorCodeDuplicatePolicyName    EngineBuildErrorCode = C.OpenPitEngineBuildErrorCode_DuplicatePolicyName
+	EngineBuildErrorCodeDuplicatePolicyGroupID EngineBuildErrorCode = C.OpenPitEngineBuildErrorCode_DuplicatePolicyGroupId
+	EngineBuildErrorCodeOther                  EngineBuildErrorCode = C.OpenPitEngineBuildErrorCode_Other
+)
+
+const (
+	MarketDataRegisterStatusOk                  MarketDataRegisterStatus = C.OpenPitMarketDataRegisterStatus_Ok
+	MarketDataRegisterStatusAlreadyRegistered   MarketDataRegisterStatus = C.OpenPitMarketDataRegisterStatus_AlreadyRegistered
+	MarketDataRegisterStatusDuplicateID         MarketDataRegisterStatus = C.OpenPitMarketDataRegisterStatus_DuplicateId
+	MarketDataRegisterStatusDuplicateInstrument MarketDataRegisterStatus = C.OpenPitMarketDataRegisterStatus_DuplicateInstrument
+	MarketDataRegisterStatusUnknownInstrument   MarketDataRegisterStatus = C.OpenPitMarketDataRegisterStatus_UnknownInstrument
+	MarketDataRegisterStatusError               MarketDataRegisterStatus = C.OpenPitMarketDataRegisterStatus_Error
+	MarketDataRegisterStatusNoTarget            MarketDataRegisterStatus = C.OpenPitMarketDataRegisterStatus_NoTarget
+)
+
+const (
+	MarketDataQuoteResolutionAccountOnly                 MarketDataQuoteResolution = C.OpenPitMarketDataQuoteResolution_AccountOnly
+	MarketDataQuoteResolutionAccountThenGroup            MarketDataQuoteResolution = C.OpenPitMarketDataQuoteResolution_AccountThenGroup
+	MarketDataQuoteResolutionAccountThenGroupThenDefault MarketDataQuoteResolution = C.OpenPitMarketDataQuoteResolution_AccountThenGroupThenDefault
+)
 
 const (
 	ParamLeverageScale = C.OPENPIT_PARAM_LEVERAGE_SCALE
@@ -192,50 +273,53 @@ const (
 )
 
 const (
-	RejectScopeOrder   = C.OpenPitRejectScope_Order
-	RejectScopeAccount = C.OpenPitRejectScope_Account
+	RejectScopeOrder   = C.OpenPitPretradeRejectScope_Order
+	RejectScopeAccount = C.OpenPitPretradeRejectScope_Account
 )
 
 const (
-	RejectCodeMissingRequiredField        = C.OpenPitRejectCode_MissingRequiredField
-	RejectCodeInvalidFieldFormat          = C.OpenPitRejectCode_InvalidFieldFormat
-	RejectCodeInvalidFieldValue           = C.OpenPitRejectCode_InvalidFieldValue
-	RejectCodeUnsupportedOrderType        = C.OpenPitRejectCode_UnsupportedOrderType
-	RejectCodeUnsupportedTimeInForce      = C.OpenPitRejectCode_UnsupportedTimeInForce
-	RejectCodeUnsupportedOrderAttribute   = C.OpenPitRejectCode_UnsupportedOrderAttribute
-	RejectCodeDuplicateClientOrderID      = C.OpenPitRejectCode_DuplicateClientOrderId
-	RejectCodeTooLateToEnter              = C.OpenPitRejectCode_TooLateToEnter
-	RejectCodeExchangeClosed              = C.OpenPitRejectCode_ExchangeClosed
-	RejectCodeUnknownInstrument           = C.OpenPitRejectCode_UnknownInstrument
-	RejectCodeUnknownAccount              = C.OpenPitRejectCode_UnknownAccount
-	RejectCodeUnknownVenue                = C.OpenPitRejectCode_UnknownVenue
-	RejectCodeUnknownClearingAccount      = C.OpenPitRejectCode_UnknownClearingAccount
-	RejectCodeUnknownCollateralAsset      = C.OpenPitRejectCode_UnknownCollateralAsset
-	RejectCodeInsufficientFunds           = C.OpenPitRejectCode_InsufficientFunds
-	RejectCodeInsufficientMargin          = C.OpenPitRejectCode_InsufficientMargin
-	RejectCodeInsufficientPosition        = C.OpenPitRejectCode_InsufficientPosition
-	RejectCodeCreditLimitExceeded         = C.OpenPitRejectCode_CreditLimitExceeded
-	RejectCodeRiskLimitExceeded           = C.OpenPitRejectCode_RiskLimitExceeded
-	RejectCodeOrderExceedsLimit           = C.OpenPitRejectCode_OrderExceedsLimit
-	RejectCodeOrderQtyExceedsLimit        = C.OpenPitRejectCode_OrderQtyExceedsLimit
-	RejectCodeOrderNotionalExceedsLimit   = C.OpenPitRejectCode_OrderNotionalExceedsLimit
-	RejectCodePositionLimitExceeded       = C.OpenPitRejectCode_PositionLimitExceeded
-	RejectCodeConcentrationLimitExceeded  = C.OpenPitRejectCode_ConcentrationLimitExceeded
-	RejectCodeLeverageLimitExceeded       = C.OpenPitRejectCode_LeverageLimitExceeded
-	RejectCodeRateLimitExceeded           = C.OpenPitRejectCode_RateLimitExceeded
-	RejectCodePnlKillSwitchTriggered      = C.OpenPitRejectCode_PnlKillSwitchTriggered
-	RejectCodeAccountBlocked              = C.OpenPitRejectCode_AccountBlocked
-	RejectCodeAccountNotAuthorized        = C.OpenPitRejectCode_AccountNotAuthorized
-	RejectCodeComplianceRestriction       = C.OpenPitRejectCode_ComplianceRestriction
-	RejectCodeInstrumentRestricted        = C.OpenPitRejectCode_InstrumentRestricted
-	RejectCodeJurisdictionRestriction     = C.OpenPitRejectCode_JurisdictionRestriction
-	RejectCodeWashTradePrevention         = C.OpenPitRejectCode_WashTradePrevention
-	RejectCodeSelfMatchPrevention         = C.OpenPitRejectCode_SelfMatchPrevention
-	RejectCodeShortSaleRestriction        = C.OpenPitRejectCode_ShortSaleRestriction
-	RejectCodeRiskConfigurationMissing    = C.OpenPitRejectCode_RiskConfigurationMissing
-	RejectCodeReferenceDataUnavailable    = C.OpenPitRejectCode_ReferenceDataUnavailable
-	RejectCodeOrderValueCalculationFailed = C.OpenPitRejectCode_OrderValueCalculationFailed
-	RejectCodeSystemUnavailable           = C.OpenPitRejectCode_SystemUnavailable
-	RejectCodeCustom                      = C.OpenPitRejectCode_Custom
-	RejectCodeOther                       = C.OpenPitRejectCode_Other
+	RejectCodeMissingRequiredField            = C.OpenPitPretradeRejectCode_MissingRequiredField
+	RejectCodeInvalidFieldFormat              = C.OpenPitPretradeRejectCode_InvalidFieldFormat
+	RejectCodeInvalidFieldValue               = C.OpenPitPretradeRejectCode_InvalidFieldValue
+	RejectCodeUnsupportedOrderType            = C.OpenPitPretradeRejectCode_UnsupportedOrderType
+	RejectCodeUnsupportedTimeInForce          = C.OpenPitPretradeRejectCode_UnsupportedTimeInForce
+	RejectCodeUnsupportedOrderAttribute       = C.OpenPitPretradeRejectCode_UnsupportedOrderAttribute
+	RejectCodeDuplicateClientOrderID          = C.OpenPitPretradeRejectCode_DuplicateClientOrderId
+	RejectCodeTooLateToEnter                  = C.OpenPitPretradeRejectCode_TooLateToEnter
+	RejectCodeExchangeClosed                  = C.OpenPitPretradeRejectCode_ExchangeClosed
+	RejectCodeUnknownInstrument               = C.OpenPitPretradeRejectCode_UnknownInstrument
+	RejectCodeUnknownAccount                  = C.OpenPitPretradeRejectCode_UnknownAccount
+	RejectCodeUnknownVenue                    = C.OpenPitPretradeRejectCode_UnknownVenue
+	RejectCodeUnknownClearingAccount          = C.OpenPitPretradeRejectCode_UnknownClearingAccount
+	RejectCodeUnknownCollateralAsset          = C.OpenPitPretradeRejectCode_UnknownCollateralAsset
+	RejectCodeInsufficientFunds               = C.OpenPitPretradeRejectCode_InsufficientFunds
+	RejectCodeInsufficientMargin              = C.OpenPitPretradeRejectCode_InsufficientMargin
+	RejectCodeInsufficientPosition            = C.OpenPitPretradeRejectCode_InsufficientPosition
+	RejectCodeCreditLimitExceeded             = C.OpenPitPretradeRejectCode_CreditLimitExceeded
+	RejectCodeRiskLimitExceeded               = C.OpenPitPretradeRejectCode_RiskLimitExceeded
+	RejectCodeOrderExceedsLimit               = C.OpenPitPretradeRejectCode_OrderExceedsLimit
+	RejectCodeOrderQtyExceedsLimit            = C.OpenPitPretradeRejectCode_OrderQtyExceedsLimit
+	RejectCodeOrderNotionalExceedsLimit       = C.OpenPitPretradeRejectCode_OrderNotionalExceedsLimit
+	RejectCodePositionLimitExceeded           = C.OpenPitPretradeRejectCode_PositionLimitExceeded
+	RejectCodeConcentrationLimitExceeded      = C.OpenPitPretradeRejectCode_ConcentrationLimitExceeded
+	RejectCodeLeverageLimitExceeded           = C.OpenPitPretradeRejectCode_LeverageLimitExceeded
+	RejectCodeRateLimitExceeded               = C.OpenPitPretradeRejectCode_RateLimitExceeded
+	RejectCodePnlKillSwitchTriggered          = C.OpenPitPretradeRejectCode_PnlKillSwitchTriggered
+	RejectCodeAccountBlocked                  = C.OpenPitPretradeRejectCode_AccountBlocked
+	RejectCodeAccountNotAuthorized            = C.OpenPitPretradeRejectCode_AccountNotAuthorized
+	RejectCodeComplianceRestriction           = C.OpenPitPretradeRejectCode_ComplianceRestriction
+	RejectCodeInstrumentRestricted            = C.OpenPitPretradeRejectCode_InstrumentRestricted
+	RejectCodeJurisdictionRestriction         = C.OpenPitPretradeRejectCode_JurisdictionRestriction
+	RejectCodeWashTradePrevention             = C.OpenPitPretradeRejectCode_WashTradePrevention
+	RejectCodeSelfMatchPrevention             = C.OpenPitPretradeRejectCode_SelfMatchPrevention
+	RejectCodeShortSaleRestriction            = C.OpenPitPretradeRejectCode_ShortSaleRestriction
+	RejectCodeRiskConfigurationMissing        = C.OpenPitPretradeRejectCode_RiskConfigurationMissing
+	RejectCodeReferenceDataUnavailable        = C.OpenPitPretradeRejectCode_ReferenceDataUnavailable
+	RejectCodeOrderValueCalculationFailed     = C.OpenPitPretradeRejectCode_OrderValueCalculationFailed
+	RejectCodeSystemUnavailable               = C.OpenPitPretradeRejectCode_SystemUnavailable
+	RejectCodeMarkPriceUnavailable            = C.OpenPitPretradeRejectCode_MarkPriceUnavailable
+	RejectCodeAccountAdjustmentBoundsExceeded = C.OpenPitPretradeRejectCode_AccountAdjustmentBoundsExceeded
+	RejectCodeArithmeticOverflow              = C.OpenPitPretradeRejectCode_ArithmeticOverflow
+	RejectCodeCustom                          = C.OpenPitPretradeRejectCode_Custom
+	RejectCodeOther                           = C.OpenPitPretradeRejectCode_Other
 )

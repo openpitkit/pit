@@ -21,10 +21,20 @@ import abc
 import collections.abc
 import dataclasses
 
-from .. import AccountAdjustment, AccountAdjustmentContext, ExecutionReport, Order
-from .._openpit import Context
+from .. import (
+    AccountAdjustment,
+    AccountAdjustmentContext,
+    ExecutionReport,
+    Order,
+)
+from .._openpit import (
+    AccountOutcomeEntry,
+    Context,
+    PostTradeContext,
+    PostTradeResult,
+)
 from ..core import Mutation
-from ..param import AccountId
+from ..param import AccountId, Price
 from ._enum import RejectScope
 
 @dataclasses.dataclass(frozen=True)
@@ -52,10 +62,35 @@ class PolicyDecision:
         mutations: collections.abc.Iterable[Mutation] = (),
     ) -> PolicyDecision: ...
 
+@dataclasses.dataclass(frozen=True)
+class PolicyPreTradeResult:
+    rejects: tuple[PolicyReject, ...] = ()
+    mutations: tuple[Mutation, ...] = ()
+    account_adjustments: tuple[AccountOutcomeEntry, ...] = ()
+    lock_prices: tuple[Price, ...] = ()
+
+    @classmethod
+    def accept(
+        cls,
+        mutations: collections.abc.Iterable[Mutation] = (),
+        account_adjustments: collections.abc.Iterable[AccountOutcomeEntry] = (),
+        lock_prices: collections.abc.Iterable[Price] = (),
+    ) -> PolicyPreTradeResult: ...
+    @classmethod
+    def reject(
+        cls,
+        rejects: collections.abc.Iterable[PolicyReject],
+        mutations: collections.abc.Iterable[Mutation] = (),
+        account_adjustments: collections.abc.Iterable[AccountOutcomeEntry] = (),
+        lock_prices: collections.abc.Iterable[Price] = (),
+    ) -> PolicyPreTradeResult: ...
+
 class Policy(abc.ABC):
     @property
     @abc.abstractmethod
     def name(self) -> str: ...
+    @property
+    def policy_group_id(self) -> int: ...
     def check_pre_trade_start(
         self,
         ctx: Context,
@@ -65,15 +100,20 @@ class Policy(abc.ABC):
         self,
         ctx: Context,
         order: Order,
-    ) -> PolicyDecision: ...
-    def apply_execution_report(self, report: ExecutionReport) -> bool: ...
+    ) -> PolicyPreTradeResult: ...
+    def apply_execution_report(
+        self,
+        ctx: PostTradeContext,
+        report: ExecutionReport,
+    ) -> PostTradeResult | None: ...
     def apply_account_adjustment(
         self,
         ctx: AccountAdjustmentContext,
         account_id: AccountId,
         adjustment: AccountAdjustment,
     ) -> (
-        PolicyDecision
+        collections.abc.Iterable[AccountOutcomeEntry]
+        | PolicyDecision
         | collections.abc.Iterable[PolicyReject]
         | tuple[Mutation, ...]
         | None

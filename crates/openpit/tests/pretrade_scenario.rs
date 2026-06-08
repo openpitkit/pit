@@ -28,13 +28,14 @@ use openpit::pretrade::policies::PnlBoundsKillSwitchPolicy;
 use openpit::pretrade::policies::{OrderSizeAssetBarrier, OrderSizeLimit, OrderSizeLimitPolicy};
 use openpit::pretrade::policies::{RateLimit, RateLimitBrokerBarrier, RateLimitPolicy};
 use openpit::pretrade::{
-    PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects,
+    PolicyPreTradeResult, PostTradeContext, PreTradeContext, PreTradePolicy, Reject, RejectCode,
+    RejectScope, Rejects,
 };
 use openpit::storage::NoLocking;
 use openpit::{
     Engine, EngineBuildError, ExecutionReportOperation, FinancialImpact, HasAccountId,
     HasClosePosition, HasFee, HasInstrument, HasPnl, HasReduceOnly, HasTradeAmount, Instrument,
-    Mutation, Mutations, OrderOperation, OrderPosition, WithExecutionReportOperation,
+    LocalSync, Mutation, Mutations, OrderOperation, OrderPosition, WithExecutionReportOperation,
     WithFinancialImpact, WithOrderOperation, WithOrderPosition,
 };
 use rust_decimal::Decimal;
@@ -77,7 +78,7 @@ impl HasFee for TestReport {
 #[test]
 fn integration_scenario_rate_limit_then_kill_switch() {
     let usd = Asset::new("USD").expect("asset code must be valid");
-    let builder = Engine::<TestOrder, TestReport>::builder().no_sync();
+    let builder = Engine::builder().no_sync();
     let shared_pnl = Rc::new(
         PnlBoundsKillSwitchPolicy::new(
             [pnl_bounds_barrier(usd.clone(), Some(pnl("-500")), None)],
@@ -127,7 +128,7 @@ fn integration_scenario_rate_limit_then_kill_switch() {
     );
 
     let post_trade = engine.apply_execution_report(&execution_report_spx_usd("-600"));
-    assert!(post_trade.kill_switch_triggered);
+    assert!(!post_trade.account_blocks.is_empty());
 
     let kill_switch_reject = match engine.start_pre_trade(order_aapl_usd("99.5", "1")) {
         Ok(_) => panic!("AAPL order must be blocked by kill switch"),
@@ -136,12 +137,7 @@ fn integration_scenario_rate_limit_then_kill_switch() {
     let kill_switch_reject = &kill_switch_reject[0];
     assert_eq!(kill_switch_reject.scope, RejectScope::Account);
     assert_eq!(kill_switch_reject.code, RejectCode::PnlKillSwitchTriggered);
-    // apply_execution_report already recorded the permanent block (None);
-    // subsequent checks report "account blocked", not the barrier reason.
-    assert_eq!(
-        kill_switch_reject.reason,
-        "pnl kill switch triggered: account blocked"
-    );
+    assert_eq!(kill_switch_reject.reason, "pnl kill switch triggered");
 }
 
 #[test]
@@ -213,7 +209,7 @@ fn integration_table_order_size_limit_paths() {
                 .expect("valid config")
         };
 
-        let engine = Engine::<TestOrder, TestReport>::builder()
+        let engine = Engine::builder::<TestOrder, TestReport, ()>()
             .no_sync()
             .pre_trade(size_limit)
             .build()
@@ -244,7 +240,7 @@ fn integration_table_order_size_limit_paths() {
 
     let size_limit = OrderSizeLimitPolicy::new(None, [order_size_limit_usd("100", "1000")], [])
         .expect("valid config");
-    let overflow_engine = Engine::<TestOrder, TestReport>::builder()
+    let overflow_engine = Engine::builder::<TestOrder, TestReport, ()>()
         .no_sync()
         .pre_trade(size_limit)
         .build()
@@ -279,7 +275,7 @@ fn integration_table_order_size_limit_paths() {
 
 #[test]
 fn integration_order_validation_checks_only_provided_fields() {
-    let engine = Engine::<TestOrder, TestReport>::builder()
+    let engine = Engine::builder::<TestOrder, TestReport, ()>()
         .no_sync()
         .pre_trade(OrderValidationPolicy::new())
         .build()
@@ -419,7 +415,7 @@ fn integration_table_main_stage_paths() {
 
     for case in cases {
         let journal = Rc::new(RefCell::new(Vec::new()));
-        let engine = Engine::<TestOrder, TestReport>::builder()
+        let engine = Engine::builder()
             .no_sync()
             .pre_trade(NotionalCapPolicy::new(
                 "NotionalCapPolicy",
@@ -476,7 +472,7 @@ fn integration_table_main_stage_paths() {
 
 #[test]
 fn integration_engine_builder_defaults_and_guardrails() {
-    let mut reservation = Engine::<TestOrder, TestReport>::builder()
+    let mut reservation = Engine::builder::<TestOrder, TestReport, ()>()
         .no_sync()
         .pre_trade(OrderValidationPolicy::new())
         .build()
@@ -487,7 +483,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
         .expect("engine::builder request must execute");
     reservation.rollback();
 
-    let mut reservation = Engine::<TestOrder, TestReport>::builder()
+    let mut reservation = Engine::builder::<TestOrder, TestReport, ()>()
         .no_sync()
         .pre_trade(OrderValidationPolicy::new())
         .build()
@@ -498,7 +494,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
         .expect("builder request must execute");
     reservation.commit();
 
-    let dup_builder = Engine::<TestOrder, TestReport>::builder().no_sync();
+    let dup_builder = Engine::builder::<TestOrder, TestReport, ()>().no_sync();
     let first_duplicate_policy = PnlBoundsKillSwitchPolicy::new(
         [pnl_bounds_barrier(
             Asset::new("USD").expect("asset code must be valid"),
@@ -528,7 +524,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
         Err(EngineBuildError::DuplicatePolicyName { name }) if name == "PnlBoundsKillSwitchPolicy"
     ));
 
-    let duplicate_main = Engine::<TestOrder, TestReport>::builder()
+    let duplicate_main = Engine::builder()
         .no_sync()
         .pre_trade(NotionalCapPolicy::new(
             "MainDup",
@@ -546,7 +542,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
         Err(EngineBuildError::DuplicatePolicyName { name }) if name == "MainDup"
     ));
 
-    let engine = Engine::<TestOrder, TestReport>::builder()
+    let engine = Engine::builder()
         .no_sync()
         .pre_trade(NotionalCapPolicy::new(
             "MainDefault",
@@ -556,9 +552,9 @@ fn integration_engine_builder_defaults_and_guardrails() {
         .build()
         .expect("engine must build");
     let post_trade = engine.apply_execution_report(&execution_report_spx_usd("0"));
-    assert!(!post_trade.kill_switch_triggered);
+    assert!(post_trade.account_blocks.is_empty());
 
-    let overflow_engine = Engine::<TestOrder, TestReport>::builder()
+    let overflow_engine = Engine::builder::<TestOrder, TestReport, ()>()
         .no_sync()
         .pre_trade(OrderValidationPolicy::new())
         .build()
@@ -582,7 +578,7 @@ fn integration_engine_builder_defaults_and_guardrails() {
         .expect("without rejecting policies the request must execute");
     reservation.rollback();
 
-    let misc_builder = Engine::<TestOrder, TestReport>::builder().no_sync();
+    let misc_builder = Engine::builder::<TestOrder, TestReport, ()>().no_sync();
     let pnl_policy: TestPnlPolicy = PnlBoundsKillSwitchPolicy::new(
         [pnl_bounds_barrier(
             Asset::new("EUR").expect("asset code must be valid"),
@@ -594,15 +590,17 @@ fn integration_engine_builder_defaults_and_guardrails() {
     )
     .expect("policy config must be valid");
     assert!(
-        !<TestPnlPolicy as PreTradePolicy<TestOrder, TestReport>>::apply_execution_report(
+        <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::apply_execution_report(
             &pnl_policy,
+            &PostTradeContext::<NoLocking>::new(),
             &execution_report_spx_usd("-10")
         )
+        .is_none_or(|r| r.is_empty())
     );
     // EUR-only policy has no barrier for USD: order passes.
-    <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport>>::check_pre_trade_start(
+    <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::check_pre_trade_start(
         &pnl_policy,
-        &PreTradeContext::new(),
+        &PreTradeContext::new(None),
         &order_aapl_usd("100", "1"),
     )
     .expect("no barrier configured for USD: order must pass");
@@ -630,17 +628,20 @@ fn integration_engine_builder_defaults_and_guardrails() {
         fee: Fee::ZERO,
     };
     assert!(
-        !<TestPnlPolicy as PreTradePolicy<TestOrder, TestReport>>::apply_execution_report(
+        <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::apply_execution_report(
             &overflow_policy,
+            &PostTradeContext::<NoLocking>::new(),
             &report_max,
         )
+        .is_none_or(|r| r.is_empty())
     );
     let triggered =
-        <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport>>::apply_execution_report(
+        <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::apply_execution_report(
             &overflow_policy,
+            &PostTradeContext::<NoLocking>::new(),
             &report_max,
         );
-    assert!(triggered);
+    assert!(!triggered.is_none_or(|r| r.is_empty()));
 }
 
 #[test]
@@ -685,9 +686,10 @@ fn integration_custom_order_strategy_tag_policy() {
 
     struct StrategyTagPolicy;
 
-    impl<O, R> PreTradePolicy<O, R> for StrategyTagPolicy
+    impl<O, R, A, Sync> PreTradePolicy<O, R, A, Sync> for StrategyTagPolicy
     where
         O: HasStrategyTag + HasTradeAmount,
+        Sync: openpit::SyncMode,
     {
         fn name(&self) -> &str {
             "StrategyTagPolicy"
@@ -695,10 +697,10 @@ fn integration_custom_order_strategy_tag_policy() {
 
         fn perform_pre_trade_check(
             &self,
-            _ctx: &PreTradeContext,
+            _ctx: &PreTradeContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
             order: &O,
             _mutations: &mut Mutations,
-        ) -> Result<(), Rejects> {
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
             if order.strategy_tag() == "blocked" {
                 return Err(Rejects::from(Reject::new(
                     "StrategyTagPolicy",
@@ -708,15 +710,19 @@ fn integration_custom_order_strategy_tag_policy() {
                     "project strategy tag blocked",
                 )));
             }
-            Ok(())
+            Ok(None)
         }
 
-        fn apply_execution_report(&self, _report: &R) -> bool {
-            false
+        fn apply_execution_report(
+            &self,
+            _ctx: &PostTradeContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
+            _report: &R,
+        ) -> Option<openpit::PostTradeResult> {
+            None
         }
     }
 
-    let engine = Engine::<StrategyOrder, StrategyExecutionReport>::builder()
+    let engine = Engine::builder::<StrategyOrder, StrategyExecutionReport, ()>()
         .no_sync()
         .pre_trade(StrategyTagPolicy)
         .build()
@@ -771,7 +777,7 @@ fn integration_custom_order_strategy_tag_policy() {
     };
     let _ = report.report_tag;
     let post_trade = engine.apply_execution_report(&report);
-    assert!(!post_trade.kill_switch_triggered);
+    assert!(post_trade.account_blocks.is_empty());
 }
 
 #[test]
@@ -808,7 +814,7 @@ fn integration_with_order_operation_with_order_position_reduce_only_accessible()
     );
     assert_eq!(order.inner.close_position(), Ok(false));
 
-    let engine = Engine::<CompositeOrder, TestReport>::builder()
+    let engine = Engine::builder::<CompositeOrder, TestReport, ()>()
         .no_sync()
         .pre_trade(OrderValidationPolicy::new())
         .build()
@@ -882,17 +888,17 @@ impl NotionalCapPolicy {
     }
 }
 
-impl PreTradePolicy<TestOrder, TestReport> for NotionalCapPolicy {
+impl PreTradePolicy<TestOrder, TestReport, (), LocalSync> for NotionalCapPolicy {
     fn name(&self) -> &str {
         self.name
     }
 
     fn perform_pre_trade_check(
         &self,
-        _ctx: &PreTradeContext,
+        _ctx: &PreTradeContext<NoLocking>,
         order: &TestOrder,
         mutations: &mut Mutations,
-    ) -> Result<(), Rejects> {
+    ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
         let requested_notional = order
             .price
             .expect("price must be present")
@@ -927,11 +933,15 @@ impl PreTradePolicy<TestOrder, TestReport> for NotionalCapPolicy {
         }
 
         mutations.push(Mutation::new(|| {}, || {}));
-        Ok(())
+        Ok(None)
     }
 
-    fn apply_execution_report(&self, _report: &TestReport) -> bool {
-        false
+    fn apply_execution_report(
+        &self,
+        _ctx: &PostTradeContext<NoLocking>,
+        _report: &TestReport,
+    ) -> Option<openpit::PostTradeResult> {
+        None
     }
 }
 
@@ -945,26 +955,31 @@ impl SharedPnlPolicy {
     }
 }
 
-impl PreTradePolicy<TestOrder, TestReport> for SharedPnlPolicy {
+impl PreTradePolicy<TestOrder, TestReport, (), LocalSync> for SharedPnlPolicy {
     fn name(&self) -> &str {
-        <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport>>::name(&self.inner)
+        <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::name(&self.inner)
     }
 
     fn check_pre_trade_start(
         &self,
-        _ctx: &PreTradeContext,
+        _ctx: &PreTradeContext<NoLocking>,
         order: &TestOrder,
     ) -> Result<(), Rejects> {
-        <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport>>::check_pre_trade_start(
+        <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::check_pre_trade_start(
             &self.inner,
-            &PreTradeContext::new(),
+            &PreTradeContext::new(None),
             order,
         )
     }
 
-    fn apply_execution_report(&self, report: &TestReport) -> bool {
-        <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport>>::apply_execution_report(
+    fn apply_execution_report(
+        &self,
+        ctx: &PostTradeContext<NoLocking>,
+        report: &TestReport,
+    ) -> Option<openpit::PostTradeResult> {
+        <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::apply_execution_report(
             &self.inner,
+            ctx,
             report,
         )
     }

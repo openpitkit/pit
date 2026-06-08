@@ -32,7 +32,7 @@ class TaggedOrder(openpit.Order):
                     "USD",
                 ),
                 side=openpit.param.Side.BUY,
-                account_id=openpit.param.AccountId.from_u64(99224416),
+                account_id=openpit.param.AccountId.from_int(99224416),
                 trade_amount=openpit.param.TradeAmount.quantity(10),
                 price=openpit.param.Price(25),
             ),
@@ -50,7 +50,7 @@ class TaggedReport(openpit.ExecutionReport):
                     "USD",
                 ),
                 side=openpit.param.Side.BUY,
-                account_id=openpit.param.AccountId.from_u64(99224416),
+                account_id=openpit.param.AccountId.from_int(99224416),
             ),
             financial_impact=openpit.FinancialImpact(
                 pnl=openpit.param.Pnl(5),
@@ -94,13 +94,14 @@ class CaptureStartCheck(openpit.pretrade.Policy):
     # @typing.override
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
-    ) -> bool:
+    ) -> openpit.pretrade.PostTradeResult | None:
         tagged_report = typing.cast(TaggedReport, report)
+        _ = ctx
         self.reports.append(report)
         self._journal.append(f"report-start:{self.name}:{tagged_report.report_tag}")
-        return False
+        return None
 
 
 class SequenceFenceStartCheck(openpit.pretrade.Policy):
@@ -126,12 +127,13 @@ class SequenceFenceStartCheck(openpit.pretrade.Policy):
     # @typing.override
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
-    ) -> bool:
+    ) -> openpit.pretrade.PostTradeResult | None:
         tagged_report = typing.cast(TaggedReport, report)
+        _ = ctx
         self._journal.append(f"report-start:{self.name}:{tagged_report.report_tag}")
-        return False
+        return None
 
 
 class CaptureExecutionCheck(openpit.pretrade.Policy):
@@ -161,13 +163,14 @@ class CaptureExecutionCheck(openpit.pretrade.Policy):
     # @typing.override
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
-    ) -> bool:
+    ) -> openpit.pretrade.PostTradeResult | None:
         tagged_report = typing.cast(TaggedReport, report)
+        _ = ctx
         self.reports.append(report)
         self._journal.append(f"report-main:{self.name}:{tagged_report.report_tag}")
-        return False
+        return None
 
 
 class SequenceFenceExecutionCheck(openpit.pretrade.Policy):
@@ -194,12 +197,13 @@ class SequenceFenceExecutionCheck(openpit.pretrade.Policy):
     # @typing.override
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
-    ) -> bool:
+    ) -> openpit.pretrade.PostTradeResult | None:
         tagged_report = typing.cast(TaggedReport, report)
+        _ = ctx
         self._journal.append(f"report-main:{self.name}:{tagged_report.report_tag}")
-        return False
+        return None
 
 
 def make_tagged_order(order_tag: str) -> TaggedOrder:
@@ -336,7 +340,7 @@ def test_policy_callbacks_preserve_original_objects_across_interleaving(
 
     for report_index in case.report_order:
         post_trade = engine.apply_execution_report(report=reports[report_index])
-        assert post_trade.kill_switch_triggered is False
+        assert not post_trade.account_blocks
 
     expected_execute_orders = [orders[index] for index in case.execute_order]
     expected_reports = [reports[index] for index in case.report_order]

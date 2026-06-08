@@ -20,6 +20,11 @@ import datetime
 import openpit
 import pytest
 
+# Mirrors public examples from:
+# - bindings/python/README.md
+# - ../pit.wiki/Getting-Started.md
+# If this test changes, update every linked documentation snippet.
+
 
 def send_order_to_venue(order: openpit.Order) -> None:
     _ = order
@@ -32,7 +37,7 @@ def _aapl_usd_order(
     account_id: openpit.param.AccountId | None = None,
 ) -> openpit.Order:
     if account_id is None:
-        account_id = openpit.param.AccountId.from_u64(99224416)
+        account_id = openpit.param.AccountId.from_int(99224416)
     return openpit.Order(
         operation=openpit.OrderOperation(
             instrument=openpit.Instrument("AAPL", "USD"),
@@ -48,7 +53,7 @@ def _aapl_usd_report() -> openpit.ExecutionReport:
     return openpit.ExecutionReport(
         operation=openpit.ExecutionReportOperation(
             instrument=openpit.Instrument("AAPL", "USD"),
-            account_id=openpit.param.AccountId.from_u64(99224416),
+            account_id=openpit.param.AccountId.from_int(99224416),
             side=openpit.param.Side.BUY,
         ),
         financial_impact=openpit.FinancialImpact(
@@ -60,7 +65,7 @@ def _aapl_usd_report() -> openpit.ExecutionReport:
 
 @pytest.mark.integration
 def test_readme_quickstart() -> None:
-    # Source: bindings/python/README.md — Usage
+    # Source: bindings/python/README.md - Usage
     # Shared with: pit.wiki/Getting-Started.md
     # Keep README and wiki versions of this example in sync.
 
@@ -120,7 +125,7 @@ def test_readme_quickstart() -> None:
                 "AAPL",
                 "USD",
             ),
-            account_id=openpit.param.AccountId.from_u64(99224416),
+            account_id=openpit.param.AccountId.from_int(99224416),
             side=openpit.param.Side.BUY,
             trade_amount=openpit.param.TradeAmount.quantity(100.0),
             price=openpit.param.Price(185.0),
@@ -176,7 +181,7 @@ def test_readme_quickstart() -> None:
                 "AAPL",
                 "USD",
             ),
-            account_id=openpit.param.AccountId.from_u64(99224416),
+            account_id=openpit.param.AccountId.from_int(99224416),
             side=openpit.param.Side.BUY,
         ),
         financial_impact=openpit.FinancialImpact(
@@ -190,7 +195,7 @@ def test_readme_quickstart() -> None:
     # 7. After each execution report is applied, the system may report that it has
     # been determined in advance that all subsequent requests will be rejected if
     # the account status does not change.
-    assert result.kill_switch_triggered is False
+    assert not result.account_blocks
 
 
 class BlockedAccountPolicy(openpit.pretrade.Policy):
@@ -205,7 +210,7 @@ class BlockedAccountPolicy(openpit.pretrade.Policy):
     ) -> tuple[openpit.pretrade.PolicyReject, ...]:
         del ctx
         assert order.operation is not None
-        if order.operation.account_id == openpit.param.AccountId.from_u64(1):
+        if order.operation.account_id == openpit.param.AccountId.from_int(1):
             return (
                 openpit.pretrade.PolicyReject(
                     code=openpit.pretrade.RejectCode.ACCOUNT_BLOCKED,
@@ -218,9 +223,10 @@ class BlockedAccountPolicy(openpit.pretrade.Policy):
 
     def apply_execution_report(
         self,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
     ) -> bool:
-        del report
+        del ctx, report
         return False
 
 
@@ -261,9 +267,10 @@ class DocsNotionalCapPolicy(openpit.pretrade.Policy):
 
     def apply_execution_report(
         self,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
     ) -> bool:
-        del report
+        del ctx, report
         return False
 
 
@@ -280,8 +287,12 @@ class MyMainStagePolicy(openpit.pretrade.Policy):
         del ctx, order
         return openpit.pretrade.PolicyDecision.accept()
 
-    def apply_execution_report(self, report: openpit.ExecutionReport) -> bool:
-        del report
+    def apply_execution_report(
+        self,
+        ctx: openpit.pretrade.PostTradeContext,
+        report: openpit.ExecutionReport,
+    ) -> bool:
+        del ctx, report
         return False
 
 
@@ -301,7 +312,7 @@ class MyAdjustmentCheck(openpit.pretrade.Policy):
 
 @pytest.mark.integration
 def test_docs_guides_policies_start_stage_policy() -> None:
-    # Source: bindings/python/docs/guides/policies.md — start-stage checks
+    # Source: bindings/python/docs/guides/policies.md - start-stage checks
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -314,7 +325,7 @@ def test_docs_guides_policies_start_stage_policy() -> None:
 
     blocked = engine.start_pre_trade(
         order=_aapl_usd_order(
-            account_id=openpit.param.AccountId.from_u64(1),
+            account_id=openpit.param.AccountId.from_int(1),
         )
     )
     assert not blocked.ok
@@ -323,7 +334,7 @@ def test_docs_guides_policies_start_stage_policy() -> None:
 
 @pytest.mark.integration
 def test_docs_guides_policies_main_stage_policy() -> None:
-    # Source: bindings/python/docs/guides/policies.md — main-stage checks
+    # Source: bindings/python/docs/guides/policies.md - main-stage checks
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -350,7 +361,7 @@ def test_docs_guides_policies_main_stage_policy() -> None:
 
 @pytest.mark.integration
 def test_docs_guides_engine_build_engine() -> None:
-    # Source: bindings/python/docs/guides/engine.md — Build an engine
+    # Source: bindings/python/docs/guides/engine.md - Build an engine
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -365,7 +376,7 @@ def test_docs_guides_engine_build_engine() -> None:
 
 @pytest.mark.integration
 def test_docs_guides_engine_explicit_two_stage_flow() -> None:
-    # Source: bindings/python/docs/guides/engine.md — Run the explicit two-stage flow
+    # Source: bindings/python/docs/guides/engine.md - Run the explicit two-stage flow
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -390,7 +401,7 @@ def test_docs_guides_engine_explicit_two_stage_flow() -> None:
 
 @pytest.mark.integration
 def test_docs_guides_engine_shortcut_flow() -> None:
-    # Source: bindings/python/docs/guides/engine.md — Run the shortcut flow
+    # Source: bindings/python/docs/guides/engine.md - Run the shortcut flow
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -407,7 +418,7 @@ def test_docs_guides_engine_shortcut_flow() -> None:
 
 @pytest.mark.integration
 def test_docs_guides_engine_finalize_reservations() -> None:
-    # Source: bindings/python/docs/guides/engine.md — Finalize reservations
+    # Source: bindings/python/docs/guides/engine.md - Finalize reservations
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -435,7 +446,7 @@ def test_docs_guides_engine_finalize_reservations() -> None:
 
 @pytest.mark.integration
 def test_docs_guides_engine_apply_post_trade_reports() -> None:
-    # Source: bindings/python/docs/guides/engine.md — Apply post-trade reports
+    # Source: bindings/python/docs/guides/engine.md - Apply post-trade reports
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -445,7 +456,7 @@ def test_docs_guides_engine_apply_post_trade_reports() -> None:
     report = _aapl_usd_report()
 
     post_trade = engine.apply_execution_report(report=report)
-    if post_trade.kill_switch_triggered:
+    if post_trade.account_blocks:
         print("halt new orders until the blocked state is cleared")
 
-    assert post_trade.kill_switch_triggered is False
+    assert not post_trade.account_blocks

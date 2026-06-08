@@ -15,6 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
+// Package openpit provides the Go binding for the OpenPit pre-trade risk engine.
 package openpit
 
 import (
@@ -51,7 +52,7 @@ func TestAccountAdjustmentNativeE2E_BatchAppliesAndInvokesPolicyPerItem(t *testi
 			Amount: optional.Some(
 				model.NewAccountAdjustmentAmountFromValues(
 					model.AccountAdjustmentAmountValues{
-						Total: optional.Some(
+						Balance: optional.Some(
 							param.NewDeltaAdjustmentAmount(
 								mustAdjustmentNativePositionSize(t, "10"),
 							),
@@ -80,7 +81,7 @@ func TestAccountAdjustmentNativeE2E_BatchAppliesAndInvokesPolicyPerItem(t *testi
 						AverageEntryPrice: optional.Some(
 							mustAdjustmentNativePrice(t, "102.25"),
 						),
-						Leverage: optional.Some(param.NewLeverageFromInt(4)),
+						Leverage: optional.Some(param.NewLeverageFromUint16(4)),
 						Mode:     optional.Some(param.PositionModeHedged),
 					},
 				),
@@ -88,10 +89,10 @@ func TestAccountAdjustmentNativeE2E_BatchAppliesAndInvokesPolicyPerItem(t *testi
 			Bounds: optional.Some(
 				model.NewAccountAdjustmentBoundsFromValues(
 					model.AccountAdjustmentBoundsValues{
-						TotalUpper:   optional.Some(mustAdjustmentNativePositionSize(t, "100")),
-						TotalLower:   optional.Some(mustAdjustmentNativePositionSize(t, "20")),
-						PendingUpper: optional.Some(mustAdjustmentNativePositionSize(t, "50")),
-						PendingLower: optional.Some(mustAdjustmentNativePositionSize(t, "5")),
+						BalanceUpper:  optional.Some(mustAdjustmentNativePositionSize(t, "100")),
+						BalanceLower:  optional.Some(mustAdjustmentNativePositionSize(t, "20")),
+						IncomingUpper: optional.Some(mustAdjustmentNativePositionSize(t, "50")),
+						IncomingLower: optional.Some(mustAdjustmentNativePositionSize(t, "5")),
 					},
 				),
 			),
@@ -101,8 +102,8 @@ func TestAccountAdjustmentNativeE2E_BatchAppliesAndInvokesPolicyPerItem(t *testi
 		t.Fatalf("NewAccountAdjustmentFromValues(second) error = %v", err)
 	}
 
-	rejects, err := engine.ApplyAccountAdjustment(
-		param.NewAccountIDFromInt(77),
+	rejects, _, err := engine.ApplyAccountAdjustment(
+		param.NewAccountIDFromUint64(77),
 		[]model.AccountAdjustment{first, second},
 	)
 	if err != nil {
@@ -127,6 +128,10 @@ func (p accountAdjustmentCountingPolicy) Name() string {
 	return p.name
 }
 
+func (accountAdjustmentCountingPolicy) PolicyGroupID() model.PolicyGroupID {
+	return model.DefaultPolicyGroupID
+}
+
 func (accountAdjustmentCountingPolicy) CheckPreTradeStart(
 	pretrade.Context,
 	model.Order,
@@ -138,12 +143,17 @@ func (accountAdjustmentCountingPolicy) PerformPreTradeCheck(
 	pretrade.Context,
 	model.Order,
 	tx.Mutations,
+	pretrade.Result,
 ) []reject.Reject {
 	return nil
 }
 
-func (accountAdjustmentCountingPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
-	return false
+func (accountAdjustmentCountingPolicy) ApplyExecutionReport(
+	_ pretrade.PostTradeContext,
+	_ model.ExecutionReport,
+	_ pretrade.PostTradeAdjustments,
+) []reject.AccountBlock {
+	return nil
 }
 
 func (p *accountAdjustmentCountingPolicy) ApplyAccountAdjustment(
@@ -151,6 +161,7 @@ func (p *accountAdjustmentCountingPolicy) ApplyAccountAdjustment(
 	param.AccountID,
 	model.AccountAdjustment,
 	tx.Mutations,
+	pretrade.AccountOutcomes,
 ) []reject.Reject {
 	p.calls++
 	return nil

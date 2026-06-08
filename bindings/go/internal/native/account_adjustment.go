@@ -34,52 +34,86 @@ func AccountAdjustmentReset(adjustment *AccountAdjustment) {
 	*adjustment = NewAccountAdjustment()
 }
 
+func AccountAdjustmentGetOperationKind(
+	adjustment AccountAdjustment,
+) AccountAdjustmentOperationKind {
+	return adjustment.operation.kind
+}
+
 func AccountAdjustmentGetBalanceOperation(
 	adjustment AccountAdjustment,
-) AccountAdjustmentBalanceOperationOptional {
-	return adjustment.balance_operation
+) AccountAdjustmentBalanceOperation {
+	return adjustment.operation.balance
 }
 
 func AccountAdjustmentGetBalanceOperationView(
 	adjustment *AccountAdjustment,
-) *AccountAdjustmentBalanceOperationOptional {
-	return &adjustment.balance_operation
+) *AccountAdjustmentBalanceOperation {
+	return &adjustment.operation.balance
 }
 
 func AccountAdjustmentSetBalanceOperationAndUnsetPositionOperation(
 	adjustment *AccountAdjustment,
 	operation AccountAdjustmentBalanceOperation,
 ) {
-	AccountAdjustmentBalanceOperationOptionalSet(&adjustment.balance_operation, operation)
-	AccountAdjustmentPositionOperationOptionalReset(&adjustment.position_operation)
+	adjustment.operation.kind = AccountAdjustmentOperationKindBalance
+	adjustment.operation.balance = operation
+	AccountAdjustmentPositionOperationReset(&adjustment.operation.position)
+}
+
+func AccountAdjustmentSelectBalanceOperationAndUnsetPositionOperation(
+	adjustment *AccountAdjustment,
+) {
+	if adjustment.operation.kind != AccountAdjustmentOperationKindBalance {
+		AccountAdjustmentBalanceOperationReset(&adjustment.operation.balance)
+	}
+	adjustment.operation.kind = AccountAdjustmentOperationKindBalance
+	AccountAdjustmentPositionOperationReset(&adjustment.operation.position)
 }
 
 func AccountAdjustmentUnsetBalanceOperation(adjustment *AccountAdjustment) {
-	AccountAdjustmentBalanceOperationOptionalReset(&adjustment.balance_operation)
+	if adjustment.operation.kind == AccountAdjustmentOperationKindBalance {
+		adjustment.operation.kind = AccountAdjustmentOperationKindAbsent
+	}
+	AccountAdjustmentBalanceOperationReset(&adjustment.operation.balance)
 }
 
 func AccountAdjustmentGetPositionOperation(
 	adjustment AccountAdjustment,
-) AccountAdjustmentPositionOperationOptional {
-	return adjustment.position_operation
+) AccountAdjustmentPositionOperation {
+	return adjustment.operation.position
 }
 
 func AccountAdjustmentGetPositionOperationView(
 	adjustment *AccountAdjustment,
-) *AccountAdjustmentPositionOperationOptional {
-	return &adjustment.position_operation
+) *AccountAdjustmentPositionOperation {
+	return &adjustment.operation.position
 }
 
 func AccountAdjustmentSetPositionOperationAndUnsetBalanceOperation(
 	adjustment *AccountAdjustment,
 	operation AccountAdjustmentPositionOperation,
 ) {
-	AccountAdjustmentPositionOperationOptionalSet(&adjustment.position_operation, operation)
-	AccountAdjustmentBalanceOperationOptionalReset(&adjustment.balance_operation)
+	adjustment.operation.kind = AccountAdjustmentOperationKindPosition
+	adjustment.operation.position = operation
+	AccountAdjustmentBalanceOperationReset(&adjustment.operation.balance)
+}
+
+func AccountAdjustmentSelectPositionOperationAndUnsetBalanceOperation(
+	adjustment *AccountAdjustment,
+) {
+	if adjustment.operation.kind != AccountAdjustmentOperationKindPosition {
+		AccountAdjustmentPositionOperationReset(&adjustment.operation.position)
+	}
+	adjustment.operation.kind = AccountAdjustmentOperationKindPosition
+	AccountAdjustmentBalanceOperationReset(&adjustment.operation.balance)
 }
 
 func AccountAdjustmentUnsetPositionOperation(adjustment *AccountAdjustment) {
-	AccountAdjustmentPositionOperationOptionalReset(&adjustment.position_operation)
+	if adjustment.operation.kind == AccountAdjustmentOperationKindPosition {
+		adjustment.operation.kind = AccountAdjustmentOperationKindAbsent
+	}
+	AccountAdjustmentPositionOperationReset(&adjustment.operation.position)
 }
 
 func AccountAdjustmentGetAmount(adjustment AccountAdjustment) AccountAdjustmentAmountOptional {
@@ -124,86 +158,6 @@ func AccountAdjustmentGetUserData(adjustment AccountAdjustment) unsafe.Pointer {
 
 func AccountAdjustmentSetUserData(adjustment *AccountAdjustment, userData unsafe.Pointer) {
 	adjustment.user_data = userData
-}
-
-//------------------------------------------------------------------------------
-// AccountAdjustmentBalanceOperationOptional
-
-func NewAccountAdjustmentBalanceOperationOptional() AccountAdjustmentBalanceOperationOptional {
-	return AccountAdjustmentBalanceOperationOptional{}
-}
-
-func AccountAdjustmentBalanceOperationOptionalReset(
-	operation *AccountAdjustmentBalanceOperationOptional,
-) {
-	AccountAdjustmentBalanceOperationReset(&operation.value)
-	operation.is_set = false
-}
-
-func AccountAdjustmentBalanceOperationOptionalIsSet(
-	value AccountAdjustmentBalanceOperationOptional,
-) bool {
-	return bool(value.is_set)
-}
-
-func AccountAdjustmentBalanceOperationOptionalGet(
-	value AccountAdjustmentBalanceOperationOptional,
-) AccountAdjustmentBalanceOperation {
-	return value.value
-}
-
-func AccountAdjustmentBalanceOperationOptionalGetView(
-	value *AccountAdjustmentBalanceOperationOptional,
-) *AccountAdjustmentBalanceOperation {
-	return &value.value
-}
-
-func AccountAdjustmentBalanceOperationOptionalSet(
-	value *AccountAdjustmentBalanceOperationOptional,
-	operation AccountAdjustmentBalanceOperation,
-) {
-	value.value = operation
-	value.is_set = true
-}
-
-//------------------------------------------------------------------------------
-// AccountAdjustmentPositionOperationOptional
-
-func NewAccountAdjustmentPositionOperationOptional() AccountAdjustmentPositionOperationOptional {
-	return AccountAdjustmentPositionOperationOptional{}
-}
-
-func AccountAdjustmentPositionOperationOptionalReset(
-	operation *AccountAdjustmentPositionOperationOptional,
-) {
-	AccountAdjustmentPositionOperationReset(&operation.value)
-	operation.is_set = false
-}
-
-func AccountAdjustmentPositionOperationOptionalIsSet(
-	value AccountAdjustmentPositionOperationOptional,
-) bool {
-	return bool(value.is_set)
-}
-
-func AccountAdjustmentPositionOperationOptionalGet(
-	value AccountAdjustmentPositionOperationOptional,
-) AccountAdjustmentPositionOperation {
-	return value.value
-}
-
-func AccountAdjustmentPositionOperationOptionalGetView(
-	value *AccountAdjustmentPositionOperationOptional,
-) *AccountAdjustmentPositionOperation {
-	return &value.value
-}
-
-func AccountAdjustmentPositionOperationOptionalSet(
-	value *AccountAdjustmentPositionOperationOptional,
-	operation AccountAdjustmentPositionOperation,
-) {
-	value.value = operation
-	value.is_set = true
 }
 
 //------------------------------------------------------------------------------
@@ -438,46 +392,46 @@ func AccountAdjustmentAmountReset(amount *AccountAdjustmentAmount) {
 	*amount = NewAccountAdjustmentAmount()
 }
 
-func AccountAdjustmentAmountGetTotal(amount AccountAdjustmentAmount) ParamAdjustmentAmount {
-	return amount.total
+func AccountAdjustmentAmountGetBalance(amount AccountAdjustmentAmount) ParamAdjustmentAmount {
+	return amount.balance
 }
 
-func AccountAdjustmentAmountSetTotal(amount *AccountAdjustmentAmount, value ParamAdjustmentAmount) {
-	amount.total = value
+func AccountAdjustmentAmountSetBalance(amount *AccountAdjustmentAmount, value ParamAdjustmentAmount) {
+	amount.balance = value
 }
 
-func AccountAdjustmentAmountUnsetTotal(amount *AccountAdjustmentAmount) {
-	amount.total = ParamAdjustmentAmount{}
+func AccountAdjustmentAmountUnsetBalance(amount *AccountAdjustmentAmount) {
+	amount.balance = ParamAdjustmentAmount{}
 }
 
-func AccountAdjustmentAmountGetReserved(amount AccountAdjustmentAmount) ParamAdjustmentAmount {
-	return amount.reserved
+func AccountAdjustmentAmountGetHeld(amount AccountAdjustmentAmount) ParamAdjustmentAmount {
+	return amount.held
 }
 
-func AccountAdjustmentAmountSetReserved(
+func AccountAdjustmentAmountSetHeld(
 	amount *AccountAdjustmentAmount,
 	value ParamAdjustmentAmount,
 ) {
-	amount.reserved = value
+	amount.held = value
 }
 
-func AccountAdjustmentAmountUnsetReserved(amount *AccountAdjustmentAmount) {
-	amount.reserved = ParamAdjustmentAmount{}
+func AccountAdjustmentAmountUnsetHeld(amount *AccountAdjustmentAmount) {
+	amount.held = ParamAdjustmentAmount{}
 }
 
-func AccountAdjustmentAmountGetPending(amount AccountAdjustmentAmount) ParamAdjustmentAmount {
-	return amount.pending
+func AccountAdjustmentAmountGetIncoming(amount AccountAdjustmentAmount) ParamAdjustmentAmount {
+	return amount.incoming
 }
 
-func AccountAdjustmentAmountSetPending(
+func AccountAdjustmentAmountSetIncoming(
 	amount *AccountAdjustmentAmount,
 	value ParamAdjustmentAmount,
 ) {
-	amount.pending = value
+	amount.incoming = value
 }
 
-func AccountAdjustmentAmountUnsetPending(amount *AccountAdjustmentAmount) {
-	amount.pending = ParamAdjustmentAmount{}
+func AccountAdjustmentAmountUnsetIncoming(amount *AccountAdjustmentAmount) {
+	amount.incoming = ParamAdjustmentAmount{}
 }
 
 //------------------------------------------------------------------------------
@@ -491,112 +445,112 @@ func AccountAdjustmentBoundsReset(bounds *AccountAdjustmentBounds) {
 	*bounds = NewAccountAdjustmentBounds()
 }
 
-func AccountAdjustmentBoundsGetTotalUpper(
+func AccountAdjustmentBoundsGetBalanceUpper(
 	bounds AccountAdjustmentBounds,
 ) ParamPositionSizeOptional {
-	return bounds.total_upper
+	return bounds.balance_upper
 }
 
-func AccountAdjustmentBoundsSetTotalUpper(
+func AccountAdjustmentBoundsSetBalanceUpper(
 	bounds *AccountAdjustmentBounds,
 	bound ParamPositionSize,
 ) {
-	bounds.total_upper.value = bound
-	bounds.total_upper.is_set = true
+	bounds.balance_upper.value = bound
+	bounds.balance_upper.is_set = true
 }
 
-func AccountAdjustmentBoundsUnsetTotalUpper(bounds *AccountAdjustmentBounds) {
-	bounds.total_upper = ParamPositionSizeOptional{}
+func AccountAdjustmentBoundsUnsetBalanceUpper(bounds *AccountAdjustmentBounds) {
+	bounds.balance_upper = ParamPositionSizeOptional{}
 }
 
-func AccountAdjustmentBoundsGetTotalLower(
+func AccountAdjustmentBoundsGetBalanceLower(
 	bounds AccountAdjustmentBounds,
 ) ParamPositionSizeOptional {
-	return bounds.total_lower
+	return bounds.balance_lower
 }
 
-func AccountAdjustmentBoundsSetTotalLower(
+func AccountAdjustmentBoundsSetBalanceLower(
 	bounds *AccountAdjustmentBounds,
 	bound ParamPositionSize,
 ) {
-	bounds.total_lower.value = bound
-	bounds.total_lower.is_set = true
+	bounds.balance_lower.value = bound
+	bounds.balance_lower.is_set = true
 }
 
-func AccountAdjustmentBoundsUnsetTotalLower(bounds *AccountAdjustmentBounds) {
-	bounds.total_lower = ParamPositionSizeOptional{}
+func AccountAdjustmentBoundsUnsetBalanceLower(bounds *AccountAdjustmentBounds) {
+	bounds.balance_lower = ParamPositionSizeOptional{}
 }
 
-func AccountAdjustmentBoundsGetReservedUpper(
+func AccountAdjustmentBoundsGetHeldUpper(
 	bounds AccountAdjustmentBounds,
 ) ParamPositionSizeOptional {
-	return bounds.reserved_upper
+	return bounds.held_upper
 }
 
-func AccountAdjustmentBoundsSetReservedUpper(
+func AccountAdjustmentBoundsSetHeldUpper(
 	bounds *AccountAdjustmentBounds,
 	bound ParamPositionSize,
 ) {
-	bounds.reserved_upper.value = bound
-	bounds.reserved_upper.is_set = true
+	bounds.held_upper.value = bound
+	bounds.held_upper.is_set = true
 }
 
-func AccountAdjustmentBoundsUnsetReservedUpper(bounds *AccountAdjustmentBounds) {
-	bounds.reserved_upper = ParamPositionSizeOptional{}
+func AccountAdjustmentBoundsUnsetHeldUpper(bounds *AccountAdjustmentBounds) {
+	bounds.held_upper = ParamPositionSizeOptional{}
 }
 
-func AccountAdjustmentBoundsGetReservedLower(
+func AccountAdjustmentBoundsGetHeldLower(
 	bounds AccountAdjustmentBounds,
 ) ParamPositionSizeOptional {
-	return bounds.reserved_lower
+	return bounds.held_lower
 }
 
-func AccountAdjustmentBoundsSetReservedLower(
+func AccountAdjustmentBoundsSetHeldLower(
 	bounds *AccountAdjustmentBounds,
 	bound ParamPositionSize,
 ) {
-	bounds.reserved_lower.value = bound
-	bounds.reserved_lower.is_set = true
+	bounds.held_lower.value = bound
+	bounds.held_lower.is_set = true
 }
 
-func AccountAdjustmentBoundsUnsetReservedLower(bounds *AccountAdjustmentBounds) {
-	bounds.reserved_lower = ParamPositionSizeOptional{}
+func AccountAdjustmentBoundsUnsetHeldLower(bounds *AccountAdjustmentBounds) {
+	bounds.held_lower = ParamPositionSizeOptional{}
 }
 
-func AccountAdjustmentBoundsGetPendingUpper(
+func AccountAdjustmentBoundsGetIncomingUpper(
 	bounds AccountAdjustmentBounds,
 ) ParamPositionSizeOptional {
-	return bounds.pending_upper
+	return bounds.incoming_upper
 }
 
-func AccountAdjustmentBoundsSetPendingUpper(
+func AccountAdjustmentBoundsSetIncomingUpper(
 	bounds *AccountAdjustmentBounds,
 	bound ParamPositionSize,
 ) {
-	bounds.pending_upper.value = bound
-	bounds.pending_upper.is_set = true
+	bounds.incoming_upper.value = bound
+	bounds.incoming_upper.is_set = true
 }
 
-func AccountAdjustmentBoundsUnsetPendingUpper(bounds *AccountAdjustmentBounds) {
-	bounds.pending_upper = ParamPositionSizeOptional{}
+func AccountAdjustmentBoundsUnsetIncomingUpper(bounds *AccountAdjustmentBounds) {
+	bounds.incoming_upper = ParamPositionSizeOptional{}
 }
 
-func AccountAdjustmentBoundsGetPendingLower(
+func AccountAdjustmentBoundsGetIncomingLower(
 	bounds AccountAdjustmentBounds,
 ) ParamPositionSizeOptional {
-	return bounds.pending_lower
+	return bounds.incoming_lower
 }
 
-func AccountAdjustmentBoundsSetPendingLower(
+func AccountAdjustmentBoundsSetIncomingLower(
 	bounds *AccountAdjustmentBounds,
 	bound ParamPositionSize,
 ) {
-	bounds.pending_lower.value = bound
-	bounds.pending_lower.is_set = true
+	bounds.incoming_lower.value = bound
+	bounds.incoming_lower.is_set = true
 }
 
-func AccountAdjustmentBoundsUnsetPendingLower(bounds *AccountAdjustmentBounds) {
-	bounds.pending_lower = ParamPositionSizeOptional{}
+func AccountAdjustmentBoundsUnsetIncomingLower(bounds *AccountAdjustmentBounds) {
+	bounds.incoming_lower = ParamPositionSizeOptional{}
 }
 
 //------------------------------------------------------------------------------

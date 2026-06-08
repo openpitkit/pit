@@ -15,8 +15,10 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
+// Package optional provides optional value types for the SDK.
 package optional
 
+// Bool is a tri-state boolean: BoolNone (unset), False, or True.
 type Bool int8
 
 const (

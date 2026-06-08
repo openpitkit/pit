@@ -43,63 +43,57 @@
 //! with the caller.
 
 mod core;
+pub mod marketdata;
 pub mod param;
 pub mod pretrade;
 pub mod storage;
 
 pub use core::engine::{
-    AccountAdjustmentBatchError, Engine, EngineBuildError, EngineBuilder, LocalEngine,
-    SequentialEngine, SyncedEngine,
+    AccountAdjustmentBatchError, AccountSyncEngine, Engine, FullSyncEngine, LocalEngine,
+};
+pub use core::engine_builder::{
+    EngineBuildError, EngineBuilder, IntoPolicyObject, ReadyEngineBuilder, SyncedEngineBuilder,
 };
 pub use core::{
-    AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
-    AccountAdjustmentContext, AccountAdjustmentPositionOperation, AccountKey, AccountKeyConstraint,
+    AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBatchResult,
+    AccountAdjustmentBounds, AccountAdjustmentContext, AccountAdjustmentOutcome,
+    AccountAdjustmentPositionOperation, AccountKey, AccountKeyConstraint, AccountOutcomeEntry,
     ExecutionReportFillDetails, ExecutionReportOperation, ExecutionReportPositionImpact,
-    FinancialImpact, HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentPending,
-    HasAccountAdjustmentPendingLowerBound, HasAccountAdjustmentPendingUpperBound,
-    HasAccountAdjustmentPositionLeverage, HasAccountAdjustmentReserved,
-    HasAccountAdjustmentReservedLowerBound, HasAccountAdjustmentReservedUpperBound,
-    HasAccountAdjustmentTotal, HasAccountAdjustmentTotalLowerBound,
-    HasAccountAdjustmentTotalUpperBound, HasAccountId, HasAutoBorrow, HasAverageEntryPrice,
+    FinancialImpact, HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
+    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
+    HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
+    HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
+    HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
+    HasAccountAdjustmentPositionLeverage, HasAccountId, HasAutoBorrow, HasAverageEntryPrice,
     HasBalanceAsset, HasClosePosition, HasCollateralAsset, HasExecutionReportIsFinal,
     HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
-    HasFee, HasInstrument, HasLeavesQuantity, HasLock, HasOrderCollateralAsset, HasOrderLeverage,
+    HasFee, HasInstrument, HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage,
     HasOrderPositionSide, HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode,
-    HasReduceOnly, HasSide, HasTradeAmount, Instrument, Mutation, Mutations, OrderMargin,
-    OrderOperation, OrderPosition, RequestFieldAccessError, WithAccountAdjustmentAmount,
-    WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
-    WithAccountAdjustmentPositionOperation, WithExecutionReportFillDetails,
-    WithExecutionReportOperation, WithExecutionReportPositionImpact, WithFinancialImpact,
-    WithOrderMargin, WithOrderOperation, WithOrderPosition,
+    HasPreTradeLock, HasReduceOnly, HasSide, HasTradeAmount, Instrument, Mutation, Mutations,
+    OrderMargin, OrderOperation, OrderPosition, OutcomeAmount, RequestFieldAccessError,
+    WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
+    WithAccountAdjustmentBounds, WithAccountAdjustmentPositionOperation,
+    WithExecutionReportFillDetails, WithExecutionReportOperation,
+    WithExecutionReportPositionImpact, WithFinancialImpact, WithOrderMargin, WithOrderOperation,
+    WithOrderPosition,
 };
 pub use core::{
-    AccountSyncPolicy, FullSyncPolicy, LocalSyncPolicy, ReadyEngineBuilder, SyncPolicy,
-    SyncedEngineBuilder,
+    AccountBlockHandle, AccountControl, AccountGroupError, AccountSync, AccountSyncHandle,
+    AccountSyncHandleWeak, Accounts, EngineTrait, EngineTraitOf, FullSync, LocalSync, SyncMode,
 };
-pub use core::{
-    EngineLockingPolicy, LocalEngineLocking, SequentialEngineLocking, SyncedEngineLocking,
+pub use core::{PolicyGroupId, DEFAULT_POLICY_GROUP_ID};
+pub use marketdata::{
+    AccountInfo, AlreadyRegistered, InstrumentId, LocalTtlGate, MarketDataBuilder, MarketDataError,
+    MarketDataLock, MarketDataService, MarketDataSync, NoopLock, PushForError, Quote,
+    QuoteResolution, QuoteTtl, RegistrationError, ServiceTtlGate, UnknownInstrumentId,
 };
 #[cfg(feature = "derive")]
 pub use openpit_derive::RequestFields;
 pub use param::{AdjustmentAmount, PositionMode};
 pub use pretrade::PostTradeResult;
+pub use pretrade::{
+    SpotFundsConfigError, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
+    SpotFundsPricingSource,
+};
+pub use storage::IndexFlag;
 pub use storage::StorageBuilder;
-
-/// Workspace-private re-exports. NOT part of the public API.
-///
-/// Workspace crates (e.g. `pit-interop`) that need to extend the
-/// engine's locking strategy with their own `EngineLockingPolicy`
-/// impl reach internal openpit traits through this module. Out-of-
-/// workspace consumers should not depend on this path; its contents
-/// are unstable and undocumented.
-#[doc(hidden)]
-pub mod __private {
-    pub use crate::core::engine::EnginePolicies;
-
-    /// Internal sealed-trait marker. Not part of the public API.
-    ///
-    /// Workspace crates implementing a custom [`super::EngineLockingPolicy`] must
-    /// add `impl openpit::__private::Sealed for MyType {}` to opt in. External
-    /// crates cannot reach this trait.
-    pub trait Sealed {}
-}

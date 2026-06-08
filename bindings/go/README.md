@@ -6,7 +6,7 @@
 
 > **Read-only mirror.** This repository is a mirror of [`bindings/go/`](https://github.com/openpitkit/pit/tree/main/bindings/go)
 > from the [openpitkit/pit](https://github.com/openpitkit/pit) monorepo.
-> **Do not open pull requests here** — contribute to the monorepo instead.
+> **Do not open pull requests here** - contribute to the monorepo instead.
 
 `openpit` is an embeddable pre-trade risk SDK for integrating policy-driven
 risk checks into trading systems from Go.
@@ -18,19 +18,15 @@ For the public Go module source, see [go.openpit.dev/openpit](https://go.openpit
 
 ## Versioning Policy (Pre‑1.0)
 
-Until OpenPit reaches a stable `1.0` release, the project follows a relaxed
-interpretation of Semantic Versioning.
+Before the `1.0` release OpenPit follows a relaxed Semantic Versioning:
 
-During this phase:
+- `PATCH` releases carry bug fixes and small internal corrections.
+- `MINOR` releases may introduce new features **and may also change the
+  public interface**.
 
-- `PATCH` releases are used for bug fixes and small internal corrections.
-- `MINOR` releases may introduce new features **and may also change the public
-  interface**.
-
-This means that breaking API changes can appear in minor releases before `1.0`.
-Consumers of the library should take this into account when declaring
-dependencies and consider using version constraints that tolerate API
-evolution during the pre‑stable phase.
+Breaking API changes can appear in minor releases before `1.0`. Pick
+version constraints that tolerate API evolution during the pre-stable
+phase.
 
 ## Getting Started
 
@@ -40,7 +36,14 @@ and architecture notes.
 
 ## Examples
 
-Runnable end-to-end examples: [`examples/go/`](https://github.com/openpitkit/pit/tree/main/examples/go).
+Runnable end-to-end examples live in [`examples/go/`](https://github.com/openpitkit/pit/tree/main/examples/go):
+
+- [`spot_funds`](https://github.com/openpitkit/pit/tree/main/examples/go/spot_funds)
+  \- simplest SpotFunds policy integration (limit-only).
+- [`spot_table`](https://github.com/openpitkit/pit/tree/main/examples/go/spot_table)
+  \- table-driven test runner for the SpotFunds policy.
+- [`rate_pnl_killswitch`](https://github.com/openpitkit/pit/tree/main/examples/go/rate_pnl_killswitch)
+  \- rate-limit + P&L kill-switch supervisor.
 
 ## Install
 
@@ -63,41 +66,49 @@ The engine evaluates an order through a deterministic pre-trade pipeline:
 - `engine.ExecutePreTrade(order)` is a shortcut that composes both stages
 - `engine.ApplyExecutionReport(report)` updates post-trade policy state
 
-Start-stage policies aggregate rejects from all registered policies. Main-stage
-policies aggregate rejects and roll back registered mutations in reverse order
-when any reject is produced.
+Start-stage policies aggregate rejects from all registered policies.
+Main-stage policies aggregate rejects and roll back registered mutations
+in reverse order when any reject is produced.
 
-Built-in start-stage policies currently include:
+Built-in policies:
 
-- `policies.BuildOrderValidation()`
-- `policies.BuildPnlBoundsKillswitch()...`
-- `policies.BuildRateLimit()...`
-- `policies.BuildOrderSizeLimit()...`
+- [Spot Funds](https://github.com/openpitkit/pit/wiki/Spot-Funds) - per-account
+  solvency gate over spendable funds.
+- [Order Validation](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
+  \- structural integrity checks on every order.
+- [Rate Limit](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
+  \- throttle order flow per broker, asset, or account.
+- [Order Size Limit](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
+  \- fat-finger caps on quantity and notional.
+- [P&L Kill Switch](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
+  \- halt an account when realized P&L breaches bounds.
+- plus your own via the [policy SDK](https://github.com/openpitkit/pit/wiki/Policy-API#go-interface).
 
-The primary integration model is to write project-specific policies against the
-public Go policy API described in the wiki:
+The primary integration model is to write project-specific policies against
+the public Go policy API:
 [Custom Go policies](https://github.com/openpitkit/pit/wiki/Policy-API#go-interface).
 
-There are two types of rejections: a full kill switch for the account and a
-rejection of only the current request. This is useful in algorithmic trading
-when automatic order submission must be halted until the situation is analyzed.
+Two types of rejections are supported: a full kill switch for the account
+and a rejection of only the current request. Kill switches are intended
+for algorithmic trading where automatic order submission must be halted
+until the situation is analyzed.
 
 ## Threading
 
 Canonical contract: [Threading Contract](https://github.com/openpitkit/pit/wiki/Threading-Contract).
 
-The Go binding follows the same SDK threading contract. Goroutine migration
-between OS threads during one SDK call is supported, and callbacks invoked by
-the SDK may run on a different OS thread than the goroutine that initiated the
-call.
+Goroutine migration between OS threads during one SDK call is supported,
+and callbacks invoked by the SDK may run on a different OS thread than the
+goroutine that initiated the call.
 
 Custom policies that need internal state across calls use the built-in
-[Storage](https://github.com/openpitkit/pit/wiki/Storage) abstraction -
+[Storage](https://github.com/openpitkit/pit/wiki/Storage) abstraction:
 synchronization-aware key-value storage that handles goroutine migration
-correctly without exposing locks to the policy code.
+correctly without exposing locks to policy code.
 
 ## Usage
 
+<!-- Test mirror: pit/bindings/go/examples_readme_test.go -->
 ```go
 package main
 
@@ -190,7 +201,7 @@ func main() {
   log.Fatal(err)
  }
  op.SetInstrument(param.NewInstrument(aapl, usd))
- op.SetAccountID(param.NewAccountIDFromInt(99224416))
+ op.SetAccountID(param.NewAccountIDFromUint64(99224416))
  op.SetSide(param.SideBuy)
  price, _ := param.NewPriceFromString("185")
  qty, _ := param.NewQuantityFromString("100")
@@ -238,7 +249,7 @@ func main() {
  report := model.NewExecutionReport()
  reportOp := model.NewExecutionReportOperation()
  reportOp.SetInstrument(param.NewInstrument(aapl, usd))
- reportOp.SetAccountID(param.NewAccountIDFromInt(99224416))
+ reportOp.SetAccountID(param.NewAccountIDFromUint64(99224416))
  reportOp.SetSide(param.SideBuy)
  report.SetOperation(reportOp)
 
@@ -257,7 +268,7 @@ func main() {
  // 8. After each execution report is applied, the system may report that it
  // has been determined in advance that all subsequent requests will be
  // rejected if the account status does not change.
- if result.KillSwitchTriggered {
+ if len(result.AccountBlocks) > 0 {
   fmt.Println("halt new orders until the blocked state is cleared")
  }
 }
@@ -296,7 +307,7 @@ Subsequent process starts find the cached file and skip extraction.
 
 Environment overrides:
 
-- `OPENPIT_RUNTIME_LIBRARY_PATH` — use an explicit pre-extracted library path
-  instead of the embedded copy; extraction is skipped entirely.
-- `OPENPIT_RUNTIME_CACHE_DIR` — override the root directory for extraction
+- `OPENPIT_RUNTIME_LIBRARY_PATH` - use an explicit pre-extracted library
+  path instead of the embedded copy; extraction is skipped entirely.
+- `OPENPIT_RUNTIME_CACHE_DIR` - override the root directory for extraction
   instead of the OS user cache directory.

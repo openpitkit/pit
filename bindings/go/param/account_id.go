@@ -15,6 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
+// Package param provides value types used as parameters throughout the SDK.
 package param
 
 import (
@@ -29,11 +30,12 @@ type AccountID struct {
 	native native.ParamAccountID
 }
 
+// ErrAccountIDEmpty is returned when an empty account ID string is provided.
 var ErrAccountIDEmpty = native.ErrAccountIdEmpty
 
-// NewAccountIDFromInt constructs an account identifier from an integer value.
-func NewAccountIDFromInt(source uint64) AccountID {
-	return NewAccountIDFromHandle(native.CreateParamAccountIDFromU64(source))
+// NewAccountIDFromUint64 constructs an account identifier from an integer value.
+func NewAccountIDFromUint64(source uint64) AccountID {
+	return NewAccountIDFromHandle(native.CreateParamAccountIDFromUint64(source))
 }
 
 // NewAccountIDFromString constructs an account identifier by hashing input string with FNV-1a
@@ -49,17 +51,19 @@ func NewAccountIDFromInt(source uint64) AccountID {
 // If collision risk is unacceptable, use your own collision-free
 // string-to-integer mapping and construct account identifiers from integers.
 func NewAccountIDFromString(source string) (AccountID, error) {
-	value, err := native.CreateParamAccountIDFromStr(source)
+	value, err := native.CreateParamAccountIDFromString(source)
 	if err != nil {
 		return AccountID{}, err
 	}
 	return NewAccountIDFromHandle(value), nil
 }
 
+// NewAccountIDFromHandle creates an AccountID from a native handle.
 func NewAccountIDFromHandle(source native.ParamAccountID) AccountID {
 	return AccountID{native: source}
 }
 
+// NewAccountIDOptionFromHandle creates an optional AccountID from a native optional handle.
 func NewAccountIDOptionFromHandle(
 	source native.ParamAccountIDOptional,
 ) optional.Option[AccountID] {

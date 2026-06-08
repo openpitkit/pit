@@ -11,28 +11,28 @@ from .param import (
 )
 
 class Amount:
-    """Grouped total/reserved/pending adjustment payload."""
+    """Grouped balance/held/incoming adjustment payload."""
 
     def __init__(
         self,
         *,
-        total: AdjustmentAmount | None = None,
-        reserved: AdjustmentAmount | None = None,
-        pending: AdjustmentAmount | None = None,
+        balance: AdjustmentAmount | None = None,
+        held: AdjustmentAmount | None = None,
+        incoming: AdjustmentAmount | None = None,
     ) -> None: ...
     @property
-    def total(self) -> AdjustmentAmount | None:
+    def balance(self) -> AdjustmentAmount | None:
         """Actual resulting balance/position value."""
 
     @property
-    def reserved(self) -> AdjustmentAmount | None:
+    def held(self) -> AdjustmentAmount | None:
         """Amount earmarked for outgoing settlement.
 
         Unavailable for immediate use.
         """
 
     @property
-    def pending(self) -> AdjustmentAmount | None:
+    def incoming(self) -> AdjustmentAmount | None:
         """Amount in-flight for incoming acquisition and not yet finalized."""
 
 class BalanceOperation:
@@ -84,36 +84,36 @@ class Bounds:
     def __init__(
         self,
         *,
-        total_upper: PositionSize | None = None,
-        total_lower: PositionSize | None = None,
-        reserved_upper: PositionSize | None = None,
-        reserved_lower: PositionSize | None = None,
-        pending_upper: PositionSize | None = None,
-        pending_lower: PositionSize | None = None,
+        balance_upper: PositionSize | None = None,
+        balance_lower: PositionSize | None = None,
+        held_upper: PositionSize | None = None,
+        held_lower: PositionSize | None = None,
+        incoming_upper: PositionSize | None = None,
+        incoming_lower: PositionSize | None = None,
     ) -> None: ...
     @property
-    def total_upper(self) -> PositionSize | None:
-        """Allowed post-adjustment inclusive upper bound for total."""
+    def balance_upper(self) -> PositionSize | None:
+        """Allowed post-adjustment inclusive upper bound for balance."""
 
     @property
-    def total_lower(self) -> PositionSize | None:
-        """Allowed post-adjustment inclusive lower bound for total."""
+    def balance_lower(self) -> PositionSize | None:
+        """Allowed post-adjustment inclusive lower bound for balance."""
 
     @property
-    def reserved_upper(self) -> PositionSize | None:
-        """Allowed post-adjustment inclusive upper bound for reserved."""
+    def held_upper(self) -> PositionSize | None:
+        """Allowed post-adjustment inclusive upper bound for held."""
 
     @property
-    def reserved_lower(self) -> PositionSize | None:
-        """Allowed post-adjustment inclusive lower bound for reserved."""
+    def held_lower(self) -> PositionSize | None:
+        """Allowed post-adjustment inclusive lower bound for held."""
 
     @property
-    def pending_upper(self) -> PositionSize | None:
-        """Allowed post-adjustment inclusive upper bound for pending."""
+    def incoming_upper(self) -> PositionSize | None:
+        """Allowed post-adjustment inclusive upper bound for incoming."""
 
     @property
-    def pending_lower(self) -> PositionSize | None:
-        """Allowed post-adjustment inclusive lower bound for pending."""
+    def incoming_lower(self) -> PositionSize | None:
+        """Allowed post-adjustment inclusive lower bound for incoming."""
 
 class Adjustment:
     """Extensible non-trading account-adjustment model."""

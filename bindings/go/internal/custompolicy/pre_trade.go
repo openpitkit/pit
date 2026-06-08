@@ -47,6 +47,7 @@ func StartPreTrade(impl pretrade.Policy) (native.PretradePreTradePolicy, error) 
 
 	policyHandle, err := native.CreatePretradeCustomPreTradePolicy(
 		impl.Name(),
+		native.PolicyGroupID(impl.PolicyGroupID()),
 		PreTradePolicyCheckPreTradeStartFnAddr(),
 		PreTradePolicyPerformPreTradeCheckFnAddr(),
 		PreTradePolicyApplyReportFnAddr(),
@@ -72,7 +73,7 @@ func pitPretradePreTradePolicyCheckPreTradeStart(
 	ctx *C.OpenPitPretradeContext,
 	order *C.OpenPitOrder,
 	userData unsafe.Pointer,
-) *C.OpenPitRejectList {
+) *C.OpenPitPretradeRejectList {
 	// Panics from the user implementation are deliberately allowed to propagate.
 	// A panic unwinding across the FFI boundary may terminate the process;
 	// containing it is the implementer's responsibility, as stated on the Policy
@@ -93,8 +94,9 @@ func pitPretradePreTradePolicyPerformPreTradeCheck(
 	ctx *C.OpenPitPretradeContext,
 	order *C.OpenPitOrder,
 	mutations *C.OpenPitMutations,
+	outResult *C.OpenPitPretradePreTradeResult,
 	userData unsafe.Pointer,
-) *C.OpenPitRejectList {
+) *C.OpenPitPretradeRejectList {
 	// Panics from the user implementation are deliberately allowed to propagate.
 	// A panic unwinding across the FFI boundary may terminate the process;
 	// containing it is the implementer's responsibility, as stated on the Policy
@@ -109,24 +111,35 @@ func pitPretradePreTradePolicyPerformPreTradeCheck(
 			tx.NewMutationsFromHandle(
 				native.Mutations(mutations),
 			),
+			pretrade.NewPreTradeResultFromHandle(
+				native.PretradePreTradeResult(outResult),
+			),
 		),
 	)
 }
 
 //export pitPretradePreTradePolicyApplyExecutionReport
 func pitPretradePreTradePolicyApplyExecutionReport(
+	ctx *C.OpenPitPostTradeContext,
 	report *C.OpenPitExecutionReport,
+	outAdjustments *C.OpenPitPostTradeAdjustmentList,
 	userData unsafe.Pointer,
-) C.bool {
+) *C.OpenPitPretradeAccountBlockList {
 	// Panics from the user implementation are deliberately allowed to
 	// propagate. A panic unwinding across the FFI boundary may terminate the
 	// process; containing it is the implementer's responsibility, as stated
 	// on the Policy interface.
 
-	return C.bool(
+	return newNativeAccountBlockListOrNil(
 		getPreTrade(userData).impl.ApplyExecutionReport(
+			pretrade.NewPostTradeContextFromHandle(
+				native.PostTradeContext(ctx),
+			),
 			model.NewExecutionReportFromHandle(
 				*(*native.ExecutionReport)(unsafe.Pointer(report)),
+			),
+			pretrade.NewPostTradeAdjustmentsFromHandle(
+				native.PostTradeAdjustmentList(outAdjustments),
 			),
 		),
 	)
@@ -138,8 +151,9 @@ func pitPretradePreTradePolicyApplyAccountAdjustment(
 	accountID C.OpenPitParamAccountId,
 	adjustment *C.OpenPitAccountAdjustment,
 	mutations *C.OpenPitMutations,
+	outOutcomes *C.OpenPitAccountOutcomeEntryList,
 	userData unsafe.Pointer,
-) *C.OpenPitRejectList {
+) *C.OpenPitPretradeRejectList {
 	// Panics from the user implementation are deliberately allowed to propagate.
 	// A panic unwinding across the FFI boundary may terminate the process;
 	// containing it is the implementer's responsibility, as stated on the Policy
@@ -158,6 +172,9 @@ func pitPretradePreTradePolicyApplyAccountAdjustment(
 			),
 			tx.NewMutationsFromHandle(
 				native.Mutations(mutations),
+			),
+			pretrade.NewAccountOutcomesFromHandle(
+				native.AccountOutcomeEntryList(outOutcomes),
 			),
 		),
 	)

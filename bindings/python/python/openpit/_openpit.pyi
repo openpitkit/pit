@@ -19,11 +19,28 @@
 
 from __future__ import annotations
 
+import datetime
 import decimal
 import typing
 
 from . import param
 from .pretrade import Policy
+
+class _AccountInfo(typing.Protocol):
+    """Any object that exposes an ``account_group`` property.
+
+    Engine contexts (``Context``, ``PostTradeContext``,
+    ``AccountAdjustmentContext``) satisfy this protocol automatically via their
+    ``account_group`` property.  A minimal stub for testing::
+
+        class _Stub:
+            @property
+            def account_group(self) -> AccountGroupId | None:
+                return None
+    """
+
+    @property
+    def account_group(self) -> AccountGroupId | None: ...
 
 _ROUNDING_STRATEGY_DEFAULT: str
 _ROUNDING_STRATEGY_BANKER: str
@@ -37,10 +54,238 @@ _LEVERAGE_STEP: float
 def _validate_asset(value: str) -> None: ...
 
 class RejectError(Exception):
-    """Python exception type exposed by the native module."""
+    """Base exception type raised by the library."""
 
 class ParamError(ValueError):
     """Numeric parameter validation and arithmetic error."""
+
+class MarketDataError(Exception):
+    """Base exception for market-data read failures."""
+
+class UnknownInstrument(MarketDataError):
+    """Requested market-data instrument is not registered."""
+
+class QuoteUnavailable(MarketDataError):
+    """No usable quote is available."""
+
+class AlreadyRegistered(Exception):
+    """Instrument is already registered."""
+
+class RegistrationError(Exception):
+    """Explicit market-data registration conflicts with existing state."""
+
+class UnknownInstrumentId(Exception):
+    """Instrument id is unknown to the market-data service."""
+
+class AccountGroupRegistrationError(Exception):
+    """Account-group registration conflicts with existing state."""
+
+class InstrumentId:
+    """Market-data instrument identifier."""
+
+    def __init__(self, value: int) -> None: ...
+    @property
+    def value(self) -> int: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __ne__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+    def __repr__(self) -> str: ...
+
+class QuoteTtl:
+    """Quote lifetime policy."""
+
+    @staticmethod
+    def infinite() -> QuoteTtl: ...
+    @staticmethod
+    def within(duration: datetime.timedelta) -> QuoteTtl: ...
+
+class Quote:
+    """Market snapshot with optional mark, bid, and ask prices."""
+
+    def __init__(
+        self,
+        *,
+        mark: Price | decimal.Decimal | str | int | float | None = None,
+        bid: Price | decimal.Decimal | str | int | float | None = None,
+        ask: Price | decimal.Decimal | str | int | float | None = None,
+    ) -> None: ...
+    @property
+    def mark(self) -> Price | None: ...
+    @property
+    def bid(self) -> Price | None: ...
+    @property
+    def ask(self) -> Price | None: ...
+    def __eq__(self, other: object) -> bool: ...
+
+class QuoteResolution:
+    """Controls which quote buckets a read may fall through to."""
+
+    ACCOUNT_ONLY: typing.ClassVar[QuoteResolution]
+    """Consult only the per-account bucket."""
+    ACCOUNT_THEN_GROUP: typing.ClassVar[QuoteResolution]
+    """Consult the per-account bucket, then the account's group bucket."""
+    ACCOUNT_THEN_GROUP_THEN_DEFAULT: typing.ClassVar[QuoteResolution]
+    """Consult per-account, then group, then the default ("everyone-else") bucket."""
+
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+
+class MarketDataService:
+    """Live market-data service."""
+
+    def register(self, instrument: Instrument) -> InstrumentId: ...
+    def register_with_ttl(
+        self,
+        instrument: Instrument,
+        ttl: QuoteTtl,
+    ) -> InstrumentId: ...
+    def register_with_id(
+        self,
+        instrument: Instrument,
+        id: InstrumentId,
+    ) -> InstrumentId: ...
+    def register_with_id_and_ttl(
+        self,
+        instrument: Instrument,
+        id: InstrumentId,
+        ttl: QuoteTtl,
+    ) -> InstrumentId: ...
+    # ── TTL setters / clearers ────────────────────────────────────────────────
+    def set_account_ttl(self, account_id: AccountId, ttl: QuoteTtl) -> None: ...
+    def clear_account_ttl(self, account_id: AccountId) -> None: ...
+    def set_account_group_ttl(
+        self, account_group_id: AccountGroupId, ttl: QuoteTtl
+    ) -> None:
+        """Set the TTL override for the given account group.
+
+        Passing ``AccountGroupId.DEFAULT`` targets the service-level
+        default-group TTL (the "everyone-else" bucket).
+        """
+
+    def clear_account_group_ttl(self, account_group_id: AccountGroupId) -> None:
+        """Clear the TTL override for the given account group.
+
+        Passing ``AccountGroupId.DEFAULT`` targets the service-level
+        default-group TTL (the "everyone-else" bucket).
+        """
+
+    def set_instrument_ttl(
+        self, instrument_id: InstrumentId, ttl: QuoteTtl
+    ) -> None: ...
+    def clear_instrument_ttl(self, instrument_id: InstrumentId) -> None: ...
+    def set_instrument_account_ttl(
+        self,
+        instrument_id: InstrumentId,
+        account_id: AccountId,
+        ttl: QuoteTtl,
+    ) -> None: ...
+    def clear_instrument_account_ttl(
+        self,
+        instrument_id: InstrumentId,
+        account_id: AccountId,
+    ) -> None: ...
+    def set_instrument_account_group_ttl(
+        self,
+        instrument_id: InstrumentId,
+        account_group_id: AccountGroupId,
+        ttl: QuoteTtl,
+    ) -> None:
+        """Set the per-instrument TTL override for the given account group.
+
+        Passing ``AccountGroupId.DEFAULT`` targets the instrument-level
+        default-group TTL (the "everyone-else" bucket for this instrument).
+        """
+
+    def clear_instrument_account_group_ttl(
+        self,
+        instrument_id: InstrumentId,
+        account_group_id: AccountGroupId,
+    ) -> None:
+        """Clear the per-instrument TTL override for the given account group.
+
+        Passing ``AccountGroupId.DEFAULT`` targets the instrument-level
+        default-group TTL (the "everyone-else" bucket for this instrument).
+        """
+    # ── Clear ─────────────────────────────────────────────────────────────────
+    def clear(self, instrument_id: InstrumentId) -> None: ...
+    # ── Push (default bucket) ─────────────────────────────────────────────────
+    def push(self, instrument_id: InstrumentId, quote: Quote) -> None: ...
+    def push_patch(self, instrument_id: InstrumentId, quote: Quote) -> None: ...
+    def push_by_instrument(
+        self, instrument: Instrument, quote: Quote
+    ) -> InstrumentId: ...
+    def push_by_instrument_patch(
+        self,
+        instrument: Instrument,
+        quote: Quote,
+    ) -> InstrumentId: ...
+    # ── Targeted fan-out push ─────────────────────────────────────────────────
+    def push_for(
+        self,
+        instrument_id: InstrumentId,
+        quote: Quote,
+        account_ids: typing.Iterable[AccountId],
+        account_group_ids: typing.Iterable[AccountGroupId],
+    ) -> None:
+        """Push a full quote snapshot to specific accounts and/or groups.
+
+        To target the default ("everyone-else") bucket, include
+        ``AccountGroupId.DEFAULT`` in ``account_group_ids``.
+        """
+
+    def push_for_patch(
+        self,
+        instrument_id: InstrumentId,
+        quote: Quote,
+        account_ids: typing.Iterable[AccountId],
+        account_group_ids: typing.Iterable[AccountGroupId],
+    ) -> None:
+        """Push a partial quote patch to specific accounts and/or groups.
+
+        To target the default ("everyone-else") bucket, include
+        ``AccountGroupId.DEFAULT`` in ``account_group_ids``.
+        """
+    # ── Get ───────────────────────────────────────────────────────────────────
+    def get(
+        self,
+        instrument_id: InstrumentId,
+        account_id: AccountId,
+        account_info: _AccountInfo,
+        resolution: QuoteResolution,
+    ) -> Quote | None: ...
+    def get_or_err(
+        self,
+        instrument_id: InstrumentId,
+        account_id: AccountId,
+        account_info: _AccountInfo,
+        resolution: QuoteResolution,
+    ) -> Quote: ...
+    # ── Resolve ───────────────────────────────────────────────────────────────
+    def resolve(self, instrument: Instrument) -> InstrumentId | None: ...
+
+class MarketDataBuilder:
+    """Builder for a market-data service.
+
+    Obtain via ``SyncedEngineBuilder.market_data(default_ttl)`` or
+    ``ReadyEngineBuilder.market_data(default_ttl)``. Do not construct directly.
+    """
+
+    def no_sync(self) -> MarketDataBuilder:
+        """Downgrade to no-sync mode (no-op locks, zero overhead).
+
+        Use only when the market-data service is written from a single thread
+        and never read concurrently. Returns ``self`` for chaining.
+        """
+        ...
+
+    def full_sync(self) -> MarketDataBuilder:
+        """Upgrade to Full synchronization (real locks, safe for a concurrent feed).
+
+        No-op when already Full. Returns ``self`` for chaining.
+        """
+        ...
+
+    def build(self) -> MarketDataService: ...
 
 class Reject:
     """Business reject returned by pre-trade checks."""
@@ -100,13 +345,35 @@ class AccountId:
     """Type-safe account identifier."""
 
     @staticmethod
-    def from_u64(value: int) -> AccountId: ...
+    def from_int(value: int) -> AccountId: ...
     @staticmethod
-    def from_str(value: str) -> AccountId: ...
+    def from_string(value: str) -> AccountId: ...
     @property
     def value(self) -> int: ...
     def __eq__(self, other: object) -> bool: ...
+    def __ne__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __repr__(self) -> str: ...
+
+class AccountGroupId:
+    """Type-safe account-group identifier."""
+
+    DEFAULT: typing.ClassVar[AccountGroupId]
+    """The reserved default group an account belongs to until assigned."""
+
+    @staticmethod
+    def from_int(value: int) -> AccountGroupId:
+        """Raises ``ValueError`` when ``value`` is the reserved default group (0).
+        Raises ``OverflowError`` for values outside ``1..=4294967295``."""
+
+    @staticmethod
+    def from_string(value: str) -> AccountGroupId: ...
+    @property
+    def value(self) -> int: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __ne__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+    def __repr__(self) -> str: ...
 
 class Quantity:
     """Instrument quantity value type."""
@@ -120,18 +387,16 @@ class Quantity:
     @staticmethod
     def from_decimal(value: decimal.Decimal) -> Quantity: ...
     @staticmethod
-    def from_str(value: str) -> Quantity: ...
+    def from_string(value: str) -> Quantity: ...
     @staticmethod
     def from_int(value: int) -> Quantity: ...
-    @staticmethod
-    def from_u64(value: int) -> Quantity: ...
     @staticmethod
     def from_float(value: float) -> Quantity:
         """WARNING: float inputs are imprecise and may yield inconsistent
         results across platforms; prefer ``str`` or ``decimal.Decimal``."""
 
     @staticmethod
-    def from_str_rounded(value: str, scale: int, strategy: str) -> Quantity: ...
+    def from_string_rounded(value: str, scale: int, strategy: str) -> Quantity: ...
     @staticmethod
     def from_float_rounded(value: float, scale: int, strategy: str) -> Quantity:
         """WARNING: float inputs are imprecise and may yield inconsistent
@@ -147,6 +412,7 @@ class Quantity:
     def decimal(self) -> decimal.Decimal: ...
     def to_json_value(self) -> str: ...
     def calculate_volume(self, price: Price) -> Volume: ...
+    def to_position_size(self) -> PositionSize: ...
     def __add__(self, other: Quantity) -> Quantity: ...
     def __sub__(self, other: Quantity) -> Quantity: ...
     def __mul__(self, other: int | float) -> Quantity: ...
@@ -166,18 +432,16 @@ class Price:
     @staticmethod
     def from_decimal(value: decimal.Decimal) -> Price: ...
     @staticmethod
-    def from_str(value: str) -> Price: ...
+    def from_string(value: str) -> Price: ...
     @staticmethod
     def from_int(value: int) -> Price: ...
-    @staticmethod
-    def from_u64(value: int) -> Price: ...
     @staticmethod
     def from_float(value: float) -> Price:
         """WARNING: float inputs are imprecise and may yield inconsistent
         results across platforms; prefer ``str`` or ``decimal.Decimal``."""
 
     @staticmethod
-    def from_str_rounded(value: str, scale: int, strategy: str) -> Price: ...
+    def from_string_rounded(value: str, scale: int, strategy: str) -> Price: ...
     @staticmethod
     def from_float_rounded(value: float, scale: int, strategy: str) -> Price:
         """WARNING: float inputs are imprecise and may yield inconsistent
@@ -193,6 +457,7 @@ class Price:
     def decimal(self) -> decimal.Decimal: ...
     def to_json_value(self) -> str: ...
     def calculate_volume(self, quantity: Quantity) -> Volume: ...
+    def calculate_position_size(self, quantity: Quantity) -> PositionSize: ...
     def __add__(self, other: Price) -> Price: ...
     def __sub__(self, other: Price) -> Price: ...
     def __neg__(self) -> Price: ...
@@ -213,18 +478,16 @@ class Pnl:
     @staticmethod
     def from_decimal(value: decimal.Decimal) -> Pnl: ...
     @staticmethod
-    def from_str(value: str) -> Pnl: ...
+    def from_string(value: str) -> Pnl: ...
     @staticmethod
     def from_int(value: int) -> Pnl: ...
-    @staticmethod
-    def from_u64(value: int) -> Pnl: ...
     @staticmethod
     def from_float(value: float) -> Pnl:
         """WARNING: float inputs are imprecise and may yield inconsistent
         results across platforms; prefer ``str`` or ``decimal.Decimal``."""
 
     @staticmethod
-    def from_str_rounded(value: str, scale: int, strategy: str) -> Pnl: ...
+    def from_string_rounded(value: str, scale: int, strategy: str) -> Pnl: ...
     @staticmethod
     def from_float_rounded(value: float, scale: int, strategy: str) -> Pnl:
         """WARNING: float inputs are imprecise and may yield inconsistent
@@ -263,18 +526,16 @@ class Fee:
     @staticmethod
     def from_decimal(value: decimal.Decimal) -> Fee: ...
     @staticmethod
-    def from_str(value: str) -> Fee: ...
+    def from_string(value: str) -> Fee: ...
     @staticmethod
     def from_int(value: int) -> Fee: ...
-    @staticmethod
-    def from_u64(value: int) -> Fee: ...
     @staticmethod
     def from_float(value: float) -> Fee:
         """WARNING: float inputs are imprecise and may yield inconsistent
         results across platforms; prefer ``str`` or ``decimal.Decimal``."""
 
     @staticmethod
-    def from_str_rounded(value: str, scale: int, strategy: str) -> Fee: ...
+    def from_string_rounded(value: str, scale: int, strategy: str) -> Fee: ...
     @staticmethod
     def from_float_rounded(value: float, scale: int, strategy: str) -> Fee:
         """WARNING: float inputs are imprecise and may yield inconsistent
@@ -312,18 +573,16 @@ class Volume:
     @staticmethod
     def from_decimal(value: decimal.Decimal) -> Volume: ...
     @staticmethod
-    def from_str(value: str) -> Volume: ...
+    def from_string(value: str) -> Volume: ...
     @staticmethod
     def from_int(value: int) -> Volume: ...
-    @staticmethod
-    def from_u64(value: int) -> Volume: ...
     @staticmethod
     def from_float(value: float) -> Volume:
         """WARNING: float inputs are imprecise and may yield inconsistent
         results across platforms; prefer ``str`` or ``decimal.Decimal``."""
 
     @staticmethod
-    def from_str_rounded(value: str, scale: int, strategy: str) -> Volume: ...
+    def from_string_rounded(value: str, scale: int, strategy: str) -> Volume: ...
     @staticmethod
     def from_float_rounded(value: float, scale: int, strategy: str) -> Volume:
         """WARNING: float inputs are imprecise and may yield inconsistent
@@ -341,7 +600,7 @@ class Volume:
     def to_cash_flow_inflow(self) -> CashFlow: ...
     def to_cash_flow_outflow(self) -> CashFlow: ...
     def calculate_quantity(self, price: Price) -> Quantity: ...
-    def to_notional(self) -> Notional: ...
+    def to_position_size(self) -> PositionSize: ...
     def __add__(self, other: Volume) -> Volume: ...
     def __sub__(self, other: Volume) -> Volume: ...
     def __mul__(self, other: int | float) -> Volume: ...
@@ -366,18 +625,16 @@ class Notional:
     @staticmethod
     def from_decimal(value: decimal.Decimal) -> Notional: ...
     @staticmethod
-    def from_str(value: str) -> Notional: ...
+    def from_string(value: str) -> Notional: ...
     @staticmethod
     def from_int(value: int) -> Notional: ...
-    @staticmethod
-    def from_u64(value: int) -> Notional: ...
     @staticmethod
     def from_float(value: float) -> Notional:
         """WARNING: float inputs are imprecise and may yield inconsistent
         results across platforms; prefer ``str`` or ``decimal.Decimal``."""
 
     @staticmethod
-    def from_str_rounded(value: str, scale: int, strategy: str) -> Notional: ...
+    def from_string_rounded(value: str, scale: int, strategy: str) -> Notional: ...
     @staticmethod
     def from_float_rounded(value: float, scale: int, strategy: str) -> Notional:
         """WARNING: float inputs are imprecise and may yield inconsistent
@@ -420,18 +677,16 @@ class CashFlow:
     @staticmethod
     def from_decimal(value: decimal.Decimal) -> CashFlow: ...
     @staticmethod
-    def from_str(value: str) -> CashFlow: ...
+    def from_string(value: str) -> CashFlow: ...
     @staticmethod
     def from_int(value: int) -> CashFlow: ...
-    @staticmethod
-    def from_u64(value: int) -> CashFlow: ...
     @staticmethod
     def from_float(value: float) -> CashFlow:
         """WARNING: float inputs are imprecise and may yield inconsistent
         results across platforms; prefer ``str`` or ``decimal.Decimal``."""
 
     @staticmethod
-    def from_str_rounded(value: str, scale: int, strategy: str) -> CashFlow: ...
+    def from_string_rounded(value: str, scale: int, strategy: str) -> CashFlow: ...
     @staticmethod
     def from_float_rounded(value: float, scale: int, strategy: str) -> CashFlow:
         """WARNING: float inputs are imprecise and may yield inconsistent
@@ -474,18 +729,16 @@ class PositionSize:
     @staticmethod
     def from_decimal(value: decimal.Decimal) -> PositionSize: ...
     @staticmethod
-    def from_str(value: str) -> PositionSize: ...
+    def from_string(value: str) -> PositionSize: ...
     @staticmethod
     def from_int(value: int) -> PositionSize: ...
-    @staticmethod
-    def from_u64(value: int) -> PositionSize: ...
     @staticmethod
     def from_float(value: float) -> PositionSize:
         """WARNING: float inputs are imprecise and may yield inconsistent
         results across platforms; prefer ``str`` or ``decimal.Decimal``."""
 
     @staticmethod
-    def from_str_rounded(value: str, scale: int, strategy: str) -> PositionSize: ...
+    def from_string_rounded(value: str, scale: int, strategy: str) -> PositionSize: ...
     @staticmethod
     def from_float_rounded(value: float, scale: int, strategy: str) -> PositionSize:
         """WARNING: float inputs are imprecise and may yield inconsistent
@@ -936,29 +1189,29 @@ class Trade:
         """Trade quantity."""
 
 class AccountAdjustmentAmount:
-    """Grouped amount payload (`total + reserved + pending`)."""
+    """Grouped amount payload (balance + held + incoming)."""
 
     def __init__(
         self,
         *,
-        total: AdjustmentAmount | None = None,
-        reserved: AdjustmentAmount | None = None,
-        pending: AdjustmentAmount | None = None,
+        balance: AdjustmentAmount | None = None,
+        held: AdjustmentAmount | None = None,
+        incoming: AdjustmentAmount | None = None,
     ) -> None:
-        _ = (total, reserved, pending)
+        _ = (balance, held, incoming)
 
     @property
-    def total(self) -> AdjustmentAmount | None: ...
-    @total.setter
-    def total(self, value: AdjustmentAmount | None) -> None: ...
+    def balance(self) -> AdjustmentAmount | None: ...
+    @balance.setter
+    def balance(self, value: AdjustmentAmount | None) -> None: ...
     @property
-    def reserved(self) -> AdjustmentAmount | None: ...
-    @reserved.setter
-    def reserved(self, value: AdjustmentAmount | None) -> None: ...
+    def held(self) -> AdjustmentAmount | None: ...
+    @held.setter
+    def held(self, value: AdjustmentAmount | None) -> None: ...
     @property
-    def pending(self) -> AdjustmentAmount | None: ...
-    @pending.setter
-    def pending(self, value: AdjustmentAmount | None) -> None: ...
+    def incoming(self) -> AdjustmentAmount | None: ...
+    @incoming.setter
+    def incoming(self, value: AdjustmentAmount | None) -> None: ...
 
 class AccountAdjustmentBalanceOperation:
     """Physical-balance account-adjustment operation group."""
@@ -1033,46 +1286,46 @@ class AccountAdjustmentBounds:
     def __init__(
         self,
         *,
-        total_upper: param.PositionSize | None = None,
-        total_lower: param.PositionSize | None = None,
-        reserved_upper: param.PositionSize | None = None,
-        reserved_lower: param.PositionSize | None = None,
-        pending_upper: param.PositionSize | None = None,
-        pending_lower: param.PositionSize | None = None,
+        balance_upper: param.PositionSize | None = None,
+        balance_lower: param.PositionSize | None = None,
+        held_upper: param.PositionSize | None = None,
+        held_lower: param.PositionSize | None = None,
+        incoming_upper: param.PositionSize | None = None,
+        incoming_lower: param.PositionSize | None = None,
     ) -> None:
         _ = (
-            total_upper,
-            total_lower,
-            reserved_upper,
-            reserved_lower,
-            pending_upper,
-            pending_lower,
+            balance_upper,
+            balance_lower,
+            held_upper,
+            held_lower,
+            incoming_upper,
+            incoming_lower,
         )
 
     @property
-    def total_upper(self) -> param.PositionSize | None: ...
-    @total_upper.setter
-    def total_upper(self, value: param.PositionSize | None) -> None: ...
+    def balance_upper(self) -> param.PositionSize | None: ...
+    @balance_upper.setter
+    def balance_upper(self, value: param.PositionSize | None) -> None: ...
     @property
-    def total_lower(self) -> param.PositionSize | None: ...
-    @total_lower.setter
-    def total_lower(self, value: param.PositionSize | None) -> None: ...
+    def balance_lower(self) -> param.PositionSize | None: ...
+    @balance_lower.setter
+    def balance_lower(self, value: param.PositionSize | None) -> None: ...
     @property
-    def reserved_upper(self) -> param.PositionSize | None: ...
-    @reserved_upper.setter
-    def reserved_upper(self, value: param.PositionSize | None) -> None: ...
+    def held_upper(self) -> param.PositionSize | None: ...
+    @held_upper.setter
+    def held_upper(self, value: param.PositionSize | None) -> None: ...
     @property
-    def reserved_lower(self) -> param.PositionSize | None: ...
-    @reserved_lower.setter
-    def reserved_lower(self, value: param.PositionSize | None) -> None: ...
+    def held_lower(self) -> param.PositionSize | None: ...
+    @held_lower.setter
+    def held_lower(self, value: param.PositionSize | None) -> None: ...
     @property
-    def pending_upper(self) -> param.PositionSize | None: ...
-    @pending_upper.setter
-    def pending_upper(self, value: param.PositionSize | None) -> None: ...
+    def incoming_upper(self) -> param.PositionSize | None: ...
+    @incoming_upper.setter
+    def incoming_upper(self, value: param.PositionSize | None) -> None: ...
     @property
-    def pending_lower(self) -> param.PositionSize | None: ...
-    @pending_lower.setter
-    def pending_lower(self, value: param.PositionSize | None) -> None: ...
+    def incoming_lower(self) -> param.PositionSize | None: ...
+    @incoming_lower.setter
+    def incoming_lower(self, value: param.PositionSize | None) -> None: ...
 
 class AccountAdjustment:
     """Extensible non-trading account-adjustment record."""
@@ -1125,15 +1378,67 @@ class Request:
     def execute(self) -> ExecuteResult:
         """Run main-stage pre-trade checks."""
 
+PolicyGroupId: typing.TypeAlias = int
+"""Group identifier used to tag policies and their outcomes."""
+
 class Lock:
-    """Pre-trade lock payload."""
+    """Pre-trade lock payload: grouped `(policy_group_id, price)` records."""
 
-    def __init__(self, price: param.Price | None = None) -> None:
-        _ = price
+    def __init__(
+        self,
+        entries: (
+            Lock | typing.Iterable[tuple[PolicyGroupId, param.Price]] | None
+        ) = None,
+    ) -> None:
+        _ = entries
 
-    @property
-    def price(self) -> param.Price | None:
-        """Optional locked price."""
+    def push(self, policy_group_id: PolicyGroupId, price: param.Price) -> None:
+        """Append `price` under `policy_group_id`."""
+
+    def push_many(
+        self,
+        policy_group_id: PolicyGroupId,
+        prices: typing.Iterable[param.Price],
+    ) -> None:
+        """Append every price under `policy_group_id`."""
+
+    def extend(
+        self, entries: typing.Iterable[tuple[PolicyGroupId, param.Price]]
+    ) -> None:
+        """Append every `(policy_group_id, price)` pair from the iterable."""
+
+    def merge(self, other: Lock) -> None:
+        """Append all entries from another lock."""
+
+    def __len__(self) -> int:
+        """Number of stored price entries."""
+
+    def prices_of(self, policy_group_id: PolicyGroupId) -> list[param.Price]:
+        """All prices stored under `policy_group_id`, in insertion order."""
+
+    def entries(self) -> list[tuple[PolicyGroupId, param.Price]]:
+        """Every `(policy_group_id, price)` pair, default group first."""
+
+    def to_json(self) -> str:
+        """Serialize to compact JSON."""
+
+    @staticmethod
+    def from_json(text: str) -> Lock:
+        """Deserialize from compact JSON."""
+
+    def to_msgpack(self) -> bytes:
+        """Serialize to MessagePack."""
+
+    @staticmethod
+    def from_msgpack(data: bytes) -> Lock:
+        """Deserialize from MessagePack."""
+
+    def to_cbor(self) -> bytes:
+        """Serialize to CBOR."""
+
+    @staticmethod
+    def from_cbor(data: bytes) -> Lock:
+        """Deserialize from CBOR."""
 
 class Reservation:
     """
@@ -1145,6 +1450,9 @@ class Reservation:
 
     def lock(self) -> Lock:
         """Current reservation lock payload."""
+
+    def account_adjustments(self) -> list[AccountAdjustmentOutcome]:
+        """Account adjustment outcomes captured by the reservation."""
 
     def commit(self) -> None:
         """Finalize reservation as committed."""
@@ -1199,6 +1507,67 @@ class ExecuteResult:
     def __bool__(self) -> bool:
         """Boolean convenience alias for ``ok``."""
 
+class OutcomeAmount:
+    """Delta and absolute values for one account position field."""
+
+    def __init__(
+        self,
+        *,
+        delta: param.PositionSize,
+        absolute: param.PositionSize,
+    ) -> None: ...
+    @property
+    def delta(self) -> param.PositionSize:
+        """Signed change applied by this operation."""
+
+    @property
+    def absolute(self) -> param.PositionSize:
+        """Field value at the moment the policy returned."""
+
+class AccountOutcomeEntry:
+    """Account position outcome for one asset."""
+
+    def __init__(
+        self,
+        *,
+        asset: str,
+        balance: OutcomeAmount | None = None,
+        held: OutcomeAmount | None = None,
+        incoming: OutcomeAmount | None = None,
+    ) -> None: ...
+    @property
+    def asset(self) -> str:
+        """Asset this outcome refers to."""
+
+    @property
+    def balance(self) -> OutcomeAmount | None:
+        """Balance outcome."""
+
+    @property
+    def held(self) -> OutcomeAmount | None:
+        """Held amount outcome."""
+
+    @property
+    def incoming(self) -> OutcomeAmount | None:
+        """Incoming amount outcome."""
+
+class AccountAdjustmentOutcome:
+    """Account position outcome tagged with a policy group."""
+
+    def __init__(
+        self,
+        *,
+        policy_group_id: PolicyGroupId,
+        entry: AccountOutcomeEntry,
+    ) -> None: ...
+    @property
+    def policy_group_id(self) -> PolicyGroupId:
+        """Policy group tag of the policy that produced this outcome."""
+
+    @property
+    def entry(self) -> AccountOutcomeEntry:
+        """Account outcome entry."""
+
 class AccountAdjustmentBatchResult:
     """Result of ``Engine.apply_account_adjustment``."""
 
@@ -1214,26 +1583,104 @@ class AccountAdjustmentBatchResult:
     def rejects(self) -> list[Reject]:
         """Reject list when validation fails."""
 
+    @property
+    def outcomes(self) -> list[AccountAdjustmentOutcome]:
+        """Account position outcomes returned on success."""
+
     def __bool__(self) -> bool:
         """Boolean convenience alias for ``ok``."""
+
+class AccountBlock:
+    """An account-level block record returned by a policy callback."""
+
+    def __init__(
+        self,
+        *,
+        policy: str,
+        code: str,
+        reason: str,
+        details: str,
+        user_data: int = 0,
+    ) -> None: ...
+    @property
+    def code(self) -> str:
+        """Stable machine-readable reject code."""
+
+    @property
+    def policy(self) -> str:
+        """Policy name that produced the block."""
+
+    @property
+    def reason(self) -> str:
+        """Human-readable reject reason."""
+
+    @property
+    def details(self) -> str:
+        """Case-specific reject details."""
+
+    @property
+    def user_data(self) -> int:
+        """Opaque caller-defined integer token."""
 
 class PostTradeResult:
     """
     Result of ``Engine.apply_execution_report``.
 
-    Reports whether any policy considers an account-level kill switch to be
-    active after the report has been applied.
+    A non-empty ``account_blocks`` list means at least one policy entered a
+    blocked state after the report was applied.
+
+    Post-trade processing is **not** atomic: ``account_adjustments`` reflect
+    storage mutations that have already been applied, so callers must propagate
+    them downstream even when ``account_blocks`` is non-empty.
     """
 
+    def __init__(
+        self,
+        *,
+        account_blocks: typing.Iterable[AccountBlock] | None = None,
+        account_adjustments: typing.Iterable[AccountAdjustmentOutcome] | None = None,
+    ) -> None: ...
     @property
-    def kill_switch_triggered(self) -> bool:
-        """Whether any policy reported an active kill switch."""
+    def account_blocks(self) -> list[AccountBlock]:
+        """Account blocks reported by policies. Non-empty when a kill switch fired."""
+
+    @property
+    def account_adjustments(self) -> list[AccountAdjustmentOutcome]:
+        """Per-asset position outcomes reported by policies, in registration order."""
+
+class AccountControl:
+    """Per-account handle to the engine's account-block facility.
+
+    Valid to use only within the pre-trade processing of the request it belongs
+    to — from the callback that produced it through the commit or rollback of
+    that request's reservation (so it may be retained for a deferred mutation
+    commit/rollback callback). Recording a block through it after that pre-trade
+    transaction has completed is unspecified and must not be relied upon.
+    """
+
+    def block(self, block: AccountBlock) -> None: ...
 
 class Context:
     """Context of the current pre-trade operation."""
 
+    @property
+    def account_control(self) -> AccountControl | None: ...
+    @property
+    def account_group(self) -> AccountGroupId | None: ...
+
 class AccountAdjustmentContext:
     """Context of the current account-adjustment operation."""
+
+    @property
+    def account_control(self) -> AccountControl: ...
+    @property
+    def account_group(self) -> AccountGroupId | None: ...
+
+class PostTradeContext:
+    """Context of the current post-trade operation."""
+
+    @property
+    def account_group(self) -> AccountGroupId | None: ...
 
 class OrderSizeLimit:
     """Order size limits."""
@@ -1262,6 +1709,9 @@ class SyncedEngineBuilder:
         """Register a built-in policy via its ready builder."""
         _ = builtin_ready_builder
 
+    def market_data(self, default_ttl: QuoteTtl) -> MarketDataBuilder:
+        """Create a market-data service builder."""
+
 class ReadyEngineBuilder:
     """Third stage of the engine builder (at least one policy registered). Accepts more
     policies and builds the engine."""
@@ -1276,6 +1726,9 @@ class ReadyEngineBuilder:
     def builtin(self, builtin_ready_builder: typing.Any) -> ReadyEngineBuilder:
         """Register a built-in policy via its ready builder."""
         _ = builtin_ready_builder
+
+    def market_data(self, default_ttl: QuoteTtl) -> MarketDataBuilder:
+        """Create a market-data service builder."""
 
     def build(self) -> Engine:
         """Build an engine instance."""
@@ -1295,6 +1748,23 @@ class Engine:
         account_id: object,
         adjustments: object,
     ) -> AccountAdjustmentBatchResult: ...
+    def accounts(self) -> Accounts:
+        """Return a handle to the engine's account-group registry."""
+
+class Accounts:
+    """Handle to the engine's account-group registry."""
+
+    def register_group(
+        self,
+        accounts: typing.Iterable[AccountId],
+        group: AccountGroupId,
+    ) -> None: ...
+    def unregister_group(
+        self,
+        accounts: typing.Iterable[AccountId],
+        group: AccountGroupId,
+    ) -> None: ...
+    def group_of(self, account: AccountId) -> AccountGroupId | None: ...
 
 class EngineBuilder:
     """First stage of the engine builder."""

@@ -36,7 +36,7 @@ func TestRequestExecuteReturnsErrorOnSecondCall(t *testing.T) {
 		t.Fatalf("EngineStartPreTrade() error = %v", err)
 	}
 	if rejects != nil {
-		native.DestroyRejectList(rejects)
+		native.DestroyPretradeRejectList(rejects)
 		t.Fatalf("EngineStartPreTrade() rejects = %v, want nil", rejects)
 	}
 
@@ -79,7 +79,7 @@ func TestRequestExecuteAfterCloseReturnsError(t *testing.T) {
 		t.Fatalf("EngineStartPreTrade() error = %v", err)
 	}
 	if rejects != nil {
-		native.DestroyRejectList(rejects)
+		native.DestroyPretradeRejectList(rejects)
 		t.Fatalf("EngineStartPreTrade() rejects = %v, want nil", rejects)
 	}
 
@@ -135,26 +135,78 @@ func TestReservationRollbackAndCloseAllowsSubsequentRollback(t *testing.T) {
 	reservation.Rollback()
 }
 
-func TestReservationLockReturnsPrice(t *testing.T) {
-	price := mustPriceForPreTradeTests(t, "125")
-	nativeLock := native.NewPretradePreTradeLock()
-	native.PretradePreTradeLockSetPrice(&nativeLock, price.Handle())
-	lock := newLock(nativeLock)
-
-	lockPrice, ok := lock.Price().Get()
-	if !ok {
-		t.Fatal("Lock().Price().Get() ok = false, want true")
-	}
-	if !lockPrice.Equal(price) {
-		t.Fatalf("Lock().Price() = %q, want %q", lockPrice.String(), price.String())
+func TestReservationLockOnFreshReservationProducesNonZeroBlob(t *testing.T) {
+	reservation := newReservationForPreTradeTests(t, newValidOrderForPreTradeTests(t))
+	lock := reservation.Lock()
+	if len(lock.Bytes()) == 0 {
+		t.Fatal("Reservation.Lock().Bytes() is empty, want canonical empty-lock blob")
 	}
 }
 
-func TestReservationLockOnFreshReservationReturnsUnsetPrice(t *testing.T) {
+func TestLockMsgPackRoundTripPreservesIdentity(t *testing.T) {
 	reservation := newReservationForPreTradeTests(t, newValidOrderForPreTradeTests(t))
-	lock := reservation.Lock()
-	if lock.Price().IsSet() {
-		t.Fatal("Reservation.Lock().Price().IsSet() = true, want false")
+	original := reservation.Lock()
+
+	msgpackBlob, err := original.MarshalMsgpack()
+	if err != nil {
+		t.Fatalf("Lock.MarshalMsgpack() error = %v", err)
+	}
+	restored, err := NewLockFromMsgPack(msgpackBlob)
+	if err != nil {
+		t.Fatalf("NewLockFromMsgPack() error = %v", err)
+	}
+	if !restored.Equal(original) {
+		t.Fatal("restored lock != original lock after msgpack round-trip")
+	}
+}
+
+func TestLockPricesExposeListOnly(t *testing.T) {
+	price := mustPriceForPreTradeTests(t, "185")
+	other := mustPriceForPreTradeTests(t, "186")
+	lock := newLockForPreTradeTests(t, model.DefaultPolicyGroupID, price, other)
+
+	prices, err := lock.Prices()
+	if err != nil {
+		t.Fatalf("Lock.Prices() error = %v", err)
+	}
+	if len(prices) != 2 {
+		t.Fatalf("len(Lock.Prices()) = %d, want 2", len(prices))
+	}
+	if !prices[0].Equal(price) || !prices[1].Equal(other) {
+		t.Fatalf("Lock.Prices() = [%s, %s], want [%s, %s]", prices[0], prices[1], price, other)
+	}
+
+	missing, err := lock.PricesOf(model.PolicyGroupID(99))
+	if err != nil {
+		t.Fatalf("Lock.PricesOf(missing) error = %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("len(Lock.PricesOf(missing)) = %d, want 0", len(missing))
+	}
+
+	single := newLockForPreTradeTests(t, model.DefaultPolicyGroupID, price)
+	singlePrices, err := single.Prices()
+	if err != nil {
+		t.Fatalf("Lock.Prices(single) error = %v", err)
+	}
+	if len(singlePrices) != 1 {
+		t.Fatalf("len(Lock.Prices(single)) = %d, want 1", len(singlePrices))
+	}
+	if !singlePrices[0].Equal(price) {
+		t.Fatalf("Lock.Prices(single)[0] = %s, want %s", singlePrices[0], price)
+	}
+}
+
+func TestLockLen(t *testing.T) {
+	price := mustPriceForPreTradeTests(t, "185")
+	lock := newLockForPreTradeTests(t, model.DefaultPolicyGroupID, price, price)
+
+	got, err := lock.Len()
+	if err != nil {
+		t.Fatalf("Lock.Len() error = %v", err)
+	}
+	if got != 2 {
+		t.Fatalf("Lock.Len() = %d, want 2", got)
 	}
 }
 
@@ -165,11 +217,11 @@ func newNativeEngineForPreTradeTests(t *testing.T) native.Engine {
 	if err != nil {
 		t.Fatalf("CreateEngineBuilder() error = %v", err)
 	}
-	if err := native.EngineBuilderAddBuiltinOrderValidation(builder); err != nil {
+	if err := native.EngineBuilderAddBuiltinOrderValidation(builder, native.DefaultPolicyGroupID); err != nil {
 		native.DestroyEngineBuilder(builder)
 		t.Fatalf("EngineBuilderAddBuiltinOrderValidation() error = %v", err)
 	}
-	engine, err := native.EngineBuilderBuild(builder)
+	engine, _, err := native.EngineBuilderBuild(builder)
 	native.DestroyEngineBuilder(builder)
 	if err != nil {
 		t.Fatalf("EngineBuilderBuild() error = %v", err)
@@ -187,7 +239,7 @@ func newReservationForPreTradeTests(t *testing.T, order model.Order) *Reservatio
 		t.Fatalf("EngineExecutePreTrade() error = %v", err)
 	}
 	if rejects != nil {
-		native.DestroyRejectList(rejects)
+		native.DestroyPretradeRejectList(rejects)
 		t.Fatalf("EngineExecutePreTrade() rejects = %v, want nil", rejects)
 	}
 
@@ -204,6 +256,23 @@ func mustPriceForPreTradeTests(t *testing.T, value string) param.Price {
 		t.Fatalf("NewPriceFromString(%q) error = %v", value, err)
 	}
 	return price
+}
+
+func newLockForPreTradeTests(t *testing.T, groupID model.PolicyGroupID, prices ...param.Price) Lock {
+	t.Helper()
+
+	handle := native.CreatePretradePreTradeLock()
+	defer native.DestroyPretradePreTradeLock(handle)
+	for _, price := range prices {
+		if err := native.PretradePreTradeLockPush(
+			handle,
+			native.PolicyGroupID(groupID),
+			price.Handle(),
+		); err != nil {
+			t.Fatalf("PretradePreTradeLockPush() error = %v", err)
+		}
+	}
+	return newLockFromHandle(handle)
 }
 
 func mustQuantityForPreTradeTests(t *testing.T, value string) param.Quantity {
@@ -234,7 +303,7 @@ func newValidOrderForPreTradeTests(t *testing.T) model.Order {
 	operation.SetInstrument(
 		param.NewInstrument(mustAssetForPreTradeTests(t, "AAPL"), mustAssetForPreTradeTests(t, "USD")),
 	)
-	operation.SetAccountID(param.NewAccountIDFromInt(1001))
+	operation.SetAccountID(param.NewAccountIDFromUint64(1001))
 	operation.SetSide(param.SideBuy)
 	operation.SetTradeAmount(param.NewQuantityTradeAmount(mustQuantityForPreTradeTests(t, "1")))
 	operation.SetPrice(mustPriceForPreTradeTests(t, "100"))

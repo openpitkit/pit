@@ -22,6 +22,8 @@ import (
 	"runtime/cgo"
 	"sync"
 
+	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/accounts"
 	"go.openpit.dev/openpit/internal/callback"
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
@@ -31,6 +33,7 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
+// ClientEngineOption configures a ClientEngine at build time.
 type ClientEngineOption func(*clientEngineOptions)
 
 // UnsafeFastClientPayloadCallbacks selects callback adapters that trust every
@@ -129,206 +132,24 @@ func (e *ClientEngine[Order, Report, Adjustment]) ApplyExecutionReport(
 func (e *ClientEngine[Order, Report, Adjustment]) ApplyAccountAdjustment(
 	accountID param.AccountID,
 	adjustments []Adjustment,
-) (optional.Option[reject.AccountAdjustmentBatchError], error) {
-	engineAdjustments, payloads := newClientAdjustmentPayloads(adjustments)
-	defer payloads.release()
-	rejects, err := e.engine.ApplyAccountAdjustment(accountID, engineAdjustments)
-	runtime.KeepAlive(adjustments)
-	return rejects, err
-}
-
-//------------------------------------------------------------------------------
-// ClientEngineBuilder
-
-// ClientEngineBuilder is the initial stage of the client engine builder.
-// Call one of FullSync, NoSync, or AccountSync to obtain a
-// ClientSyncedEngineBuilder on which policies can be registered.
-type ClientEngineBuilder[
-	Order pretrade.ClientOrder,
-	Report pretrade.ClientExecutionReport,
-	Adjustment clientAccountAdjustment,
-] struct {
-	unsafeFastPayloadCallbacks bool
-}
-
-// NewClientEngineBuilder creates a builder for strategies that use custom
-// order, execution report, and account-adjustment types.
-//
-// Call FullSync, NoSync, or AccountSync to select a sync policy
-// and obtain a ClientSyncedEngineBuilder.
-func NewClientEngineBuilder[
-	Order pretrade.ClientOrder,
-	Report pretrade.ClientExecutionReport,
-	Adjustment clientAccountAdjustment,
-](options ...ClientEngineOption) *ClientEngineBuilder[Order, Report, Adjustment] {
-	config := clientEngineOptions{}
-	for _, option := range options {
-		option(&config)
-	}
-	return &ClientEngineBuilder[Order, Report, Adjustment]{
-		unsafeFastPayloadCallbacks: config.unsafeFastPayloadCallbacks,
-	}
-}
-
-// NewClientPreTradeEngineBuilder creates a client builder for custom order
-// and execution report types while keeping account adjustments on the standard
-// SDK model type.
-func NewClientPreTradeEngineBuilder[
-	Order pretrade.ClientOrder,
-	Report pretrade.ClientExecutionReport,
-](
-	options ...ClientEngineOption,
-) *ClientEngineBuilder[Order, Report, model.AccountAdjustment] {
-	return NewClientEngineBuilder[Order, Report, model.AccountAdjustment](options...)
-}
-
-// NewClientAccountAdjustmentEngineBuilder creates a client builder for custom
-// account-adjustment types while keeping orders and execution reports on the
-// standard SDK model types.
-func NewClientAccountAdjustmentEngineBuilder[
-	Adjustment clientAccountAdjustment,
-](
-	options ...ClientEngineOption,
-) *ClientEngineBuilder[model.Order, model.ExecutionReport, Adjustment] {
-	return NewClientEngineBuilder[model.Order, model.ExecutionReport, Adjustment](options...)
-}
-
-// FullSync configures full thread-safety synchronization and returns a
-// ClientSyncedEngineBuilder ready to accept policies.
-func (
-	b *ClientEngineBuilder[Order, Report, Adjustment],
-) FullSync() *ClientSyncedEngineBuilder[Order, Report, Adjustment] {
-	return &ClientSyncedEngineBuilder[Order, Report, Adjustment]{
-		synced:                     NewEngineBuilder().FullSync(),
-		unsafeFastPayloadCallbacks: b.unsafeFastPayloadCallbacks,
-	}
-}
-
-// NoSync configures single-thread (no-sync) synchronization and returns
-// a ClientSyncedEngineBuilder ready to accept policies.
-func (
-	b *ClientEngineBuilder[Order, Report, Adjustment],
-) NoSync() *ClientSyncedEngineBuilder[Order, Report, Adjustment] {
-	return &ClientSyncedEngineBuilder[Order, Report, Adjustment]{
-		synced:                     NewEngineBuilder().NoSync(),
-		unsafeFastPayloadCallbacks: b.unsafeFastPayloadCallbacks,
-	}
-}
-
-// AccountSync configures account-sharded synchronization and returns a
-// ClientSyncedEngineBuilder ready to accept policies. The resulting engine
-// handle is safe for concurrent invocation when the caller pins each account
-// to a single processing chain.
-func (
-	b *ClientEngineBuilder[Order, Report, Adjustment],
-) AccountSync() *ClientSyncedEngineBuilder[Order, Report, Adjustment] {
-	return &ClientSyncedEngineBuilder[Order, Report, Adjustment]{
-		synced:                     NewEngineBuilder().AccountSync(),
-		unsafeFastPayloadCallbacks: b.unsafeFastPayloadCallbacks,
-	}
-}
-
-//------------------------------------------------------------------------------
-// ClientSyncedEngineBuilder
-
-// ClientSyncedEngineBuilder is the second stage of the client engine builder
-// chain. Add at least one policy to advance to ClientReadyEngineBuilder where
-// Build is available.
-type ClientSyncedEngineBuilder[
-	Order pretrade.ClientOrder,
-	Report pretrade.ClientExecutionReport,
-	Adjustment clientAccountAdjustment,
-] struct {
-	synced                     *SyncedEngineBuilder
-	unsafeFastPayloadCallbacks bool
-}
-
-func (
-	b *ClientSyncedEngineBuilder[Order, Report, Adjustment],
-) newReady() *ClientReadyEngineBuilder[Order, Report, Adjustment] {
-	return &ClientReadyEngineBuilder[Order, Report, Adjustment]{
-		ready:                      newReadyEngineBuilder(b.synced),
-		unsafeFastPayloadCallbacks: b.unsafeFastPayloadCallbacks,
-	}
-}
-
-func (b *ClientSyncedEngineBuilder[Order, Report, Adjustment]) PreTrade(
-	policy ...pretrade.ClientPreTradePolicy[Order, Report],
-) *ClientReadyEngineBuilder[Order, Report, Adjustment] {
-	rb := b.newReady()
-	for _, p := range policy {
-		rb.addPreTradePolicy(p)
-	}
-	return rb
-}
-
-// Builtin registers a built-in entity on the builder.
-func (
-	b *ClientSyncedEngineBuilder[Order, Report, Adjustment],
-) Builtin(
-	builtinReadyBuilder builtinReadyBuilder,
-) *ClientReadyEngineBuilder[Order, Report, Adjustment] {
-	return b.newReady().Builtin(builtinReadyBuilder)
-}
-
-//------------------------------------------------------------------------------
-// ClientReadyEngineBuilder
-
-// ClientReadyEngineBuilder is the third stage of the client engine builder
-// chain. Accepts additional policies and builds the engine via Build.
-type ClientReadyEngineBuilder[
-	Order pretrade.ClientOrder,
-	Report pretrade.ClientExecutionReport,
-	Adjustment clientAccountAdjustment,
-] struct {
-	ready                      *ReadyEngineBuilder
-	unsafeFastPayloadCallbacks bool
-}
-
-// Close releases the underlying builder and any policies it still owns.
-func (b *ClientReadyEngineBuilder[Order, Report, Adjustment]) Close() {
-	b.ready.Close()
-}
-
-// Build constructs a ClientEngine and transfers ownership of policies to it.
-func (b *ClientReadyEngineBuilder[Order, Report, Adjustment]) Build() (
-	*ClientEngine[Order, Report, Adjustment],
+) (
+	optional.Option[reject.AccountAdjustmentBatchError],
+	[]accountadjustment.Outcome,
 	error,
 ) {
-	engine, err := b.ready.Build()
-	if err != nil {
-		return nil, err
-	}
-	return &ClientEngine[Order, Report, Adjustment]{engine: engine}, nil
+	engineAdjustments, payloads := newClientAdjustmentPayloads(adjustments)
+	defer payloads.release()
+	rejects, outcomes, err := e.engine.ApplyAccountAdjustment(accountID, engineAdjustments)
+	runtime.KeepAlive(adjustments)
+	return rejects, outcomes, err
 }
 
-func (b *ClientReadyEngineBuilder[Order, Report, Adjustment]) PreTrade(
-	policy ...pretrade.ClientPreTradePolicy[Order, Report],
-) *ClientReadyEngineBuilder[Order, Report, Adjustment] {
-	for _, p := range policy {
-		b.addPreTradePolicy(p)
-	}
-	return b
-}
-
-// Builtin registers a built-in entity on the builder.
-func (
-	b *ClientReadyEngineBuilder[Order, Report, Adjustment],
-) Builtin(
-	builtinReadyBuilder builtinReadyBuilder,
-) *ClientReadyEngineBuilder[Order, Report, Adjustment] {
-	b.ready.Builtin(builtinReadyBuilder)
-	return b
-}
-
-func (b *ClientReadyEngineBuilder[Order, Report, Adjustment]) addPreTradePolicy(
-	p pretrade.ClientPreTradePolicy[Order, Report],
-) {
-	if b.unsafeFastPayloadCallbacks {
-		b.ready.PreTrade(pretrade.NewUnsafeFastClientPreTradePolicy(p))
-		return
-	}
-	b.ready.PreTrade(pretrade.NewSafeClientPreTradePolicy(p))
+// Accounts returns an accessor for account-group management bound to this
+// engine. Account-group membership is keyed by account id and is independent of
+// the client payload types, so the accessor is the same one the standard Engine
+// exposes.
+func (e *ClientEngine[Order, Report, Adjustment]) Accounts() accounts.Accounts {
+	return e.engine.Accounts()
 }
 
 // ClientRequest is a deferred pre-trade request that keeps the original client

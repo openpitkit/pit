@@ -102,6 +102,7 @@
 use rust_decimal::Decimal;
 use std::fmt::{Display, Formatter};
 
+pub mod account_group_id;
 pub mod account_id;
 pub mod adjustment_amount;
 pub mod asset;
@@ -122,6 +123,7 @@ pub mod trade;
 pub mod trade_amount;
 pub mod volume;
 
+pub use account_group_id::{AccountGroupId, AccountGroupIdError, DEFAULT_ACCOUNT_GROUP};
 pub use account_id::{AccountId, AccountIdError};
 pub use adjustment_amount::AdjustmentAmount;
 pub use asset::{Asset, AssetError};

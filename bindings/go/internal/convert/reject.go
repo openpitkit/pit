@@ -22,14 +22,25 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
-func NewNativeRejectListOrNil(source []reject.Reject) native.RejectList {
+func NewNativeRejectListOrNil(source []reject.Reject) native.PretradeRejectList {
 	if len(source) == 0 {
 		return nil
 	}
-	result := native.CreateRejectList(len(source))
+	result := native.CreatePretradeRejectList(len(source))
 	for _, r := range source {
 		// Reject data will be copied here, source reject must be existing before.
-		native.RejectListPush(result, r.NewHandle())
+		native.PretradeRejectListPush(result, r.NewHandle())
+	}
+	return result
+}
+
+func NewNativeAccountBlockListOrNil(source []reject.AccountBlock) native.PretradeAccountBlockList {
+	if len(source) == 0 {
+		return nil
+	}
+	result := native.CreatePretradeAccountBlockList(len(source))
+	for _, b := range source {
+		native.PretradeAccountBlockListPush(result, b.NewHandle())
 	}
 	return result
 }

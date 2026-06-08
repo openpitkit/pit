@@ -25,17 +25,17 @@ import "C"
 import "unsafe"
 
 //------------------------------------------------------------------------------
-// Reject
+// PretradeReject
 
-func CreateReject(
-	code RejectCode,
-	scope RejectScope,
+func CreatePretradeReject(
+	code PretradeRejectCode,
+	scope PretradeRejectScope,
 	policy StringView,
 	reason StringView,
 	details StringView,
 	userData unsafe.Pointer,
-) Reject {
-	return Reject{
+) PretradeReject {
+	return PretradeReject{
 		policy:    policy.value,
 		reason:    reason.value,
 		details:   details.value,
@@ -45,56 +45,125 @@ func CreateReject(
 	}
 }
 
-func RejectGetCode(reject Reject) RejectCode {
+func PretradeRejectGetCode(reject PretradeReject) PretradeRejectCode {
 	return reject.code
 }
 
-func RejectGetScope(reject Reject) RejectScope {
+func PretradeRejectGetScope(reject PretradeReject) PretradeRejectScope {
 	return reject.scope
 }
 
-func RejectGetPolicy(reject Reject) StringView {
+func PretradeRejectGetPolicy(reject PretradeReject) StringView {
 	return newStringView(reject.policy)
 }
 
-func RejectGetReason(reject Reject) StringView {
+func PretradeRejectGetReason(reject PretradeReject) StringView {
 	return newStringView(reject.reason)
 }
 
-func RejectGetDetails(reject Reject) StringView {
+func PretradeRejectGetDetails(reject PretradeReject) StringView {
 	return newStringView(reject.details)
 }
 
-func RejectGetUserData(reject Reject) unsafe.Pointer {
+func PretradeRejectGetUserData(reject PretradeReject) unsafe.Pointer {
 	return reject.user_data
 }
 
 //------------------------------------------------------------------------------
-// RejectList
+// PretradeRejectList
 
-func CreateRejectList(reserve int) RejectList {
+func CreatePretradeRejectList(reserve int) PretradeRejectList {
 	if reserve < 0 {
 		reserve = 0
 	}
-	return C.openpit_create_reject_list(C.size_t(reserve))
+	return C.openpit_pretrade_create_reject_list(C.size_t(reserve))
 }
 
-func DestroyRejectList(rejects RejectList) {
-	C.openpit_destroy_reject_list(rejects)
+func DestroyPretradeRejectList(rejects PretradeRejectList) {
+	C.openpit_pretrade_destroy_reject_list(rejects)
 }
 
-func RejectListPush(list RejectList, reject Reject) {
-	C.openpit_reject_list_push(list, reject)
+func PretradeRejectListPush(list PretradeRejectList, reject PretradeReject) {
+	C.openpit_pretrade_reject_list_push(list, reject)
 }
 
-func RejectListLen(list RejectList) int {
-	return int(C.openpit_reject_list_len(list))
+func PretradeRejectListLen(list PretradeRejectList) int {
+	return int(C.openpit_pretrade_reject_list_len(list))
 }
 
-func RejectListGet(list RejectList, index int) Reject {
-	var out Reject
-	if !C.openpit_reject_list_get(list, C.size_t(index), &out) { //nolint:gocritic
-		return Reject{}
+func PretradeRejectListGet(list PretradeRejectList, index int) PretradeReject {
+	var out PretradeReject
+	if !C.openpit_pretrade_reject_list_get(list, C.size_t(index), &out) { //nolint:gocritic // CGo out-parameter requires address-of operator
+		return PretradeReject{}
+	}
+	return out
+}
+
+//------------------------------------------------------------------------------
+// PretradeAccountBlock
+
+func CreatePretradeAccountBlock(
+	code PretradeRejectCode,
+	policy StringView,
+	reason StringView,
+	details StringView,
+	userData unsafe.Pointer,
+) PretradeAccountBlock {
+	return PretradeAccountBlock{
+		policy:    policy.value,
+		reason:    reason.value,
+		details:   details.value,
+		user_data: userData,
+		code:      code,
+	}
+}
+
+func PretradeAccountBlockGetCode(block PretradeAccountBlock) PretradeRejectCode {
+	return block.code
+}
+
+func PretradeAccountBlockGetPolicy(block PretradeAccountBlock) StringView {
+	return newStringView(block.policy)
+}
+
+func PretradeAccountBlockGetReason(block PretradeAccountBlock) StringView {
+	return newStringView(block.reason)
+}
+
+func PretradeAccountBlockGetDetails(block PretradeAccountBlock) StringView {
+	return newStringView(block.details)
+}
+
+func PretradeAccountBlockGetUserData(block PretradeAccountBlock) unsafe.Pointer {
+	return block.user_data
+}
+
+//------------------------------------------------------------------------------
+// PretradeAccountBlockList
+
+func CreatePretradeAccountBlockList(reserve int) PretradeAccountBlockList {
+	if reserve < 0 {
+		reserve = 0
+	}
+	return C.openpit_pretrade_create_account_block_list(C.size_t(reserve))
+}
+
+func DestroyPretradeAccountBlockList(blocks PretradeAccountBlockList) {
+	C.openpit_pretrade_destroy_account_block_list(blocks)
+}
+
+func PretradeAccountBlockListPush(list PretradeAccountBlockList, block PretradeAccountBlock) {
+	C.openpit_pretrade_account_block_list_push(list, block)
+}
+
+func PretradeAccountBlockListLen(list PretradeAccountBlockList) int {
+	return int(C.openpit_pretrade_account_block_list_len(list))
+}
+
+func PretradeAccountBlockListGet(list PretradeAccountBlockList, index int) PretradeAccountBlock {
+	var out PretradeAccountBlock
+	if !C.openpit_pretrade_account_block_list_get(list, C.size_t(index), &out) { //nolint:gocritic // CGo out-parameter requires address-of operator
+		return PretradeAccountBlock{}
 	}
 	return out
 }

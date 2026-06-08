@@ -10,7 +10,7 @@ risk checks into trading systems from Python.
 For an overview and links to all resources, see
 the project website [openpit.dev](https://openpit.dev/).
 For the Python API guide and generated reference, see
-[openpit.readthedocs.io](https://openpit.readthedocs.io/).
+[openpit.readthedocs.io](https://openpit.readthedocs.io/en/stable/).
 For full project documentation, see
 [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
 For conceptual and architectural pages, see
@@ -18,19 +18,15 @@ For conceptual and architectural pages, see
 
 ## Versioning Policy (Pre‑1.0)
 
-Until OpenPit reaches a stable `1.0` release, the project follows a relaxed
-interpretation of Semantic Versioning.
+Before the `1.0` release OpenPit follows a relaxed Semantic Versioning:
 
-During this phase:
+- `PATCH` releases carry bug fixes and small internal corrections.
+- `MINOR` releases may introduce new features **and may also change the
+  public interface**.
 
-- `PATCH` releases are used for bug fixes and small internal corrections.
-- `MINOR` releases may introduce new features **and may also change the public
-  interface**.
-
-This means that breaking API changes can appear in minor releases before `1.0`.
-Consumers of the library should take this into account when declaring
-dependencies and consider using version constraints that tolerate API
-evolution during the pre‑stable phase.
+Breaking API changes can appear in minor releases before `1.0`. Pick
+version constraints that tolerate API evolution during the pre-stable
+phase.
 
 ## Getting Started
 
@@ -38,7 +34,14 @@ Visit the [PyPI package](https://pypi.org/project/openpit/).
 
 ## Examples
 
-Runnable end-to-end examples: [`examples/python/`](https://github.com/openpitkit/pit/tree/main/examples/python).
+Runnable end-to-end examples live in [`examples/python/`](https://github.com/openpitkit/pit/tree/main/examples/python):
+
+- [`spot_funds`](https://github.com/openpitkit/pit/tree/main/examples/python/spot_funds)
+  \- simplest SpotFunds policy integration (limit-only).
+- [`spot_table`](https://github.com/openpitkit/pit/tree/main/examples/python/spot_table)
+  \- table-driven test runner for the SpotFunds policy.
+- [`rate_pnl_killswitch`](https://github.com/openpitkit/pit/tree/main/examples/python/rate_pnl_killswitch)
+  \- rate-limit + P&L kill-switch supervisor.
 
 ## Install
 
@@ -68,49 +71,48 @@ maturin develop --release --manifest-path bindings/python/Cargo.toml
 
 The engine evaluates an order through a deterministic pre-trade pipeline:
 
-- `engine.start_pre_trade(order=...)` runs start-stage checks and makes
-  lightweight check policies
+- `engine.start_pre_trade(order=...)` runs lightweight start-stage checks
 - `request.execute()` runs main-stage check policies
 - `reservation.commit()` applies reserved state
 - `reservation.rollback()` reverts reserved state
-- `engine.apply_execution_report(report=...)` updates post-trade policy state
+- `engine.apply_execution_report(report=...)` updates post-trade policy
+  state
 
-Start-stage checks aggregate rejects from all registered policies. Main-stage
-checks aggregate rejects and run rollback mutations in reverse order when any
-reject is produced.
+Start-stage checks aggregate rejects from all registered policies.
+Main-stage checks aggregate rejects and run rollback mutations in reverse
+order when any reject is produced.
 
-Built-in policies currently include:
+Built-in policies:
 
-- `OrderValidationPolicy`
-- `PnlBoundsKillSwitchPolicy`
-- `RateLimitPolicy`
-- `OrderSizeLimitPolicy`
+- `SpotFundsPolicy` -
+  [per-account solvency gate over spendable funds](https://github.com/openpitkit/pit/wiki/Spot-Funds)
+- `OrderValidationPolicy` - [structural integrity checks on every order](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
+- `RateLimitPolicy` - [throttle order flow per broker, asset, or account](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
+- `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
+- `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
 
-The primary integration model is to write project-specific policies against the
-public Python policy API described in the manual: [Custom Python policies](https://github.com/openpitkit/pit/wiki/Policies#python-custom-policy-api).
-
-There are two types of rejections: a full kill switch for the account and a
-rejection of only the current request. This is useful in algorithmic trading
-when automatic order submission must be halted until the situation is analyzed.
+The primary integration model is to write project-specific policies against
+the public Python policy API:
+[Custom Python policies](https://github.com/openpitkit/pit/wiki/Policy-API#python-interface).
 
 ## Threading
 
 Canonical contract: [Threading Contract](https://github.com/openpitkit/pit/wiki/Threading-Contract).
 
-The Python binding follows the same SDK threading contract.
-Public methods acquire the GIL when needed; the SDK does not release the GIL
-across callback boundaries, so Python policies execute on the calling thread.
+Public methods acquire the GIL when needed; the SDK does not release the
+GIL across callback boundaries, so Python policies execute on the calling
+thread.
 
-Custom policies that need internal state across calls can use the
-built-in [Storage](https://github.com/openpitkit/pit/wiki/Storage)
-abstraction. In typical Python usage - synchronous code or an asyncio
-loop pinned to one thread - the no-sync policy is sufficient and the
-storage compiles down to direct dictionary access. A synchronizing
-policy is needed only when the engine is genuinely shared across OS
-threads.
+Custom policies that need internal state across calls can use the built-in
+[Storage](https://github.com/openpitkit/pit/wiki/Storage) abstraction. In
+typical Python usage (synchronous code or an asyncio loop pinned to one
+thread) the no-sync policy is sufficient and the storage compiles down to
+direct dictionary access. A synchronizing policy is needed only when the
+engine is genuinely shared across OS threads.
 
 ## Usage
 
+<!-- Test mirror: pit/bindings/python/tests/integration/test_examples_readme.py -->
 ```python
 import datetime
 import openpit
@@ -139,13 +141,23 @@ rate_limit_policy = (
     )
 )
 
+max_qty = openpit.param.Quantity("500")
+max_notional = openpit.param.Volume("100000")
 order_size_policy = (
     openpit.pretrade.policies.build_order_size_limit()
+    .broker_barrier(
+        openpit.pretrade.policies.OrderSizeBrokerBarrier(
+            limit=openpit.pretrade.policies.OrderSizeLimit(
+                max_quantity=max_qty,
+                max_notional=max_notional,
+            ),
+        )
+    )
     .asset_barriers(
         openpit.pretrade.policies.OrderSizeAssetBarrier(
             limit=openpit.pretrade.policies.OrderSizeLimit(
-                max_quantity=openpit.param.Quantity("500"),
-                max_notional=openpit.param.Volume("100000"),
+                max_quantity=max_qty,
+                max_notional=max_notional,
             ),
             settlement_asset="USD",
         ),
@@ -167,7 +179,7 @@ engine = (
 order = openpit.Order(
     operation=openpit.OrderOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.TradeAmount.quantity(100.0),
         price=openpit.param.Price(185.0),
@@ -220,7 +232,7 @@ reservation.commit()
 report = openpit.ExecutionReport(
     operation=openpit.ExecutionReportOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
     ),
     financial_impact=openpit.FinancialImpact(
@@ -234,7 +246,7 @@ result = engine.apply_execution_report(report=report)
 # 8. After each execution report is applied, the system may report that it has
 # been determined in advance that all subsequent requests will be rejected if
 # the account status does not change.
-assert result.kill_switch_triggered is False
+assert not result.account_blocks
 ```
 
 ## Errors

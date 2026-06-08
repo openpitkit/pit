@@ -15,6 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
+// Package tx provides transaction mutation types for the pre-trade pipeline.
 package tx
 
 import (
@@ -24,8 +25,10 @@ import (
 	"go.openpit.dev/openpit/tx/internal/mutation"
 )
 
+// Mutations is a collection of commit/rollback callbacks registered during a pre-trade check.
 type Mutations struct{ handle native.Mutations }
 
+// NewMutationsFromHandle creates a Mutations from a native handle.
 func NewMutationsFromHandle(handle native.Mutations) Mutations {
 	return Mutations{handle: handle}
 }

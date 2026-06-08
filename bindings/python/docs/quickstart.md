@@ -1,7 +1,8 @@
 # Quickstart
 
-This example builds an engine with payload validation, checks one order, commits
-the reservation, and sends a post-trade report back to the engine.
+A minimal end-to-end flow: build an engine with payload validation, check
+one order, commit the reservation, and feed a post-trade report back into
+the engine.
 
 ```python
 import openpit
@@ -25,7 +26,7 @@ engine = (
 order = openpit.Order(
     operation=openpit.OrderOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.TradeAmount.quantity("100"),
         price=openpit.param.Price("185"),
@@ -60,7 +61,7 @@ else:
 report = openpit.ExecutionReport(
     operation=openpit.ExecutionReportOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
     ),
     financial_impact=openpit.FinancialImpact(
@@ -70,7 +71,7 @@ report = openpit.ExecutionReport(
 )
 
 post_trade = engine.apply_execution_report(report=report)
-assert post_trade.kill_switch_triggered is False
+assert not post_trade.account_blocks
 ```
 
 Use `engine.execute_pre_trade(order=...)` when the caller does not need to keep

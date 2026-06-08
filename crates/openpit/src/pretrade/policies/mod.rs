@@ -21,6 +21,7 @@ pub mod order_size_limit;
 pub mod order_validation;
 pub mod pnl_bounds_killswitch;
 pub mod rate_limit;
+mod spot_funds;
 
 pub use order_size_limit::{
     OrderSizeAccountAssetBarrier, OrderSizeAssetBarrier, OrderSizeBrokerBarrier, OrderSizeLimit,
@@ -34,4 +35,9 @@ pub use pnl_bounds_killswitch::{
 pub use rate_limit::{
     RateLimit, RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitAssetBarrier,
     RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError,
+};
+pub use spot_funds::SpotFundsPolicy;
+pub use spot_funds::{
+    SpotFundsConfigError, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
+    SpotFundsPricingSource,
 };

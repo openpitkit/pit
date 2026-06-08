@@ -23,59 +23,67 @@ import (
 	"go.openpit.dev/openpit/internal/native"
 )
 
+// Scope identifies whether a reject applies to an order or an account.
 type Scope uint8
 
 const (
-	ScopeOrder   Scope = native.RejectScopeOrder
+	// ScopeOrder means the reject applies to a single order.
+	ScopeOrder Scope = native.RejectScopeOrder
+	// ScopeAccount means the reject applies at the account level.
 	ScopeAccount Scope = native.RejectScopeAccount
 )
 
-type Code native.RejectCode
+// Code is a stable machine-readable reject code.
+type Code native.PretradeRejectCode
 
+// Predefined reject codes used by built-in policies and available to custom policies.
 const (
-	CodeMissingRequiredField        Code = native.RejectCodeMissingRequiredField
-	CodeInvalidFieldFormat          Code = native.RejectCodeInvalidFieldFormat
-	CodeInvalidFieldValue           Code = native.RejectCodeInvalidFieldValue
-	CodeUnsupportedOrderType        Code = native.RejectCodeUnsupportedOrderType
-	CodeUnsupportedTimeInForce      Code = native.RejectCodeUnsupportedTimeInForce
-	CodeUnsupportedOrderAttribute   Code = native.RejectCodeUnsupportedOrderAttribute
-	CodeDuplicateClientOrderID      Code = native.RejectCodeDuplicateClientOrderID
-	CodeTooLateToEnter              Code = native.RejectCodeTooLateToEnter
-	CodeExchangeClosed              Code = native.RejectCodeExchangeClosed
-	CodeUnknownInstrument           Code = native.RejectCodeUnknownInstrument
-	CodeUnknownAccount              Code = native.RejectCodeUnknownAccount
-	CodeUnknownVenue                Code = native.RejectCodeUnknownVenue
-	CodeUnknownClearingAccount      Code = native.RejectCodeUnknownClearingAccount
-	CodeUnknownCollateralAsset      Code = native.RejectCodeUnknownCollateralAsset
-	CodeInsufficientFunds           Code = native.RejectCodeInsufficientFunds
-	CodeInsufficientMargin          Code = native.RejectCodeInsufficientMargin
-	CodeInsufficientPosition        Code = native.RejectCodeInsufficientPosition
-	CodeCreditLimitExceeded         Code = native.RejectCodeCreditLimitExceeded
-	CodeRiskLimitExceeded           Code = native.RejectCodeRiskLimitExceeded
-	CodeOrderExceedsLimit           Code = native.RejectCodeOrderExceedsLimit
-	CodeOrderQtyExceedsLimit        Code = native.RejectCodeOrderQtyExceedsLimit
-	CodeOrderNotionalExceedsLimit   Code = native.RejectCodeOrderNotionalExceedsLimit
-	CodePositionLimitExceeded       Code = native.RejectCodePositionLimitExceeded
-	CodeConcentrationLimitExceeded  Code = native.RejectCodeConcentrationLimitExceeded
-	CodeLeverageLimitExceeded       Code = native.RejectCodeLeverageLimitExceeded
-	CodeRateLimitExceeded           Code = native.RejectCodeRateLimitExceeded
-	CodePnlKillSwitchTriggered      Code = native.RejectCodePnlKillSwitchTriggered
-	CodeAccountBlocked              Code = native.RejectCodeAccountBlocked
-	CodeAccountNotAuthorized        Code = native.RejectCodeAccountNotAuthorized
-	CodeComplianceRestriction       Code = native.RejectCodeComplianceRestriction
-	CodeInstrumentRestricted        Code = native.RejectCodeInstrumentRestricted
-	CodeJurisdictionRestriction     Code = native.RejectCodeJurisdictionRestriction
-	CodeWashTradePrevention         Code = native.RejectCodeWashTradePrevention
-	CodeSelfMatchPrevention         Code = native.RejectCodeSelfMatchPrevention
-	CodeShortSaleRestriction        Code = native.RejectCodeShortSaleRestriction
-	CodeRiskConfigurationMissing    Code = native.RejectCodeRiskConfigurationMissing
-	CodeReferenceDataUnavailable    Code = native.RejectCodeReferenceDataUnavailable
-	CodeOrderValueCalculationFailed Code = native.RejectCodeOrderValueCalculationFailed
-	CodeSystemUnavailable           Code = native.RejectCodeSystemUnavailable
-	CodeCustom                      Code = native.RejectCodeCustom
-	CodeOther                       Code = native.RejectCodeOther
+	CodeMissingRequiredField            Code = native.RejectCodeMissingRequiredField
+	CodeInvalidFieldFormat              Code = native.RejectCodeInvalidFieldFormat
+	CodeInvalidFieldValue               Code = native.RejectCodeInvalidFieldValue
+	CodeUnsupportedOrderType            Code = native.RejectCodeUnsupportedOrderType
+	CodeUnsupportedTimeInForce          Code = native.RejectCodeUnsupportedTimeInForce
+	CodeUnsupportedOrderAttribute       Code = native.RejectCodeUnsupportedOrderAttribute
+	CodeDuplicateClientOrderID          Code = native.RejectCodeDuplicateClientOrderID
+	CodeTooLateToEnter                  Code = native.RejectCodeTooLateToEnter
+	CodeExchangeClosed                  Code = native.RejectCodeExchangeClosed
+	CodeUnknownInstrument               Code = native.RejectCodeUnknownInstrument
+	CodeUnknownAccount                  Code = native.RejectCodeUnknownAccount
+	CodeUnknownVenue                    Code = native.RejectCodeUnknownVenue
+	CodeUnknownClearingAccount          Code = native.RejectCodeUnknownClearingAccount
+	CodeUnknownCollateralAsset          Code = native.RejectCodeUnknownCollateralAsset
+	CodeInsufficientFunds               Code = native.RejectCodeInsufficientFunds
+	CodeInsufficientMargin              Code = native.RejectCodeInsufficientMargin
+	CodeInsufficientPosition            Code = native.RejectCodeInsufficientPosition
+	CodeCreditLimitExceeded             Code = native.RejectCodeCreditLimitExceeded
+	CodeRiskLimitExceeded               Code = native.RejectCodeRiskLimitExceeded
+	CodeOrderExceedsLimit               Code = native.RejectCodeOrderExceedsLimit
+	CodeOrderQtyExceedsLimit            Code = native.RejectCodeOrderQtyExceedsLimit
+	CodeOrderNotionalExceedsLimit       Code = native.RejectCodeOrderNotionalExceedsLimit
+	CodePositionLimitExceeded           Code = native.RejectCodePositionLimitExceeded
+	CodeConcentrationLimitExceeded      Code = native.RejectCodeConcentrationLimitExceeded
+	CodeLeverageLimitExceeded           Code = native.RejectCodeLeverageLimitExceeded
+	CodeRateLimitExceeded               Code = native.RejectCodeRateLimitExceeded
+	CodePnlKillSwitchTriggered          Code = native.RejectCodePnlKillSwitchTriggered
+	CodeAccountBlocked                  Code = native.RejectCodeAccountBlocked
+	CodeAccountNotAuthorized            Code = native.RejectCodeAccountNotAuthorized
+	CodeComplianceRestriction           Code = native.RejectCodeComplianceRestriction
+	CodeInstrumentRestricted            Code = native.RejectCodeInstrumentRestricted
+	CodeJurisdictionRestriction         Code = native.RejectCodeJurisdictionRestriction
+	CodeWashTradePrevention             Code = native.RejectCodeWashTradePrevention
+	CodeSelfMatchPrevention             Code = native.RejectCodeSelfMatchPrevention
+	CodeShortSaleRestriction            Code = native.RejectCodeShortSaleRestriction
+	CodeRiskConfigurationMissing        Code = native.RejectCodeRiskConfigurationMissing
+	CodeReferenceDataUnavailable        Code = native.RejectCodeReferenceDataUnavailable
+	CodeOrderValueCalculationFailed     Code = native.RejectCodeOrderValueCalculationFailed
+	CodeSystemUnavailable               Code = native.RejectCodeSystemUnavailable
+	CodeMarkPriceUnavailable            Code = native.RejectCodeMarkPriceUnavailable
+	CodeAccountAdjustmentBoundsExceeded Code = native.RejectCodeAccountAdjustmentBoundsExceeded
+	CodeCustom                          Code = native.RejectCodeCustom
+	CodeOther                           Code = native.RejectCodeOther
 )
 
+// Reject represents a single pre-trade check rejection.
 type Reject struct {
 	// Human-readable reject reason.
 	Reason string
@@ -93,6 +101,7 @@ type Reject struct {
 	Scope Scope
 }
 
+// New creates a Reject with the given fields.
 func New(
 	code Code, // stable machine-readable reject code
 	policy string, // policy name that produced the reject
@@ -112,23 +121,23 @@ func New(
 
 // NewFromHandle creates a Reject from a Reject handle with data copied from
 // the handle.
-func NewFromHandle(handle native.Reject) Reject {
+func NewFromHandle(handle native.PretradeReject) Reject {
 	return Reject{
-		Code:     Code(native.RejectGetCode(handle)),
-		Scope:    Scope(native.RejectGetScope(handle)),
-		Policy:   native.RejectGetPolicy(handle).Safe(),
-		Reason:   native.RejectGetReason(handle).Safe(),
-		Details:  native.RejectGetDetails(handle).Safe(),
-		UserData: native.RejectGetUserData(handle),
+		Code:     Code(native.PretradeRejectGetCode(handle)),
+		Scope:    Scope(native.PretradeRejectGetScope(handle)),
+		Policy:   native.PretradeRejectGetPolicy(handle).Safe(),
+		Reason:   native.PretradeRejectGetReason(handle).Safe(),
+		Details:  native.PretradeRejectGetDetails(handle).Safe(),
+		UserData: native.PretradeRejectGetUserData(handle),
 	}
 }
 
 // NewHandle returns a native Reject handle that refers to the current Reject
 // data.
-func (r Reject) NewHandle() native.Reject {
-	return native.CreateReject(
-		native.RejectCode(r.Code),
-		native.RejectScope(r.Scope),
+func (r Reject) NewHandle() native.PretradeReject {
+	return native.CreatePretradeReject(
+		native.PretradeRejectCode(r.Code),
+		native.PretradeRejectScope(r.Scope),
 		native.NewStringView(r.Policy),
 		native.NewStringView(r.Reason),
 		native.NewStringView(r.Details),
@@ -141,8 +150,6 @@ func (r Reject) NewHandle() native.Reject {
 // Uses copy-on-write semantics. Original instance is unchanged.
 //
 // Caller manages lifetime of userData.
-//
-//nolint:revive // intentional copy-on-write
 func (r Reject) WithUserData(userData unsafe.Pointer) Reject {
 	r.UserData = userData
 	return r

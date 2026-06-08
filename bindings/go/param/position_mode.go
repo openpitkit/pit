@@ -32,6 +32,7 @@ const (
 	PositionModeHedged PositionMode = native.ParamPositionModeHedged
 )
 
+// NewPositionModeFromHandle creates an optional PositionMode from a native handle.
 func NewPositionModeFromHandle(v native.ParamPositionMode) optional.Option[PositionMode] {
 	if v == native.ParamPositionModeNotSet {
 		return optional.None[PositionMode]()
@@ -39,6 +40,7 @@ func NewPositionModeFromHandle(v native.ParamPositionMode) optional.Option[Posit
 	return optional.Some(PositionMode(v))
 }
 
+// String returns a human-readable representation of the position mode.
 func (v PositionMode) String() string {
 	if v == PositionModeNetting {
 		return "netting"
@@ -46,6 +48,7 @@ func (v PositionMode) String() string {
 	return "hedged"
 }
 
+// Handle returns the underlying native handle.
 func (v PositionMode) Handle() native.ParamPositionMode {
 	return native.ParamPositionMode(v)
 }

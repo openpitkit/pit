@@ -27,6 +27,11 @@ import (
 	"go.openpit.dev/openpit/pretrade/policies"
 )
 
+// Mirrors public examples from:
+// - bindings/go/README.md
+// - ../pit.wiki/Getting-Started.md
+// If this test changes, update every linked documentation snippet.
+
 // Source: bindings/go/README.md - Usage
 func TestReadmeQuickstart(t *testing.T) {
 	usd, err := param.NewAsset("USD")
@@ -100,7 +105,7 @@ func TestReadmeQuickstart(t *testing.T) {
 		t.Fatalf("NewAsset(AAPL) error = %v", err)
 	}
 	op.SetInstrument(param.NewInstrument(aapl, usd))
-	op.SetAccountID(param.NewAccountIDFromInt(99224416))
+	op.SetAccountID(param.NewAccountIDFromUint64(99224416))
 	op.SetSide(param.SideBuy)
 	price, _ := param.NewPriceFromString("185")
 	qty, _ := param.NewQuantityFromString("100")
@@ -133,7 +138,7 @@ func TestReadmeQuickstart(t *testing.T) {
 	report := model.NewExecutionReport()
 	reportOp := model.NewExecutionReportOperation()
 	reportOp.SetInstrument(param.NewInstrument(aapl, usd))
-	reportOp.SetAccountID(param.NewAccountIDFromInt(99224416))
+	reportOp.SetAccountID(param.NewAccountIDFromUint64(99224416))
 	reportOp.SetSide(param.SideBuy)
 	report.SetOperation(reportOp)
 
@@ -150,7 +155,7 @@ func TestReadmeQuickstart(t *testing.T) {
 	}
 
 	// 6. Kill switch must not be triggered after a small loss.
-	if result.KillSwitchTriggered {
-		t.Fatal("KillSwitchTriggered = true, want false")
+	if len(result.AccountBlocks) > 0 {
+		t.Fatalf("AccountBlocks = %v, want none after small loss", result.AccountBlocks)
 	}
 }

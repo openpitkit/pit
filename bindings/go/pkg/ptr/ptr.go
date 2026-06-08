@@ -15,8 +15,10 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
+// Package ptr provides generic pointer helpers.
 package ptr
 
+// New allocates a copy of t and returns a pointer to it.
 func New[T any](t T) *T {
 	return &t
 }

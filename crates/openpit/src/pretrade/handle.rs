@@ -15,7 +15,6 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::lock::PreTradeLock;
 use super::reject::Rejects;
 use super::request::RequestHandle;
 use super::reservation::{PreTradeReservation, ReservationHandle};
@@ -24,12 +23,12 @@ use std::marker::PhantomData;
 
 type RequestExecutor = Box<dyn FnOnce() -> Result<PreTradeReservation, Rejects>>;
 
-pub(crate) struct RequestHandleImpl<O> {
+pub(crate) struct RequestHandleImpl<Order> {
     execute: RequestExecutor,
-    marker: PhantomData<fn(O)>,
+    marker: PhantomData<fn(Order)>,
 }
 
-impl<O> RequestHandleImpl<O> {
+impl<Order> RequestHandleImpl<Order> {
     pub(crate) fn new(execute: RequestExecutor) -> Self {
         Self {
             execute,
@@ -38,7 +37,7 @@ impl<O> RequestHandleImpl<O> {
     }
 }
 
-impl<O> RequestHandle<O> for RequestHandleImpl<O> {
+impl<Order> RequestHandle<Order> for RequestHandleImpl<Order> {
     fn execute(self: Box<Self>) -> Result<PreTradeReservation, Rejects> {
         let this = *self;
         (this.execute)()
@@ -46,32 +45,22 @@ impl<O> RequestHandle<O> for RequestHandleImpl<O> {
 }
 
 pub(crate) struct ReservationHandleImpl {
-    mutations: Option<Mutations>,
+    mutations: Mutations,
 }
 
 impl ReservationHandleImpl {
     pub(crate) fn new(mutations: Mutations) -> Self {
-        Self {
-            mutations: Some(mutations),
-        }
+        Self { mutations }
     }
 }
 
 impl ReservationHandle for ReservationHandleImpl {
-    fn commit(mut self: Box<Self>) {
-        if let Some(mutations) = self.mutations.take() {
-            mutations.commit_all();
-        }
+    fn commit(self: Box<Self>) {
+        self.mutations.commit_all();
     }
 
-    fn rollback(mut self: Box<Self>) {
-        if let Some(mutations) = self.mutations.take() {
-            mutations.rollback_all();
-        }
-    }
-
-    fn lock(&self) -> PreTradeLock {
-        PreTradeLock::default()
+    fn rollback(self: Box<Self>) {
+        self.mutations.rollback_all();
     }
 }
 
@@ -91,7 +80,7 @@ mod tests {
     #[test]
     fn commit_calls_commit_closures_in_order() {
         let calls = Rc::new(RefCell::new(Vec::new()));
-        let mut mutations = Mutations::new();
+        let mut mutations = Mutations::with_capacity(3);
         for id in ["a", "b", "c"] {
             let c = Rc::clone(&calls);
             mutations.push(Mutation::new(
@@ -111,7 +100,7 @@ mod tests {
     #[test]
     fn rollback_calls_rollback_closures_in_reverse_order() {
         let calls = Rc::new(RefCell::new(Vec::new()));
-        let mut mutations = Mutations::new();
+        let mut mutations = Mutations::with_capacity(3);
         for id in ["a", "b", "c"] {
             let r = Rc::clone(&calls);
             mutations.push(Mutation::new(noop_action, move || {
@@ -144,12 +133,5 @@ mod tests {
         let result = handle.execute();
         assert!(result.is_err());
         assert!(*called.borrow());
-    }
-
-    #[test]
-    fn lock_returns_default_lock() {
-        noop_action();
-        let handle = ReservationHandleImpl::new(Mutations::new());
-        assert_eq!(handle.lock(), crate::pretrade::PreTradeLock::default());
     }
 }

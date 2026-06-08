@@ -42,10 +42,10 @@ type Volume struct {
 	native native.ParamVolume
 }
 
-var volumeZero = sync.OnceValue(func() Volume { return newVolumeOrPanic(NewVolumeFromInt(0)) })
+var newVolumeZero = sync.OnceValue(func() Volume { return newVolumeOrPanic(NewVolumeFromInt64(0)) })
 
-// VolumeZero returns the canonical zero value of Volume.
-func VolumeZero() Volume { return volumeZero() }
+// NewVolumeZero returns the canonical zero value of Volume.
+func NewVolumeZero() Volume { return newVolumeZero() }
 
 func newVolumeOrPanic(value Volume, err error) Volume {
 	if err != nil {
@@ -68,30 +68,35 @@ func NewVolumeFromDecimal(v decimal.Decimal) (Volume, error) {
 	return NewVolumeFromHandle(nativeValue), nil
 }
 
+// NewVolumeFromString creates a Volume from a decimal string.
 func NewVolumeFromString(v string) (Volume, error) {
-	nativeValue, err := native.CreateParamVolumeFromStr(v)
+	nativeValue, err := native.CreateParamVolumeFromString(v)
 	if err != nil {
 		return Volume{}, err
 	}
 	return NewVolumeFromHandle(nativeValue), nil
 }
 
-func NewVolumeFromInt(v int64) (Volume, error) {
-	nativeValue, err := native.CreateParamVolumeFromI64(v)
+// NewVolumeFromInt64 creates a Volume from a signed integer.
+func NewVolumeFromInt64(v int64) (Volume, error) {
+	nativeValue, err := native.CreateParamVolumeFromInt64(v)
 	if err != nil {
 		return Volume{}, err
 	}
 	return NewVolumeFromHandle(nativeValue), nil
 }
 
-func NewVolumeFromUint(v uint64) (Volume, error) {
-	nativeValue, err := native.CreateParamVolumeFromU64(v)
+// NewVolumeFromUint64 creates a Volume from an unsigned integer.
+func NewVolumeFromUint64(v uint64) (Volume, error) {
+	nativeValue, err := native.CreateParamVolumeFromUint64(v)
 	if err != nil {
 		return Volume{}, err
 	}
 	return NewVolumeFromHandle(nativeValue), nil
 }
 
+// NewVolumeFromFloat constructs a Volume from a float64 value.
+//
 // WARNING: float64 values are inherently imprecise. The same numeric literal
 // interpreted as float64 can differ by one ULP from its string representation
 // and may produce different values on different platforms or compilers.
@@ -107,10 +112,12 @@ func NewVolumeFromFloat(v float64) (Volume, error) {
 	return NewVolumeFromHandle(nativeValue), nil
 }
 
+// NewVolumeFromHandle creates a Volume from a native handle.
 func NewVolumeFromHandle(v native.ParamVolume) Volume {
 	return Volume{native: v}
 }
 
+// NewVolumeOptionFromHandle creates an optional Volume from a native optional handle.
 func NewVolumeOptionFromHandle(v native.ParamVolumeOptional) optional.Option[Volume] {
 	if !native.ParamVolumeOptionalIsSet(v) {
 		return optional.None[Volume]()
@@ -118,18 +125,20 @@ func NewVolumeOptionFromHandle(v native.ParamVolumeOptional) optional.Option[Vol
 	return optional.Some(NewVolumeFromHandle(native.ParamVolumeOptionalGet(v)))
 }
 
+// NewVolumeFromStringRounded creates a Volume from a string, rounded to the given scale.
 func NewVolumeFromStringRounded(
 	v string,
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Volume, error) {
-	nativeValue, err := native.CreateParamVolumeFromStrRounded(v, scale, strategy.native())
+	nativeValue, err := native.CreateParamVolumeFromStringRounded(v, scale, strategy.native())
 	if err != nil {
 		return Volume{}, err
 	}
 	return NewVolumeFromHandle(nativeValue), nil
 }
 
+// NewVolumeFromFloatRounded creates a Volume from a float64, rounded to the given scale.
 func NewVolumeFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy) (Volume, error) {
 	nativeValue, err := native.CreateParamVolumeFromF64Rounded(v, scale, strategy.native())
 	if err != nil {
@@ -160,14 +169,20 @@ func NewVolumeFromDecimalRounded(
 	return NewVolumeFromHandle(nativeValue), nil
 }
 
+// Decimal returns the value as a shopspring decimal.
 func (v Volume) Decimal() decimal.Decimal {
 	return newDecimalFromHandle(native.ParamVolumeGetDecimal(v.native))
 }
 
+// Handle returns the underlying native handle.
 func (v Volume) Handle() native.ParamVolume {
 	return v.native
 }
 
+// Float returns the value as a float64.
+//
+// NewVolumeFromFloat constructs a Volume from a float64 value.
+//
 // WARNING: float64 values are inherently imprecise. The same numeric literal
 // interpreted as float64 can differ by one ULP from its string representation
 // and may produce different values on different platforms or compilers.
@@ -180,26 +195,31 @@ func (v Volume) Float() float64 {
 	return newParamValueOrPanic(native.ParamVolumeToF64(v.native))
 }
 
+// String returns the decimal string representation of the volume.
 func (v Volume) String() string {
 	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamVolumeToString(v.native))
 }
 
+// IsZero reports whether the volume is zero.
 func (v Volume) IsZero() bool {
 	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamVolumeIsZero(v.native))
 }
 
+// Equal reports whether v and other are equal.
 func (v Volume) Equal(other Volume) bool {
 	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamVolumeCompare(v.native, other.native)) == 0
 }
 
+// Compare returns -1, 0, or 1 comparing v to other.
 func (v Volume) Compare(other Volume) int {
 	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamVolumeCompare(v.native, other.native))
 }
 
+// CheckedAdd returns v + other or an error on overflow.
 func (v Volume) CheckedAdd(other Volume) (Volume, error) {
 	result, err := native.ParamVolumeCheckedAdd(v.native, other.native)
 	if err != nil {
@@ -208,6 +228,7 @@ func (v Volume) CheckedAdd(other Volume) (Volume, error) {
 	return NewVolumeFromHandle(result), nil
 }
 
+// CheckedSub returns v - other or an error on overflow.
 func (v Volume) CheckedSub(other Volume) (Volume, error) {
 	result, err := native.ParamVolumeCheckedSub(v.native, other.native)
 	if err != nil {
@@ -216,6 +237,7 @@ func (v Volume) CheckedSub(other Volume) (Volume, error) {
 	return NewVolumeFromHandle(result), nil
 }
 
+// CheckedMulInt returns v * scalar or an error on overflow.
 func (v Volume) CheckedMulInt(scalar int64) (Volume, error) {
 	result, err := native.ParamVolumeCheckedMulI64(v.native, scalar)
 	if err != nil {
@@ -224,6 +246,7 @@ func (v Volume) CheckedMulInt(scalar int64) (Volume, error) {
 	return NewVolumeFromHandle(result), nil
 }
 
+// CheckedMulUint returns v * scalar or an error on overflow.
 func (v Volume) CheckedMulUint(scalar uint64) (Volume, error) {
 	result, err := native.ParamVolumeCheckedMulU64(v.native, scalar)
 	if err != nil {
@@ -232,6 +255,7 @@ func (v Volume) CheckedMulUint(scalar uint64) (Volume, error) {
 	return NewVolumeFromHandle(result), nil
 }
 
+// CheckedMulFloat returns v * scalar or an error on overflow.
 func (v Volume) CheckedMulFloat(scalar float64) (Volume, error) {
 	result, err := native.ParamVolumeCheckedMulF64(v.native, scalar)
 	if err != nil {
@@ -240,6 +264,7 @@ func (v Volume) CheckedMulFloat(scalar float64) (Volume, error) {
 	return NewVolumeFromHandle(result), nil
 }
 
+// CheckedDivInt returns v / divisor or an error on division by zero or overflow.
 func (v Volume) CheckedDivInt(divisor int64) (Volume, error) {
 	result, err := native.ParamVolumeCheckedDivI64(v.native, divisor)
 	if err != nil {
@@ -248,6 +273,7 @@ func (v Volume) CheckedDivInt(divisor int64) (Volume, error) {
 	return NewVolumeFromHandle(result), nil
 }
 
+// CheckedDivUint returns v / divisor or an error on division by zero.
 func (v Volume) CheckedDivUint(divisor uint64) (Volume, error) {
 	result, err := native.ParamVolumeCheckedDivU64(v.native, divisor)
 	if err != nil {
@@ -256,6 +282,7 @@ func (v Volume) CheckedDivUint(divisor uint64) (Volume, error) {
 	return NewVolumeFromHandle(result), nil
 }
 
+// CheckedDivFloat returns v / divisor or an error on division by zero or overflow.
 func (v Volume) CheckedDivFloat(divisor float64) (Volume, error) {
 	result, err := native.ParamVolumeCheckedDivF64(v.native, divisor)
 	if err != nil {
@@ -264,6 +291,7 @@ func (v Volume) CheckedDivFloat(divisor float64) (Volume, error) {
 	return NewVolumeFromHandle(result), nil
 }
 
+// CheckedRemInt returns v % divisor or an error on division by zero.
 func (v Volume) CheckedRemInt(divisor int64) (Volume, error) {
 	result, err := native.ParamVolumeCheckedRemI64(v.native, divisor)
 	if err != nil {
@@ -272,6 +300,7 @@ func (v Volume) CheckedRemInt(divisor int64) (Volume, error) {
 	return NewVolumeFromHandle(result), nil
 }
 
+// CheckedRemUint returns v % divisor or an error on division by zero.
 func (v Volume) CheckedRemUint(divisor uint64) (Volume, error) {
 	result, err := native.ParamVolumeCheckedRemU64(v.native, divisor)
 	if err != nil {
@@ -280,6 +309,7 @@ func (v Volume) CheckedRemUint(divisor uint64) (Volume, error) {
 	return NewVolumeFromHandle(result), nil
 }
 
+// CheckedRemFloat returns v % divisor or an error on division by zero.
 func (v Volume) CheckedRemFloat(divisor float64) (Volume, error) {
 	result, err := native.ParamVolumeCheckedRemF64(v.native, divisor)
 	if err != nil {
@@ -288,20 +318,29 @@ func (v Volume) CheckedRemFloat(divisor float64) (Volume, error) {
 	return NewVolumeFromHandle(result), nil
 }
 
+// CashFlowInflow returns the volume as a positive inflow CashFlow.
 func (v Volume) CashFlowInflow() CashFlow {
 	// invariant: source value already validated by constructor and not caller-modifiable here.
 	return NewCashFlowFromHandle(newParamValueOrPanic(native.ParamVolumeToCashFlowInflow(v.native)))
 }
 
+// CashFlowOutflow returns the volume as a negative outflow CashFlow.
 func (v Volume) CashFlowOutflow() CashFlow {
 	// invariant: source value already validated by constructor and not caller-modifiable here.
 	return NewCashFlowFromHandle(newParamValueOrPanic(native.ParamVolumeToCashFlowOutflow(v.native)))
 }
 
+// CalculateQuantity returns the quantity equivalent to volume / price.
 func (v Volume) CalculateQuantity(price Price) (Quantity, error) {
 	result, err := native.ParamVolumeCalculateQuantity(v.native, price.native)
 	if err != nil {
 		return Quantity{}, err
 	}
 	return NewQuantityFromHandle(result), nil
+}
+
+// ToPositionSize returns the volume as a PositionSize.
+func (v Volume) ToPositionSize() PositionSize {
+	// invariant: native value already validated on construction; conversion cannot fail.
+	return NewPositionSizeFromHandle(newParamValueOrPanic(native.ParamVolumeToPositionSize(v.native)))
 }

@@ -39,7 +39,7 @@
 //     events.
 //  3. The Reactor implementation - replace loggingReactor with code that
 //     actually submits orders to the venue, updates your strategy book, and
-//     halts the strategy when KillSwitchTriggered fires.
+//     halts the strategy when a kill switch account block is returned.
 package main
 
 import (
@@ -94,9 +94,9 @@ type Reactor interface {
 	OnRejected(order model.Order, rejects []reject.Reject)
 
 	// OnReport fires after the engine has consumed a venue execution report.
-	// When result.KillSwitchTriggered is true, the engine has permanently
-	// blocked this account for this asset - your strategy must stop sending
-	// orders for it until operators clear the state.
+	// When result.AccountBlocks is non-empty, the engine has permanently
+	// blocked this account - your strategy must stop sending orders for it
+	// until operators clear the state.
 	OnReport(report model.ExecutionReport, result openpit.PostTradeResult)
 }
 
@@ -258,11 +258,11 @@ func runReport(engine *openpit.Engine, ev Event, stats *Stats, react Reactor) er
 		// Inputs are short constants produced by the strategy/example, not
 		// untrusted external data, so the documented Rat.SetString
 		// memory-consumption advisory does not apply here.
-		if r, ok := new(big.Rat).SetString(ev.RealizedPnl); ok { //nolint:gosec // G113
+		if r, ok := new(big.Rat).SetString(ev.RealizedPnl); ok {
 			stats.Pnl.Add(stats.Pnl, r)
 		}
 	}
-	if result.KillSwitchTriggered && !stats.KillSwitch {
+	if len(result.AccountBlocks) > 0 && !stats.KillSwitch {
 		stats.KillSwitch = true
 		stats.KillSwitchOnTrade = stats.Reports
 	}
@@ -309,7 +309,7 @@ func buildOrder() model.Order {
 	traded, _ := param.NewAsset(scenarioAssetTraded)
 	settle, _ := param.NewAsset(scenarioAssetSettle)
 	op.SetInstrument(param.NewInstrument(traded, settle))
-	op.SetAccountID(param.NewAccountIDFromInt(scenarioAccount))
+	op.SetAccountID(param.NewAccountIDFromUint64(scenarioAccount))
 	op.SetSide(param.SideBuy)
 	price, _ := param.NewPriceFromString(scenarioOrderPrice)
 	qty, _ := param.NewQuantityFromString(scenarioOrderQty)
@@ -327,7 +327,7 @@ func buildReport(pnl string) model.ExecutionReport {
 	traded, _ := param.NewAsset(scenarioAssetTraded)
 	settle, _ := param.NewAsset(scenarioAssetSettle)
 	op.SetInstrument(param.NewInstrument(traded, settle))
-	op.SetAccountID(param.NewAccountIDFromInt(scenarioAccount))
+	op.SetAccountID(param.NewAccountIDFromUint64(scenarioAccount))
 	op.SetSide(param.SideBuy)
 	report.SetOperation(op)
 	p, _ := param.NewPnlFromString(pnl)
@@ -414,7 +414,7 @@ func (r *loggingReactor) OnRejected(_ model.Order, rj []reject.Reject) {
 }
 
 func (*loggingReactor) OnReport(_ model.ExecutionReport, res openpit.PostTradeResult) {
-	if res.KillSwitchTriggered {
+	if len(res.AccountBlocks) > 0 {
 		fmt.Println("kill switch triggered - halt new orders until cleared")
 	}
 }
@@ -458,7 +458,8 @@ func runExample() error {
 	stream := newScenarioStream(&order, &report, &finalReport)
 
 	// Step 4 - run the loop. Replace loggingReactor with your venue client.
-	stats, err := Run(engine, stream, &loggingReactor{rejectCap: 4})
+	const exampleRejectCap = 4
+	stats, err := Run(engine, stream, &loggingReactor{rejectCap: exampleRejectCap})
 	if err != nil {
 		return err
 	}

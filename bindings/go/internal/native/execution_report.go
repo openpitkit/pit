@@ -437,17 +437,16 @@ func ExecutionReportFillUnsetLeavesQuantity(fill *ExecutionReportFill) {
 	fill.leaves_quantity = ParamQuantityOptional{}
 }
 
-func ExecutionReportFillGetLockPrice(fill ExecutionReportFill) ParamPriceOptional {
-	return fill.lock_price
+func ExecutionReportFillGetLock(fill ExecutionReportFill) PretradePreTradeLock {
+	return (PretradePreTradeLock)(unsafe.Pointer(fill.lock))
 }
 
-func ExecutionReportFillSetLockPrice(fill *ExecutionReportFill, price ParamPrice) {
-	fill.lock_price.value = price
-	fill.lock_price.is_set = true
+func ExecutionReportFillSetLock(fill *ExecutionReportFill, lock PretradePreTradeLock) {
+	fill.lock = (*C.OpenPitPretradePreTradeLock)(unsafe.Pointer(lock))
 }
 
-func ExecutionReportFillUnsetLockPrice(fill *ExecutionReportFill) {
-	fill.lock_price = ParamPriceOptional{}
+func ExecutionReportFillUnsetLock(fill *ExecutionReportFill) {
+	fill.lock = nil
 }
 
 // ExecutionReportFillGetFinal returns the final flag when it is set.

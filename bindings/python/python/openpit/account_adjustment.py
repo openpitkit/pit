@@ -55,7 +55,7 @@ def _require_instance(
 
 
 class Amount(_AccountAdjustmentAmount):
-    """Grouped total/reserved/pending adjustment payload."""
+    """Grouped balance/held/incoming adjustment payload."""
 
     # @typing.override
     def __new__(cls, *args: typing.Any, **kwargs: typing.Any) -> Amount:
@@ -66,19 +66,19 @@ class Amount(_AccountAdjustmentAmount):
     def __init__(
         self,
         *,
-        total: AdjustmentAmount | None = None,
-        reserved: AdjustmentAmount | None = None,
-        pending: AdjustmentAmount | None = None,
+        balance: AdjustmentAmount | None = None,
+        held: AdjustmentAmount | None = None,
+        incoming: AdjustmentAmount | None = None,
     ) -> None:
-        _AccountAdjustmentAmount.total.__set__(self, total)
-        _AccountAdjustmentAmount.reserved.__set__(self, reserved)
-        _AccountAdjustmentAmount.pending.__set__(self, pending)
+        _AccountAdjustmentAmount.balance.__set__(self, balance)
+        _AccountAdjustmentAmount.held.__set__(self, held)
+        _AccountAdjustmentAmount.incoming.__set__(self, incoming)
 
     # @typing.override
     @property
-    def total(self) -> AdjustmentAmount | None:
+    def balance(self) -> AdjustmentAmount | None:
         """Actual resulting balance/position value."""
-        value = _AccountAdjustmentAmount.total.__get__(self, type(self))
+        value = _AccountAdjustmentAmount.balance.__get__(self, type(self))
         if value is None:
             return None
         if value.is_delta:
@@ -87,12 +87,12 @@ class Amount(_AccountAdjustmentAmount):
 
     # @typing.override
     @property
-    def reserved(self) -> AdjustmentAmount | None:
+    def held(self) -> AdjustmentAmount | None:
         """Amount earmarked for outgoing settlement.
 
         Unavailable for immediate use.
         """
-        value = _AccountAdjustmentAmount.reserved.__get__(self, type(self))
+        value = _AccountAdjustmentAmount.held.__get__(self, type(self))
         if value is None:
             return None
         if value.is_delta:
@@ -101,9 +101,9 @@ class Amount(_AccountAdjustmentAmount):
 
     # @typing.override
     @property
-    def pending(self) -> AdjustmentAmount | None:
+    def incoming(self) -> AdjustmentAmount | None:
         """Amount in-flight for incoming acquisition and not yet finalized."""
-        value = _AccountAdjustmentAmount.pending.__get__(self, type(self))
+        value = _AccountAdjustmentAmount.incoming.__get__(self, type(self))
         if value is None:
             return None
         if value.is_delta:
@@ -240,49 +240,49 @@ class Bounds(_AccountAdjustmentBounds):
     def __init__(
         self,
         *,
-        total_upper: PositionSize | None = None,
-        total_lower: PositionSize | None = None,
-        reserved_upper: PositionSize | None = None,
-        reserved_lower: PositionSize | None = None,
-        pending_upper: PositionSize | None = None,
-        pending_lower: PositionSize | None = None,
+        balance_upper: PositionSize | None = None,
+        balance_lower: PositionSize | None = None,
+        held_upper: PositionSize | None = None,
+        held_lower: PositionSize | None = None,
+        incoming_upper: PositionSize | None = None,
+        incoming_lower: PositionSize | None = None,
     ) -> None:
-        _AccountAdjustmentBounds.total_upper.__set__(self, total_upper)
-        _AccountAdjustmentBounds.total_lower.__set__(self, total_lower)
-        _AccountAdjustmentBounds.reserved_upper.__set__(self, reserved_upper)
-        _AccountAdjustmentBounds.reserved_lower.__set__(self, reserved_lower)
-        _AccountAdjustmentBounds.pending_upper.__set__(self, pending_upper)
-        _AccountAdjustmentBounds.pending_lower.__set__(self, pending_lower)
+        _AccountAdjustmentBounds.balance_upper.__set__(self, balance_upper)
+        _AccountAdjustmentBounds.balance_lower.__set__(self, balance_lower)
+        _AccountAdjustmentBounds.held_upper.__set__(self, held_upper)
+        _AccountAdjustmentBounds.held_lower.__set__(self, held_lower)
+        _AccountAdjustmentBounds.incoming_upper.__set__(self, incoming_upper)
+        _AccountAdjustmentBounds.incoming_lower.__set__(self, incoming_lower)
 
     @property
-    def total_upper(self) -> PositionSize | None:
-        """Allowed post-adjustment inclusive upper bound for total."""
-        return _AccountAdjustmentBounds.total_upper.__get__(self, type(self))
+    def balance_upper(self) -> PositionSize | None:
+        """Allowed post-adjustment inclusive upper bound for balance."""
+        return _AccountAdjustmentBounds.balance_upper.__get__(self, type(self))
 
     @property
-    def total_lower(self) -> PositionSize | None:
-        """Allowed post-adjustment inclusive lower bound for total."""
-        return _AccountAdjustmentBounds.total_lower.__get__(self, type(self))
+    def balance_lower(self) -> PositionSize | None:
+        """Allowed post-adjustment inclusive lower bound for balance."""
+        return _AccountAdjustmentBounds.balance_lower.__get__(self, type(self))
 
     @property
-    def reserved_upper(self) -> PositionSize | None:
-        """Allowed post-adjustment inclusive upper bound for reserved."""
-        return _AccountAdjustmentBounds.reserved_upper.__get__(self, type(self))
+    def held_upper(self) -> PositionSize | None:
+        """Allowed post-adjustment inclusive upper bound for held."""
+        return _AccountAdjustmentBounds.held_upper.__get__(self, type(self))
 
     @property
-    def reserved_lower(self) -> PositionSize | None:
-        """Allowed post-adjustment inclusive lower bound for reserved."""
-        return _AccountAdjustmentBounds.reserved_lower.__get__(self, type(self))
+    def held_lower(self) -> PositionSize | None:
+        """Allowed post-adjustment inclusive lower bound for held."""
+        return _AccountAdjustmentBounds.held_lower.__get__(self, type(self))
 
     @property
-    def pending_upper(self) -> PositionSize | None:
-        """Allowed post-adjustment inclusive upper bound for pending."""
-        return _AccountAdjustmentBounds.pending_upper.__get__(self, type(self))
+    def incoming_upper(self) -> PositionSize | None:
+        """Allowed post-adjustment inclusive upper bound for incoming."""
+        return _AccountAdjustmentBounds.incoming_upper.__get__(self, type(self))
 
     @property
-    def pending_lower(self) -> PositionSize | None:
-        """Allowed post-adjustment inclusive lower bound for pending."""
-        return _AccountAdjustmentBounds.pending_lower.__get__(self, type(self))
+    def incoming_lower(self) -> PositionSize | None:
+        """Allowed post-adjustment inclusive lower bound for incoming."""
+        return _AccountAdjustmentBounds.incoming_lower.__get__(self, type(self))
 
     def __repr__(self) -> str:
         return _AccountAdjustmentBounds.__repr__(self)

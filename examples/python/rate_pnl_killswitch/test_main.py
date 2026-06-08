@@ -52,7 +52,7 @@ class RecordingReactor:
         self, report: openpit.ExecutionReport, result: openpit.PostTradeResult
     ) -> None:
         del report
-        if result.kill_switch_triggered:
+        if result.account_blocks:
             self.kill_switched = True
 
 

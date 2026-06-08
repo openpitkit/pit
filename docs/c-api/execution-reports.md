@@ -46,7 +46,7 @@ Populated fill-details group for an execution report.
 typedef struct OpenPitExecutionReportFill {
     OpenPitExecutionReportTradeOptional last_trade;
     OpenPitParamQuantityOptional leaves_quantity;
-    OpenPitParamPriceOptional lock_price;
+    const OpenPitPretradePreTradeLock * lock;
     OpenPitExecutionReportIsFinalOptional is_final;
 } OpenPitExecutionReportFill;
 ```
@@ -128,14 +128,4 @@ typedef struct OpenPitExecutionReport {
     OpenPitExecutionReportPositionImpactOptional position_impact;
     void * user_data;
 } OpenPitExecutionReport;
-```
-
-## `OpenPitPretradePostTradeResult`
-
-Aggregated post-trade processing result.
-
-```c
-typedef struct OpenPitPretradePostTradeResult {
-    bool kill_switch_triggered;
-} OpenPitPretradePostTradeResult;
 ```

@@ -21,6 +21,7 @@ import (
 	"runtime"
 
 	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
 )
@@ -68,14 +69,33 @@ type PnlBoundsKillswitchBuilder struct {
 type PnlBoundsKillswitchReadyBuilder struct {
 	brokerBarriers  []native.PretradePoliciesPnlBoundsBarrier
 	accountBarriers []native.PretradePoliciesPnlBoundsAccountBarrier
+	policyGroupID   model.PolicyGroupID
 }
 
 // BuildPnlBoundsKillswitch returns a new P&L bounds kill-switch policy
 // builder.
 func BuildPnlBoundsKillswitch() *PnlBoundsKillswitchBuilder {
 	return &PnlBoundsKillswitchBuilder{
-		builder: &PnlBoundsKillswitchReadyBuilder{},
+		builder: &PnlBoundsKillswitchReadyBuilder{policyGroupID: model.DefaultPolicyGroupID},
 	}
+}
+
+// PolicyGroupID assigns the policy to a pricing group and returns a ready
+// builder. When not set the policy uses model.DefaultPolicyGroupID.
+func (b *PnlBoundsKillswitchBuilder) PolicyGroupID(
+	groupID model.PolicyGroupID,
+) *PnlBoundsKillswitchReadyBuilder {
+	b.builder.PolicyGroupID(groupID)
+	return b.builder
+}
+
+// PolicyGroupID assigns the policy to a pricing group. When not set the policy
+// uses model.DefaultPolicyGroupID.
+func (b *PnlBoundsKillswitchReadyBuilder) PolicyGroupID(
+	groupID model.PolicyGroupID,
+) *PnlBoundsKillswitchReadyBuilder {
+	b.policyGroupID = groupID
+	return b
 }
 
 // BrokerBarriers adds broker-level P&L bounds barriers and returns a
@@ -137,7 +157,10 @@ func (b *PnlBoundsKillswitchReadyBuilder) AccountBarriers(
 // given engine builder.
 func (b *PnlBoundsKillswitchReadyBuilder) Build(builder native.EngineBuilder) error {
 	err := native.EngineBuilderAddBuiltinPnlBoundsKillswitch(
-		builder, b.brokerBarriers, b.accountBarriers,
+		builder,
+		native.PolicyGroupID(b.policyGroupID),
+		b.brokerBarriers,
+		b.accountBarriers,
 	)
 	runtime.KeepAlive(b)
 	return err

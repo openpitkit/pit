@@ -99,8 +99,9 @@ if typing.TYPE_CHECKING:
         ExecutionReport,
         Order,
     )
-    from ..param import AccountId
-from .._openpit import Context
+    from .._openpit import AccountOutcomeEntry, PostTradeResult
+    from ..param import AccountId, Price
+from .._openpit import Context, PostTradeContext
 from ..core import Mutation
 from ._enum import RejectScope
 
@@ -185,6 +186,59 @@ class PolicyDecision:
         return cls(rejects=tuple(rejects), mutations=tuple(mutations))
 
 
+@dataclasses.dataclass(frozen=True)
+class PolicyPreTradeResult:
+    """
+    Return type of :meth:`Policy.perform_pre_trade_check`.
+
+    Attributes:
+        rejects: Rejects produced by the policy.
+        mutations: Mutations registered by the policy.
+        account_adjustments: Per-asset outcome entries produced by the policy.
+        lock_prices: Prices to store under this policy's ``policy_group_id``.
+    """
+
+    rejects: tuple[PolicyReject, ...] = ()
+    mutations: tuple[Mutation, ...] = ()
+    account_adjustments: tuple[AccountOutcomeEntry, ...] = ()
+    lock_prices: tuple[Price, ...] = ()
+
+    @classmethod
+    def accept(
+        cls,
+        mutations: typing.Iterable[Mutation] = (),
+        account_adjustments: typing.Iterable[AccountOutcomeEntry] = (),
+        lock_prices: typing.Iterable[Price] = (),
+    ) -> PolicyPreTradeResult:
+        """
+        Build a successful pre-trade result.
+        """
+        return cls(
+            rejects=(),
+            mutations=tuple(mutations),
+            account_adjustments=tuple(account_adjustments),
+            lock_prices=tuple(lock_prices),
+        )
+
+    @classmethod
+    def reject(
+        cls,
+        rejects: typing.Iterable[PolicyReject],
+        mutations: typing.Iterable[Mutation] = (),
+        account_adjustments: typing.Iterable[AccountOutcomeEntry] = (),
+        lock_prices: typing.Iterable[Price] = (),
+    ) -> PolicyPreTradeResult:
+        """
+        Build a rejecting pre-trade result.
+        """
+        return cls(
+            rejects=tuple(rejects),
+            mutations=tuple(mutations),
+            account_adjustments=tuple(account_adjustments),
+            lock_prices=tuple(lock_prices),
+        )
+
+
 class Policy(abc.ABC):
     """
     Unified Python pre-trade policy interface.
@@ -197,7 +251,9 @@ class Policy(abc.ABC):
 
     Implementation rule:
     - override the methods needed by the registration path used by the policy
-    - return :class:`PolicyDecision` for main-stage and adjustment outcomes
+    - return :class:`PolicyPreTradeResult` for main-stage outcomes
+    - return :class:`openpit.pretrade.PostTradeResult` for post-trade outcomes
+    - return account outcome entries for account-adjustment outcomes
     - raise exceptions only for programming/runtime failures
     """
 
@@ -211,6 +267,16 @@ class Policy(abc.ABC):
         """
         raise NotImplementedError("name is not implemented")
 
+    @property
+    def policy_group_id(self) -> int:
+        """
+        Return the policy group tag.
+
+        The engine stores pre-trade lock prices and account-adjustment outcomes
+        under this group. ``0`` is the default group.
+        """
+        return 0
+
     def check_pre_trade_start(
         self,
         ctx: Context,
@@ -221,6 +287,14 @@ class Policy(abc.ABC):
 
         Args:
             ctx: Context of the current pre-trade operation.
+                ``ctx.account_control`` is an
+                :class:`openpit.pretrade.AccountControl` when the engine exposes
+                the account-block facility for the order's account, otherwise
+                ``None``. A policy may block the account directly or capture the
+                handle into a :class:`openpit.Mutation` rollback/commit closure
+                to block on a deferred failure. The handle is valid only within
+                this request's pre-trade processing (through its reservation's
+                commit or rollback); using it afterwards is unspecified.
             order: Incoming order candidate. This must be
                 :class:`openpit.Order` or one of its subclasses.
 
@@ -235,34 +309,49 @@ class Policy(abc.ABC):
         self,
         ctx: Context,
         order: Order,
-    ) -> PolicyDecision:
+    ) -> PolicyPreTradeResult:
         """
         Evaluate order context in main stage.
 
         Args:
             ctx: Context of the current pre-trade operation.
+                ``ctx.account_control`` is an
+                :class:`openpit.pretrade.AccountControl` when the engine exposes
+                the account-block facility for the order's account, otherwise
+                ``None``. A policy may block the account directly or capture the
+                handle into a :class:`openpit.Mutation` rollback/commit closure
+                to block on a deferred failure. The handle is valid only within
+                this request's pre-trade processing (through its reservation's
+                commit or rollback); using it afterwards is unspecified.
             order: Incoming order candidate.
 
         Returns:
-            PolicyDecision:
-                - use ``PolicyDecision.accept(...)`` for pass path
-                - use ``PolicyDecision.reject(...)`` for business rejects
+            PolicyPreTradeResult:
+                - use ``PolicyPreTradeResult.accept(...)`` for pass path
+                - use ``PolicyPreTradeResult.reject(...)`` for business rejects
         """
-        return PolicyDecision.accept()
+        return PolicyPreTradeResult.accept()
 
-    def apply_execution_report(self, report: ExecutionReport) -> bool:
+    def apply_execution_report(
+        self,
+        ctx: PostTradeContext,
+        report: ExecutionReport,
+    ) -> PostTradeResult | None:
         """
         Apply post-trade feedback to policy state.
 
         Args:
+            ctx: Post-trade context. ``ctx.account_group`` is the
+                :class:`openpit.param.AccountGroupId` of the report's account,
+                or ``None`` when the account is absent or unregistered.
             report: Execution report produced after fill/close.
 
         Returns:
-            bool:
-                ``True`` if this policy considers kill-switch triggered after
-                processing the report, otherwise ``False``.
+            PostTradeResult | None:
+                Result with account blocks and account adjustments, or ``None``
+                if the report caused no visible post-trade outcome.
         """
-        return False
+        return None
 
     def apply_account_adjustment(
         self,
@@ -270,7 +359,8 @@ class Policy(abc.ABC):
         account_id: AccountId,
         adjustment: AccountAdjustment,
     ) -> (
-        PolicyDecision
+        collections.abc.Iterable[AccountOutcomeEntry]
+        | PolicyDecision
         | collections.abc.Iterable[PolicyReject]
         | tuple[Mutation, ...]
         | None
@@ -280,12 +370,22 @@ class Policy(abc.ABC):
 
         Args:
             ctx: Read-only engine context for the current batch operation.
+                ``ctx.account_control`` is always an
+                :class:`openpit.pretrade.AccountControl` handle to the engine's
+                account-block facility. A policy may block the account directly
+                or capture the handle into a :class:`openpit.Mutation`
+                rollback/commit closure to block on a deferred failure. The
+                handle is valid only within this batch operation's processing
+                (through its commit or rollback); using it afterwards is
+                unspecified.
             account_id: Account affected by the batch.
             adjustment: Current adjustment item.
 
         Returns:
-            ``None`` or ``PolicyDecision.accept()`` for success, an iterable of
-            ``PolicyReject`` objects for business rejection, or a tuple of
-            ``Mutation`` objects to register rollback work.
+            Iterable of account outcome entries for success with outcomes,
+            ``None`` or ``PolicyDecision.accept()`` for success without
+            outcomes, an iterable of ``PolicyReject`` objects for business
+            rejection, or a tuple of ``Mutation`` objects to register rollback
+            work.
         """
         return None

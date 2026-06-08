@@ -22,8 +22,9 @@ use std::time::{Duration, Instant};
 
 use crate::core::{HasAccountId, HasInstrument};
 use crate::param::{AccountId, Asset};
-use crate::pretrade::policy::request_field_access_pre_trade_reject;
+use crate::pretrade::policy::{missing_required_field_reject, PolicyGroupId, PolicyName};
 use crate::pretrade::start_pre_trade_time::start_pre_trade_now;
+use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
 use crate::pretrade::{PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects};
 use crate::storage::{Storage, StorageBuilder};
 
@@ -188,7 +189,7 @@ impl AtomicWindowCounter {
 /// use openpit::OrderOperation;
 /// use openpit::param::TradeAmount;
 ///
-/// let builder = Engine::<OrderOperation>::builder().no_sync();
+/// let builder = Engine::builder::<OrderOperation, (), ()>().no_sync();
 /// let policy = RateLimitPolicy::new(
 ///     Some(RateLimitBrokerBarrier {
 ///         limit: RateLimit { max_orders: 2, window: Duration::from_secs(60) },
@@ -230,6 +231,7 @@ where
     account_asset_barriers: HashMap<(AccountId, Asset), RateLimit>,
     per_account_asset_timestamps:
         Option<TimestampStorage<(AccountId, Asset), LockingPolicyFactory>>,
+    group_id: PolicyGroupId,
 }
 
 impl<LockingPolicyFactory> RateLimitPolicy<LockingPolicyFactory>
@@ -243,7 +245,7 @@ where
     ///
     /// `storage_builder` must be obtained from the engine builder so that the
     /// per-account and per-(account, asset) timestamp storages share the factory
-    /// type with the engine's synchronization policy.
+    /// type with the engine's synchronization mode.
     ///
     /// At least one barrier must be provided across all four axes. If all are
     /// `None` or empty, returns [`RateLimitPolicyError::NoBarriersConfigured`].
@@ -311,29 +313,56 @@ where
             per_account_asset_timestamps: (!account_asset_barriers_map.is_empty())
                 .then(|| storage_builder.create()),
             account_asset_barriers: account_asset_barriers_map,
+            group_id: DEFAULT_POLICY_GROUP_ID,
         })
+    }
+
+    /// Assigns a group tag to this policy instance.
+    ///
+    /// See [`PolicyGroupId`] and [`DEFAULT_POLICY_GROUP_ID`] for details.
+    pub fn with_policy_group_id(mut self, id: PolicyGroupId) -> Self {
+        self.group_id = id;
+        self
     }
 }
 
-impl<Order, ExecutionReport, AccountAdjustment, LockingPolicyFactory>
-    PreTradePolicy<Order, ExecutionReport, AccountAdjustment>
+impl<LockingPolicyFactory> PolicyName for RateLimitPolicy<LockingPolicyFactory>
+where
+    LockingPolicyFactory: crate::storage::LockingPolicyFactory,
+{
+    fn policy_name(&self) -> &str {
+        Self::NAME
+    }
+}
+
+impl<Order, ExecutionReport, AccountAdjustment, LockingPolicyFactory, Sync>
+    PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
     for RateLimitPolicy<LockingPolicyFactory>
 where
     Order: HasAccountId + HasInstrument,
     LockingPolicyFactory: crate::storage::LockingPolicyFactory,
+    Sync: crate::core::SyncMode,
 {
     fn name(&self) -> &str {
         Self::NAME
     }
 
-    fn check_pre_trade_start(&self, _ctx: &PreTradeContext, order: &Order) -> Result<(), Rejects> {
+    fn policy_group_id(&self) -> PolicyGroupId {
+        self.group_id
+    }
+
+    fn check_pre_trade_start(
+        &self,
+        _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+        order: &Order,
+    ) -> Result<(), Rejects> {
         let settlement_opt: Option<Asset> =
             if !self.asset_counters.is_empty() || !self.account_asset_barriers.is_empty() {
                 Some(
                     order
                         .instrument()
                         .map_err(|e| {
-                            Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e))
+                            Rejects::from(missing_required_field_reject(self, "instrument", &e))
                         })?
                         .settlement_asset()
                         .clone(),
@@ -344,7 +373,7 @@ where
         let account_id_opt: Option<AccountId> =
             if self.per_account_timestamps.is_some() || !self.account_asset_barriers.is_empty() {
                 Some(order.account_id().map_err(|e| {
-                    Rejects::from(request_field_access_pre_trade_reject(Self::NAME, &e))
+                    Rejects::from(missing_required_field_reject(self, "account ID", &e))
                 })?)
             } else {
                 None
@@ -457,10 +486,6 @@ where
 
         Ok(())
     }
-
-    fn apply_execution_report(&self, _report: &ExecutionReport) -> bool {
-        false
-    }
 }
 
 fn rate_limit_reject(
@@ -521,9 +546,8 @@ mod tests {
 
     type TestPolicy = RateLimitPolicy<NoLocking>;
 
-    fn test_builder() -> crate::SyncedEngineBuilder<OrderOperation, (), (), crate::LocalSyncPolicy>
-    {
-        crate::Engine::<OrderOperation>::builder().no_sync()
+    fn test_builder() -> crate::SyncedEngineBuilder<OrderOperation, (), (), crate::LocalSync> {
+        crate::Engine::builder().no_sync()
     }
 
     // ── constructor validation ─────────────────────────────────────────────
@@ -755,10 +779,13 @@ mod tests {
             account_id: account(1),
         };
 
-        let result = <TestPolicy as PreTradePolicy<NoInstrumentOrder, ()>>::check_pre_trade_start(
-            &policy,
-            &PreTradeContext::new(),
-            &order,
+        let result = <TestPolicy as PreTradePolicy<
+            NoInstrumentOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy, &PreTradeContext::<NoLocking>::new(None), &order
         );
 
         assert!(result.is_ok());
@@ -771,10 +798,13 @@ mod tests {
             account_id: account(1),
         };
 
-        let result = <TestPolicy as PreTradePolicy<NoInstrumentOrder, ()>>::check_pre_trade_start(
-            &policy,
-            &PreTradeContext::new(),
-            &order,
+        let result = <TestPolicy as PreTradePolicy<
+            NoInstrumentOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy, &PreTradeContext::<NoLocking>::new(None), &order
         );
 
         assert!(result.is_ok());
@@ -892,16 +922,19 @@ mod tests {
         }
 
         let policy = account_policy(account(1), 10, Duration::from_secs(60));
-        let reject = <TestPolicy as PreTradePolicy<NoAccountId, ()>>::check_pre_trade_start(
+        let reject = <TestPolicy as PreTradePolicy<NoAccountId, (), (), crate::core::LocalSync>>::check_pre_trade_start(
             &policy,
-            &PreTradeContext::new(),
+            &PreTradeContext::<NoLocking>::new(None),
             &NoAccountId,
         )
         .expect_err("missing account_id must reject");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
-        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(
+            reject.reason,
+            "failed to access required field 'account ID'"
+        );
         assert_eq!(reject.details, "failed to access field 'account_id'");
     }
 
@@ -925,9 +958,9 @@ mod tests {
 
         let policy = broker_policy(10, Duration::from_secs(60));
         assert!(
-            <TestPolicy as PreTradePolicy<NoAccountId, ()>>::check_pre_trade_start(
+            <TestPolicy as PreTradePolicy<NoAccountId, (), (), crate::core::LocalSync>>::check_pre_trade_start(
                 &policy,
-                &PreTradeContext::new(),
+                &PreTradeContext::<NoLocking>::new(None),
                 &NoAccountId,
             )
             .is_ok()
@@ -941,16 +974,22 @@ mod tests {
             account_id: account(1),
         };
 
-        let reject = <TestPolicy as PreTradePolicy<NoInstrumentOrder, ()>>::check_pre_trade_start(
-            &policy,
-            &PreTradeContext::new(),
-            &order,
+        let reject = <TestPolicy as PreTradePolicy<
+            NoInstrumentOrder,
+            (),
+            (),
+            crate::core::LocalSync,
+        >>::check_pre_trade_start(
+            &policy, &PreTradeContext::<NoLocking>::new(None), &order
         )
         .expect_err("asset-axis policy must require instrument");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Order);
         assert_eq!(reject.code, RejectCode::MissingRequiredField);
-        assert_eq!(reject.reason, "failed to access required field");
+        assert_eq!(
+            reject.reason,
+            "failed to access required field 'instrument'"
+        );
         assert_eq!(reject.details, "failed to access field 'instrument'");
     }
 
@@ -974,9 +1013,9 @@ mod tests {
 
     fn check_at(policy: &TestPolicy, order: &OrderOperation, now: Instant) -> Result<(), Rejects> {
         with_start_pre_trade_now(now, || {
-            <TestPolicy as PreTradePolicy<OrderOperation, ()>>::check_pre_trade_start(
+            <TestPolicy as PreTradePolicy<OrderOperation, (), (), crate::core::LocalSync>>::check_pre_trade_start(
                 policy,
-                &PreTradeContext::new(),
+                &PreTradeContext::<NoLocking>::new(None),
                 order,
             )
         })

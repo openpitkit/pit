@@ -45,8 +45,7 @@ func TestPositionSizeFromString(t *testing.T) {
 		{name: "invalid", input: "position-size", wantError: true},
 	}
 
-	for _, tt := range tests { //nolint:copyloopvar
-		tt := tt //nolint:copyloopvar
+	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -80,14 +79,13 @@ func TestPositionSizeFromIntAndUint(t *testing.T) {
 		{name: "zero", input: 0, want: "0"},
 		{name: "positive", input: 7, want: "7"},
 	}
-	for _, tt := range intTests { //nolint:copyloopvar
-		tt := tt //nolint:copyloopvar
+	for _, tt := range intTests {
 		t.Run("int-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			value, err := NewPositionSizeFromInt(tt.input)
+			value, err := NewPositionSizeFromInt64(tt.input)
 			if err != nil {
-				t.Fatalf("NewPositionSizeFromInt(%d) error = %v", tt.input, err)
+				t.Fatalf("NewPositionSizeFromInt64(%d) error = %v", tt.input, err)
 			}
 			if got := value.String(); got != tt.want {
 				t.Fatalf("String() = %q, want %q", got, tt.want)
@@ -103,14 +101,13 @@ func TestPositionSizeFromIntAndUint(t *testing.T) {
 		{name: "zero", input: 0, want: "0"},
 		{name: "positive", input: 7, want: "7"},
 	}
-	for _, tt := range uintTests { //nolint:copyloopvar
-		tt := tt //nolint:copyloopvar
+	for _, tt := range uintTests {
 		t.Run("uint-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			value, err := NewPositionSizeFromUint(tt.input)
+			value, err := NewPositionSizeFromUint64(tt.input)
 			if err != nil {
-				t.Fatalf("NewPositionSizeFromUint(%d) error = %v", tt.input, err)
+				t.Fatalf("NewPositionSizeFromUint64(%d) error = %v", tt.input, err)
 			}
 			if got := value.String(); got != tt.want {
 				t.Fatalf("String() = %q, want %q", got, tt.want)
@@ -130,8 +127,7 @@ func TestPositionSizeFromFloat(t *testing.T) {
 		t.Fatalf("String() = %q, want %q", got, "12.5")
 	}
 
-	for _, input := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} { //nolint:copyloopvar
-		input := input //nolint:copyloopvar
+	for _, input := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
 		t.Run("invalid", func(t *testing.T) {
 			t.Parallel()
 
@@ -216,13 +212,11 @@ func TestPositionSizeRoundedConstructors(t *testing.T) {
 		},
 	}
 
-	for _, ctor := range constructors { //nolint:copyloopvar
-		ctor := ctor //nolint:copyloopvar
+	for _, ctor := range constructors {
 		t.Run(ctor.name, func(t *testing.T) {
 			t.Parallel()
 
-			for _, tc := range strategyCases { //nolint:copyloopvar
-				tc := tc //nolint:copyloopvar
+			for _, tc := range strategyCases {
 				t.Run(tc.name, func(t *testing.T) {
 					t.Parallel()
 
@@ -330,8 +324,8 @@ func TestPositionSizeIsZeroEqualCompare(t *testing.T) {
 	b := mustPositionSizeValue(t, "0")
 	c := mustPositionSizeValue(t, "3")
 
-	if a.Compare(a) != 0 { //nolint:gocritic
-		t.Fatalf("reflexive compare = %d, want 0", a.Compare(a)) //nolint:gocritic
+	if a.Compare(a) != 0 { //nolint:gocritic // testing reflexivity: Compare(x,x) must return 0
+		t.Fatalf("reflexive compare = %d, want 0", a.Compare(a)) //nolint:gocritic // testing reflexivity: Compare(x,x) must return 0
 	}
 	if a.Compare(b) >= 0 || b.Compare(c) >= 0 || a.Compare(c) >= 0 {
 		t.Fatal("transitive compare contract violated")
@@ -437,8 +431,8 @@ func TestPositionSizeCheckedAddQuantity(t *testing.T) {
 		t.Fatalf("CheckedAddQuantity(flip) = %q, want %q", got, "-1")
 	}
 
-	max := mustPositionSizeValue(t, decimalMaxValue)
-	if _, err := max.CheckedAddQuantity(mustQuantityForPosition(t, "1"), SideBuy); err == nil {
+	maxVal := mustPositionSizeValue(t, decimalMaxValue)
+	if _, err := maxVal.CheckedAddQuantity(mustQuantityForPosition(t, "1"), SideBuy); err == nil {
 		t.Fatal("CheckedAddQuantity(overflow) error = nil, want overflow error")
 	}
 }
@@ -480,7 +474,7 @@ func makeNativePositionSizeOptional(value PositionSize) native.ParamPositionSize
 	}
 
 	layout := positionSizeOptionalLayout{Value: value.Handle(), IsSet: true}
-	return *(*native.ParamPositionSizeOptional)(unsafe.Pointer(&layout))
+	return *(*native.ParamPositionSizeOptional)(unsafe.Pointer(&layout)) //nolint:gosec // memory layout verification requires unsafe.Pointer
 }
 
 func mustPositionSizeValue(t *testing.T, source string) PositionSize {

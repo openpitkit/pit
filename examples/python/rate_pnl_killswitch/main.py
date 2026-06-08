@@ -41,7 +41,7 @@ What you typically change to adapt this example to your own application:
    and strategy events.
 3. The reactor implementation - replace ``LoggingReactor`` with code that
    actually submits orders to the venue, updates your strategy book, and
-   halts the strategy when ``kill_switch_triggered`` fires.
+   halts the strategy when ``account_blocks`` is non-empty.
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ class Reactor(Protocol):
         result: openpit.PostTradeResult,
     ) -> None:
         """The engine consumed a venue execution report. When
-        ``result.kill_switch_triggered`` is true, the strategy must stop
+        ``result.account_blocks`` is non-empty when the strategy must stop
         sending orders for this account until operators clear the state."""
 
 
@@ -252,7 +252,7 @@ def _run_report(
     result = engine.apply_execution_report(report=event.report)
     stats.reports += 1
     stats.pnl += event.realized_pnl
-    if result.kill_switch_triggered and not stats.kill_switch:
+    if result.account_blocks and not stats.kill_switch:
         stats.kill_switch = True
         stats.kill_switch_on_trade = stats.reports
     reactor.on_report(event.report, result)
@@ -296,7 +296,7 @@ def build_order() -> openpit.Order:
     return openpit.Order(
         operation=openpit.OrderOperation(
             instrument=openpit.Instrument(SCENARIO_ASSET_TRADED, SCENARIO_ASSET_SETTLE),
-            account_id=openpit.param.AccountId.from_u64(SCENARIO_ACCOUNT),
+            account_id=openpit.param.AccountId.from_int(SCENARIO_ACCOUNT),
             side=openpit.param.Side.BUY,
             trade_amount=openpit.param.TradeAmount.quantity(SCENARIO_ORDER_QTY),
             price=openpit.param.Price(SCENARIO_ORDER_PRICE),
@@ -311,7 +311,7 @@ def build_report(pnl: Decimal) -> openpit.ExecutionReport:
     return openpit.ExecutionReport(
         operation=openpit.ExecutionReportOperation(
             instrument=openpit.Instrument(SCENARIO_ASSET_TRADED, SCENARIO_ASSET_SETTLE),
-            account_id=openpit.param.AccountId.from_u64(SCENARIO_ACCOUNT),
+            account_id=openpit.param.AccountId.from_int(SCENARIO_ACCOUNT),
             side=openpit.param.Side.BUY,
         ),
         financial_impact=openpit.FinancialImpact(
@@ -378,7 +378,7 @@ class LoggingReactor:
         self, report: openpit.ExecutionReport, result: openpit.PostTradeResult
     ) -> None:
         del report
-        if result.kill_switch_triggered:
+        if result.account_blocks:
             print("kill switch triggered - halt new orders until cleared")
 
 

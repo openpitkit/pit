@@ -1,19 +1,20 @@
 # OpenPit Python documentation
 
-OpenPit is an embeddable pre-trade risk SDK for Python applications that need
-policy-driven checks before an order leaves the process. It is designed for
-trading systems, broker gateways, strategy runtimes, and test harnesses that
-want deterministic order admission logic close to the caller.
+OpenPit is an embeddable pre-trade risk SDK for Python applications that
+need policy-driven checks before an order leaves the process. Typical
+embeddings are trading systems, broker gateways, strategy runtimes, and
+test harnesses that need deterministic order-admission logic next to the
+caller.
 
-The Python package is named `openpit`. It exposes a risk engine with explicit
-synchronization policies, strong domain value types, order and execution-report
-models, built-in policies, and Python policy interfaces for project-specific
-checks.
+The Python package is `openpit`. It exposes a risk engine with explicit
+synchronization policies, strong domain value types, order and
+execution-report models, built-in policies, and Python interfaces for
+project-specific checks.
 
 ## Main use case
 
-Use OpenPit when an application needs to decide whether an order can be sent to
-a downstream venue or broker adapter. A typical flow is:
+Use OpenPit when an application has to decide whether an order can be sent
+to a downstream venue or broker adapter. A typical flow:
 
 1. Build an `openpit.Engine` during application startup.
 2. Register built-in and custom policies.
@@ -22,22 +23,23 @@ a downstream venue or broker adapter. A typical flow is:
 5. Commit or roll back the returned reservation.
 6. Feed `openpit.ExecutionReport` objects back into the engine.
 
-This model keeps pre-trade decisions explicit: policy rejects are returned as
-business results, while invalid API usage remains an exception.
+Pre-trade decisions stay explicit: policy rejects are returned as business
+results, while invalid API usage remains an exception.
 
 ## Key features
 
-- Two-stage pre-trade pipeline with explicit request and reservation handles.
+- Two-stage pre-trade pipeline with explicit request and reservation
+  handles.
 - Built-in order validation, rate limit, P&L kill switch, and size-limit
   policies.
 - Python interfaces for start-stage, main-stage, and account-adjustment
   policies.
-- Exact decimal-backed domain value types for prices, quantities, P&L, fees,
-  cash flow, and position sizes.
-- Extensible Python order and execution-report models for integration-specific
-  metadata.
-- Atomic account-adjustment batches with policy rejects and rollback mutations.
-- Sphinx-generated API reference from the public Python layer.
+- Exact decimal-backed domain value types for prices, quantities, P&L,
+  fees, cash flow, and position sizes.
+- Extensible Python order and execution-report models that can carry
+  integration-specific metadata into policy callbacks.
+- Atomic account-adjustment batches with policy rejects and rollback
+  mutations.
 
 ## Minimal quickstart
 
@@ -57,7 +59,7 @@ engine = (
 order = openpit.Order(
     operation=openpit.OrderOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.TradeAmount.quantity("100"),
         price=openpit.param.Price("185"),

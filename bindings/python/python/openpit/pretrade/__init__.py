@@ -17,9 +17,21 @@
 
 """Pre-trade pipeline components: policies, rejects, requests, and reservations."""
 
+from __future__ import annotations
+
+import typing
+from collections.abc import Iterable  # noqa: F401  (used in string annotations)
+
 from .._openpit import (
+    _DEFAULT_POLICY_GROUP_ID,
     AccountAdjustmentBatchResult,
+    AccountAdjustmentOutcome,
+    AccountBlock,
+    AccountControl,
+    AccountOutcomeEntry,
     ExecuteResult,
+    OutcomeAmount,
+    PostTradeContext,
     PostTradeResult,
     Reject,
     Request,
@@ -36,8 +48,14 @@ from .policy import (
     Context,
     Policy,
     PolicyDecision,
+    PolicyPreTradeResult,
     PolicyReject,
 )
+
+PolicyGroupId: typing.TypeAlias = int
+"""Group identifier used to tag policies and their outcomes."""
+
+DEFAULT_POLICY_GROUP_ID: PolicyGroupId = _DEFAULT_POLICY_GROUP_ID
 
 RejectCode.__module__ = __name__
 RejectScope.__module__ = __name__
@@ -49,6 +67,13 @@ Opaque context object passed to Python policy callbacks.
 The object identifies the current engine evaluation context. Treat it as
 read-only. Future releases may expose additional query methods on this object;
 policies should not create instances directly.
+
+``account_control`` is an :class:`AccountControl` when the engine exposes the
+account-block facility for the evaluated account, otherwise ``None``. A policy
+may capture it into a :class:`openpit.Mutation` rollback/commit closure to block
+the account on a deferred failure. The handle is valid only within this
+request's pre-trade processing (through its reservation's commit or rollback);
+using it afterwards is unspecified.
 """
 
 ExecuteResult.__doc__ = """
@@ -66,9 +91,15 @@ reservation. Failed results never contain a reservation.
 PostTradeResult.__doc__ = """
 Result of ``openpit.Engine.apply_execution_report``.
 
+Post-trade processing is not atomic: ``account_adjustments`` reflect storage
+mutations that have already been applied, so callers must propagate them
+downstream even when ``account_blocks`` is non-empty.
+
 Attributes:
-    kill_switch_triggered: ``True`` when at least one policy reports that new
-        requests for the account should be blocked after processing the report.
+    account_blocks: List of account blocks reported by policies. Non-empty
+        when at least one policy entered a blocked state after the report.
+    account_adjustments: List of per-asset position outcomes reported by
+        policies, in policy registration order.
 """
 
 Reject.__doc__ = """
@@ -125,34 +156,37 @@ Rejects = list[Reject]
 
 
 class Lock(_Lock):
-    """Pre-trade price lock payload."""
+    """Pre-trade price lock payload: grouped `(policy_group_id, price)` records."""
 
-    # @typing.override
-    def __new__(cls, *args: object, **kwargs: object) -> "Lock":
+    def __new__(cls, *args: object, **kwargs: object) -> Lock:
         return _Lock.__new__(cls, *args, **kwargs)
 
-    # @typing.override
-    def __init__(self, price: Price | None = None) -> None:
-        if price is not None and not isinstance(price, Price):
-            raise TypeError(f"price must be {Price.__module__}.{Price.__name__}")
+    def __init__(
+        self,
+        entries: Lock | Iterable[tuple[PolicyGroupId, Price]] | None = None,
+    ) -> None:
+        _ = entries  # actual construction performed in _Lock.__new__
 
-    # @typing.override
-    @property
-    def price(self) -> Price | None:
-        return _Lock.price.__get__(self, type(self))
-
-    # @typing.override
     def __repr__(self) -> str:
-        return f"Lock(price={self.price!r})"
+        return _Lock.__repr__(self)
 
 
 __all__ = [
     "AccountAdjustmentBatchResult",
+    "AccountAdjustmentOutcome",
+    "AccountBlock",
+    "AccountControl",
+    "AccountOutcomeEntry",
+    "DEFAULT_POLICY_GROUP_ID",
     "ExecuteResult",
+    "PolicyGroupId",
+    "OutcomeAmount",
     "Policy",
     "Context",
     "PolicyDecision",
+    "PolicyPreTradeResult",
     "PolicyReject",
+    "PostTradeContext",
     "PostTradeResult",
     "Lock",
     "Reject",

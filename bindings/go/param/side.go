@@ -34,6 +34,7 @@ const (
 	SideSell Side = native.ParamSideSell
 )
 
+// NewSideFromHandle creates an optional Side from a native handle.
 func NewSideFromHandle(v native.ParamSide) optional.Option[Side] {
 	switch v {
 	case native.ParamSideSell:
@@ -73,6 +74,7 @@ func (v Side) Sign() int8 {
 	return -1
 }
 
+// String returns a human-readable representation of the side.
 func (v Side) String() string {
 	if v == SideBuy {
 		return "buy"
@@ -80,6 +82,7 @@ func (v Side) String() string {
 	return "sell"
 }
 
+// Handle returns the underlying native handle.
 func (v Side) Handle() native.ParamSide {
 	return native.ParamSide(v)
 }

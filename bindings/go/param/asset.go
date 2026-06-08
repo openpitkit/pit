@@ -67,12 +67,13 @@ type Asset struct {
 	buf *native.String
 }
 
+// ErrAssetEmpty is returned when an empty asset identifier string is provided.
 var ErrAssetEmpty = native.ErrAssetEmpty
 
 // NewAsset validates v and creates an Asset whose bytes live in a C-heap
 // buffer freed automatically by the GC.
 func NewAsset(v string) (Asset, error) {
-	validated, err := native.CreateParamAssetFromStr(v)
+	validated, err := native.CreateParamAssetFromString(v)
 	if err != nil {
 		return Asset{}, err
 	}

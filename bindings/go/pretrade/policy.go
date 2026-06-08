@@ -25,6 +25,7 @@ import (
 	"go.openpit.dev/openpit/tx"
 )
 
+// Policy is the interface implemented by all pre-trade risk policies.
 type Policy interface {
 	// Close releases any resources held by the policy.
 	Close()
@@ -34,6 +35,10 @@ type Policy interface {
 	// Policy names must be unique across all policies registered in the same
 	// engine instance.
 	Name() string
+
+	// PolicyGroupID returns the policy-group tag the engine assigns to records
+	// produced by this policy.
+	PolicyGroupID() model.PolicyGroupID
 
 	// CheckPreTradeStart performs start-stage checks against an order.
 	//
@@ -51,8 +56,10 @@ type Policy interface {
 	// or rejects.
 	//
 	// Policies may inspect the order, append mutations to be committed or
-	// rolled back later, and return zero or more rejects.
-	// An empty rejects list means accept.
+	// rolled back later, fill the result collector with lock prices and
+	// account-adjustment outcomes, and return zero or more rejects.
+	// An empty rejects list means accept. The engine keeps the result
+	// collector content only when the policy accepts.
 	//
 	// Rollback safety:
 	// In this pre-trade pipeline, rollback may happen after external systems
@@ -63,21 +70,31 @@ type Policy interface {
 	// Implementations must not let panics escape this method. A panic raised
 	// here may propagate across the SDK boundary and terminate the process;
 	// recovering from such panics is the implementer's responsibility.
-	PerformPreTradeCheck(Context, model.Order, tx.Mutations) []reject.Reject
+	PerformPreTradeCheck(Context, model.Order, tx.Mutations, Result) []reject.Reject
 
 	// ApplyExecutionReport applies post-trade updates from execution reports.
 	//
-	// Returns `true` when this policy reports kill-switch trigger.
+	// Returns account blocks representing the kill-switch state. An empty list
+	// means no kill switch. A non-empty list means this policy entered a
+	// blocked state after the report was applied. Policies may also fill the
+	// adjustments collector with group-tagged account-adjustment outcomes; the
+	// block return and the collector are independent channels.
 	//
 	// Implementations must not let panics escape this method. A panic raised
 	// here may propagate across the SDK boundary and terminate the process;
 	// recovering from such panics is the implementer's responsibility.
-	ApplyExecutionReport(model.ExecutionReport) bool
+	ApplyExecutionReport(
+		PostTradeContext,
+		model.ExecutionReport,
+		PostTradeAdjustments,
+	) []reject.AccountBlock
 
 	// ApplyAccountAdjustment validates one account adjustment.
 	//
 	// Returns zero or more rejects when an adjustment violates policy
-	// constraints. Empty list means accept.
+	// constraints. Empty list means accept. Policies may fill the outcomes
+	// collector with account-outcome entries; the engine keeps them only when
+	// the policy accepts.
 	//
 	// Implementations must not let panics escape this method. A panic raised
 	// here may propagate across the SDK boundary and terminate the process;
@@ -87,5 +104,6 @@ type Policy interface {
 		param.AccountID,
 		model.AccountAdjustment,
 		tx.Mutations,
+		AccountOutcomes,
 	) []reject.Reject
 }

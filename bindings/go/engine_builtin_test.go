@@ -113,7 +113,7 @@ func TestBuiltinRateLimitAccountAxisHappyAndReject(t *testing.T) {
 		Builtin(policies.BuildRateLimit().
 			AccountBarriers(policies.RateLimitAccountBarrier{
 				Limit:     policies.RateLimit{MaxOrders: 1, Window: 60 * time.Second},
-				AccountID: param.NewAccountIDFromInt(1001),
+				AccountID: param.NewAccountIDFromUint64(1001),
 			}),
 		).Build()
 	if err != nil {
@@ -160,7 +160,7 @@ func TestBuiltinRateLimitAccountAssetAxisHappyAndReject(t *testing.T) {
 		Builtin(policies.BuildRateLimit().
 			AccountAssetBarriers(policies.RateLimitAccountAssetBarrier{
 				Limit:           policies.RateLimit{MaxOrders: 1, Window: 60 * time.Second},
-				AccountID:       param.NewAccountIDFromInt(1001),
+				AccountID:       param.NewAccountIDFromUint64(1001),
 				SettlementAsset: usd,
 			}),
 		).Build()
@@ -215,11 +215,11 @@ func TestBuiltinRateLimitCombinedAxesHappyAndReject(t *testing.T) {
 			}).
 			AccountBarriers(policies.RateLimitAccountBarrier{
 				Limit:     policies.RateLimit{MaxOrders: 5, Window: 60 * time.Second},
-				AccountID: param.NewAccountIDFromInt(1001),
+				AccountID: param.NewAccountIDFromUint64(1001),
 			}).
 			AccountAssetBarriers(policies.RateLimitAccountAssetBarrier{
 				Limit:           policies.RateLimit{MaxOrders: 5, Window: 60 * time.Second},
-				AccountID:       param.NewAccountIDFromInt(1001),
+				AccountID:       param.NewAccountIDFromUint64(1001),
 				SettlementAsset: usd,
 			}),
 		).Build()
@@ -312,7 +312,7 @@ func hugeOrderSizeLimit(t *testing.T) policies.OrderSizeBrokerBarrier {
 
 func TestBuiltinOrderSizeLimitAccountAssetOverridesAssetBaseline(t *testing.T) {
 	usd := builtinTestAsset(t, "USD")
-	acct := param.NewAccountIDFromInt(1001)
+	acct := param.NewAccountIDFromUint64(1001)
 
 	// Asset baseline: max qty 10. Account+asset override: max qty 5.
 	engine, err := NewEngineBuilder().NoSync().
@@ -491,8 +491,8 @@ func TestBuiltinPnlBoundsKillswitchBrokerOnlyTriggersAndBlocksAccount(t *testing
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport() error = %v", err)
 	}
-	if !result.KillSwitchTriggered {
-		t.Fatal("KillSwitchTriggered = false, want true")
+	if len(result.AccountBlocks) == 0 || result.AccountBlocks[0].Code != reject.CodePnlKillSwitchTriggered {
+		t.Fatalf("AccountBlocks = %v, want kill switch block", result.AccountBlocks)
 	}
 
 	_, rejects, err = engine.StartPreTrade(pnlTestOrder(t, 1))
@@ -508,12 +508,6 @@ func TestBuiltinPnlBoundsKillswitchBrokerOnlyTriggersAndBlocksAccount(t *testing
 			rejects[0].Code, reject.CodePnlKillSwitchTriggered,
 		)
 	}
-	if rejects[0].Reason != "pnl kill switch triggered: account blocked" {
-		t.Fatalf(
-			"reject reason = %q, want %q",
-			rejects[0].Reason, "pnl kill switch triggered: account blocked",
-		)
-	}
 }
 
 func TestBuiltinPnlBoundsKillswitchAccountBarrierIndependentOfOtherAccounts(
@@ -524,7 +518,7 @@ func TestBuiltinPnlBoundsKillswitchAccountBarrierIndependentOfOtherAccounts(
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildPnlBoundsKillswitch().
 			AccountBarriers(policies.PnlBoundsAccountAssetBarrier{
-				AccountID:       param.NewAccountIDFromInt(1001),
+				AccountID:       param.NewAccountIDFromUint64(1001),
 				SettlementAsset: usd,
 				LowerBound:      optional.Some(pnlTestPnl(t, "-100")),
 				InitialPnl:      pnlTestPnl(t, "0"),
@@ -541,8 +535,8 @@ func TestBuiltinPnlBoundsKillswitchAccountBarrierIndependentOfOtherAccounts(
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport() error = %v", err)
 	}
-	if !result.KillSwitchTriggered {
-		t.Fatal("KillSwitchTriggered = false, want true for account 1001")
+	if len(result.AccountBlocks) == 0 || result.AccountBlocks[0].Code != reject.CodePnlKillSwitchTriggered {
+		t.Fatalf("AccountBlocks = %v, want kill switch block for account 1001", result.AccountBlocks)
 	}
 
 	_, rejects, err := engine.StartPreTrade(pnlTestOrder(t, 1001))
@@ -628,7 +622,7 @@ func rateLimitTestOrder(
 	order := model.NewOrder()
 	op := order.EnsureOperationView()
 	op.SetInstrument(param.NewInstrument(underlying, settlement))
-	op.SetAccountID(param.NewAccountIDFromInt(accountID))
+	op.SetAccountID(param.NewAccountIDFromUint64(accountID))
 	op.SetSide(param.SideBuy)
 	qty, err := param.NewQuantityFromString("1")
 	if err != nil {
@@ -672,7 +666,7 @@ func orderSizeTestOrder(
 	order := model.NewOrder()
 	op := order.EnsureOperationView()
 	op.SetInstrument(param.NewInstrument(u, s))
-	op.SetAccountID(param.NewAccountIDFromInt(accountID))
+	op.SetAccountID(param.NewAccountIDFromUint64(accountID))
 	op.SetSide(param.SideBuy)
 	qty, err := param.NewQuantityFromString(quantity)
 	if err != nil {
@@ -706,7 +700,7 @@ func pnlTestOrder(
 	order := model.NewOrder()
 	op := order.EnsureOperationView()
 	op.SetInstrument(param.NewInstrument(u, s))
-	op.SetAccountID(param.NewAccountIDFromInt(accountID))
+	op.SetAccountID(param.NewAccountIDFromUint64(accountID))
 	op.SetSide(param.SideBuy)
 	qty, err := param.NewQuantityFromString("1")
 	if err != nil {
@@ -732,13 +726,13 @@ func pnlTestReport(
 	report := model.NewExecutionReport()
 	op := model.NewExecutionReportOperation()
 	op.SetInstrument(param.NewInstrument(u, s))
-	op.SetAccountID(param.NewAccountIDFromInt(accountID))
+	op.SetAccountID(param.NewAccountIDFromUint64(accountID))
 	op.SetSide(param.SideBuy)
 	report.SetOperation(op)
 	pnl := pnlTestPnl(t, pnlStr)
-	fee, err := param.NewFeeFromInt(0)
+	fee, err := param.NewFeeFromInt64(0)
 	if err != nil {
-		t.Fatalf("NewFeeFromInt() error = %v", err)
+		t.Fatalf("NewFeeFromInt64() error = %v", err)
 	}
 	impact := model.NewExecutionReportFinancialImpact()
 	impact.SetPnl(pnl)

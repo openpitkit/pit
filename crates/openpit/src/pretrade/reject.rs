@@ -36,7 +36,13 @@ pub enum RejectScope {
     Order,
     /// Account-level reject signal.
     ///
-    /// Engine reports it; application decides whether to stop trading.
+    /// Every pre-trade stage that returns this scope automatically records the
+    /// affected account in the engine's blocked-accounts registry. The block is
+    /// irreversible until the engine is rebuilt; no retry, replay, or time
+    /// passing clears it.
+    ///
+    /// A policy that intends to reject only the current order without latching
+    /// a block on the account must return [`RejectScope::Order`] instead.
     Account,
 }
 
@@ -122,6 +128,19 @@ pub enum RejectCode {
     OrderValueCalculationFailed,
     /// Risk system is temporarily unavailable.
     SystemUnavailable,
+    /// Mark price required for order evaluation is unavailable.
+    MarkPriceUnavailable,
+    /// Account adjustment would violate its configured bounds.
+    AccountAdjustmentBoundsExceeded,
+    /// Underlying decimal arithmetic overflowed during evaluation.
+    ///
+    /// Distinct from [`Self::OrderValueCalculationFailed`]: that code
+    /// signals that an order value could not be produced for any
+    /// reason (missing input, invalid result, division by zero),
+    /// while this code is reserved for the specific case where a
+    /// `checked_add`/`checked_sub`/`checked_mul` exceeded the value
+    /// range of the underlying decimal representation.
+    ArithmeticOverflow,
     /// Reserved discriminant for caller-defined reject classes.
     ///
     /// Use together with `Reject::with_user_data` to attach a caller-defined
@@ -175,6 +194,9 @@ impl RejectCode {
             Self::ReferenceDataUnavailable => "ReferenceDataUnavailable",
             Self::OrderValueCalculationFailed => "OrderValueCalculationFailed",
             Self::SystemUnavailable => "SystemUnavailable",
+            Self::MarkPriceUnavailable => "MarkPriceUnavailable",
+            Self::AccountAdjustmentBoundsExceeded => "AccountAdjustmentBoundsExceeded",
+            Self::ArithmeticOverflow => "ArithmeticOverflow",
             Self::Custom => "Custom",
             Self::Other => "Other",
         }
@@ -296,6 +318,84 @@ impl Display for Rejects {
 
 impl std::error::Error for Rejects {}
 
+/// Account-level reject record produced by policies.
+///
+/// Carries the same fields as [`Reject`] except scope, which is fixed to
+/// [`RejectScope::Account`] on conversion. Use [`From<AccountBlock> for
+/// Reject`] to obtain a full reject record.
+///
+/// # Examples
+///
+/// ```
+/// use openpit::pretrade::{AccountBlock, Reject, RejectCode, RejectScope};
+///
+/// let block = AccountBlock::new(
+///     "PnlKillSwitch",
+///     RejectCode::PnlKillSwitchTriggered,
+///     "daily loss limit breached",
+///     "loss exceeded configured threshold",
+/// );
+/// let reject = Reject::from(block);
+/// assert_eq!(reject.scope, RejectScope::Account);
+/// assert_eq!(reject.code, RejectCode::PnlKillSwitchTriggered);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AccountBlock {
+    /// Human-readable reject reason.
+    pub reason: String,
+    /// Case-specific reject details.
+    pub details: String,
+    /// Policy name that produced the block.
+    pub policy: String,
+    /// Opaque caller-defined token.
+    ///
+    /// The SDK never inspects, dereferences, or frees this value. Its meaning,
+    /// lifetime, and thread-safety are the caller's responsibility. `0` / null
+    /// means "not set". See the project Threading Contract for the full lifetime
+    /// model.
+    pub user_data: usize,
+    /// Stable machine-readable reject code.
+    pub code: RejectCode,
+}
+
+impl AccountBlock {
+    /// Creates an account block with human-readable reason and details.
+    pub fn new(
+        policy: impl Into<String>,
+        code: RejectCode,
+        reason: impl Into<String>,
+        details: impl Into<String>,
+    ) -> Self {
+        Self {
+            code,
+            reason: reason.into(),
+            details: details.into(),
+            policy: policy.into(),
+            user_data: 0,
+        }
+    }
+
+    /// Returns a copy of this block with caller-defined opaque token.
+    pub fn with_user_data(mut self, user_data: usize) -> Self {
+        self.user_data = user_data;
+        self
+    }
+}
+
+impl From<AccountBlock> for Reject {
+    fn from(block: AccountBlock) -> Self {
+        Self {
+            reason: block.reason,
+            details: block.details,
+            policy: block.policy,
+            user_data: block.user_data,
+            code: block.code,
+            scope: RejectScope::Account,
+        }
+    }
+}
+
 impl Reject {
     /// Creates a reject with human-readable reason and details.
     pub fn new(
@@ -319,6 +419,13 @@ impl Reject {
     pub fn with_user_data(mut self, user_data: usize) -> Self {
         self.user_data = user_data;
         self
+    }
+
+    /// Creates an [`AccountBlock`] from this reject, substituting `code` for
+    /// the original reject code. All other fields are copied verbatim.
+    pub fn account_block_with_code(&self, code: RejectCode) -> AccountBlock {
+        AccountBlock::new(&self.policy, code, &self.reason, &self.details)
+            .with_user_data(self.user_data)
     }
 }
 
@@ -389,6 +496,12 @@ mod tests {
                 "OrderValueCalculationFailed",
             ),
             (RejectCode::SystemUnavailable, "SystemUnavailable"),
+            (RejectCode::MarkPriceUnavailable, "MarkPriceUnavailable"),
+            (
+                RejectCode::AccountAdjustmentBoundsExceeded,
+                "AccountAdjustmentBoundsExceeded",
+            ),
+            (RejectCode::ArithmeticOverflow, "ArithmeticOverflow"),
             (RejectCode::Custom, "Custom"),
             (RejectCode::Other, "Other"),
         ];

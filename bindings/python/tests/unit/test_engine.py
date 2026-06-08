@@ -21,10 +21,10 @@ class AcceptPolicy(openpit.pretrade.Policy):
     # @typing.override
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
     ) -> bool:
-        _ = report
+        _ = ctx, report
         return False
 
 
@@ -50,10 +50,10 @@ class NamedRejectPolicy(openpit.pretrade.Policy):
     # @typing.override
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
     ) -> bool:
-        del report
+        del ctx, report
         return False
 
 
@@ -67,7 +67,7 @@ class TaggedOrder(openpit.Order):
                     "USD",
                 ),
                 side=openpit.param.Side.BUY,
-                account_id=openpit.param.AccountId.from_u64(99224416),
+                account_id=openpit.param.AccountId.from_int(99224416),
                 trade_amount=openpit.param.TradeAmount.quantity(1),
                 price=openpit.param.Price(10),
             ),
@@ -85,7 +85,7 @@ class MissingPriceOrder(openpit.Order):
                     "USD",
                 ),
                 side=openpit.param.Side.BUY,
-                account_id=openpit.param.AccountId.from_u64(99224416),
+                account_id=openpit.param.AccountId.from_int(99224416),
                 trade_amount=openpit.param.TradeAmount.quantity(1),
             ),
         )
@@ -149,3 +149,41 @@ def test_engine_start_pre_trade_accepts_order_subclass_without_price() -> None:
     start_result = engine.start_pre_trade(order=MissingPriceOrder())
     assert start_result.ok
     start_result.request.execute().reservation.rollback()
+
+
+@pytest.mark.unit
+def test_engine_account_group_register_and_lookup() -> None:
+    engine = openpit.Engine.builder().no_sync().pre_trade(policy=AcceptPolicy()).build()
+    a1 = openpit.param.AccountId.from_int(1)
+    a2 = openpit.param.AccountId.from_int(2)
+    g = openpit.param.AccountGroupId.from_int(7)
+
+    assert engine.accounts().group_of(a1) is None
+    engine.accounts().register_group([a1, a2], g)
+    assert engine.accounts().group_of(a1) == g
+    assert engine.accounts().group_of(a2) == g
+
+    engine.accounts().unregister_group([a1, a2], g)
+    assert engine.accounts().group_of(a1) is None
+
+
+@pytest.mark.unit
+def test_engine_register_account_group_raises_on_conflict() -> None:
+    engine = openpit.Engine.builder().no_sync().pre_trade(policy=AcceptPolicy()).build()
+    a = openpit.param.AccountId.from_int(10)
+    g1 = openpit.param.AccountGroupId.from_int(1)
+    g2 = openpit.param.AccountGroupId.from_int(2)
+
+    engine.accounts().register_group([a], g1)
+    with pytest.raises(openpit.AccountGroupRegistrationError):
+        engine.accounts().register_group([a], g2)
+
+
+@pytest.mark.unit
+def test_engine_unregister_account_group_raises_when_not_in_group() -> None:
+    engine = openpit.Engine.builder().no_sync().pre_trade(policy=AcceptPolicy()).build()
+    a = openpit.param.AccountId.from_int(20)
+    g = openpit.param.AccountGroupId.from_int(3)
+
+    with pytest.raises(openpit.AccountGroupRegistrationError):
+        engine.accounts().unregister_group([a], g)

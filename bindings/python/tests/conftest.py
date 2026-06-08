@@ -1,6 +1,6 @@
 import openpit
 
-_DEFAULT_ACCOUNT_ID = openpit.param.AccountId.from_u64(99224416)
+_DEFAULT_ACCOUNT_ID = openpit.param.AccountId.from_int(99224416)
 
 
 def make_order(

@@ -49,7 +49,7 @@ def test_pnl_kill_switch_triggers_when_pnl_outside_bounds() -> None:
             )
             .account_barriers(
                 policies.PnlBoundsAccountAssetBarrier(
-                    account_id=openpit.param.AccountId.from_u64(99224416),
+                    account_id=openpit.param.AccountId.from_int(99224416),
                     settlement_asset="USD",
                     lower_bound=openpit.param.Pnl("-100"),
                     initial_pnl=openpit.param.Pnl("0"),
@@ -62,7 +62,7 @@ def test_pnl_kill_switch_triggers_when_pnl_outside_bounds() -> None:
     post_trade = engine.apply_execution_report(
         report=conftest.make_report(pnl=openpit.param.Pnl("-120"))
     )
-    assert post_trade.kill_switch_triggered
+    assert post_trade.account_blocks
 
     blocked = engine.start_pre_trade(order=conftest.make_order())
     assert not blocked.ok
@@ -172,7 +172,7 @@ def test_order_size_limit_paths(
                     "USD",
                 ),
                 side=openpit.param.Side.BUY,
-                account_id=openpit.param.AccountId.from_u64(99224416),
+                account_id=openpit.param.AccountId.from_int(99224416),
                 trade_amount=trade_amount,
             ),
         )
@@ -276,7 +276,7 @@ def test_rate_limit_account_barrier_independent_of_asset() -> None:
                         max_orders=1,
                         window=datetime.timedelta(seconds=60),
                     ),
-                    account_id=openpit.param.AccountId.from_u64(99224416),
+                    account_id=openpit.param.AccountId.from_int(99224416),
                 )
             )
         )
@@ -304,7 +304,7 @@ def test_rate_limit_account_asset_barrier_specific_to_pair() -> None:
                         max_orders=1,
                         window=datetime.timedelta(seconds=60),
                     ),
-                    account_id=openpit.param.AccountId.from_u64(99224416),
+                    account_id=openpit.param.AccountId.from_int(99224416),
                     settlement_asset="USD",
                 )
             )
@@ -321,7 +321,7 @@ def test_rate_limit_account_asset_barrier_specific_to_pair() -> None:
 
     third = engine.start_pre_trade(
         order=conftest.make_order(
-            account_id=openpit.param.AccountId.from_u64(11111111),
+            account_id=openpit.param.AccountId.from_int(11111111),
         )
     )
     assert third.ok
@@ -351,7 +351,7 @@ def test_order_size_limit_account_asset_overrides_asset_baseline() -> None:
                         max_quantity=openpit.param.Quantity("100"),
                         max_notional=openpit.param.Volume("10000"),
                     ),
-                    account_id=openpit.param.AccountId.from_u64(99224416),
+                    account_id=openpit.param.AccountId.from_int(99224416),
                     settlement_asset="USD",
                 )
             )
@@ -453,7 +453,7 @@ def test_engine_full_sync_concurrent_start_pre_trade_is_safe() -> None:
     total_threads = 4
     per_thread = 500
     account_ids = [
-        openpit.param.AccountId.from_u64(index) for index in range(total_threads)
+        openpit.param.AccountId.from_int(index) for index in range(total_threads)
     ]
 
     engine = (
@@ -520,6 +520,234 @@ def test_engine_full_sync_concurrent_broker_rate_limit_is_safe() -> None:
 
 
 @pytest.mark.unit
+def test_spot_funds_builder_limit_only_mode() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
+    )
+    assert engine is not None
+
+
+@pytest.mark.unit
+def test_builtin_policy_builders_reject_duplicate_non_default_group_id() -> None:
+    policies = openpit.pretrade.policies
+    with pytest.raises(ValueError, match="duplicate non-default policy_group_id: 7"):
+        (
+            openpit.Engine.builder()
+            .no_sync()
+            .builtin(policies.build_order_validation().with_policy_group_id(7))
+            .builtin(policies.build_spot_funds().with_policy_group_id(7))
+            .build()
+        )
+
+
+@pytest.mark.unit
+def test_builtin_policy_builders_accept_non_default_group_id() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_rate_limit()
+            .with_policy_group_id(1)
+            .broker_barrier(
+                policies.RateLimitBrokerBarrier(
+                    limit=policies.RateLimit(
+                        max_orders=10,
+                        window=datetime.timedelta(seconds=60),
+                    )
+                )
+            )
+        )
+        .builtin(
+            policies.build_order_size_limit()
+            .with_policy_group_id(2)
+            .broker_barrier(_huge_broker_barrier())
+        )
+        .builtin(
+            policies.build_pnl_bounds_killswitch()
+            .with_policy_group_id(3)
+            .broker_barriers(
+                policies.PnlBoundsBrokerBarrier(
+                    settlement_asset="USD",
+                    lower_bound=openpit.param.Pnl("-1000"),
+                )
+            )
+        )
+        .builtin(policies.build_order_validation().with_policy_group_id(4))
+        .builtin(policies.build_spot_funds().with_policy_group_id(5))
+        .build()
+    )
+
+    assert engine is not None
+
+
+@pytest.mark.unit
+def test_spot_funds_policy_group_id_tags_outcomes_and_lock_prices() -> None:
+    policies = openpit.pretrade.policies
+    policy_group_id = 7
+    account_id = openpit.param.AccountId.from_int(99224416)
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(policies.build_spot_funds().with_policy_group_id(policy_group_id))
+        .build()
+    )
+
+    seed_result = engine.apply_account_adjustment(
+        account_id=account_id,
+        adjustments=[
+            openpit.AccountAdjustment(
+                operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+                amount=openpit.AccountAdjustmentAmount(
+                    balance=openpit.param.AdjustmentAmount.absolute(
+                        openpit.param.PositionSize("10000")
+                    )
+                ),
+            )
+        ],
+    )
+
+    assert seed_result.ok
+    assert seed_result.outcomes
+    assert {outcome.policy_group_id for outcome in seed_result.outcomes} == {
+        policy_group_id
+    }
+
+    result = engine.execute_pre_trade(
+        order=conftest.make_order(
+            account_id=account_id,
+            trade_amount=openpit.param.TradeAmount.quantity("10"),
+            price=openpit.param.Price("200"),
+        )
+    )
+
+    assert result.ok
+    assert result.reservation is not None
+    assert result.reservation.lock().entries() == [
+        (policy_group_id, openpit.param.Price("200"))
+    ]
+    assert result.reservation.account_adjustments()
+    assert {
+        outcome.policy_group_id for outcome in result.reservation.account_adjustments()
+    } == {policy_group_id}
+
+
+def _mock_market_data(*quotes: tuple[str, str]) -> openpit.marketdata.MarketDataService:
+    service = (
+        openpit.Engine.builder()
+        .full_sync()
+        .market_data(openpit.marketdata.QuoteTtl.infinite())
+        .build()
+    )
+    for underlying, mark in quotes:
+        instrument_id = service.register(openpit.Instrument(underlying, "USD"))
+        service.push(instrument_id, openpit.marketdata.Quote(mark=mark))
+    return service
+
+
+@pytest.mark.unit
+def test_spot_funds_builder_market_data_with_quotes() -> None:
+    policies = openpit.pretrade.policies
+    service = _mock_market_data(("AAPL", "200"), ("BTC", "50000"))
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds().market_data(service, default_slippage_bps=2000)
+        )
+        .build()
+    )
+    assert engine is not None
+
+
+@pytest.mark.unit
+def test_spot_funds_builder_market_data_zero_slippage() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds().market_data(
+                _mock_market_data(), default_slippage_bps=0
+            )
+        )
+        .build()
+    )
+    assert engine is not None
+
+
+@pytest.mark.unit
+def test_spot_funds_builder_market_data_max_slippage_accepted() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds().market_data(
+                _mock_market_data(), default_slippage_bps=10_000
+            )
+        )
+        .build()
+    )
+    assert engine is not None
+
+
+@pytest.mark.unit
+def test_spot_funds_market_data_slippage_out_of_range_rejected() -> None:
+    policies = openpit.pretrade.policies
+    with pytest.raises(ValueError):
+        openpit.Engine.builder().no_sync().builtin(
+            policies.build_spot_funds().market_data(
+                _mock_market_data(), default_slippage_bps=10_001
+            )
+        ).build()
+
+
+@pytest.mark.unit
+def test_spot_funds_full_engine_with_local_md_service_is_rejected() -> None:
+    policies = openpit.pretrade.policies
+    # No-sync MD service: derived from a no_sync() engine builder (no
+    # full_sync upgrade).
+    local_service = (
+        openpit.Engine.builder()
+        .no_sync()
+        .market_data(openpit.marketdata.QuoteTtl.infinite())
+        .build()
+    )
+    with pytest.raises((ValueError, RuntimeError), match="multi-threaded|full_sync"):
+        openpit.Engine.builder().full_sync().builtin(
+            policies.build_spot_funds().market_data(
+                local_service, default_slippage_bps=100
+            )
+        ).build()
+
+
+@pytest.mark.unit
+def test_spot_funds_local_engine_with_full_md_service_is_accepted() -> None:
+    policies = openpit.pretrade.policies
+    # Full MD service: derived from a no_sync() builder then upgraded via full_sync().
+    full_service = (
+        openpit.Engine.builder()
+        .no_sync()
+        .market_data(openpit.marketdata.QuoteTtl.infinite())
+        .full_sync()
+        .build()
+    )
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds().market_data(
+                full_service, default_slippage_bps=100
+            )
+        )
+        .build()
+    )
+    assert engine is not None
+
+
+@pytest.mark.unit
 def test_rate_limit_zero_window_rejected_by_builder() -> None:
     policies = openpit.pretrade.policies
     with pytest.raises(ValueError, match="rate limit window must be positive"):
@@ -531,5 +759,166 @@ def test_rate_limit_zero_window_rejected_by_builder() -> None:
                         window=datetime.timedelta(seconds=0),
                     )
                 )
+            )
+        ).build()
+
+
+def _mock_market_data_named(
+    *quotes: tuple[str, str],
+) -> tuple[
+    openpit.marketdata.MarketDataService,
+    dict[str, openpit.marketdata.InstrumentId],
+]:
+    service = (
+        openpit.Engine.builder()
+        .full_sync()
+        .market_data(openpit.marketdata.QuoteTtl.infinite())
+        .build()
+    )
+    ids: dict[str, openpit.marketdata.InstrumentId] = {}
+    for underlying, mark in quotes:
+        instrument_id = service.register(openpit.Instrument(underlying, "USD"))
+        service.push(instrument_id, openpit.marketdata.Quote(mark=mark))
+        ids[underlying] = instrument_id
+    return service, ids
+
+
+def _seed_balance(engine: openpit.Engine, account_id: openpit.param.AccountId) -> None:
+    result = engine.apply_account_adjustment(
+        account_id=account_id,
+        adjustments=[
+            openpit.AccountAdjustment(
+                operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+                amount=openpit.AccountAdjustmentAmount(
+                    balance=openpit.param.AdjustmentAmount.absolute(
+                        openpit.param.PositionSize("10000")
+                    )
+                ),
+            )
+        ],
+    )
+    assert result.ok
+
+
+@pytest.mark.unit
+def test_spot_funds_override_instrument_only_accepted() -> None:
+    """Instrument-only override is accepted and the engine builds."""
+    policies = openpit.pretrade.policies
+    service, ids = _mock_market_data_named(("AAPL", "200"))
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds().market_data(
+                service,
+                default_slippage_bps=500,
+                overrides=[
+                    policies.SpotFundsOverride(
+                        instrument=ids["AAPL"],
+                        slippage_bps=0,
+                    )
+                ],
+            )
+        )
+        .build()
+    )
+    assert engine is not None
+
+
+@pytest.mark.unit
+def test_spot_funds_override_account_scoped_accepted() -> None:
+    """Account-scoped override is accepted and influences a pre-trade check."""
+    policies = openpit.pretrade.policies
+    account_id = openpit.param.AccountId.from_int(99224416)
+    service, ids = _mock_market_data_named(("AAPL", "200"))
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds().market_data(
+                service,
+                default_slippage_bps=500,
+                overrides=[
+                    policies.SpotFundsOverride(
+                        instrument=ids["AAPL"],
+                        account_id=account_id,
+                        slippage_bps=0,
+                    )
+                ],
+            )
+        )
+        .build()
+    )
+    _seed_balance(engine, account_id)
+
+    result = engine.execute_pre_trade(
+        order=conftest.make_order(
+            account_id=account_id,
+            trade_amount=openpit.param.TradeAmount.quantity("1"),
+            price=None,
+        )
+    )
+    assert result.ok
+    result.reservation.rollback()
+
+
+@pytest.mark.unit
+def test_spot_funds_override_group_scoped_accepted() -> None:
+    """Group-scoped override is accepted and influences a pre-trade check."""
+    policies = openpit.pretrade.policies
+    account_id = openpit.param.AccountId.from_int(99224416)
+    group_id = openpit.param.AccountGroupId.from_int(7)
+    service, ids = _mock_market_data_named(("AAPL", "200"))
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds().market_data(
+                service,
+                default_slippage_bps=500,
+                overrides=[
+                    policies.SpotFundsOverride(
+                        instrument=ids["AAPL"],
+                        account_group_id=group_id,
+                        slippage_bps=0,
+                    )
+                ],
+            )
+        )
+        .build()
+    )
+    engine.accounts().register_group([account_id], group_id)
+    _seed_balance(engine, account_id)
+
+    result = engine.execute_pre_trade(
+        order=conftest.make_order(
+            account_id=account_id,
+            trade_amount=openpit.param.TradeAmount.quantity("1"),
+            price=None,
+        )
+    )
+    assert result.ok
+    result.reservation.rollback()
+
+
+@pytest.mark.unit
+def test_spot_funds_override_both_account_and_group_raises_value_error() -> None:
+    """Passing both account_id and account_group_id on one override is an error."""
+    policies = openpit.pretrade.policies
+    account_id = openpit.param.AccountId.from_int(99224416)
+    service, ids = _mock_market_data_named(("AAPL", "200"))
+    with pytest.raises(ValueError, match="account.*group|group.*account"):
+        openpit.Engine.builder().no_sync().builtin(
+            policies.build_spot_funds().market_data(
+                service,
+                default_slippage_bps=500,
+                overrides=[
+                    policies.SpotFundsOverride(
+                        instrument=ids["AAPL"],
+                        account_id=account_id,
+                        account_group_id=openpit.param.AccountGroupId.from_int(7),
+                        slippage_bps=0,
+                    )
+                ],
             )
         ).build()

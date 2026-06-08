@@ -15,7 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-// Engine<..., SyncedEngineLocking> is Send + Sync via Arc<EngineInner>.  These
+// FullSyncEngine<...> is Send + Sync via Arc<EngineInner>.  These
 // tests exercise two FullSync contracts at the engine-handle level:
 //
 // 1. Sequential cross-thread invocation through Mutex<Engine>, proving the
@@ -34,10 +34,10 @@ use openpit::pretrade::policies::{
     RateLimit, RateLimitAccountBarrier, RateLimitBrokerBarrier, RateLimitPolicy,
 };
 use openpit::pretrade::{PreTradeRequest, RejectCode, Rejects};
-use openpit::{Instrument, OrderOperation, SyncedEngine};
+use openpit::{FullSyncEngine, Instrument, OrderOperation};
 use parking_lot::Mutex;
 
-type TestEngine = SyncedEngine<OrderOperation, ()>;
+type TestEngine = FullSyncEngine<OrderOperation, ()>;
 
 const TOTAL_THREADS: usize = 8;
 const PER_THREAD: usize = 1_000;
@@ -63,7 +63,7 @@ fn build_order(account_id: AccountId) -> OrderOperation {
 }
 
 fn build_engine(total_calls: usize) -> TestEngine {
-    let builder = openpit::Engine::<OrderOperation, ()>::builder().full_sync();
+    let builder = openpit::Engine::builder().full_sync();
     let policy = RateLimitPolicy::new(
         Some(RateLimitBrokerBarrier {
             limit: RateLimit {

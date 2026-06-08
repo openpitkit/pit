@@ -129,20 +129,20 @@ func TestPositionSizeCheckedArithmeticHappyPaths(t *testing.T) {
 func TestPositionSizeCheckedArithmeticErrors(t *testing.T) {
 	t.Parallel()
 
-	max := mustPositionSizeValue(t, decimalMaxValue)
-	min := mustPositionSizeValue(t, decimalMinValue)
+	maxVal := mustPositionSizeValue(t, decimalMaxValue)
+	minVal := mustPositionSizeValue(t, decimalMinValue)
 	one := mustPositionSizeValue(t, "1")
 
-	if _, err := max.CheckedAdd(one); err == nil {
+	if _, err := maxVal.CheckedAdd(one); err == nil {
 		t.Fatal("CheckedAdd() error = nil, want overflow error")
 	}
-	if _, err := min.CheckedSub(one); err == nil {
+	if _, err := minVal.CheckedSub(one); err == nil {
 		t.Fatal("CheckedSub() error = nil, want overflow error")
 	}
-	if _, err := max.CheckedMulInt(2); err == nil {
+	if _, err := maxVal.CheckedMulInt(2); err == nil {
 		t.Fatal("CheckedMulInt() error = nil, want overflow error")
 	}
-	if _, err := max.CheckedMulUint(2); err == nil {
+	if _, err := maxVal.CheckedMulUint(2); err == nil {
 		t.Fatal("CheckedMulUint() error = nil, want overflow error")
 	}
 	if _, err := one.CheckedMulFloat(math.NaN()); err == nil {

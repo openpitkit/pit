@@ -88,10 +88,10 @@ func TestNewLeverageOptionFromHandle(t *testing.T) {
 	}
 }
 
-func TestNewLeverageFromIntEncodesFixedPoint(t *testing.T) {
+func TestNewLeverageFromUint16EncodesFixedPoint(t *testing.T) {
 	t.Parallel()
 
-	leverage := NewLeverageFromInt(100)
+	leverage := NewLeverageFromUint16(100)
 	if leverage.Handle() != 1000 {
 		t.Fatalf("Handle() = %d, want %d", leverage.Handle(), 1000)
 	}
@@ -116,7 +116,7 @@ func TestLeverageCalculateMarginRequired(t *testing.T) {
 	t.Parallel()
 
 	leverage := NewLeverageFromFloat32(100)
-	notional := newNotionalOrPanic(NewNotionalFromInt(1000))
+	notional := newNotionalOrPanic(NewNotionalFromInt64(1000))
 	margin, err := leverage.CalculateMarginRequired(notional)
 	if err != nil {
 		t.Fatalf("CalculateMarginRequired() error = %v", err)

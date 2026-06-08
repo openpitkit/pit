@@ -109,7 +109,7 @@ has_request_field_trait!(
     /// This is not generic user metadata. It is policy-produced context that
     /// must be preserved across the order lifecycle when later execution-report
     /// handling depends on reservation-time details.
-    HasLock,
+    HasPreTradeLock,
     lock -> PreTradeLock
 );
 
@@ -154,56 +154,56 @@ has_request_field_trait!(
 
 has_request_field_trait!(
     /// Actual resulting balance/position value after applying the adjustment.
-    HasAccountAdjustmentTotal,
-    total -> Option<AdjustmentAmount>
+    HasAccountAdjustmentBalance,
+    balance -> Option<AdjustmentAmount>
 );
 
 has_request_field_trait!(
     /// Amount earmarked for outgoing settlement and unavailable for immediate use.
-    HasAccountAdjustmentReserved,
-    reserved -> Option<AdjustmentAmount>
+    HasAccountAdjustmentHeld,
+    held -> Option<AdjustmentAmount>
 );
 
 has_request_field_trait!(
     /// Amount in-flight for incoming acquisition and not yet finalized.
-    HasAccountAdjustmentPending,
-    pending -> Option<AdjustmentAmount>
+    HasAccountAdjustmentIncoming,
+    incoming -> Option<AdjustmentAmount>
 );
 
 has_request_field_trait!(
     /// Allowed post-adjustment range for the corresponding component.
-    HasAccountAdjustmentTotalUpperBound,
-    total_upper -> Option<PositionSize>
+    HasAccountAdjustmentBalanceUpperBound,
+    balance_upper -> Option<PositionSize>
 );
 
 has_request_field_trait!(
     /// Allowed post-adjustment range for the corresponding component.
-    HasAccountAdjustmentTotalLowerBound,
-    total_lower -> Option<PositionSize>
+    HasAccountAdjustmentBalanceLowerBound,
+    balance_lower -> Option<PositionSize>
 );
 
 has_request_field_trait!(
     /// Allowed post-adjustment range for the corresponding component.
-    HasAccountAdjustmentReservedUpperBound,
-    reserved_upper -> Option<PositionSize>
+    HasAccountAdjustmentHeldUpperBound,
+    held_upper -> Option<PositionSize>
 );
 
 has_request_field_trait!(
     /// Allowed post-adjustment range for the corresponding component.
-    HasAccountAdjustmentReservedLowerBound,
-    reserved_lower -> Option<PositionSize>
+    HasAccountAdjustmentHeldLowerBound,
+    held_lower -> Option<PositionSize>
 );
 
 has_request_field_trait!(
     /// Allowed post-adjustment range for the corresponding component.
-    HasAccountAdjustmentPendingUpperBound,
-    pending_upper -> Option<PositionSize>
+    HasAccountAdjustmentIncomingUpperBound,
+    incoming_upper -> Option<PositionSize>
 );
 
 has_request_field_trait!(
     /// Allowed post-adjustment range for the corresponding component.
-    HasAccountAdjustmentPendingLowerBound,
-    pending_lower -> Option<PositionSize>
+    HasAccountAdjustmentIncomingLowerBound,
+    incoming_lower -> Option<PositionSize>
 );
 
 has_request_field_trait!(HasAccountAdjustmentPositionLeverage, position_leverage -> Option<Leverage>);

@@ -19,6 +19,19 @@
 import openpit
 import pytest
 
+# Mirrors public Python examples from:
+# - ../pit.wiki/Account-Adjustments.md
+# - ../pit.wiki/Account-Groups.md
+# - ../pit.wiki/Balance-Reconciliation.md
+# - ../pit.wiki/Domain-Types.md
+# - ../pit.wiki/Getting-Started.md
+# - ../pit.wiki/Policies.md
+# - ../pit.wiki/Policy-API.md
+# - ../pit.wiki/Pre-trade-Pipeline.md
+# - ../pit.wiki/Pre-Trade-Lock.md
+# - ../pit.wiki/Spot-Funds.md
+# If this file changes, update every linked documentation snippet.
+
 # --- Shared helpers ---
 
 
@@ -29,7 +42,7 @@ def _aapl_usd_order(quantity: str, price: str) -> openpit.Order:
                 "AAPL",
                 "USD",
             ),
-            account_id=openpit.param.AccountId.from_u64(99224416),
+            account_id=openpit.param.AccountId.from_int(99224416),
             side=openpit.param.Side.BUY,
             trade_amount=openpit.param.TradeAmount.quantity(quantity),
             price=openpit.param.Price(price),
@@ -44,7 +57,7 @@ def _aapl_usd_report(pnl: str, fee: str) -> openpit.ExecutionReport:
                 "AAPL",
                 "USD",
             ),
-            account_id=openpit.param.AccountId.from_u64(99224416),
+            account_id=openpit.param.AccountId.from_int(99224416),
             side=openpit.param.Side.BUY,
         ),
         financial_impact=openpit.FinancialImpact(
@@ -73,7 +86,7 @@ class ReserveThenValidatePolicy(openpit.pretrade.Policy):
         self,
         ctx: openpit.pretrade.Context,
         order: openpit.Order,
-    ) -> openpit.pretrade.PolicyDecision:
+    ) -> openpit.pretrade.PolicyPreTradeResult:
         del ctx
         assert order.operation is not None
         prev_reserved = self._reserved
@@ -84,7 +97,7 @@ class ReserveThenValidatePolicy(openpit.pretrade.Policy):
             rollback=lambda: setattr(self, "_reserved", prev_reserved),
         )
         if next_reserved > self._limit:
-            return openpit.pretrade.PolicyDecision.reject(
+            return openpit.pretrade.PolicyPreTradeResult.reject(
                 rejects=[
                     openpit.pretrade.PolicyReject(
                         code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
@@ -96,15 +109,16 @@ class ReserveThenValidatePolicy(openpit.pretrade.Policy):
                 mutations=[rollback],
             )
 
-        return openpit.pretrade.PolicyDecision.accept(mutations=[rollback])
+        return openpit.pretrade.PolicyPreTradeResult.accept(mutations=[rollback])
 
     # @typing.override
     def apply_execution_report(
         self,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
-    ) -> bool:
-        _ = report
-        return False
+    ) -> openpit.pretrade.PostTradeResult | None:
+        _ = ctx, report
+        return None
 
 
 # --- Policy-API: Custom Main-Stage Check ---
@@ -126,7 +140,7 @@ class NotionalCapPolicy(openpit.pretrade.Policy):
         self,
         ctx: openpit.pretrade.Context,
         order: openpit.Order,
-    ) -> openpit.pretrade.PolicyDecision:
+    ) -> openpit.pretrade.PolicyPreTradeResult:
         del ctx
         assert order.operation is not None
 
@@ -145,7 +159,7 @@ class NotionalCapPolicy(openpit.pretrade.Policy):
         if requested_notional > self._max_abs_notional:
             # Business validation failures should become explicit rejects,
             # not exceptions.
-            return openpit.pretrade.PolicyDecision.reject(
+            return openpit.pretrade.PolicyPreTradeResult.reject(
                 rejects=[
                     openpit.pretrade.PolicyReject(
                         code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
@@ -161,15 +175,16 @@ class NotionalCapPolicy(openpit.pretrade.Policy):
             )
 
         # This policy only validates. It does not reserve mutable state.
-        return openpit.pretrade.PolicyDecision.accept()
+        return openpit.pretrade.PolicyPreTradeResult.accept()
 
     # @typing.override
     def apply_execution_report(
         self,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
-    ) -> bool:
-        _ = report
-        return False
+    ) -> openpit.pretrade.PostTradeResult | None:
+        _ = ctx, report
+        return None
 
 
 # --- Account-Adjustments: CumulativeLimitPolicy ---
@@ -228,12 +243,40 @@ class CumulativeLimitPolicy(openpit.pretrade.Policy):
         )
 
 
+# --- Policy-API: Block an Account from an Adjustment Callback ---
+
+
+class BlockOnAdjustmentPolicy(openpit.pretrade.Policy):
+    @property
+    def name(self) -> str:
+        return "BlockOnAdjustmentPolicy"
+
+    def apply_account_adjustment(
+        self,
+        ctx: openpit.AccountAdjustmentContext,
+        account_id: openpit.param.AccountId,
+        adjustment: openpit.AccountAdjustment,
+    ) -> None:
+        del account_id, adjustment
+        # The adjustment context always exposes the account-block facility.
+        control: openpit.AccountControl = ctx.account_control
+        control.block(
+            openpit.pretrade.AccountBlock(
+                policy=self.name,
+                code=openpit.pretrade.RejectCode.ACCOUNT_BLOCKED,
+                reason="blocked via account_control",
+                details="custom policy blocked the account from a callback",
+            )
+        )
+        return None
+
+
 # --- Tests ---
 
 
 @pytest.mark.integration
 def test_example_wiki_domain_types_create_validated_values() -> None:
-    # Used in: pit.wiki/Domain-Types.md — Create Validated Values
+    # Used in: pit.wiki/Domain-Types.md - Create Validated Values
     from decimal import Decimal
 
     import openpit
@@ -255,21 +298,21 @@ def test_example_wiki_domain_types_create_validated_values() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_domain_types_directional_types() -> None:
-    # Used in: pit.wiki/Domain-Types.md — Work With Directional Types
+    # Used in: pit.wiki/Domain-Types.md - Work With Directional Types
     import openpit
 
     # Directional helpers keep side logic explicit instead of comparing raw strings.
     side = openpit.param.Side.BUY
     position_side = openpit.param.PositionSide.LONG
 
-    assert side.opposite().value == "sell"
+    assert side.opposite().value == "SELL"
     assert side.sign() == 1
-    assert position_side.opposite().value == "short"
+    assert position_side.opposite().value == "SHORT"
 
 
 @pytest.mark.integration
 def test_example_wiki_domain_types_leverage() -> None:
-    # Used in: pit.wiki/Domain-Types.md — Create Leverage
+    # Used in: pit.wiki/Domain-Types.md - Create Leverage
     import openpit
 
     # Leverage is a plain multiplier with direct int/float constructors.
@@ -283,7 +326,7 @@ def test_example_wiki_domain_types_leverage() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_pipeline_start_stage_reject() -> None:
-    # Used in: pit.wiki/Pre-trade-Pipeline.md — Handle a Start-Stage Reject
+    # Used in: pit.wiki/Pre-trade-Pipeline.md - Handle a Start-Stage Reject
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -308,7 +351,7 @@ def test_example_wiki_pipeline_start_stage_reject() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_pipeline_main_stage_finalize() -> None:
-    # Used in: pit.wiki/Pre-trade-Pipeline.md — Execute the Main Stage and Finalize the
+    # Used in: pit.wiki/Pre-trade-Pipeline.md - Execute the Main Stage and Finalize the
     # Reservation
     engine = (
         openpit.Engine.builder()
@@ -335,8 +378,8 @@ def test_example_wiki_pipeline_main_stage_finalize() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_pipeline_shortcut_start_and_main() -> None:
-    # Used in: pit.wiki/Pre-trade-Pipeline.md — Shortcut for Start + Main Stages
-    # Used in: pit.wiki/Getting-Started.md — Shortcut for Start + Main Stages
+    # Used in: pit.wiki/Pre-trade-Pipeline.md - Shortcut for Start + Main Stages
+    # Used in: pit.wiki/Getting-Started.md - Shortcut for Start + Main Stages
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -360,9 +403,9 @@ def test_example_wiki_pipeline_shortcut_start_and_main() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_account_adjustments() -> None:
-    # Used in: pit.wiki/Account-Adjustments.md — Examples → Python
+    # Used in: pit.wiki/Account-Adjustments.md - Examples → Python
     # Build one batch that mixes balance and position adjustments.
-    account_id = openpit.param.AccountId.from_u64(99224416)
+    account_id = openpit.param.AccountId.from_int(99224416)
 
     adjustments = [
         openpit.AccountAdjustment(
@@ -370,7 +413,7 @@ def test_example_wiki_account_adjustments() -> None:
                 asset="USD",
             ),
             amount=openpit.AccountAdjustmentAmount(
-                total=openpit.param.AdjustmentAmount.absolute(
+                balance=openpit.param.AdjustmentAmount.absolute(
                     openpit.param.PositionSize(10000)
                 )
             ),
@@ -386,7 +429,7 @@ def test_example_wiki_account_adjustments() -> None:
                 mode=openpit.param.PositionMode.HEDGED,
             ),
             amount=openpit.AccountAdjustmentAmount(
-                total=openpit.param.AdjustmentAmount.absolute(
+                balance=openpit.param.AdjustmentAmount.absolute(
                     openpit.param.PositionSize(-3)
                 )
             ),
@@ -408,7 +451,7 @@ def test_example_wiki_account_adjustments() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_account_adjustments_cumulative_limit() -> None:
-    # Used in: pit.wiki/Account-Adjustments.md — Example: Balance Limit Policy
+    # Used in: pit.wiki/Account-Adjustments.md - Example: Balance Limit Policy
     policy = CumulativeLimitPolicy(max_cumulative=openpit.param.Volume("1000000"))
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
 
@@ -418,7 +461,7 @@ def test_example_wiki_account_adjustments_cumulative_limit() -> None:
                 asset="USD",
             ),
             amount=openpit.AccountAdjustmentAmount(
-                total=openpit.param.AdjustmentAmount.absolute(
+                balance=openpit.param.AdjustmentAmount.absolute(
                     openpit.param.PositionSize(100)
                 )
             ),
@@ -426,15 +469,52 @@ def test_example_wiki_account_adjustments_cumulative_limit() -> None:
     ]
 
     result = engine.apply_account_adjustment(
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
         adjustments=adjustments,
     )
     assert result.ok
 
 
 @pytest.mark.integration
+def test_example_wiki_account_control_block() -> None:
+    # Used in: pit.wiki/Policy-API.md - Block an Account from an Adjustment Callback
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(policy=BlockOnAdjustmentPolicy())
+        .build()
+    )
+
+    # Driving an adjustment triggers the block.
+    engine.apply_account_adjustment(
+        account_id=openpit.param.AccountId.from_int(99224416),
+        adjustments=[
+            openpit.AccountAdjustment(
+                operation=openpit.AccountAdjustmentBalanceOperation(asset="USD")
+            )
+        ],
+    )
+
+    # A later order on the same account is rejected with ACCOUNT_BLOCKED, without
+    # any start-check involvement.
+    blocked = engine.start_pre_trade(
+        order=openpit.Order(
+            operation=openpit.OrderOperation(
+                instrument=openpit.Instrument("AAPL", "USD"),
+                account_id=openpit.param.AccountId.from_int(99224416),
+                side=openpit.param.Side.BUY,
+                trade_amount=openpit.param.TradeAmount.quantity(10),
+                price=openpit.param.Price(25),
+            ),
+        )
+    )
+    assert not blocked.ok
+    assert blocked.rejects[0].code == openpit.pretrade.RejectCode.ACCOUNT_BLOCKED
+
+
+@pytest.mark.integration
 def test_example_wiki_policy_rollback_safety() -> None:
-    # Used in: pit.wiki/Policy-API.md — Example: Rollback Safety Pattern
+    # Used in: pit.wiki/Policy-API.md - Example: Rollback Safety Pattern
     reserve_policy = ReserveThenValidatePolicy()
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=reserve_policy).build()
 
@@ -451,7 +531,7 @@ def test_example_wiki_policy_rollback_safety() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_policy_notional_cap() -> None:
-    # Used in: pit.wiki/Policy-API.md — Example: Custom Main-Stage Check
+    # Used in: pit.wiki/Policy-API.md - Example: Custom Main-Stage Check
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -533,16 +613,12 @@ class StrategyTagPolicy(openpit.pretrade.Policy):
             ]
         return []
 
-    def apply_execution_report(self, report: openpit.ExecutionReport) -> bool:
-        _ = report
-        return False
-
 
 def _make_strategy_order(strategy_tag: str) -> StrategyOrder:
     return StrategyOrder(
         operation=openpit.OrderOperation(
             instrument=openpit.Instrument("AAPL", "USD"),
-            account_id=openpit.param.AccountId.from_u64(99224416),
+            account_id=openpit.param.AccountId.from_int(99224416),
             side=openpit.param.Side.BUY,
             trade_amount=openpit.param.TradeAmount.quantity(10),
             price=openpit.param.Price(25),
@@ -553,7 +629,7 @@ def _make_strategy_order(strategy_tag: str) -> StrategyOrder:
 
 @pytest.mark.integration
 def test_example_wiki_custom_python_models() -> None:
-    # Used in: pit.wiki/Policy-API.md — Example: Python Custom Models
+    # Used in: pit.wiki/Policy-API.md - Example: Python Custom Models
     engine = (
         openpit.Engine.builder().no_sync().pre_trade(policy=StrategyTagPolicy()).build()
     )
@@ -582,7 +658,7 @@ def test_example_wiki_custom_python_models() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_policies_order_validation() -> None:
-    # Used in: pit.wiki/Policies.md — OrderValidationPolicy
+    # Used in: pit.wiki/Policies.md - OrderValidationPolicy
     # Keep this example in sync with the matching wiki example.
     import openpit
     import openpit.pretrade.policies
@@ -604,7 +680,7 @@ def test_example_wiki_policies_order_validation() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_policies_rate_limit() -> None:
-    # Used in: pit.wiki/Policies.md — RateLimitPolicy
+    # Used in: pit.wiki/Policies.md - RateLimitPolicy
     # Keep this example in sync with the matching wiki example.
     import datetime
 
@@ -635,7 +711,7 @@ def test_example_wiki_policies_rate_limit() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_policies_order_size_limit() -> None:
-    # Used in: pit.wiki/Policies.md — OrderSizeLimitPolicy
+    # Used in: pit.wiki/Policies.md - OrderSizeLimitPolicy
     # Keep this example in sync with the matching wiki example.
     import openpit
     import openpit.pretrade.policies
@@ -673,8 +749,47 @@ def test_example_wiki_policies_order_size_limit() -> None:
 
 
 @pytest.mark.integration
+def test_example_wiki_pipeline_apply_post_trade_feedback() -> None:
+    # Used in: pit.wiki/Pre-trade-Pipeline.md - Apply Post-Trade Feedback
+    # Used in: pit.wiki/Getting-Started.md - Apply Post-Trade Feedback
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(openpit.pretrade.policies.build_order_validation())
+        .build()
+    )
+    report = _aapl_usd_report("-50", "3.4")
+
+    # Execution reports feed realized outcomes back into cumulative policy state.
+    result = engine.apply_execution_report(report=report)
+    if result.account_blocks:
+        print("halt new orders until the blocked state is cleared")
+
+    assert not result.account_blocks
+
+
+@pytest.mark.integration
+def test_example_wiki_getting_started_run_order() -> None:
+    # Used in: pit.wiki/Getting-Started.md - Run an Order Through the Engine
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(openpit.pretrade.policies.build_order_validation())
+        .build()
+    )
+    order = _aapl_usd_order("100", "185")
+
+    start_result = engine.start_pre_trade(order=order)
+    assert start_result.ok
+
+    execute_result = start_result.request.execute()
+    assert execute_result.ok
+    execute_result.reservation.commit()
+
+
+@pytest.mark.integration
 def test_example_wiki_policies_pnl_bounds_killswitch() -> None:
-    # Used in: pit.wiki/Policies.md — PnlBoundsKillSwitchPolicy
+    # Used in: pit.wiki/Policies.md - PnlBoundsKillSwitchPolicy
     # Keep this example in sync with the matching wiki example.
     import openpit
     import openpit.pretrade.policies
@@ -698,3 +813,236 @@ def test_example_wiki_policies_pnl_bounds_killswitch() -> None:
     start_result = engine.start_pre_trade(order=order)
     assert start_result.ok
     start_result.request.execute().reservation.commit()
+
+
+@pytest.mark.integration
+def test_example_wiki_policies_spot_funds() -> None:
+    # Used in: pit.wiki/Policies.md - SpotFundsPolicy → Python
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(openpit.pretrade.policies.build_spot_funds())
+        .build()
+    )
+    assert engine is not None
+
+
+@pytest.mark.integration
+def test_example_wiki_spot_funds_limit_only() -> None:
+    # Used in: pit.wiki/Spot-Funds.md - Limit-Only Mode → Python
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(openpit.pretrade.policies.build_spot_funds())
+        .build()
+    )
+
+    account_id = openpit.param.AccountId.from_int(99224416)
+
+    # Seed 10000 USD of available funds through the account-adjustment pipeline.
+    seed = openpit.AccountAdjustment(
+        operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+        amount=openpit.AccountAdjustmentAmount(
+            balance=openpit.param.AdjustmentAmount.absolute(
+                openpit.param.PositionSize(10000)
+            )
+        ),
+    )
+    seed_result = engine.apply_account_adjustment(
+        account_id=account_id, adjustments=[seed]
+    )
+    assert seed_result.ok
+
+    # Buy 10 AAPL @ 200 holds 2000 USD; available drops to 8000.
+    order = openpit.Order(
+        operation=openpit.OrderOperation(
+            instrument=openpit.Instrument("AAPL", "USD"),
+            account_id=account_id,
+            side=openpit.param.Side.BUY,
+            trade_amount=openpit.param.TradeAmount.quantity("10"),
+            price=openpit.param.Price("200"),
+        ),
+    )
+    result = engine.execute_pre_trade(order=order)
+    assert result.ok
+    result.reservation.commit()
+
+
+@pytest.mark.integration
+def test_example_wiki_spot_funds_market_orders() -> None:
+    # Used in: pit.wiki/Spot-Funds.md - Market Orders → Python
+    builder = openpit.Engine.builder().no_sync()
+
+    # A shared market-data service feeds the policy's market-order pricing.
+    market_data = builder.market_data(openpit.marketdata.QuoteTtl.infinite()).build()
+    aapl = openpit.Instrument("AAPL", "USD")
+    aapl_id = market_data.register(aapl)
+    market_data.push(aapl_id, openpit.marketdata.Quote(mark="200"))
+
+    # Spot funds with market orders enabled at 1500 bps worst-case slippage.
+    engine = builder.builtin(
+        openpit.pretrade.policies.build_spot_funds().market_data(
+            market_data,
+            default_slippage_bps=1500,
+            pricing_source=openpit.pretrade.policies.SpotFundsPricingSource.MARK,
+        )
+    ).build()
+
+    account_id = openpit.param.AccountId.from_int(99224416)
+    seed = openpit.AccountAdjustment(
+        operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+        amount=openpit.AccountAdjustmentAmount(
+            balance=openpit.param.AdjustmentAmount.absolute(
+                openpit.param.PositionSize(10000)
+            )
+        ),
+    )
+    engine.apply_account_adjustment(account_id=account_id, adjustments=[seed])
+
+    # Market buy (no price): priced at mark 200 + 15% = 230 per unit worst case.
+    order = openpit.Order(
+        operation=openpit.OrderOperation(
+            instrument=aapl,
+            account_id=account_id,
+            side=openpit.param.Side.BUY,
+            trade_amount=openpit.param.TradeAmount.quantity("5"),
+            price=None,
+        ),
+    )
+    result = engine.execute_pre_trade(order=order)
+    assert result.ok
+    result.reservation.commit()
+
+
+@pytest.mark.integration
+def test_example_wiki_pre_trade_lock_persistence() -> None:
+    # Used in: pit.wiki/Pre-Trade-Lock.md - Persisting and Restoring a Lock → Python
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(openpit.pretrade.policies.build_spot_funds())
+        .build()
+    )
+
+    account_id = openpit.param.AccountId.from_int(99224416)
+
+    # Seed 10000 USD so the buy can be reserved.
+    seed = openpit.AccountAdjustment(
+        operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+        amount=openpit.AccountAdjustmentAmount(
+            balance=openpit.param.AdjustmentAmount.absolute(
+                openpit.param.PositionSize(10000)
+            )
+        ),
+    )
+    engine.apply_account_adjustment(account_id=account_id, adjustments=[seed])
+
+    # Buy 10 AAPL @ 200 holds 2000 USD and records the lock price (200).
+    order = openpit.Order(
+        operation=openpit.OrderOperation(
+            instrument=openpit.Instrument("AAPL", "USD"),
+            account_id=account_id,
+            side=openpit.param.Side.BUY,
+            trade_amount=openpit.param.TradeAmount.quantity("10"),
+            price=openpit.param.Price("200"),
+        ),
+    )
+    result = engine.execute_pre_trade(order=order)
+
+    # Persist the lock with its built-in JSON serialization before committing.
+    payload = result.reservation.lock().to_json()
+    result.reservation.commit()
+
+    # --- After a process restart, rebuild the lock from your store. ---
+    restored = openpit.pretrade.Lock.from_json(payload)
+
+    # The final fill must carry the restored lock so the policy reconciles the
+    # 2000 USD it held against the real fill instead of blocking the account.
+    report = openpit.ExecutionReport(
+        operation=openpit.ExecutionReportOperation(
+            instrument=openpit.Instrument("AAPL", "USD"),
+            account_id=account_id,
+            side=openpit.param.Side.BUY,
+        ),
+        fill=openpit.ExecutionReportFillDetails(
+            last_trade=openpit.param.Trade(
+                price=openpit.param.Price("200"),
+                quantity=openpit.param.Quantity("10"),
+            ),
+            leaves_quantity=openpit.param.Quantity("0"),
+            lock=restored,
+            is_final=True,
+        ),
+    )
+    post = engine.apply_execution_report(report=report)
+    assert not post.account_blocks
+
+
+@pytest.mark.integration
+def test_example_wiki_balance_reconciliation_delta_absolute() -> None:
+    # Used in: pit.wiki/Balance-Reconciliation.md - Delta Versus Absolute → Python
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(openpit.pretrade.policies.build_spot_funds())
+        .build()
+    )
+    account_id = openpit.param.AccountId.from_int(99224416)
+
+    def seed(amount: int) -> openpit.AccountAdjustment:
+        return openpit.AccountAdjustment(
+            operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+            amount=openpit.AccountAdjustmentAmount(
+                balance=openpit.param.AdjustmentAmount.absolute(
+                    openpit.param.PositionSize(amount)
+                )
+            ),
+        )
+
+    # First seed: available USD goes from 0 to 10000.
+    first = engine.apply_account_adjustment(
+        account_id=account_id, adjustments=[seed(10000)]
+    )
+    assert first.ok
+    usd = first.outcomes[0].entry.balance
+    assert usd.delta == openpit.param.PositionSize(10000)
+    assert usd.absolute == openpit.param.PositionSize(10000)
+
+    # Second seed: available USD goes from 10000 to 15000.
+    second = engine.apply_account_adjustment(
+        account_id=account_id, adjustments=[seed(15000)]
+    )
+    assert second.ok
+    usd = second.outcomes[0].entry.balance
+    # delta is the change to add to your own ledger; absolute is just a snapshot.
+    assert usd.delta == openpit.param.PositionSize(5000)
+    assert usd.absolute == openpit.param.PositionSize(15000)
+
+
+@pytest.mark.integration
+def test_example_wiki_account_groups_register_and_read() -> None:
+    # Used in: pit.wiki/Account-Groups.md - Examples → Python
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(openpit.pretrade.policies.build_order_validation())
+        .build()
+    )
+
+    # Group two accounts under one compact identifier.
+    hedge_book = openpit.param.AccountGroupId.from_int(7)
+    accounts = [
+        openpit.param.AccountId.from_int(10),
+        openpit.param.AccountId.from_int(11),
+    ]
+    engine.accounts().register_group(accounts, hedge_book)
+
+    # Membership is readable by id, without enumerating the accounts.
+    assert (
+        engine.accounts().group_of(openpit.param.AccountId.from_int(10)) == hedge_book
+    )
+    assert engine.accounts().group_of(openpit.param.AccountId.from_int(99)) is None
+
+    # Removing the group is atomic too: every listed account must be a member.
+    engine.accounts().unregister_group(accounts, hedge_book)
+    assert engine.accounts().group_of(openpit.param.AccountId.from_int(10)) is None

@@ -28,10 +28,15 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const (
+	decimalMantissaBits = 64 // hi mantissa occupies the upper 64 bits of a 128-bit value
+	decimalSignBitShift = 63 // arithmetic right shift to propagate the sign bit
+)
+
 // NewDecimalFromNative constructs a decimal from a native decimal.
 func NewDecimalFromNative(source ParamDecimal) decimal.Decimal {
 	mantissa := big.NewInt(int64(source.mantissa_hi))
-	mantissa.Lsh(mantissa, 64)
+	mantissa.Lsh(mantissa, decimalMantissaBits)
 	mantissa.Add(mantissa, new(big.Int).SetUint64(uint64(source.mantissa_lo)))
 	return decimal.NewFromBigInt(mantissa, -int32(source.scale))
 }
@@ -45,7 +50,7 @@ func NewDecimalFromNative(source ParamDecimal) decimal.Decimal {
 func NewNativeDecimalFromDecimal(source decimal.Decimal) ParamDecimal {
 	return ParamDecimal{
 		mantissa_lo: C.int64_t(source.CoefficientInt64()),
-		mantissa_hi: C.int64_t(source.CoefficientInt64() >> 63),
+		mantissa_hi: C.int64_t(source.CoefficientInt64() >> decimalSignBitShift),
 		scale:       C.int32_t(-source.Exponent()),
 	}
 }

@@ -51,8 +51,7 @@ func TestCashFlowFromString(t *testing.T) {
 		{name: "invalid", input: "cash-flow", wantError: true},
 	}
 
-	for _, tt := range tests { //nolint:copyloopvar
-		tt := tt //nolint:copyloopvar
+	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -86,14 +85,13 @@ func TestCashFlowFromIntAndUint(t *testing.T) {
 		{name: "zero", input: 0, want: "0"},
 		{name: "positive", input: 7, want: "7"},
 	}
-	for _, tt := range intTests { //nolint:copyloopvar
-		tt := tt //nolint:copyloopvar
+	for _, tt := range intTests {
 		t.Run("int-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			value, err := NewCashFlowFromInt(tt.input)
+			value, err := NewCashFlowFromInt64(tt.input)
 			if err != nil {
-				t.Fatalf("NewCashFlowFromInt(%d) error = %v", tt.input, err)
+				t.Fatalf("NewCashFlowFromInt64(%d) error = %v", tt.input, err)
 			}
 			if got := value.String(); got != tt.want {
 				t.Fatalf("String() = %q, want %q", got, tt.want)
@@ -109,14 +107,13 @@ func TestCashFlowFromIntAndUint(t *testing.T) {
 		{name: "zero", input: 0, want: "0"},
 		{name: "positive", input: 7, want: "7"},
 	}
-	for _, tt := range uintTests { //nolint:copyloopvar
-		tt := tt //nolint:copyloopvar
+	for _, tt := range uintTests {
 		t.Run("uint-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			value, err := NewCashFlowFromUint(tt.input)
+			value, err := NewCashFlowFromUint64(tt.input)
 			if err != nil {
-				t.Fatalf("NewCashFlowFromUint(%d) error = %v", tt.input, err)
+				t.Fatalf("NewCashFlowFromUint64(%d) error = %v", tt.input, err)
 			}
 			if got := value.String(); got != tt.want {
 				t.Fatalf("String() = %q, want %q", got, tt.want)
@@ -136,8 +133,7 @@ func TestCashFlowFromFloat(t *testing.T) {
 		t.Fatalf("String() = %q, want %q", got, "12.5")
 	}
 
-	for _, input := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} { //nolint:copyloopvar
-		input := input //nolint:copyloopvar
+	for _, input := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
 		t.Run(fmt.Sprintf("invalid-%v", input), func(t *testing.T) {
 			t.Parallel()
 
@@ -222,13 +218,11 @@ func TestCashFlowRoundedConstructors(t *testing.T) {
 		},
 	}
 
-	for _, ctor := range constructors { //nolint:copyloopvar
-		ctor := ctor //nolint:copyloopvar
+	for _, ctor := range constructors {
 		t.Run(ctor.name, func(t *testing.T) {
 			t.Parallel()
 
-			for _, tc := range strategyCases { //nolint:copyloopvar
-				tc := tc //nolint:copyloopvar
+			for _, tc := range strategyCases {
 				t.Run(tc.name, func(t *testing.T) {
 					t.Parallel()
 
@@ -336,8 +330,8 @@ func TestCashFlowIsZeroEqualCompare(t *testing.T) {
 	b := mustCashFlow(t, "0")
 	c := mustCashFlow(t, "3")
 
-	if a.Compare(a) != 0 { //nolint:gocritic
-		t.Fatalf("reflexive compare = %d, want 0", a.Compare(a)) //nolint:gocritic
+	if a.Compare(a) != 0 { //nolint:gocritic // testing reflexivity: Compare(x,x) must return 0
+		t.Fatalf("reflexive compare = %d, want 0", a.Compare(a)) //nolint:gocritic // testing reflexivity: Compare(x,x) must return 0
 	}
 	if a.Compare(b) >= 0 || b.Compare(c) >= 0 || a.Compare(c) >= 0 {
 		t.Fatal("transitive compare contract violated")
@@ -454,20 +448,20 @@ func TestCashFlowCheckedArithmeticHappyPaths(t *testing.T) {
 func TestCashFlowCheckedArithmeticErrors(t *testing.T) {
 	t.Parallel()
 
-	max := mustCashFlow(t, decimalMaxValue)
-	min := mustCashFlow(t, decimalMinValue)
+	maxVal := mustCashFlow(t, decimalMaxValue)
+	minVal := mustCashFlow(t, decimalMinValue)
 	one := mustCashFlow(t, "1")
 
-	if _, err := max.CheckedAdd(one); err == nil {
+	if _, err := maxVal.CheckedAdd(one); err == nil {
 		t.Fatal("CheckedAdd() error = nil, want overflow error")
 	}
-	if _, err := min.CheckedSub(one); err == nil {
+	if _, err := minVal.CheckedSub(one); err == nil {
 		t.Fatal("CheckedSub() error = nil, want overflow error")
 	}
-	if _, err := max.CheckedMulInt(2); err == nil {
+	if _, err := maxVal.CheckedMulInt(2); err == nil {
 		t.Fatal("CheckedMulInt() error = nil, want overflow error")
 	}
-	if _, err := max.CheckedMulUint(2); err == nil {
+	if _, err := maxVal.CheckedMulUint(2); err == nil {
 		t.Fatal("CheckedMulUint() error = nil, want overflow error")
 	}
 	if _, err := one.CheckedMulFloat(math.NaN()); err == nil {
@@ -515,7 +509,7 @@ func makeNativeCashFlowOptional(value CashFlow) native.ParamCashFlowOptional {
 	}
 
 	layout := cashFlowOptionalLayout{Value: value.Handle(), IsSet: true}
-	return *(*native.ParamCashFlowOptional)(unsafe.Pointer(&layout))
+	return *(*native.ParamCashFlowOptional)(unsafe.Pointer(&layout)) //nolint:gosec // memory layout verification requires unsafe.Pointer
 }
 
 func assertPanicContains(t *testing.T, want string, fn func()) {

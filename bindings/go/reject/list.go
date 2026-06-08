@@ -23,10 +23,12 @@ import (
 	"go.openpit.dev/openpit/internal/native"
 )
 
+// NewList creates a reject list from the provided rejects.
 func NewList(rejects ...Reject) []Reject {
 	return rejects
 }
 
+// NewSingleItemList creates a single-element reject list.
 func NewSingleItemList(
 	code Code, // stable machine-readable reject code
 	policy string, // policy name that produced the reject
@@ -37,14 +39,15 @@ func NewSingleItemList(
 	return NewList(New(code, policy, reason, details, scope))
 }
 
-func NewListFromHandle(handle native.RejectList) ([]Reject, error) {
-	len := native.RejectListLen(handle)
-	if len == 0 {
+// NewListFromHandle creates a reject list from a native handle.
+func NewListFromHandle(handle native.PretradeRejectList) ([]Reject, error) {
+	count := native.PretradeRejectListLen(handle)
+	if count == 0 {
 		return nil, errors.New("reject list is not provided")
 	}
-	result := make([]Reject, len)
-	for i := 0; i < len; i++ {
-		result[i] = NewFromHandle(native.RejectListGet(handle, i))
+	result := make([]Reject, count)
+	for i := 0; i < count; i++ {
+		result[i] = NewFromHandle(native.PretradeRejectListGet(handle, i))
 	}
 	return result, nil
 }

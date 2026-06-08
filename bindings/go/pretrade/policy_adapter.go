@@ -56,10 +56,16 @@ type ClientExecutionReport interface {
 type ClientPreTradePolicy[Order ClientOrder, Report ClientExecutionReport] interface {
 	Close()
 	Name() string
+	PolicyGroupID() model.PolicyGroupID
 	CheckPreTradeStart(Context, Order) []reject.Reject
-	PerformPreTradeCheck(Context, Order, tx.Mutations) []reject.Reject
-	ApplyExecutionReport(Report) bool
-	ApplyAccountAdjustment(accountadjustment.Context, param.AccountID, model.AccountAdjustment, tx.Mutations) []reject.Reject
+	PerformPreTradeCheck(Context, Order, tx.Mutations, Result) []reject.Reject
+	ApplyExecutionReport(PostTradeContext, Report, PostTradeAdjustments) []reject.AccountBlock
+	ApplyAccountAdjustment(
+		accountadjustment.Context,
+		param.AccountID,
+		model.AccountAdjustment,
+		tx.Mutations, AccountOutcomes,
+	) []reject.Reject
 }
 
 // NewSafeClientPreTradePolicy adapts a client typed pre-trade policy to
@@ -105,6 +111,10 @@ func (p *safeClientPreTradePolicy[Order, Report]) Name() string {
 	return p.policy.Name()
 }
 
+func (p *safeClientPreTradePolicy[Order, Report]) PolicyGroupID() model.PolicyGroupID {
+	return p.policy.PolicyGroupID()
+}
+
 func (p *safeClientPreTradePolicy[Order, Report]) CheckPreTradeStart(
 	ctx Context,
 	engineOrder model.Order,
@@ -120,22 +130,25 @@ func (p *safeClientPreTradePolicy[Order, Report]) PerformPreTradeCheck(
 	ctx Context,
 	engineOrder model.Order,
 	mutations tx.Mutations,
+	result Result,
 ) []reject.Reject {
 	order, ok := safeOrderPayload[Order](engineOrder)
 	if !ok {
 		return clientPayloadMismatchReject[Order](p.Name())
 	}
-	return p.policy.PerformPreTradeCheck(ctx, order, mutations)
+	return p.policy.PerformPreTradeCheck(ctx, order, mutations, result)
 }
 
 func (p *safeClientPreTradePolicy[Order, Report]) ApplyExecutionReport(
+	ctx PostTradeContext,
 	engineReport model.ExecutionReport,
-) bool {
+	adjustments PostTradeAdjustments,
+) []reject.AccountBlock {
 	report, ok := safeReportPayload[Report](engineReport)
 	if !ok {
-		return false
+		return nil
 	}
-	return p.policy.ApplyExecutionReport(report)
+	return p.policy.ApplyExecutionReport(ctx, report, adjustments)
 }
 
 func (p *safeClientPreTradePolicy[Order, Report]) ApplyAccountAdjustment(
@@ -143,8 +156,9 @@ func (p *safeClientPreTradePolicy[Order, Report]) ApplyAccountAdjustment(
 	accountID param.AccountID,
 	adjustment model.AccountAdjustment,
 	mutations tx.Mutations,
+	outcomes AccountOutcomes,
 ) []reject.Reject {
-	return p.policy.ApplyAccountAdjustment(ctx, accountID, adjustment, mutations)
+	return p.policy.ApplyAccountAdjustment(ctx, accountID, adjustment, mutations, outcomes)
 }
 
 type unsafeFastClientPreTradePolicy[
@@ -162,6 +176,10 @@ func (p *unsafeFastClientPreTradePolicy[Order, Report]) Name() string {
 	return p.policy.Name()
 }
 
+func (p *unsafeFastClientPreTradePolicy[Order, Report]) PolicyGroupID() model.PolicyGroupID {
+	return p.policy.PolicyGroupID()
+}
+
 func (p *unsafeFastClientPreTradePolicy[Order, Report]) CheckPreTradeStart(
 	ctx Context,
 	engineOrder model.Order,
@@ -173,14 +191,25 @@ func (p *unsafeFastClientPreTradePolicy[Order, Report]) PerformPreTradeCheck(
 	ctx Context,
 	engineOrder model.Order,
 	mutations tx.Mutations,
+	result Result,
 ) []reject.Reject {
-	return p.policy.PerformPreTradeCheck(ctx, unsafeFastOrderPayload[Order](engineOrder), mutations)
+	return p.policy.PerformPreTradeCheck(
+		ctx,
+		unsafeFastOrderPayload[Order](engineOrder),
+		mutations,
+		result,
+	)
 }
 
 func (p *unsafeFastClientPreTradePolicy[Order, Report]) ApplyExecutionReport(
+	ctx PostTradeContext,
 	engineReport model.ExecutionReport,
-) bool {
-	return p.policy.ApplyExecutionReport(unsafeFastReportPayload[Report](engineReport))
+	adjustments PostTradeAdjustments,
+) []reject.AccountBlock {
+	return p.policy.ApplyExecutionReport(
+		ctx,
+		unsafeFastReportPayload[Report](engineReport), adjustments,
+	)
 }
 
 func (p *unsafeFastClientPreTradePolicy[Order, Report]) ApplyAccountAdjustment(
@@ -188,8 +217,9 @@ func (p *unsafeFastClientPreTradePolicy[Order, Report]) ApplyAccountAdjustment(
 	accountID param.AccountID,
 	adjustment model.AccountAdjustment,
 	mutations tx.Mutations,
+	outcomes AccountOutcomes,
 ) []reject.Reject {
-	return p.policy.ApplyAccountAdjustment(ctx, accountID, adjustment, mutations)
+	return p.policy.ApplyAccountAdjustment(ctx, accountID, adjustment, mutations, outcomes)
 }
 
 func safeOrderPayload[Order ClientOrder](order model.Order) (value Order, ok bool) {

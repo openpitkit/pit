@@ -1,19 +1,20 @@
 # Concepts
 
-OpenPit separates pre-trade validation from order submission. The engine does
-not send orders to venues. It evaluates the order, returns business rejects or a
-reservation, and leaves external I/O to the caller.
+OpenPit separates pre-trade validation from order submission. The engine
+does not send orders to venues; it evaluates an order, returns business
+rejects or a reservation, and leaves external I/O to the caller.
 
 ## Engine
 
-`openpit.Engine` is the runtime object that owns policy instances. Build it once
-with `openpit.Engine.builder()`, choose a synchronization policy, and reuse it
-for the matching call pattern.
+`openpit.Engine` is the runtime object that owns policy instances. Build
+it once with `openpit.Engine.builder()`, choose a synchronization policy,
+and reuse it under the matching call pattern.
 
-`full_sync()` allows concurrent calls on the same engine handle.
-`no_sync()` keeps the handle on the OS thread that created it.
-`account_sync()` allows concurrent calls when the caller pins each account
-to one processing chain so calls for the same account are never concurrent.
+- `full_sync()` allows concurrent calls on the same engine handle.
+- `no_sync()` keeps the handle on the OS thread that created it.
+- `account_sync()` allows concurrent calls when the caller pins each
+  account to one processing chain, so calls for the same account are
+  never concurrent.
 
 ## Start stage
 

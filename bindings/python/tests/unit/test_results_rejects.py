@@ -30,10 +30,10 @@ class AlwaysRejectPolicy(openpit.pretrade.Policy):
     # @typing.override
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
     ) -> bool:
-        _ = report
+        _ = ctx, report
         return False
 
 
@@ -67,10 +67,10 @@ class RejectWithMutationPolicy(openpit.pretrade.Policy):
 
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
     ) -> bool:
-        _ = report
+        _ = ctx, report
         return False
 
 
@@ -98,10 +98,10 @@ class RejectWithUserDataTokenPolicy(openpit.pretrade.Policy):
 
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
     ) -> bool:
-        _ = report
+        _ = ctx, report
         return False
 
 
@@ -227,10 +227,10 @@ class RejectWithInvalidUserDataPolicy(openpit.pretrade.Policy):
 
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
     ) -> bool:
-        _ = report
+        _ = ctx, report
         return False
 
 

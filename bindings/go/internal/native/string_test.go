@@ -24,7 +24,7 @@ import (
 
 func TestImportStringEmptyReturnsNilPointerWithZeroLength(t *testing.T) {
 	view := importString("")
-	if unsafe.Pointer(view.ptr) != nil {
+	if unsafe.Pointer(view.ptr) != nil { //nolint:gosec // CGo string view layout check requires unsafe.Pointer
 		t.Fatal(`importString("").ptr != nil, want nil`)
 	}
 	if view.len != 0 {
@@ -70,9 +70,9 @@ func TestStringViewSafeAndUnsafeRoundTrip(t *testing.T) {
 }
 
 func TestConsumeSharedStringSuccessPath(t *testing.T) {
-	price, err := CreateParamPriceFromStr("123.45")
+	price, err := CreateParamPriceFromString("123.45")
 	if err != nil {
-		t.Fatalf("CreateParamPriceFromStr() error = %v", err)
+		t.Fatalf("CreateParamPriceFromString() error = %v", err)
 	}
 
 	text, err := ParamPriceToString(price)

@@ -42,10 +42,10 @@ type Fee struct {
 	native native.ParamFee
 }
 
-var feeZero = sync.OnceValue(func() Fee { return newFeeOrPanic(NewFeeFromInt(0)) })
+var newFeeZero = sync.OnceValue(func() Fee { return newFeeOrPanic(NewFeeFromInt64(0)) })
 
-// FeeZero returns the canonical zero value of Fee.
-func FeeZero() Fee { return feeZero() }
+// NewFeeZero returns the canonical zero value of Fee.
+func NewFeeZero() Fee { return newFeeZero() }
 
 func newFeeOrPanic(value Fee, err error) Fee {
 	if err != nil {
@@ -68,30 +68,35 @@ func NewFeeFromDecimal(v decimal.Decimal) (Fee, error) {
 	return NewFeeFromHandle(nativeValue), nil
 }
 
+// NewFeeFromString creates a Fee from a decimal string.
 func NewFeeFromString(v string) (Fee, error) {
-	nativeValue, err := native.CreateParamFeeFromStr(v)
+	nativeValue, err := native.CreateParamFeeFromString(v)
 	if err != nil {
 		return Fee{}, err
 	}
 	return NewFeeFromHandle(nativeValue), nil
 }
 
-func NewFeeFromInt(v int64) (Fee, error) {
-	nativeValue, err := native.CreateParamFeeFromI64(v)
+// NewFeeFromInt64 creates a Fee from a signed integer.
+func NewFeeFromInt64(v int64) (Fee, error) {
+	nativeValue, err := native.CreateParamFeeFromInt64(v)
 	if err != nil {
 		return Fee{}, err
 	}
 	return NewFeeFromHandle(nativeValue), nil
 }
 
-func NewFeeFromUint(v uint64) (Fee, error) {
-	nativeValue, err := native.CreateParamFeeFromU64(v)
+// NewFeeFromUint64 creates a Fee from an unsigned integer.
+func NewFeeFromUint64(v uint64) (Fee, error) {
+	nativeValue, err := native.CreateParamFeeFromUint64(v)
 	if err != nil {
 		return Fee{}, err
 	}
 	return NewFeeFromHandle(nativeValue), nil
 }
 
+// NewFeeFromFloat constructs a Fee from a float64 value.
+//
 // WARNING: float64 values are inherently imprecise. The same numeric literal
 // interpreted as float64 can differ by one ULP from its string representation
 // and may produce different values on different platforms or compilers.
@@ -107,10 +112,12 @@ func NewFeeFromFloat(v float64) (Fee, error) {
 	return NewFeeFromHandle(nativeValue), nil
 }
 
+// NewFeeFromHandle creates a Fee from a native handle.
 func NewFeeFromHandle(v native.ParamFee) Fee {
 	return Fee{native: v}
 }
 
+// NewFeeOptionFromHandle creates an optional Fee from a native optional handle.
 func NewFeeOptionFromHandle(v native.ParamFeeOptional) optional.Option[Fee] {
 	if !native.ParamFeeOptionalIsSet(v) {
 		return optional.None[Fee]()
@@ -118,18 +125,20 @@ func NewFeeOptionFromHandle(v native.ParamFeeOptional) optional.Option[Fee] {
 	return optional.Some(NewFeeFromHandle(native.ParamFeeOptionalGet(v)))
 }
 
+// NewFeeFromStringRounded creates a Fee from a string, rounded to the given scale.
 func NewFeeFromStringRounded(
 	v string,
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Fee, error) {
-	nativeValue, err := native.CreateParamFeeFromStrRounded(v, scale, strategy.native())
+	nativeValue, err := native.CreateParamFeeFromStringRounded(v, scale, strategy.native())
 	if err != nil {
 		return Fee{}, err
 	}
 	return NewFeeFromHandle(nativeValue), nil
 }
 
+// NewFeeFromFloatRounded creates a Fee from a float64, rounded to the given scale.
 func NewFeeFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy) (Fee, error) {
 	nativeValue, err := native.CreateParamFeeFromF64Rounded(v, scale, strategy.native())
 	if err != nil {
@@ -160,14 +169,20 @@ func NewFeeFromDecimalRounded(
 	return NewFeeFromHandle(nativeValue), nil
 }
 
+// Decimal returns the value as a shopspring decimal.
 func (v Fee) Decimal() decimal.Decimal {
 	return newDecimalFromHandle(native.ParamFeeGetDecimal(v.native))
 }
 
+// Handle returns the underlying native handle.
 func (v Fee) Handle() native.ParamFee {
 	return v.native
 }
 
+// Float returns the value as a float64.
+//
+// NewFeeFromFloat constructs a Fee from a float64 value.
+//
 // WARNING: float64 values are inherently imprecise. The same numeric literal
 // interpreted as float64 can differ by one ULP from its string representation
 // and may produce different values on different platforms or compilers.
@@ -180,26 +195,31 @@ func (v Fee) Float() float64 {
 	return newParamValueOrPanic(native.ParamFeeToF64(v.native))
 }
 
+// String returns the decimal string representation of the fee.
 func (v Fee) String() string {
 	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamFeeToString(v.native))
 }
 
+// IsZero reports whether the fee is zero.
 func (v Fee) IsZero() bool {
 	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamFeeIsZero(v.native))
 }
 
+// Equal reports whether v and other are equal.
 func (v Fee) Equal(other Fee) bool {
 	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamFeeCompare(v.native, other.native)) == 0
 }
 
+// Compare returns -1, 0, or 1 comparing v to other.
 func (v Fee) Compare(other Fee) int {
 	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamFeeCompare(v.native, other.native))
 }
 
+// CheckedAdd returns v + other or an error on overflow.
 func (v Fee) CheckedAdd(other Fee) (Fee, error) {
 	result, err := native.ParamFeeCheckedAdd(v.native, other.native)
 	if err != nil {
@@ -208,6 +228,7 @@ func (v Fee) CheckedAdd(other Fee) (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
+// CheckedSub returns v - other or an error on overflow.
 func (v Fee) CheckedSub(other Fee) (Fee, error) {
 	result, err := native.ParamFeeCheckedSub(v.native, other.native)
 	if err != nil {
@@ -216,6 +237,7 @@ func (v Fee) CheckedSub(other Fee) (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
+// CheckedNeg returns the negation of v or an error on overflow.
 func (v Fee) CheckedNeg() (Fee, error) {
 	result, err := native.ParamFeeCheckedNeg(v.native)
 	if err != nil {
@@ -224,6 +246,7 @@ func (v Fee) CheckedNeg() (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
+// CheckedMulInt returns v * scalar or an error on overflow.
 func (v Fee) CheckedMulInt(scalar int64) (Fee, error) {
 	result, err := native.ParamFeeCheckedMulI64(v.native, scalar)
 	if err != nil {
@@ -232,6 +255,7 @@ func (v Fee) CheckedMulInt(scalar int64) (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
+// CheckedMulUint returns v * scalar or an error on overflow.
 func (v Fee) CheckedMulUint(scalar uint64) (Fee, error) {
 	result, err := native.ParamFeeCheckedMulU64(v.native, scalar)
 	if err != nil {
@@ -240,6 +264,7 @@ func (v Fee) CheckedMulUint(scalar uint64) (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
+// CheckedMulFloat returns v * scalar or an error on overflow.
 func (v Fee) CheckedMulFloat(scalar float64) (Fee, error) {
 	result, err := native.ParamFeeCheckedMulF64(v.native, scalar)
 	if err != nil {
@@ -248,6 +273,7 @@ func (v Fee) CheckedMulFloat(scalar float64) (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
+// CheckedDivInt returns v / divisor or an error on division by zero or overflow.
 func (v Fee) CheckedDivInt(divisor int64) (Fee, error) {
 	result, err := native.ParamFeeCheckedDivI64(v.native, divisor)
 	if err != nil {
@@ -256,6 +282,7 @@ func (v Fee) CheckedDivInt(divisor int64) (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
+// CheckedDivUint returns v / divisor or an error on division by zero.
 func (v Fee) CheckedDivUint(divisor uint64) (Fee, error) {
 	result, err := native.ParamFeeCheckedDivU64(v.native, divisor)
 	if err != nil {
@@ -264,6 +291,7 @@ func (v Fee) CheckedDivUint(divisor uint64) (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
+// CheckedDivFloat returns v / divisor or an error on division by zero or overflow.
 func (v Fee) CheckedDivFloat(divisor float64) (Fee, error) {
 	result, err := native.ParamFeeCheckedDivF64(v.native, divisor)
 	if err != nil {
@@ -272,6 +300,7 @@ func (v Fee) CheckedDivFloat(divisor float64) (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
+// CheckedRemInt returns v % divisor or an error on division by zero.
 func (v Fee) CheckedRemInt(divisor int64) (Fee, error) {
 	result, err := native.ParamFeeCheckedRemI64(v.native, divisor)
 	if err != nil {
@@ -280,6 +309,7 @@ func (v Fee) CheckedRemInt(divisor int64) (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
+// CheckedRemUint returns v % divisor or an error on division by zero.
 func (v Fee) CheckedRemUint(divisor uint64) (Fee, error) {
 	result, err := native.ParamFeeCheckedRemU64(v.native, divisor)
 	if err != nil {
@@ -288,6 +318,7 @@ func (v Fee) CheckedRemUint(divisor uint64) (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
+// CheckedRemFloat returns v % divisor or an error on division by zero.
 func (v Fee) CheckedRemFloat(divisor float64) (Fee, error) {
 	result, err := native.ParamFeeCheckedRemF64(v.native, divisor)
 	if err != nil {
@@ -296,6 +327,7 @@ func (v Fee) CheckedRemFloat(divisor float64) (Fee, error) {
 	return NewFeeFromHandle(result), nil
 }
 
+// Pnl converts the fee to a Pnl value.
 func (v Fee) Pnl() (Pnl, error) {
 	nativeValue, err := native.ParamFeeToPnl(v.native)
 	if err != nil {
@@ -304,6 +336,7 @@ func (v Fee) Pnl() (Pnl, error) {
 	return NewPnlFromHandle(nativeValue), nil
 }
 
+// PositionSize converts the fee to a PositionSize value.
 func (v Fee) PositionSize() (PositionSize, error) {
 	nativeValue, err := native.ParamFeeToPositionSize(v.native)
 	if err != nil {
@@ -312,6 +345,7 @@ func (v Fee) PositionSize() (PositionSize, error) {
 	return NewPositionSizeFromHandle(nativeValue), nil
 }
 
+// CashFlow converts the fee to a CashFlow value.
 func (v Fee) CashFlow() (CashFlow, error) {
 	nativeValue, err := native.ParamFeeToCashFlow(v.native)
 	if err != nil {

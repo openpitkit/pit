@@ -27,6 +27,11 @@ def test_pretrade_entities_have_rust_like_module_paths() -> None:
     assert openpit.pretrade.Reject.__module__ == "openpit.pretrade"
     assert openpit.pretrade.RejectCode.__module__ == "openpit.pretrade"
     assert openpit.PostTradeResult.__module__ == "openpit.pretrade"
+    assert openpit.pretrade.PostTradeResult is openpit.PostTradeResult
+    assert openpit.pretrade.AccountBlock.__module__ == "openpit.pretrade"
+    assert openpit.pretrade.OutcomeAmount.__module__ == "openpit.pretrade"
+    assert openpit.pretrade.AccountOutcomeEntry.__module__ == "openpit.pretrade"
+    assert openpit.pretrade.AccountAdjustmentOutcome.__module__ == "openpit.pretrade"
 
     assert openpit.account_adjustment.Adjustment.__module__ == (
         "openpit.account_adjustment"

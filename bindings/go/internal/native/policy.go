@@ -161,6 +161,7 @@ func NewPretradePoliciesPnlBoundsAccountBarrier(
 
 func CreatePretradeCustomPreTradePolicy(
 	name string,
+	groupID PolicyGroupID,
 	checkPreTradeStartFnAddr unsafe.Pointer,
 	performPreTradeCheckFnAddr unsafe.Pointer,
 	applyExecutionReportFnAddr unsafe.Pointer,
@@ -171,6 +172,7 @@ func CreatePretradeCustomPreTradePolicy(
 	var outError SharedString
 	p := C.openpit_create_pretrade_custom_pre_trade_policy(
 		importString(name),
+		groupID,
 		*(*C.OpenPitPretradePreTradePolicyCheckPreTradeStartFn)(checkPreTradeStartFnAddr),
 		*(*C.OpenPitPretradePreTradePolicyPerformPreTradeCheckFn)(performPreTradeCheckFnAddr),
 		*(*C.OpenPitPretradePreTradePolicyApplyExecutionReportFn)(applyExecutionReportFnAddr),

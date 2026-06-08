@@ -71,9 +71,10 @@ class IntegrationStrategy(openpit.pretrade.Policy):
     # @typing.override
     def apply_execution_report(
         self,
-        *,
+        ctx: openpit.pretrade.PostTradeContext,
         report: openpit.ExecutionReport,
     ) -> bool:
+        _ = ctx
         assert report.operation is not None
         assert report.financial_impact is not None
         assert report.financial_impact.pnl is not None
@@ -123,7 +124,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         start = engine.start_pre_trade(
             order=conftest.make_order(
                 side=openpit.param.Side.SELL,
-                account_id=openpit.param.AccountId.from_u64(99224416),
+                account_id=openpit.param.AccountId.from_int(99224416),
                 trade_amount=openpit.param.TradeAmount.quantity(5),
                 price=openpit.param.Price("100"),
             )
@@ -138,7 +139,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         post_trade = engine.apply_execution_report(
             report=conftest.make_report(pnl=openpit.param.Pnl("4.5"))
         )
-        assert post_trade.kill_switch_triggered is False
+        assert not post_trade.account_blocks
         assert strategy.journal[-1] == ("AAPL", "USD", "4.5")
         return
 
@@ -149,7 +150,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         start = engine.start_pre_trade(
             order=conftest.make_order(
                 side=openpit.param.Side.BUY,
-                account_id=openpit.param.AccountId.from_u64(99224416),
+                account_id=openpit.param.AccountId.from_int(99224416),
                 trade_amount=openpit.param.TradeAmount.quantity(3),
                 price=openpit.param.Price("100"),
             )
@@ -169,7 +170,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         resumed = engine.start_pre_trade(
             order=conftest.make_order(
                 side=openpit.param.Side.BUY,
-                account_id=openpit.param.AccountId.from_u64(99224416),
+                account_id=openpit.param.AccountId.from_int(99224416),
                 trade_amount=openpit.param.TradeAmount.quantity(7),
                 price=openpit.param.Price("100"),
             )
@@ -186,7 +187,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         start = engine.start_pre_trade(
             order=conftest.make_order(
                 side=openpit.param.Side.BUY,
-                account_id=openpit.param.AccountId.from_u64(99224416),
+                account_id=openpit.param.AccountId.from_int(99224416),
                 trade_amount=openpit.param.TradeAmount.quantity(8),
                 price=openpit.param.Price("100"),
             )
@@ -245,7 +246,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
                 )
                 .account_barriers(
                     policies.PnlBoundsAccountAssetBarrier(
-                        account_id=openpit.param.AccountId.from_u64(99224416),
+                        account_id=openpit.param.AccountId.from_int(99224416),
                         settlement_asset="USD",
                         lower_bound=openpit.param.Pnl("-500"),
                         initial_pnl=openpit.param.Pnl("0"),
@@ -258,7 +259,7 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
         post_trade = engine.apply_execution_report(
             report=conftest.make_report(pnl=openpit.param.Pnl("-600"))
         )
-        assert post_trade.kill_switch_triggered
+        assert post_trade.account_blocks
 
         blocked = engine.start_pre_trade(
             order=conftest.make_order(price=openpit.param.Price("99.5"))

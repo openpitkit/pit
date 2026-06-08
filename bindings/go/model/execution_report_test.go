@@ -44,7 +44,7 @@ func TestExecutionReportLifecycle(t *testing.T) {
 	report := NewExecutionReport()
 	assertExecutionReportUnset(t, report)
 
-	values := executionReportValuesFromFixture(fixture)
+	values := executionReportValuesFromFixture(t, fixture)
 	report.SetValues(values)
 	assertExecutionReportValuesEqual(t, report.Values(), values)
 
@@ -161,10 +161,19 @@ func TestExecutionReportFillFieldRoundTrip(t *testing.T) {
 	fill.UnsetLeavesQuantity()
 	assertQuantityOptionUnset(t, fill.LeavesQuantity())
 
-	fill.SetLockPrice(fixture.lockPrice)
-	assertPriceOptionEqual(t, fill.LockPrice(), fixture.lockPrice)
-	fill.UnsetLockPrice()
-	assertPriceOptionUnset(t, fill.LockPrice())
+	lock := newFixtureLock(t, fixture.lockPrice)
+	fill.SetLock(lock)
+	gotLock := fill.Lock()
+	if gotLock == nil {
+		t.Fatal("Lock() after SetLock = nil, want non-nil bytes")
+	}
+	if got := lockBytesLen(t, gotLock); got != 1 {
+		t.Fatalf("Lock().Len = %d, want 1", got)
+	}
+	fill.UnsetLock()
+	if fill.Lock() != nil {
+		t.Fatal("Lock() after UnsetLock = non-nil, want nil")
+	}
 
 	fill.SetIsFinal(true)
 	assertOptionalBoolEqual(t, fill.IsFinal(), true)
@@ -176,11 +185,12 @@ func TestExecutionReportFillFieldRoundTrip(t *testing.T) {
 	values := ExecutionReportFillValues{
 		LastTrade:      optional.Some(lastTrade),
 		LeavesQuantity: optional.Some(fixture.leavesQuantity),
-		LockPrice:      optional.Some(fixture.lockPrice),
+		Lock:           newFixtureLock(t, fixture.lockPrice),
 		IsFinal:        optional.BoolSome(true),
 	}
 	fill.SetValues(values)
-	assertExecutionReportFillValuesEqual(t, fill.Values(), values)
+	got := fill.Values()
+	assertExecutionReportFillValuesEqual(t, got, values)
 
 	fill.Reset()
 	assertExecutionReportFillUnset(t, fill)
@@ -308,7 +318,7 @@ func newExecutionReportFixture(t *testing.T) executionReportFixture {
 		// Keep same asset on both legs to avoid depending on current
 		// NewInstrumentFromHandle settlement-leg mapping behavior.
 		instrument:     param.NewInstrument(mustModelAsset(t, "USD"), mustModelAsset(t, "USD")),
-		accountID:      param.NewAccountIDFromInt(42),
+		accountID:      param.NewAccountIDFromUint64(42),
 		side:           param.SideBuy,
 		pnl:            pnl,
 		fee:            fee,
@@ -321,7 +331,8 @@ func newExecutionReportFixture(t *testing.T) executionReportFixture {
 	}
 }
 
-func executionReportValuesFromFixture(fixture executionReportFixture) ExecutionReportValues {
+func executionReportValuesFromFixture(t *testing.T, fixture executionReportFixture) ExecutionReportValues {
+	t.Helper()
 	operation := NewExecutionReportOperationFromValues(
 		ExecutionReportOperationValues{
 			Instrument: optional.Some(fixture.instrument),
@@ -343,7 +354,7 @@ func executionReportValuesFromFixture(fixture executionReportFixture) ExecutionR
 				NewExecutionReportTrade(fixture.tradePrice, fixture.tradeQuantity),
 			),
 			LeavesQuantity: optional.Some(fixture.leavesQuantity),
-			LockPrice:      optional.Some(fixture.lockPrice),
+			Lock:           newFixtureLock(t, fixture.lockPrice),
 			IsFinal:        optional.BoolSome(true),
 		},
 	)
@@ -440,7 +451,9 @@ func assertExecutionReportFillUnset(t *testing.T, fill ExecutionReportFill) {
 	t.Helper()
 	assertExecutionReportTradeOptionUnset(t, fill.LastTrade())
 	assertQuantityOptionUnset(t, fill.LeavesQuantity())
-	assertPriceOptionUnset(t, fill.LockPrice())
+	if fill.Lock() != nil {
+		t.Fatal("fill.Lock() = non-nil, want nil")
+	}
 	assertOptionalBoolUnset(t, fill.IsFinal())
 }
 
@@ -452,8 +465,38 @@ func assertExecutionReportFillValuesEqual(
 	t.Helper()
 	assertExecutionReportTradeOptionValuesEqual(t, got.LastTrade, want.LastTrade)
 	assertQuantityOptionValuesEqual(t, got.LeavesQuantity, want.LeavesQuantity)
-	assertPriceOptionValuesEqual(t, got.LockPrice, want.LockPrice)
+	if (got.Lock == nil) != (want.Lock == nil) {
+		t.Fatalf("Lock presence mismatch: got nil=%v, want nil=%v", got.Lock == nil, want.Lock == nil)
+	}
+	if got.Lock != nil && want.Lock != nil {
+		if gotLen, wantLen := lockBytesLen(t, got.Lock), lockBytesLen(t, want.Lock); gotLen != wantLen {
+			t.Fatalf("Lock len mismatch: got %d, want %d", gotLen, wantLen)
+		}
+	}
 	assertOptionalBoolValuesEqual(t, got.IsFinal, want.IsFinal)
+}
+
+func newFixtureLock(t *testing.T, price param.Price) []byte {
+	t.Helper()
+	handle := native.CreatePretradePreTradeLock()
+	defer native.DestroyPretradePreTradeLock(handle)
+	if err := native.PretradePreTradeLockPush(handle, native.DefaultPolicyGroupID, price.Handle()); err != nil {
+		t.Fatalf("PretradePreTradeLockPush error = %v", err)
+	}
+	raw := native.PretradePreTradeLockToRaw(handle)
+	value := native.CloneBytes(native.SharedBytesView(raw))
+	native.DestroySharedBytes(raw)
+	return value
+}
+
+func lockBytesLen(t *testing.T, value []byte) int {
+	t.Helper()
+	handle, err := native.CreatePretradePreTradeLockFromRaw(value)
+	if err != nil {
+		t.Fatalf("CreatePretradePreTradeLockFromRaw error = %v", err)
+	}
+	defer native.DestroyPretradePreTradeLock(handle)
+	return native.PretradePreTradeLockLen(handle)
 }
 
 func assertExecutionReportPositionImpactUnset(

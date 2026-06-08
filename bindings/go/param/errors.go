@@ -19,6 +19,7 @@ package param
 
 import "go.openpit.dev/openpit/internal/native"
 
+// Sentinel errors returned by param value constructors and arithmetic operations.
 var (
 	ErrNegative        = native.ErrNegative
 	ErrDivisionByZero  = native.ErrDivisionByZero

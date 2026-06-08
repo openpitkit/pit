@@ -38,7 +38,7 @@ func TestConsumeParamErrorMapsSentinelByCode(t *testing.T) {
 func TestConsumeParamErrorMapsAssetEmptyByCode(t *testing.T) {
 	t.Parallel()
 
-	_, err := CreateParamAssetFromStr(" ")
+	_, err := CreateParamAssetFromString(" ")
 	if !errors.Is(err, ErrAssetEmpty) {
 		t.Fatalf("expected ErrAssetEmpty, got %v", err)
 	}
@@ -47,7 +47,7 @@ func TestConsumeParamErrorMapsAssetEmptyByCode(t *testing.T) {
 func TestConsumeParamErrorMapsAccountIdEmptyByCode(t *testing.T) {
 	t.Parallel()
 
-	_, err := CreateParamAccountIDFromStr(" ")
+	_, err := CreateParamAccountIDFromString(" ")
 	if !errors.Is(err, ErrAccountIdEmpty) {
 		t.Fatalf("expected ErrAccountIdEmpty, got %v", err)
 	}

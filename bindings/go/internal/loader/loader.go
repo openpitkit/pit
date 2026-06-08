@@ -28,17 +28,23 @@ import (
 	goruntime "runtime"
 	"strings"
 	"sync"
+	"unsafe"
 
 	pitruntime "go.openpit.dev/openpit/internal/runtime"
 )
 
 // SDKVersion is the version baked into the Go SDK source tree. It is used both
 // for runtime cache namespacing and for the runtime/SDK compatibility check.
-const SDKVersion = "0.3.0"
+const SDKVersion = "0.4.0"
 
 const (
 	envRuntimePath  = "OPENPIT_RUNTIME_LIBRARY_PATH"
 	envRuntimeCache = "OPENPIT_RUNTIME_CACHE_DIR"
+)
+
+const (
+	cacheDirMode  = 0o750 // group-read, no world access
+	cacheFileMode = 0o755 // executable shared library
 )
 
 // Reason codes attached to *RuntimeLoadError. They are stable strings that
@@ -50,6 +56,7 @@ const (
 	ReasonCacheWriteFailed   = "runtime cache write failed"
 	ReasonMagicCheckFailed   = "shared library magic check failed"
 	ReasonDlopenFailed       = "dlopen failed"
+	ReasonSymbolNotFound     = "runtime symbol not found"
 	ReasonVersionMismatch    = "runtime version mismatch"
 )
 
@@ -103,8 +110,9 @@ func reasonForResolveError(err error) string {
 }
 
 var (
-	loadOnce   sync.Once
-	loadedPath string
+	loadOnce     sync.Once
+	loadedPath   string
+	loadedHandle unsafe.Pointer
 )
 
 func init() {
@@ -118,12 +126,20 @@ func LoadedPath() string {
 	return loadedPath
 }
 
+// LoadedHandle returns the dlopen handle of the runtime library that the
+// loader opened during package initialization. Used by the native package to
+// resolve openpit_* symbols via dlsym instead of relying on PLT entries.
+func LoadedHandle() unsafe.Pointer {
+	return loadedHandle
+}
+
 func load() {
 	path, err := resolvePath()
 	if err != nil {
 		panic(&RuntimeLoadError{Reason: reasonForResolveError(err), Path: path, Cause: err})
 	}
-	if err := loadRuntimeLibrary(path); err != nil {
+	handle, err := loadRuntimeLibrary(path)
+	if err != nil {
 		reason := ReasonDlopenFailed
 		if errors.Is(err, errMagicCheckFailed) {
 			reason = ReasonMagicCheckFailed
@@ -131,6 +147,7 @@ func load() {
 		panic(&RuntimeLoadError{Reason: reason, Path: path, Cause: err})
 	}
 	loadedPath = path
+	loadedHandle = handle
 }
 
 func resolvePath() (string, error) {
@@ -153,11 +170,19 @@ func resolvePath() (string, error) {
 		return "", fmt.Errorf("%w: %w", errEmbedNotFound, err)
 	}
 
+	// Key the cache on the embedded artifact's content hash so that a changed
+	// artifact under the same SDK version maps to a fresh location and a stale
+	// extraction is never reused.
+	contentHash, err := pitruntime.Hash()
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errEmbedNotFound, err)
+	}
+
 	cacheDir, err := resolveCacheDir(SDKVersion)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", errCacheResolveFailed, err)
 	}
-	targetPath := filepath.Join(cacheDir, fileName)
+	targetPath := filepath.Join(cacheDir, contentHash, fileName)
 	if err := ensureVersionedPath(SDKVersion, targetPath); err != nil {
 		return targetPath, fmt.Errorf("%w: %w", errCacheResolveFailed, err)
 	}
@@ -184,12 +209,13 @@ func resolvePath() (string, error) {
 			errEmbedNotFound, fileName, embeddedName)
 	}
 
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+	targetDir := filepath.Dir(targetPath)
+	if err := os.MkdirAll(targetDir, cacheDirMode); err != nil {
 		return targetPath, fmt.Errorf("%w: failed to create cache dir %q: %w",
-			errCacheWriteFailed, cacheDir, err)
+			errCacheWriteFailed, targetDir, err)
 	}
 
-	if err := write(targetPath, data, 0o755); err != nil {
+	if err := write(targetPath, data, cacheFileMode); err != nil {
 		return targetPath, fmt.Errorf("%w: %w", errCacheWriteFailed, err)
 	}
 

@@ -8,40 +8,30 @@
 policy-driven risk checks into trading systems from C and other environments
 that consume a C ABI.
 
-For an overview and links to all resources, see
-the project website [openpit.dev](https://openpit.dev/).
-For full project documentation, see
-[the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
-For conceptual and architectural pages, see
-[the project wiki](https://github.com/openpitkit/pit/wiki).
-For the split C reference manual, see
-[the C API docs](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
+For an overview and links to all resources, see the project website [openpit.dev](https://openpit.dev/).
+For full project documentation, see [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
+For conceptual and architectural pages, see [the project wiki](https://github.com/openpitkit/pit/wiki).
+For the split C reference manual, see [the C API docs](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
 
 ## Versioning Policy (Pre‑1.0)
 
-Until OpenPit reaches a stable `1.0` release, the project follows a relaxed
-interpretation of Semantic Versioning.
+Before the `1.0` release OpenPit follows a relaxed Semantic Versioning:
 
-During this phase:
+- `PATCH` releases carry bug fixes and small internal corrections.
+- `MINOR` releases may introduce new features **and may also change the
+  public interface**.
 
-- `PATCH` releases are used for bug fixes and small internal corrections.
-- `MINOR` releases may introduce new features **and may also change the public
-  interface**.
-
-This means that breaking API changes can appear in minor releases before `1.0`.
-Consumers of the library should take this into account when declaring
-dependencies and consider using version constraints that tolerate API
-evolution during the pre‑stable phase.
+Breaking API changes can appear in minor releases before `1.0`. Pick
+version constraints that tolerate API evolution during the pre-stable
+phase.
 
 ## Getting Started
 
-Visit the
-[C API documentation](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
+Visit the [C API documentation](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
 
 ## Install
 
-For normal end-user installation, use the published
-[GitHub release assets](https://github.com/openpitkit/pit/releases):
+For normal end-user installation, use the published [GitHub release assets](https://github.com/openpitkit/pit/releases):
 
 - `openpit.h`
 - `libopenpit_ffi.so` on Linux
@@ -56,7 +46,7 @@ header plus the reference docs.
 With [Just](https://just.systems/):
 
 ```bash
-just ffi-c-api
+just gen-api-c
 ```
 
 Manual:
@@ -95,36 +85,53 @@ The engine evaluates an order through a deterministic pre-trade pipeline:
   deferred request
 - `openpit_pretrade_pre_trade_request_execute(...)` runs main-stage check
   policies
+- `openpit_engine_execute_pre_trade(...)` runs the start and main stages in a
+  single call
 - `openpit_pretrade_pre_trade_reservation_commit(...)` applies reserved state
 - `openpit_pretrade_pre_trade_reservation_rollback(...)` reverts reserved state
 - `openpit_engine_apply_execution_report(...)` updates post-trade policy state
+- `openpit_engine_apply_account_adjustment(...)` validates and applies account
+  adjustments
 
 Start-stage policies aggregate rejects from all registered policies. Main-stage
 policies aggregate rejects and run rollback mutations in reverse order when any
 reject is produced.
 
-Built-in policies currently include:
+Built-in policies:
 
-- order validation
-- P&L kill switch
-- sliding-window rate limit
-- per-settlement order size limits
+- [Spot Funds](https://github.com/openpitkit/pit/wiki/Spot-Funds) - per-account
+  solvency gate over spendable funds.
+- [Order Validation](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
+  \- structural integrity checks on every order.
+- [Rate Limit](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
+  \- throttle order flow per broker, asset, or account.
+- [Order Size Limit](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
+  \- fat-finger caps on quantity and notional.
+- [P&L Kill Switch](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
+  \- halt an account when realized P&L breaches bounds.
+- plus your own via the [policy SDK](https://github.com/openpitkit/pit/wiki/Policy-API).
 
 The primary integration model is to build project-specific policies against the
-public C API described in the manual: [the C API docs](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
+public C API: [the C API docs](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
 
-There are two types of rejections: a full kill switch for the account and a
-rejection of only the current request. This is useful in algorithmic trading
-when automatic order submission must be halted until the situation is analyzed.
+Two types of rejections are supported: a full kill switch for the account and a
+rejection of only the current request. Kill switches are intended for
+algorithmic trading where automatic order submission must be halted until the
+situation is analyzed.
 
-Built-in policies that need to maintain state across calls use the SDK's
-[Storage](https://github.com/openpitkit/pit/wiki/Storage) abstraction
-internally. The runtime library performs the necessary memory
-synchronization for policy state itself; the C consumer is responsible
-only for the threading contract on the SDK handle.
+Built-in policies that maintain state across calls use the SDK's [Storage](https://github.com/openpitkit/pit/wiki/Storage)
+abstraction internally. The runtime library handles the necessary memory
+synchronization for policy state; the C consumer is responsible only for the
+threading contract on the SDK handle.
+
+Policies that need live prices (such as spot funds) read quotes from a
+market-data service built with `openpit_create_marketdata_builder(...)` and
+updated through the `openpit_marketdata_service_*` functions; one service handle
+can be shared between a quote feed and the engine.
 
 ## Usage
 
+<!-- Test mirror: none; C snippets are intentionally not mirrored. -->
 ```c
 #include <stdbool.h>
 #include <stdint.h>
@@ -246,7 +253,7 @@ static const char *view_to_cstr(OpenPitStringView view, char *buf, size_t cap) {
     return buf;
 }
 
-static void print_reject(const OpenPitReject *reject) {
+static void print_reject(const OpenPitPretradeReject *reject) {
     char policy[128];
     char reason[256];
     char details[256];
@@ -259,12 +266,12 @@ static void print_reject(const OpenPitReject *reject) {
         view_to_cstr(reject->details, details, sizeof(details)));
 }
 
-static void print_reject_list(const OpenPitRejectList *rejects) {
+static void print_reject_list(const OpenPitPretradeRejectList *rejects) {
     size_t i = 0;
-    size_t len = openpit_reject_list_len(rejects);
+    size_t len = openpit_pretrade_reject_list_len(rejects);
     for (i = 0; i < len; ++i) {
-        OpenPitReject item = {0};
-        if (openpit_reject_list_get(rejects, i, &item)) {
+        OpenPitPretradeReject item = {0};
+        if (openpit_pretrade_reject_list_get(rejects, i, &item)) {
             print_reject(&item);
         }
     }
@@ -283,9 +290,9 @@ int main(void) {
     OpenPitEngine *engine = NULL;
     OpenPitPretradePreTradeRequest *request = NULL;
     OpenPitPretradePreTradeReservation *reservation = NULL;
-    OpenPitRejectList *start_rejects = NULL;
-    OpenPitRejectList *execute_rejects = NULL;
-    OpenPitEngineApplyExecutionReportResult apply_result = {0};
+    OpenPitPretradeRejectList *start_rejects = NULL;
+    OpenPitPretradeRejectList *execute_rejects = NULL;
+    OpenPitPretradeAccountBlockList *account_blocks = NULL;
     OpenPitOrder order = {0};
     OpenPitExecutionReport report = {0};
 
@@ -314,7 +321,7 @@ int main(void) {
     }
 
     if (!openpit_engine_builder_add_builtin_order_validation_policy(
-            builder, &error)) {
+            builder, 0, &error)) {  /* group id 0 = default group */
         report_out_error(
             "openpit_engine_builder_add_builtin_order_validation_policy",
             error);
@@ -322,7 +329,7 @@ int main(void) {
         goto cleanup;
     }
     if (!openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
-            builder, &pnl_barrier, 1, NULL, 0, &error)) {
+            builder, 0, &pnl_barrier, 1, NULL, 0, &error)) {
         report_out_error(
             "openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy",
             error);
@@ -330,7 +337,7 @@ int main(void) {
         goto cleanup;
     }
     if (!openpit_engine_builder_add_builtin_rate_limit_policy(
-            builder, &rate_limit, NULL, 0, NULL, 0, NULL, 0, &error)) {
+            builder, 0, &rate_limit, NULL, 0, NULL, 0, NULL, 0, &error)) {
         report_out_error(
             "openpit_engine_builder_add_builtin_rate_limit_policy",
             error);
@@ -338,7 +345,7 @@ int main(void) {
         goto cleanup;
     }
     if (!openpit_engine_builder_add_builtin_order_size_limit_policy(
-            builder, &order_size_limit, NULL, 0, NULL, 0, &error)) {
+            builder, 0, &order_size_limit, NULL, 0, NULL, 0, &error)) {
         report_out_error(
             "openpit_engine_builder_add_builtin_order_size_limit_policy",
             error);
@@ -346,10 +353,19 @@ int main(void) {
         goto cleanup;
     }
 
-    engine = openpit_engine_builder_build(builder, &error);
+    /*
+     * On a domain build failure (for example, a duplicate policy name or group
+     * id) the structured error is written to out_build_error and out_error is
+     * left untouched. This example passes NULL for out_build_error to stay
+     * minimal, so it must not read error on failure; use a generic message.
+     */
+    engine = openpit_engine_builder_build(builder, NULL, &error);
     if (engine == NULL) {
-        report_out_error("openpit_engine_builder_build", error);
-        error = NULL;
+        report_last_error("openpit_engine_builder_build");
+        if (error != NULL) {
+            openpit_destroy_shared_string(error);
+            error = NULL;
+        }
         goto cleanup;
     }
 
@@ -428,16 +444,18 @@ int main(void) {
     report.financial_impact.value.fee.is_set = true;
     report.financial_impact.value.fee.value = fee;
 
-    apply_result = openpit_engine_apply_execution_report(engine, &report, &error);
-    if (apply_result.is_error) {
+    if (!openpit_engine_apply_execution_report(
+            engine, &report, &account_blocks, NULL, &error)) {
         report_out_error("openpit_engine_apply_execution_report", error);
         error = NULL;
         goto cleanup;
     }
 
     /* 8. After each execution report, kill-switch state may change. */
-    if (apply_result.post_trade_result.kill_switch_triggered) {
+    if (account_blocks != NULL) {
         fprintf(stderr, "kill switch triggered\n");
+        openpit_pretrade_destroy_account_block_list(account_blocks);
+        account_blocks = NULL;
     }
 
     rc = 0;
@@ -453,10 +471,10 @@ cleanup:
         openpit_destroy_pretrade_pre_trade_request(request);
     }
     if (execute_rejects != NULL) {
-        openpit_destroy_reject_list(execute_rejects);
+        openpit_pretrade_destroy_reject_list(execute_rejects);
     }
     if (start_rejects != NULL) {
-        openpit_destroy_reject_list(start_rejects);
+        openpit_pretrade_destroy_reject_list(start_rejects);
     }
     openpit_destroy_engine(engine);
     openpit_destroy_engine_builder(builder);
@@ -480,8 +498,8 @@ For the full type and ownership reference, use the generated C manual:
 
 ## Errors
 
-Business rejects are returned through `OpenPitRejectList*` and related APIs such
-as `openpit_engine_start_pre_trade(...)` and
+Business rejects are returned through `OpenPitPretradeRejectList*` and
+related APIs such as `openpit_engine_start_pre_trade(...)` and
 `openpit_pretrade_pre_trade_request_execute(...)`.
 
 Input validation errors and API misuse are reported through two channels:
@@ -491,7 +509,7 @@ Input validation errors and API misuse are reported through two channels:
 - out-pointer: pass `OpenPitSharedString **out_error` where supported; read the
   message with `openpit_shared_string_view()`, then release with
   `openpit_destroy_shared_string()`
-- read `OpenPitRejectCode` for stable machine-readable business reject categories
+- read `OpenPitPretradeRejectCode` for stable machine-readable business reject categories
 - use the generated C docs for ownership and lifetime rules of every returned
   pointer
 
@@ -508,7 +526,7 @@ Recommended local flow:
 With [Just](https://just.systems/):
 
 ```bash
-just ffi-c-api
+just gen-api-c
 just build
 cc -xc -fsyntax-only -include bindings/c/openpit.h /dev/null
 ```

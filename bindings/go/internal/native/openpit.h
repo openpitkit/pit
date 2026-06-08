@@ -15,8 +15,9 @@
  * language governing permissions and limitations under the
  * License.
  *
+ * Please see https://openpit.dev and the OWNERS file for details.
+ *
  * Generated file. Do not edit manually.
- * Please see https://github.com/openpitkit and the OWNERS file for details.
  */
 
 #ifndef OPENPIT_H
@@ -36,21 +37,26 @@ typedef struct OpenPitAccountAdjustmentAmountOptional
     OpenPitAccountAdjustmentAmountOptional;
 typedef struct OpenPitAccountAdjustmentBalanceOperation
     OpenPitAccountAdjustmentBalanceOperation;
-typedef struct OpenPitAccountAdjustmentBalanceOperationOptional
-    OpenPitAccountAdjustmentBalanceOperationOptional;
 typedef struct OpenPitAccountAdjustmentBatchError
     OpenPitAccountAdjustmentBatchError;
 typedef struct OpenPitAccountAdjustmentBounds OpenPitAccountAdjustmentBounds;
 typedef struct OpenPitAccountAdjustmentBoundsOptional
     OpenPitAccountAdjustmentBoundsOptional;
 typedef struct OpenPitAccountAdjustmentContext OpenPitAccountAdjustmentContext;
+typedef struct OpenPitAccountAdjustmentOperation
+    OpenPitAccountAdjustmentOperation;
+typedef struct OpenPitAccountAdjustmentOutcome OpenPitAccountAdjustmentOutcome;
+typedef struct OpenPitAccountAdjustmentOutcomeList
+    OpenPitAccountAdjustmentOutcomeList;
 typedef struct OpenPitAccountAdjustmentPositionOperation
     OpenPitAccountAdjustmentPositionOperation;
-typedef struct OpenPitAccountAdjustmentPositionOperationOptional
-    OpenPitAccountAdjustmentPositionOperationOptional;
+typedef struct OpenPitAccountControl OpenPitAccountControl;
+typedef struct OpenPitAccountGroupError OpenPitAccountGroupError;
+typedef struct OpenPitAccountOutcomeEntry OpenPitAccountOutcomeEntry;
+typedef struct OpenPitAccountOutcomeEntryList OpenPitAccountOutcomeEntryList;
+typedef struct OpenPitBytesView OpenPitBytesView;
 typedef struct OpenPitEngine OpenPitEngine;
-typedef struct OpenPitEngineApplyExecutionReportResult
-    OpenPitEngineApplyExecutionReportResult;
+typedef struct OpenPitEngineBuildError OpenPitEngineBuildError;
 typedef struct OpenPitEngineBuilder OpenPitEngineBuilder;
 typedef struct OpenPitExecutionReport OpenPitExecutionReport;
 typedef struct OpenPitExecutionReportFill OpenPitExecutionReportFill;
@@ -71,6 +77,9 @@ typedef struct OpenPitExecutionReportTradeOptional
 typedef struct OpenPitFinancialImpact OpenPitFinancialImpact;
 typedef struct OpenPitFinancialImpactOptional OpenPitFinancialImpactOptional;
 typedef struct OpenPitInstrument OpenPitInstrument;
+typedef struct OpenPitMarketDataQuote OpenPitMarketDataQuote;
+typedef struct OpenPitMarketDataQuoteTtl OpenPitMarketDataQuoteTtl;
+typedef struct OpenPitMarketDataService OpenPitMarketDataService;
 typedef struct OpenPitMutations OpenPitMutations;
 typedef struct OpenPitOrder OpenPitOrder;
 typedef struct OpenPitOrderMargin OpenPitOrderMargin;
@@ -79,6 +88,10 @@ typedef struct OpenPitOrderOperation OpenPitOrderOperation;
 typedef struct OpenPitOrderOperationOptional OpenPitOrderOperationOptional;
 typedef struct OpenPitOrderPosition OpenPitOrderPosition;
 typedef struct OpenPitOrderPositionOptional OpenPitOrderPositionOptional;
+typedef struct OpenPitOutcomeAmount OpenPitOutcomeAmount;
+typedef struct OpenPitOutcomeAmountOptional OpenPitOutcomeAmountOptional;
+typedef struct OpenPitParamAccountGroupIdOptional
+    OpenPitParamAccountGroupIdOptional;
 typedef struct OpenPitParamAccountIdOptional OpenPitParamAccountIdOptional;
 typedef struct OpenPitParamAdjustmentAmount OpenPitParamAdjustmentAmount;
 typedef struct OpenPitParamCashFlow OpenPitParamCashFlow;
@@ -101,6 +114,10 @@ typedef struct OpenPitParamQuantityOptional OpenPitParamQuantityOptional;
 typedef struct OpenPitParamTradeAmount OpenPitParamTradeAmount;
 typedef struct OpenPitParamVolume OpenPitParamVolume;
 typedef struct OpenPitParamVolumeOptional OpenPitParamVolumeOptional;
+typedef struct OpenPitPostTradeAdjustmentList OpenPitPostTradeAdjustmentList;
+typedef struct OpenPitPostTradeContext OpenPitPostTradeContext;
+typedef struct OpenPitPretradeAccountBlock OpenPitPretradeAccountBlock;
+typedef struct OpenPitPretradeAccountBlockList OpenPitPretradeAccountBlockList;
 typedef struct OpenPitPretradeContext OpenPitPretradeContext;
 typedef struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier
     OpenPitPretradePoliciesOrderSizeAccountAssetBarrier;
@@ -122,14 +139,27 @@ typedef struct OpenPitPretradePoliciesRateLimitAssetBarrier
     OpenPitPretradePoliciesRateLimitAssetBarrier;
 typedef struct OpenPitPretradePoliciesRateLimitBrokerBarrier
     OpenPitPretradePoliciesRateLimitBrokerBarrier;
-typedef struct OpenPitPretradePostTradeResult OpenPitPretradePostTradeResult;
+typedef struct OpenPitPretradePoliciesSpotFundsOverride
+    OpenPitPretradePoliciesSpotFundsOverride;
 typedef struct OpenPitPretradePreTradeLock OpenPitPretradePreTradeLock;
+typedef struct OpenPitPretradePreTradeLockEntries
+    OpenPitPretradePreTradeLockEntries;
+typedef struct OpenPitPretradePreTradeLockEntriesView
+    OpenPitPretradePreTradeLockEntriesView;
+typedef struct OpenPitPretradePreTradeLockEntry
+    OpenPitPretradePreTradeLockEntry;
+typedef struct OpenPitPretradePreTradeLockPrices
+    OpenPitPretradePreTradeLockPrices;
+typedef struct OpenPitPretradePreTradeLockPricesView
+    OpenPitPretradePreTradeLockPricesView;
 typedef struct OpenPitPretradePreTradePolicy OpenPitPretradePreTradePolicy;
 typedef struct OpenPitPretradePreTradeRequest OpenPitPretradePreTradeRequest;
 typedef struct OpenPitPretradePreTradeReservation
     OpenPitPretradePreTradeReservation;
-typedef struct OpenPitReject OpenPitReject;
-typedef struct OpenPitRejectList OpenPitRejectList;
+typedef struct OpenPitPretradePreTradeResult OpenPitPretradePreTradeResult;
+typedef struct OpenPitPretradeReject OpenPitPretradeReject;
+typedef struct OpenPitPretradeRejectList OpenPitPretradeRejectList;
+typedef struct OpenPitSharedBytes OpenPitSharedBytes;
 typedef struct OpenPitSharedString OpenPitSharedString;
 typedef struct OpenPitStringView OpenPitStringView;
 
@@ -152,9 +182,10 @@ typedef uint16_t OpenPitParamLeverage;
  * Stable account identifier type for FFI payloads.
  *
  * WARNING: Use exactly one account-id source model per runtime:
- * - either purely numeric IDs (`openpit_create_param_account_id_from_u64`),
+ * - either purely numeric IDs
+ *   (`openpit_create_param_account_id_from_uint64`),
  * - or purely string-derived IDs
- *   (`openpit_create_param_account_id_from_str`).
+ *   (`openpit_create_param_account_id_from_string`).
  *
  * Do not mix both models in the same runtime state. A hashed string value can
  * coincide with a direct numeric ID, and then two distinct accounts become one
@@ -171,6 +202,26 @@ typedef OpenPitSharedString ** OpenPitOutError;
  * Parameter error out-pointer used by fallible param FFI calls.
  */
 typedef OpenPitParamError ** OpenPitOutParamError;
+
+/**
+ * Stable account-group identifier type for FFI payloads.
+ *
+ * WARNING: Use exactly one account-group-id source model per runtime:
+ * - either purely numeric IDs
+ *   (`openpit_create_param_account_group_id_from_uint32`),
+ * - or purely string-derived IDs
+ *   (`openpit_create_param_account_group_id_from_string`).
+ *
+ * Do not mix both models in the same runtime state. A hashed string value can
+ * coincide with a direct numeric ID, collapsing two distinct groups into one
+ * key.
+ */
+typedef uint32_t OpenPitParamAccountGroupId;
+
+/**
+ * Stable instrument identifier for FFI payloads.
+ */
+typedef uint64_t OpenPitMarketDataInstrumentId;
 
 /**
  * Sentinel value indicating leverage is not set.
@@ -220,6 +271,19 @@ typedef OpenPitParamError ** OpenPitOutParamError;
  */
 #define OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS \
     ((OpenPitParamRoundingStrategy) OpenPitParamRoundingStrategy_Down)
+
+/**
+ * The reserved default account-group identifier. Every account belongs to this
+ * group until it is registered into another one, so no constructor may produce
+ * it. Mirrors `openpit::param::DEFAULT_ACCOUNT_GROUP`.
+ */
+#define OPENPIT_DEFAULT_ACCOUNT_GROUP ((OpenPitParamAccountGroupId) 0)
+
+/**
+ * The default policy-group identifier used when a caller does not assign a
+ * policy to a specific group. Mirrors `openpit::DEFAULT_POLICY_GROUP_ID`.
+ */
+#define OPENPIT_DEFAULT_POLICY_GROUP_ID ((uint16_t) 0)
 
 /**
  * Order side.
@@ -367,6 +431,31 @@ typedef uint8_t OpenPitParamAdjustmentAmountKind;
     ((OpenPitParamAdjustmentAmountKind) 2)
 
 /**
+ * Selects which account-adjustment operation payload is present.
+ *
+ * At most one operation payload can be selected at a time:
+ * - `Absent` means no operation is supplied;
+ * - `Balance` selects the balance-operation payload;
+ * - `Position` selects the position-operation payload.
+ */
+typedef uint8_t OpenPitAccountAdjustmentOperationKind;
+/**
+ * No operation is supplied.
+ */
+#define OpenPitAccountAdjustmentOperationKind_Absent \
+    ((OpenPitAccountAdjustmentOperationKind) 0)
+/**
+ * The balance-operation payload is selected.
+ */
+#define OpenPitAccountAdjustmentOperationKind_Balance \
+    ((OpenPitAccountAdjustmentOperationKind) 1)
+/**
+ * The position-operation payload is selected.
+ */
+#define OpenPitAccountAdjustmentOperationKind_Position \
+    ((OpenPitAccountAdjustmentOperationKind) 2)
+
+/**
  * Result of `openpit_engine_apply_account_adjustment`.
  */
 typedef uint8_t OpenPitAccountAdjustmentApplyStatus;
@@ -392,182 +481,234 @@ typedef uint8_t OpenPitAccountAdjustmentApplyStatus;
  * Valid values: `Order` (1), `Account` (2). Zero is not a valid scope value;
  * the caller must always set this field explicitly.
  */
-typedef uint8_t OpenPitRejectScope;
+typedef uint8_t OpenPitPretradeRejectScope;
 /**
  * The reject applies to one order or order-like request.
  */
-#define OpenPitRejectScope_Order ((OpenPitRejectScope) 1)
+#define OpenPitPretradeRejectScope_Order ((OpenPitPretradeRejectScope) 1)
 /**
  * The reject applies to account state rather than to one order only.
  */
-#define OpenPitRejectScope_Account ((OpenPitRejectScope) 2)
+#define OpenPitPretradeRejectScope_Account ((OpenPitPretradeRejectScope) 2)
 
 /**
  * Stable classification code for a reject.
  *
  * Read this first when you need machine-readable handling. The textual fields
- * in [`OpenPitReject`] provide operator-facing explanation and extra context.
+ * in [`OpenPitPretradeReject`] provide operator-facing explanation and extra
+ * context.
  *
- * Valid codes are `1..=39` and `255` (`Other`). Unknown incoming codes are
+ * Valid codes are `1..=42` and `255` (`Other`). Unknown incoming codes are
  * mapped to `Other` (`255`).
  */
-typedef uint16_t OpenPitRejectCode;
+typedef uint16_t OpenPitPretradeRejectCode;
 /**
  * A required field is absent.
  */
-#define OpenPitRejectCode_MissingRequiredField ((OpenPitRejectCode) 1)
+#define OpenPitPretradeRejectCode_MissingRequiredField \
+    ((OpenPitPretradeRejectCode) 1)
 /**
  * A field cannot be parsed from the supplied wire value.
  */
-#define OpenPitRejectCode_InvalidFieldFormat ((OpenPitRejectCode) 2)
+#define OpenPitPretradeRejectCode_InvalidFieldFormat \
+    ((OpenPitPretradeRejectCode) 2)
 /**
  * A field is syntactically valid but semantically unacceptable.
  */
-#define OpenPitRejectCode_InvalidFieldValue ((OpenPitRejectCode) 3)
+#define OpenPitPretradeRejectCode_InvalidFieldValue \
+    ((OpenPitPretradeRejectCode) 3)
 /**
  * The requested order type is not supported.
  */
-#define OpenPitRejectCode_UnsupportedOrderType ((OpenPitRejectCode) 4)
+#define OpenPitPretradeRejectCode_UnsupportedOrderType \
+    ((OpenPitPretradeRejectCode) 4)
 /**
  * The requested time-in-force is not supported.
  */
-#define OpenPitRejectCode_UnsupportedTimeInForce ((OpenPitRejectCode) 5)
+#define OpenPitPretradeRejectCode_UnsupportedTimeInForce \
+    ((OpenPitPretradeRejectCode) 5)
 /**
  * Another order attribute is unsupported.
  */
-#define OpenPitRejectCode_UnsupportedOrderAttribute ((OpenPitRejectCode) 6)
+#define OpenPitPretradeRejectCode_UnsupportedOrderAttribute \
+    ((OpenPitPretradeRejectCode) 6)
 /**
  * The client order identifier duplicates an active order.
  */
-#define OpenPitRejectCode_DuplicateClientOrderId ((OpenPitRejectCode) 7)
+#define OpenPitPretradeRejectCode_DuplicateClientOrderId \
+    ((OpenPitPretradeRejectCode) 7)
 /**
  * The order arrived after the allowed entry deadline.
  */
-#define OpenPitRejectCode_TooLateToEnter ((OpenPitRejectCode) 8)
+#define OpenPitPretradeRejectCode_TooLateToEnter ((OpenPitPretradeRejectCode) 8)
 /**
  * Trading is closed for the relevant venue or session.
  */
-#define OpenPitRejectCode_ExchangeClosed ((OpenPitRejectCode) 9)
+#define OpenPitPretradeRejectCode_ExchangeClosed ((OpenPitPretradeRejectCode) 9)
 /**
  * The instrument cannot be resolved.
  */
-#define OpenPitRejectCode_UnknownInstrument ((OpenPitRejectCode) 10)
+#define OpenPitPretradeRejectCode_UnknownInstrument \
+    ((OpenPitPretradeRejectCode) 10)
 /**
  * The account cannot be resolved.
  */
-#define OpenPitRejectCode_UnknownAccount ((OpenPitRejectCode) 11)
+#define OpenPitPretradeRejectCode_UnknownAccount \
+    ((OpenPitPretradeRejectCode) 11)
 /**
  * The venue cannot be resolved.
  */
-#define OpenPitRejectCode_UnknownVenue ((OpenPitRejectCode) 12)
+#define OpenPitPretradeRejectCode_UnknownVenue ((OpenPitPretradeRejectCode) 12)
 /**
  * The clearing account cannot be resolved.
  */
-#define OpenPitRejectCode_UnknownClearingAccount ((OpenPitRejectCode) 13)
+#define OpenPitPretradeRejectCode_UnknownClearingAccount \
+    ((OpenPitPretradeRejectCode) 13)
 /**
  * The collateral asset cannot be resolved.
  */
-#define OpenPitRejectCode_UnknownCollateralAsset ((OpenPitRejectCode) 14)
+#define OpenPitPretradeRejectCode_UnknownCollateralAsset \
+    ((OpenPitPretradeRejectCode) 14)
 /**
  * Available balance is insufficient.
  */
-#define OpenPitRejectCode_InsufficientFunds ((OpenPitRejectCode) 15)
+#define OpenPitPretradeRejectCode_InsufficientFunds \
+    ((OpenPitPretradeRejectCode) 15)
 /**
  * Available margin is insufficient.
  */
-#define OpenPitRejectCode_InsufficientMargin ((OpenPitRejectCode) 16)
+#define OpenPitPretradeRejectCode_InsufficientMargin \
+    ((OpenPitPretradeRejectCode) 16)
 /**
  * Available position is insufficient.
  */
-#define OpenPitRejectCode_InsufficientPosition ((OpenPitRejectCode) 17)
+#define OpenPitPretradeRejectCode_InsufficientPosition \
+    ((OpenPitPretradeRejectCode) 17)
 /**
  * A credit limit was exceeded.
  */
-#define OpenPitRejectCode_CreditLimitExceeded ((OpenPitRejectCode) 18)
+#define OpenPitPretradeRejectCode_CreditLimitExceeded \
+    ((OpenPitPretradeRejectCode) 18)
 /**
  * A risk limit was exceeded.
  */
-#define OpenPitRejectCode_RiskLimitExceeded ((OpenPitRejectCode) 19)
+#define OpenPitPretradeRejectCode_RiskLimitExceeded \
+    ((OpenPitPretradeRejectCode) 19)
 /**
  * The order exceeds a generic configured limit.
  */
-#define OpenPitRejectCode_OrderExceedsLimit ((OpenPitRejectCode) 20)
+#define OpenPitPretradeRejectCode_OrderExceedsLimit \
+    ((OpenPitPretradeRejectCode) 20)
 /**
  * The order quantity exceeds a configured limit.
  */
-#define OpenPitRejectCode_OrderQtyExceedsLimit ((OpenPitRejectCode) 21)
+#define OpenPitPretradeRejectCode_OrderQtyExceedsLimit \
+    ((OpenPitPretradeRejectCode) 21)
 /**
  * The order notional exceeds a configured limit.
  */
-#define OpenPitRejectCode_OrderNotionalExceedsLimit ((OpenPitRejectCode) 22)
+#define OpenPitPretradeRejectCode_OrderNotionalExceedsLimit \
+    ((OpenPitPretradeRejectCode) 22)
 /**
  * The resulting position exceeds a configured limit.
  */
-#define OpenPitRejectCode_PositionLimitExceeded ((OpenPitRejectCode) 23)
+#define OpenPitPretradeRejectCode_PositionLimitExceeded \
+    ((OpenPitPretradeRejectCode) 23)
 /**
  * Concentration constraints were violated.
  */
-#define OpenPitRejectCode_ConcentrationLimitExceeded ((OpenPitRejectCode) 24)
+#define OpenPitPretradeRejectCode_ConcentrationLimitExceeded \
+    ((OpenPitPretradeRejectCode) 24)
 /**
  * Leverage constraints were violated.
  */
-#define OpenPitRejectCode_LeverageLimitExceeded ((OpenPitRejectCode) 25)
+#define OpenPitPretradeRejectCode_LeverageLimitExceeded \
+    ((OpenPitPretradeRejectCode) 25)
 /**
  * The request rate exceeded a configured limit.
  */
-#define OpenPitRejectCode_RateLimitExceeded ((OpenPitRejectCode) 26)
+#define OpenPitPretradeRejectCode_RateLimitExceeded \
+    ((OpenPitPretradeRejectCode) 26)
 /**
  * A loss barrier has blocked further risk-taking.
  */
-#define OpenPitRejectCode_PnlKillSwitchTriggered ((OpenPitRejectCode) 27)
+#define OpenPitPretradeRejectCode_PnlKillSwitchTriggered \
+    ((OpenPitPretradeRejectCode) 27)
 /**
  * The account is blocked.
  */
-#define OpenPitRejectCode_AccountBlocked ((OpenPitRejectCode) 28)
+#define OpenPitPretradeRejectCode_AccountBlocked \
+    ((OpenPitPretradeRejectCode) 28)
 /**
  * The account is not authorized for this action.
  */
-#define OpenPitRejectCode_AccountNotAuthorized ((OpenPitRejectCode) 29)
+#define OpenPitPretradeRejectCode_AccountNotAuthorized \
+    ((OpenPitPretradeRejectCode) 29)
 /**
  * A compliance restriction blocked the action.
  */
-#define OpenPitRejectCode_ComplianceRestriction ((OpenPitRejectCode) 30)
+#define OpenPitPretradeRejectCode_ComplianceRestriction \
+    ((OpenPitPretradeRejectCode) 30)
 /**
  * The instrument is restricted.
  */
-#define OpenPitRejectCode_InstrumentRestricted ((OpenPitRejectCode) 31)
+#define OpenPitPretradeRejectCode_InstrumentRestricted \
+    ((OpenPitPretradeRejectCode) 31)
 /**
  * A jurisdiction restriction blocked the action.
  */
-#define OpenPitRejectCode_JurisdictionRestriction ((OpenPitRejectCode) 32)
+#define OpenPitPretradeRejectCode_JurisdictionRestriction \
+    ((OpenPitPretradeRejectCode) 32)
 /**
  * The action would violate wash-trade prevention.
  */
-#define OpenPitRejectCode_WashTradePrevention ((OpenPitRejectCode) 33)
+#define OpenPitPretradeRejectCode_WashTradePrevention \
+    ((OpenPitPretradeRejectCode) 33)
 /**
  * The action would violate self-match prevention.
  */
-#define OpenPitRejectCode_SelfMatchPrevention ((OpenPitRejectCode) 34)
+#define OpenPitPretradeRejectCode_SelfMatchPrevention \
+    ((OpenPitPretradeRejectCode) 34)
 /**
  * Short-sale restriction blocked the action.
  */
-#define OpenPitRejectCode_ShortSaleRestriction ((OpenPitRejectCode) 35)
+#define OpenPitPretradeRejectCode_ShortSaleRestriction \
+    ((OpenPitPretradeRejectCode) 35)
 /**
  * Required risk configuration is missing.
  */
-#define OpenPitRejectCode_RiskConfigurationMissing ((OpenPitRejectCode) 36)
+#define OpenPitPretradeRejectCode_RiskConfigurationMissing \
+    ((OpenPitPretradeRejectCode) 36)
 /**
  * Required reference data is unavailable.
  */
-#define OpenPitRejectCode_ReferenceDataUnavailable ((OpenPitRejectCode) 37)
+#define OpenPitPretradeRejectCode_ReferenceDataUnavailable \
+    ((OpenPitPretradeRejectCode) 37)
 /**
  * The system could not compute an order value needed for validation.
  */
-#define OpenPitRejectCode_OrderValueCalculationFailed ((OpenPitRejectCode) 38)
+#define OpenPitPretradeRejectCode_OrderValueCalculationFailed \
+    ((OpenPitPretradeRejectCode) 38)
 /**
  * A required service or subsystem is unavailable.
  */
-#define OpenPitRejectCode_SystemUnavailable ((OpenPitRejectCode) 39)
+#define OpenPitPretradeRejectCode_SystemUnavailable \
+    ((OpenPitPretradeRejectCode) 39)
+/**
+ * Required mark price is unavailable.
+ */
+#define OpenPitPretradeRejectCode_MarkPriceUnavailable \
+    ((OpenPitPretradeRejectCode) 40)
+/**
+ * Account adjustment would violate configured bounds.
+ */
+#define OpenPitPretradeRejectCode_AccountAdjustmentBoundsExceeded \
+    ((OpenPitPretradeRejectCode) 41)
+/**
+ * Underlying decimal arithmetic overflowed during evaluation.
+ */
+#define OpenPitPretradeRejectCode_ArithmeticOverflow \
+    ((OpenPitPretradeRejectCode) 42)
 /**
  * Reserved discriminant for caller-defined reject classes.
  *
@@ -575,11 +716,11 @@ typedef uint16_t OpenPitRejectCode;
  * payload that the receiving code can decode. The SDK does not interpret this
  * code beyond mapping it to FFI value 254.
  */
-#define OpenPitRejectCode_Custom ((OpenPitRejectCode) 254)
+#define OpenPitPretradeRejectCode_Custom ((OpenPitPretradeRejectCode) 254)
 /**
  * A catch-all code for rejects that do not fit a more specific class.
  */
-#define OpenPitRejectCode_Other ((OpenPitRejectCode) 255)
+#define OpenPitPretradeRejectCode_Other ((OpenPitPretradeRejectCode) 255)
 
 /**
  * Parameter error code transported through FFI.
@@ -639,16 +780,16 @@ typedef uint32_t OpenPitParamErrorCode;
  */
 typedef uint8_t OpenPitSyncPolicy;
 /**
+ * The handle stays on the OS thread that created it. Use this for
+ * single-threaded embeddings where synchronization overhead must be zero.
+ */
+#define OpenPitSyncPolicy_None ((OpenPitSyncPolicy) 0)
+/**
  * Concurrent invocation of public methods on the same handle is safe.
  * Sequential cross-thread access is also safe. Use this when the engine is
  * shared across threads.
  */
-#define OpenPitSyncPolicy_Full ((OpenPitSyncPolicy) 0)
-/**
- * The handle stays on the OS thread that created it. Use this for
- * single-threaded embeddings where synchronization overhead must be zero.
- */
-#define OpenPitSyncPolicy_Local ((OpenPitSyncPolicy) 1)
+#define OpenPitSyncPolicy_Full ((OpenPitSyncPolicy) 1)
 /**
  * Sequential cross-thread access on the same handle is safe; the caller pins
  * each account to a single processing chain (one queue or one worker at a
@@ -673,6 +814,128 @@ typedef uint8_t OpenPitPretradeStatus;
  * Call failed due to invalid input; read the error out-pointer.
  */
 #define OpenPitPretradeStatus_Error ((OpenPitPretradeStatus) 2)
+
+/**
+ * Machine-readable discriminant describing why building an engine failed.
+ *
+ * Each value identifies a distinct failure category. There is no success
+ * value: a build-error object exists only when a build did not produce an
+ * engine.
+ */
+typedef uint8_t OpenPitEngineBuildErrorCode;
+/**
+ * Two or more registered policies declare the same name.
+ */
+#define OpenPitEngineBuildErrorCode_DuplicatePolicyName \
+    ((OpenPitEngineBuildErrorCode) 0)
+/**
+ * Two or more registered policies declare the same non-default group id.
+ */
+#define OpenPitEngineBuildErrorCode_DuplicatePolicyGroupId \
+    ((OpenPitEngineBuildErrorCode) 1)
+/**
+ * A failure category not covered by the above. Forward-compatible catch-all;
+ * no structured payload is available.
+ */
+#define OpenPitEngineBuildErrorCode_Other ((OpenPitEngineBuildErrorCode) 2)
+
+/**
+ * Selects which quote buckets a read will consult, in order.
+ *
+ * When the more-specific bucket has no quote, the read falls through to the
+ * next bucket permitted by this value.
+ */
+typedef uint8_t OpenPitMarketDataQuoteResolution;
+/**
+ * Consult only the per-account bucket for the reading account.
+ */
+#define OpenPitMarketDataQuoteResolution_AccountOnly \
+    ((OpenPitMarketDataQuoteResolution) 0)
+/**
+ * Consult the per-account bucket, then fall back to the account's group bucket
+ * when the account bucket has no quote.
+ */
+#define OpenPitMarketDataQuoteResolution_AccountThenGroup \
+    ((OpenPitMarketDataQuoteResolution) 1)
+/**
+ * Consult the per-account bucket, then the account's group bucket, then the
+ * default-group ("everyone-else") bucket, in that order.
+ */
+#define OpenPitMarketDataQuoteResolution_AccountThenGroupThenDefault \
+    ((OpenPitMarketDataQuoteResolution) 2)
+
+/**
+ * Result of a market-data read.
+ */
+typedef uint8_t OpenPitMarketDataGetStatus;
+/**
+ * A usable quote was found; `out_quote` was written.
+ */
+#define OpenPitMarketDataGetStatus_Found ((OpenPitMarketDataGetStatus) 0)
+/**
+ * The instrument is registered but no usable quote is available (never pushed,
+ * cleared, or aged past its TTL).
+ */
+#define OpenPitMarketDataGetStatus_Unavailable ((OpenPitMarketDataGetStatus) 1)
+/**
+ * The instrument id is not registered with the service.
+ */
+#define OpenPitMarketDataGetStatus_UnknownInstrument \
+    ((OpenPitMarketDataGetStatus) 2)
+
+/**
+ * Result of a market-data registration or update.
+ *
+ * Each operation returns only the subset of variants it can produce; see the
+ * per-function contract for the variants it may report.
+ */
+typedef uint8_t OpenPitMarketDataRegisterStatus;
+/**
+ * The operation succeeded; any associated output was written.
+ */
+#define OpenPitMarketDataRegisterStatus_Ok ((OpenPitMarketDataRegisterStatus) 0)
+/**
+ * The instrument is already registered with the service.
+ */
+#define OpenPitMarketDataRegisterStatus_AlreadyRegistered \
+    ((OpenPitMarketDataRegisterStatus) 1)
+/**
+ * The supplied id is already registered with the service.
+ */
+#define OpenPitMarketDataRegisterStatus_DuplicateId \
+    ((OpenPitMarketDataRegisterStatus) 2)
+/**
+ * The supplied instrument is already registered under a different id.
+ */
+#define OpenPitMarketDataRegisterStatus_DuplicateInstrument \
+    ((OpenPitMarketDataRegisterStatus) 3)
+/**
+ * The supplied instrument id is not registered with the service.
+ */
+#define OpenPitMarketDataRegisterStatus_UnknownInstrument \
+    ((OpenPitMarketDataRegisterStatus) 4)
+/**
+ * A boundary failure occurred (null pointer or an invalid payload); when
+ * `out_error` is not null, a caller-owned error string was written.
+ */
+#define OpenPitMarketDataRegisterStatus_Error \
+    ((OpenPitMarketDataRegisterStatus) 5)
+/**
+ * A targeted push (`push_for` / `push_for_patch`) was called with both the
+ * account list and the group list empty.
+ */
+#define OpenPitMarketDataRegisterStatus_NoTarget \
+    ((OpenPitMarketDataRegisterStatus) 6)
+
+typedef uint8_t OpenPitPretradePreTradeLockPricesStatus;
+#define OpenPitPretradePreTradeLockPricesStatus_Error \
+    ((OpenPitPretradePreTradeLockPricesStatus) 0)
+#define OpenPitPretradePreTradeLockPricesStatus_Empty \
+    ((OpenPitPretradePreTradeLockPricesStatus) 1)
+#define OpenPitPretradePreTradeLockPricesStatus_One \
+    ((OpenPitPretradePreTradeLockPricesStatus) 2)
+#define OpenPitPretradePreTradeLockPricesStatus_List \
+    ((OpenPitPretradePreTradeLockPricesStatus) 3)
 
 /**
  * Decimal value represented as `mantissa * 10^-scale`.
@@ -881,16 +1144,6 @@ struct OpenPitExecutionReportPositionImpactOptional {
 };
 
 /**
- * Aggregated post-trade processing result.
- */
-struct OpenPitPretradePostTradeResult {
-    /**
-     * Whether the report triggered some kill-switch policy.
-     */
-    bool kill_switch_triggered;
-};
-
-/**
  * One amount component inside an account adjustment.
  *
  * The numeric value is interpreted according to `kind`:
@@ -915,17 +1168,17 @@ struct OpenPitParamAdjustmentAmount {
  */
 struct OpenPitAccountAdjustmentAmount {
     /**
-     * Requested total-balance change.
+     * Requested balance change.
      */
-    OpenPitParamAdjustmentAmount total;
+    OpenPitParamAdjustmentAmount balance;
     /**
-     * Requested reserved-balance change.
+     * Requested held-balance change.
      */
-    OpenPitParamAdjustmentAmount reserved;
+    OpenPitParamAdjustmentAmount held;
     /**
-     * Requested pending-balance change.
+     * Requested incoming-balance change.
      */
-    OpenPitParamAdjustmentAmount pending;
+    OpenPitParamAdjustmentAmount incoming;
 };
 
 /**
@@ -935,29 +1188,29 @@ struct OpenPitAccountAdjustmentAmount {
  */
 struct OpenPitAccountAdjustmentBounds {
     /**
-     * Optional upper bound for total balance.
+     * Optional upper bound for balance.
      */
-    OpenPitParamPositionSizeOptional total_upper;
+    OpenPitParamPositionSizeOptional balance_upper;
     /**
-     * Optional lower bound for total balance.
+     * Optional lower bound for balance.
      */
-    OpenPitParamPositionSizeOptional total_lower;
+    OpenPitParamPositionSizeOptional balance_lower;
     /**
-     * Optional upper bound for reserved balance.
+     * Optional upper bound for held balance.
      */
-    OpenPitParamPositionSizeOptional reserved_upper;
+    OpenPitParamPositionSizeOptional held_upper;
     /**
-     * Optional lower bound for reserved balance.
+     * Optional lower bound for held balance.
      */
-    OpenPitParamPositionSizeOptional reserved_lower;
+    OpenPitParamPositionSizeOptional held_lower;
     /**
-     * Optional upper bound for pending balance.
+     * Optional upper bound for incoming balance.
      */
-    OpenPitParamPositionSizeOptional pending_upper;
+    OpenPitParamPositionSizeOptional incoming_upper;
     /**
-     * Optional lower bound for pending balance.
+     * Optional lower bound for incoming balance.
      */
-    OpenPitParamPositionSizeOptional pending_lower;
+    OpenPitParamPositionSizeOptional incoming_lower;
 };
 
 struct OpenPitAccountAdjustmentAmountOptional {
@@ -985,27 +1238,29 @@ struct OpenPitParamError {
 };
 
 /**
- * Price-lock snapshot returned from a reservation.
+ * Shared order-size limits for
+ * `openpit_engine_builder_add_builtin_order_size_limit_policy`.
  */
-struct OpenPitPretradePreTradeLock {
+struct OpenPitPretradePoliciesOrderSizeLimit {
     /**
-     * Optional reserved price.
+     * Maximum allowed quantity for one order.
      */
-    OpenPitParamPriceOptional price;
+    OpenPitParamQuantity max_quantity;
+    /**
+     * Maximum allowed notional for one order.
+     */
+    OpenPitParamVolume max_notional;
 };
 
 /**
- * Result of `openpit_engine_apply_execution_report`.
+ * Broker-wide order-size barrier for
+ * `openpit_engine_builder_add_builtin_order_size_limit_policy`.
  */
-struct OpenPitEngineApplyExecutionReportResult {
+struct OpenPitPretradePoliciesOrderSizeBrokerBarrier {
     /**
-     * The result of the post-trade processing if no error occurred.
+     * Size limits for this broker barrier.
      */
-    OpenPitPretradePostTradeResult post_trade_result;
-    /**
-     * Whether the call failed at the transport level.
-     */
-    bool is_error;
+    OpenPitPretradePoliciesOrderSizeLimit limit;
 };
 
 /**
@@ -1042,30 +1297,109 @@ struct OpenPitPretradePoliciesRateLimitAccountBarrier {
     uint64_t window_nanoseconds;
 };
 
-/**
- * Shared order-size limits for
- * `openpit_engine_builder_add_builtin_order_size_limit_policy`.
- */
-struct OpenPitPretradePoliciesOrderSizeLimit {
-    /**
-     * Maximum allowed quantity for one order.
-     */
-    OpenPitParamQuantity max_quantity;
-    /**
-     * Maximum allowed notional for one order.
-     */
-    OpenPitParamVolume max_notional;
+struct OpenPitParamAccountGroupIdOptional {
+    OpenPitParamAccountGroupId value;
+    bool is_set;
 };
 
 /**
- * Broker-wide order-size barrier for
- * `openpit_engine_builder_add_builtin_order_size_limit_policy`.
+ * A delta/absolute pair for one position field.
  */
-struct OpenPitPretradePoliciesOrderSizeBrokerBarrier {
+struct OpenPitOutcomeAmount {
     /**
-     * Size limits for this broker barrier.
+     * Signed change applied by this operation relative to the field value at
+     * operation start. Authoritative for position bookkeeping.
      */
-    OpenPitPretradePoliciesOrderSizeLimit limit;
+    OpenPitParamPositionSize delta;
+    /**
+     * Field value at the moment the policy returned, before deferred commit. Treat
+     * as a convenience hint only; prefer `delta`.
+     */
+    OpenPitParamPositionSize absolute;
+};
+
+struct OpenPitOutcomeAmountOptional {
+    OpenPitOutcomeAmount value;
+    bool is_set;
+};
+
+/**
+ * Non-owning byte slice view.
+ *
+ * Lifetime contract:
+ * - `ptr` points to `len` readable bytes;
+ * - the memory is valid while the original object is alive;
+ * - the caller must not free or mutate memory behind `ptr`;
+ * - if the caller needs to retain the bytes beyond that announced lifetime,
+ *   the caller must copy them.
+ */
+struct OpenPitBytesView {
+    const uint8_t * ptr;
+    size_t len;
+};
+
+/**
+ * Market snapshot value passed across the FFI boundary.
+ *
+ * Every field is optional (`is_set == false` means the producer did not
+ * publish that field). Mirrors [`Quote`].
+ */
+struct OpenPitMarketDataQuote {
+    /**
+     * Mark price.
+     */
+    OpenPitParamPriceOptional mark;
+    /**
+     * Best-bid price.
+     */
+    OpenPitParamPriceOptional bid;
+    /**
+     * Best-ask price.
+     */
+    OpenPitParamPriceOptional ask;
+};
+
+/**
+ * Service-wide / per-instrument quote lifetime for FFI payloads.
+ *
+ * `is_infinite == true` means quotes never expire on their own. Otherwise the
+ * quote expires `secs` + `nanos` after the push that wrote it. Mirrors
+ * [`QuoteTtl`].
+ */
+struct OpenPitMarketDataQuoteTtl {
+    /**
+     * Whole-seconds part of the finite lifetime (ignored when infinite).
+     */
+    uint64_t secs;
+    /**
+     * Sub-second nanoseconds part of the finite lifetime (ignored when infinite).
+     */
+    uint32_t nanos;
+    /**
+     * When `true`, quotes never expire on their own.
+     */
+    bool is_infinite;
+};
+
+struct OpenPitPretradePreTradeLockPricesView {
+    const OpenPitParamPrice * ptr;
+    size_t len;
+};
+
+/**
+ * A single `(policy_group_id, price)` record exchanged across the C boundary.
+ */
+struct OpenPitPretradePreTradeLockEntry {
+    uint16_t policy_group_id;
+    OpenPitParamPrice price;
+};
+
+/**
+ * Read-only view over a caller-owned lock entry snapshot.
+ */
+struct OpenPitPretradePreTradeLockEntriesView {
+    const OpenPitPretradePreTradeLockEntry * ptr;
+    size_t len;
 };
 
 /**
@@ -1148,9 +1482,17 @@ struct OpenPitExecutionReportFill {
      */
     OpenPitParamQuantityOptional leaves_quantity;
     /**
-     * Optional lock price associated with the report.
+     * Pre-trade lock attached to the order.
+     *
+     * Ownership contract:
+     * - the caller owns the pointer when present (build it through
+     *   `openpit_pretrade_lock_*` functions) and remains responsible for
+     *   releasing it with `openpit_destroy_pretrade_pre_trade_lock`;
+     * - null is equivalent to an empty lock; passing null does *not* mean
+     *   "default group" - no record is created on import unless the caller
+     *   supplied one through this pointer.
      */
-    OpenPitParamPriceOptional lock_price;
+    const OpenPitPretradePreTradeLock * lock;
     /**
      * Whether this report closes the order's report stream. The order is filled,
      * cancelled, or rejected.
@@ -1177,15 +1519,10 @@ struct OpenPitAccountAdjustmentBalanceOperation {
     OpenPitParamPriceOptional average_entry_price;
 };
 
-struct OpenPitAccountAdjustmentBalanceOperationOptional {
-    OpenPitAccountAdjustmentBalanceOperation value;
-    bool is_set;
-};
-
 /**
  * Single rejection record returned by checks.
  */
-struct OpenPitReject {
+struct OpenPitPretradeReject {
     /**
      * Policy name that produced the reject.
      */
@@ -1213,11 +1550,76 @@ struct OpenPitReject {
     /**
      * Stable machine-readable reject code.
      */
-    OpenPitRejectCode code;
+    OpenPitPretradeRejectCode code;
     /**
      * Reject scope.
      */
-    OpenPitRejectScope scope;
+    OpenPitPretradeRejectScope scope;
+};
+
+/**
+ * Single account-block record returned by kill-switch checks.
+ */
+struct OpenPitPretradeAccountBlock {
+    /**
+     * Policy name that produced the block.
+     */
+    OpenPitStringView policy;
+    /**
+     * Human-readable reject reason.
+     */
+    OpenPitStringView reason;
+    /**
+     * Case-specific reject details.
+     */
+    OpenPitStringView details;
+    /**
+     * Opaque caller-defined token.
+     *
+     * The SDK never inspects, dereferences, or frees this value. Its meaning,
+     * lifetime, and thread-safety are the caller's responsibility. `0` / null
+     * means "not set". See the project Threading Contract for the full lifetime
+     * model.
+     */
+    void * user_data;
+    /**
+     * Stable machine-readable reject code.
+     */
+    OpenPitPretradeRejectCode code;
+};
+
+/**
+ * Per-settlement-asset order-size barrier for
+ * `openpit_engine_builder_add_builtin_order_size_limit_policy`.
+ */
+struct OpenPitPretradePoliciesOrderSizeAssetBarrier {
+    /**
+     * Size limits for this asset barrier.
+     */
+    OpenPitPretradePoliciesOrderSizeLimit limit;
+    /**
+     * Settlement asset this barrier applies to.
+     */
+    OpenPitStringView settlement_asset;
+};
+
+/**
+ * Per-(account, settlement-asset) order-size barrier for
+ * `openpit_engine_builder_add_builtin_order_size_limit_policy`.
+ */
+struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier {
+    /**
+     * Size limits for this account+asset barrier.
+     */
+    OpenPitPretradePoliciesOrderSizeLimit limit;
+    /**
+     * Account this barrier applies to.
+     */
+    OpenPitParamAccountId account_id;
+    /**
+     * Settlement asset this barrier applies to.
+     */
+    OpenPitStringView settlement_asset;
 };
 
 /**
@@ -1327,37 +1729,86 @@ struct OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
 };
 
 /**
- * Per-settlement-asset order-size barrier for
- * `openpit_engine_builder_add_builtin_order_size_limit_policy`.
+ * Slippage override entry for the spot funds policy.
+ *
+ * Mirrors [`SpotFundsOverride`](openpit::SpotFundsOverride) together with the
+ * [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget) it applies to.
+ * `instrument_id` selects the registered instrument. The scope is chosen by
+ * the `account_id` and `account_group_id` optionals, which are mutually
+ * exclusive: when neither is set the entry is an instrument-level default;
+ * when `account_id.is_set` it applies only to `account_id.value`; when
+ * `account_group_id.is_set` it applies only to accounts in
+ * `account_group_id.value`. When `has_slippage_bps` is `true`, `slippage_bps`
+ * is the slippage for that scope; when `false`, the entry is ignored and the
+ * cascade falls through to the next tier (ultimately the global
+ * `market_slippage_bps`).
+ *
+ * Slippage resolves account -> account group -> instrument -> global for each
+ * order.
  */
-struct OpenPitPretradePoliciesOrderSizeAssetBarrier {
+struct OpenPitPretradePoliciesSpotFundsOverride {
     /**
-     * Size limits for this asset barrier.
+     * Registered market-data instrument id.
      */
-    OpenPitPretradePoliciesOrderSizeLimit limit;
+    OpenPitMarketDataInstrumentId instrument_id;
     /**
-     * Settlement asset this barrier applies to.
+     * Account the override applies to. When `is_set`, the override is scoped to
+     * `value`; mutually exclusive with `account_group_id`. Both unset means an
+     * instrument-level default.
      */
-    OpenPitStringView settlement_asset;
+    OpenPitParamAccountIdOptional account_id;
+    /**
+     * Account group the override applies to. When `is_set`, the override is scoped
+     * to `value`; mutually exclusive with `account_id`. Both unset means an
+     * instrument-level default.
+     */
+    OpenPitParamAccountGroupIdOptional account_group_id;
+    /**
+     * Slippage in basis points for the selected scope, used only when
+     * `has_slippage_bps` is `true`.
+     */
+    uint16_t slippage_bps;
+    /**
+     * Whether `slippage_bps` carries a value.
+     */
+    bool has_slippage_bps;
 };
 
 /**
- * Per-(account, settlement-asset) order-size barrier for
- * `openpit_engine_builder_add_builtin_order_size_limit_policy`.
+ * Raw outcome data produced by a policy for one asset.
  */
-struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier {
+struct OpenPitAccountOutcomeEntry {
     /**
-     * Size limits for this account+asset barrier.
+     * Asset this outcome refers to.
      */
-    OpenPitPretradePoliciesOrderSizeLimit limit;
+    OpenPitStringView asset;
     /**
-     * Account this barrier applies to.
+     * Settled balance/position outcome.
      */
-    OpenPitParamAccountId account_id;
+    OpenPitOutcomeAmountOptional balance;
     /**
-     * Settlement asset this barrier applies to.
+     * Held (reserved) amount outcome.
      */
-    OpenPitStringView settlement_asset;
+    OpenPitOutcomeAmountOptional held;
+    /**
+     * Incoming (pending inflow) amount outcome.
+     */
+    OpenPitOutcomeAmountOptional incoming;
+};
+
+/**
+ * Account position outcome with the group tag of the business entity that
+ * produced it.
+ */
+struct OpenPitAccountAdjustmentOutcome {
+    /**
+     * Policy-group tag of the policy that produced this outcome.
+     */
+    uint16_t policy_group_id;
+    /**
+     * Account adjustment outcome entry.
+     */
+    OpenPitAccountOutcomeEntry entry;
 };
 
 /**
@@ -1497,9 +1948,27 @@ struct OpenPitAccountAdjustmentPositionOperation {
     OpenPitParamPositionMode mode;
 };
 
-struct OpenPitAccountAdjustmentPositionOperationOptional {
-    OpenPitAccountAdjustmentPositionOperation value;
-    bool is_set;
+/**
+ * Account-adjustment operation as a single discriminated value.
+ *
+ * `kind` selects which payload is meaningful; the payload not selected by
+ * `kind` is ignored. Because a single discriminant chooses the payload,
+ * supplying both a balance and a position operation at once is not
+ * representable.
+ */
+struct OpenPitAccountAdjustmentOperation {
+    /**
+     * Selects which payload below is meaningful.
+     */
+    OpenPitAccountAdjustmentOperationKind kind;
+    /**
+     * Balance-operation payload, meaningful only when `kind` is `Balance`.
+     */
+    OpenPitAccountAdjustmentBalanceOperation balance;
+    /**
+     * Position-operation payload, meaningful only when `kind` is `Position`.
+     */
+    OpenPitAccountAdjustmentPositionOperation position;
 };
 
 /**
@@ -1507,13 +1976,9 @@ struct OpenPitAccountAdjustmentPositionOperationOptional {
  */
 struct OpenPitAccountAdjustment {
     /**
-     * Optional balance-operation group.
+     * Discriminated operation: at most one payload, selected by its kind.
      */
-    OpenPitAccountAdjustmentBalanceOperationOptional balance_operation;
-    /**
-     * Optional position-operation group.
-     */
-    OpenPitAccountAdjustmentPositionOperationOptional position_operation;
+    OpenPitAccountAdjustmentOperation operation;
     /**
      * Optional amount-change group.
      */
@@ -1567,25 +2032,6 @@ struct OpenPitOrder {
 };
 
 /**
- * Callback invoked for either commit or rollback of a registered mutation.
- */
-typedef void (*OpenPitMutationFn)(
-    void * user_data
-);
-
-/**
- * Optional callback to release mutation user_data after execution.
- *
- * Called exactly once per `openpit_mutations_push`:
- * - after `commit_fn` when commit runs;
- * - after `rollback_fn` when rollback runs;
- * - or on drop if neither action ran.
- */
-typedef void (*OpenPitMutationFreeFn)(
-    void * user_data
-);
-
-/**
  * Callback used by a custom pre-trade policy to validate one order before a
  * deferred pre-trade request is created.
  *
@@ -1603,12 +2049,12 @@ typedef void (*OpenPitMutationFreeFn)(
  * - A rejected order must set explicit `code` and `scope` values in every
  *   list item.
  * - The returned list ownership is transferred to the engine; create it with
- *   `openpit_create_reject_list`.
+ *   `openpit_pretrade_create_reject_list`.
  * - Every reject payload is copied into internal storage before the callback
  *   returns.
  * - `user_data` is passed through unchanged from policy creation.
  */
-typedef OpenPitRejectList *
+typedef OpenPitPretradeRejectList *
 (*OpenPitPretradePreTradePolicyCheckPreTradeStartFn)(
     const OpenPitPretradeContext * ctx,
     const OpenPitOrder * order,
@@ -1630,20 +2076,35 @@ typedef OpenPitRejectList *
  * - `mutations` is a callback-scoped non-owning pointer that allows the
  *   callback to register commit/rollback mutations.
  * - The callback must not store or use `mutations` after return.
+ * - `out_result` is a callback-scoped non-owning collector the callback may
+ *   fill with lock prices and account adjustments via
+ *   `openpit_pretrade_pre_trade_result_push_lock_price` and
+ *   `openpit_pretrade_pre_trade_result_push_account_adjustment`. Neither
+ *   push carries a `policy_group_id`; the engine assigns the policy group.
+ *   The callback must not store or use `out_result` after return.
+ * - The reject channel and the `out_result` channel are independent: a
+ *   callback may both reject and fill `out_result`, but the engine only
+ *   keeps `out_result` when the callback accepts (returns null or an empty
+ *   list).
  * - Return null or an empty list to accept the order.
  * - Return a non-empty reject list to reject the order.
  * - Every returned reject must contain explicit `code` and `scope` values.
  * - The returned list ownership is transferred to the engine; create it with
- *   `openpit_create_reject_list`.
+ *   `openpit_pretrade_create_reject_list`.
  * - Every reject payload is copied into internal storage before this
  *   callback returns.
  * - `user_data` is passed through unchanged from policy creation.
+ *
+ * Parameter ordering convention: read-only inputs first (`ctx`, `order`), then
+ * callback-scoped collectors in the order (`mutations`, `out_result`), then
+ * the trailing opaque `user_data`.
  */
-typedef OpenPitRejectList *
+typedef OpenPitPretradeRejectList *
 (*OpenPitPretradePreTradePolicyPerformPreTradeCheckFn)(
     const OpenPitPretradeContext * ctx,
     const OpenPitOrder * order,
     OpenPitMutations * mutations,
+    OpenPitPretradePreTradeResult * out_result,
     void * user_data
 );
 
@@ -1651,18 +2112,40 @@ typedef OpenPitRejectList *
  * Callback used by a custom pre-trade policy to observe an execution report.
  *
  * Contract:
+ * - `ctx` is a read-only post-trade context valid only for the duration of
+ *   the callback. Use `openpit_post_trade_context_get_account_group` to
+ *   query the report account's group.
  * - `report` points to a read-only report view valid only for the duration
  *   of the callback.
  * - `report` is passed as a borrowed view and is not copied before the
  *   callback runs.
  * - If the callback wants to keep any data from `report`, it must copy that
  *   data before returning.
- * - Return `true` when this policy reports a kill-switch trigger.
- * - Return `false` otherwise.
+ * - `out_adjustments` is a callback-scoped non-owning collector the callback
+ *   may fill with group-tagged account-adjustment outcomes via
+ *   `openpit_pretrade_post_trade_adjustment_list_push`. This channel IS
+ *   group-tagged. The callback must not store or use `out_adjustments` after
+ *   return.
+ * - The account-block return and the `out_adjustments` channel are
+ *   independent: a callback may report blocks, adjustments, both, or
+ *   neither.
+ * - Return a non-null account-block list when this policy reports a
+ *   kill-switch trigger. The returned list ownership is transferred to the
+ *   engine; create it with `openpit_pretrade_create_account_block_list`.
+ * - Return null to indicate no kill-switch condition.
+ * - A null `apply_execution_report_fn` means that hook returns no blocks and
+ *   no adjustments.
  * - `user_data` is passed through unchanged from policy creation.
+ *
+ * Parameter ordering convention: read-only context first (`ctx`), then
+ * read-only input (`report`), then the callback-scoped collector
+ * (`out_adjustments`), then the trailing opaque `user_data`.
  */
-typedef bool (*OpenPitPretradePreTradePolicyApplyExecutionReportFn)(
+typedef OpenPitPretradeAccountBlockList *
+(*OpenPitPretradePreTradePolicyApplyExecutionReportFn)(
+    const OpenPitPostTradeContext * ctx,
     const OpenPitExecutionReport * report,
+    OpenPitPostTradeAdjustmentList * out_adjustments,
     void * user_data
 );
 
@@ -1684,17 +2167,30 @@ typedef bool (*OpenPitPretradePreTradePolicyApplyExecutionReportFn)(
  * - `mutations` is a callback-scoped non-owning pointer that allows the
  *   callback to register commit/rollback mutations.
  * - The callback must not store or use `mutations` after return.
+ * - `out_outcomes` is a callback-scoped non-owning collector the callback
+ *   may fill with account-outcome entries via
+ *   `openpit_account_outcome_entry_list_push`. No `policy_group_id` is
+ *   carried; the engine assigns the policy group. The callback must not
+ *   store or use `out_outcomes` after return.
+ * - The reject channel and the `out_outcomes` channel are independent: the
+ *   engine only keeps `out_outcomes` when the callback accepts (returns null
+ *   or an empty list).
  * - Return null to accept the adjustment.
  * - Return a non-empty reject list to reject the adjustment.
  * - Returned reject list ownership is transferred to the callee.
  * - `user_data` is passed through unchanged from policy creation.
+ *
+ * Parameter ordering convention: read-only inputs first (`ctx`, `account_id`,
+ * `adjustment`), then callback-scoped collectors in the order (`mutations`,
+ * `out_outcomes`), then the trailing opaque `user_data`.
  */
-typedef OpenPitRejectList *
+typedef OpenPitPretradeRejectList *
 (*OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn)(
     const OpenPitAccountAdjustmentContext * ctx,
     OpenPitParamAccountId account_id,
     const OpenPitAccountAdjustment * adjustment,
     OpenPitMutations * mutations,
+    OpenPitAccountOutcomeEntryList * out_outcomes,
     void * user_data
 );
 
@@ -1711,6 +2207,42 @@ typedef OpenPitRejectList *
  */
 typedef void (*OpenPitPretradePreTradePolicyFreeUserDataFn)(
     void * user_data
+);
+
+/**
+ * Callback invoked for either commit or rollback of a registered mutation.
+ */
+typedef void (*OpenPitMutationFn)(
+    void * user_data
+);
+
+/**
+ * Optional callback to release mutation user_data after execution.
+ *
+ * Called exactly once per `openpit_mutations_push`:
+ * - after `commit_fn` when commit runs;
+ * - after `rollback_fn` when rollback runs;
+ * - or on drop if neither action ran.
+ */
+typedef void (*OpenPitMutationFreeFn)(
+    void * user_data
+);
+
+/**
+ * Resolves the reading account's group on demand.
+ *
+ * Returns `true` and writes the group id to `out_account_group_id` when the
+ * account belongs to a group; returns `false` when it has none. Invoked lazily
+ * by `openpit_marketdata_service_get` — only when the resolution mode would
+ * consult the group or default-group bucket and the per-account bucket has no
+ * quote.
+ *
+ * The function pointer must not be null; see the contract on
+ * `openpit_marketdata_service_get`.
+ */
+typedef bool (*OpenPitMarketDataAccountGroupResolver)(
+    void * user_data,
+    OpenPitParamAccountGroupId * out_account_group_id
 );
 
 /**
@@ -1925,7 +2457,7 @@ OpenPitParamDecimal openpit_param_notional_get_decimal(
     OpenPitParamNotional value
 );
 
-bool openpit_create_param_pnl_from_str(
+bool openpit_create_param_pnl_from_string(
     OpenPitStringView value,
     OpenPitParamPnl * out,
     OpenPitOutParamError out_error
@@ -1937,19 +2469,19 @@ bool openpit_create_param_pnl_from_f64(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_pnl_from_i64(
+bool openpit_create_param_pnl_from_int64(
     int64_t value,
     OpenPitParamPnl * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_pnl_from_u64(
+bool openpit_create_param_pnl_from_uint64(
     uint64_t value,
     OpenPitParamPnl * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_pnl_from_str_rounded(
+bool openpit_create_param_pnl_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -2080,7 +2612,7 @@ bool openpit_param_pnl_checked_neg(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_price_from_str(
+bool openpit_create_param_price_from_string(
     OpenPitStringView value,
     OpenPitParamPrice * out,
     OpenPitOutParamError out_error
@@ -2092,19 +2624,19 @@ bool openpit_create_param_price_from_f64(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_price_from_i64(
+bool openpit_create_param_price_from_int64(
     int64_t value,
     OpenPitParamPrice * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_price_from_u64(
+bool openpit_create_param_price_from_uint64(
     uint64_t value,
     OpenPitParamPrice * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_price_from_str_rounded(
+bool openpit_create_param_price_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -2235,7 +2767,7 @@ bool openpit_param_price_checked_neg(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_quantity_from_str(
+bool openpit_create_param_quantity_from_string(
     OpenPitStringView value,
     OpenPitParamQuantity * out,
     OpenPitOutParamError out_error
@@ -2247,19 +2779,19 @@ bool openpit_create_param_quantity_from_f64(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_quantity_from_i64(
+bool openpit_create_param_quantity_from_int64(
     int64_t value,
     OpenPitParamQuantity * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_quantity_from_u64(
+bool openpit_create_param_quantity_from_uint64(
     uint64_t value,
     OpenPitParamQuantity * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_quantity_from_str_rounded(
+bool openpit_create_param_quantity_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -2384,7 +2916,7 @@ bool openpit_param_quantity_checked_rem_f64(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_volume_from_str(
+bool openpit_create_param_volume_from_string(
     OpenPitStringView value,
     OpenPitParamVolume * out,
     OpenPitOutParamError out_error
@@ -2396,19 +2928,19 @@ bool openpit_create_param_volume_from_f64(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_volume_from_i64(
+bool openpit_create_param_volume_from_int64(
     int64_t value,
     OpenPitParamVolume * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_volume_from_u64(
+bool openpit_create_param_volume_from_uint64(
     uint64_t value,
     OpenPitParamVolume * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_volume_from_str_rounded(
+bool openpit_create_param_volume_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -2533,7 +3065,7 @@ bool openpit_param_volume_checked_rem_f64(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_cash_flow_from_str(
+bool openpit_create_param_cash_flow_from_string(
     OpenPitStringView value,
     OpenPitParamCashFlow * out,
     OpenPitOutParamError out_error
@@ -2545,19 +3077,19 @@ bool openpit_create_param_cash_flow_from_f64(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_cash_flow_from_i64(
+bool openpit_create_param_cash_flow_from_int64(
     int64_t value,
     OpenPitParamCashFlow * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_cash_flow_from_u64(
+bool openpit_create_param_cash_flow_from_uint64(
     uint64_t value,
     OpenPitParamCashFlow * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_cash_flow_from_str_rounded(
+bool openpit_create_param_cash_flow_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -2688,7 +3220,7 @@ bool openpit_param_cash_flow_checked_neg(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_position_size_from_str(
+bool openpit_create_param_position_size_from_string(
     OpenPitStringView value,
     OpenPitParamPositionSize * out,
     OpenPitOutParamError out_error
@@ -2700,19 +3232,19 @@ bool openpit_create_param_position_size_from_f64(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_position_size_from_i64(
+bool openpit_create_param_position_size_from_int64(
     int64_t value,
     OpenPitParamPositionSize * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_position_size_from_u64(
+bool openpit_create_param_position_size_from_uint64(
     uint64_t value,
     OpenPitParamPositionSize * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_position_size_from_str_rounded(
+bool openpit_create_param_position_size_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -2843,7 +3375,7 @@ bool openpit_param_position_size_checked_neg(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_fee_from_str(
+bool openpit_create_param_fee_from_string(
     OpenPitStringView value,
     OpenPitParamFee * out,
     OpenPitOutParamError out_error
@@ -2855,19 +3387,19 @@ bool openpit_create_param_fee_from_f64(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_fee_from_i64(
+bool openpit_create_param_fee_from_int64(
     int64_t value,
     OpenPitParamFee * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_fee_from_u64(
+bool openpit_create_param_fee_from_uint64(
     uint64_t value,
     OpenPitParamFee * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_fee_from_str_rounded(
+bool openpit_create_param_fee_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -2998,7 +3530,7 @@ bool openpit_param_fee_checked_neg(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_notional_from_str(
+bool openpit_create_param_notional_from_string(
     OpenPitStringView value,
     OpenPitParamNotional * out,
     OpenPitOutParamError out_error
@@ -3010,19 +3542,19 @@ bool openpit_create_param_notional_from_f64(
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_notional_from_i64(
+bool openpit_create_param_notional_from_int64(
     int64_t value,
     OpenPitParamNotional * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_notional_from_u64(
+bool openpit_create_param_notional_from_uint64(
     uint64_t value,
     OpenPitParamNotional * out,
     OpenPitOutParamError out_error
 );
 
-bool openpit_create_param_notional_from_str_rounded(
+bool openpit_create_param_notional_from_string_rounded(
     OpenPitStringView value,
     uint32_t scale,
     OpenPitParamRoundingStrategy rounding,
@@ -3161,6 +3693,13 @@ bool openpit_param_price_calculate_volume(
     OpenPitOutParamError out_error
 );
 
+bool openpit_param_price_calculate_position_size(
+    OpenPitParamPrice price,
+    OpenPitParamQuantity quantity,
+    OpenPitParamPositionSize * out,
+    OpenPitOutParamError out_error
+);
+
 bool openpit_param_quantity_calculate_volume(
     OpenPitParamQuantity quantity,
     OpenPitParamPrice price,
@@ -3183,6 +3722,18 @@ bool openpit_param_pnl_to_cash_flow(
 
 bool openpit_param_pnl_to_position_size(
     OpenPitParamPnl value,
+    OpenPitParamPositionSize * out,
+    OpenPitOutParamError out_error
+);
+
+bool openpit_param_quantity_to_position_size(
+    OpenPitParamQuantity value,
+    OpenPitParamPositionSize * out,
+    OpenPitOutParamError out_error
+);
+
+bool openpit_param_volume_to_position_size(
+    OpenPitParamVolume value,
     OpenPitParamPositionSize * out,
     OpenPitOutParamError out_error
 );
@@ -3333,13 +3884,13 @@ bool openpit_param_volume_from_notional(
  * This is a direct numeric mapping with no collision risk.
  *
  * WARNING: Do not mix IDs produced by this function with IDs produced by
- * `openpit_create_param_account_id_from_str` in the same runtime state.
+ * `openpit_create_param_account_id_from_string` in the same runtime state.
  *
  * Contract:
  * - returns a stable account identifier value;
  * - this function always succeeds.
  */
-OpenPitParamAccountId openpit_create_param_account_id_from_u64(
+OpenPitParamAccountId openpit_create_param_account_id_from_uint64(
     uint64_t value
 );
 
@@ -3355,13 +3906,13 @@ OpenPitParamAccountId openpit_create_param_account_id_from_u64(
  *   collision is approximately `n^2 / 2^65`.
  * - if collision risk is unacceptable, keep your own collision-free
  *   string-to-integer mapping and use
- *   `openpit_create_param_account_id_from_u64`.
+ *   `openpit_create_param_account_id_from_uint64`.
  *
  * The previous sentence is why this helper is suitable for stable adapter-side
  * mapping, but not for workflows that require guaranteed uniqueness.
  *
  * WARNING: Do not mix IDs produced by this function with IDs produced by
- * `openpit_create_param_account_id_from_u64` in the same runtime state.
+ * `openpit_create_param_account_id_from_uint64` in the same runtime state.
  *
  * Contract:
  * - returns `true` and writes a stable account identifier to `out` on
@@ -3374,7 +3925,7 @@ OpenPitParamAccountId openpit_create_param_account_id_from_u64(
  * `value.ptr` must be non-null and point to at least `value.len` readable
  * UTF-8 bytes.
  */
-bool openpit_create_param_account_id_from_str(
+bool openpit_create_param_account_id_from_string(
     OpenPitStringView value,
     OpenPitParamAccountId * out,
     OpenPitOutParamError out_error
@@ -3386,17 +3937,88 @@ bool openpit_create_param_account_id_from_str(
  *
  * The returned handle must be destroyed with `openpit_destroy_param_asset`.
  */
-OpenPitSharedString * openpit_create_param_asset_from_str(
+OpenPitSharedString * openpit_create_param_asset_from_string(
     OpenPitStringView value,
     OpenPitOutParamError out_error
 );
 
 /**
  * Destroys a caller-owned asset handle created by
- * `openpit_create_param_asset_from_str`.
+ * `openpit_create_param_asset_from_string`.
  */
 void openpit_destroy_param_asset(
     OpenPitSharedString * handle
+);
+
+/**
+ * Renders an order side into a caller-owned shared string.
+ *
+ * Returns null and writes `out_error` when the side is not set.
+ */
+OpenPitSharedString * openpit_param_side_to_string(
+    OpenPitParamSide value,
+    OpenPitOutParamError out_error
+);
+
+/**
+ * Renders a position side into a caller-owned shared string.
+ *
+ * Returns null and writes `out_error` when the position side is not set.
+ */
+OpenPitSharedString * openpit_param_position_side_to_string(
+    OpenPitParamPositionSide value,
+    OpenPitOutParamError out_error
+);
+
+/**
+ * Renders a position effect into a caller-owned shared string.
+ *
+ * Returns null and writes `out_error` when the position effect is not set.
+ */
+OpenPitSharedString * openpit_param_position_effect_to_string(
+    OpenPitParamPositionEffect value,
+    OpenPitOutParamError out_error
+);
+
+/**
+ * Renders a position mode into a caller-owned shared string.
+ *
+ * Returns null and writes `out_error` when the position mode is not set.
+ */
+OpenPitSharedString * openpit_param_position_mode_to_string(
+    OpenPitParamPositionMode value,
+    OpenPitOutParamError out_error
+);
+
+/**
+ * Renders an account identifier into a caller-owned shared string.
+ *
+ * This conversion always succeeds.
+ */
+OpenPitSharedString * openpit_param_account_id_to_string(
+    OpenPitParamAccountId value
+);
+
+/**
+ * Renders a trade amount into a caller-owned shared string.
+ *
+ * Returns null and writes `out_error` when the trade amount is not set or its
+ * numeric value cannot be decoded.
+ */
+OpenPitSharedString * openpit_param_trade_amount_to_string(
+    OpenPitParamTradeAmount value,
+    OpenPitOutParamError out_error
+);
+
+/**
+ * Renders an adjustment amount into a caller-owned shared string.
+ *
+ * Returns null and writes `out_error` when the amount is not set or its
+ * numeric value cannot be decoded.
+ */
+OpenPitSharedString * openpit_param_adjustment_amount_to_string(
+    OpenPitParamAdjustmentAmount value,
+    OpenPitOutParamError out_error
 );
 
 /**
@@ -3406,10 +4028,10 @@ void openpit_destroy_param_asset(
  *
  * Contract:
  * - returns a new caller-owned list;
- * - release it with `openpit_destroy_reject_list`;
+ * - release it with `openpit_pretrade_destroy_reject_list`;
  * - this function always succeeds.
  */
-OpenPitRejectList * openpit_create_reject_list(
+OpenPitPretradeRejectList * openpit_pretrade_create_reject_list(
     size_t reserve
 );
 
@@ -3420,8 +4042,8 @@ OpenPitRejectList * openpit_create_reject_list(
  * - passing null is allowed;
  * - this function always succeeds.
  */
-void openpit_destroy_reject_list(
-    OpenPitRejectList * rejects
+void openpit_pretrade_destroy_reject_list(
+    OpenPitPretradeRejectList * rejects
 );
 
 /**
@@ -3433,9 +4055,9 @@ void openpit_destroy_reject_list(
  * - this function never fails;
  * - violating the pointer contract aborts the call.
  */
-void openpit_reject_list_push(
-    OpenPitRejectList * list,
-    OpenPitReject reject
+void openpit_pretrade_reject_list_push(
+    OpenPitPretradeRejectList * list,
+    OpenPitPretradeReject reject
 );
 
 /**
@@ -3446,8 +4068,8 @@ void openpit_reject_list_push(
  * - this function never fails;
  * - violating the pointer contract aborts the call.
  */
-size_t openpit_reject_list_len(
-    const OpenPitRejectList * list
+size_t openpit_pretrade_reject_list_len(
+    const OpenPitPretradeRejectList * list
 );
 
 /**
@@ -3465,10 +4087,82 @@ size_t openpit_reject_list_len(
  * - this function never fails;
  * - violating the pointer contract aborts the call.
  */
-bool openpit_reject_list_get(
-    const OpenPitRejectList * list,
+bool openpit_pretrade_reject_list_get(
+    const OpenPitPretradeRejectList * list,
     size_t index,
-    OpenPitReject * out_reject
+    OpenPitPretradeReject * out_reject
+);
+
+/**
+ * Creates a caller-owned account-block list with preallocated capacity.
+ *
+ * `reserve` is the requested number of elements to preallocate.
+ *
+ * Contract:
+ * - returns a new caller-owned list;
+ * - release it with `openpit_pretrade_destroy_account_block_list`;
+ * - this function always succeeds.
+ */
+OpenPitPretradeAccountBlockList * openpit_pretrade_create_account_block_list(
+    size_t reserve
+);
+
+/**
+ * Releases a caller-owned account-block list.
+ *
+ * Contract:
+ * - passing null is allowed;
+ * - this function always succeeds.
+ */
+void openpit_pretrade_destroy_account_block_list(
+    OpenPitPretradeAccountBlockList * blocks
+);
+
+/**
+ * Appends one account block to the list by copying its payload.
+ *
+ * Contract:
+ * - `list` must be a valid non-null pointer;
+ * - string views in `block` are copied before this function returns;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+void openpit_pretrade_account_block_list_push(
+    OpenPitPretradeAccountBlockList * list,
+    OpenPitPretradeAccountBlock block
+);
+
+/**
+ * Returns the number of account blocks in the list.
+ *
+ * Contract:
+ * - `list` must be a valid non-null pointer;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+size_t openpit_pretrade_account_block_list_len(
+    const OpenPitPretradeAccountBlockList * list
+);
+
+/**
+ * Copies a non-owning account-block view at `index` into `out_block`.
+ *
+ * The copied view borrows string memory from `list`.
+ *
+ * Contract:
+ * - `list` must be a valid non-null pointer;
+ * - `out_block` must be a valid non-null pointer;
+ * - returns `true` when a value exists and was copied;
+ * - returns `false` when `index` is out of bounds and does not write
+ *   `out_block`;
+ * - the copied view remains valid while `list` is alive and unchanged;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+bool openpit_pretrade_account_block_list_get(
+    const OpenPitPretradeAccountBlockList * list,
+    size_t index,
+    OpenPitPretradeAccountBlock * out_block
 );
 
 /**
@@ -3490,8 +4184,8 @@ void openpit_destroy_param_error(
  * - returns a non-null caller-owned builder object.
  *
  * Error:
- * - returns null when `sync_policy` is not one of `OpenPitSyncPolicy_Full`
- *   (0), `OpenPitSyncPolicy_Local` (1), or `OpenPitSyncPolicy_Account` (2);
+ * - returns null when `sync_policy` is not one of `OpenPitSyncPolicy_None`
+ *   (0), `OpenPitSyncPolicy_Full` (1), or `OpenPitSyncPolicy_Account` (2);
  * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
  *   error handle that MUST be released with `openpit_destroy_shared_string`.
  *
@@ -3526,19 +4220,84 @@ void openpit_destroy_engine_builder(
  *
  * Error:
  * - returns null when `builder` is null, the builder was already consumed,
- *   or configuration is invalid;
- * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
- *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ *   or no policies were registered;
+ * - for those non-domain failures, if `out_error` is not null, writes a
+ *   caller-owned `OpenPitSharedString` error handle that MUST be released
+ *   with `openpit_destroy_shared_string`, and writes null to
+ *   `out_build_error` if it is not null;
+ * - returns null when the configuration is rejected during building (for
+ *   example, duplicate policy names or duplicate group ids); in that case,
+ *   if `out_build_error` is not null, writes a caller-owned
+ *   `OpenPitEngineBuildError` pointer that carries the machine-readable
+ *   failure code and the offending value, and MUST be released with
+ *   `openpit_destroy_engine_build_error`; `out_error` is left untouched for
+ *   this domain failure.
  *
  * Ownership:
  * - on success the returned engine pointer is owned by the caller and must
- *   be released with `openpit_destroy_engine`;
+ *   be released with `openpit_destroy_engine`; on success, null is written
+ *   to `out_build_error` if it is not null;
  * - the builder becomes consumed regardless of success and must not be
  *   reused.
  */
 OpenPitEngine * openpit_engine_builder_build(
     OpenPitEngineBuilder * builder,
+    OpenPitEngineBuildError ** out_build_error,
     OpenPitOutError out_error
+);
+
+/**
+ * Releases a build-error object returned by engine construction.
+ *
+ * Contract:
+ * - passing null is allowed;
+ * - this function always succeeds.
+ */
+void openpit_destroy_engine_build_error(
+    OpenPitEngineBuildError * build_error
+);
+
+/**
+ * Returns the machine-readable failure category of a build error.
+ *
+ * Contract:
+ * - `build_error` must be a valid non-null pointer;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+OpenPitEngineBuildErrorCode openpit_engine_build_error_get_code(
+    const OpenPitEngineBuildError * build_error
+);
+
+/**
+ * Returns a non-owning view of the offending policy name from a build error.
+ *
+ * Contract:
+ * - `build_error` must be a valid non-null pointer;
+ * - the returned view points into memory owned by `build_error` and is valid
+ *   while `build_error` is alive; it must not be used after the build error
+ *   is destroyed;
+ * - the view is empty unless the failure category is the
+ *   duplicate-policy-name category;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+OpenPitStringView openpit_engine_build_error_get_policy_name(
+    const OpenPitEngineBuildError * build_error
+);
+
+/**
+ * Returns the offending policy group id from a build error.
+ *
+ * Contract:
+ * - `build_error` must be a valid non-null pointer;
+ * - the value is zero unless the failure category is the
+ *   duplicate-policy-group-id category;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+uint16_t openpit_engine_build_error_get_policy_group_id(
+    const OpenPitEngineBuildError * build_error
 );
 
 /**
@@ -3576,11 +4335,11 @@ void openpit_destroy_engine(
  *   `openpit_destroy_pretrade_pre_trade_request`.
  *
  * Reject ownership contract:
- * - on `Rejected`, a non-null `OpenPitRejectList` pointer is written to
- *   `out_rejects` if it is not null;
+ * - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written
+ *   to `out_rejects` if it is not null;
  * - the caller takes ownership and MUST release it with
- *   `openpit_destroy_reject_list`; failing to do so leaks the heap
- *   allocation made inside this call;
+ *   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the
+ *   memory allocated inside this call;
  * - no thread-local state is involved, and the returned pointer is safe to
  *   read on any thread;
  * - on `Passed` and `Error`, null is written to `out_rejects`, and the
@@ -3595,7 +4354,7 @@ OpenPitPretradeStatus openpit_engine_start_pre_trade(
     OpenPitEngine * engine,
     const OpenPitOrder * order,
     OpenPitPretradePreTradeRequest ** out_request,
-    OpenPitRejectList ** out_rejects,
+    OpenPitPretradeRejectList ** out_rejects,
     OpenPitOutError out_error
 );
 
@@ -3621,11 +4380,11 @@ OpenPitPretradeStatus openpit_engine_start_pre_trade(
  *   `openpit_destroy_pretrade_pre_trade_reservation`.
  *
  * Reject ownership contract:
- * - on `Rejected`, a non-null `OpenPitRejectList` pointer is written to
- *   `out_rejects` if it is not null;
+ * - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written
+ *   to `out_rejects` if it is not null;
  * - the caller takes ownership and MUST release it with
- *   `openpit_destroy_reject_list`; failing to do so leaks the heap
- *   allocation made inside this call;
+ *   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the
+ *   memory allocated inside this call;
  * - no thread-local state is involved, and the returned pointer is safe to
  *   read on any thread;
  * - on `Passed` and `Error`, null is written to `out_rejects`, and the
@@ -3640,7 +4399,7 @@ OpenPitPretradeStatus openpit_engine_execute_pre_trade(
     OpenPitEngine * engine,
     const OpenPitOrder * order,
     OpenPitPretradePreTradeReservation ** out_reservation,
-    OpenPitRejectList ** out_rejects,
+    OpenPitPretradeRejectList ** out_rejects,
     OpenPitOutError out_error
 );
 
@@ -3666,11 +4425,11 @@ OpenPitPretradeStatus openpit_engine_execute_pre_trade(
  *   cannot be executed again.
  *
  * Reject ownership contract:
- * - on `Rejected`, a non-null `OpenPitRejectList` pointer is written to
- *   `out_rejects` if it is not null;
+ * - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written
+ *   to `out_rejects` if it is not null;
  * - the caller takes ownership and MUST release it with
- *   `openpit_destroy_reject_list`; failing to do so leaks the heap
- *   allocation made inside this call;
+ *   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the
+ *   memory allocated inside this call;
  * - no thread-local state is involved, and the returned pointer is safe to
  *   read on any thread;
  * - on `Passed` and `Error`, null is written to `out_rejects`, and the
@@ -3679,7 +4438,7 @@ OpenPitPretradeStatus openpit_engine_execute_pre_trade(
 OpenPitPretradeStatus openpit_pretrade_pre_trade_request_execute(
     OpenPitPretradePreTradeRequest * request,
     OpenPitPretradePreTradeReservation ** out_reservation,
-    OpenPitRejectList ** out_rejects,
+    OpenPitPretradeRejectList ** out_rejects,
     OpenPitOutError out_error
 );
 
@@ -3735,7 +4494,26 @@ void openpit_pretrade_pre_trade_reservation_rollback(
  * Lifetime contract:
  * - the returned snapshot is detached from the reservation state.
  */
-OpenPitPretradePreTradeLock openpit_pretrade_pre_trade_reservation_get_lock(
+OpenPitPretradePreTradeLock * openpit_pretrade_pre_trade_reservation_get_lock(
+    const OpenPitPretradePreTradeReservation * reservation
+);
+
+/**
+ * Returns the account-adjustment outcomes collected by the reservation.
+ *
+ * Contract:
+ * - `reservation` must be a valid non-null pointer;
+ * - violating the pointer contract aborts the call;
+ * - this function never fails;
+ * - always returns a caller-owned `OpenPitAccountAdjustmentOutcomeList`
+ *   (possibly empty); release it with
+ *   `openpit_destroy_account_adjustment_outcome_list`.
+ *
+ * Lifetime contract:
+ * - the returned list is detached from the reservation state.
+ */
+OpenPitAccountAdjustmentOutcomeList *
+openpit_pretrade_pre_trade_reservation_get_account_adjustments(
     const OpenPitPretradePreTradeReservation * reservation
 );
 
@@ -3757,27 +4535,37 @@ void openpit_destroy_pretrade_pre_trade_reservation(
 /**
  * Applies an execution report to engine state.
  *
+ * Returns `true` on success, `false` on error.
+ *
  * Success:
- * - returns `OpenPitEngineApplyExecutionReportResult { is_error = false, ...
- *   }`.
+ * - returns `true`;
+ * - if `out_blocks` is not null and at least one policy entered a blocked
+ *   state, writes a caller-owned `OpenPitPretradeAccountBlockList` pointer;
+ *   release it with `openpit_pretrade_destroy_account_block_list`;
+ * - if `out_blocks` is not null and no policy blocked, writes null.
+ * - if `out_adjustments` is not null and at least one policy produced an
+ *   account-adjustment outcome, writes a caller-owned
+ *   `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
+ *   `openpit_destroy_account_adjustment_outcome_list`;
+ * - if `out_adjustments` is not null and no outcome was produced, writes
+ *   null.
  *
  * Error:
- * - returns `OpenPitEngineApplyExecutionReportResult { is_error = true,
- *   post_trade_result = { kill_switch_triggered = false } }` when input
- *   pointers are invalid or the report payload cannot be decoded;
+ * - returns `false` when input pointers are invalid or the report payload
+ *   cannot be decoded;
  * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
- *   error handle that MUST be released with `openpit_destroy_shared_string`;
- * - when `is_error` is `true`, do not trust any other fields beyond the fact
- *   that the call failed.
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
  *
  * Lifetime contract:
  * - `report` is read as a borrowed view during this call only;
  * - the operation does not retain any pointer into source memory after this
  *   function returns.
  */
-OpenPitEngineApplyExecutionReportResult openpit_engine_apply_execution_report(
+bool openpit_engine_apply_execution_report(
     OpenPitEngine * engine,
     const OpenPitExecutionReport * report,
+    OpenPitPretradeAccountBlockList ** out_blocks,
+    OpenPitAccountAdjustmentOutcomeList ** out_adjustments,
     OpenPitOutError out_error
 );
 
@@ -3813,7 +4601,8 @@ size_t openpit_account_adjustment_batch_error_get_failed_adjustment_index(
  * - this function never fails;
  * - violating the pointer contract aborts the call.
  */
-const OpenPitRejectList * openpit_account_adjustment_batch_error_get_rejects(
+const OpenPitPretradeRejectList *
+openpit_account_adjustment_batch_error_get_rejects(
     const OpenPitAccountAdjustmentBatchError * batch_error
 );
 
@@ -3835,6 +4624,11 @@ const OpenPitRejectList * openpit_account_adjustment_batch_error_get_rejects(
  *
  * Result handling:
  * - `Applied` means there is no reject object to clean up;
+ * - on `Applied`, if `out_outcomes` is not null and at least one policy
+ *   produced an account-adjustment outcome, writes a caller-owned
+ *   `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
+ *   `openpit_destroy_account_adjustment_outcome_list`; if no outcome was
+ *   produced, writes null;
  * - `Rejected` stores batch error details in `out_reject`, the caller must
  *   release a returned object with
  *   `openpit_destroy_account_adjustment_batch_error`;
@@ -3856,120 +4650,223 @@ OpenPitAccountAdjustmentApplyStatus openpit_engine_apply_account_adjustment(
     const OpenPitAccountAdjustment * adjustments,
     size_t adjustments_len,
     OpenPitAccountAdjustmentBatchError ** out_reject,
+    OpenPitAccountAdjustmentOutcomeList ** out_outcomes,
     OpenPitOutError out_error
 );
 
 /**
- * Adds the built-in order-validation policy to the engine builder.
+ * Releases a caller-owned account-group error.
  *
  * Contract:
- * - `builder` must be a valid engine builder pointer.
+ * - call exactly once per pointer returned by a registry function;
+ * - passing null is allowed and has no effect.
+ */
+void openpit_destroy_account_group_error(
+    OpenPitAccountGroupError * err
+);
+
+/**
+ * Returns the human-readable error message from an account-group error.
+ *
+ * Contract:
+ * - `err` must be a valid non-null pointer;
+ * - the returned view borrows from the error object and is valid while the
+ *   error is alive;
+ * - violating the pointer contract aborts the call.
+ */
+OpenPitStringView openpit_account_group_error_get_message(
+    const OpenPitAccountGroupError * err
+);
+
+/**
+ * Returns the offending account identifier from an account-group error.
+ *
+ * Contract:
+ * - `err` must be a valid non-null pointer;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+OpenPitParamAccountId openpit_account_group_error_get_account(
+    const OpenPitAccountGroupError * err
+);
+
+/**
+ * Returns the current group of the offending account from an account-group
+ * error, or writes zero and returns `false` when no group is present.
+ *
+ * Contract:
+ * - `err` must be a valid non-null pointer;
+ * - `out_group` must be a valid non-null pointer;
+ * - returns `true` when the account belongs to a group and writes that group
+ *   to `out_group`;
+ * - returns `false` when the account belongs to no group; `out_group` is
+ *   written to only when the return value is `true`;
+ * - violating the pointer contract aborts the call.
+ */
+bool openpit_account_group_error_get_current_group(
+    const OpenPitAccountGroupError * err,
+    OpenPitParamAccountGroupId * out_group
+);
+
+/**
+ * Atomically registers every account in `accounts` into `group`.
+ *
+ * The operation is all-or-nothing: if any listed account is already a member
+ * of any group (including `group`), no account is registered.
+ *
+ * Contract:
+ * - `engine` must be a valid non-null engine pointer;
+ * - `accounts` must point to an array of at least `accounts_len` account
+ *   identifiers, or may be null when `accounts_len` is zero;
+ * - `group` is the target group and must not be the reserved
+ *   `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
  *
  * Success:
- * - returns `true`; the builder retains the policy.
+ * - returns `true`; all listed accounts are now members of `group`.
  *
  * Error:
- * - returns `false` when the builder is null or already consumed;
- * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
- *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ * - returns `false` when `engine` is null, `accounts` is null with non-zero
+ *   length, `group` is the reserved default group, or any listed account is
+ *   already registered;
+ * - for pointer/argument errors, if `out_error` is not null, writes a
+ *   caller-owned `OpenPitSharedString` error handle that MUST be released
+ *   with `openpit_destroy_shared_string`;
+ * - for domain errors (reserved target group, or account already
+ *   registered), if `out_group_error` is not null, writes a caller-owned
+ *   `OpenPitAccountGroupError` pointer that MUST be released with
+ *   `openpit_destroy_account_group_error`; `out_error` is left untouched for
+ *   domain failures.
  */
-bool openpit_engine_builder_add_builtin_order_validation_policy(
-    OpenPitEngineBuilder * builder,
+bool openpit_engine_register_account_group(
+    OpenPitEngine * engine,
+    const OpenPitParamAccountId * accounts,
+    size_t accounts_len,
+    OpenPitParamAccountGroupId group,
+    OpenPitAccountGroupError ** out_group_error,
     OpenPitOutError out_error
 );
 
 /**
- * Adds the built-in rate-limit policy to the engine builder.
+ * Atomically removes every account in `accounts` from `group`.
+ *
+ * The operation is all-or-nothing: if any listed account is not currently a
+ * member of `group`, no account is removed.
  *
  * Contract:
- * - `builder` must be a valid engine builder pointer.
- * - At least one barrier axis must be configured: `broker` non-null,
- *   `asset_len > 0`, `account_len > 0`, or `account_asset_len > 0`.
- * - When a length is greater than zero the corresponding pointer must point
- *   to that many readable entries.
- * - Each `settlement_asset` string view inside an array entry must be valid
- *   for the duration of the call.
+ * - `engine` must be a valid non-null engine pointer;
+ * - `accounts` must point to an array of at least `accounts_len` account
+ *   identifiers, or may be null when `accounts_len` is zero;
+ * - `group` is the group to remove accounts from and must not be the
+ *   reserved `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
  *
  * Success:
- * - returns `true`; the builder retains the policy.
+ * - returns `true`; all listed accounts are now removed from `group`.
  *
  * Error:
- * - returns `false` when the builder is null or already consumed, when no
- *   barrier axis is configured, or when argument parsing fails;
- * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
- *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ * - returns `false` when `engine` is null, `accounts` is null with non-zero
+ *   length, `group` is the reserved default group, or any listed account is
+ *   not in `group`;
+ * - for pointer/argument errors, if `out_error` is not null, writes a
+ *   caller-owned `OpenPitSharedString` error handle that MUST be released
+ *   with `openpit_destroy_shared_string`;
+ * - for domain errors (reserved target group, or account not in group), if
+ *   `out_group_error` is not null, writes a caller-owned
+ *   `OpenPitAccountGroupError` pointer that MUST be released with
+ *   `openpit_destroy_account_group_error`; `out_error` is left untouched for
+ *   domain failures.
  */
-bool openpit_engine_builder_add_builtin_rate_limit_policy(
-    OpenPitEngineBuilder * builder,
-    const OpenPitPretradePoliciesRateLimitBrokerBarrier * broker,
-    const OpenPitPretradePoliciesRateLimitAssetBarrier * asset,
-    size_t asset_len,
-    const OpenPitPretradePoliciesRateLimitAccountBarrier * account,
-    size_t account_len,
-    const OpenPitPretradePoliciesRateLimitAccountAssetBarrier * account_asset,
-    size_t account_asset_len,
+bool openpit_engine_unregister_account_group(
+    OpenPitEngine * engine,
+    const OpenPitParamAccountId * accounts,
+    size_t accounts_len,
+    OpenPitParamAccountGroupId group,
+    OpenPitAccountGroupError ** out_group_error,
     OpenPitOutError out_error
 );
 
 /**
- * Adds the built-in order-size limit policy to the engine builder.
+ * Returns the account-group membership of a single account.
  *
  * Contract:
- * - `builder` must be a valid engine builder pointer.
- * - At least one barrier axis must be configured: `broker` non-null,
- *   `asset_len > 0`, or `account_asset_len > 0`.
- * - When a length is greater than zero the corresponding pointer must point
- *   to that many readable entries.
- * - Each `settlement_asset` string view inside an array entry must be valid
- *   for the duration of the call.
- * - `max_quantity` and `max_notional` inside each limit must be valid.
+ * - `engine` must be a valid non-null engine pointer;
+ * - `account` is the account identifier to look up;
+ * - `out_group` must be a valid non-null pointer.
  *
  * Success:
- * - returns `true`; the builder retains the policy.
+ * - returns `true` when the account belongs to a group and writes that group
+ *   identifier to `out_group`;
+ * - returns `false` when the account belongs to no group; `out_group` is not
+ *   written to when the return value is `false`.
  *
  * Error:
- * - returns `false` when the builder is null or already consumed, when no
- *   barrier axis is configured, or when argument parsing fails;
- * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
- *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ * - aborts the call when `engine` or `out_group` is null.
  */
-bool openpit_engine_builder_add_builtin_order_size_limit_policy(
-    OpenPitEngineBuilder * builder,
-    const OpenPitPretradePoliciesOrderSizeBrokerBarrier * broker,
-    const OpenPitPretradePoliciesOrderSizeAssetBarrier * asset,
-    size_t asset_len,
-    const OpenPitPretradePoliciesOrderSizeAccountAssetBarrier * account_asset,
-    size_t account_asset_len,
-    OpenPitOutError out_error
+bool openpit_engine_account_group(
+    const OpenPitEngine * engine,
+    OpenPitParamAccountId account,
+    OpenPitParamAccountGroupId * out_group
 );
 
 /**
- * Adds the built-in P&L bounds kill-switch policy to the engine builder.
+ * Creates a custom pre-trade policy from caller-provided callbacks.
  *
  * Contract:
- * - `builder` must be a valid engine builder pointer.
- * - At least one barrier must be provided: `broker_len > 0` or `account_len
- *   > 0`.
- * - When a length is greater than zero the corresponding pointer must point
- *   to that many readable entries.
- * - Each `settlement_asset` string view inside an array entry must be valid
- *   for the duration of the call.
+ * - `name` must point to a valid, null-terminated string for the duration of
+ *   the call.
+ * - `policy_group_id` is the policy-group tag the engine embeds in every
+ *   account adjustment outcome this policy produces. Use `0` for the default
+ *   group.
+ * - `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`,
+ *   `apply_execution_report_fn`, and `apply_account_adjustment_fn` may be
+ *   null.
+ * - A null `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`, or
+ *   `apply_account_adjustment_fn` means that hook accepts by default.
+ * - A null `apply_execution_report_fn` means that hook returns an empty list
+ *   (no kill switch).
+ * - Non-null callbacks and `free_user_data_fn` must remain callable for as
+ *   long as the policy may still be used by either the caller pointer or the
+ *   engine.
+ * - Custom main-stage and account-adjustment callbacks can register
+ *   commit/rollback mutations through their `mutations` pointer.
+ * - `free_user_data_fn` will be called exactly once, when the last reference
+ *   to the policy is released.
+ * - `user_data` is opaque to the SDK: the engine never inspects,
+ *   dereferences, or frees it; it is forwarded verbatim to the registered
+ *   callbacks. Lifetime, thread-safety, and meaning of the pointed-at state
+ *   are entirely the caller's responsibility. Under `OpenPitSyncPolicy_None`
+ *   or `OpenPitSyncPolicy_Account`, the caller serialises per-handle
+ *   invocation per the SDK threading contract; under
+ *   `OpenPitSyncPolicy_Full`, the caller is responsible for making any state
+ *   reachable through `user_data` safe under concurrent invocation.
  *
  * Success:
- * - returns `true`; the builder retains the policy.
+ * - returns a new caller-owned policy object.
  *
  * Error:
- * - returns `false` when the builder is null or already consumed, when no
- *   barrier is configured, or when argument parsing fails;
+ * - returns null when `name` is invalid;
  * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
  *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ *
+ * Lifetime contract:
+ * - The policy stores its own copy of `name`; the caller may release the
+ *   input string after this function returns.
+ * - The returned pointer is owned by the caller and must be released with
+ *   `openpit_destroy_pretrade_pre_trade_policy` when no longer needed.
+ * - If the policy is added to the engine builder, the engine keeps its own
+ *   reference, but the caller must still release the caller-owned pointer.
+ * - `free_user_data_fn` runs once the last reference to the policy is
+ *   released; when the engine is the final holder, it runs as part of engine
+ *   destruction.
  */
-bool openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
-    OpenPitEngineBuilder * builder,
-    const OpenPitPretradePoliciesPnlBoundsBarrier * broker,
-    size_t broker_len,
-    const OpenPitPretradePoliciesPnlBoundsAccountBarrier * account,
-    size_t account_len,
+OpenPitPretradePreTradePolicy * openpit_create_pretrade_custom_pre_trade_policy(
+    OpenPitStringView name,
+    uint16_t policy_group_id,
+    OpenPitPretradePreTradePolicyCheckPreTradeStartFn check_pre_trade_start_fn,
+    OpenPitPretradePreTradePolicyPerformPreTradeCheckFn perform_pre_trade_check_fn,
+    OpenPitPretradePreTradePolicyApplyExecutionReportFn apply_execution_report_fn,
+    OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn apply_account_adjustment_fn,
+    OpenPitPretradePreTradePolicyFreeUserDataFn free_user_data_fn,
+    void * user_data,
     OpenPitOutError out_error
 );
 
@@ -4063,60 +4960,177 @@ bool openpit_mutations_push(
 );
 
 /**
- * Creates a custom pre-trade policy from caller-provided callbacks.
+ * Adds the built-in order-size limit policy to the engine builder.
  *
  * Contract:
- * - `name` must point to a valid, null-terminated string for the duration of
- *   the call.
- * - `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`,
- *   `apply_execution_report_fn`, and `apply_account_adjustment_fn` may be
- *   null.
- * - A null `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`, or
- *   `apply_account_adjustment_fn` means that hook accepts by default.
- * - A null `apply_execution_report_fn` means that hook returns `false`.
- * - Non-null callbacks and `free_user_data_fn` must remain callable for as
- *   long as the policy may still be used by either the caller pointer or the
- *   engine.
- * - Custom main-stage and account-adjustment callbacks can register
- *   commit/rollback mutations through their `mutations` pointer.
- * - `free_user_data_fn` will be called exactly once, when the last reference
- *   to the policy is released.
- * - `user_data` is opaque to the SDK: the engine never inspects,
- *   dereferences, or frees it; it is forwarded verbatim to the registered
- *   callbacks. Lifetime, thread-safety, and meaning of the pointed-at state
- *   are entirely the caller's responsibility. Under
- *   `OpenPitSyncPolicy_Local` or `OpenPitSyncPolicy_Account`, the caller
- *   serialises per-handle invocation per the SDK threading contract; under
- *   `OpenPitSyncPolicy_Full`, the caller is responsible for making any state
- *   reachable through `user_data` safe under concurrent invocation.
+ * - `builder` must be a valid engine builder pointer.
+ * - `policy_group_id` assigns the policy to a policy group (pass `0` for
+ *   default).
+ * - At least one barrier axis must be configured: `broker` non-null,
+ *   `asset_len > 0`, or `account_asset_len > 0`.
+ * - When a length is greater than zero the corresponding pointer must point
+ *   to that many readable entries.
+ * - Each `settlement_asset` string view inside an array entry must be valid
+ *   for the duration of the call.
+ * - `max_quantity` and `max_notional` inside each limit must be valid.
  *
  * Success:
- * - returns a new caller-owned policy object.
+ * - returns `true`; the builder retains the policy.
  *
  * Error:
- * - returns null when `name` is invalid;
+ * - returns `false` when the builder is null or already consumed, when no
+ *   barrier axis is configured, or when argument parsing fails;
  * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
  *   error handle that MUST be released with `openpit_destroy_shared_string`.
- *
- * Lifetime contract:
- * - The policy stores its own copy of `name`; the caller may release the
- *   input string after this function returns.
- * - The returned pointer is owned by the caller and must be released with
- *   `openpit_destroy_pretrade_pre_trade_policy` when no longer needed.
- * - If the policy is added to the engine builder, the engine keeps its own
- *   reference, but the caller must still release the caller-owned pointer.
- * - `free_user_data_fn` runs once the last reference to the policy is
- *   released; when the engine is the final holder, it runs as part of engine
- *   destruction.
  */
-OpenPitPretradePreTradePolicy * openpit_create_pretrade_custom_pre_trade_policy(
-    OpenPitStringView name,
-    OpenPitPretradePreTradePolicyCheckPreTradeStartFn check_pre_trade_start_fn,
-    OpenPitPretradePreTradePolicyPerformPreTradeCheckFn perform_pre_trade_check_fn,
-    OpenPitPretradePreTradePolicyApplyExecutionReportFn apply_execution_report_fn,
-    OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn apply_account_adjustment_fn,
-    OpenPitPretradePreTradePolicyFreeUserDataFn free_user_data_fn,
-    void * user_data,
+bool openpit_engine_builder_add_builtin_order_size_limit_policy(
+    OpenPitEngineBuilder * builder,
+    uint16_t policy_group_id,
+    const OpenPitPretradePoliciesOrderSizeBrokerBarrier * broker,
+    const OpenPitPretradePoliciesOrderSizeAssetBarrier * asset,
+    size_t asset_len,
+    const OpenPitPretradePoliciesOrderSizeAccountAssetBarrier * account_asset,
+    size_t account_asset_len,
+    OpenPitOutError out_error
+);
+
+/**
+ * Adds the built-in order-validation policy to the engine builder.
+ *
+ * Contract:
+ * - `builder` must be a valid engine builder pointer.
+ * - `policy_group_id` assigns the policy to a policy group (pass `0` for
+ *   default).
+ *
+ * Success:
+ * - returns `true`; the builder retains the policy.
+ *
+ * Error:
+ * - returns `false` when the builder is null or already consumed;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ */
+bool openpit_engine_builder_add_builtin_order_validation_policy(
+    OpenPitEngineBuilder * builder,
+    uint16_t policy_group_id,
+    OpenPitOutError out_error
+);
+
+/**
+ * Adds the built-in P&L bounds kill-switch policy to the engine builder.
+ *
+ * Contract:
+ * - `builder` must be a valid engine builder pointer.
+ * - `policy_group_id` assigns the policy to a policy group (pass `0` for
+ *   default).
+ * - At least one barrier must be provided: `broker_len > 0` or `account_len
+ *   > 0`.
+ * - When a length is greater than zero the corresponding pointer must point
+ *   to that many readable entries.
+ * - Each `settlement_asset` string view inside an array entry must be valid
+ *   for the duration of the call.
+ *
+ * Success:
+ * - returns `true`; the builder retains the policy.
+ *
+ * Error:
+ * - returns `false` when the builder is null or already consumed, when no
+ *   barrier is configured, or when argument parsing fails;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ */
+bool openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
+    OpenPitEngineBuilder * builder,
+    uint16_t policy_group_id,
+    const OpenPitPretradePoliciesPnlBoundsBarrier * broker,
+    size_t broker_len,
+    const OpenPitPretradePoliciesPnlBoundsAccountBarrier * account,
+    size_t account_len,
+    OpenPitOutError out_error
+);
+
+/**
+ * Adds the built-in rate-limit policy to the engine builder.
+ *
+ * Contract:
+ * - `builder` must be a valid engine builder pointer.
+ * - `policy_group_id` assigns the policy to a policy group (pass `0` for
+ *   default).
+ * - At least one barrier axis must be configured: `broker` non-null,
+ *   `asset_len > 0`, `account_len > 0`, or `account_asset_len > 0`.
+ * - When a length is greater than zero the corresponding pointer must point
+ *   to that many readable entries.
+ * - Each `settlement_asset` string view inside an array entry must be valid
+ *   for the duration of the call.
+ *
+ * Success:
+ * - returns `true`; the builder retains the policy.
+ *
+ * Error:
+ * - returns `false` when the builder is null or already consumed, when no
+ *   barrier axis is configured, or when argument parsing fails;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ */
+bool openpit_engine_builder_add_builtin_rate_limit_policy(
+    OpenPitEngineBuilder * builder,
+    uint16_t policy_group_id,
+    const OpenPitPretradePoliciesRateLimitBrokerBarrier * broker,
+    const OpenPitPretradePoliciesRateLimitAssetBarrier * asset,
+    size_t asset_len,
+    const OpenPitPretradePoliciesRateLimitAccountBarrier * account,
+    size_t account_len,
+    const OpenPitPretradePoliciesRateLimitAccountAssetBarrier * account_asset,
+    size_t account_asset_len,
+    OpenPitOutError out_error
+);
+
+/**
+ * Adds the built-in spot funds policy to the engine builder.
+ *
+ * Contract:
+ * - `builder` must be a valid engine builder pointer.
+ * - `market_data` is a borrowed market-data service handle or null. Null
+ *   disables market orders entirely (limit-only mode): they are rejected
+ *   with `UnsupportedOrderType`. A non-null handle enables market orders;
+ *   the policy reads live quotes from the supplied market-data service.
+ * - `market_slippage_bps` is a pointer to a `u16` or null. When
+ *   `market_data` is non-null it MUST be non-null too (otherwise this is a
+ *   configuration error and the call fails). The value is the worst-case
+ *   global slippage in basis points (1 bps = 0.01%). Range validation is
+ *   performed by the core engine.
+ * - `pricing_source` selects the base price: `0` = Mark, `1` = BookTop.
+ * - `instrument_overrides` / `overrides_len` describe a contiguous array of
+ *   slippage overrides; pass null + 0 for none. Each entry selects an
+ *   instrument by `instrument_id` and a scope via its `account_id` /
+ *   `account_group_id` optionals: both unset is an instrument-level default,
+ *   a set `account_id` scopes the override to that account, a set
+ *   `account_group_id` scopes it to that account group. The two are mutually
+ *   exclusive; setting both fails the call. An entry with `has_slippage_bps
+ *   == false` is ignored. Slippage resolves account -> account group ->
+ *   instrument -> global per order.
+ * - `policy_group_id` tags the policy instance.
+ *
+ * Mismatch guard: when `market_data` is non-null and the engine is
+ * multi-threaded (`Full` or `Account` sync mode) but the market-data service
+ * was built in no-sync (`None`, no-op locks) mode, this call fails with a
+ * descriptive error. A no-sync engine accepts both no-sync and full-sync MD
+ * services.
+ *
+ * Success: returns `true`; the builder retains the policy.
+ *
+ * Error: returns `false`. If `out_error` is non-null, writes a caller-owned
+ * `OpenPitSharedString` error handle (release with
+ * `openpit_destroy_shared_string`).
+ */
+bool openpit_engine_builder_add_builtin_spot_funds_policy(
+    OpenPitEngineBuilder * builder,
+    const OpenPitMarketDataService * market_data,
+    const uint16_t * market_slippage_bps,
+    uint8_t pricing_source,
+    const OpenPitPretradePoliciesSpotFundsOverride * instrument_overrides,
+    size_t overrides_len,
+    uint16_t policy_group_id,
     OpenPitOutError out_error
 );
 
@@ -4129,6 +5143,1460 @@ OpenPitPretradePreTradePolicy * openpit_create_pretrade_custom_pre_trade_policy(
  * process lifetime. The caller must not release it.
  */
 OpenPitStringView openpit_get_runtime_version(void);
+
+/**
+ * Returns the build profile of the linked OpenPit runtime.
+ *
+ * This function never fails.
+ *
+ * The value is a stable, machine-parseable `key=value;`-delimited string (keys
+ * `version`, `profile`, `opt_level`, `debug_assertions`, `target`,
+ * `target_cpu`, `lto`). It lets a consumer reliably distinguish a debug core
+ * from a release core, for example to refuse latency-sensitive work on a debug
+ * build. The `target_cpu` and `lto` fields report the literal `unknown` when
+ * they cannot be determined at build time.
+ *
+ * The returned view is read-only, never null, and remains valid for the entire
+ * process lifetime. The caller must not release it.
+ */
+OpenPitStringView openpit_get_runtime_build_profile(void);
+
+/**
+ * Records a block against the account bound to an account-control handle.
+ *
+ * Records `block` against the bound account on the engine's shared
+ * blocked-accounts facility. The first cause recorded for an account wins;
+ * later calls for the same account are no-ops.
+ *
+ * Contract:
+ * - `control` must be a valid non-null account-control handle, or null.
+ * - `block` payload fields are copied into internal storage before this call
+ *   returns.
+ * - Passing a null `control` records nothing and has no effect.
+ *
+ * # Safety
+ *
+ * `control` must be either null or a valid account-control handle provided by
+ * this library.
+ */
+void openpit_account_control_block(
+    const OpenPitAccountControl * control,
+    OpenPitPretradeAccountBlock block
+);
+
+/**
+ * Returns a new handle referring to the same account-control facility.
+ *
+ * Use this to retain the ability to block the bound account from a later
+ * callback within the same pre-trade transaction. The returned handle records
+ * blocks against the same account as the source handle and shares its validity
+ * window: it is valid to use only within that pre-trade transaction, and is
+ * undefined afterwards.
+ *
+ * Success:
+ * - returns a non-null caller-owned handle to the same facility.
+ *
+ * Error:
+ * - returns null when `control` is null.
+ *
+ * Cleanup:
+ * - the returned handle MUST be released with
+ *   `openpit_destroy_account_control` exactly once.
+ *
+ * # Safety
+ *
+ * `control` must be either null or a valid account-control handle provided by
+ * this library.
+ */
+OpenPitAccountControl * openpit_account_control_clone(
+    const OpenPitAccountControl * control
+);
+
+/**
+ * Releases a caller-owned account-control handle.
+ *
+ * Lifetime contract:
+ * - Call this exactly once for each handle that was returned to the caller.
+ * - After this call the handle is no longer valid.
+ * - Passing a null pointer is allowed and has no effect.
+ * - This function always succeeds.
+ */
+void openpit_destroy_account_control(
+    OpenPitAccountControl * control
+);
+
+/**
+ * Returns an account-control handle for a main-stage pre-trade context.
+ *
+ * A main-stage pre-trade context carries account control only when an account
+ * could be bound to the request.
+ *
+ * Contract:
+ * - `ctx` must be the callback-scoped context pointer passed to a custom
+ *   main-stage pre-trade callback; it is valid only for the duration of that
+ *   callback.
+ *
+ * Success:
+ * - returns a non-null caller-owned handle when the context carries account
+ *   control.
+ *
+ * Error:
+ * - returns null when `ctx` is null or the context carries no account
+ *   control (no account could be bound).
+ *
+ * Cleanup:
+ * - the returned handle MUST be released with
+ *   `openpit_destroy_account_control` exactly once. It may be retained for
+ *   deferred blocking, but it is valid to use only within the pre-trade
+ *   transaction of this request — through the commit or rollback of its
+ *   reservation; recording a block through it afterwards is undefined.
+ *
+ * # Safety
+ *
+ * `ctx` must be either null or a valid callback-scoped pre-trade context
+ * pointer provided to this library.
+ */
+OpenPitAccountControl * openpit_pretrade_context_get_account_control(
+    const OpenPitPretradeContext * ctx
+);
+
+/**
+ * Returns an account-control handle for an account-adjustment context.
+ *
+ * An account-adjustment context always carries account control, so this call
+ * returns a non-null handle for any valid context.
+ *
+ * Contract:
+ * - `ctx` must be the callback-scoped context pointer passed to a custom
+ *   account-adjustment callback; it is valid only for the duration of that
+ *   callback.
+ *
+ * Success:
+ * - returns a non-null caller-owned handle.
+ *
+ * Error:
+ * - returns null when `ctx` is null.
+ *
+ * Cleanup:
+ * - the returned handle MUST be released with
+ *   `openpit_destroy_account_control` exactly once. It may be retained for
+ *   deferred blocking, but it is valid to use only within the account
+ *   adjustment processing of this request — through the commit or rollback
+ *   of that request; recording a block through it afterwards is undefined.
+ *
+ * # Safety
+ *
+ * `ctx` must be either null or a valid callback-scoped account-adjustment
+ * context pointer provided to this library.
+ */
+OpenPitAccountControl * openpit_account_adjustment_context_get_account_control(
+    const OpenPitAccountAdjustmentContext * ctx
+);
+
+/**
+ * Returns the account-group for a main-stage pre-trade context.
+ *
+ * Looks up the group registered for the bound order account. The result is
+ * cached on first call and reused for subsequent calls within the same context
+ * lifetime.
+ *
+ * Contract:
+ * - `ctx` must be the callback-scoped context pointer passed to a custom
+ *   main-stage pre-trade callback; it is valid only for the duration of that
+ *   callback.
+ * - `out_group` must be a valid non-null pointer.
+ *
+ * Success:
+ * - returns `true` and writes the group to `out_group` when the account is
+ *   registered in a group;
+ * - returns `false` when `ctx` is null, no account was bound to the request,
+ *   or the account belongs to no group; `out_group` is not written to.
+ *
+ * # Safety
+ *
+ * `ctx` must be either null or a valid callback-scoped pre-trade context
+ * pointer provided to this library.
+ */
+bool openpit_pretrade_context_get_account_group(
+    const OpenPitPretradeContext * ctx,
+    OpenPitParamAccountGroupId * out_group
+);
+
+/**
+ * Returns the account-group for an account-adjustment context.
+ *
+ * Looks up the group registered for the adjusted account. The result is cached
+ * on first call and reused for subsequent calls within the same context
+ * lifetime.
+ *
+ * Contract:
+ * - `ctx` must be the callback-scoped context pointer passed to a custom
+ *   account-adjustment callback; it is valid only for the duration of that
+ *   callback.
+ * - `out_group` must be a valid non-null pointer.
+ *
+ * Success:
+ * - returns `true` and writes the group to `out_group` when the account is
+ *   registered in a group;
+ * - returns `false` when `ctx` is null or the account belongs to no group;
+ *   `out_group` is not written to.
+ *
+ * # Safety
+ *
+ * `ctx` must be either null or a valid callback-scoped account-adjustment
+ * context pointer provided to this library.
+ */
+bool openpit_account_adjustment_context_get_account_group(
+    const OpenPitAccountAdjustmentContext * ctx,
+    OpenPitParamAccountGroupId * out_group
+);
+
+/**
+ * Returns the account-group for a post-trade context.
+ *
+ * Looks up the group registered for the report's account. The result is cached
+ * on first call and reused for subsequent calls within the same context
+ * lifetime.
+ *
+ * Contract:
+ * - `ctx` must be the callback-scoped context pointer passed to a custom
+ *   `apply_execution_report` callback; it is valid only for the duration of
+ *   that callback.
+ * - `out_group` must be a valid non-null pointer.
+ *
+ * Success:
+ * - returns `true` and writes the group to `out_group` when the account is
+ *   registered in a group;
+ * - returns `false` when `ctx` is null or the account belongs to no group;
+ *   `out_group` is not written to.
+ *
+ * # Safety
+ *
+ * `ctx` must be either null or a valid callback-scoped post-trade context
+ * pointer provided to this library.
+ */
+bool openpit_post_trade_context_get_account_group(
+    const OpenPitPostTradeContext * ctx,
+    OpenPitParamAccountGroupId * out_group
+);
+
+/**
+ * Constructs an account-group identifier from a 32-bit integer.
+ *
+ * This is a direct numeric mapping with no collision risk.
+ *
+ * The value `0` is reserved for the default account group
+ * (`OPENPIT_DEFAULT_ACCOUNT_GROUP`) and is rejected: every account already
+ * belongs to that group implicitly, so no external input may name it.
+ *
+ * WARNING: Do not mix IDs produced by this function with IDs produced by
+ * `openpit_create_param_account_group_id_from_string` in the same runtime
+ * state.
+ *
+ * Contract:
+ * - returns `true` and writes a stable account-group identifier to `out` on
+ *   success;
+ * - returns `false` on the reserved value (`0`) and optionally writes an
+ *   error message to `out_error`.
+ *
+ * # Safety
+ *
+ * `out` must be either null or a valid writable pointer.
+ */
+bool openpit_create_param_account_group_id_from_uint32(
+    uint32_t value,
+    OpenPitParamAccountGroupId * out,
+    OpenPitOutError out_error
+);
+
+/**
+ * Constructs an account-group identifier from a UTF-8 byte sequence using
+ * FNV-1a 32-bit hashing.
+ *
+ * The bytes are read only for the duration of the call. No trailing zero byte
+ * is required.
+ *
+ * Collision note:
+ * - different group strings can map to the same identifier;
+ * - for `n` distinct group strings the probability of at least one collision
+ *   is approximately `n^2 / (2 * 2^32)`.
+ * - if collision risk is unacceptable, keep your own collision-free
+ *   string-to-integer mapping and use
+ *   `openpit_create_param_account_group_id_from_uint32`.
+ *
+ * WARNING: Do not mix IDs produced by this function with IDs produced by
+ * `openpit_create_param_account_group_id_from_uint32` in the same runtime
+ * state.
+ *
+ * Contract:
+ * - returns `true` and writes a stable account-group identifier to `out` on
+ *   success;
+ * - returns `false` on invalid input (empty string) and optionally writes an
+ *   error message to `out_error`.
+ *
+ * # Safety
+ *
+ * `value.ptr` must be non-null and point to at least `value.len` readable
+ * UTF-8 bytes when `value.len > 0`.
+ */
+bool openpit_create_param_account_group_id_from_string(
+    OpenPitStringView value,
+    OpenPitParamAccountGroupId * out,
+    OpenPitOutError out_error
+);
+
+/**
+ * Releases a caller-owned account-adjustment outcome list.
+ *
+ * Contract:
+ * - passing null is allowed;
+ * - this function always succeeds.
+ *
+ * # Safety
+ *
+ * `outcomes` must be either null or a pointer returned by this library. The
+ * list must be destroyed at most once.
+ */
+void openpit_destroy_account_adjustment_outcome_list(
+    OpenPitAccountAdjustmentOutcomeList * outcomes
+);
+
+/**
+ * Returns the number of outcomes in the list.
+ *
+ * Contract:
+ * - `list` must be a valid non-null pointer;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ *
+ * # Safety
+ *
+ * `list` must be a valid non-null pointer returned by this library and must
+ * remain alive for the duration of this call.
+ */
+size_t openpit_account_adjustment_outcome_list_len(
+    const OpenPitAccountAdjustmentOutcomeList * list
+);
+
+/**
+ * Copies a non-owning outcome view at `index` into `out_outcome`.
+ *
+ * The copied view borrows string memory from `list`.
+ *
+ * Contract:
+ * - `list` must be a valid non-null pointer;
+ * - `out_outcome` must be a valid non-null pointer;
+ * - returns `true` when a value exists and was copied;
+ * - returns `false` when `index` is out of bounds and does not write
+ *   `out_outcome`;
+ * - the copied view remains valid while `list` is alive and unchanged;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ *
+ * # Safety
+ *
+ * `list` and `out_outcome` must be valid non-null pointers returned by or
+ * provided to this library and must remain alive for the duration of this
+ * call.
+ */
+bool openpit_account_adjustment_outcome_list_get(
+    const OpenPitAccountAdjustmentOutcomeList * list,
+    size_t index,
+    OpenPitAccountAdjustmentOutcome * out_outcome
+);
+
+/**
+ * Appends one lock price to the main-stage pre-trade result.
+ *
+ * # Safety
+ *
+ * If `result` is non-null it must be a valid, properly aligned pointer to an
+ * `OpenPitPretradePreTradeResult` that is exclusively accessible for the
+ * duration of this call.
+ *
+ * Contract:
+ * - `result` must be a valid non-null callback-scoped pointer;
+ * - `price` is validated with the same domain rules as
+ *   `openpit_create_param_price`;
+ * - no `policy_group_id` is accepted: the engine assigns the policy's group.
+ *
+ * Success:
+ * - returns `true`; the result now carries one extra lock price.
+ *
+ * Error:
+ * - returns `false` when `result` is null or `price` fails domain
+ *   validation;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ */
+bool openpit_pretrade_pre_trade_result_push_lock_price(
+    OpenPitPretradePreTradeResult * result,
+    OpenPitParamPrice price,
+    OpenPitOutError out_error
+);
+
+/**
+ * Appends one account-adjustment outcome to the main-stage pre-trade result.
+ *
+ * # Safety
+ *
+ * If `result` is non-null it must be a valid, properly aligned pointer to an
+ * `OpenPitPretradePreTradeResult` that is exclusively accessible for the
+ * duration of this call.
+ *
+ * Contract:
+ * - `result` must be a valid non-null callback-scoped pointer;
+ * - `entry` is validated with `OpenPitAccountOutcomeEntry::to_entry`;
+ * - no `policy_group_id` is accepted: the engine assigns the policy's group.
+ *
+ * Success:
+ * - returns `true`; the result now carries one extra account-adjustment
+ *   entry.
+ *
+ * Error:
+ * - returns `false` when `result` is null or `entry` fails validation;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ */
+bool openpit_pretrade_pre_trade_result_push_account_adjustment(
+    OpenPitPretradePreTradeResult * result,
+    OpenPitAccountOutcomeEntry entry,
+    OpenPitOutError out_error
+);
+
+/**
+ * Appends one group-tagged account-adjustment outcome to the post-trade list.
+ *
+ * # Safety
+ *
+ * If `list` is non-null it must be a valid, properly aligned pointer to an
+ * `OpenPitPostTradeAdjustmentList` that is exclusively accessible for the
+ * duration of this call.
+ *
+ * Contract:
+ * - `list` must be a valid non-null callback-scoped pointer;
+ * - `policy_group_id` tags the produced outcome;
+ * - `entry` is validated with `OpenPitAccountOutcomeEntry::to_entry`.
+ *
+ * Success:
+ * - returns `true`; the list now carries one extra outcome.
+ *
+ * Error:
+ * - returns `false` when `list` is null or `entry` fails validation;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ */
+bool openpit_pretrade_post_trade_adjustment_list_push(
+    OpenPitPostTradeAdjustmentList * list,
+    uint16_t policy_group_id,
+    OpenPitAccountOutcomeEntry entry,
+    OpenPitOutError out_error
+);
+
+/**
+ * Appends one account-outcome entry to the account-adjustment outcome list.
+ *
+ * # Safety
+ *
+ * If `list` is non-null it must be a valid, properly aligned pointer to an
+ * `OpenPitAccountOutcomeEntryList` that is exclusively accessible for the
+ * duration of this call.
+ *
+ * Contract:
+ * - `list` must be a valid non-null callback-scoped pointer;
+ * - `entry` is validated with `OpenPitAccountOutcomeEntry::to_entry`;
+ * - no `policy_group_id` is accepted: the engine assigns the policy's group.
+ *
+ * Success:
+ * - returns `true`; the list now carries one extra entry.
+ *
+ * Error:
+ * - returns `false` when `list` is null or `entry` fails validation;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ */
+bool openpit_account_outcome_entry_list_push(
+    OpenPitAccountOutcomeEntryList * list,
+    OpenPitAccountOutcomeEntry entry,
+    OpenPitOutError out_error
+);
+
+/**
+ * Releases a main-stage pre-trade result collector. Passing null is allowed.
+ *
+ * # Safety
+ *
+ * `result` must be either null or a pointer returned by this library, and must
+ * be destroyed at most once.
+ */
+void openpit_destroy_pretrade_pre_trade_result(
+    OpenPitPretradePreTradeResult * result
+);
+
+/**
+ * Releases a post-trade adjustment list collector. Passing null is allowed.
+ *
+ * # Safety
+ *
+ * `list` must be either null or a pointer returned by this library, and must
+ * be destroyed at most once.
+ */
+void openpit_destroy_post_trade_adjustment_list(
+    OpenPitPostTradeAdjustmentList * list
+);
+
+/**
+ * Releases an account-outcome entry list collector. Passing null is allowed.
+ *
+ * # Safety
+ *
+ * `list` must be either null or a pointer returned by this library, and must
+ * be destroyed at most once.
+ */
+void openpit_destroy_account_outcome_entry_list(
+    OpenPitAccountOutcomeEntryList * list
+);
+
+/**
+ * Releases a `OpenPitSharedBytes` handle.
+ *
+ * Null input is a no-op.
+ */
+void openpit_destroy_shared_bytes(
+    OpenPitSharedBytes * handle
+);
+
+/**
+ * Borrows a read-only view of the bytes stored in the handle.
+ *
+ * Returns an unset view (`ptr == null`, `len == 0`) when `handle` is null.
+ */
+OpenPitBytesView openpit_shared_bytes_view(
+    const OpenPitSharedBytes * handle
+);
+
+/**
+ * Returns an empty quote with every field unset.
+ *
+ * This function never fails.
+ */
+OpenPitMarketDataQuote openpit_create_marketdata_quote(void);
+
+/**
+ * Builds an infinite quote lifetime.
+ *
+ * This function never fails.
+ */
+OpenPitMarketDataQuoteTtl openpit_create_marketdata_quote_ttl_infinite(void);
+
+/**
+ * Builds a finite quote lifetime of `secs` seconds plus `nanos` nanoseconds.
+ *
+ * This function never fails.
+ */
+OpenPitMarketDataQuoteTtl openpit_create_marketdata_quote_ttl_within(
+    uint64_t secs,
+    uint32_t nanos
+);
+
+/**
+ * Creates a market-data service with the chosen synchronization mode.
+ *
+ * `mode` uses the same byte convention as `openpit_create_engine_builder`:
+ * - `0` = `None` (no internal synchronization: no-op locks, zero overhead,
+ *   single-threaded use only);
+ * - `1` = `Full` (full synchronization: real `RwLock`, safe for a concurrent
+ *   quote feed).
+ *
+ * Only `None` (0) and `Full` (1) are valid for a market-data service. Passing
+ * `2` (`Account`) or any other byte is an error.
+ *
+ * Success:
+ * - returns a non-null caller-owned `OpenPitMarketDataService` handle.
+ *
+ * Error:
+ * - returns null when `mode` is not `0` or `1`; if `out_error` is not null,
+ *   writes a caller-owned `OpenPitSharedString` error handle that MUST be
+ *   released with `openpit_destroy_shared_string`.
+ *
+ * Cleanup:
+ * - the returned service handle MUST be released with
+ *   `openpit_destroy_marketdata_service` exactly once.
+ */
+OpenPitMarketDataService * openpit_create_marketdata_service(
+    uint8_t mode,
+    OpenPitMarketDataQuoteTtl default_ttl,
+    OpenPitOutError out_error
+);
+
+/**
+ * Releases a market-data service handle.
+ *
+ * Contract:
+ * - passing null is allowed;
+ * - releases this handle; the underlying service stays alive while other
+ *   handles to it exist;
+ * - after this call the pointer is invalid;
+ * - this function always succeeds.
+ */
+void openpit_destroy_marketdata_service(
+    OpenPitMarketDataService * service
+);
+
+/**
+ * Returns a new handle referring to the same market-data service.
+ *
+ * Use this to hand the same service to a policy and a feed.
+ *
+ * Success:
+ * - returns a non-null caller-owned handle to the same service.
+ *
+ * Error:
+ * - returns null when `service` is null.
+ *
+ * Cleanup:
+ * - the returned handle MUST be released with
+ *   `openpit_destroy_marketdata_service` exactly once.
+ */
+OpenPitMarketDataService * openpit_marketdata_service_clone(
+    const OpenPitMarketDataService * service
+);
+
+/**
+ * Registers `instrument` with the service-wide default TTL.
+ *
+ * Status:
+ * - `Ok`: registered; the auto-assigned id was written to `out_id`;
+ * - `AlreadyRegistered`: the instrument is already registered;
+ * - `Error`: `service`/`out_id` is null or the instrument payload is
+ *   invalid; if `out_error` is not null, a caller-owned
+ *   `OpenPitSharedString` error handle was written that MUST be released
+ *   with `openpit_destroy_shared_string`.
+ */
+OpenPitMarketDataRegisterStatus openpit_marketdata_service_register(
+    const OpenPitMarketDataService * service,
+    const OpenPitInstrument * instrument,
+    OpenPitMarketDataInstrumentId * out_id,
+    OpenPitOutError out_error
+);
+
+/**
+ * Registers `instrument` with a per-instrument TTL override.
+ *
+ * Behaves like `openpit_marketdata_service_register` otherwise.
+ */
+OpenPitMarketDataRegisterStatus openpit_marketdata_service_register_with_ttl(
+    const OpenPitMarketDataService * service,
+    const OpenPitInstrument * instrument,
+    OpenPitMarketDataQuoteTtl ttl,
+    OpenPitMarketDataInstrumentId * out_id,
+    OpenPitOutError out_error
+);
+
+/**
+ * Registers `instrument` under the caller-supplied `instrument_id` with the
+ * service-wide default TTL.
+ *
+ * Status:
+ * - `Ok`: registered; `instrument_id` was written to `out_id`;
+ * - `DuplicateInstrument`: the instrument name is already registered under a
+ *   different id;
+ * - `DuplicateId`: `instrument_id` is already registered;
+ * - `Error`: `service`/`out_id` is null or the instrument payload is
+ *   invalid; if `out_error` is not null, a caller-owned
+ *   `OpenPitSharedString` error handle was written.
+ */
+OpenPitMarketDataRegisterStatus openpit_marketdata_service_register_with_id(
+    const OpenPitMarketDataService * service,
+    const OpenPitInstrument * instrument,
+    OpenPitMarketDataInstrumentId instrument_id,
+    OpenPitMarketDataInstrumentId * out_id,
+    OpenPitOutError out_error
+);
+
+/**
+ * Registers `instrument` under the caller-supplied `instrument_id` with a
+ * per-instrument TTL override.
+ *
+ * Behaves like `openpit_marketdata_service_register_with_id` otherwise.
+ */
+OpenPitMarketDataRegisterStatus
+openpit_marketdata_service_register_with_id_and_ttl(
+    const OpenPitMarketDataService * service,
+    const OpenPitInstrument * instrument,
+    OpenPitMarketDataInstrumentId instrument_id,
+    OpenPitMarketDataQuoteTtl ttl,
+    OpenPitMarketDataInstrumentId * out_id,
+    OpenPitOutError out_error
+);
+
+/**
+ * Pins the service-level TTL for `account_id`.
+ *
+ * Applies to every instrument for `account_id` that does not have a more
+ * specific instrument × account TTL cell.
+ *
+ * Contract:
+ * - `service` must be a valid non-null handle; passing null aborts the call;
+ * - this function never fails.
+ */
+void openpit_marketdata_service_set_account_ttl(
+    const OpenPitMarketDataService * service,
+    OpenPitParamAccountId account_id,
+    OpenPitMarketDataQuoteTtl ttl
+);
+
+/**
+ * Reverts the service-level TTL for `account_id` back to "inherit".
+ *
+ * Contract:
+ * - `service` must be a valid non-null handle; passing null aborts the call;
+ * - this function never fails.
+ */
+void openpit_marketdata_service_clear_account_ttl(
+    const OpenPitMarketDataService * service,
+    OpenPitParamAccountId account_id
+);
+
+/**
+ * Pins the service-level TTL for `account_group_id`.
+ *
+ * Pass `OPENPIT_DEFAULT_ACCOUNT_GROUP` (`0`) to set the service-level
+ * default-group TTL.
+ *
+ * Contract:
+ * - `service` must be a valid non-null handle; passing null aborts the call;
+ * - this function never fails.
+ */
+void openpit_marketdata_service_set_account_group_ttl(
+    const OpenPitMarketDataService * service,
+    OpenPitParamAccountGroupId account_group_id,
+    OpenPitMarketDataQuoteTtl ttl
+);
+
+/**
+ * Reverts the service-level TTL for `account_group_id` back to "inherit".
+ *
+ * Pass `OPENPIT_DEFAULT_ACCOUNT_GROUP` (`0`) to clear the default-group TTL.
+ *
+ * Contract:
+ * - `service` must be a valid non-null handle; passing null aborts the call;
+ * - this function never fails.
+ */
+void openpit_marketdata_service_clear_account_group_ttl(
+    const OpenPitMarketDataService * service,
+    OpenPitParamAccountGroupId account_group_id
+);
+
+/**
+ * Updates the instrument-level TTL for an already-registered instrument.
+ *
+ * This replaces the removed `openpit_marketdata_service_set_ttl`.
+ *
+ * Status:
+ * - `Ok`: updated; the new TTL takes effect on the next read;
+ * - `UnknownInstrument`: `instrument_id` is not registered.
+ *
+ * Contract:
+ * - `service` must be a valid non-null handle; passing null aborts the call.
+ */
+OpenPitMarketDataRegisterStatus openpit_marketdata_service_set_instrument_ttl(
+    const OpenPitMarketDataService * service,
+    OpenPitMarketDataInstrumentId instrument_id,
+    OpenPitMarketDataQuoteTtl ttl
+);
+
+/**
+ * Reverts the instrument-level TTL for `instrument_id` back to "inherit".
+ *
+ * Status:
+ * - `Ok`: cleared;
+ * - `UnknownInstrument`: `instrument_id` is not registered.
+ *
+ * Contract:
+ * - `service` must be a valid non-null handle; passing null aborts the call.
+ */
+OpenPitMarketDataRegisterStatus openpit_marketdata_service_clear_instrument_ttl(
+    const OpenPitMarketDataService * service,
+    OpenPitMarketDataInstrumentId instrument_id
+);
+
+/**
+ * Pins the instrument × account TTL cell for `(instrument_id, account_id)`.
+ *
+ * This is the highest-priority TTL tier (overrides all group and
+ * instrument-level cells for this account).
+ *
+ * Status:
+ * - `Ok`: pinned;
+ * - `UnknownInstrument`: `instrument_id` is not registered.
+ *
+ * Contract:
+ * - `service` must be a valid non-null handle; passing null aborts the call.
+ */
+OpenPitMarketDataRegisterStatus
+openpit_marketdata_service_set_instrument_account_ttl(
+    const OpenPitMarketDataService * service,
+    OpenPitMarketDataInstrumentId instrument_id,
+    OpenPitParamAccountId account_id,
+    OpenPitMarketDataQuoteTtl ttl
+);
+
+/**
+ * Reverts the instrument × account TTL cell for `(instrument_id, account_id)`
+ * back to "inherit".
+ *
+ * Status:
+ * - `Ok`: cleared;
+ * - `UnknownInstrument`: `instrument_id` is not registered.
+ *
+ * Contract:
+ * - `service` must be a valid non-null handle; passing null aborts the call.
+ */
+OpenPitMarketDataRegisterStatus
+openpit_marketdata_service_clear_instrument_account_ttl(
+    const OpenPitMarketDataService * service,
+    OpenPitMarketDataInstrumentId instrument_id,
+    OpenPitParamAccountId account_id
+);
+
+/**
+ * Pins the instrument × group TTL cell for `(instrument_id,
+ * account_group_id)`.
+ *
+ * Pass `OPENPIT_DEFAULT_ACCOUNT_GROUP` (`0`) for `account_group_id` to target
+ * the instrument's default-group TTL cell.
+ *
+ * Status:
+ * - `Ok`: pinned;
+ * - `UnknownInstrument`: `instrument_id` is not registered.
+ *
+ * Contract:
+ * - `service` must be a valid non-null handle; passing null aborts the call.
+ */
+OpenPitMarketDataRegisterStatus
+openpit_marketdata_service_set_instrument_account_group_ttl(
+    const OpenPitMarketDataService * service,
+    OpenPitMarketDataInstrumentId instrument_id,
+    OpenPitParamAccountGroupId account_group_id,
+    OpenPitMarketDataQuoteTtl ttl
+);
+
+/**
+ * Reverts the instrument × group TTL cell for `(instrument_id,
+ * account_group_id)` back to "inherit".
+ *
+ * Pass `OPENPIT_DEFAULT_ACCOUNT_GROUP` (`0`) for `account_group_id` to clear
+ * the instrument's default-group TTL cell.
+ *
+ * Status:
+ * - `Ok`: cleared;
+ * - `UnknownInstrument`: `instrument_id` is not registered.
+ *
+ * Contract:
+ * - `service` must be a valid non-null handle; passing null aborts the call.
+ */
+OpenPitMarketDataRegisterStatus
+openpit_marketdata_service_clear_instrument_account_group_ttl(
+    const OpenPitMarketDataService * service,
+    OpenPitMarketDataInstrumentId instrument_id,
+    OpenPitParamAccountGroupId account_group_id
+);
+
+/**
+ * Clears the stored quote for `instrument_id`.
+ *
+ * Contract:
+ * - `service` must be a valid non-null handle; passing null aborts the call;
+ * - a no-op if `instrument_id` is not registered;
+ * - this function never fails.
+ */
+void openpit_marketdata_service_clear(
+    const OpenPitMarketDataService * service,
+    OpenPitMarketDataInstrumentId instrument_id
+);
+
+/**
+ * Publishes a quote for `instrument_id`, replacing the entire stored snapshot.
+ *
+ * Status:
+ * - `Ok`: the snapshot was replaced;
+ * - `UnknownInstrument`: `instrument_id` is not registered;
+ * - `Error`: `service` is null or `quote` carries an invalid price; if
+ *   `out_error` is not null, a caller-owned `OpenPitSharedString` error
+ *   handle was written.
+ */
+OpenPitMarketDataRegisterStatus openpit_marketdata_service_push(
+    const OpenPitMarketDataService * service,
+    OpenPitMarketDataInstrumentId instrument_id,
+    OpenPitMarketDataQuote quote,
+    OpenPitOutError out_error
+);
+
+/**
+ * Publishes a partial update for `instrument_id`, merging it into the stored
+ * snapshot.
+ *
+ * Behaves like `openpit_marketdata_service_push` otherwise.
+ */
+OpenPitMarketDataRegisterStatus openpit_marketdata_service_push_patch(
+    const OpenPitMarketDataService * service,
+    OpenPitMarketDataInstrumentId instrument_id,
+    OpenPitMarketDataQuote quote,
+    OpenPitOutError out_error
+);
+
+/**
+ * Publishes a quote for `instrument_id` into the per-account bucket of every
+ * account in `account_ids` and the per-group bucket of every group in
+ * `account_group_ids`, replacing each target's snapshot.
+ *
+ * A null pointer with a matching length of `0` is a valid empty list.
+ *
+ * Status:
+ * - `Ok`: all targets were written;
+ * - `UnknownInstrument`: `instrument_id` is not registered;
+ * - `NoTarget`: both `account_ids` and `account_group_ids` are empty; use
+ *   `openpit_marketdata_service_push` to write the default bucket;
+ * - `Error`: `service` is null or `quote` carries an invalid price; if
+ *   `out_error` is not null, a caller-owned `OpenPitSharedString` error
+ *   handle was written.
+ */
+OpenPitMarketDataRegisterStatus openpit_marketdata_service_push_for(
+    const OpenPitMarketDataService * service,
+    OpenPitMarketDataInstrumentId instrument_id,
+    OpenPitMarketDataQuote quote,
+    const OpenPitParamAccountId * account_ids,
+    size_t account_ids_len,
+    const OpenPitParamAccountGroupId * account_group_ids,
+    size_t account_group_ids_len,
+    OpenPitOutError out_error
+);
+
+/**
+ * Publishes a partial update for `instrument_id` into the per-account bucket
+ * of every account in `account_ids` and the per-group bucket of every group in
+ * `account_group_ids`, merging independently into each target's existing
+ * snapshot.
+ *
+ * Behaves like `openpit_marketdata_service_push_for` otherwise.
+ */
+OpenPitMarketDataRegisterStatus openpit_marketdata_service_push_for_patch(
+    const OpenPitMarketDataService * service,
+    OpenPitMarketDataInstrumentId instrument_id,
+    OpenPitMarketDataQuote quote,
+    const OpenPitParamAccountId * account_ids,
+    size_t account_ids_len,
+    const OpenPitParamAccountGroupId * account_group_ids,
+    size_t account_group_ids_len,
+    OpenPitOutError out_error
+);
+
+/**
+ * Publishes a quote for `instrument`, replacing the stored snapshot.
+ *
+ * If `instrument` is unregistered, a named slot is created with the
+ * service-default TTL.
+ *
+ * Success:
+ * - returns `true` and writes the instrument's id to `out_id`.
+ *
+ * Error:
+ * - returns `false` when `service`/`out_id` is null, the instrument payload
+ *   is invalid, or `quote` carries an invalid price;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle.
+ */
+bool openpit_marketdata_service_push_by_instrument(
+    const OpenPitMarketDataService * service,
+    const OpenPitInstrument * instrument,
+    OpenPitMarketDataQuote quote,
+    OpenPitMarketDataInstrumentId * out_id,
+    OpenPitOutError out_error
+);
+
+/**
+ * Publishes a partial update for `instrument`, merging it into the stored
+ * snapshot.
+ *
+ * Behaves like `openpit_marketdata_service_push_by_instrument` otherwise.
+ */
+bool openpit_marketdata_service_push_by_instrument_patch(
+    const OpenPitMarketDataService * service,
+    const OpenPitInstrument * instrument,
+    OpenPitMarketDataQuote quote,
+    OpenPitMarketDataInstrumentId * out_id,
+    OpenPitOutError out_error
+);
+
+/**
+ * Reads the latest quote for `(instrument_id, account_id)` under the given
+ * resolution.
+ *
+ * `resolve_account_group` is a **required** callback that supplies the reading
+ * account's group **lazily** — it is invoked only when the resolution mode
+ * would consult a group or default-group bucket and the per-account bucket has
+ * no quote. The callback receives the caller-supplied `user_data` context
+ * pointer and, when the account belongs to a group, writes the group id to
+ * `out_account_group_id` and returns `true`; when the account has no group it
+ * returns `false`. Pass `OPENPIT_DEFAULT_ACCOUNT_GROUP` (`0`) to target the
+ * default group bucket.
+ *
+ * `resolution` controls which buckets are consulted, in order, when the
+ * more-specific bucket has no quote.
+ *
+ * Status:
+ * - `Found`: a usable quote was written to `out_quote`;
+ * - `Unavailable`: registered but no usable quote (never pushed, cleared, or
+ *   aged past TTL);
+ * - `UnknownInstrument`: `instrument_id` is not registered.
+ *
+ * Contract:
+ * - `service`, `resolve_account_group`, and `out_quote` must be valid
+ *   non-null pointers; passing null for any of them aborts the call.
+ */
+OpenPitMarketDataGetStatus openpit_marketdata_service_get(
+    const OpenPitMarketDataService * service,
+    OpenPitMarketDataInstrumentId instrument_id,
+    OpenPitParamAccountId account_id,
+    OpenPitMarketDataAccountGroupResolver resolve_account_group,
+    void * user_data,
+    OpenPitMarketDataQuoteResolution resolution,
+    OpenPitMarketDataQuote * out_quote
+);
+
+/**
+ * Resolves `instrument` to its registered id.
+ *
+ * Success:
+ * - returns `true` and writes the id to `out_id` when `instrument` is
+ *   registered by name;
+ * - returns `false` (without writing `out_id`) when the instrument is not
+ *   registered, the instrument payload is invalid, or `service`/`out_id` is
+ *   null.
+ *
+ * This call does not use `out_error`: a `false` result simply means "not
+ * resolved".
+ */
+bool openpit_marketdata_service_resolve(
+    const OpenPitMarketDataService * service,
+    const OpenPitInstrument * instrument,
+    OpenPitMarketDataInstrumentId * out_id
+);
+
+/**
+ * Allocates an empty lock.
+ *
+ * Success:
+ * - always returns a non-null caller-owned handle.
+ *
+ * Cleanup:
+ * - the caller MUST release the returned handle with
+ *   `openpit_destroy_pretrade_pre_trade_lock` exactly once.
+ */
+OpenPitPretradePreTradeLock * openpit_create_pretrade_pre_trade_lock(void);
+
+/**
+ * Releases a lock handle.
+ *
+ * Contract:
+ * - passing null is allowed;
+ * - after this call the pointer is invalid;
+ * - this function always succeeds.
+ */
+void openpit_destroy_pretrade_pre_trade_lock(
+    OpenPitPretradePreTradeLock * handle
+);
+
+/**
+ * Returns a deep copy of `lock`.
+ *
+ * Success:
+ * - returns a non-null caller-owned handle independent of `lock`.
+ *
+ * Error:
+ * - returns null when `lock` is null.
+ *
+ * Cleanup:
+ * - the caller MUST release the returned handle with
+ *   `openpit_destroy_pretrade_pre_trade_lock` exactly once.
+ */
+OpenPitPretradePreTradeLock * openpit_pretrade_pre_trade_lock_clone(
+    const OpenPitPretradePreTradeLock * lock
+);
+
+/**
+ * Total number of stored prices across all groups.
+ *
+ * `lock` must be a valid non-null handle. Passing null aborts the process.
+ */
+size_t openpit_pretrade_pre_trade_lock_len(
+    const OpenPitPretradePreTradeLock * lock
+);
+
+/**
+ * Returns `true` when the lock carries no price records.
+ *
+ * `lock` must be a valid non-null handle. Passing null aborts the process.
+ */
+bool openpit_pretrade_pre_trade_lock_is_empty(
+    const OpenPitPretradePreTradeLock * lock
+);
+
+/**
+ * Appends `price` under `policy_group_id`.
+ *
+ * Success:
+ * - returns `true`; the lock now carries one extra record for
+ *   `policy_group_id`.
+ *
+ * Error:
+ * - returns `false` when `lock` is null or when `price` fails domain
+ *   validation;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ */
+bool openpit_pretrade_pre_trade_lock_push(
+    OpenPitPretradePreTradeLock * lock,
+    uint16_t policy_group_id,
+    OpenPitParamPrice price,
+    OpenPitOutError out_error
+);
+
+/**
+ * Appends every `(policy_group_id, price)` record from `entries` into `lock`.
+ *
+ * `entries_ptr`/`entries_len` describe an array of
+ * `OpenPitPretradePreTradeLockEntry`. A zero length is allowed and leaves the
+ * lock unchanged regardless of `entries_ptr`.
+ *
+ * Success:
+ * - returns `true`; every record has been appended in input order.
+ *
+ * Error:
+ * - returns `false` when `lock` is null, when `entries_ptr` is null while
+ *   `entries_len` is non-zero, or when any price fails domain validation; on
+ *   the first invalid price no record is appended;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ */
+bool openpit_pretrade_pre_trade_lock_push_many(
+    OpenPitPretradePreTradeLock * lock,
+    const OpenPitPretradePreTradeLockEntry * entries_ptr,
+    size_t entries_len,
+    OpenPitOutError out_error
+);
+
+/**
+ * Builds a new lock populated from the given `(policy_group_id, price)`
+ * records.
+ *
+ * `entries_ptr`/`entries_len` describe an array of
+ * `OpenPitPretradePreTradeLockEntry`. A zero length is allowed and yields an
+ * empty lock regardless of `entries_ptr`.
+ *
+ * Success:
+ * - returns a non-null caller-owned lock handle.
+ *
+ * Error:
+ * - returns null when `entries_ptr` is null while `entries_len` is non-zero
+ *   or when any price fails domain validation;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ *
+ * Cleanup:
+ * - on success the caller MUST release the returned handle with
+ *   `openpit_destroy_pretrade_pre_trade_lock` exactly once.
+ */
+OpenPitPretradePreTradeLock *
+openpit_create_pretrade_pre_trade_lock_from_entries(
+    const OpenPitPretradePreTradeLockEntry * entries_ptr,
+    size_t entries_len,
+    OpenPitOutError out_error
+);
+
+/**
+ * Appends every record from `src` into `dst`, leaving `src` unchanged.
+ *
+ * Success:
+ * - returns `true`; `dst` now also carries every record from `src`.
+ *
+ * Error:
+ * - returns `false` when `dst` or `src` is null;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ */
+bool openpit_pretrade_pre_trade_lock_merge(
+    OpenPitPretradePreTradeLock * dst,
+    const OpenPitPretradePreTradeLock * src,
+    OpenPitOutError out_error
+);
+
+/**
+ * Releases a caller-owned lock price list.
+ *
+ * Contract:
+ * - `handle` must be a valid non-null pointer;
+ * - this function always succeeds.
+ */
+void openpit_destroy_pretrade_pre_trade_lock_prices(
+    OpenPitPretradePreTradeLockPrices * handle
+);
+
+/**
+ * Borrows a read-only view of a lock price list.
+ *
+ * `handle` must be a valid non-null pointer; violating this triggers a panic.
+ *
+ * Returns an unset view (`ptr == null`, `len == 0`) when the list is empty.
+ * The view remains valid only while `handle` is alive.
+ */
+OpenPitPretradePreTradeLockPricesView
+openpit_pretrade_pre_trade_lock_prices_view(
+    const OpenPitPretradePreTradeLockPrices * handle
+);
+
+/**
+ * Returns the prices stored under `policy_group_id`.
+ *
+ * Single-price case:
+ * - when the group holds exactly one price, it is written directly to
+ *   `out_price`.
+ *
+ * Status:
+ * - `Error`: `lock`, `out_price`, or `out_prices` is null; `out_error`
+ *   receives an error handle when provided.
+ * - `Empty`: the call succeeded and the group has no prices; `out_prices` is
+ *   set to null.
+ * - `One`: the call succeeded and `out_price` contains the only stored
+ *   price; `out_prices` is set to null.
+ * - `List`: the call succeeded and `out_prices` contains a caller-owned
+ *   list.
+ *
+ * Cleanup:
+ * - when status is `List`, the caller MUST release `*out_prices` with
+ *   `openpit_destroy_pretrade_pre_trade_lock_prices` exactly once.
+ */
+OpenPitPretradePreTradeLockPricesStatus
+openpit_pretrade_pre_trade_lock_prices_of(
+    const OpenPitPretradePreTradeLock * lock,
+    uint16_t policy_group_id,
+    OpenPitParamPrice * out_price,
+    OpenPitPretradePreTradeLockPrices ** out_prices,
+    OpenPitOutError out_error
+);
+
+/**
+ * Returns a caller-owned snapshot of every `(policy_group_id, price)` record
+ * stored in `lock`, in iteration order (default-group records first, then each
+ * non-default group in insertion order).
+ *
+ * `lock` must be a valid non-null handle. Passing null aborts the process.
+ *
+ * Cleanup:
+ * - the caller MUST release the returned handle with
+ *   `openpit_destroy_pretrade_pre_trade_lock_entries` exactly once.
+ */
+OpenPitPretradePreTradeLockEntries * openpit_pretrade_pre_trade_lock_entries(
+    const OpenPitPretradePreTradeLock * lock
+);
+
+/**
+ * Releases a caller-owned lock entry snapshot.
+ *
+ * Contract:
+ * - `handle` must be a valid non-null pointer;
+ * - this function always succeeds.
+ */
+void openpit_destroy_pretrade_pre_trade_lock_entries(
+    OpenPitPretradePreTradeLockEntries * handle
+);
+
+/**
+ * Borrows a read-only view of a lock entry snapshot.
+ *
+ * `handle` must be a valid non-null pointer; violating this triggers a panic.
+ *
+ * Returns an unset view (`ptr == null`, `len == 0`) when the snapshot is
+ * empty. The view remains valid only while `handle` is alive.
+ */
+OpenPitPretradePreTradeLockEntriesView
+openpit_pretrade_pre_trade_lock_entries_view(
+    const OpenPitPretradePreTradeLockEntries * handle
+);
+
+/**
+ * Serializes the lock as MessagePack.
+ *
+ * Success:
+ * - returns a non-null caller-owned `OpenPitSharedBytes` carrying the
+ *   MessagePack payload.
+ *
+ * Error:
+ * - returns null when `lock` is null or when the encoder fails;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ *
+ * Cleanup:
+ * - on success the caller MUST release the returned handle with
+ *   `openpit_destroy_shared_bytes` exactly once.
+ */
+OpenPitSharedBytes * openpit_pretrade_pre_trade_lock_to_msgpack(
+    const OpenPitPretradePreTradeLock * lock,
+    OpenPitOutError out_error
+);
+
+/**
+ * Builds a new lock from a MessagePack payload.
+ *
+ * Success:
+ * - returns a non-null caller-owned lock handle.
+ *
+ * Error:
+ * - returns null when `data_ptr` is null or when the payload cannot be
+ *   decoded;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ *
+ * Cleanup:
+ * - on success the caller MUST release the returned handle with
+ *   `openpit_destroy_pretrade_pre_trade_lock` exactly once.
+ */
+OpenPitPretradePreTradeLock *
+openpit_create_pretrade_pre_trade_lock_from_msgpack(
+    const uint8_t * data_ptr,
+    size_t data_len,
+    OpenPitOutError out_error
+);
+
+/**
+ * Serializes the lock as compact JSON.
+ *
+ * Success:
+ * - returns a non-null caller-owned `OpenPitSharedString` carrying the JSON
+ *   payload.
+ *
+ * Error:
+ * - returns null when `lock` is null or when the encoder fails;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ *
+ * Cleanup:
+ * - on success the caller MUST release the returned handle with
+ *   `openpit_destroy_shared_string` exactly once.
+ */
+OpenPitSharedString * openpit_pretrade_pre_trade_lock_to_json(
+    const OpenPitPretradePreTradeLock * lock,
+    OpenPitOutError out_error
+);
+
+/**
+ * Builds a new lock from a JSON payload produced by
+ * `openpit_pretrade_pre_trade_lock_to_json` (or any compatible serializer).
+ *
+ * `text_ptr`/`text_len` describe a UTF-8 byte sequence.
+ *
+ * Success:
+ * - returns a non-null caller-owned lock handle.
+ *
+ * Error:
+ * - returns null when `text_ptr` is null or when the payload cannot be
+ *   decoded (invalid UTF-8 or invalid lock JSON);
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ *
+ * Cleanup:
+ * - on success the caller MUST release the returned handle with
+ *   `openpit_destroy_pretrade_pre_trade_lock` exactly once.
+ */
+OpenPitPretradePreTradeLock * openpit_create_pretrade_pre_trade_lock_from_json(
+    const uint8_t * text_ptr,
+    size_t text_len,
+    OpenPitOutError out_error
+);
+
+/**
+ * Serializes the lock as CBOR.
+ *
+ * Success:
+ * - returns a non-null caller-owned `OpenPitSharedBytes` carrying the CBOR
+ *   payload.
+ *
+ * Error:
+ * - returns null when `lock` is null or when the encoder fails;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ *
+ * Cleanup:
+ * - on success the caller MUST release the returned handle with
+ *   `openpit_destroy_shared_bytes` exactly once.
+ */
+OpenPitSharedBytes * openpit_pretrade_pre_trade_lock_to_cbor(
+    const OpenPitPretradePreTradeLock * lock,
+    OpenPitOutError out_error
+);
+
+/**
+ * Builds a new lock from a CBOR payload.
+ *
+ * Success:
+ * - returns a non-null caller-owned lock handle.
+ *
+ * Error:
+ * - returns null when `data_ptr` is null or when the payload cannot be
+ *   decoded;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ *
+ * Cleanup:
+ * - on success the caller MUST release the returned handle with
+ *   `openpit_destroy_pretrade_pre_trade_lock` exactly once.
+ */
+OpenPitPretradePreTradeLock * openpit_create_pretrade_pre_trade_lock_from_cbor(
+    const uint8_t * data_ptr,
+    size_t data_len,
+    OpenPitOutError out_error
+);
+
+/**
+ * Serializes the lock using the in-process binary-stable raw layout.
+ *
+ * `lock` must be a valid non-null handle; violating this triggers a panic.
+ *
+ * Success:
+ * - always returns a non-null caller-owned `OpenPitSharedBytes` carrying the
+ *   raw payload.
+ *
+ * Cleanup:
+ * - the caller MUST release the returned handle with
+ *   `openpit_destroy_shared_bytes` exactly once.
+ */
+OpenPitSharedBytes * openpit_pretrade_pre_trade_lock_to_raw(
+    const OpenPitPretradePreTradeLock * lock
+);
+
+/**
+ * Builds a new lock from a raw payload produced by
+ * `openpit_pretrade_pre_trade_lock_to_raw`.
+ *
+ * Success:
+ * - returns a non-null caller-owned lock handle.
+ *
+ * Error:
+ * - returns null when `data_ptr` is null or when the payload cannot be
+ *   decoded;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ *
+ * Cleanup:
+ * - on success the caller MUST release the returned handle with
+ *   `openpit_destroy_pretrade_pre_trade_lock` exactly once.
+ */
+OpenPitPretradePreTradeLock * openpit_create_pretrade_pre_trade_lock_from_raw(
+    const uint8_t * data_ptr,
+    size_t data_len,
+    OpenPitOutError out_error
+);
 
 /**
  * Releases a `OpenPitSharedString` handle.

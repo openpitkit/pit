@@ -45,8 +45,8 @@ func TestNewNotionalFromStringRejectsNegative(t *testing.T) {
 func TestNotionalZeroIsZero(t *testing.T) {
 	t.Parallel()
 
-	if !NotionalZero().IsZero() {
-		t.Fatal("NotionalZero().IsZero() must be true")
+	if !NewNotionalZero().IsZero() {
+		t.Fatal("NewNotionalZero().IsZero() must be true")
 	}
 }
 
@@ -82,7 +82,7 @@ func TestNotionalCalculateMarginRequired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNotionalFromString failed: %v", err)
 	}
-	leverage := NewLeverageFromInt(100)
+	leverage := NewLeverageFromUint16(100)
 
 	margin, err := notional.CalculateMarginRequired(leverage)
 	if err != nil {
@@ -147,7 +147,7 @@ func TestNotionalCompare(t *testing.T) {
 	if large.Compare(small) <= 0 {
 		t.Fatal("large.Compare(small) must be positive")
 	}
-	if small.Compare(small) != 0 { // nolint
+	if small.Compare(small) != 0 { //nolint:gocritic // testing reflexivity: Compare(x,x) must return 0
 		t.Fatal("same.Compare(same) must be 0")
 	}
 }

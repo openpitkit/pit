@@ -45,22 +45,49 @@ typedef struct OpenPitAccountAdjustmentPositionOperation {
 } OpenPitAccountAdjustmentPositionOperation;
 ```
 
-## `OpenPitAccountAdjustmentBalanceOperationOptional`
+## `OpenPitAccountAdjustmentOperationKind`
+
+Selects which account-adjustment operation payload is present.
+
+At most one operation payload can be selected at a time:
+
+- `Absent` means no operation is supplied;
+- `Balance` selects the balance-operation payload;
+- `Position` selects the position-operation payload.
 
 ```c
-typedef struct OpenPitAccountAdjustmentBalanceOperationOptional {
-    OpenPitAccountAdjustmentBalanceOperation value;
-    bool is_set;
-} OpenPitAccountAdjustmentBalanceOperationOptional;
+typedef uint8_t OpenPitAccountAdjustmentOperationKind;
+/**
+ * No operation is supplied.
+ */
+#define OpenPitAccountAdjustmentOperationKind_Absent \
+    ((OpenPitAccountAdjustmentOperationKind) 0)
+/**
+ * The balance-operation payload is selected.
+ */
+#define OpenPitAccountAdjustmentOperationKind_Balance \
+    ((OpenPitAccountAdjustmentOperationKind) 1)
+/**
+ * The position-operation payload is selected.
+ */
+#define OpenPitAccountAdjustmentOperationKind_Position \
+    ((OpenPitAccountAdjustmentOperationKind) 2)
 ```
 
-## `OpenPitAccountAdjustmentPositionOperationOptional`
+## `OpenPitAccountAdjustmentOperation`
+
+Account-adjustment operation as a single discriminated value.
+
+`kind` selects which payload is meaningful; the payload not selected by `kind`
+is ignored. Because a single discriminant chooses the payload, supplying both a
+balance and a position operation at once is not representable.
 
 ```c
-typedef struct OpenPitAccountAdjustmentPositionOperationOptional {
-    OpenPitAccountAdjustmentPositionOperation value;
-    bool is_set;
-} OpenPitAccountAdjustmentPositionOperationOptional;
+typedef struct OpenPitAccountAdjustmentOperation {
+    OpenPitAccountAdjustmentOperationKind kind;
+    OpenPitAccountAdjustmentBalanceOperation balance;
+    OpenPitAccountAdjustmentPositionOperation position;
+} OpenPitAccountAdjustmentOperation;
 ```
 
 ## `OpenPitAccountAdjustmentAmount`
@@ -71,9 +98,9 @@ The group is absent when every field is absent.
 
 ```c
 typedef struct OpenPitAccountAdjustmentAmount {
-    OpenPitParamAdjustmentAmount total;
-    OpenPitParamAdjustmentAmount reserved;
-    OpenPitParamAdjustmentAmount pending;
+    OpenPitParamAdjustmentAmount balance;
+    OpenPitParamAdjustmentAmount held;
+    OpenPitParamAdjustmentAmount incoming;
 } OpenPitAccountAdjustmentAmount;
 ```
 
@@ -85,12 +112,12 @@ The group is absent when every bound is absent.
 
 ```c
 typedef struct OpenPitAccountAdjustmentBounds {
-    OpenPitParamPositionSizeOptional total_upper;
-    OpenPitParamPositionSizeOptional total_lower;
-    OpenPitParamPositionSizeOptional reserved_upper;
-    OpenPitParamPositionSizeOptional reserved_lower;
-    OpenPitParamPositionSizeOptional pending_upper;
-    OpenPitParamPositionSizeOptional pending_lower;
+    OpenPitParamPositionSizeOptional balance_upper;
+    OpenPitParamPositionSizeOptional balance_lower;
+    OpenPitParamPositionSizeOptional held_upper;
+    OpenPitParamPositionSizeOptional held_lower;
+    OpenPitParamPositionSizeOptional incoming_upper;
+    OpenPitParamPositionSizeOptional incoming_lower;
 } OpenPitAccountAdjustmentBounds;
 ```
 
@@ -100,8 +127,7 @@ Full caller-owned account-adjustment payload.
 
 ```c
 typedef struct OpenPitAccountAdjustment {
-    OpenPitAccountAdjustmentBalanceOperationOptional balance_operation;
-    OpenPitAccountAdjustmentPositionOperationOptional position_operation;
+    OpenPitAccountAdjustmentOperation operation;
     OpenPitAccountAdjustmentAmountOptional amount;
     OpenPitAccountAdjustmentBoundsOptional bounds;
     void * user_data;
@@ -147,4 +173,18 @@ typedef struct OpenPitAccountAdjustmentBoundsOptional {
     OpenPitAccountAdjustmentBounds value;
     bool is_set;
 } OpenPitAccountAdjustmentBoundsOptional;
+```
+
+## `openpit_param_adjustment_amount_to_string`
+
+Renders an adjustment amount into a caller-owned shared string.
+
+Returns null and writes `out_error` when the amount is not set or its numeric
+value cannot be decoded.
+
+```c
+OpenPitSharedString * openpit_param_adjustment_amount_to_string(
+    OpenPitParamAdjustmentAmount value,
+    OpenPitOutParamError out_error
+);
 ```

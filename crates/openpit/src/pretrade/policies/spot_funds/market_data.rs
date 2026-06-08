@@ -1,0 +1,696 @@
+// Copyright The Pit Project Owners. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Please see https://github.com/openpitkit and the OWNERS file for details.
+
+//! Market-data configuration for [`SpotFundsPolicy`](super::SpotFundsPolicy).
+
+use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
+
+use crate::core::instrument::Instrument;
+use crate::marketdata::{
+    AccountInfo, InstrumentId, MarketDataService, MarketDataSync, Quote, QuoteResolution,
+};
+use crate::param::{AccountGroupId, AccountId, Price};
+
+use super::market_order_pricer::WithSlippage;
+
+// ─── SpotFundsConfigError ─────────────────────────────────────────────────────
+
+/// Error returned by [`SpotFundsMarketData::new`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpotFundsConfigError {
+    /// The slippage value is out of the accepted range (0..=10 000 bps).
+    SlippageOutOfRange {
+        /// The bps value that triggered the error.
+        bps: u16,
+    },
+}
+
+impl Display for SpotFundsConfigError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SlippageOutOfRange { bps } => {
+                write!(
+                    f,
+                    "slippage {bps} bps is out of range (must be <= 10 000 bps)"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SpotFundsConfigError {}
+
+// ─── SpotFundsPriceError ──────────────────────────────────────────────────────
+
+/// Error returned by the effective-price helpers on
+/// [`SpotFundsMarketData`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SpotFundsPriceError {
+    /// No usable quote is available for the instrument.
+    QuoteUnavailable,
+    /// The effective price could not be computed (decimal overflow or
+    /// non-positive result).
+    CalculationFailed,
+}
+
+// ─── SpotFundsPricingSource ───────────────────────────────────────────────────
+
+/// Source the policy uses to derive the base price for a market order
+/// before slippage is applied.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpotFundsPricingSource {
+    /// Use the stored `mark` price. The order would notionally be priced at
+    /// `mark * (1 + slippage)` for buys and `mark * (1 - slippage)` for
+    /// sells.
+    ///
+    /// Returns `SpotFundsPriceError::QuoteUnavailable` if the stored quote
+    /// has no `mark` field.
+    #[default]
+    Mark,
+    /// Use the side of the book that the order would cross: `ask` for buys
+    /// and `bid` for sells. Slippage is added as a cushion on top
+    /// (`ask * (1 + slippage)` / `bid * (1 - slippage)`).
+    ///
+    /// Returns `SpotFundsPriceError::QuoteUnavailable` if the relevant
+    /// side of the book is missing from the stored quote - no implicit
+    /// fallback to `mark`.
+    BookTop,
+}
+
+// ─── SpotFundsOverride ────────────────────────────────────────────────────────
+
+/// Override *value* applied at a slippage-cascade target.
+///
+/// Holds the slippage knob a [`SpotFundsOverrideTarget`] applies to the
+/// instrument/account/account group it selects. Every field is optional: a `None`
+/// means "fall back to the next tier of the cascade and ultimately the global
+/// setting configured on the bundle". The struct is named to flag its role as
+/// the container for override knobs - future settings land here as additional
+/// `Option<_>` fields, and call sites that initialise it via
+/// `..Default::default()` keep compiling.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpotFundsOverride {
+    /// Slippage in basis points applied at the target. `None` defers to the
+    /// next tier of the cascade (and ultimately the global `slippage_bps`
+    /// configured on [`SpotFundsMarketData::new`]).
+    pub slippage_bps: Option<u16>,
+}
+
+// ─── SpotFundsOverrideTarget ──────────────────────────────────────────────────
+
+/// Selects which accounts a [`SpotFundsOverride`] applies to within the
+/// slippage resolution cascade.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpotFundsOverrideTarget {
+    /// Instrument-level default: applies when no account- or account-group-scoped
+    /// override matches the order's account.
+    Instrument(InstrumentId),
+    /// Applies to the instrument only for this exact account (highest priority).
+    InstrumentAccount(InstrumentId, AccountId),
+    /// Applies to the instrument only for accounts in this account group.
+    InstrumentAccountGroup(InstrumentId, AccountGroupId),
+}
+
+// ─── SpotFundsMarketData ──────────────────────────────────────────────────────
+
+/// Market-data configuration for [`SpotFundsPolicy`](super::SpotFundsPolicy).
+///
+/// Pairs a shared [`MarketDataService`] handle with the worst-case slippage,
+/// the [`SpotFundsPricingSource`] used to derive the base price for a market
+/// order, and an optional set of [`SpotFundsOverride`]s scoped by
+/// [`SpotFundsOverrideTarget`]. Slippage is resolved per order along three
+/// override scopes - per `(instrument, account_id)`, per
+/// `(instrument, account_group_id)`, and per `instrument` - falling back to the
+/// global slippage. Everything is
+/// fixed at construction time; the bundle is then handed to
+/// [`SpotFundsPolicy::new`](super::SpotFundsPolicy::new).
+///
+/// Pass `None` to [`SpotFundsPolicy::new`](super::SpotFundsPolicy::new) to
+/// disable market orders entirely (rejected with
+/// [`crate::pretrade::RejectCode::UnsupportedOrderType`]).
+pub struct SpotFundsMarketData<Sync: MarketDataSync> {
+    market_data: Sync::Shared<MarketDataService<Sync>>,
+    pricing_source: SpotFundsPricingSource,
+    global_pricer: WithSlippage,
+    account_overrides: HashMap<(InstrumentId, AccountId), WithSlippage>,
+    account_group_overrides: HashMap<(InstrumentId, AccountGroupId), WithSlippage>,
+    instrument_overrides: HashMap<InstrumentId, WithSlippage>,
+}
+
+impl<Sync: MarketDataSync> SpotFundsMarketData<Sync> {
+    /// Builds the bundle from the full set of configuration parameters.
+    ///
+    /// All parameters are required; pass `SpotFundsPricingSource::Mark` for
+    /// the default source and `[]` (or any empty iterator) for no overrides.
+    ///
+    /// Each `(target, override)` pair places a [`SpotFundsOverride`] into one
+    /// of three slippage scopes selected by [`SpotFundsOverrideTarget`]: per
+    /// `(instrument, account_id)`, per `(instrument, account_group_id)`, or
+    /// per-instrument default. The slippage for an order resolves
+    /// account -> account group -> instrument -> global. An override whose
+    /// `slippage_bps` is `None` is ignored (the cascade falls through to the
+    /// next tier).
+    ///
+    /// Returns [`SpotFundsConfigError::SlippageOutOfRange`] when
+    /// `slippage_bps > 10_000` or when any override carries a `slippage_bps`
+    /// above the same bound.
+    pub fn new<Overrides>(
+        market_data: Sync::Shared<MarketDataService<Sync>>,
+        slippage_bps: u16,
+        pricing_source: SpotFundsPricingSource,
+        overrides: Overrides,
+    ) -> Result<Self, SpotFundsConfigError>
+    where
+        Overrides: IntoIterator<Item = (SpotFundsOverrideTarget, SpotFundsOverride)>,
+    {
+        if slippage_bps > 10_000 {
+            return Err(SpotFundsConfigError::SlippageOutOfRange { bps: slippage_bps });
+        }
+        let global_pricer = WithSlippage::new(slippage_bps);
+        let mut account_overrides = HashMap::new();
+        let mut account_group_overrides = HashMap::new();
+        let mut instrument_overrides = HashMap::new();
+        for (target, ovr) in overrides {
+            let Some(bps) = ovr.slippage_bps else {
+                continue;
+            };
+            if bps > 10_000 {
+                return Err(SpotFundsConfigError::SlippageOutOfRange { bps });
+            }
+            let pricer = WithSlippage::new(bps);
+            match target {
+                SpotFundsOverrideTarget::Instrument(instrument_id) => {
+                    instrument_overrides.insert(instrument_id, pricer);
+                }
+                SpotFundsOverrideTarget::InstrumentAccount(instrument_id, account_id) => {
+                    account_overrides.insert((instrument_id, account_id), pricer);
+                }
+                SpotFundsOverrideTarget::InstrumentAccountGroup(
+                    instrument_id,
+                    account_group_id,
+                ) => {
+                    account_group_overrides.insert((instrument_id, account_group_id), pricer);
+                }
+            }
+        }
+        Ok(Self {
+            market_data,
+            pricing_source,
+            global_pricer,
+            account_overrides,
+            account_group_overrides,
+            instrument_overrides,
+        })
+    }
+
+    fn pricer_for(
+        &self,
+        instrument_id: InstrumentId,
+        account_id: AccountId,
+        account_info: &impl AccountInfo,
+    ) -> &WithSlippage {
+        if let Some(p) = self.account_overrides.get(&(instrument_id, account_id)) {
+            return p;
+        }
+        if let Some(account_group_id) = account_info.group() {
+            if let Some(p) = self
+                .account_group_overrides
+                .get(&(instrument_id, account_group_id))
+            {
+                return p;
+            }
+        }
+        if let Some(p) = self.instrument_overrides.get(&instrument_id) {
+            return p;
+        }
+        &self.global_pricer
+    }
+
+    /// Raw quote field used as the base for buy-side pricing before slippage
+    /// is applied; `None` when the relevant field is missing from the quote.
+    fn pricing_base_for_buy(&self, quote: &Quote) -> Option<Price> {
+        match self.pricing_source {
+            SpotFundsPricingSource::Mark => quote.mark,
+            SpotFundsPricingSource::BookTop => quote.ask,
+        }
+    }
+
+    /// Raw quote field used as the base for sell-side pricing before slippage
+    /// is applied; `None` when the relevant field is missing from the quote.
+    fn pricing_base_for_sell(&self, quote: &Quote) -> Option<Price> {
+        match self.pricing_source {
+            SpotFundsPricingSource::Mark => quote.mark,
+            SpotFundsPricingSource::BookTop => quote.bid,
+        }
+    }
+
+    pub(super) fn effective_buy_price(
+        &self,
+        instrument_id: InstrumentId,
+        account_id: AccountId,
+        account_info: &impl AccountInfo,
+    ) -> Result<Price, SpotFundsPriceError> {
+        let quote = self
+            .market_data
+            .get(
+                instrument_id,
+                account_id,
+                account_info,
+                QuoteResolution::AccountThenGroupThenDefault,
+            )
+            .ok_or(SpotFundsPriceError::QuoteUnavailable)?;
+        let base = self
+            .pricing_base_for_buy(&quote)
+            .ok_or(SpotFundsPriceError::QuoteUnavailable)?;
+        self.pricer_for(instrument_id, account_id, account_info)
+            .effective_buy_price(base)
+            .map_err(|_| SpotFundsPriceError::CalculationFailed)
+    }
+
+    pub(super) fn effective_sell_price(
+        &self,
+        instrument_id: InstrumentId,
+        account_id: AccountId,
+        account_info: &impl AccountInfo,
+    ) -> Result<Price, SpotFundsPriceError> {
+        let quote = self
+            .market_data
+            .get(
+                instrument_id,
+                account_id,
+                account_info,
+                QuoteResolution::AccountThenGroupThenDefault,
+            )
+            .ok_or(SpotFundsPriceError::QuoteUnavailable)?;
+        let base = self
+            .pricing_base_for_sell(&quote)
+            .ok_or(SpotFundsPriceError::QuoteUnavailable)?;
+        self.pricer_for(instrument_id, account_id, account_info)
+            .effective_sell_price(base)
+            .map_err(|_| SpotFundsPriceError::CalculationFailed)
+    }
+
+    pub(super) fn resolve(&self, instrument: &Instrument) -> Option<InstrumentId> {
+        self.market_data.resolve(instrument)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::marketdata::{MarketDataBuilder, Quote, QuoteTtl};
+    use crate::param::{Asset, Price};
+    use crate::FullSync;
+
+    fn px(s: &str) -> Price {
+        Price::from_str(s).expect("valid price")
+    }
+
+    fn asset(s: &str) -> Asset {
+        Asset::new(s).expect("valid asset")
+    }
+
+    fn account(n: u64) -> AccountId {
+        AccountId::from_u64(n)
+    }
+
+    fn group(n: u32) -> AccountGroupId {
+        AccountGroupId::from_u32(n).expect("valid account group id")
+    }
+
+    /// Registers `AAPL/USD` with `mark = 100` in the default bucket and returns
+    /// the service handle plus the instrument id. The default bucket is
+    /// reachable by any account under `AccountThenGroupThenDefault`, so every
+    /// effective-price call below shares the same base price and any change in
+    /// the result is attributable solely to the slippage tier selected.
+    fn service_with_mark_100() -> (Arc<MarketDataService<FullSync>>, InstrumentId) {
+        let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+        let id = svc
+            .register(Instrument::new(asset("AAPL"), asset("USD")))
+            .expect("register must succeed");
+        svc.push(id, Quote::new().with_mark(px("100")))
+            .expect("push must succeed");
+        (svc, id)
+    }
+
+    fn buy_price<Overrides>(
+        slippage_bps: u16,
+        overrides: Overrides,
+        account_id: AccountId,
+        account_info: &impl AccountInfo,
+    ) -> Result<Price, SpotFundsPriceError>
+    where
+        Overrides: IntoIterator<Item = (SpotFundsOverrideTarget, SpotFundsOverride)>,
+    {
+        let (svc, id) = service_with_mark_100();
+        let bundle = SpotFundsMarketData::<FullSync>::new(
+            Arc::clone(&svc),
+            slippage_bps,
+            SpotFundsPricingSource::Mark,
+            overrides,
+        )
+        .expect("bundle must build");
+        bundle.effective_buy_price(id, account_id, account_info)
+    }
+
+    #[test]
+    fn account_override_wins_over_group_instrument_and_global() {
+        let (svc, id) = service_with_mark_100();
+        let acc = account(7);
+        let grp = group(3);
+        // global 0, instrument 1000, group 2000, account 3000 bps.
+        let overrides = [
+            (
+                SpotFundsOverrideTarget::Instrument(id),
+                SpotFundsOverride {
+                    slippage_bps: Some(1000),
+                },
+            ),
+            (
+                SpotFundsOverrideTarget::InstrumentAccountGroup(id, grp),
+                SpotFundsOverride {
+                    slippage_bps: Some(2000),
+                },
+            ),
+            (
+                SpotFundsOverrideTarget::InstrumentAccount(id, acc),
+                SpotFundsOverride {
+                    slippage_bps: Some(3000),
+                },
+            ),
+        ];
+        let bundle = SpotFundsMarketData::<FullSync>::new(
+            Arc::clone(&svc),
+            0,
+            SpotFundsPricingSource::Mark,
+            overrides,
+        )
+        .expect("bundle must build");
+        // 100 * (1 + 0.30) = 130 - account tier wins even though the account
+        // is also in the matching group.
+        assert_eq!(
+            bundle.effective_buy_price(id, acc, &Some(grp)),
+            Ok(px("130"))
+        );
+    }
+
+    #[test]
+    fn group_override_used_when_no_account_override_matches() {
+        let acc = account(7);
+        let grp = group(3);
+        let (svc, id) = service_with_mark_100();
+        let overrides = [
+            (
+                SpotFundsOverrideTarget::Instrument(id),
+                SpotFundsOverride {
+                    slippage_bps: Some(1000),
+                },
+            ),
+            (
+                SpotFundsOverrideTarget::InstrumentAccountGroup(id, grp),
+                SpotFundsOverride {
+                    slippage_bps: Some(2000),
+                },
+            ),
+        ];
+        let bundle = SpotFundsMarketData::<FullSync>::new(
+            Arc::clone(&svc),
+            0,
+            SpotFundsPricingSource::Mark,
+            overrides,
+        )
+        .expect("bundle must build");
+        // No account override, account is in group 3 -> 100 * 1.20 = 120.
+        assert_eq!(
+            bundle.effective_buy_price(id, acc, &Some(grp)),
+            Ok(px("120"))
+        );
+    }
+
+    #[test]
+    fn instrument_default_used_when_neither_account_nor_group_matches() {
+        let acc = account(7);
+        let (svc, id) = service_with_mark_100();
+        let bundle = SpotFundsMarketData::<FullSync>::new(
+            Arc::clone(&svc),
+            0,
+            SpotFundsPricingSource::Mark,
+            [(
+                SpotFundsOverrideTarget::Instrument(id),
+                SpotFundsOverride {
+                    slippage_bps: Some(1000),
+                },
+            )],
+        )
+        .expect("bundle must build");
+        // Account info yields no account group, so the account-group tier is
+        // skipped entirely and the instrument default (1000 bps) applies -> 110.
+        assert_eq!(bundle.effective_buy_price(id, acc, &None), Ok(px("110")));
+        // A present but non-matching group still falls through to instrument.
+        assert_eq!(
+            bundle.effective_buy_price(id, acc, &Some(group(9))),
+            Ok(px("110"))
+        );
+    }
+
+    #[test]
+    fn global_used_when_nothing_matches() {
+        let acc = account(7);
+        // Global 1000 bps, no overrides at all -> 100 * 1.10 = 110.
+        assert_eq!(
+            buy_price(1000, std::iter::empty(), acc, &None),
+            Ok(px("110"))
+        );
+    }
+
+    #[test]
+    fn none_slippage_override_entry_is_treated_as_absent() {
+        let acc = account(7);
+        let grp = group(3);
+        let (svc, id) = service_with_mark_100();
+        // Account and group entries both carry None -> ignored, so the cascade
+        // falls through to the instrument default (1000 bps = 110).
+        let overrides = [
+            (
+                SpotFundsOverrideTarget::InstrumentAccount(id, acc),
+                SpotFundsOverride { slippage_bps: None },
+            ),
+            (
+                SpotFundsOverrideTarget::InstrumentAccountGroup(id, grp),
+                SpotFundsOverride { slippage_bps: None },
+            ),
+            (
+                SpotFundsOverrideTarget::Instrument(id),
+                SpotFundsOverride {
+                    slippage_bps: Some(1000),
+                },
+            ),
+        ];
+        let bundle = SpotFundsMarketData::<FullSync>::new(
+            Arc::clone(&svc),
+            0,
+            SpotFundsPricingSource::Mark,
+            overrides,
+        )
+        .expect("bundle must build");
+        assert_eq!(
+            bundle.effective_buy_price(id, acc, &Some(grp)),
+            Ok(px("110"))
+        );
+    }
+
+    #[test]
+    fn out_of_range_account_override_returns_slippage_out_of_range() {
+        let (svc, id) = service_with_mark_100();
+        let result = SpotFundsMarketData::<FullSync>::new(
+            Arc::clone(&svc),
+            0,
+            SpotFundsPricingSource::Mark,
+            [(
+                SpotFundsOverrideTarget::InstrumentAccount(id, account(7)),
+                SpotFundsOverride {
+                    slippage_bps: Some(10_001),
+                },
+            )],
+        );
+        assert_eq!(
+            result.err(),
+            Some(SpotFundsConfigError::SlippageOutOfRange { bps: 10_001 })
+        );
+    }
+
+    #[test]
+    fn out_of_range_group_override_returns_slippage_out_of_range() {
+        let (svc, id) = service_with_mark_100();
+        let result = SpotFundsMarketData::<FullSync>::new(
+            Arc::clone(&svc),
+            0,
+            SpotFundsPricingSource::Mark,
+            [(
+                SpotFundsOverrideTarget::InstrumentAccountGroup(id, group(3)),
+                SpotFundsOverride {
+                    slippage_bps: Some(10_001),
+                },
+            )],
+        );
+        assert_eq!(
+            result.err(),
+            Some(SpotFundsConfigError::SlippageOutOfRange { bps: 10_001 })
+        );
+    }
+
+    // ── Sell-side cascade tests ───────────────────────────────────────────────
+    //
+    // Formula: mark * (1 - factor), factor = bps / 10_000, mark = 100.
+    //   3000 bps -> 100 * 0.70 = 70
+    //   2000 bps -> 100 * 0.80 = 80
+    //   1000 bps -> 100 * 0.90 = 90
+    //      0 bps -> 100 * 1.00 = 100
+
+    fn sell_price<Overrides>(
+        slippage_bps: u16,
+        overrides: Overrides,
+        account_id: AccountId,
+        account_info: &impl AccountInfo,
+    ) -> Result<Price, SpotFundsPriceError>
+    where
+        Overrides: IntoIterator<Item = (SpotFundsOverrideTarget, SpotFundsOverride)>,
+    {
+        let (svc, id) = service_with_mark_100();
+        let bundle = SpotFundsMarketData::<FullSync>::new(
+            Arc::clone(&svc),
+            slippage_bps,
+            SpotFundsPricingSource::Mark,
+            overrides,
+        )
+        .expect("bundle must build");
+        bundle.effective_sell_price(id, account_id, account_info)
+    }
+
+    #[test]
+    fn sell_account_override_wins_over_group_instrument_and_global() {
+        let (svc, id) = service_with_mark_100();
+        let acc = account(7);
+        let grp = group(3);
+        // global 0, instrument 1000, group 2000, account 3000 bps.
+        let overrides = [
+            (
+                SpotFundsOverrideTarget::Instrument(id),
+                SpotFundsOverride {
+                    slippage_bps: Some(1000),
+                },
+            ),
+            (
+                SpotFundsOverrideTarget::InstrumentAccountGroup(id, grp),
+                SpotFundsOverride {
+                    slippage_bps: Some(2000),
+                },
+            ),
+            (
+                SpotFundsOverrideTarget::InstrumentAccount(id, acc),
+                SpotFundsOverride {
+                    slippage_bps: Some(3000),
+                },
+            ),
+        ];
+        let bundle = SpotFundsMarketData::<FullSync>::new(
+            Arc::clone(&svc),
+            0,
+            SpotFundsPricingSource::Mark,
+            overrides,
+        )
+        .expect("bundle must build");
+        // 100 * (1 - 0.30) = 70 — account tier wins even though the
+        // account is also in the matching group.
+        assert_eq!(
+            bundle.effective_sell_price(id, acc, &Some(grp)),
+            Ok(px("70"))
+        );
+    }
+
+    #[test]
+    fn sell_group_override_used_when_no_account_override_matches() {
+        let acc = account(7);
+        let grp = group(3);
+        let (svc, id) = service_with_mark_100();
+        let overrides = [
+            (
+                SpotFundsOverrideTarget::Instrument(id),
+                SpotFundsOverride {
+                    slippage_bps: Some(1000),
+                },
+            ),
+            (
+                SpotFundsOverrideTarget::InstrumentAccountGroup(id, grp),
+                SpotFundsOverride {
+                    slippage_bps: Some(2000),
+                },
+            ),
+        ];
+        let bundle = SpotFundsMarketData::<FullSync>::new(
+            Arc::clone(&svc),
+            0,
+            SpotFundsPricingSource::Mark,
+            overrides,
+        )
+        .expect("bundle must build");
+        // No account override; account is in group 3 -> 100 * 0.80 = 80.
+        assert_eq!(
+            bundle.effective_sell_price(id, acc, &Some(grp)),
+            Ok(px("80"))
+        );
+    }
+
+    #[test]
+    fn sell_instrument_default_used_when_neither_account_nor_group_matches() {
+        let acc = account(7);
+        let (svc, id) = service_with_mark_100();
+        let bundle = SpotFundsMarketData::<FullSync>::new(
+            Arc::clone(&svc),
+            0,
+            SpotFundsPricingSource::Mark,
+            [(
+                SpotFundsOverrideTarget::Instrument(id),
+                SpotFundsOverride {
+                    slippage_bps: Some(1000),
+                },
+            )],
+        )
+        .expect("bundle must build");
+        // No account group -> instrument default 1000 bps -> 100 * 0.90 = 90.
+        assert_eq!(bundle.effective_sell_price(id, acc, &None), Ok(px("90")));
+        // A present but non-matching group still falls through to
+        // the instrument default.
+        assert_eq!(
+            bundle.effective_sell_price(id, acc, &Some(group(9))),
+            Ok(px("90"))
+        );
+    }
+
+    #[test]
+    fn sell_global_used_when_nothing_matches() {
+        let acc = account(7);
+        // Global 1000 bps, no overrides -> 100 * (1 - 0.10) = 90.
+        assert_eq!(
+            sell_price(1000, std::iter::empty(), acc, &None),
+            Ok(px("90"))
+        );
+    }
+}

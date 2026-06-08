@@ -24,6 +24,38 @@ use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::storage::key_bound::AnyKey;
 use crate::storage::policy::{LockingPolicy, LockingPolicyFactory};
 
+/// Sync-mode-aware shared handle for [`IndexLocking`]-based engines.
+///
+/// Mirrors `AccountSyncHandle`: wraps `Arc<T>` for thread-safe
+/// reference-counting while being deliberately `!Sync` (via
+/// `PhantomData<Cell<()>>`) to match the `AccountSync` engine contract
+/// that guarantees sequential per-handle invocation.
+pub struct IndexShared<T>(
+    std::sync::Arc<T>,
+    std::marker::PhantomData<std::cell::Cell<()>>,
+);
+
+impl<T> Clone for IndexShared<T> {
+    fn clone(&self) -> Self {
+        Self(std::sync::Arc::clone(&self.0), std::marker::PhantomData)
+    }
+}
+
+impl<T> std::ops::Deref for IndexShared<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+// SAFETY: `IndexLocking` engines guarantee sequential per-handle
+// invocation: only one logical thread holds a reference at a time, so
+// shared `&T` never races with mutation. The `Arc` refcount is
+// thread-safe. `!Sync` (enforced by `PhantomData<Cell<()>>`) prevents
+// sharing `&IndexShared<T>` across threads, matching the `AccountSync`
+// engine contract.
+unsafe impl<T: Send> Send for IndexShared<T> {}
+
 /// Locking policy factory that synchronizes the **index** but leaves
 /// values unsynchronized.
 ///
@@ -79,7 +111,7 @@ use crate::storage::policy::{LockingPolicy, LockingPolicyFactory};
 /// use std::thread;
 /// use openpit::Engine;
 ///
-/// let builder = Engine::<(), ()>::builder().account_sync();
+/// let builder = Engine::builder::<(), ()>().account_sync();
 /// let storage = Arc::new(builder.storage_builder().create::<u64, u64>());
 /// let s2 = Arc::clone(&storage);
 /// thread::spawn(move || {
@@ -117,10 +149,19 @@ impl<KeyBound: 'static> std::fmt::Debug for IndexLocking<KeyBound> {
 impl<KeyBound: 'static> LockingPolicyFactory for IndexLocking<KeyBound> {
     type Policy = IndexLockingPolicy;
 
+    /// Multi-thread regime; `AtomicBool` provides lock-free synchronization.
+    type IndexFlag = std::sync::atomic::AtomicBool;
+
+    type Shared<T: 'static> = IndexShared<T>;
+
     fn create_policy(&self) -> Self::Policy {
         IndexLockingPolicy {
             index: RwLock::new(()),
         }
+    }
+
+    fn new_shared<T: 'static>(value: T) -> IndexShared<T> {
+        IndexShared(std::sync::Arc::new(value), std::marker::PhantomData)
     }
 }
 

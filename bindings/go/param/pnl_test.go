@@ -44,8 +44,7 @@ func TestPnlFromString(t *testing.T) {
 		{name: "invalid", input: "pnl", wantError: true},
 	}
 
-	for _, tt := range tests { //nolint:copyloopvar
-		tt := tt //nolint:copyloopvar
+	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -79,14 +78,13 @@ func TestPnlFromIntAndUint(t *testing.T) {
 		{name: "zero", input: 0, want: "0"},
 		{name: "positive", input: 7, want: "7"},
 	}
-	for _, tt := range intTests { //nolint:copyloopvar
-		tt := tt //nolint:copyloopvar
+	for _, tt := range intTests {
 		t.Run("int-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			value, err := NewPnlFromInt(tt.input)
+			value, err := NewPnlFromInt64(tt.input)
 			if err != nil {
-				t.Fatalf("NewPnlFromInt(%d) error = %v", tt.input, err)
+				t.Fatalf("NewPnlFromInt64(%d) error = %v", tt.input, err)
 			}
 			if got := value.String(); got != tt.want {
 				t.Fatalf("String() = %q, want %q", got, tt.want)
@@ -102,14 +100,13 @@ func TestPnlFromIntAndUint(t *testing.T) {
 		{name: "zero", input: 0, want: "0"},
 		{name: "positive", input: 7, want: "7"},
 	}
-	for _, tt := range uintTests { //nolint:copyloopvar
-		tt := tt //nolint:copyloopvar
+	for _, tt := range uintTests {
 		t.Run("uint-"+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			value, err := NewPnlFromUint(tt.input)
+			value, err := NewPnlFromUint64(tt.input)
 			if err != nil {
-				t.Fatalf("NewPnlFromUint(%d) error = %v", tt.input, err)
+				t.Fatalf("NewPnlFromUint64(%d) error = %v", tt.input, err)
 			}
 			if got := value.String(); got != tt.want {
 				t.Fatalf("String() = %q, want %q", got, tt.want)
@@ -129,8 +126,7 @@ func TestPnlFromFloat(t *testing.T) {
 		t.Fatalf("String() = %q, want %q", got, "12.5")
 	}
 
-	for _, input := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} { //nolint:copyloopvar
-		input := input //nolint:copyloopvar
+	for _, input := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
 		t.Run("invalid", func(t *testing.T) {
 			t.Parallel()
 
@@ -215,13 +211,11 @@ func TestPnlRoundedConstructors(t *testing.T) {
 		},
 	}
 
-	for _, ctor := range constructors { //nolint:copyloopvar
-		ctor := ctor //nolint:copyloopvar
+	for _, ctor := range constructors {
 		t.Run(ctor.name, func(t *testing.T) {
 			t.Parallel()
 
-			for _, tc := range strategyCases { //nolint:copyloopvar
-				tc := tc //nolint:copyloopvar
+			for _, tc := range strategyCases {
 				t.Run(tc.name, func(t *testing.T) {
 					t.Parallel()
 
@@ -312,8 +306,8 @@ func TestPnlIsZeroEqualCompare(t *testing.T) {
 	b := mustPnlValue(t, "0")
 	c := mustPnlValue(t, "3")
 
-	if a.Compare(a) != 0 { //nolint:gocritic
-		t.Fatalf("reflexive compare = %d, want 0", a.Compare(a)) //nolint:gocritic
+	if a.Compare(a) != 0 { //nolint:gocritic // testing reflexivity: Compare(x,x) must return 0
+		t.Fatalf("reflexive compare = %d, want 0", a.Compare(a)) //nolint:gocritic // testing reflexivity: Compare(x,x) must return 0
 	}
 	if a.Compare(b) >= 0 || b.Compare(c) >= 0 || a.Compare(c) >= 0 {
 		t.Fatal("transitive compare contract violated")
@@ -430,20 +424,20 @@ func TestPnlCheckedArithmeticHappyPaths(t *testing.T) {
 func TestPnlCheckedArithmeticErrors(t *testing.T) {
 	t.Parallel()
 
-	max := mustPnlValue(t, decimalMaxValue)
-	min := mustPnlValue(t, decimalMinValue)
+	maxVal := mustPnlValue(t, decimalMaxValue)
+	minVal := mustPnlValue(t, decimalMinValue)
 	one := mustPnlValue(t, "1")
 
-	if _, err := max.CheckedAdd(one); err == nil {
+	if _, err := maxVal.CheckedAdd(one); err == nil {
 		t.Fatal("CheckedAdd() error = nil, want overflow error")
 	}
-	if _, err := min.CheckedSub(one); err == nil {
+	if _, err := minVal.CheckedSub(one); err == nil {
 		t.Fatal("CheckedSub() error = nil, want overflow error")
 	}
-	if _, err := max.CheckedMulInt(2); err == nil {
+	if _, err := maxVal.CheckedMulInt(2); err == nil {
 		t.Fatal("CheckedMulInt() error = nil, want overflow error")
 	}
-	if _, err := max.CheckedMulUint(2); err == nil {
+	if _, err := maxVal.CheckedMulUint(2); err == nil {
 		t.Fatal("CheckedMulUint() error = nil, want overflow error")
 	}
 	if _, err := one.CheckedMulFloat(math.NaN()); err == nil {
@@ -506,7 +500,7 @@ func makeNativePnlOptional(value Pnl) native.ParamPnlOptional {
 	}
 
 	layout := pnlOptionalLayout{Value: value.Handle(), IsSet: true}
-	return *(*native.ParamPnlOptional)(unsafe.Pointer(&layout))
+	return *(*native.ParamPnlOptional)(unsafe.Pointer(&layout)) //nolint:gosec // memory layout verification requires unsafe.Pointer
 }
 
 func mustPnlValue(t *testing.T, source string) Pnl {

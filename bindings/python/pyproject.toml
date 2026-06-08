@@ -40,7 +40,7 @@ dynamic = ["version"]
 
 [project.urls]
 Homepage = "https://openpit.dev/"
-Documentation = "https://openpit.readthedocs.io/"
+Documentation = "https://openpit.readthedocs.io/en/stable/"
 Repository = "https://github.com/openpitkit/pit"
 Issues = "https://github.com/openpitkit/pit/issues"
 Changelog = "https://github.com/openpitkit/pit/releases"

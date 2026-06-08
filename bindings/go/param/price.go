@@ -42,10 +42,10 @@ type Price struct {
 	native native.ParamPrice
 }
 
-var priceZero = sync.OnceValue(func() Price { return newPriceOrPanic(NewPriceFromInt(0)) })
+var newPriceZero = sync.OnceValue(func() Price { return newPriceOrPanic(NewPriceFromInt64(0)) })
 
-// PriceZero returns the canonical zero value of Price.
-func PriceZero() Price { return priceZero() }
+// NewPriceZero returns the canonical zero value of Price.
+func NewPriceZero() Price { return newPriceZero() }
 
 func newPriceOrPanic(value Price, err error) Price {
 	if err != nil {
@@ -68,30 +68,35 @@ func NewPriceFromDecimal(v decimal.Decimal) (Price, error) {
 	return NewPriceFromHandle(nativeValue), nil
 }
 
+// NewPriceFromString creates a Price from a decimal string.
 func NewPriceFromString(v string) (Price, error) {
-	nativeValue, err := native.CreateParamPriceFromStr(v)
+	nativeValue, err := native.CreateParamPriceFromString(v)
 	if err != nil {
 		return Price{}, err
 	}
 	return NewPriceFromHandle(nativeValue), nil
 }
 
-func NewPriceFromInt(v int64) (Price, error) {
-	nativeValue, err := native.CreateParamPriceFromI64(v)
+// NewPriceFromInt64 creates a Price from a signed integer.
+func NewPriceFromInt64(v int64) (Price, error) {
+	nativeValue, err := native.CreateParamPriceFromInt64(v)
 	if err != nil {
 		return Price{}, err
 	}
 	return NewPriceFromHandle(nativeValue), nil
 }
 
-func NewPriceFromUint(v uint64) (Price, error) {
-	nativeValue, err := native.CreateParamPriceFromU64(v)
+// NewPriceFromUint64 creates a Price from an unsigned integer.
+func NewPriceFromUint64(v uint64) (Price, error) {
+	nativeValue, err := native.CreateParamPriceFromUint64(v)
 	if err != nil {
 		return Price{}, err
 	}
 	return NewPriceFromHandle(nativeValue), nil
 }
 
+// NewPriceFromFloat constructs a Price from a float64 value.
+//
 // WARNING: float64 values are inherently imprecise. The same numeric literal
 // interpreted as float64 can differ by one ULP from its string representation
 // and may produce different values on different platforms or compilers.
@@ -107,10 +112,12 @@ func NewPriceFromFloat(v float64) (Price, error) {
 	return NewPriceFromHandle(nativeValue), nil
 }
 
+// NewPriceFromHandle creates a Price from a native handle.
 func NewPriceFromHandle(v native.ParamPrice) Price {
 	return Price{native: v}
 }
 
+// NewPriceOptionFromHandle creates an optional Price from a native optional handle.
 func NewPriceOptionFromHandle(v native.ParamPriceOptional) optional.Option[Price] {
 	if !native.ParamPriceOptionalIsSet(v) {
 		return optional.None[Price]()
@@ -118,18 +125,20 @@ func NewPriceOptionFromHandle(v native.ParamPriceOptional) optional.Option[Price
 	return optional.Some(NewPriceFromHandle(native.ParamPriceOptionalGet(v)))
 }
 
+// NewPriceFromStringRounded creates a Price from a string, rounded to the given scale.
 func NewPriceFromStringRounded(
 	v string,
 	scale uint32,
 	strategy RoundingStrategy,
 ) (Price, error) {
-	nativeValue, err := native.CreateParamPriceFromStrRounded(v, scale, strategy.native())
+	nativeValue, err := native.CreateParamPriceFromStringRounded(v, scale, strategy.native())
 	if err != nil {
 		return Price{}, err
 	}
 	return NewPriceFromHandle(nativeValue), nil
 }
 
+// NewPriceFromFloatRounded creates a Price from a float64, rounded to the given scale.
 func NewPriceFromFloatRounded(v float64, scale uint32, strategy RoundingStrategy) (Price, error) {
 	nativeValue, err := native.CreateParamPriceFromF64Rounded(v, scale, strategy.native())
 	if err != nil {
@@ -160,14 +169,20 @@ func NewPriceFromDecimalRounded(
 	return NewPriceFromHandle(nativeValue), nil
 }
 
+// Decimal returns the value as a shopspring decimal.
 func (v Price) Decimal() decimal.Decimal {
 	return newDecimalFromHandle(native.ParamPriceGetDecimal(v.native))
 }
 
+// Handle returns the underlying native handle.
 func (v Price) Handle() native.ParamPrice {
 	return v.native
 }
 
+// Float returns the value as a float64.
+//
+// NewPriceFromFloat constructs a Price from a float64 value.
+//
 // WARNING: float64 values are inherently imprecise. The same numeric literal
 // interpreted as float64 can differ by one ULP from its string representation
 // and may produce different values on different platforms or compilers.
@@ -180,26 +195,31 @@ func (v Price) Float() float64 {
 	return newParamValueOrPanic(native.ParamPriceToF64(v.native))
 }
 
+// String returns the decimal string representation of the price.
 func (v Price) String() string {
 	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamPriceToString(v.native))
 }
 
+// IsZero reports whether the price is zero.
 func (v Price) IsZero() bool {
 	// invariant: native value already validated on construction; conversion cannot fail.
 	return newParamValueOrPanic(native.ParamPriceIsZero(v.native))
 }
 
+// Equal reports whether v and other are equal.
 func (v Price) Equal(other Price) bool {
 	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamPriceCompare(v.native, other.native)) == 0
 }
 
+// Compare returns -1, 0, or 1 comparing v to other.
 func (v Price) Compare(other Price) int {
 	// invariant: native values already validated on construction; comparison cannot fail.
 	return newParamValueOrPanic(native.ParamPriceCompare(v.native, other.native))
 }
 
+// CheckedAdd returns v + other or an error on overflow.
 func (v Price) CheckedAdd(other Price) (Price, error) {
 	result, err := native.ParamPriceCheckedAdd(v.native, other.native)
 	if err != nil {
@@ -208,6 +228,7 @@ func (v Price) CheckedAdd(other Price) (Price, error) {
 	return NewPriceFromHandle(result), nil
 }
 
+// CheckedSub returns v - other or an error on overflow.
 func (v Price) CheckedSub(other Price) (Price, error) {
 	result, err := native.ParamPriceCheckedSub(v.native, other.native)
 	if err != nil {
@@ -216,6 +237,7 @@ func (v Price) CheckedSub(other Price) (Price, error) {
 	return NewPriceFromHandle(result), nil
 }
 
+// CheckedNeg returns the negation of v or an error on overflow.
 func (v Price) CheckedNeg() (Price, error) {
 	result, err := native.ParamPriceCheckedNeg(v.native)
 	if err != nil {
@@ -224,6 +246,7 @@ func (v Price) CheckedNeg() (Price, error) {
 	return NewPriceFromHandle(result), nil
 }
 
+// CheckedMulInt returns v * scalar or an error on overflow.
 func (v Price) CheckedMulInt(scalar int64) (Price, error) {
 	result, err := native.ParamPriceCheckedMulI64(v.native, scalar)
 	if err != nil {
@@ -232,6 +255,7 @@ func (v Price) CheckedMulInt(scalar int64) (Price, error) {
 	return NewPriceFromHandle(result), nil
 }
 
+// CheckedMulUint returns v * scalar or an error on overflow.
 func (v Price) CheckedMulUint(scalar uint64) (Price, error) {
 	result, err := native.ParamPriceCheckedMulU64(v.native, scalar)
 	if err != nil {
@@ -240,6 +264,7 @@ func (v Price) CheckedMulUint(scalar uint64) (Price, error) {
 	return NewPriceFromHandle(result), nil
 }
 
+// CheckedMulFloat returns v * scalar or an error on overflow.
 func (v Price) CheckedMulFloat(scalar float64) (Price, error) {
 	result, err := native.ParamPriceCheckedMulF64(v.native, scalar)
 	if err != nil {
@@ -248,6 +273,7 @@ func (v Price) CheckedMulFloat(scalar float64) (Price, error) {
 	return NewPriceFromHandle(result), nil
 }
 
+// CheckedDivInt returns v / divisor or an error on division by zero or overflow.
 func (v Price) CheckedDivInt(divisor int64) (Price, error) {
 	result, err := native.ParamPriceCheckedDivI64(v.native, divisor)
 	if err != nil {
@@ -256,6 +282,7 @@ func (v Price) CheckedDivInt(divisor int64) (Price, error) {
 	return NewPriceFromHandle(result), nil
 }
 
+// CheckedDivUint returns v / divisor or an error on division by zero.
 func (v Price) CheckedDivUint(divisor uint64) (Price, error) {
 	result, err := native.ParamPriceCheckedDivU64(v.native, divisor)
 	if err != nil {
@@ -264,6 +291,7 @@ func (v Price) CheckedDivUint(divisor uint64) (Price, error) {
 	return NewPriceFromHandle(result), nil
 }
 
+// CheckedDivFloat returns v / divisor or an error on division by zero or overflow.
 func (v Price) CheckedDivFloat(divisor float64) (Price, error) {
 	result, err := native.ParamPriceCheckedDivF64(v.native, divisor)
 	if err != nil {
@@ -272,6 +300,7 @@ func (v Price) CheckedDivFloat(divisor float64) (Price, error) {
 	return NewPriceFromHandle(result), nil
 }
 
+// CheckedRemInt returns v % divisor or an error on division by zero.
 func (v Price) CheckedRemInt(divisor int64) (Price, error) {
 	result, err := native.ParamPriceCheckedRemI64(v.native, divisor)
 	if err != nil {
@@ -280,6 +309,7 @@ func (v Price) CheckedRemInt(divisor int64) (Price, error) {
 	return NewPriceFromHandle(result), nil
 }
 
+// CheckedRemUint returns v % divisor or an error on division by zero.
 func (v Price) CheckedRemUint(divisor uint64) (Price, error) {
 	result, err := native.ParamPriceCheckedRemU64(v.native, divisor)
 	if err != nil {
@@ -288,6 +318,7 @@ func (v Price) CheckedRemUint(divisor uint64) (Price, error) {
 	return NewPriceFromHandle(result), nil
 }
 
+// CheckedRemFloat returns v % divisor or an error on division by zero.
 func (v Price) CheckedRemFloat(divisor float64) (Price, error) {
 	result, err := native.ParamPriceCheckedRemF64(v.native, divisor)
 	if err != nil {
@@ -296,10 +327,20 @@ func (v Price) CheckedRemFloat(divisor float64) (Price, error) {
 	return NewPriceFromHandle(result), nil
 }
 
+// CalculateVolume returns the volume equivalent to price × quantity.
 func (v Price) CalculateVolume(quantity Quantity) (Volume, error) {
 	result, err := native.ParamPriceCalculateVolume(v.native, quantity.native)
 	if err != nil {
 		return Volume{}, err
 	}
 	return NewVolumeFromHandle(result), nil
+}
+
+// CalculatePositionSize returns the position size equivalent to price × quantity.
+func (v Price) CalculatePositionSize(quantity Quantity) (PositionSize, error) {
+	result, err := native.ParamPriceCalculatePositionSize(v.native, quantity.native)
+	if err != nil {
+		return PositionSize{}, err
+	}
+	return NewPositionSizeFromHandle(result), nil
 }

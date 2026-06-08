@@ -47,7 +47,7 @@ use super::policy::LockingPolicyFactory;
 /// The `'static` super-bound mirrors the lifetime requirements of the
 /// keys actually stored in the [`Storage`](super::Storage) and lets the
 /// marker types live in the
-/// [`StorageLockingPolicyFactory`](crate::SyncPolicy::StorageLockingPolicyFactory)
+/// [`StorageLockingPolicyFactory`](crate::SyncMode::StorageLockingPolicyFactory)
 /// associated type without dangling lifetime parameters.
 ///
 /// [`IndexLocking`]: super::IndexLocking

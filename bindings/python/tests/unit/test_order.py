@@ -1,7 +1,7 @@
 import openpit
 import pytest
 
-_ACCOUNT_ID = openpit.param.AccountId.from_u64(99224416)
+_ACCOUNT_ID = openpit.param.AccountId.from_int(99224416)
 
 
 @pytest.mark.unit
@@ -188,7 +188,7 @@ def test_order_position_bool_flags_default_to_false() -> None:
 
 
 @pytest.mark.unit
-def test_order_operation_accepts_account_id_from_u64() -> None:
+def test_order_operation_accepts_account_id_from_int() -> None:
     op = openpit.OrderOperation(
         instrument=openpit.Instrument(
             "AAPL",
@@ -196,13 +196,13 @@ def test_order_operation_accepts_account_id_from_u64() -> None:
         ),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.TradeAmount.quantity(1),
-        account_id=openpit.param.AccountId.from_u64(99224416),
+        account_id=openpit.param.AccountId.from_int(99224416),
     )
     assert op.account_id.value == 99224416
 
 
 @pytest.mark.unit
-def test_order_operation_accepts_account_id_from_str() -> None:
+def test_order_operation_accepts_account_id_from_string() -> None:
     op = openpit.OrderOperation(
         instrument=openpit.Instrument(
             "AAPL",
@@ -210,9 +210,11 @@ def test_order_operation_accepts_account_id_from_str() -> None:
         ),
         side=openpit.param.Side.BUY,
         trade_amount=openpit.param.TradeAmount.quantity(1),
-        account_id=openpit.param.AccountId.from_str("my-account"),
+        account_id=openpit.param.AccountId.from_string("my-account"),
     )
-    assert op.account_id.value == openpit.param.AccountId.from_str("my-account").value
+    assert (
+        op.account_id.value == openpit.param.AccountId.from_string("my-account").value
+    )
 
 
 @pytest.mark.unit

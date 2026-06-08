@@ -78,6 +78,9 @@ class RejectCode(_enum.StrEnum):
     REFERENCE_DATA_UNAVAILABLE = "ReferenceDataUnavailable"
     ORDER_VALUE_CALCULATION_FAILED = "OrderValueCalculationFailed"
     SYSTEM_UNAVAILABLE = "SystemUnavailable"
+    MARK_PRICE_UNAVAILABLE = "MarkPriceUnavailable"
+    ACCOUNT_ADJUSTMENT_BOUNDS_EXCEEDED = "AccountAdjustmentBoundsExceeded"
+    ARITHMETIC_OVERFLOW = "ArithmeticOverflow"
     CUSTOM = "Custom"
     OTHER = "Other"
 
@@ -159,6 +162,15 @@ RejectCode.ORDER_VALUE_CALCULATION_FAILED.__doc__ = (
 )
 RejectCode.SYSTEM_UNAVAILABLE.__doc__ = (
     "The system cannot process the request right now."
+)
+RejectCode.MARK_PRICE_UNAVAILABLE.__doc__ = (
+    "A mark price required for order evaluation is unavailable."
+)
+RejectCode.ACCOUNT_ADJUSTMENT_BOUNDS_EXCEEDED.__doc__ = (
+    "An account adjustment would violate its configured bounds."
+)
+RejectCode.ARITHMETIC_OVERFLOW.__doc__ = (
+    "Underlying decimal arithmetic overflowed during evaluation."
 )
 RejectCode.CUSTOM.__doc__ = (
     "Custom reject code, depends on policy implementation."

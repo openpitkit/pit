@@ -21,6 +21,7 @@ import dataclasses
 import typing
 
 from ._openpit import AccountAdjustmentContext as AccountAdjustmentContext
+from ._openpit import AccountControl as AccountControl
 from ._openpit import ExecutionReport as _ExecutionReport
 from ._openpit import ExecutionReportFillDetails as _ExecutionReportFillDetails
 from ._openpit import ExecutionReportOperation as _ExecutionReportOperation
@@ -54,6 +55,13 @@ Opaque context object passed to account-adjustment check callbacks.
 
 The object identifies the current account-adjustment evaluation context. Treat
 it as read-only and do not instantiate it directly.
+
+``account_control`` is an :class:`openpit.AccountControl` handle to the engine's
+account-block facility for the evaluated account. A policy may use it to block
+the account directly or capture it into a :class:`openpit.Mutation`
+rollback/commit closure to block on a deferred failure. The handle is valid only
+within the processing of this account-adjustment request (through its commit or
+rollback); using it afterwards is unspecified.
 """
 
 
@@ -493,7 +501,7 @@ class ExecutionReportFillDetails(_ExecutionReportFillDetails):
         from .pretrade import Lock as _PythonLock
 
         value = _ExecutionReportFillDetails.lock.__get__(self, type(self))
-        return _PythonLock(price=value.price)
+        return _PythonLock(value)
 
     # @typing.override
     @property
@@ -657,6 +665,7 @@ __all__ = [
     "AccountAdjustmentBounds",
     "AccountAdjustmentContext",
     "AccountAdjustmentPositionOperation",
+    "AccountControl",
     "ExecutionReport",
     "ExecutionReportFillDetails",
     "ExecutionReportOperation",

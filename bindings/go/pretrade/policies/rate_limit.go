@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/ptr"
 )
@@ -77,12 +78,29 @@ type RateLimitReadyBuilder struct {
 	assetBarriers        []native.PretradePoliciesRateLimitAssetBarrier
 	accountBarriers      []native.PretradePoliciesRateLimitAccountBarrier
 	accountAssetBarriers []native.PretradePoliciesRateLimitAccountAssetBarrier
+	policyGroupID        model.PolicyGroupID
 	err                  error
 }
 
 // BuildRateLimit returns a new rate-limit policy builder.
 func BuildRateLimit() *RateLimitBuilder {
-	return &RateLimitBuilder{builder: &RateLimitReadyBuilder{}}
+	return &RateLimitBuilder{
+		builder: &RateLimitReadyBuilder{policyGroupID: model.DefaultPolicyGroupID},
+	}
+}
+
+// PolicyGroupID assigns the policy to a pricing group and returns a ready
+// builder. When not set the policy uses model.DefaultPolicyGroupID.
+func (b *RateLimitBuilder) PolicyGroupID(groupID model.PolicyGroupID) *RateLimitReadyBuilder {
+	b.builder.PolicyGroupID(groupID)
+	return b.builder
+}
+
+// PolicyGroupID assigns the policy to a pricing group. When not set the
+// policy uses model.DefaultPolicyGroupID.
+func (b *RateLimitReadyBuilder) PolicyGroupID(groupID model.PolicyGroupID) *RateLimitReadyBuilder {
+	b.policyGroupID = groupID
+	return b
 }
 
 func validateWindow(window time.Duration) error {
@@ -113,7 +131,7 @@ func (b *RateLimitReadyBuilder) BrokerBarrier(
 		b.err = err
 		return b
 	}
-	windowNanos := uint64(barrier.Limit.Window) //nolint:gosec
+	windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // time.Duration is always non-negative after validateWindow
 	b.broker = ptr.New(native.NewPretradePoliciesRateLimitBrokerBarrier(
 		barrier.Limit.MaxOrders,
 		windowNanos,
@@ -140,7 +158,7 @@ func (b *RateLimitReadyBuilder) AssetBarriers(
 			b.err = err
 			return b
 		}
-		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec
+		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // time.Duration is always non-negative after validateWindow
 		b.assetBarriers = append(
 			b.assetBarriers,
 			native.NewPretradePoliciesRateLimitAssetBarrier(
@@ -173,7 +191,7 @@ func (b *RateLimitReadyBuilder) AccountBarriers(
 			b.err = err
 			return b
 		}
-		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec
+		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // time.Duration is always non-negative after validateWindow
 		b.accountBarriers = append(
 			b.accountBarriers,
 			native.NewPretradePoliciesRateLimitAccountBarrier(
@@ -208,7 +226,7 @@ func (b *RateLimitReadyBuilder) AccountAssetBarriers(
 			b.err = err
 			return b
 		}
-		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec
+		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // time.Duration is always non-negative after validateWindow
 		b.accountAssetBarriers = append(
 			b.accountAssetBarriers,
 			native.NewPretradePoliciesRateLimitAccountAssetBarrier(
@@ -230,6 +248,7 @@ func (b *RateLimitReadyBuilder) Build(builder native.EngineBuilder) error {
 	}
 	err := native.EngineBuilderAddBuiltinRateLimit(
 		builder,
+		native.PolicyGroupID(b.policyGroupID),
 		b.broker,
 		b.assetBarriers,
 		b.accountBarriers,

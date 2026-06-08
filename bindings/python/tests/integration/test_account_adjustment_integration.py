@@ -86,7 +86,7 @@ def _make_balance_adjustment(asset_code: str) -> openpit.AccountAdjustment:
 
 @pytest.mark.integration
 def test_account_adjustment_integration_successful_batch() -> None:
-    account_id = openpit.param.AccountId.from_u64(99224416)
+    account_id = openpit.param.AccountId.from_int(99224416)
     policy = RecordingAdjustmentCheck()
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
 
@@ -106,7 +106,7 @@ def test_account_adjustment_integration_successful_batch() -> None:
 
 @pytest.mark.integration
 def test_account_adjustment_integration_reject_on_first() -> None:
-    account_id = openpit.param.AccountId.from_u64(99224416)
+    account_id = openpit.param.AccountId.from_int(99224416)
     policy = RecordingAdjustmentCheck(reject_on_asset="USD")
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
 
@@ -126,7 +126,7 @@ def test_account_adjustment_integration_reject_on_first() -> None:
 
 @pytest.mark.integration
 def test_account_adjustment_integration_reject_on_last() -> None:
-    account_id = openpit.param.AccountId.from_u64(99224416)
+    account_id = openpit.param.AccountId.from_int(99224416)
     policy = RecordingAdjustmentCheck(reject_on_asset="GBP")
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
 
@@ -146,7 +146,7 @@ def test_account_adjustment_integration_reject_on_last() -> None:
 
 @pytest.mark.integration
 def test_account_adjustment_integration_reject_on_middle() -> None:
-    account_id = openpit.param.AccountId.from_u64(99224416)
+    account_id = openpit.param.AccountId.from_int(99224416)
     policy = RecordingAdjustmentCheck(reject_on_asset="EUR")
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
 
@@ -167,7 +167,7 @@ def test_account_adjustment_integration_reject_on_middle() -> None:
 
 @pytest.mark.integration
 def test_account_adjustment_integration_rollback_commits_on_success() -> None:
-    account_id = openpit.param.AccountId.from_u64(99224416)
+    account_id = openpit.param.AccountId.from_int(99224416)
     policy = MutatingRecordingPolicy()
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
 
@@ -188,7 +188,7 @@ def test_account_adjustment_integration_rollback_commits_on_success() -> None:
 def test_account_adjustment_integration_rollback_consistent_after_reject_first() -> (
     None
 ):
-    account_id = openpit.param.AccountId.from_u64(99224416)
+    account_id = openpit.param.AccountId.from_int(99224416)
     policy = MutatingRecordingPolicy(reject_on_asset="USD")
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
 
@@ -216,7 +216,7 @@ def test_account_adjustment_integration_rollback_consistent_after_reject_first()
 
 @pytest.mark.integration
 def test_account_adjustment_integration_rollback_consistent_after_reject_last() -> None:
-    account_id = openpit.param.AccountId.from_u64(99224416)
+    account_id = openpit.param.AccountId.from_int(99224416)
     policy = MutatingRecordingPolicy(reject_on_asset="GBP")
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
 
@@ -244,7 +244,7 @@ def test_account_adjustment_integration_rollback_consistent_after_reject_last() 
 def test_account_adjustment_integration_rollback_consistent_after_reject_middle() -> (
     None
 ):
-    account_id = openpit.param.AccountId.from_u64(99224416)
+    account_id = openpit.param.AccountId.from_int(99224416)
     policy = MutatingRecordingPolicy(reject_on_asset="EUR")
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
 

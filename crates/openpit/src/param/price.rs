@@ -15,7 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::{define_signed_value_type, Error, ParamKind, Quantity, Volume};
+use super::{define_signed_value_type, Error, ParamKind, PositionSize, Quantity, Volume};
 
 define_signed_value_type!(
     /// Price per one instrument unit.
@@ -27,6 +27,24 @@ define_signed_value_type!(
 );
 
 impl Price {
+    /// Calculates the signed notional position size as `price × quantity`.
+    ///
+    /// Preserves the sign of the price; use this when a negative price is
+    /// meaningful (e.g. crediting the buyer). For unsigned notional use
+    /// [`Price::calculate_volume`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Overflow`] with [`ParamKind::Price`] if multiplication overflows.
+    pub fn calculate_position_size(self, quantity: Quantity) -> Result<PositionSize, Error> {
+        self.to_decimal()
+            .checked_mul(quantity.to_decimal())
+            .ok_or(Error::Overflow {
+                param: ParamKind::Price,
+            })
+            .map(PositionSize::new)
+    }
+
     /// Calculates volume from price and quantity.
     ///
     /// Uses absolute values of both price and quantity to ensure volume is non-negative.
@@ -56,6 +74,38 @@ mod tests {
         value
             .parse()
             .expect("decimal literal in tests must be valid")
+    }
+
+    #[test]
+    fn calculate_position_size_positive_price() {
+        let price = Price::from_str("100").expect("must be valid");
+        let qty = Quantity::from_str("2.5").expect("must be valid");
+        let pos = price
+            .calculate_position_size(qty)
+            .expect("must not overflow");
+        assert_eq!(pos.to_decimal(), d("250"));
+    }
+
+    #[test]
+    fn calculate_position_size_negative_price_preserves_sign() {
+        let price = Price::new(d("-50"));
+        let qty = Quantity::from_str("3").expect("must be valid");
+        let pos = price
+            .calculate_position_size(qty)
+            .expect("must not overflow");
+        assert_eq!(pos.to_decimal(), d("-150"));
+    }
+
+    #[test]
+    fn calculate_position_size_overflow_returns_error() {
+        let price = Price::new(Decimal::MAX);
+        let qty = Quantity::from_str("2").expect("must be valid");
+        assert_eq!(
+            price.calculate_position_size(qty),
+            Err(Error::Overflow {
+                param: ParamKind::Price
+            })
+        );
     }
 
     #[test]

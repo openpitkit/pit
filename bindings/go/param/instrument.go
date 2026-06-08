@@ -24,15 +24,18 @@ import (
 	"go.openpit.dev/openpit/pkg/optional"
 )
 
+// Instrument identifies a tradable instrument by its underlying and settlement assets.
 type Instrument struct {
 	UnderlyingAsset Asset
 	SettlementAsset Asset
 }
 
+// NewInstrument creates an Instrument from the given underlying and settlement assets.
 func NewInstrument(underlyingAsset Asset, settlementAsset Asset) Instrument {
 	return Instrument{UnderlyingAsset: underlyingAsset, SettlementAsset: settlementAsset}
 }
 
+// NewInstrumentFromHandle creates an optional Instrument from a native handle.
 func NewInstrumentFromHandle(i native.Instrument) optional.Option[Instrument] {
 	underlyingAsset, hasUnderlyingAsset := NewAssetFromHandle(
 		native.InstrumentGetUnderlyingAsset(i),
@@ -51,10 +54,12 @@ func NewInstrumentFromHandle(i native.Instrument) optional.Option[Instrument] {
 	return optional.Some(NewInstrument(underlyingAsset, settlementAsset))
 }
 
+// String returns "underlying/settlement" format.
 func (i Instrument) String() string {
 	return fmt.Sprintf("%s/%s", i.UnderlyingAsset, i.SettlementAsset)
 }
 
+// Handle returns the native instrument handle.
 func (i Instrument) Handle() native.Instrument {
 	return native.NewInstrument(i.UnderlyingAsset.Handle(), i.SettlementAsset.Handle())
 }

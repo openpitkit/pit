@@ -124,26 +124,26 @@ def test_account_adjustment_optional_defaults() -> None:
 @pytest.mark.unit
 def test_account_adjustment_amount_sparse_optional_fields() -> None:
     amount = openpit.AccountAdjustmentAmount(
-        total=openpit.param.AdjustmentAmount.absolute(openpit.param.PositionSize("5"))
+        balance=openpit.param.AdjustmentAmount.absolute(openpit.param.PositionSize("5"))
     )
 
-    assert amount.total is not None
-    assert amount.total.is_absolute
-    assert amount.total.as_absolute is not None
-    assert str(amount.total.as_absolute) == "5"
-    assert amount.reserved is None
-    assert amount.pending is None
+    assert amount.balance is not None
+    assert amount.balance.is_absolute
+    assert amount.balance.as_absolute is not None
+    assert str(amount.balance.as_absolute) == "5"
+    assert amount.held is None
+    assert amount.incoming is None
 
 
 @pytest.mark.unit
 def test_account_adjustment_bounds_sparse_optional_fields() -> None:
     bounds = openpit.AccountAdjustmentBounds(
-        pending_lower=openpit.param.PositionSize("-2")
+        incoming_lower=openpit.param.PositionSize("-2")
     )
 
-    assert str(bounds.pending_lower) == "-2"
-    assert bounds.total_upper is None
-    assert bounds.reserved_upper is None
+    assert str(bounds.incoming_lower) == "-2"
+    assert bounds.balance_upper is None
+    assert bounds.held_upper is None
 
 
 @pytest.mark.unit
@@ -195,7 +195,7 @@ def test_repr_and_basic_property_access() -> None:
             asset="USD",
         ),
         amount=openpit.AccountAdjustmentAmount(
-            pending=openpit.param.AdjustmentAmount.delta(
+            incoming=openpit.param.AdjustmentAmount.delta(
                 openpit.param.PositionSize("1")
             )
         ),
@@ -203,6 +203,6 @@ def test_repr_and_basic_property_access() -> None:
 
     assert "AccountAdjustment(" in repr(adjustment)
     assert adjustment.operation.asset == "USD"
-    assert adjustment.amount.pending.is_delta
-    assert adjustment.amount.pending.as_delta is not None
-    assert str(adjustment.amount.pending.as_delta) == "1"
+    assert adjustment.amount.incoming.is_delta
+    assert adjustment.amount.incoming.as_delta is not None
+    assert str(adjustment.amount.incoming.as_delta) == "1"

@@ -114,10 +114,13 @@ func (p mutationTrackingPolicy) Name() string {
 	return p.name
 }
 
+func (mutationTrackingPolicy) PolicyGroupID() model.PolicyGroupID { return model.DefaultPolicyGroupID }
+
 func (p *mutationTrackingPolicy) PerformPreTradeCheck(
 	_ pretrade.Context,
 	_ model.Order,
 	mutations tx.Mutations,
+	_ pretrade.Result,
 ) []reject.Reject {
 	if p.shouldReject {
 		return reject.NewSingleItemList(
@@ -147,8 +150,8 @@ func (mutationTrackingPolicy) CheckPreTradeStart(pretrade.Context, model.Order) 
 	return nil
 }
 
-func (mutationTrackingPolicy) ApplyExecutionReport(model.ExecutionReport) bool {
-	return false
+func (mutationTrackingPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ model.ExecutionReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
+	return nil
 }
 
 func (mutationTrackingPolicy) ApplyAccountAdjustment(
@@ -156,6 +159,7 @@ func (mutationTrackingPolicy) ApplyAccountAdjustment(
 	param.AccountID,
 	model.AccountAdjustment,
 	tx.Mutations,
+	pretrade.AccountOutcomes,
 ) []reject.Reject {
 	return nil
 }
@@ -181,7 +185,7 @@ func newValidOrderForNativeE2E(t *testing.T) model.Order {
 	operation.SetInstrument(
 		param.NewInstrument(mustOrderNativeAsset(t, "AAPL"), mustOrderNativeAsset(t, "USD")),
 	)
-	operation.SetAccountID(param.NewAccountIDFromInt(1001))
+	operation.SetAccountID(param.NewAccountIDFromUint64(1001))
 	operation.SetSide(param.SideBuy)
 	operation.SetTradeAmount(param.NewQuantityTradeAmount(mustOrderNativeQuantity(t, "1")))
 	operation.SetPrice(mustOrderNativePrice(t, "100"))

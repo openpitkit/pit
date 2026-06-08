@@ -11,16 +11,16 @@ Runtime selector for the engine's storage synchronization policy.
 ```c
 typedef uint8_t OpenPitSyncPolicy;
 /**
+ * The handle stays on the OS thread that created it. Use this for
+ * single-threaded embeddings where synchronization overhead must be zero.
+ */
+#define OpenPitSyncPolicy_None ((OpenPitSyncPolicy) 0)
+/**
  * Concurrent invocation of public methods on the same handle is safe.
  * Sequential cross-thread access is also safe. Use this when the engine is
  * shared across threads.
  */
-#define OpenPitSyncPolicy_Full ((OpenPitSyncPolicy) 0)
-/**
- * The handle stays on the OS thread that created it. Use this for
- * single-threaded embeddings where synchronization overhead must be zero.
- */
-#define OpenPitSyncPolicy_Local ((OpenPitSyncPolicy) 1)
+#define OpenPitSyncPolicy_Full ((OpenPitSyncPolicy) 1)
 /**
  * Sequential cross-thread access on the same handle is safe; the caller pins
  * each account to a single processing chain (one queue or one worker at a
@@ -82,16 +82,6 @@ typedef struct OpenPitPretradePreTradeReservation
     OpenPitPretradePreTradeReservation;
 ```
 
-## `OpenPitPretradePreTradeLock`
-
-Price-lock snapshot returned from a reservation.
-
-```c
-typedef struct OpenPitPretradePreTradeLock {
-    OpenPitParamPriceOptional price;
-} OpenPitPretradePreTradeLock;
-```
-
 ## `OpenPitPretradeStatus`
 
 Result status for pre-trade operations.
@@ -127,6 +117,47 @@ typedef struct OpenPitAccountAdjustmentBatchError
     OpenPitAccountAdjustmentBatchError;
 ```
 
+## `OpenPitEngineBuildErrorCode`
+
+Machine-readable discriminant describing why building an engine failed.
+
+Each value identifies a distinct failure category. There is no success value: a
+build-error object exists only when a build did not produce an engine.
+
+```c
+typedef uint8_t OpenPitEngineBuildErrorCode;
+/**
+ * Two or more registered policies declare the same name.
+ */
+#define OpenPitEngineBuildErrorCode_DuplicatePolicyName \
+    ((OpenPitEngineBuildErrorCode) 0)
+/**
+ * Two or more registered policies declare the same non-default group id.
+ */
+#define OpenPitEngineBuildErrorCode_DuplicatePolicyGroupId \
+    ((OpenPitEngineBuildErrorCode) 1)
+/**
+ * A failure category not covered by the above. Forward-compatible catch-all;
+ * no structured payload is available.
+ */
+#define OpenPitEngineBuildErrorCode_Other ((OpenPitEngineBuildErrorCode) 2)
+```
+
+## `OpenPitEngineBuildError`
+
+Structured build-failure details returned by engine construction.
+
+Ownership:
+
+- created by `openpit_engine_builder_build` when building does not produce an
+  engine;
+- owned by the caller;
+- released with `openpit_destroy_engine_build_error`.
+
+```c
+typedef struct OpenPitEngineBuildError OpenPitEngineBuildError;
+```
+
 ## `openpit_create_engine_builder`
 
 Creates a new engine builder with the chosen synchronization policy.
@@ -137,8 +168,8 @@ Success:
 
 Error:
 
-- returns null when `sync_policy` is not one of `OpenPitSyncPolicy_Full` (0),
-  `OpenPitSyncPolicy_Local` (1), or `OpenPitSyncPolicy_Account` (2);
+- returns null when `sync_policy` is not one of `OpenPitSyncPolicy_None` (0),
+  `OpenPitSyncPolicy_Full` (1), or `OpenPitSyncPolicy_Account` (2);
 - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
   error handle that MUST be released with `openpit_destroy_shared_string`.
 
@@ -182,21 +213,102 @@ Success:
 
 Error:
 
-- returns null when `builder` is null, the builder was already consumed, or
-  configuration is invalid;
-- if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
-  error handle that MUST be released with `openpit_destroy_shared_string`.
+- returns null when `builder` is null, the builder was already consumed, or no
+  policies were registered;
+- for those non-domain failures, if `out_error` is not null, writes a
+  caller-owned `OpenPitSharedString` error handle that MUST be released with
+  `openpit_destroy_shared_string`, and writes null to `out_build_error` if it
+  is not null;
+- returns null when the configuration is rejected during building (for
+  example, duplicate policy names or duplicate group ids); in that case, if
+  `out_build_error` is not null, writes a caller-owned
+  `OpenPitEngineBuildError` pointer that carries the machine-readable failure
+  code and the offending value, and MUST be released with
+  `openpit_destroy_engine_build_error`; `out_error` is left untouched for this
+  domain failure.
 
 Ownership:
 
 - on success the returned engine pointer is owned by the caller and must be
-  released with `openpit_destroy_engine`;
+  released with `openpit_destroy_engine`; on success, null is written to
+  `out_build_error` if it is not null;
 - the builder becomes consumed regardless of success and must not be reused.
 
 ```c
 OpenPitEngine * openpit_engine_builder_build(
     OpenPitEngineBuilder * builder,
+    OpenPitEngineBuildError ** out_build_error,
     OpenPitOutError out_error
+);
+```
+
+## `openpit_destroy_engine_build_error`
+
+Releases a build-error object returned by engine construction.
+
+Contract:
+
+- passing null is allowed;
+- this function always succeeds.
+
+```c
+void openpit_destroy_engine_build_error(
+    OpenPitEngineBuildError * build_error
+);
+```
+
+## `openpit_engine_build_error_get_code`
+
+Returns the machine-readable failure category of a build error.
+
+Contract:
+
+- `build_error` must be a valid non-null pointer;
+- this function never fails;
+- violating the pointer contract aborts the call.
+
+```c
+OpenPitEngineBuildErrorCode openpit_engine_build_error_get_code(
+    const OpenPitEngineBuildError * build_error
+);
+```
+
+## `openpit_engine_build_error_get_policy_name`
+
+Returns a non-owning view of the offending policy name from a build error.
+
+Contract:
+
+- `build_error` must be a valid non-null pointer;
+- the returned view points into memory owned by `build_error` and is valid
+  while `build_error` is alive; it must not be used after the build error is
+  destroyed;
+- the view is empty unless the failure category is the duplicate-policy-name
+  category;
+- this function never fails;
+- violating the pointer contract aborts the call.
+
+```c
+OpenPitStringView openpit_engine_build_error_get_policy_name(
+    const OpenPitEngineBuildError * build_error
+);
+```
+
+## `openpit_engine_build_error_get_policy_group_id`
+
+Returns the offending policy group id from a build error.
+
+Contract:
+
+- `build_error` must be a valid non-null pointer;
+- the value is zero unless the failure category is the
+  duplicate-policy-group-id category;
+- this function never fails;
+- violating the pointer contract aborts the call.
+
+```c
+uint16_t openpit_engine_build_error_get_policy_group_id(
+    const OpenPitEngineBuildError * build_error
 );
 ```
 
@@ -244,11 +356,11 @@ Cleanup:
 
 Reject ownership contract:
 
-- on `Rejected`, a non-null `OpenPitRejectList` pointer is written to
+- on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
   `out_rejects` if it is not null;
 - the caller takes ownership and MUST release it with
-  `openpit_destroy_reject_list`; failing to do so leaks the heap allocation
-  made inside this call;
+  `openpit_pretrade_destroy_reject_list`; failing to do so leaks the memory
+  allocated inside this call;
 - no thread-local state is involved, and the returned pointer is safe to read
   on any thread;
 - on `Passed` and `Error`, null is written to `out_rejects`, and the caller
@@ -265,7 +377,7 @@ OpenPitPretradeStatus openpit_engine_start_pre_trade(
     OpenPitEngine * engine,
     const OpenPitOrder * order,
     OpenPitPretradePreTradeRequest ** out_request,
-    OpenPitRejectList ** out_rejects,
+    OpenPitPretradeRejectList ** out_rejects,
     OpenPitOutError out_error
 );
 ```
@@ -296,11 +408,11 @@ Cleanup:
 
 Reject ownership contract:
 
-- on `Rejected`, a non-null `OpenPitRejectList` pointer is written to
+- on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
   `out_rejects` if it is not null;
 - the caller takes ownership and MUST release it with
-  `openpit_destroy_reject_list`; failing to do so leaks the heap allocation
-  made inside this call;
+  `openpit_pretrade_destroy_reject_list`; failing to do so leaks the memory
+  allocated inside this call;
 - no thread-local state is involved, and the returned pointer is safe to read
   on any thread;
 - on `Passed` and `Error`, null is written to `out_rejects`, and the caller
@@ -317,7 +429,7 @@ OpenPitPretradeStatus openpit_engine_execute_pre_trade(
     OpenPitEngine * engine,
     const OpenPitOrder * order,
     OpenPitPretradePreTradeReservation ** out_reservation,
-    OpenPitRejectList ** out_rejects,
+    OpenPitPretradeRejectList ** out_rejects,
     OpenPitOutError out_error
 );
 ```
@@ -348,11 +460,11 @@ Ownership:
 
 Reject ownership contract:
 
-- on `Rejected`, a non-null `OpenPitRejectList` pointer is written to
+- on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
   `out_rejects` if it is not null;
 - the caller takes ownership and MUST release it with
-  `openpit_destroy_reject_list`; failing to do so leaks the heap allocation
-  made inside this call;
+  `openpit_pretrade_destroy_reject_list`; failing to do so leaks the memory
+  allocated inside this call;
 - no thread-local state is involved, and the returned pointer is safe to read
   on any thread;
 - on `Passed` and `Error`, null is written to `out_rejects`, and the caller
@@ -362,7 +474,7 @@ Reject ownership contract:
 OpenPitPretradeStatus openpit_pretrade_pre_trade_request_execute(
     OpenPitPretradePreTradeRequest * request,
     OpenPitPretradePreTradeReservation ** out_reservation,
-    OpenPitRejectList ** out_rejects,
+    OpenPitPretradeRejectList ** out_rejects,
     OpenPitOutError out_error
 );
 ```
@@ -434,7 +546,31 @@ Lifetime contract:
 - the returned snapshot is detached from the reservation state.
 
 ```c
-OpenPitPretradePreTradeLock openpit_pretrade_pre_trade_reservation_get_lock(
+OpenPitPretradePreTradeLock * openpit_pretrade_pre_trade_reservation_get_lock(
+    const OpenPitPretradePreTradeReservation * reservation
+);
+```
+
+## `openpit_pretrade_pre_trade_reservation_get_account_adjustments`
+
+Returns the account-adjustment outcomes collected by the reservation.
+
+Contract:
+
+- `reservation` must be a valid non-null pointer;
+- violating the pointer contract aborts the call;
+- this function never fails;
+- always returns a caller-owned `OpenPitAccountAdjustmentOutcomeList`
+  (possibly empty); release it with
+  `openpit_destroy_account_adjustment_outcome_list`.
+
+Lifetime contract:
+
+- the returned list is detached from the reservation state.
+
+```c
+OpenPitAccountAdjustmentOutcomeList *
+openpit_pretrade_pre_trade_reservation_get_account_adjustments(
     const OpenPitPretradePreTradeReservation * reservation
 );
 ```
@@ -457,33 +593,31 @@ void openpit_destroy_pretrade_pre_trade_reservation(
 );
 ```
 
-## `OpenPitEngineApplyExecutionReportResult`
-
-Result of `openpit_engine_apply_execution_report`.
-
-```c
-typedef struct OpenPitEngineApplyExecutionReportResult {
-    OpenPitPretradePostTradeResult post_trade_result;
-    bool is_error;
-} OpenPitEngineApplyExecutionReportResult;
-```
-
 ## `openpit_engine_apply_execution_report`
 
 Applies an execution report to engine state.
 
+Returns `true` on success, `false` on error.
+
 Success:
 
-- returns `OpenPitEngineApplyExecutionReportResult { is_error = false, ... }`.
+- returns `true`;
+- if `out_blocks` is not null and at least one policy entered a blocked state,
+  writes a caller-owned `OpenPitPretradeAccountBlockList` pointer; release it
+  with `openpit_pretrade_destroy_account_block_list`;
+- if `out_blocks` is not null and no policy blocked, writes null.
+- if `out_adjustments` is not null and at least one policy produced an
+  account-adjustment outcome, writes a caller-owned
+  `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
+  `openpit_destroy_account_adjustment_outcome_list`;
+- if `out_adjustments` is not null and no outcome was produced, writes null.
 
 Error:
 
-- returns `OpenPitEngineApplyExecutionReportResult { is_error = true, post_trade_result = { kill_switch_triggered = false } }` when input pointers
-  are invalid or the report payload cannot be decoded;
+- returns `false` when input pointers are invalid or the report payload cannot
+  be decoded;
 - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
-  error handle that MUST be released with `openpit_destroy_shared_string`;
-- when `is_error` is `true`, do not trust any other fields beyond the fact
-  that the call failed.
+  error handle that MUST be released with `openpit_destroy_shared_string`.
 
 Lifetime contract:
 
@@ -492,9 +626,11 @@ Lifetime contract:
   function returns.
 
 ```c
-OpenPitEngineApplyExecutionReportResult openpit_engine_apply_execution_report(
+bool openpit_engine_apply_execution_report(
     OpenPitEngine * engine,
     const OpenPitExecutionReport * report,
+    OpenPitPretradeAccountBlockList ** out_blocks,
+    OpenPitAccountAdjustmentOutcomeList ** out_adjustments,
     OpenPitOutError out_error
 );
 ```
@@ -542,7 +678,8 @@ Contract:
 - violating the pointer contract aborts the call.
 
 ```c
-const OpenPitRejectList * openpit_account_adjustment_batch_error_get_rejects(
+const OpenPitPretradeRejectList *
+openpit_account_adjustment_batch_error_get_rejects(
     const OpenPitAccountAdjustmentBatchError * batch_error
 );
 ```
@@ -568,6 +705,11 @@ Error:
 Result handling:
 
 - `Applied` means there is no reject object to clean up;
+- on `Applied`, if `out_outcomes` is not null and at least one policy produced
+  an account-adjustment outcome, writes a caller-owned
+  `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
+  `openpit_destroy_account_adjustment_outcome_list`; if no outcome was
+  produced, writes null;
 - `Rejected` stores batch error details in `out_reject`, the caller must
   release a returned object with
   `openpit_destroy_account_adjustment_batch_error`;
@@ -591,6 +733,209 @@ OpenPitAccountAdjustmentApplyStatus openpit_engine_apply_account_adjustment(
     const OpenPitAccountAdjustment * adjustments,
     size_t adjustments_len,
     OpenPitAccountAdjustmentBatchError ** out_reject,
+    OpenPitAccountAdjustmentOutcomeList ** out_outcomes,
     OpenPitOutError out_error
+);
+```
+
+## `OpenPitAccountGroupError`
+
+Structured error returned by account-group registry operations.
+
+Ownership:
+
+- created by `openpit_engine_register_account_group` and
+  `openpit_engine_unregister_account_group` on failure;
+- owned by the caller;
+- released with `openpit_destroy_account_group_error`.
+
+```c
+typedef struct OpenPitAccountGroupError OpenPitAccountGroupError;
+```
+
+## `openpit_destroy_account_group_error`
+
+Releases a caller-owned account-group error.
+
+Contract:
+
+- call exactly once per pointer returned by a registry function;
+- passing null is allowed and has no effect.
+
+```c
+void openpit_destroy_account_group_error(
+    OpenPitAccountGroupError * err
+);
+```
+
+## `openpit_account_group_error_get_message`
+
+Returns the human-readable error message from an account-group error.
+
+Contract:
+
+- `err` must be a valid non-null pointer;
+- the returned view borrows from the error object and is valid while the error
+  is alive;
+- violating the pointer contract aborts the call.
+
+```c
+OpenPitStringView openpit_account_group_error_get_message(
+    const OpenPitAccountGroupError * err
+);
+```
+
+## `openpit_account_group_error_get_account`
+
+Returns the offending account identifier from an account-group error.
+
+Contract:
+
+- `err` must be a valid non-null pointer;
+- this function never fails;
+- violating the pointer contract aborts the call.
+
+```c
+OpenPitParamAccountId openpit_account_group_error_get_account(
+    const OpenPitAccountGroupError * err
+);
+```
+
+## `openpit_account_group_error_get_current_group`
+
+Returns the current group of the offending account from an account-group error,
+or writes zero and returns `false` when no group is present.
+
+Contract:
+
+- `err` must be a valid non-null pointer;
+- `out_group` must be a valid non-null pointer;
+- returns `true` when the account belongs to a group and writes that group to
+  `out_group`;
+- returns `false` when the account belongs to no group; `out_group` is written
+  to only when the return value is `true`;
+- violating the pointer contract aborts the call.
+
+```c
+bool openpit_account_group_error_get_current_group(
+    const OpenPitAccountGroupError * err,
+    OpenPitParamAccountGroupId * out_group
+);
+```
+
+## `openpit_engine_register_account_group`
+
+Atomically registers every account in `accounts` into `group`.
+
+The operation is all-or-nothing: if any listed account is already a member of
+any group (including `group`), no account is registered.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer;
+- `accounts` must point to an array of at least `accounts_len` account
+  identifiers, or may be null when `accounts_len` is zero;
+- `group` is the target group and must not be the reserved
+  `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
+
+Success:
+
+- returns `true`; all listed accounts are now members of `group`.
+
+Error:
+
+- returns `false` when `engine` is null, `accounts` is null with non-zero
+  length, `group` is the reserved default group, or any listed account is
+  already registered;
+- for pointer/argument errors, if `out_error` is not null, writes a
+  caller-owned `OpenPitSharedString` error handle that MUST be released with
+  `openpit_destroy_shared_string`;
+- for domain errors (reserved target group, or account already registered), if
+  `out_group_error` is not null, writes a caller-owned
+  `OpenPitAccountGroupError` pointer that MUST be released with
+  `openpit_destroy_account_group_error`; `out_error` is left untouched for
+  domain failures.
+
+```c
+bool openpit_engine_register_account_group(
+    OpenPitEngine * engine,
+    const OpenPitParamAccountId * accounts,
+    size_t accounts_len,
+    OpenPitParamAccountGroupId group,
+    OpenPitAccountGroupError ** out_group_error,
+    OpenPitOutError out_error
+);
+```
+
+## `openpit_engine_unregister_account_group`
+
+Atomically removes every account in `accounts` from `group`.
+
+The operation is all-or-nothing: if any listed account is not currently a member
+of `group`, no account is removed.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer;
+- `accounts` must point to an array of at least `accounts_len` account
+  identifiers, or may be null when `accounts_len` is zero;
+- `group` is the group to remove accounts from and must not be the reserved
+  `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
+
+Success:
+
+- returns `true`; all listed accounts are now removed from `group`.
+
+Error:
+
+- returns `false` when `engine` is null, `accounts` is null with non-zero
+  length, `group` is the reserved default group, or any listed account is not
+  in `group`;
+- for pointer/argument errors, if `out_error` is not null, writes a
+  caller-owned `OpenPitSharedString` error handle that MUST be released with
+  `openpit_destroy_shared_string`;
+- for domain errors (reserved target group, or account not in group), if
+  `out_group_error` is not null, writes a caller-owned
+  `OpenPitAccountGroupError` pointer that MUST be released with
+  `openpit_destroy_account_group_error`; `out_error` is left untouched for
+  domain failures.
+
+```c
+bool openpit_engine_unregister_account_group(
+    OpenPitEngine * engine,
+    const OpenPitParamAccountId * accounts,
+    size_t accounts_len,
+    OpenPitParamAccountGroupId group,
+    OpenPitAccountGroupError ** out_group_error,
+    OpenPitOutError out_error
+);
+```
+
+## `openpit_engine_account_group`
+
+Returns the account-group membership of a single account.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer;
+- `account` is the account identifier to look up;
+- `out_group` must be a valid non-null pointer.
+
+Success:
+
+- returns `true` when the account belongs to a group and writes that group
+  identifier to `out_group`;
+- returns `false` when the account belongs to no group; `out_group` is not
+  written to when the return value is `false`.
+
+Error:
+
+- aborts the call when `engine` or `out_group` is null.
+
+```c
+bool openpit_engine_account_group(
+    const OpenPitEngine * engine,
+    OpenPitParamAccountId account,
+    OpenPitParamAccountGroupId * out_group
 );
 ```

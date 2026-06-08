@@ -20,10 +20,10 @@ package native
 import "testing"
 
 func TestCreateRejectListClampsNegativeReserve(t *testing.T) {
-	list := CreateRejectList(-3)
-	t.Cleanup(func() { DestroyRejectList(list) })
+	list := CreatePretradeRejectList(-3)
+	t.Cleanup(func() { DestroyPretradeRejectList(list) })
 
-	reject := CreateReject(
+	reject := CreatePretradeReject(
 		RejectCodeOther,
 		RejectScopeOrder,
 		NewStringView("policy"),
@@ -31,20 +31,20 @@ func TestCreateRejectListClampsNegativeReserve(t *testing.T) {
 		NewStringView("details"),
 		nil,
 	)
-	RejectListPush(list, reject)
+	PretradeRejectListPush(list, reject)
 
-	if got := RejectListLen(list); got != 1 {
-		t.Fatalf("RejectListLen() = %d, want 1", got)
+	if got := PretradeRejectListLen(list); got != 1 {
+		t.Fatalf("PretradeRejectListLen() = %d, want 1", got)
 	}
 }
 
 func TestRejectListGetReturnsZeroValueOutOfBounds(t *testing.T) {
-	list := CreateRejectList(1)
-	t.Cleanup(func() { DestroyRejectList(list) })
+	list := CreatePretradeRejectList(1)
+	t.Cleanup(func() { DestroyPretradeRejectList(list) })
 
-	RejectListPush(
+	PretradeRejectListPush(
 		list,
-		CreateReject(
+		CreatePretradeReject(
 			RejectCodeOther,
 			RejectScopeOrder,
 			NewStringView("policy"),
@@ -54,23 +54,23 @@ func TestRejectListGetReturnsZeroValueOutOfBounds(t *testing.T) {
 		),
 	)
 
-	outOfBounds := RejectListGet(list, 10)
-	if RejectGetCode(outOfBounds) != 0 {
-		t.Fatalf("RejectGetCode(outOfBounds) = %v, want 0", RejectGetCode(outOfBounds))
+	outOfBounds := PretradeRejectListGet(list, 10)
+	if PretradeRejectGetCode(outOfBounds) != 0 {
+		t.Fatalf("PretradeRejectGetCode(outOfBounds) = %v, want 0", PretradeRejectGetCode(outOfBounds))
 	}
-	if RejectGetScope(outOfBounds) != 0 {
-		t.Fatalf("RejectGetScope(outOfBounds) = %v, want 0", RejectGetScope(outOfBounds))
+	if PretradeRejectGetScope(outOfBounds) != 0 {
+		t.Fatalf("PretradeRejectGetScope(outOfBounds) = %v, want 0", PretradeRejectGetScope(outOfBounds))
 	}
-	if RejectGetPolicy(outOfBounds).IsSet() {
-		t.Fatal("RejectGetPolicy(outOfBounds).IsSet() = true, want false")
+	if PretradeRejectGetPolicy(outOfBounds).IsSet() {
+		t.Fatal("PretradeRejectGetPolicy(outOfBounds).IsSet() = true, want false")
 	}
-	if RejectGetReason(outOfBounds).IsSet() {
-		t.Fatal("RejectGetReason(outOfBounds).IsSet() = true, want false")
+	if PretradeRejectGetReason(outOfBounds).IsSet() {
+		t.Fatal("PretradeRejectGetReason(outOfBounds).IsSet() = true, want false")
 	}
-	if RejectGetDetails(outOfBounds).IsSet() {
-		t.Fatal("RejectGetDetails(outOfBounds).IsSet() = true, want false")
+	if PretradeRejectGetDetails(outOfBounds).IsSet() {
+		t.Fatal("PretradeRejectGetDetails(outOfBounds).IsSet() = true, want false")
 	}
-	if RejectGetUserData(outOfBounds) != nil {
-		t.Fatalf("RejectGetUserData(outOfBounds) = %v, want nil", RejectGetUserData(outOfBounds))
+	if PretradeRejectGetUserData(outOfBounds) != nil {
+		t.Fatalf("PretradeRejectGetUserData(outOfBounds) = %v, want nil", PretradeRejectGetUserData(outOfBounds))
 	}
 }

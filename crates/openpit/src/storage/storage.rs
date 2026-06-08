@@ -381,6 +381,48 @@ where
         Some(reader(value))
     }
 
+    /// Read/write scoped access to one entry; **does not insert on miss**.
+    ///
+    /// If the entry is present, `mutator` is invoked with an exclusive
+    /// reference to the value. The storage holds the index domain in
+    /// shared mode and the values domain exclusively for the duration of
+    /// the call. Returns `Some(mutator's result)` on a hit, `None` on a
+    /// miss without inserting any default.
+    ///
+    /// Use this when the operation is only meaningful for entries that
+    /// already exist — for example, consuming from a hold that may not
+    /// exist — so that absent keys never create phantom entries.
+    ///
+    /// `mutator` must not call [`Storage::with`] or
+    /// [`Storage::with_mut`] back into the same storage; see the
+    /// [closure re-entry note on `Storage`](Storage#closure-re-entry).
+    pub fn with_mut_if_present<Mutator, Output>(
+        &self,
+        key: &Key,
+        mutator: Mutator,
+    ) -> Option<Output>
+    where
+        Mutator: FnOnce(&mut Value) -> Output,
+    {
+        #[cfg(debug_assertions)]
+        let _reentry = self.reentry.acquire_values_write();
+
+        let _index_guard = self.locking_policy.read_index();
+        // SAFETY: index shared lock blocks structural mutation, so the
+        // map stays put for the duration of the call.
+        let data = unsafe { &*self.data.get() };
+        let value_box = data.get(key)?;
+        let value_cell: &UnsafeCell<Value> = value_box.as_ref();
+        let _values_guard = self.locking_policy.write_values(key);
+        // SAFETY: index shared + values exclusive uphold the aliasing
+        // invariant for the `&mut Value` exposed to `mutator`. The `Box`
+        // indirection ensures address stability for the duration of the
+        // shared index lock. The reference is confined to `mutator`'s
+        // call and does not escape.
+        let value: &mut Value = unsafe { &mut *value_cell.get() };
+        Some(mutator(value))
+    }
+
     /// Read/write scoped access to one entry; inserts on demand.
     ///
     /// `mutator` is always invoked. It receives a mutable reference to
@@ -469,6 +511,143 @@ where
         mutator(value, !already_present)
     }
 
+    /// Read/write scoped access to one entry; inserts on demand and rolls
+    /// back the insert when `mutator` returns `Err`.
+    ///
+    /// Behaves like [`with_mut`](Self::with_mut) but the `mutator` closure
+    /// returns `Result<Output, Error>`:
+    ///
+    /// * **Fast path** (existing entry): acquires index shared + values
+    ///   exclusive. `mutator` receives `&mut Value`; any mutations it makes
+    ///   are visible whether it returns `Ok` or `Err` — storage does **not**
+    ///   snapshot or restore the value. If `mutator` needs to leave the entry
+    ///   untouched on failure it must avoid writing before it knows the
+    ///   operation will succeed.
+    /// * **Slow path** (new entry): acquires index exclusive, inserts
+    ///   `default()`, acquires values exclusive, and invokes `mutator`.
+    ///   If `mutator` returns `Err`, the just-inserted entry is removed
+    ///   under the same exclusive index lock — no phantom entry remains.
+    ///   If `mutator` returns `Ok`, the entry is kept.
+    ///
+    /// `Key: Clone` is required for the same reason as in `with_mut`.
+    ///
+    /// `mutator` must not call [`Storage::with`] or [`Storage::with_mut`]
+    /// back into the same storage; see the
+    /// [closure re-entry note on `Storage`](Storage#closure-re-entry).
+    pub fn with_mut_or_insert<Mutator, Output, Error, Initializer>(
+        &self,
+        key: Key,
+        default: Initializer,
+        mutator: Mutator,
+    ) -> Result<Output, Error>
+    where
+        Mutator: FnOnce(&mut Value, bool) -> Result<Output, Error>,
+        Initializer: FnOnce() -> Value,
+        Key: Clone,
+    {
+        self.with_mut_or_insert_prune_new_if(key, default, |_| false, mutator)
+    }
+
+    /// Like [`with_mut_or_insert`](Self::with_mut_or_insert) but, when the entry was **newly inserted**
+    /// and the mutation returned `Ok`, calls `prune_if` on the current slot
+    /// value and removes the entry atomically under the same exclusive-index
+    /// lock if `prune_if` returns `true`.
+    ///
+    /// This eliminates the window in which a just-inserted entry with an
+    /// unwanted value (e.g. all-zero) could be observed by another thread.
+    /// For entries that were already present before the call, behaviour is
+    /// identical to [`with_mut_or_insert`](Self::with_mut_or_insert); pruning of existing entries that
+    /// satisfy the predicate after mutation is the caller's responsibility
+    /// (see [`remove_if`](Self::remove_if)).
+    pub fn with_mut_or_insert_prune_new_if<Mutator, Output, Error, Initializer, Pred>(
+        &self,
+        key: Key,
+        default: Initializer,
+        prune_if: Pred,
+        mutator: Mutator,
+    ) -> Result<Output, Error>
+    where
+        Mutator: FnOnce(&mut Value, bool) -> Result<Output, Error>,
+        Initializer: FnOnce() -> Value,
+        Pred: FnOnce(&Value) -> bool,
+        Key: Clone,
+    {
+        #[cfg(debug_assertions)]
+        let _reentry = self.reentry.acquire_values_write();
+
+        // Fast path: take the index shared and look the key up. Most
+        // callers hit this path repeatedly, so it should not block
+        // concurrent readers on other entries.
+        {
+            let index_guard = self.locking_policy.read_index();
+            // SAFETY: index shared lock blocks structural mutation, so the
+            // map stays put for the duration of the call.
+            let data = unsafe { &*self.data.get() };
+            if let Some(value_box) = data.get(&key) {
+                let value_cell: &UnsafeCell<Value> = value_box.as_ref();
+                let _values_guard = self.locking_policy.write_values(&key);
+                // SAFETY: index shared + values exclusive uphold the
+                // aliasing invariant for the `&mut Value` exposed to
+                // `mutator`. The `Box` indirection keeps the value address
+                // stable independently of any rehash that would happen if the
+                // index were ever taken exclusively (it cannot be while we
+                // hold the shared index lock). The reference is confined to
+                // `mutator`'s call and does not escape.
+                let result = {
+                    let value: &mut Value = unsafe { &mut *value_cell.get() };
+                    mutator(value, false)
+                };
+                drop(index_guard);
+                return result;
+            }
+        }
+
+        // Slow path: the key was absent under the shared index lock.
+        // Re-take the index exclusively, which also serializes us against
+        // any other thread that may have raced to insert in the meantime.
+        let _index_guard = self.locking_policy.write_index();
+        // SAFETY: index exclusive lock; we have unique access to the map
+        // and may rehash freely.
+        let data = unsafe { &mut *self.data.get() };
+        // `data.entry(key)` moves `key` into the map; clone it first so we
+        // can pass the same key to `write_values` below.
+        use std::collections::hash_map::Entry;
+
+        let lookup_key = key.clone();
+        let (value_cell, already_present): (&UnsafeCell<Value>, bool) = match data.entry(key) {
+            Entry::Occupied(entry) => (&**entry.into_mut(), true),
+            Entry::Vacant(entry) => (&**entry.insert(Box::new(UnsafeCell::new(default()))), false),
+        };
+        // After this point no further structural mutation happens; bucket
+        // addresses inside the map are stable for as long as we hold the
+        // exclusive index lock.
+        let _values_guard = self.locking_policy.write_values(&lookup_key);
+        // SAFETY: index exclusive + values exclusive => no other thread can
+        // observe or touch this entry; the `&mut Value` exposed to `mutator`
+        // is exclusive for the duration of the call. Address stability is
+        // guaranteed by holding the exclusive index lock until `value` drops.
+        let result = {
+            let value: &mut Value = unsafe { &mut *value_cell.get() };
+            mutator(value, !already_present)
+            // `value` drops here, before the potential remove below.
+        };
+        if !already_present {
+            // Under the same write_index lock: remove the just-inserted entry
+            // on Err (rollback) or when prune_if approves on Ok.
+            // SAFETY: `value` was dropped above; reading the slot via
+            // `value_cell` for the prune predicate does not alias any live
+            // `&mut Value`.
+            let should_remove = match &result {
+                Err(_) => true,
+                Ok(_) => prune_if(unsafe { &*value_cell.get() }),
+            };
+            if should_remove {
+                data.remove(&lookup_key);
+            }
+        }
+        result
+    }
+
     /// Removes the entry under `key`, returning whether it was present.
     ///
     /// Acquires the index and values domains exclusively for the
@@ -480,5 +659,32 @@ where
         // the map and to every value currently inside it.
         let data = unsafe { &mut *self.data.get() };
         data.remove(key).is_some()
+    }
+
+    /// Removes the entry under `key` only if `predicate` returns `true`
+    /// for its current value.
+    ///
+    /// The check and the removal happen under the same exclusive lock
+    /// acquisition, so there is no window for another thread to change
+    /// the value between the test and the removal.
+    ///
+    /// Returns `true` when the entry existed and `predicate` approved the
+    /// removal; `false` when the entry was absent or `predicate` declined.
+    pub fn remove_if<Pred>(&self, key: &Key, predicate: Pred) -> bool
+    where
+        Pred: FnOnce(&Value) -> bool,
+    {
+        let _index_guard = self.locking_policy.write_index();
+        let _values_guard = self.locking_policy.write_values(key);
+        // SAFETY: both domains held exclusively => unique access to
+        // the map and to every value currently inside it.
+        let data = unsafe { &mut *self.data.get() };
+        match data.get(key) {
+            Some(value_box) if predicate(unsafe { &*value_box.get() }) => {
+                data.remove(key);
+                true
+            }
+            _ => false,
+        }
     }
 }

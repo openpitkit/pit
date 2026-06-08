@@ -102,6 +102,20 @@ func DestroySharedString(handle SharedString) {
 	C.openpit_destroy_shared_string(handle)
 }
 
+// SharedStringViewBytes returns a freshly allocated copy of the bytes backing
+// the handle. The result is independent of the handle and safe to keep beyond
+// its lifetime.
+func SharedStringViewBytes(handle SharedString) []byte {
+	if handle == nil {
+		return nil
+	}
+	view := C.openpit_shared_string_view(handle)
+	if view.ptr == nil || view.len == 0 {
+		return nil
+	}
+	return C.GoBytes(unsafe.Pointer(view.ptr), C.int(view.len))
+}
+
 //------------------------------------------------------------------------------
 // String
 

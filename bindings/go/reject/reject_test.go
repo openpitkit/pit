@@ -33,35 +33,35 @@ func TestRejectWithUserDataReturnsCopyWithToken(t *testing.T) {
 		ScopeOrder,
 	)
 	var token byte
-	userData := unsafe.Pointer(&token)
-	copy := base.WithUserData(userData)
+	userData := unsafe.Pointer(&token) //nolint:gosec // unsafe.Pointer for testing user data field
+	withUserData := base.WithUserData(userData)
 
 	if base.UserData != nil {
 		t.Fatalf("base UserData = %v, want nil", base.UserData)
 	}
-	if copy.UserData != userData {
-		t.Fatalf("copy UserData = %v, want %v", copy.UserData, userData)
+	if withUserData.UserData != userData {
+		t.Fatalf("copy UserData = %v, want %v", withUserData.UserData, userData)
 	}
-	if copy.Code != base.Code {
-		t.Fatalf("copy Code = %v, want %v", copy.Code, base.Code)
+	if withUserData.Code != base.Code {
+		t.Fatalf("copy Code = %v, want %v", withUserData.Code, base.Code)
 	}
-	if copy.Scope != base.Scope {
-		t.Fatalf("copy Scope = %v, want %v", copy.Scope, base.Scope)
+	if withUserData.Scope != base.Scope {
+		t.Fatalf("copy Scope = %v, want %v", withUserData.Scope, base.Scope)
 	}
-	if copy.Policy != base.Policy {
-		t.Fatalf("copy Policy = %q, want %q", copy.Policy, base.Policy)
+	if withUserData.Policy != base.Policy {
+		t.Fatalf("copy Policy = %q, want %q", withUserData.Policy, base.Policy)
 	}
-	if copy.Reason != base.Reason {
-		t.Fatalf("copy Reason = %q, want %q", copy.Reason, base.Reason)
+	if withUserData.Reason != base.Reason {
+		t.Fatalf("copy Reason = %q, want %q", withUserData.Reason, base.Reason)
 	}
-	if copy.Details != base.Details {
-		t.Fatalf("copy Details = %q, want %q", copy.Details, base.Details)
+	if withUserData.Details != base.Details {
+		t.Fatalf("copy Details = %q, want %q", withUserData.Details, base.Details)
 	}
 }
 
 func TestRejectNewWithUserDataInitialisesAllFields(t *testing.T) {
 	var token byte
-	userData := unsafe.Pointer(&token)
+	userData := unsafe.Pointer(&token) //nolint:gosec // unsafe.Pointer for testing user data field
 	rej := New(
 		CodeRiskLimitExceeded,
 		"policy-b",
@@ -91,8 +91,8 @@ func TestRejectNewWithUserDataInitialisesAllFields(t *testing.T) {
 }
 
 func TestNewListFromHandleReturnsErrorForEmptyList(t *testing.T) {
-	handle := native.CreateRejectList(0)
-	t.Cleanup(func() { native.DestroyRejectList(handle) })
+	handle := native.CreatePretradeRejectList(0)
+	t.Cleanup(func() { native.DestroyPretradeRejectList(handle) })
 
 	list, err := NewListFromHandle(handle)
 	if list != nil {

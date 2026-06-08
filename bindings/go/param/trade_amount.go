@@ -24,10 +24,12 @@ import (
 	"go.openpit.dev/openpit/pkg/optional"
 )
 
+// TradeAmount is a trade amount expressed as either a quantity or a volume.
 type TradeAmount struct {
 	native native.ParamTradeAmount
 }
 
+// NewQuantityTradeAmount creates a quantity-denominated TradeAmount.
 func NewQuantityTradeAmount(v Quantity) TradeAmount {
 	return newTradeAmount(
 		native.CreateParamTradeAmount(
@@ -37,6 +39,7 @@ func NewQuantityTradeAmount(v Quantity) TradeAmount {
 	)
 }
 
+// NewVolumeTradeAmount creates a volume-denominated TradeAmount.
 func NewVolumeTradeAmount(v Volume) TradeAmount {
 	return newTradeAmount(
 		native.CreateParamTradeAmount(
@@ -46,6 +49,7 @@ func NewVolumeTradeAmount(v Volume) TradeAmount {
 	)
 }
 
+// NewTradeAmountFromHandle creates an optional TradeAmount from a native handle.
 func NewTradeAmountFromHandle(amount native.ParamTradeAmount) optional.Option[TradeAmount] {
 	if native.ParamTradeAmountGetKind(amount) == native.ParamTradeAmountKindNotSet {
 		return optional.None[TradeAmount]()
@@ -57,14 +61,17 @@ func newTradeAmount(amount native.ParamTradeAmount) TradeAmount {
 	return TradeAmount{native: amount}
 }
 
+// IsQuantity reports whether the trade amount is quantity-denominated.
 func (a TradeAmount) IsQuantity() bool {
 	return native.ParamTradeAmountGetKind(a.native) == native.ParamTradeAmountKindQuantity
 }
 
+// IsVolume reports whether the trade amount is volume-denominated.
 func (a TradeAmount) IsVolume() bool {
 	return native.ParamTradeAmountGetKind(a.native) == native.ParamTradeAmountKindVolume
 }
 
+// MustQuantity returns the quantity or panics if not quantity-denominated.
 func (a TradeAmount) MustQuantity() Quantity {
 	if !a.IsQuantity() {
 		panic("requested trade amount as quantity, but it is not")
@@ -76,6 +83,7 @@ func (a TradeAmount) MustQuantity() Quantity {
 	return NewQuantityFromHandle(value)
 }
 
+// MustVolume returns the volume or panics if not volume-denominated.
 func (a TradeAmount) MustVolume() Volume {
 	if !a.IsVolume() {
 		panic("requested trade amount as volume, but it is not")
@@ -87,10 +95,24 @@ func (a TradeAmount) MustVolume() Volume {
 	return NewVolumeFromHandle(value)
 }
 
+// Handle returns the underlying native handle.
 func (a TradeAmount) Handle() native.ParamTradeAmount {
 	return a.native
 }
 
+// String returns a human-readable representation of the trade amount.
+func (a TradeAmount) String() string {
+	switch native.ParamTradeAmountGetKind(a.native) {
+	case native.ParamTradeAmountKindQuantity:
+		return "qty: " + a.MustQuantity().String()
+	case native.ParamTradeAmountKindVolume:
+		return "vol: " + a.MustVolume().String()
+	default:
+		return "not set"
+	}
+}
+
+// Choose calls getQuantity or getVolume depending on the trade amount kind.
 func (a TradeAmount) Choose(getQuantity func(Quantity), getVolume func(Volume)) {
 	if a.IsQuantity() {
 		getQuantity(a.MustQuantity())

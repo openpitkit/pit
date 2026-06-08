@@ -66,8 +66,8 @@ type Leverage struct {
 	native native.ParamLeverage
 }
 
-// LeverageZero returns the canonical zero value of Leverage (`not set` state).
-func LeverageZero() Leverage { return Leverage{} }
+// NewLeverageZero returns the canonical zero value of Leverage (`not set` state).
+func NewLeverageZero() Leverage { return Leverage{} }
 
 // NewLeverageFromHandle wraps native leverage payload as Leverage.
 //
@@ -88,14 +88,14 @@ func NewLeverageOptionFromHandle(v native.ParamLeverage) optional.Option[Leverag
 	return optional.Some(NewLeverageFromHandle(v))
 }
 
-// NewLeverageFromInt builds leverage from integer multiplier.
+// NewLeverageFromUint16 builds leverage from integer multiplier.
 //
 // Conversion uses fixed-point encoding:
 //
 //	raw = multiplier * LeverageScale
 //
 // No business validation is performed.
-func NewLeverageFromInt(multiplier uint16) Leverage {
+func NewLeverageFromUint16(multiplier uint16) Leverage {
 	return Leverage{
 		native: native.ParamLeverage(multiplier) * LeverageScale,
 	}

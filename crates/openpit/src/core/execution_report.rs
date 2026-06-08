@@ -15,7 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use crate::core::request_trait::HasLock;
+use crate::core::request_trait::HasPreTradeLock;
 use crate::impl_request_has_field;
 use crate::impl_request_has_field_passthrough;
 use crate::param::{AccountId, Fee, Pnl, PositionEffect, PositionSide, Quantity, Side, Trade};
@@ -66,7 +66,7 @@ impl_request_has_field_passthrough!(
     HasPnl, pnl, Pnl;
     HasFee, fee, Fee;
     HasLeavesQuantity, leaves_quantity, Quantity;
-    HasLock, lock, PreTradeLock;
+    HasPreTradeLock, lock, PreTradeLock;
     HasOrderPrice, price, Option<crate::param::Price>;
     HasOrderPositionSide, position_side, Option<PositionSide>;
     HasOrderLeverage, leverage, Option<crate::param::Leverage>;
@@ -98,7 +98,7 @@ impl_request_has_field_passthrough!(
     HasClosePosition, close_position, bool;
     HasAutoBorrow, auto_borrow, bool;
     HasLeavesQuantity, leaves_quantity, Quantity;
-    HasLock, lock, PreTradeLock;
+    HasPreTradeLock, lock, PreTradeLock;
     HasOrderPrice, price, Option<crate::param::Price>;
     HasOrderPositionSide, position_side, Option<PositionSide>;
     HasOrderLeverage, leverage, Option<crate::param::Leverage>;
@@ -199,7 +199,7 @@ impl_request_has_field!(
     fill,
     HasExecutionReportLastTrade, last_trade, Option<Trade>, last_trade;
     HasLeavesQuantity, leaves_quantity, Quantity, leaves_quantity;
-    HasLock, lock, PreTradeLock, lock;
+    HasPreTradeLock, lock, PreTradeLock, lock;
     HasExecutionReportIsFinal, is_final, bool, is_final;
 );
 impl_request_has_field_passthrough!(
@@ -219,7 +219,7 @@ impl_request_has_field_passthrough!(
     HasPnl, pnl, Pnl;
     HasFee, fee, Fee;
     HasLeavesQuantity, leaves_quantity, Quantity;
-    HasLock, lock, PreTradeLock;
+    HasPreTradeLock, lock, PreTradeLock;
     HasOrderPrice, price, Option<crate::param::Price>;
     HasOrderPositionSide, position_side, Option<PositionSide>;
     HasOrderLeverage, leverage, Option<crate::param::Leverage>;

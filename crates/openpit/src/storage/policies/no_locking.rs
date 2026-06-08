@@ -47,7 +47,7 @@ use crate::storage::policy::{LockingPolicy, LockingPolicyFactory, NotThreadSafe}
 /// ```
 /// use openpit::Engine;
 ///
-/// let builder = Engine::<(), ()>::builder().no_sync();
+/// let builder = Engine::builder::<(), (), ()>().no_sync();
 /// let storage = builder.storage_builder().create::<u32, String>();
 /// storage.with_mut(1, || "hello".to_string(), |entry, is_new| {
 ///     assert!(is_new);
@@ -64,10 +64,19 @@ pub struct NoLocking;
 impl LockingPolicyFactory for NoLocking {
     type Policy = NoLockingPolicy;
 
+    /// Single-thread regime; `Cell<bool>` needs no synchronization.
+    type IndexFlag = std::cell::Cell<bool>;
+
+    type Shared<T: 'static> = std::rc::Rc<T>;
+
     fn create_policy(&self) -> Self::Policy {
         NoLockingPolicy {
             _not_thread_safe: PhantomData,
         }
+    }
+
+    fn new_shared<T: 'static>(value: T) -> std::rc::Rc<T> {
+        std::rc::Rc::new(value)
     }
 }
 

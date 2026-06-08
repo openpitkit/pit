@@ -41,7 +41,7 @@ func (r *recordingReactor) OnRejected(_ model.Order, rj []reject.Reject) {
 	}
 }
 func (r *recordingReactor) OnReport(_ model.ExecutionReport, res openpit.PostTradeResult) {
-	if res.KillSwitchTriggered {
+	if len(res.AccountBlocks) > 0 {
 		r.killSwitched = true
 	}
 }
@@ -100,7 +100,7 @@ func TestScenarioTripsBothKillswitches(t *testing.T) {
 	}
 
 	// 999 * (-0.05) + (-460) = -509.95, just past the -500 floor.
-	want, _ := new(big.Rat).SetString("-509.95") //nolint:gosec // G113 - constant input
+	want, _ := new(big.Rat).SetString("-509.95")
 	if stats.Pnl.Cmp(want) != 0 {
 		t.Errorf("pnl = %s, want -509.95", stats.Pnl.FloatString(2))
 	}

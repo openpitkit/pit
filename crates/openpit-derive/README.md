@@ -1,15 +1,13 @@
 # openpit-derive
 
-Proc-macro derives for [`openpit`](https://crates.io/crates/openpit).
+Proc-macro derives for [`openpit`](https://crates.io/crates/openpit). This
+crate provides the `RequestFields` derive macro, which the public `openpit`
+crate re-exports under the `derive` feature.
 
-This crate provides the `RequestFields` derive macro used by the public
-`openpit` `derive` feature.
-
-End users normally depend on `openpit` and enable:
+End users normally depend on `openpit` directly:
 
 ```toml
-openpit = { version = "0.2", features = ["derive"] }
+openpit = { version = "X.X", features = ["derive"] }
 ```
 
-The derive macro is re-exported by `openpit`, so direct dependency on
-`openpit-derive` is usually unnecessary.
+A direct dependency on `openpit-derive` is usually unnecessary.

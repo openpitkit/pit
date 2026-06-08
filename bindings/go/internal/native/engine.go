@@ -20,7 +20,7 @@ package native
 /*
 #include "openpit.h"
 
-extern const OpenPitRejectList * openpit_account_adjustment_batch_error_get_rejects(
+extern const OpenPitPretradeRejectList * openpit_account_adjustment_batch_error_get_rejects(
     const OpenPitAccountAdjustmentBatchError * batch_error
 );
 */
@@ -38,8 +38,8 @@ import (
 type SyncPolicy = C.OpenPitSyncPolicy
 
 const (
+	SyncPolicyNone    SyncPolicy = C.OpenPitSyncPolicy_None
 	SyncPolicyFull    SyncPolicy = C.OpenPitSyncPolicy_Full
-	SyncPolicyLocal   SyncPolicy = C.OpenPitSyncPolicy_Local
 	SyncPolicyAccount SyncPolicy = C.OpenPitSyncPolicy_Account
 )
 
@@ -47,7 +47,7 @@ func CreateEngineBuilder(syncPolicy SyncPolicy) (EngineBuilder, error) {
 	var outError SharedString
 	builder := C.openpit_create_engine_builder(
 		syncPolicy,
-		C.OpenPitOutError(&outError), //nolint:gocritic
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
 	if builder == nil {
 		return nil, consumeSharedStringAsError(outError, "openpit_create_engine_builder failed")
@@ -59,28 +59,59 @@ func DestroyEngineBuilder(builder EngineBuilder) {
 	C.openpit_destroy_engine_builder(builder)
 }
 
-func EngineBuilderBuild(builder EngineBuilder) (Engine, error) {
+// EngineBuilderBuild constructs the engine from the builder.
+//
+// On a domain build failure it surfaces a non-nil EngineBuildError handle, which
+// the caller owns and must release with DestroyEngineBuildError. On a boundary
+// failure it surfaces the error from the string out-error. A null engine is
+// treated as failure; on success both the handle and the error are nil.
+func EngineBuilderBuild(builder EngineBuilder) (Engine, EngineBuildError, error) {
+	var outBuildError EngineBuildError
 	var outError SharedString
-	e := C.openpit_engine_builder_build(builder, C.OpenPitOutError(&outError)) //nolint:gocritic
+	e := C.openpit_engine_builder_build(
+		builder,
+		&outBuildError,
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
+	)
 	if e == nil {
-		return nil, consumeSharedStringAsError(outError, "openpit_engine_builder_build failed")
+		if outBuildError != nil {
+			return nil, outBuildError, nil
+		}
+		return nil, nil, consumeSharedStringAsError(outError, "openpit_engine_builder_build failed")
 	}
-	return e, nil
+	return e, nil, nil
+}
+
+func DestroyEngineBuildError(err EngineBuildError) {
+	C.openpit_destroy_engine_build_error(err)
+}
+
+func EngineBuildErrorGetCode(err EngineBuildError) EngineBuildErrorCode {
+	return C.openpit_engine_build_error_get_code(err)
+}
+
+func EngineBuildErrorGetPolicyName(err EngineBuildError) string {
+	return newStringView(C.openpit_engine_build_error_get_policy_name(err)).Safe()
+}
+
+func EngineBuildErrorGetPolicyGroupID(err EngineBuildError) uint16 {
+	return uint16(C.openpit_engine_build_error_get_policy_group_id(err))
 }
 
 func EngineBuilderAddPreTradePolicy(builder EngineBuilder, policy PretradePreTradePolicy) error {
 	var outError SharedString
-	if !C.openpit_engine_builder_add_pre_trade_policy(builder, policy, C.OpenPitOutError(&outError)) { //nolint:gocritic
+	if !C.openpit_engine_builder_add_pre_trade_policy(builder, policy, C.OpenPitOutError(&outError)) { //nolint:gocritic // CGo out-parameter requires address-of operator
 		return consumeSharedStringAsError(outError, "openpit_engine_builder_add_pre_trade_policy failed")
 	}
 	return nil
 }
 
-func EngineBuilderAddBuiltinOrderValidation(builder EngineBuilder) error {
+func EngineBuilderAddBuiltinOrderValidation(builder EngineBuilder, groupID PolicyGroupID) error {
 	var outError SharedString
 	if !C.openpit_engine_builder_add_builtin_order_validation_policy(
 		builder,
-		C.OpenPitOutError(&outError), //nolint:gocritic
+		groupID,
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return consumeSharedStringAsError(
 			outError,
@@ -92,6 +123,7 @@ func EngineBuilderAddBuiltinOrderValidation(builder EngineBuilder) error {
 
 func EngineBuilderAddBuiltinRateLimit(
 	builder EngineBuilder,
+	groupID PolicyGroupID,
 	broker *PretradePoliciesRateLimitBrokerBarrier,
 	assets []PretradePoliciesRateLimitAssetBarrier,
 	accounts []PretradePoliciesRateLimitAccountBarrier,
@@ -113,6 +145,7 @@ func EngineBuilderAddBuiltinRateLimit(
 	var outError SharedString
 	if !C.openpit_engine_builder_add_builtin_rate_limit_policy(
 		builder,
+		groupID,
 		broker,
 		assetsPtr,
 		C.size_t(len(assets)),
@@ -120,7 +153,7 @@ func EngineBuilderAddBuiltinRateLimit(
 		C.size_t(len(accounts)),
 		accountAssetsPtr,
 		C.size_t(len(accountAssets)),
-		C.OpenPitOutError(&outError), //nolint:gocritic
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return consumeSharedStringAsError(
 			outError,
@@ -132,6 +165,7 @@ func EngineBuilderAddBuiltinRateLimit(
 
 func EngineBuilderAddBuiltinOrderSizeLimit(
 	builder EngineBuilder,
+	groupID PolicyGroupID,
 	broker *PretradePoliciesOrderSizeBrokerBarrier,
 	assets []PretradePoliciesOrderSizeAssetBarrier,
 	accountAssets []PretradePoliciesOrderSizeAccountAssetBarrier,
@@ -150,12 +184,13 @@ func EngineBuilderAddBuiltinOrderSizeLimit(
 	var outError SharedString
 	if !C.openpit_engine_builder_add_builtin_order_size_limit_policy(
 		builder,
+		groupID,
 		broker,
 		assetsPtr,
 		C.size_t(len(assets)),
 		accountAssetsPtr,
 		C.size_t(len(accountAssets)),
-		C.OpenPitOutError(&outError), //nolint:gocritic
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return consumeSharedStringAsError(
 			outError,
@@ -167,6 +202,7 @@ func EngineBuilderAddBuiltinOrderSizeLimit(
 
 func EngineBuilderAddBuiltinPnlBoundsKillswitch(
 	builder EngineBuilder,
+	groupID PolicyGroupID,
 	brokerBarriers []PretradePoliciesPnlBoundsBarrier,
 	accountBarriers []PretradePoliciesPnlBoundsAccountBarrier,
 ) error {
@@ -184,11 +220,12 @@ func EngineBuilderAddBuiltinPnlBoundsKillswitch(
 	var outError SharedString
 	if !C.openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
 		builder,
+		groupID,
 		brokerPtr,
 		C.size_t(len(brokerBarriers)),
 		accountPtr,
 		C.size_t(len(accountBarriers)),
-		C.OpenPitOutError(&outError), //nolint:gocritic
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return consumeSharedStringAsError(
 			outError,
@@ -198,20 +235,92 @@ func EngineBuilderAddBuiltinPnlBoundsKillswitch(
 	return nil
 }
 
+// NewPretradePoliciesSpotFundsOverride builds an override POD. accountID and
+// accountGroupID select the scope; both nil means instrument-level. When
+// slippageBps is nil the entry is ignored and the cascade falls through to the
+// next tier.
+func NewPretradePoliciesSpotFundsOverride(
+	instrumentID MarketDataInstrumentID,
+	accountID *ParamAccountID,
+	accountGroupID *ParamAccountGroupID,
+	slippageBps *uint16,
+) PretradePoliciesSpotFundsOverride {
+	override := PretradePoliciesSpotFundsOverride{instrument_id: instrumentID}
+	if accountID != nil {
+		override.account_id = C.OpenPitParamAccountIdOptional{
+			value:  *accountID,
+			is_set: C.bool(true),
+		}
+	}
+	if accountGroupID != nil {
+		override.account_group_id = C.OpenPitParamAccountGroupIdOptional{
+			value:  *accountGroupID,
+			is_set: C.bool(true),
+		}
+	}
+	if slippageBps != nil {
+		override.slippage_bps = C.uint16_t(*slippageBps)
+		override.has_slippage_bps = true
+	}
+	return override
+}
+
+func EngineBuilderAddBuiltinSpotFunds(
+	builder EngineBuilder,
+	marketData MarketDataService,
+	marketSlippageBps *uint16,
+	pricingSource uint8,
+	instrumentOverrides []PretradePoliciesSpotFundsOverride,
+	groupID PolicyGroupID,
+) error {
+	var slippagePtr *C.uint16_t
+	if marketSlippageBps != nil {
+		slippageValue := C.uint16_t(*marketSlippageBps)
+		slippagePtr = &slippageValue
+	}
+	var overridesPtr *C.OpenPitPretradePoliciesSpotFundsOverride
+	if len(instrumentOverrides) > 0 {
+		overridesPtr = (*C.OpenPitPretradePoliciesSpotFundsOverride)(
+			unsafe.Pointer(&instrumentOverrides[0]),
+		)
+	}
+
+	var outError SharedString
+	if !C.openpit_engine_builder_add_builtin_spot_funds_policy(
+		builder,
+		marketData,
+		slippagePtr,
+		C.uint8_t(pricingSource),
+		overridesPtr,
+		C.size_t(len(instrumentOverrides)),
+		groupID,
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return consumeSharedStringAsError(
+			outError,
+			"openpit_engine_builder_add_builtin_spot_funds_policy failed",
+		)
+	}
+	return nil
+}
+
 func DestroyEngine(engine Engine) {
 	C.openpit_destroy_engine(engine)
 }
 
-func EngineStartPreTrade(engine Engine, order Order) (PretradePreTradeRequest, RejectList, error) {
+func EngineStartPreTrade(
+	engine Engine,
+	order Order,
+) (PretradePreTradeRequest, PretradeRejectList, error) {
 	var request PretradePreTradeRequest
-	var rejects RejectList
+	var rejects PretradeRejectList
 	var outError SharedString
 	status := C.openpit_engine_start_pre_trade(
 		engine,
 		&order,
 		&request,
 		&rejects,
-		C.OpenPitOutError(&outError), //nolint:gocritic
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
 
 	switch status {
@@ -226,7 +335,7 @@ func EngineStartPreTrade(engine Engine, order Order) (PretradePreTradeRequest, R
 		return nil, nil, consumeSharedStringAsError(outError, "openpit_engine_start_pre_trade failed")
 	default:
 		DestroyPretradePreTradeRequest(request)
-		DestroyRejectList(rejects)
+		DestroyPretradeRejectList(rejects)
 		DestroySharedString(outError)
 		return nil,
 			nil,
@@ -237,16 +346,16 @@ func EngineStartPreTrade(engine Engine, order Order) (PretradePreTradeRequest, R
 func EngineExecutePreTrade(
 	engine Engine,
 	order Order,
-) (PretradePreTradeReservation, RejectList, error) {
+) (PretradePreTradeReservation, PretradeRejectList, error) {
 	var reservation PretradePreTradeReservation
-	var rejects RejectList
+	var rejects PretradeRejectList
 	var outError SharedString
 	status := C.openpit_engine_execute_pre_trade(
 		engine,
 		&order,
 		&reservation,
 		&rejects,
-		C.OpenPitOutError(&outError), //nolint:gocritic
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
 
 	switch status {
@@ -261,7 +370,7 @@ func EngineExecutePreTrade(
 		return nil, nil, consumeSharedStringAsError(outError, "openpit_engine_execute_pre_trade failed")
 	default:
 		DestroyPretradePreTradeReservation(reservation)
-		DestroyRejectList(rejects)
+		DestroyPretradeRejectList(rejects)
 		DestroySharedString(outError)
 		return nil,
 			nil,
@@ -270,7 +379,11 @@ func EngineExecutePreTrade(
 }
 
 type PretradePostTradeResult struct {
-	KillSwitchTriggered bool
+	AccountBlocks []PretradeAccountBlock
+	// Outcomes is the native account-adjustment outcome list handle produced by
+	// policies, or nil. The caller owns it and must release it with
+	// DestroyAccountAdjustmentOutcomeList.
+	Outcomes AccountAdjustmentOutcomeList
 }
 
 func EngineApplyExecutionReport(
@@ -278,28 +391,49 @@ func EngineApplyExecutionReport(
 	report ExecutionReport,
 ) (PretradePostTradeResult, error) {
 	var outError SharedString
-	result := C.openpit_engine_apply_execution_report(engine, &report, C.OpenPitOutError(&outError)) //nolint:gocritic
-	if result.is_error {
+	var outBlocks PretradeAccountBlockList
+	var outAdjustments AccountAdjustmentOutcomeList
+	if !C.openpit_engine_apply_execution_report(
+		engine,
+		&report,
+		&outBlocks,
+		&outAdjustments,
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
 		return PretradePostTradeResult{},
 			consumeSharedStringAsError(outError, "openpit_engine_apply_execution_report failed")
 	}
-	return PretradePostTradeResult{
-			KillSwitchTriggered: bool(result.post_trade_result.kill_switch_triggered),
-		},
-		nil
+
+	var blocks []PretradeAccountBlock
+	if outBlocks != nil {
+		n := PretradeAccountBlockListLen(outBlocks)
+		blocks = make([]PretradeAccountBlock, n)
+		for i := range blocks {
+			blocks[i] = PretradeAccountBlockListGet(outBlocks, i)
+		}
+		DestroyPretradeAccountBlockList(outBlocks)
+	}
+
+	return PretradePostTradeResult{AccountBlocks: blocks, Outcomes: outAdjustments}, nil
 }
 
+// EngineApplyAccountAdjustment applies a batch of account adjustments.
+//
+// On the Applied status it returns the native account-adjustment outcome list
+// handle (or nil), which the caller owns and must release with
+// DestroyAccountAdjustmentOutcomeList.
 func EngineApplyAccountAdjustment(
 	engine Engine,
 	accountID ParamAccountID,
 	adjustments []AccountAdjustment,
-) (AccountAdjustmentBatchError, error) {
+) (AccountAdjustmentBatchError, AccountAdjustmentOutcomeList, error) {
 	var adjustmentsPtr *C.OpenPitAccountAdjustment
 	if len(adjustments) > 0 {
 		adjustmentsPtr = (*C.OpenPitAccountAdjustment)(unsafe.Pointer(&adjustments[0]))
 	}
 
 	var reject AccountAdjustmentBatchError
+	var outOutcomes AccountAdjustmentOutcomeList
 	var outError SharedString
 	status := C.openpit_engine_apply_account_adjustment(
 		engine,
@@ -307,20 +441,22 @@ func EngineApplyAccountAdjustment(
 		adjustmentsPtr,
 		C.size_t(len(adjustments)),
 		&reject,
-		C.OpenPitOutError(&outError), //nolint:gocritic
+		&outOutcomes,
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
 
 	switch status {
 	case C.OpenPitAccountAdjustmentApplyStatus_Error:
-		return nil, consumeSharedStringAsError(outError, "openpit_engine_apply_account_adjustment failed")
+		return nil, nil, consumeSharedStringAsError(outError, "openpit_engine_apply_account_adjustment failed")
 	case C.OpenPitAccountAdjustmentApplyStatus_Applied:
-		return nil, nil
+		return nil, outOutcomes, nil
 	case C.OpenPitAccountAdjustmentApplyStatus_Rejected:
-		return reject, nil
+		return reject, nil, nil
 	default:
 		DestroyAccountAdjustmentBatchError(reject)
 		DestroySharedString(outError)
 		return nil,
+			nil,
 			fmt.Errorf("openpit_engine_apply_account_adjustment failed with unexpected status %d", status)
 	}
 }
@@ -330,15 +466,15 @@ func EngineApplyAccountAdjustment(
 
 func PretradePreTradeRequestExecute(
 	request PretradePreTradeRequest,
-) (PretradePreTradeReservation, RejectList, error) {
+) (PretradePreTradeReservation, PretradeRejectList, error) {
 	var reservation PretradePreTradeReservation
-	var rejects RejectList
+	var rejects PretradeRejectList
 	var outError SharedString
 	status := C.openpit_pretrade_pre_trade_request_execute(
 		request,
 		&reservation,
 		&rejects,
-		C.OpenPitOutError(&outError), //nolint:gocritic
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
 
 	switch status {
@@ -356,7 +492,7 @@ func PretradePreTradeRequestExecute(
 	default:
 		DestroyPretradePreTradeReservation(reservation)
 		DestroyPretradePreTradeRequest(request)
-		DestroyRejectList(rejects)
+		DestroyPretradeRejectList(rejects)
 		DestroySharedString(outError)
 		return nil,
 			nil,
@@ -389,28 +525,13 @@ func PretradePreTradeReservationGetLock(
 	return C.openpit_pretrade_pre_trade_reservation_get_lock(reservation)
 }
 
-//------------------------------------------------------------------------------
-// PretradePreTradeLock
-
-func NewPretradePreTradeLock() PretradePreTradeLock {
-	return PretradePreTradeLock{}
-}
-
-func PretradePreTradeLockReset(lock *PretradePreTradeLock) {
-	*lock = NewPretradePreTradeLock()
-}
-
-func PretradePreTradeLockGetPrice(lock PretradePreTradeLock) ParamPriceOptional {
-	return lock.price
-}
-
-func PretradePreTradeLockSetPrice(lock *PretradePreTradeLock, price ParamPrice) {
-	lock.price.value = price
-	lock.price.is_set = true
-}
-
-func PretradePreTradeLockUnsetPrice(lock *PretradePreTradeLock) {
-	lock.price = ParamPriceOptional{}
+// PretradePreTradeReservationGetAccountAdjustments returns the native
+// account-adjustment outcome list produced by the reservation, or nil. The
+// caller owns it and must release it with DestroyAccountAdjustmentOutcomeList.
+func PretradePreTradeReservationGetAccountAdjustments(
+	reservation PretradePreTradeReservation,
+) AccountAdjustmentOutcomeList {
+	return C.openpit_pretrade_pre_trade_reservation_get_account_adjustments(reservation)
 }
 
 //------------------------------------------------------------------------------
@@ -426,7 +547,7 @@ func AccountAdjustmentBatchErrorGetFailedAdjustmentIndex(
 	return int(C.openpit_account_adjustment_batch_error_get_failed_adjustment_index(handle))
 }
 
-func AccountAdjustmentBatchErrorGetRejects(handle AccountAdjustmentBatchError) RejectList {
+func AccountAdjustmentBatchErrorGetRejects(handle AccountAdjustmentBatchError) PretradeRejectList {
 	return C.openpit_account_adjustment_batch_error_get_rejects(handle)
 }
 
@@ -447,7 +568,7 @@ func MutationsPush(
 		*(*C.OpenPitMutationFn)(rollbackFnAddr),
 		userData,
 		*(*C.OpenPitMutationFreeFn)(freeFnAddr),
-		C.OpenPitOutError(&outError), //nolint:gocritic
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return consumeSharedStringAsError(outError, "openpit_mutations_push failed")
 	}

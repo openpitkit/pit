@@ -27,6 +27,7 @@ type AdjustmentAmount struct {
 	native native.ParamAdjustmentAmount
 }
 
+// NewDeltaAdjustmentAmount creates a delta (relative) adjustment amount.
 func NewDeltaAdjustmentAmount(v PositionSize) AdjustmentAmount {
 	return newAdjustmentAmount(
 		native.CreateParamAdjustmentAmount(
@@ -36,6 +37,7 @@ func NewDeltaAdjustmentAmount(v PositionSize) AdjustmentAmount {
 	)
 }
 
+// NewAbsoluteAdjustmentAmount creates an absolute adjustment amount.
 func NewAbsoluteAdjustmentAmount(v PositionSize) AdjustmentAmount {
 	return newAdjustmentAmount(
 		native.CreateParamAdjustmentAmount(
@@ -45,6 +47,7 @@ func NewAbsoluteAdjustmentAmount(v PositionSize) AdjustmentAmount {
 	)
 }
 
+// NewAdjustmentAmountFromHandle creates an optional AdjustmentAmount from a native handle.
 func NewAdjustmentAmountFromHandle(
 	amount native.ParamAdjustmentAmount,
 ) optional.Option[AdjustmentAmount] {
@@ -58,14 +61,17 @@ func newAdjustmentAmount(amount native.ParamAdjustmentAmount) AdjustmentAmount {
 	return AdjustmentAmount{native: amount}
 }
 
+// IsDelta reports whether the adjustment is a relative delta.
 func (a AdjustmentAmount) IsDelta() bool {
 	return native.ParamAdjustmentAmountGetKind(a.native) == native.ParamAdjustmentAmountKindDelta
 }
 
+// IsAbsolute reports whether the adjustment is an absolute value.
 func (a AdjustmentAmount) IsAbsolute() bool {
 	return native.ParamAdjustmentAmountGetKind(a.native) == native.ParamAdjustmentAmountKindAbsolute
 }
 
+// MustDelta returns the delta value or panics if not a delta adjustment.
 func (a AdjustmentAmount) MustDelta() PositionSize {
 	if !a.IsDelta() {
 		panic("requested adjustment amount as delta, but it is not")
@@ -73,6 +79,7 @@ func (a AdjustmentAmount) MustDelta() PositionSize {
 	return NewPositionSizeFromHandle(native.ParamAdjustmentAmountGetValue(a.native))
 }
 
+// MustAbsolute returns the absolute value or panics if not an absolute adjustment.
 func (a AdjustmentAmount) MustAbsolute() PositionSize {
 	if !a.IsAbsolute() {
 		panic("requested adjustment amount as absolute, but it is not")
@@ -80,10 +87,12 @@ func (a AdjustmentAmount) MustAbsolute() PositionSize {
 	return NewPositionSizeFromHandle(native.ParamAdjustmentAmountGetValue(a.native))
 }
 
+// Handle returns the underlying native handle.
 func (a AdjustmentAmount) Handle() native.ParamAdjustmentAmount {
 	return a.native
 }
 
+// Choose calls getDelta or getAbsolute depending on the adjustment kind.
 func (a AdjustmentAmount) Choose(getDelta func(PositionSize), getAbsolute func(PositionSize)) {
 	if a.IsDelta() {
 		getDelta(a.MustDelta())
@@ -96,6 +105,7 @@ func (a AdjustmentAmount) Choose(getDelta func(PositionSize), getAbsolute func(P
 	panic("requested adjustment amount variant, but it is not set")
 }
 
+// String returns a human-readable representation of the adjustment amount.
 func (a AdjustmentAmount) String() string {
 	switch native.ParamAdjustmentAmountGetKind(a.native) {
 	case native.ParamAdjustmentAmountKindDelta:

@@ -47,6 +47,17 @@ of raw strings and numbers.
    :undoc-members:
 ```
 
+## Market data
+
+The `openpit.marketdata` module exposes the live market-data service used by
+built-in policies that require real-time price feeds.
+
+```{eval-rst}
+.. automodule:: openpit.marketdata
+   :members:
+   :undoc-members:
+```
+
 ## Core order and report models
 
 Core models group order, execution-report, and mutation payloads. `Order` and
@@ -87,6 +98,12 @@ reservation that must be committed or rolled back.
    :members:
 
 .. autoclass:: openpit.pretrade.PostTradeResult
+   :members:
+
+.. autoclass:: openpit.pretrade.PostTradeContext
+   :members:
+
+.. autoclass:: openpit.pretrade.AccountOutcomeEntry
    :members:
 
 .. autoclass:: openpit.pretrade.AccountAdjustmentBatchResult

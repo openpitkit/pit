@@ -24,10 +24,12 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
+// Request is a pre-trade check request returned by the engine.
 type Request struct {
 	handle native.PretradePreTradeRequest
 }
 
+// NewRequestFromHandle creates a Request from a native handle.
 func NewRequestFromHandle(handle native.PretradePreTradeRequest) *Request {
 	return &Request{handle: handle}
 }
@@ -61,7 +63,7 @@ func (r *Request) Execute() (*Reservation, []reject.Reject, error) {
 
 	if rejects != nil {
 		rejectResult, err := reject.NewListFromHandle(rejects)
-		native.DestroyRejectList(rejects)
+		native.DestroyPretradeRejectList(rejects)
 		if err != nil {
 			return nil,
 				nil,
