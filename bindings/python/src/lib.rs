@@ -647,11 +647,11 @@ impl PyMarketDataService {
         account_group_ids: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let account_ids = account_ids
-            .iter()?
+            .try_iter()?
             .map(|item| parse_account_id_input(&item?))
             .collect::<PyResult<Vec<_>>>()?;
         let group_ids = account_group_ids
-            .iter()?
+            .try_iter()?
             .map(|item| parse_account_group_id_input(&item?))
             .collect::<PyResult<Vec<_>>>()?;
         py.allow_threads(|| {
@@ -674,11 +674,11 @@ impl PyMarketDataService {
         account_group_ids: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let account_ids = account_ids
-            .iter()?
+            .try_iter()?
             .map(|item| parse_account_id_input(&item?))
             .collect::<PyResult<Vec<_>>>()?;
         let group_ids = account_group_ids
-            .iter()?
+            .try_iter()?
             .map(|item| parse_account_group_id_input(&item?))
             .collect::<PyResult<Vec<_>>>()?;
         py.allow_threads(|| {
@@ -902,7 +902,7 @@ impl PyEngine {
 
         let account_id = parse_account_id_input(account_id)?;
         let batch = adjustments
-            .iter()?
+            .try_iter()?
             .map(|item| extract_python_account_adjustment(&item?))
             .collect::<PyResult<Vec<_>>>()?;
 
@@ -964,7 +964,7 @@ impl PyAccounts {
     ) -> PyResult<()> {
         let group = parse_account_group_id_input(group)?;
         let account_ids = accounts
-            .iter()?
+            .try_iter()?
             .map(|item| parse_account_id_input(&item?))
             .collect::<PyResult<Vec<_>>>()?;
         py.allow_threads(|| self.inner.register_group(&account_ids, group))
@@ -980,7 +980,7 @@ impl PyAccounts {
     ) -> PyResult<()> {
         let group = parse_account_group_id_input(group)?;
         let account_ids = accounts
-            .iter()?
+            .try_iter()?
             .map(|item| parse_account_id_input(&item?))
             .collect::<PyResult<Vec<_>>>()?;
         py.allow_threads(|| self.inner.unregister_group(&account_ids, group))
@@ -1607,7 +1607,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, PyEngineSync>
                     return None;
                 }
             };
-            let kwargs = PyDict::new_bound(py);
+            let kwargs = PyDict::new(py);
             if let Err(error) = kwargs.set_item("ctx", post_trade_ctx) {
                 set_python_callback_error(error);
                 return None;
@@ -1744,7 +1744,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, PyEngineSync>
 
             let mut rejects = Vec::new();
             let mut outcomes = Vec::new();
-            let iter = result.iter().map_err(|error| {
+            let iter = result.try_iter().map_err(|error| {
                 set_python_callback_error(error);
                 python_callback_rejects(&self.name)
             })?;
@@ -2040,12 +2040,12 @@ fn apply_policy_decision(
     rejects: &mut Vec<Reject>,
 ) -> PyResult<()> {
     let reject_items = decision.getattr("rejects")?;
-    for item in reject_items.iter()? {
+    for item in reject_items.try_iter()? {
         rejects.push(parse_policy_reject(&item?, policy_name)?);
     }
 
     let mutation_items = decision.getattr("mutations")?;
-    for item in mutation_items.iter()? {
+    for item in mutation_items.try_iter()? {
         mutations.push(parse_policy_mutation(&item?)?);
     }
     Ok(())
@@ -2074,7 +2074,7 @@ fn apply_policy_pre_trade_result(
     let mut result = PolicyPreTradeResult::empty();
     if has_account_adjustments {
         let items = value.getattr("account_adjustments")?;
-        for item in items.iter()? {
+        for item in items.try_iter()? {
             result
                 .account_adjustments
                 .push(parse_account_outcome_entry(&item?)?);
@@ -2082,7 +2082,7 @@ fn apply_policy_pre_trade_result(
     }
     if has_lock_prices {
         let items = value.getattr("lock_prices")?;
-        for item in items.iter()? {
+        for item in items.try_iter()? {
             result.lock_prices.push(parse_price_input(&item?)?);
         }
     }
@@ -2099,7 +2099,7 @@ fn parse_policy_rejects(value: &Bound<'_, PyAny>, policy_name: &str) -> PyResult
     }
 
     let mut rejects = Vec::new();
-    for item in value.iter()? {
+    for item in value.try_iter()? {
         rejects.push(parse_policy_reject(&item?, policy_name)?);
     }
     Ok(rejects)
@@ -2284,7 +2284,7 @@ fn parse_account_block_list(
     value: &Bound<'_, PyAny>,
 ) -> PyResult<Vec<openpit::pretrade::AccountBlock>> {
     let mut blocks = Vec::new();
-    for item in value.iter()? {
+    for item in value.try_iter()? {
         blocks.push(parse_account_block(&item?)?);
     }
     Ok(blocks)
@@ -2294,7 +2294,7 @@ fn parse_account_adjustment_outcome_list(
     value: &Bound<'_, PyAny>,
 ) -> PyResult<Vec<AccountAdjustmentOutcome>> {
     let mut outcomes = Vec::new();
-    for item in value.iter()? {
+    for item in value.try_iter()? {
         outcomes.push(parse_account_adjustment_outcome(&item?)?);
     }
     Ok(outcomes)
@@ -2528,7 +2528,7 @@ impl PySyncedEngineBuilder {
     }
 }
 
-#[pyclass(name = "ReadyEngineBuilder", module = "openpit")]
+#[pyclass(name = "ReadyEngineBuilder", module = "openpit", unsendable)]
 struct PyReadyEngineBuilder {
     state: RefCell<Option<PyBuilderState>>,
     sync_policy: PySyncPolicy,
@@ -3133,10 +3133,10 @@ impl PyOrderOperation {
     fn side(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
         self.side
             .map(|side| {
-                PyModule::import_bound(py, "openpit.param")?
+                PyModule::import(py, "openpit.param")?
                     .getattr("Side")?
                     .call1((side_name(side),))
-                    .map(|obj| obj.into_py(py))
+                    .map(|obj| obj.unbind())
             })
             .transpose()
     }
@@ -3210,10 +3210,10 @@ impl PyOrderPosition {
     fn position_side(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
         self.position_side
             .map(|side| {
-                PyModule::import_bound(py, "openpit.param")?
+                PyModule::import(py, "openpit.param")?
                     .getattr("PositionSide")?
                     .call1((position_side_name(side),))
-                    .map(|obj| obj.into_py(py))
+                    .map(|obj| obj.unbind())
             })
             .transpose()
     }
@@ -3725,7 +3725,10 @@ impl PyAccountId {
                 CompareOp::Ne => self.inner != other.inner,
                 _ => return Ok(py.NotImplemented().into()),
             };
-            return Ok(result.into_py(py));
+            return Ok(pyo3::types::PyBool::new(py, result)
+                .as_any()
+                .clone()
+                .unbind());
         }
         Ok(py.NotImplemented().into())
     }
@@ -3809,7 +3812,10 @@ impl PyAccountGroupId {
                 CompareOp::Ne => self.inner != other.inner,
                 _ => return Ok(py.NotImplemented().into()),
             };
-            return Ok(result.into_py(py));
+            return Ok(pyo3::types::PyBool::new(py, result)
+                .as_any()
+                .clone()
+                .unbind());
         }
         Ok(py.NotImplemented().into())
     }
@@ -3952,7 +3958,7 @@ macro_rules! impl_decimal_pymethods {
                         CompareOp::Gt => self.inner > other.inner,
                         CompareOp::Ge => self.inner >= other.inner,
                     };
-                    return Ok(result.into_py(py));
+                    return Ok(pyo3::types::PyBool::new(py, result).as_any().clone().unbind());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -3983,7 +3989,7 @@ macro_rules! impl_decimal_pymethods {
                         .inner
                         .checked_add(other.inner)
                         .map_err(|error| create_param_error(error.to_string()))?;
-                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                    return Ok(Py::new(py, Self { inner: result })?.into_any());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -3999,7 +4005,7 @@ macro_rules! impl_decimal_pymethods {
                         .inner
                         .checked_sub(other.inner)
                         .map_err(|error| create_param_error(error.to_string()))?;
-                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                    return Ok(Py::new(py, Self { inner: result })?.into_any());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -4011,7 +4017,7 @@ macro_rules! impl_decimal_pymethods {
                         .inner
                         .checked_sub(self.inner)
                         .map_err(|error| create_param_error(error.to_string()))?;
-                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                    return Ok(Py::new(py, Self { inner: result })?.into_any());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -4033,7 +4039,7 @@ macro_rules! impl_decimal_pymethods {
                             .checked_mul_f64(v)
                             .map_err(|error| create_param_error(error.to_string()))?,
                     };
-                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                    return Ok(Py::new(py, Self { inner: result })?.into_any());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -4059,7 +4065,7 @@ macro_rules! impl_decimal_pymethods {
                             .checked_div_f64(v)
                             .map_err(|error| create_param_error(error.to_string()))?,
                     };
-                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                    return Ok(Py::new(py, Self { inner: result })?.into_any());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -4081,7 +4087,7 @@ macro_rules! impl_decimal_pymethods {
                             .checked_rem_f64(v)
                             .map_err(|error| create_param_error(error.to_string()))?,
                     };
-                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                    return Ok(Py::new(py, Self { inner: result })?.into_any());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -4218,7 +4224,7 @@ macro_rules! impl_decimal_pymethods {
                         CompareOp::Gt => self.inner > other.inner,
                         CompareOp::Ge => self.inner >= other.inner,
                     };
-                    return Ok(result.into_py(py));
+                    return Ok(pyo3::types::PyBool::new(py, result).as_any().clone().unbind());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -4249,7 +4255,7 @@ macro_rules! impl_decimal_pymethods {
                         .inner
                         .checked_add(other.inner)
                         .map_err(|error| create_param_error(error.to_string()))?;
-                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                    return Ok(Py::new(py, Self { inner: result })?.into_any());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -4265,7 +4271,7 @@ macro_rules! impl_decimal_pymethods {
                         .inner
                         .checked_sub(other.inner)
                         .map_err(|error| create_param_error(error.to_string()))?;
-                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                    return Ok(Py::new(py, Self { inner: result })?.into_any());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -4277,7 +4283,7 @@ macro_rules! impl_decimal_pymethods {
                         .inner
                         .checked_sub(self.inner)
                         .map_err(|error| create_param_error(error.to_string()))?;
-                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                    return Ok(Py::new(py, Self { inner: result })?.into_any());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -4299,7 +4305,7 @@ macro_rules! impl_decimal_pymethods {
                             .checked_mul_f64(v)
                             .map_err(|error| create_param_error(error.to_string()))?,
                     };
-                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                    return Ok(Py::new(py, Self { inner: result })?.into_any());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -4325,7 +4331,7 @@ macro_rules! impl_decimal_pymethods {
                             .checked_div_f64(v)
                             .map_err(|error| create_param_error(error.to_string()))?,
                     };
-                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                    return Ok(Py::new(py, Self { inner: result })?.into_any());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -4347,7 +4353,7 @@ macro_rules! impl_decimal_pymethods {
                             .checked_rem_f64(v)
                             .map_err(|error| create_param_error(error.to_string()))?,
                     };
-                    return Ok(Py::new(py, Self { inner: result })?.into_py(py));
+                    return Ok(Py::new(py, Self { inner: result })?.into_any());
                 }
                 Ok(py.NotImplemented().into())
             }
@@ -4923,10 +4929,10 @@ impl PyAccountAdjustmentPositionOperation {
     fn mode(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
         self.mode
             .map(|mode| {
-                PyModule::import_bound(py, "openpit.param")?
+                PyModule::import(py, "openpit.param")?
                     .getattr("PositionMode")?
                     .call1((position_mode_name(mode),))
-                    .map(|obj| obj.into_py(py))
+                    .map(|obj| obj.unbind())
             })
             .transpose()
     }
@@ -5296,7 +5302,7 @@ impl PyPreTradeLock {
     ) -> PyResult<()> {
         let policy_group_id = parse_policy_group_id_input(policy_group_id)?;
         let iterator = prices
-            .iter()
+            .try_iter()
             .map_err(|_| PyTypeError::new_err("prices must be an iterable of Price values"))?;
         let mut parsed = Vec::new();
         for item in iterator {
@@ -5350,7 +5356,7 @@ impl PyPreTradeLock {
         let bytes = rmp_serde::to_vec(&self.inner).map_err(|error| {
             PyValueError::new_err(format!("lock msgpack encode failed: {error}"))
         })?;
-        Ok(PyBytes::new_bound(py, &bytes))
+        Ok(PyBytes::new(py, &bytes))
     }
 
     #[staticmethod]
@@ -5365,7 +5371,7 @@ impl PyPreTradeLock {
         let mut buffer = Vec::new();
         ciborium::ser::into_writer(&self.inner, &mut buffer)
             .map_err(|error| PyValueError::new_err(format!("lock cbor encode failed: {error}")))?;
-        Ok(PyBytes::new_bound(py, &buffer))
+        Ok(PyBytes::new(py, &buffer))
     }
 
     #[staticmethod]
@@ -5406,7 +5412,7 @@ fn parse_policy_group_id_input(value: &Bound<'_, PyAny>) -> PyResult<PolicyGroup
 }
 
 fn push_pairs_into_lock(lock: &mut PreTradeLock, entries: &Bound<'_, PyAny>) -> PyResult<()> {
-    let iterator = entries.iter().map_err(|_| {
+    let iterator = entries.try_iter().map_err(|_| {
         PyTypeError::new_err("entries must be an iterable of (policy_group_id, price) pairs")
     })?;
     for item in iterator {
@@ -5498,10 +5504,10 @@ impl PyExecutionReportOperation {
     fn side(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
         self.side
             .map(|side| {
-                PyModule::import_bound(py, "openpit.param")?
+                PyModule::import(py, "openpit.param")?
                     .getattr("Side")?
                     .call1((side_name(side),))
-                    .map(|obj| obj.into_py(py))
+                    .map(|obj| obj.unbind())
             })
             .transpose()
     }
@@ -5700,10 +5706,10 @@ impl PyExecutionReportPositionImpact {
     fn position_effect(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
         self.position_effect
             .map(|effect| {
-                PyModule::import_bound(py, "openpit.param")?
+                PyModule::import(py, "openpit.param")?
                     .getattr("PositionEffect")?
                     .call1((position_effect_name(effect),))
-                    .map(|obj| obj.into_py(py))
+                    .map(|obj| obj.unbind())
             })
             .transpose()
     }
@@ -5718,10 +5724,10 @@ impl PyExecutionReportPositionImpact {
     fn position_side(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
         self.position_side
             .map(|side| {
-                PyModule::import_bound(py, "openpit.param")?
+                PyModule::import(py, "openpit.param")?
                     .getattr("PositionSide")?
                     .call1((position_side_name(side),))
-                    .map(|obj| obj.into_py(py))
+                    .map(|obj| obj.unbind())
             })
             .transpose()
     }
@@ -6286,7 +6292,7 @@ fn rust_decimal_to_python_decimal(
     py: Python<'_>,
     value: rust_decimal::Decimal,
 ) -> PyResult<PyObject> {
-    let decimal_mod = PyModule::import_bound(py, "decimal")?;
+    let decimal_mod = PyModule::import(py, "decimal")?;
     let decimal_cls = decimal_mod.getattr("Decimal")?;
     let text = value.to_string();
     Ok(decimal_cls.call1((text,))?.unbind())
@@ -6294,7 +6300,7 @@ fn rust_decimal_to_python_decimal(
 
 fn extract_python_decimal_string(value: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
     let py = value.py();
-    let decimal_mod = PyModule::import_bound(py, "decimal")?;
+    let decimal_mod = PyModule::import(py, "decimal")?;
     let decimal_cls = decimal_mod.getattr("Decimal")?;
     if value.is_instance(&decimal_cls)? {
         return Ok(Some(value.str()?.extract::<String>()?));
@@ -6545,29 +6551,17 @@ fn format_engine_build_error(error: EngineBuildError) -> String {
 
 #[pymodule]
 fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add("RejectError", py.get_type_bound::<RejectError>())?;
-    module.add("ParamError", py.get_type_bound::<ParamError>())?;
-    module.add("MarketDataError", py.get_type_bound::<MarketDataError>())?;
-    module.add(
-        "UnknownInstrument",
-        py.get_type_bound::<UnknownInstrument>(),
-    )?;
-    module.add("QuoteUnavailable", py.get_type_bound::<QuoteUnavailable>())?;
-    module.add(
-        "AlreadyRegistered",
-        py.get_type_bound::<AlreadyRegistered>(),
-    )?;
-    module.add(
-        "RegistrationError",
-        py.get_type_bound::<RegistrationError>(),
-    )?;
-    module.add(
-        "UnknownInstrumentId",
-        py.get_type_bound::<UnknownInstrumentId>(),
-    )?;
+    module.add("RejectError", py.get_type::<RejectError>())?;
+    module.add("ParamError", py.get_type::<ParamError>())?;
+    module.add("MarketDataError", py.get_type::<MarketDataError>())?;
+    module.add("UnknownInstrument", py.get_type::<UnknownInstrument>())?;
+    module.add("QuoteUnavailable", py.get_type::<QuoteUnavailable>())?;
+    module.add("AlreadyRegistered", py.get_type::<AlreadyRegistered>())?;
+    module.add("RegistrationError", py.get_type::<RegistrationError>())?;
+    module.add("UnknownInstrumentId", py.get_type::<UnknownInstrumentId>())?;
     module.add(
         "AccountGroupRegistrationError",
-        py.get_type_bound::<AccountGroupRegistrationError>(),
+        py.get_type::<AccountGroupRegistrationError>(),
     )?;
     module.add(
         "_ROUNDING_STRATEGY_DEFAULT",
@@ -6762,9 +6756,9 @@ mod field_access_tests {
     fn python_engine_end_to_end_covers_python_adapter_paths() {
         ensure_python_initialized();
         Python::with_gil(|py| -> PyResult<()> {
-            let policy_module = PyModule::from_code_bound(
+            let policy_module = PyModule::from_code(
                 py,
-                r#"
+                cr#"
 from types import SimpleNamespace
 
 class StartCheck:
@@ -6816,8 +6810,8 @@ class AdjustmentCheck:
     def apply_account_adjustment(self, ctx, account_id, adjustment):
         return None
 "#,
-                "test_python_policies.py",
-                "test_python_policies",
+                c"test_python_policies.py",
+                c"test_python_policies",
             )?;
 
             let start_check = policy_module.getattr("StartCheck")?.call0()?;
@@ -6829,11 +6823,11 @@ class AdjustmentCheck:
             let ov_policy = make_order_validation_start_check(DEFAULT_POLICY_GROUP_ID);
             builder.add_policy(ov_policy)?;
 
-            let ns_module = PyModule::from_code_bound(
+            let ns_module = PyModule::from_code(
                 py,
-                "from types import SimpleNamespace",
-                "ns_helper.py",
-                "ns_helper",
+                c"from types import SimpleNamespace",
+                c"ns_helper.py",
+                c"ns_helper",
             )?;
             let simple_namespace = ns_module.getattr("SimpleNamespace")?;
             let pnl_lower_bound = Py::new(
@@ -6842,7 +6836,7 @@ class AdjustmentCheck:
                     inner: Pnl::from_str("-500").expect("pnl must be valid"),
                 },
             )?;
-            let pnl_barrier_kwargs = PyDict::new_bound(py);
+            let pnl_barrier_kwargs = PyDict::new(py);
             pnl_barrier_kwargs.set_item("settlement_asset", "USD")?;
             pnl_barrier_kwargs.set_item("lower_bound", pnl_lower_bound)?;
             let pnl_barrier_obj = simple_namespace.call((), Some(&pnl_barrier_kwargs))?;
@@ -6980,7 +6974,7 @@ class AdjustmentCheck:
                     inner: AccountId::from_u64(99224416),
                 },
             )?;
-            let adjustments = PyList::new_bound(py, [adjustment.bind(py).clone().into_any()]);
+            let adjustments = PyList::new(py, [adjustment.bind(py).clone().into_any()])?;
             let batch = engine.apply_account_adjustment(
                 py,
                 &account_id.bind(py).clone().into_any(),
