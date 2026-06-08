@@ -12,4 +12,5 @@ derive = ["openpit/derive"]
 openpit = { version = "=__OPENPIT_VERSION__" }
 
 [dev-dependencies]
+parking_lot = "0.12"
 rust_decimal = "1.41"

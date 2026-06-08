@@ -15,13 +15,14 @@
 #
 # Please see https://github.com/openpitkit and the OWNERS file for details.
 
-FROM golang:1.22-bookworm
+FROM golang:1.23-bookworm
 
 WORKDIR /opt/e2e
 
 COPY e2e/scripts/go-module.sh /usr/local/bin/run-release-e2e
 COPY e2e/clients/go /opt/e2e/go-consumer
 COPY examples/go /opt/e2e/examples
+COPY examples/tables /opt/e2e/tables
 
 RUN chmod +x /usr/local/bin/run-release-e2e
 

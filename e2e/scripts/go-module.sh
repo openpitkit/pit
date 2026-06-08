@@ -36,9 +36,19 @@ go test ./...
 #    module by stripping its local `replace` directive and pinning the version.
 #    This exercises exactly what an SDK consumer sees when they copy the
 #    example from the repository.
+#
+#    Examples are laid out under a shared root that mirrors the repository:
+#    each example lives at <root>/go/<name> with the scenario tables at
+#    <root>/tables, so the examples' own `../../tables/...` references resolve
+#    exactly as they do in the source tree.
+examples_root="/tmp/openpit-go-examples"
+rm -rf "${examples_root}"
+mkdir -p "${examples_root}/go"
+cp -R /opt/e2e/tables "${examples_root}/tables"
+
 for example_src in /opt/e2e/examples/*/; do
   name="$(basename "${example_src}")"
-  workdir="/tmp/openpit-go-example-${name}"
+  workdir="${examples_root}/go/${name}"
   echo "==> Testing example ${name} against go.openpit.dev/openpit ${OPENPIT_VERSION}"
   rm -rf "${workdir}"
   mkdir -p "${workdir}"
