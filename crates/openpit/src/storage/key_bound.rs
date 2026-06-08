@@ -30,7 +30,7 @@
 //! * [`CreateStorageFor`] is a permission marker on
 //!   [`LockingPolicyFactory`](super::LockingPolicyFactory) that controls
 //!   which key types a factory can produce storages for through
-//!   [`StorageBuilder::create`](super::StorageBuilder::create).
+//!   [`StorageBuilder::create_for_bound_key`](super::StorageBuilder::create_for_bound_key).
 
 use super::policies::{FullLocking, IndexLocking, NoLocking};
 use super::policy::LockingPolicyFactory;
@@ -65,13 +65,13 @@ impl<Key> IndexKeyBound<Key> for AnyKey {}
 
 /// Permission marker: locking-policy factories that implement this trait can
 /// produce [`Storage`](super::Storage) instances with the given key type via
-/// [`StorageBuilder::create`](super::StorageBuilder::create) and
+/// [`StorageBuilder::create_for_bound_key`](super::StorageBuilder::create_for_bound_key) and
 /// [`StorageBuilder::create_with_capacity`](super::StorageBuilder::create_with_capacity).
 ///
 /// The trait is the compile-time gate that surfaces a key-bound mismatch as
-/// an error on `StorageBuilder::create`, with a domain-specific diagnostic
-/// (see `AccountKeyConstraint` in the engine layer) when the bound is
-/// stricter than `AnyKey`.
+/// an error on `StorageBuilder::create_for_bound_key`, with a domain-specific
+/// diagnostic (see `AccountKeyConstraint` in the engine layer) when the bound
+/// is stricter than `AnyKey`.
 ///
 /// All built-in factories implement it:
 ///
@@ -82,8 +82,8 @@ impl<Key> IndexKeyBound<Key> for AnyKey {}
 ///   every key; with a stricter marker it is only the keys that satisfy
 ///   that marker.
 ///
-/// Custom factories that wish to be usable through `StorageBuilder::create`
-/// must add a one-line blanket impl:
+/// Custom factories that wish to be usable through
+/// `StorageBuilder::create_for_bound_key` must add a one-line blanket impl:
 ///
 /// ```ignore
 /// impl<Key> openpit::storage::CreateStorageFor<Key> for MyCustomFactory {}

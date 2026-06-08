@@ -150,15 +150,18 @@ impl<Trait: EngineTrait> Engine<Trait> {
         Self { inner }
     }
 
-    /// Returns a handle to the engine's account-group registry.
+    /// Returns a handle to the engine's account registry.
     ///
-    /// The returned [`Accounts`] handle shares the engine's single registry;
-    /// register or unregister account-group membership through it. The handle
-    /// is cloneable and inherits the engine's synchronization mode.
+    /// The returned [`Accounts`] handle shares the engine's single account-group
+    /// registry and its single blocked-accounts set; register or unregister
+    /// account-group membership and block or unblock accounts and groups through
+    /// it. The handle is cloneable and inherits the engine's synchronization
+    /// mode.
     pub fn accounts(&self) -> Accounts<<Trait::Sync as SyncMode>::StorageLockingPolicyFactory> {
-        Accounts::new(AccountGroupsHandle::from_inner(
-            self.inner.account_groups.clone(),
-        ))
+        Accounts::new(
+            AccountGroupsHandle::from_inner(self.inner.account_groups.clone()),
+            AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone()),
+        )
     }
 }
 
@@ -225,11 +228,11 @@ impl<Trait: EngineTrait> Engine<Trait> {
     where
         Trait::Order: HasAccountId,
     {
-        if let Some(rejects) = self
-            .inner
-            .blocked_accounts
-            .check(&order, RejectScope::Order)
-        {
+        if let Some(rejects) = self.inner.blocked_accounts.check(
+            &self.inner.account_groups,
+            &order,
+            RejectScope::Order,
+        ) {
             return Err(rejects);
         }
 
@@ -438,7 +441,11 @@ where
     };
     let inner: &EngineInner<Trait> = &engine_ref;
 
-    if let Some(rejects) = inner.blocked_accounts.check(&order, RejectScope::Order) {
+    if let Some(rejects) =
+        inner
+            .blocked_accounts
+            .check(&inner.account_groups, &order, RejectScope::Order)
+    {
         return Err(rejects);
     }
 

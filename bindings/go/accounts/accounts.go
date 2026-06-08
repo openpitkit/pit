@@ -15,7 +15,8 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-// Package accounts provides account-group management bound to an engine.
+// Package accounts provides account-group management and pre-trade account
+// blocking bound to an engine.
 package accounts
 
 import (
@@ -25,10 +26,10 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
-// Accounts manages account-group membership for an engine. Obtain it from an
-// engine's Accounts accessor. It carries no state of its own: every call
-// forwards to the engine it was created from, and it is valid for as long as
-// that engine is.
+// Accounts manages account-group membership and account/group pre-trade blocks
+// for an engine. Obtain it from an engine's Accounts accessor. It carries no
+// state of its own: every call forwards to the engine it was created from, and
+// it is valid for as long as that engine is.
 type Accounts struct {
 	engine native.Engine
 }
@@ -87,4 +88,69 @@ func (a Accounts) UnregisterGroup(accounts []param.AccountID, group param.Accoun
 func (a Accounts) GroupOf(account param.AccountID) optional.Option[param.AccountGroupID] {
 	id, ok := native.EngineAccountGroup(a.engine, account.Handle())
 	return optional.From(param.NewAccountGroupIDFromHandle(id), ok)
+}
+
+// Block blocks account with reason, gating its pre-trade orders until it is
+// unblocked. The first reason recorded for an account wins: blocking an
+// already-blocked account keeps the original reason. reason may be empty.
+func (a Accounts) Block(account param.AccountID, reason string) {
+	native.EngineBlockAccount(a.engine, account.Handle(), reason)
+}
+
+// Unblock lifts the block on account. Unblocking an account that is not blocked
+// is a no-op.
+func (a Accounts) Unblock(account param.AccountID) {
+	native.EngineUnblockAccount(a.engine, account.Handle())
+}
+
+// ReplaceBlockReason replaces the recorded reason of a blocked account.
+//
+// Returns a *reject.AccountBlockError with kind AccountNotBlocked when account
+// is not blocked.
+func (a Accounts) ReplaceBlockReason(account param.AccountID, reason string) error {
+	blockErr := native.EngineReplaceAccountBlockReason(a.engine, account.Handle(), reason)
+	if blockErr != nil {
+		return reject.NewAccountBlockErrorFromHandle(blockErr)
+	}
+	return nil
+}
+
+// BlockGroup blocks group with reason, gating the pre-trade orders of every
+// account in it. The first reason recorded for a group wins: blocking an
+// already-blocked group keeps the original reason. reason may be empty.
+//
+// Returns a *reject.AccountBlockError with kind ReservedGroup when group is the
+// reserved param.DefaultAccountGroup.
+func (a Accounts) BlockGroup(group param.AccountGroupID, reason string) error {
+	blockErr := native.EngineBlockAccountGroup(a.engine, group.Handle(), reason)
+	if blockErr != nil {
+		return reject.NewAccountBlockErrorFromHandle(blockErr)
+	}
+	return nil
+}
+
+// UnblockGroup lifts the block on group. Unblocking a group that is not blocked
+// is a no-op.
+//
+// Returns a *reject.AccountBlockError with kind ReservedGroup when group is the
+// reserved param.DefaultAccountGroup.
+func (a Accounts) UnblockGroup(group param.AccountGroupID) error {
+	blockErr := native.EngineUnblockAccountGroup(a.engine, group.Handle())
+	if blockErr != nil {
+		return reject.NewAccountBlockErrorFromHandle(blockErr)
+	}
+	return nil
+}
+
+// ReplaceGroupBlockReason replaces the recorded reason of a blocked group.
+//
+// Returns a *reject.AccountBlockError with kind ReservedGroup when group is the
+// reserved param.DefaultAccountGroup, or GroupNotBlocked when group is not
+// blocked.
+func (a Accounts) ReplaceGroupBlockReason(group param.AccountGroupID, reason string) error {
+	blockErr := native.EngineReplaceAccountGroupBlockReason(a.engine, group.Handle(), reason)
+	if blockErr != nil {
+		return reject.NewAccountBlockErrorFromHandle(blockErr)
+	}
+	return nil
 }

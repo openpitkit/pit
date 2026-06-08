@@ -135,3 +135,66 @@ func NewAccountGroupErrorFromHandle(handle native.AccountGroupError) *AccountGro
 	}
 	return err
 }
+
+// AccountBlockErrorKind classifies an AccountBlockError.
+type AccountBlockErrorKind uint32
+
+const (
+	// AccountBlockErrorKindReservedGroup means the targeted group is the
+	// reserved param.DefaultAccountGroup, which cannot be blocked, unblocked,
+	// or have its block reason replaced.
+	AccountBlockErrorKindReservedGroup AccountBlockErrorKind = native.AccountBlockErrorKindReservedGroup
+	// AccountBlockErrorKindAccountNotBlocked means a block-reason replacement
+	// targeted an account that is not blocked.
+	AccountBlockErrorKindAccountNotBlocked AccountBlockErrorKind = native.AccountBlockErrorKindAccountNotBlocked
+	// AccountBlockErrorKindGroupNotBlocked means a block-reason replacement
+	// targeted a group that is not blocked.
+	AccountBlockErrorKindGroupNotBlocked AccountBlockErrorKind = native.AccountBlockErrorKindGroupNotBlocked
+)
+
+// AccountBlockError is returned when an account- or group-block operation fails.
+//
+// Block and Unblock are infallible; only ReplaceBlockReason, BlockGroup,
+// UnblockGroup, and ReplaceGroupBlockReason can produce it. Kind tells the
+// failure apart; Account is set only for AccountNotBlocked and Group only for
+// GroupNotBlocked.
+type AccountBlockError struct {
+	// Message is the human-readable error description.
+	Message string
+	// Account is the account that is not blocked. It is non-nil only when Kind
+	// is AccountBlockErrorKindAccountNotBlocked.
+	Account *param.AccountID
+	// Group is the group that is not blocked. It is non-nil only when Kind is
+	// AccountBlockErrorKindGroupNotBlocked.
+	Group *param.AccountGroupID
+	// Kind classifies the failure.
+	Kind AccountBlockErrorKind
+}
+
+// Error implements the error interface.
+func (e *AccountBlockError) Error() string {
+	return e.Message
+}
+
+// NewAccountBlockErrorFromHandle creates an AccountBlockError from a native
+// handle and releases it.
+func NewAccountBlockErrorFromHandle(handle native.AccountBlockError) *AccountBlockError {
+	msg := native.AccountBlockErrorGetMessage(handle)
+	kind := native.AccountBlockErrorGetKind(handle)
+	account, hasAccount := native.AccountBlockErrorGetAccount(handle)
+	group, hasGroup := native.AccountBlockErrorGetGroup(handle)
+	native.DestroyAccountBlockError(handle)
+	err := &AccountBlockError{
+		Message: msg,
+		Kind:    AccountBlockErrorKind(kind),
+	}
+	if hasAccount {
+		a := param.NewAccountIDFromHandle(account)
+		err.Account = &a
+	}
+	if hasGroup {
+		g := param.NewAccountGroupIDFromHandle(group)
+		err.Group = &g
+	}
+	return err
+}

@@ -3558,6 +3558,7 @@ fn hold_rollback_overflow_blocks_account_with_account_sync_storage() {
     let blocked = <AccountSyncFactory as LockingPolicyFactory>::new_shared(BlockedAccounts::new(
         &storage_builder,
     ));
+    let groups = crate::core::account_groups::AccountGroups::new(&storage_builder);
 
     let policy: AccountSyncPolicy = SpotFundsPolicy::new(None, &storage_builder);
 
@@ -3644,7 +3645,7 @@ fn hold_rollback_overflow_blocks_account_with_account_sync_storage() {
         Some(px("1")),
     );
     let rejects = blocked
-        .check(&probe, crate::pretrade::RejectScope::Order)
+        .check(&groups, &probe, crate::pretrade::RejectScope::Order)
         .expect("account must be blocked");
     assert!(
         rejects

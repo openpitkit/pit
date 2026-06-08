@@ -73,8 +73,8 @@ def test_account_id_constructors() -> None:
 
     # from_int and from_string of the same numeric string are NOT equal.
     assert (
-        openpit.param.AccountId.from_int(42).value
-        != openpit.param.AccountId.from_string("42").value
+        openpit.param.AccountId.from_int(99224416).value
+        != openpit.param.AccountId.from_string("99224416").value
     )
 
 
@@ -455,9 +455,9 @@ def test_param_constant_classes_expose_stable_names() -> None:
 
 @pytest.mark.unit
 def test_account_group_id_from_int() -> None:
-    g = openpit.param.AccountGroupId.from_int(42)
-    assert g.value == 42
-    assert repr(g) == "AccountGroupId(value=42)"
+    g = openpit.param.AccountGroupId.from_int(99224416)
+    assert g.value == 99224416
+    assert repr(g) == "AccountGroupId(value=99224416)"
 
 
 @pytest.mark.unit

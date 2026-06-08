@@ -21,6 +21,7 @@ import pytest
 
 # Mirrors public Python examples from:
 # - ../pit.wiki/Account-Adjustments.md
+# - ../pit.wiki/Account-Blocking.md
 # - ../pit.wiki/Account-Groups.md
 # - ../pit.wiki/Balance-Reconciliation.md
 # - ../pit.wiki/Domain-Types.md
@@ -1017,6 +1018,30 @@ def test_example_wiki_balance_reconciliation_delta_absolute() -> None:
     # delta is the change to add to your own ledger; absolute is just a snapshot.
     assert usd.delta == openpit.param.PositionSize(5000)
     assert usd.absolute == openpit.param.PositionSize(15000)
+
+
+@pytest.mark.integration
+def test_example_wiki_account_block_unblock() -> None:
+    # Used in: pit.wiki/Account-Blocking.md - Examples → Python
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(openpit.pretrade.policies.build_order_validation())
+        .build()
+    )
+
+    accounts = engine.accounts()
+
+    # Block account 99224416 - all subsequent pre-trade orders are rejected.
+    accounts.block(openpit.param.AccountId.from_int(99224416), "compliance hold")
+
+    # Unblock account 99224416 - pre-trade orders are allowed again.
+    accounts.unblock(openpit.param.AccountId.from_int(99224416))
+
+    # Block every current and future member of a group in one call.
+    desk = openpit.param.AccountGroupId.from_int(7)
+    accounts.block_group(desk, "desk suspended")
+    accounts.unblock_group(desk)
 
 
 @pytest.mark.integration

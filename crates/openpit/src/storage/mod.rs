@@ -63,7 +63,7 @@
 //! use openpit::Engine;
 //!
 //! let builder = Engine::builder::<(), (), ()>().full_sync();
-//! let storage = builder.storage_builder().create::<&'static str, u64>();
+//! let storage = builder.storage_builder().create_for_bound_key::<&'static str, u64>();
 //!
 //! // Insert.
 //! storage.with_mut("ticks", || 0, |counter, is_new| {

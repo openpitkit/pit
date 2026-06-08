@@ -183,7 +183,7 @@ where
             return Err(PnlBoundsKillSwitchPolicyError::NoBarriersConfigured);
         }
 
-        let realized = storage_builder.create();
+        let realized = storage_builder.create_for_bound_key();
         for (account_id, by_settlement) in &account {
             for (settlement_asset, barrier) in by_settlement {
                 realized.with_mut(

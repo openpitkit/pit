@@ -33,7 +33,7 @@ use super::storage::Storage;
 ///
 /// 1. Accept a `&StorageBuilder<Factory>` obtained from an engine builder
 ///    at policy construction time.
-/// 2. Call [`create`](Self::create) for each internal data table.
+/// 2. Call [`create_for_bound_key`](Self::create_for_bound_key) for each internal data table.
 /// 3. Operate on the resulting [`Storage`] instances exclusively through
 ///    [`Storage::with`](super::Storage::with) and
 ///    [`Storage::with_mut`](super::Storage::with_mut).
@@ -62,8 +62,8 @@ use super::storage::Storage;
 /// use openpit::Engine;
 ///
 /// let engine_builder = Engine::builder::<(), (), ()>().full_sync();
-/// let users = engine_builder.storage_builder().create::<u64, String>();
-/// let orders = engine_builder.storage_builder().create::<u64, Vec<u8>>();
+/// let users = engine_builder.storage_builder().create_for_bound_key::<u64, String>();
+/// let orders = engine_builder.storage_builder().create_for_bound_key::<u64, Vec<u8>>();
 /// // `users` and `orders` are unrelated storages; locking one does
 /// // not affect the other.
 /// users.with_mut(1, || "alice".to_string(), |_, _| {});
@@ -99,10 +99,30 @@ where
     /// [`CreateStorageFor<Key>`](super::CreateStorageFor). All built-in
     /// factories ship with the appropriate impls.
     #[inline]
-    pub fn create<Key, Value>(&self) -> Storage<Key, Value, LockingPolicyFactory::Policy>
+    pub fn create_for_bound_key<Key, Value>(
+        &self,
+    ) -> Storage<Key, Value, LockingPolicyFactory::Policy>
     where
         LockingPolicyFactory: CreateStorageFor<Key>,
     {
+        Storage::with_locking_policy(self.locking_policy_factory.create_policy())
+    }
+
+    /// Creates an empty storage configured by this builder's policy factory,
+    /// bypassing the [`CreateStorageFor<Key>`](super::CreateStorageFor) key
+    /// gate.
+    ///
+    /// Unlike [`create_for_bound_key`](Self::create_for_bound_key), this does
+    /// **not** require the factory to admit `Key`. Any key type may be used,
+    /// including those that
+    /// [`CreateStorageFor<Key>`](super::CreateStorageFor) would reject under a
+    /// stricter bound. [`AnyKey`](super::AnyKey) is the loosest bound and
+    /// admits every key; this method bypasses the
+    /// [`CreateStorageFor<Key>`](super::CreateStorageFor) gate entirely.
+    #[inline]
+    pub(crate) fn create_for_any_key<Key, Value>(
+        &self,
+    ) -> Storage<Key, Value, LockingPolicyFactory::Policy> {
         Storage::with_locking_policy(self.locking_policy_factory.create_policy())
     }
 
@@ -123,7 +143,7 @@ where
     /// Creates an empty storage wrapped in a [`LockingPolicyFactory::Shared`](crate::storage::LockingPolicyFactory::Shared)
     /// handle.
     ///
-    /// Equivalent to `Factory::new_shared(self.create::<Key, Value>())`.
+    /// Equivalent to `Factory::new_shared(self.create_for_bound_key::<Key, Value>())`.
     /// Use this when the storage needs to be shared across clones of the
     /// same policy.
     #[inline]
@@ -134,15 +154,15 @@ where
         LockingPolicyFactory: CreateStorageFor<Key>,
     {
         <LockingPolicyFactory as super::policy::LockingPolicyFactory>::new_shared(
-            self.create::<Key, Value>(),
+            self.create_for_bound_key::<Key, Value>(),
         )
     }
 
     /// Creates an empty storage with an initial capacity hint for the
     /// underlying map.
     ///
-    /// Otherwise identical to [`Self::create`]; useful when the rough
-    /// number of entries is known up front and the caller wants to
+    /// Otherwise identical to [`Self::create_for_bound_key`]; useful when the
+    /// rough number of entries is known up front and the caller wants to
     /// avoid rehashing during the warm-up phase.
     #[inline]
     pub fn create_with_capacity<Key, Value>(

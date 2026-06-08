@@ -21,7 +21,7 @@
 //! [`Storage`](super::Storage) instance. A storage owns one policy instance,
 //! created by a [`LockingPolicyFactory`]. The factory is the type-level
 //! configuration on a [`StorageBuilder`](super::StorageBuilder); each call to
-//! [`StorageBuilder::create`](super::StorageBuilder::create) produces a fresh
+//! [`StorageBuilder::create_for_bound_key`](super::StorageBuilder::create_for_bound_key) produces a fresh
 //! policy via [`LockingPolicyFactory::create_policy`], so every storage has
 //! its own private locks.
 //!
@@ -158,7 +158,7 @@ pub unsafe trait FullySynchronized: LockingPolicy {}
 ///
 /// A factory is the type-level configuration parameter of
 /// [`StorageBuilder`](super::StorageBuilder). Every call to
-/// [`StorageBuilder::create`](super::StorageBuilder::create) invokes
+/// [`StorageBuilder::create_for_bound_key`](super::StorageBuilder::create_for_bound_key) invokes
 /// [`Self::create_policy`] and hands the freshly-built policy to the new
 /// storage. Storages built from the same builder therefore have completely
 /// independent locks.

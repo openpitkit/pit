@@ -84,6 +84,7 @@ create_exception!(openpit, AlreadyRegistered, PyException);
 create_exception!(openpit, RegistrationError, PyException);
 create_exception!(openpit, UnknownInstrumentId, PyException);
 create_exception!(openpit, AccountGroupRegistrationError, PyException);
+create_exception!(openpit, AccountBlockError, PyException);
 
 thread_local! {
     static PY_CALLBACK_ERROR: RefCell<Option<PyErr>> = const { RefCell::new(None) };
@@ -160,6 +161,10 @@ fn create_push_for_error(error: openpit::marketdata::PushForError) -> PyErr {
 
 fn convert_account_group_error(error: AccountGroupError) -> PyErr {
     AccountGroupRegistrationError::new_err(error.to_string())
+}
+
+fn convert_account_block_error(error: openpit::AccountBlockError) -> PyErr {
+    AccountBlockError::new_err(error.to_string())
 }
 
 fn convert_account_group_id_error(error: AccountGroupIdError) -> PyErr {
@@ -943,11 +948,12 @@ impl PyEngine {
     }
 }
 
-/// Handle to the engine's account-group registry.
+/// Handle to the engine's account-group registry and pre-trade block controls.
 ///
 /// Obtained from ``Engine.accounts()``. The handle shares the engine's single
-/// registry, so changes made through it are visible to every other handle and
-/// to running policies. It inherits the engine's synchronization mode.
+/// account control state, so changes made through it are visible to every other
+/// handle and to running policies. It inherits the engine's synchronization
+/// mode.
 #[pyclass(name = "Accounts", module = "openpit")]
 struct PyAccounts {
     inner: Accounts<PyStorageFactory>,
@@ -999,6 +1005,63 @@ impl PyAccounts {
             Some(g) => Py::new(py, PyAccountGroupId { inner: g }).map(Some),
             None => Ok(None),
         }
+    }
+
+    #[pyo3(signature = (account, reason))]
+    fn block(&self, py: Python<'_>, account: &Bound<'_, PyAny>, reason: String) -> PyResult<()> {
+        let account_id = parse_account_id_input(account)?;
+        py.allow_threads(|| self.inner.block(account_id, reason));
+        Ok(())
+    }
+
+    #[pyo3(signature = (account))]
+    fn unblock(&self, py: Python<'_>, account: &Bound<'_, PyAny>) -> PyResult<()> {
+        let account_id = parse_account_id_input(account)?;
+        py.allow_threads(|| self.inner.unblock(account_id));
+        Ok(())
+    }
+
+    #[pyo3(signature = (account, reason))]
+    fn replace_block_reason(
+        &self,
+        py: Python<'_>,
+        account: &Bound<'_, PyAny>,
+        reason: String,
+    ) -> PyResult<()> {
+        let account_id = parse_account_id_input(account)?;
+        py.allow_threads(|| self.inner.replace_block_reason(account_id, reason))
+            .map_err(convert_account_block_error)
+    }
+
+    #[pyo3(signature = (group, reason))]
+    fn block_group(
+        &self,
+        py: Python<'_>,
+        group: &Bound<'_, PyAny>,
+        reason: String,
+    ) -> PyResult<()> {
+        let group_id = parse_account_group_id_input(group)?;
+        py.allow_threads(|| self.inner.block_group(group_id, reason))
+            .map_err(convert_account_block_error)
+    }
+
+    #[pyo3(signature = (group))]
+    fn unblock_group(&self, py: Python<'_>, group: &Bound<'_, PyAny>) -> PyResult<()> {
+        let group_id = parse_account_group_id_input(group)?;
+        py.allow_threads(|| self.inner.unblock_group(group_id))
+            .map_err(convert_account_block_error)
+    }
+
+    #[pyo3(signature = (group, reason))]
+    fn replace_group_block_reason(
+        &self,
+        py: Python<'_>,
+        group: &Bound<'_, PyAny>,
+        reason: String,
+    ) -> PyResult<()> {
+        let group_id = parse_account_group_id_input(group)?;
+        py.allow_threads(|| self.inner.replace_group_block_reason(group_id, reason))
+            .map_err(convert_account_block_error)
     }
 }
 
@@ -6563,6 +6626,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         "AccountGroupRegistrationError",
         py.get_type::<AccountGroupRegistrationError>(),
     )?;
+    module.add("AccountBlockError", py.get_type::<AccountBlockError>())?;
     module.add(
         "_ROUNDING_STRATEGY_DEFAULT",
         rounding_strategy_name(RoundingStrategy::DEFAULT),

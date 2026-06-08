@@ -32,3 +32,28 @@ Common cases include:
 
 Do not raise exceptions for normal risk decisions in custom policies. Return
 `PolicyReject` or `PolicyDecision.reject(...)` instead.
+
+## `AccountBlockError`
+
+Raised by the fallible admin account-blocking methods on `engine.accounts()`:
+`replace_block_reason`, `block_group`, `unblock_group`, and
+`replace_group_block_reason`.
+
+`AccountBlockError` carries a human-readable error message indicating the
+failure reason (e.g., "account N is not blocked", "account group N is not
+blocked", "the reserved default account group is not a valid target").
+
+```python
+try:
+    engine.accounts().replace_block_reason(account_id, "new reason")
+except AccountBlockError as e:
+    print(str(e))
+```
+
+### `AccountBlocked` reject code
+
+When a pre-trade order is submitted for an account that is currently blocked
+(directly or through its group), the engine rejects it with reject code
+`RejectCode.ACCOUNT_BLOCKED`. This reject is returned through the normal
+`StartResult.rejects` / `ExecuteResult.rejects` channel - it is not raised as
+an exception.

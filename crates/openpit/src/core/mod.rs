@@ -41,7 +41,7 @@ pub use account_adjustment::{
 };
 pub use account_adjustment_context::AccountAdjustmentContext;
 pub(crate) use account_control::BlockedAccounts;
-pub use account_control::{AccountBlockHandle, AccountControl};
+pub use account_control::{AccountBlockError, AccountBlockHandle, AccountControl};
 pub use account_groups::{AccountGroupError, Accounts};
 pub(crate) use account_groups::{AccountGroups, AccountGroupsHandle, GroupLookup};
 pub use account_key::{AccountKey, AccountKeyConstraint};

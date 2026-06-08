@@ -30,7 +30,7 @@ fn build<Factory>() -> Storage<u32, String, Factory::Policy>
 where
     Factory: LockingPolicyFactory + Default + CreateStorageFor<u32>,
 {
-    StorageBuilder::new(Factory::default()).create::<u32, String>()
+    StorageBuilder::new(Factory::default()).create_for_bound_key::<u32, String>()
 }
 
 fn smoke_with_with_mut_remove<LockingPolicy>(storage: Storage<u32, String, LockingPolicy>)
@@ -128,8 +128,8 @@ fn full_locking_smoke() {
 #[test]
 fn builder_creates_independent_storages() {
     let builder = StorageBuilder::new(FullLocking);
-    let a = builder.create::<u32, u32>();
-    let b = builder.create::<u32, u32>();
+    let a = builder.create_for_bound_key::<u32, u32>();
+    let b = builder.create_for_bound_key::<u32, u32>();
 
     a.with_mut(1, || 10, |_, _| {});
     b.with_mut(1, || 20, |_, _| {});
@@ -173,7 +173,7 @@ fn index_locking_storage_is_send_only() {
 
 #[test]
 fn full_locking_concurrent_readers_and_writers() {
-    let storage = Arc::new(StorageBuilder::new(FullLocking).create::<u64, u64>());
+    let storage = Arc::new(StorageBuilder::new(FullLocking).create_for_bound_key::<u64, u64>());
 
     // Pre-populate.
     for k in 0..16u64 {
@@ -232,7 +232,7 @@ fn full_locking_concurrent_readers_and_writers() {
 
 #[test]
 fn full_locking_concurrent_inserts_unique_keys() {
-    let storage = Arc::new(StorageBuilder::new(FullLocking).create::<u64, u64>());
+    let storage = Arc::new(StorageBuilder::new(FullLocking).create_for_bound_key::<u64, u64>());
     let new_count = Arc::new(AtomicUsize::new(0));
     let total_threads = 8u64;
     let per_thread = 64u64;
@@ -265,7 +265,7 @@ fn full_locking_concurrent_inserts_unique_keys() {
 
 #[test]
 fn full_locking_concurrent_inserts_shared_key_one_winner() {
-    let storage = Arc::new(StorageBuilder::new(FullLocking).create::<u64, u64>());
+    let storage = Arc::new(StorageBuilder::new(FullLocking).create_for_bound_key::<u64, u64>());
     let new_count = Arc::new(AtomicUsize::new(0));
     let total_threads = 8u64;
 
@@ -295,7 +295,7 @@ fn full_locking_concurrent_inserts_shared_key_one_winner() {
 
 #[test]
 fn storage_remove_drops_entry() {
-    let storage = StorageBuilder::new(FullLocking).create::<u32, u32>();
+    let storage = StorageBuilder::new(FullLocking).create_for_bound_key::<u32, u32>();
     storage.with_mut(
         10,
         || 100,
@@ -312,14 +312,16 @@ fn storage_remove_drops_entry() {
 fn index_locking_with_any_key_accepts_arbitrary_key() {
     // The default `KeyBound = AnyKey` should allow any `Hash + Eq` key
     // (here a primitive `u32` and a non-account-shaped tuple).
-    let primitives = StorageBuilder::new(IndexLocking::<AnyKey>::default()).create::<u32, String>();
+    let primitives = StorageBuilder::new(IndexLocking::<AnyKey>::default())
+        .create_for_bound_key::<u32, String>();
     primitives.with_mut(1, || "alpha".to_string(), |_, _| {});
     assert_eq!(
         primitives.with(&1, |value| value.clone()),
         Some("alpha".to_string()),
     );
 
-    let tuples = StorageBuilder::new(IndexLocking::<AnyKey>::default()).create::<(u8, u16), u8>();
+    let tuples = StorageBuilder::new(IndexLocking::<AnyKey>::default())
+        .create_for_bound_key::<(u8, u16), u8>();
     tuples.with_mut((1, 2), || 7, |_, _| {});
     assert_eq!(tuples.with(&(1, 2), |value| *value), Some(7));
 }
@@ -332,7 +334,8 @@ fn index_locking_with_account_constraint_accepts_account_id() {
     struct OnlyU64Key;
     impl IndexKeyBound<u64> for OnlyU64Key {}
 
-    let storage = StorageBuilder::new(IndexLocking::<OnlyU64Key>::default()).create::<u64, u32>();
+    let storage = StorageBuilder::new(IndexLocking::<OnlyU64Key>::default())
+        .create_for_bound_key::<u64, u32>();
     storage.with_mut(42, || 7, |_, _| {});
     assert_eq!(storage.with(&42, |value| *value), Some(7));
 }
@@ -344,8 +347,8 @@ fn index_locking_with_account_constraint_accepts_tuple_with_account_id() {
     struct OnlyU64TupleKey;
     impl IndexKeyBound<(u64, u16)> for OnlyU64TupleKey {}
 
-    let storage =
-        StorageBuilder::new(IndexLocking::<OnlyU64TupleKey>::default()).create::<(u64, u16), u32>();
+    let storage = StorageBuilder::new(IndexLocking::<OnlyU64TupleKey>::default())
+        .create_for_bound_key::<(u64, u16), u32>();
     storage.with_mut((1, 2), || 7, |_, _| {});
     assert_eq!(storage.with(&(1, 2), |value| *value), Some(7));
 }
@@ -373,7 +376,7 @@ where
 
 #[test]
 fn with_mut_if_present_returns_none_and_does_not_insert_on_miss() {
-    let storage = StorageBuilder::new(FullLocking).create::<&'static str, u32>();
+    let storage = StorageBuilder::new(FullLocking).create_for_bound_key::<&'static str, u32>();
     let result = storage.with_mut_if_present(&"missing", |v| {
         *v += 1;
         *v
@@ -387,7 +390,7 @@ fn with_mut_if_present_returns_none_and_does_not_insert_on_miss() {
 
 #[test]
 fn with_mut_if_present_mutates_existing_entry() {
-    let storage = StorageBuilder::new(FullLocking).create::<&'static str, u32>();
+    let storage = StorageBuilder::new(FullLocking).create_for_bound_key::<&'static str, u32>();
     storage.with_mut("k", || 10u32, |_, _| {});
     let result = storage.with_mut_if_present(&"k", |v| {
         *v += 5;
@@ -398,8 +401,34 @@ fn with_mut_if_present_mutates_existing_entry() {
 }
 
 #[test]
+fn with_mut_if_present_exclusive_index_returns_none_and_does_not_insert_on_miss() {
+    let storage = StorageBuilder::new(FullLocking).create_for_bound_key::<&'static str, u32>();
+    let result = storage.with_mut_if_present_exclusive_index(&"missing", |v| {
+        *v += 1;
+        *v
+    });
+    assert!(result.is_none());
+    assert!(
+        storage.is_empty(),
+        "no entry must be created for a missing key"
+    );
+}
+
+#[test]
+fn with_mut_if_present_exclusive_index_mutates_existing_entry() {
+    let storage = StorageBuilder::new(FullLocking).create_for_bound_key::<&'static str, u32>();
+    storage.with_mut("k", || 10u32, |_, _| {});
+    let result = storage.with_mut_if_present_exclusive_index(&"k", |v| {
+        *v += 5;
+        *v
+    });
+    assert_eq!(result, Some(15));
+    assert_eq!(storage.with(&"k", |v| *v), Some(15));
+}
+
+#[test]
 fn with_mut_round_trip() {
-    let storage = StorageBuilder::new(FullLocking).create::<&'static str, Vec<u32>>();
+    let storage = StorageBuilder::new(FullLocking).create_for_bound_key::<&'static str, Vec<u32>>();
     storage.with_mut("v", Vec::new, |entry, _| {
         entry.push(1);
         entry.push(2);
@@ -411,7 +440,7 @@ fn with_mut_round_trip() {
 
 #[test]
 fn no_locking_nested_with_inside_with_is_allowed() {
-    let storage = StorageBuilder::new(NoLocking).create::<u32, u32>();
+    let storage = StorageBuilder::new(NoLocking).create_for_bound_key::<u32, u32>();
     storage.with_mut(1, || 10, |_, _| {});
     storage.with_mut(2, || 20, |_, _| {});
 
@@ -428,7 +457,7 @@ fn no_locking_nested_with_inside_with_is_allowed() {
 #[test]
 #[should_panic(expected = "closure re-entered the same storage")]
 fn no_locking_with_mut_inside_with_panics_in_debug() {
-    let storage = StorageBuilder::new(NoLocking).create::<u32, u32>();
+    let storage = StorageBuilder::new(NoLocking).create_for_bound_key::<u32, u32>();
     storage.with_mut(1, || 10, |_, _| {});
     storage.with_mut(2, || 20, |_, _| {});
 
@@ -440,7 +469,7 @@ fn no_locking_with_mut_inside_with_panics_in_debug() {
 #[test]
 #[should_panic(expected = "closure re-entered the same storage")]
 fn no_locking_with_inside_with_mut_panics_in_debug() {
-    let storage = StorageBuilder::new(NoLocking).create::<u32, u32>();
+    let storage = StorageBuilder::new(NoLocking).create_for_bound_key::<u32, u32>();
     storage.with_mut(1, || 10, |_, _| {});
     storage.with_mut(2, || 20, |_, _| {});
 
@@ -455,7 +484,7 @@ fn no_locking_with_inside_with_mut_panics_in_debug() {
 
 #[test]
 fn full_locking_nested_with_inside_with_is_allowed() {
-    let storage = StorageBuilder::new(FullLocking).create::<u32, u32>();
+    let storage = StorageBuilder::new(FullLocking).create_for_bound_key::<u32, u32>();
     storage.with_mut(1, || 10, |_, _| {});
     storage.with_mut(2, || 20, |_, _| {});
 
@@ -479,7 +508,7 @@ fn full_locking_nested_with_inside_with_is_allowed() {
 #[test]
 #[should_panic(expected = "closure re-entered the same storage")]
 fn no_locking_re_entry_in_with_mut_panics_in_debug() {
-    let storage = StorageBuilder::new(NoLocking).create::<u32, u32>();
+    let storage = StorageBuilder::new(NoLocking).create_for_bound_key::<u32, u32>();
     storage.with_mut(1, || 0, |_, _| {});
     storage.with_mut(2, || 0, |_, _| {});
     storage.with_mut(
@@ -497,7 +526,8 @@ fn no_locking_re_entry_in_with_mut_panics_in_debug() {
 #[test]
 #[should_panic(expected = "closure re-entered the same storage")]
 fn index_locking_re_entry_in_with_mut_panics_in_debug() {
-    let storage = StorageBuilder::new(IndexLocking::<AnyKey>::default()).create::<u32, u32>();
+    let storage =
+        StorageBuilder::new(IndexLocking::<AnyKey>::default()).create_for_bound_key::<u32, u32>();
     storage.with_mut(1, || 0, |_, _| {});
     storage.with_mut(2, || 0, |_, _| {});
     storage.with_mut(

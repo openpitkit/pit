@@ -32,6 +32,7 @@ use openpit::{
 
 // Mirrors public Rust examples from:
 // - ../pit.wiki/Account-Adjustments.md
+// - ../pit.wiki/Account-Blocking.md
 // - ../pit.wiki/Account-Groups.md
 // - ../pit.wiki/Balance-Reconciliation.md
 // - ../pit.wiki/Custom-Rust-Types.md
@@ -532,7 +533,7 @@ fn example_wiki_account_adjustments_balance_limit_policy() -> Result<(), Box<dyn
         ) -> Self {
             Self {
                 max_total,
-                totals: Arc::new(storage_builder.create()),
+                totals: Arc::new(storage_builder.create_for_bound_key()),
             }
         }
     }
@@ -920,7 +921,7 @@ fn example_wiki_storage_custom_policy() -> Result<(), Box<dyn std::error::Error>
     {
         pub fn new(storage_builder: &StorageBuilder<StorageLockingPolicyFactory>) -> Self {
             Self {
-                realized: storage_builder.create(),
+                realized: storage_builder.create_for_bound_key(),
             }
         }
 
@@ -959,7 +960,9 @@ fn example_wiki_storage_engine_builder() -> Result<(), Box<dyn std::error::Error
     // Wiki example: pit.wiki/Storage.md - Engine-Owned Builder Use
     // Keep this example in sync with the matching wiki example.
     let builder = Engine::builder::<(), (), ()>().full_sync();
-    let counters = builder.storage_builder().create::<&'static str, u64>();
+    let counters = builder
+        .storage_builder()
+        .create_for_bound_key::<&'static str, u64>();
 
     counters.with_mut(
         "ticks",
@@ -1405,5 +1408,33 @@ fn example_wiki_account_groups_register_and_read() -> Result<(), Box<dyn std::er
         hedge_book,
     )?;
     assert_eq!(accounts.group_of(AccountId::from_u64(10)), None);
+    Ok(())
+}
+
+#[test]
+fn example_wiki_account_block_unblock() -> Result<(), Box<dyn std::error::Error>> {
+    // Wiki example: pit.wiki/Account-Blocking.md - Examples → Rust
+    // Keep this example in sync with the matching wiki example.
+    use openpit::param::{AccountGroupId, AccountId};
+    use openpit::pretrade::policies::OrderValidationPolicy;
+    use openpit::{Engine, OrderOperation};
+
+    let engine: openpit::LocalEngine<OrderOperation> = Engine::builder()
+        .no_sync()
+        .pre_trade(OrderValidationPolicy::new())
+        .build()?;
+
+    let accounts = engine.accounts();
+
+    // Block account 99224416 - all subsequent pre-trade orders are rejected.
+    accounts.block(AccountId::from_u64(99224416), "compliance hold".to_string());
+
+    // Unblock account 99224416 - pre-trade orders are allowed again.
+    accounts.unblock(AccountId::from_u64(99224416));
+
+    // Block every current and future member of a group in one call.
+    let desk = AccountGroupId::from_u32(7)?;
+    accounts.block_group(desk, "desk suspended".to_string())?;
+    accounts.unblock_group(desk)?;
     Ok(())
 }

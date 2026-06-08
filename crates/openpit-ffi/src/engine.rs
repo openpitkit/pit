@@ -1341,6 +1341,475 @@ pub extern "C" fn openpit_engine_account_group(
     }
 }
 
+//--------------------------------------------------------------------------------------------------
+
+/// Structured error returned by account block operations.
+///
+/// Ownership:
+/// - created by `openpit_engine_replace_account_block_reason`,
+///   `openpit_engine_block_account_group`,
+///   `openpit_engine_unblock_account_group`, and
+///   `openpit_engine_replace_account_group_block_reason` on failure;
+/// - owned by the caller;
+/// - released with `openpit_destroy_account_block_error`.
+pub struct OpenPitAccountBlockError {
+    /// Human-readable error message.
+    message: String,
+    /// Offending account identifier; meaningful only when `account_is_set` is
+    /// true; stored as `0` when absent.
+    account: u64,
+    /// Whether `account` is present.
+    account_is_set: bool,
+    /// Offending account-group identifier; meaningful only when `group_is_set`
+    /// is true; stored as `0` when absent.
+    group: u32,
+    /// Whether `group` is present.
+    group_is_set: bool,
+}
+
+impl OpenPitAccountBlockError {
+    fn new(err: openpit::AccountBlockError) -> Self {
+        match &err {
+            openpit::AccountBlockError::AccountNotBlocked { account } => Self {
+                message: err.to_string(),
+                account: account.as_u64(),
+                account_is_set: true,
+                group: 0,
+                group_is_set: false,
+            },
+            openpit::AccountBlockError::GroupNotBlocked { group } => Self {
+                message: err.to_string(),
+                account: 0,
+                account_is_set: false,
+                group: group.as_u32(),
+                group_is_set: true,
+            },
+            _ => Self {
+                message: err.to_string(),
+                account: 0,
+                account_is_set: false,
+                group: 0,
+                group_is_set: false,
+            },
+        }
+    }
+}
+
+/// Discriminant for the variant carried by an [`OpenPitAccountBlockError`].
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenPitAccountBlockErrorKind {
+    /// The target group is the reserved default account group.
+    ReservedGroup = 0,
+    /// The target account is not currently blocked.
+    AccountNotBlocked = 1,
+    /// The target account group is not currently blocked.
+    GroupNotBlocked = 2,
+}
+
+#[no_mangle]
+/// Releases a caller-owned account-block error.
+///
+/// Contract:
+/// - call exactly once per pointer returned by a block function;
+/// - passing null is allowed and has no effect.
+pub extern "C" fn openpit_destroy_account_block_error(err: *mut OpenPitAccountBlockError) {
+    if err.is_null() {
+        return;
+    }
+    unsafe { drop(Box::from_raw(err)) };
+}
+
+#[no_mangle]
+/// Returns the human-readable error message from an account-block error.
+///
+/// Contract:
+/// - `err` must be a valid non-null pointer;
+/// - the returned view borrows from the error object and is valid while the
+///   error is alive;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_account_block_error_get_message(
+    err: *const OpenPitAccountBlockError,
+) -> crate::OpenPitStringView {
+    assert!(!err.is_null(), "account block error pointer is null");
+    crate::OpenPitStringView::from_utf8(unsafe { &(*err).message })
+}
+
+#[no_mangle]
+/// Returns the variant kind of an account-block error.
+///
+/// Contract:
+/// - `err` must be a valid non-null pointer;
+/// - this function never fails;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_account_block_error_get_kind(
+    err: *const OpenPitAccountBlockError,
+) -> OpenPitAccountBlockErrorKind {
+    assert!(!err.is_null(), "account block error pointer is null");
+    let err = unsafe { &*err };
+    if err.account_is_set {
+        OpenPitAccountBlockErrorKind::AccountNotBlocked
+    } else if err.group_is_set {
+        OpenPitAccountBlockErrorKind::GroupNotBlocked
+    } else {
+        OpenPitAccountBlockErrorKind::ReservedGroup
+    }
+}
+
+#[no_mangle]
+/// Returns the offending account identifier from an account-block error.
+///
+/// Contract:
+/// - `err` must be a valid non-null pointer;
+/// - `out_account` must be a valid non-null pointer;
+/// - returns `true` when the error variant carries an account and writes it to
+///   `out_account`;
+/// - returns `false` when no account is present; `out_account` is left
+///   untouched when the return value is `false`;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_account_block_error_get_account(
+    err: *const OpenPitAccountBlockError,
+    out_account: *mut crate::param::OpenPitParamAccountId,
+) -> bool {
+    assert!(!err.is_null(), "account block error pointer is null");
+    assert!(!out_account.is_null(), "out_account pointer is null");
+    let err = unsafe { &*err };
+    if err.account_is_set {
+        unsafe { *out_account = err.account };
+        true
+    } else {
+        false
+    }
+}
+
+#[no_mangle]
+/// Returns the offending account-group identifier from an account-block error.
+///
+/// Contract:
+/// - `err` must be a valid non-null pointer;
+/// - `out_group` must be a valid non-null pointer;
+/// - returns `true` when the error variant carries a group and writes it to
+///   `out_group`;
+/// - returns `false` when no group is present; `out_group` is left untouched
+///   when the return value is `false`;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_account_block_error_get_group(
+    err: *const OpenPitAccountBlockError,
+    out_group: *mut crate::account_group_id::OpenPitParamAccountGroupId,
+) -> bool {
+    assert!(!err.is_null(), "account block error pointer is null");
+    assert!(!out_group.is_null(), "out_group pointer is null");
+    let err = unsafe { &*err };
+    if err.group_is_set {
+        unsafe { *out_group = err.group };
+        true
+    } else {
+        false
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+
+#[no_mangle]
+/// Blocks `account` with `reason`.
+///
+/// The first cause for an account wins: if the account is already blocked (by
+/// an admin call or a prior kill-switch), this call is a no-op and does not
+/// overwrite the stored reason. Use
+/// `openpit_engine_replace_account_block_reason` to change the stored reason.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer;
+/// - `reason` is interpreted as UTF-8; an empty string is used when
+///   `reason.ptr` is null OR `reason.len` is zero; passing a null `ptr` with
+///   a non-zero `len` is caller misuse and is treated as empty (not read);
+///   an empty reason is explicitly allowed;
+/// - violating the `engine` pointer contract aborts the call.
+pub extern "C" fn openpit_engine_block_account(
+    engine: *mut OpenPitEngine,
+    account_id: crate::param::OpenPitParamAccountId,
+    reason: crate::OpenPitStringView,
+) {
+    assert!(!engine.is_null(), "engine is null");
+    let account = openpit::param::AccountId::from_u64(account_id);
+    let reason_bytes: &[u8] = if reason.ptr.is_null() || reason.len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(reason.ptr, reason.len) }
+    };
+    let reason_str = String::from_utf8_lossy(reason_bytes).into_owned();
+    unsafe { &*engine }
+        .inner
+        .accounts()
+        .block(account, reason_str);
+}
+
+#[no_mangle]
+/// Unblocks `account`, clearing any block on it.
+///
+/// Idempotent: a no-op when `account` is not blocked. Both admin blocks and
+/// kill-switch blocks are cleared.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_engine_unblock_account(
+    engine: *mut OpenPitEngine,
+    account_id: crate::param::OpenPitParamAccountId,
+) {
+    assert!(!engine.is_null(), "engine is null");
+    let account = openpit::param::AccountId::from_u64(account_id);
+    unsafe { &*engine }.inner.accounts().unblock(account);
+}
+
+#[no_mangle]
+/// Replaces the stored reason of an already-blocked account.
+///
+/// Unlike `openpit_engine_block_account`, which preserves the first cause, this
+/// overwrites the stored cause with `reason`, leaving the account blocked.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer;
+/// - `reason` is interpreted as UTF-8; an empty string is used when
+///   `reason.ptr` is null OR `reason.len` is zero; passing a null `ptr` with
+///   a non-zero `len` is caller misuse and is treated as empty (not read);
+///   an empty reason is explicitly allowed;
+/// - on failure, if `out_error` is not null, writes a caller-owned
+///   `OpenPitAccountBlockError` pointer that MUST be released with
+///   `openpit_destroy_account_block_error`;
+/// - aborts the call when `engine` is null.
+///
+/// Success:
+/// - returns `true`; the stored reason has been replaced.
+///
+/// Error:
+/// - returns `false` with `OpenPitAccountBlockErrorKind_AccountNotBlocked`
+///   when `account` is not currently blocked.
+pub extern "C" fn openpit_engine_replace_account_block_reason(
+    engine: *mut OpenPitEngine,
+    account_id: crate::param::OpenPitParamAccountId,
+    reason: crate::OpenPitStringView,
+    out_error: *mut *mut OpenPitAccountBlockError,
+) -> bool {
+    if !out_error.is_null() {
+        unsafe { *out_error = std::ptr::null_mut() };
+    }
+    assert!(!engine.is_null(), "engine is null");
+    let account = openpit::param::AccountId::from_u64(account_id);
+    let reason_bytes: &[u8] = if reason.ptr.is_null() || reason.len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(reason.ptr, reason.len) }
+    };
+    let reason_str = String::from_utf8_lossy(reason_bytes).into_owned();
+    match unsafe { &*engine }
+        .inner
+        .accounts()
+        .replace_block_reason(account, reason_str)
+    {
+        Ok(()) => true,
+        Err(err) => {
+            if !out_error.is_null() {
+                unsafe { *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(err))) };
+            }
+            false
+        }
+    }
+}
+
+#[no_mangle]
+/// Blocks the account group `group` with `reason`.
+///
+/// The first cause for a group wins: re-blocking an already-blocked group is a
+/// no-op. Use `openpit_engine_replace_account_group_block_reason` to change the
+/// stored reason.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer;
+/// - `group` must not be `OPENPIT_DEFAULT_ACCOUNT_GROUP`;
+/// - `reason` is interpreted as UTF-8; an empty string is used when
+///   `reason.ptr` is null OR `reason.len` is zero; passing a null `ptr` with
+///   a non-zero `len` is caller misuse and is treated as empty (not read);
+///   an empty reason is explicitly allowed;
+/// - on failure, if `out_error` is not null, writes a caller-owned
+///   `OpenPitAccountBlockError` pointer that MUST be released with
+///   `openpit_destroy_account_block_error`;
+/// - aborts the call when `engine` is null.
+///
+/// Success:
+/// - returns `true`; the group is now blocked.
+///
+/// Error:
+/// - returns `false` with `OpenPitAccountBlockErrorKind_ReservedGroup` when
+///   `group` is the reserved default group.
+pub extern "C" fn openpit_engine_block_account_group(
+    engine: *mut OpenPitEngine,
+    group: crate::account_group_id::OpenPitParamAccountGroupId,
+    reason: crate::OpenPitStringView,
+    out_error: *mut *mut OpenPitAccountBlockError,
+) -> bool {
+    if !out_error.is_null() {
+        unsafe { *out_error = std::ptr::null_mut() };
+    }
+    assert!(!engine.is_null(), "engine is null");
+    let group = match openpit::param::AccountGroupId::from_u32(group) {
+        Ok(group) => group,
+        Err(_) => {
+            if !out_error.is_null() {
+                unsafe {
+                    *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(
+                        openpit::AccountBlockError::ReservedGroup,
+                    )))
+                };
+            }
+            return false;
+        }
+    };
+    let reason_bytes: &[u8] = if reason.ptr.is_null() || reason.len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(reason.ptr, reason.len) }
+    };
+    let reason_str = String::from_utf8_lossy(reason_bytes).into_owned();
+    match unsafe { &*engine }
+        .inner
+        .accounts()
+        .block_group(group, reason_str)
+    {
+        Ok(()) => true,
+        Err(err) => {
+            if !out_error.is_null() {
+                unsafe { *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(err))) };
+            }
+            false
+        }
+    }
+}
+
+#[no_mangle]
+/// Unblocks the account group `group`, clearing the group block.
+///
+/// Idempotent: a no-op when `group` is not blocked. Accounts blocked
+/// individually remain blocked.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer;
+/// - `group` must not be `OPENPIT_DEFAULT_ACCOUNT_GROUP`;
+/// - on failure, if `out_error` is not null, writes a caller-owned
+///   `OpenPitAccountBlockError` pointer that MUST be released with
+///   `openpit_destroy_account_block_error`;
+/// - aborts the call when `engine` is null.
+///
+/// Success:
+/// - returns `true`; the group is now unblocked.
+///
+/// Error:
+/// - returns `false` with `OpenPitAccountBlockErrorKind_ReservedGroup` when
+///   `group` is the reserved default group.
+pub extern "C" fn openpit_engine_unblock_account_group(
+    engine: *mut OpenPitEngine,
+    group: crate::account_group_id::OpenPitParamAccountGroupId,
+    out_error: *mut *mut OpenPitAccountBlockError,
+) -> bool {
+    if !out_error.is_null() {
+        unsafe { *out_error = std::ptr::null_mut() };
+    }
+    assert!(!engine.is_null(), "engine is null");
+    let group = match openpit::param::AccountGroupId::from_u32(group) {
+        Ok(group) => group,
+        Err(_) => {
+            if !out_error.is_null() {
+                unsafe {
+                    *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(
+                        openpit::AccountBlockError::ReservedGroup,
+                    )))
+                };
+            }
+            return false;
+        }
+    };
+    match unsafe { &*engine }.inner.accounts().unblock_group(group) {
+        Ok(()) => true,
+        Err(err) => {
+            if !out_error.is_null() {
+                unsafe { *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(err))) };
+            }
+            false
+        }
+    }
+}
+
+#[no_mangle]
+/// Replaces the stored reason of an already-blocked account group.
+///
+/// Unlike `openpit_engine_block_account_group`, which preserves the first
+/// cause, this overwrites the stored cause with `reason`, leaving the group
+/// blocked.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer;
+/// - `group` must not be `OPENPIT_DEFAULT_ACCOUNT_GROUP`;
+/// - `reason` is interpreted as UTF-8; an empty string is used when
+///   `reason.ptr` is null OR `reason.len` is zero; passing a null `ptr` with
+///   a non-zero `len` is caller misuse and is treated as empty (not read);
+///   an empty reason is explicitly allowed;
+/// - on failure, if `out_error` is not null, writes a caller-owned
+///   `OpenPitAccountBlockError` pointer that MUST be released with
+///   `openpit_destroy_account_block_error`;
+/// - aborts the call when `engine` is null.
+///
+/// Success:
+/// - returns `true`; the stored group-block reason has been replaced.
+///
+/// Error:
+/// - returns `false` with `OpenPitAccountBlockErrorKind_ReservedGroup` when
+///   `group` is the reserved default group;
+/// - returns `false` with `OpenPitAccountBlockErrorKind_GroupNotBlocked` when
+///   `group` is not currently blocked.
+pub extern "C" fn openpit_engine_replace_account_group_block_reason(
+    engine: *mut OpenPitEngine,
+    group: crate::account_group_id::OpenPitParamAccountGroupId,
+    reason: crate::OpenPitStringView,
+    out_error: *mut *mut OpenPitAccountBlockError,
+) -> bool {
+    if !out_error.is_null() {
+        unsafe { *out_error = std::ptr::null_mut() };
+    }
+    assert!(!engine.is_null(), "engine is null");
+    let group = match openpit::param::AccountGroupId::from_u32(group) {
+        Ok(group) => group,
+        Err(_) => {
+            if !out_error.is_null() {
+                unsafe {
+                    *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(
+                        openpit::AccountBlockError::ReservedGroup,
+                    )))
+                };
+            }
+            return false;
+        }
+    };
+    let reason_bytes: &[u8] = if reason.ptr.is_null() || reason.len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(reason.ptr, reason.len) }
+    };
+    let reason_str = String::from_utf8_lossy(reason_bytes).into_owned();
+    match unsafe { &*engine }
+        .inner
+        .accounts()
+        .replace_group_block_reason(group, reason_str)
+    {
+        Ok(()) => true,
+        Err(err) => {
+            if !out_error.is_null() {
+                unsafe { *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(err))) };
+            }
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::c_void;

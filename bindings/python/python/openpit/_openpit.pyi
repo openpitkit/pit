@@ -80,6 +80,9 @@ class UnknownInstrumentId(Exception):
 class AccountGroupRegistrationError(Exception):
     """Account-group registration conflicts with existing state."""
 
+class AccountBlockError(Exception):
+    """Admin block/unblock operation failed."""
+
 class InstrumentId:
     """Market-data instrument identifier."""
 
@@ -1749,10 +1752,10 @@ class Engine:
         adjustments: object,
     ) -> AccountAdjustmentBatchResult: ...
     def accounts(self) -> Accounts:
-        """Return a handle to the engine's account-group registry."""
+        """Return a handle to the engine's account controls."""
 
 class Accounts:
-    """Handle to the engine's account-group registry."""
+    """Handle to the engine's account groups and pre-trade block controls."""
 
     def register_group(
         self,
@@ -1765,6 +1768,14 @@ class Accounts:
         group: AccountGroupId,
     ) -> None: ...
     def group_of(self, account: AccountId) -> AccountGroupId | None: ...
+    def block(self, account: AccountId, reason: str) -> None: ...
+    def unblock(self, account: AccountId) -> None: ...
+    def replace_block_reason(self, account: AccountId, reason: str) -> None: ...
+    def block_group(self, group: AccountGroupId, reason: str) -> None: ...
+    def unblock_group(self, group: AccountGroupId) -> None: ...
+    def replace_group_block_reason(
+        self, group: AccountGroupId, reason: str
+    ) -> None: ...
 
 class EngineBuilder:
     """First stage of the engine builder."""

@@ -51,7 +51,7 @@ where
         Factory: CreateStorageFor<(AccountId, Asset)>,
     {
         Self {
-            inner: builder.create::<(AccountId, Asset), Holdings>(),
+            inner: builder.create_for_bound_key::<(AccountId, Asset), Holdings>(),
         }
     }
 

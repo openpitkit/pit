@@ -373,6 +373,213 @@ func (t *groupOfTask) abort(err error) {
 	t.f.Resolve(optional.None[param.AccountGroupID](), err)
 }
 
+// Block enqueues an account-block call routed through the queue of account.
+//
+// The future resolves with a nil error: blocking is infallible and re-blocking
+// an already-blocked account keeps the first reason.
+func (a AsyncAccounts) Block(
+	ctx context.Context,
+	account param.AccountID,
+	reason string,
+) *future.Future[struct{}] {
+	f := future.New[struct{}]()
+	task := &blockTask{f: f, engine: a.engine, account: account, reason: reason}
+	if err := a.engine.strategy.submit(ctx, account, task); err != nil {
+		f.Resolve(struct{}{}, err)
+	}
+	return f
+}
+
+// blockTask carries one Block call to its worker.
+type blockTask struct {
+	f       *future.Future[struct{}]
+	engine  *AsyncEngine
+	account param.AccountID
+	reason  string
+}
+
+func (t *blockTask) run() {
+	t.engine.driver.Accounts().Block(t.account, t.reason)
+	t.f.Resolve(struct{}{}, nil)
+}
+
+func (t *blockTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
+
+// Unblock enqueues an account-unblock call routed through the queue of account.
+//
+// The future resolves with a nil error: unblocking is infallible and unblocking
+// an account that is not blocked is a no-op.
+func (a AsyncAccounts) Unblock(
+	ctx context.Context,
+	account param.AccountID,
+) *future.Future[struct{}] {
+	f := future.New[struct{}]()
+	task := &unblockTask{f: f, engine: a.engine, account: account}
+	if err := a.engine.strategy.submit(ctx, account, task); err != nil {
+		f.Resolve(struct{}{}, err)
+	}
+	return f
+}
+
+// unblockTask carries one Unblock call to its worker.
+type unblockTask struct {
+	f       *future.Future[struct{}]
+	engine  *AsyncEngine
+	account param.AccountID
+}
+
+func (t *unblockTask) run() {
+	t.engine.driver.Accounts().Unblock(t.account)
+	t.f.Resolve(struct{}{}, nil)
+}
+
+func (t *unblockTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
+
+// ReplaceBlockReason enqueues a block-reason replacement routed through the
+// queue of account.
+//
+// The future resolves with a non-nil error (*reject.AccountBlockError with kind
+// AccountNotBlocked) when account is not blocked, or on transport failure.
+func (a AsyncAccounts) ReplaceBlockReason(
+	ctx context.Context,
+	account param.AccountID,
+	reason string,
+) *future.Future[struct{}] {
+	f := future.New[struct{}]()
+	task := &replaceBlockReasonTask{f: f, engine: a.engine, account: account, reason: reason}
+	if err := a.engine.strategy.submit(ctx, account, task); err != nil {
+		f.Resolve(struct{}{}, err)
+	}
+	return f
+}
+
+// replaceBlockReasonTask carries one ReplaceBlockReason call to its worker.
+type replaceBlockReasonTask struct {
+	f       *future.Future[struct{}]
+	engine  *AsyncEngine
+	account param.AccountID
+	reason  string
+}
+
+func (t *replaceBlockReasonTask) run() {
+	t.f.Resolve(struct{}{}, t.engine.driver.Accounts().ReplaceBlockReason(t.account, t.reason))
+}
+
+func (t *replaceBlockReasonTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
+
+// BlockGroup enqueues a group-block call routed through the queue derived from
+// group, so calls for the same group are serialized.
+//
+// The future resolves with a non-nil error (*reject.AccountBlockError with kind
+// ReservedGroup) when group is the reserved param.DefaultAccountGroup, or on
+// transport failure.
+func (a AsyncAccounts) BlockGroup(
+	ctx context.Context,
+	group param.AccountGroupID,
+	reason string,
+) *future.Future[struct{}] {
+	f := future.New[struct{}]()
+	task := &blockGroupTask{f: f, engine: a.engine, group: group, reason: reason}
+	if err := a.engine.strategy.submit(ctx, groupRoutingKey(group), task); err != nil {
+		f.Resolve(struct{}{}, err)
+	}
+	return f
+}
+
+// blockGroupTask carries one BlockGroup call to its worker.
+type blockGroupTask struct {
+	f      *future.Future[struct{}]
+	engine *AsyncEngine
+	group  param.AccountGroupID
+	reason string
+}
+
+func (t *blockGroupTask) run() {
+	t.f.Resolve(struct{}{}, t.engine.driver.Accounts().BlockGroup(t.group, t.reason))
+}
+
+func (t *blockGroupTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
+
+// UnblockGroup enqueues a group-unblock call routed through the queue derived
+// from group, so calls for the same group are serialized.
+//
+// The future resolves with a non-nil error (*reject.AccountBlockError with kind
+// ReservedGroup) when group is the reserved param.DefaultAccountGroup, or on
+// transport failure.
+func (a AsyncAccounts) UnblockGroup(
+	ctx context.Context,
+	group param.AccountGroupID,
+) *future.Future[struct{}] {
+	f := future.New[struct{}]()
+	task := &unblockGroupTask{f: f, engine: a.engine, group: group}
+	if err := a.engine.strategy.submit(ctx, groupRoutingKey(group), task); err != nil {
+		f.Resolve(struct{}{}, err)
+	}
+	return f
+}
+
+// unblockGroupTask carries one UnblockGroup call to its worker.
+type unblockGroupTask struct {
+	f      *future.Future[struct{}]
+	engine *AsyncEngine
+	group  param.AccountGroupID
+}
+
+func (t *unblockGroupTask) run() {
+	t.f.Resolve(struct{}{}, t.engine.driver.Accounts().UnblockGroup(t.group))
+}
+
+func (t *unblockGroupTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
+
+// ReplaceGroupBlockReason enqueues a group block-reason replacement routed
+// through the queue derived from group, so calls for the same group are
+// serialized.
+//
+// The future resolves with a non-nil error (*reject.AccountBlockError with kind
+// ReservedGroup when group is the reserved param.DefaultAccountGroup, or
+// GroupNotBlocked when group is not blocked), or on transport failure.
+func (a AsyncAccounts) ReplaceGroupBlockReason(
+	ctx context.Context,
+	group param.AccountGroupID,
+	reason string,
+) *future.Future[struct{}] {
+	f := future.New[struct{}]()
+	task := &replaceGroupBlockReasonTask{f: f, engine: a.engine, group: group, reason: reason}
+	if err := a.engine.strategy.submit(ctx, groupRoutingKey(group), task); err != nil {
+		f.Resolve(struct{}{}, err)
+	}
+	return f
+}
+
+// replaceGroupBlockReasonTask carries one ReplaceGroupBlockReason call to its
+// worker.
+type replaceGroupBlockReasonTask struct {
+	f      *future.Future[struct{}]
+	engine *AsyncEngine
+	group  param.AccountGroupID
+	reason string
+}
+
+func (t *replaceGroupBlockReasonTask) run() {
+	t.f.Resolve(
+		struct{}{},
+		t.engine.driver.Accounts().ReplaceGroupBlockReason(t.group, t.reason),
+	)
+}
+
+func (t *replaceGroupBlockReasonTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
+
+// groupRoutingKey derives a stable per-group routing key for the dispatcher.
+// Group-level block operations carry no account, so they are pinned to a
+// deterministic queue keyed by the group id. Group ids (uint32) share the
+// numeric routing space with account ids (uint64), so a group op with id N
+// is co-serialized with any account op whose id equals N. This is benign:
+// admin block operations are rare, and the native layer is independently
+// concurrency-safe regardless of dispatch order.
+func groupRoutingKey(group param.AccountGroupID) param.AccountID {
+	return param.NewAccountIDFromUint64(uint64(group.Handle()))
+}
+
 // submitTask carries one caller-supplied Submit closure to its worker.
 type submitTask struct {
 	f  *future.Future[struct{}]

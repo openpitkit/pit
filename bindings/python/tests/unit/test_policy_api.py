@@ -395,7 +395,7 @@ def test_post_trade_context_group_returns_registered_group() -> None:
 
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=CaptureGroup()).build()
     account = openpit.param.AccountId.from_int(99224416)  # same as conftest default
-    g = openpit.param.AccountGroupId.from_int(42)
+    g = openpit.param.AccountGroupId.from_int(99224416)
     engine.accounts().register_group([account], g)
     engine.apply_execution_report(
         report=conftest.make_report(pnl=openpit.param.Pnl("1"))

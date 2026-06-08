@@ -313,6 +313,17 @@ static bool (*_fn_openpit_account_group_error_get_current_group)(const OpenPitAc
 static bool (*_fn_openpit_engine_register_account_group)(OpenPitEngine *, const OpenPitParamAccountId *, size_t, OpenPitParamAccountGroupId, OpenPitAccountGroupError **, OpenPitOutError) = NULL;
 static bool (*_fn_openpit_engine_unregister_account_group)(OpenPitEngine *, const OpenPitParamAccountId *, size_t, OpenPitParamAccountGroupId, OpenPitAccountGroupError **, OpenPitOutError) = NULL;
 static bool (*_fn_openpit_engine_account_group)(const OpenPitEngine *, OpenPitParamAccountId, OpenPitParamAccountGroupId *) = NULL;
+static void (*_fn_openpit_destroy_account_block_error)(OpenPitAccountBlockError *) = NULL;
+static OpenPitStringView (*_fn_openpit_account_block_error_get_message)(const OpenPitAccountBlockError *) = NULL;
+static OpenPitAccountBlockErrorKind (*_fn_openpit_account_block_error_get_kind)(const OpenPitAccountBlockError *) = NULL;
+static bool (*_fn_openpit_account_block_error_get_account)(const OpenPitAccountBlockError *, OpenPitParamAccountId *) = NULL;
+static bool (*_fn_openpit_account_block_error_get_group)(const OpenPitAccountBlockError *, OpenPitParamAccountGroupId *) = NULL;
+static void (*_fn_openpit_engine_block_account)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView) = NULL;
+static void (*_fn_openpit_engine_unblock_account)(OpenPitEngine *, OpenPitParamAccountId) = NULL;
+static bool (*_fn_openpit_engine_replace_account_block_reason)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView, OpenPitAccountBlockError **) = NULL;
+static bool (*_fn_openpit_engine_block_account_group)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitStringView, OpenPitAccountBlockError **) = NULL;
+static bool (*_fn_openpit_engine_unblock_account_group)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitAccountBlockError **) = NULL;
+static bool (*_fn_openpit_engine_replace_account_group_block_reason)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitStringView, OpenPitAccountBlockError **) = NULL;
 static OpenPitPretradePreTradePolicy * (*_fn_openpit_create_pretrade_custom_pre_trade_policy)(OpenPitStringView, uint16_t, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyApplyExecutionReportFn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn, OpenPitPretradePreTradePolicyFreeUserDataFn, void *, OpenPitOutError) = NULL;
 static void (*_fn_openpit_destroy_pretrade_pre_trade_policy)(OpenPitPretradePreTradePolicy *) = NULL;
 static OpenPitStringView (*_fn_openpit_pretrade_pre_trade_policy_get_name)(const OpenPitPretradePreTradePolicy *) = NULL;
@@ -967,6 +978,28 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_engine_unregister_account_group == NULL) return "openpit_engine_unregister_account_group";
     _fn_openpit_engine_account_group = (bool (*)(const OpenPitEngine *, OpenPitParamAccountId, OpenPitParamAccountGroupId *))openpit_dlsym(handle, "openpit_engine_account_group");
     if (_fn_openpit_engine_account_group == NULL) return "openpit_engine_account_group";
+    _fn_openpit_destroy_account_block_error = (void (*)(OpenPitAccountBlockError *))openpit_dlsym(handle, "openpit_destroy_account_block_error");
+    if (_fn_openpit_destroy_account_block_error == NULL) return "openpit_destroy_account_block_error";
+    _fn_openpit_account_block_error_get_message = (OpenPitStringView (*)(const OpenPitAccountBlockError *))openpit_dlsym(handle, "openpit_account_block_error_get_message");
+    if (_fn_openpit_account_block_error_get_message == NULL) return "openpit_account_block_error_get_message";
+    _fn_openpit_account_block_error_get_kind = (OpenPitAccountBlockErrorKind (*)(const OpenPitAccountBlockError *))openpit_dlsym(handle, "openpit_account_block_error_get_kind");
+    if (_fn_openpit_account_block_error_get_kind == NULL) return "openpit_account_block_error_get_kind";
+    _fn_openpit_account_block_error_get_account = (bool (*)(const OpenPitAccountBlockError *, OpenPitParamAccountId *))openpit_dlsym(handle, "openpit_account_block_error_get_account");
+    if (_fn_openpit_account_block_error_get_account == NULL) return "openpit_account_block_error_get_account";
+    _fn_openpit_account_block_error_get_group = (bool (*)(const OpenPitAccountBlockError *, OpenPitParamAccountGroupId *))openpit_dlsym(handle, "openpit_account_block_error_get_group");
+    if (_fn_openpit_account_block_error_get_group == NULL) return "openpit_account_block_error_get_group";
+    _fn_openpit_engine_block_account = (void (*)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView))openpit_dlsym(handle, "openpit_engine_block_account");
+    if (_fn_openpit_engine_block_account == NULL) return "openpit_engine_block_account";
+    _fn_openpit_engine_unblock_account = (void (*)(OpenPitEngine *, OpenPitParamAccountId))openpit_dlsym(handle, "openpit_engine_unblock_account");
+    if (_fn_openpit_engine_unblock_account == NULL) return "openpit_engine_unblock_account";
+    _fn_openpit_engine_replace_account_block_reason = (bool (*)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView, OpenPitAccountBlockError **))openpit_dlsym(handle, "openpit_engine_replace_account_block_reason");
+    if (_fn_openpit_engine_replace_account_block_reason == NULL) return "openpit_engine_replace_account_block_reason";
+    _fn_openpit_engine_block_account_group = (bool (*)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitStringView, OpenPitAccountBlockError **))openpit_dlsym(handle, "openpit_engine_block_account_group");
+    if (_fn_openpit_engine_block_account_group == NULL) return "openpit_engine_block_account_group";
+    _fn_openpit_engine_unblock_account_group = (bool (*)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitAccountBlockError **))openpit_dlsym(handle, "openpit_engine_unblock_account_group");
+    if (_fn_openpit_engine_unblock_account_group == NULL) return "openpit_engine_unblock_account_group";
+    _fn_openpit_engine_replace_account_group_block_reason = (bool (*)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitStringView, OpenPitAccountBlockError **))openpit_dlsym(handle, "openpit_engine_replace_account_group_block_reason");
+    if (_fn_openpit_engine_replace_account_group_block_reason == NULL) return "openpit_engine_replace_account_group_block_reason";
     _fn_openpit_create_pretrade_custom_pre_trade_policy = (OpenPitPretradePreTradePolicy * (*)(OpenPitStringView, uint16_t, OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn, OpenPitPretradePreTradePolicyApplyExecutionReportFn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn, OpenPitPretradePreTradePolicyFreeUserDataFn, void *, OpenPitOutError))openpit_dlsym(handle, "openpit_create_pretrade_custom_pre_trade_policy");
     if (_fn_openpit_create_pretrade_custom_pre_trade_policy == NULL) return "openpit_create_pretrade_custom_pre_trade_policy";
     _fn_openpit_destroy_pretrade_pre_trade_policy = (void (*)(OpenPitPretradePreTradePolicy *))openpit_dlsym(handle, "openpit_destroy_pretrade_pre_trade_policy");
@@ -2260,6 +2293,50 @@ bool openpit_engine_unregister_account_group(OpenPitEngine * engine, const OpenP
 
 bool openpit_engine_account_group(const OpenPitEngine * engine, OpenPitParamAccountId account, OpenPitParamAccountGroupId * out_group) {
     return _fn_openpit_engine_account_group(engine, account, out_group);
+}
+
+void openpit_destroy_account_block_error(OpenPitAccountBlockError * err) {
+    _fn_openpit_destroy_account_block_error(err);
+}
+
+OpenPitStringView openpit_account_block_error_get_message(const OpenPitAccountBlockError * err) {
+    return _fn_openpit_account_block_error_get_message(err);
+}
+
+OpenPitAccountBlockErrorKind openpit_account_block_error_get_kind(const OpenPitAccountBlockError * err) {
+    return _fn_openpit_account_block_error_get_kind(err);
+}
+
+bool openpit_account_block_error_get_account(const OpenPitAccountBlockError * err, OpenPitParamAccountId * out_account) {
+    return _fn_openpit_account_block_error_get_account(err, out_account);
+}
+
+bool openpit_account_block_error_get_group(const OpenPitAccountBlockError * err, OpenPitParamAccountGroupId * out_group) {
+    return _fn_openpit_account_block_error_get_group(err, out_group);
+}
+
+void openpit_engine_block_account(OpenPitEngine * engine, OpenPitParamAccountId account_id, OpenPitStringView reason) {
+    _fn_openpit_engine_block_account(engine, account_id, reason);
+}
+
+void openpit_engine_unblock_account(OpenPitEngine * engine, OpenPitParamAccountId account_id) {
+    _fn_openpit_engine_unblock_account(engine, account_id);
+}
+
+bool openpit_engine_replace_account_block_reason(OpenPitEngine * engine, OpenPitParamAccountId account_id, OpenPitStringView reason, OpenPitAccountBlockError ** out_error) {
+    return _fn_openpit_engine_replace_account_block_reason(engine, account_id, reason, out_error);
+}
+
+bool openpit_engine_block_account_group(OpenPitEngine * engine, OpenPitParamAccountGroupId group, OpenPitStringView reason, OpenPitAccountBlockError ** out_error) {
+    return _fn_openpit_engine_block_account_group(engine, group, reason, out_error);
+}
+
+bool openpit_engine_unblock_account_group(OpenPitEngine * engine, OpenPitParamAccountGroupId group, OpenPitAccountBlockError ** out_error) {
+    return _fn_openpit_engine_unblock_account_group(engine, group, out_error);
+}
+
+bool openpit_engine_replace_account_group_block_reason(OpenPitEngine * engine, OpenPitParamAccountGroupId group, OpenPitStringView reason, OpenPitAccountBlockError ** out_error) {
+    return _fn_openpit_engine_replace_account_group_block_reason(engine, group, reason, out_error);
 }
 
 OpenPitPretradePreTradePolicy * openpit_create_pretrade_custom_pre_trade_policy(OpenPitStringView name, uint16_t policy_group_id, OpenPitPretradePreTradePolicyCheckPreTradeStartFn check_pre_trade_start_fn, OpenPitPretradePreTradePolicyPerformPreTradeCheckFn perform_pre_trade_check_fn, OpenPitPretradePreTradePolicyApplyExecutionReportFn apply_execution_report_fn, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn apply_account_adjustment_fn, OpenPitPretradePreTradePolicyFreeUserDataFn free_user_data_fn, void * user_data, OpenPitOutError out_error) {

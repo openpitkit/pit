@@ -165,7 +165,7 @@ mod reentry {
 /// `Storage` solves that problem once. A policy chooses a
 /// [`LockingPolicyFactory`](super::LockingPolicyFactory) at construction
 /// time and receives a ready-made `Storage` via
-/// [`StorageBuilder::create`](super::StorageBuilder::create). From that
+/// [`StorageBuilder::create_for_bound_key`](super::StorageBuilder::create_for_bound_key). From that
 /// point on the policy reads and mutates its state through the scoped
 /// [`Storage::with`] and [`Storage::with_mut`] methods, without ever
 /// touching a lock primitive directly. If the embedding switches from
@@ -419,6 +419,39 @@ where
         // indirection ensures address stability for the duration of the
         // shared index lock. The reference is confined to `mutator`'s
         // call and does not escape.
+        let value: &mut Value = unsafe { &mut *value_cell.get() };
+        Some(mutator(value))
+    }
+
+    /// Read/write scoped access to one existing entry, guarded by an
+    /// exclusive index lock.
+    ///
+    /// This is intentionally crate-private: most callers should use
+    /// [`with_mut_if_present`](Self::with_mut_if_present), which keeps readers
+    /// on other keys moving. Engine-owned facilities use this variant only
+    /// when the index domain itself is the synchronization boundary against
+    /// readers.
+    pub(crate) fn with_mut_if_present_exclusive_index<Mutator, Output>(
+        &self,
+        key: &Key,
+        mutator: Mutator,
+    ) -> Option<Output>
+    where
+        Mutator: FnOnce(&mut Value) -> Output,
+    {
+        #[cfg(debug_assertions)]
+        let _reentry = self.reentry.acquire_values_write();
+
+        let _index_guard = self.locking_policy.write_index();
+        // SAFETY: index exclusive lock blocks every structural mutation and
+        // every shared-index reader while the lookup and mutation run.
+        let data = unsafe { &*self.data.get() };
+        let value_box = data.get(key)?;
+        let value_cell: &UnsafeCell<Value> = value_box.as_ref();
+        let _values_guard = self.locking_policy.write_values(key);
+        // SAFETY: index exclusive + values exclusive uphold the aliasing
+        // invariant for the `&mut Value` exposed to `mutator`. The reference is
+        // confined to `mutator`'s call and does not escape.
         let value: &mut Value = unsafe { &mut *value_cell.get() };
         Some(mutator(value))
     }

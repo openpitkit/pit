@@ -39,6 +39,7 @@ import (
 
 // Mirrors public Go examples from:
 // - ../pit.wiki/Account-Adjustments.md
+// - ../pit.wiki/Account-Blocking.md
 // - ../pit.wiki/Account-Groups.md
 // - ../pit.wiki/Async-Engine.md
 // - ../pit.wiki/Balance-Reconciliation.md
@@ -1814,6 +1815,38 @@ func TestExampleWikiAsyncEngine(t *testing.T) {
 		context.Background(),
 	).Await(context.Background()); err != nil {
 		t.Fatalf("CommitAndClose Await error = %v", err)
+	}
+}
+
+// Used in: pit.wiki/Account-Blocking.md - Examples → Go
+func TestExampleWikiAccountBlockUnblock(t *testing.T) {
+	engine, err := NewEngineBuilder().
+		FullSync().
+		Builtin(policies.BuildOrderValidation()).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	accounts := engine.Accounts()
+
+	// Block account 99224416 - all subsequent pre-trade orders are rejected.
+	accounts.Block(param.NewAccountIDFromUint64(99224416), "compliance hold")
+
+	// Unblock account 99224416 - pre-trade orders are allowed again.
+	accounts.Unblock(param.NewAccountIDFromUint64(99224416))
+
+	// Block every current and future member of a group in one call.
+	desk, err := param.NewAccountGroupIDFromUint32(7)
+	if err != nil {
+		t.Fatalf("NewAccountGroupIDFromUint32() error = %v", err)
+	}
+	if err := accounts.BlockGroup(desk, "desk suspended"); err != nil {
+		t.Fatalf("BlockGroup() error = %v", err)
+	}
+	if err := accounts.UnblockGroup(desk); err != nil {
+		t.Fatalf("UnblockGroup() error = %v", err)
 	}
 }
 

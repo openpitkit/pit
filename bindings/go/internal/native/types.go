@@ -125,6 +125,8 @@ type PolicyGroupID = C.uint16_t
 type ParamAccountGroupID = C.OpenPitParamAccountGroupId
 type PostTradeContext = *C.OpenPitPostTradeContext
 type AccountGroupError = *C.OpenPitAccountGroupError
+type AccountBlockError = *C.OpenPitAccountBlockError
+type AccountBlockErrorKind = C.OpenPitAccountBlockErrorKind
 
 type MarketDataService = *C.OpenPitMarketDataService
 type MarketDataQuote = C.OpenPitMarketDataQuote
@@ -152,6 +154,12 @@ const ParamLeverageNotSet = C.OPENPIT_PARAM_LEVERAGE_NOT_SET
 const DefaultPolicyGroupID PolicyGroupID = C.OPENPIT_DEFAULT_POLICY_GROUP_ID
 
 const DefaultAccountGroup ParamAccountGroupID = C.OPENPIT_DEFAULT_ACCOUNT_GROUP
+
+const (
+	AccountBlockErrorKindReservedGroup     = C.OpenPitAccountBlockErrorKind_ReservedGroup
+	AccountBlockErrorKindAccountNotBlocked = C.OpenPitAccountBlockErrorKind_AccountNotBlocked
+	AccountBlockErrorKindGroupNotBlocked   = C.OpenPitAccountBlockErrorKind_GroupNotBlocked
+)
 
 const (
 	PretradePreTradeLockPricesStatusError PretradePreTradeLockPricesStatus = C.OpenPitPretradePreTradeLockPricesStatus_Error

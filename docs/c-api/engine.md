@@ -939,3 +939,327 @@ bool openpit_engine_account_group(
     OpenPitParamAccountGroupId * out_group
 );
 ```
+
+## `OpenPitAccountBlockError`
+
+Structured error returned by account block operations.
+
+Ownership:
+
+- created by `openpit_engine_replace_account_block_reason`,
+  `openpit_engine_block_account_group`,
+  `openpit_engine_unblock_account_group`, and
+  `openpit_engine_replace_account_group_block_reason` on failure;
+- owned by the caller;
+- released with `openpit_destroy_account_block_error`.
+
+```c
+typedef struct OpenPitAccountBlockError OpenPitAccountBlockError;
+```
+
+## `OpenPitAccountBlockErrorKind`
+
+Discriminant for the variant carried by an [`OpenPitAccountBlockError`].
+
+```c
+typedef uint32_t OpenPitAccountBlockErrorKind;
+/**
+ * The target group is the reserved default account group.
+ */
+#define OpenPitAccountBlockErrorKind_ReservedGroup \
+    ((OpenPitAccountBlockErrorKind) 0)
+/**
+ * The target account is not currently blocked.
+ */
+#define OpenPitAccountBlockErrorKind_AccountNotBlocked \
+    ((OpenPitAccountBlockErrorKind) 1)
+/**
+ * The target account group is not currently blocked.
+ */
+#define OpenPitAccountBlockErrorKind_GroupNotBlocked \
+    ((OpenPitAccountBlockErrorKind) 2)
+```
+
+## `openpit_destroy_account_block_error`
+
+Releases a caller-owned account-block error.
+
+Contract:
+
+- call exactly once per pointer returned by a block function;
+- passing null is allowed and has no effect.
+
+```c
+void openpit_destroy_account_block_error(
+    OpenPitAccountBlockError * err
+);
+```
+
+## `openpit_account_block_error_get_message`
+
+Returns the human-readable error message from an account-block error.
+
+Contract:
+
+- `err` must be a valid non-null pointer;
+- the returned view borrows from the error object and is valid while the error
+  is alive;
+- violating the pointer contract aborts the call.
+
+```c
+OpenPitStringView openpit_account_block_error_get_message(
+    const OpenPitAccountBlockError * err
+);
+```
+
+## `openpit_account_block_error_get_kind`
+
+Returns the variant kind of an account-block error.
+
+Contract:
+
+- `err` must be a valid non-null pointer;
+- this function never fails;
+- violating the pointer contract aborts the call.
+
+```c
+OpenPitAccountBlockErrorKind openpit_account_block_error_get_kind(
+    const OpenPitAccountBlockError * err
+);
+```
+
+## `openpit_account_block_error_get_account`
+
+Returns the offending account identifier from an account-block error.
+
+Contract:
+
+- `err` must be a valid non-null pointer;
+- `out_account` must be a valid non-null pointer;
+- returns `true` when the error variant carries an account and writes it to
+  `out_account`;
+- returns `false` when no account is present; `out_account` is left untouched
+  when the return value is `false`;
+- violating the pointer contract aborts the call.
+
+```c
+bool openpit_account_block_error_get_account(
+    const OpenPitAccountBlockError * err,
+    OpenPitParamAccountId * out_account
+);
+```
+
+## `openpit_account_block_error_get_group`
+
+Returns the offending account-group identifier from an account-block error.
+
+Contract:
+
+- `err` must be a valid non-null pointer;
+- `out_group` must be a valid non-null pointer;
+- returns `true` when the error variant carries a group and writes it to
+  `out_group`;
+- returns `false` when no group is present; `out_group` is left untouched when
+  the return value is `false`;
+- violating the pointer contract aborts the call.
+
+```c
+bool openpit_account_block_error_get_group(
+    const OpenPitAccountBlockError * err,
+    OpenPitParamAccountGroupId * out_group
+);
+```
+
+## `openpit_engine_block_account`
+
+Blocks `account` with `reason`.
+
+The first cause for an account wins: if the account is already blocked (by an
+admin call or a prior kill-switch), this call is a no-op and does not overwrite
+the stored reason. Use `openpit_engine_replace_account_block_reason` to change
+the stored reason.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer;
+- `reason` is interpreted as UTF-8; an empty string is used when `reason.ptr`
+  is null OR `reason.len` is zero; passing a null `ptr` with a non-zero `len`
+  is caller misuse and is treated as empty (not read); an empty reason is
+  explicitly allowed;
+- violating the `engine` pointer contract aborts the call.
+
+```c
+void openpit_engine_block_account(
+    OpenPitEngine * engine,
+    OpenPitParamAccountId account_id,
+    OpenPitStringView reason
+);
+```
+
+## `openpit_engine_unblock_account`
+
+Unblocks `account`, clearing any block on it.
+
+Idempotent: a no-op when `account` is not blocked. Both admin blocks and
+kill-switch blocks are cleared.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer;
+- violating the pointer contract aborts the call.
+
+```c
+void openpit_engine_unblock_account(
+    OpenPitEngine * engine,
+    OpenPitParamAccountId account_id
+);
+```
+
+## `openpit_engine_replace_account_block_reason`
+
+Replaces the stored reason of an already-blocked account.
+
+Unlike `openpit_engine_block_account`, which preserves the first cause, this
+overwrites the stored cause with `reason`, leaving the account blocked.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer;
+- `reason` is interpreted as UTF-8; an empty string is used when `reason.ptr`
+  is null OR `reason.len` is zero; passing a null `ptr` with a non-zero `len`
+  is caller misuse and is treated as empty (not read); an empty reason is
+  explicitly allowed;
+- on failure, if `out_error` is not null, writes a caller-owned
+  `OpenPitAccountBlockError` pointer that MUST be released with
+  `openpit_destroy_account_block_error`;
+- aborts the call when `engine` is null.
+
+Success:
+
+- returns `true`; the stored reason has been replaced.
+
+Error:
+
+- returns `false` with `OpenPitAccountBlockErrorKind_AccountNotBlocked` when
+  `account` is not currently blocked.
+
+```c
+bool openpit_engine_replace_account_block_reason(
+    OpenPitEngine * engine,
+    OpenPitParamAccountId account_id,
+    OpenPitStringView reason,
+    OpenPitAccountBlockError ** out_error
+);
+```
+
+## `openpit_engine_block_account_group`
+
+Blocks the account group `group` with `reason`.
+
+The first cause for a group wins: re-blocking an already-blocked group is a
+no-op. Use `openpit_engine_replace_account_group_block_reason` to change the
+stored reason.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer;
+- `group` must not be `OPENPIT_DEFAULT_ACCOUNT_GROUP`;
+- `reason` is interpreted as UTF-8; an empty string is used when `reason.ptr`
+  is null OR `reason.len` is zero; passing a null `ptr` with a non-zero `len`
+  is caller misuse and is treated as empty (not read); an empty reason is
+  explicitly allowed;
+- on failure, if `out_error` is not null, writes a caller-owned
+  `OpenPitAccountBlockError` pointer that MUST be released with
+  `openpit_destroy_account_block_error`;
+- aborts the call when `engine` is null.
+
+Success:
+
+- returns `true`; the group is now blocked.
+
+Error:
+
+- returns `false` with `OpenPitAccountBlockErrorKind_ReservedGroup` when
+  `group` is the reserved default group.
+
+```c
+bool openpit_engine_block_account_group(
+    OpenPitEngine * engine,
+    OpenPitParamAccountGroupId group,
+    OpenPitStringView reason,
+    OpenPitAccountBlockError ** out_error
+);
+```
+
+## `openpit_engine_unblock_account_group`
+
+Unblocks the account group `group`, clearing the group block.
+
+Idempotent: a no-op when `group` is not blocked. Accounts blocked individually
+remain blocked.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer;
+- `group` must not be `OPENPIT_DEFAULT_ACCOUNT_GROUP`;
+- on failure, if `out_error` is not null, writes a caller-owned
+  `OpenPitAccountBlockError` pointer that MUST be released with
+  `openpit_destroy_account_block_error`;
+- aborts the call when `engine` is null.
+
+Success:
+
+- returns `true`; the group is now unblocked.
+
+Error:
+
+- returns `false` with `OpenPitAccountBlockErrorKind_ReservedGroup` when
+  `group` is the reserved default group.
+
+```c
+bool openpit_engine_unblock_account_group(
+    OpenPitEngine * engine,
+    OpenPitParamAccountGroupId group,
+    OpenPitAccountBlockError ** out_error
+);
+```
+
+## `openpit_engine_replace_account_group_block_reason`
+
+Replaces the stored reason of an already-blocked account group.
+
+Unlike `openpit_engine_block_account_group`, which preserves the first cause,
+this overwrites the stored cause with `reason`, leaving the group blocked.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer;
+- `group` must not be `OPENPIT_DEFAULT_ACCOUNT_GROUP`;
+- `reason` is interpreted as UTF-8; an empty string is used when `reason.ptr`
+  is null OR `reason.len` is zero; passing a null `ptr` with a non-zero `len`
+  is caller misuse and is treated as empty (not read); an empty reason is
+  explicitly allowed;
+- on failure, if `out_error` is not null, writes a caller-owned
+  `OpenPitAccountBlockError` pointer that MUST be released with
+  `openpit_destroy_account_block_error`;
+- aborts the call when `engine` is null.
+
+Success:
+
+- returns `true`; the stored group-block reason has been replaced.
+
+Error:
+
+- returns `false` with `OpenPitAccountBlockErrorKind_ReservedGroup` when
+  `group` is the reserved default group;
+- returns `false` with `OpenPitAccountBlockErrorKind_GroupNotBlocked` when
+  `group` is not currently blocked.
+
+```c
+bool openpit_engine_replace_account_group_block_reason(
+    OpenPitEngine * engine,
+    OpenPitParamAccountGroupId group,
+    OpenPitStringView reason,
+    OpenPitAccountBlockError ** out_error
+);
+```

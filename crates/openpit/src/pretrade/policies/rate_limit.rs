@@ -308,10 +308,10 @@ where
             broker_counter,
             asset_counters,
             per_account_timestamps: (!account_barriers_map.is_empty())
-                .then(|| storage_builder.create()),
+                .then(|| storage_builder.create_for_bound_key()),
             account_barriers: account_barriers_map,
             per_account_asset_timestamps: (!account_asset_barriers_map.is_empty())
-                .then(|| storage_builder.create()),
+                .then(|| storage_builder.create_for_bound_key()),
             account_asset_barriers: account_asset_barriers_map,
             group_id: DEFAULT_POLICY_GROUP_ID,
         })

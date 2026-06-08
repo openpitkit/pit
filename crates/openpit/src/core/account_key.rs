@@ -95,8 +95,8 @@ impl<T1, T2, T3> AccountKey for (AccountId, T1, T2, T3) {
 /// use openpit::Engine;
 ///
 /// let builder = Engine::builder::<(), (), ()>().account_sync();
-/// let _ = builder.storage_builder().create::<AccountId, u64>();
-/// let _ = builder.storage_builder().create::<(AccountId, Asset), u64>();
+/// let _ = builder.storage_builder().create_for_bound_key::<AccountId, u64>();
+/// let _ = builder.storage_builder().create_for_bound_key::<(AccountId, Asset), u64>();
 /// ```
 ///
 /// Keys that do not identify an account are rejected at compile time
@@ -109,7 +109,7 @@ impl<T1, T2, T3> AccountKey for (AccountId, T1, T2, T3) {
 /// // `u32` does not implement `AccountKey`, so account-sync mode
 /// // refuses to create a storage keyed by it.
 /// let builder = Engine::builder::<(), (), ()>().account_sync();
-/// let _ = builder.storage_builder().create::<u32, u64>();
+/// let _ = builder.storage_builder().create_for_bound_key::<u32, u64>();
 /// ```
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AccountKeyConstraint;

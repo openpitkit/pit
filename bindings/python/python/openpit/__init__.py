@@ -70,6 +70,7 @@ from . import core as core
 from . import marketdata as marketdata
 from . import param, pretrade
 from ._openpit import (
+    AccountBlockError,
     AccountGroupRegistrationError,
     Accounts,
     Engine,
@@ -237,13 +238,14 @@ are invoked when a later policy or adjustment rejects.
 )
 _set_doc(
     Engine.accounts,
-    """Return a handle to the engine's account-group registry.
+    """Return a handle to the engine's account controls.
 
 Returns:
     Accounts: Handle for registering, unregistering, and reading account-group
-    membership. The handle shares the engine's single registry, so changes are
-    visible to every other handle and to running policies; it inherits the
-    engine's synchronization mode.
+    membership, plus account/group pre-trade blocks. The handle shares the
+    engine's single account-control state, so changes are visible to every
+    other handle and to running policies; it inherits the engine's
+    synchronization mode.
 
 Every account starts in :data:`openpit.param.DEFAULT_ACCOUNT_GROUP` and joins
 another group only through ``register_group``.
@@ -295,8 +297,101 @@ Returns:
     reserved :data:`openpit.param.DEFAULT_ACCOUNT_GROUP`).
     """,
 )
+_set_doc(
+    Accounts.block,
+    """Block an account, rejecting all subsequent pre-trade requests for it.
+
+The first block reason wins: re-blocking an already-blocked account is a no-op
+and does not overwrite the stored reason. Use :meth:`replace_block_reason` to
+change it.
+
+Args:
+    account: :class:`openpit.param.AccountId` to block.
+    reason: Human-readable reason stored with the block. Passed back in the
+        reject detail on every gated order.
+    """,
+)
+_set_doc(
+    Accounts.unblock,
+    """Unblock an account, lifting the block on all subsequent pre-trade requests.
+
+Idempotent: a no-op when the account is not blocked.
+
+Args:
+    account: :class:`openpit.param.AccountId` to unblock.
+    """,
+)
+_set_doc(
+    Accounts.replace_block_reason,
+    """Replace the stored reason of an already-blocked account.
+
+Unlike :meth:`block`, which preserves the first reason, this overwrites it
+while keeping the account blocked.
+
+Args:
+    account: :class:`openpit.param.AccountId` whose block reason to update.
+    reason: New human-readable reason.
+
+Raises:
+    AccountBlockError: If the account is not currently blocked.
+    """,
+)
+_set_doc(
+    Accounts.block_group,
+    """Block an account group, rejecting all subsequent pre-trade requests for
+its members.
+
+Group blocking is a live predicate: an account registered into ``group``
+after the block takes effect is immediately gated; an account that leaves
+``group`` is no longer group-blocked unless blocked individually.
+
+Idempotent: the first block reason wins. Use
+:meth:`replace_group_block_reason` to change it.
+
+Args:
+    group: :class:`openpit.param.AccountGroupId` to block. Must not be
+        :data:`openpit.param.DEFAULT_ACCOUNT_GROUP`.
+    reason: Human-readable reason stored with the block.
+
+Raises:
+    AccountBlockError: If ``group`` is the reserved default group.
+    """,
+)
+_set_doc(
+    Accounts.unblock_group,
+    """Unblock an account group.
+
+Idempotent: a no-op when the group is not blocked. Accounts blocked
+individually remain blocked.
+
+Args:
+    group: :class:`openpit.param.AccountGroupId` to unblock. Must not be
+        :data:`openpit.param.DEFAULT_ACCOUNT_GROUP`.
+
+Raises:
+    AccountBlockError: If ``group`` is the reserved default group.
+    """,
+)
+_set_doc(
+    Accounts.replace_group_block_reason,
+    """Replace the stored reason of an already-blocked account group.
+
+Unlike :meth:`block_group`, which preserves the first reason, this overwrites
+it while keeping the group blocked.
+
+Args:
+    group: :class:`openpit.param.AccountGroupId` whose block reason to update.
+        Must not be :data:`openpit.param.DEFAULT_ACCOUNT_GROUP`.
+    reason: New human-readable reason.
+
+Raises:
+    AccountBlockError: If ``group`` is the reserved default group, or if
+        ``group`` is not currently blocked.
+    """,
+)
 
 __all__ = [
+    "AccountBlockError",
     "AccountGroupRegistrationError",
     "Accounts",
     "Engine",
