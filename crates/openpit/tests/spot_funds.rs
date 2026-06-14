@@ -18,7 +18,7 @@
 use openpit::param::{
     AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, Trade, TradeAmount,
 };
-use openpit::pretrade::policies::SpotFundsPolicy;
+use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsPricingSource, SpotFundsSettings};
 use openpit::pretrade::{PreTradeLock, RejectCode, DEFAULT_POLICY_GROUP_ID};
 use openpit::{
     Engine, FullSync, FullSyncEngine, HasAccountAdjustmentBalance,
@@ -243,7 +243,10 @@ fn held_adj(asset_code: &str, amount: AdjustmentAmount) -> TestAdjustment {
 
 fn build_engine() -> TestEngine {
     let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())
+        .expect("settings must build");
     let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        settings,
         None::<SpotFundsMarketData<FullSync>>,
         builder.storage_builder(),
     );

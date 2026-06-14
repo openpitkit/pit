@@ -45,9 +45,35 @@ def test_builtins_policies_have_rust_like_module_paths() -> None:
     assert not hasattr(openpit, "OrderSizeLimit")
     assert not hasattr(openpit, "PnlBoundsBrokerBarrier")
     assert not hasattr(openpit, "PnlBoundsAccountAssetBarrier")
+    assert not hasattr(openpit, "PnlBoundsAccountAssetBarrierUpdate")
 
     assert policies.OrderSizeLimit.__module__ == "openpit.pretrade.policies"
     assert policies.PnlBoundsBrokerBarrier.__module__ == "openpit.pretrade.policies"
     assert (
         policies.PnlBoundsAccountAssetBarrier.__module__ == "openpit.pretrade.policies"
     )
+    assert (
+        policies.PnlBoundsAccountAssetBarrierUpdate.__module__
+        == "openpit.pretrade.policies"
+    )
+    assert (
+        policies.SpotFundsOverrideTargetInstrument.__module__
+        == "openpit.pretrade.policies"
+    )
+    assert (
+        policies.SpotFundsOverrideTargetInstrumentAccount.__module__
+        == "openpit.pretrade.policies"
+    )
+    assert (
+        policies.SpotFundsOverrideTargetInstrumentAccountGroup.__module__
+        == "openpit.pretrade.policies"
+    )
+
+
+def test_configurator_entities_have_rust_like_module_paths() -> None:
+    # Configurator is accessor-only: reached via Engine.configure(), never
+    # constructed or imported at the package top level.
+    assert not hasattr(openpit, "Configurator")
+    assert callable(openpit.Engine.configure)
+    assert openpit.PolicyConfigureError.__module__ == "openpit"
+    assert openpit.ConfigureErrorKind.__module__ == "openpit"

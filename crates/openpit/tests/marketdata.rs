@@ -22,7 +22,7 @@ use openpit::param::{
     AccountGroupId, AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, Trade,
     TradeAmount, DEFAULT_ACCOUNT_GROUP,
 };
-use openpit::pretrade::policies::SpotFundsPolicy;
+use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
 use openpit::pretrade::{PreTradeLock, RejectCode};
 use openpit::{
     AccountInfo, AlreadyRegistered, Engine, FullSync, FullSyncEngine, HasAccountAdjustmentBalance,
@@ -728,15 +728,18 @@ fn build_sf_engine_with_market_orders(
         .expect("register must succeed");
     svc.push(id, Quote::new().with_mark(mark_price))
         .expect("push must succeed");
-    let bundle = SpotFundsMarketData::new(
-        Arc::clone(&svc),
+    let settings = SpotFundsSettings::new(
         slippage_bps,
         SpotFundsPricingSource::Mark,
         std::iter::empty(),
     )
-    .expect("bundle must build");
-    let policy =
-        SpotFundsPolicy::<FullSync, FullSync>::new(Some(bundle), builder.storage_builder());
+    .expect("settings must build");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        settings,
+        Some(bundle),
+        builder.storage_builder(),
+    );
     builder
         .pre_trade(policy)
         .build()
@@ -745,7 +748,10 @@ fn build_sf_engine_with_market_orders(
 
 fn build_sf_engine_no_market_orders() -> SfEngine {
     let builder = Engine::builder::<OrderOperation, SfTestReport, SfTestAdjustment>().full_sync();
+    let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())
+        .expect("settings must build");
     let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        settings,
         None::<SpotFundsMarketData<FullSync>>,
         builder.storage_builder(),
     );
@@ -812,15 +818,14 @@ fn spot_funds_book_top_uses_ask_for_market_buy() {
             .with_ask(px("200")),
     )
     .expect("push must succeed");
-    let bundle = SpotFundsMarketData::new(
-        Arc::clone(&svc),
-        0,
-        SpotFundsPricingSource::BookTop,
-        std::iter::empty(),
-    )
-    .expect("bundle must build");
-    let policy =
-        SpotFundsPolicy::<FullSync, FullSync>::new(Some(bundle), builder.storage_builder());
+    let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::BookTop, std::iter::empty())
+        .expect("settings must build");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        settings,
+        Some(bundle),
+        builder.storage_builder(),
+    );
     let engine = builder
         .pre_trade(policy)
         .build()
@@ -862,15 +867,14 @@ fn spot_funds_book_top_without_ask_rejects_market_buy() {
     // Push mark only - no ask available.
     svc.push(id, Quote::new().with_mark(px("100")))
         .expect("push must succeed");
-    let bundle = SpotFundsMarketData::new(
-        Arc::clone(&svc),
-        0,
-        SpotFundsPricingSource::BookTop,
-        std::iter::empty(),
-    )
-    .expect("bundle must build");
-    let policy =
-        SpotFundsPolicy::<FullSync, FullSync>::new(Some(bundle), builder.storage_builder());
+    let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::BookTop, std::iter::empty())
+        .expect("settings must build");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        settings,
+        Some(bundle),
+        builder.storage_builder(),
+    );
     let engine = builder
         .pre_trade(policy)
         .build()
@@ -925,11 +929,14 @@ fn spot_funds_per_instrument_override_only_affects_its_id() {
             slippage_bps: Some(10_000),
         },
     )];
-    let bundle =
-        SpotFundsMarketData::new(Arc::clone(&svc), 0, SpotFundsPricingSource::Mark, overrides)
-            .expect("bundle must build");
-    let policy =
-        SpotFundsPolicy::<FullSync, FullSync>::new(Some(bundle), builder.storage_builder());
+    let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, overrides)
+        .expect("settings must build");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        settings,
+        Some(bundle),
+        builder.storage_builder(),
+    );
     let engine = builder
         .pre_trade(policy)
         .build()
@@ -978,8 +985,7 @@ fn spot_funds_instrument_override_out_of_range_returns_error() {
         .register(instr("AAPL", "USD"))
         .expect("register must succeed");
 
-    let result = SpotFundsMarketData::<FullSync>::new(
-        Arc::clone(&svc),
+    let result = SpotFundsSettings::new(
         0,
         SpotFundsPricingSource::Mark,
         [(

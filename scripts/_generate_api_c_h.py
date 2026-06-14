@@ -575,6 +575,20 @@ def parse_file(path: Path) -> list[Item]:
             docs = []
             attrs = []
             continue
+        if stripped.startswith("pub union "):
+            union_name_match = re.match(r"pub union (\w+)", stripped)
+            if union_name_match and not union_name_match.group(1).startswith("OpenPit"):
+                _block, i = collect_item(lines, i)
+                docs = []
+                attrs = []
+                continue
+            block, i = collect_item(lines, i)
+            item = parse_union(block, docs, attrs)
+            if item:
+                items.append(item)
+            docs = []
+            attrs = []
+            continue
         if stripped.startswith("pub enum "):
             block, i = collect_item(lines, i)
             item = parse_enum(block, docs, attrs)
@@ -801,6 +815,54 @@ def parse_struct(block: str, docs: list[str], attrs: list[str]) -> Item | None:
         attrs=list(attrs),
         fields=fields,
         repr_name=parse_repr(attrs),
+    )
+
+
+def parse_union(block: str, docs: list[str], attrs: list[str]) -> Item | None:
+    header = block.splitlines()[0].strip()
+    match = re.match(r"pub union (\w+)\s*\{", header)
+    if not match:
+        raise UnsupportedStructShapeError(f"unsupported union declaration: `{header}`")
+    name = match.group(1)
+    field_docs: list[str] = []
+    fields: list[Field] = []
+    # A field type may span several source lines (e.g. a long type wrapped onto
+    # the next line). Accumulate `pub name: type,` across lines until the
+    # trailing comma closes the field.
+    pending: str | None = None
+    for line in block.splitlines()[1:]:
+        stripped = line.strip()
+        if pending is None:
+            if stripped in {"}", "};"}:
+                break
+            if stripped.startswith("///"):
+                field_docs.append(stripped[3:].lstrip())
+                continue
+            if stripped.startswith("#["):
+                continue
+            if not stripped or not stripped.startswith("pub "):
+                continue
+            pending = stripped
+        else:
+            pending = f"{pending} {stripped}"
+        if not pending.endswith(","):
+            continue
+        field_match = re.match(r"pub (\w+):\s*(.+),$", " ".join(pending.split()))
+        if field_match:
+            fields.append(
+                Field(field_match.group(1), field_match.group(2).strip(), field_docs)
+            )
+            field_docs = []
+        pending = None
+    repr_name = parse_repr(attrs)
+    return Item(
+        kind="union",
+        name=name,
+        docs=list(docs),
+        attrs=list(attrs),
+        fields=fields,
+        opaque=repr_name is None,
+        repr_name=repr_name,
     )
 
 
@@ -1397,6 +1459,40 @@ def format_field_decl(field: Field) -> str:
     return f"{map_type(field.rust_type)} {field.name};"
 
 
+def format_field_decl_lines(field: Field, indent: int = 4) -> list[str]:
+    """Render a field declaration as indented C lines.
+
+    A declaration whose indented single-line form exceeds 80 columns wraps the
+    field name (and any trailing array dimension) onto the next line at twice
+    the base indent, matching the body style used for long struct/union fields.
+    """
+    pad = " " * indent
+    array_match = re.match(r"\[(.+);\s*([^\]]+)\]", field.rust_type)
+    if array_match:
+        c_type = map_type(array_match.group(1))
+        suffix = f"[{array_match.group(2).strip()}]"
+    else:
+        c_type = map_type(field.rust_type)
+        suffix = ""
+    single = f"{pad}{c_type} {field.name}{suffix};"
+    if len(single) <= 80:
+        return [single]
+    return [f"{pad}{c_type}", f"{pad}{pad}{field.name}{suffix};"]
+
+
+def format_aggregate_typedef(item: Item) -> str:
+    """Render a struct/union as a named `typedef ... {` block for the docs."""
+    keyword = "union" if item.kind == "union" else "struct"
+    head = f"typedef {keyword} {item.name} {{"
+    if len(head) > 80:
+        head = f"typedef {keyword}\n    {item.name} {{"
+    body_lines: list[str] = []
+    for field_item in item.fields:
+        body_lines.extend(format_field_decl_lines(field_item))
+    body = "\n".join(body_lines)
+    return f"{head}\n{body}\n}} {item.name};"
+
+
 def unwrap_array_type(rust_type: str) -> str | None:
     array_match = re.match(r"\[(.+);\s*([^\]]+)\]", rust_type.strip())
     if not array_match:
@@ -1593,11 +1689,15 @@ def format_multiline_typedef(
     return "\n".join(parts).replace(") ;", ");")
 
 
-def format_forward_decl(name: str) -> str:
-    line = f"typedef struct {name} {name};"
+def format_forward_decl(name: str, kind: str = "struct") -> str:
+    keyword = "union" if kind == "union" else "struct"
+    line = f"typedef {keyword} {name} {name};"
     if len(line) <= 80:
         return line
-    return f"typedef struct {name}\n    {name};"
+    head = f"typedef {keyword} {name}"
+    if len(head) <= 80:
+        return f"{head}\n    {name};"
+    return f"typedef {keyword}\n    {name}\n    {name};"
 
 
 def format_define(name: str, ctype: str, value: str) -> str:
@@ -1622,7 +1722,10 @@ def collapse_blank_lines(lines: list[str]) -> list[str]:
 
 
 def render_header(items: list[Item]) -> str:
-    forward_names: set[str] = set()
+    # Maps a forward-declared aggregate name to its C kind ("struct" or
+    # "union") so the forward decl emits the matching `typedef struct`/
+    # `typedef union`. Opaque handles are always structs.
+    forward_kinds: dict[str, str] = {}
     alias_items = []
     const_items = []
     enum_items = []
@@ -1631,15 +1734,15 @@ def render_header(items: list[Item]) -> str:
     fn_items = []
     for item in items:
         if item.kind == "opaque":
-            forward_names.add(item.name)
+            forward_kinds[item.name] = "struct"
         elif item.kind == "alias":
             alias_items.append(item)
         elif item.kind == "const":
             const_items.append(item)
         elif item.kind == "enum":
             enum_items.append(item)
-        elif item.kind == "struct":
-            forward_names.add(item.name)
+        elif item.kind in {"struct", "union"}:
+            forward_kinds[item.name] = item.kind
             struct_items.append(item)
         elif item.kind == "typedef_fn":
             typedef_items.append(item)
@@ -1684,9 +1787,9 @@ def render_header(items: list[Item]) -> str:
         "",
     ]
 
-    for name in sorted(forward_names):
-        parts.append(format_forward_decl(name))
-    if forward_names:
+    for name in sorted(forward_kinds):
+        parts.append(format_forward_decl(name, forward_kinds[name]))
+    if forward_kinds:
         parts.append("")
 
     for item in alias_items:
@@ -1716,13 +1819,14 @@ def render_header(items: list[Item]) -> str:
     for item in struct_items:
         if item.opaque:
             continue
-        parts.append(format_doc_comment(item.docs) + f"struct {item.name} {{")
+        keyword = "union" if item.kind == "union" else "struct"
+        parts.append(format_doc_comment(item.docs) + f"{keyword} {item.name} {{")
         for field_item in item.fields:
             field_doc = format_doc_comment(field_item.docs)
             if field_doc:
                 for doc_line in field_doc.rstrip().splitlines():
                     parts.append(f"    {doc_line}" if doc_line else "")
-            parts.append(f"    {format_field_decl(field_item)}")
+            parts.extend(format_field_decl_lines(field_item))
         parts.append("};")
         parts.append("")
 
@@ -1827,13 +1931,8 @@ def render_docs(items: list[Item], source_files: list[str]) -> str:
                         format_define(f"{item.name}_{variant}", item.name, str(value))
                     )
                 declaration = "\n".join(enum_lines)
-            elif item.kind == "struct":
-                fields = "\n".join(
-                    f"    {format_field_decl(field_item)}" for field_item in item.fields
-                )
-                declaration = (
-                    f"typedef struct {item.name} {{\n{fields}\n}} {item.name};"
-                )
+            elif item.kind in {"struct", "union"}:
+                declaration = format_aggregate_typedef(item)
             elif item.kind == "typedef_fn":
                 declaration = format_multiline_typedef(item.name, item.args, item.ret)
             else:

@@ -20,6 +20,7 @@
 use std::marker::PhantomData;
 
 use crate::storage::policy::{LockingPolicy, LockingPolicyFactory, NotThreadSafe};
+use crate::storage::{ConfigCell, LocalConfigCell};
 
 /// Locking policy factory that performs **no synchronization** at all.
 ///
@@ -69,6 +70,8 @@ impl LockingPolicyFactory for NoLocking {
 
     type Shared<T: 'static> = std::rc::Rc<T>;
 
+    type Config<Settings: Clone + 'static> = LocalConfigCell<Settings>;
+
     fn create_policy(&self) -> Self::Policy {
         NoLockingPolicy {
             _not_thread_safe: PhantomData,
@@ -77,6 +80,10 @@ impl LockingPolicyFactory for NoLocking {
 
     fn new_shared<T: 'static>(value: T) -> std::rc::Rc<T> {
         std::rc::Rc::new(value)
+    }
+
+    fn new_config<Settings: Clone + 'static>(value: Settings) -> LocalConfigCell<Settings> {
+        LocalConfigCell::new(value)
     }
 }
 

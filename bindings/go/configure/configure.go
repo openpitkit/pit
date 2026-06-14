@@ -1,0 +1,415 @@
+// Copyright The Pit Project Owners. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Please see https://github.com/openpitkit and the OWNERS file for details.
+
+// Package configure provides runtime policy-settings updates bound to an engine.
+package configure
+
+import (
+	"fmt"
+
+	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
+	"go.openpit.dev/openpit/pkg/ptr"
+	"go.openpit.dev/openpit/pretrade/policies"
+)
+
+// Configurator updates the runtime settings of built-in policies registered on
+// an engine. Obtain it from an engine's Configure accessor. It carries no
+// state of its own: every call forwards to the engine it was created from,
+// and it is valid for as long as that engine is.
+type Configurator struct {
+	engine native.Engine
+}
+
+// NewFromHandle wraps a native engine handle into a Configurator accessor.
+func NewFromHandle(engine native.Engine) Configurator {
+	return Configurator{engine: engine}
+}
+
+//------------------------------------------------------------------------------
+// Error
+
+// ErrorKind classifies an Error.
+type ErrorKind uint32
+
+const (
+	// ErrorKindUnknown means no configurable policy carries the requested name.
+	ErrorKindUnknown ErrorKind = ErrorKind(native.ConfigureErrorKindUnknown)
+	// ErrorKindTypeMismatch means the policy name matched a policy of a
+	// different type than the configure call targets.
+	ErrorKindTypeMismatch ErrorKind = ErrorKind(native.ConfigureErrorKindTypeMismatch)
+	// ErrorKindValidation means the supplied configuration values failed
+	// validation.
+	ErrorKindValidation ErrorKind = ErrorKind(native.ConfigureErrorKindValidation)
+)
+
+// Error is returned when a runtime configure call fails.
+//
+// Kind classifies the failure; Message provides a human-readable description.
+type Error struct {
+	// Message is the human-readable error description.
+	Message string
+	// Kind classifies the failure.
+	Kind ErrorKind
+}
+
+// Error implements the error interface.
+func (e *Error) Error() string {
+	return e.Message
+}
+
+func newErrorFromHandle(handle native.ConfigureError) *Error {
+	msg := native.ConfigureErrorGetMessage(handle)
+	kind := native.ConfigureErrorGetKind(handle)
+	native.DestroyConfigureError(handle)
+	return &Error{
+		Message: msg,
+		Kind:    ErrorKind(kind),
+	}
+}
+
+//------------------------------------------------------------------------------
+// RateLimit
+
+// RateLimit updates the runtime settings of the named rate-limit policy.
+//
+// broker, assets, accounts, and accountAssets mirror the axis types accepted by
+// [policies.RateLimitReadyBuilder]. A non-nil axis replaces that axis
+// wholesale; barriers can be added and removed at runtime. A barrier key that
+// survives the replacement keeps its live counter (no reset). An empty non-nil
+// slice clears the axis, subject to the policy's at-least-one-barrier rule.
+// Nil axes and nil broker are left unchanged.
+//
+// Returns a *ConfigureError on a domain error (kind TypeMismatch when the name
+// belongs to a different policy type, Validation when values are invalid).
+func (c Configurator) RateLimit(
+	name string,
+	broker *policies.RateLimitBrokerBarrier,
+	assets []policies.RateLimitAssetBarrier,
+	accounts []policies.RateLimitAccountBarrier,
+	accountAssets []policies.RateLimitAccountAssetBarrier,
+) error {
+	var nativeBroker *native.PretradePoliciesRateLimitBrokerBarrier
+	if broker != nil {
+		windowNanos := uint64(broker.Limit.Window) //nolint:gosec // negative duration becomes large uint64; core rejects it
+		b := native.NewPretradePoliciesRateLimitBrokerBarrier(broker.Limit.MaxOrders, windowNanos)
+		nativeBroker = ptr.New(b)
+	}
+
+	var nativeAssets []native.PretradePoliciesRateLimitAssetBarrier
+	if assets != nil {
+		nativeAssets = make([]native.PretradePoliciesRateLimitAssetBarrier, 0, len(assets))
+		for _, a := range assets {
+			windowNanos := uint64(a.Limit.Window) //nolint:gosec // negative duration becomes large uint64; core rejects it
+			nativeAssets = append(nativeAssets, native.NewPretradePoliciesRateLimitAssetBarrier(
+				a.Limit.MaxOrders,
+				windowNanos,
+				a.SettlementAsset.Handle(),
+			))
+		}
+	}
+
+	var nativeAccounts []native.PretradePoliciesRateLimitAccountBarrier
+	if accounts != nil {
+		nativeAccounts = make([]native.PretradePoliciesRateLimitAccountBarrier, 0, len(accounts))
+		for _, a := range accounts {
+			windowNanos := uint64(a.Limit.Window) //nolint:gosec // negative duration becomes large uint64; core rejects it
+			nativeAccounts = append(nativeAccounts, native.NewPretradePoliciesRateLimitAccountBarrier(
+				a.AccountID.Handle(),
+				a.Limit.MaxOrders,
+				windowNanos,
+			))
+		}
+	}
+
+	var nativeAccountAssets []native.PretradePoliciesRateLimitAccountAssetBarrier
+	if accountAssets != nil {
+		nativeAccountAssets = make([]native.PretradePoliciesRateLimitAccountAssetBarrier, 0, len(accountAssets))
+		for _, a := range accountAssets {
+			windowNanos := uint64(a.Limit.Window) //nolint:gosec // negative duration becomes large uint64; core rejects it
+			nativeAccountAssets = append(
+				nativeAccountAssets,
+				native.NewPretradePoliciesRateLimitAccountAssetBarrier(
+					a.AccountID.Handle(),
+					a.Limit.MaxOrders,
+					windowNanos,
+					a.SettlementAsset.Handle(),
+				),
+			)
+		}
+	}
+
+	configErr := native.EngineConfigureRateLimit(
+		c.engine,
+		name,
+		nativeBroker,
+		nativeAssets,
+		nativeAccounts,
+		nativeAccountAssets,
+	)
+	if configErr != nil {
+		return newErrorFromHandle(configErr)
+	}
+	return nil
+}
+
+//------------------------------------------------------------------------------
+// PnlBoundsKillSwitch
+
+// PnlBoundsKillSwitch updates the runtime settings of the named P&L bounds
+// kill-switch policy.
+//
+// brokerBarriers mirrors the broker axis accepted by
+// [policies.PnlBoundsKillswitchReadyBuilder]. accountBarriers updates bounds
+// without replacing the live P&L accumulated for each account and settlement
+// asset. An axis passed as nil is left unchanged; an empty non-nil slice
+// replaces the axis with an empty set (subject to the policy's
+// at-least-one-barrier rule).
+//
+// Returns a *Error on a domain error.
+func (c Configurator) PnlBoundsKillSwitch(
+	name string,
+	brokerBarriers []policies.PnlBoundsBrokerBarrier,
+	accountBarriers []policies.PnlBoundsAccountAssetBarrierUpdate,
+) error {
+	var nativeBrokers []native.PretradePoliciesPnlBoundsBarrier
+	if brokerBarriers != nil {
+		nativeBrokers = make([]native.PretradePoliciesPnlBoundsBarrier, 0, len(brokerBarriers))
+		for _, b := range brokerBarriers {
+			nativeBrokers = append(nativeBrokers, native.NewPretradePoliciesPnlBoundsBarrier(
+				b.SettlementAsset.Handle(),
+				pnlOptionalToNative(b.LowerBound),
+				pnlOptionalToNative(b.UpperBound),
+			))
+		}
+	}
+
+	var nativeAccounts []native.PretradePoliciesPnlBoundsAccountBarrierUpdate
+	if accountBarriers != nil {
+		nativeAccounts = make(
+			[]native.PretradePoliciesPnlBoundsAccountBarrierUpdate,
+			0,
+			len(accountBarriers),
+		)
+		for _, a := range accountBarriers {
+			nativeAccounts = append(
+				nativeAccounts,
+				native.NewPretradePoliciesPnlBoundsAccountBarrierUpdate(
+					a.AccountID.Handle(),
+					a.Barrier.SettlementAsset.Handle(),
+					pnlOptionalToNative(a.Barrier.LowerBound),
+					pnlOptionalToNative(a.Barrier.UpperBound),
+				),
+			)
+		}
+	}
+
+	configErr := native.EngineConfigurePnlBoundsKillSwitch(
+		c.engine,
+		name,
+		nativeBrokers,
+		nativeAccounts,
+	)
+	if configErr != nil {
+		return newErrorFromHandle(configErr)
+	}
+	return nil
+}
+
+//------------------------------------------------------------------------------
+// SetAccountPnl
+
+// SetAccountPnl force-sets the live accumulated P&L for one
+// (account, settlementAsset) entry of the named P&L bounds kill-switch policy.
+//
+// This is an absolute assignment (upsert): the entry is created if it does not
+// exist yet, exactly as a construction-time seed would. It is distinct from
+// [Configurator.PnlBoundsKillSwitch], which retunes bounds and never touches
+// accumulated P&L. The new value is evaluated against the live bounds on the
+// next check; forcing the accumulator past a bound trips the kill switch and
+// latches an engine-level account block that this call never clears.
+//
+// Returns a *Error on a domain error (kind TypeMismatch when the name belongs
+// to a different policy type, Unknown when no policy carries the name).
+func (c Configurator) SetAccountPnl(
+	name string,
+	account param.AccountID,
+	settlementAsset param.Asset,
+	pnl param.Pnl,
+) error {
+	configErr := native.EngineSetAccountPnl(
+		c.engine,
+		name,
+		account.Handle(),
+		settlementAsset.Handle(),
+		pnl.Handle(),
+	)
+	if configErr != nil {
+		return newErrorFromHandle(configErr)
+	}
+	return nil
+}
+
+//------------------------------------------------------------------------------
+// OrderSizeLimit
+
+// OrderSizeLimit updates the runtime settings of the named order-size-limit
+// policy.
+//
+// broker, assets, and accountAssets mirror the axis types accepted by
+// [policies.OrderSizeLimitReadyBuilder]. An axis passed as nil is left
+// unchanged; an empty non-nil slice replaces the axis with an empty set
+// (subject to the policy's at-least-one-barrier rule). A nil broker leaves
+// the broker barrier unchanged.
+//
+// Returns a *Error on a domain error.
+func (c Configurator) OrderSizeLimit(
+	name string,
+	broker *policies.OrderSizeBrokerBarrier,
+	assets []policies.OrderSizeAssetBarrier,
+	accountAssets []policies.OrderSizeAccountAssetBarrier,
+) error {
+	var nativeBroker *native.PretradePoliciesOrderSizeBrokerBarrier
+	if broker != nil {
+		b := native.NewPretradePoliciesOrderSizeBrokerBarrier(
+			native.NewPretradePoliciesOrderSizeLimit(
+				broker.Limit.MaxQuantity.Handle(),
+				broker.Limit.MaxNotional.Handle(),
+			),
+		)
+		nativeBroker = ptr.New(b)
+	}
+
+	var nativeAssets []native.PretradePoliciesOrderSizeAssetBarrier
+	if assets != nil {
+		nativeAssets = make([]native.PretradePoliciesOrderSizeAssetBarrier, 0, len(assets))
+		for _, a := range assets {
+			nativeAssets = append(nativeAssets, native.NewPretradePoliciesOrderSizeAssetBarrier(
+				native.NewPretradePoliciesOrderSizeLimit(
+					a.Limit.MaxQuantity.Handle(),
+					a.Limit.MaxNotional.Handle(),
+				),
+				a.SettlementAsset.Handle(),
+			))
+		}
+	}
+
+	var nativeAccountAssets []native.PretradePoliciesOrderSizeAccountAssetBarrier
+	if accountAssets != nil {
+		nativeAccountAssets = make([]native.PretradePoliciesOrderSizeAccountAssetBarrier, 0, len(accountAssets))
+		for _, a := range accountAssets {
+			nativeAccountAssets = append(
+				nativeAccountAssets,
+				native.NewPretradePoliciesOrderSizeAccountAssetBarrier(
+					native.NewPretradePoliciesOrderSizeLimit(
+						a.Limit.MaxQuantity.Handle(),
+						a.Limit.MaxNotional.Handle(),
+					),
+					a.AccountID.Handle(),
+					a.SettlementAsset.Handle(),
+				),
+			)
+		}
+	}
+
+	configErr := native.EngineConfigureOrderSizeLimit(
+		c.engine,
+		name,
+		nativeBroker,
+		nativeAssets,
+		nativeAccountAssets,
+	)
+	if configErr != nil {
+		return newErrorFromHandle(configErr)
+	}
+	return nil
+}
+
+//------------------------------------------------------------------------------
+// SpotFunds
+
+// SpotFunds updates the runtime settings of the named spot-funds policy.
+//
+// globalSlippageBps and pricingSource are optional: pass None to leave them
+// unchanged. Each override entry is applied individually (insert-or-clear):
+// an entry whose SlippageBps is None clears any override at its target. A nil
+// overrides slice leaves the cascade untouched; entries never replace the
+// whole table.
+//
+// The overrides slice and [policies.SpotFundsOverrideEntry] type mirror those
+// accepted by [policies.SpotFundsReadyBuilder.Overrides].
+//
+// Returns a *Error on a domain error.
+func (c Configurator) SpotFunds(
+	name string,
+	globalSlippageBps optional.Option[uint16],
+	pricingSource optional.Option[policies.SpotFundsPricingSource],
+	overrides []policies.SpotFundsOverrideEntry,
+) error {
+	var slippagePtr *uint16
+	if v, has := globalSlippageBps.Get(); has {
+		slippagePtr = ptr.New(v)
+	}
+
+	var pricingSourcePtr *uint8
+	if v, has := pricingSource.Get(); has {
+		u := uint8(v)
+		pricingSourcePtr = &u
+	}
+
+	var nativeOverrides []native.PretradePoliciesSpotFundsOverride
+	if overrides != nil {
+		nativeOverrides = make([]native.PretradePoliciesSpotFundsOverride, 0, len(overrides))
+		for i, e := range overrides {
+			var slippageBpsPtr *uint16
+			if v, has := e.Override.SlippageBps.Get(); has {
+				slippageBpsPtr = ptr.New(v)
+			}
+			override, err := policies.NewNativeSpotFundsOverride(e.Target, slippageBpsPtr)
+			if err != nil {
+				return &Error{
+					Kind:    ErrorKindValidation,
+					Message: fmt.Sprintf("configure: spot funds override %d: %v", i, err),
+				}
+			}
+			nativeOverrides = append(nativeOverrides, override)
+		}
+	}
+
+	configErr := native.EngineConfigureSpotFunds(
+		c.engine,
+		name,
+		slippagePtr,
+		pricingSourcePtr,
+		nativeOverrides,
+	)
+	if configErr != nil {
+		return newErrorFromHandle(configErr)
+	}
+	return nil
+}
+
+//------------------------------------------------------------------------------
+// Helpers
+
+func pnlOptionalToNative(value optional.Option[param.Pnl]) native.ParamPnlOptional {
+	if v, has := value.Get(); has {
+		return native.NewParamPnlOptional(v.Handle())
+	}
+	return native.ParamPnlOptional{}
+}

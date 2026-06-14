@@ -80,7 +80,7 @@ def test_readme_quickstart() -> None:
         .builtin(
             policies.build_pnl_bounds_killswitch().broker_barriers(
                 policies.PnlBoundsBrokerBarrier(
-                    settlement_asset="USD",
+                    settlement_asset=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl("-1000"),
                 )
             )
@@ -111,7 +111,7 @@ def test_readme_quickstart() -> None:
                         max_quantity=max_qty,
                         max_notional=max_notional,
                     ),
-                    settlement_asset="USD",
+                    settlement_asset=openpit.param.Asset("USD"),
                 )
             )
         )

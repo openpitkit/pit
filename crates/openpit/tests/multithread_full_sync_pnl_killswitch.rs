@@ -35,6 +35,7 @@ use std::thread;
 use openpit::param::{AccountId, Asset, Fee, Pnl, Quantity, Side, TradeAmount};
 use openpit::pretrade::policies::{
     PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy,
+    PnlBoundsKillSwitchSettings,
 };
 use openpit::pretrade::{PostTradeContext, PreTradeContext, PreTradePolicy, RejectCode};
 use openpit::storage::FullLocking;
@@ -154,8 +155,8 @@ fn pnl_full_sync_no_lost_updates_under_concurrent_apply() {
     let upper_bound_str = expected_total.to_string();
 
     let builder = Engine::builder::<OrderOperation, TestReport, ()>().full_sync();
-    let policy: Arc<TestPolicy> = Arc::new(
-        PnlBoundsKillSwitchPolicy::new(
+    let policy: Arc<TestPolicy> = Arc::new(PnlBoundsKillSwitchPolicy::new(
+        PnlBoundsKillSwitchSettings::new(
             [PnlBoundsBrokerBarrier {
                 settlement_asset: usd(),
                 lower_bound: Some(pnl("-100000")),
@@ -172,10 +173,10 @@ fn pnl_full_sync_no_lost_updates_under_concurrent_apply() {
                 account_id: account(1),
                 initial_pnl: Pnl::ZERO,
             }],
-            builder.storage_builder(),
         )
-        .expect("policy must be configured"),
-    );
+        .expect("policy settings must be valid"),
+        builder.storage_builder(),
+    ));
 
     let pnl_delta = Pnl::from_str(&PNL_PER_REPORT.to_string()).expect("pnl delta must be valid");
 
@@ -211,8 +212,8 @@ fn pnl_full_sync_kill_switch_is_monotonic_and_visible_to_subsequent_checks() {
     // Tight upper bound: guaranteed to be exceeded during concurrent execution.
     // TOTAL_THREADS * PER_THREAD_REPORTS * PNL_PER_REPORT = 400 >> 50.
     let builder = Engine::builder::<OrderOperation, TestReport, ()>().full_sync();
-    let policy: Arc<TestPolicy> = Arc::new(
-        PnlBoundsKillSwitchPolicy::new(
+    let policy: Arc<TestPolicy> = Arc::new(PnlBoundsKillSwitchPolicy::new(
+        PnlBoundsKillSwitchSettings::new(
             [PnlBoundsBrokerBarrier {
                 settlement_asset: usd(),
                 lower_bound: Some(pnl("-100000")),
@@ -227,10 +228,10 @@ fn pnl_full_sync_kill_switch_is_monotonic_and_visible_to_subsequent_checks() {
                 account_id: account(1),
                 initial_pnl: Pnl::ZERO,
             }],
-            builder.storage_builder(),
         )
-        .expect("policy must be configured"),
-    );
+        .expect("policy settings must be valid"),
+        builder.storage_builder(),
+    ));
 
     let pnl_delta = Pnl::from_str(&PNL_PER_REPORT.to_string()).expect("pnl delta must be valid");
 

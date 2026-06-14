@@ -128,6 +128,9 @@ type AccountGroupError = *C.OpenPitAccountGroupError
 type AccountBlockError = *C.OpenPitAccountBlockError
 type AccountBlockErrorKind = C.OpenPitAccountBlockErrorKind
 
+type ConfigureError = *C.OpenPitConfigureError
+type ConfigureErrorKind = C.OpenPitConfigureErrorKind
+
 type MarketDataService = *C.OpenPitMarketDataService
 type MarketDataQuote = C.OpenPitMarketDataQuote
 type MarketDataQuoteTTL = C.OpenPitMarketDataQuoteTtl
@@ -159,6 +162,12 @@ const (
 	AccountBlockErrorKindReservedGroup     = C.OpenPitAccountBlockErrorKind_ReservedGroup
 	AccountBlockErrorKindAccountNotBlocked = C.OpenPitAccountBlockErrorKind_AccountNotBlocked
 	AccountBlockErrorKindGroupNotBlocked   = C.OpenPitAccountBlockErrorKind_GroupNotBlocked
+)
+
+const (
+	ConfigureErrorKindUnknown      ConfigureErrorKind = C.OpenPitConfigureErrorKind_Unknown
+	ConfigureErrorKindTypeMismatch ConfigureErrorKind = C.OpenPitConfigureErrorKind_TypeMismatch
+	ConfigureErrorKindValidation   ConfigureErrorKind = C.OpenPitConfigureErrorKind_Validation
 )
 
 const (

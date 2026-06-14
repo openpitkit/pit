@@ -245,24 +245,25 @@ func NewPretradePoliciesSpotFundsOverride(
 	accountGroupID *ParamAccountGroupID,
 	slippageBps *uint16,
 ) PretradePoliciesSpotFundsOverride {
-	override := PretradePoliciesSpotFundsOverride{instrument_id: instrumentID}
-	if accountID != nil {
-		override.account_id = C.OpenPitParamAccountIdOptional{
-			value:  *accountID,
-			is_set: C.bool(true),
-		}
+	switch {
+	case accountID != nil:
+		return NewPretradePoliciesSpotFundsInstrumentAccountOverride(
+			instrumentID,
+			*accountID,
+			slippageBps,
+		)
+	case accountGroupID != nil:
+		return NewPretradePoliciesSpotFundsInstrumentAccountGroupOverride(
+			instrumentID,
+			*accountGroupID,
+			slippageBps,
+		)
+	default:
+		return NewPretradePoliciesSpotFundsInstrumentOverride(
+			instrumentID,
+			slippageBps,
+		)
 	}
-	if accountGroupID != nil {
-		override.account_group_id = C.OpenPitParamAccountGroupIdOptional{
-			value:  *accountGroupID,
-			is_set: C.bool(true),
-		}
-	}
-	if slippageBps != nil {
-		override.slippage_bps = C.uint16_t(*slippageBps)
-		override.has_slippage_bps = true
-	}
-	return override
 }
 
 func EngineBuilderAddBuiltinSpotFunds(

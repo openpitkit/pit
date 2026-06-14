@@ -18,7 +18,6 @@
 package policies
 
 import (
-	"fmt"
 	"runtime"
 	"time"
 
@@ -103,16 +102,6 @@ func (b *RateLimitReadyBuilder) PolicyGroupID(groupID model.PolicyGroupID) *Rate
 	return b
 }
 
-func validateWindow(window time.Duration) error {
-	if window < 0 {
-		return fmt.Errorf(
-			"rate limit window must be non-negative; got %s",
-			window,
-		)
-	}
-	return nil
-}
-
 // BrokerBarrier sets the broker-wide rate limit and returns a ready
 // builder.
 func (b *RateLimitBuilder) BrokerBarrier(barrier RateLimitBrokerBarrier) *RateLimitReadyBuilder {
@@ -127,11 +116,7 @@ func (b *RateLimitReadyBuilder) BrokerBarrier(
 	if b.err != nil {
 		return b
 	}
-	if err := validateWindow(barrier.Limit.Window); err != nil {
-		b.err = err
-		return b
-	}
-	windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // time.Duration is always non-negative after validateWindow
+	windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // a negative duration wraps to a large uint64, which the core rejects as InvalidWindow
 	b.broker = ptr.New(native.NewPretradePoliciesRateLimitBrokerBarrier(
 		barrier.Limit.MaxOrders,
 		windowNanos,
@@ -154,11 +139,7 @@ func (b *RateLimitReadyBuilder) AssetBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
-		if err := validateWindow(barrier.Limit.Window); err != nil {
-			b.err = err
-			return b
-		}
-		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // time.Duration is always non-negative after validateWindow
+		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // a negative duration wraps to a large uint64, which the core rejects as InvalidWindow
 		b.assetBarriers = append(
 			b.assetBarriers,
 			native.NewPretradePoliciesRateLimitAssetBarrier(
@@ -187,11 +168,7 @@ func (b *RateLimitReadyBuilder) AccountBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
-		if err := validateWindow(barrier.Limit.Window); err != nil {
-			b.err = err
-			return b
-		}
-		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // time.Duration is always non-negative after validateWindow
+		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // a negative duration wraps to a large uint64, which the core rejects as InvalidWindow
 		b.accountBarriers = append(
 			b.accountBarriers,
 			native.NewPretradePoliciesRateLimitAccountBarrier(
@@ -222,11 +199,7 @@ func (b *RateLimitReadyBuilder) AccountAssetBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
-		if err := validateWindow(barrier.Limit.Window); err != nil {
-			b.err = err
-			return b
-		}
-		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // time.Duration is always non-negative after validateWindow
+		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // a negative duration wraps to a large uint64, which the core rejects as InvalidWindow
 		b.accountAssetBarriers = append(
 			b.accountAssetBarriers,
 			native.NewPretradePoliciesRateLimitAccountAssetBarrier(

@@ -79,8 +79,8 @@ pub use core::{
 };
 pub use core::{
     AccountBlockError, AccountBlockHandle, AccountControl, AccountGroupError, AccountSync,
-    AccountSyncHandle, AccountSyncHandleWeak, Accounts, EngineTrait, EngineTraitOf, FullSync,
-    LocalSync, SyncMode,
+    AccountSyncHandle, AccountSyncHandleWeak, Accounts, Configurator, ConfigureError, EngineTrait,
+    EngineTraitOf, FullSync, LocalSync, SyncMode,
 };
 pub use core::{PolicyGroupId, DEFAULT_POLICY_GROUP_ID};
 pub use marketdata::{

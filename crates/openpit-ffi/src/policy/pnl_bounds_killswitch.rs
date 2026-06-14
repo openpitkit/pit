@@ -17,14 +17,33 @@
 
 #![allow(clippy::missing_safety_doc, clippy::not_unsafe_ptr_arg_deref)]
 
-use openpit::param::AccountId;
+use openpit::param::{AccountId, Pnl};
+use openpit::pretrade::policies::pnl_bounds_killswitch::PnlBoundsAccountAssetBarrierUpdate;
 use openpit::pretrade::policies::{
     PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy,
+    PnlBoundsKillSwitchPolicyError, PnlBoundsKillSwitchSettings,
 };
 
+use crate::engine::{write_configure_error, OpenPitConfigureError};
 use crate::param::{OpenPitParamPnl, OpenPitParamPnlOptional};
 
 use super::*;
+
+/// Parses an optional P&L bound for a configure function, mapping any failure
+/// to an [`OpenPitConfigureError`].
+fn parse_configure_optional_pnl(
+    bound: OpenPitParamPnlOptional,
+    label: &str,
+    index: usize,
+    field: &str,
+) -> Result<Option<Pnl>, OpenPitConfigureError> {
+    if !bound.is_set {
+        return Ok(None);
+    }
+    bound.value.to_param().map(Some).map_err(|e| {
+        OpenPitConfigureError::validation(format!("{label}[{index}] {field} is invalid: {e}"))
+    })
+}
 
 /// One broker barrier definition for
 /// `openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy`.
@@ -72,6 +91,24 @@ pub struct OpenPitPretradePoliciesPnlBoundsAccountBarrier {
     pub upper_bound: OpenPitParamPnlOptional,
     /// Starting accumulated P&L pre-loaded into storage at construction.
     pub initial_pnl: OpenPitParamPnl,
+}
+
+/// Runtime replacement for a per-(account, settlement-asset) P&L barrier.
+///
+/// Passed to `openpit_engine_configure_pnl_bounds_killswitch`. It intentionally
+/// has no `initial_pnl`: runtime replacement preserves and evaluates the live
+/// accumulated P&L.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate {
+    /// Account this replacement barrier applies to.
+    pub account_id: OpenPitParamAccountId,
+    /// Settlement asset whose live accumulated P&L is monitored.
+    pub settlement_asset: OpenPitStringView,
+    /// Optional replacement lower bound.
+    pub lower_bound: OpenPitParamPnlOptional,
+    /// Optional replacement upper bound.
+    pub upper_bound: OpenPitParamPnlOptional,
 }
 
 #[no_mangle]
@@ -218,15 +255,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
         });
     }
 
-    let builder_ref = unsafe { &mut *builder };
-    let storage = match policy_storage(builder_ref) {
-        Some(storage) => storage,
-        None => {
-            write_error(out_error, "engine builder is no longer available");
-            return false;
-        }
-    };
-    let policy = match PnlBoundsKillSwitchPolicy::new(barriers, account_barriers, storage) {
+    let settings = match PnlBoundsKillSwitchSettings::new(barriers, account_barriers) {
         Ok(v) => v,
         Err(e) => {
             write_error_format!(
@@ -237,11 +266,322 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
             return false;
         }
     };
-    let policy = policy.with_policy_group_id(openpit::PolicyGroupId::new(policy_group_id));
+
+    let builder_ref = unsafe { &mut *builder };
+    let storage = match policy_storage(builder_ref) {
+        Some(storage) => storage,
+        None => {
+            write_error(out_error, "engine builder is no longer available");
+            return false;
+        }
+    };
+    let policy = PnlBoundsKillSwitchPolicy::new(settings, storage)
+        .with_policy_group_id(openpit::PolicyGroupId::new(policy_group_id));
     match crate::engine::add_pre_trade_policy_to_builder(builder_ref, policy) {
         Ok(()) => true,
         Err(err) => {
             write_error(out_error, &err);
+            false
+        }
+    }
+}
+
+#[no_mangle]
+/// Retunes the built-in P&L bounds kill-switch policy registered under `name`.
+///
+/// This is a partial update (PATCH) at the axis level: each axis is replaced
+/// wholesale only when its `has_*` flag is `true`, mirroring the
+/// replace-shaped settings setters. Runtime account barriers use a dedicated
+/// update DTO with no `initial_pnl`; accumulated P&L is preserved.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer.
+/// - `name` selects the policy; it is interpreted as UTF-8. A built-in
+///   policy added via
+///   `openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy`
+///   registers under its fixed name `"PnlBoundsKillSwitchPolicy"`, so pass
+///   that string here.
+/// - When `has_broker` is `true`, the broker axis is replaced by the
+///   `broker_len` entries at `broker` (a length of zero clears it, subject to
+///   the policy's "at least one barrier" rule).
+/// - When `has_account` is `true`, the account+asset axis is replaced by the
+///   `account_len` entries at `account`.
+/// - Each `settlement_asset` view must be valid for the duration of the call.
+/// - A `has_*` flag set to `false` leaves that axis untouched.
+///
+/// Success:
+/// - returns `true`; the new barriers apply from the next check onward.
+///
+/// Error:
+/// - returns `false`; if `out_error` is non-null, writes a caller-owned
+///   `OpenPitConfigureError` (release with `openpit_destroy_configure_error`).
+/// - a null `engine` returns `false` and, when `out_error` is non-null, writes
+///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be released
+///   with `openpit_destroy_configure_error`.
+pub unsafe extern "C" fn openpit_engine_configure_pnl_bounds_killswitch(
+    engine: *mut crate::engine::OpenPitEngine,
+    name: OpenPitStringView,
+    broker: *const OpenPitPretradePoliciesPnlBoundsBarrier,
+    broker_len: usize,
+    has_broker: bool,
+    account: *const OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate,
+    account_len: usize,
+    has_account: bool,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> bool {
+    if engine.is_null() {
+        write_configure_error(
+            out_error,
+            OpenPitConfigureError::validation("engine is null".to_owned()),
+        );
+        return false;
+    }
+    let name = match unsafe { cstr_arg(name) } {
+        Some(name) => name,
+        None => {
+            write_configure_error(
+                out_error,
+                OpenPitConfigureError::validation(
+                    "policy name is null or invalid UTF-8".to_owned(),
+                ),
+            );
+            return false;
+        }
+    };
+
+    let broker_barriers: Vec<PnlBoundsBrokerBarrier> = if has_broker {
+        let slice = match unsafe {
+            try_slice_arg(
+                broker,
+                broker_len,
+                "pnl_bounds broker",
+                std::ptr::null_mut(),
+            )
+        } {
+            Some(v) => v,
+            None => {
+                write_configure_error(
+                    out_error,
+                    OpenPitConfigureError::validation("pnl_bounds broker is null".to_owned()),
+                );
+                return false;
+            }
+        };
+        let mut out = Vec::with_capacity(slice.len());
+        for (index, entry) in slice.iter().enumerate() {
+            let settlement = match parse_configure_asset(entry.settlement_asset, "broker", index) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
+            let lower_bound = match parse_configure_optional_pnl(
+                entry.lower_bound,
+                "broker",
+                index,
+                "lower_bound",
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
+            let upper_bound = match parse_configure_optional_pnl(
+                entry.upper_bound,
+                "broker",
+                index,
+                "upper_bound",
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
+            out.push(PnlBoundsBrokerBarrier {
+                settlement_asset: settlement,
+                lower_bound,
+                upper_bound,
+            });
+        }
+        out
+    } else {
+        Vec::new()
+    };
+
+    let account_barriers: Vec<PnlBoundsAccountAssetBarrierUpdate> = if has_account {
+        let slice = match unsafe {
+            try_slice_arg(
+                account,
+                account_len,
+                "pnl_bounds account",
+                std::ptr::null_mut(),
+            )
+        } {
+            Some(v) => v,
+            None => {
+                write_configure_error(
+                    out_error,
+                    OpenPitConfigureError::validation("pnl_bounds account is null".to_owned()),
+                );
+                return false;
+            }
+        };
+        let mut out = Vec::with_capacity(slice.len());
+        for (index, entry) in slice.iter().enumerate() {
+            let settlement = match parse_configure_asset(entry.settlement_asset, "account", index) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
+            let lower_bound = match parse_configure_optional_pnl(
+                entry.lower_bound,
+                "account",
+                index,
+                "lower_bound",
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
+            let upper_bound = match parse_configure_optional_pnl(
+                entry.upper_bound,
+                "account",
+                index,
+                "upper_bound",
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
+            out.push(PnlBoundsAccountAssetBarrierUpdate {
+                barrier: PnlBoundsBrokerBarrier {
+                    settlement_asset: settlement,
+                    lower_bound,
+                    upper_bound,
+                },
+                account_id: AccountId::from_u64(entry.account_id),
+            });
+        }
+        out
+    } else {
+        Vec::new()
+    };
+
+    let result = unsafe { &*engine }.configurator().pnl_bounds_killswitch(
+        &name,
+        |settings| -> Result<(), PnlBoundsKillSwitchPolicyError> {
+            if has_broker {
+                settings.set_broker_barriers(broker_barriers.iter().cloned())?;
+            }
+            if has_account {
+                settings.set_account_barriers(account_barriers.iter().cloned())?;
+            }
+            Ok(())
+        },
+    );
+    match result {
+        Ok(()) => true,
+        Err(err) => {
+            write_configure_error(out_error, OpenPitConfigureError::new(err));
+            false
+        }
+    }
+}
+
+#[no_mangle]
+/// Force-sets the live accumulated P&L for a `(account_id, settlement_asset)`
+/// entry of the P&L bounds kill-switch policy registered under `name`.
+///
+/// This is an absolute assignment, deliberately distinct from
+/// `openpit_engine_configure_pnl_bounds_killswitch`: that function retunes the
+/// bounds and never touches accumulated P&L, whereas this overwrites the live
+/// accumulator. The entry is created if it does not exist yet. The new value is
+/// evaluated against the live bounds from the next check onward.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer.
+/// - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
+///   added via
+///   `openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy`
+///   registers under its fixed name `"PnlBoundsKillSwitchPolicy"`, so pass
+///   that string here.
+/// - `settlement_asset` must be valid for the duration of the call.
+/// - `pnl` is the absolute value the entry is set to.
+///
+/// Success:
+/// - returns `true`; the new accumulated P&L applies from the next check
+///   onward.
+///
+/// Error:
+/// - returns `false`; if `out_error` is non-null, writes a caller-owned
+///   `OpenPitConfigureError` (release with `openpit_destroy_configure_error`).
+/// - a null `engine` returns `false` and, when `out_error` is non-null, writes
+///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be released
+///   with `openpit_destroy_configure_error`.
+pub unsafe extern "C" fn openpit_engine_configure_set_account_pnl(
+    engine: *mut crate::engine::OpenPitEngine,
+    name: OpenPitStringView,
+    account_id: OpenPitParamAccountId,
+    settlement_asset: OpenPitStringView,
+    pnl: OpenPitParamPnl,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> bool {
+    if engine.is_null() {
+        write_configure_error(
+            out_error,
+            OpenPitConfigureError::validation("engine is null".to_owned()),
+        );
+        return false;
+    }
+    let name = match unsafe { cstr_arg(name) } {
+        Some(name) => name,
+        None => {
+            write_configure_error(
+                out_error,
+                OpenPitConfigureError::validation(
+                    "policy name is null or invalid UTF-8".to_owned(),
+                ),
+            );
+            return false;
+        }
+    };
+    let settlement = match parse_configure_asset(settlement_asset, "pnl_bounds settlement", 0) {
+        Ok(v) => v,
+        Err(e) => {
+            write_configure_error(out_error, e);
+            return false;
+        }
+    };
+    let pnl = match pnl.to_param() {
+        Ok(v) => v,
+        Err(e) => {
+            write_configure_error(
+                out_error,
+                OpenPitConfigureError::validation(format!("pnl is invalid: {e}")),
+            );
+            return false;
+        }
+    };
+
+    let result = unsafe { &*engine }.configurator().set_account_pnl(
+        &name,
+        AccountId::from_u64(account_id),
+        settlement,
+        pnl,
+    );
+    match result {
+        Ok(()) => true,
+        Err(err) => {
+            write_configure_error(out_error, OpenPitConfigureError::new(err));
             false
         }
     }
@@ -472,5 +812,139 @@ mod tests {
             "pnl_bounds_killswitch_policy account is null"
         );
         crate::engine::openpit_destroy_engine_builder(builder);
+    }
+
+    #[test]
+    fn configure_pnl_bounds_killswitch_rejects_null_and_invalid_utf8_names() {
+        let broker = [OpenPitPretradePoliciesPnlBoundsBarrier {
+            settlement_asset: OpenPitStringView::from_utf8("USD"),
+            lower_bound: pnl_optional(Some(pnl_param(-10000, 0))),
+            upper_bound: pnl_optional(None),
+        }];
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
+                builder,
+                0,
+                broker.as_ptr(),
+                broker.len(),
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+        let invalid_utf8 = [0xff];
+        let invalid_name = OpenPitStringView {
+            ptr: invalid_utf8.as_ptr(),
+            len: invalid_utf8.len(),
+        };
+
+        for name in [OpenPitStringView::default(), invalid_name] {
+            let mut out_error = std::ptr::null_mut();
+            let ok = unsafe {
+                openpit_engine_configure_pnl_bounds_killswitch(
+                    engine,
+                    name,
+                    std::ptr::null(),
+                    0,
+                    false,
+                    std::ptr::null(),
+                    0,
+                    false,
+                    &mut out_error,
+                )
+            };
+            assert!(!ok);
+            assert!(!out_error.is_null());
+            assert_eq!(
+                crate::engine::openpit_configure_error_get_kind(out_error),
+                crate::engine::OpenPitConfigureErrorKind::Validation
+            );
+            crate::engine::openpit_destroy_configure_error(out_error);
+        }
+
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    // Force-setting the accumulated P&L past a configured bound makes the next
+    // start-pre-trade reject the order, proving the override reaches the live
+    // ledger the hot path reads.
+    #[test]
+    fn set_account_pnl_overrides_accumulated_pnl_and_blocks_next_order() {
+        // Lower bound -100 USD across all accounts; account 7 (the order's
+        // account) has no history, so it passes before the override.
+        let broker = [OpenPitPretradePoliciesPnlBoundsBarrier {
+            settlement_asset: OpenPitStringView::from_utf8("USD"),
+            lower_bound: pnl_optional(Some(pnl_param(-100, 0))),
+            upper_bound: pnl_optional(None),
+        }];
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
+                builder,
+                0,
+                broker.as_ptr(),
+                broker.len(),
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+        run_start_pre_trade_passes(engine);
+
+        // Force account 7's USD P&L to -150, breaching the lower bound -100.
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_set_account_pnl(
+                engine,
+                OpenPitStringView::from_utf8("PnlBoundsKillSwitchPolicy"),
+                7,
+                OpenPitStringView::from_utf8("USD"),
+                pnl_param(-150, 0),
+                &mut out_error,
+            )
+        };
+        assert!(ok, "set_account_pnl must succeed");
+        assert!(out_error.is_null(), "success leaves out_error untouched");
+
+        // The next order on account 7 now breaches the bound and is rejected.
+        let order = valid_pit_order();
+        let mut request = std::ptr::null_mut();
+        let mut out_rejects = std::ptr::null_mut();
+        let status = crate::engine::openpit_engine_start_pre_trade(
+            engine,
+            &order,
+            &mut request,
+            &mut out_rejects,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(
+            status,
+            crate::engine::OpenPitPretradeStatus::Rejected,
+            "order must be rejected after the P&L override"
+        );
+        crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
+        crate::reject::openpit_pretrade_destroy_reject_list(out_rejects);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn set_account_pnl_null_engine_reports_validation_error() {
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_set_account_pnl(
+                std::ptr::null_mut(),
+                OpenPitStringView::from_utf8("PnlBoundsKillSwitchPolicy"),
+                7,
+                OpenPitStringView::from_utf8("USD"),
+                pnl_param(0, 0),
+                &mut out_error,
+            )
+        };
+        assert!(!ok);
+        assert!(!out_error.is_null());
+        assert_eq!(
+            crate::engine::openpit_configure_error_get_kind(out_error),
+            crate::engine::OpenPitConfigureErrorKind::Validation
+        );
+        crate::engine::openpit_destroy_configure_error(out_error);
     }
 }

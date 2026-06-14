@@ -191,7 +191,7 @@ fn example_wiki_market_data_market_orders_book_top_override(
     use openpit::param::{
         AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, TradeAmount,
     };
-    use openpit::pretrade::policies::SpotFundsPolicy;
+    use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
     use openpit::pretrade::RejectCode;
     use openpit::{
         AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
@@ -223,8 +223,7 @@ fn example_wiki_market_data_market_orders_book_top_override(
     // Price market orders from the top of book (ask for buys, bid for sells).
     // The global slippage is 100 bps, but AAPL overrides it to zero, so a buy
     // is priced exactly at the ask.
-    let bundle = SpotFundsMarketData::new(
-        Arc::clone(&market_data),
+    let settings = SpotFundsSettings::new(
         100,
         SpotFundsPricingSource::BookTop,
         [(
@@ -234,8 +233,12 @@ fn example_wiki_market_data_market_orders_book_top_override(
             },
         )],
     )?;
-    let policy =
-        SpotFundsPolicy::<FullSync, FullSync>::new(Some(bundle), builder.storage_builder());
+    let bundle = SpotFundsMarketData::new(Arc::clone(&market_data));
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        settings,
+        Some(bundle),
+        builder.storage_builder(),
+    );
     let engine = builder.pre_trade(policy).build()?;
 
     let account = AccountId::from_u64(99224416);

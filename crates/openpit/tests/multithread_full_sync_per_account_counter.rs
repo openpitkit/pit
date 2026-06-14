@@ -20,7 +20,9 @@ use std::thread;
 use std::time::Duration;
 
 use openpit::param::{AccountId, Asset, Quantity, Side, TradeAmount};
-use openpit::pretrade::policies::{RateLimit, RateLimitAccountBarrier, RateLimitPolicy};
+use openpit::pretrade::policies::{
+    RateLimit, RateLimitAccountBarrier, RateLimitPolicy, RateLimitSettings,
+};
 use openpit::pretrade::{PreTradeContext, PreTradePolicy};
 use openpit::storage::FullLocking;
 use openpit::{Engine, FullSync, Instrument, OrderOperation};
@@ -67,16 +69,11 @@ fn rate_limit_full_sync_per_account_counter_isolated_under_concurrent_load() {
         .collect();
 
     let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
-    let policy: Arc<TestPolicy> = Arc::new(
-        RateLimitPolicy::<FullLocking>::new(
-            None,
-            [],
-            account_barriers,
-            [],
-            builder.storage_builder(),
-        )
-        .expect("policy must be configured"),
-    );
+    let policy: Arc<TestPolicy> = Arc::new(RateLimitPolicy::<FullLocking>::new(
+        RateLimitSettings::new(None, [], account_barriers, [])
+            .expect("rate limit settings must be valid"),
+        builder.storage_builder(),
+    ));
 
     thread::scope(|s| {
         for tid in 0..TOTAL_THREADS {

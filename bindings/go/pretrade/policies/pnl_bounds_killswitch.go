@@ -39,18 +39,30 @@ type PnlBoundsBrokerBarrier struct {
 
 // PnlBoundsAccountAssetBarrier defines per-(account, settlement asset) P&L
 // bounds with an initial P&L seed.
+//
+// Barrier carries the settlement asset and bounds configuration (identical to
+// the broker-level shape); AccountID and InitialPnl bind it to a specific
+// account. Both the broker barrier (if any) and this account+asset barrier are
+// evaluated on every check; the order passes only if neither is breached.
 type PnlBoundsAccountAssetBarrier struct {
-	AccountID       param.AccountID
-	SettlementAsset param.Asset
-	// LowerBound is typically negative and represents the loss limit for
-	// this account.
-	LowerBound optional.Option[param.Pnl]
-	// UpperBound is typically positive and represents the profit-taking
-	// limit for this account.
-	UpperBound optional.Option[param.Pnl]
+	// Barrier holds the settlement asset and P&L bounds for this
+	// account+asset pair. The fields mirror PnlBoundsBrokerBarrier so that
+	// per-account bounds can be expressed with the same type vocabulary as
+	// broker-level bounds.
+	Barrier PnlBoundsBrokerBarrier
+	// AccountID is the account this barrier applies to.
+	AccountID param.AccountID
 	// InitialPnl is pre-loaded into storage at construction; accumulation
 	// starts from this value.
 	InitialPnl param.Pnl
+}
+
+// PnlBoundsAccountAssetBarrierUpdate updates bounds for an existing
+// per-(account, settlement asset) accumulator without replacing its live P&L.
+type PnlBoundsAccountAssetBarrierUpdate struct {
+	Barrier PnlBoundsBrokerBarrier
+	// AccountID is the account this barrier applies to.
+	AccountID param.AccountID
 }
 
 //------------------------------------------------------------------------------
@@ -143,9 +155,9 @@ func (b *PnlBoundsKillswitchReadyBuilder) AccountBarriers(
 			b.accountBarriers,
 			native.NewPretradePoliciesPnlBoundsAccountBarrier(
 				barrier.AccountID.Handle(),
-				barrier.SettlementAsset.Handle(),
-				newParamPnlOptionalFromOptional(barrier.LowerBound),
-				newParamPnlOptionalFromOptional(barrier.UpperBound),
+				barrier.Barrier.SettlementAsset.Handle(),
+				newParamPnlOptionalFromOptional(barrier.Barrier.LowerBound),
+				newParamPnlOptionalFromOptional(barrier.Barrier.UpperBound),
 				barrier.InitialPnl.Handle(),
 			),
 		)

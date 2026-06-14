@@ -45,6 +45,7 @@ import (
 // - ../pit.wiki/Balance-Reconciliation.md
 // - ../pit.wiki/Custom-Go-Types.md
 // - ../pit.wiki/Domain-Types.md
+// - ../pit.wiki/Dynamic-Policy-Reconfiguration.md
 // - ../pit.wiki/Getting-Started.md
 // - ../pit.wiki/Policies.md
 // - ../pit.wiki/Policy-API.md
@@ -1924,4 +1925,152 @@ func TestExampleWikiCustomGoTypesUnsafeFastCallbacks(t *testing.T) {
 		t.Fatalf("ExecutePreTrade() unexpected rejects: %v", rejects)
 	}
 	reservation.CommitAndClose()
+}
+
+// Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Retune a Built-in Policy
+// This mirror is intentionally wider than the wiki snippet: it adds the test
+// harness (t.Fatalf assertions, wikiExampleOrder) so the example runs. The
+// snippet shows idiomatic return-error style; the mirror uses t.Fatalf for the
+// same error paths. Keep the shared user-code flow in sync with the wiki.
+func TestExampleWikiDynamicPolicyReconfigurationRateLimit(t *testing.T) {
+	order := wikiExampleOrder(t, "1", "100")
+
+	// Register the rate-limit policy through Builtin so the engine keeps a
+	// handle to its settings; built-in policies are configurable by name.
+	engine, err := NewEngineBuilder().
+		NoSync().
+		Builtin(
+			policies.BuildRateLimit().BrokerBarrier(
+				policies.RateLimitBrokerBarrier{
+					Limit: policies.RateLimit{
+						MaxOrders: 5,
+						Window:    60 * time.Second,
+					},
+				},
+			),
+		).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	// The generous limit of 5 admits the first three orders.
+	for i := 0; i < 3; i++ {
+		reservation, rejects, err := engine.ExecutePreTrade(order)
+		if err != nil {
+			t.Fatalf("ExecutePreTrade() error = %v", err)
+		}
+		if rejects != nil {
+			t.Fatalf("ExecutePreTrade() unexpected rejects: %v", rejects)
+		}
+		reservation.CommitAndClose()
+	}
+
+	// Tighten the broker limit to 2 at runtime, without rebuilding the engine.
+	// Built-in policies register under their type name (policies.RateLimitPolicyName).
+	err = engine.Configure().RateLimit(
+		policies.RateLimitPolicyName,
+		&policies.RateLimitBrokerBarrier{
+			Limit: policies.RateLimit{MaxOrders: 2, Window: 60 * time.Second},
+		},
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Configure().RateLimit() error = %v", err)
+	}
+
+	// The next order would have passed under the old limit of 5; the new limit
+	// of 2 rejects it, proving the live policy reads the retuned value.
+	_, rejects, err := engine.ExecutePreTrade(order)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
+	}
+	if len(rejects) != 1 {
+		t.Fatalf("reject len = %d, want 1", len(rejects))
+	}
+	if rejects[0].Reason != "rate limit exceeded: broker barrier" {
+		t.Fatalf("reject reason = %q, want %q",
+			rejects[0].Reason, "rate limit exceeded: broker barrier")
+	}
+}
+
+// Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Force-set Accumulated P&L
+// This mirror is intentionally wider than the wiki snippet: it adds the test
+// harness (t.Fatalf assertions, wikiExampleOrder and the account it carries) so
+// the example runs. The snippet shows idiomatic return-error style; the mirror
+// uses t.Fatalf for the same error paths. Keep the shared user-code flow in
+// sync with the wiki.
+func TestExampleWikiDynamicPolicyReconfigurationSetAccountPnl(t *testing.T) {
+	order := wikiExampleOrder(t, "1", "100")
+	account := param.NewAccountIDFromUint64(99224416)
+
+	usd, err := param.NewAsset("USD")
+	if err != nil {
+		t.Fatalf("NewAsset(USD) error = %v", err)
+	}
+	lowerBound, err := param.NewPnlFromString("-100")
+	if err != nil {
+		t.Fatalf("NewPnlFromString(-100) error = %v", err)
+	}
+
+	// Register the kill-switch policy through Builtin so the engine keeps a
+	// handle to its accumulator; built-in policies are configurable by name.
+	engine, err := NewEngineBuilder().
+		NoSync().
+		Builtin(
+			policies.BuildPnlBoundsKillswitch().BrokerBarriers(
+				policies.PnlBoundsBrokerBarrier{
+					SettlementAsset: usd,
+					LowerBound:      optional.Some(lowerBound),
+				},
+			),
+		).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	// With no P&L history the order passes against the lower bound of -100.
+	reservation, rejects, err := engine.ExecutePreTrade(order)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
+	}
+	if rejects != nil {
+		t.Fatalf("ExecutePreTrade() unexpected rejects: %v", rejects)
+	}
+	reservation.CommitAndClose()
+
+	// Force-set the account's accumulated P&L to -150 USD, below the bound.
+	// Built-in policies register under their type name (policies.PnlBoundsKillSwitchPolicyName).
+	forced, err := param.NewPnlFromString("-150")
+	if err != nil {
+		t.Fatalf("NewPnlFromString(-150) error = %v", err)
+	}
+	err = engine.Configure().SetAccountPnl(
+		policies.PnlBoundsKillSwitchPolicyName,
+		account,
+		usd,
+		forced,
+	)
+	if err != nil {
+		t.Fatalf("Configure().SetAccountPnl() error = %v", err)
+	}
+
+	// The next order for that account breaches the lower bound and is rejected;
+	// the breach also latches an engine-level block on the account.
+	_, rejects, err = engine.ExecutePreTrade(order)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
+	}
+	if len(rejects) != 1 {
+		t.Fatalf("reject len = %d, want 1", len(rejects))
+	}
+	if rejects[0].Reason != "pnl kill switch triggered: broker barrier" {
+		t.Fatalf("reject reason = %q, want %q",
+			rejects[0].Reason, "pnl kill switch triggered: broker barrier")
+	}
 }

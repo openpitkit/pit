@@ -43,15 +43,17 @@ def test_pnl_kill_switch_triggers_when_pnl_outside_bounds() -> None:
             policies.build_pnl_bounds_killswitch()
             .broker_barriers(
                 policies.PnlBoundsBrokerBarrier(
-                    settlement_asset="USD",
+                    settlement_asset=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl("-100"),
                 )
             )
             .account_barriers(
                 policies.PnlBoundsAccountAssetBarrier(
+                    barrier=policies.PnlBoundsBrokerBarrier(
+                        settlement_asset=openpit.param.Asset("USD"),
+                        lower_bound=openpit.param.Pnl("-100"),
+                    ),
                     account_id=openpit.param.AccountId.from_int(99224416),
-                    settlement_asset="USD",
-                    lower_bound=openpit.param.Pnl("-100"),
                     initial_pnl=openpit.param.Pnl("0"),
                 )
             )
@@ -71,6 +73,39 @@ def test_pnl_kill_switch_triggers_when_pnl_outside_bounds() -> None:
         blocked.rejects[0].code == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
     )
     assert blocked.rejects[0].scope == "account"
+
+
+@pytest.mark.unit
+def test_pnl_account_barrier_requires_initial_pnl() -> None:
+    policies = openpit.pretrade.policies
+    with pytest.raises(TypeError, match="initial_pnl"):
+        policies.PnlBoundsAccountAssetBarrier(
+            barrier=policies.PnlBoundsBrokerBarrier(
+                settlement_asset=openpit.param.Asset("USD"),
+                lower_bound=openpit.param.Pnl("-100"),
+            ),
+            account_id=openpit.param.AccountId.from_int(99224416),
+        )
+
+
+@pytest.mark.unit
+def test_pnl_account_barrier_update_is_not_a_construction_barrier() -> None:
+    policies = openpit.pretrade.policies
+    update = policies.PnlBoundsAccountAssetBarrierUpdate(
+        barrier=policies.PnlBoundsBrokerBarrier(
+            settlement_asset=openpit.param.Asset("USD"),
+            lower_bound=openpit.param.Pnl("-100"),
+        ),
+        account_id=openpit.param.AccountId.from_int(99224416),
+    )
+
+    with pytest.raises(TypeError, match="PnlBoundsAccountAssetBarrier"):
+        (
+            openpit.Engine.builder()
+            .no_sync()
+            .builtin(policies.build_pnl_bounds_killswitch().account_barriers(update))
+            .build()
+        )
 
 
 def _huge_broker_barrier() -> openpit.pretrade.policies.OrderSizeBrokerBarrier:
@@ -216,7 +251,7 @@ def test_pnl_kill_switch_requires_asset_string() -> None:
             policies.build_pnl_bounds_killswitch().broker_barriers(
                 policies.PnlBoundsBrokerBarrier(
                     settlement_asset=123,  # type: ignore[arg-type]
-                    lower_bound=openpit.param.Pnl(-100),
+                    lower_bound=openpit.param.Pnl("-100"),
                 )
             )
         ).build()
@@ -229,7 +264,7 @@ def test_pnl_kill_switch_requires_at_least_one_bound() -> None:
         openpit.Engine.builder().no_sync().builtin(
             policies.build_pnl_bounds_killswitch().broker_barriers(
                 policies.PnlBoundsBrokerBarrier(
-                    settlement_asset="USD",
+                    settlement_asset=openpit.param.Asset("USD"),
                 )
             )
         ).build()
@@ -248,7 +283,7 @@ def test_rate_limit_asset_barrier_rejects_when_limit_is_exceeded() -> None:
                         max_orders=1,
                         window=datetime.timedelta(seconds=60),
                     ),
-                    settlement_asset="USD",
+                    settlement_asset=openpit.param.Asset("USD"),
                 )
             )
         )
@@ -305,7 +340,7 @@ def test_rate_limit_account_asset_barrier_specific_to_pair() -> None:
                         window=datetime.timedelta(seconds=60),
                     ),
                     account_id=openpit.param.AccountId.from_int(99224416),
-                    settlement_asset="USD",
+                    settlement_asset=openpit.param.Asset("USD"),
                 )
             )
         )
@@ -342,7 +377,7 @@ def test_order_size_limit_account_asset_overrides_asset_baseline() -> None:
                         max_quantity=openpit.param.Quantity("5"),
                         max_notional=openpit.param.Volume("10000"),
                     ),
-                    settlement_asset="USD",
+                    settlement_asset=openpit.param.Asset("USD"),
                 )
             )
             .account_asset_barriers(
@@ -352,7 +387,7 @@ def test_order_size_limit_account_asset_overrides_asset_baseline() -> None:
                         max_notional=openpit.param.Volume("10000"),
                     ),
                     account_id=openpit.param.AccountId.from_int(99224416),
-                    settlement_asset="USD",
+                    settlement_asset=openpit.param.Asset("USD"),
                 )
             )
         )
@@ -386,7 +421,7 @@ def test_order_size_limit_unknown_settlement_passes() -> None:
                         max_quantity=openpit.param.Quantity("1"),
                         max_notional=openpit.param.Volume("100"),
                     ),
-                    settlement_asset="EUR",
+                    settlement_asset=openpit.param.Asset("EUR"),
                 )
             )
         )
@@ -569,7 +604,7 @@ def test_builtin_policy_builders_accept_non_default_group_id() -> None:
             .with_policy_group_id(3)
             .broker_barriers(
                 policies.PnlBoundsBrokerBarrier(
-                    settlement_asset="USD",
+                    settlement_asset=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl("-1000"),
                 )
             )
@@ -654,7 +689,7 @@ def test_spot_funds_builder_market_data_with_quotes() -> None:
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            policies.build_spot_funds().market_data(service, default_slippage_bps=2000)
+            policies.build_spot_funds().market_data(service, global_slippage_bps=2000)
         )
         .build()
     )
@@ -669,7 +704,7 @@ def test_spot_funds_builder_market_data_zero_slippage() -> None:
         .no_sync()
         .builtin(
             policies.build_spot_funds().market_data(
-                _mock_market_data(), default_slippage_bps=0
+                _mock_market_data(), global_slippage_bps=0
             )
         )
         .build()
@@ -685,7 +720,7 @@ def test_spot_funds_builder_market_data_max_slippage_accepted() -> None:
         .no_sync()
         .builtin(
             policies.build_spot_funds().market_data(
-                _mock_market_data(), default_slippage_bps=10_000
+                _mock_market_data(), global_slippage_bps=10_000
             )
         )
         .build()
@@ -699,7 +734,7 @@ def test_spot_funds_market_data_slippage_out_of_range_rejected() -> None:
     with pytest.raises(ValueError):
         openpit.Engine.builder().no_sync().builtin(
             policies.build_spot_funds().market_data(
-                _mock_market_data(), default_slippage_bps=10_001
+                _mock_market_data(), global_slippage_bps=10_001
             )
         ).build()
 
@@ -718,7 +753,7 @@ def test_spot_funds_full_engine_with_local_md_service_is_rejected() -> None:
     with pytest.raises((ValueError, RuntimeError), match="multi-threaded|full_sync"):
         openpit.Engine.builder().full_sync().builtin(
             policies.build_spot_funds().market_data(
-                local_service, default_slippage_bps=100
+                local_service, global_slippage_bps=100
             )
         ).build()
 
@@ -739,7 +774,7 @@ def test_spot_funds_local_engine_with_full_md_service_is_accepted() -> None:
         .no_sync()
         .builtin(
             policies.build_spot_funds().market_data(
-                full_service, default_slippage_bps=100
+                full_service, global_slippage_bps=100
             )
         )
         .build()
@@ -811,11 +846,15 @@ def test_spot_funds_override_instrument_only_accepted() -> None:
         .builtin(
             policies.build_spot_funds().market_data(
                 service,
-                default_slippage_bps=500,
+                global_slippage_bps=500,
                 overrides=[
-                    policies.SpotFundsOverride(
-                        instrument=ids["AAPL"],
-                        slippage_bps=0,
+                    policies.SpotFundsOverrideEntry(
+                        target=(
+                            policies.SpotFundsOverrideTargetInstrument(
+                                instrument=ids["AAPL"],
+                            )
+                        ),
+                        override=policies.SpotFundsOverride(slippage_bps=0),
                     )
                 ],
             )
@@ -837,12 +876,16 @@ def test_spot_funds_override_account_scoped_accepted() -> None:
         .builtin(
             policies.build_spot_funds().market_data(
                 service,
-                default_slippage_bps=500,
+                global_slippage_bps=500,
                 overrides=[
-                    policies.SpotFundsOverride(
-                        instrument=ids["AAPL"],
-                        account_id=account_id,
-                        slippage_bps=0,
+                    policies.SpotFundsOverrideEntry(
+                        target=(
+                            policies.SpotFundsOverrideTargetInstrumentAccount(
+                                instrument=ids["AAPL"],
+                                account_id=account_id,
+                            )
+                        ),
+                        override=policies.SpotFundsOverride(slippage_bps=0),
                     )
                 ],
             )
@@ -875,12 +918,16 @@ def test_spot_funds_override_group_scoped_accepted() -> None:
         .builtin(
             policies.build_spot_funds().market_data(
                 service,
-                default_slippage_bps=500,
+                global_slippage_bps=500,
                 overrides=[
-                    policies.SpotFundsOverride(
-                        instrument=ids["AAPL"],
-                        account_group_id=group_id,
-                        slippage_bps=0,
+                    policies.SpotFundsOverrideEntry(
+                        target=(
+                            policies.SpotFundsOverrideTargetInstrumentAccountGroup(
+                                instrument=ids["AAPL"],
+                                account_group_id=group_id,
+                            )
+                        ),
+                        override=policies.SpotFundsOverride(slippage_bps=0),
                     )
                 ],
             )
@@ -902,22 +949,22 @@ def test_spot_funds_override_group_scoped_accepted() -> None:
 
 
 @pytest.mark.unit
-def test_spot_funds_override_both_account_and_group_raises_value_error() -> None:
-    """Passing both account_id and account_group_id on one override is an error."""
+def test_spot_funds_override_rejects_unknown_target_entity() -> None:
+    """Construction rejects objects outside the explicit target variants."""
     policies = openpit.pretrade.policies
-    account_id = openpit.param.AccountId.from_int(99224416)
-    service, ids = _mock_market_data_named(("AAPL", "200"))
-    with pytest.raises(ValueError, match="account.*group|group.*account"):
+    service, _ = _mock_market_data_named(("AAPL", "200"))
+    with pytest.raises(
+        TypeError,
+        match=r"SpotFundsOverrideEntry\.target must be one of",
+    ):
         openpit.Engine.builder().no_sync().builtin(
             policies.build_spot_funds().market_data(
                 service,
-                default_slippage_bps=500,
+                global_slippage_bps=500,
                 overrides=[
-                    policies.SpotFundsOverride(
-                        instrument=ids["AAPL"],
-                        account_id=account_id,
-                        account_group_id=openpit.param.AccountGroupId.from_int(7),
-                        slippage_bps=0,
+                    policies.SpotFundsOverrideEntry(
+                        target=object(),  # type: ignore[arg-type]
+                        override=policies.SpotFundsOverride(slippage_bps=0),
                     )
                 ],
             )

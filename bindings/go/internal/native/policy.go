@@ -156,6 +156,104 @@ func NewPretradePoliciesPnlBoundsAccountBarrier(
 	}
 }
 
+type PretradePoliciesPnlBoundsAccountBarrierUpdate = C.OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate
+
+func NewPretradePoliciesPnlBoundsAccountBarrierUpdate(
+	accountID ParamAccountID,
+	settlementAsset string,
+	lowerBound ParamPnlOptional,
+	upperBound ParamPnlOptional,
+) PretradePoliciesPnlBoundsAccountBarrierUpdate {
+	return PretradePoliciesPnlBoundsAccountBarrierUpdate{
+		account_id:       accountID,
+		settlement_asset: importString(settlementAsset),
+		lower_bound:      lowerBound,
+		upper_bound:      upperBound,
+	}
+}
+
+func newPretradePoliciesSpotFundsOverride(
+	target C.OpenPitPretradePoliciesSpotFundsOverrideTarget,
+	slippageBps *uint16,
+) PretradePoliciesSpotFundsOverride {
+	override := PretradePoliciesSpotFundsOverride{target: target}
+	if slippageBps != nil {
+		override.slippage_bps = C.uint16_t(*slippageBps)
+		override.has_slippage_bps = true
+	}
+	return override
+}
+
+func NewPretradePoliciesSpotFundsInstrumentOverride(
+	instrumentID MarketDataInstrumentID,
+	slippageBps *uint16,
+) PretradePoliciesSpotFundsOverride {
+	var payload C.OpenPitPretradePoliciesSpotFundsOverrideTargetPayload
+	instrumentPayload := C.OpenPitPretradePoliciesSpotFundsOverrideTargetInstrument{
+		instrument_id: instrumentID,
+	}
+	*(*C.OpenPitPretradePoliciesSpotFundsOverrideTargetInstrument)(
+		unsafe.Pointer(&payload),
+	) = instrumentPayload
+	return newPretradePoliciesSpotFundsOverride(
+		C.OpenPitPretradePoliciesSpotFundsOverrideTarget{
+			tag: C.uint8_t(
+				C.OpenPitPretradePoliciesSpotFundsOverrideTargetTag_Instrument,
+			),
+			payload: payload,
+		},
+		slippageBps,
+	)
+}
+
+func NewPretradePoliciesSpotFundsInstrumentAccountOverride(
+	instrumentID MarketDataInstrumentID,
+	accountID ParamAccountID,
+	slippageBps *uint16,
+) PretradePoliciesSpotFundsOverride {
+	var payload C.OpenPitPretradePoliciesSpotFundsOverrideTargetPayload
+	accountPayload := C.OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccount{
+		instrument_id: instrumentID,
+		account_id:    accountID,
+	}
+	*(*C.OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccount)(
+		unsafe.Pointer(&payload),
+	) = accountPayload
+	return newPretradePoliciesSpotFundsOverride(
+		C.OpenPitPretradePoliciesSpotFundsOverrideTarget{
+			tag: C.uint8_t(
+				C.OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccount,
+			),
+			payload: payload,
+		},
+		slippageBps,
+	)
+}
+
+func NewPretradePoliciesSpotFundsInstrumentAccountGroupOverride(
+	instrumentID MarketDataInstrumentID,
+	accountGroupID ParamAccountGroupID,
+	slippageBps *uint16,
+) PretradePoliciesSpotFundsOverride {
+	var payload C.OpenPitPretradePoliciesSpotFundsOverrideTargetPayload
+	groupPayload := C.OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccountGroup{
+		instrument_id:    instrumentID,
+		account_group_id: accountGroupID,
+	}
+	*(*C.OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccountGroup)(
+		unsafe.Pointer(&payload),
+	) = groupPayload
+	return newPretradePoliciesSpotFundsOverride(
+		C.OpenPitPretradePoliciesSpotFundsOverrideTarget{
+			tag: C.uint8_t(
+				C.OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccountGroup,
+			),
+			payload: payload,
+		},
+		slippageBps,
+	)
+}
+
 //------------------------------------------------------------------------------
 // PreTradePolicy
 

@@ -110,6 +110,14 @@ where
         DEFAULT_POLICY_GROUP_ID
     }
 
+    #[doc(hidden)]
+    #[allow(private_interfaces)]
+    fn built_in_config_entry(
+        &self,
+    ) -> Option<crate::core::ConfigEntry<<Sync as SyncMode>::StorageLockingPolicyFactory>> {
+        None
+    }
+
     /// Performs start-stage checks against an order.
     ///
     /// Returning `Ok(())` allows the engine to continue building the deferred

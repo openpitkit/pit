@@ -23,6 +23,7 @@ use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::storage::key_bound::AnyKey;
 use crate::storage::policy::{LockingPolicy, LockingPolicyFactory};
+use crate::storage::{ArcSwapConfigCell, ConfigCell};
 
 /// Sync-mode-aware shared handle for [`IndexLocking`]-based engines.
 ///
@@ -154,6 +155,8 @@ impl<KeyBound: 'static> LockingPolicyFactory for IndexLocking<KeyBound> {
 
     type Shared<T: 'static> = IndexShared<T>;
 
+    type Config<Settings: Clone + 'static> = ArcSwapConfigCell<Settings>;
+
     fn create_policy(&self) -> Self::Policy {
         IndexLockingPolicy {
             index: RwLock::new(()),
@@ -162,6 +165,10 @@ impl<KeyBound: 'static> LockingPolicyFactory for IndexLocking<KeyBound> {
 
     fn new_shared<T: 'static>(value: T) -> IndexShared<T> {
         IndexShared(std::sync::Arc::new(value), std::marker::PhantomData)
+    }
+
+    fn new_config<Settings: Clone + 'static>(value: Settings) -> ArcSwapConfigCell<Settings> {
+        ArcSwapConfigCell::new(value)
     }
 }
 

@@ -199,12 +199,18 @@ def test_example_wiki_market_data_market_orders_book_top_override() -> None:
     engine = builder.builtin(
         openpit.pretrade.policies.build_spot_funds().market_data(
             market_data,
-            default_slippage_bps=100,
+            global_slippage_bps=100,
             pricing_source=openpit.pretrade.policies.SpotFundsPricingSource.BOOK_TOP,
             overrides=[
-                openpit.pretrade.policies.SpotFundsOverride(
-                    instrument=aapl_id,
-                    slippage_bps=0,
+                openpit.pretrade.policies.SpotFundsOverrideEntry(
+                    target=(
+                        openpit.pretrade.policies.SpotFundsOverrideTargetInstrument(
+                            instrument=aapl_id
+                        )
+                    ),
+                    override=openpit.pretrade.policies.SpotFundsOverride(
+                        slippage_bps=0
+                    ),
                 )
             ],
         )

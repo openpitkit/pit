@@ -20,7 +20,9 @@ use std::sync::Arc;
 
 use openpit::marketdata::sealed::Sealed as MarketDataSealed;
 use openpit::marketdata::RuntimeLock;
-use openpit::storage::{FullLocking, IndexLocking, LockingPolicy, LockingPolicyFactory};
+use openpit::storage::{
+    ArcSwapConfigCell, FullLocking, IndexLocking, LockingPolicy, LockingPolicyFactory,
+};
 use openpit::{AccountKey, AccountKeyConstraint, MarketDataSync};
 
 // ─── Engine handle types ──────────────────────────────────────────────────────
@@ -316,9 +318,14 @@ impl LockingPolicyFactory for StorageLockingPolicyFactory {
     type Policy = StorageLockingPolicy;
     type IndexFlag = std::sync::atomic::AtomicBool;
     type Shared<T: 'static> = EngineHandle<T>;
+    type Config<T: Clone + 'static> = ArcSwapConfigCell<T>;
 
     fn new_shared<T: 'static>(value: T) -> EngineHandle<T> {
         EngineHandle(Arc::new(value))
+    }
+
+    fn new_config<T: Clone + 'static>(value: T) -> ArcSwapConfigCell<T> {
+        <ArcSwapConfigCell<T> as openpit::storage::ConfigCell<T>>::new(value)
     }
 
     fn create_policy(&self) -> StorageLockingPolicy {
@@ -418,6 +425,7 @@ mod tests {
 
     use openpit::param::{AccountGroupId, AccountId, Asset, Price};
     use openpit::pretrade::policies::SpotFundsPolicy;
+    use openpit::pretrade::policies::SpotFundsSettings;
     use openpit::pretrade::{SpotFundsMarketData, SpotFundsPricingSource};
     use openpit::{
         Instrument, MarketDataBuilder, MarketDataService, Quote, QuoteResolution, QuoteTtl,
@@ -492,13 +500,11 @@ mod tests {
     #[test]
     fn engine_locking_spot_funds_market_data_builds() {
         let service = build_md_service(SyncMode::Full);
-        let bundle: SpotFundsMarketData<EngineLocking> = SpotFundsMarketData::new(
-            service,
-            10,
-            SpotFundsPricingSource::Mark,
-            std::iter::empty(),
-        )
-        .expect("bundle");
-        let _ = bundle;
+        // The slippage / pricing-source / override cascade now lives in
+        // `SpotFundsSettings`; `SpotFundsMarketData` carries only the handle.
+        let bundle: SpotFundsMarketData<EngineLocking> = SpotFundsMarketData::new(service);
+        let settings = SpotFundsSettings::new(10, SpotFundsPricingSource::Mark, std::iter::empty())
+            .expect("settings");
+        let _ = (bundle, settings);
     }
 }

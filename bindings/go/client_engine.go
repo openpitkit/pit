@@ -24,6 +24,7 @@ import (
 
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/accounts"
+	"go.openpit.dev/openpit/configure"
 	"go.openpit.dev/openpit/internal/callback"
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
@@ -150,6 +151,13 @@ func (e *ClientEngine[Order, Report, Adjustment]) ApplyAccountAdjustment(
 // exposes.
 func (e *ClientEngine[Order, Report, Adjustment]) Accounts() accounts.Accounts {
 	return e.engine.Accounts()
+}
+
+// Configure returns an accessor for runtime policy-settings updates bound to
+// this engine. Policy configuration is independent of the client payload types,
+// so the accessor is the same one the standard Engine exposes.
+func (e *ClientEngine[Order, Report, Adjustment]) Configure() configure.Configurator {
+	return e.engine.Configure()
 }
 
 // ClientRequest is a deferred pre-trade request that keeps the original client

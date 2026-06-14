@@ -229,6 +229,27 @@ pub(super) fn parse_settlement_asset_or_error(
     }
 }
 
+/// Parses a settlement-asset string view for a configure function, mapping any
+/// failure to an [`OpenPitConfigureError`] (the only error channel those
+/// functions expose). Mirrors [`parse_settlement_asset_or_error`], which
+/// instead targets the shared-string builder error channel.
+pub(super) fn parse_configure_asset(
+    settlement: OpenPitStringView,
+    label: &str,
+    index: usize,
+) -> Result<Asset, crate::engine::OpenPitConfigureError> {
+    let settlement_raw = unsafe { cstr_arg(settlement) }.ok_or_else(|| {
+        crate::engine::OpenPitConfigureError::validation(format!(
+            "{label}[{index}] settlement_asset is not set"
+        ))
+    })?;
+    Asset::new(&settlement_raw).map_err(|e| {
+        crate::engine::OpenPitConfigureError::validation(format!(
+            "{label}[{index}] settlement_asset is invalid: {e}"
+        ))
+    })
+}
+
 pub(super) fn parse_optional_pnl_or_error(
     bound: OpenPitParamPnlOptional,
     label: &str,

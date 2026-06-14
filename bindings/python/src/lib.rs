@@ -33,15 +33,19 @@ use openpit::param::{
 };
 use openpit::pretrade::policies::OrderValidationPolicy;
 use openpit::pretrade::policies::PnlBoundsAccountAssetBarrier;
+use openpit::pretrade::policies::PnlBoundsAccountAssetBarrierUpdate;
 use openpit::pretrade::policies::PnlBoundsBrokerBarrier;
 use openpit::pretrade::policies::PnlBoundsKillSwitchPolicy;
+use openpit::pretrade::policies::PnlBoundsKillSwitchSettings;
 use openpit::pretrade::policies::SpotFundsPolicy;
+use openpit::pretrade::policies::SpotFundsSettings;
 use openpit::pretrade::policies::{
     OrderSizeAccountAssetBarrier, OrderSizeAssetBarrier, OrderSizeLimit, OrderSizeLimitPolicy,
+    OrderSizeLimitSettings,
 };
 use openpit::pretrade::policies::{
     RateLimit, RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitAssetBarrier,
-    RateLimitBrokerBarrier, RateLimitPolicy,
+    RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
 };
 use openpit::pretrade::PostTradeContext;
 use openpit::pretrade::{
@@ -54,10 +58,10 @@ use openpit::{
     AccountAdjustmentOutcome, AccountOutcomeEntry, Engine, EngineBuildError, EngineBuilder,
     Instrument, Mutation, Mutations, OutcomeAmount, PostTradeResult,
 };
-use openpit::{AccountGroupError, Accounts, PolicyGroupId, DEFAULT_POLICY_GROUP_ID};
+use openpit::{AccountGroupError, Accounts, Configurator, PolicyGroupId, DEFAULT_POLICY_GROUP_ID};
 use openpit::{
-    InstrumentId, MarketDataBuilder, MarketDataService, Quote, QuoteTtl, SpotFundsMarketData,
-    SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPricingSource,
+    ConfigureError, InstrumentId, MarketDataBuilder, MarketDataService, Quote, QuoteTtl,
+    SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPricingSource,
 };
 use openpit_interop::{
     AccountAdjustmentAmountAccess, AccountAdjustmentBoundsAccess, AccountAdjustmentOperationAccess,
@@ -85,6 +89,7 @@ create_exception!(openpit, RegistrationError, PyException);
 create_exception!(openpit, UnknownInstrumentId, PyException);
 create_exception!(openpit, AccountGroupRegistrationError, PyException);
 create_exception!(openpit, AccountBlockError, PyException);
+create_exception!(openpit, PolicyConfigureError, PyException);
 
 thread_local! {
     static PY_CALLBACK_ERROR: RefCell<Option<PyErr>> = const { RefCell::new(None) };
@@ -165,6 +170,49 @@ fn convert_account_group_error(error: AccountGroupError) -> PyErr {
 
 fn convert_account_block_error(error: openpit::AccountBlockError) -> PyErr {
     AccountBlockError::new_err(error.to_string())
+}
+
+#[pyclass(name = "ConfigureErrorKind", module = "openpit", frozen, eq, eq_int)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+// Integer values mirror the C `OpenPitConfigureErrorKind` so the Python,
+// Go, and C bindings agree on the discriminants.
+enum PyConfigureErrorKind {
+    /// No registered policy carries the requested name.
+    #[pyo3(name = "UNKNOWN")]
+    Unknown = 0,
+    /// The named policy exists but its settings type differs from the target.
+    #[pyo3(name = "TYPE_MISMATCH")]
+    TypeMismatch = 1,
+    /// The update was rejected; the prior value still applies.
+    #[pyo3(name = "VALIDATION")]
+    Validation = 2,
+}
+
+impl PyConfigureErrorKind {
+    fn of(error: &ConfigureError) -> Self {
+        match error {
+            ConfigureError::UnknownPolicy { .. } => Self::Unknown,
+            ConfigureError::PolicyTypeMismatch { .. } => Self::TypeMismatch,
+            ConfigureError::Validation { .. } => Self::Validation,
+            // Unreachable via FFI (the configure closure runs no user callback,
+            // so no same-thread re-entry), mapped to Validation for completeness.
+            ConfigureError::NestedConfiguration => Self::Validation,
+            // `ConfigureError` is `#[non_exhaustive]`; an unforeseen variant is
+            // reported as a validation failure, matching the C binding default.
+            _ => Self::Validation,
+        }
+    }
+}
+
+fn convert_configure_error(error: ConfigureError) -> PyErr {
+    let kind = PyConfigureErrorKind::of(&error);
+    let err = PolicyConfigureError::new_err(error.to_string());
+    Python::with_gil(|py| {
+        if let Err(set_err) = err.value(py).setattr("kind", kind) {
+            set_err.restore(py);
+        }
+    });
+    err
 }
 
 fn convert_account_group_id_error(error: AccountGroupIdError) -> PyErr {
@@ -946,6 +994,263 @@ impl PyEngine {
             inner: self.inner.accounts(),
         }
     }
+
+    fn configure(&self) -> PyConfigurator {
+        PyConfigurator {
+            inner: self.inner.configure(),
+        }
+    }
+}
+
+/// Handle to the engine's runtime policy settings registry.
+///
+/// Obtained from ``Engine.configure()``. The handle shares the engine's single
+/// settings registry, so changes made through it are visible to running
+/// policies immediately. It inherits the engine's synchronization mode.
+#[pyclass(name = "Configurator", module = "openpit")]
+struct PyConfigurator {
+    inner: Configurator<PyEngineSync>,
+}
+
+#[pymethods]
+impl PyConfigurator {
+    /// Retune a registered rate-limit policy at runtime.
+    ///
+    /// ``name`` must match the name given to the policy at registration time.
+    /// Policy settings use the named entities from
+    /// ``openpit.pretrade.policies``.
+    ///
+    /// Axes passed as ``None`` are left unchanged.  A supplied list REPLACES
+    /// that axis wholesale: an empty list clears it (subject to the
+    /// at-least-one-barrier rule enforced by the core).  Barriers may be added
+    /// and removed at runtime; a barrier key that survives a replacement keeps
+    /// its live counter (no reset).  ``broker`` replaces the broker barrier
+    /// when provided and leaves it unchanged when ``None``.
+    #[pyo3(signature = (name, *, broker = None, asset_barriers = None, account_barriers = None, account_asset_barriers = None))]
+    fn rate_limit(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        broker: Option<Bound<'_, PyAny>>,
+        asset_barriers: Option<Vec<Bound<'_, PyAny>>>,
+        account_barriers: Option<Vec<Bound<'_, PyAny>>>,
+        account_asset_barriers: Option<Vec<Bound<'_, PyAny>>>,
+    ) -> PyResult<()> {
+        let broker_barrier = broker
+            .as_ref()
+            .map(parse_rate_limit_broker_barrier)
+            .transpose()?;
+        let assets: Option<Vec<RateLimitAssetBarrier>> = asset_barriers
+            .map(|v| {
+                v.iter()
+                    .map(parse_rate_limit_asset_barrier)
+                    .collect::<PyResult<Vec<_>>>()
+            })
+            .transpose()?;
+        let accounts: Option<Vec<RateLimitAccountBarrier>> = account_barriers
+            .map(|v| {
+                v.iter()
+                    .map(parse_rate_limit_account_barrier)
+                    .collect::<PyResult<Vec<_>>>()
+            })
+            .transpose()?;
+        let account_assets: Option<Vec<RateLimitAccountAssetBarrier>> = account_asset_barriers
+            .map(|v| {
+                v.iter()
+                    .map(parse_rate_limit_account_asset_barrier)
+                    .collect::<PyResult<Vec<_>>>()
+            })
+            .transpose()?;
+
+        py.allow_threads(|| {
+            self.inner.rate_limit(name, |s| {
+                if let Some(b) = &broker_barrier {
+                    s.set_broker(Some(b.clone()))?;
+                }
+                if let Some(v) = &assets {
+                    s.set_asset_barriers(v.iter().cloned())?;
+                }
+                if let Some(v) = &accounts {
+                    s.set_account_barriers(v.iter().cloned())?;
+                }
+                if let Some(v) = &account_assets {
+                    s.set_account_asset_barriers(v.iter().cloned())?;
+                }
+                Ok::<_, openpit::pretrade::policies::RateLimitPolicyError>(())
+            })
+        })
+        .map_err(convert_configure_error)
+    }
+
+    /// Retune a registered P&L bounds kill-switch policy at runtime.
+    ///
+    /// ``name`` must match the name given to the policy at registration time.
+    /// ``account_barriers`` accepts only
+    /// ``PnlBoundsAccountAssetBarrierUpdate`` entities. Runtime updates preserve
+    /// live accumulated P&L and cannot provide construction-only ``initial_pnl``.
+    ///
+    /// An axis passed as ``None`` is left unchanged; an empty list replaces the
+    /// axis with an empty set (subject to the policy's at-least-one-barrier
+    /// rule).
+    #[pyo3(signature = (name, *, broker_barriers = None, account_barriers = None))]
+    fn pnl_bounds_killswitch(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        broker_barriers: Option<Vec<Bound<'_, PyAny>>>,
+        account_barriers: Option<Vec<Bound<'_, PyAny>>>,
+    ) -> PyResult<()> {
+        let brokers: Option<Vec<PnlBoundsBrokerBarrier>> = broker_barriers
+            .map(|v| {
+                v.iter()
+                    .map(parse_pnl_broker_barrier)
+                    .collect::<PyResult<_>>()
+            })
+            .transpose()?;
+        let accounts: Option<Vec<PnlBoundsAccountAssetBarrierUpdate>> = account_barriers
+            .map(|v| {
+                v.iter()
+                    .map(parse_pnl_account_barrier_update)
+                    .collect::<PyResult<_>>()
+            })
+            .transpose()?;
+        py.allow_threads(|| {
+            self.inner.pnl_bounds_killswitch(name, |s| {
+                if let Some(b) = &brokers {
+                    s.set_broker_barriers(b.iter().cloned())?;
+                }
+                if let Some(a) = &accounts {
+                    s.set_account_barriers(a.iter().cloned())?;
+                }
+                Ok::<_, openpit::pretrade::policies::PnlBoundsKillSwitchPolicyError>(())
+            })
+        })
+        .map_err(convert_configure_error)
+    }
+
+    /// Force-set the live accumulated P&L for a ``(account, settlement_asset)``
+    /// entry of a registered P&L bounds kill-switch policy.
+    ///
+    /// ``name`` must match the name given to the policy at registration time.
+    /// Unlike :meth:`pnl_bounds_killswitch`, which retunes bounds and never
+    /// touches accumulated P&L, this is an absolute assignment (upsert) of the
+    /// live accumulator; the new value is evaluated against the live bounds on
+    /// the next order. Forcing the accumulator past a bound trips the kill
+    /// switch, which latches an engine-level account block that this call does
+    /// not clear.
+    #[pyo3(signature = (name, *, account, settlement_asset, pnl))]
+    fn set_account_pnl(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        account: &Bound<'_, PyAny>,
+        settlement_asset: &Bound<'_, PyAny>,
+        pnl: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let account = parse_account_id_input(account)?;
+        let settlement_asset = parse_asset_input(settlement_asset)?;
+        let pnl = parse_pnl_input(pnl)?;
+        py.allow_threads(|| {
+            self.inner
+                .set_account_pnl(name, account, settlement_asset, pnl)
+        })
+        .map_err(convert_configure_error)
+    }
+
+    /// Retune a registered order-size-limit policy at runtime.
+    ///
+    /// ``name`` must match the name given to the policy at registration time.
+    /// The barrier arguments mirror those of
+    /// :meth:`~ReadyEngineBuilder._add_builtin_order_size_limit`.
+    ///
+    /// ``broker=None`` and axis arguments passed as ``None`` are left
+    /// unchanged; an empty list replaces that axis with an empty set (subject
+    /// to the at-least-one-barrier rule).
+    #[pyo3(signature = (name, *, broker = None, asset_barriers = None, account_asset_barriers = None))]
+    fn order_size_limit<'py>(
+        &self,
+        py: Python<'py>,
+        name: &str,
+        broker: Option<Bound<'py, PyAny>>,
+        asset_barriers: Option<Vec<Bound<'py, PyAny>>>,
+        account_asset_barriers: Option<Vec<Bound<'py, PyAny>>>,
+    ) -> PyResult<()> {
+        let broker_barrier = broker
+            .as_ref()
+            .map(parse_order_size_broker_barrier)
+            .transpose()?;
+        let asset: Option<Vec<OrderSizeAssetBarrier>> = asset_barriers
+            .map(|v| {
+                v.iter()
+                    .map(parse_order_size_asset_barrier)
+                    .collect::<PyResult<Vec<_>>>()
+            })
+            .transpose()?;
+        let account_asset: Option<Vec<OrderSizeAccountAssetBarrier>> = account_asset_barriers
+            .map(|v| {
+                v.iter()
+                    .map(parse_order_size_account_asset_barrier)
+                    .collect::<PyResult<Vec<_>>>()
+            })
+            .transpose()?;
+
+        py.allow_threads(|| {
+            self.inner.order_size_limit(name, |s| {
+                if let Some(b) = &broker_barrier {
+                    s.set_broker(Some(b.clone()))?;
+                }
+                if let Some(a) = &asset {
+                    s.set_asset_barriers(a.clone())?;
+                }
+                if let Some(aa) = &account_asset {
+                    s.set_account_asset_barriers(aa.clone())?;
+                }
+                Ok::<_, openpit::pretrade::policies::OrderSizeLimitPolicyError>(())
+            })
+        })
+        .map_err(convert_configure_error)
+    }
+
+    /// Retune a registered spot-funds policy at runtime.
+    ///
+    /// ``name`` must match the name given to the policy at registration time.
+    /// ``global_slippage_bps`` replaces the global slippage when provided.
+    /// ``pricing_source`` and ``overrides`` use the named entities from
+    /// ``openpit.pretrade.policies``.
+    #[pyo3(signature = (name, *, global_slippage_bps = None, pricing_source = None, overrides = vec![]))]
+    fn spot_funds(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        global_slippage_bps: Option<u16>,
+        pricing_source: Option<Bound<'_, PyAny>>,
+        overrides: Vec<Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let parsed_pricing_source = pricing_source
+            .as_ref()
+            .map(parse_spot_funds_pricing_source_entity)
+            .transpose()?;
+        let parsed_overrides: Vec<(SpotFundsOverrideTarget, SpotFundsOverride)> = overrides
+            .iter()
+            .map(parse_spot_funds_override_entity)
+            .collect::<PyResult<_>>()?;
+
+        py.allow_threads(|| {
+            self.inner.spot_funds(name, |s| {
+                if let Some(bps) = global_slippage_bps {
+                    s.set_global_slippage_bps(bps)?;
+                }
+                if let Some(src) = parsed_pricing_source {
+                    s.set_pricing_source(src);
+                }
+                for (target, ovr) in &parsed_overrides {
+                    s.set_override(*target, *ovr)?;
+                }
+                Ok::<_, openpit::pretrade::policies::SpotFundsConfigError>(())
+            })
+        })
+        .map_err(convert_configure_error)
+    }
 }
 
 /// Handle to the engine's account-group registry and pre-trade block controls.
@@ -1476,12 +1781,6 @@ impl PyPostTradeContext {
 
 type PyStorageFactory = openpit_interop::StorageLockingPolicyFactory;
 type PyEngineSync = openpit_interop::EngineLocking;
-type PySpotFundsOverrideEntry<'a> = (
-    PyRef<'a, PyInstrumentId>,
-    Option<PyRef<'a, PyAccountId>>,
-    Option<PyRef<'a, PyAccountGroupId>>,
-    Option<u16>,
-);
 
 impl From<&PreTradeContext<PyStorageFactory>> for PyPreTradeContext {
     fn from(context: &PreTradeContext<PyStorageFactory>) -> Self {
@@ -2526,6 +2825,46 @@ impl PyBuilderState {
             Self::Ready(builder) => builder.storage_builder(),
         }
     }
+
+    fn add_configurable_rate_limit(
+        self,
+        policy: RateLimitPolicy<openpit_interop::StorageLockingPolicyFactory>,
+    ) -> Self {
+        PyBuilderState::Ready(match self {
+            Self::Synced(builder) => builder.pre_trade(policy),
+            Self::Ready(builder) => builder.pre_trade(policy),
+        })
+    }
+
+    fn add_configurable_pnl_killswitch(
+        self,
+        policy: PnlBoundsKillSwitchPolicy<openpit_interop::StorageLockingPolicyFactory>,
+    ) -> Self {
+        PyBuilderState::Ready(match self {
+            Self::Synced(builder) => builder.pre_trade(policy),
+            Self::Ready(builder) => builder.pre_trade(policy),
+        })
+    }
+
+    fn add_configurable_order_size_limit(
+        self,
+        policy: OrderSizeLimitPolicy<openpit_interop::StorageLockingPolicyFactory>,
+    ) -> Self {
+        PyBuilderState::Ready(match self {
+            Self::Synced(builder) => builder.pre_trade(policy),
+            Self::Ready(builder) => builder.pre_trade(policy),
+        })
+    }
+
+    fn add_configurable_spot_funds(
+        self,
+        policy: SpotFundsPolicy<openpit_interop::EngineLocking, openpit_interop::EngineLocking>,
+    ) -> Self {
+        PyBuilderState::Ready(match self {
+            Self::Synced(builder) => builder.pre_trade(policy),
+            Self::Ready(builder) => builder.pre_trade(policy),
+        })
+    }
 }
 
 #[pyclass(name = "EngineBuilder", module = "openpit")]
@@ -2627,6 +2966,34 @@ impl PyReadyEngineBuilder {
         })
     }
 
+    fn add_configurable_rate_limit(
+        &self,
+        policy: RateLimitPolicy<openpit_interop::StorageLockingPolicyFactory>,
+    ) -> PyResult<()> {
+        self.with_state(|state| state.add_configurable_rate_limit(policy))
+    }
+
+    fn add_configurable_pnl_killswitch(
+        &self,
+        policy: PnlBoundsKillSwitchPolicy<openpit_interop::StorageLockingPolicyFactory>,
+    ) -> PyResult<()> {
+        self.with_state(|state| state.add_configurable_pnl_killswitch(policy))
+    }
+
+    fn add_configurable_order_size_limit(
+        &self,
+        policy: OrderSizeLimitPolicy<openpit_interop::StorageLockingPolicyFactory>,
+    ) -> PyResult<()> {
+        self.with_state(|state| state.add_configurable_order_size_limit(policy))
+    }
+
+    fn add_configurable_spot_funds(
+        &self,
+        policy: SpotFundsPolicy<openpit_interop::EngineLocking, openpit_interop::EngineLocking>,
+    ) -> PyResult<()> {
+        self.with_state(|state| state.add_configurable_spot_funds(policy))
+    }
+
     fn push_policy(&self, policy: &Bound<'_, PyAny>) -> PyResult<()> {
         let name = policy
             .getattr("name")?
@@ -2689,7 +3056,7 @@ impl PyReadyEngineBuilder {
                 .as_ref()
                 .ok_or_else(|| PyValueError::new_err("engine builder is no longer available"))?
                 .storage_builder();
-            make_rate_limit_start_check(
+            make_rate_limit_policy(
                 storage_builder,
                 PolicyGroupId::new(policy_group_id),
                 broker,
@@ -2698,7 +3065,7 @@ impl PyReadyEngineBuilder {
                 account_asset_barriers,
             )?
         };
-        slf.add_policy(policy)?;
+        slf.add_configurable_rate_limit(policy)?;
         Ok(slf)
     }
 
@@ -2710,13 +3077,13 @@ impl PyReadyEngineBuilder {
         asset_barriers: Vec<(PyRef<'_, PyOrderSizeLimit>, String)>,
         account_asset_barriers: Vec<(PyRef<'_, PyOrderSizeLimit>, u64, String)>,
     ) -> PyResult<PyRef<'py, Self>> {
-        let policy = make_order_size_limit_start_check(
+        let policy = make_order_size_limit_policy(
             PolicyGroupId::new(policy_group_id),
             broker,
             asset_barriers,
             account_asset_barriers,
         )?;
-        slf.add_policy(policy)?;
+        slf.add_configurable_order_size_limit(policy)?;
         Ok(slf)
     }
 
@@ -2733,14 +3100,14 @@ impl PyReadyEngineBuilder {
                 .as_ref()
                 .ok_or_else(|| PyValueError::new_err("engine builder is no longer available"))?
                 .storage_builder();
-            make_pnl_killswitch_start_check(
+            make_pnl_killswitch_policy(
                 storage_builder,
                 PolicyGroupId::new(policy_group_id),
                 broker_barriers,
                 account_barriers,
             )?
         };
-        slf.add_policy(policy)?;
+        slf.add_configurable_pnl_killswitch(policy)?;
         Ok(slf)
     }
 
@@ -2755,37 +3122,20 @@ impl PyReadyEngineBuilder {
         Ok(slf)
     }
 
-    #[pyo3(name = "_add_builtin_spot_funds", signature = (*, policy_group_id = 0, market_data = None, default_slippage_bps = None, pricing_source = None, overrides = vec![]))]
+    #[pyo3(name = "_add_builtin_spot_funds", signature = (*, policy_group_id = 0, market_data = None, global_slippage_bps = None, pricing_source = None, overrides = vec![]))]
     fn add_builtin_spot_funds<'py>(
         slf: PyRef<'py, Self>,
         policy_group_id: u16,
         market_data: Option<PyRef<'_, PyMarketDataService>>,
-        default_slippage_bps: Option<u16>,
+        global_slippage_bps: Option<u16>,
         pricing_source: Option<&str>,
-        overrides: Vec<PySpotFundsOverrideEntry<'_>>,
+        overrides: Vec<Bound<'_, PyAny>>,
     ) -> PyResult<PyRef<'py, Self>> {
         let engine_sync = slf.sync_policy;
         let md_handle = market_data.map(|svc| (svc.inner.clone(), svc.mode));
         let overrides = overrides
-            .into_iter()
-            .map(|(id, account_id, account_group_id, slippage_bps)| {
-                let instrument = id.inner;
-                let target = match (account_id, account_group_id) {
-                    (Some(_), Some(_)) => {
-                        return Err(PyValueError::new_err(
-                            "spot funds override cannot target both an account and a group",
-                        ))
-                    }
-                    (Some(a), None) => {
-                        SpotFundsOverrideTarget::InstrumentAccount(instrument, a.inner)
-                    }
-                    (None, Some(g)) => {
-                        SpotFundsOverrideTarget::InstrumentAccountGroup(instrument, g.inner)
-                    }
-                    (None, None) => SpotFundsOverrideTarget::Instrument(instrument),
-                };
-                Ok((target, SpotFundsOverride { slippage_bps }))
-            })
+            .iter()
+            .map(parse_spot_funds_override_entity)
             .collect::<PyResult<Vec<_>>>()?;
         let policy = {
             let state = slf.state.borrow();
@@ -2793,17 +3143,17 @@ impl PyReadyEngineBuilder {
                 .as_ref()
                 .ok_or_else(|| PyValueError::new_err("engine builder is no longer available"))?;
             let storage_builder = state_ref.storage_builder();
-            make_spot_funds_start_check(
+            make_spot_funds_policy(
                 storage_builder,
                 PolicyGroupId::new(policy_group_id),
                 engine_sync,
                 md_handle,
-                default_slippage_bps,
+                global_slippage_bps,
                 pricing_source,
                 overrides,
             )?
         };
-        slf.add_policy(policy)?;
+        slf.add_configurable_spot_funds(policy)?;
         Ok(slf)
     }
 
@@ -2848,6 +3198,123 @@ impl PyOrderSizeLimit {
             max_notional: parse_volume_input(max_notional)?.to_string(),
         })
     }
+}
+
+fn ensure_policy_entity(obj: &Bound<'_, PyAny>, class_name: &str) -> PyResult<()> {
+    let policies = obj.py().import("openpit.pretrade.policies")?;
+    let expected = policies.getattr(class_name)?;
+    if obj.is_instance(&expected)? {
+        return Ok(());
+    }
+    Err(PyTypeError::new_err(format!(
+        "expected openpit.pretrade.policies.{class_name}"
+    )))
+}
+
+fn parse_rate_limit_window(value: &Bound<'_, PyAny>) -> PyResult<Duration> {
+    let datetime = value.py().import("datetime")?;
+    let timedelta = datetime.getattr("timedelta")?;
+    if !value.is_instance(&timedelta)? {
+        return Err(PyTypeError::new_err(
+            "RateLimit.window must be datetime.timedelta",
+        ));
+    }
+
+    let days = value.getattr("days")?.extract::<i64>()?;
+    if days < 0 {
+        return Err(PyValueError::new_err(
+            "RateLimit.window must not be negative",
+        ));
+    }
+    let days = u64::try_from(days)
+        .map_err(|_| PyValueError::new_err("RateLimit.window must not be negative"))?;
+    let seconds = value.getattr("seconds")?.extract::<u64>()?;
+    let microseconds = value.getattr("microseconds")?.extract::<u32>()?;
+    // `datetime.timedelta` normalises to 0 <= seconds < 86_400 and
+    // 0 <= microseconds < 1_000_000, bounded by `timedelta.max` (~10^9 days),
+    // so neither the day-to-second scaling nor the micro-to-nano scaling can
+    // overflow their target types.
+    Ok(Duration::new(days * 86_400 + seconds, microseconds * 1_000))
+}
+
+fn parse_rate_limit_entity(obj: &Bound<'_, PyAny>) -> PyResult<RateLimit> {
+    ensure_policy_entity(obj, "RateLimit")?;
+    Ok(RateLimit {
+        max_orders: obj.getattr("max_orders")?.extract()?,
+        window: parse_rate_limit_window(&obj.getattr("window")?)?,
+    })
+}
+
+fn parse_rate_limit_broker_barrier(obj: &Bound<'_, PyAny>) -> PyResult<RateLimitBrokerBarrier> {
+    ensure_policy_entity(obj, "RateLimitBrokerBarrier")?;
+    Ok(RateLimitBrokerBarrier {
+        limit: parse_rate_limit_entity(&obj.getattr("limit")?)?,
+    })
+}
+
+fn parse_rate_limit_asset_barrier(obj: &Bound<'_, PyAny>) -> PyResult<RateLimitAssetBarrier> {
+    ensure_policy_entity(obj, "RateLimitAssetBarrier")?;
+    Ok(RateLimitAssetBarrier {
+        limit: parse_rate_limit_entity(&obj.getattr("limit")?)?,
+        settlement_asset: parse_asset_input(&obj.getattr("settlement_asset")?)?,
+    })
+}
+
+fn parse_rate_limit_account_barrier(obj: &Bound<'_, PyAny>) -> PyResult<RateLimitAccountBarrier> {
+    ensure_policy_entity(obj, "RateLimitAccountBarrier")?;
+    Ok(RateLimitAccountBarrier {
+        limit: parse_rate_limit_entity(&obj.getattr("limit")?)?,
+        account_id: parse_account_id_input(&obj.getattr("account_id")?)?,
+    })
+}
+
+fn parse_rate_limit_account_asset_barrier(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<RateLimitAccountAssetBarrier> {
+    ensure_policy_entity(obj, "RateLimitAccountAssetBarrier")?;
+    Ok(RateLimitAccountAssetBarrier {
+        limit: parse_rate_limit_entity(&obj.getattr("limit")?)?,
+        account_id: parse_account_id_input(&obj.getattr("account_id")?)?,
+        settlement_asset: parse_asset_input(&obj.getattr("settlement_asset")?)?,
+    })
+}
+
+fn parse_order_size_limit_entity(obj: &Bound<'_, PyAny>) -> PyResult<OrderSizeLimit> {
+    let limit = obj
+        .extract::<PyRef<'_, PyOrderSizeLimit>>()
+        .map_err(|_| PyTypeError::new_err("limit must be OrderSizeLimit"))?;
+    Ok(OrderSizeLimit {
+        max_quantity: parse_quantity(&limit.max_quantity)?,
+        max_notional: parse_volume(&limit.max_notional)?,
+    })
+}
+
+fn parse_order_size_broker_barrier(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<openpit::pretrade::policies::OrderSizeBrokerBarrier> {
+    ensure_policy_entity(obj, "OrderSizeBrokerBarrier")?;
+    Ok(openpit::pretrade::policies::OrderSizeBrokerBarrier {
+        limit: parse_order_size_limit_entity(&obj.getattr("limit")?)?,
+    })
+}
+
+fn parse_order_size_asset_barrier(obj: &Bound<'_, PyAny>) -> PyResult<OrderSizeAssetBarrier> {
+    ensure_policy_entity(obj, "OrderSizeAssetBarrier")?;
+    Ok(OrderSizeAssetBarrier {
+        limit: parse_order_size_limit_entity(&obj.getattr("limit")?)?,
+        settlement_asset: parse_asset_input(&obj.getattr("settlement_asset")?)?,
+    })
+}
+
+fn parse_order_size_account_asset_barrier(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<OrderSizeAccountAssetBarrier> {
+    ensure_policy_entity(obj, "OrderSizeAccountAssetBarrier")?;
+    Ok(OrderSizeAccountAssetBarrier {
+        limit: parse_order_size_limit_entity(&obj.getattr("limit")?)?,
+        account_id: parse_account_id_input(&obj.getattr("account_id")?)?,
+        settlement_asset: parse_asset_input(&obj.getattr("settlement_asset")?)?,
+    })
 }
 
 type ParsedRateLimitBarriers = (
@@ -2915,40 +3382,31 @@ fn parse_rate_limit_barriers(
     Ok((broker_barrier, asset, account, account_asset))
 }
 
-fn make_rate_limit_start_check(
+fn make_rate_limit_policy(
     storage_builder: &StorageBuilder<openpit_interop::StorageLockingPolicyFactory>,
     policy_group_id: PolicyGroupId,
     broker: Option<(usize, u64)>,
     asset_barriers: Vec<(String, usize, u64)>,
     account_barriers: Vec<(u64, usize, u64)>,
     account_asset_barriers: Vec<(u64, String, usize, u64)>,
-) -> PyResult<BoxedPreTradePolicy> {
+) -> PyResult<RateLimitPolicy<openpit_interop::StorageLockingPolicyFactory>> {
     let (broker_barrier, asset, account, account_asset) = parse_rate_limit_barriers(
         broker,
         asset_barriers,
         account_barriers,
         account_asset_barriers,
     )?;
-    let policy = RateLimitPolicy::new(
-        broker_barrier,
-        asset,
-        account,
-        account_asset,
-        storage_builder,
-    )
-    .map(|policy| policy.with_policy_group_id(policy_group_id))
-    .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(BoxedPreTradePolicy {
-        inner: Box::new(policy),
-    })
+    let settings = RateLimitSettings::new(broker_barrier, asset, account, account_asset)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(RateLimitPolicy::new(settings, storage_builder).with_policy_group_id(policy_group_id))
 }
 
-fn make_order_size_limit_start_check(
+fn make_order_size_limit_policy(
     policy_group_id: PolicyGroupId,
     broker: Option<PyRef<'_, PyOrderSizeLimit>>,
     asset_barriers: Vec<(PyRef<'_, PyOrderSizeLimit>, String)>,
     account_asset_barriers: Vec<(PyRef<'_, PyOrderSizeLimit>, u64, String)>,
-) -> PyResult<BoxedPreTradePolicy> {
+) -> PyResult<OrderSizeLimitPolicy<openpit_interop::StorageLockingPolicyFactory>> {
     use openpit::param::AccountId;
 
     let broker_barrier = broker
@@ -2989,43 +3447,58 @@ fn make_order_size_limit_start_check(
         })
         .collect::<PyResult<Vec<_>>>()?;
 
-    let policy = OrderSizeLimitPolicy::new(broker_barrier, asset, account_asset)
-        .map(|policy| policy.with_policy_group_id(policy_group_id))
+    let settings = OrderSizeLimitSettings::new(broker_barrier, asset, account_asset)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(BoxedPreTradePolicy {
-        inner: Box::new(policy),
+    Ok(OrderSizeLimitPolicy::new(settings).with_policy_group_id(policy_group_id))
+}
+
+fn parse_pnl_bounds_barrier(obj: &Bound<'_, PyAny>) -> PyResult<PnlBoundsBrokerBarrier> {
+    let settlement_asset = obj.getattr("settlement_asset")?;
+    let lower_bound_value = obj.getattr("lower_bound")?;
+    let lower_bound = if lower_bound_value.is_none() {
+        None
+    } else {
+        Some(parse_pnl_input(&lower_bound_value)?)
+    };
+    let upper_bound_value = obj.getattr("upper_bound")?;
+    let upper_bound = if upper_bound_value.is_none() {
+        None
+    } else {
+        Some(parse_pnl_input(&upper_bound_value)?)
+    };
+    Ok(PnlBoundsBrokerBarrier {
+        settlement_asset: parse_asset_input(&settlement_asset)?,
+        lower_bound,
+        upper_bound,
     })
 }
 
 fn parse_pnl_broker_barrier(obj: &Bound<'_, PyAny>) -> PyResult<PnlBoundsBrokerBarrier> {
-    let settlement_asset = obj.getattr("settlement_asset")?;
-    let lower_bound_val = obj
-        .getattr("lower_bound")
-        .ok()
-        .and_then(|v| if v.is_none() { None } else { Some(v) })
-        .map(|v| parse_pnl_input(&v))
-        .transpose()?;
-    let upper_bound_val = obj
-        .getattr("upper_bound")
-        .ok()
-        .and_then(|v| if v.is_none() { None } else { Some(v) })
-        .map(|v| parse_pnl_input(&v))
-        .transpose()?;
-    Ok(PnlBoundsBrokerBarrier {
-        settlement_asset: parse_asset_input(&settlement_asset)?,
-        lower_bound: lower_bound_val,
-        upper_bound: upper_bound_val,
-    })
+    ensure_policy_entity(obj, "PnlBoundsBrokerBarrier")?;
+    parse_pnl_bounds_barrier(obj)
 }
 
 fn parse_pnl_account_barrier(obj: &Bound<'_, PyAny>) -> PyResult<PnlBoundsAccountAssetBarrier> {
+    ensure_policy_entity(obj, "PnlBoundsAccountAssetBarrier")?;
+    let barrier_obj = obj.getattr("barrier")?;
     let account_id_obj = obj.getattr("account_id")?;
     let initial_pnl_obj = obj.getattr("initial_pnl")?;
-    let barrier = parse_pnl_broker_barrier(obj)?;
     Ok(PnlBoundsAccountAssetBarrier {
+        barrier: parse_pnl_broker_barrier(&barrier_obj)?,
         account_id: parse_account_id_input(&account_id_obj)?,
         initial_pnl: parse_pnl_input(&initial_pnl_obj)?,
-        barrier,
+    })
+}
+
+fn parse_pnl_account_barrier_update(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<PnlBoundsAccountAssetBarrierUpdate> {
+    ensure_policy_entity(obj, "PnlBoundsAccountAssetBarrierUpdate")?;
+    let barrier_obj = obj.getattr("barrier")?;
+    let account_id_obj = obj.getattr("account_id")?;
+    Ok(PnlBoundsAccountAssetBarrierUpdate {
+        barrier: parse_pnl_broker_barrier(&barrier_obj)?,
+        account_id: parse_account_id_input(&account_id_obj)?,
     })
 }
 
@@ -3047,20 +3520,17 @@ fn parse_pnl_killswitch_barriers<'py>(
     Ok((brokers, accounts))
 }
 
-fn make_pnl_killswitch_start_check(
+fn make_pnl_killswitch_policy(
     storage_builder: &StorageBuilder<openpit_interop::StorageLockingPolicyFactory>,
     policy_group_id: PolicyGroupId,
     broker_barriers: Vec<Bound<'_, PyAny>>,
     account_barriers: Vec<Bound<'_, PyAny>>,
-) -> PyResult<BoxedPreTradePolicy> {
+) -> PyResult<PnlBoundsKillSwitchPolicy<openpit_interop::StorageLockingPolicyFactory>> {
     let (brokers, accounts) = parse_pnl_killswitch_barriers(&broker_barriers, &account_barriers)?;
-    let policy =
-        PnlBoundsKillSwitchPolicy::new(brokers.into_iter(), accounts.into_iter(), storage_builder)
-            .map(|policy| policy.with_policy_group_id(policy_group_id))
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(BoxedPreTradePolicy {
-        inner: Box::new(policy),
-    })
+    let settings = PnlBoundsKillSwitchSettings::new(brokers, accounts)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(PnlBoundsKillSwitchPolicy::new(settings, storage_builder)
+        .with_policy_group_id(policy_group_id))
 }
 
 fn make_order_validation_start_check(policy_group_id: PolicyGroupId) -> BoxedPreTradePolicy {
@@ -3069,8 +3539,8 @@ fn make_order_validation_start_check(policy_group_id: PolicyGroupId) -> BoxedPre
     }
 }
 
-fn parse_spot_funds_pricing_source(value: Option<&str>) -> PyResult<SpotFundsPricingSource> {
-    match value.unwrap_or("Mark") {
+fn parse_spot_funds_pricing_source_str(value: &str) -> PyResult<SpotFundsPricingSource> {
+    match value {
         "Mark" => Ok(SpotFundsPricingSource::Mark),
         "BookTop" => Ok(SpotFundsPricingSource::BookTop),
         other => Err(PyValueError::new_err(format!(
@@ -3079,15 +3549,110 @@ fn parse_spot_funds_pricing_source(value: Option<&str>) -> PyResult<SpotFundsPri
     }
 }
 
-fn make_spot_funds_start_check(
+fn parse_spot_funds_pricing_source_entity(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<SpotFundsPricingSource> {
+    ensure_policy_entity(value, "SpotFundsPricingSource")?;
+    parse_spot_funds_pricing_source_str(&value.getattr("value")?.extract::<String>()?)
+}
+
+fn parse_spot_funds_override_entity(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<(SpotFundsOverrideTarget, SpotFundsOverride)> {
+    ensure_policy_entity(value, "SpotFundsOverrideEntry")?;
+    let target_value = value.getattr("target")?;
+    let target = parse_spot_funds_override_target_entity(&target_value)?;
+
+    let override_value = value.getattr("override")?;
+    ensure_policy_entity(&override_value, "SpotFundsOverride")?;
+    let slippage_bps_value = override_value.getattr("slippage_bps")?;
+    let slippage_bps = if slippage_bps_value.is_none() {
+        None
+    } else {
+        Some(slippage_bps_value.extract::<u16>()?)
+    };
+
+    Ok((target, SpotFundsOverride { slippage_bps }))
+}
+
+fn parse_spot_funds_override_target_entity(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<SpotFundsOverrideTarget> {
+    let policies = value.py().import("openpit.pretrade.policies")?;
+    let instrument_target = policies.getattr("SpotFundsOverrideTargetInstrument")?;
+    let account_target = policies.getattr("SpotFundsOverrideTargetInstrumentAccount")?;
+    let account_group_target = policies.getattr("SpotFundsOverrideTargetInstrumentAccountGroup")?;
+
+    let instrument = || {
+        value
+            .getattr("instrument")?
+            .extract::<PyRef<'_, PyInstrumentId>>()
+            .map(|instrument| instrument.inner)
+            .map_err(|_| {
+                PyTypeError::new_err(
+                    "spot funds override target instrument must be \
+                     openpit.marketdata.InstrumentId",
+                )
+            })
+    };
+
+    if value.is_instance(&instrument_target)? {
+        return Ok(SpotFundsOverrideTarget::Instrument(instrument()?));
+    }
+    if value.is_instance(&account_target)? {
+        let account_id = value
+            .getattr("account_id")?
+            .extract::<PyRef<'_, PyAccountId>>()
+            .map_err(|_| {
+                PyTypeError::new_err(
+                    "SpotFundsOverrideTargetInstrumentAccount.account_id must be \
+                     openpit.param.AccountId",
+                )
+            })?
+            .inner;
+        return Ok(SpotFundsOverrideTarget::InstrumentAccount(
+            instrument()?,
+            account_id,
+        ));
+    }
+    if value.is_instance(&account_group_target)? {
+        let account_group_id = value
+            .getattr("account_group_id")?
+            .extract::<PyRef<'_, PyAccountGroupId>>()
+            .map_err(|_| {
+                PyTypeError::new_err(
+                    "SpotFundsOverrideTargetInstrumentAccountGroup.account_group_id \
+                     must be openpit.param.AccountGroupId",
+                )
+            })?
+            .inner;
+        return Ok(SpotFundsOverrideTarget::InstrumentAccountGroup(
+            instrument()?,
+            account_group_id,
+        ));
+    }
+
+    Err(PyTypeError::new_err(
+        "SpotFundsOverrideEntry.target must be one of \
+         openpit.pretrade.policies.SpotFundsOverrideTargetInstrument, \
+         openpit.pretrade.policies.SpotFundsOverrideTargetInstrumentAccount, or \
+         openpit.pretrade.policies.SpotFundsOverrideTargetInstrumentAccountGroup",
+    ))
+}
+
+fn parse_spot_funds_pricing_source(value: Option<&str>) -> PyResult<SpotFundsPricingSource> {
+    parse_spot_funds_pricing_source_str(value.unwrap_or("Mark"))
+}
+
+fn make_spot_funds_policy(
     storage_builder: &StorageBuilder<openpit_interop::StorageLockingPolicyFactory>,
     policy_group_id: PolicyGroupId,
     engine_sync: SyncMode,
     market_data: Option<(EngineHandle<MarketDataService<EngineLocking>>, SyncMode)>,
-    default_slippage_bps: Option<u16>,
+    global_slippage_bps: Option<u16>,
     pricing_source: Option<&str>,
     instrument_overrides: Vec<(SpotFundsOverrideTarget, SpotFundsOverride)>,
-) -> PyResult<BoxedPreTradePolicy> {
+) -> PyResult<SpotFundsPolicy<EngineLocking, EngineLocking>> {
     let market_orders: Option<SpotFundsMarketData<EngineLocking>> = match market_data {
         Some((handle, md_mode)) => {
             // Mismatch guard: a multi-threaded engine requires a fully-locked MD
@@ -3101,29 +3666,29 @@ fn make_spot_funds_start_check(
                      call .full_sync() on the market-data builder before .build()",
                 ));
             }
-            let bps = default_slippage_bps.ok_or_else(|| {
-                PyValueError::new_err(
-                    "default_slippage_bps is required when market_data is provided",
-                )
-            })?;
-            Some(
-                SpotFundsMarketData::<EngineLocking>::new(
-                    handle,
-                    bps,
-                    parse_spot_funds_pricing_source(pricing_source)?,
-                    instrument_overrides,
-                )
-                .map_err(|e| PyValueError::new_err(e.to_string()))?,
-            )
+            if global_slippage_bps.is_none() {
+                return Err(PyValueError::new_err(
+                    "global_slippage_bps is required when market_data is provided",
+                ));
+            }
+            Some(SpotFundsMarketData::<EngineLocking>::new(handle))
         }
         None => None,
     };
-    let policy =
-        SpotFundsPolicy::<EngineLocking, EngineLocking>::new(market_orders, storage_builder)
-            .with_policy_group_id(policy_group_id);
-    Ok(BoxedPreTradePolicy {
-        inner: Box::new(policy),
-    })
+    // Build the settings for the slippage cascade.
+    let slippage_bps = global_slippage_bps.unwrap_or(0);
+    let settings = SpotFundsSettings::new(
+        slippage_bps,
+        parse_spot_funds_pricing_source(pricing_source)?,
+        instrument_overrides,
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(SpotFundsPolicy::<EngineLocking, EngineLocking>::new(
+        settings,
+        market_orders,
+        storage_builder,
+    )
+    .with_policy_group_id(policy_group_id))
 }
 
 #[pyclass(name = "OrderOperation", module = "openpit.core", subclass)]
@@ -6628,6 +7193,11 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     module.add("AccountBlockError", py.get_type::<AccountBlockError>())?;
     module.add(
+        "PolicyConfigureError",
+        py.get_type::<PolicyConfigureError>(),
+    )?;
+    module.add_class::<PyConfigureErrorKind>()?;
+    module.add(
         "_ROUNDING_STRATEGY_DEFAULT",
         rounding_strategy_name(RoundingStrategy::DEFAULT),
     )?;
@@ -6671,6 +7241,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyLeverage>()?;
     module.add_class::<PyEngine>()?; // "Engine"
     module.add_class::<PyAccounts>()?;
+    module.add_class::<PyConfigurator>()?;
     module.add_class::<PyReject>()?;
     module.add_class::<PyAccountBlock>()?;
     module.add_class::<PyStartPreTradeResult>()?;
@@ -6721,7 +7292,56 @@ mod field_access_tests {
 
     fn ensure_python_initialized() {
         static INIT: Once = Once::new();
-        INIT.call_once(pyo3::prepare_freethreaded_python);
+        INIT.call_once(|| {
+            pyo3::prepare_freethreaded_python();
+            // PyO3 embeds the interpreter against the base CPython install,
+            // not the virtualenv `PYO3_PYTHON` points at, and the embedded
+            // binary has no `pyvenv.cfg`, so `site` never resolves the venv
+            // prefix. As a result the venv `site-packages` (and the
+            // `maturin develop` `.pth` that puts the editable `openpit`
+            // package on the path) are absent from the embedded `sys.path`.
+            // Query the venv interpreter for its effective `sys.path` and
+            // prepend the missing entries so `import openpit` resolves
+            // regardless of how `cargo test` was invoked.
+            if let Err(error) = Python::with_gil(prepend_venv_sys_path) {
+                panic!("failed to configure venv sys.path for embedded python: {error}");
+            }
+        });
+    }
+
+    fn prepend_venv_sys_path(py: Python<'_>) -> PyResult<()> {
+        let interpreter = option_env!("PYO3_PYTHON").unwrap_or("python3");
+        let output = std::process::Command::new(interpreter)
+            .args(["-c", "import sys; print('\\n'.join(sys.path))"])
+            .output()
+            .map_err(|error| {
+                PyRuntimeError::new_err(format!(
+                    "failed to run venv interpreter {interpreter:?}: {error}"
+                ))
+            })?;
+        if !output.status.success() {
+            return Err(PyRuntimeError::new_err(format!(
+                "venv interpreter {interpreter:?} exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr),
+            )));
+        }
+        let venv_path = String::from_utf8_lossy(&output.stdout);
+
+        let sys = py.import("sys")?;
+        let path = sys.getattr("path")?.downcast_into::<PyList>()?;
+        let existing: Vec<String> = path.extract()?;
+        // Preserve the venv ordering while prepending only entries that are
+        // not already present, so the editable package directory wins without
+        // duplicating the embedded interpreter's own search paths.
+        for entry in venv_path.lines().rev() {
+            let entry = entry.trim();
+            if entry.is_empty() || existing.iter().any(|present| present == entry) {
+                continue;
+            }
+            path.insert(0, entry)?;
+        }
+        Ok(())
     }
 
     fn order_without_operation() -> Order {
@@ -6887,13 +7507,7 @@ class AdjustmentCheck:
             let ov_policy = make_order_validation_start_check(DEFAULT_POLICY_GROUP_ID);
             builder.add_policy(ov_policy)?;
 
-            let ns_module = PyModule::from_code(
-                py,
-                c"from types import SimpleNamespace",
-                c"ns_helper.py",
-                c"ns_helper",
-            )?;
-            let simple_namespace = ns_module.getattr("SimpleNamespace")?;
+            let policies_module = py.import("openpit.pretrade.policies")?;
             let pnl_lower_bound = Py::new(
                 py,
                 PyPnl {
@@ -6903,21 +7517,23 @@ class AdjustmentCheck:
             let pnl_barrier_kwargs = PyDict::new(py);
             pnl_barrier_kwargs.set_item("settlement_asset", "USD")?;
             pnl_barrier_kwargs.set_item("lower_bound", pnl_lower_bound)?;
-            let pnl_barrier_obj = simple_namespace.call((), Some(&pnl_barrier_kwargs))?;
+            let pnl_barrier_obj = policies_module
+                .getattr("PnlBoundsBrokerBarrier")?
+                .call((), Some(&pnl_barrier_kwargs))?;
             let pnl_policy = {
                 let state = builder.state.borrow();
                 let storage_builder = state
                     .as_ref()
                     .expect("builder must be available")
                     .storage_builder();
-                make_pnl_killswitch_start_check(
+                make_pnl_killswitch_policy(
                     storage_builder,
                     DEFAULT_POLICY_GROUP_ID,
                     vec![pnl_barrier_obj],
                     vec![],
                 )?
             };
-            builder.add_policy(pnl_policy)?;
+            builder.add_configurable_pnl_killswitch(pnl_policy)?;
 
             let rl_policy = {
                 let state = builder.state.borrow();
@@ -6925,7 +7541,7 @@ class AdjustmentCheck:
                     .as_ref()
                     .expect("builder must be available")
                     .storage_builder();
-                make_rate_limit_start_check(
+                make_rate_limit_policy(
                     storage_builder,
                     DEFAULT_POLICY_GROUP_ID,
                     Some((100, 1_000)),
@@ -6934,20 +7550,20 @@ class AdjustmentCheck:
                     vec![],
                 )?
             };
-            builder.add_policy(rl_policy)?;
+            builder.add_configurable_rate_limit(rl_policy)?;
 
             let size_limit = PyOrderSizeLimit {
                 max_quantity: "1000".to_owned(),
                 max_notional: "1000000".to_owned(),
             };
             let size_limit_py = Py::new(py, size_limit)?;
-            let sl_policy = make_order_size_limit_start_check(
+            let sl_policy = make_order_size_limit_policy(
                 DEFAULT_POLICY_GROUP_ID,
                 None,
                 vec![(size_limit_py.bind(py).borrow(), "USD".to_owned())],
                 vec![],
             )?;
-            builder.add_policy(sl_policy)?;
+            builder.add_configurable_order_size_limit(sl_policy)?;
             builder.push_policy(&start_check)?;
             builder.push_policy(&execution_check)?;
             builder.push_policy(&adjustment_check)?;

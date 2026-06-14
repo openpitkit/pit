@@ -24,7 +24,7 @@ use std::marker::PhantomData;
 use super::engine::{Engine, EngineInner};
 use super::engine_trait::EngineTraitOf;
 use super::sync_mode::{AccountSync, FullSync, LocalSync, SyncMode};
-use super::{AccountGroups, BlockedAccounts};
+use super::{AccountGroups, BlockedAccounts, ConfigRegistry};
 use crate::marketdata::MarketDataSync;
 use crate::pretrade::PreTradePolicy;
 use crate::storage::{LockingPolicyFactory, StorageBuilder};
@@ -212,7 +212,8 @@ impl std::error::Error for EngineBuildError {}
 /// use openpit::{WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation};
 /// use openpit::pretrade::policies::{
 ///     PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy,
-///     RateLimit, RateLimitBrokerBarrier, RateLimitPolicy,
+///     PnlBoundsKillSwitchSettings, RateLimit, RateLimitBrokerBarrier, RateLimitPolicy,
+///     RateLimitSettings,
 /// };
 /// use openpit::Engine;
 /// use openpit::param::{AccountId, Asset, Pnl};
@@ -223,32 +224,36 @@ impl std::error::Error for EngineBuildError {}
 /// let builder = Engine::builder::<MyOrder, MyReport, ()>().no_sync();
 ///
 /// let pnl_policy = PnlBoundsKillSwitchPolicy::new(
-///     [PnlBoundsBrokerBarrier {
-///         settlement_asset: Asset::new("USD")?,
-///         lower_bound: Some(Pnl::from_str("-500")?),
-///         upper_bound: None,
-///     }],
-///     [PnlBoundsAccountAssetBarrier {
-///         barrier: PnlBoundsBrokerBarrier {
+///     PnlBoundsKillSwitchSettings::new(
+///         [PnlBoundsBrokerBarrier {
 ///             settlement_asset: Asset::new("USD")?,
-///             lower_bound: Some(Pnl::from_str("-200")?),
+///             lower_bound: Some(Pnl::from_str("-500")?),
 ///             upper_bound: None,
-///         },
-///         account_id: AccountId::from_u64(99224416),
-///         initial_pnl: Pnl::from_str("-50")?,
-///     }],
+///         }],
+///         [PnlBoundsAccountAssetBarrier {
+///             barrier: PnlBoundsBrokerBarrier {
+///                 settlement_asset: Asset::new("USD")?,
+///                 lower_bound: Some(Pnl::from_str("-200")?),
+///                 upper_bound: None,
+///             },
+///             account_id: AccountId::from_u64(99224416),
+///             initial_pnl: Pnl::from_str("-50")?,
+///         }],
+///     )?,
 ///     builder.storage_builder(),
-/// )?;
+/// );
 ///
 /// let rate_policy = RateLimitPolicy::new(
-///     Some(RateLimitBrokerBarrier {
-///         limit: RateLimit { max_orders: 100, window: Duration::from_secs(1) },
-///     }),
-///     [],
-///     [],
-///     [],
+///     RateLimitSettings::new(
+///         Some(RateLimitBrokerBarrier {
+///             limit: RateLimit { max_orders: 100, window: Duration::from_secs(1) },
+///         }),
+///         [],
+///         [],
+///         [],
+///     )?,
 ///     builder.storage_builder(),
-/// )?;
+/// );
 ///
 /// let engine = builder
 ///     .pre_trade(pnl_policy)
@@ -307,6 +312,7 @@ impl<Order: 'static, ExecutionReport: 'static, AccountAdjustment: 'static>
             storage_builder,
             blocked_accounts,
             account_groups,
+            config_entries: Vec::new(),
             _marker: PhantomData,
         }
     }
@@ -394,6 +400,10 @@ pub struct SyncedEngineBuilder<
         <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
             AccountGroups<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         >,
+    config_entries: Vec<(
+        String,
+        crate::core::ConfigEntry<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+    )>,
     _marker: PhantomData<(Order, ExecutionReport, AccountAdjustment)>,
 }
 
@@ -456,6 +466,14 @@ where
     ///   policy state is accepted.
     /// - [`AccountSync`] (from `account_sync`): `Send + 'static`.
     /// - [`FullSync`] (from `full_sync`): `Send + Sync + 'static`.
+    ///
+    /// For a supported built-in policy, the builder captures a clone of its
+    /// settings cell under the policy's
+    /// [`name`](crate::pretrade::PreTradePolicy::name). The built engine can
+    /// retune it through [`Engine::configure`](crate::Engine::configure), and
+    /// the policy observes the update on its next hot-path read. Custom
+    /// policies are registered normally but are not runtime-configurable in
+    /// this release.
     pub fn pre_trade<Policy>(
         mut self,
         policy: Policy,
@@ -465,12 +483,17 @@ where
             <Sync as SyncMode>::PreTradePolicyObject<Order, ExecutionReport, AccountAdjustment>,
         >,
     {
-        self.pre_trade_policies.push(policy.into_policy_object());
+        let obj = policy.into_policy_object();
+        if let Some(entry) = obj.built_in_config_entry() {
+            self.config_entries.push((obj.name().to_owned(), entry));
+        }
+        self.pre_trade_policies.push(obj);
         ReadyEngineBuilder {
             pre_trade_policies: self.pre_trade_policies,
             storage_builder: self.storage_builder,
             blocked_accounts: self.blocked_accounts,
             account_groups: self.account_groups,
+            config_entries: self.config_entries,
             _marker: PhantomData,
         }
     }
@@ -507,6 +530,10 @@ pub struct ReadyEngineBuilder<
         <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
             AccountGroups<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         >,
+    config_entries: Vec<(
+        String,
+        crate::core::ConfigEntry<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+    )>,
     _marker: PhantomData<(Order, ExecutionReport, AccountAdjustment)>,
 }
 
@@ -546,13 +573,21 @@ where
     Sync: SyncMode,
 {
     /// Registers an additional policy.
+    ///
+    /// Supported built-in policies are registered with their runtime settings
+    /// cell. Custom policies are registered normally but are not
+    /// runtime-configurable in this release.
     pub fn pre_trade<Policy>(mut self, policy: Policy) -> Self
     where
         Policy: IntoPolicyObject<
             <Sync as SyncMode>::PreTradePolicyObject<Order, ExecutionReport, AccountAdjustment>,
         >,
     {
-        self.pre_trade_policies.push(policy.into_policy_object());
+        let obj = policy.into_policy_object();
+        if let Some(entry) = obj.built_in_config_entry() {
+            self.config_entries.push((obj.name().to_owned(), entry));
+        }
+        self.pre_trade_policies.push(obj);
         self
     }
 
@@ -565,11 +600,18 @@ where
     > {
         ensure_unique_policy_names(self.pre_trade_policies.iter().map(|p| p.name()))?;
         ensure_unique_group_ids(self.pre_trade_policies.iter().map(|p| p.policy_group_id()))?;
+        // Duplicate policy names are rejected above, so the registry's keys are
+        // already unique; collecting into the map cannot drop a distinct cell.
+        let config_registry =
+            <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::new_shared(
+                ConfigRegistry::from_entries(self.config_entries.into_iter().collect()),
+            );
         Ok(Engine::from_inner(<Sync as SyncMode>::new_strong(
             EngineInner {
                 pre_trade_policies: self.pre_trade_policies,
                 blocked_accounts: self.blocked_accounts,
                 account_groups: self.account_groups,
+                config_registry,
             },
         )))
     }

@@ -23,7 +23,7 @@ import datetime
 import decimal
 import typing
 
-from . import param
+from . import param, pretrade
 from .pretrade import Policy
 
 class _AccountInfo(typing.Protocol):
@@ -82,6 +82,30 @@ class AccountGroupRegistrationError(Exception):
 
 class AccountBlockError(Exception):
     """Admin block/unblock operation failed."""
+
+class ConfigureErrorKind:
+    """Classifies why a runtime policy reconfiguration failed.
+
+    Integer values match the C ``OpenPitConfigureErrorKind`` and the Go
+    ``ConfigureErrorKind`` so all bindings agree on the discriminants.
+    """
+
+    UNKNOWN: typing.ClassVar[ConfigureErrorKind]
+    """No registered policy carries the requested name."""
+    TYPE_MISMATCH: typing.ClassVar[ConfigureErrorKind]
+    """The named policy exists but its settings type differs from the target."""
+    VALIDATION: typing.ClassVar[ConfigureErrorKind]
+    """The update was rejected; the prior value still applies."""
+
+class PolicyConfigureError(Exception):
+    """Runtime policy reconfiguration failed.
+
+    Raised by ``Configurator`` methods when the policy name is unknown,
+    has the wrong type, or the new settings fail validation.
+    """
+
+    kind: ConfigureErrorKind
+    """Classifies the failure (unknown policy, type mismatch, or validation)."""
 
 class InstrumentId:
     """Market-data instrument identifier."""
@@ -1754,6 +1778,9 @@ class Engine:
     def accounts(self) -> Accounts:
         """Return a handle to the engine's account controls."""
 
+    def configure(self) -> Configurator:
+        """Return a handle to the engine's runtime policy settings registry."""
+
 class Accounts:
     """Handle to the engine's account groups and pre-trade block controls."""
 
@@ -1776,6 +1803,146 @@ class Accounts:
     def replace_group_block_reason(
         self, group: AccountGroupId, reason: str
     ) -> None: ...
+
+class Configurator:
+    """Handle to the engine's runtime policy settings registry.
+
+    Obtained from ``Engine.configure()``. The handle shares the engine's single
+    settings registry, so changes made through it are visible to running
+    policies immediately. It inherits the engine's synchronization mode.
+    """
+
+    def rate_limit(
+        self,
+        name: str,
+        *,
+        broker: pretrade.policies.RateLimitBrokerBarrier | None = None,
+        asset_barriers: list[pretrade.policies.RateLimitAssetBarrier] | None = None,
+        account_barriers: list[pretrade.policies.RateLimitAccountBarrier] | None = None,
+        account_asset_barriers: (
+            list[pretrade.policies.RateLimitAccountAssetBarrier] | None
+        ) = None,
+    ) -> None:
+        """Retune a registered rate-limit policy at runtime.
+
+        *name* must match the name given to the policy at registration time.
+
+        An axis passed as ``None`` is left unchanged.  A supplied list REPLACES
+        that axis wholesale: an empty list clears it (subject to the
+        at-least-one-barrier rule enforced by the core).  Barriers may be added
+        and removed at runtime; a barrier key that survives a replacement keeps
+        its live counter (no reset).  *broker* replaces the broker barrier when
+        provided and leaves it unchanged when ``None``.
+
+        Policy settings use the named rate-limit entities from
+        ``openpit.pretrade.policies``.
+
+        Raises:
+            PolicyConfigureError: If the policy is not found, has the wrong
+                type, or the new settings fail validation.
+        """
+
+    def pnl_bounds_killswitch(
+        self,
+        name: str,
+        *,
+        broker_barriers: list[pretrade.policies.PnlBoundsBrokerBarrier] | None = None,
+        account_barriers: (
+            list[pretrade.policies.PnlBoundsAccountAssetBarrierUpdate] | None
+        ) = None,
+    ) -> None:
+        """Retune a registered P&L bounds kill-switch policy at runtime.
+
+        *name* must match the name given to the policy at registration time.
+
+        The barrier arguments mirror those of
+        ``ReadyEngineBuilder._add_builtin_pnl_bounds_killswitch``.
+
+        An axis passed as ``None`` is left unchanged; an empty list replaces
+        the axis with an empty set (subject to the at-least-one-barrier rule).
+
+        Raises:
+            PolicyConfigureError: If the policy is not found, has the wrong
+                type, or the new settings fail validation.
+        """
+
+    def set_account_pnl(
+        self,
+        name: str,
+        *,
+        account: param.AccountId,
+        settlement_asset: param.Asset,
+        pnl: param.Pnl,
+    ) -> None:
+        """Force-set the live accumulated P&L for one account entry.
+
+        *name* must match the name given to the P&L bounds kill-switch policy at
+        registration time.
+
+        Unlike :meth:`pnl_bounds_killswitch`, which retunes bounds and never
+        touches accumulated P&L, this is an absolute assignment (upsert) of the
+        live accumulator for ``(account, settlement_asset)``; the new value is
+        evaluated against the live bounds on the next order. Forcing the
+        accumulator past a bound trips the kill switch, which latches an
+        engine-level account block that this call does not clear.
+
+        Raises:
+            PolicyConfigureError: If the policy is not found or has a different
+                type than a P&L bounds kill-switch policy.
+        """
+
+    def order_size_limit(
+        self,
+        name: str,
+        *,
+        broker: pretrade.policies.OrderSizeBrokerBarrier | None = None,
+        asset_barriers: list[pretrade.policies.OrderSizeAssetBarrier] | None = None,
+        account_asset_barriers: (
+            list[pretrade.policies.OrderSizeAccountAssetBarrier] | None
+        ) = None,
+    ) -> None:
+        """Retune a registered order-size-limit policy at runtime.
+
+        *name* must match the name given to the policy at registration time.
+
+        Policy settings use the named order-size entities from
+        ``openpit.pretrade.policies``.
+
+        ``broker=None`` and axis arguments passed as ``None`` are left
+        unchanged; an empty list replaces that axis with an empty set (subject
+        to the at-least-one-barrier rule).
+
+        Raises:
+            PolicyConfigureError: If the policy is not found, has the wrong
+                type, or the new settings fail validation.
+        """
+
+    def spot_funds(
+        self,
+        name: str,
+        *,
+        global_slippage_bps: int | None = None,
+        pricing_source: pretrade.policies.SpotFundsPricingSource | None = None,
+        overrides: list[pretrade.policies.SpotFundsOverrideEntry] = ...,
+    ) -> None:
+        """Retune a registered spot-funds policy at runtime.
+
+        *name* must match the name given to the policy at registration time.
+
+        *global_slippage_bps* replaces the global slippage when provided.
+
+        *pricing_source* is a
+        :class:`~openpit.pretrade.policies.SpotFundsPricingSource`, or ``None``
+        to leave the current source unchanged.
+
+        *overrides* contains
+        :class:`~openpit.pretrade.policies.SpotFundsOverrideEntry` entries that
+        replace individual cascade entries.
+
+        Raises:
+            PolicyConfigureError: If the policy is not found, has the wrong
+                type, or the new settings fail validation.
+        """
 
 class EngineBuilder:
     """First stage of the engine builder."""

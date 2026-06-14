@@ -82,7 +82,7 @@ class RateLimitAssetBarrier:
     """
 
     limit: RateLimit
-    settlement_asset: str
+    settlement_asset: param.Asset
 
 
 @dataclasses.dataclass(frozen=True)
@@ -110,7 +110,7 @@ class RateLimitAccountAssetBarrier:
 
     limit: RateLimit
     account_id: param.AccountId
-    settlement_asset: str
+    settlement_asset: param.Asset
 
 
 class RateLimitReadyBuilder:
@@ -211,6 +211,10 @@ class RateLimitBuilder:
     the axis methods to obtain a :class:`RateLimitReadyBuilder`.
     """
 
+    #: Registration name of the rate-limit policy. Pass to
+    #: ``engine.configure().rate_limit`` to retune it at runtime.
+    NAME: str = "RateLimitPolicy"
+
     def __init__(self) -> None:
         self._ready = RateLimitReadyBuilder()
 
@@ -271,7 +275,7 @@ class OrderSizeAssetBarrier:
     """
 
     limit: OrderSizeLimit
-    settlement_asset: str
+    settlement_asset: param.Asset
 
 
 @dataclasses.dataclass(frozen=True)
@@ -286,7 +290,7 @@ class OrderSizeAccountAssetBarrier:
 
     limit: OrderSizeLimit
     account_id: param.AccountId
-    settlement_asset: str
+    settlement_asset: param.Asset
 
 
 class OrderSizeLimitReadyBuilder:
@@ -353,6 +357,10 @@ class OrderSizeLimitBuilder:
     before the broker barrier is set.
     """
 
+    #: Registration name of the order-size-limit policy. Pass to
+    #: ``engine.configure().order_size_limit`` to retune it at runtime.
+    NAME: str = "OrderSizeLimitPolicy"
+
     def __init__(self) -> None:
         self._ready = OrderSizeLimitReadyBuilder()
 
@@ -402,30 +410,44 @@ class PnlBoundsBrokerBarrier:
     At least one of *lower_bound* or *upper_bound* must be provided.
     """
 
-    settlement_asset: str
+    settlement_asset: param.Asset
     lower_bound: param.Pnl | None = None
     upper_bound: param.Pnl | None = None
 
 
 @dataclasses.dataclass(frozen=True)
 class PnlBoundsAccountAssetBarrier:
-    """Per-account P&L bounds barrier.
+    """Per-(account, settlement-asset) P&L bounds refinement.
+
+    Pairs a :class:`PnlBoundsBrokerBarrier` (the settlement asset and bounds
+    configuration) with an account identity and a starting P&L.
 
     Args:
+        barrier: Settlement asset and bounds for this account+asset barrier.
         account_id: Account this barrier applies to.
-        settlement_asset: Settlement asset tracked by this barrier.
-        initial_pnl: Initial P&L offset loaded at construction.
-        lower_bound: Optional lower P&L bound.
-        upper_bound: Optional upper P&L bound.
-
-    At least one of *lower_bound* or *upper_bound* must be provided.
+        initial_pnl: Starting accumulated P&L, consumed at construction only.
+            Seeds P&L accrued before the engine started.
     """
 
+    barrier: PnlBoundsBrokerBarrier
     account_id: param.AccountId
-    settlement_asset: str
     initial_pnl: param.Pnl
-    lower_bound: param.Pnl | None = None
-    upper_bound: param.Pnl | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class PnlBoundsAccountAssetBarrierUpdate:
+    """Runtime replacement for a per-account P&L bounds barrier.
+
+    Runtime updates preserve the live accumulated P&L and cannot seed or reset
+    it.
+
+    Args:
+        barrier: Settlement asset and replacement bounds for this account.
+        account_id: Account this replacement barrier applies to.
+    """
+
+    barrier: PnlBoundsBrokerBarrier
+    account_id: param.AccountId
 
 
 class PnlBoundsKillswitchReadyBuilder:
@@ -479,6 +501,11 @@ class PnlBoundsKillswitchBuilder:
     :class:`PnlBoundsKillswitchReadyBuilder`.
     """
 
+    #: Registration name of the P&L bounds kill-switch policy. Pass to
+    #: ``engine.configure().pnl_bounds_killswitch`` (or ``set_account_pnl``)
+    #: to retune it at runtime.
+    NAME: str = "PnlBoundsKillSwitchPolicy"
+
     def __init__(self) -> None:
         self._ready = PnlBoundsKillswitchReadyBuilder()
 
@@ -519,19 +546,80 @@ class SpotFundsPricingSource(_enum.StrEnum):
 
 
 @dataclasses.dataclass(frozen=True)
-class SpotFundsOverride:
-    """Spot-funds slippage override for a registered instrument, optionally
-    narrowed to a single account or an account group (mutually exclusive).
+class SpotFundsOverrideTargetInstrument:
+    """Instrument-level slippage override target.
 
-    When ``slippage_bps`` is ``None`` the entry is ignored. Resolution order:
-    (instrument, account_id) -> (instrument, account_group_id) -> (instrument)
-    -> global.
+    Args:
+        instrument: Instrument the override applies to.
     """
 
     instrument: marketdata.InstrumentId
-    account_id: param.AccountId | None = None
-    account_group_id: param.AccountGroupId | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class SpotFundsOverrideTargetInstrumentAccount:
+    """Account-scoped slippage override target.
+
+    Args:
+        instrument: Instrument the override applies to.
+        account_id: Account the override applies to.
+    """
+
+    instrument: marketdata.InstrumentId
+    account_id: param.AccountId
+
+
+@dataclasses.dataclass(frozen=True)
+class SpotFundsOverrideTargetInstrumentAccountGroup:
+    """Account-group-scoped slippage override target.
+
+    Args:
+        instrument: Instrument the override applies to.
+        account_group_id: Account group the override applies to.
+    """
+
+    instrument: marketdata.InstrumentId
+    account_group_id: param.AccountGroupId
+
+
+SpotFundsOverrideTarget: typing.TypeAlias = (
+    SpotFundsOverrideTargetInstrument
+    | SpotFundsOverrideTargetInstrumentAccount
+    | SpotFundsOverrideTargetInstrumentAccountGroup
+)
+"""Union of all valid spot-funds cascade override target types."""
+
+
+@dataclasses.dataclass(frozen=True)
+class SpotFundsOverride:
+    """Override value applied at a ``SpotFundsOverrideTarget``.
+
+    When ``slippage_bps`` is ``None`` the entry is ignored and the cascade
+    falls through to the next tier.
+
+    Args:
+        slippage_bps: Slippage in basis points applied at the target. ``None``
+            defers to the next tier of the cascade (and ultimately the global
+            slippage).
+    """
+
     slippage_bps: int | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class SpotFundsOverrideEntry:
+    """Pairs a cascade target with its override value.
+
+    Resolution order: ``(instrument, account_id)`` ->
+    ``(instrument, account_group_id)`` -> ``(instrument)`` -> global.
+
+    Args:
+        target: Cascade target selecting the instrument and account scope.
+        override: Override value applied at the target.
+    """
+
+    target: SpotFundsOverrideTarget
+    override: SpotFundsOverride
 
 
 class SpotFundsReadyBuilder:
@@ -547,9 +635,9 @@ class SpotFundsReadyBuilder:
 
     def __init__(self) -> None:
         self._market_data: marketdata.MarketDataService | None = None
-        self._default_slippage_bps: int | None = None
+        self._global_slippage_bps: int | None = None
         self._pricing_source: SpotFundsPricingSource = SpotFundsPricingSource.MARK
-        self._overrides: tuple[SpotFundsOverride, ...] = ()
+        self._overrides: tuple[SpotFundsOverrideEntry, ...] = ()
         self._policy_group_id = DEFAULT_POLICY_GROUP_ID
 
     def with_policy_group_id(self, policy_group_id: int) -> SpotFundsReadyBuilder:
@@ -560,22 +648,21 @@ class SpotFundsReadyBuilder:
     def market_data(
         self,
         service: marketdata.MarketDataService,
-        default_slippage_bps: int,
+        global_slippage_bps: int,
         pricing_source: SpotFundsPricingSource = SpotFundsPricingSource.MARK,
-        overrides: typing.Iterable[SpotFundsOverride] = (),
+        overrides: typing.Iterable[SpotFundsOverrideEntry] = (),
     ) -> SpotFundsReadyBuilder:
         """Enable market orders through a live market-data service.
 
-        Overrides narrow slippage per instrument, optionally scoped to an
-        account or account group (mutually exclusive). Resolution order:
-        (instrument, account_id) -> (instrument, account_group_id) ->
-        (instrument) -> global.
+        Each override uses one explicit instrument, account, or account-group
+        target variant. Resolution order: (instrument, account_id) ->
+        (instrument, account_group_id) -> (instrument) -> global.
 
         Calling it more than once replaces the service handle and all
         market-data bundle parameters.
         """
         self._market_data = service
-        self._default_slippage_bps = default_slippage_bps
+        self._global_slippage_bps = global_slippage_bps
         self._pricing_source = SpotFundsPricingSource(pricing_source)
         self._overrides = tuple(overrides)
         return self
@@ -585,14 +672,11 @@ class SpotFundsReadyBuilder:
         builder._add_builtin_spot_funds(
             policy_group_id=self._policy_group_id,
             market_data=self._market_data,
-            default_slippage_bps=self._default_slippage_bps,
+            global_slippage_bps=self._global_slippage_bps,
             pricing_source=(
                 None if self._market_data is None else self._pricing_source.value
             ),
-            overrides=[
-                (o.instrument, o.account_id, o.account_group_id, o.slippage_bps)
-                for o in self._overrides
-            ],
+            overrides=self._overrides,
         )
 
 
@@ -606,6 +690,10 @@ class SpotFundsBuilder:
     market-data service.
     """
 
+    #: Registration name of the spot funds policy. Pass to
+    #: ``engine.configure().spot_funds`` to retune it at runtime.
+    NAME: str = "SpotFundsPolicy"
+
     def __init__(self) -> None:
         self._ready = SpotFundsReadyBuilder()
 
@@ -617,18 +705,18 @@ class SpotFundsBuilder:
     def market_data(
         self,
         service: marketdata.MarketDataService,
-        default_slippage_bps: int,
+        global_slippage_bps: int,
         pricing_source: SpotFundsPricingSource = SpotFundsPricingSource.MARK,
-        overrides: typing.Iterable[SpotFundsOverride] = (),
+        overrides: typing.Iterable[SpotFundsOverrideEntry] = (),
     ) -> SpotFundsReadyBuilder:
         """Enable market orders through a live market-data service.
 
-        Overrides narrow slippage per instrument, optionally scoped to an
-        account or account group (mutually exclusive).
+        Each override uses one explicit instrument, account, or account-group
+        target variant.
         """
         return self._ready.market_data(
             service,
-            default_slippage_bps,
+            global_slippage_bps,
             pricing_source,
             overrides,
         )
@@ -689,11 +777,17 @@ __all__ = [
     "build_order_size_limit",
     "PnlBoundsBrokerBarrier",
     "PnlBoundsAccountAssetBarrier",
+    "PnlBoundsAccountAssetBarrierUpdate",
     "PnlBoundsKillswitchReadyBuilder",
     "PnlBoundsKillswitchBuilder",
     "build_pnl_bounds_killswitch",
     "SpotFundsPricingSource",
+    "SpotFundsOverrideTarget",
+    "SpotFundsOverrideTargetInstrument",
+    "SpotFundsOverrideTargetInstrumentAccount",
+    "SpotFundsOverrideTargetInstrumentAccountGroup",
     "SpotFundsOverride",
+    "SpotFundsOverrideEntry",
     "SpotFundsReadyBuilder",
     "SpotFundsBuilder",
     "build_spot_funds",

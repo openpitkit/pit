@@ -27,6 +27,7 @@
 //!
 //! Custom controls typically start from the policy traits plus [`PreTradeContext`].
 
+mod configurable;
 mod context;
 pub(crate) mod handle;
 pub mod holdings;
@@ -41,6 +42,7 @@ mod request;
 mod reservation;
 pub(crate) mod start_pre_trade_time;
 
+pub(crate) use configurable::ConfigurablePolicy;
 pub use context::PreTradeContext;
 pub use lock::PreTradeLock;
 pub use policies::{

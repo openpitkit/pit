@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use openpit::param::{AccountId, Asset, Quantity, Side, TradeAmount};
 use openpit::pretrade::policies::{
-    RateLimit, RateLimitAccountBarrier, RateLimitBrokerBarrier, RateLimitPolicy,
+    RateLimit, RateLimitAccountBarrier, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
 };
 use openpit::pretrade::{PreTradeRequest, RejectCode, Rejects};
 use openpit::{FullSyncEngine, Instrument, OrderOperation};
@@ -65,24 +65,26 @@ fn build_order(account_id: AccountId) -> OrderOperation {
 fn build_engine(total_calls: usize) -> TestEngine {
     let builder = openpit::Engine::builder().full_sync();
     let policy = RateLimitPolicy::new(
-        Some(RateLimitBrokerBarrier {
-            limit: RateLimit {
-                max_orders: total_calls,
-                window: Duration::from_secs(60),
-            },
-        }),
-        [],
-        [RateLimitAccountBarrier {
-            account_id: account(),
-            limit: RateLimit {
-                max_orders: total_calls,
-                window: Duration::from_secs(60),
-            },
-        }],
-        [],
+        RateLimitSettings::new(
+            Some(RateLimitBrokerBarrier {
+                limit: RateLimit {
+                    max_orders: total_calls,
+                    window: Duration::from_secs(60),
+                },
+            }),
+            [],
+            [RateLimitAccountBarrier {
+                account_id: account(),
+                limit: RateLimit {
+                    max_orders: total_calls,
+                    window: Duration::from_secs(60),
+                },
+            }],
+            [],
+        )
+        .expect("rate-limit settings must be valid"),
         builder.storage_builder(),
-    )
-    .expect("rate-limit policy must be configured");
+    );
 
     builder
         .pre_trade(policy)

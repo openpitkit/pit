@@ -24,9 +24,13 @@ use openpit::param::TradeAmount;
 use openpit::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side, Volume};
 use openpit::pretrade::policies::OrderValidationPolicy;
 use openpit::pretrade::policies::PnlBoundsBrokerBarrier;
-use openpit::pretrade::policies::PnlBoundsKillSwitchPolicy;
-use openpit::pretrade::policies::{OrderSizeAssetBarrier, OrderSizeLimit, OrderSizeLimitPolicy};
-use openpit::pretrade::policies::{RateLimit, RateLimitBrokerBarrier, RateLimitPolicy};
+use openpit::pretrade::policies::{
+    OrderSizeAssetBarrier, OrderSizeLimit, OrderSizeLimitPolicy, OrderSizeLimitSettings,
+};
+use openpit::pretrade::policies::{PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchSettings};
+use openpit::pretrade::policies::{
+    RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
+};
 use openpit::pretrade::{
     PolicyPreTradeResult, PostTradeContext, PreTradeContext, PreTradePolicy, Reject, RejectCode,
     RejectScope, Rejects,
@@ -79,27 +83,29 @@ impl HasFee for TestReport {
 fn integration_scenario_rate_limit_then_kill_switch() {
     let usd = Asset::new("USD").expect("asset code must be valid");
     let builder = Engine::builder().no_sync();
-    let shared_pnl = Rc::new(
-        PnlBoundsKillSwitchPolicy::new(
+    let shared_pnl = Rc::new(PnlBoundsKillSwitchPolicy::new(
+        PnlBoundsKillSwitchSettings::new(
             [pnl_bounds_barrier(usd.clone(), Some(pnl("-500")), None)],
             [],
-            builder.storage_builder(),
         )
-        .expect("pnl policy must be configured"),
-    );
-    let rate_policy = RateLimitPolicy::new(
-        Some(RateLimitBrokerBarrier {
-            limit: RateLimit {
-                max_orders: 1,
-                window: Duration::from_millis(500),
-            },
-        }),
-        [],
-        [],
-        [],
+        .expect("pnl settings must be valid"),
         builder.storage_builder(),
-    )
-    .expect("rate limit policy must be configured");
+    ));
+    let rate_policy = RateLimitPolicy::new(
+        RateLimitSettings::new(
+            Some(RateLimitBrokerBarrier {
+                limit: RateLimit {
+                    max_orders: 1,
+                    window: Duration::from_millis(500),
+                },
+            }),
+            [],
+            [],
+            [],
+        )
+        .expect("rate limit settings must be valid"),
+        builder.storage_builder(),
+    );
 
     let engine = builder
         .pre_trade(SharedPnlPolicy::new(Rc::clone(&shared_pnl)))
@@ -202,11 +208,15 @@ fn integration_table_order_size_limit_paths() {
 
     for case in cases {
         let size_limit = if case.configure_limit {
-            OrderSizeLimitPolicy::new(None, [order_size_limit_usd("10", "1000")], [])
-                .expect("valid config")
+            OrderSizeLimitPolicy::<NoLocking>::new(
+                OrderSizeLimitSettings::new(None, [order_size_limit_usd("10", "1000")], [])
+                    .expect("valid config"),
+            )
         } else {
-            OrderSizeLimitPolicy::new(None, [order_size_limit_eur("10", "1000")], [])
-                .expect("valid config")
+            OrderSizeLimitPolicy::<NoLocking>::new(
+                OrderSizeLimitSettings::new(None, [order_size_limit_eur("10", "1000")], [])
+                    .expect("valid config"),
+            )
         };
 
         let engine = Engine::builder::<TestOrder, TestReport, ()>()
@@ -238,8 +248,10 @@ fn integration_table_order_size_limit_paths() {
         }
     }
 
-    let size_limit = OrderSizeLimitPolicy::new(None, [order_size_limit_usd("100", "1000")], [])
-        .expect("valid config");
+    let size_limit = OrderSizeLimitPolicy::<NoLocking>::new(
+        OrderSizeLimitSettings::new(None, [order_size_limit_usd("100", "1000")], [])
+            .expect("valid config"),
+    );
     let overflow_engine = Engine::builder::<TestOrder, TestReport, ()>()
         .no_sync()
         .pre_trade(size_limit)
@@ -496,25 +508,29 @@ fn integration_engine_builder_defaults_and_guardrails() {
 
     let dup_builder = Engine::builder::<TestOrder, TestReport, ()>().no_sync();
     let first_duplicate_policy = PnlBoundsKillSwitchPolicy::new(
-        [pnl_bounds_barrier(
-            Asset::new("USD").expect("asset code must be valid"),
-            Some(pnl("-100")),
-            None,
-        )],
-        vec![],
+        PnlBoundsKillSwitchSettings::new(
+            [pnl_bounds_barrier(
+                Asset::new("USD").expect("asset code must be valid"),
+                Some(pnl("-100")),
+                None,
+            )],
+            vec![],
+        )
+        .expect("policy config must be valid"),
         dup_builder.storage_builder(),
-    )
-    .expect("policy config must be valid");
+    );
     let second_duplicate_policy = PnlBoundsKillSwitchPolicy::new(
-        [pnl_bounds_barrier(
-            Asset::new("USD").expect("asset code must be valid"),
-            Some(pnl("-100")),
-            None,
-        )],
-        vec![],
+        PnlBoundsKillSwitchSettings::new(
+            [pnl_bounds_barrier(
+                Asset::new("USD").expect("asset code must be valid"),
+                Some(pnl("-100")),
+                None,
+            )],
+            vec![],
+        )
+        .expect("policy config must be valid"),
         dup_builder.storage_builder(),
-    )
-    .expect("policy config must be valid");
+    );
     let duplicate_start = dup_builder
         .pre_trade(first_duplicate_policy)
         .pre_trade(second_duplicate_policy)
@@ -580,15 +596,17 @@ fn integration_engine_builder_defaults_and_guardrails() {
 
     let misc_builder = Engine::builder::<TestOrder, TestReport, ()>().no_sync();
     let pnl_policy: TestPnlPolicy = PnlBoundsKillSwitchPolicy::new(
-        [pnl_bounds_barrier(
-            Asset::new("EUR").expect("asset code must be valid"),
-            Some(pnl("-100")),
-            None,
-        )],
-        vec![],
+        PnlBoundsKillSwitchSettings::new(
+            [pnl_bounds_barrier(
+                Asset::new("EUR").expect("asset code must be valid"),
+                Some(pnl("-100")),
+                None,
+            )],
+            vec![],
+        )
+        .expect("policy config must be valid"),
         misc_builder.storage_builder(),
-    )
-    .expect("policy config must be valid");
+    );
     assert!(
         <TestPnlPolicy as PreTradePolicy<TestOrder, TestReport, (), LocalSync>>::apply_execution_report(
             &pnl_policy,
@@ -609,15 +627,17 @@ fn integration_engine_builder_defaults_and_guardrails() {
     // Two MAX applications: first stores MAX, second overflows → true.
     let overflow_account = AccountId::from_u64(1);
     let overflow_policy: TestPnlPolicy = PnlBoundsKillSwitchPolicy::new(
-        [pnl_bounds_barrier(
-            Asset::new("USD").expect("asset code must be valid"),
-            Some(pnl("-100")),
-            None,
-        )],
-        vec![],
+        PnlBoundsKillSwitchSettings::new(
+            [pnl_bounds_barrier(
+                Asset::new("USD").expect("asset code must be valid"),
+                Some(pnl("-100")),
+                None,
+            )],
+            vec![],
+        )
+        .expect("policy config must be valid"),
         misc_builder.storage_builder(),
-    )
-    .expect("policy config must be valid");
+    );
     let report_max = TestReport {
         instrument: Instrument::new(
             Asset::new("AAPL").expect("must be valid"),

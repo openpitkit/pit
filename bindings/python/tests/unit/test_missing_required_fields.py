@@ -32,7 +32,7 @@ def test_start_pre_trade_pnl_kill_switch_without_operation_rejects() -> None:
         .builtin(
             policies.build_pnl_bounds_killswitch().broker_barriers(
                 policies.PnlBoundsBrokerBarrier(
-                    settlement_asset="USD",
+                    settlement_asset=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl("-500"),
                 )
             )
@@ -60,7 +60,7 @@ def test_apply_execution_report_without_financial_impact_does_not_panic() -> Non
         .builtin(
             policies.build_pnl_bounds_killswitch().broker_barriers(
                 policies.PnlBoundsBrokerBarrier(
-                    settlement_asset="USD",
+                    settlement_asset=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl("-500"),
                 )
             )
@@ -104,7 +104,7 @@ def test_start_pre_trade_order_size_limit_without_operation_rejects() -> None:
                         max_quantity=openpit.param.Quantity("100"),
                         max_notional=openpit.param.Volume("50000"),
                     ),
-                    settlement_asset="USD",
+                    settlement_asset=openpit.param.Asset("USD"),
                 )
             )
         )

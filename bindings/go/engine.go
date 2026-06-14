@@ -44,6 +44,7 @@ import (
 
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/accounts"
+	"go.openpit.dev/openpit/configure"
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
@@ -224,4 +225,11 @@ func (e *Engine) ApplyAccountAdjustment(
 // engine is.
 func (e *Engine) Accounts() accounts.Accounts {
 	return accounts.NewFromHandle(e.handle)
+}
+
+// Configure returns an accessor for runtime policy-settings updates bound to
+// this engine. The returned value is a thin handle; it is valid for as long as
+// the engine is.
+func (e *Engine) Configure() configure.Configurator {
+	return configure.NewFromHandle(e.handle)
 }

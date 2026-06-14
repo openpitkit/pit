@@ -217,8 +217,7 @@ Error:
   policies were registered;
 - for those non-domain failures, if `out_error` is not null, writes a
   caller-owned `OpenPitSharedString` error handle that MUST be released with
-  `openpit_destroy_shared_string`, and writes null to `out_build_error` if it
-  is not null;
+  `openpit_destroy_shared_string`; `out_build_error` is left untouched;
 - returns null when the configuration is rejected during building (for
   example, duplicate policy names or duplicate group ids); in that case, if
   `out_build_error` is not null, writes a caller-owned
@@ -230,8 +229,7 @@ Error:
 Ownership:
 
 - on success the returned engine pointer is owned by the caller and must be
-  released with `openpit_destroy_engine`; on success, null is written to
-  `out_build_error` if it is not null;
+  released with `openpit_destroy_engine`; `out_build_error` is left untouched;
 - the builder becomes consumed regardless of success and must not be reused.
 
 ```c
@@ -354,17 +352,18 @@ Cleanup:
   `openpit_pretrade_pre_trade_request_execute` or
   `openpit_destroy_pretrade_pre_trade_request`.
 
-Reject ownership contract:
+Output ownership contract:
 
+- on `Passed`, a non-null request pointer is written to `out_request` if it is
+  not null;
 - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
   `out_rejects` if it is not null;
-- the caller takes ownership and MUST release it with
-  `openpit_pretrade_destroy_reject_list`; failing to do so leaks the memory
-  allocated inside this call;
-- no thread-local state is involved, and the returned pointer is safe to read
-  on any thread;
-- on `Passed` and `Error`, null is written to `out_rejects`, and the caller
-  must not call destroy in those cases.
+- the caller owns either returned object and MUST release it with the
+  corresponding destroy function;
+- no thread-local state is involved, and returned pointers are safe to read on
+  any thread;
+- on `Passed` and `Error`, `out_rejects` is left untouched;
+- on `Rejected` and `Error`, `out_request` is left untouched.
 
 Order lifetime contract:
 
@@ -406,17 +405,18 @@ Cleanup:
   `openpit_pretrade_pre_trade_reservation_rollback`, or
   `openpit_destroy_pretrade_pre_trade_reservation`.
 
-Reject ownership contract:
+Output ownership contract:
 
+- on `Passed`, a non-null reservation pointer is written to `out_reservation`
+  if it is not null;
 - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
   `out_rejects` if it is not null;
-- the caller takes ownership and MUST release it with
-  `openpit_pretrade_destroy_reject_list`; failing to do so leaks the memory
-  allocated inside this call;
-- no thread-local state is involved, and the returned pointer is safe to read
-  on any thread;
-- on `Passed` and `Error`, null is written to `out_rejects`, and the caller
-  must not call destroy in those cases.
+- the caller owns either returned object and MUST release it with the
+  corresponding destroy function;
+- no thread-local state is involved, and returned pointers are safe to read on
+  any thread;
+- on `Passed` and `Error`, `out_rejects` is left untouched;
+- on `Rejected` and `Error`, `out_reservation` is left untouched.
 
 Order lifetime contract:
 
@@ -458,17 +458,18 @@ Ownership:
   released with `openpit_destroy_pretrade_pre_trade_request`, but it cannot be
   executed again.
 
-Reject ownership contract:
+Output ownership contract:
 
+- on `Passed`, a non-null reservation pointer is written to `out_reservation`
+  if it is not null;
 - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
   `out_rejects` if it is not null;
-- the caller takes ownership and MUST release it with
-  `openpit_pretrade_destroy_reject_list`; failing to do so leaks the memory
-  allocated inside this call;
-- no thread-local state is involved, and the returned pointer is safe to read
-  on any thread;
-- on `Passed` and `Error`, null is written to `out_rejects`, and the caller
-  must not call destroy in those cases.
+- the caller owns either returned object and MUST release it with the
+  corresponding destroy function;
+- no thread-local state is involved, and returned pointers are safe to read on
+  any thread;
+- on `Passed` and `Error`, `out_rejects` is left untouched;
+- on `Rejected` and `Error`, `out_reservation` is left untouched.
 
 ```c
 OpenPitPretradeStatus openpit_pretrade_pre_trade_request_execute(
@@ -605,12 +606,12 @@ Success:
 - if `out_blocks` is not null and at least one policy entered a blocked state,
   writes a caller-owned `OpenPitPretradeAccountBlockList` pointer; release it
   with `openpit_pretrade_destroy_account_block_list`;
-- if `out_blocks` is not null and no policy blocked, writes null.
+- when no policy blocked, `out_blocks` is left untouched;
 - if `out_adjustments` is not null and at least one policy produced an
   account-adjustment outcome, writes a caller-owned
   `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
   `openpit_destroy_account_adjustment_outcome_list`;
-- if `out_adjustments` is not null and no outcome was produced, writes null.
+- when no outcome was produced, `out_adjustments` is left untouched.
 
 Error:
 
@@ -709,7 +710,7 @@ Result handling:
   an account-adjustment outcome, writes a caller-owned
   `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
   `openpit_destroy_account_adjustment_outcome_list`; if no outcome was
-  produced, writes null;
+  produced, `out_outcomes` is left untouched;
 - `Rejected` stores batch error details in `out_reject`, the caller must
   release a returned object with
   `openpit_destroy_account_adjustment_batch_error`;
@@ -804,7 +805,7 @@ OpenPitParamAccountId openpit_account_group_error_get_account(
 ## `openpit_account_group_error_get_current_group`
 
 Returns the current group of the offending account from an account-group error,
-or writes zero and returns `false` when no group is present.
+or returns `false` and leaves `out_group` untouched when no group is set.
 
 Contract:
 
@@ -1067,6 +1068,91 @@ Contract:
 bool openpit_account_block_error_get_group(
     const OpenPitAccountBlockError * err,
     OpenPitParamAccountGroupId * out_group
+);
+```
+
+## `OpenPitConfigureErrorKind`
+
+Discriminant for the variant carried by an [`OpenPitConfigureError`].
+
+```c
+typedef uint32_t OpenPitConfigureErrorKind;
+/**
+ * No configurable policy carries the requested name.
+ */
+#define OpenPitConfigureErrorKind_Unknown ((OpenPitConfigureErrorKind) 0)
+/**
+ * A policy is registered under the name, but its settings type differs from
+ * the one the called configure function targets.
+ */
+#define OpenPitConfigureErrorKind_TypeMismatch ((OpenPitConfigureErrorKind) 1)
+/**
+ * The applied update was rejected by the policy's settings validation; the
+ * prior configuration still applies.
+ */
+#define OpenPitConfigureErrorKind_Validation ((OpenPitConfigureErrorKind) 2)
+```
+
+## `OpenPitConfigureError`
+
+Structured error returned by runtime policy reconfiguration.
+
+Ownership:
+
+- created by the `openpit_engine_configure_*` functions on failure;
+- owned by the caller;
+- released with `openpit_destroy_configure_error`.
+
+```c
+typedef struct OpenPitConfigureError OpenPitConfigureError;
+```
+
+## `openpit_destroy_configure_error`
+
+Releases a caller-owned configure error.
+
+Contract:
+
+- call exactly once per pointer returned by an `openpit_engine_configure_*`
+  function;
+- passing null is allowed and has no effect.
+
+```c
+void openpit_destroy_configure_error(
+    OpenPitConfigureError * err
+);
+```
+
+## `openpit_configure_error_get_message`
+
+Returns the human-readable error message from a configure error.
+
+Contract:
+
+- `err` must be a valid non-null pointer;
+- the returned view borrows from the error object and is valid while the error
+  is alive;
+- violating the pointer contract aborts the call.
+
+```c
+OpenPitStringView openpit_configure_error_get_message(
+    const OpenPitConfigureError * err
+);
+```
+
+## `openpit_configure_error_get_kind`
+
+Returns the variant kind of a configure error.
+
+Contract:
+
+- `err` must be a valid non-null pointer;
+- this function never fails;
+- violating the pointer contract aborts the call.
+
+```c
+OpenPitConfigureErrorKind openpit_configure_error_get_kind(
+    const OpenPitConfigureError * err
 );
 ```
 

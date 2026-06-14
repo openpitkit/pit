@@ -71,6 +71,8 @@ jobs:
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
+        with:
+          key: python-${{ matrix.python-version }}
 
       - name: Setup Python
         uses: actions/setup-python@v5

@@ -97,6 +97,7 @@
 //! through a `match`; that layer is not part of this module.
 
 mod builder;
+mod config_cell;
 mod index_flag;
 mod key_bound;
 mod policies;
@@ -108,6 +109,7 @@ mod storage;
 mod tests;
 
 pub use builder::StorageBuilder;
+pub use config_cell::{ArcSwapConfigCell, ConfigCell, LocalConfigCell};
 pub use index_flag::IndexFlag;
 pub use key_bound::{AnyKey, CreateStorageFor, IndexKeyBound};
 pub use policies::{FullLocking, IndexLocking, NoLocking};

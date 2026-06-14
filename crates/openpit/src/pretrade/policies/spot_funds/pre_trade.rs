@@ -31,6 +31,7 @@ use crate::param::{AccountId, Asset, PositionSize, Price, Side, TradeAmount};
 use crate::pretrade::holdings::{HoldError, Holdings};
 use crate::pretrade::policy::missing_required_field_reject;
 use crate::pretrade::{PolicyPreTradeResult, Reject, RejectCode, RejectScope, Rejects};
+use crate::storage::ConfigCell;
 use crate::Mutations;
 
 use super::rejects::{
@@ -75,7 +76,12 @@ where
         )
     }
 
-    /// Resolves the effective buy price via the market-order bundle.
+    /// Resolves the effective buy price for a market order.
+    ///
+    /// The instrument is resolved and the quote fetched through the
+    /// market-data service handle, then the slippage cascade is applied by
+    /// reading the settings cell on the hot path - allocation-free and
+    /// without acquiring a per-order lock.
     ///
     /// `account_id` and `account_info` select the per-account / per-group /
     /// default quote and the TTL cascade tier (widest [`QuoteResolution`]).
@@ -94,12 +100,20 @@ where
         let instrument_id = bundle
             .resolve(instrument)
             .ok_or_else(|| Self::reject_from_price_err(SpotFundsPriceError::QuoteUnavailable))?;
-        bundle
-            .effective_buy_price(instrument_id, account_id, account_info)
+        let quote = bundle
+            .quote(instrument_id, account_id, account_info)
+            .ok_or_else(|| Self::reject_from_price_err(SpotFundsPriceError::QuoteUnavailable))?;
+        self.settings
+            .with(|s| s.effective_buy_price(&quote, instrument_id, account_id, account_info))
             .map_err(Self::reject_from_price_err)
     }
 
-    /// Resolves the effective sell price via the market-order bundle.
+    /// Resolves the effective sell price for a market order.
+    ///
+    /// The instrument is resolved and the quote fetched through the
+    /// market-data service handle, then the slippage cascade is applied by
+    /// reading the settings cell on the hot path - allocation-free and
+    /// without acquiring a per-order lock.
     ///
     /// `account_id` and `account_info` select the per-account / per-group /
     /// default quote and the TTL cascade tier (widest [`QuoteResolution`]).
@@ -118,8 +132,11 @@ where
         let instrument_id = bundle
             .resolve(instrument)
             .ok_or_else(|| Self::reject_from_price_err(SpotFundsPriceError::QuoteUnavailable))?;
-        bundle
-            .effective_sell_price(instrument_id, account_id, account_info)
+        let quote = bundle
+            .quote(instrument_id, account_id, account_info)
+            .ok_or_else(|| Self::reject_from_price_err(SpotFundsPriceError::QuoteUnavailable))?;
+        self.settings
+            .with(|s| s.effective_sell_price(&quote, instrument_id, account_id, account_info))
             .map_err(Self::reject_from_price_err)
     }
 

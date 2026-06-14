@@ -21,6 +21,7 @@ pub(crate) mod account_control;
 pub(crate) mod account_groups;
 pub(crate) mod account_key;
 pub(crate) mod account_outcome;
+pub(crate) mod configure;
 pub(crate) mod engine;
 pub(crate) mod engine_builder;
 pub(crate) mod engine_trait;
@@ -48,6 +49,8 @@ pub use account_key::{AccountKey, AccountKeyConstraint};
 pub use account_outcome::{
     AccountAdjustmentBatchResult, AccountAdjustmentOutcome, AccountOutcomeEntry, OutcomeAmount,
 };
+pub(crate) use configure::{ConfigEntry, ConfigRegistry};
+pub use configure::{Configurator, ConfigureError};
 pub use engine_trait::{EngineTrait, EngineTraitOf};
 pub use execution_report::{
     ExecutionReportFillDetails, ExecutionReportOperation, ExecutionReportPositionImpact,

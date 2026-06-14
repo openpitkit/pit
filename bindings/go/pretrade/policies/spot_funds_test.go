@@ -18,6 +18,7 @@
 package policies_test
 
 import (
+	"strings"
 	"testing"
 
 	openpit "go.openpit.dev/openpit"
@@ -104,13 +105,13 @@ func TestSpotFundsBuilderBookTopWithInstrumentOverrides(t *testing.T) {
 			WithMarketOrders(service, 1500).
 			PricingSource(policies.SpotFundsPricingSourceBookTop).
 			Overrides(
-				policies.SpotFundsOverride{
-					Instrument:  marketdata.NewInstrumentIDFromUint64(1),
-					SlippageBps: optional.Some[uint16](500),
+				policies.SpotFundsOverrideEntry{
+					Target:   policies.SpotFundsOverrideTargetInstrument{Instrument: marketdata.NewInstrumentIDFromUint64(1)},
+					Override: policies.SpotFundsOverride{SlippageBps: optional.Some[uint16](500)},
 				},
-				policies.SpotFundsOverride{
-					Instrument:  marketdata.NewInstrumentIDFromUint64(2),
-					SlippageBps: optional.None[uint16](),
+				policies.SpotFundsOverrideEntry{
+					Target:   policies.SpotFundsOverrideTargetInstrument{Instrument: marketdata.NewInstrumentIDFromUint64(2)},
+					Override: policies.SpotFundsOverride{SlippageBps: optional.None[uint16]()},
 				},
 			),
 		).Build()
@@ -130,10 +131,12 @@ func TestSpotFundsBuilderOverrideAccountScoped(t *testing.T) {
 		Builtin(policies.BuildSpotFunds().
 			WithMarketOrders(service, 1500).
 			Overrides(
-				policies.SpotFundsOverride{
-					Instrument:  marketdata.NewInstrumentIDFromUint64(1),
-					AccountID:   optional.Some(account),
-					SlippageBps: optional.Some[uint16](200),
+				policies.SpotFundsOverrideEntry{
+					Target: policies.SpotFundsOverrideTargetInstrumentAccount{
+						Instrument: marketdata.NewInstrumentIDFromUint64(1),
+						AccountID:  account,
+					},
+					Override: policies.SpotFundsOverride{SlippageBps: optional.Some[uint16](200)},
 				},
 			),
 		).Build()
@@ -153,10 +156,12 @@ func TestSpotFundsBuilderOverrideGroupScoped(t *testing.T) {
 		Builtin(policies.BuildSpotFunds().
 			WithMarketOrders(service, 1500).
 			Overrides(
-				policies.SpotFundsOverride{
-					Instrument:     marketdata.NewInstrumentIDFromUint64(1),
-					AccountGroupID: optional.Some(group),
-					SlippageBps:    optional.Some[uint16](300),
+				policies.SpotFundsOverrideEntry{
+					Target: policies.SpotFundsOverrideTargetInstrumentAccountGroup{
+						Instrument:     marketdata.NewInstrumentIDFromUint64(1),
+						AccountGroupID: group,
+					},
+					Override: policies.SpotFundsOverride{SlippageBps: optional.Some[uint16](300)},
 				},
 			),
 		).Build()
@@ -174,9 +179,9 @@ func TestSpotFundsBuilderOverrideInstrumentOnly(t *testing.T) {
 		Builtin(policies.BuildSpotFunds().
 			WithMarketOrders(service, 1500).
 			Overrides(
-				policies.SpotFundsOverride{
-					Instrument:  marketdata.NewInstrumentIDFromUint64(1),
-					SlippageBps: optional.Some[uint16](100),
+				policies.SpotFundsOverrideEntry{
+					Target:   policies.SpotFundsOverrideTargetInstrument{Instrument: marketdata.NewInstrumentIDFromUint64(1)},
+					Override: policies.SpotFundsOverride{SlippageBps: optional.Some[uint16](100)},
 				},
 			),
 		).Build()
@@ -186,29 +191,199 @@ func TestSpotFundsBuilderOverrideInstrumentOnly(t *testing.T) {
 	engine.Stop()
 }
 
-func TestSpotFundsBuilderOverrideBothAccountAndGroupIsError(t *testing.T) {
+func TestSpotFundsBuilderPointerOverrideTargets(t *testing.T) {
 	service := mustMarketDataService(t)
 	defer service.Close()
 
-	account := param.NewAccountIDFromUint64(1)
-	group := mustAccountGroupID(t, 2)
+	group := mustAccountGroupID(t, 7)
+	entries := []policies.SpotFundsOverrideEntry{
+		{
+			Target: &policies.SpotFundsOverrideTargetInstrument{
+				Instrument: marketdata.NewInstrumentIDFromUint64(1),
+			},
+			Override: policies.SpotFundsOverride{
+				SlippageBps: optional.Some[uint16](100),
+			},
+		},
+		{
+			Target: &policies.SpotFundsOverrideTargetInstrumentAccount{
+				Instrument: marketdata.NewInstrumentIDFromUint64(2),
+				AccountID:  param.NewAccountIDFromUint64(42),
+			},
+			Override: policies.SpotFundsOverride{
+				SlippageBps: optional.Some[uint16](200),
+			},
+		},
+		{
+			Target: &policies.SpotFundsOverrideTargetInstrumentAccountGroup{
+				Instrument:     marketdata.NewInstrumentIDFromUint64(3),
+				AccountGroupID: group,
+			},
+			Override: policies.SpotFundsOverride{
+				SlippageBps: optional.Some[uint16](300),
+			},
+		},
+	}
 
-	_, err := openpit.NewEngineBuilder().NoSync().
+	engine, err := openpit.NewEngineBuilder().NoSync().
 		Builtin(policies.BuildSpotFunds().
 			WithMarketOrders(service, 1500).
-			Overrides(
-				policies.SpotFundsOverride{
-					Instrument:     marketdata.NewInstrumentIDFromUint64(1),
-					AccountID:      optional.Some(account),
-					AccountGroupID: optional.Some(group),
-					SlippageBps:    optional.Some[uint16](100),
-				},
-			),
+			Overrides(entries...),
 		).Build()
-	if err == nil {
-		t.Fatal("Build() error = nil, want non-nil (both account and group set)")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	engine.Stop()
+}
+
+func TestSpotFundsBuilderInvalidOverrideTargets(t *testing.T) {
+	tests := []struct {
+		name   string
+		target policies.SpotFundsOverrideTarget
+	}{
+		{name: "nil interface"},
+		{
+			name:   "nil instrument pointer",
+			target: (*policies.SpotFundsOverrideTargetInstrument)(nil),
+		},
+		{
+			name:   "nil account pointer",
+			target: (*policies.SpotFundsOverrideTargetInstrumentAccount)(nil),
+		},
+		{
+			name: "nil account group pointer",
+			target: (*policies.SpotFundsOverrideTargetInstrumentAccountGroup)(
+				nil,
+			),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := openpit.NewEngineBuilder().NoSync().
+				Builtin(policies.BuildSpotFunds().
+					PolicyGroupID(0).
+					Overrides(policies.SpotFundsOverrideEntry{
+						Target: test.target,
+					}),
+				).Build()
+			if err == nil {
+				t.Fatal("Build() error = nil, want invalid target error")
+			}
+			if !strings.Contains(
+				err.Error(),
+				"spot funds override 0: target is nil",
+			) {
+				t.Fatalf("Build() error = %q, want indexed nil target error", err)
+			}
+		})
 	}
 }
+
+func TestSpotFundsConfiguratorPointerOverrideTargets(t *testing.T) {
+	service := mustMarketDataService(t)
+	defer service.Close()
+
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFunds().WithMarketOrders(service, 1500)).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	group := mustAccountGroupID(t, 7)
+	err = engine.Configure().SpotFunds(
+		policies.SpotFundsPolicyName,
+		optional.None[uint16](),
+		optional.None[policies.SpotFundsPricingSource](),
+		[]policies.SpotFundsOverrideEntry{
+			{
+				Target: &policies.SpotFundsOverrideTargetInstrument{
+					Instrument: marketdata.NewInstrumentIDFromUint64(1),
+				},
+			},
+			{
+				Target: &policies.SpotFundsOverrideTargetInstrumentAccount{
+					Instrument: marketdata.NewInstrumentIDFromUint64(2),
+					AccountID:  param.NewAccountIDFromUint64(42),
+				},
+			},
+			{
+				Target: &policies.SpotFundsOverrideTargetInstrumentAccountGroup{
+					Instrument:     marketdata.NewInstrumentIDFromUint64(3),
+					AccountGroupID: group,
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("Configure().SpotFunds() error = %v", err)
+	}
+}
+
+func TestSpotFundsConfiguratorInvalidOverrideTargets(t *testing.T) {
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFunds()).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	tests := []struct {
+		name   string
+		target policies.SpotFundsOverrideTarget
+	}{
+		{name: "nil interface"},
+		{
+			name:   "nil instrument pointer",
+			target: (*policies.SpotFundsOverrideTargetInstrument)(nil),
+		},
+		{
+			name:   "nil account pointer",
+			target: (*policies.SpotFundsOverrideTargetInstrumentAccount)(nil),
+		},
+		{
+			name: "nil account group pointer",
+			target: (*policies.SpotFundsOverrideTargetInstrumentAccountGroup)(
+				nil,
+			),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := engine.Configure().SpotFunds(
+				policies.SpotFundsPolicyName,
+				optional.None[uint16](),
+				optional.None[policies.SpotFundsPricingSource](),
+				[]policies.SpotFundsOverrideEntry{{Target: test.target}},
+			)
+			if err == nil {
+				t.Fatal(
+					"Configure().SpotFunds() error = nil, want invalid target error",
+				)
+			}
+			if !strings.Contains(
+				err.Error(),
+				"configure: spot funds override 0: target is nil",
+			) {
+				t.Fatalf(
+					"Configure().SpotFunds() error = %q, want indexed nil target error",
+					err,
+				)
+			}
+		})
+	}
+}
+
+// TestSpotFundsBuilderOverrideBothAccountAndGroupIsError is no longer
+// representable at the type level: the target variants
+// SpotFundsOverrideTargetInstrumentAccount and
+// SpotFundsOverrideTargetInstrumentAccountGroup are mutually exclusive by
+// construction, so this scenario cannot be expressed in Go.
+// The C ABI still enforces mutual exclusion, but the Go API prevents it.
 
 func TestSpotFundsBuilderGroupID(t *testing.T) {
 	engine, err := openpit.NewEngineBuilder().NoSync().

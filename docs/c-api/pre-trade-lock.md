@@ -286,11 +286,12 @@ Status:
 
 - `Error`: `lock`, `out_price`, or `out_prices` is null; `out_error` receives
   an error handle when provided.
-- `Empty`: the call succeeded and the group has no prices; `out_prices` is set
-  to null.
+- `Empty`: the call succeeded and the group has no prices; `out_price` and
+  `out_prices` are left untouched.
 - `One`: the call succeeded and `out_price` contains the only stored price;
-  `out_prices` is set to null.
+  `out_prices` is left untouched.
 - `List`: the call succeeded and `out_prices` contains a caller-owned list.
+  `out_price` is left untouched.
 
 Cleanup:
 

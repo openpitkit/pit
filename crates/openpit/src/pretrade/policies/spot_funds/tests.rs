@@ -221,10 +221,16 @@ fn engine_builder() -> crate::SyncedEngineBuilder<(), (), (), crate::FullSync> {
     crate::Engine::builder().full_sync()
 }
 
+/// Default-cascade settings: global `slip_bps`, `Mark` pricing, no overrides.
+fn settings(slip_bps: u16) -> SpotFundsSettings {
+    SpotFundsSettings::new(slip_bps, SpotFundsPricingSource::Mark, std::iter::empty())
+        .expect("settings must build")
+}
+
 /// Builds a `SpotFundsPolicy` with no market-order support.
 fn build_policy(_mark: Option<()>, _slip_bps: Option<u16>) -> TestPolicy {
     let b = engine_builder();
-    SpotFundsPolicy::new(None, b.storage_builder())
+    SpotFundsPolicy::new(settings(0), None, b.storage_builder())
 }
 
 /// Builds a policy whose market-data service has `instrument` registered
@@ -241,14 +247,8 @@ fn build_policy_with_market_data(
         .expect("register must succeed");
     svc.push(id, Quote::new().with_mark(price))
         .expect("push must succeed");
-    let bundle = SpotFundsMarketData::new(
-        Arc::clone(&svc),
-        slip_bps,
-        SpotFundsPricingSource::Mark,
-        std::iter::empty(),
-    )
-    .expect("bundle must build");
-    SpotFundsPolicy::new(Some(bundle), b.storage_builder())
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+    SpotFundsPolicy::new(settings(slip_bps), Some(bundle), b.storage_builder())
 }
 
 // ── request builders ──────────────────────────────────────────────────────
@@ -454,6 +454,203 @@ fn report_blocks(policy: &TestPolicy, report: &TestReport) -> Vec<crate::pretrad
 fn new_creates_empty_holdings() {
     let policy = build_policy(None, None);
     assert!(holdings_of(&policy, account(99224416), &asset("USD")).is_none());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SpotFundsSettings construction + validation
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn settings_new_rejects_out_of_range_global_slippage() {
+    let result = SpotFundsSettings::new(10_001, SpotFundsPricingSource::Mark, std::iter::empty());
+    assert_eq!(
+        result.err(),
+        Some(SpotFundsConfigError::SlippageOutOfRange { bps: 10_001 })
+    );
+}
+
+#[test]
+fn settings_new_accepts_max_slippage_boundary() {
+    // 10_000 bps is the inclusive upper bound and must build.
+    assert!(
+        SpotFundsSettings::new(10_000, SpotFundsPricingSource::Mark, std::iter::empty()).is_ok()
+    );
+}
+
+#[test]
+fn settings_set_global_slippage_bps_boundary_and_reject() {
+    let mut s = settings(0);
+    // Boundary value succeeds.
+    assert!(s.set_global_slippage_bps(10_000).is_ok());
+    // Above the bound is rejected and the prior value is retained.
+    assert_eq!(
+        s.set_global_slippage_bps(10_001).err(),
+        Some(SpotFundsConfigError::SlippageOutOfRange { bps: 10_001 })
+    );
+    // The 10_000 bps value is still in effect: a sell at 100% slippage prices
+    // to zero and is uncomputable, whereas a fresh 0-bps default would not.
+    let (svc, id) = {
+        let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+        let id = svc
+            .register(instr("AAPL", "USD"))
+            .expect("register must succeed");
+        svc.push(id, Quote::new().with_mark(px("100")))
+            .expect("push must succeed");
+        (svc, id)
+    };
+    let md = SpotFundsMarketData::<FullSync>::new(Arc::clone(&svc));
+    let quote = md.quote(id, account(7), &None).expect("quote present");
+    assert!(s
+        .effective_sell_price(&quote, id, account(7), &None)
+        .is_err());
+}
+
+#[test]
+fn settings_set_override_above_bound_is_rejected() {
+    let mut s = settings(0);
+    let id = {
+        let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+        svc.register(instr("AAPL", "USD"))
+            .expect("register must succeed")
+    };
+    assert_eq!(
+        s.set_override(
+            SpotFundsOverrideTarget::Instrument(id),
+            SpotFundsOverride {
+                slippage_bps: Some(10_001),
+            },
+        )
+        .err(),
+        Some(SpotFundsConfigError::SlippageOutOfRange { bps: 10_001 })
+    );
+}
+
+#[test]
+fn settings_set_override_then_clear_falls_back_to_global() {
+    // Global 0 bps; set an instrument override at 1000 bps, observe it, then
+    // clear it (None) and observe the cascade fall back to the global tier.
+    let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let id = svc
+        .register(instr("AAPL", "USD"))
+        .expect("register must succeed");
+    svc.push(id, Quote::new().with_mark(px("100")))
+        .expect("push must succeed");
+    let md = SpotFundsMarketData::<FullSync>::new(Arc::clone(&svc));
+    let quote = md.quote(id, account(7), &None).expect("quote present");
+
+    let mut s = settings(0);
+    s.set_override(
+        SpotFundsOverrideTarget::Instrument(id),
+        SpotFundsOverride {
+            slippage_bps: Some(1000),
+        },
+    )
+    .expect("override must set");
+    // 100 * (1 + 0.10) = 110.
+    assert_eq!(
+        s.effective_buy_price(&quote, id, account(7), &None),
+        Ok(px("110"))
+    );
+
+    s.set_override(
+        SpotFundsOverrideTarget::Instrument(id),
+        SpotFundsOverride { slippage_bps: None },
+    )
+    .expect("override must clear");
+    // Back to global 0 bps: 100 * 1.00 = 100.
+    assert_eq!(
+        s.effective_buy_price(&quote, id, account(7), &None),
+        Ok(px("100"))
+    );
+}
+
+#[test]
+fn settings_set_pricing_source_switches_quote_field() {
+    // Mark unset, ask = 100: Mark source has no base (QuoteUnavailable),
+    // BookTop source reads `ask` and prices the buy.
+    let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let id = svc
+        .register(instr("AAPL", "USD"))
+        .expect("register must succeed");
+    svc.push(id, Quote::new().with_ask(px("100")))
+        .expect("push must succeed");
+    let md = SpotFundsMarketData::<FullSync>::new(Arc::clone(&svc));
+    let quote = md.quote(id, account(7), &None).expect("quote present");
+
+    let mut s = settings(0);
+    assert!(s
+        .effective_buy_price(&quote, id, account(7), &None)
+        .is_err());
+    s.set_pricing_source(SpotFundsPricingSource::BookTop);
+    assert_eq!(
+        s.effective_buy_price(&quote, id, account(7), &None),
+        Ok(px("100"))
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Policy group tag + ConfigurablePolicy
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn with_policy_group_id_records_tag_observed_by_policy() {
+    use crate::pretrade::PreTradePolicy;
+    let id = DEFAULT_POLICY_GROUP_ID;
+    let policy = build_policy(None, None);
+    assert_eq!(
+        <TestPolicy as PreTradePolicy<
+            TestOrder,
+            TestReport,
+            TestAdjustment,
+            crate::core::FullSync,
+        >>::policy_group_id(&policy),
+        id
+    );
+
+    let tag = crate::pretrade::PolicyGroupId::new(7);
+    let tagged = build_policy(None, None).with_policy_group_id(tag);
+    assert_eq!(
+        <TestPolicy as PreTradePolicy<
+            TestOrder,
+            TestReport,
+            TestAdjustment,
+            crate::core::FullSync,
+        >>::policy_group_id(&tagged),
+        tag
+    );
+}
+
+#[test]
+fn settings_cell_clone_shares_state_with_running_policy() {
+    use crate::pretrade::ConfigurablePolicy;
+    use crate::storage::ConfigCell;
+
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    // Start at global 0 bps so a market buy of qty 10 @ mark 100 reserves 1000.
+    let policy = build_policy_with_market_data(aapl_usd.clone(), px("100"), 0);
+    seed(&policy, acc, asset("USD"), "10000");
+
+    // Publish a new global slippage (2000 bps) through the registry-side clone;
+    // the running policy must observe it on its next hot-path read.
+    let cell =
+        <TestPolicy as ConfigurablePolicy<crate::storage::FullLocking>>::settings_cell(&policy);
+    cell.update(|s| s.set_global_slippage_bps(2000))
+        .expect("update must publish");
+
+    // effective = 100 * (1 + 0.20) = 120; held = 10 * 120 = 1200.
+    let order = make_order(
+        acc,
+        aapl_usd,
+        Side::Buy,
+        TradeAmount::Quantity(qty("10")),
+        None,
+    );
+    let mut mutations = Mutations::with_capacity(1);
+    pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
+    let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
+    assert_eq!(h.held(), ps("1200"));
+    assert_eq!(h.available(), ps("8800"));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3197,7 +3394,7 @@ fn build_engine_with_spot_funds_policy(
 ) -> crate::FullSyncEngine<TestOrder, TestReport, TestAdjustment> {
     let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
     let policy: SpotFundsPolicy<FullSync, FullSync> =
-        SpotFundsPolicy::new(None, builder.storage_builder());
+        SpotFundsPolicy::new(settings(0), None, builder.storage_builder());
     builder
         .pre_trade(policy)
         .build()
@@ -3435,7 +3632,7 @@ fn hold_rollback_overflow_blocks_account_via_local_engine() {
 
     let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().no_sync();
     let policy: SpotFundsPolicy<crate::LocalSync, crate::LocalSync> =
-        SpotFundsPolicy::new(None, builder.storage_builder());
+        SpotFundsPolicy::new(settings(0), None, builder.storage_builder());
     let engine: crate::LocalEngine<TestOrder, TestReport, TestAdjustment> = builder
         .pre_trade(policy)
         .build()
@@ -3560,7 +3757,7 @@ fn hold_rollback_overflow_blocks_account_with_account_sync_storage() {
     ));
     let groups = crate::core::account_groups::AccountGroups::new(&storage_builder);
 
-    let policy: AccountSyncPolicy = SpotFundsPolicy::new(None, &storage_builder);
+    let policy: AccountSyncPolicy = SpotFundsPolicy::new(settings(0), None, &storage_builder);
 
     let make_control = || AccountControl::new(AccountBlockHandle::from_inner(blocked.clone()), acc);
 
@@ -4578,14 +4775,14 @@ fn buy_market_group_override_reserves_group_slippage_not_global() {
             },
         ),
     ];
-    let bundle = SpotFundsMarketData::new(
-        Arc::clone(&svc),
+    let settings = SpotFundsSettings::new(
         0, // global = 0 bps
         SpotFundsPricingSource::Mark,
         overrides,
     )
-    .expect("bundle must build");
-    let policy = SpotFundsPolicy::new(Some(bundle), b.storage_builder());
+    .expect("settings must build");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+    let policy = SpotFundsPolicy::new(settings, Some(bundle), b.storage_builder());
     seed(&policy, acc, asset("USD"), "10000");
 
     let order = make_order(

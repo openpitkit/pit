@@ -316,9 +316,9 @@ func TestExampleWikiMarketDataMarketOrdersBookTopOverride(t *testing.T) {
 			policies.BuildSpotFunds().
 				WithMarketOrders(marketData, 100).
 				PricingSource(policies.SpotFundsPricingSourceBookTop).
-				Overrides(policies.SpotFundsOverride{
-					Instrument:  aaplID,
-					SlippageBps: optional.Some(uint16(0)),
+				Overrides(policies.SpotFundsOverrideEntry{
+					Target:   policies.SpotFundsOverrideTargetInstrument{Instrument: aaplID},
+					Override: policies.SpotFundsOverride{SlippageBps: optional.Some(uint16(0))},
 				}),
 		).
 		Build()

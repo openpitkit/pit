@@ -37,6 +37,7 @@ use openpit::{
 // - ../pit.wiki/Balance-Reconciliation.md
 // - ../pit.wiki/Custom-Rust-Types.md
 // - ../pit.wiki/Domain-Types.md
+// - ../pit.wiki/Dynamic-Policy-Reconfiguration.md
 // - ../pit.wiki/Getting-Started.md
 // - ../pit.wiki/Policies.md
 // - ../pit.wiki/Policy-API.md
@@ -823,21 +824,25 @@ fn example_wiki_policies_rate_limit() -> Result<(), Box<dyn std::error::Error>> 
     // Keep this example in sync with the matching wiki example.
     use std::time::Duration;
 
-    use openpit::pretrade::policies::{RateLimit, RateLimitBrokerBarrier, RateLimitPolicy};
+    use openpit::pretrade::policies::{
+        RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
+    };
 
     let builder = Engine::builder::<OrderOperation, PitExecutionReport, ()>().no_sync();
     let policy = RateLimitPolicy::new(
-        Some(RateLimitBrokerBarrier {
-            limit: RateLimit {
-                max_orders: 100,
-                window: Duration::from_secs(1),
-            },
-        }),
-        [],
-        [],
-        [],
+        RateLimitSettings::new(
+            Some(RateLimitBrokerBarrier {
+                limit: RateLimit {
+                    max_orders: 100,
+                    window: Duration::from_secs(1),
+                },
+            }),
+            [],
+            [],
+            [],
+        )?,
         builder.storage_builder(),
-    )?;
+    );
     let engine = builder.pre_trade(policy).build()?;
 
     let order = aapl_usd_order("1", "100");
@@ -851,24 +856,25 @@ fn example_wiki_policies_order_size_limit() -> Result<(), Box<dyn std::error::Er
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{Asset, Quantity, Volume};
     use openpit::pretrade::policies::{
-        OrderSizeAssetBarrier, OrderSizeLimit, OrderSizeLimitPolicy,
+        OrderSizeAssetBarrier, OrderSizeLimit, OrderSizeLimitPolicy, OrderSizeLimitSettings,
     };
-
-    let policy = OrderSizeLimitPolicy::new(
-        None,
-        [OrderSizeAssetBarrier {
-            limit: OrderSizeLimit {
-                max_quantity: Quantity::from_str("100")?,
-                max_notional: Volume::from_str("50000")?,
-            },
-            settlement_asset: Asset::new("USD")?,
-        }],
-        [],
-    )?;
+    use openpit::storage::NoLocking;
 
     let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
-        .pre_trade(policy)
+        .pre_trade(OrderSizeLimitPolicy::<NoLocking>::new(
+            OrderSizeLimitSettings::new(
+                None,
+                [OrderSizeAssetBarrier {
+                    limit: OrderSizeLimit {
+                        max_quantity: Quantity::from_str("100")?,
+                        max_notional: Volume::from_str("50000")?,
+                    },
+                    settlement_asset: Asset::new("USD")?,
+                }],
+                [],
+            )?,
+        ))
         .build()?;
 
     let order = aapl_usd_order("10", "100");
@@ -881,18 +887,22 @@ fn example_wiki_policies_pnl_bounds_killswitch() -> Result<(), Box<dyn std::erro
     // Wiki example: pit.wiki/Policies.md - PnlBoundsKillSwitchPolicy
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{Asset, Pnl};
-    use openpit::pretrade::policies::{PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy};
+    use openpit::pretrade::policies::{
+        PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchSettings,
+    };
 
     let builder = Engine::builder::<OrderOperation, PitExecutionReport, ()>().no_sync();
     let policy = PnlBoundsKillSwitchPolicy::new(
-        [PnlBoundsBrokerBarrier {
-            settlement_asset: Asset::new("USD")?,
-            lower_bound: Some(Pnl::from_str("-1000")?),
-            upper_bound: Some(Pnl::from_str("500")?),
-        }],
-        [],
+        PnlBoundsKillSwitchSettings::new(
+            [PnlBoundsBrokerBarrier {
+                settlement_asset: Asset::new("USD")?,
+                lower_bound: Some(Pnl::from_str("-1000")?),
+                upper_bound: Some(Pnl::from_str("500")?),
+            }],
+            [],
+        )?,
         builder.storage_builder(),
-    )?;
+    );
     let engine = builder.pre_trade(policy).build()?;
 
     let order = aapl_usd_order("1", "100");
@@ -1045,11 +1055,11 @@ fn example_wiki_custom_types_account_adjustment_wrapper() -> Result<(), Box<dyn 
 fn example_wiki_policies_spot_funds() -> Result<(), Box<dyn std::error::Error>> {
     // Wiki example: pit.wiki/Policies.md - SpotFundsPolicy
     // Keep this example in sync with the matching wiki example.
-    use openpit::pretrade::policies::SpotFundsPolicy;
+    use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
     use openpit::{
-        Engine, FullSync, OrderOperation, SpotFundsMarketData, WithAccountAdjustmentAmount,
-        WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
-        WithExecutionReportFillDetails, WithExecutionReportOperation,
+        Engine, FullSync, OrderOperation, SpotFundsMarketData, SpotFundsPricingSource,
+        WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
+        WithAccountAdjustmentBounds, WithExecutionReportFillDetails, WithExecutionReportOperation,
     };
 
     // Report and account-adjustment shapes composed from public SDK wrappers.
@@ -1061,6 +1071,7 @@ fn example_wiki_policies_spot_funds() -> Result<(), Box<dyn std::error::Error>> 
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
     // Limit-only mode: no market-data bundle.
     let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])?,
         None::<SpotFundsMarketData<FullSync>>,
         builder.storage_builder(),
     );
@@ -1075,10 +1086,10 @@ fn example_wiki_spot_funds_limit_only() -> Result<(), Box<dyn std::error::Error>
     use openpit::param::{
         AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, TradeAmount,
     };
-    use openpit::pretrade::policies::SpotFundsPolicy;
+    use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
     use openpit::{
         AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
-        Engine, FullSync, Instrument, OrderOperation, SpotFundsMarketData,
+        Engine, FullSync, Instrument, OrderOperation, SpotFundsMarketData, SpotFundsPricingSource,
         WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
         WithAccountAdjustmentBounds, WithExecutionReportFillDetails, WithExecutionReportOperation,
     };
@@ -1092,6 +1103,7 @@ fn example_wiki_spot_funds_limit_only() -> Result<(), Box<dyn std::error::Error>
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
     // Limit-only mode: no market-data bundle.
     let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])?,
         None::<SpotFundsMarketData<FullSync>>,
         builder.storage_builder(),
     );
@@ -1140,7 +1152,7 @@ fn example_wiki_spot_funds_market_orders() -> Result<(), Box<dyn std::error::Err
     use openpit::param::{
         AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, TradeAmount,
     };
-    use openpit::pretrade::policies::SpotFundsPolicy;
+    use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
     use openpit::{
         AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
         Engine, FullSync, Instrument, OrderOperation, Quote, QuoteTtl, SpotFundsMarketData,
@@ -1162,14 +1174,13 @@ fn example_wiki_spot_funds_market_orders() -> Result<(), Box<dyn std::error::Err
     market_data.push(aapl_id, Quote::new().with_mark(Price::from_str("200")?))?;
 
     // Worst-case slippage of 1500 bps, priced from the quote mark.
-    let bundle = SpotFundsMarketData::new(
-        Arc::clone(&market_data),
-        1500,
-        SpotFundsPricingSource::Mark,
-        std::iter::empty(),
-    )?;
-    let policy =
-        SpotFundsPolicy::<FullSync, FullSync>::new(Some(bundle), builder.storage_builder());
+    let settings = SpotFundsSettings::new(1500, SpotFundsPricingSource::Mark, [])?;
+    let bundle = SpotFundsMarketData::new(Arc::clone(&market_data));
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        settings,
+        Some(bundle),
+        builder.storage_builder(),
+    );
     let engine = builder.pre_trade(policy).build()?;
 
     let account = AccountId::from_u64(99224416);
@@ -1209,12 +1220,12 @@ fn example_wiki_balance_reconciliation_delta_absolute() -> Result<(), Box<dyn st
     // Wiki example: pit.wiki/Balance-Reconciliation.md - Delta Versus Absolute
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{AccountId, AdjustmentAmount, Asset, PositionSize};
-    use openpit::pretrade::policies::SpotFundsPolicy;
+    use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
     use openpit::{
         AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
-        Engine, FullSync, OrderOperation, SpotFundsMarketData, WithAccountAdjustmentAmount,
-        WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
-        WithExecutionReportFillDetails, WithExecutionReportOperation,
+        Engine, FullSync, OrderOperation, SpotFundsMarketData, SpotFundsPricingSource,
+        WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
+        WithAccountAdjustmentBounds, WithExecutionReportFillDetails, WithExecutionReportOperation,
     };
 
     // Report and account-adjustment shapes composed from public SDK wrappers.
@@ -1225,6 +1236,7 @@ fn example_wiki_balance_reconciliation_delta_absolute() -> Result<(), Box<dyn st
 
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
     let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])?,
         None::<SpotFundsMarketData<FullSync>>,
         builder.storage_builder(),
     );
@@ -1274,14 +1286,14 @@ fn example_wiki_pre_trade_lock_persistence() -> Result<(), Box<dyn std::error::E
     use openpit::param::{
         AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, Trade, TradeAmount,
     };
-    use openpit::pretrade::policies::SpotFundsPolicy;
+    use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
     use openpit::pretrade::PreTradeLock;
     use openpit::{
         AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
         Engine, ExecutionReportFillDetails, ExecutionReportOperation, FullSync, Instrument,
-        OrderOperation, PolicyGroupId, SpotFundsMarketData, WithAccountAdjustmentAmount,
-        WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
-        WithExecutionReportFillDetails, WithExecutionReportOperation,
+        OrderOperation, PolicyGroupId, SpotFundsMarketData, SpotFundsPricingSource,
+        WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
+        WithAccountAdjustmentBounds, WithExecutionReportFillDetails, WithExecutionReportOperation,
     };
 
     type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
@@ -1291,6 +1303,7 @@ fn example_wiki_pre_trade_lock_persistence() -> Result<(), Box<dyn std::error::E
 
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
     let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])?,
         None::<SpotFundsMarketData<FullSync>>,
         builder.storage_builder(),
     );
@@ -1436,5 +1449,142 @@ fn example_wiki_account_block_unblock() -> Result<(), Box<dyn std::error::Error>
     let desk = AccountGroupId::from_u32(7)?;
     accounts.block_group(desk, "desk suspended".to_string())?;
     accounts.unblock_group(desk)?;
+    Ok(())
+}
+
+#[test]
+fn example_wiki_dynamic_policy_reconfiguration_rate_limit() -> Result<(), Box<dyn std::error::Error>>
+{
+    // Wiki example: pit.wiki/Dynamic-Policy-Reconfiguration.md - Retune a Built-in Policy
+    // This mirror is intentionally wider than the wiki snippet: it adds the test
+    // harness (the fn -> Result wrapper and `order` helper) so the example runs.
+    // Keep the shared user-code flow in sync with the wiki.
+    use std::time::Duration;
+
+    use openpit::pretrade::policies::{
+        RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError, RateLimitSettings,
+    };
+    use openpit::storage::NoLocking;
+    use openpit::{Engine, OrderOperation, WithExecutionReportOperation, WithFinancialImpact};
+
+    type Report = WithExecutionReportOperation<WithFinancialImpact<()>>;
+
+    // Harness helper: the AAPL/USD order from Getting Started.
+    fn order() -> OrderOperation {
+        aapl_usd_order("1", "100")
+    }
+
+    // Register the rate-limit policy so the engine keeps a handle to its
+    // settings cell; built-in policies are configurable by name.
+    let builder = Engine::builder::<OrderOperation, Report, ()>().no_sync();
+    let policy = RateLimitPolicy::new(
+        RateLimitSettings::new(
+            Some(RateLimitBrokerBarrier {
+                limit: RateLimit {
+                    max_orders: 5,
+                    window: Duration::from_secs(60),
+                },
+            }),
+            [],
+            [],
+            [],
+        )?,
+        builder.storage_builder(),
+    );
+    let engine = builder.pre_trade(policy).build()?;
+
+    // The generous limit of 5 admits the first three orders. `order` is the
+    // AAPL/USD order built in Getting Started.
+    for _ in 0..3 {
+        engine.execute_pre_trade(order())?.commit();
+    }
+
+    // Tighten the broker limit to 2 at runtime, without rebuilding the engine.
+    // Built-in policies register under their own name (RateLimitPolicy::NAME).
+    let name = RateLimitPolicy::<NoLocking>::NAME;
+    engine
+        .configure()
+        .rate_limit::<RateLimitPolicyError>(name, |settings| {
+            settings.set_broker(Some(RateLimitBrokerBarrier {
+                limit: RateLimit {
+                    max_orders: 2,
+                    window: Duration::from_secs(60),
+                },
+            }))
+        })?;
+
+    // The next order would have passed under the old limit of 5; the new limit
+    // of 2 rejects it, proving the live policy reads the retuned value.
+    let rejects = engine
+        .execute_pre_trade(order())
+        .err()
+        .expect("order beyond the tightened limit must be rejected");
+    assert_eq!(rejects[0].reason, "rate limit exceeded: broker barrier");
+    Ok(())
+}
+
+#[test]
+fn example_wiki_dynamic_policy_reconfiguration_set_account_pnl(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Wiki example: pit.wiki/Dynamic-Policy-Reconfiguration.md - Force-set Accumulated P&L
+    // This mirror is intentionally wider than the wiki snippet: it adds the test
+    // harness (the fn -> Result wrapper, the `order` helper, and the `account`
+    // binding) so the example runs. Keep the shared user-code flow in sync with
+    // the wiki.
+    use openpit::param::{AccountId, Asset, Pnl};
+    use openpit::pretrade::policies::{
+        PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchSettings,
+    };
+    use openpit::storage::NoLocking;
+    use openpit::{Engine, OrderOperation, WithExecutionReportOperation, WithFinancialImpact};
+
+    type Report = WithExecutionReportOperation<WithFinancialImpact<()>>;
+
+    // Harness: the AAPL/USD order from Getting Started and its account.
+    let account = AccountId::from_u64(99224416);
+    fn order() -> OrderOperation {
+        aapl_usd_order("1", "100")
+    }
+
+    // Register the kill-switch policy so the engine keeps a handle to its
+    // accumulator; built-in policies are configurable by name.
+    let builder = Engine::builder::<OrderOperation, Report, ()>().no_sync();
+    let policy = PnlBoundsKillSwitchPolicy::new(
+        PnlBoundsKillSwitchSettings::new(
+            [PnlBoundsBrokerBarrier {
+                settlement_asset: Asset::new("USD")?,
+                lower_bound: Some(Pnl::from_str("-100")?),
+                upper_bound: None,
+            }],
+            [],
+        )?,
+        builder.storage_builder(),
+    );
+    let engine = builder.pre_trade(policy).build()?;
+
+    // With no P&L history the order passes against the lower bound of -100.
+    // `order` is the AAPL/USD order built in Getting Started.
+    engine.execute_pre_trade(order())?.commit();
+
+    // Force-set the account's accumulated P&L to -150 USD, below the bound.
+    // Built-in policies register under their own name (PnlBoundsKillSwitchPolicy::NAME).
+    let name = PnlBoundsKillSwitchPolicy::<NoLocking>::NAME;
+    engine.configure().set_account_pnl(
+        name,
+        account,
+        Asset::new("USD")?,
+        Pnl::from_str("-150")?,
+    )?;
+
+    // The next order for that account breaches the lower bound and is rejected;
+    // the breach also latches an engine-level block on the account.
+    let rejects = engine
+        .execute_pre_trade(order())
+        .err()
+        .expect("order beyond the breached bound must be rejected");
+    assert_eq!(
+        rejects[0].reason,
+        "pnl kill switch triggered: broker barrier"
+    );
     Ok(())
 }

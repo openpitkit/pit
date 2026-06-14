@@ -32,10 +32,10 @@ use crate::marketdata::MarketDataSync;
 use crate::param::{AccountId, Asset};
 use crate::pretrade::holdings::HoldingsStore;
 use crate::pretrade::policy::{PolicyGroupId, PolicyName};
+use crate::pretrade::ConfigurablePolicy;
 use crate::pretrade::PreTradePolicy;
-use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
 use crate::pretrade::{PolicyPreTradeResult, PostTradeResult, PreTradeContext, Rejects};
-use crate::storage::{CreateStorageFor, StorageBuilder};
+use crate::storage::{ConfigCell, CreateStorageFor, StorageBuilder};
 use crate::{AccountAdjustmentContext, Mutations};
 
 mod adjustment;
@@ -52,7 +52,7 @@ mod tests;
 
 pub use market_data::{
     SpotFundsConfigError, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
-    SpotFundsPricingSource,
+    SpotFundsPricingSource, SpotFundsSettings,
 };
 
 // known cost: every call site does `holdings.with_mut((id, asset.clone()), ...)` —
@@ -73,11 +73,13 @@ pub(super) type HoldingsKey = (AccountId, Asset);
 /// holdings are treated as zero and fail reservations through the
 /// regular [`crate::pretrade::RejectCode::InsufficientFunds`] path.
 ///
-/// Market-order support is enabled by passing a
-/// [`SpotFundsMarketData`](crate::pretrade::SpotFundsMarketData) to
-/// [`new`](SpotFundsPolicy::new). The bundle carries the service handle and the
-/// worst-case slippage in basis points. Without a bundle, market orders (those
-/// with `price=None`) are rejected with
+/// The runtime-updatable slippage / pricing / override cascade and the policy
+/// group tag live in [`SpotFundsSettings`], stored behind a settings cell read
+/// allocation-free on the hot path. Market-order support is enabled by passing
+/// a [`SpotFundsMarketData`](crate::pretrade::SpotFundsMarketData) to
+/// [`new`](SpotFundsPolicy::new); it carries only the service handle, which is
+/// fixed for the policy's lifetime. Without it, market orders (those with
+/// `price=None`) are rejected with
 /// [`crate::pretrade::RejectCode::UnsupportedOrderType`].
 pub struct SpotFundsPolicy<Sync, MarketDataSyncMode>
 where
@@ -91,8 +93,9 @@ where
                 as crate::storage::LockingPolicyFactory>::Policy,
         >,
     >,
+    pub(super) settings: <Sync::StorageLockingPolicyFactory
+        as crate::storage::LockingPolicyFactory>::Config<SpotFundsSettings>,
     pub(super) market_orders: Option<SpotFundsMarketData<MarketDataSyncMode>>,
-    pub(super) group_id: PolicyGroupId,
 }
 
 impl<Sync, MarketDataSyncMode> SpotFundsPolicy<Sync, MarketDataSyncMode>
@@ -105,15 +108,21 @@ where
 
     /// Builds the policy.
     ///
-    /// `market_orders` enables market-order support when `Some`. The bundle
-    /// carries the shared [`MarketDataService`](crate::marketdata::MarketDataService)
-    /// handle and the worst-case slippage. Pass `None` to disable market orders
-    /// (they will be rejected with [`crate::pretrade::RejectCode::UnsupportedOrderType`]).
+    /// `settings` carries the runtime-updatable slippage / pricing / override
+    /// cascade (see [`SpotFundsSettings`]); it is stored behind the engine's
+    /// settings cell and may be updated at runtime.
+    ///
+    /// `market_orders` enables market-order support when `Some`. It carries the
+    /// shared [`MarketDataService`](crate::marketdata::MarketDataService) handle
+    /// the policy prices market orders against. Pass `None` to disable market
+    /// orders (they will be rejected with
+    /// [`crate::pretrade::RejectCode::UnsupportedOrderType`]).
     ///
     /// `storage_builder` must come from the engine builder so the internal
     /// holdings storage uses the engine's synchronisation flavor. Initial
     /// balances are seeded at runtime via `apply_account_adjustment`.
     pub fn new(
+        settings: SpotFundsSettings,
         market_orders: Option<SpotFundsMarketData<MarketDataSyncMode>>,
         storage_builder: &StorageBuilder<<Sync as SyncMode>::StorageLockingPolicyFactory>,
     ) -> Self
@@ -125,16 +134,35 @@ where
                 as crate::storage::LockingPolicyFactory>::new_shared(
                 HoldingsStore::new(storage_builder),
             ),
+            settings: <Sync::StorageLockingPolicyFactory
+                as crate::storage::LockingPolicyFactory>::new_config(settings),
             market_orders,
-            group_id: DEFAULT_POLICY_GROUP_ID,
         }
+    }
+
+    /// Reads the policy group tag from the settings cell.
+    ///
+    /// Allocation-free and lock-free on the supported cell flavors.
+    pub(super) fn group_id(&self) -> PolicyGroupId {
+        self.settings.with(SpotFundsSettings::group_id)
     }
 
     /// Assigns a group tag to this policy instance.
     ///
-    /// See [`PolicyGroupId`] and [`DEFAULT_POLICY_GROUP_ID`] for details.
-    pub fn with_policy_group_id(mut self, id: PolicyGroupId) -> Self {
-        self.group_id = id;
+    /// The tag is fixed at construction; it is recorded in the policy's
+    /// [`SpotFundsSettings`] but has no runtime setter. See [`PolicyGroupId`]
+    /// and [`DEFAULT_POLICY_GROUP_ID`](crate::pretrade::DEFAULT_POLICY_GROUP_ID)
+    /// for details.
+    pub fn with_policy_group_id(self, id: PolicyGroupId) -> Self {
+        // The closure is infallible, so the transactional update always
+        // publishes the new tag; `Infallible` keeps the cell's `Result` API
+        // satisfied without a runtime failure path.
+        self.settings
+            .update::<std::convert::Infallible>(|s| {
+                s.set_group_id(id);
+                Ok(())
+            })
+            .unwrap_or_else(|e| match e {});
         self
     }
 }
@@ -180,7 +208,20 @@ where
     }
 
     fn policy_group_id(&self) -> PolicyGroupId {
-        self.group_id
+        self.group_id()
+    }
+
+    #[allow(private_interfaces)]
+    fn built_in_config_entry(
+        &self,
+    ) -> Option<
+        crate::core::ConfigEntry<
+            <Sync as SyncMode>::StorageLockingPolicyFactory,
+        >,
+    > {
+        Some(crate::core::ConfigEntry::SpotFunds(
+            crate::pretrade::ConfigurablePolicy::settings_cell(self),
+        ))
     }
 
     /// Applies an account adjustment to the policy's holdings.
@@ -237,5 +278,22 @@ where
         mutations: &mut Mutations,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
         self.perform_pre_trade_check_impl(ctx.account_control.clone(), ctx, order, mutations)
+    }
+}
+
+impl<Sync, MarketDataSyncMode> ConfigurablePolicy<<Sync as SyncMode>::StorageLockingPolicyFactory>
+    for SpotFundsPolicy<Sync, MarketDataSyncMode>
+where
+    Sync: SyncMode,
+    MarketDataSyncMode: MarketDataSync,
+{
+    type Settings = SpotFundsSettings;
+
+    fn settings_cell(
+        &self,
+    ) -> <Sync::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Config<
+        SpotFundsSettings,
+    > {
+        self.settings.clone()
     }
 }

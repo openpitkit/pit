@@ -44,7 +44,7 @@ impl Display for MarketOrderPriceError {
 impl std::error::Error for MarketOrderPriceError {}
 
 /// Pricer that applies a fixed basis-point slippage.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct WithSlippage {
     /// Slippage factor = bps / 10_000.
     factor: Decimal,

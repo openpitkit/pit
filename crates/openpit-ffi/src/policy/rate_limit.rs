@@ -22,8 +22,10 @@ use std::time::Duration;
 use openpit::param::AccountId;
 use openpit::pretrade::policies::{
     RateLimit, RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitAssetBarrier,
-    RateLimitBrokerBarrier, RateLimitPolicy,
+    RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError, RateLimitSettings,
 };
+
+use crate::engine::{write_configure_error, OpenPitConfigureError};
 
 use super::*;
 
@@ -203,6 +205,19 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
         });
     }
 
+    let settings = match RateLimitSettings::new(
+        broker_opt,
+        asset_barriers,
+        account_barriers,
+        account_asset_barriers,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            write_error_format!(out_error, "rate_limit_policy creation failed: {}", e);
+            return false;
+        }
+    };
+
     let builder_ref = unsafe { &mut *builder };
     let storage = match policy_storage(builder_ref) {
         Some(storage) => storage,
@@ -211,24 +226,241 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
             return false;
         }
     };
-    let policy = match RateLimitPolicy::new(
-        broker_opt,
-        asset_barriers,
-        account_barriers,
-        account_asset_barriers,
-        storage,
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            write_error_format!(out_error, "rate_limit_policy creation failed: {}", e);
-            return false;
-        }
-    };
-    let policy = policy.with_policy_group_id(openpit::PolicyGroupId::new(policy_group_id));
+    let policy = RateLimitPolicy::new(settings, storage)
+        .with_policy_group_id(openpit::PolicyGroupId::new(policy_group_id));
     match crate::engine::add_pre_trade_policy_to_builder(builder_ref, policy) {
         Ok(()) => true,
         Err(err) => {
             write_error(out_error, &err);
+            false
+        }
+    }
+}
+
+#[no_mangle]
+/// Retunes the built-in rate-limit policy registered under `name`.
+///
+/// This is a partial update (PATCH): each axis is touched only when its
+/// `has_*` flag is `true`. A touched axis is replaced wholesale — barriers
+/// can be added and removed at runtime. A barrier key that survives the
+/// replacement keeps its live counter (no reset). An empty axis (`len` 0
+/// with `has_*` true) clears it, subject to the policy's at-least-one-
+/// barrier rule. Setting `has_broker` to `true` with a null `broker` pointer
+/// clears the broker barrier.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer.
+/// - `name` selects the policy; it is interpreted as UTF-8. A built-in
+///   policy added via `openpit_engine_builder_add_builtin_rate_limit_policy`
+///   registers under its fixed name `"RateLimitPolicy"`, so pass that string
+///   here.
+/// - When `has_broker` is `true` and `broker` is non-null, it must point to
+///   one readable entry whose `max_orders`/`window_nanoseconds` replace the
+///   broker barrier; a null `broker` with `has_broker` true clears it.
+/// - When `has_asset`/`has_account`/`has_account_asset` is `true`, the
+///   matching pointer must point to `*_len` readable entries (a length of
+///   zero clears that axis). Each `settlement_asset` view must be valid for
+///   the duration of the call.
+/// - A `has_*` flag set to `false` leaves that axis untouched regardless of
+///   the pointer/length arguments.
+///
+/// Success:
+/// - returns `true`; the new limits apply from the next order onward with no
+///   counter reset.
+///
+/// Error:
+/// - returns `false`; if `out_error` is non-null, writes a caller-owned
+///   `OpenPitConfigureError` (release with `openpit_destroy_configure_error`)
+///   describing the unknown policy, settings-type mismatch, or rejected
+///   update.
+/// - a null `engine` returns `false` and, when `out_error` is non-null, writes
+///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be released
+///   with `openpit_destroy_configure_error`.
+pub unsafe extern "C" fn openpit_engine_configure_rate_limit(
+    engine: *mut crate::engine::OpenPitEngine,
+    name: OpenPitStringView,
+    broker: *const OpenPitPretradePoliciesRateLimitBrokerBarrier,
+    has_broker: bool,
+    asset: *const OpenPitPretradePoliciesRateLimitAssetBarrier,
+    asset_len: usize,
+    has_asset: bool,
+    account: *const OpenPitPretradePoliciesRateLimitAccountBarrier,
+    account_len: usize,
+    has_account: bool,
+    account_asset: *const OpenPitPretradePoliciesRateLimitAccountAssetBarrier,
+    account_asset_len: usize,
+    has_account_asset: bool,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> bool {
+    if engine.is_null() {
+        write_configure_error(
+            out_error,
+            OpenPitConfigureError::validation("engine is null".to_owned()),
+        );
+        return false;
+    }
+    let name = match unsafe { cstr_arg(name) } {
+        Some(name) => name,
+        None => {
+            write_configure_error(
+                out_error,
+                OpenPitConfigureError::validation(
+                    "policy name is null or invalid UTF-8".to_owned(),
+                ),
+            );
+            return false;
+        }
+    };
+
+    // Parse every C argument into owned Rust values up front, so the
+    // configure closure only runs infallible-typed setters. An argument that
+    // cannot be parsed (e.g. an invalid asset code) never reaches the core
+    // configurator and is reported as a `Validation` error.
+    let broker_barrier: Option<RateLimitBrokerBarrier> = if has_broker && !broker.is_null() {
+        let b = unsafe { &*broker };
+        Some(RateLimitBrokerBarrier {
+            limit: RateLimit {
+                max_orders: b.max_orders,
+                window: Duration::from_nanos(b.window_nanoseconds),
+            },
+        })
+    } else {
+        None
+    };
+
+    let asset_barriers: Vec<RateLimitAssetBarrier> = if has_asset {
+        let slice = match unsafe {
+            try_slice_arg(asset, asset_len, "rate_limit asset", std::ptr::null_mut())
+        } {
+            Some(v) => v,
+            None => {
+                write_configure_error(
+                    out_error,
+                    OpenPitConfigureError::validation("rate_limit asset is null".to_owned()),
+                );
+                return false;
+            }
+        };
+        let mut out = Vec::with_capacity(slice.len());
+        for (index, entry) in slice.iter().enumerate() {
+            let settlement = match parse_configure_asset(entry.settlement_asset, "asset", index) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
+            out.push(RateLimitAssetBarrier {
+                limit: RateLimit {
+                    max_orders: entry.max_orders,
+                    window: Duration::from_nanos(entry.window_nanoseconds),
+                },
+                settlement_asset: settlement,
+            });
+        }
+        out
+    } else {
+        Vec::new()
+    };
+
+    let account_barriers: Vec<RateLimitAccountBarrier> = if has_account {
+        let slice = match unsafe {
+            try_slice_arg(
+                account,
+                account_len,
+                "rate_limit account",
+                std::ptr::null_mut(),
+            )
+        } {
+            Some(v) => v,
+            None => {
+                write_configure_error(
+                    out_error,
+                    OpenPitConfigureError::validation("rate_limit account is null".to_owned()),
+                );
+                return false;
+            }
+        };
+        slice
+            .iter()
+            .map(|entry| RateLimitAccountBarrier {
+                limit: RateLimit {
+                    max_orders: entry.max_orders,
+                    window: Duration::from_nanos(entry.window_nanoseconds),
+                },
+                account_id: AccountId::from_u64(entry.account_id),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let account_asset_barriers: Vec<RateLimitAccountAssetBarrier> = if has_account_asset {
+        let slice = match unsafe {
+            try_slice_arg(
+                account_asset,
+                account_asset_len,
+                "rate_limit account_asset",
+                std::ptr::null_mut(),
+            )
+        } {
+            Some(v) => v,
+            None => {
+                write_configure_error(
+                    out_error,
+                    OpenPitConfigureError::validation(
+                        "rate_limit account_asset is null".to_owned(),
+                    ),
+                );
+                return false;
+            }
+        };
+        let mut out = Vec::with_capacity(slice.len());
+        for (index, entry) in slice.iter().enumerate() {
+            let settlement =
+                match parse_configure_asset(entry.settlement_asset, "account_asset", index) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        write_configure_error(out_error, e);
+                        return false;
+                    }
+                };
+            out.push(RateLimitAccountAssetBarrier {
+                limit: RateLimit {
+                    max_orders: entry.max_orders,
+                    window: Duration::from_nanos(entry.window_nanoseconds),
+                },
+                account_id: AccountId::from_u64(entry.account_id),
+                settlement_asset: settlement,
+            });
+        }
+        out
+    } else {
+        Vec::new()
+    };
+
+    let result = unsafe { &*engine }.configurator().rate_limit(
+        &name,
+        |settings| -> Result<(), RateLimitPolicyError> {
+            if has_broker {
+                settings.set_broker(broker_barrier.clone())?;
+            }
+            if has_asset {
+                settings.set_asset_barriers(asset_barriers.iter().cloned())?;
+            }
+            if has_account {
+                settings.set_account_barriers(account_barriers.iter().cloned())?;
+            }
+            if has_account_asset {
+                settings.set_account_asset_barriers(account_asset_barriers.iter().cloned())?;
+            }
+            Ok(())
+        },
+    );
+    match result {
+        Ok(()) => true,
+        Err(err) => {
+            write_configure_error(out_error, OpenPitConfigureError::new(err));
             false
         }
     }
@@ -468,6 +700,320 @@ mod tests {
             )
         });
         run_start_pre_trade_passes(engine);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    /// Runs `start_pre_trade` and asserts the order is rejected by a policy.
+    fn run_start_pre_trade_rejected(engine: *mut crate::engine::OpenPitEngine) {
+        let order = valid_pit_order();
+        let mut request = std::ptr::null_mut();
+        let mut out_rejects = std::ptr::null_mut();
+        let status = crate::engine::openpit_engine_start_pre_trade(
+            engine,
+            &order,
+            &mut request,
+            &mut out_rejects,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(
+            status,
+            crate::engine::OpenPitPretradeStatus::Rejected,
+            "start_pre_trade should be rejected after retune"
+        );
+        crate::reject::openpit_pretrade_destroy_reject_list(out_rejects);
+    }
+
+    fn configure_error_message(
+        handle: *mut crate::engine::OpenPitConfigureError,
+    ) -> (crate::engine::OpenPitConfigureErrorKind, String) {
+        assert!(!handle.is_null(), "configure error must be populated");
+        let kind = crate::engine::openpit_configure_error_get_kind(handle);
+        let view = crate::engine::openpit_configure_error_get_message(handle);
+        let bytes = unsafe { std::slice::from_raw_parts(view.ptr, view.len) };
+        let message = std::str::from_utf8(bytes).expect("utf8").to_owned();
+        crate::engine::openpit_destroy_configure_error(handle);
+        (kind, message)
+    }
+
+    /// Round trip: build with a loose broker barrier, tighten it through the
+    /// configure entry point, then observe the new limit on the hot path.
+    #[test]
+    fn configure_rate_limit_round_trip_tightens_broker_barrier() {
+        let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            max_orders: 100,
+            window_nanoseconds: 1_000_000_000,
+        };
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_rate_limit_policy(
+                builder,
+                0,
+                &broker,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+
+        // Retune the broker barrier down to a single order per minute before
+        // any order is submitted, so the live counter starts clean.
+        let tighter = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            max_orders: 1,
+            window_nanoseconds: 60_000_000_000,
+        };
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_rate_limit(
+                engine,
+                OpenPitStringView::from_utf8("RateLimitPolicy"),
+                &tighter,
+                true,
+                std::ptr::null(),
+                0,
+                false,
+                std::ptr::null(),
+                0,
+                false,
+                std::ptr::null(),
+                0,
+                false,
+                &mut out_error,
+            )
+        };
+        assert!(ok, "configure must succeed");
+        assert!(out_error.is_null(), "no error on success");
+
+        // First order consumes the single slot and passes; the second breaches
+        // the retuned barrier and is rejected.
+        run_start_pre_trade_passes(engine);
+        run_start_pre_trade_rejected(engine);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    /// Error path: configuring an unregistered policy name yields a populated
+    /// `OpenPitConfigureError` with the `Unknown` kind.
+    #[test]
+    fn configure_rate_limit_unknown_name_reports_error() {
+        let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            max_orders: 100,
+            window_nanoseconds: 1_000_000_000,
+        };
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_rate_limit_policy(
+                builder,
+                0,
+                &broker,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+
+        let tighter = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            max_orders: 1,
+            window_nanoseconds: 60_000_000_000,
+        };
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_rate_limit(
+                engine,
+                OpenPitStringView::from_utf8("NoSuchPolicy"),
+                &tighter,
+                true,
+                std::ptr::null(),
+                0,
+                false,
+                std::ptr::null(),
+                0,
+                false,
+                std::ptr::null(),
+                0,
+                false,
+                &mut out_error,
+            )
+        };
+        assert!(!ok, "configure must fail for an unknown policy name");
+        let (kind, message) = configure_error_message(out_error);
+        assert_eq!(kind, crate::engine::OpenPitConfigureErrorKind::Unknown);
+        assert!(
+            message.contains("NoSuchPolicy"),
+            "message should name the unknown policy, got: {message}"
+        );
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    /// Adding a new asset barrier at runtime via configure succeeds even when
+    /// no asset axis was configured at build time; the new limit is enforced
+    /// immediately on the next order.
+    #[test]
+    fn configure_rate_limit_adds_asset_barrier_at_runtime() {
+        let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            max_orders: 100,
+            window_nanoseconds: 1_000_000_000,
+        };
+        // Build with only a broker barrier; no asset axis at build time.
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_rate_limit_policy(
+                builder,
+                0,
+                &broker,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+
+        // Add a USD asset barrier (max 1 order per 60 s) at runtime.
+        let usd = OpenPitStringView::from_utf8("USD");
+        let asset = [OpenPitPretradePoliciesRateLimitAssetBarrier {
+            settlement_asset: usd,
+            max_orders: 1,
+            window_nanoseconds: 60_000_000_000,
+        }];
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_rate_limit(
+                engine,
+                OpenPitStringView::from_utf8("RateLimitPolicy"),
+                std::ptr::null(),
+                false,
+                asset.as_ptr(),
+                asset.len(),
+                true,
+                std::ptr::null(),
+                0,
+                false,
+                std::ptr::null(),
+                0,
+                false,
+                &mut out_error,
+            )
+        };
+        assert!(ok, "adding an asset barrier at runtime must succeed");
+        assert!(out_error.is_null(), "no error on success");
+
+        // The test order has settlement USD (see valid_pit_order). The first
+        // order consumes the single slot and passes; the second is rejected.
+        run_start_pre_trade_passes(engine);
+        run_start_pre_trade_rejected(engine);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    /// Error path: retuning the broker barrier with window_nanoseconds 0
+    /// yields a `Validation` error (invalid window).
+    #[test]
+    fn configure_rate_limit_invalid_window_reports_validation() {
+        let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            max_orders: 100,
+            window_nanoseconds: 1_000_000_000,
+        };
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_rate_limit_policy(
+                builder,
+                0,
+                &broker,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+
+        // Zero window is invalid — SDK returns InvalidWindow.
+        let zero_window = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            max_orders: 1,
+            window_nanoseconds: 0,
+        };
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_rate_limit(
+                engine,
+                OpenPitStringView::from_utf8("RateLimitPolicy"),
+                &zero_window,
+                true,
+                std::ptr::null(),
+                0,
+                false,
+                std::ptr::null(),
+                0,
+                false,
+                std::ptr::null(),
+                0,
+                false,
+                &mut out_error,
+            )
+        };
+        assert!(!ok, "zero-window broker retune must fail");
+        let (kind, _message) = configure_error_message(out_error);
+        assert_eq!(kind, crate::engine::OpenPitConfigureErrorKind::Validation);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_rate_limit_rejects_null_and_invalid_utf8_names() {
+        let broker = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            max_orders: 100,
+            window_nanoseconds: 1_000_000_000,
+        };
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_rate_limit_policy(
+                builder,
+                0,
+                &broker,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+        let invalid_utf8 = [0xff];
+        let invalid_name = OpenPitStringView {
+            ptr: invalid_utf8.as_ptr(),
+            len: invalid_utf8.len(),
+        };
+
+        for name in [OpenPitStringView::default(), invalid_name] {
+            let mut out_error = std::ptr::null_mut();
+            let ok = unsafe {
+                openpit_engine_configure_rate_limit(
+                    engine,
+                    name,
+                    std::ptr::null(),
+                    false,
+                    std::ptr::null(),
+                    0,
+                    false,
+                    std::ptr::null(),
+                    0,
+                    false,
+                    std::ptr::null(),
+                    0,
+                    false,
+                    &mut out_error,
+                )
+            };
+            assert!(!ok);
+            let (kind, _) = configure_error_message(out_error);
+            assert_eq!(kind, crate::engine::OpenPitConfigureErrorKind::Validation);
+        }
+
         crate::engine::openpit_destroy_engine(engine);
     }
 }

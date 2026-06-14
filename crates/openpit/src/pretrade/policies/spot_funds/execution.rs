@@ -320,7 +320,8 @@ where
         trade: Trade,
         lock: &PreTradeLock,
     ) -> Result<PositionSize, AccountBlock> {
-        let lock_price = settlement_lock_price(Self::NAME, side, lock, self.group_id, "buy fill")?;
+        let lock_price =
+            settlement_lock_price(Self::NAME, side, lock, self.group_id(), "buy fill")?;
         settlement_reserved_amount(
             Self::NAME,
             side,
@@ -389,7 +390,7 @@ where
         lock: &PreTradeLock,
     ) -> Result<PositionSize, AccountBlock> {
         let lock_price =
-            settlement_lock_price(Self::NAME, side, lock, self.group_id, "buy release")?;
+            settlement_lock_price(Self::NAME, side, lock, self.group_id(), "buy release")?;
         settlement_reserved_amount(
             Self::NAME,
             side,
@@ -502,16 +503,17 @@ where
             }
         }
 
+        let group_id = self.group_id();
         let mut adjustments: Vec<AccountAdjustmentOutcome> = Vec::with_capacity(2);
         push_leg_outcome(
             &mut adjustments,
-            self.group_id,
+            group_id,
             underlying_asset,
             &deltas.underlying,
         );
         push_leg_outcome(
             &mut adjustments,
-            self.group_id,
+            group_id,
             settlement_asset,
             &deltas.settlement,
         );

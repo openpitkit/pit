@@ -1,7 +1,9 @@
 #![cfg(feature = "derive")]
 
 use openpit::param::{AccountId, Asset, Fee, Pnl};
-use openpit::pretrade::policies::{PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy};
+use openpit::pretrade::policies::{
+    PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchSettings,
+};
 use openpit::{
     Engine, HasAccountId, HasFee, HasInstrument, HasPnl, Instrument, RequestFieldAccessError,
     RequestFields,
@@ -127,15 +129,17 @@ fn derive_feature_reexport_builds_wrappers_and_engine_smoke_path() {
 
     let builder = Engine::builder::<DerivedOrder, DerivedReport, ()>().no_sync();
     let pnl_policy = PnlBoundsKillSwitchPolicy::new(
-        [PnlBoundsBrokerBarrier {
-            settlement_asset: Asset::new("USD").expect("must be valid"),
-            lower_bound: Some(Pnl::from_str("-500").expect("must be valid")),
-            upper_bound: None,
-        }],
-        [],
+        PnlBoundsKillSwitchSettings::new(
+            [PnlBoundsBrokerBarrier {
+                settlement_asset: Asset::new("USD").expect("must be valid"),
+                lower_bound: Some(Pnl::from_str("-500").expect("must be valid")),
+                upper_bound: None,
+            }],
+            [],
+        )
+        .expect("must build settings"),
         builder.storage_builder(),
-    )
-    .expect("must build policy");
+    );
     let engine = builder
         .pre_trade(pnl_policy)
         .build()

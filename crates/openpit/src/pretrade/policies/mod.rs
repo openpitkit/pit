@@ -25,19 +25,20 @@ mod spot_funds;
 
 pub use order_size_limit::{
     OrderSizeAccountAssetBarrier, OrderSizeAssetBarrier, OrderSizeBrokerBarrier, OrderSizeLimit,
-    OrderSizeLimitPolicy, OrderSizeLimitPolicyError,
+    OrderSizeLimitPolicy, OrderSizeLimitPolicyError, OrderSizeLimitSettings,
 };
 pub use order_validation::OrderValidationPolicy;
+pub(crate) use pnl_bounds_killswitch::RealizedPnlStorage;
 pub use pnl_bounds_killswitch::{
-    PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy,
-    PnlBoundsKillSwitchPolicyError,
+    PnlBoundsAccountAssetBarrier, PnlBoundsAccountAssetBarrierUpdate, PnlBoundsBrokerBarrier,
+    PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchPolicyError, PnlBoundsKillSwitchSettings,
 };
 pub use rate_limit::{
     RateLimit, RateLimitAccountAssetBarrier, RateLimitAccountBarrier, RateLimitAssetBarrier,
-    RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError,
+    RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError, RateLimitSettings,
 };
 pub use spot_funds::SpotFundsPolicy;
 pub use spot_funds::{
     SpotFundsConfigError, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
-    SpotFundsPricingSource,
+    SpotFundsPricingSource, SpotFundsSettings,
 };

@@ -18,9 +18,11 @@
 package openpit
 
 import (
+	"errors"
 	"testing"
 	"time"
 
+	"go.openpit.dev/openpit/configure"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
@@ -518,10 +520,12 @@ func TestBuiltinPnlBoundsKillswitchAccountBarrierIndependentOfOtherAccounts(
 	engine, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildPnlBoundsKillswitch().
 			AccountBarriers(policies.PnlBoundsAccountAssetBarrier{
-				AccountID:       param.NewAccountIDFromUint64(1001),
-				SettlementAsset: usd,
-				LowerBound:      optional.Some(pnlTestPnl(t, "-100")),
-				InitialPnl:      pnlTestPnl(t, "0"),
+				Barrier: policies.PnlBoundsBrokerBarrier{
+					SettlementAsset: usd,
+					LowerBound:      optional.Some(pnlTestPnl(t, "-100")),
+				},
+				AccountID:  param.NewAccountIDFromUint64(1001),
+				InitialPnl: pnlTestPnl(t, "0"),
 			}),
 		).Build()
 	if err != nil {
@@ -563,6 +567,173 @@ func TestBuiltinPnlBoundsKillswitchAccountBarrierIndependentOfOtherAccounts(
 		t.Fatalf("acct 9999 rejects = %v, want none", rejects)
 	}
 	request.Close()
+}
+
+func TestBuiltinPnlBoundsKillswitchRuntimeAccountBarrierPreservesPnl(
+	t *testing.T,
+) {
+	usd := builtinTestAsset(t, "USD")
+	accountID := param.NewAccountIDFromUint64(1001)
+
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildPnlBoundsKillswitch().
+			AccountBarriers(policies.PnlBoundsAccountAssetBarrier{
+				Barrier: policies.PnlBoundsBrokerBarrier{
+					SettlementAsset: usd,
+					LowerBound:      optional.Some(pnlTestPnl(t, "-1000")),
+				},
+				AccountID:  accountID,
+				InitialPnl: pnlTestPnl(t, "-50"),
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	err = engine.Configure().PnlBoundsKillSwitch(
+		policies.PnlBoundsKillSwitchPolicyName,
+		nil,
+		[]policies.PnlBoundsAccountAssetBarrierUpdate{
+			{
+				Barrier: policies.PnlBoundsBrokerBarrier{
+					SettlementAsset: usd,
+					LowerBound:      optional.Some(pnlTestPnl(t, "-100")),
+				},
+				AccountID: accountID,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("Configure().PnlBoundsKillSwitch() error = %v", err)
+	}
+
+	result, err := engine.ApplyExecutionReport(
+		pnlTestReport(t, 1001, "AAPL", "USD", "-60"),
+	)
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport() error = %v", err)
+	}
+	if len(result.AccountBlocks) == 0 ||
+		result.AccountBlocks[0].Code != reject.CodePnlKillSwitchTriggered {
+		t.Fatalf(
+			"AccountBlocks = %v, want preserved P&L to trigger kill switch",
+			result.AccountBlocks,
+		)
+	}
+}
+
+func TestBuiltinSetAccountPnlForcesBreachAndRejectsNextOrder(t *testing.T) {
+	usd := builtinTestAsset(t, "USD")
+	account := param.NewAccountIDFromUint64(1001)
+
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildPnlBoundsKillswitch().
+			BrokerBarriers(policies.PnlBoundsBrokerBarrier{
+				SettlementAsset: usd,
+				LowerBound:      optional.Some(pnlTestPnl(t, "-100")),
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	// With no P&L history the order passes against the lower bound of -100.
+	request, rejects, err := engine.StartPreTrade(pnlTestOrder(t, 1001))
+	if err != nil {
+		t.Fatalf("StartPreTrade() error = %v", err)
+	}
+	if len(rejects) != 0 {
+		t.Fatalf("StartPreTrade() rejects = %v, want none", rejects)
+	}
+	request.Close()
+
+	// Force the accumulator below the lower bound; this trips the kill switch.
+	err = engine.Configure().SetAccountPnl(
+		policies.PnlBoundsKillSwitchPolicyName,
+		account,
+		usd,
+		pnlTestPnl(t, "-150"),
+	)
+	if err != nil {
+		t.Fatalf("Configure().SetAccountPnl() error = %v", err)
+	}
+
+	_, rejects, err = engine.StartPreTrade(pnlTestOrder(t, 1001))
+	if err != nil {
+		t.Fatalf("post-force StartPreTrade() error = %v", err)
+	}
+	if len(rejects) != 1 {
+		t.Fatalf("post-force reject len = %d, want 1", len(rejects))
+	}
+	if rejects[0].Code != reject.CodePnlKillSwitchTriggered {
+		t.Fatalf(
+			"reject code = %v, want %v",
+			rejects[0].Code, reject.CodePnlKillSwitchTriggered,
+		)
+	}
+}
+
+func TestBuiltinSetAccountPnlUnknownPolicyReturnsUnknown(t *testing.T) {
+	usd := builtinTestAsset(t, "USD")
+
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildPnlBoundsKillswitch().
+			BrokerBarriers(policies.PnlBoundsBrokerBarrier{
+				SettlementAsset: usd,
+				LowerBound:      optional.Some(pnlTestPnl(t, "-100")),
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	err = engine.Configure().SetAccountPnl(
+		"NoSuchPolicy",
+		param.NewAccountIDFromUint64(1001),
+		usd,
+		pnlTestPnl(t, "-150"),
+	)
+
+	var configErr *configure.Error
+	if !errors.As(err, &configErr) {
+		t.Fatalf("SetAccountPnl(unknown) error = %v, want *configure.Error", err)
+	}
+	if configErr.Kind != configure.ErrorKindUnknown {
+		t.Fatalf("error kind = %v, want %v", configErr.Kind, configure.ErrorKindUnknown)
+	}
+}
+
+func TestBuiltinSetAccountPnlWrongPolicyTypeReturnsTypeMismatch(t *testing.T) {
+	usd := builtinTestAsset(t, "USD")
+
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildRateLimit().
+			BrokerBarrier(policies.RateLimitBrokerBarrier{
+				Limit: policies.RateLimit{MaxOrders: 5, Window: 60 * time.Second},
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	err = engine.Configure().SetAccountPnl(
+		policies.RateLimitPolicyName,
+		param.NewAccountIDFromUint64(1001),
+		usd,
+		pnlTestPnl(t, "-150"),
+	)
+
+	var configErr *configure.Error
+	if !errors.As(err, &configErr) {
+		t.Fatalf("SetAccountPnl(wrong type) error = %v, want *configure.Error", err)
+	}
+	if configErr.Kind != configure.ErrorKindTypeMismatch {
+		t.Fatalf("error kind = %v, want %v", configErr.Kind, configure.ErrorKindTypeMismatch)
+	}
 }
 
 func TestBuiltinPnlBoundsKillswitchBrokerBarrierRejectViaCheckPreTradeStart(

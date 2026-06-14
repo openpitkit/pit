@@ -240,15 +240,17 @@ def test_engine_end_to_end_table(case: str, expected_code: str | None) -> None:
                 policies.build_pnl_bounds_killswitch()
                 .broker_barriers(
                     policies.PnlBoundsBrokerBarrier(
-                        settlement_asset="USD",
+                        settlement_asset=openpit.param.Asset("USD"),
                         lower_bound=openpit.param.Pnl("-500"),
                     )
                 )
                 .account_barriers(
                     policies.PnlBoundsAccountAssetBarrier(
+                        barrier=policies.PnlBoundsBrokerBarrier(
+                            settlement_asset=openpit.param.Asset("USD"),
+                            lower_bound=openpit.param.Pnl("-500"),
+                        ),
                         account_id=openpit.param.AccountId.from_int(99224416),
-                        settlement_asset="USD",
-                        lower_bound=openpit.param.Pnl("-500"),
                         initial_pnl=openpit.param.Pnl("0"),
                     )
                 )

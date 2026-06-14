@@ -18,53 +18,155 @@
 #![allow(clippy::missing_safety_doc, clippy::not_unsafe_ptr_arg_deref)]
 
 use openpit::param::{AccountGroupId, AccountId};
-use openpit::pretrade::policies::SpotFundsPolicy;
+use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
 use openpit::{
-    InstrumentId, PolicyGroupId, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
-    SpotFundsPricingSource,
+    InstrumentId, PolicyGroupId, SpotFundsConfigError, SpotFundsMarketData, SpotFundsOverride,
+    SpotFundsOverrideTarget, SpotFundsPricingSource,
 };
 use openpit_interop::{EngineLocking, SyncMode};
 
-use crate::account_group_id::OpenPitParamAccountGroupIdOptional;
+use crate::account_group_id::OpenPitParamAccountGroupId;
+use crate::engine::{write_configure_error, OpenPitConfigureError};
 use crate::marketdata::{OpenPitMarketDataInstrumentId, OpenPitMarketDataService};
-use crate::param::OpenPitParamAccountIdOptional;
+use crate::param::OpenPitParamAccountId;
 
 use super::*;
 
+/// Maps the `u8` pricing-source contract to the core enum for a configure
+/// function, returning an [`OpenPitConfigureError`] on an invalid selector.
+fn configure_pricing_source(value: u8) -> Result<SpotFundsPricingSource, OpenPitConfigureError> {
+    match value {
+        0 => Ok(SpotFundsPricingSource::Mark),
+        1 => Ok(SpotFundsPricingSource::BookTop),
+        other => Err(OpenPitConfigureError::validation(format!(
+            "pricing_source must be 0 (Mark) or 1 (BookTop), got {other}"
+        ))),
+    }
+}
+
+/// Tagged target variants for a spot-funds slippage override.
+///
+/// Spot funds overrides use an explicit tagged hierarchy matching the Rust
+/// [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget) variants:
+/// `Instrument`, `InstrumentAccount`, and `InstrumentAccountGroup`.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenPitPretradePoliciesSpotFundsOverrideTargetTag {
+    /// Instrument-level override.
+    Instrument = 0,
+    /// Override for one instrument and account.
+    InstrumentAccount = 1,
+    /// Override for one instrument and account group.
+    InstrumentAccountGroup = 2,
+}
+
+/// Payload for an instrument-level spot-funds override target.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct OpenPitPretradePoliciesSpotFundsOverrideTargetInstrument {
+    /// Registered market-data instrument id.
+    pub instrument_id: OpenPitMarketDataInstrumentId,
+}
+
+/// Payload for an instrument-and-account spot-funds override target.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccount {
+    /// Registered market-data instrument id.
+    pub instrument_id: OpenPitMarketDataInstrumentId,
+    /// Account the override applies to.
+    pub account_id: OpenPitParamAccountId,
+}
+
+/// Payload for an instrument-and-account-group spot-funds override target.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccountGroup {
+    /// Registered market-data instrument id.
+    pub instrument_id: OpenPitMarketDataInstrumentId,
+    /// Account group the override applies to.
+    pub account_group_id: OpenPitParamAccountGroupId,
+}
+
+/// Variant payload for a tagged spot-funds override target.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union OpenPitPretradePoliciesSpotFundsOverrideTargetPayload {
+    /// Payload used with the `Instrument` tag.
+    pub instrument: OpenPitPretradePoliciesSpotFundsOverrideTargetInstrument,
+    /// Payload used with the `InstrumentAccount` tag.
+    pub instrument_account: OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccount,
+    /// Payload used with the `InstrumentAccountGroup` tag.
+    pub instrument_account_group:
+        OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccountGroup,
+}
+
+/// Explicit tagged target for a spot-funds slippage override.
+///
+/// The `tag` selects exactly one union payload. Unknown tags are rejected
+/// through the function's existing error channel before the payload is read.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct OpenPitPretradePoliciesSpotFundsOverrideTarget {
+    /// One of [`OpenPitPretradePoliciesSpotFundsOverrideTargetTag`].
+    ///
+    /// Stored as `u8` so unknown C values can be rejected without constructing
+    /// an invalid Rust enum discriminant.
+    pub tag: u8,
+    /// Payload selected by `tag`.
+    pub payload: OpenPitPretradePoliciesSpotFundsOverrideTargetPayload,
+}
+
 /// Slippage override entry for the spot funds policy.
 ///
-/// Mirrors [`SpotFundsOverride`](openpit::SpotFundsOverride) together with the
-/// [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget) it applies to.
-/// `instrument_id` selects the registered instrument. The scope is chosen by
-/// the `account_id` and `account_group_id` optionals, which are mutually
-/// exclusive: when neither is set the entry is an instrument-level default; when
-/// `account_id.is_set` it applies only to `account_id.value`; when
-/// `account_group_id.is_set` it applies only to accounts in
-/// `account_group_id.value`. When `has_slippage_bps` is `true`, `slippage_bps`
-/// is the slippage for that scope; when `false`, the entry is ignored and the
-/// cascade falls through to the next tier (ultimately the global
-/// `market_slippage_bps`).
-///
-/// Slippage resolves account -> account group -> instrument -> global for each
-/// order.
+/// `target` mirrors the three variants of
+/// [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget). When
+/// `has_slippage_bps` is `true`, `slippage_bps` is used for the selected
+/// target. When it is `false`, construction ignores the entry and runtime
+/// configuration clears the selected override. Slippage resolves account ->
+/// account group -> instrument -> global for each order.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct OpenPitPretradePoliciesSpotFundsOverride {
-    /// Registered market-data instrument id.
-    pub instrument_id: OpenPitMarketDataInstrumentId,
-    /// Account the override applies to. When `is_set`, the override is scoped to
-    /// `value`; mutually exclusive with `account_group_id`. Both unset means an
-    /// instrument-level default.
-    pub account_id: OpenPitParamAccountIdOptional,
-    /// Account group the override applies to. When `is_set`, the override is
-    /// scoped to `value`; mutually exclusive with `account_id`. Both unset means
-    /// an instrument-level default.
-    pub account_group_id: OpenPitParamAccountGroupIdOptional,
-    /// Slippage in basis points for the selected scope, used only when
-    /// `has_slippage_bps` is `true`.
+    /// Explicit tagged override target.
+    pub target: OpenPitPretradePoliciesSpotFundsOverrideTarget,
+    /// Slippage in basis points, used only when `has_slippage_bps` is `true`.
     pub slippage_bps: u16,
     /// Whether `slippage_bps` carries a value.
     pub has_slippage_bps: bool,
+}
+
+fn override_target(
+    entry: &OpenPitPretradePoliciesSpotFundsOverride,
+) -> Result<SpotFundsOverrideTarget, String> {
+    let tag = entry.target.tag;
+    if tag == OpenPitPretradePoliciesSpotFundsOverrideTargetTag::Instrument as u8 {
+        let payload = unsafe { entry.target.payload.instrument };
+        return Ok(SpotFundsOverrideTarget::Instrument(InstrumentId::new(
+            payload.instrument_id,
+        )));
+    }
+    if tag == OpenPitPretradePoliciesSpotFundsOverrideTargetTag::InstrumentAccount as u8 {
+        let payload = unsafe { entry.target.payload.instrument_account };
+        return Ok(SpotFundsOverrideTarget::InstrumentAccount(
+            InstrumentId::new(payload.instrument_id),
+            AccountId::from_u64(payload.account_id),
+        ));
+    }
+    if tag == OpenPitPretradePoliciesSpotFundsOverrideTargetTag::InstrumentAccountGroup as u8 {
+        let payload = unsafe { entry.target.payload.instrument_account_group };
+        let account_group_id = AccountGroupId::from_u32(payload.account_group_id).map_err(|e| {
+            format!(
+                "spot funds override account group id {} is invalid: {e}",
+                payload.account_group_id
+            )
+        })?;
+        return Ok(SpotFundsOverrideTarget::InstrumentAccountGroup(
+            InstrumentId::new(payload.instrument_id),
+            account_group_id,
+        ));
+    }
+    Err(format!("spot funds override target tag {tag} is invalid"))
 }
 
 /// Pricing source selector for the spot funds policy.
@@ -101,12 +203,9 @@ fn import_pricing_source(value: u8, out_error: OpenPitOutError) -> Option<SpotFu
 ///   performed by the core engine.
 /// - `pricing_source` selects the base price: `0` = Mark, `1` = BookTop.
 /// - `instrument_overrides` / `overrides_len` describe a contiguous array of
-///   slippage overrides; pass null + 0 for none. Each entry selects an
-///   instrument by `instrument_id` and a scope via its `account_id` /
-///   `account_group_id` optionals: both unset is an instrument-level default,
-///   a set `account_id` scopes the override to that account, a set
-///   `account_group_id` scopes it to that account group. The two are mutually
-///   exclusive; setting both fails the call. An entry with
+///   slippage overrides; pass null + 0 for none. Each entry uses an explicit
+///   tagged target matching `Instrument`, `InstrumentAccount`, or
+///   `InstrumentAccountGroup`. An unknown tag fails the call. An entry with
 ///   `has_slippage_bps == false` is ignored. Slippage resolves
 ///   account -> account group -> instrument -> global per order.
 /// - `policy_group_id` tags the policy instance.
@@ -137,8 +236,26 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_policy(
         return false;
     }
 
-    let market_orders: Option<SpotFundsMarketData<EngineLocking>> = if market_data.is_null() {
-        None
+    // The slippage / pricing-source / override cascade now lives in
+    // `SpotFundsSettings`; `SpotFundsMarketData` carries only the service
+    // handle. Build both here: the settings are always required, while the
+    // market-data handle is `Some` only when a service is supplied (market
+    // orders enabled). In limit-only mode the slippage cascade is inert, so a
+    // default settings instance is used and the slippage/pricing/override
+    // arguments are not consulted.
+    let (market_orders, settings): (
+        Option<SpotFundsMarketData<EngineLocking>>,
+        SpotFundsSettings,
+    ) = if market_data.is_null() {
+        let settings =
+            match SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty()) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_error_format!(out_error, "spot funds settings build failed: {}", e);
+                    return false;
+                }
+            };
+        (None, settings)
     } else {
         let svc = unsafe { &*market_data };
 
@@ -167,7 +284,7 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_policy(
         }
         let bps = unsafe { *market_slippage_bps };
 
-        let pricing_source = match import_pricing_source(pricing_source, out_error) {
+        let source = match import_pricing_source(pricing_source, out_error) {
             Some(v) => v,
             None => return false,
         };
@@ -186,35 +303,12 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_policy(
         let mut overrides: Vec<(SpotFundsOverrideTarget, SpotFundsOverride)> =
             Vec::with_capacity(overrides_slice.len());
         for entry in overrides_slice {
-            let instrument_id = InstrumentId::new(entry.instrument_id);
-            let target = match (entry.account_id.is_set, entry.account_group_id.is_set) {
-                (true, true) => {
-                    write_error(
-                        out_error,
-                        "spot funds override cannot target both an account and an account group",
-                    );
+            let target = match override_target(entry) {
+                Ok(target) => target,
+                Err(error) => {
+                    write_error(out_error, &error);
                     return false;
                 }
-                (true, false) => SpotFundsOverrideTarget::InstrumentAccount(
-                    instrument_id,
-                    AccountId::from_u64(entry.account_id.value),
-                ),
-                (false, true) => match AccountGroupId::from_u32(entry.account_group_id.value) {
-                    Ok(account_group_id) => SpotFundsOverrideTarget::InstrumentAccountGroup(
-                        instrument_id,
-                        account_group_id,
-                    ),
-                    Err(e) => {
-                        write_error_format!(
-                            out_error,
-                            "spot funds override account group id {} is invalid: {}",
-                            entry.account_group_id.value,
-                            e
-                        );
-                        return false;
-                    }
-                },
-                (false, false) => SpotFundsOverrideTarget::Instrument(instrument_id),
             };
             overrides.push((
                 target,
@@ -224,14 +318,18 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_policy(
             ));
         }
 
-        let handle = svc.handle_clone();
-        match SpotFundsMarketData::<EngineLocking>::new(handle, bps, pricing_source, overrides) {
-            Ok(bundle) => Some(bundle),
+        let settings = match SpotFundsSettings::new(bps, source, overrides) {
+            Ok(v) => v,
             Err(e) => {
-                write_error_format!(out_error, "spot funds market data build failed: {}", e);
+                write_error_format!(out_error, "spot funds settings build failed: {}", e);
                 return false;
             }
-        }
+        };
+        let handle = svc.handle_clone();
+        (
+            Some(SpotFundsMarketData::<EngineLocking>::new(handle)),
+            settings,
+        )
     };
 
     let builder_ref = unsafe { &mut *builder };
@@ -242,13 +340,159 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_policy(
             return false;
         }
     };
-    let policy =
-        SpotFundsPolicy::<EngineLocking, EngineLocking>::new(market_orders, storage_builder)
-            .with_policy_group_id(PolicyGroupId::new(policy_group_id));
+    let policy = SpotFundsPolicy::<EngineLocking, EngineLocking>::new(
+        settings,
+        market_orders,
+        storage_builder,
+    )
+    .with_policy_group_id(PolicyGroupId::new(policy_group_id));
     match crate::engine::add_pre_trade_policy_to_builder(builder_ref, policy) {
         Ok(()) => true,
         Err(err) => {
             write_error(out_error, &err);
+            false
+        }
+    }
+}
+
+#[no_mangle]
+/// Retunes the built-in spot-funds policy registered under `name`.
+///
+/// This is a partial update (PATCH): the global slippage, pricing source, and
+/// each supplied override are applied only when their corresponding `has_*`
+/// flag is `true`. The market-data service handle is fixed at build time and
+/// cannot be changed here; this function only tunes the slippage / pricing
+/// cascade that lives in the settings cell.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer.
+/// - `name` selects the policy; it is interpreted as UTF-8. A built-in
+///   policy added via `openpit_engine_builder_add_builtin_spot_funds_policy`
+///   registers under its fixed name `"SpotFundsPolicy"`, so pass that string
+///   here.
+/// - When `has_global_slippage_bps` is `true`, the global slippage is set to
+///   `global_slippage_bps`.
+/// - When `has_pricing_source` is `true`, the pricing source is set from
+///   `pricing_source` (`0` = Mark, `1` = BookTop).
+/// - When `has_overrides` is `true`, each of the `overrides_len` entries at
+///   `instrument_overrides` is applied via insert-or-clear: an entry with
+///   `has_slippage_bps == false` clears any override at its explicit tagged
+///   target. Unknown target tags fail the call.
+/// - A `has_*` flag set to `false` leaves that dimension untouched.
+///
+/// Success:
+/// - returns `true`; the new cascade applies from the next market order onward.
+///
+/// Error:
+/// - returns `false`; if `out_error` is non-null, writes a caller-owned
+///   `OpenPitConfigureError` (release with `openpit_destroy_configure_error`).
+/// - a null `engine` returns `false` and, when `out_error` is non-null, writes
+///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be released
+///   with `openpit_destroy_configure_error`.
+pub unsafe extern "C" fn openpit_engine_configure_spot_funds(
+    engine: *mut crate::engine::OpenPitEngine,
+    name: OpenPitStringView,
+    global_slippage_bps: u16,
+    has_global_slippage_bps: bool,
+    pricing_source: u8,
+    has_pricing_source: bool,
+    instrument_overrides: *const OpenPitPretradePoliciesSpotFundsOverride,
+    overrides_len: usize,
+    has_overrides: bool,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> bool {
+    if engine.is_null() {
+        write_configure_error(
+            out_error,
+            OpenPitConfigureError::validation("engine is null".to_owned()),
+        );
+        return false;
+    }
+    let name = match unsafe { cstr_arg(name) } {
+        Some(name) => name,
+        None => {
+            write_configure_error(
+                out_error,
+                OpenPitConfigureError::validation(
+                    "policy name is null or invalid UTF-8".to_owned(),
+                ),
+            );
+            return false;
+        }
+    };
+
+    let source = if has_pricing_source {
+        match configure_pricing_source(pricing_source) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                write_configure_error(out_error, e);
+                return false;
+            }
+        }
+    } else {
+        None
+    };
+
+    let overrides: Vec<(SpotFundsOverrideTarget, SpotFundsOverride)> = if has_overrides {
+        let slice = match unsafe {
+            try_slice_arg(
+                instrument_overrides,
+                overrides_len,
+                "spot_funds instrument_overrides",
+                std::ptr::null_mut(),
+            )
+        } {
+            Some(v) => v,
+            None => {
+                write_configure_error(
+                    out_error,
+                    OpenPitConfigureError::validation(
+                        "spot_funds instrument_overrides is null".to_owned(),
+                    ),
+                );
+                return false;
+            }
+        };
+        let mut out = Vec::with_capacity(slice.len());
+        for entry in slice {
+            let target = match override_target(entry) {
+                Ok(target) => target,
+                Err(error) => {
+                    write_configure_error(out_error, OpenPitConfigureError::validation(error));
+                    return false;
+                }
+            };
+            out.push((
+                target,
+                SpotFundsOverride {
+                    slippage_bps: entry.has_slippage_bps.then_some(entry.slippage_bps),
+                },
+            ));
+        }
+        out
+    } else {
+        Vec::new()
+    };
+
+    let result = unsafe { &*engine }.configurator().spot_funds(
+        &name,
+        |settings| -> Result<(), SpotFundsConfigError> {
+            if has_global_slippage_bps {
+                settings.set_global_slippage_bps(global_slippage_bps)?;
+            }
+            if let Some(source) = source {
+                settings.set_pricing_source(source);
+            }
+            for (target, ovr) in &overrides {
+                settings.set_override(*target, *ovr)?;
+            }
+            Ok(())
+        },
+    );
+    match result {
+        Ok(()) => true,
+        Err(err) => {
+            write_configure_error(out_error, OpenPitConfigureError::new(err));
             false
         }
     }
@@ -269,7 +513,6 @@ mod tests {
         std::ptr::null_mut()
     }
 
-    /// Creates a Full-mode (byte 0) engine builder.
     /// Creates a Full-mode (byte 1) engine builder.
     fn make_builder() -> *mut crate::engine::OpenPitEngineBuilder {
         let mut err: *mut crate::string::OpenPitSharedString = std::ptr::null_mut();
@@ -321,6 +564,67 @@ mod tests {
         result
     }
 
+    fn instrument_override(
+        instrument_id: OpenPitMarketDataInstrumentId,
+        slippage_bps: Option<u16>,
+    ) -> OpenPitPretradePoliciesSpotFundsOverride {
+        OpenPitPretradePoliciesSpotFundsOverride {
+            target: OpenPitPretradePoliciesSpotFundsOverrideTarget {
+                tag: OpenPitPretradePoliciesSpotFundsOverrideTargetTag::Instrument as u8,
+                payload: OpenPitPretradePoliciesSpotFundsOverrideTargetPayload {
+                    instrument: OpenPitPretradePoliciesSpotFundsOverrideTargetInstrument {
+                        instrument_id,
+                    },
+                },
+            },
+            slippage_bps: slippage_bps.unwrap_or_default(),
+            has_slippage_bps: slippage_bps.is_some(),
+        }
+    }
+
+    fn account_override(
+        instrument_id: OpenPitMarketDataInstrumentId,
+        account_id: OpenPitParamAccountId,
+        slippage_bps: u16,
+    ) -> OpenPitPretradePoliciesSpotFundsOverride {
+        OpenPitPretradePoliciesSpotFundsOverride {
+            target: OpenPitPretradePoliciesSpotFundsOverrideTarget {
+                tag: OpenPitPretradePoliciesSpotFundsOverrideTargetTag::InstrumentAccount as u8,
+                payload: OpenPitPretradePoliciesSpotFundsOverrideTargetPayload {
+                    instrument_account:
+                        OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccount {
+                            instrument_id,
+                            account_id,
+                        },
+                },
+            },
+            slippage_bps,
+            has_slippage_bps: true,
+        }
+    }
+
+    fn group_override(
+        instrument_id: OpenPitMarketDataInstrumentId,
+        account_group_id: OpenPitParamAccountGroupId,
+        slippage_bps: u16,
+    ) -> OpenPitPretradePoliciesSpotFundsOverride {
+        OpenPitPretradePoliciesSpotFundsOverride {
+            target: OpenPitPretradePoliciesSpotFundsOverrideTarget {
+                tag: OpenPitPretradePoliciesSpotFundsOverrideTargetTag::InstrumentAccountGroup
+                    as u8,
+                payload: OpenPitPretradePoliciesSpotFundsOverrideTargetPayload {
+                    instrument_account_group:
+                        OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccountGroup {
+                            instrument_id,
+                            account_group_id,
+                        },
+                },
+            },
+            slippage_bps,
+            has_slippage_bps: true,
+        }
+    }
+
     #[test]
     fn add_builtin_spot_funds_policy_limit_only() {
         let builder = make_builder();
@@ -366,32 +670,8 @@ mod tests {
         let service = make_service();
         let bps: u16 = 1000;
         let overrides = [
-            OpenPitPretradePoliciesSpotFundsOverride {
-                instrument_id: 1,
-                account_id: OpenPitParamAccountIdOptional {
-                    value: 0,
-                    is_set: false,
-                },
-                account_group_id: OpenPitParamAccountGroupIdOptional {
-                    value: 0,
-                    is_set: false,
-                },
-                slippage_bps: 500,
-                has_slippage_bps: true,
-            },
-            OpenPitPretradePoliciesSpotFundsOverride {
-                instrument_id: 2,
-                account_id: OpenPitParamAccountIdOptional {
-                    value: 0,
-                    is_set: false,
-                },
-                account_group_id: OpenPitParamAccountGroupIdOptional {
-                    value: 0,
-                    is_set: false,
-                },
-                slippage_bps: 0,
-                has_slippage_bps: false,
-            },
+            instrument_override(1, Some(500)),
+            instrument_override(2, None),
         ];
         let result = unsafe {
             openpit_engine_builder_add_builtin_spot_funds_policy(
@@ -414,19 +694,7 @@ mod tests {
         let builder = make_builder();
         let service = make_service();
         let bps: u16 = 1000;
-        let overrides = [OpenPitPretradePoliciesSpotFundsOverride {
-            instrument_id: 1,
-            account_id: OpenPitParamAccountIdOptional {
-                value: 99224416,
-                is_set: true,
-            },
-            account_group_id: OpenPitParamAccountGroupIdOptional {
-                value: 0,
-                is_set: false,
-            },
-            slippage_bps: 250,
-            has_slippage_bps: true,
-        }];
+        let overrides = [account_override(1, 99224416, 250)];
         let result = unsafe {
             openpit_engine_builder_add_builtin_spot_funds_policy(
                 builder,
@@ -448,19 +716,7 @@ mod tests {
         let builder = make_builder();
         let service = make_service();
         let bps: u16 = 1000;
-        let overrides = [OpenPitPretradePoliciesSpotFundsOverride {
-            instrument_id: 1,
-            account_id: OpenPitParamAccountIdOptional {
-                value: 0,
-                is_set: false,
-            },
-            account_group_id: OpenPitParamAccountGroupIdOptional {
-                value: 3,
-                is_set: true,
-            },
-            slippage_bps: 250,
-            has_slippage_bps: true,
-        }];
+        let overrides = [group_override(1, 3, 250)];
         let result = unsafe {
             openpit_engine_builder_add_builtin_spot_funds_policy(
                 builder,
@@ -478,19 +734,18 @@ mod tests {
     }
 
     #[test]
-    fn add_builtin_spot_funds_policy_override_with_account_and_group_is_error() {
+    fn add_builtin_spot_funds_policy_override_with_invalid_tag_is_error() {
         let builder = make_builder();
         let service = make_service();
         let bps: u16 = 1000;
         let overrides = [OpenPitPretradePoliciesSpotFundsOverride {
-            instrument_id: 1,
-            account_id: OpenPitParamAccountIdOptional {
-                value: 99224416,
-                is_set: true,
-            },
-            account_group_id: OpenPitParamAccountGroupIdOptional {
-                value: 3,
-                is_set: true,
+            target: OpenPitPretradePoliciesSpotFundsOverrideTarget {
+                tag: 255,
+                payload: OpenPitPretradePoliciesSpotFundsOverrideTargetPayload {
+                    instrument: OpenPitPretradePoliciesSpotFundsOverrideTargetInstrument {
+                        instrument_id: 1,
+                    },
+                },
             },
             slippage_bps: 250,
             has_slippage_bps: true,
@@ -511,7 +766,7 @@ mod tests {
         assert!(!result);
         assert!(!err.is_null());
         let msg = cstr_to_string(err);
-        assert!(msg.contains("both an account and an account group"));
+        assert!(msg.contains("target tag 255 is invalid"));
         openpit_destroy_marketdata_service(service);
     }
 
@@ -520,20 +775,7 @@ mod tests {
         let builder = make_builder();
         let service = make_service();
         let bps: u16 = 1000;
-        // Account group 0 is the reserved default and cannot be constructed.
-        let overrides = [OpenPitPretradePoliciesSpotFundsOverride {
-            instrument_id: 1,
-            account_id: OpenPitParamAccountIdOptional {
-                value: 0,
-                is_set: false,
-            },
-            account_group_id: OpenPitParamAccountGroupIdOptional {
-                value: 0,
-                is_set: true,
-            },
-            slippage_bps: 250,
-            has_slippage_bps: true,
-        }];
+        let overrides = [group_override(1, 0, 250)];
         let mut err: *mut crate::string::OpenPitSharedString = std::ptr::null_mut();
         let result = unsafe {
             openpit_engine_builder_add_builtin_spot_funds_policy(
@@ -758,5 +1000,122 @@ mod tests {
 
         openpit_destroy_marketdata_service(full_service);
         openpit_destroy_engine_builder(local_eng);
+    }
+
+    #[test]
+    fn configure_spot_funds_rejects_null_and_invalid_utf8_names() {
+        let builder = make_builder();
+        assert!(unsafe {
+            openpit_engine_builder_add_builtin_spot_funds_policy(
+                builder,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                0,
+                null_out_error(),
+            )
+        });
+        let engine = crate::engine::openpit_engine_builder_build(
+            builder,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        assert!(!engine.is_null());
+        openpit_destroy_engine_builder(builder);
+
+        let invalid_utf8 = [0xff];
+        let invalid_name = OpenPitStringView {
+            ptr: invalid_utf8.as_ptr(),
+            len: invalid_utf8.len(),
+        };
+
+        for name in [OpenPitStringView::default(), invalid_name] {
+            let mut out_error = std::ptr::null_mut();
+            let ok = unsafe {
+                openpit_engine_configure_spot_funds(
+                    engine,
+                    name,
+                    0,
+                    false,
+                    0,
+                    false,
+                    std::ptr::null(),
+                    0,
+                    false,
+                    &mut out_error,
+                )
+            };
+            assert!(!ok);
+            assert!(!out_error.is_null());
+            assert_eq!(
+                crate::engine::openpit_configure_error_get_kind(out_error),
+                crate::engine::OpenPitConfigureErrorKind::Validation
+            );
+            crate::engine::openpit_destroy_configure_error(out_error);
+        }
+
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_spot_funds_invalid_target_tag_uses_structured_error() {
+        let builder = make_builder();
+        assert!(unsafe {
+            openpit_engine_builder_add_builtin_spot_funds_policy(
+                builder,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                0,
+                null_out_error(),
+            )
+        });
+        let engine = crate::engine::openpit_engine_builder_build(
+            builder,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        assert!(!engine.is_null());
+        openpit_destroy_engine_builder(builder);
+
+        let overrides = [OpenPitPretradePoliciesSpotFundsOverride {
+            target: OpenPitPretradePoliciesSpotFundsOverrideTarget {
+                tag: 255,
+                payload: OpenPitPretradePoliciesSpotFundsOverrideTargetPayload {
+                    instrument: OpenPitPretradePoliciesSpotFundsOverrideTargetInstrument {
+                        instrument_id: 1,
+                    },
+                },
+            },
+            slippage_bps: 0,
+            has_slippage_bps: false,
+        }];
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_spot_funds(
+                engine,
+                OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                0,
+                false,
+                0,
+                false,
+                overrides.as_ptr(),
+                overrides.len(),
+                true,
+                &mut out_error,
+            )
+        };
+        assert!(!ok);
+        assert!(!out_error.is_null());
+        assert_eq!(
+            crate::engine::openpit_configure_error_get_kind(out_error),
+            crate::engine::OpenPitConfigureErrorKind::Validation
+        );
+        crate::engine::openpit_destroy_configure_error(out_error);
+        crate::engine::openpit_destroy_engine(engine);
     }
 }

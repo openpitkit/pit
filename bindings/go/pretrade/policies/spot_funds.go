@@ -18,6 +18,7 @@
 package policies
 
 import (
+	"fmt"
 	"runtime"
 
 	"go.openpit.dev/openpit/internal/native"
@@ -38,17 +39,60 @@ const (
 	SpotFundsPricingSourceBookTop SpotFundsPricingSource = 1
 )
 
-// SpotFundsOverride overrides the market slippage for a registered instrument,
-// optionally narrowed to a single account or an account group. AccountID and
-// AccountGroupID are mutually exclusive; setting both makes Build return an
-// error. When SlippageBps is None the entry is ignored (defers to the next
-// cascade tier). Resolution order: (instrument, account_id) ->
-// (instrument, account_group_id) -> (instrument) -> global.
-type SpotFundsOverride struct {
+// SpotFundsOverrideTarget selects which accounts a SpotFundsOverride applies
+// to within the slippage resolution cascade.
+//
+// Use one of the concrete types that implement this interface:
+//   - [SpotFundsOverrideTargetInstrument] - instrument-level default
+//   - [SpotFundsOverrideTargetInstrumentAccount] - scoped to one account
+//   - [SpotFundsOverrideTargetInstrumentAccountGroup] - scoped to one account
+//     group
+type SpotFundsOverrideTarget interface {
+	spotFundsOverrideTarget()
+}
+
+// SpotFundsOverrideTargetInstrument is an instrument-level default: applies
+// when no account- or account-group-scoped override matches the order's
+// account.
+type SpotFundsOverrideTargetInstrument struct {
+	Instrument marketdata.InstrumentID
+}
+
+// SpotFundsOverrideTargetInstrumentAccount applies to the instrument only for
+// this exact account (highest priority in the cascade).
+type SpotFundsOverrideTargetInstrumentAccount struct {
+	Instrument marketdata.InstrumentID
+	AccountID  param.AccountID
+}
+
+// SpotFundsOverrideTargetInstrumentAccountGroup applies to the instrument only
+// for accounts in this account group.
+type SpotFundsOverrideTargetInstrumentAccountGroup struct {
 	Instrument     marketdata.InstrumentID
-	AccountID      optional.Option[param.AccountID]
-	AccountGroupID optional.Option[param.AccountGroupID]
-	SlippageBps    optional.Option[uint16]
+	AccountGroupID param.AccountGroupID
+}
+
+func (SpotFundsOverrideTargetInstrument) spotFundsOverrideTarget()             {}
+func (SpotFundsOverrideTargetInstrumentAccount) spotFundsOverrideTarget()      {}
+func (SpotFundsOverrideTargetInstrumentAccountGroup) spotFundsOverrideTarget() {}
+
+// SpotFundsOverride is the override value applied at a
+// [SpotFundsOverrideTarget]. When SlippageBps is None the entry is ignored
+// and the cascade falls through to the next tier.
+type SpotFundsOverride struct {
+	// SlippageBps is the slippage applied at the target. None defers to the
+	// next tier of the cascade (and ultimately the global slippage).
+	SlippageBps optional.Option[uint16]
+}
+
+// SpotFundsOverrideEntry pairs a target with its override value. Passed to
+// [SpotFundsReadyBuilder.Overrides].
+//
+// Resolution order: (instrument, account_id) ->
+// (instrument, account_group_id) -> (instrument) -> global.
+type SpotFundsOverrideEntry struct {
+	Target   SpotFundsOverrideTarget
+	Override SpotFundsOverride
 }
 
 //------------------------------------------------------------------------------
@@ -70,7 +114,7 @@ type SpotFundsReadyBuilder struct {
 	marketData        *marketdata.Service
 	marketSlippageBps *uint16
 	pricingSource     SpotFundsPricingSource
-	overrides         []SpotFundsOverride
+	overrides         []SpotFundsOverrideEntry
 	policyGroupID     model.PolicyGroupID
 }
 
@@ -136,10 +180,12 @@ func (b *SpotFundsReadyBuilder) PricingSource(
 	return b
 }
 
-// Overrides sets per-instrument slippage overrides, each optionally scoped to
-// a single account or an account group. Calling it more than once replaces the
-// previous overrides.
-func (b *SpotFundsReadyBuilder) Overrides(overrides ...SpotFundsOverride) *SpotFundsReadyBuilder {
+// Overrides sets per-instrument slippage overrides, each paired with a target
+// that selects the scope. Calling it more than once replaces the previous
+// overrides.
+func (b *SpotFundsReadyBuilder) Overrides(
+	overrides ...SpotFundsOverrideEntry,
+) *SpotFundsReadyBuilder {
 	b.overrides = overrides
 	return b
 }
@@ -161,27 +207,16 @@ func (b *SpotFundsReadyBuilder) Build(builder native.EngineBuilder) error {
 	var nativeOverrides []native.PretradePoliciesSpotFundsOverride
 	if len(b.overrides) > 0 {
 		nativeOverrides = make([]native.PretradePoliciesSpotFundsOverride, len(b.overrides))
-		for i, o := range b.overrides {
-			var accountPtr *native.ParamAccountID
-			if v, has := o.AccountID.Get(); has {
-				h := v.Handle()
-				accountPtr = &h
-			}
-			var groupPtr *native.ParamAccountGroupID
-			if v, has := o.AccountGroupID.Get(); has {
-				h := v.Handle()
-				groupPtr = &h
-			}
+		for i, e := range b.overrides {
 			var slippagePtr *uint16
-			if v, has := o.SlippageBps.Get(); has {
+			if v, has := e.Override.SlippageBps.Get(); has {
 				slippagePtr = &v
 			}
-			nativeOverrides[i] = native.NewPretradePoliciesSpotFundsOverride(
-				o.Instrument.Handle(),
-				accountPtr,
-				groupPtr,
-				slippagePtr,
-			)
+			override, err := NewNativeSpotFundsOverride(e.Target, slippagePtr)
+			if err != nil {
+				return fmt.Errorf("spot funds override %d: %w", i, err)
+			}
+			nativeOverrides[i] = override
 		}
 	}
 
@@ -202,4 +237,85 @@ func (b *SpotFundsReadyBuilder) Build(builder native.EngineBuilder) error {
 // Equivalent to building without calling [SpotFundsBuilder.WithMarketOrders].
 func (b *SpotFundsBuilder) Build(builder native.EngineBuilder) error {
 	return b.builder.Build(builder)
+}
+
+// NewNativeSpotFundsOverride translates a [SpotFundsOverrideTarget] and its
+// slippage into the native tagged-union override. It is shared by the spot
+// funds builder and the runtime configurator.
+func NewNativeSpotFundsOverride(
+	target SpotFundsOverrideTarget,
+	slippageBps *uint16,
+) (native.PretradePoliciesSpotFundsOverride, error) {
+	var zero native.PretradePoliciesSpotFundsOverride
+
+	switch target := target.(type) {
+	case SpotFundsOverrideTargetInstrument:
+		return native.NewPretradePoliciesSpotFundsOverride(
+				target.Instrument.Handle(),
+				nil,
+				nil,
+				slippageBps,
+			),
+			nil
+	case *SpotFundsOverrideTargetInstrument:
+		if target == nil {
+			return zero, fmt.Errorf("target is nil")
+		}
+		return native.NewPretradePoliciesSpotFundsOverride(
+				target.Instrument.Handle(),
+				nil,
+				nil,
+				slippageBps,
+			),
+			nil
+	case SpotFundsOverrideTargetInstrumentAccount:
+		accountID := target.AccountID.Handle()
+		return native.NewPretradePoliciesSpotFundsOverride(
+				target.Instrument.Handle(),
+				&accountID,
+				nil,
+				slippageBps,
+			),
+			nil
+	case *SpotFundsOverrideTargetInstrumentAccount:
+		if target == nil {
+			return zero, fmt.Errorf("target is nil")
+		}
+		accountID := target.AccountID.Handle()
+		return native.NewPretradePoliciesSpotFundsOverride(
+				target.Instrument.Handle(),
+				&accountID,
+				nil,
+				slippageBps,
+			),
+			nil
+	case SpotFundsOverrideTargetInstrumentAccountGroup:
+		accountGroupID := target.AccountGroupID.Handle()
+		return native.NewPretradePoliciesSpotFundsOverride(
+				target.Instrument.Handle(),
+				nil,
+				&accountGroupID,
+				slippageBps,
+			),
+			nil
+	case *SpotFundsOverrideTargetInstrumentAccountGroup:
+		if target == nil {
+			return zero, fmt.Errorf("target is nil")
+		}
+		accountGroupID := target.AccountGroupID.Handle()
+		return native.NewPretradePoliciesSpotFundsOverride(
+				target.Instrument.Handle(),
+				nil,
+				&accountGroupID,
+				slippageBps,
+			),
+			nil
+	case nil:
+		return zero, fmt.Errorf("target is nil")
+	default:
+		return zero, fmt.Errorf(
+			"unsupported target type %T",
+			target,
+		)
+	}
 }

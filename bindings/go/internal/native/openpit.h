@@ -56,6 +56,7 @@ typedef struct OpenPitAccountGroupError OpenPitAccountGroupError;
 typedef struct OpenPitAccountOutcomeEntry OpenPitAccountOutcomeEntry;
 typedef struct OpenPitAccountOutcomeEntryList OpenPitAccountOutcomeEntryList;
 typedef struct OpenPitBytesView OpenPitBytesView;
+typedef struct OpenPitConfigureError OpenPitConfigureError;
 typedef struct OpenPitEngine OpenPitEngine;
 typedef struct OpenPitEngineBuildError OpenPitEngineBuildError;
 typedef struct OpenPitEngineBuilder OpenPitEngineBuilder;
@@ -130,6 +131,8 @@ typedef struct OpenPitPretradePoliciesOrderSizeLimit
     OpenPitPretradePoliciesOrderSizeLimit;
 typedef struct OpenPitPretradePoliciesPnlBoundsAccountBarrier
     OpenPitPretradePoliciesPnlBoundsAccountBarrier;
+typedef struct OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate
+    OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate;
 typedef struct OpenPitPretradePoliciesPnlBoundsBarrier
     OpenPitPretradePoliciesPnlBoundsBarrier;
 typedef struct OpenPitPretradePoliciesRateLimitAccountAssetBarrier
@@ -142,6 +145,17 @@ typedef struct OpenPitPretradePoliciesRateLimitBrokerBarrier
     OpenPitPretradePoliciesRateLimitBrokerBarrier;
 typedef struct OpenPitPretradePoliciesSpotFundsOverride
     OpenPitPretradePoliciesSpotFundsOverride;
+typedef struct OpenPitPretradePoliciesSpotFundsOverrideTarget
+    OpenPitPretradePoliciesSpotFundsOverrideTarget;
+typedef struct OpenPitPretradePoliciesSpotFundsOverrideTargetInstrument
+    OpenPitPretradePoliciesSpotFundsOverrideTargetInstrument;
+typedef struct OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccount
+    OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccount;
+typedef struct
+    OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccountGroup
+    OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccountGroup;
+typedef union OpenPitPretradePoliciesSpotFundsOverrideTargetPayload
+    OpenPitPretradePoliciesSpotFundsOverrideTargetPayload;
 typedef struct OpenPitPretradePreTradeLock OpenPitPretradePreTradeLock;
 typedef struct OpenPitPretradePreTradeLockEntries
     OpenPitPretradePreTradeLockEntries;
@@ -861,6 +875,49 @@ typedef uint32_t OpenPitAccountBlockErrorKind;
     ((OpenPitAccountBlockErrorKind) 2)
 
 /**
+ * Discriminant for the variant carried by an [`OpenPitConfigureError`].
+ */
+typedef uint32_t OpenPitConfigureErrorKind;
+/**
+ * No configurable policy carries the requested name.
+ */
+#define OpenPitConfigureErrorKind_Unknown ((OpenPitConfigureErrorKind) 0)
+/**
+ * A policy is registered under the name, but its settings type differs from
+ * the one the called configure function targets.
+ */
+#define OpenPitConfigureErrorKind_TypeMismatch ((OpenPitConfigureErrorKind) 1)
+/**
+ * The applied update was rejected by the policy's settings validation; the
+ * prior configuration still applies.
+ */
+#define OpenPitConfigureErrorKind_Validation ((OpenPitConfigureErrorKind) 2)
+
+/**
+ * Tagged target variants for a spot-funds slippage override.
+ *
+ * Spot funds overrides use an explicit tagged hierarchy matching the Rust
+ * [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget) variants:
+ * `Instrument`, `InstrumentAccount`, and `InstrumentAccountGroup`.
+ */
+typedef uint8_t OpenPitPretradePoliciesSpotFundsOverrideTargetTag;
+/**
+ * Instrument-level override.
+ */
+#define OpenPitPretradePoliciesSpotFundsOverrideTargetTag_Instrument \
+    ((OpenPitPretradePoliciesSpotFundsOverrideTargetTag) 0)
+/**
+ * Override for one instrument and account.
+ */
+#define OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccount \
+    ((OpenPitPretradePoliciesSpotFundsOverrideTargetTag) 1)
+/**
+ * Override for one instrument and account group.
+ */
+#define OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccountGroup \
+    ((OpenPitPretradePoliciesSpotFundsOverrideTargetTag) 2)
+
+/**
  * Selects which quote buckets a read will consult, in order.
  *
  * When the more-specific bucket has no quote, the read falls through to the
@@ -1318,6 +1375,109 @@ struct OpenPitPretradePoliciesRateLimitAccountBarrier {
     uint64_t window_nanoseconds;
 };
 
+/**
+ * Payload for an instrument-level spot-funds override target.
+ */
+struct OpenPitPretradePoliciesSpotFundsOverrideTargetInstrument {
+    /**
+     * Registered market-data instrument id.
+     */
+    OpenPitMarketDataInstrumentId instrument_id;
+};
+
+/**
+ * Payload for an instrument-and-account spot-funds override target.
+ */
+struct OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccount {
+    /**
+     * Registered market-data instrument id.
+     */
+    OpenPitMarketDataInstrumentId instrument_id;
+    /**
+     * Account the override applies to.
+     */
+    OpenPitParamAccountId account_id;
+};
+
+/**
+ * Payload for an instrument-and-account-group spot-funds override target.
+ */
+struct OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccountGroup {
+    /**
+     * Registered market-data instrument id.
+     */
+    OpenPitMarketDataInstrumentId instrument_id;
+    /**
+     * Account group the override applies to.
+     */
+    OpenPitParamAccountGroupId account_group_id;
+};
+
+/**
+ * Variant payload for a tagged spot-funds override target.
+ */
+union OpenPitPretradePoliciesSpotFundsOverrideTargetPayload {
+    /**
+     * Payload used with the `Instrument` tag.
+     */
+    OpenPitPretradePoliciesSpotFundsOverrideTargetInstrument instrument;
+    /**
+     * Payload used with the `InstrumentAccount` tag.
+     */
+    OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccount
+        instrument_account;
+    /**
+     * Payload used with the `InstrumentAccountGroup` tag.
+     */
+    OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccountGroup
+        instrument_account_group;
+};
+
+/**
+ * Explicit tagged target for a spot-funds slippage override.
+ *
+ * The `tag` selects exactly one union payload. Unknown tags are rejected
+ * through the function's existing error channel before the payload is read.
+ */
+struct OpenPitPretradePoliciesSpotFundsOverrideTarget {
+    /**
+     * One of [`OpenPitPretradePoliciesSpotFundsOverrideTargetTag`].
+     *
+     * Stored as `u8` so unknown C values can be rejected without constructing an
+     * invalid Rust enum discriminant.
+     */
+    uint8_t tag;
+    /**
+     * Payload selected by `tag`.
+     */
+    OpenPitPretradePoliciesSpotFundsOverrideTargetPayload payload;
+};
+
+/**
+ * Slippage override entry for the spot funds policy.
+ *
+ * `target` mirrors the three variants of
+ * [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget). When
+ * `has_slippage_bps` is `true`, `slippage_bps` is used for the selected
+ * target. When it is `false`, construction ignores the entry and runtime
+ * configuration clears the selected override. Slippage resolves account ->
+ * account group -> instrument -> global for each order.
+ */
+struct OpenPitPretradePoliciesSpotFundsOverride {
+    /**
+     * Explicit tagged override target.
+     */
+    OpenPitPretradePoliciesSpotFundsOverrideTarget target;
+    /**
+     * Slippage in basis points, used only when `has_slippage_bps` is `true`.
+     */
+    uint16_t slippage_bps;
+    /**
+     * Whether `slippage_bps` carries a value.
+     */
+    bool has_slippage_bps;
+};
+
 struct OpenPitParamAccountGroupIdOptional {
     OpenPitParamAccountGroupId value;
     bool is_set;
@@ -1708,6 +1868,32 @@ struct OpenPitPretradePoliciesPnlBoundsAccountBarrier {
 };
 
 /**
+ * Runtime replacement for a per-(account, settlement-asset) P&L barrier.
+ *
+ * Passed to `openpit_engine_configure_pnl_bounds_killswitch`. It intentionally
+ * has no `initial_pnl`: runtime replacement preserves and evaluates the live
+ * accumulated P&L.
+ */
+struct OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate {
+    /**
+     * Account this replacement barrier applies to.
+     */
+    OpenPitParamAccountId account_id;
+    /**
+     * Settlement asset whose live accumulated P&L is monitored.
+     */
+    OpenPitStringView settlement_asset;
+    /**
+     * Optional replacement lower bound.
+     */
+    OpenPitParamPnlOptional lower_bound;
+    /**
+     * Optional replacement upper bound.
+     */
+    OpenPitParamPnlOptional upper_bound;
+};
+
+/**
  * Per-settlement-asset rate-limit barrier for
  * `openpit_engine_builder_add_builtin_rate_limit_policy`.
  */
@@ -1747,52 +1933,6 @@ struct OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
      * Window duration in nanoseconds.
      */
     uint64_t window_nanoseconds;
-};
-
-/**
- * Slippage override entry for the spot funds policy.
- *
- * Mirrors [`SpotFundsOverride`](openpit::SpotFundsOverride) together with the
- * [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget) it applies to.
- * `instrument_id` selects the registered instrument. The scope is chosen by
- * the `account_id` and `account_group_id` optionals, which are mutually
- * exclusive: when neither is set the entry is an instrument-level default;
- * when `account_id.is_set` it applies only to `account_id.value`; when
- * `account_group_id.is_set` it applies only to accounts in
- * `account_group_id.value`. When `has_slippage_bps` is `true`, `slippage_bps`
- * is the slippage for that scope; when `false`, the entry is ignored and the
- * cascade falls through to the next tier (ultimately the global
- * `market_slippage_bps`).
- *
- * Slippage resolves account -> account group -> instrument -> global for each
- * order.
- */
-struct OpenPitPretradePoliciesSpotFundsOverride {
-    /**
-     * Registered market-data instrument id.
-     */
-    OpenPitMarketDataInstrumentId instrument_id;
-    /**
-     * Account the override applies to. When `is_set`, the override is scoped to
-     * `value`; mutually exclusive with `account_group_id`. Both unset means an
-     * instrument-level default.
-     */
-    OpenPitParamAccountIdOptional account_id;
-    /**
-     * Account group the override applies to. When `is_set`, the override is scoped
-     * to `value`; mutually exclusive with `account_id`. Both unset means an
-     * instrument-level default.
-     */
-    OpenPitParamAccountGroupIdOptional account_group_id;
-    /**
-     * Slippage in basis points for the selected scope, used only when
-     * `has_slippage_bps` is `true`.
-     */
-    uint16_t slippage_bps;
-    /**
-     * Whether `slippage_bps` carries a value.
-     */
-    bool has_slippage_bps;
 };
 
 /**
@@ -4244,8 +4384,8 @@ void openpit_destroy_engine_builder(
  *   or no policies were registered;
  * - for those non-domain failures, if `out_error` is not null, writes a
  *   caller-owned `OpenPitSharedString` error handle that MUST be released
- *   with `openpit_destroy_shared_string`, and writes null to
- *   `out_build_error` if it is not null;
+ *   with `openpit_destroy_shared_string`; `out_build_error` is left
+ *   untouched;
  * - returns null when the configuration is rejected during building (for
  *   example, duplicate policy names or duplicate group ids); in that case,
  *   if `out_build_error` is not null, writes a caller-owned
@@ -4256,8 +4396,8 @@ void openpit_destroy_engine_builder(
  *
  * Ownership:
  * - on success the returned engine pointer is owned by the caller and must
- *   be released with `openpit_destroy_engine`; on success, null is written
- *   to `out_build_error` if it is not null;
+ *   be released with `openpit_destroy_engine`; `out_build_error` is left
+ *   untouched;
  * - the builder becomes consumed regardless of success and must not be
  *   reused.
  */
@@ -4355,16 +4495,17 @@ void openpit_destroy_engine(
  *   `openpit_pretrade_pre_trade_request_execute` or
  *   `openpit_destroy_pretrade_pre_trade_request`.
  *
- * Reject ownership contract:
+ * Output ownership contract:
+ * - on `Passed`, a non-null request pointer is written to `out_request` if
+ *   it is not null;
  * - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written
  *   to `out_rejects` if it is not null;
- * - the caller takes ownership and MUST release it with
- *   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the
- *   memory allocated inside this call;
- * - no thread-local state is involved, and the returned pointer is safe to
+ * - the caller owns either returned object and MUST release it with the
+ *   corresponding destroy function;
+ * - no thread-local state is involved, and returned pointers are safe to
  *   read on any thread;
- * - on `Passed` and `Error`, null is written to `out_rejects`, and the
- *   caller must not call destroy in those cases.
+ * - on `Passed` and `Error`, `out_rejects` is left untouched;
+ * - on `Rejected` and `Error`, `out_request` is left untouched.
  *
  * Order lifetime contract:
  * - `order` is read as a borrowed view during this call;
@@ -4400,16 +4541,17 @@ OpenPitPretradeStatus openpit_engine_start_pre_trade(
  *   `openpit_pretrade_pre_trade_reservation_rollback`, or
  *   `openpit_destroy_pretrade_pre_trade_reservation`.
  *
- * Reject ownership contract:
+ * Output ownership contract:
+ * - on `Passed`, a non-null reservation pointer is written to
+ *   `out_reservation` if it is not null;
  * - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written
  *   to `out_rejects` if it is not null;
- * - the caller takes ownership and MUST release it with
- *   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the
- *   memory allocated inside this call;
- * - no thread-local state is involved, and the returned pointer is safe to
+ * - the caller owns either returned object and MUST release it with the
+ *   corresponding destroy function;
+ * - no thread-local state is involved, and returned pointers are safe to
  *   read on any thread;
- * - on `Passed` and `Error`, null is written to `out_rejects`, and the
- *   caller must not call destroy in those cases.
+ * - on `Passed` and `Error`, `out_rejects` is left untouched;
+ * - on `Rejected` and `Error`, `out_reservation` is left untouched.
  *
  * Order lifetime contract:
  * - `order` is read as a borrowed view during this call only;
@@ -4445,16 +4587,17 @@ OpenPitPretradeStatus openpit_engine_execute_pre_trade(
  *   released with `openpit_destroy_pretrade_pre_trade_request`, but it
  *   cannot be executed again.
  *
- * Reject ownership contract:
+ * Output ownership contract:
+ * - on `Passed`, a non-null reservation pointer is written to
+ *   `out_reservation` if it is not null;
  * - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written
  *   to `out_rejects` if it is not null;
- * - the caller takes ownership and MUST release it with
- *   `openpit_pretrade_destroy_reject_list`; failing to do so leaks the
- *   memory allocated inside this call;
- * - no thread-local state is involved, and the returned pointer is safe to
+ * - the caller owns either returned object and MUST release it with the
+ *   corresponding destroy function;
+ * - no thread-local state is involved, and returned pointers are safe to
  *   read on any thread;
- * - on `Passed` and `Error`, null is written to `out_rejects`, and the
- *   caller must not call destroy in those cases.
+ * - on `Passed` and `Error`, `out_rejects` is left untouched;
+ * - on `Rejected` and `Error`, `out_reservation` is left untouched.
  */
 OpenPitPretradeStatus openpit_pretrade_pre_trade_request_execute(
     OpenPitPretradePreTradeRequest * request,
@@ -4563,13 +4706,12 @@ void openpit_destroy_pretrade_pre_trade_reservation(
  * - if `out_blocks` is not null and at least one policy entered a blocked
  *   state, writes a caller-owned `OpenPitPretradeAccountBlockList` pointer;
  *   release it with `openpit_pretrade_destroy_account_block_list`;
- * - if `out_blocks` is not null and no policy blocked, writes null.
+ * - when no policy blocked, `out_blocks` is left untouched;
  * - if `out_adjustments` is not null and at least one policy produced an
  *   account-adjustment outcome, writes a caller-owned
  *   `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
  *   `openpit_destroy_account_adjustment_outcome_list`;
- * - if `out_adjustments` is not null and no outcome was produced, writes
- *   null.
+ * - when no outcome was produced, `out_adjustments` is left untouched.
  *
  * Error:
  * - returns `false` when input pointers are invalid or the report payload
@@ -4649,7 +4791,7 @@ openpit_account_adjustment_batch_error_get_rejects(
  *   produced an account-adjustment outcome, writes a caller-owned
  *   `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
  *   `openpit_destroy_account_adjustment_outcome_list`; if no outcome was
- *   produced, writes null;
+ *   produced, `out_outcomes` is left untouched;
  * - `Rejected` stores batch error details in `out_reject`, the caller must
  *   release a returned object with
  *   `openpit_destroy_account_adjustment_batch_error`;
@@ -4713,7 +4855,8 @@ OpenPitParamAccountId openpit_account_group_error_get_account(
 
 /**
  * Returns the current group of the offending account from an account-group
- * error, or writes zero and returns `false` when no group is present.
+ * error, or returns `false` and leaves `out_group` untouched when no group is
+ * set.
  *
  * Contract:
  * - `err` must be a valid non-null pointer;
@@ -4896,6 +5039,43 @@ bool openpit_account_block_error_get_account(
 bool openpit_account_block_error_get_group(
     const OpenPitAccountBlockError * err,
     OpenPitParamAccountGroupId * out_group
+);
+
+/**
+ * Releases a caller-owned configure error.
+ *
+ * Contract:
+ * - call exactly once per pointer returned by an
+ *   `openpit_engine_configure_*` function;
+ * - passing null is allowed and has no effect.
+ */
+void openpit_destroy_configure_error(
+    OpenPitConfigureError * err
+);
+
+/**
+ * Returns the human-readable error message from a configure error.
+ *
+ * Contract:
+ * - `err` must be a valid non-null pointer;
+ * - the returned view borrows from the error object and is valid while the
+ *   error is alive;
+ * - violating the pointer contract aborts the call.
+ */
+OpenPitStringView openpit_configure_error_get_message(
+    const OpenPitConfigureError * err
+);
+
+/**
+ * Returns the variant kind of a configure error.
+ *
+ * Contract:
+ * - `err` must be a valid non-null pointer;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+OpenPitConfigureErrorKind openpit_configure_error_get_kind(
+    const OpenPitConfigureError * err
 );
 
 /**
@@ -5249,6 +5429,56 @@ bool openpit_engine_builder_add_builtin_order_size_limit_policy(
 );
 
 /**
+ * Retunes the built-in order-size limit policy registered under `name`.
+ *
+ * This is a partial update (PATCH) at the axis level: each axis is replaced
+ * wholesale only when its `has_*` flag is `true`, mirroring the replace-shaped
+ * settings setters.
+ *
+ * Contract:
+ * - `engine` must be a valid non-null engine pointer.
+ * - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
+ *   added via `openpit_engine_builder_add_builtin_order_size_limit_policy`
+ *   registers under its fixed name `"OrderSizeLimitPolicy"`, so pass that
+ *   string here.
+ * - When `has_broker` is `true`, the broker barrier is set to `*broker` when
+ *   `broker` is non-null, or cleared when `broker` is null.
+ * - When `has_asset` is `true`, the per-asset axis is replaced by the
+ *   `asset_len` entries at `asset`.
+ * - When `has_account_asset` is `true`, the per-(account, asset) axis is
+ *   replaced by the `account_asset_len` entries at `account_asset`.
+ * - Each `settlement_asset` view and every `max_quantity`/`max_notional`
+ *   must be valid for the duration of the call.
+ * - A `has_*` flag set to `false` leaves that axis untouched. The policy's
+ *   "at least one barrier" rule still applies to the resulting
+ *   configuration.
+ *
+ * Success:
+ * - returns `true`; the new limits apply from the next order onward.
+ *
+ * Error:
+ * - returns `false`; if `out_error` is non-null, writes a caller-owned
+ *   `OpenPitConfigureError` (release with
+ *   `openpit_destroy_configure_error`).
+ * - a null `engine` returns `false` and, when `out_error` is non-null,
+ *   writes a caller-owned `OpenPitConfigureError` (`Validation`) that must
+ *   be released with `openpit_destroy_configure_error`.
+ */
+bool openpit_engine_configure_order_size_limit(
+    OpenPitEngine * engine,
+    OpenPitStringView name,
+    const OpenPitPretradePoliciesOrderSizeBrokerBarrier * broker,
+    bool has_broker,
+    const OpenPitPretradePoliciesOrderSizeAssetBarrier * asset,
+    size_t asset_len,
+    bool has_asset,
+    const OpenPitPretradePoliciesOrderSizeAccountAssetBarrier * account_asset,
+    size_t account_asset_len,
+    bool has_account_asset,
+    OpenPitConfigureError ** out_error
+);
+
+/**
  * Adds the built-in order-validation policy to the engine builder.
  *
  * Contract:
@@ -5304,6 +5534,93 @@ bool openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
 );
 
 /**
+ * Retunes the built-in P&L bounds kill-switch policy registered under `name`.
+ *
+ * This is a partial update (PATCH) at the axis level: each axis is replaced
+ * wholesale only when its `has_*` flag is `true`, mirroring the replace-shaped
+ * settings setters. Runtime account barriers use a dedicated update DTO with
+ * no `initial_pnl`; accumulated P&L is preserved.
+ *
+ * Contract:
+ * - `engine` must be a valid non-null engine pointer.
+ * - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
+ *   added via
+ *   `openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy`
+ *   registers under its fixed name `"PnlBoundsKillSwitchPolicy"`, so pass
+ *   that string here.
+ * - When `has_broker` is `true`, the broker axis is replaced by the
+ *   `broker_len` entries at `broker` (a length of zero clears it, subject to
+ *   the policy's "at least one barrier" rule).
+ * - When `has_account` is `true`, the account+asset axis is replaced by the
+ *   `account_len` entries at `account`.
+ * - Each `settlement_asset` view must be valid for the duration of the call.
+ * - A `has_*` flag set to `false` leaves that axis untouched.
+ *
+ * Success:
+ * - returns `true`; the new barriers apply from the next check onward.
+ *
+ * Error:
+ * - returns `false`; if `out_error` is non-null, writes a caller-owned
+ *   `OpenPitConfigureError` (release with
+ *   `openpit_destroy_configure_error`).
+ * - a null `engine` returns `false` and, when `out_error` is non-null,
+ *   writes a caller-owned `OpenPitConfigureError` (`Validation`) that must
+ *   be released with `openpit_destroy_configure_error`.
+ */
+bool openpit_engine_configure_pnl_bounds_killswitch(
+    OpenPitEngine * engine,
+    OpenPitStringView name,
+    const OpenPitPretradePoliciesPnlBoundsBarrier * broker,
+    size_t broker_len,
+    bool has_broker,
+    const OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate * account,
+    size_t account_len,
+    bool has_account,
+    OpenPitConfigureError ** out_error
+);
+
+/**
+ * Force-sets the live accumulated P&L for a `(account_id, settlement_asset)`
+ * entry of the P&L bounds kill-switch policy registered under `name`.
+ *
+ * This is an absolute assignment, deliberately distinct from
+ * `openpit_engine_configure_pnl_bounds_killswitch`: that function retunes the
+ * bounds and never touches accumulated P&L, whereas this overwrites the live
+ * accumulator. The entry is created if it does not exist yet. The new value is
+ * evaluated against the live bounds from the next check onward.
+ *
+ * Contract:
+ * - `engine` must be a valid non-null engine pointer.
+ * - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
+ *   added via
+ *   `openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy`
+ *   registers under its fixed name `"PnlBoundsKillSwitchPolicy"`, so pass
+ *   that string here.
+ * - `settlement_asset` must be valid for the duration of the call.
+ * - `pnl` is the absolute value the entry is set to.
+ *
+ * Success:
+ * - returns `true`; the new accumulated P&L applies from the next check
+ *   onward.
+ *
+ * Error:
+ * - returns `false`; if `out_error` is non-null, writes a caller-owned
+ *   `OpenPitConfigureError` (release with
+ *   `openpit_destroy_configure_error`).
+ * - a null `engine` returns `false` and, when `out_error` is non-null,
+ *   writes a caller-owned `OpenPitConfigureError` (`Validation`) that must
+ *   be released with `openpit_destroy_configure_error`.
+ */
+bool openpit_engine_configure_set_account_pnl(
+    OpenPitEngine * engine,
+    OpenPitStringView name,
+    OpenPitParamAccountId account_id,
+    OpenPitStringView settlement_asset,
+    OpenPitParamPnl pnl,
+    OpenPitConfigureError ** out_error
+);
+
+/**
  * Adds the built-in rate-limit policy to the engine builder.
  *
  * Contract:
@@ -5340,6 +5657,63 @@ bool openpit_engine_builder_add_builtin_rate_limit_policy(
 );
 
 /**
+ * Retunes the built-in rate-limit policy registered under `name`.
+ *
+ * This is a partial update (PATCH): each axis is touched only when its `has_*`
+ * flag is `true`. A touched axis is replaced wholesale — barriers can be added
+ * and removed at runtime. A barrier key that survives the replacement keeps
+ * its live counter (no reset). An empty axis (`len` 0 with `has_*` true)
+ * clears it, subject to the policy's at-least-one- barrier rule. Setting
+ * `has_broker` to `true` with a null `broker` pointer clears the broker
+ * barrier.
+ *
+ * Contract:
+ * - `engine` must be a valid non-null engine pointer.
+ * - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
+ *   added via `openpit_engine_builder_add_builtin_rate_limit_policy`
+ *   registers under its fixed name `"RateLimitPolicy"`, so pass that string
+ *   here.
+ * - When `has_broker` is `true` and `broker` is non-null, it must point to
+ *   one readable entry whose `max_orders`/`window_nanoseconds` replace the
+ *   broker barrier; a null `broker` with `has_broker` true clears it.
+ * - When `has_asset`/`has_account`/`has_account_asset` is `true`, the
+ *   matching pointer must point to `*_len` readable entries (a length of
+ *   zero clears that axis). Each `settlement_asset` view must be valid for
+ *   the duration of the call.
+ * - A `has_*` flag set to `false` leaves that axis untouched regardless of
+ *   the pointer/length arguments.
+ *
+ * Success:
+ * - returns `true`; the new limits apply from the next order onward with no
+ *   counter reset.
+ *
+ * Error:
+ * - returns `false`; if `out_error` is non-null, writes a caller-owned
+ *   `OpenPitConfigureError` (release with `openpit_destroy_configure_error`)
+ *   describing the unknown policy, settings-type mismatch, or rejected
+ *   update.
+ * - a null `engine` returns `false` and, when `out_error` is non-null,
+ *   writes a caller-owned `OpenPitConfigureError` (`Validation`) that must
+ *   be released with `openpit_destroy_configure_error`.
+ */
+bool openpit_engine_configure_rate_limit(
+    OpenPitEngine * engine,
+    OpenPitStringView name,
+    const OpenPitPretradePoliciesRateLimitBrokerBarrier * broker,
+    bool has_broker,
+    const OpenPitPretradePoliciesRateLimitAssetBarrier * asset,
+    size_t asset_len,
+    bool has_asset,
+    const OpenPitPretradePoliciesRateLimitAccountBarrier * account,
+    size_t account_len,
+    bool has_account,
+    const OpenPitPretradePoliciesRateLimitAccountAssetBarrier * account_asset,
+    size_t account_asset_len,
+    bool has_account_asset,
+    OpenPitConfigureError ** out_error
+);
+
+/**
  * Adds the built-in spot funds policy to the engine builder.
  *
  * Contract:
@@ -5355,14 +5729,11 @@ bool openpit_engine_builder_add_builtin_rate_limit_policy(
  *   performed by the core engine.
  * - `pricing_source` selects the base price: `0` = Mark, `1` = BookTop.
  * - `instrument_overrides` / `overrides_len` describe a contiguous array of
- *   slippage overrides; pass null + 0 for none. Each entry selects an
- *   instrument by `instrument_id` and a scope via its `account_id` /
- *   `account_group_id` optionals: both unset is an instrument-level default,
- *   a set `account_id` scopes the override to that account, a set
- *   `account_group_id` scopes it to that account group. The two are mutually
- *   exclusive; setting both fails the call. An entry with `has_slippage_bps
- *   == false` is ignored. Slippage resolves account -> account group ->
- *   instrument -> global per order.
+ *   slippage overrides; pass null + 0 for none. Each entry uses an explicit
+ *   tagged target matching `Instrument`, `InstrumentAccount`, or
+ *   `InstrumentAccountGroup`. An unknown tag fails the call. An entry with
+ *   `has_slippage_bps == false` is ignored. Slippage resolves account ->
+ *   account group -> instrument -> global per order.
  * - `policy_group_id` tags the policy instance.
  *
  * Mismatch guard: when `market_data` is non-null and the engine is
@@ -5386,6 +5757,56 @@ bool openpit_engine_builder_add_builtin_spot_funds_policy(
     size_t overrides_len,
     uint16_t policy_group_id,
     OpenPitOutError out_error
+);
+
+/**
+ * Retunes the built-in spot-funds policy registered under `name`.
+ *
+ * This is a partial update (PATCH): the global slippage, pricing source, and
+ * each supplied override are applied only when their corresponding `has_*`
+ * flag is `true`. The market-data service handle is fixed at build time and
+ * cannot be changed here; this function only tunes the slippage / pricing
+ * cascade that lives in the settings cell.
+ *
+ * Contract:
+ * - `engine` must be a valid non-null engine pointer.
+ * - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
+ *   added via `openpit_engine_builder_add_builtin_spot_funds_policy`
+ *   registers under its fixed name `"SpotFundsPolicy"`, so pass that string
+ *   here.
+ * - When `has_global_slippage_bps` is `true`, the global slippage is set to
+ *   `global_slippage_bps`.
+ * - When `has_pricing_source` is `true`, the pricing source is set from
+ *   `pricing_source` (`0` = Mark, `1` = BookTop).
+ * - When `has_overrides` is `true`, each of the `overrides_len` entries at
+ *   `instrument_overrides` is applied via insert-or-clear: an entry with
+ *   `has_slippage_bps == false` clears any override at its explicit tagged
+ *   target. Unknown target tags fail the call.
+ * - A `has_*` flag set to `false` leaves that dimension untouched.
+ *
+ * Success:
+ * - returns `true`; the new cascade applies from the next market order
+ *   onward.
+ *
+ * Error:
+ * - returns `false`; if `out_error` is non-null, writes a caller-owned
+ *   `OpenPitConfigureError` (release with
+ *   `openpit_destroy_configure_error`).
+ * - a null `engine` returns `false` and, when `out_error` is non-null,
+ *   writes a caller-owned `OpenPitConfigureError` (`Validation`) that must
+ *   be released with `openpit_destroy_configure_error`.
+ */
+bool openpit_engine_configure_spot_funds(
+    OpenPitEngine * engine,
+    OpenPitStringView name,
+    uint16_t global_slippage_bps,
+    bool has_global_slippage_bps,
+    uint8_t pricing_source,
+    bool has_pricing_source,
+    const OpenPitPretradePoliciesSpotFundsOverride * instrument_overrides,
+    size_t overrides_len,
+    bool has_overrides,
+    OpenPitConfigureError ** out_error
 );
 
 /**
@@ -6620,12 +7041,12 @@ openpit_pretrade_pre_trade_lock_prices_view(
  * Status:
  * - `Error`: `lock`, `out_price`, or `out_prices` is null; `out_error`
  *   receives an error handle when provided.
- * - `Empty`: the call succeeded and the group has no prices; `out_prices` is
- *   set to null.
+ * - `Empty`: the call succeeded and the group has no prices; `out_price` and
+ *   `out_prices` are left untouched.
  * - `One`: the call succeeded and `out_price` contains the only stored
- *   price; `out_prices` is set to null.
+ *   price; `out_prices` is left untouched.
  * - `List`: the call succeeded and `out_prices` contains a caller-owned
- *   list.
+ *   list. `out_price` is left untouched.
  *
  * Cleanup:
  * - when status is `List`, the caller MUST release `*out_prices` with

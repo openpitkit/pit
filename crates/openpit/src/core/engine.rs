@@ -24,7 +24,7 @@ use super::account_outcome::{AccountAdjustmentBatchResult, AccountAdjustmentOutc
 use super::engine_builder::EngineBuilder;
 use super::engine_trait::{EngineTrait, EngineTraitOf};
 use super::sync_mode::{AccountSync, FullSync, LocalSync, SyncMode};
-use super::{AccountGroups, BlockedAccounts, HasAccountId};
+use super::{AccountGroups, BlockedAccounts, ConfigRegistry, Configurator, HasAccountId};
 use crate::param::AccountId;
 use crate::pretrade::handle::{RequestHandleImpl, ReservationHandleImpl};
 use crate::pretrade::start_pre_trade_time::with_start_pre_trade_now;
@@ -54,6 +54,10 @@ pub(crate) struct EngineInner<Trait: EngineTrait> {
     pub(crate) account_groups: <<Trait::Sync as SyncMode>::StorageLockingPolicyFactory
         as crate::storage::LockingPolicyFactory>::Shared<
         AccountGroups<<Trait::Sync as SyncMode>::StorageLockingPolicyFactory>,
+    >,
+    pub(crate) config_registry: <<Trait::Sync as SyncMode>::StorageLockingPolicyFactory
+        as crate::storage::LockingPolicyFactory>::Shared<
+        ConfigRegistry<<Trait::Sync as SyncMode>::StorageLockingPolicyFactory>,
     >,
 }
 
@@ -162,6 +166,17 @@ impl<Trait: EngineTrait> Engine<Trait> {
             AccountGroupsHandle::from_inner(self.inner.account_groups.clone()),
             AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone()),
         )
+    }
+
+    /// Returns a handle for retuning supported built-in policies at runtime.
+    ///
+    /// The returned [`Configurator`] shares the engine's settings registry; an
+    /// update published through it is observed by the running policy on its
+    /// next hot-path read. The handle is cloneable and inherits the engine's
+    /// synchronization mode. Custom-policy runtime reconfiguration is planned
+    /// for a later release.
+    pub fn configure(&self) -> Configurator<Trait::Sync> {
+        Configurator::from_inner(self.inner.config_registry.clone())
     }
 }
 

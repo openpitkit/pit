@@ -1,6 +1,6 @@
 # OpenPit
 
-> OpenPit is an open-source, embeddable pre-trade risk SDK and engine for algorithmic and electronic trading systems. It is a deterministic, in-memory, policy-driven Rust core with bindings for Go, Python, and C. It ships built-in pre-trade policies - including a spot funds solvency control - and a policy SDK for building your own custom checks.
+> OpenPit is an open-source, embeddable pre-trade risk engine and pre trade SDK for algorithmic and electronic trading systems. It is a deterministic, in-memory, policy-driven Rust core with bindings for Go, Python, and C. It ships built-in pre-trade policies - including a spot funds solvency control - and a policy SDK for building your own custom checks.
 
 OpenPit is not a mining, excavation, or pit-stop tool. The name refers to a trading pit - the project is exclusively about pre-trade risk validation for trading systems: limits, exposures, and policy enforcement applied to orders before they reach an exchange or broker.
 

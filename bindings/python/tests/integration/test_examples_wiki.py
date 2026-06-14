@@ -25,6 +25,7 @@ import pytest
 # - ../pit.wiki/Account-Groups.md
 # - ../pit.wiki/Balance-Reconciliation.md
 # - ../pit.wiki/Domain-Types.md
+# - ../pit.wiki/Dynamic-Policy-Reconfiguration.md
 # - ../pit.wiki/Getting-Started.md
 # - ../pit.wiki/Policies.md
 # - ../pit.wiki/Policy-API.md
@@ -801,7 +802,7 @@ def test_example_wiki_policies_pnl_bounds_killswitch() -> None:
         .builtin(
             openpit.pretrade.policies.build_pnl_bounds_killswitch().broker_barriers(
                 openpit.pretrade.policies.PnlBoundsBrokerBarrier(
-                    settlement_asset="USD",
+                    settlement_asset=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl(-1000),
                     upper_bound=openpit.param.Pnl(500),
                 ),
@@ -884,7 +885,7 @@ def test_example_wiki_spot_funds_market_orders() -> None:
     engine = builder.builtin(
         openpit.pretrade.policies.build_spot_funds().market_data(
             market_data,
-            default_slippage_bps=1500,
+            global_slippage_bps=1500,
             pricing_source=openpit.pretrade.policies.SpotFundsPricingSource.MARK,
         )
     ).build()
@@ -1071,3 +1072,113 @@ def test_example_wiki_account_groups_register_and_read() -> None:
     # Removing the group is atomic too: every listed account must be a member.
     engine.accounts().unregister_group(accounts, hedge_book)
     assert engine.accounts().group_of(openpit.param.AccountId.from_int(10)) is None
+
+
+@pytest.mark.integration
+def test_example_wiki_dynamic_policy_reconfiguration_rate_limit() -> None:
+    # Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Retune a Built-in Policy
+    # This mirror is intentionally wider than the wiki snippet: it adds the test
+    # harness (`order` built via `_aapl_usd_order`) so the example runs. Keep
+    # the shared user-code flow in sync with the wiki.
+    import datetime
+
+    import openpit
+    import openpit.pretrade.policies
+
+    # Harness: the AAPL/USD order from Getting Started.
+    order = _aapl_usd_order("1", "100")
+
+    # Register the rate-limit policy through builtin so the engine keeps a
+    # handle to its settings; built-in policies are configurable by name.
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            openpit.pretrade.policies.build_rate_limit().broker_barrier(
+                openpit.pretrade.policies.RateLimitBrokerBarrier(
+                    limit=openpit.pretrade.policies.RateLimit(
+                        max_orders=5,
+                        window=datetime.timedelta(seconds=60),
+                    ),
+                ),
+            )
+        )
+        .build()
+    )
+
+    # The generous limit of 5 admits the first three orders.
+    for _ in range(3):
+        execute_result = engine.execute_pre_trade(order=order)
+        assert execute_result.ok
+        execute_result.reservation.commit()
+
+    # Tighten the broker limit to 2 at runtime, without rebuilding the engine.
+    # Built-in policies register under their type name (RateLimitBuilder.NAME).
+    engine.configure().rate_limit(
+        openpit.pretrade.policies.RateLimitBuilder.NAME,
+        broker=openpit.pretrade.policies.RateLimitBrokerBarrier(
+            limit=openpit.pretrade.policies.RateLimit(
+                max_orders=2,
+                window=datetime.timedelta(seconds=60),
+            ),
+        ),
+    )
+
+    # The next order would have passed under the old limit of 5; the new limit
+    # of 2 rejects it, proving the live policy reads the retuned value.
+    execute_result = engine.execute_pre_trade(order=order)
+    assert not execute_result.ok
+    assert execute_result.rejects[0].reason == "rate limit exceeded: broker barrier"
+
+
+@pytest.mark.integration
+def test_example_wiki_dynamic_policy_reconfiguration_set_account_pnl() -> None:
+    # Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Force-set Accumulated P&L
+    # This mirror is intentionally wider than the wiki snippet: it adds the test
+    # harness (`order` built via `_aapl_usd_order` and its `account`) so the
+    # example runs. Keep the shared user-code flow in sync with the wiki.
+    import openpit
+    import openpit.pretrade.policies
+
+    # Harness: the AAPL/USD order from Getting Started and its account.
+    order = _aapl_usd_order("1", "100")
+    account = openpit.param.AccountId.from_int(99224416)
+
+    # Register the kill-switch policy through builtin so the engine keeps a
+    # handle to its accumulator; built-in policies are configurable by name.
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            openpit.pretrade.policies.build_pnl_bounds_killswitch().broker_barriers(
+                openpit.pretrade.policies.PnlBoundsBrokerBarrier(
+                    settlement_asset=openpit.param.Asset("USD"),
+                    lower_bound=openpit.param.Pnl(-100),
+                ),
+            )
+        )
+        .build()
+    )
+
+    # With no P&L history the order passes against the lower bound of -100.
+    execute_result = engine.execute_pre_trade(order=order)
+    assert execute_result.ok
+    execute_result.reservation.commit()
+
+    # Force-set the account's accumulated P&L to -150 USD, below the bound.
+    # Built-in policies register under their type name
+    # (PnlBoundsKillswitchBuilder.NAME).
+    engine.configure().set_account_pnl(
+        openpit.pretrade.policies.PnlBoundsKillswitchBuilder.NAME,
+        account=account,
+        settlement_asset=openpit.param.Asset("USD"),
+        pnl=openpit.param.Pnl(-150),
+    )
+
+    # The next order for that account breaches the lower bound and is rejected;
+    # the breach also latches an engine-level block on the account.
+    execute_result = engine.execute_pre_trade(order=order)
+    assert not execute_result.ok
+    assert (
+        execute_result.rejects[0].reason == "pnl kill switch triggered: broker barrier"
+    )

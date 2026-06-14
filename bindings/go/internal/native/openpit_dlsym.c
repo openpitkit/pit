@@ -318,6 +318,9 @@ static OpenPitStringView (*_fn_openpit_account_block_error_get_message)(const Op
 static OpenPitAccountBlockErrorKind (*_fn_openpit_account_block_error_get_kind)(const OpenPitAccountBlockError *) = NULL;
 static bool (*_fn_openpit_account_block_error_get_account)(const OpenPitAccountBlockError *, OpenPitParamAccountId *) = NULL;
 static bool (*_fn_openpit_account_block_error_get_group)(const OpenPitAccountBlockError *, OpenPitParamAccountGroupId *) = NULL;
+static void (*_fn_openpit_destroy_configure_error)(OpenPitConfigureError *) = NULL;
+static OpenPitStringView (*_fn_openpit_configure_error_get_message)(const OpenPitConfigureError *) = NULL;
+static OpenPitConfigureErrorKind (*_fn_openpit_configure_error_get_kind)(const OpenPitConfigureError *) = NULL;
 static void (*_fn_openpit_engine_block_account)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView) = NULL;
 static void (*_fn_openpit_engine_unblock_account)(OpenPitEngine *, OpenPitParamAccountId) = NULL;
 static bool (*_fn_openpit_engine_replace_account_block_reason)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView, OpenPitAccountBlockError **) = NULL;
@@ -330,10 +333,15 @@ static OpenPitStringView (*_fn_openpit_pretrade_pre_trade_policy_get_name)(const
 static bool (*_fn_openpit_engine_builder_add_pre_trade_policy)(OpenPitEngineBuilder *, OpenPitPretradePreTradePolicy *, OpenPitOutError) = NULL;
 static bool (*_fn_openpit_mutations_push)(OpenPitMutations *, OpenPitMutationFn, OpenPitMutationFn, void *, OpenPitMutationFreeFn, OpenPitOutError) = NULL;
 static bool (*_fn_openpit_engine_builder_add_builtin_order_size_limit_policy)(OpenPitEngineBuilder *, uint16_t, const OpenPitPretradePoliciesOrderSizeBrokerBarrier *, const OpenPitPretradePoliciesOrderSizeAssetBarrier *, size_t, const OpenPitPretradePoliciesOrderSizeAccountAssetBarrier *, size_t, OpenPitOutError) = NULL;
+static bool (*_fn_openpit_engine_configure_order_size_limit)(OpenPitEngine *, OpenPitStringView, const OpenPitPretradePoliciesOrderSizeBrokerBarrier *, bool, const OpenPitPretradePoliciesOrderSizeAssetBarrier *, size_t, bool, const OpenPitPretradePoliciesOrderSizeAccountAssetBarrier *, size_t, bool, OpenPitConfigureError **) = NULL;
 static bool (*_fn_openpit_engine_builder_add_builtin_order_validation_policy)(OpenPitEngineBuilder *, uint16_t, OpenPitOutError) = NULL;
 static bool (*_fn_openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy)(OpenPitEngineBuilder *, uint16_t, const OpenPitPretradePoliciesPnlBoundsBarrier *, size_t, const OpenPitPretradePoliciesPnlBoundsAccountBarrier *, size_t, OpenPitOutError) = NULL;
+static bool (*_fn_openpit_engine_configure_pnl_bounds_killswitch)(OpenPitEngine *, OpenPitStringView, const OpenPitPretradePoliciesPnlBoundsBarrier *, size_t, bool, const OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate *, size_t, bool, OpenPitConfigureError **) = NULL;
+static bool (*_fn_openpit_engine_configure_set_account_pnl)(OpenPitEngine *, OpenPitStringView, OpenPitParamAccountId, OpenPitStringView, OpenPitParamPnl, OpenPitConfigureError **) = NULL;
 static bool (*_fn_openpit_engine_builder_add_builtin_rate_limit_policy)(OpenPitEngineBuilder *, uint16_t, const OpenPitPretradePoliciesRateLimitBrokerBarrier *, const OpenPitPretradePoliciesRateLimitAssetBarrier *, size_t, const OpenPitPretradePoliciesRateLimitAccountBarrier *, size_t, const OpenPitPretradePoliciesRateLimitAccountAssetBarrier *, size_t, OpenPitOutError) = NULL;
+static bool (*_fn_openpit_engine_configure_rate_limit)(OpenPitEngine *, OpenPitStringView, const OpenPitPretradePoliciesRateLimitBrokerBarrier *, bool, const OpenPitPretradePoliciesRateLimitAssetBarrier *, size_t, bool, const OpenPitPretradePoliciesRateLimitAccountBarrier *, size_t, bool, const OpenPitPretradePoliciesRateLimitAccountAssetBarrier *, size_t, bool, OpenPitConfigureError **) = NULL;
 static bool (*_fn_openpit_engine_builder_add_builtin_spot_funds_policy)(OpenPitEngineBuilder *, const OpenPitMarketDataService *, const uint16_t *, uint8_t, const OpenPitPretradePoliciesSpotFundsOverride *, size_t, uint16_t, OpenPitOutError) = NULL;
+static bool (*_fn_openpit_engine_configure_spot_funds)(OpenPitEngine *, OpenPitStringView, uint16_t, bool, uint8_t, bool, const OpenPitPretradePoliciesSpotFundsOverride *, size_t, bool, OpenPitConfigureError **) = NULL;
 static OpenPitStringView (*_fn_openpit_get_runtime_version)(void) = NULL;
 static OpenPitStringView (*_fn_openpit_get_runtime_build_profile)(void) = NULL;
 static void (*_fn_openpit_account_control_block)(const OpenPitAccountControl *, OpenPitPretradeAccountBlock) = NULL;
@@ -988,6 +996,12 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_account_block_error_get_account == NULL) return "openpit_account_block_error_get_account";
     _fn_openpit_account_block_error_get_group = (bool (*)(const OpenPitAccountBlockError *, OpenPitParamAccountGroupId *))openpit_dlsym(handle, "openpit_account_block_error_get_group");
     if (_fn_openpit_account_block_error_get_group == NULL) return "openpit_account_block_error_get_group";
+    _fn_openpit_destroy_configure_error = (void (*)(OpenPitConfigureError *))openpit_dlsym(handle, "openpit_destroy_configure_error");
+    if (_fn_openpit_destroy_configure_error == NULL) return "openpit_destroy_configure_error";
+    _fn_openpit_configure_error_get_message = (OpenPitStringView (*)(const OpenPitConfigureError *))openpit_dlsym(handle, "openpit_configure_error_get_message");
+    if (_fn_openpit_configure_error_get_message == NULL) return "openpit_configure_error_get_message";
+    _fn_openpit_configure_error_get_kind = (OpenPitConfigureErrorKind (*)(const OpenPitConfigureError *))openpit_dlsym(handle, "openpit_configure_error_get_kind");
+    if (_fn_openpit_configure_error_get_kind == NULL) return "openpit_configure_error_get_kind";
     _fn_openpit_engine_block_account = (void (*)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView))openpit_dlsym(handle, "openpit_engine_block_account");
     if (_fn_openpit_engine_block_account == NULL) return "openpit_engine_block_account";
     _fn_openpit_engine_unblock_account = (void (*)(OpenPitEngine *, OpenPitParamAccountId))openpit_dlsym(handle, "openpit_engine_unblock_account");
@@ -1012,14 +1026,24 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_mutations_push == NULL) return "openpit_mutations_push";
     _fn_openpit_engine_builder_add_builtin_order_size_limit_policy = (bool (*)(OpenPitEngineBuilder *, uint16_t, const OpenPitPretradePoliciesOrderSizeBrokerBarrier *, const OpenPitPretradePoliciesOrderSizeAssetBarrier *, size_t, const OpenPitPretradePoliciesOrderSizeAccountAssetBarrier *, size_t, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_builder_add_builtin_order_size_limit_policy");
     if (_fn_openpit_engine_builder_add_builtin_order_size_limit_policy == NULL) return "openpit_engine_builder_add_builtin_order_size_limit_policy";
+    _fn_openpit_engine_configure_order_size_limit = (bool (*)(OpenPitEngine *, OpenPitStringView, const OpenPitPretradePoliciesOrderSizeBrokerBarrier *, bool, const OpenPitPretradePoliciesOrderSizeAssetBarrier *, size_t, bool, const OpenPitPretradePoliciesOrderSizeAccountAssetBarrier *, size_t, bool, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_order_size_limit");
+    if (_fn_openpit_engine_configure_order_size_limit == NULL) return "openpit_engine_configure_order_size_limit";
     _fn_openpit_engine_builder_add_builtin_order_validation_policy = (bool (*)(OpenPitEngineBuilder *, uint16_t, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_builder_add_builtin_order_validation_policy");
     if (_fn_openpit_engine_builder_add_builtin_order_validation_policy == NULL) return "openpit_engine_builder_add_builtin_order_validation_policy";
     _fn_openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy = (bool (*)(OpenPitEngineBuilder *, uint16_t, const OpenPitPretradePoliciesPnlBoundsBarrier *, size_t, const OpenPitPretradePoliciesPnlBoundsAccountBarrier *, size_t, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy");
     if (_fn_openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy == NULL) return "openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy";
+    _fn_openpit_engine_configure_pnl_bounds_killswitch = (bool (*)(OpenPitEngine *, OpenPitStringView, const OpenPitPretradePoliciesPnlBoundsBarrier *, size_t, bool, const OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate *, size_t, bool, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_pnl_bounds_killswitch");
+    if (_fn_openpit_engine_configure_pnl_bounds_killswitch == NULL) return "openpit_engine_configure_pnl_bounds_killswitch";
+    _fn_openpit_engine_configure_set_account_pnl = (bool (*)(OpenPitEngine *, OpenPitStringView, OpenPitParamAccountId, OpenPitStringView, OpenPitParamPnl, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_set_account_pnl");
+    if (_fn_openpit_engine_configure_set_account_pnl == NULL) return "openpit_engine_configure_set_account_pnl";
     _fn_openpit_engine_builder_add_builtin_rate_limit_policy = (bool (*)(OpenPitEngineBuilder *, uint16_t, const OpenPitPretradePoliciesRateLimitBrokerBarrier *, const OpenPitPretradePoliciesRateLimitAssetBarrier *, size_t, const OpenPitPretradePoliciesRateLimitAccountBarrier *, size_t, const OpenPitPretradePoliciesRateLimitAccountAssetBarrier *, size_t, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_builder_add_builtin_rate_limit_policy");
     if (_fn_openpit_engine_builder_add_builtin_rate_limit_policy == NULL) return "openpit_engine_builder_add_builtin_rate_limit_policy";
+    _fn_openpit_engine_configure_rate_limit = (bool (*)(OpenPitEngine *, OpenPitStringView, const OpenPitPretradePoliciesRateLimitBrokerBarrier *, bool, const OpenPitPretradePoliciesRateLimitAssetBarrier *, size_t, bool, const OpenPitPretradePoliciesRateLimitAccountBarrier *, size_t, bool, const OpenPitPretradePoliciesRateLimitAccountAssetBarrier *, size_t, bool, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_rate_limit");
+    if (_fn_openpit_engine_configure_rate_limit == NULL) return "openpit_engine_configure_rate_limit";
     _fn_openpit_engine_builder_add_builtin_spot_funds_policy = (bool (*)(OpenPitEngineBuilder *, const OpenPitMarketDataService *, const uint16_t *, uint8_t, const OpenPitPretradePoliciesSpotFundsOverride *, size_t, uint16_t, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_builder_add_builtin_spot_funds_policy");
     if (_fn_openpit_engine_builder_add_builtin_spot_funds_policy == NULL) return "openpit_engine_builder_add_builtin_spot_funds_policy";
+    _fn_openpit_engine_configure_spot_funds = (bool (*)(OpenPitEngine *, OpenPitStringView, uint16_t, bool, uint8_t, bool, const OpenPitPretradePoliciesSpotFundsOverride *, size_t, bool, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_spot_funds");
+    if (_fn_openpit_engine_configure_spot_funds == NULL) return "openpit_engine_configure_spot_funds";
     _fn_openpit_get_runtime_version = (OpenPitStringView (*)(void))openpit_dlsym(handle, "openpit_get_runtime_version");
     if (_fn_openpit_get_runtime_version == NULL) return "openpit_get_runtime_version";
     _fn_openpit_get_runtime_build_profile = (OpenPitStringView (*)(void))openpit_dlsym(handle, "openpit_get_runtime_build_profile");
@@ -2315,6 +2339,18 @@ bool openpit_account_block_error_get_group(const OpenPitAccountBlockError * err,
     return _fn_openpit_account_block_error_get_group(err, out_group);
 }
 
+void openpit_destroy_configure_error(OpenPitConfigureError * err) {
+    _fn_openpit_destroy_configure_error(err);
+}
+
+OpenPitStringView openpit_configure_error_get_message(const OpenPitConfigureError * err) {
+    return _fn_openpit_configure_error_get_message(err);
+}
+
+OpenPitConfigureErrorKind openpit_configure_error_get_kind(const OpenPitConfigureError * err) {
+    return _fn_openpit_configure_error_get_kind(err);
+}
+
 void openpit_engine_block_account(OpenPitEngine * engine, OpenPitParamAccountId account_id, OpenPitStringView reason) {
     _fn_openpit_engine_block_account(engine, account_id, reason);
 }
@@ -2363,6 +2399,10 @@ bool openpit_engine_builder_add_builtin_order_size_limit_policy(OpenPitEngineBui
     return _fn_openpit_engine_builder_add_builtin_order_size_limit_policy(builder, policy_group_id, broker, asset, asset_len, account_asset, account_asset_len, out_error);
 }
 
+bool openpit_engine_configure_order_size_limit(OpenPitEngine * engine, OpenPitStringView name, const OpenPitPretradePoliciesOrderSizeBrokerBarrier * broker, bool has_broker, const OpenPitPretradePoliciesOrderSizeAssetBarrier * asset, size_t asset_len, bool has_asset, const OpenPitPretradePoliciesOrderSizeAccountAssetBarrier * account_asset, size_t account_asset_len, bool has_account_asset, OpenPitConfigureError ** out_error) {
+    return _fn_openpit_engine_configure_order_size_limit(engine, name, broker, has_broker, asset, asset_len, has_asset, account_asset, account_asset_len, has_account_asset, out_error);
+}
+
 bool openpit_engine_builder_add_builtin_order_validation_policy(OpenPitEngineBuilder * builder, uint16_t policy_group_id, OpenPitOutError out_error) {
     return _fn_openpit_engine_builder_add_builtin_order_validation_policy(builder, policy_group_id, out_error);
 }
@@ -2371,12 +2411,28 @@ bool openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(OpenPitEngi
     return _fn_openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(builder, policy_group_id, broker, broker_len, account, account_len, out_error);
 }
 
+bool openpit_engine_configure_pnl_bounds_killswitch(OpenPitEngine * engine, OpenPitStringView name, const OpenPitPretradePoliciesPnlBoundsBarrier * broker, size_t broker_len, bool has_broker, const OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate * account, size_t account_len, bool has_account, OpenPitConfigureError ** out_error) {
+    return _fn_openpit_engine_configure_pnl_bounds_killswitch(engine, name, broker, broker_len, has_broker, account, account_len, has_account, out_error);
+}
+
+bool openpit_engine_configure_set_account_pnl(OpenPitEngine * engine, OpenPitStringView name, OpenPitParamAccountId account_id, OpenPitStringView settlement_asset, OpenPitParamPnl pnl, OpenPitConfigureError ** out_error) {
+    return _fn_openpit_engine_configure_set_account_pnl(engine, name, account_id, settlement_asset, pnl, out_error);
+}
+
 bool openpit_engine_builder_add_builtin_rate_limit_policy(OpenPitEngineBuilder * builder, uint16_t policy_group_id, const OpenPitPretradePoliciesRateLimitBrokerBarrier * broker, const OpenPitPretradePoliciesRateLimitAssetBarrier * asset, size_t asset_len, const OpenPitPretradePoliciesRateLimitAccountBarrier * account, size_t account_len, const OpenPitPretradePoliciesRateLimitAccountAssetBarrier * account_asset, size_t account_asset_len, OpenPitOutError out_error) {
     return _fn_openpit_engine_builder_add_builtin_rate_limit_policy(builder, policy_group_id, broker, asset, asset_len, account, account_len, account_asset, account_asset_len, out_error);
 }
 
+bool openpit_engine_configure_rate_limit(OpenPitEngine * engine, OpenPitStringView name, const OpenPitPretradePoliciesRateLimitBrokerBarrier * broker, bool has_broker, const OpenPitPretradePoliciesRateLimitAssetBarrier * asset, size_t asset_len, bool has_asset, const OpenPitPretradePoliciesRateLimitAccountBarrier * account, size_t account_len, bool has_account, const OpenPitPretradePoliciesRateLimitAccountAssetBarrier * account_asset, size_t account_asset_len, bool has_account_asset, OpenPitConfigureError ** out_error) {
+    return _fn_openpit_engine_configure_rate_limit(engine, name, broker, has_broker, asset, asset_len, has_asset, account, account_len, has_account, account_asset, account_asset_len, has_account_asset, out_error);
+}
+
 bool openpit_engine_builder_add_builtin_spot_funds_policy(OpenPitEngineBuilder * builder, const OpenPitMarketDataService * market_data, const uint16_t * market_slippage_bps, uint8_t pricing_source, const OpenPitPretradePoliciesSpotFundsOverride * instrument_overrides, size_t overrides_len, uint16_t policy_group_id, OpenPitOutError out_error) {
     return _fn_openpit_engine_builder_add_builtin_spot_funds_policy(builder, market_data, market_slippage_bps, pricing_source, instrument_overrides, overrides_len, policy_group_id, out_error);
+}
+
+bool openpit_engine_configure_spot_funds(OpenPitEngine * engine, OpenPitStringView name, uint16_t global_slippage_bps, bool has_global_slippage_bps, uint8_t pricing_source, bool has_pricing_source, const OpenPitPretradePoliciesSpotFundsOverride * instrument_overrides, size_t overrides_len, bool has_overrides, OpenPitConfigureError ** out_error) {
+    return _fn_openpit_engine_configure_spot_funds(engine, name, global_slippage_bps, has_global_slippage_bps, pricing_source, has_pricing_source, instrument_overrides, overrides_len, has_overrides, out_error);
 }
 
 OpenPitStringView openpit_get_runtime_version(void) {

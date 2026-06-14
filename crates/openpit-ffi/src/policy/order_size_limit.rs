@@ -20,12 +20,32 @@
 use openpit::param::AccountId;
 use openpit::pretrade::policies::{
     OrderSizeAccountAssetBarrier, OrderSizeAssetBarrier, OrderSizeBrokerBarrier, OrderSizeLimit,
-    OrderSizeLimitPolicy,
+    OrderSizeLimitPolicy, OrderSizeLimitPolicyError, OrderSizeLimitSettings,
 };
 
+use crate::engine::{write_configure_error, OpenPitConfigureError};
 use crate::param::{OpenPitParamQuantity, OpenPitParamVolume};
 
 use super::*;
+
+/// Converts a C order-size limit into the core type for a configure function,
+/// mapping any parse failure to an [`OpenPitConfigureError`].
+fn parse_configure_limit(
+    limit: OpenPitPretradePoliciesOrderSizeLimit,
+    label: &str,
+    index: usize,
+) -> Result<OrderSizeLimit, OpenPitConfigureError> {
+    let max_quantity = limit.max_quantity.to_param().map_err(|e| {
+        OpenPitConfigureError::validation(format!("{label}[{index}] max_quantity is invalid: {e}"))
+    })?;
+    let max_notional = limit.max_notional.to_param().map_err(|e| {
+        OpenPitConfigureError::validation(format!("{label}[{index}] max_notional is invalid: {e}"))
+    })?;
+    Ok(OrderSizeLimit {
+        max_quantity,
+        max_notional,
+    })
+}
 
 /// Shared order-size limits for
 /// `openpit_engine_builder_add_builtin_order_size_limit_policy`.
@@ -228,19 +248,217 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_pol
         });
     }
 
-    let policy = match OrderSizeLimitPolicy::new(broker_opt, asset_barriers, account_asset_barriers)
-    {
-        Ok(v) => v,
-        Err(e) => {
-            write_error_format!(out_error, "order_size_limit_policy creation failed: {}", e);
-            return false;
-        }
-    };
-    let policy = policy.with_policy_group_id(openpit::PolicyGroupId::new(policy_group_id));
+    let settings =
+        match OrderSizeLimitSettings::new(broker_opt, asset_barriers, account_asset_barriers) {
+            Ok(v) => v,
+            Err(e) => {
+                write_error_format!(out_error, "order_size_limit_policy creation failed: {}", e);
+                return false;
+            }
+        };
+    // The policy is generic over its locking factory; instantiate it with the
+    // interop factory used by every built-in in this crate.
+    let policy = OrderSizeLimitPolicy::<FfiStorageFactory>::new(settings)
+        .with_policy_group_id(openpit::PolicyGroupId::new(policy_group_id));
     match crate::engine::add_pre_trade_policy_to_builder(unsafe { &mut *builder }, policy) {
         Ok(()) => true,
         Err(err) => {
             write_error(out_error, &err);
+            false
+        }
+    }
+}
+
+#[no_mangle]
+/// Retunes the built-in order-size limit policy registered under `name`.
+///
+/// This is a partial update (PATCH) at the axis level: each axis is replaced
+/// wholesale only when its `has_*` flag is `true`, mirroring the
+/// replace-shaped settings setters.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer.
+/// - `name` selects the policy; it is interpreted as UTF-8. A built-in
+///   policy added via `openpit_engine_builder_add_builtin_order_size_limit_policy`
+///   registers under its fixed name `"OrderSizeLimitPolicy"`, so pass that
+///   string here.
+/// - When `has_broker` is `true`, the broker barrier is set to `*broker` when
+///   `broker` is non-null, or cleared when `broker` is null.
+/// - When `has_asset` is `true`, the per-asset axis is replaced by the
+///   `asset_len` entries at `asset`.
+/// - When `has_account_asset` is `true`, the per-(account, asset) axis is
+///   replaced by the `account_asset_len` entries at `account_asset`.
+/// - Each `settlement_asset` view and every `max_quantity`/`max_notional` must
+///   be valid for the duration of the call.
+/// - A `has_*` flag set to `false` leaves that axis untouched. The policy's
+///   "at least one barrier" rule still applies to the resulting configuration.
+///
+/// Success:
+/// - returns `true`; the new limits apply from the next order onward.
+///
+/// Error:
+/// - returns `false`; if `out_error` is non-null, writes a caller-owned
+///   `OpenPitConfigureError` (release with `openpit_destroy_configure_error`).
+/// - a null `engine` returns `false` and, when `out_error` is non-null, writes
+///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be released
+///   with `openpit_destroy_configure_error`.
+pub unsafe extern "C" fn openpit_engine_configure_order_size_limit(
+    engine: *mut crate::engine::OpenPitEngine,
+    name: OpenPitStringView,
+    broker: *const OpenPitPretradePoliciesOrderSizeBrokerBarrier,
+    has_broker: bool,
+    asset: *const OpenPitPretradePoliciesOrderSizeAssetBarrier,
+    asset_len: usize,
+    has_asset: bool,
+    account_asset: *const OpenPitPretradePoliciesOrderSizeAccountAssetBarrier,
+    account_asset_len: usize,
+    has_account_asset: bool,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> bool {
+    if engine.is_null() {
+        write_configure_error(
+            out_error,
+            OpenPitConfigureError::validation("engine is null".to_owned()),
+        );
+        return false;
+    }
+    let name = match unsafe { cstr_arg(name) } {
+        Some(name) => name,
+        None => {
+            write_configure_error(
+                out_error,
+                OpenPitConfigureError::validation(
+                    "policy name is null or invalid UTF-8".to_owned(),
+                ),
+            );
+            return false;
+        }
+    };
+
+    let broker_barrier: Option<OrderSizeBrokerBarrier> = if has_broker && !broker.is_null() {
+        let limit = match parse_configure_limit(unsafe { &*broker }.limit, "broker", 0) {
+            Ok(v) => v,
+            Err(e) => {
+                write_configure_error(out_error, e);
+                return false;
+            }
+        };
+        Some(OrderSizeBrokerBarrier { limit })
+    } else {
+        None
+    };
+
+    let asset_barriers: Vec<OrderSizeAssetBarrier> = if has_asset {
+        let slice = match unsafe {
+            try_slice_arg(
+                asset,
+                asset_len,
+                "order_size_limit asset",
+                std::ptr::null_mut(),
+            )
+        } {
+            Some(v) => v,
+            None => {
+                write_configure_error(
+                    out_error,
+                    OpenPitConfigureError::validation("order_size_limit asset is null".to_owned()),
+                );
+                return false;
+            }
+        };
+        let mut out = Vec::with_capacity(slice.len());
+        for (index, entry) in slice.iter().enumerate() {
+            let settlement = match parse_configure_asset(entry.settlement_asset, "asset", index) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
+            let limit = match parse_configure_limit(entry.limit, "asset", index) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
+            out.push(OrderSizeAssetBarrier {
+                limit,
+                settlement_asset: settlement,
+            });
+        }
+        out
+    } else {
+        Vec::new()
+    };
+
+    let account_asset_barriers: Vec<OrderSizeAccountAssetBarrier> = if has_account_asset {
+        let slice = match unsafe {
+            try_slice_arg(
+                account_asset,
+                account_asset_len,
+                "order_size_limit account_asset",
+                std::ptr::null_mut(),
+            )
+        } {
+            Some(v) => v,
+            None => {
+                write_configure_error(
+                    out_error,
+                    OpenPitConfigureError::validation(
+                        "order_size_limit account_asset is null".to_owned(),
+                    ),
+                );
+                return false;
+            }
+        };
+        let mut out = Vec::with_capacity(slice.len());
+        for (index, entry) in slice.iter().enumerate() {
+            let settlement =
+                match parse_configure_asset(entry.settlement_asset, "account_asset", index) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        write_configure_error(out_error, e);
+                        return false;
+                    }
+                };
+            let limit = match parse_configure_limit(entry.limit, "account_asset", index) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
+            out.push(OrderSizeAccountAssetBarrier {
+                limit,
+                account_id: AccountId::from_u64(entry.account_id),
+                settlement_asset: settlement,
+            });
+        }
+        out
+    } else {
+        Vec::new()
+    };
+
+    let result = unsafe { &*engine }.configurator().order_size_limit(
+        &name,
+        |settings| -> Result<(), OrderSizeLimitPolicyError> {
+            if has_broker {
+                settings.set_broker(broker_barrier.clone())?;
+            }
+            if has_asset {
+                settings.set_asset_barriers(asset_barriers.iter().cloned())?;
+            }
+            if has_account_asset {
+                settings.set_account_asset_barriers(account_asset_barriers.iter().cloned())?;
+            }
+            Ok(())
+        },
+    );
+    match result {
+        Ok(()) => true,
+        Err(err) => {
+            write_configure_error(out_error, OpenPitConfigureError::new(err));
             false
         }
     }
@@ -413,5 +631,61 @@ mod tests {
             "expected SDK no-barrier error wrapped by FFI, got: {message}"
         );
         crate::engine::openpit_destroy_engine_builder(builder);
+    }
+
+    #[test]
+    fn configure_order_size_limit_rejects_null_and_invalid_utf8_names() {
+        let asset = [OpenPitPretradePoliciesOrderSizeAssetBarrier {
+            limit: OpenPitPretradePoliciesOrderSizeLimit {
+                max_quantity: quantity_param(100, 0),
+                max_notional: volume_param(10000, 0),
+            },
+            settlement_asset: OpenPitStringView::from_utf8("USD"),
+        }];
+        let engine = build_engine_with_builtin_start_policy(|builder| unsafe {
+            openpit_engine_builder_add_builtin_order_size_limit_policy(
+                builder,
+                0,
+                std::ptr::null(),
+                asset.as_ptr(),
+                asset.len(),
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        });
+        let invalid_utf8 = [0xff];
+        let invalid_name = OpenPitStringView {
+            ptr: invalid_utf8.as_ptr(),
+            len: invalid_utf8.len(),
+        };
+
+        for name in [OpenPitStringView::default(), invalid_name] {
+            let mut out_error = std::ptr::null_mut();
+            let ok = unsafe {
+                openpit_engine_configure_order_size_limit(
+                    engine,
+                    name,
+                    std::ptr::null(),
+                    false,
+                    std::ptr::null(),
+                    0,
+                    false,
+                    std::ptr::null(),
+                    0,
+                    false,
+                    &mut out_error,
+                )
+            };
+            assert!(!ok);
+            assert!(!out_error.is_null());
+            assert_eq!(
+                crate::engine::openpit_configure_error_get_kind(out_error),
+                crate::engine::OpenPitConfigureErrorKind::Validation
+            );
+            crate::engine::openpit_destroy_configure_error(out_error);
+        }
+
+        crate::engine::openpit_destroy_engine(engine);
     }
 }

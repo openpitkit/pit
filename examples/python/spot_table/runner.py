@@ -189,7 +189,7 @@ def build_spot_engine_sync(
     engine = builder_.builtin(
         openpit.pretrade.policies.build_spot_funds().market_data(
             service,
-            default_slippage_bps=fm.slippage_bps,
+            global_slippage_bps=fm.slippage_bps,
             pricing_source=openpit.pretrade.policies.SpotFundsPricingSource.MARK,
         )
     ).build()

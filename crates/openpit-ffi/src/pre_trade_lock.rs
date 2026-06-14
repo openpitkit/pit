@@ -360,11 +360,12 @@ pub extern "C" fn openpit_pretrade_pre_trade_lock_prices_view(
 /// Status:
 /// - `Error`: `lock`, `out_price`, or `out_prices` is null; `out_error`
 ///   receives an error handle when provided.
-/// - `Empty`: the call succeeded and the group has no prices; `out_prices` is
-///   set to null.
+/// - `Empty`: the call succeeded and the group has no prices; `out_price` and
+///   `out_prices` are left untouched.
 /// - `One`: the call succeeded and `out_price` contains the only stored price;
-///   `out_prices` is set to null.
+///   `out_prices` is left untouched.
 /// - `List`: the call succeeded and `out_prices` contains a caller-owned list.
+///   `out_price` is left untouched.
 ///
 /// Cleanup:
 /// - when status is `List`, the caller MUST release `*out_prices` with
@@ -388,10 +389,6 @@ pub extern "C" fn openpit_pretrade_pre_trade_lock_prices_of(
     if out_prices.is_null() {
         write_error(out_error, "out_prices pointer must be non-null");
         return OpenPitPretradePreTradeLockPricesStatus::Error;
-    }
-    unsafe {
-        *out_price = OpenPitParamPrice::default();
-        *out_prices = std::ptr::null_mut();
     }
     let lock_ref = unsafe { &*lock };
     let mut prices = lock_ref
@@ -971,8 +968,10 @@ mod tests {
         openpit_pretrade_pre_trade_lock_push(lock, 7, first, &mut err);
         openpit_pretrade_pre_trade_lock_push(lock, 7, second, &mut err);
 
-        let mut out_price = OpenPitParamPrice::default();
-        let mut out_prices: *mut OpenPitPretradePreTradeLockPrices = std::ptr::null_mut();
+        let price_sentinel = price_of("999");
+        let mut out_price = price_sentinel;
+        let mut out_prices =
+            core::ptr::NonNull::<OpenPitPretradePreTradeLockPrices>::dangling().as_ptr();
         let status = openpit_pretrade_pre_trade_lock_prices_of(
             lock,
             7,
@@ -981,7 +980,7 @@ mod tests {
             &mut err,
         );
         assert_eq!(status, OpenPitPretradePreTradeLockPricesStatus::List);
-        assert!(out_price == OpenPitParamPrice::default());
+        assert_eq!(out_price, price_sentinel);
         assert!(!out_prices.is_null());
         let view = openpit_pretrade_pre_trade_lock_prices_view(out_prices);
         assert!(!view.ptr.is_null());
@@ -990,6 +989,9 @@ mod tests {
         assert_eq!(values, &[first, second]);
         openpit_destroy_pretrade_pre_trade_lock_prices(out_prices);
 
+        let prices_sentinel =
+            core::ptr::NonNull::<OpenPitPretradePreTradeLockPrices>::dangling().as_ptr();
+        out_prices = prices_sentinel;
         let missing = openpit_pretrade_pre_trade_lock_prices_of(
             lock,
             99,
@@ -998,7 +1000,8 @@ mod tests {
             &mut err,
         );
         assert_eq!(missing, OpenPitPretradePreTradeLockPricesStatus::Empty);
-        assert!(out_prices.is_null());
+        assert_eq!(out_price, price_sentinel);
+        assert_eq!(out_prices, prices_sentinel);
         assert!(err.is_null());
 
         openpit_destroy_pretrade_pre_trade_lock(lock);
@@ -1012,7 +1015,9 @@ mod tests {
         openpit_pretrade_pre_trade_lock_push(lock, 0, price, &mut err);
 
         let mut out_price = OpenPitParamPrice::default();
-        let mut out_prices: *mut OpenPitPretradePreTradeLockPrices = std::ptr::null_mut();
+        let prices_sentinel =
+            core::ptr::NonNull::<OpenPitPretradePreTradeLockPrices>::dangling().as_ptr();
+        let mut out_prices = prices_sentinel;
         let status = openpit_pretrade_pre_trade_lock_prices_of(
             lock,
             0,
@@ -1022,7 +1027,7 @@ mod tests {
         );
         assert_eq!(status, OpenPitPretradePreTradeLockPricesStatus::One);
         assert_eq!(out_price, price);
-        assert!(out_prices.is_null());
+        assert_eq!(out_prices, prices_sentinel);
         assert!(err.is_null());
 
         openpit_destroy_pretrade_pre_trade_lock(lock);

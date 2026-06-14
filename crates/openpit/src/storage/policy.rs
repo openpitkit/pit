@@ -164,7 +164,7 @@ pub unsafe trait FullySynchronized: LockingPolicy {}
 /// independent locks.
 pub trait LockingPolicyFactory {
     /// Concrete policy produced by this factory.
-    type Policy: LockingPolicy;
+    type Policy: LockingPolicy + 'static;
 
     /// Bool-cell whose synchronization matches this factory's locking
     /// regime. Used by engine-internal book-keeping that needs to
@@ -181,11 +181,19 @@ pub trait LockingPolicyFactory {
     /// matching the `AccountSync` engine contract).
     type Shared<T: 'static>: Clone + std::ops::Deref<Target = T>;
 
+    /// Sync-mode-aware settings cell for a configurable policy.
+    /// NoLocking -> LocalConfigCell (zero atomics); FullLocking/IndexLocking ->
+    /// ArcSwapConfigCell.
+    type Config<Settings: Clone + 'static>: super::ConfigCell<Settings>;
+
     /// Builds a fresh policy for a new storage instance.
     fn create_policy(&self) -> Self::Policy;
 
     /// Wraps `value` in the sync-mode-appropriate shared handle.
     fn new_shared<T: 'static>(value: T) -> Self::Shared<T>;
+
+    /// Creates a settings cell holding `value`.
+    fn new_config<Settings: Clone + 'static>(value: Settings) -> Self::Config<Settings>;
 }
 
 /// Marker that opts a type out of [`Send`] and [`Sync`].

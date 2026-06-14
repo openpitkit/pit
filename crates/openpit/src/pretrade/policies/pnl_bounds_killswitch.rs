@@ -28,7 +28,7 @@ use crate::pretrade::{
     AccountBlock, PostTradeResult, PreTradeContext, PreTradePolicy, Reject, RejectCode,
     RejectScope, Rejects,
 };
-use crate::storage::{Storage, StorageBuilder};
+use crate::storage::{ConfigCell, Storage, StorageBuilder};
 
 /// Per-settlement P&L bounds configuration for the broker barrier.
 ///
@@ -62,49 +62,26 @@ pub struct PnlBoundsAccountAssetBarrier {
     pub barrier: PnlBoundsBrokerBarrier,
     /// Account this barrier applies to.
     pub account_id: AccountId,
-    /// Starting accumulated P&L for the account.
+    /// Starting accumulated P&L for the account, consumed at construction only.
     ///
-    /// Pre-loaded into storage at construction; accumulation starts from this value.
+    /// Seeds P&L accrued before the engine started.
     pub initial_pnl: Pnl,
 }
 
-/// P&L kill switch with per-settlement-asset bounds.
+/// Runtime replacement for a per-(account, settlement-asset) P&L barrier.
 ///
-/// Accumulates realized P&L (`pnl + fee` from execution reports) per
-/// `(account, settlement asset)` and blocks the account when the running
-/// total crosses a configured lower or upper bound.
-///
-/// Two barrier kinds can be configured, independently or together:
-/// - **broker barrier** — one set of bounds per settlement asset, applied to
-///   every account trading that asset;
-/// - **account+asset barrier** — tighter bounds for a specific
-///   `(account, settlement asset)` pair, with an explicit starting P&L.
-///
-/// An order is blocked when the realized P&L on its settlement asset is
-/// outside **either** applicable barrier. If neither barrier covers the
-/// `(account, settlement)` pair, the order passes.
-///
-/// Constructor rules:
-/// - at least one barrier (broker or account+asset) must be configured;
-/// - at least one of `lower_bound` or `upper_bound` must be configured for
-///   each barrier;
-/// - constructor does not validate signs of bounds;
-/// - constructor does not validate ordering (`lower_bound <= upper_bound`).
-pub struct PnlBoundsKillSwitchPolicy<LockingPolicyFactory>
-where
-    LockingPolicyFactory: crate::storage::LockingPolicyFactory,
-{
-    broker_barriers: HashMap<Asset, PnlBoundsBrokerBarrier>,
-    account_barriers: HashMap<AccountId, HashMap<Asset, PnlBoundsAccountAssetBarrier>>,
-    group_id: PolicyGroupId,
-    realized: Storage<
-        (AccountId, Asset),
-        Pnl,
-        <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy,
-    >,
+/// Runtime updates cannot seed or reset accumulated P&L. The live accumulator
+/// is preserved and evaluated against the replacement barrier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PnlBoundsAccountAssetBarrierUpdate {
+    /// Settlement asset and replacement bounds for this account.
+    pub barrier: PnlBoundsBrokerBarrier,
+    /// Account this replacement barrier applies to.
+    pub account_id: AccountId,
 }
 
-/// Errors returned by [`PnlBoundsKillSwitchPolicy`] operations.
+/// Errors returned by [`PnlBoundsKillSwitchPolicy`] and
+/// [`PnlBoundsKillSwitchSettings`] operations.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PnlBoundsKillSwitchPolicyError {
@@ -123,13 +100,210 @@ impl Display for PnlBoundsKillSwitchPolicyError {
             ),
             Self::NoBoundsConfigured { settlement_asset } => write!(
                 f,
-                "at least one of lower_bound or upper_bound must be configured for settlement asset {settlement_asset}"
+                "at least one of lower_bound or upper_bound must be configured \
+                 for settlement asset {settlement_asset}"
             ),
         }
     }
 }
 
 impl std::error::Error for PnlBoundsKillSwitchPolicyError {}
+
+/// Runtime-updatable settings for [`PnlBoundsKillSwitchPolicy`].
+///
+/// Holds the barrier configuration that can be replaced at runtime via
+/// [`crate::storage::ConfigCell::update`]. The policy reads this on every hot
+/// path via its cell; `realized` P&L storage is held outside the cell and is
+/// never touched by a settings update.
+///
+/// `group_id` is set at construction time and cannot be changed via a settings
+/// update; it is part of the settings so that the engine can distribute a single
+/// clone of the cell while the group tag travels with the settings snapshot.
+///
+/// # Realized P&L accumulates independently of barrier configuration
+///
+/// Realized P&L (`pnl + fee` from each execution report) is tracked for
+/// **every** `(account, settlement asset)` pair regardless of whether a barrier
+/// exists for that pair at the time of the report. When a barrier is added at
+/// runtime, the live accumulator is already authoritative. The deliberate
+/// trade-off is that the accumulator retains an entry for every pair ever
+/// traded.
+///
+/// # `initial_pnl` is construction-only
+///
+/// The `initial_pnl` field on each [`PnlBoundsAccountAssetBarrier`] is consumed
+/// only once at [`PnlBoundsKillSwitchPolicy::new`] to seed the realized P&L
+/// storage. Runtime account-barrier replacement accepts only
+/// [`PnlBoundsAccountAssetBarrierUpdate`], which cannot carry a seed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PnlBoundsKillSwitchSettings {
+    account_barriers: HashMap<AccountId, HashMap<Asset, PnlBoundsAccountAssetBarrierUpdate>>,
+    broker_barriers: HashMap<Asset, PnlBoundsBrokerBarrier>,
+    initial_pnl: HashMap<(AccountId, Asset), Pnl>,
+    group_id: PolicyGroupId,
+}
+
+impl PnlBoundsKillSwitchSettings {
+    /// Creates validated settings from raw barrier iterables.
+    ///
+    /// At least one barrier must appear across `broker_barriers` and
+    /// `account_barriers`. Each barrier must have at least one bound
+    /// configured; `group_id` defaults to [`DEFAULT_POLICY_GROUP_ID`].
+    pub fn new(
+        broker_barriers: impl IntoIterator<Item = PnlBoundsBrokerBarrier>,
+        account_barriers: impl IntoIterator<Item = PnlBoundsAccountAssetBarrier>,
+    ) -> Result<Self, PnlBoundsKillSwitchPolicyError> {
+        let mut broker = HashMap::new();
+        for barrier in broker_barriers {
+            validate_bounds(
+                &barrier.lower_bound,
+                &barrier.upper_bound,
+                &barrier.settlement_asset,
+            )?;
+            broker.insert(barrier.settlement_asset.clone(), barrier);
+        }
+
+        let mut account = HashMap::new();
+        let mut initial_pnl = HashMap::new();
+        for barrier in account_barriers {
+            validate_bounds(
+                &barrier.barrier.lower_bound,
+                &barrier.barrier.upper_bound,
+                &barrier.barrier.settlement_asset,
+            )?;
+            let account_id = barrier.account_id;
+            let settlement_asset = barrier.barrier.settlement_asset.clone();
+            initial_pnl.insert((account_id, settlement_asset.clone()), barrier.initial_pnl);
+            account
+                .entry(account_id)
+                .or_insert_with(HashMap::new)
+                .insert(
+                    settlement_asset,
+                    PnlBoundsAccountAssetBarrierUpdate {
+                        barrier: barrier.barrier,
+                        account_id,
+                    },
+                );
+        }
+
+        if broker.is_empty() && account.is_empty() {
+            return Err(PnlBoundsKillSwitchPolicyError::NoBarriersConfigured);
+        }
+
+        Ok(Self {
+            account_barriers: account,
+            broker_barriers: broker,
+            initial_pnl,
+            group_id: DEFAULT_POLICY_GROUP_ID,
+        })
+    }
+
+    /// Replaces the broker barriers.
+    ///
+    /// Validates every barrier before applying; returns an error (leaving
+    /// settings unchanged) if any barrier has neither bound set or if the
+    /// resulting combined set would be empty.
+    pub fn set_broker_barriers(
+        &mut self,
+        barriers: impl IntoIterator<Item = PnlBoundsBrokerBarrier>,
+    ) -> Result<(), PnlBoundsKillSwitchPolicyError> {
+        let mut broker = HashMap::new();
+        for barrier in barriers {
+            validate_bounds(
+                &barrier.lower_bound,
+                &barrier.upper_bound,
+                &barrier.settlement_asset,
+            )?;
+            broker.insert(barrier.settlement_asset.clone(), barrier);
+        }
+        if broker.is_empty() && self.account_barriers.is_empty() {
+            return Err(PnlBoundsKillSwitchPolicyError::NoBarriersConfigured);
+        }
+        self.broker_barriers = broker;
+        Ok(())
+    }
+
+    /// Replaces the account+asset barriers without changing accumulated P&L.
+    ///
+    /// Validates every barrier before applying; returns an error (leaving
+    /// settings unchanged) if any barrier has neither bound set or if the
+    /// resulting combined set would be empty. The update DTO has no
+    /// `initial_pnl`: runtime replacement always evaluates the live
+    /// accumulator.
+    pub fn set_account_barriers(
+        &mut self,
+        barriers: impl IntoIterator<Item = PnlBoundsAccountAssetBarrierUpdate>,
+    ) -> Result<(), PnlBoundsKillSwitchPolicyError> {
+        let mut account = HashMap::new();
+        for barrier in barriers {
+            validate_bounds(
+                &barrier.barrier.lower_bound,
+                &barrier.barrier.upper_bound,
+                &barrier.barrier.settlement_asset,
+            )?;
+            account
+                .entry(barrier.account_id)
+                .or_insert_with(HashMap::new)
+                .insert(barrier.barrier.settlement_asset.clone(), barrier);
+        }
+        if self.broker_barriers.is_empty() && account.is_empty() {
+            return Err(PnlBoundsKillSwitchPolicyError::NoBarriersConfigured);
+        }
+        self.account_barriers = account;
+        Ok(())
+    }
+}
+
+/// Shared handle to the per-`(account, settlement asset)` realized P&L ledger.
+///
+/// The policy and the runtime configurator hold clones of the same handle, so
+/// a force-set writes through the same ledger the hot path reads. The `Shared`
+/// wrapper is `Arc`/`Rc` per sync mode; its `Deref` is free, so the hot path
+/// pays no extra cost.
+pub(crate) type RealizedPnlStorage<LockingPolicyFactory> =
+    <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
+        Storage<
+            (AccountId, Asset),
+            Pnl,
+            <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy,
+        >,
+    >;
+
+/// P&L kill switch with per-settlement-asset bounds.
+///
+/// Accumulates realized P&L (`pnl + fee` from execution reports) per
+/// `(account, settlement asset)` and blocks the account when the running
+/// total crosses a configured lower or upper bound.
+///
+/// Two barrier kinds can be configured, independently or together:
+/// - **broker barrier** - one set of bounds per settlement asset, applied to
+///   every account trading that asset;
+/// - **account+asset barrier** - tighter bounds for a specific
+///   `(account, settlement asset)` pair, with an explicit starting P&L.
+///
+/// An order is blocked when the realized P&L on its settlement asset is
+/// outside **either** applicable barrier. If neither barrier covers the
+/// `(account, settlement)` pair, the order passes.
+///
+/// Barriers are read from a [`crate::storage::ConfigCell`] on every hot-path
+/// call, so they can be replaced at runtime via
+/// [`crate::storage::ConfigCell::update`] without restarting the engine.
+/// Accumulated realized P&L lives outside the cell and is never reset by a
+/// settings update.
+///
+/// Constructor rules:
+/// - at least one barrier (broker or account+asset) must be configured;
+/// - at least one of `lower_bound` or `upper_bound` must be configured for
+///   each barrier;
+/// - constructor does not validate signs of bounds;
+/// - constructor does not validate ordering (`lower_bound <= upper_bound`).
+pub struct PnlBoundsKillSwitchPolicy<LockingPolicyFactory>
+where
+    LockingPolicyFactory: crate::storage::LockingPolicyFactory,
+{
+    settings: LockingPolicyFactory::Config<PnlBoundsKillSwitchSettings>,
+    realized: RealizedPnlStorage<LockingPolicyFactory>,
+}
 
 impl<LockingPolicyFactory> PnlBoundsKillSwitchPolicy<LockingPolicyFactory>
 where
@@ -140,89 +314,57 @@ where
 
     /// Creates a P&L bounds kill-switch policy.
     ///
-    /// `storage_builder` must be obtained from the engine builder so that the
-    /// per-account P&L storage shares the factory type with the engine's
+    /// `settings` carries the validated barrier configuration and the group
+    /// tag. `storage_builder` must be obtained from the engine builder so that
+    /// the per-account P&L storage shares the factory type with the engine's
     /// synchronization mode.
     ///
-    /// At least one barrier must be provided across `broker_barriers` and
-    /// `account_barriers`; if both are empty, returns `NoBarriersConfigured`.
-    /// Each barrier must have at least one bound configured.
+    /// The `initial_pnl` supplied through each construction-time
+    /// [`PnlBoundsAccountAssetBarrier`] is consumed once here to seed the
+    /// realized P&L storage. Runtime barrier updates cannot carry a seed and
+    /// therefore cannot reset accumulated P&L.
     pub fn new(
-        broker_barriers: impl IntoIterator<Item = PnlBoundsBrokerBarrier>,
-        account_barriers: impl IntoIterator<Item = PnlBoundsAccountAssetBarrier>,
+        mut settings: PnlBoundsKillSwitchSettings,
         storage_builder: &StorageBuilder<LockingPolicyFactory>,
-    ) -> Result<Self, PnlBoundsKillSwitchPolicyError>
+    ) -> Self
     where
         LockingPolicyFactory: crate::storage::CreateStorageFor<(AccountId, Asset)>,
     {
-        let mut broker = HashMap::new();
-        for barrier in broker_barriers {
-            Self::validate_bounds(
-                &barrier.lower_bound,
-                &barrier.upper_bound,
-                &barrier.settlement_asset,
-            )?;
-            broker.insert(barrier.settlement_asset.clone(), barrier);
-        }
-
-        let mut account: HashMap<AccountId, HashMap<Asset, PnlBoundsAccountAssetBarrier>> =
-            HashMap::new();
-        for barrier in account_barriers {
-            Self::validate_bounds(
-                &barrier.barrier.lower_bound,
-                &barrier.barrier.upper_bound,
-                &barrier.barrier.settlement_asset,
-            )?;
-            account
-                .entry(barrier.account_id)
-                .or_default()
-                .insert(barrier.barrier.settlement_asset.clone(), barrier);
-        }
-
-        if broker.is_empty() && account.is_empty() {
-            return Err(PnlBoundsKillSwitchPolicyError::NoBarriersConfigured);
-        }
-
         let realized = storage_builder.create_for_bound_key();
-        for (account_id, by_settlement) in &account {
-            for (settlement_asset, barrier) in by_settlement {
-                realized.with_mut(
-                    (*account_id, settlement_asset.clone()),
-                    || Pnl::ZERO,
-                    |entry, _is_new| {
-                        *entry = barrier.initial_pnl;
-                    },
-                );
-            }
+        let initial_pnl = std::mem::take(&mut settings.initial_pnl);
+
+        for ((account_id, settlement_asset), initial_pnl) in initial_pnl {
+            realized.with_mut(
+                (account_id, settlement_asset),
+                || Pnl::ZERO,
+                |entry, _is_new| {
+                    *entry = initial_pnl;
+                },
+            );
         }
 
-        Ok(Self {
-            broker_barriers: broker,
-            account_barriers: account,
+        // Seed first, then share: the configurator and the hot path observe the
+        // same ledger through this handle.
+        let realized = LockingPolicyFactory::new_shared(realized);
+
+        Self {
+            settings: LockingPolicyFactory::new_config(settings),
             realized,
-            group_id: DEFAULT_POLICY_GROUP_ID,
-        })
+        }
     }
 
     /// Assigns a group tag to this policy instance.
     ///
-    /// See [`PolicyGroupId`] and [`DEFAULT_POLICY_GROUP_ID`] for details.
-    pub fn with_policy_group_id(mut self, id: PolicyGroupId) -> Self {
-        self.group_id = id;
+    /// Updates the group ID inside the settings cell. See [`PolicyGroupId`]
+    /// and [`DEFAULT_POLICY_GROUP_ID`] for details.
+    pub fn with_policy_group_id(self, id: PolicyGroupId) -> Self {
+        self.settings
+            .update::<std::convert::Infallible>(|s| {
+                s.group_id = id;
+                Ok(())
+            })
+            .unwrap_or_else(|e| match e {});
         self
-    }
-
-    fn validate_bounds(
-        lower_bound: &Option<Pnl>,
-        upper_bound: &Option<Pnl>,
-        settlement_asset: &Asset,
-    ) -> Result<(), PnlBoundsKillSwitchPolicyError> {
-        if lower_bound.is_none() && upper_bound.is_none() {
-            return Err(PnlBoundsKillSwitchPolicyError::NoBoundsConfigured {
-                settlement_asset: settlement_asset.clone(),
-            });
-        }
-        Ok(())
     }
 }
 
@@ -235,21 +377,52 @@ where
     }
 }
 
+impl<LockingPolicyFactory> crate::pretrade::ConfigurablePolicy<LockingPolicyFactory>
+    for PnlBoundsKillSwitchPolicy<LockingPolicyFactory>
+where
+    LockingPolicyFactory: crate::storage::LockingPolicyFactory,
+{
+    type Settings = PnlBoundsKillSwitchSettings;
+
+    /// Returns a clone of the policy's own settings cell.
+    ///
+    /// Both the returned clone and the policy's internal field point at the
+    /// same underlying value. The engine can publish a new settings value
+    /// through the registry clone and the running policy will observe it on
+    /// its next hot-path read.
+    fn settings_cell(&self) -> LockingPolicyFactory::Config<PnlBoundsKillSwitchSettings> {
+        self.settings.clone()
+    }
+}
+
 impl<Order, ExecutionReport, AccountAdjustment, LockingPolicyFactory, Sync>
     PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync>
     for PnlBoundsKillSwitchPolicy<LockingPolicyFactory>
 where
     Order: HasInstrument + HasAccountId,
     ExecutionReport: HasInstrument + HasPnl + HasFee + HasAccountId,
-    LockingPolicyFactory: crate::storage::LockingPolicyFactory,
-    Sync: crate::core::SyncMode,
+    LockingPolicyFactory:
+        crate::storage::LockingPolicyFactory + crate::storage::CreateStorageFor<AccountId>,
+    Sync: crate::core::SyncMode<StorageLockingPolicyFactory = LockingPolicyFactory>,
 {
     fn name(&self) -> &str {
         Self::NAME
     }
 
     fn policy_group_id(&self) -> PolicyGroupId {
-        self.group_id
+        self.settings.with(|s| s.group_id)
+    }
+
+    #[allow(private_interfaces)]
+    fn built_in_config_entry(
+        &self,
+    ) -> Option<
+        crate::core::ConfigEntry<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+    > {
+        Some(crate::core::ConfigEntry::PnlBoundsKillSwitch {
+            settings: crate::pretrade::ConfigurablePolicy::settings_cell(self),
+            realized: self.realized.clone(),
+        })
     }
 
     fn check_pre_trade_start(
@@ -266,57 +439,64 @@ where
 
         let settlement = instrument.settlement_asset();
 
-        let broker_barrier = self.broker_barriers.get(settlement);
-        let account_barrier = self
-            .account_barriers
-            .get(&account_id)
-            .and_then(|m| m.get(settlement));
+        // Read barriers from the cell; no allocation on the hot path.
+        let (broker_breach, account_breach) = self.settings.with(|s| {
+            let broker_barrier = s.broker_barriers.get(settlement);
+            let account_barrier = s
+                .account_barriers
+                .get(&account_id)
+                .and_then(|m| m.get(settlement));
 
-        if broker_barrier.is_none() && account_barrier.is_none() {
-            return Ok(());
-        }
-
-        let current_pnl = self
-            .realized
-            .with(&(account_id, settlement.clone()), |entry| *entry)
-            .unwrap_or(Pnl::ZERO);
-
-        if let Some(broker_barrier) = broker_barrier {
-            let breached = breached_sides(
-                broker_barrier.lower_bound,
-                broker_barrier.upper_bound,
-                current_pnl,
-            );
-            if !breached.is_empty() {
-                return Err(barrier_breach_reject(
-                    self,
-                    "pnl kill switch triggered: broker barrier",
-                    &breached,
-                    broker_barrier,
-                    current_pnl,
-                    account_id,
-                )
-                .into());
+            if broker_barrier.is_none() && account_barrier.is_none() {
+                return (None, None);
             }
-        }
 
-        if let Some(account_barrier) = account_barrier {
-            let breached = breached_sides(
-                account_barrier.barrier.lower_bound,
-                account_barrier.barrier.upper_bound,
-                current_pnl,
-            );
-            if !breached.is_empty() {
-                return Err(barrier_breach_reject(
-                    self,
-                    "pnl kill switch triggered: account + asset barrier",
-                    &breached,
-                    &account_barrier.barrier,
-                    current_pnl,
-                    account_id,
-                )
-                .into());
-            }
+            let current_pnl = self
+                .realized
+                .with(&(account_id, settlement.clone()), |entry| *entry)
+                .unwrap_or(Pnl::ZERO);
+
+            let bb = broker_barrier.and_then(|b| {
+                let sides = breached_sides(b.lower_bound, b.upper_bound, current_pnl);
+                if sides.is_empty() {
+                    None
+                } else {
+                    Some(barrier_breach_reject(
+                        Self::NAME,
+                        "pnl kill switch triggered: broker barrier",
+                        &sides,
+                        b,
+                        current_pnl,
+                        account_id,
+                    ))
+                }
+            });
+
+            let ab = account_barrier.and_then(|a| {
+                let sides =
+                    breached_sides(a.barrier.lower_bound, a.barrier.upper_bound, current_pnl);
+                if sides.is_empty() {
+                    None
+                } else {
+                    Some(barrier_breach_reject(
+                        Self::NAME,
+                        "pnl kill switch triggered: account + asset barrier",
+                        &sides,
+                        &a.barrier,
+                        current_pnl,
+                        account_id,
+                    ))
+                }
+            });
+
+            (bb, ab)
+        });
+
+        if let Some(reject) = broker_breach {
+            return Err(reject.into());
+        }
+        if let Some(reject) = account_breach {
+            return Err(reject.into());
         }
 
         Ok(())
@@ -328,12 +508,18 @@ where
     /// The report contract expects `pnl` plus explicit `fee`. Fee impact is
     /// added to `pnl` before accumulation.
     ///
+    /// Accumulation is unconditional: realized P&L is tracked for every
+    /// `(account, settlement asset)` whether or not a barrier is currently
+    /// configured for that pair. This ensures that a barrier added at runtime
+    /// sees the true accumulated P&L rather than a stale zero.
+    ///
     /// The accumulation is performed under a single write lock; no intermediate
     /// reads from the realized storage are issued.
     ///
     /// Returns an [`AccountBlock`] when any required report field cannot be
     /// accessed, when `pnl + fee` or the accumulated value overflows, or when
-    /// the new accumulated value breaches a configured barrier.
+    /// the new accumulated value breaches a configured barrier. Returns `None`
+    /// when no barrier covers the pair and no overflow occurs.
     fn apply_execution_report(
         &self,
         _ctx: &crate::pretrade::PostTradeContext<
@@ -376,16 +562,6 @@ where
 
         let settlement = instrument.settlement_asset();
 
-        // Only track accounts/settlements that have a configured barrier.
-        let has_barrier = self.broker_barriers.contains_key(settlement)
-            || self
-                .account_barriers
-                .get(&account_id)
-                .is_some_and(|m| m.contains_key(settlement));
-        if !has_barrier {
-            return None;
-        }
-
         let pnl_with_fee = match pnl_delta.checked_add(fee.to_pnl()) {
             Ok(v) => v,
             Err(_) => {
@@ -420,15 +596,22 @@ where
                     }
                 };
                 *entry = updated;
-                if is_outside_bounds(
-                    &self.broker_barriers,
-                    &self.account_barriers,
-                    updated,
-                    settlement,
-                    account_id,
-                ) {
+
+                // Read barriers from the cell to determine if the new total
+                // breaches a boundary.
+                let outside = self.settings.with(|s| {
+                    is_outside_bounds(
+                        &s.broker_barriers,
+                        &s.account_barriers,
+                        updated,
+                        settlement,
+                        account_id,
+                    )
+                });
+
+                if outside {
                     Some(AccountBlock::new(
-                        self.policy_name(),
+                        Self::NAME,
                         RejectCode::PnlKillSwitchTriggered,
                         "pnl kill switch triggered",
                         format!(
@@ -446,8 +629,8 @@ where
     }
 }
 
-fn barrier_breach_reject<Policy: PolicyName + ?Sized>(
-    policy: &Policy,
+fn barrier_breach_reject(
+    policy_name: &'static str,
     reason: &'static str,
     breached_sides: &[&'static str],
     barrier: &PnlBoundsBrokerBarrier,
@@ -459,7 +642,7 @@ fn barrier_breach_reject<Policy: PolicyName + ?Sized>(
     let lower_bound = barrier.lower_bound;
     let upper_bound = barrier.upper_bound;
     Reject::new(
-        policy.policy_name(),
+        policy_name,
         RejectScope::Account,
         RejectCode::PnlKillSwitchTriggered,
         reason,
@@ -485,7 +668,7 @@ fn pnl_calculation_failed_block<Policy: PolicyName + ?Sized>(
 
 fn is_outside_bounds(
     broker_barriers: &HashMap<Asset, PnlBoundsBrokerBarrier>,
-    account_barriers: &HashMap<AccountId, HashMap<Asset, PnlBoundsAccountAssetBarrier>>,
+    account_barriers: &HashMap<AccountId, HashMap<Asset, PnlBoundsAccountAssetBarrierUpdate>>,
     pnl: Pnl,
     settlement: &Asset,
     account_id: AccountId,
@@ -526,18 +709,31 @@ fn breached_sides(
     sides
 }
 
+fn validate_bounds(
+    lower_bound: &Option<Pnl>,
+    upper_bound: &Option<Pnl>,
+    settlement_asset: &Asset,
+) -> Result<(), PnlBoundsKillSwitchPolicyError> {
+    if lower_bound.is_none() && upper_bound.is_none() {
+        return Err(PnlBoundsKillSwitchPolicyError::NoBoundsConfigured {
+            settlement_asset: settlement_asset.clone(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::core::{HasAccountId, HasFee, HasInstrument, HasPnl, Instrument, OrderOperation};
     use crate::param::TradeAmount;
     use crate::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side};
     use crate::pretrade::{PreTradeContext, PreTradePolicy, RejectCode, RejectScope};
-    use crate::storage::NoLocking;
+    use crate::storage::{ConfigCell, NoLocking};
     use crate::RequestFieldAccessError;
 
     use super::{
-        PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy,
-        PnlBoundsKillSwitchPolicyError,
+        PnlBoundsAccountAssetBarrier, PnlBoundsAccountAssetBarrierUpdate, PnlBoundsBrokerBarrier,
+        PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchPolicyError, PnlBoundsKillSwitchSettings,
     };
 
     type TestPolicy = PnlBoundsKillSwitchPolicy<NoLocking>;
@@ -605,7 +801,7 @@ mod tests {
 
     // ── global bound breaches ───────────────────────────────────────────────
 
-    // apply_execution_report detects a breach → returns AccountBlock and the
+    // apply_execution_report detects a breach -> returns AccountBlock and the
     // stored realized P&L stays at the breaching value, so subsequent
     // check_pre_trade_start re-reports the breach.
     #[test]
@@ -642,16 +838,17 @@ mod tests {
     #[test]
     fn check_detects_lower_bound_breach_with_specific_reason() {
         // Use initial_pnl to place PnL outside bounds before any apply.
-        let policy: TestPolicy = PnlBoundsKillSwitchPolicy::new(
+        let settings = PnlBoundsKillSwitchSettings::new(
             [barrier_usd(Some(pnl("-100")), Some(pnl("50")))],
             [PnlBoundsAccountAssetBarrier {
                 barrier: barrier("USD", Some(pnl("-500")), None),
                 account_id: account(1),
                 initial_pnl: pnl("-101"),
             }],
-            test_builder().storage_builder(),
         )
-        .expect("policy must be valid");
+        .expect("settings must be valid");
+        let policy: TestPolicy =
+            PnlBoundsKillSwitchPolicy::new(settings, test_builder().storage_builder());
         let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
         let reject = &reject[0];
         assert_eq!(reject.scope, RejectScope::Account);
@@ -668,16 +865,17 @@ mod tests {
 
     #[test]
     fn check_detects_upper_bound_breach_with_specific_reason() {
-        let policy: TestPolicy = PnlBoundsKillSwitchPolicy::new(
+        let settings = PnlBoundsKillSwitchSettings::new(
             [barrier_usd(Some(pnl("-100")), Some(pnl("50")))],
             [PnlBoundsAccountAssetBarrier {
                 barrier: barrier("USD", None, Some(pnl("500"))),
                 account_id: account(1),
                 initial_pnl: pnl("51"),
             }],
-            test_builder().storage_builder(),
         )
-        .expect("policy must be valid");
+        .expect("settings must be valid");
+        let policy: TestPolicy =
+            PnlBoundsKillSwitchPolicy::new(settings, test_builder().storage_builder());
         let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
         assert_eq!(
             reject[0].reason,
@@ -688,16 +886,17 @@ mod tests {
 
     #[test]
     fn inverted_bounds_breach_detected_at_check() {
-        let policy: TestPolicy = PnlBoundsKillSwitchPolicy::new(
+        let settings = PnlBoundsKillSwitchSettings::new(
             [barrier_usd(Some(pnl("10")), Some(pnl("5")))],
             [PnlBoundsAccountAssetBarrier {
                 barrier: barrier("USD", None, Some(pnl("500"))),
                 account_id: account(1),
                 initial_pnl: pnl("7"),
             }],
-            test_builder().storage_builder(),
         )
-        .expect("policy must be valid");
+        .expect("settings must be valid");
+        let policy: TestPolicy =
+            PnlBoundsKillSwitchPolicy::new(settings, test_builder().storage_builder());
         let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
         assert_eq!(reject[0].code, RejectCode::PnlKillSwitchTriggered);
         assert_eq!(
@@ -711,16 +910,17 @@ mod tests {
 
     #[test]
     fn account_barrier_initial_pnl_pre_loaded_into_storage() {
-        let policy: TestPolicy = PnlBoundsKillSwitchPolicy::new(
+        let settings = PnlBoundsKillSwitchSettings::new(
             [barrier_usd(Some(pnl("-500")), None)],
             [PnlBoundsAccountAssetBarrier {
                 barrier: barrier("USD", Some(pnl("-100")), None),
                 account_id: account(1),
                 initial_pnl: pnl("-90"),
             }],
-            test_builder().storage_builder(),
         )
-        .expect("policy must be valid");
+        .expect("settings must be valid");
+        let policy: TestPolicy =
+            PnlBoundsKillSwitchPolicy::new(settings, test_builder().storage_builder());
 
         // initial_pnl -90 is within account bounds [-100, ∞): passes before any report
         assert!(check_start(&policy, &order("USD", account(1))).is_ok());
@@ -731,16 +931,17 @@ mod tests {
     #[test]
     fn account_barrier_breach_detected_at_check_specific_reason() {
         // initial_pnl -200 violates account bound [-100] but NOT global [-500].
-        let policy: TestPolicy = PnlBoundsKillSwitchPolicy::new(
+        let settings = PnlBoundsKillSwitchSettings::new(
             [barrier_usd(Some(pnl("-500")), None)],
             [PnlBoundsAccountAssetBarrier {
                 barrier: barrier("USD", Some(pnl("-100")), None),
                 account_id: account(1),
                 initial_pnl: pnl("-200"),
             }],
-            test_builder().storage_builder(),
         )
-        .expect("policy must be valid");
+        .expect("settings must be valid");
+        let policy: TestPolicy =
+            PnlBoundsKillSwitchPolicy::new(settings, test_builder().storage_builder());
 
         let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
         let reject = &reject[0];
@@ -754,16 +955,17 @@ mod tests {
 
     #[test]
     fn account_barrier_apply_breach_blocks() {
-        let policy: TestPolicy = PnlBoundsKillSwitchPolicy::new(
+        let settings = PnlBoundsKillSwitchSettings::new(
             [barrier_usd(Some(pnl("-500")), None)],
             [PnlBoundsAccountAssetBarrier {
                 barrier: barrier("USD", Some(pnl("-100")), None),
                 account_id: account(1),
                 initial_pnl: Pnl::ZERO,
             }],
-            test_builder().storage_builder(),
         )
-        .expect("policy must be valid");
+        .expect("settings must be valid");
+        let policy: TestPolicy =
+            PnlBoundsKillSwitchPolicy::new(settings, test_builder().storage_builder());
 
         // -200 violates account bound [-100], apply detects and blocks.
         let blocks = apply_report_blocks(&policy, &report("USD", account(1), pnl("-200")));
@@ -777,16 +979,17 @@ mod tests {
 
     #[test]
     fn global_barrier_breach_blocks_even_within_account_bounds() {
-        let policy: TestPolicy = PnlBoundsKillSwitchPolicy::new(
+        let settings = PnlBoundsKillSwitchSettings::new(
             [barrier_usd(Some(pnl("-100")), None)],
             [PnlBoundsAccountAssetBarrier {
                 barrier: barrier("USD", Some(pnl("-500")), None),
                 account_id: account(1),
                 initial_pnl: Pnl::ZERO,
             }],
-            test_builder().storage_builder(),
         )
-        .expect("policy must be valid");
+        .expect("settings must be valid");
+        let policy: TestPolicy =
+            PnlBoundsKillSwitchPolicy::new(settings, test_builder().storage_builder());
 
         // -200 is within account bound [-500] but violates global [-100].
         let blocks = apply_report_blocks(&policy, &report("USD", account(1), pnl("-200")));
@@ -803,10 +1006,7 @@ mod tests {
 
     #[test]
     fn no_barriers_configured_rejected_by_constructor() {
-        let err =
-            PnlBoundsKillSwitchPolicy::<NoLocking>::new([], [], test_builder().storage_builder())
-                .err()
-                .expect("must fail");
+        let err = PnlBoundsKillSwitchSettings::new([], []).expect_err("must fail");
         assert_eq!(err, PnlBoundsKillSwitchPolicyError::NoBarriersConfigured);
         assert_eq!(
             err.to_string(),
@@ -817,17 +1017,15 @@ mod tests {
     #[test]
     fn missing_bounds_rejected_by_constructor() {
         let usd = Asset::new("USD").expect("asset code must be valid");
-        let err = PnlBoundsKillSwitchPolicy::<NoLocking>::new(
+        let err = PnlBoundsKillSwitchSettings::new(
             [PnlBoundsBrokerBarrier {
                 settlement_asset: usd.clone(),
                 lower_bound: None,
                 upper_bound: None,
             }],
             [],
-            test_builder().storage_builder(),
         )
-        .err()
-        .expect("must fail");
+        .expect_err("must fail");
 
         assert_eq!(
             err,
@@ -840,7 +1038,7 @@ mod tests {
     #[test]
     fn missing_account_bounds_rejected_by_constructor() {
         let usd = Asset::new("USD").expect("must be valid");
-        let err = PnlBoundsKillSwitchPolicy::<NoLocking>::new(
+        let err = PnlBoundsKillSwitchSettings::new(
             [barrier_usd(Some(pnl("-100")), None)],
             [PnlBoundsAccountAssetBarrier {
                 barrier: PnlBoundsBrokerBarrier {
@@ -851,10 +1049,8 @@ mod tests {
                 account_id: account(1),
                 initial_pnl: Pnl::ZERO,
             }],
-            test_builder().storage_builder(),
         )
-        .err()
-        .expect("must fail");
+        .expect_err("must fail");
 
         assert_eq!(
             err,
@@ -886,7 +1082,7 @@ mod tests {
 
     #[test]
     fn accumulation_and_breach_detection_independent_per_settlement() {
-        let policy: TestPolicy = PnlBoundsKillSwitchPolicy::new(
+        let settings = PnlBoundsKillSwitchSettings::new(
             [
                 barrier("USD", Some(pnl("-100")), Some(pnl("50"))),
                 barrier("EUR", Some(pnl("-200")), Some(pnl("100"))),
@@ -903,9 +1099,10 @@ mod tests {
                     initial_pnl: Pnl::ZERO,
                 },
             ],
-            test_builder().storage_builder(),
         )
-        .expect("policy must be valid");
+        .expect("settings must be valid");
+        let policy: TestPolicy =
+            PnlBoundsKillSwitchPolicy::new(settings, test_builder().storage_builder());
 
         apply_report(&policy, &report("USD", account(1), pnl("-30")));
         apply_report(&policy, &report("EUR", account(1), pnl("40")));
@@ -1028,13 +1225,16 @@ mod tests {
         assert!(second.is_empty());
     }
 
+    // Realized P&L is now accumulated unconditionally. An overflow in pnl+fee
+    // for an untracked settlement still produces an AccountBlock so that the
+    // engine can latch the account - the barrier-presence check no longer
+    // short-circuits before the overflow guard.
     #[test]
-    fn untracked_settlement_ignores_pnl_plus_fee_overflow() {
+    fn untracked_settlement_pnl_plus_fee_overflow_produces_block() {
         use rust_decimal::Decimal;
         let policy = policy_usd(None, Some(Pnl::new(Decimal::MAX)));
 
-        // EUR has no barrier; overflow in pnl+fee must not block the account.
-        let triggered = apply_report(
+        let blocks = apply_report_blocks(
             &policy,
             &report_with_fee(
                 "EUR",
@@ -1043,29 +1243,29 @@ mod tests {
                 Fee::new(-Decimal::ONE),
             ),
         );
-        assert!(
-            !triggered,
-            "untracked settlement must not trigger kill switch"
-        );
-        assert!(check_start(&policy, &order("EUR", account(1))).is_ok());
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].code, RejectCode::OrderValueCalculationFailed);
+        assert_eq!(blocks[0].reason, "pnl accumulation overflow");
+        assert!(blocks[0].details.contains("pnl + fee overflow"));
     }
 
     // ── account-only barrier ─────────────────────────────────────────────────
 
     #[test]
     fn account_only_barrier_without_global() {
-        let policy: TestPolicy = PnlBoundsKillSwitchPolicy::new(
+        let settings = PnlBoundsKillSwitchSettings::new(
             [],
             [PnlBoundsAccountAssetBarrier {
                 barrier: barrier("USD", Some(pnl("-100")), None),
                 account_id: account(1),
                 initial_pnl: Pnl::ZERO,
             }],
-            test_builder().storage_builder(),
         )
-        .expect("policy must be valid");
+        .expect("settings must be valid");
+        let policy: TestPolicy =
+            PnlBoundsKillSwitchPolicy::new(settings, test_builder().storage_builder());
 
-        // apply detects breach → returns AccountBlock for account(1) USD.
+        // apply detects breach -> returns AccountBlock for account(1) USD.
         let blocks = apply_report_blocks(&policy, &report("USD", account(1), pnl("-150")));
         assert_eq!(blocks.len(), 1);
         let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
@@ -1075,9 +1275,9 @@ mod tests {
             "pnl kill switch triggered: account + asset barrier"
         );
 
-        // Other account, same settlement: no barrier → passes.
+        // Other account, same settlement: no barrier -> passes.
         assert!(check_start(&policy, &order("USD", account(2))).is_ok());
-        // Same account, different settlement: no barrier → passes.
+        // Same account, different settlement: no barrier -> passes.
         assert!(check_start(&policy, &order("EUR", account(1))).is_ok());
     }
 
@@ -1119,6 +1319,224 @@ mod tests {
             "failed to access required field 'instrument'"
         );
         assert_eq!(reject.details, "failed to access field 'instrument'");
+    }
+
+    // ── settings-cell tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn settings_cell_clone_shares_underlying_value() {
+        use crate::pretrade::ConfigurablePolicy;
+
+        let policy = policy_usd(Some(pnl("-100")), Some(pnl("50")));
+        let cell = policy.settings_cell();
+
+        // Update through the clone; the policy must observe the change.
+        cell.update::<PnlBoundsKillSwitchPolicyError>(|s| {
+            s.set_broker_barriers([barrier_usd(Some(pnl("-200")), Some(pnl("200")))])
+        })
+        .expect("valid update");
+
+        // Old bound was 50; new is 200. 100 was outside before, inside now.
+        apply_report(&policy, &report("USD", account(1), pnl("100")));
+        assert!(
+            check_start(&policy, &order("USD", account(1))).is_ok(),
+            "updated barrier must be observed by the policy"
+        );
+    }
+
+    #[test]
+    fn settings_update_does_not_reset_realized_pnl() {
+        use crate::pretrade::ConfigurablePolicy;
+
+        let policy = policy_usd(Some(pnl("-100")), Some(pnl("50")));
+
+        // Accumulate some P&L.
+        apply_report(&policy, &report("USD", account(1), pnl("40")));
+
+        // Tighten the upper bound to 30 via the cell; P&L (40) is now outside.
+        let cell = policy.settings_cell();
+        cell.update::<PnlBoundsKillSwitchPolicyError>(|s| {
+            s.set_broker_barriers([barrier_usd(Some(pnl("-100")), Some(pnl("30")))])
+        })
+        .expect("valid update");
+
+        // The accumulated 40 must still be present (not reset by update).
+        let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
+        assert_eq!(reject[0].code, RejectCode::PnlKillSwitchTriggered);
+        assert_eq!(
+            reject[0].reason,
+            "pnl kill switch triggered: broker barrier"
+        );
+    }
+
+    // `Configurator::set_account_pnl` force-sets the live accumulator and the
+    // override is observed on the next hot-path check: forcing one account past
+    // a bound rejects its next order, while forcing a different (never-breached)
+    // account inside the bound lets its order through. Driven through a real
+    // engine because the override lives on the configurator, not the policy.
+    //
+    // The two directions use different accounts on purpose: a breach is a kill
+    // switch, so once account 1 is rejected the engine latches its account-level
+    // block, which force-setting the ledger back inside the bound does not clear
+    // (only an explicit admin unblock does). The passing direction is therefore
+    // exercised on account 2.
+    #[test]
+    fn set_account_pnl_overrides_live_accumulator() {
+        use crate::Engine;
+
+        let builder = Engine::builder::<OrderOperation, TestReport, ()>().no_sync();
+        let settings =
+            PnlBoundsKillSwitchSettings::new([barrier_usd(Some(pnl("-100")), Some(pnl("50")))], [])
+                .expect("settings must be valid");
+        let policy: TestPolicy =
+            PnlBoundsKillSwitchPolicy::new(settings, builder.storage_builder());
+        let engine = builder
+            .pre_trade(policy)
+            .build()
+            .expect("engine must build");
+        let name = PnlBoundsKillSwitchPolicy::<NoLocking>::NAME;
+        let usd = Asset::new("USD").expect("asset code must be valid");
+
+        // No history: the order passes against bounds [-100, 50].
+        engine
+            .execute_pre_trade(order("USD", account(1)))
+            .expect("order must pass with zero P&L");
+
+        // Force account 1's accumulator below the lower bound; its next order
+        // rejects and the engine latches the account-level block.
+        engine
+            .configure()
+            .set_account_pnl(name, account(1), usd.clone(), pnl("-150"))
+            .expect("force-set must publish");
+        let reject = engine
+            .execute_pre_trade(order("USD", account(1)))
+            .err()
+            .expect("order must reject after the override breaches the bound");
+        assert_eq!(reject[0].code, RejectCode::PnlKillSwitchTriggered);
+        assert_eq!(
+            reject[0].reason,
+            "pnl kill switch triggered: broker barrier"
+        );
+
+        // Force account 2's accumulator inside the bounds; its order passes,
+        // proving the override is observed in the passing direction too.
+        engine
+            .configure()
+            .set_account_pnl(name, account(2), usd, pnl("-10"))
+            .expect("force-set inside bounds must publish");
+        engine
+            .execute_pre_trade(order("USD", account(2)))
+            .expect("order must pass after the accumulator is set inside bounds");
+    }
+
+    // Realized P&L accumulated before a barrier is added must be respected once
+    // the barrier is installed at runtime. Construct with a barrier on account B
+    // / USD only (to satisfy the "at least one barrier" constructor rule), then
+    // feed reports for account A / USD (no barrier yet) to build up a loss.
+    #[test]
+    fn barrier_added_at_runtime_sees_pre_accumulated_pnl() {
+        use crate::pretrade::ConfigurablePolicy;
+
+        let settings = PnlBoundsKillSwitchSettings::new(
+            [],
+            [PnlBoundsAccountAssetBarrier {
+                barrier: barrier("USD", Some(pnl("-500")), None),
+                account_id: account(2),
+                initial_pnl: Pnl::ZERO,
+            }],
+        )
+        .expect("settings must be valid");
+        let policy: TestPolicy =
+            PnlBoundsKillSwitchPolicy::new(settings, test_builder().storage_builder());
+
+        apply_report(&policy, &report("USD", account(1), pnl("-80")));
+        apply_report(&policy, &report("USD", account(1), pnl("-40")));
+        assert!(check_start(&policy, &order("USD", account(1))).is_ok());
+
+        let cell = policy.settings_cell();
+        cell.update::<PnlBoundsKillSwitchPolicyError>(|settings| {
+            settings.set_account_barriers([
+                PnlBoundsAccountAssetBarrierUpdate {
+                    barrier: barrier("USD", Some(pnl("-500")), None),
+                    account_id: account(2),
+                },
+                PnlBoundsAccountAssetBarrierUpdate {
+                    barrier: barrier("USD", Some(pnl("-100")), None),
+                    account_id: account(1),
+                },
+            ])
+        })
+        .expect("barrier add must succeed");
+
+        let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
+        assert_eq!(
+            reject[0].reason,
+            "pnl kill switch triggered: account + asset barrier"
+        );
+    }
+
+    #[test]
+    fn settings_update_invalid_leaves_prior_value() {
+        use crate::pretrade::ConfigurablePolicy;
+
+        let policy = policy_usd(Some(pnl("-100")), Some(pnl("50")));
+        let cell = policy.settings_cell();
+
+        // Attempt to clear all barriers via set_broker_barriers; this will
+        // fail because account_barriers is also empty.
+        let result = cell.update::<PnlBoundsKillSwitchPolicyError>(|s| s.set_broker_barriers([]));
+        assert_eq!(
+            result,
+            Err(PnlBoundsKillSwitchPolicyError::NoBarriersConfigured)
+        );
+
+        // Original barrier still applies.
+        apply_report(&policy, &report("USD", account(1), pnl("51")));
+        let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
+        assert_eq!(reject[0].code, RejectCode::PnlKillSwitchTriggered);
+    }
+
+    #[test]
+    fn set_account_barriers_validated_before_apply() {
+        let mut settings =
+            PnlBoundsKillSwitchSettings::new([barrier_usd(Some(pnl("-100")), None)], [])
+                .expect("valid");
+
+        let usd = Asset::new("USD").expect("valid");
+        let err = settings
+            .set_account_barriers([PnlBoundsAccountAssetBarrierUpdate {
+                barrier: PnlBoundsBrokerBarrier {
+                    settlement_asset: usd.clone(),
+                    lower_bound: None,
+                    upper_bound: None,
+                },
+                account_id: account(1),
+            }])
+            .expect_err("must fail");
+        assert_eq!(
+            err,
+            PnlBoundsKillSwitchPolicyError::NoBoundsConfigured {
+                settlement_asset: usd,
+            }
+        );
+        assert!(settings
+            .broker_barriers
+            .contains_key(&Asset::new("USD").expect("valid")));
+    }
+
+    #[test]
+    fn with_policy_group_id_observed_via_policy_group_id() {
+        use crate::pretrade::PolicyGroupId;
+
+        let policy =
+            policy_usd(Some(pnl("-100")), None).with_policy_group_id(PolicyGroupId::new(7));
+        let observed = <TestPolicy as PreTradePolicy<
+            OrderOperation,
+            TestReport,
+            (),
+            crate::core::LocalSync,
+        >>::policy_group_id(&policy);
+        assert_eq!(observed, PolicyGroupId::new(7));
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
@@ -1181,12 +1599,10 @@ mod tests {
     }
 
     fn policy_usd(lower_bound: Option<Pnl>, upper_bound: Option<Pnl>) -> TestPolicy {
-        PnlBoundsKillSwitchPolicy::new(
-            [barrier_usd(lower_bound, upper_bound)],
-            [],
-            test_builder().storage_builder(),
-        )
-        .expect("policy must be valid")
+        let settings =
+            PnlBoundsKillSwitchSettings::new([barrier_usd(lower_bound, upper_bound)], [])
+                .expect("settings must be valid");
+        PnlBoundsKillSwitchPolicy::new(settings, test_builder().storage_builder())
     }
 
     fn barrier_usd(lower_bound: Option<Pnl>, upper_bound: Option<Pnl>) -> PnlBoundsBrokerBarrier {
@@ -1449,12 +1865,11 @@ mod tests {
 
     #[test]
     fn broker_barrier_excluding_zero_rejects_account_without_history() {
-        let policy: TestPolicy = PnlBoundsKillSwitchPolicy::new(
-            [barrier("USD", Some(pnl("10")), None)],
-            [],
-            test_builder().storage_builder(),
-        )
-        .expect("policy must be valid");
+        let settings =
+            PnlBoundsKillSwitchSettings::new([barrier("USD", Some(pnl("10")), None)], [])
+                .expect("settings must be valid");
+        let policy: TestPolicy =
+            PnlBoundsKillSwitchPolicy::new(settings, test_builder().storage_builder());
 
         let reject = check_start(&policy, &order("USD", account(1))).expect_err("must reject");
         let reject = &reject[0];

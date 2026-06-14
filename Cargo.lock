@@ -14,6 +14,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arc-swap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -299,6 +308,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "openpit"
 version = "0.4.0"
 dependencies = [
+ "arc-swap",
  "openpit-derive",
  "parking_lot",
  "rust_decimal",
@@ -334,6 +344,7 @@ dependencies = [
 name = "openpit-interop"
 version = "0.4.0"
 dependencies = [
+ "arc-swap",
  "openpit",
 ]
 

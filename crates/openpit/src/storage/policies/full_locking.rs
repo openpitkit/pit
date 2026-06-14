@@ -20,6 +20,7 @@
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::storage::policy::{FullySynchronized, LockingPolicy, LockingPolicyFactory};
+use crate::storage::{ArcSwapConfigCell, ConfigCell};
 
 /// Locking policy factory that synchronizes **both** the index and the
 /// values domain.
@@ -53,6 +54,8 @@ impl LockingPolicyFactory for FullLocking {
 
     type Shared<T: 'static> = std::sync::Arc<T>;
 
+    type Config<Settings: Clone + 'static> = ArcSwapConfigCell<Settings>;
+
     fn create_policy(&self) -> Self::Policy {
         FullLockingPolicy {
             index: RwLock::new(()),
@@ -62,6 +65,10 @@ impl LockingPolicyFactory for FullLocking {
 
     fn new_shared<T: 'static>(value: T) -> std::sync::Arc<T> {
         std::sync::Arc::new(value)
+    }
+
+    fn new_config<Settings: Clone + 'static>(value: Settings) -> ArcSwapConfigCell<Settings> {
+        ArcSwapConfigCell::new(value)
     }
 }
 

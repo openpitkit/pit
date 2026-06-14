@@ -110,10 +110,11 @@ use openpit::param::{
 };
 use openpit::pretrade::policies::{
     OrderSizeAssetBarrier, OrderSizeBrokerBarrier, OrderSizeLimit, OrderSizeLimitPolicy,
-    OrderValidationPolicy,
-    PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy,
-    RateLimit, RateLimitBrokerBarrier, RateLimitPolicy,
+    OrderSizeLimitSettings, OrderValidationPolicy,
+    PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchSettings,
+    RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
 };
+use openpit::storage::NoLocking;
 use openpit::{Engine, Instrument};
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -125,51 +126,55 @@ let builder = Engine::builder::<OrderOperation, Report, ()>().no_sync();
 
 // 2. Configure policies.
 let pnl_policy = PnlBoundsKillSwitchPolicy::new(
-    [PnlBoundsBrokerBarrier {
-        settlement_asset: usd.clone(),
-        lower_bound: Some(Pnl::from_str("-1000")?),
-        upper_bound: None,
-    }],
-    [],
+    PnlBoundsKillSwitchSettings::new(
+        [PnlBoundsBrokerBarrier {
+            settlement_asset: usd.clone(),
+            lower_bound: Some(Pnl::from_str("-1000")?),
+            upper_bound: None,
+        }],
+        [],
+    )?,
     builder.storage_builder(),
-)?;
+);
 
 let rate_limit_policy = RateLimitPolicy::new(
-    Some(RateLimitBrokerBarrier {
-        limit: RateLimit {
-            max_orders: 100,
-            window: Duration::from_secs(1),
-        },
-    }),
-    [],
-    [],
-    [],
+    RateLimitSettings::new(
+        Some(RateLimitBrokerBarrier {
+            limit: RateLimit {
+                max_orders: 100,
+                window: Duration::from_secs(1),
+            },
+        }),
+        [],
+        [],
+        [],
+    )?,
     builder.storage_builder(),
-)?;
-
-let size_policy = OrderSizeLimitPolicy::new(
-    Some(OrderSizeBrokerBarrier {
-        limit: OrderSizeLimit {
-            max_quantity: Quantity::from_str("500")?,
-            max_notional: Volume::from_str("100000")?,
-        },
-    }),
-    [OrderSizeAssetBarrier {
-        limit: OrderSizeLimit {
-            max_quantity: Quantity::from_str("500")?,
-            max_notional: Volume::from_str("100000")?,
-        },
-        settlement_asset: usd.clone(),
-    }],
-    [],
-)?;
+);
 
 // 3. Build the engine (one time at the platform initialization).
 let engine = builder
     .pre_trade(OrderValidationPolicy::new())
     .pre_trade(pnl_policy)
     .pre_trade(rate_limit_policy)
-    .pre_trade(size_policy)
+    .pre_trade(OrderSizeLimitPolicy::<NoLocking>::new(
+        OrderSizeLimitSettings::new(
+            Some(OrderSizeBrokerBarrier {
+                limit: OrderSizeLimit {
+                    max_quantity: Quantity::from_str("500")?,
+                    max_notional: Volume::from_str("100000")?,
+                },
+            }),
+            [OrderSizeAssetBarrier {
+                limit: OrderSizeLimit {
+                    max_quantity: Quantity::from_str("500")?,
+                    max_notional: Volume::from_str("100000")?,
+                },
+                settlement_asset: usd.clone(),
+            }],
+            [],
+        )?,
+    ))
     .build()?;
 
 // 3. Check an order.

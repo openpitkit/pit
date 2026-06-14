@@ -20,7 +20,9 @@ use std::thread;
 use std::time::Duration;
 
 use openpit::param::{AccountId, Asset, Quantity, Side, TradeAmount};
-use openpit::pretrade::policies::{RateLimit, RateLimitBrokerBarrier, RateLimitPolicy};
+use openpit::pretrade::policies::{
+    RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
+};
 use openpit::pretrade::{PreTradeContext, PreTradePolicy};
 use openpit::storage::FullLocking;
 use openpit::{Engine, FullSync, Instrument, OrderOperation};
@@ -55,8 +57,8 @@ fn build_order(account_id: AccountId) -> OrderOperation {
 fn rate_limit_full_sync_broker_counter_not_lost_under_concurrent_load() {
     let total_calls = TOTAL_THREADS * PER_THREAD;
     let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
-    let policy: Arc<TestPolicy> = Arc::new(
-        RateLimitPolicy::<FullLocking>::new(
+    let policy: Arc<TestPolicy> = Arc::new(RateLimitPolicy::<FullLocking>::new(
+        RateLimitSettings::new(
             Some(RateLimitBrokerBarrier {
                 limit: RateLimit {
                     max_orders: total_calls,
@@ -66,10 +68,10 @@ fn rate_limit_full_sync_broker_counter_not_lost_under_concurrent_load() {
             [],
             [],
             [],
-            builder.storage_builder(),
         )
-        .expect("policy must be configured"),
-    );
+        .expect("rate limit settings must be valid"),
+        builder.storage_builder(),
+    ));
 
     thread::scope(|s| {
         for tid in 0..TOTAL_THREADS {
