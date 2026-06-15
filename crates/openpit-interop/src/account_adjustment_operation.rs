@@ -17,11 +17,12 @@
 
 //! Runtime wrapper for the account-adjustment operation group.
 
-use openpit::param::{Asset, Leverage, PositionMode, Price};
+use openpit::param::{Asset, Leverage, Pnl, PositionMode, Price};
 use openpit::{
-    HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentPositionLeverage,
-    HasAverageEntryPrice, HasBalanceAsset, HasCollateralAsset, HasPositionInstrument,
-    HasPositionMode, Instrument, RequestFieldAccessError,
+    HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentBalanceRealizedPnl,
+    HasAccountAdjustmentPositionLeverage, HasAverageEntryPrice, HasBalanceAsset,
+    HasCollateralAsset, HasPositionInstrument, HasPositionMode, Instrument,
+    RequestFieldAccessError,
 };
 
 /// Populated balance-adjustment operation with individually-optional fields.
@@ -34,6 +35,8 @@ pub struct PopulatedBalanceOperation {
     pub asset: Option<Asset>,
     /// Average entry price (optional).
     pub average_entry_price: Option<Price>,
+    /// Realized PnL force-set (optional).
+    pub realized_pnl: Option<Pnl>,
 }
 
 /// Populated position-adjustment operation with individually-optional fields.
@@ -85,6 +88,17 @@ impl HasAccountAdjustmentBalanceAverageEntryPrice for PopulatedAccountAdjustment
             Self::Balance(op) => Ok(op.average_entry_price),
             Self::Position(_) => Err(RequestFieldAccessError::new(
                 "operation.balance_average_entry_price",
+            )),
+        }
+    }
+}
+
+impl HasAccountAdjustmentBalanceRealizedPnl for PopulatedAccountAdjustmentOperation {
+    fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
+        match self {
+            Self::Balance(op) => Ok(op.realized_pnl),
+            Self::Position(_) => Err(RequestFieldAccessError::new(
+                "operation.balance_realized_pnl",
             )),
         }
     }
@@ -181,6 +195,17 @@ impl HasAccountAdjustmentBalanceAverageEntryPrice for AccountAdjustmentOperation
     }
 }
 
+impl HasAccountAdjustmentBalanceRealizedPnl for AccountAdjustmentOperationAccess {
+    fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
+        match self {
+            Self::Populated(op) => op.balance_realized_pnl(),
+            Self::Absent => Err(RequestFieldAccessError::new(
+                "operation.balance_realized_pnl",
+            )),
+        }
+    }
+}
+
 impl HasPositionInstrument for AccountAdjustmentOperationAccess {
     fn position_instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
         match self {
@@ -240,6 +265,7 @@ mod tests {
         PopulatedBalanceOperation {
             asset: Some(Asset::new("USD").expect("valid")),
             average_entry_price: None,
+            realized_pnl: None,
         }
     }
 
@@ -263,6 +289,7 @@ mod tests {
         );
         assert!(access.balance_asset().is_ok());
         assert!(access.balance_average_entry_price().is_ok());
+        assert!(access.balance_realized_pnl().is_ok());
         assert!(access.position_instrument().is_err());
         assert!(access.collateral_asset().is_err());
         assert!(access.average_entry_price().is_err());
@@ -282,6 +309,7 @@ mod tests {
         assert!(access.position_leverage().is_ok());
         assert!(access.balance_asset().is_err());
         assert!(access.balance_average_entry_price().is_err());
+        assert!(access.balance_realized_pnl().is_err());
     }
 
     #[test]
@@ -290,10 +318,12 @@ mod tests {
             PopulatedAccountAdjustmentOperation::Balance(PopulatedBalanceOperation {
                 asset: None,
                 average_entry_price: None,
+                realized_pnl: None,
             }),
         );
         assert!(access.balance_asset().is_err());
         assert_eq!(access.balance_average_entry_price().unwrap(), None);
+        assert_eq!(access.balance_realized_pnl().unwrap(), None);
     }
 
     #[test]
@@ -312,6 +342,7 @@ mod tests {
         assert!(access.average_entry_price().is_err());
         assert!(access.position_mode().is_err());
         assert_eq!(access.position_leverage().unwrap(), None);
+        assert!(access.balance_realized_pnl().is_err());
     }
 
     #[test]
@@ -319,6 +350,7 @@ mod tests {
         let access = AccountAdjustmentOperationAccess::Absent;
         assert!(access.balance_asset().is_err());
         assert!(access.balance_average_entry_price().is_err());
+        assert!(access.balance_realized_pnl().is_err());
         assert!(access.position_instrument().is_err());
         assert!(access.collateral_asset().is_err());
         assert!(access.average_entry_price().is_err());

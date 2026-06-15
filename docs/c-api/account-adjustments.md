@@ -28,6 +28,7 @@ Balance-operation payload for account adjustment.
 typedef struct OpenPitAccountAdjustmentBalanceOperation {
     OpenPitStringView asset;
     OpenPitParamPriceOptional average_entry_price;
+    OpenPitParamPnlOptional realized_pnl;
 } OpenPitAccountAdjustmentBalanceOperation;
 ```
 

@@ -145,6 +145,8 @@ type AccountOutcomeEntryList = *C.OpenPitAccountOutcomeEntryList
 type AccountOutcomeEntry = C.OpenPitAccountOutcomeEntry
 type OutcomeAmount = C.OpenPitOutcomeAmount
 type OutcomeAmountOptional = C.OpenPitOutcomeAmountOptional
+type PnlOutcomeAmount = C.OpenPitPnlOutcomeAmount
+type PnlOutcomeAmountOptional = C.OpenPitPnlOutcomeAmountOptional
 type AccountAdjustmentOutcome = C.OpenPitAccountAdjustmentOutcome
 type AccountAdjustmentOutcomeList = *C.OpenPitAccountAdjustmentOutcomeList
 
@@ -183,6 +185,7 @@ const (
 	MarketDataGetStatusFound             MarketDataGetStatus = C.OpenPitMarketDataGetStatus_Found
 	MarketDataGetStatusUnavailable       MarketDataGetStatus = C.OpenPitMarketDataGetStatus_Unavailable
 	MarketDataGetStatusUnknownInstrument MarketDataGetStatus = C.OpenPitMarketDataGetStatus_UnknownInstrument
+	MarketDataGetStatusQuoteExpired      MarketDataGetStatus = C.OpenPitMarketDataGetStatus_QuoteExpired
 )
 
 const (

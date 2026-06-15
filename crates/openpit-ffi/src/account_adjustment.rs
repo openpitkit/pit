@@ -32,9 +32,9 @@ use crate::instrument::{import_instrument, parse_asset_view, OpenPitInstrument};
 use crate::last_error::{write_param_error_unspecified, OpenPitOutParamError};
 use crate::param::{
     export_leverage, export_position_mode, import_leverage, import_position_mode,
-    OpenPitParamAdjustmentAmountKind, OpenPitParamLeverage, OpenPitParamPositionMode,
-    OpenPitParamPositionSize, OpenPitParamPositionSizeOptional, OpenPitParamPrice,
-    OpenPitParamPriceOptional,
+    OpenPitParamAdjustmentAmountKind, OpenPitParamLeverage, OpenPitParamPnl,
+    OpenPitParamPnlOptional, OpenPitParamPositionMode, OpenPitParamPositionSize,
+    OpenPitParamPositionSizeOptional, OpenPitParamPrice, OpenPitParamPriceOptional,
 };
 use crate::string::OpenPitSharedString;
 use crate::OpenPitStringView;
@@ -59,8 +59,19 @@ pub struct OpenPitParamAdjustmentAmount {
 pub struct OpenPitAccountAdjustmentBalanceOperation {
     /// Balance asset code.
     pub asset: OpenPitStringView,
-    /// Optional average entry price.
+    /// Optional force-set of the average entry price in account currency. No
+    /// FX is applied by this adjustment.
     pub average_entry_price: OpenPitParamPriceOptional,
+    /// Optional force-set of the slot's absolute realized PnL in account
+    /// currency. No FX is applied by this adjustment.
+    ///
+    /// When set, the adjustment overwrites the slot's cumulative realized PnL
+    /// with this caller-supplied account-currency value, the same way
+    /// `average_entry_price` force-sets the average. The change is surfaced on
+    /// the outcome's `realized_pnl` field as a delta/absolute pair, where
+    /// `delta` is `new - prior` and `absolute` is this value; leaving it unset
+    /// keeps the slot's realized PnL untouched and emits no outcome.
+    pub realized_pnl: OpenPitParamPnlOptional,
 }
 
 #[repr(C)]
@@ -71,7 +82,8 @@ pub struct OpenPitAccountAdjustmentPositionOperation {
     pub instrument: OpenPitInstrument,
     /// Position collateral asset.
     pub collateral_asset: OpenPitStringView,
-    /// Position average entry price.
+    /// Optional force-set of the average entry price in account currency. No
+    /// FX is applied by this adjustment.
     pub average_entry_price: OpenPitParamPriceOptional,
     /// Optional leverage.
     pub leverage: OpenPitParamLeverage,
@@ -254,9 +266,16 @@ fn import_balance_operation(
         None
     };
 
+    let realized_pnl = if value.realized_pnl.is_set {
+        Some(value.realized_pnl.value.to_param()?)
+    } else {
+        None
+    };
+
     Ok(PopulatedBalanceOperation {
         asset,
         average_entry_price,
+        realized_pnl,
     })
 }
 
@@ -364,6 +383,13 @@ fn export_balance_operation(
                 value: OpenPitParamPrice(v.to_decimal().into()),
             },
             None => OpenPitParamPriceOptional::default(),
+        },
+        realized_pnl: match value.realized_pnl {
+            Some(v) => OpenPitParamPnlOptional {
+                is_set: true,
+                value: OpenPitParamPnl(v.to_decimal().into()),
+            },
+            None => OpenPitParamPnlOptional::default(),
         },
     }
 }
@@ -519,10 +545,13 @@ mod tests {
     };
     use crate::instrument::OpenPitInstrument;
     use crate::param::{
-        OpenPitParamAdjustmentAmountKind, OpenPitParamPositionMode, OpenPitParamPositionSize,
-        OpenPitParamPositionSizeOptional, OpenPitParamPrice,
+        OpenPitParamAdjustmentAmountKind, OpenPitParamPnl, OpenPitParamPnlOptional,
+        OpenPitParamPositionMode, OpenPitParamPositionSize, OpenPitParamPositionSizeOptional,
+        OpenPitParamPrice,
     };
-    use openpit::param::{AdjustmentAmount, Asset, Leverage, PositionMode, PositionSize, Price};
+    use openpit::param::{
+        AdjustmentAmount, Asset, Leverage, Pnl, PositionMode, PositionSize, Price,
+    };
     use openpit::{AccountAdjustmentAmount, AccountAdjustmentBounds, Instrument};
     use openpit_interop::{
         AccountAdjustmentAmountAccess, AccountAdjustmentBoundsAccess,
@@ -542,6 +571,12 @@ mod tests {
                     average_entry_price: crate::param::OpenPitParamPriceOptional {
                         value: OpenPitParamPrice(
                             Price::from_str("10").expect("price").to_decimal().into(),
+                        ),
+                        is_set: true,
+                    },
+                    realized_pnl: OpenPitParamPnlOptional {
+                        value: OpenPitParamPnl(
+                            Pnl::from_str("7").expect("pnl").to_decimal().into(),
                         ),
                         is_set: true,
                     },
@@ -610,6 +645,7 @@ mod tests {
             PopulatedAccountAdjustmentOperation::Balance(PopulatedBalanceOperation {
                 asset: Some(Asset::new("USD").expect("asset")),
                 average_entry_price: Some(Price::from_str("10").expect("price")),
+                realized_pnl: Some(Pnl::from_str("7").expect("pnl")),
             })
         );
 

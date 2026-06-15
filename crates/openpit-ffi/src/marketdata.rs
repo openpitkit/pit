@@ -219,10 +219,13 @@ pub enum OpenPitMarketDataGetStatus {
     /// A usable quote was found; `out_quote` was written.
     Found = 0,
     /// The instrument is registered but no usable quote is available
-    /// (never pushed, cleared, or aged past its TTL).
+    /// (never pushed or cleared).
     Unavailable = 1,
     /// The instrument id is not registered with the service.
     UnknownInstrument = 2,
+    /// The selected quote exists but aged past its effective TTL; the stale
+    /// quote was written to `out_quote`.
+    QuoteExpired = 3,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -1247,9 +1250,10 @@ pub extern "C" fn openpit_marketdata_service_push_by_instrument_patch(
 ///
 /// Status:
 /// - `Found`: a usable quote was written to `out_quote`;
-/// - `Unavailable`: registered but no usable quote (never pushed, cleared, or
-///   aged past TTL);
-/// - `UnknownInstrument`: `instrument_id` is not registered.
+/// - `Unavailable`: registered but no usable quote (never pushed or cleared);
+/// - `UnknownInstrument`: `instrument_id` is not registered;
+/// - `QuoteExpired`: selected quote aged past TTL; the stale quote was written
+///   to `out_quote`.
 ///
 /// Contract:
 /// - `service`, `resolve_account_group`, and `out_quote` must be valid non-null
@@ -1274,7 +1278,7 @@ pub extern "C" fn openpit_marketdata_service_get(
         resolve: resolve_account_group.unwrap(),
         user_data,
     };
-    match unsafe { &*service }.handle.get_or_err(
+    match unsafe { &*service }.handle.get(
         InstrumentId::new(instrument_id),
         AccountId::from_u64(account_id),
         &adapter,
@@ -1289,6 +1293,10 @@ pub extern "C" fn openpit_marketdata_service_get(
         }
         Err(openpit::marketdata::MarketDataError::QuoteUnavailable) => {
             OpenPitMarketDataGetStatus::Unavailable
+        }
+        Err(openpit::marketdata::MarketDataError::QuoteExpired(quote)) => {
+            unsafe { *out_quote = OpenPitMarketDataQuote::from_quote(quote) };
+            OpenPitMarketDataGetStatus::QuoteExpired
         }
         // `MarketDataError` is `#[non_exhaustive]`; treat any future variant as
         // "no usable quote available".

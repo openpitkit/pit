@@ -69,7 +69,6 @@ def test_example_wiki_market_data_register_push_get() -> None:
     # Read for an account with no group: the lookup falls through to the
     # default bucket.
     quote = service.get(aapl_id, account_id, _NO_GROUP, _DEFAULT)
-    assert quote is not None
     assert quote.mark == openpit.param.Price("150")
     assert quote.bid == openpit.param.Price("149.5")
 
@@ -119,7 +118,7 @@ def test_example_wiki_market_data_finite_ttl_hides_stale_quote() -> None:
     account_info = types.SimpleNamespace(account_group=None)
 
     def read():
-        return service.get(
+        return service.get_optional(
             aapl_id,
             account_id,
             account_info,
@@ -157,7 +156,7 @@ def test_example_wiki_market_data_clear_then_recover() -> None:
     # clear hides the quote but keeps the instrument registered.
     service.clear(aapl_id)
     assert (
-        service.get(
+        service.get_optional(
             aapl_id,
             account_id,
             account_info,
@@ -169,7 +168,7 @@ def test_example_wiki_market_data_clear_then_recover() -> None:
     # Pushing again restores a quote for the same id.
     service.push(aapl_id, openpit.marketdata.Quote(mark="210"))
     assert (
-        service.get(
+        service.get_optional(
             aapl_id,
             account_id,
             account_info,
@@ -221,27 +220,27 @@ def test_example_wiki_market_data_market_orders_book_top_override() -> None:
         account_id=account_id, adjustments=[_seed_usd_balance(1000)]
     )
 
-    def market_buy(quantity: str) -> openpit.Order:
+    def market_buy() -> openpit.Order:
         return openpit.Order(
             operation=openpit.OrderOperation(
                 instrument=aapl,
                 account_id=account_id,
                 side=openpit.param.Side.BUY,
-                trade_amount=openpit.param.TradeAmount.quantity(quantity),
+                trade_amount=openpit.param.TradeAmount.quantity("1"),
                 price=None,
             ),
         )
 
     # Market buy (no price): priced at the ask 200.5 because the override pins
     # slippage to zero. The seeded balance covers it, so it passes.
-    passed = engine.execute_pre_trade(order=market_buy("1"))
+    passed = engine.execute_pre_trade(order=market_buy())
     assert passed.ok
     passed.reservation.commit()
 
     # A full replace that carries only the mark drops bid and ask. With the
     # BookTop source there is no ask to price a buy, so it is rejected.
     market_data.push(aapl_id, openpit.marketdata.Quote(mark="215"))
-    rejected = engine.execute_pre_trade(order=market_buy("1"))
+    rejected = engine.execute_pre_trade(order=market_buy())
     assert not rejected.ok
     assert (
         rejected.rejects[0].code == openpit.pretrade.RejectCode.MARK_PRICE_UNAVAILABLE
@@ -280,5 +279,4 @@ def test_example_wiki_market_data_push_for_fan_out() -> None:
         account_info,
         openpit.marketdata.QuoteResolution.ACCOUNT_ONLY,
     )
-    assert quote is not None
     assert quote.mark == openpit.param.Price("150")

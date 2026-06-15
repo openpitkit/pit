@@ -438,6 +438,10 @@ where
                 absolute: new_holdings.held(),
             }),
             incoming: None,
+            // Reservation moves funds between available and held only; it
+            // realizes no PnL and does not change the average entry price.
+            realized_pnl: None,
+            average_entry_price: None,
         });
         Ok(())
     }
@@ -518,6 +522,10 @@ where
                 absolute: new_holdings.held(),
             }),
             incoming: None,
+            // Reservation moves funds between available and held only; it
+            // realizes no PnL and does not change the average entry price.
+            realized_pnl: None,
+            average_entry_price: None,
         });
         Ok(())
     }

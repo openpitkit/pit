@@ -459,7 +459,7 @@ mod tests {
                 &None::<AccountGroupId>,
                 QuoteResolution::AccountThenGroupThenDefault,
             )
-            .is_some());
+            .is_ok());
     }
 
     #[test]
@@ -484,7 +484,7 @@ mod tests {
                 &None::<AccountGroupId>,
                 QuoteResolution::AccountThenGroupThenDefault,
             )
-            .is_some());
+            .is_ok());
     }
 
     #[test]

@@ -23,6 +23,7 @@ use crate::account_adjustment::{
 };
 use crate::account_outcome::{outcomes_to_list_owned, OpenPitAccountAdjustmentOutcomeList};
 use crate::execution_report::{import_execution_report, ExecutionReport, OpenPitExecutionReport};
+use crate::instrument::parse_asset_view;
 use crate::last_error::{write_error, OpenPitOutError};
 use crate::order::{import_order, OpenPitOrder, Order};
 use crate::param::OpenPitParamAccountId;
@@ -32,7 +33,7 @@ use crate::reject::{
 };
 use crate::write_error_format;
 use crate::OpenPitStringView;
-use openpit::param::AccountId;
+use openpit::param::{AccountGroupId, AccountId, DEFAULT_ACCOUNT_GROUP};
 use openpit::pretrade::Rejects;
 
 //--------------------------------------------------------------------------------------------------
@@ -105,6 +106,27 @@ impl OpenPitEngine {
     /// reuse those modules' barrier structs.
     pub(crate) fn configurator(&self) -> openpit::Configurator<openpit_interop::EngineLocking> {
         self.inner.configure()
+    }
+}
+
+fn engine_ref<'a>(engine: *const OpenPitEngine) -> Option<&'a OpenPitEngine> {
+    if engine.is_null() {
+        None
+    } else {
+        Some(unsafe { &*engine })
+    }
+}
+
+fn engine_ref_or_error<'a>(
+    engine: *const OpenPitEngine,
+    out_error: OpenPitOutError,
+) -> Option<&'a OpenPitEngine> {
+    match engine_ref(engine) {
+        Some(engine) => Some(engine),
+        None => {
+            write_error(out_error, "engine is null");
+            None
+        }
     }
 }
 
@@ -1608,14 +1630,168 @@ pub extern "C" fn openpit_engine_account_group(
 ) -> bool {
     assert!(!engine.is_null(), "engine is null");
     assert!(!out_group.is_null(), "out_group is null");
+    let engine = unsafe { &*engine };
     let account = openpit::param::AccountId::from_u64(account);
-    match unsafe { &*engine }.inner.accounts().group_of(account) {
+    match engine.inner.accounts().group_of(account) {
         Some(group) => {
             unsafe { *out_group = group.as_u32() };
             true
         }
         None => false,
     }
+}
+
+//--------------------------------------------------------------------------------------------------
+
+// Maps a raw u32 group id to `AccountGroupId`, allowing the reserved
+// `DEFAULT_ACCOUNT_GROUP` (0). Any non-zero u32 is a valid group id, so
+// `AccountGroupId::from_u32` cannot fail for non-zero values; the `Err`
+// branch exists only for forward-compatibility should the reserved set widen.
+fn import_account_group_id_allow_default(group: u32) -> Result<AccountGroupId, ()> {
+    if group == DEFAULT_ACCOUNT_GROUP.as_u32() {
+        return Ok(DEFAULT_ACCOUNT_GROUP);
+    }
+    AccountGroupId::from_u32(group).map_err(|_| ())
+}
+
+#[no_mangle]
+/// Sets the explicit currency of `account`.
+///
+/// Setting or changing the account currency does not validate existing
+/// holdings and does not recompute stored average entry price or realized PnL.
+/// The caller owns the risk of changing currency on live state; a control or
+/// recompute API may be added later.
+///
+/// Contract:
+/// - passing null for `engine` returns `false` and writes `out_error`;
+/// - `asset` is parsed as an asset code and must be present;
+/// - on parse failure, if `out_error` is not null, writes a caller-owned
+///   `OpenPitSharedString` error handle that MUST be released with
+///   `openpit_destroy_shared_string`.
+pub extern "C" fn openpit_engine_set_account_currency(
+    engine: *mut OpenPitEngine,
+    account_id: crate::param::OpenPitParamAccountId,
+    asset: crate::OpenPitStringView,
+    out_error: OpenPitOutError,
+) -> bool {
+    let Some(engine) = engine_ref_or_error(engine, out_error) else {
+        return false;
+    };
+    let asset = match parse_asset_view(asset, "asset") {
+        Ok(Some(asset)) => asset,
+        Ok(None) => {
+            write_error(out_error, "asset is required");
+            return false;
+        }
+        Err(err) => {
+            write_error(out_error, &err);
+            return false;
+        }
+    };
+    let account = openpit::param::AccountId::from_u64(account_id);
+    engine.inner.accounts().set_currency(account, asset);
+    true
+}
+
+#[no_mangle]
+/// Clears the explicit currency of `account`.
+///
+/// Clearing the account currency does not validate existing holdings and does
+/// not recompute stored average entry price or realized PnL. The caller owns
+/// the risk of changing currency on live state; a control or recompute API may
+/// be added later.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer.
+pub extern "C" fn openpit_engine_clear_account_currency(
+    engine: *mut OpenPitEngine,
+    account_id: crate::param::OpenPitParamAccountId,
+) {
+    assert!(!engine.is_null(), "engine is null");
+    let engine = unsafe { &*engine };
+    let account = openpit::param::AccountId::from_u64(account_id);
+    engine.inner.accounts().clear_currency(account);
+}
+
+#[no_mangle]
+/// Sets the currency inherited by accounts in `group`.
+///
+/// `OPENPIT_DEFAULT_ACCOUNT_GROUP` (value `0`) is allowed and represents the
+/// global default tier.
+///
+/// Setting or changing the group currency does not validate existing holdings
+/// and does not recompute stored average entry price or realized PnL. The
+/// caller owns the risk of changing currency on live state; a control or
+/// recompute API may be added later.
+///
+/// Contract:
+/// - passing null for `engine` returns `false` and writes `out_error`;
+/// - `group` must be `OPENPIT_DEFAULT_ACCOUNT_GROUP` or a valid non-reserved
+///   group id; an invalid (reserved) id returns `false` and writes
+///   `out_error`;
+/// - `asset` is parsed as an asset code and must be present;
+/// - on any failure, if `out_error` is not null, writes a caller-owned
+///   `OpenPitSharedString` error handle that MUST be released with
+///   `openpit_destroy_shared_string`.
+pub extern "C" fn openpit_engine_set_account_group_currency(
+    engine: *mut OpenPitEngine,
+    group: crate::account_group_id::OpenPitParamAccountGroupId,
+    asset: crate::OpenPitStringView,
+    out_error: OpenPitOutError,
+) -> bool {
+    let Some(engine) = engine_ref_or_error(engine, out_error) else {
+        return false;
+    };
+    let group = match import_account_group_id_allow_default(group) {
+        Ok(g) => g,
+        Err(()) => {
+            write_error(out_error, "group is reserved");
+            return false;
+        }
+    };
+    let asset = match parse_asset_view(asset, "asset") {
+        Ok(Some(asset)) => asset,
+        Ok(None) => {
+            write_error(out_error, "asset is required");
+            return false;
+        }
+        Err(err) => {
+            write_error(out_error, &err);
+            return false;
+        }
+    };
+    engine.inner.accounts().set_group_currency(group, asset);
+    true
+}
+
+#[no_mangle]
+/// Clears the currency inherited by accounts in `group`.
+///
+/// `OPENPIT_DEFAULT_ACCOUNT_GROUP` (value `0`) is allowed and represents the
+/// global default tier.
+///
+/// Clearing the group currency does not validate existing holdings and does
+/// not recompute stored average entry price or realized PnL. The caller owns
+/// the risk of changing currency on live state; a control or recompute API may
+/// be added later.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer;
+/// - `group` must be `OPENPIT_DEFAULT_ACCOUNT_GROUP` or a valid non-reserved
+///   group id; an invalid (reserved) id is silently ignored (no-op) because
+///   this function has no error-output channel; prefer
+///   `openpit_engine_set_account_group_currency` when error reporting is
+///   needed.
+pub extern "C" fn openpit_engine_clear_account_group_currency(
+    engine: *mut OpenPitEngine,
+    group: crate::account_group_id::OpenPitParamAccountGroupId,
+) {
+    assert!(!engine.is_null(), "engine is null");
+    let engine = unsafe { &*engine };
+    let Ok(group) = import_account_group_id_allow_default(group) else {
+        return;
+    };
+    engine.inner.accounts().clear_group_currency(group);
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -1669,6 +1845,25 @@ impl OpenPitAccountBlockError {
                 group_is_set: false,
             },
         }
+    }
+
+    fn message(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            account: 0,
+            account_is_set: false,
+            group: 0,
+            group_is_set: false,
+        }
+    }
+}
+
+fn write_account_block_error(
+    out_error: *mut *mut OpenPitAccountBlockError,
+    err: OpenPitAccountBlockError,
+) {
+    if !out_error.is_null() {
+        unsafe { *out_error = Box::into_raw(Box::new(err)) };
     }
 }
 
@@ -1920,14 +2115,14 @@ pub extern "C" fn openpit_configure_error_get_kind(
 /// - `reason` is interpreted as UTF-8; an empty string is used when
 ///   `reason.ptr` is null OR `reason.len` is zero; passing a null `ptr` with
 ///   a non-zero `len` is caller misuse and is treated as empty (not read);
-///   an empty reason is explicitly allowed;
-/// - violating the `engine` pointer contract aborts the call.
+///   an empty reason is explicitly allowed.
 pub extern "C" fn openpit_engine_block_account(
     engine: *mut OpenPitEngine,
     account_id: crate::param::OpenPitParamAccountId,
     reason: crate::OpenPitStringView,
 ) {
     assert!(!engine.is_null(), "engine is null");
+    let engine = unsafe { &*engine };
     let account = openpit::param::AccountId::from_u64(account_id);
     let reason_bytes: &[u8] = if reason.ptr.is_null() || reason.len == 0 {
         &[]
@@ -1935,10 +2130,7 @@ pub extern "C" fn openpit_engine_block_account(
         unsafe { std::slice::from_raw_parts(reason.ptr, reason.len) }
     };
     let reason_str = String::from_utf8_lossy(reason_bytes).into_owned();
-    unsafe { &*engine }
-        .inner
-        .accounts()
-        .block(account, reason_str);
+    engine.inner.accounts().block(account, reason_str);
 }
 
 #[no_mangle]
@@ -1948,15 +2140,15 @@ pub extern "C" fn openpit_engine_block_account(
 /// kill-switch blocks are cleared.
 ///
 /// Contract:
-/// - `engine` must be a valid non-null engine pointer;
-/// - violating the pointer contract aborts the call.
+/// - `engine` must be a valid non-null engine pointer.
 pub extern "C" fn openpit_engine_unblock_account(
     engine: *mut OpenPitEngine,
     account_id: crate::param::OpenPitParamAccountId,
 ) {
     assert!(!engine.is_null(), "engine is null");
+    let engine = unsafe { &*engine };
     let account = openpit::param::AccountId::from_u64(account_id);
-    unsafe { &*engine }.inner.accounts().unblock(account);
+    engine.inner.accounts().unblock(account);
 }
 
 #[no_mangle]
@@ -1974,7 +2166,7 @@ pub extern "C" fn openpit_engine_unblock_account(
 /// - on failure, if `out_error` is not null, writes a caller-owned
 ///   `OpenPitAccountBlockError` pointer that MUST be released with
 ///   `openpit_destroy_account_block_error`;
-/// - aborts the call when `engine` is null.
+/// - returns `false` and writes `out_error` when `engine` is null.
 ///
 /// Success:
 /// - returns `true`; the stored reason has been replaced.
@@ -1988,7 +2180,14 @@ pub extern "C" fn openpit_engine_replace_account_block_reason(
     reason: crate::OpenPitStringView,
     out_error: *mut *mut OpenPitAccountBlockError,
 ) -> bool {
-    assert!(!engine.is_null(), "engine is null");
+    if engine.is_null() {
+        write_account_block_error(
+            out_error,
+            OpenPitAccountBlockError::message("engine is null"),
+        );
+        return false;
+    }
+    let engine = unsafe { &*engine };
     let account = openpit::param::AccountId::from_u64(account_id);
     let reason_bytes: &[u8] = if reason.ptr.is_null() || reason.len == 0 {
         &[]
@@ -1996,16 +2195,14 @@ pub extern "C" fn openpit_engine_replace_account_block_reason(
         unsafe { std::slice::from_raw_parts(reason.ptr, reason.len) }
     };
     let reason_str = String::from_utf8_lossy(reason_bytes).into_owned();
-    match unsafe { &*engine }
+    match engine
         .inner
         .accounts()
         .replace_block_reason(account, reason_str)
     {
         Ok(()) => true,
         Err(err) => {
-            if !out_error.is_null() {
-                unsafe { *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(err))) };
-            }
+            write_account_block_error(out_error, OpenPitAccountBlockError::new(err));
             false
         }
     }
@@ -2028,7 +2225,7 @@ pub extern "C" fn openpit_engine_replace_account_block_reason(
 /// - on failure, if `out_error` is not null, writes a caller-owned
 ///   `OpenPitAccountBlockError` pointer that MUST be released with
 ///   `openpit_destroy_account_block_error`;
-/// - aborts the call when `engine` is null.
+/// - returns `false` and writes `out_error` when `engine` is null.
 ///
 /// Success:
 /// - returns `true`; the group is now blocked.
@@ -2042,17 +2239,21 @@ pub extern "C" fn openpit_engine_block_account_group(
     reason: crate::OpenPitStringView,
     out_error: *mut *mut OpenPitAccountBlockError,
 ) -> bool {
-    assert!(!engine.is_null(), "engine is null");
+    if engine.is_null() {
+        write_account_block_error(
+            out_error,
+            OpenPitAccountBlockError::message("engine is null"),
+        );
+        return false;
+    }
+    let engine = unsafe { &*engine };
     let group = match openpit::param::AccountGroupId::from_u32(group) {
         Ok(group) => group,
         Err(_) => {
-            if !out_error.is_null() {
-                unsafe {
-                    *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(
-                        openpit::AccountBlockError::ReservedGroup,
-                    )))
-                };
-            }
+            write_account_block_error(
+                out_error,
+                OpenPitAccountBlockError::new(openpit::AccountBlockError::ReservedGroup),
+            );
             return false;
         }
     };
@@ -2062,16 +2263,10 @@ pub extern "C" fn openpit_engine_block_account_group(
         unsafe { std::slice::from_raw_parts(reason.ptr, reason.len) }
     };
     let reason_str = String::from_utf8_lossy(reason_bytes).into_owned();
-    match unsafe { &*engine }
-        .inner
-        .accounts()
-        .block_group(group, reason_str)
-    {
+    match engine.inner.accounts().block_group(group, reason_str) {
         Ok(()) => true,
         Err(err) => {
-            if !out_error.is_null() {
-                unsafe { *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(err))) };
-            }
+            write_account_block_error(out_error, OpenPitAccountBlockError::new(err));
             false
         }
     }
@@ -2089,7 +2284,7 @@ pub extern "C" fn openpit_engine_block_account_group(
 /// - on failure, if `out_error` is not null, writes a caller-owned
 ///   `OpenPitAccountBlockError` pointer that MUST be released with
 ///   `openpit_destroy_account_block_error`;
-/// - aborts the call when `engine` is null.
+/// - returns `false` and writes `out_error` when `engine` is null.
 ///
 /// Success:
 /// - returns `true`; the group is now unblocked.
@@ -2102,26 +2297,28 @@ pub extern "C" fn openpit_engine_unblock_account_group(
     group: crate::account_group_id::OpenPitParamAccountGroupId,
     out_error: *mut *mut OpenPitAccountBlockError,
 ) -> bool {
-    assert!(!engine.is_null(), "engine is null");
+    if engine.is_null() {
+        write_account_block_error(
+            out_error,
+            OpenPitAccountBlockError::message("engine is null"),
+        );
+        return false;
+    }
+    let engine = unsafe { &*engine };
     let group = match openpit::param::AccountGroupId::from_u32(group) {
         Ok(group) => group,
         Err(_) => {
-            if !out_error.is_null() {
-                unsafe {
-                    *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(
-                        openpit::AccountBlockError::ReservedGroup,
-                    )))
-                };
-            }
+            write_account_block_error(
+                out_error,
+                OpenPitAccountBlockError::new(openpit::AccountBlockError::ReservedGroup),
+            );
             return false;
         }
     };
-    match unsafe { &*engine }.inner.accounts().unblock_group(group) {
+    match engine.inner.accounts().unblock_group(group) {
         Ok(()) => true,
         Err(err) => {
-            if !out_error.is_null() {
-                unsafe { *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(err))) };
-            }
+            write_account_block_error(out_error, OpenPitAccountBlockError::new(err));
             false
         }
     }
@@ -2144,7 +2341,7 @@ pub extern "C" fn openpit_engine_unblock_account_group(
 /// - on failure, if `out_error` is not null, writes a caller-owned
 ///   `OpenPitAccountBlockError` pointer that MUST be released with
 ///   `openpit_destroy_account_block_error`;
-/// - aborts the call when `engine` is null.
+/// - returns `false` and writes `out_error` when `engine` is null.
 ///
 /// Success:
 /// - returns `true`; the stored group-block reason has been replaced.
@@ -2160,17 +2357,21 @@ pub extern "C" fn openpit_engine_replace_account_group_block_reason(
     reason: crate::OpenPitStringView,
     out_error: *mut *mut OpenPitAccountBlockError,
 ) -> bool {
-    assert!(!engine.is_null(), "engine is null");
+    if engine.is_null() {
+        write_account_block_error(
+            out_error,
+            OpenPitAccountBlockError::message("engine is null"),
+        );
+        return false;
+    }
+    let engine = unsafe { &*engine };
     let group = match openpit::param::AccountGroupId::from_u32(group) {
         Ok(group) => group,
         Err(_) => {
-            if !out_error.is_null() {
-                unsafe {
-                    *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(
-                        openpit::AccountBlockError::ReservedGroup,
-                    )))
-                };
-            }
+            write_account_block_error(
+                out_error,
+                OpenPitAccountBlockError::new(openpit::AccountBlockError::ReservedGroup),
+            );
             return false;
         }
     };
@@ -2180,16 +2381,14 @@ pub extern "C" fn openpit_engine_replace_account_group_block_reason(
         unsafe { std::slice::from_raw_parts(reason.ptr, reason.len) }
     };
     let reason_str = String::from_utf8_lossy(reason_bytes).into_owned();
-    match unsafe { &*engine }
+    match engine
         .inner
         .accounts()
         .replace_group_block_reason(group, reason_str)
     {
         Ok(()) => true,
         Err(err) => {
-            if !out_error.is_null() {
-                unsafe { *out_error = Box::into_raw(Box::new(OpenPitAccountBlockError::new(err))) };
-            }
+            write_account_block_error(out_error, OpenPitAccountBlockError::new(err));
             false
         }
     }
@@ -3815,5 +4014,50 @@ mod tests {
     #[test]
     fn destroy_dry_run_report_is_null_safe() {
         openpit_destroy_pretrade_pre_trade_dry_run_report(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn set_account_group_currency_accepts_default_and_nonzero_group() {
+        // Group id 0 maps to DEFAULT_ACCOUNT_GROUP (allowed); any non-zero u32
+        // is a valid group id. Both must succeed; out_error must be untouched.
+        let engine = build_passthrough_engine();
+        let asset = OpenPitStringView::from_utf8("USD");
+        let error_sentinel =
+            core::ptr::NonNull::<crate::string::OpenPitSharedString>::dangling().as_ptr();
+        let mut out_error = error_sentinel;
+
+        assert!(super::openpit_engine_set_account_group_currency(
+            engine,
+            0,
+            asset,
+            &mut out_error,
+        ));
+        assert_eq!(
+            out_error, error_sentinel,
+            "out_error must be untouched on success"
+        );
+
+        assert!(super::openpit_engine_set_account_group_currency(
+            engine,
+            42,
+            asset,
+            &mut out_error,
+        ));
+        assert_eq!(
+            out_error, error_sentinel,
+            "out_error must be untouched on success"
+        );
+
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn clear_account_group_currency_accepts_default_and_nonzero_group() {
+        // clear has no error channel; invalid ids are a documented no-op.
+        // Verify that valid cases (0 and non-zero) do not panic.
+        let engine = build_passthrough_engine();
+        super::openpit_engine_clear_account_group_currency(engine, 0);
+        super::openpit_engine_clear_account_group_currency(engine, 99);
+        openpit_destroy_engine(engine);
     }
 }

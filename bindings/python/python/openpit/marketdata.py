@@ -27,6 +27,7 @@ from ._openpit import MarketDataBuilder as MarketDataBuilder
 from ._openpit import MarketDataError as MarketDataError
 from ._openpit import MarketDataService as MarketDataService
 from ._openpit import Quote as Quote
+from ._openpit import QuoteExpired as QuoteExpired
 from ._openpit import QuoteResolution as QuoteResolution
 from ._openpit import QuoteTtl as QuoteTtl
 from ._openpit import QuoteUnavailable as QuoteUnavailable
@@ -69,7 +70,9 @@ _set_doc(
     """Thread-shareable live market-data service.
 
     Reads are performed with ``get(instrument_id, account_id, account_info,
-    resolution)`` and ``get_or_err(...)``. ``account_info`` is any object that
+    resolution)``. ``QuoteExpired`` raised by ``get`` carries the stale quote as
+    ``quote``. ``get_optional(...)`` keeps the older optional shape.
+    ``account_info`` is any object that
     exposes an ``account_group`` property returning an ``AccountGroupId`` or
     ``None`` — engine contexts (e.g. ``PreTradeContext``, ``PostTradeContext``)
     satisfy this automatically. The group is resolved lazily: the service only
@@ -97,6 +100,13 @@ _set_doc(
 _set_doc(MarketDataError, """Base exception for market-data read failures.""")
 _set_doc(UnknownInstrument, """Raised when a market-data id is not registered.""")
 _set_doc(QuoteUnavailable, """Raised when no usable quote is available.""")
+_set_doc(
+    QuoteExpired,
+    """Raised when the selected quote aged past TTL.
+
+    The stale quote selected before the TTL check is available as ``quote``.
+    """,
+)
 _set_doc(AlreadyRegistered, """Raised when an instrument is already registered.""")
 _set_doc(RegistrationError, """Raised when an explicit id registration conflicts.""")
 _set_doc(UnknownInstrumentId, """Raised when an operation references an unknown id.""")
@@ -109,6 +119,7 @@ __all__ = [
     "MarketDataError",
     "MarketDataService",
     "Quote",
+    "QuoteExpired",
     "QuoteResolution",
     "QuoteTtl",
     "QuoteUnavailable",

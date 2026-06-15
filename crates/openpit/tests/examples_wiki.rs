@@ -445,6 +445,7 @@ fn example_wiki_account_adjustments() -> Result<(), Box<dyn std::error::Error>> 
             operation: AccountAdjustmentOperation::Balance(AccountAdjustmentBalanceOperation {
                 asset: Asset::new("USD")?,
                 average_entry_price: None,
+                realized_pnl: None,
             }),
             amount: AccountAdjustmentAmount {
                 balance: Some(AdjustmentAmount::Absolute(PositionSize::from_f64(10000.0)?)),
@@ -1120,6 +1121,7 @@ fn example_wiki_spot_funds_limit_only() -> Result<(), Box<dyn std::error::Error>
                 operation: AccountAdjustmentBalanceOperation {
                     asset: Asset::new("USD")?,
                     average_entry_price: None,
+                    realized_pnl: None,
                 },
             },
             bounds: AccountAdjustmentBounds::default(),
@@ -1192,6 +1194,7 @@ fn example_wiki_spot_funds_market_orders() -> Result<(), Box<dyn std::error::Err
                 operation: AccountAdjustmentBalanceOperation {
                     asset: Asset::new("USD")?,
                     average_entry_price: None,
+                    realized_pnl: None,
                 },
             },
             bounds: AccountAdjustmentBounds::default(),
@@ -1253,6 +1256,7 @@ fn example_wiki_balance_reconciliation_delta_absolute() -> Result<(), Box<dyn st
                     operation: AccountAdjustmentBalanceOperation {
                         asset: Asset::new("USD")?,
                         average_entry_price: None,
+                        realized_pnl: None,
                     },
                 },
                 bounds: AccountAdjustmentBounds::default(),
@@ -1321,6 +1325,7 @@ fn example_wiki_pre_trade_lock_persistence() -> Result<(), Box<dyn std::error::E
                 operation: AccountAdjustmentBalanceOperation {
                     asset: Asset::new("USD")?,
                     average_entry_price: None,
+                    realized_pnl: None,
                 },
             },
             bounds: AccountAdjustmentBounds::default(),

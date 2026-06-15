@@ -21,6 +21,7 @@ pub(crate) mod account_control;
 pub(crate) mod account_groups;
 pub(crate) mod account_key;
 pub(crate) mod account_outcome;
+pub(crate) mod accounts;
 pub(crate) mod configure;
 pub(crate) mod engine;
 pub(crate) mod engine_builder;
@@ -43,12 +44,15 @@ pub use account_adjustment::{
 pub use account_adjustment_context::AccountAdjustmentContext;
 pub(crate) use account_control::BlockedAccounts;
 pub use account_control::{AccountBlockError, AccountBlockHandle, AccountControl};
-pub use account_groups::{AccountGroupError, Accounts};
+pub use account_groups::AccountGroupError;
 pub(crate) use account_groups::{AccountGroups, AccountGroupsHandle, GroupLookup};
 pub use account_key::{AccountKey, AccountKeyConstraint};
 pub use account_outcome::{
     AccountAdjustmentBatchResult, AccountAdjustmentOutcome, AccountOutcomeEntry, OutcomeAmount,
+    PnlOutcomeAmount,
 };
+pub(crate) use accounts::AccountCurrencies;
+pub use accounts::Accounts;
 pub(crate) use configure::{ConfigEntry, ConfigRegistry};
 pub use configure::{Configurator, ConfigureError};
 pub use engine_trait::{EngineTrait, EngineTraitOf};
@@ -65,16 +69,17 @@ pub use order::{
 };
 pub use request_trait::{
     HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
-    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
-    HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
-    HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
-    HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
-    HasAccountAdjustmentPositionLeverage, HasAccountId, HasAutoBorrow, HasAverageEntryPrice,
-    HasBalanceAsset, HasClosePosition, HasCollateralAsset, HasExecutionReportIsFinal,
-    HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
-    HasFee, HasInstrument, HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage,
-    HasOrderPositionSide, HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode,
-    HasPreTradeLock, HasReduceOnly, HasSide, HasTradeAmount, RequestFieldAccessError,
+    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceRealizedPnl,
+    HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
+    HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
+    HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
+    HasAccountAdjustmentIncomingUpperBound, HasAccountAdjustmentPositionLeverage, HasAccountId,
+    HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition, HasCollateralAsset,
+    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasExecutionReportPositionEffect,
+    HasExecutionReportPositionSide, HasFee, HasInstrument, HasLeavesQuantity,
+    HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl,
+    HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly, HasSide,
+    HasTradeAmount, RequestFieldAccessError,
 };
 pub use sync_mode::{
     AccountSync, AccountSyncHandle, AccountSyncHandleWeak, FullSync, LocalSync, SyncMode,

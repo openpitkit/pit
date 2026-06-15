@@ -42,7 +42,8 @@ use openpit::storage::{FullLocking, IndexLocking, NoLocking};
 use openpit::{
     AccountKeyConstraint, AccountSync, AccountSyncEngine, Configurator, ConfigureError, Engine,
     ExecutionReportOperation, FinancialImpact, FullSync, FullSyncEngine,
-    HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceLowerBound,
+    HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
+    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceRealizedPnl,
     HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
     HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
     HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
@@ -751,6 +752,8 @@ fn configure_order_size_limit_account_asset_barrier_tightened_rejects_previously
 struct SpotAdjustment {
     asset: Asset,
     balance: Option<AdjustmentAmount>,
+    balance_average_entry_price: Option<Price>,
+    balance_realized_pnl: Option<Pnl>,
 }
 
 impl HasBalanceAsset for SpotAdjustment {
@@ -762,6 +765,18 @@ impl HasBalanceAsset for SpotAdjustment {
 impl HasAccountAdjustmentBalance for SpotAdjustment {
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         Ok(self.balance)
+    }
+}
+
+impl HasAccountAdjustmentBalanceAverageEntryPrice for SpotAdjustment {
+    fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+        Ok(self.balance_average_entry_price)
+    }
+}
+
+impl HasAccountAdjustmentBalanceRealizedPnl for SpotAdjustment {
+    fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
+        Ok(self.balance_realized_pnl)
     }
 }
 
@@ -819,6 +834,8 @@ fn spot_balance(asset_code: &str, amount: &str) -> SpotAdjustment {
         balance: Some(AdjustmentAmount::Absolute(
             PositionSize::from_str(amount).expect("position size literal must be valid"),
         )),
+        balance_average_entry_price: None,
+        balance_realized_pnl: None,
     }
 }
 

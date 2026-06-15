@@ -401,7 +401,7 @@ where
 /// disable market orders entirely (rejected with
 /// [`crate::pretrade::RejectCode::UnsupportedOrderType`]).
 pub struct SpotFundsMarketData<Sync: MarketDataSync> {
-    market_data: Sync::Shared<MarketDataService<Sync>>,
+    pub(super) market_data: Sync::Shared<MarketDataService<Sync>>,
 }
 
 impl<Sync: MarketDataSync> SpotFundsMarketData<Sync> {
@@ -418,12 +418,14 @@ impl<Sync: MarketDataSync> SpotFundsMarketData<Sync> {
         account_id: AccountId,
         account_info: &impl AccountInfo,
     ) -> Option<Quote> {
-        self.market_data.get(
-            instrument_id,
-            account_id,
-            account_info,
-            QuoteResolution::AccountThenGroupThenDefault,
-        )
+        self.market_data
+            .get(
+                instrument_id,
+                account_id,
+                account_info,
+                QuoteResolution::AccountThenGroupThenDefault,
+            )
+            .ok()
     }
 
     pub(super) fn resolve(&self, instrument: &Instrument) -> Option<InstrumentId> {

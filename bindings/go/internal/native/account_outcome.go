@@ -170,15 +170,47 @@ func OutcomeAmountOptionalGet(optional OutcomeAmountOptional) OutcomeAmount {
 	return optional.value
 }
 
+func NewPnlOutcomeAmount(delta, absolute ParamPnl) PnlOutcomeAmount {
+	return PnlOutcomeAmount{delta: delta, absolute: absolute}
+}
+
+func PnlOutcomeAmountGetDelta(amount PnlOutcomeAmount) ParamPnl {
+	return amount.delta
+}
+
+func PnlOutcomeAmountGetAbsolute(amount PnlOutcomeAmount) ParamPnl {
+	return amount.absolute
+}
+
+func NewPnlOutcomeAmountOptionalSet(value PnlOutcomeAmount) PnlOutcomeAmountOptional {
+	return PnlOutcomeAmountOptional{value: value, is_set: true}
+}
+
+func NewPnlOutcomeAmountOptionalUnset() PnlOutcomeAmountOptional {
+	return PnlOutcomeAmountOptional{}
+}
+
+func PnlOutcomeAmountOptionalIsSet(optional PnlOutcomeAmountOptional) bool {
+	return bool(optional.is_set)
+}
+
+func PnlOutcomeAmountOptionalGet(optional PnlOutcomeAmountOptional) PnlOutcomeAmount {
+	return optional.value
+}
+
 func NewAccountOutcomeEntry(
 	asset StringView,
 	balance, held, incoming OutcomeAmountOptional,
+	realizedPnl PnlOutcomeAmountOptional,
+	averageEntryPrice ParamPriceOptional,
 ) AccountOutcomeEntry {
 	return AccountOutcomeEntry{
-		asset:    asset.value,
-		balance:  balance,
-		held:     held,
-		incoming: incoming,
+		asset:               asset.value,
+		balance:             balance,
+		held:                held,
+		incoming:            incoming,
+		realized_pnl:        realizedPnl,
+		average_entry_price: averageEntryPrice,
 	}
 }
 
@@ -196,6 +228,14 @@ func AccountOutcomeEntryGetHeld(entry AccountOutcomeEntry) OutcomeAmountOptional
 
 func AccountOutcomeEntryGetIncoming(entry AccountOutcomeEntry) OutcomeAmountOptional {
 	return entry.incoming
+}
+
+func AccountOutcomeEntryGetRealizedPnl(entry AccountOutcomeEntry) PnlOutcomeAmountOptional {
+	return entry.realized_pnl
+}
+
+func AccountOutcomeEntryGetAverageEntryPrice(entry AccountOutcomeEntry) ParamPriceOptional {
+	return entry.average_entry_price
 }
 
 func AccountAdjustmentOutcomeGetPolicyGroupID(outcome AccountAdjustmentOutcome) PolicyGroupID {

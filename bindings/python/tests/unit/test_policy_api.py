@@ -92,6 +92,10 @@ class FullParityPolicy(openpit.pretrade.Policy):
                         delta=openpit.param.PositionSize("2"),
                         absolute=openpit.param.PositionSize("5"),
                     ),
+                    realized_pnl=openpit.pretrade.PnlOutcomeAmount(
+                        delta=openpit.param.Pnl("1.25"),
+                        absolute=openpit.param.Pnl("7.5"),
+                    ),
                 )
             ],
             lock_prices=[openpit.param.Price("11")],

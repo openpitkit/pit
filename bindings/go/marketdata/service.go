@@ -28,17 +28,20 @@ import (
 	"go.openpit.dev/openpit/internal/callback"
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
 )
 
-// Errors returned by Service.GetOrErr, mirroring the SDK MarketDataError
-// variants.
+// Errors returned by Service.Get, mirroring the SDK MarketDataError variants.
 var (
 	// ErrUnknownInstrument reports that the requested instrument is not
 	// registered with the service.
 	ErrUnknownInstrument = errors.New("unknown instrument")
 	// ErrQuoteUnavailable reports that no usable quote is available for the
-	// instrument (never pushed, cleared, or aged out).
+	// instrument (never pushed or cleared).
 	ErrQuoteUnavailable = errors.New("quote unavailable")
+	// ErrQuoteExpired reports that the selected quote aged past its effective
+	// TTL. Service.Get returns the stale quote together with this error.
+	ErrQuoteExpired = errors.New("quote expired")
 )
 
 // Errors returned by the registration methods, mirroring the SDK
@@ -447,19 +450,20 @@ func (s *Service) PushByInstrumentPatch(
 	return newInstrumentIDFromHandle(id), nil
 }
 
-// Get reads the latest quote for instrumentID with account-aware resolution.
+// GetOptional reads the latest quote for instrumentID with account-aware
+// resolution.
 // accountID is the requesting account; accountInfo supplies the account's group
-// on demand — the core invokes it lazily, only when the fallback chain reaches
+// on demand - the core invokes it lazily, only when the fallback chain reaches
 // the per-group bucket. resolution controls the fallback chain.
 //
-// The boolean result is true only when a usable quote was found; an unavailable
-// or unknown instrument yields false.
-func (s *Service) Get(
+// The returned option is set only when a usable quote was found. An
+// unavailable, expired, or unknown instrument yields optional.None.
+func (s *Service) GetOptional(
 	instrumentID InstrumentID,
 	accountID param.AccountID,
 	accountInfo AccountInfo,
 	resolution QuoteResolution,
-) (Quote, bool) {
+) optional.Option[Quote] {
 	accountInfoHandle := cgo.NewHandle(accountInfo)
 	status, quote := native.MarketDataServiceGet(
 		s.handle,
@@ -471,16 +475,20 @@ func (s *Service) Get(
 	)
 	accountInfoHandle.Delete()
 	if status != native.MarketDataGetStatusFound {
-		return Quote{}, false
+		return optional.None[Quote]()
 	}
-	return newQuoteFromHandle(quote), true
+	return optional.Some(newQuoteFromHandle(quote))
 }
 
-// GetOrErr reads the latest quote for instrumentID with account-aware
-// resolution, distinguishing the two non-Found outcomes: ErrUnknownInstrument
-// when instrumentID is not registered and ErrQuoteUnavailable when it is
-// registered but holds no usable quote under the given resolution.
-func (s *Service) GetOrErr(
+// Get reads the latest quote for instrumentID with account-aware resolution,
+// distinguishing read failures: ErrUnknownInstrument when instrumentID is not
+// registered, ErrQuoteUnavailable when it is registered but holds no usable
+// quote under the given resolution, and ErrQuoteExpired when the selected quote
+// aged past TTL.
+//
+// On ErrQuoteExpired, the returned Quote is the stale quote selected by the
+// core service. Other errors return a zero Quote.
+func (s *Service) Get(
 	instrumentID InstrumentID,
 	accountID param.AccountID,
 	accountInfo AccountInfo,
@@ -501,6 +509,8 @@ func (s *Service) GetOrErr(
 		return newQuoteFromHandle(quote), nil
 	case native.MarketDataGetStatusUnknownInstrument:
 		return Quote{}, ErrUnknownInstrument
+	case native.MarketDataGetStatusQuoteExpired:
+		return newQuoteFromHandle(quote), ErrQuoteExpired
 	default:
 		return Quote{}, ErrQuoteUnavailable
 	}

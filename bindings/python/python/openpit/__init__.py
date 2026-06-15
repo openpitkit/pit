@@ -300,6 +300,60 @@ Returns:
     """,
 )
 _set_doc(
+    Accounts.set_currency,
+    """Set an account's explicit currency.
+
+Setting or changing currency does not validate existing holdings and does not
+recompute stored average entry price or realized PnL. The caller owns the risk
+of changing currency on live state; a control or recompute API may be added
+later.
+
+Args:
+    account: :class:`openpit.param.AccountId` whose currency to set.
+    asset: Currency asset, for example ``"USD"``.
+    """,
+)
+_set_doc(
+    Accounts.clear_currency,
+    """Clear an account's explicit currency.
+
+Clearing currency does not validate existing holdings and does not recompute
+stored average entry price or realized PnL.
+
+Args:
+    account: :class:`openpit.param.AccountId` whose currency to clear.
+    """,
+)
+_set_doc(
+    Accounts.set_group_currency,
+    """Set the currency inherited by accounts in a group.
+
+:data:`openpit.param.DEFAULT_ACCOUNT_GROUP` is allowed and represents the
+global default tier. Setting or changing currency does not validate existing
+holdings and does not recompute stored average entry price or realized PnL. The
+caller owns the risk of changing currency on live state; a control or recompute
+API may be added later.
+
+Args:
+    group: :class:`openpit.param.AccountGroupId` whose inherited currency to
+        set.
+    asset: Currency asset, for example ``"USD"``.
+    """,
+)
+_set_doc(
+    Accounts.clear_group_currency,
+    """Clear the currency inherited by accounts in a group.
+
+:data:`openpit.param.DEFAULT_ACCOUNT_GROUP` is allowed and represents the
+global default tier. Clearing currency does not validate existing holdings and
+does not recompute stored average entry price or realized PnL.
+
+Args:
+    group: :class:`openpit.param.AccountGroupId` whose inherited currency to
+        clear.
+    """,
+)
+_set_doc(
     Accounts.block,
     """Block an account, rejecting all subsequent pre-trade requests for it.
 

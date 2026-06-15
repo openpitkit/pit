@@ -20,21 +20,23 @@ use std::fmt::{Display, Formatter};
 use crate::core::Instrument;
 
 use super::instrument_id::InstrumentId;
+use super::quote::Quote;
 
 // ─── MarketDataError ──────────────────────────────────────────────────────────
 
 /// Error returned by market-data service read operations.
 ///
 /// A quote aged past its TTL is reported as
-/// [`QuoteUnavailable`](Self::QuoteUnavailable); the service treats a stale
-/// entry as "no quote" without distinguishing it from "never pushed".
+/// [`QuoteExpired`](Self::QuoteExpired) with the selected stale quote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MarketDataError {
     /// The requested instrument was not registered with the service.
     UnknownInstrument,
-    /// No usable quote is available (never pushed, cleared, or aged out).
+    /// No usable quote is available (never pushed or cleared).
     QuoteUnavailable,
+    /// The selected quote exists but has aged past its effective TTL.
+    QuoteExpired(Quote),
 }
 
 impl Display for MarketDataError {
@@ -42,6 +44,7 @@ impl Display for MarketDataError {
         match self {
             Self::UnknownInstrument => f.write_str("unknown instrument"),
             Self::QuoteUnavailable => f.write_str("quote unavailable"),
+            Self::QuoteExpired(_) => f.write_str("quote expired"),
         }
     }
 }

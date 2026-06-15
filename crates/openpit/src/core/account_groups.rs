@@ -18,37 +18,37 @@
 //! Account-group membership registry for [`Engine`](crate::Engine).
 //!
 //! Maps each [`AccountId`] to at most one [`AccountGroupId`]. The registry is
-//! populated by the application through the [`Accounts`] handle returned by
-//! [`Engine::accounts`](crate::Engine::accounts) and read by policies and
-//! contexts to route per-account behavior by group.
+//! populated by the application through the [`Accounts`](crate::Accounts)
+//! handle returned by [`Engine::accounts`](crate::Engine::accounts) and read by
+//! policies and contexts to route per-account behavior by group.
 
 use std::cell::OnceCell;
 use std::fmt::{Display, Formatter};
 
-use crate::core::account_control::{AccountBlockError, AccountBlockHandle};
 use crate::param::{AccountGroupId, AccountId, DEFAULT_ACCOUNT_GROUP};
-use crate::pretrade::{AccountBlock, RejectCode};
 use crate::storage::{self, LockingPolicy, Storage, StorageBuilder};
 
 // ─── AccountGroupError ───────────────────────────────────────────────────────
 
-/// Error returned by [`Accounts::register_group`] and
-/// [`Accounts::unregister_group`].
+/// Error returned by [`Accounts::register_group`](crate::Accounts::register_group)
+/// and [`Accounts::unregister_group`](crate::Accounts::unregister_group).
 ///
 /// Both operations are atomic: when they fail, the registry is left unchanged
 /// and the error names the offending account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AccountGroupError {
-    /// The target group passed to [`Accounts::register_group`] or
-    /// [`Accounts::unregister_group`] is the reserved
-    /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP).
+    /// The target group passed to
+    /// [`Accounts::register_group`](crate::Accounts::register_group) or
+    /// [`Accounts::unregister_group`](crate::Accounts::unregister_group) is
+    /// the reserved [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP).
     ///
     /// Accounts belong to the default group implicitly, so it cannot be a
     /// target of an explicit registration or unregistration.
     ReservedGroup,
-    /// An account passed to [`Accounts::register_group`] is already a member of
-    /// a group.
+    /// An account passed to
+    /// [`Accounts::register_group`](crate::Accounts::register_group) is already
+    /// a member of a group.
     ///
     /// The conflict applies whether the existing group equals the requested
     /// group or differs from it: an account may belong to at most one group,
@@ -59,8 +59,9 @@ pub enum AccountGroupError {
         /// Group the account currently belongs to.
         current_group: AccountGroupId,
     },
-    /// An account passed to [`Accounts::unregister_group`] is not currently a
-    /// member of the requested group.
+    /// An account passed to
+    /// [`Accounts::unregister_group`](crate::Accounts::unregister_group) is not
+    /// currently a member of the requested group.
     ///
     /// `current_group` is `Some` when the account belongs to a different group
     /// and `None` when the account belongs to no group at all.
@@ -292,6 +293,24 @@ where
         Self { inner }
     }
 
+    /// Atomically registers every account in `accounts` into `group`.
+    pub(crate) fn register_group(
+        &self,
+        accounts: &[AccountId],
+        group: AccountGroupId,
+    ) -> Result<(), AccountGroupError> {
+        self.inner.register_group(accounts, group)
+    }
+
+    /// Atomically removes every account in `accounts` from `group`.
+    pub(crate) fn unregister_group(
+        &self,
+        accounts: &[AccountId],
+        group: AccountGroupId,
+    ) -> Result<(), AccountGroupError> {
+        self.inner.unregister_group(accounts, group)
+    }
+
     /// Returns the group of `account`, or `None` when it is not registered.
     pub(crate) fn group_of(&self, account: AccountId) -> Option<AccountGroupId> {
         self.inner.group_of(account)
@@ -354,267 +373,6 @@ where
     fn group(&self) -> Option<AccountGroupId> {
         self.group()
     }
-}
-
-// ─── Accounts ────────────────────────────────────────────────────────────────
-
-/// Public handle to the engine's account registry.
-///
-/// Obtained from [`Engine::accounts`](crate::Engine::accounts). Cloneable;
-/// every clone refers to the same account-group registry and the same
-/// blocked-accounts set. An account belongs to at most one group at a time.
-///
-/// The handle exposes two facilities:
-///
-/// - **Group membership**: [`register_group`](Self::register_group),
-///   [`unregister_group`](Self::unregister_group), [`group_of`](Self::group_of).
-/// - **Admin blocking**: [`block`](Self::block), [`unblock`](Self::unblock),
-///   [`replace_block_reason`](Self::replace_block_reason), and their group
-///   counterparts [`block_group`](Self::block_group),
-///   [`unblock_group`](Self::unblock_group),
-///   [`replace_group_block_reason`](Self::replace_group_block_reason). A blocked
-///   account or a member of a blocked group has every pre-trade request
-///   rejected before any policy runs; group blocking is a live predicate, so it
-///   tracks membership changes without re-blocking.
-///
-/// # Thread-safety
-///
-/// `Accounts` inherits the engine's synchronization mode through its inner
-/// handles; see [`Engine`](crate::Engine)'s threading section for the contract.
-///
-/// # Examples
-///
-/// ```rust
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// use openpit::Engine;
-/// use openpit::OrderOperation;
-/// use openpit::param::{AccountGroupId, AccountId};
-/// use openpit::pretrade::policies::OrderValidationPolicy;
-///
-/// let engine: openpit::LocalEngine<OrderOperation> = Engine::builder()
-///     .no_sync()
-///     .pre_trade(OrderValidationPolicy::new())
-///     .build()?;
-///
-/// let accounts = engine.accounts();
-/// let group = AccountGroupId::from_u32(1)?;
-/// accounts.register_group(&[AccountId::from_u64(10), AccountId::from_u64(11)], group)?;
-///
-/// assert_eq!(accounts.group_of(AccountId::from_u64(10)), Some(group));
-/// assert_eq!(accounts.group_of(AccountId::from_u64(99)), None);
-///
-/// accounts.block(AccountId::from_u64(10), "manual review".to_owned());
-/// accounts.unblock(AccountId::from_u64(10));
-/// # Ok(())
-/// # }
-/// ```
-pub struct Accounts<StorageFactory>
-where
-    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
-{
-    handle: AccountGroupsHandle<StorageFactory>,
-    block_handle: AccountBlockHandle<StorageFactory>,
-}
-
-impl<StorageFactory> Clone for Accounts<StorageFactory>
-where
-    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            handle: self.handle.clone(),
-            block_handle: self.block_handle.clone(),
-        }
-    }
-}
-
-impl<StorageFactory> Accounts<StorageFactory>
-where
-    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
-{
-    pub(crate) fn new(
-        handle: AccountGroupsHandle<StorageFactory>,
-        block_handle: AccountBlockHandle<StorageFactory>,
-    ) -> Self {
-        Self {
-            handle,
-            block_handle,
-        }
-    }
-
-    /// Atomically registers every account in `accounts` into `group`.
-    ///
-    /// The operation is all-or-nothing: if any listed account is already a
-    /// member of any group (including `group`), no account is registered and
-    /// the returned [`AccountGroupError::AlreadyRegistered`] names the
-    /// offending account and its current group.
-    ///
-    /// `group` must be an explicit group: the reserved
-    /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP) is not a
-    /// valid target, since accounts belong to it implicitly.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AccountGroupError::ReservedGroup`] when `group` is the reserved
-    /// default group, or [`AccountGroupError::AlreadyRegistered`] when any
-    /// listed account already belongs to a group.
-    pub fn register_group(
-        &self,
-        accounts: &[AccountId],
-        group: AccountGroupId,
-    ) -> Result<(), AccountGroupError> {
-        self.handle.inner.register_group(accounts, group)
-    }
-
-    /// Atomically removes every account in `accounts` from `group`.
-    ///
-    /// The operation is all-or-nothing: every listed account must currently be
-    /// a member of `group`. If any is not (ungrouped or in another group), no
-    /// account is removed and the returned [`AccountGroupError::NotInGroup`]
-    /// names the offending account.
-    ///
-    /// `group` must be an explicit group: the reserved
-    /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP) is not a
-    /// valid target, since accounts belong to it implicitly.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AccountGroupError::ReservedGroup`] when `group` is the reserved
-    /// default group, or [`AccountGroupError::NotInGroup`] when any listed
-    /// account is not currently a member of `group`.
-    pub fn unregister_group(
-        &self,
-        accounts: &[AccountId],
-        group: AccountGroupId,
-    ) -> Result<(), AccountGroupError> {
-        self.handle.inner.unregister_group(accounts, group)
-    }
-
-    /// Returns the group of `account`, or `None` when it is not registered.
-    pub fn group_of(&self, account: AccountId) -> Option<AccountGroupId> {
-        self.handle.group_of(account)
-    }
-
-    /// Blocks `account` out of band with the operator-supplied `reason`.
-    ///
-    /// Every subsequent pre-trade request for `account` is rejected before any
-    /// policy runs, with [`RejectCode::AccountBlocked`] and `reason`. The block
-    /// shares the engine's single blocked-accounts set with kill-switch blocks.
-    ///
-    /// Idempotent: the first cause for an account wins, so re-blocking an
-    /// already-blocked account (whether by an admin call or a prior kill switch)
-    /// is a no-op and does **not** overwrite the stored reason. Use
-    /// [`replace_block_reason`](Self::replace_block_reason) to change it.
-    pub fn block(&self, account: AccountId, reason: String) {
-        self.block_handle.record(account, engine_block(reason));
-    }
-
-    /// Unblocks `account`, clearing any block on it.
-    ///
-    /// Idempotent: a no-op when `account` is not blocked. This clears the block
-    /// regardless of its origin - an admin block or a kill-switch block are both
-    /// removed.
-    pub fn unblock(&self, account: AccountId) {
-        self.block_handle.unblock_account(account);
-    }
-
-    /// Replaces the stored reason of an already-blocked account.
-    ///
-    /// Unlike [`block`](Self::block), which preserves the first cause, this
-    /// overwrites the stored cause with `reason`, leaving the account blocked.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AccountBlockError::AccountNotBlocked`] when `account` is not
-    /// currently blocked; the blocked set is left unchanged.
-    pub fn replace_block_reason(
-        &self,
-        account: AccountId,
-        reason: String,
-    ) -> Result<(), AccountBlockError> {
-        self.block_handle
-            .replace_reason(account, engine_block(reason))
-    }
-
-    /// Blocks the account group `group` out of band with `reason`.
-    ///
-    /// Group blocking is a live predicate: every pre-trade request whose account
-    /// currently belongs to `group` is rejected with
-    /// [`RejectCode::AccountBlocked`] and `reason`, before any policy runs. The
-    /// group is **not** expanded into its members, so an account registered into
-    /// `group` after the block takes effect immediately, and an account that
-    /// leaves `group` is no longer group-blocked unless blocked individually.
-    ///
-    /// Idempotent: the first cause for a group wins, so re-blocking an
-    /// already-blocked group is a no-op. Use
-    /// [`replace_group_block_reason`](Self::replace_group_block_reason) to change
-    /// the stored reason.
-    ///
-    /// `group` must be an explicit group: the reserved
-    /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP) is not a
-    /// valid target, since accounts belong to it implicitly.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AccountBlockError::ReservedGroup`] when `group` is the reserved
-    /// default group.
-    pub fn block_group(
-        &self,
-        group: AccountGroupId,
-        reason: String,
-    ) -> Result<(), AccountBlockError> {
-        self.block_handle.block_group(group, engine_block(reason))
-    }
-
-    /// Unblocks the account group `group`, clearing the group block.
-    ///
-    /// Idempotent: a no-op when `group` is not blocked. Accounts blocked
-    /// individually remain blocked.
-    ///
-    /// `group` must be an explicit group: the reserved
-    /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP) is not a
-    /// valid target.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AccountBlockError::ReservedGroup`] when `group` is the reserved
-    /// default group.
-    pub fn unblock_group(&self, group: AccountGroupId) -> Result<(), AccountBlockError> {
-        self.block_handle.unblock_group(group)
-    }
-
-    /// Replaces the stored reason of an already-blocked account group.
-    ///
-    /// Unlike [`block_group`](Self::block_group), which preserves the first
-    /// cause, this overwrites the stored cause with `reason`, leaving the group
-    /// blocked.
-    ///
-    /// `group` must be an explicit group: the reserved
-    /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP) is not a
-    /// valid target.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AccountBlockError::ReservedGroup`] when `group` is the reserved
-    /// default group, or [`AccountBlockError::GroupNotBlocked`] when `group` is
-    /// not currently blocked; the blocked set is left unchanged.
-    pub fn replace_group_block_reason(
-        &self,
-        group: AccountGroupId,
-        reason: String,
-    ) -> Result<(), AccountBlockError> {
-        self.block_handle
-            .replace_group_reason(group, engine_block(reason))
-    }
-}
-
-/// Builds the [`AccountBlock`] stored for an admin (engine-sourced) block.
-///
-/// The source/policy is fixed to `"Engine"` and the code to
-/// [`RejectCode::AccountBlocked`]; `reason` is the operator-supplied cause and
-/// is carried as both the human-readable reason and the case-specific details.
-fn engine_block(reason: String) -> AccountBlock {
-    AccountBlock::new("Engine", RejectCode::AccountBlocked, reason.clone(), reason)
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -966,157 +724,5 @@ mod tests {
             assert_eq!(registry.group_of(account(tid)), None);
         }
         assert_eq!(registry.group_of(account(0)), Some(group(100)));
-    }
-
-    // ─── Accounts admin-blocking surface ──────────────────────────────────
-
-    use crate::core::account_control::BlockedAccounts;
-    use crate::core::HasAccountId;
-    use crate::pretrade::RejectScope;
-    use crate::RequestFieldAccessError;
-
-    struct AccountOrder(AccountId);
-
-    impl HasAccountId for AccountOrder {
-        fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
-            Ok(self.0)
-        }
-    }
-
-    type TestAccountsHandles = (
-        Accounts<NoLocking>,
-        <NoLocking as LockingPolicyFactory>::Shared<BlockedAccounts<NoLocking>>,
-        <NoLocking as LockingPolicyFactory>::Shared<AccountGroups<NoLocking>>,
-    );
-
-    /// Builds an [`Accounts`] handle plus the shared blocked-set and registry it
-    /// wraps, so tests can drive the public API and then observe the effect
-    /// through [`BlockedAccounts::check`].
-    fn new_accounts() -> TestAccountsHandles {
-        let blocked = NoLocking::new_shared(BlockedAccounts::new(&StorageBuilder::new(NoLocking)));
-        let registry = NoLocking::new_shared(new_registry());
-        let accounts = Accounts::new(
-            AccountGroupsHandle::from_inner(registry.clone()),
-            AccountBlockHandle::from_inner(blocked.clone()),
-        );
-        (accounts, blocked, registry)
-    }
-
-    #[test]
-    fn accounts_block_then_check_rejects_and_unblock_clears() {
-        let (accounts, blocked, registry) = new_accounts();
-        accounts.block(account(1), "manual review".to_owned());
-        assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
-            .is_some());
-
-        accounts.unblock(account(1));
-        assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
-            .is_none());
-    }
-
-    #[test]
-    fn accounts_unblock_of_non_blocked_account_is_noop() {
-        let (accounts, blocked, registry) = new_accounts();
-        accounts.unblock(account(1));
-        assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
-            .is_none());
-    }
-
-    #[test]
-    fn accounts_replace_block_reason_updates_cause_and_errors_when_absent() {
-        let (accounts, blocked, registry) = new_accounts();
-        assert_eq!(
-            accounts.replace_block_reason(account(1), "x".to_owned()),
-            Err(AccountBlockError::AccountNotBlocked {
-                account: account(1)
-            })
-        );
-
-        accounts.block(account(1), "first".to_owned());
-        accounts
-            .replace_block_reason(account(1), "second".to_owned())
-            .expect("replacing reason on a blocked account must succeed");
-        let rejects = blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
-            .expect("blocked account must return rejects");
-        assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
-        assert_eq!(rejects[0].reason, "second");
-    }
-
-    #[test]
-    fn accounts_block_group_tracks_membership_live() {
-        let (accounts, blocked, registry) = new_accounts();
-        accounts
-            .block_group(group(7), "group halt".to_owned())
-            .expect("group block must succeed");
-        // Member added after the block is blocked automatically.
-        registry
-            .register_group(&[account(1)], group(7))
-            .expect("registration must succeed");
-        assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
-            .is_some());
-
-        // Leaving the group lifts the block.
-        registry
-            .unregister_group(&[account(1)], group(7))
-            .expect("unregistration must succeed");
-        assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
-            .is_none());
-    }
-
-    #[test]
-    fn accounts_unblock_group_and_replace_group_reason() {
-        let (accounts, blocked, registry) = new_accounts();
-        registry
-            .register_group(&[account(1)], group(7))
-            .expect("registration must succeed");
-        accounts
-            .block_group(group(7), "first".to_owned())
-            .expect("group block must succeed");
-        accounts
-            .replace_group_block_reason(group(7), "second".to_owned())
-            .expect("replacing group reason must succeed");
-        let rejects = blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
-            .expect("member of blocked group must be rejected");
-        assert_eq!(rejects[0].reason, "second");
-
-        accounts
-            .unblock_group(group(7))
-            .expect("group unblock must succeed");
-        assert!(blocked
-            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
-            .is_none());
-    }
-
-    #[test]
-    fn accounts_group_operations_reject_reserved_default_group() {
-        let (accounts, _blocked, _registry) = new_accounts();
-        assert_eq!(
-            accounts.block_group(DEFAULT_ACCOUNT_GROUP, "x".to_owned()),
-            Err(AccountBlockError::ReservedGroup)
-        );
-        assert_eq!(
-            accounts.unblock_group(DEFAULT_ACCOUNT_GROUP),
-            Err(AccountBlockError::ReservedGroup)
-        );
-        assert_eq!(
-            accounts.replace_group_block_reason(DEFAULT_ACCOUNT_GROUP, "x".to_owned()),
-            Err(AccountBlockError::ReservedGroup)
-        );
-    }
-
-    #[test]
-    fn accounts_replace_group_block_reason_errors_when_group_not_blocked() {
-        let (accounts, _blocked, _registry) = new_accounts();
-        assert_eq!(
-            accounts.replace_group_block_reason(group(7), "x".to_owned()),
-            Err(AccountBlockError::GroupNotBlocked { group: group(7) })
-        );
     }
 }

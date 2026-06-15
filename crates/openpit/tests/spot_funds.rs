@@ -16,7 +16,8 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 use openpit::param::{
-    AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, Trade, TradeAmount,
+    AccountId, AdjustmentAmount, Asset, Pnl, PositionSize, Price, Quantity, Side, Trade,
+    TradeAmount,
 };
 use openpit::pretrade::policies::{
     RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings, SpotFundsPolicy,
@@ -25,7 +26,8 @@ use openpit::pretrade::policies::{
 use openpit::pretrade::{PreTradeDryRunReport, PreTradeLock, RejectCode, DEFAULT_POLICY_GROUP_ID};
 use openpit::{
     Engine, FullSync, FullSyncEngine, HasAccountAdjustmentBalance,
-    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
+    HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentBalanceLowerBound,
+    HasAccountAdjustmentBalanceRealizedPnl, HasAccountAdjustmentBalanceUpperBound,
     HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
     HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
     HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound, HasAccountId,
@@ -98,6 +100,10 @@ impl HasPreTradeLock for TestReport {
 struct TestAdjustment {
     asset: Asset,
     balance: Option<AdjustmentAmount>,
+    balance_average_entry_price: Option<Price>,
+    balance_realized_pnl: Option<Pnl>,
+    balance_lower: Option<PositionSize>,
+    balance_upper: Option<PositionSize>,
     held: Option<AdjustmentAmount>,
 }
 
@@ -113,15 +119,27 @@ impl HasAccountAdjustmentBalance for TestAdjustment {
     }
 }
 
+impl HasAccountAdjustmentBalanceAverageEntryPrice for TestAdjustment {
+    fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+        Ok(self.balance_average_entry_price)
+    }
+}
+
+impl HasAccountAdjustmentBalanceRealizedPnl for TestAdjustment {
+    fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
+        Ok(self.balance_realized_pnl)
+    }
+}
+
 impl HasAccountAdjustmentBalanceLowerBound for TestAdjustment {
     fn balance_lower(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
-        Ok(None)
+        Ok(self.balance_lower)
     }
 }
 
 impl HasAccountAdjustmentBalanceUpperBound for TestAdjustment {
     fn balance_upper(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
-        Ok(None)
+        Ok(self.balance_upper)
     }
 }
 
@@ -179,6 +197,10 @@ fn px(s: &str) -> Price {
     Price::from_str(s).expect("valid price")
 }
 
+fn pnl(s: &str) -> Pnl {
+    Pnl::from_str(s).expect("valid pnl")
+}
+
 fn qty(s: &str) -> Quantity {
     Quantity::from_str(s).expect("valid quantity")
 }
@@ -230,6 +252,10 @@ fn balance_adjustment(asset_code: &str, amount: AdjustmentAmount) -> TestAdjustm
     TestAdjustment {
         asset: asset(asset_code),
         balance: Some(amount),
+        balance_average_entry_price: None,
+        balance_realized_pnl: None,
+        balance_lower: None,
+        balance_upper: None,
         held: None,
     }
 }
@@ -238,7 +264,47 @@ fn held_adj(asset_code: &str, amount: AdjustmentAmount) -> TestAdjustment {
     TestAdjustment {
         asset: asset(asset_code),
         balance: None,
+        balance_average_entry_price: None,
+        balance_realized_pnl: None,
+        balance_lower: None,
+        balance_upper: None,
         held: Some(amount),
+    }
+}
+
+/// Builds a balance adjustment carrying an average entry price and/or a
+/// realized-PnL force-set.
+fn adj_with_avg_pnl(
+    asset_code: &str,
+    balance: Option<AdjustmentAmount>,
+    average_entry_price: Option<Price>,
+    realized_pnl: Option<Pnl>,
+) -> TestAdjustment {
+    TestAdjustment {
+        asset: asset(asset_code),
+        balance,
+        balance_average_entry_price: average_entry_price,
+        balance_realized_pnl: realized_pnl,
+        balance_lower: None,
+        balance_upper: None,
+        held: None,
+    }
+}
+
+/// Builds a balance adjustment with an upper bound, used to force a reject.
+fn bounded_balance_adjustment(
+    asset_code: &str,
+    amount: AdjustmentAmount,
+    upper: PositionSize,
+) -> TestAdjustment {
+    TestAdjustment {
+        asset: asset(asset_code),
+        balance: Some(amount),
+        balance_average_entry_price: None,
+        balance_realized_pnl: None,
+        balance_lower: None,
+        balance_upper: Some(upper),
+        held: None,
     }
 }
 
@@ -727,4 +793,161 @@ fn dry_run_insufficient_funds_reports_reject_and_leaves_state_for_real_call() {
         ))
         .expect("real order within available must pass after a rejecting dry-run");
     reservation.commit();
+}
+
+// ── realized PnL / average entry price outcomes (public API) ───────────────────
+
+// Happy path: an adjustment that force-sets both the average entry price and
+// realized PnL surfaces them in the batch outcome as absolute (and delta for
+// PnL) values.
+#[test]
+fn adjustment_outcome_surfaces_average_and_realized_pnl() {
+    let engine = build_engine();
+    // Seed a non-flat slot with an average and an initial realized PnL of 30.
+    engine
+        .apply_account_adjustment(
+            account(),
+            &[adj_with_avg_pnl(
+                "AAPL",
+                Some(AdjustmentAmount::Absolute(ps("10"))),
+                Some(px("100")),
+                Some(pnl("30")),
+            )],
+        )
+        .expect("seed must succeed");
+
+    // Force realized PnL to 50 (delta +20) and the average to 150.
+    let result = engine
+        .apply_account_adjustment(
+            account(),
+            &[adj_with_avg_pnl(
+                "AAPL",
+                Some(AdjustmentAmount::Delta(ps("0"))),
+                Some(px("150")),
+                Some(pnl("50")),
+            )],
+        )
+        .expect("force-set must succeed");
+
+    let entry = &result
+        .outcomes
+        .first()
+        .expect("one outcome entry expected")
+        .entry;
+    assert_eq!(entry.asset, asset("AAPL"));
+    assert_eq!(entry.average_entry_price, Some(px("150")));
+    let pnl_outcome = entry
+        .realized_pnl
+        .expect("realized PnL must be surfaced on a force-set");
+    assert_eq!(pnl_outcome.delta, pnl("20"));
+    assert_eq!(pnl_outcome.absolute, pnl("50"));
+}
+
+// Boundary: force-setting realized PnL to exactly zero on a previously untracked
+// slot still surfaces a tracked outcome (absolute 0), distinct from the
+// "untracked, no outcome" case.
+#[test]
+fn adjustment_outcome_realized_pnl_zero_boundary_is_tracked() {
+    let engine = build_engine();
+    let result = engine
+        .apply_account_adjustment(
+            account(),
+            &[adj_with_avg_pnl(
+                "AAPL",
+                Some(AdjustmentAmount::Absolute(ps("10"))),
+                None,
+                Some(pnl("0")),
+            )],
+        )
+        .expect("force-set must succeed");
+
+    let entry = &result
+        .outcomes
+        .first()
+        .expect("one outcome entry expected")
+        .entry;
+    let pnl_outcome = entry
+        .realized_pnl
+        .expect("a zero force-set still surfaces a tracked realized PnL");
+    assert_eq!(pnl_outcome.delta, pnl("0"));
+    assert_eq!(pnl_outcome.absolute, pnl("0"));
+}
+
+// Regression for the realized-PnL rollback bug, via the public batch API: a
+// batch whose later element rejects is rolled back as a whole. A non-flat slot
+// that was untracked (realized_pnl = None) and force-set earlier in the batch
+// must return to None, NOT Some(0) — and must therefore not auto-resume realized
+// tracking on a subsequent fill.
+#[test]
+fn rejected_batch_rolls_untracked_realized_pnl_back_to_none() {
+    let engine = build_engine();
+    // Seed a long with an average but no realized-PnL tracking, plus an
+    // unrelated asset whose bound the second batch element will breach.
+    engine
+        .apply_account_adjustment(
+            account(),
+            &[
+                adj_with_avg_pnl(
+                    "AAPL",
+                    Some(AdjustmentAmount::Absolute(ps("10"))),
+                    Some(px("100")),
+                    None,
+                ),
+                balance_adjustment("USD", AdjustmentAmount::Absolute(ps("1000"))),
+            ],
+        )
+        .expect("seed must succeed");
+
+    // Batch: [force-set AAPL realized to 25, then a USD adjustment that breaches
+    // an upper bound]. The whole batch must reject and roll back.
+    let err = engine
+        .apply_account_adjustment(
+            account(),
+            &[
+                adj_with_avg_pnl(
+                    "AAPL",
+                    Some(AdjustmentAmount::Delta(ps("0"))),
+                    None,
+                    Some(pnl("25")),
+                ),
+                bounded_balance_adjustment("USD", AdjustmentAmount::Delta(ps("5000")), ps("2000")),
+            ],
+        )
+        .expect_err("second element must breach its upper bound");
+    assert_eq!(err.failed_adjustment_index, 1);
+
+    // The AAPL slot must be back to untracked realized PnL. We assert this
+    // through a subsequent fill: selling into the long realizes nothing and
+    // reports no realized PnL, proving tracking did not auto-resume (it would
+    // have if rollback had left Some(0)).
+    let aapl_usd = instr("AAPL", "USD");
+    let mut reservation = engine
+        .execute_pre_trade(make_order(
+            Side::Sell,
+            aapl_usd.clone(),
+            TradeAmount::Quantity(qty("4")),
+            Some(px("130")),
+        ))
+        .expect("sell pre-trade must accept");
+    reservation.commit();
+    let post = engine.apply_execution_report(&make_report(
+        aapl_usd,
+        Side::Sell,
+        Some(Trade {
+            price: px("130"),
+            quantity: qty("4"),
+        }),
+        qty("0"),
+        true,
+        Some(px("130")),
+    ));
+    let aapl_entry = post
+        .account_adjustments
+        .iter()
+        .find(|o| o.entry.asset == asset("AAPL"))
+        .expect("AAPL post-trade entry must exist");
+    assert!(
+        aapl_entry.entry.realized_pnl.is_none(),
+        "untracked slot must not auto-resume realized-PnL tracking after rollback"
+    );
 }

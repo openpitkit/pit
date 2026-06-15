@@ -83,14 +83,14 @@ func TestExampleWikiMarketDataPushAndRead(t *testing.T) {
 	// default bucket. Pass any marketdata.AccountInfo; in policy code this is
 	// usually the pretrade.Context. The test mirror uses a no-group stub.
 	accountID := param.NewAccountIDFromUint64(1)
-	quote, ok := service.Get(
+	quote, ok := service.GetOptional(
 		aaplID,
 		accountID,
 		noGroupInfo{},
 		marketdata.QuoteResolutionAccountThenGroupThenDefault,
-	)
+	).Get()
 	if !ok {
-		t.Fatal("Get() ok = false, want true")
+		t.Fatal("GetOptional() ok = false, want true")
 	}
 	if got, _ := quote.Mark().Get(); !got.Equal(mark) {
 		t.Fatalf("quote.Mark() = %v, want %v", got, mark)
@@ -150,14 +150,14 @@ func TestExampleWikiMarketDataReplaceVersusPatch(t *testing.T) {
 	}
 
 	accountID := param.NewAccountIDFromUint64(1)
-	quote, ok := service.Get(
+	quote, ok := service.GetOptional(
 		aaplID,
 		accountID,
 		noGroupInfo{},
 		marketdata.QuoteResolutionAccountThenGroupThenDefault,
-	)
+	).Get()
 	if !ok {
-		t.Fatal("Get() ok = false, want true")
+		t.Fatal("GetOptional() ok = false, want true")
 	}
 	if got, _ := quote.Mark().Get(); !got.Equal(newMark) {
 		t.Fatalf("quote.Mark() = %v, want %v", got, newMark)
@@ -195,20 +195,20 @@ func TestExampleWikiMarketDataFiniteTTLHidesStaleQuote(t *testing.T) {
 	}
 
 	accountID := param.NewAccountIDFromUint64(1)
-	if _, ok := service.Get(
+	if _, ok := service.GetOptional(
 		aaplID, accountID, noGroupInfo{},
 		marketdata.QuoteResolutionAccountThenGroupThenDefault,
-	); !ok {
-		t.Fatal("Get() ok = false right after push, want true")
+	).Get(); !ok {
+		t.Fatal("GetOptional() ok = false right after push, want true")
 	}
 
 	// After the lifetime elapses the quote reads as absent.
 	time.Sleep(80 * time.Millisecond)
-	if _, ok := service.Get(
+	if _, ok := service.GetOptional(
 		aaplID, accountID, noGroupInfo{},
 		marketdata.QuoteResolutionAccountThenGroupThenDefault,
-	); ok {
-		t.Fatal("Get() ok = true after TTL, want false")
+	).Get(); ok {
+		t.Fatal("GetOptional() ok = true after TTL, want false")
 	}
 
 	// A fresh push restores visibility.
@@ -216,12 +216,12 @@ func TestExampleWikiMarketDataFiniteTTLHidesStaleQuote(t *testing.T) {
 	if err := service.Push(aaplID, marketdata.NewQuote().WithMark(fresh)); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
-	quote, ok := service.Get(
+	quote, ok := service.GetOptional(
 		aaplID, accountID, noGroupInfo{},
 		marketdata.QuoteResolutionAccountThenGroupThenDefault,
-	)
+	).Get()
 	if !ok {
-		t.Fatal("Get() ok = false after fresh push, want true")
+		t.Fatal("GetOptional() ok = false after fresh push, want true")
 	}
 	if got, _ := quote.Mark().Get(); !got.Equal(fresh) {
 		t.Fatalf("quote.Mark() = %v, want %v", got, fresh)
@@ -254,11 +254,11 @@ func TestExampleWikiMarketDataClearThenRecover(t *testing.T) {
 	// Clear hides the quote but keeps the instrument registered.
 	service.Clear(aaplID)
 	accountID := param.NewAccountIDFromUint64(1)
-	if _, ok := service.Get(
+	if _, ok := service.GetOptional(
 		aaplID, accountID, noGroupInfo{},
 		marketdata.QuoteResolutionAccountThenGroupThenDefault,
-	); ok {
-		t.Fatal("Get() ok = true after Clear, want false")
+	).Get(); ok {
+		t.Fatal("GetOptional() ok = true after Clear, want false")
 	}
 
 	// Pushing again restores a quote for the same id.
@@ -266,12 +266,12 @@ func TestExampleWikiMarketDataClearThenRecover(t *testing.T) {
 	if err := service.Push(aaplID, marketdata.NewQuote().WithMark(recovered)); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
-	quote, ok := service.Get(
+	quote, ok := service.GetOptional(
 		aaplID, accountID, noGroupInfo{},
 		marketdata.QuoteResolutionAccountThenGroupThenDefault,
-	)
+	).Get()
 	if !ok {
-		t.Fatal("Get() ok = false after recovery push, want true")
+		t.Fatal("GetOptional() ok = false after recovery push, want true")
 	}
 	if got, _ := quote.Mark().Get(); !got.Equal(recovered) {
 		t.Fatalf("quote.Mark() = %v, want %v", got, recovered)
@@ -403,14 +403,14 @@ func TestExampleWikiMarketDataPushForFanOut(t *testing.T) {
 	}
 
 	// Read back for account 10 under AccountOnly - hits the per-account bucket.
-	quote, ok := service.Get(
+	quote, ok := service.GetOptional(
 		aaplID,
 		param.NewAccountIDFromUint64(10),
 		noGroupInfo{},
 		marketdata.QuoteResolutionAccountOnly,
-	)
+	).Get()
 	if !ok {
-		t.Fatal("Get(account 10) ok = false, want true")
+		t.Fatal("GetOptional(account 10) ok = false, want true")
 	}
 	if got, _ := quote.Mark().Get(); !got.Equal(mark) {
 		t.Fatalf("account 10 quote.Mark() = %v, want %v", got, mark)

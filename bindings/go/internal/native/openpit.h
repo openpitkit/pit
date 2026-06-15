@@ -116,6 +116,8 @@ typedef struct OpenPitParamQuantityOptional OpenPitParamQuantityOptional;
 typedef struct OpenPitParamTradeAmount OpenPitParamTradeAmount;
 typedef struct OpenPitParamVolume OpenPitParamVolume;
 typedef struct OpenPitParamVolumeOptional OpenPitParamVolumeOptional;
+typedef struct OpenPitPnlOutcomeAmount OpenPitPnlOutcomeAmount;
+typedef struct OpenPitPnlOutcomeAmountOptional OpenPitPnlOutcomeAmountOptional;
 typedef struct OpenPitPostTradeAdjustmentList OpenPitPostTradeAdjustmentList;
 typedef struct OpenPitPostTradeContext OpenPitPostTradeContext;
 typedef struct OpenPitPretradeAccountBlock OpenPitPretradeAccountBlock;
@@ -953,8 +955,8 @@ typedef uint8_t OpenPitMarketDataGetStatus;
  */
 #define OpenPitMarketDataGetStatus_Found ((OpenPitMarketDataGetStatus) 0)
 /**
- * The instrument is registered but no usable quote is available (never pushed,
- * cleared, or aged past its TTL).
+ * The instrument is registered but no usable quote is available (never pushed
+ * or cleared).
  */
 #define OpenPitMarketDataGetStatus_Unavailable ((OpenPitMarketDataGetStatus) 1)
 /**
@@ -962,6 +964,11 @@ typedef uint8_t OpenPitMarketDataGetStatus;
  */
 #define OpenPitMarketDataGetStatus_UnknownInstrument \
     ((OpenPitMarketDataGetStatus) 2)
+/**
+ * The selected quote exists but aged past its effective TTL; the stale quote
+ * was written to `out_quote`.
+ */
+#define OpenPitMarketDataGetStatus_QuoteExpired ((OpenPitMarketDataGetStatus) 3)
 
 /**
  * Result of a market-data registration or update.
@@ -1507,6 +1514,25 @@ struct OpenPitOutcomeAmountOptional {
 };
 
 /**
+ * An account-currency delta/absolute pair for realized PnL.
+ */
+struct OpenPitPnlOutcomeAmount {
+    /**
+     * Signed account-currency PnL change applied by this operation.
+     */
+    OpenPitParamPnl delta;
+    /**
+     * Cumulative account-currency realized PnL after this operation.
+     */
+    OpenPitParamPnl absolute;
+};
+
+struct OpenPitPnlOutcomeAmountOptional {
+    OpenPitPnlOutcomeAmount value;
+    bool is_set;
+};
+
+/**
  * Non-owning byte slice view.
  *
  * Lifetime contract:
@@ -1697,9 +1723,22 @@ struct OpenPitAccountAdjustmentBalanceOperation {
      */
     OpenPitStringView asset;
     /**
-     * Optional average entry price.
+     * Optional force-set of the average entry price in account currency. No FX is
+     * applied by this adjustment.
      */
     OpenPitParamPriceOptional average_entry_price;
+    /**
+     * Optional force-set of the slot's absolute realized PnL in account currency.
+     * No FX is applied by this adjustment.
+     *
+     * When set, the adjustment overwrites the slot's cumulative realized PnL with
+     * this caller-supplied account-currency value, the same way
+     * `average_entry_price` force-sets the average. The change is surfaced on the
+     * outcome's `realized_pnl` field as a delta/absolute pair, where `delta` is
+     * `new - prior` and `absolute` is this value; leaving it unset keeps the
+     * slot's realized PnL untouched and emits no outcome.
+     */
+    OpenPitParamPnlOptional realized_pnl;
 };
 
 /**
@@ -1957,6 +1996,18 @@ struct OpenPitAccountOutcomeEntry {
      * Incoming (pending inflow) amount outcome.
      */
     OpenPitOutcomeAmountOptional incoming;
+    /**
+     * Account-currency realized PnL outcome (delta = this op, absolute =
+     * cumulative). Unset means realized PnL was not tracked or not emitted;
+     * missing account currency or FX stops tracking without reject/block.
+     */
+    OpenPitPnlOutcomeAmountOptional realized_pnl;
+    /**
+     * Current account-currency average entry price (absolute). Unset means average
+     * entry price was not tracked or not emitted; missing account currency or FX
+     * stops tracking without reject/block.
+     */
+    OpenPitParamPriceOptional average_entry_price;
 };
 
 /**
@@ -2098,7 +2149,8 @@ struct OpenPitAccountAdjustmentPositionOperation {
      */
     OpenPitStringView collateral_asset;
     /**
-     * Position average entry price.
+     * Optional force-set of the average entry price in account currency. No FX is
+     * applied by this adjustment.
      */
     OpenPitParamPriceOptional average_entry_price;
     /**
@@ -5172,6 +5224,96 @@ bool openpit_engine_account_group(
 );
 
 /**
+ * Sets the explicit currency of `account`.
+ *
+ * Setting or changing the account currency does not validate existing holdings
+ * and does not recompute stored average entry price or realized PnL. The
+ * caller owns the risk of changing currency on live state; a control or
+ * recompute API may be added later.
+ *
+ * Contract:
+ * - passing null for `engine` returns `false` and writes `out_error`;
+ * - `asset` is parsed as an asset code and must be present;
+ * - on parse failure, if `out_error` is not null, writes a caller-owned
+ *   `OpenPitSharedString` error handle that MUST be released with
+ *   `openpit_destroy_shared_string`.
+ */
+bool openpit_engine_set_account_currency(
+    OpenPitEngine * engine,
+    OpenPitParamAccountId account_id,
+    OpenPitStringView asset,
+    OpenPitOutError out_error
+);
+
+/**
+ * Clears the explicit currency of `account`.
+ *
+ * Clearing the account currency does not validate existing holdings and does
+ * not recompute stored average entry price or realized PnL. The caller owns
+ * the risk of changing currency on live state; a control or recompute API may
+ * be added later.
+ *
+ * Contract:
+ * - `engine` must be a valid non-null engine pointer.
+ */
+void openpit_engine_clear_account_currency(
+    OpenPitEngine * engine,
+    OpenPitParamAccountId account_id
+);
+
+/**
+ * Sets the currency inherited by accounts in `group`.
+ *
+ * `OPENPIT_DEFAULT_ACCOUNT_GROUP` (value `0`) is allowed and represents the
+ * global default tier.
+ *
+ * Setting or changing the group currency does not validate existing holdings
+ * and does not recompute stored average entry price or realized PnL. The
+ * caller owns the risk of changing currency on live state; a control or
+ * recompute API may be added later.
+ *
+ * Contract:
+ * - passing null for `engine` returns `false` and writes `out_error`;
+ * - `group` must be `OPENPIT_DEFAULT_ACCOUNT_GROUP` or a valid non-reserved
+ *   group id; an invalid (reserved) id returns `false` and writes
+ *   `out_error`;
+ * - `asset` is parsed as an asset code and must be present;
+ * - on any failure, if `out_error` is not null, writes a caller-owned
+ *   `OpenPitSharedString` error handle that MUST be released with
+ *   `openpit_destroy_shared_string`.
+ */
+bool openpit_engine_set_account_group_currency(
+    OpenPitEngine * engine,
+    OpenPitParamAccountGroupId group,
+    OpenPitStringView asset,
+    OpenPitOutError out_error
+);
+
+/**
+ * Clears the currency inherited by accounts in `group`.
+ *
+ * `OPENPIT_DEFAULT_ACCOUNT_GROUP` (value `0`) is allowed and represents the
+ * global default tier.
+ *
+ * Clearing the group currency does not validate existing holdings and does not
+ * recompute stored average entry price or realized PnL. The caller owns the
+ * risk of changing currency on live state; a control or recompute API may be
+ * added later.
+ *
+ * Contract:
+ * - `engine` must be a valid non-null engine pointer;
+ * - `group` must be `OPENPIT_DEFAULT_ACCOUNT_GROUP` or a valid non-reserved
+ *   group id; an invalid (reserved) id is silently ignored (no-op) because
+ *   this function has no error-output channel; prefer
+ *   `openpit_engine_set_account_group_currency` when error reporting is
+ *   needed.
+ */
+void openpit_engine_clear_account_group_currency(
+    OpenPitEngine * engine,
+    OpenPitParamAccountGroupId group
+);
+
+/**
  * Releases a caller-owned account-block error.
  *
  * Contract:
@@ -5291,8 +5433,7 @@ OpenPitConfigureErrorKind openpit_configure_error_get_kind(
  * - `reason` is interpreted as UTF-8; an empty string is used when
  *   `reason.ptr` is null OR `reason.len` is zero; passing a null `ptr` with
  *   a non-zero `len` is caller misuse and is treated as empty (not read); an
- *   empty reason is explicitly allowed;
- * - violating the `engine` pointer contract aborts the call.
+ *   empty reason is explicitly allowed.
  */
 void openpit_engine_block_account(
     OpenPitEngine * engine,
@@ -5307,8 +5448,7 @@ void openpit_engine_block_account(
  * kill-switch blocks are cleared.
  *
  * Contract:
- * - `engine` must be a valid non-null engine pointer;
- * - violating the pointer contract aborts the call.
+ * - `engine` must be a valid non-null engine pointer.
  */
 void openpit_engine_unblock_account(
     OpenPitEngine * engine,
@@ -5330,7 +5470,7 @@ void openpit_engine_unblock_account(
  * - on failure, if `out_error` is not null, writes a caller-owned
  *   `OpenPitAccountBlockError` pointer that MUST be released with
  *   `openpit_destroy_account_block_error`;
- * - aborts the call when `engine` is null.
+ * - returns `false` and writes `out_error` when `engine` is null.
  *
  * Success:
  * - returns `true`; the stored reason has been replaced.
@@ -5363,7 +5503,7 @@ bool openpit_engine_replace_account_block_reason(
  * - on failure, if `out_error` is not null, writes a caller-owned
  *   `OpenPitAccountBlockError` pointer that MUST be released with
  *   `openpit_destroy_account_block_error`;
- * - aborts the call when `engine` is null.
+ * - returns `false` and writes `out_error` when `engine` is null.
  *
  * Success:
  * - returns `true`; the group is now blocked.
@@ -5391,7 +5531,7 @@ bool openpit_engine_block_account_group(
  * - on failure, if `out_error` is not null, writes a caller-owned
  *   `OpenPitAccountBlockError` pointer that MUST be released with
  *   `openpit_destroy_account_block_error`;
- * - aborts the call when `engine` is null.
+ * - returns `false` and writes `out_error` when `engine` is null.
  *
  * Success:
  * - returns `true`; the group is now unblocked.
@@ -5423,7 +5563,7 @@ bool openpit_engine_unblock_account_group(
  * - on failure, if `out_error` is not null, writes a caller-owned
  *   `OpenPitAccountBlockError` pointer that MUST be released with
  *   `openpit_destroy_account_block_error`;
- * - aborts the call when `engine` is null.
+ * - returns `false` and writes `out_error` when `engine` is null.
  *
  * Success:
  * - returns `true`; the stored group-block reason has been replaced.
@@ -7105,9 +7245,10 @@ bool openpit_marketdata_service_push_by_instrument_patch(
  *
  * Status:
  * - `Found`: a usable quote was written to `out_quote`;
- * - `Unavailable`: registered but no usable quote (never pushed, cleared, or
- *   aged past TTL);
- * - `UnknownInstrument`: `instrument_id` is not registered.
+ * - `Unavailable`: registered but no usable quote (never pushed or cleared);
+ * - `UnknownInstrument`: `instrument_id` is not registered;
+ * - `QuoteExpired`: selected quote aged past TTL; the stale quote was
+ *   written to `out_quote`.
  *
  * Contract:
  * - `service`, `resolve_account_group`, and `out_quote` must be valid

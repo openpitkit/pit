@@ -1196,6 +1196,110 @@ bool openpit_engine_account_group(
 );
 ```
 
+## `openpit_engine_set_account_currency`
+
+Sets the explicit currency of `account`.
+
+Setting or changing the account currency does not validate existing holdings and
+does not recompute stored average entry price or realized PnL. The caller owns
+the risk of changing currency on live state; a control or recompute API may be
+added later.
+
+Contract:
+
+- passing null for `engine` returns `false` and writes `out_error`;
+- `asset` is parsed as an asset code and must be present;
+- on parse failure, if `out_error` is not null, writes a caller-owned
+  `OpenPitSharedString` error handle that MUST be released with
+  `openpit_destroy_shared_string`.
+
+```c
+bool openpit_engine_set_account_currency(
+    OpenPitEngine * engine,
+    OpenPitParamAccountId account_id,
+    OpenPitStringView asset,
+    OpenPitOutError out_error
+);
+```
+
+## `openpit_engine_clear_account_currency`
+
+Clears the explicit currency of `account`.
+
+Clearing the account currency does not validate existing holdings and does not
+recompute stored average entry price or realized PnL. The caller owns the risk
+of changing currency on live state; a control or recompute API may be added
+later.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer.
+
+```c
+void openpit_engine_clear_account_currency(
+    OpenPitEngine * engine,
+    OpenPitParamAccountId account_id
+);
+```
+
+## `openpit_engine_set_account_group_currency`
+
+Sets the currency inherited by accounts in `group`.
+
+`OPENPIT_DEFAULT_ACCOUNT_GROUP` (value `0`) is allowed and represents the global
+default tier.
+
+Setting or changing the group currency does not validate existing holdings and
+does not recompute stored average entry price or realized PnL. The caller owns
+the risk of changing currency on live state; a control or recompute API may be
+added later.
+
+Contract:
+
+- passing null for `engine` returns `false` and writes `out_error`;
+- `group` must be `OPENPIT_DEFAULT_ACCOUNT_GROUP` or a valid non-reserved
+  group id; an invalid (reserved) id returns `false` and writes `out_error`;
+- `asset` is parsed as an asset code and must be present;
+- on any failure, if `out_error` is not null, writes a caller-owned
+  `OpenPitSharedString` error handle that MUST be released with
+  `openpit_destroy_shared_string`.
+
+```c
+bool openpit_engine_set_account_group_currency(
+    OpenPitEngine * engine,
+    OpenPitParamAccountGroupId group,
+    OpenPitStringView asset,
+    OpenPitOutError out_error
+);
+```
+
+## `openpit_engine_clear_account_group_currency`
+
+Clears the currency inherited by accounts in `group`.
+
+`OPENPIT_DEFAULT_ACCOUNT_GROUP` (value `0`) is allowed and represents the global
+default tier.
+
+Clearing the group currency does not validate existing holdings and does not
+recompute stored average entry price or realized PnL. The caller owns the risk
+of changing currency on live state; a control or recompute API may be added
+later.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer;
+- `group` must be `OPENPIT_DEFAULT_ACCOUNT_GROUP` or a valid non-reserved
+  group id; an invalid (reserved) id is silently ignored (no-op) because this
+  function has no error-output channel; prefer
+  `openpit_engine_set_account_group_currency` when error reporting is needed.
+
+```c
+void openpit_engine_clear_account_group_currency(
+    OpenPitEngine * engine,
+    OpenPitParamAccountGroupId group
+);
+```
+
 ## `OpenPitAccountBlockError`
 
 Structured error returned by account block operations.
@@ -1426,8 +1530,7 @@ Contract:
 - `reason` is interpreted as UTF-8; an empty string is used when `reason.ptr`
   is null OR `reason.len` is zero; passing a null `ptr` with a non-zero `len`
   is caller misuse and is treated as empty (not read); an empty reason is
-  explicitly allowed;
-- violating the `engine` pointer contract aborts the call.
+  explicitly allowed.
 
 ```c
 void openpit_engine_block_account(
@@ -1446,8 +1549,7 @@ kill-switch blocks are cleared.
 
 Contract:
 
-- `engine` must be a valid non-null engine pointer;
-- violating the pointer contract aborts the call.
+- `engine` must be a valid non-null engine pointer.
 
 ```c
 void openpit_engine_unblock_account(
@@ -1473,7 +1575,7 @@ Contract:
 - on failure, if `out_error` is not null, writes a caller-owned
   `OpenPitAccountBlockError` pointer that MUST be released with
   `openpit_destroy_account_block_error`;
-- aborts the call when `engine` is null.
+- returns `false` and writes `out_error` when `engine` is null.
 
 Success:
 
@@ -1512,7 +1614,7 @@ Contract:
 - on failure, if `out_error` is not null, writes a caller-owned
   `OpenPitAccountBlockError` pointer that MUST be released with
   `openpit_destroy_account_block_error`;
-- aborts the call when `engine` is null.
+- returns `false` and writes `out_error` when `engine` is null.
 
 Success:
 
@@ -1546,7 +1648,7 @@ Contract:
 - on failure, if `out_error` is not null, writes a caller-owned
   `OpenPitAccountBlockError` pointer that MUST be released with
   `openpit_destroy_account_block_error`;
-- aborts the call when `engine` is null.
+- returns `false` and writes `out_error` when `engine` is null.
 
 Success:
 
@@ -1583,7 +1685,7 @@ Contract:
 - on failure, if `out_error` is not null, writes a caller-owned
   `OpenPitAccountBlockError` pointer that MUST be released with
   `openpit_destroy_account_block_error`;
-- aborts the call when `engine` is null.
+- returns `false` and writes `out_error` when `engine` is null.
 
 Success:
 

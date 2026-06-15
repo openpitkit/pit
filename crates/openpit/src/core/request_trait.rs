@@ -153,6 +153,11 @@ has_request_field_trait!(
 );
 
 has_request_field_trait!(
+    HasAccountAdjustmentBalanceRealizedPnl,
+    balance_realized_pnl -> Option<Pnl>
+);
+
+has_request_field_trait!(
     /// Actual resulting balance/position value after applying the adjustment.
     HasAccountAdjustmentBalance,
     balance -> Option<AdjustmentAmount>

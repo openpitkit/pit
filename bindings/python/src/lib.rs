@@ -25,7 +25,7 @@ use std::thread_local;
 use std::time::Duration;
 
 use openpit::marketdata::QuoteResolution;
-use openpit::param::{AccountGroupId, AccountGroupIdError};
+use openpit::param::{AccountGroupId, AccountGroupIdError, DEFAULT_ACCOUNT_GROUP};
 use openpit::param::{
     AccountId, AdjustmentAmount, Asset, CashFlow, Fee, Leverage, Notional, Pnl, PositionEffect,
     PositionMode, PositionSide, PositionSize, Price, Quantity, RoundingStrategy, Side, Trade,
@@ -56,7 +56,7 @@ use openpit::storage::StorageBuilder;
 use openpit::AccountAdjustmentContext;
 use openpit::{
     AccountAdjustmentOutcome, AccountOutcomeEntry, Engine, EngineBuildError, EngineBuilder,
-    Instrument, Mutation, Mutations, OutcomeAmount, PostTradeResult,
+    Instrument, Mutation, Mutations, OutcomeAmount, PnlOutcomeAmount, PostTradeResult,
 };
 use openpit::{AccountGroupError, Accounts, Configurator, PolicyGroupId, DEFAULT_POLICY_GROUP_ID};
 use openpit::{
@@ -84,6 +84,7 @@ create_exception!(openpit, ParamError, PyValueError);
 create_exception!(openpit, MarketDataError, PyException);
 create_exception!(openpit, UnknownInstrument, MarketDataError);
 create_exception!(openpit, QuoteUnavailable, MarketDataError);
+create_exception!(openpit, QuoteExpired, MarketDataError);
 create_exception!(openpit, AlreadyRegistered, PyException);
 create_exception!(openpit, RegistrationError, PyException);
 create_exception!(openpit, UnknownInstrumentId, PyException);
@@ -143,12 +144,20 @@ fn create_unknown_instrument_id_error(error: openpit::UnknownInstrumentId) -> Py
 }
 
 fn create_market_data_error(error: openpit::MarketDataError) -> PyErr {
+    let message = error.to_string();
     match error {
-        openpit::MarketDataError::UnknownInstrument => {
-            UnknownInstrument::new_err(error.to_string())
+        openpit::MarketDataError::UnknownInstrument => UnknownInstrument::new_err(message),
+        openpit::MarketDataError::QuoteUnavailable => QuoteUnavailable::new_err(message),
+        openpit::MarketDataError::QuoteExpired(quote) => {
+            let err = QuoteExpired::new_err(message);
+            Python::attach(|py| {
+                if let Err(set_err) = err.value(py).setattr("quote", PyQuote { inner: quote }) {
+                    set_err.restore(py);
+                }
+            });
+            err
         }
-        openpit::MarketDataError::QuoteUnavailable => QuoteUnavailable::new_err(error.to_string()),
-        _ => MarketDataError::new_err(error.to_string()),
+        _ => MarketDataError::new_err(message),
     }
 }
 
@@ -419,12 +428,12 @@ impl PyQuote {
 /// `group()` is called lazily by the core service only when the per-account
 /// bucket misses and the resolution/TTL-cascade needs the group.  Because the
 /// call reads back into Python, the GIL must be held for the entire duration of
-/// `MarketDataService::get` / `get_or_err` — callers must NOT use
+/// `MarketDataService::get` / `get_optional` — callers must NOT use
 /// `py.detach` around those calls.
 ///
 /// Errors (attribute missing, wrong type, etc.) are stored in the thread-local
 /// `PY_CALLBACK_ERROR` slot and `group()` returns `None` so the core can
-/// complete; the caller drains the slot immediately after `get`/`get_or_err`
+/// complete; the caller drains the slot immediately after `get`/`get_optional`
 /// returns and surfaces the stored error as a `PyResult`.
 struct PyAccountInfo<'py> {
     obj: &'py Bound<'py, PyAny>,
@@ -766,7 +775,7 @@ impl PyMarketDataService {
     // ── Get ───────────────────────────────────────────────────────────────────
 
     #[pyo3(signature = (instrument_id, account_id, account_info, resolution))]
-    fn get(
+    fn get_optional(
         &self,
         _py: Python<'_>,
         instrument_id: &PyInstrumentId,
@@ -784,11 +793,17 @@ impl PyMarketDataService {
         if let Some(err) = take_python_callback_error() {
             return Err(err);
         }
-        Ok(result.map(|inner| PyQuote { inner }))
+        match result {
+            Ok(inner) => Ok(Some(PyQuote { inner })),
+            Err(openpit::MarketDataError::UnknownInstrument)
+            | Err(openpit::MarketDataError::QuoteUnavailable)
+            | Err(openpit::MarketDataError::QuoteExpired(_)) => Ok(None),
+            Err(err) => Err(create_market_data_error(err)),
+        }
     }
 
     #[pyo3(signature = (instrument_id, account_id, account_info, resolution))]
-    fn get_or_err(
+    fn get(
         &self,
         _py: Python<'_>,
         instrument_id: &PyInstrumentId,
@@ -800,9 +815,9 @@ impl PyMarketDataService {
         // GIL is held throughout so the adapter can read Python attributes lazily.
         clear_python_callback_error();
         let adapter = PyAccountInfo { obj: account_info };
-        let result =
-            self.inner
-                .get_or_err(instrument_id.inner, account_id, &adapter, resolution.into());
+        let result = self
+            .inner
+            .get(instrument_id.inner, account_id, &adapter, resolution.into());
         if let Some(err) = take_python_callback_error() {
             return Err(err);
         }
@@ -1368,6 +1383,72 @@ impl PyAccounts {
         }
     }
 
+    /// Set an explicit currency for an account.
+    ///
+    /// Setting or changing currency does not validate existing holdings and
+    /// does not recompute stored average entry price or realized PnL. The
+    /// caller owns the risk of changing currency on live state; a control or
+    /// recompute API may be added later.
+    #[pyo3(signature = (account, asset))]
+    fn set_currency(
+        &self,
+        py: Python<'_>,
+        account: &Bound<'_, PyAny>,
+        asset: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let account_id = parse_account_id_input(account)?;
+        let asset = parse_asset_input(asset)?;
+        py.detach(|| self.inner.set_currency(account_id, asset));
+        Ok(())
+    }
+
+    /// Clear an account's explicit currency.
+    ///
+    /// Clearing currency does not validate existing holdings and does not
+    /// recompute stored average entry price or realized PnL. The caller owns
+    /// the risk of changing currency on live state; a control or recompute API
+    /// may be added later.
+    #[pyo3(signature = (account))]
+    fn clear_currency(&self, py: Python<'_>, account: &Bound<'_, PyAny>) -> PyResult<()> {
+        let account_id = parse_account_id_input(account)?;
+        py.detach(|| self.inner.clear_currency(account_id));
+        Ok(())
+    }
+
+    /// Set the currency inherited by accounts in a group.
+    ///
+    /// ``AccountGroupId.DEFAULT`` is allowed and represents the global default
+    /// tier. Setting or changing currency does not validate existing holdings
+    /// and does not recompute stored average entry price or realized PnL. The
+    /// caller owns the risk of changing currency on live state; a control or
+    /// recompute API may be added later.
+    #[pyo3(signature = (group, asset))]
+    fn set_group_currency(
+        &self,
+        py: Python<'_>,
+        group: &Bound<'_, PyAny>,
+        asset: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let group_id = parse_account_group_id_input_allow_default(group)?;
+        let asset = parse_asset_input(asset)?;
+        py.detach(|| self.inner.set_group_currency(group_id, asset));
+        Ok(())
+    }
+
+    /// Clear the currency inherited by accounts in a group.
+    ///
+    /// ``AccountGroupId.DEFAULT`` is allowed and represents the global default
+    /// tier. Clearing currency does not validate existing holdings and does not
+    /// recompute stored average entry price or realized PnL. The caller owns
+    /// the risk of changing currency on live state; a control or recompute API
+    /// may be added later.
+    #[pyo3(signature = (group))]
+    fn clear_group_currency(&self, py: Python<'_>, group: &Bound<'_, PyAny>) -> PyResult<()> {
+        let group_id = parse_account_group_id_input_allow_default(group)?;
+        py.detach(|| self.inner.clear_group_currency(group_id));
+        Ok(())
+    }
+
     #[pyo3(signature = (account, reason))]
     fn block(&self, py: Python<'_>, account: &Bound<'_, PyAny>, reason: String) -> PyResult<()> {
         let account_id = parse_account_id_input(account)?;
@@ -1633,6 +1714,44 @@ impl PyOutcomeAmount {
     }
 }
 
+#[pyclass(name = "PnlOutcomeAmount", module = "openpit.pretrade", from_py_object)]
+#[derive(Clone)]
+struct PyPnlOutcomeAmount {
+    delta: Pnl,
+    absolute: Pnl,
+}
+
+#[pymethods]
+impl PyPnlOutcomeAmount {
+    #[new]
+    #[pyo3(signature = (*, delta, absolute))]
+    fn new(delta: &Bound<'_, PyAny>, absolute: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            delta: parse_pnl_input(delta)?,
+            absolute: parse_pnl_input(absolute)?,
+        })
+    }
+
+    #[getter]
+    fn delta(&self) -> PyPnl {
+        PyPnl { inner: self.delta }
+    }
+
+    #[getter]
+    fn absolute(&self) -> PyPnl {
+        PyPnl {
+            inner: self.absolute,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "PnlOutcomeAmount(delta={}, absolute={})",
+            self.delta, self.absolute
+        )
+    }
+}
+
 #[pyclass(
     name = "AccountOutcomeEntry",
     module = "openpit.pretrade",
@@ -1644,23 +1763,29 @@ struct PyAccountOutcomeEntry {
     balance: Option<PyOutcomeAmount>,
     held: Option<PyOutcomeAmount>,
     incoming: Option<PyOutcomeAmount>,
+    realized_pnl: Option<PyPnlOutcomeAmount>,
+    average_entry_price: Option<Price>,
 }
 
 #[pymethods]
 impl PyAccountOutcomeEntry {
     #[new]
-    #[pyo3(signature = (*, asset, balance = None, held = None, incoming = None))]
+    #[pyo3(signature = (*, asset, balance = None, held = None, incoming = None, realized_pnl = None, average_entry_price = None))]
     fn new(
         asset: &Bound<'_, PyAny>,
         balance: Option<PyRef<'_, PyOutcomeAmount>>,
         held: Option<PyRef<'_, PyOutcomeAmount>>,
         incoming: Option<PyRef<'_, PyOutcomeAmount>>,
+        realized_pnl: Option<PyRef<'_, PyPnlOutcomeAmount>>,
+        average_entry_price: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         Ok(Self {
             asset: parse_asset_input(asset)?,
             balance: balance.map(|value| value.clone()),
             held: held.map(|value| value.clone()),
             incoming: incoming.map(|value| value.clone()),
+            realized_pnl: realized_pnl.map(|value| value.clone()),
+            average_entry_price: average_entry_price.map(parse_price_input).transpose()?,
         })
     }
 
@@ -1684,13 +1809,25 @@ impl PyAccountOutcomeEntry {
         self.incoming.clone()
     }
 
+    #[getter]
+    fn realized_pnl(&self) -> Option<PyPnlOutcomeAmount> {
+        self.realized_pnl.clone()
+    }
+
+    #[getter]
+    fn average_entry_price(&self) -> Option<PyPrice> {
+        self.average_entry_price.map(|inner| PyPrice { inner })
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "AccountOutcomeEntry(asset={:?}, balance={:?}, held={:?}, incoming={:?})",
+            "AccountOutcomeEntry(asset={:?}, balance={:?}, held={:?}, incoming={:?}, realized_pnl={:?}, average_entry_price={:?})",
             self.asset.to_string(),
             self.balance.as_ref().map(|v| v.__repr__()),
             self.held.as_ref().map(|v| v.__repr__()),
             self.incoming.as_ref().map(|v| v.__repr__()),
+            self.realized_pnl.as_ref().map(|v| v.__repr__()),
+            self.average_entry_price().map(|v| v.inner.to_string()),
         )
     }
 }
@@ -2506,6 +2643,7 @@ fn extract_python_account_adjustment(obj: &Bound<'_, PyAny>) -> PyResult<Account
                     PopulatedAccountAdjustmentOperation::Balance(PopulatedBalanceOperation {
                         asset: operation.asset.clone(),
                         average_entry_price: operation.average_entry_price,
+                        realized_pnl: operation.realized_pnl,
                     })
                 }
                 PyAccountAdjustmentOperation::Position(py_position_operation) => {
@@ -2717,6 +2855,31 @@ fn parse_optional_outcome_amount(value: &Bound<'_, PyAny>) -> PyResult<Option<Ou
     Ok(Some(parse_outcome_amount(value)?))
 }
 
+fn parse_pnl_outcome_amount(value: &Bound<'_, PyAny>) -> PyResult<PnlOutcomeAmount> {
+    if let Ok(value) = value.extract::<PyRef<'_, PyPnlOutcomeAmount>>() {
+        return Ok(PnlOutcomeAmount {
+            delta: value.delta,
+            absolute: value.absolute,
+        });
+    }
+
+    let delta = value.getattr("delta")?;
+    let absolute = value.getattr("absolute")?;
+    Ok(PnlOutcomeAmount {
+        delta: parse_pnl_input(&delta)?,
+        absolute: parse_pnl_input(&absolute)?,
+    })
+}
+
+fn parse_optional_pnl_outcome_amount(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Option<PnlOutcomeAmount>> {
+    if value.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(parse_pnl_outcome_amount(value)?))
+}
+
 fn parse_account_outcome_entry(value: &Bound<'_, PyAny>) -> PyResult<AccountOutcomeEntry> {
     if let Ok(value) = value.extract::<PyRef<'_, PyAccountOutcomeEntry>>() {
         return Ok(AccountOutcomeEntry {
@@ -2733,14 +2896,26 @@ fn parse_account_outcome_entry(value: &Bound<'_, PyAny>) -> PyResult<AccountOutc
                 delta: amount.delta,
                 absolute: amount.absolute,
             }),
+            realized_pnl: value.realized_pnl.as_ref().map(|amount| PnlOutcomeAmount {
+                delta: amount.delta,
+                absolute: amount.absolute,
+            }),
+            average_entry_price: value.average_entry_price,
         });
     }
 
+    let avg = value.getattr("average_entry_price")?;
     Ok(AccountOutcomeEntry {
         asset: parse_asset_input(&value.getattr("asset")?)?,
         balance: parse_optional_outcome_amount(&value.getattr("balance")?)?,
         held: parse_optional_outcome_amount(&value.getattr("held")?)?,
         incoming: parse_optional_outcome_amount(&value.getattr("incoming")?)?,
+        realized_pnl: parse_optional_pnl_outcome_amount(&value.getattr("realized_pnl")?)?,
+        average_entry_price: if avg.is_none() {
+            None
+        } else {
+            Some(parse_price_input(&avg)?)
+        },
     })
 }
 
@@ -2804,6 +2979,15 @@ fn parse_account_adjustment_outcome(
                     delta: amount.delta,
                     absolute: amount.absolute,
                 }),
+                realized_pnl: value
+                    .entry
+                    .realized_pnl
+                    .as_ref()
+                    .map(|amount| PnlOutcomeAmount {
+                        delta: amount.delta,
+                        absolute: amount.absolute,
+                    }),
+                average_entry_price: value.entry.average_entry_price,
             },
         });
     }
@@ -4263,6 +4447,7 @@ struct PyAccountAdjustmentAmount {
 struct PyAccountAdjustmentBalanceOperation {
     asset: Option<Asset>,
     average_entry_price: Option<Price>,
+    realized_pnl: Option<Pnl>,
 }
 
 #[pyclass(
@@ -4676,6 +4861,24 @@ fn parse_account_group_id_input(value: &Bound<'_, PyAny>) -> PyResult<AccountGro
         )
     })?;
     AccountGroupId::from_u32(raw).map_err(convert_account_group_id_error)
+}
+
+fn parse_account_group_id_input_allow_default(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<AccountGroupId> {
+    if let Ok(group) = value.extract::<PyRef<'_, PyAccountGroupId>>() {
+        return Ok(group.inner);
+    }
+    let raw = value.extract::<u32>().map_err(|_| {
+        PyValueError::new_err(
+            "account_group_id must be an AccountGroupId or integer in range 0..=4294967295",
+        )
+    })?;
+    if raw == DEFAULT_ACCOUNT_GROUP.as_u32() {
+        Ok(DEFAULT_ACCOUNT_GROUP)
+    } else {
+        AccountGroupId::from_u32(raw).map_err(convert_account_group_id_error)
+    }
 }
 
 macro_rules! impl_decimal_pymethods {
@@ -5658,14 +5861,16 @@ impl PyAccountAdjustmentAmount {
 #[pymethods]
 impl PyAccountAdjustmentBalanceOperation {
     #[new]
-    #[pyo3(signature = (*, asset = None, average_entry_price = None))]
+    #[pyo3(signature = (*, asset = None, average_entry_price = None, realized_pnl = None))]
     fn new(
         asset: Option<&Bound<'_, PyAny>>,
         average_entry_price: Option<&Bound<'_, PyAny>>,
+        realized_pnl: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         Ok(Self {
             asset: asset.map(parse_asset_input).transpose()?,
             average_entry_price: average_entry_price.map(parse_price_input).transpose()?,
+            realized_pnl: realized_pnl.map(parse_pnl_input).transpose()?,
         })
     }
 
@@ -5691,11 +5896,23 @@ impl PyAccountAdjustmentBalanceOperation {
         Ok(())
     }
 
+    #[getter]
+    fn realized_pnl(&self) -> Option<PyPnl> {
+        self.realized_pnl.map(|inner| PyPnl { inner })
+    }
+
+    #[setter]
+    fn set_realized_pnl(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.realized_pnl = value.map(parse_pnl_input).transpose()?;
+        Ok(())
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "AccountAdjustmentBalanceOperation(asset={:?}, average_entry_price={:?})",
+            "AccountAdjustmentBalanceOperation(asset={:?}, average_entry_price={:?}, realized_pnl={:?})",
             self.asset(),
             self.average_entry_price().map(|v| v.inner.to_string()),
+            self.realized_pnl().map(|v| v.inner.to_string()),
         )
     }
 }
@@ -7437,12 +7654,21 @@ fn convert_outcome_amount(value: &OutcomeAmount) -> PyOutcomeAmount {
     }
 }
 
+fn convert_pnl_outcome_amount(value: &PnlOutcomeAmount) -> PyPnlOutcomeAmount {
+    PyPnlOutcomeAmount {
+        delta: value.delta,
+        absolute: value.absolute,
+    }
+}
+
 fn convert_outcome_entry(value: &AccountOutcomeEntry) -> PyAccountOutcomeEntry {
     PyAccountOutcomeEntry {
         asset: value.asset.clone(),
         balance: value.balance.as_ref().map(convert_outcome_amount),
         held: value.held.as_ref().map(convert_outcome_amount),
         incoming: value.incoming.as_ref().map(convert_outcome_amount),
+        realized_pnl: value.realized_pnl.as_ref().map(convert_pnl_outcome_amount),
+        average_entry_price: value.average_entry_price,
     }
 }
 
@@ -7484,6 +7710,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("MarketDataError", py.get_type::<MarketDataError>())?;
     module.add("UnknownInstrument", py.get_type::<UnknownInstrument>())?;
     module.add("QuoteUnavailable", py.get_type::<QuoteUnavailable>())?;
+    module.add("QuoteExpired", py.get_type::<QuoteExpired>())?;
     module.add("AlreadyRegistered", py.get_type::<AlreadyRegistered>())?;
     module.add("RegistrationError", py.get_type::<RegistrationError>())?;
     module.add("UnknownInstrumentId", py.get_type::<UnknownInstrumentId>())?;
@@ -7548,6 +7775,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyExecuteResult>()?;
     module.add_class::<PyAccountAdjustmentBatchResult>()?;
     module.add_class::<PyOutcomeAmount>()?;
+    module.add_class::<PyPnlOutcomeAmount>()?;
     module.add_class::<PyAccountOutcomeEntry>()?;
     module.add_class::<PyAccountAdjustmentOutcome>()?;
     module.add_class::<PyEngineBuilder>()?;

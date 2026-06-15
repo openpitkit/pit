@@ -17,10 +17,12 @@
 
 use crate::define_optional;
 use crate::last_error::{write_error, OpenPitOutError};
-use crate::param::OpenPitParamPositionSize;
+use crate::param::{OpenPitParamPnl, OpenPitParamPositionSize, OpenPitParamPriceOptional};
 use crate::OpenPitStringView;
 use openpit::param::{Asset, Price};
-use openpit::{AccountAdjustmentOutcome, AccountOutcomeEntry, OutcomeAmount, PolicyGroupId};
+use openpit::{
+    AccountAdjustmentOutcome, AccountOutcomeEntry, OutcomeAmount, PnlOutcomeAmount, PolicyGroupId,
+};
 
 /// A delta/absolute pair for one position field.
 #[repr(C)]
@@ -39,6 +41,21 @@ define_optional!(
     value = OpenPitOutcomeAmount
 );
 
+/// An account-currency delta/absolute pair for realized PnL.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct OpenPitPnlOutcomeAmount {
+    /// Signed account-currency PnL change applied by this operation.
+    pub delta: OpenPitParamPnl,
+    /// Cumulative account-currency realized PnL after this operation.
+    pub absolute: OpenPitParamPnl,
+}
+
+define_optional!(
+    optional = OpenPitPnlOutcomeAmountOptional,
+    value = OpenPitPnlOutcomeAmount
+);
+
 /// Raw outcome data produced by a policy for one asset.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -51,6 +68,14 @@ pub struct OpenPitAccountOutcomeEntry {
     pub held: OpenPitOutcomeAmountOptional,
     /// Incoming (pending inflow) amount outcome.
     pub incoming: OpenPitOutcomeAmountOptional,
+    /// Account-currency realized PnL outcome (delta = this op, absolute =
+    /// cumulative). Unset means realized PnL was not tracked or not emitted;
+    /// missing account currency or FX stops tracking without reject/block.
+    pub realized_pnl: OpenPitPnlOutcomeAmountOptional,
+    /// Current account-currency average entry price (absolute). Unset means
+    /// average entry price was not tracked or not emitted; missing account
+    /// currency or FX stops tracking without reject/block.
+    pub average_entry_price: OpenPitParamPriceOptional,
 }
 
 /// Account position outcome with the group tag of the business entity that
@@ -90,12 +115,43 @@ fn export_outcome_amount_optional(value: Option<&OutcomeAmount>) -> OpenPitOutco
     }
 }
 
+fn export_pnl_outcome_amount(value: &PnlOutcomeAmount) -> OpenPitPnlOutcomeAmount {
+    OpenPitPnlOutcomeAmount {
+        delta: OpenPitParamPnl(value.delta.to_decimal().into()),
+        absolute: OpenPitParamPnl(value.absolute.to_decimal().into()),
+    }
+}
+
+fn export_pnl_outcome_amount_optional(
+    value: Option<&PnlOutcomeAmount>,
+) -> OpenPitPnlOutcomeAmountOptional {
+    match value {
+        Some(amount) => OpenPitPnlOutcomeAmountOptional {
+            value: export_pnl_outcome_amount(amount),
+            is_set: true,
+        },
+        None => OpenPitPnlOutcomeAmountOptional::default(),
+    }
+}
+
+fn export_price_optional(value: Option<Price>) -> OpenPitParamPriceOptional {
+    match value {
+        Some(price) => OpenPitParamPriceOptional {
+            value: crate::param::OpenPitParamPrice(price.to_decimal().into()),
+            is_set: true,
+        },
+        None => OpenPitParamPriceOptional::default(),
+    }
+}
+
 fn export_outcome_entry(value: &AccountOutcomeEntry) -> OpenPitAccountOutcomeEntry {
     OpenPitAccountOutcomeEntry {
         asset: OpenPitStringView::from_utf8(value.asset.as_ref()),
         balance: export_outcome_amount_optional(value.balance.as_ref()),
         held: export_outcome_amount_optional(value.held.as_ref()),
         incoming: export_outcome_amount_optional(value.incoming.as_ref()),
+        realized_pnl: export_pnl_outcome_amount_optional(value.realized_pnl.as_ref()),
+        average_entry_price: export_price_optional(value.average_entry_price),
     }
 }
 
@@ -113,6 +169,22 @@ fn import_outcome_amount_optional(
         return Ok(None);
     }
     Ok(Some(import_outcome_amount(&value.value)?))
+}
+
+fn import_pnl_outcome_amount(value: &OpenPitPnlOutcomeAmount) -> Result<PnlOutcomeAmount, String> {
+    Ok(PnlOutcomeAmount {
+        delta: value.delta.to_param()?,
+        absolute: value.absolute.to_param()?,
+    })
+}
+
+fn import_pnl_outcome_amount_optional(
+    value: &OpenPitPnlOutcomeAmountOptional,
+) -> Result<Option<PnlOutcomeAmount>, String> {
+    if !value.is_set {
+        return Ok(None);
+    }
+    Ok(Some(import_pnl_outcome_amount(&value.value)?))
 }
 
 impl OpenPitAccountOutcomeEntry {
@@ -136,6 +208,12 @@ impl OpenPitAccountOutcomeEntry {
             balance: import_outcome_amount_optional(&self.balance)?,
             held: import_outcome_amount_optional(&self.held)?,
             incoming: import_outcome_amount_optional(&self.incoming)?,
+            realized_pnl: import_pnl_outcome_amount_optional(&self.realized_pnl)?,
+            average_entry_price: if self.average_entry_price.is_set {
+                Some(self.average_entry_price.value.to_param()?)
+            } else {
+                None
+            },
         })
     }
 }

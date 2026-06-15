@@ -115,8 +115,8 @@ typedef uint8_t OpenPitMarketDataGetStatus;
  */
 #define OpenPitMarketDataGetStatus_Found ((OpenPitMarketDataGetStatus) 0)
 /**
- * The instrument is registered but no usable quote is available (never pushed,
- * cleared, or aged past its TTL).
+ * The instrument is registered but no usable quote is available (never pushed
+ * or cleared).
  */
 #define OpenPitMarketDataGetStatus_Unavailable ((OpenPitMarketDataGetStatus) 1)
 /**
@@ -124,6 +124,11 @@ typedef uint8_t OpenPitMarketDataGetStatus;
  */
 #define OpenPitMarketDataGetStatus_UnknownInstrument \
     ((OpenPitMarketDataGetStatus) 2)
+/**
+ * The selected quote exists but aged past its effective TTL; the stale quote
+ * was written to `out_quote`.
+ */
+#define OpenPitMarketDataGetStatus_QuoteExpired ((OpenPitMarketDataGetStatus) 3)
 ```
 
 ## `OpenPitMarketDataRegisterStatus`
@@ -752,9 +757,10 @@ more-specific bucket has no quote.
 Status:
 
 - `Found`: a usable quote was written to `out_quote`;
-- `Unavailable`: registered but no usable quote (never pushed, cleared, or
-  aged past TTL);
-- `UnknownInstrument`: `instrument_id` is not registered.
+- `Unavailable`: registered but no usable quote (never pushed or cleared);
+- `UnknownInstrument`: `instrument_id` is not registered;
+- `QuoteExpired`: selected quote aged past TTL; the stale quote was written to
+  `out_quote`.
 
 Contract:
 

@@ -106,8 +106,7 @@ constraints that tolerate API evolution during the pre-stable phase.
 
 ```bash
 python3.10 -m venv .venv
-source .venv/bin/activate
-pip install -r ./requirements.txt
+.venv/bin/python -m pip install -r ./requirements.txt
 ```
 
 ### Build
@@ -138,8 +137,8 @@ just python-develop-release
 Manual:
 
 ```bash
-maturin develop --manifest-path bindings/python/Cargo.toml
-maturin develop --release --manifest-path bindings/python/Cargo.toml
+.venv/bin/maturin develop --manifest-path bindings/python/Cargo.toml
+.venv/bin/maturin develop --release --manifest-path bindings/python/Cargo.toml
 ```
 
 The recommended Python test flow is to run `maturin develop` before
@@ -186,17 +185,17 @@ Manual:
 ```bash
 # All tests:
 cargo test --workspace
-maturin develop --manifest-path bindings/python/Cargo.toml
-python -m pytest bindings/python/tests
+.venv/bin/maturin develop --manifest-path bindings/python/Cargo.toml
+.venv/bin/python -m pytest bindings/python/tests
 
 # Rust:
 cargo test --workspace
 
 # Python
 maturin develop --manifest-path bindings/python/Cargo.toml
-python -m pytest bindings/python/tests
-python -m pytest bindings/python/tests/unit
-python -m pytest bindings/python/tests/integration
+.venv/bin/python -m pytest bindings/python/tests
+.venv/bin/python -m pytest bindings/python/tests/unit
+.venv/bin/python -m pytest bindings/python/tests/integration
 
 # Go:
 cargo build -p openpit-ffi --release --locked

@@ -42,10 +42,10 @@
 //! the `set_*_ttl` setters; a multi-axis cascade resolves the effective
 //! lifetime per read. See [`MarketDataService`] for the tier order.
 //!
-//! Consumers poll via [`MarketDataService::get`] /
-//! [`MarketDataService::get_or_err`], passing the reading account, a
-//! [`AccountInfo`], and a [`QuoteResolution`]; quotes older than their
-//! effective TTL surface as "unavailable".
+//! Consumers poll via [`MarketDataService::get`], passing the reading account,
+//! an [`AccountInfo`], and a [`QuoteResolution`]; quotes older than their
+//! effective TTL surface as an expired quote error. Consumers that need
+//! optional quote behavior can call `get(...).ok()`.
 
 pub(crate) mod builder;
 pub(crate) mod error;

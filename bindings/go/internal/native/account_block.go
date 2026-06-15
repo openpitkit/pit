@@ -155,3 +155,54 @@ func EngineReplaceAccountGroupBlockReason(
 	}
 	return nil
 }
+
+//------------------------------------------------------------------------------
+// Engine account-currency operations
+
+func EngineSetAccountCurrency(
+	engine Engine,
+	account ParamAccountID,
+	asset string,
+) error {
+	var outError SharedString
+	if !C.openpit_engine_set_account_currency(
+		engine,
+		account,
+		importString(asset),
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return consumeSharedStringAsError(
+			outError,
+			"openpit_engine_set_account_currency failed",
+		)
+	}
+	return nil
+}
+
+func EngineClearAccountCurrency(engine Engine, account ParamAccountID) {
+	C.openpit_engine_clear_account_currency(engine, account)
+}
+
+func EngineSetAccountGroupCurrency(
+	engine Engine,
+	group ParamAccountGroupID,
+	asset string,
+) error {
+	var outError SharedString
+	if !C.openpit_engine_set_account_group_currency(
+		engine,
+		group,
+		importString(asset),
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return consumeSharedStringAsError(
+			outError,
+			"openpit_engine_set_account_group_currency failed",
+		)
+	}
+	return nil
+}
+
+func EngineClearAccountGroupCurrency(engine Engine, group ParamAccountGroupID) {
+	C.openpit_engine_clear_account_group_currency(engine, group)
+}

@@ -21,16 +21,17 @@ use openpit::param::{
 };
 use openpit::{
     HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
-    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
-    HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
-    HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
-    HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
-    HasAccountAdjustmentPositionLeverage, HasAccountId, HasAutoBorrow, HasAverageEntryPrice,
-    HasBalanceAsset, HasClosePosition, HasCollateralAsset, HasExecutionReportIsFinal,
-    HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
-    HasFee, HasInstrument, HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage,
-    HasOrderPositionSide, HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode,
-    HasPreTradeLock, HasReduceOnly, HasSide, HasTradeAmount, Instrument, RequestFieldAccessError,
+    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceRealizedPnl,
+    HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
+    HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
+    HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
+    HasAccountAdjustmentIncomingUpperBound, HasAccountAdjustmentPositionLeverage, HasAccountId,
+    HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition, HasCollateralAsset,
+    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasExecutionReportPositionEffect,
+    HasExecutionReportPositionSide, HasFee, HasInstrument, HasLeavesQuantity,
+    HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl,
+    HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly, HasSide,
+    HasTradeAmount, Instrument, RequestFieldAccessError,
 };
 
 use crate::{
@@ -242,6 +243,12 @@ impl HasBalanceAsset for AccountAdjustment {
 impl HasAccountAdjustmentBalanceAverageEntryPrice for AccountAdjustment {
     fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
         self.operation.balance_average_entry_price()
+    }
+}
+
+impl HasAccountAdjustmentBalanceRealizedPnl for AccountAdjustment {
+    fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
+        self.operation.balance_realized_pnl()
     }
 }
 
@@ -498,6 +505,14 @@ impl<Request: HasAccountAdjustmentBalanceAverageEntryPrice, Payload>
 {
     fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
         self.request.balance_average_entry_price()
+    }
+}
+
+impl<Request: HasAccountAdjustmentBalanceRealizedPnl, Payload>
+    HasAccountAdjustmentBalanceRealizedPnl for RequestWithPayload<Request, Payload>
+{
+    fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
+        self.request.balance_realized_pnl()
     }
 }
 

@@ -17,17 +17,19 @@
 
 //! Execution-report fixation path for [`SpotFundsPolicy`].
 
-use crate::core::account_outcome::{AccountAdjustmentOutcome, OutcomeAmount};
+use crate::core::account_outcome::{AccountAdjustmentOutcome, OutcomeAmount, PnlOutcomeAmount};
+use rust_decimal::Decimal;
+
 use crate::core::sync_mode::SyncMode;
 use crate::core::{
     AccountOutcomeEntry, HasAccountId, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
-    HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide,
+    HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide, Instrument,
 };
-use crate::marketdata::MarketDataSync;
-use crate::param::{AccountId, Asset, PositionSize, Price, Quantity, Side, Trade};
+use crate::marketdata::{MarketDataError, MarketDataSync, Quote, QuoteResolution};
+use crate::param::{AccountId, Asset, Pnl, PositionSize, Price, Quantity, Side, Trade};
 use crate::pretrade::holdings::{AdjustmentOverflowError, Holdings};
 use crate::pretrade::policy::{missing_required_field_account_block, PolicyGroupId};
-use crate::pretrade::{AccountBlock, PostTradeResult, PreTradeLock, RejectCode};
+use crate::pretrade::{AccountBlock, PostTradeContext, PostTradeResult, PreTradeLock, RejectCode};
 
 use super::rejects::arithmetic_overflow_account_block;
 use super::views::{ExecutionRequestView, FillCancelDeltas, LegDelta, LegKind};
@@ -85,6 +87,65 @@ where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         self.mutate_slot((account_id, asset.clone()), |h| h.release(amount))
+    }
+
+    fn accounting_quote(
+        &self,
+        account_id: AccountId,
+        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        instrument: &Instrument,
+    ) -> Option<Quote>
+    where
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
+    {
+        let market_orders = self.market_orders.as_ref()?;
+        let instrument_id = market_orders.resolve(instrument)?;
+        match market_orders.market_data.get(
+            instrument_id,
+            account_id,
+            ctx,
+            QuoteResolution::AccountThenGroupThenDefault,
+        ) {
+            Ok(quote) | Err(MarketDataError::QuoteExpired(quote)) => Some(quote),
+            Err(MarketDataError::QuoteUnavailable | MarketDataError::UnknownInstrument) => None,
+        }
+    }
+
+    fn account_currency_price(
+        &self,
+        account_id: AccountId,
+        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        quote_asset: &Asset,
+        account_currency: &Asset,
+        trade_price: Price,
+    ) -> Result<Option<Price>, AccountBlock>
+    where
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
+    {
+        if quote_asset == account_currency {
+            return Ok(Some(trade_price));
+        }
+
+        let direct = Instrument::new(quote_asset.clone(), account_currency.clone());
+        if let Some(mark) = self
+            .accounting_quote(account_id, ctx, &direct)
+            .and_then(|quote| quote.mark)
+        {
+            return trade_price_with_factor(Self::NAME, trade_price, mark.to_decimal()).map(Some);
+        }
+
+        let inverse = Instrument::new(account_currency.clone(), quote_asset.clone());
+        if let Some(mark) = self
+            .accounting_quote(account_id, ctx, &inverse)
+            .and_then(|quote| quote.mark)
+        {
+            let Some(factor) = Decimal::ONE.checked_div(mark.to_decimal()) else {
+                return Ok(None);
+            };
+            return trade_price_with_factor(Self::NAME, trade_price, factor).map(Some);
+        }
+
+        Ok(None)
     }
 
     pub(super) fn read_execution_request<'i, ExecutionReport>(
@@ -151,6 +212,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_trade_fill(
         &self,
+        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         account_id: AccountId,
         underlying_asset: &Asset,
         settlement_asset: &Asset,
@@ -185,6 +247,21 @@ where
             Side::Buy => (PositionSize::ZERO, qty_pos),
             Side::Sell => (qty_pos, neg(qty_pos)),
         };
+        let touches_position_accounting = !underlying_flow.is_zero();
+        let account_currency_price = if touches_position_accounting {
+            match ctx.account_currency() {
+                Some(account_currency) => self.account_currency_price(
+                    account_id,
+                    ctx,
+                    settlement_asset,
+                    &account_currency,
+                    trade.price,
+                )?,
+                None => None,
+            }
+        } else {
+            None
+        };
         // Settlement leg: buys pay `price*qty` (flow `-notional`), sells
         // receive it (flow `+notional`). The consumed reservation is the
         // portion priced at the lock; a leg that reserved nothing consumes 0
@@ -200,24 +277,39 @@ where
         // credit leg, so that if the credit leg overflows the already-applied
         // charge mutation is still reported (the non-atomicity contract). The
         // charge side is settlement for a buy and underlying for a sell.
+        //
+        // Only the underlying leg carries the account-currency fill price for
+        // average-cost / realized-PnL accounting; its net `owned` change equals
+        // `flow_received` (the signed base quantity). The settlement leg passes
+        // `None` and never touches the average or realized PnL.
         let underlying_leg = (
             LegKind::Underlying,
             underlying_asset,
             underlying_consume,
             underlying_flow,
+            account_currency_price,
         );
         let settlement_leg = (
             LegKind::Settlement,
             settlement_asset,
             settlement_consume,
             settlement_flow,
+            None,
         );
         let ordered = match side {
             Side::Buy => [settlement_leg, underlying_leg],
             Side::Sell => [underlying_leg, settlement_leg],
         };
-        for (kind, asset, consume, flow) in ordered {
-            self.settle_fill_leg(account_id, asset, kind, consume, flow, deltas)?;
+        for (kind, asset, consume, flow, realize_price) in ordered {
+            self.settle_fill_leg(
+                account_id,
+                asset,
+                kind,
+                consume,
+                flow,
+                realize_price,
+                deltas,
+            )?;
         }
         Ok(())
     }
@@ -237,6 +329,7 @@ where
         kind: LegKind,
         consume: PositionSize,
         flow_received: PositionSize,
+        realize_price: Option<Price>,
         deltas: &mut FillCancelDeltas,
     ) -> Result<(), AccountBlock>
     where
@@ -259,13 +352,32 @@ where
             return Ok(());
         }
 
-        // Held reduction and the available credit are merged into a single
-        // mutate_slot call so no concurrent pre-trade check ever observes the
-        // intermediate state where held is reduced but the credit is not yet
-        // applied.
+        // Average-cost / realized-PnL accounting for the underlying leg. The
+        // net `owned` change for the leg is `flow_received`, so it is the signed
+        // fill quantity fed to `realize_position_fill`. The realized delta is
+        // captured out of the mutate_slot closure (which runs exactly once,
+        // synchronously) so it can be recorded into the leg accumulator.
+        let mut pnl_delta = None;
+
+        // Held reduction, the available credit, and the average/PnL update are
+        // merged into a single mutate_slot call so no concurrent pre-trade check
+        // ever observes a partially-applied leg.
         let new_h = self
             .mutate_slot((account_id, asset.clone()), |h| {
-                let after_outflow = h.apply_fill_outflow(consume)?;
+                // Realize first: the average-cost formula reads `owned` before
+                // the quantity mutation, and `realize_position_fill` changes
+                // only the average / realized PnL (not available/held).
+                let realized = match (kind, realize_price) {
+                    (LegKind::Underlying, Some(price)) => {
+                        let (with_pnl, delta) = h.realize_position_fill(flow_received, price)?;
+                        pnl_delta = delta;
+                        with_pnl
+                    }
+                    (LegKind::Underlying, None) if flow_received.is_zero() => h,
+                    (LegKind::Underlying, None) => h.without_position_tracking(),
+                    (LegKind::Settlement, _) => h,
+                };
+                let after_outflow = realized.apply_fill_outflow(consume)?;
                 if balance_credit.is_zero() {
                     Ok(after_outflow)
                 } else {
@@ -301,6 +413,20 @@ where
                 ),
             )
         })?;
+        if let Some(pnl_delta) = pnl_delta {
+            leg.pnl_delta = Some(match leg.pnl_delta {
+                Some(current) => current.checked_add(pnl_delta).map_err(|_| {
+                    arithmetic_overflow_account_block(
+                        Self::NAME,
+                        format!(
+                            "fill pnl delta overflow: account {account_id}, asset {asset}, \
+                             pnl {pnl_delta}"
+                        ),
+                    )
+                })?,
+                None => pnl_delta,
+            });
+        }
         leg.final_holdings = Some(new_h);
         Ok(())
     }
@@ -452,6 +578,7 @@ where
 
     pub(super) fn apply_execution_report_impl<ExecutionReport>(
         &self,
+        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         report: &ExecutionReport,
     ) -> Option<PostTradeResult>
     where
@@ -477,6 +604,7 @@ where
 
         if let Some(trade) = request.last_trade {
             if let Err(block) = self.apply_trade_fill(
+                ctx,
                 request.account_id,
                 &underlying_asset,
                 &settlement_asset,
@@ -510,12 +638,14 @@ where
             group_id,
             underlying_asset,
             &deltas.underlying,
+            LegKind::Underlying,
         );
         push_leg_outcome(
             &mut adjustments,
             group_id,
             settlement_asset,
             &deltas.settlement,
+            LegKind::Settlement,
         );
 
         if account_blocks.is_empty() && adjustments.is_empty() {
@@ -634,15 +764,50 @@ fn neg(value: PositionSize) -> PositionSize {
     -value
 }
 
+fn trade_price_with_factor(
+    policy_name: &str,
+    price: Price,
+    factor: Decimal,
+) -> Result<Price, AccountBlock> {
+    price
+        .to_decimal()
+        .checked_mul(factor)
+        .map(Price::new)
+        .ok_or_else(|| {
+            arithmetic_overflow_account_block(
+                policy_name,
+                format!("account-currency price conversion overflow: px {price}, factor {factor}"),
+            )
+        })
+}
+
 /// Appends a per-asset outcome entry for a leg, omitting zero-delta fields and
 /// the entry entirely when the leg was never touched.
+///
+/// Realized PnL and the average entry price are emitted only for the underlying
+/// leg while tracking is active: `realized_pnl` carries the realized delta
+/// (omitted when zero, like the quantity fields) against the cumulative
+/// realized PnL, and `average_entry_price` is the absolute current average of
+/// the net position. When account currency or FX is unavailable, both are
+/// `None`. The settlement leg never realizes PnL and carries no average, so
+/// both are `None` there.
 fn push_leg_outcome(
     adjustments: &mut Vec<AccountAdjustmentOutcome>,
     group_id: PolicyGroupId,
     asset: Asset,
     leg: &LegDelta,
+    kind: LegKind,
 ) {
     if let Some(h) = leg.final_holdings {
+        let (realized_pnl, average_entry_price) = match kind {
+            LegKind::Underlying => match (leg.pnl_delta, h.realized_pnl()) {
+                (Some(delta), Some(absolute)) => {
+                    (nonzero_pnl_outcome(delta, absolute), h.avg_entry_price())
+                }
+                _ => (None, None),
+            },
+            LegKind::Settlement => (None, None),
+        };
         adjustments.push(AccountAdjustmentOutcome {
             policy_group_id: group_id,
             entry: AccountOutcomeEntry {
@@ -650,6 +815,8 @@ fn push_leg_outcome(
                 balance: nonzero_outcome(leg.balance_delta, h.available()),
                 held: nonzero_outcome(leg.held_delta, h.held()),
                 incoming: None,
+                realized_pnl,
+                average_entry_price,
             },
         });
     }
@@ -660,5 +827,13 @@ fn nonzero_outcome(delta: PositionSize, absolute: PositionSize) -> Option<Outcom
         None
     } else {
         Some(OutcomeAmount { delta, absolute })
+    }
+}
+
+fn nonzero_pnl_outcome(delta: Pnl, absolute: Pnl) -> Option<PnlOutcomeAmount> {
+    if delta.is_zero() {
+        None
+    } else {
+        Some(PnlOutcomeAmount { delta, absolute })
     }
 }

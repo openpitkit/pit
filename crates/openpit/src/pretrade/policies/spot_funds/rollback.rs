@@ -20,12 +20,46 @@
 use crate::core::sync_mode::SyncMode;
 use crate::core::AccountControl;
 use crate::marketdata::MarketDataSync;
-use crate::param::{AccountId, PositionSize};
+use crate::param::{AccountId, Pnl, PositionSize, Price};
 use crate::pretrade::holdings::Holdings;
 use crate::pretrade::{AccountBlock, RejectCode};
 use crate::{Mutation, Mutations};
 
 use super::{HoldingsKey, SpotFundsPolicy};
+
+/// Pre-adjustment average entry price to restore on rollback.
+///
+/// Wrapping the snapshot in an `Option<AvgRestore>` lets the forward path say
+/// "this adjustment force-set the average, restore this value" (`Some`) versus
+/// "leave the average untouched" (`None`). The inner `Option<Price>` is the
+/// average to restore (which may itself be `None` for a flat position).
+#[derive(Clone, Copy)]
+pub(super) struct AvgRestore(pub(super) Option<Price>);
+
+/// Pre-adjustment realized PnL to restore on rollback.
+///
+/// Symmetric to [`AvgRestore`]: the outer `Option<PnlRestore>` says whether this
+/// adjustment force-set realized PnL (`Some`, restore) or left it alone
+/// (`None`). The inner `Option<Pnl>` is the value to restore and may itself be
+/// `None` for an untracked slot, which a delta-based reversal could not express.
+#[derive(Clone, Copy)]
+pub(super) struct PnlRestore(pub(super) Option<Pnl>);
+
+/// Forward state needed to reverse an account adjustment.
+///
+/// Quantities reverse via inverse deltas (concurrency-safe). Average entry price
+/// and realized PnL reverse via absolute snapshots, since neither is
+/// delta-reversible. `realized_pnl_delta` is retained solely for outcome
+/// surfacing (the delta/absolute pair reported to the caller), not for rollback.
+#[derive(Clone, Copy)]
+pub(super) struct AdjustmentRollback {
+    pub(super) available_delta: PositionSize,
+    pub(super) held_delta: PositionSize,
+    pub(super) incoming_delta: PositionSize,
+    pub(super) realized_pnl_delta: Option<Pnl>,
+    pub(super) prior_avg: Option<AvgRestore>,
+    pub(super) prior_realized: Option<PnlRestore>,
+}
 
 /// Records an arithmetic overflow encountered during a rollback closure via
 /// [`AccountControl`] captured from the operation context.
@@ -135,12 +169,18 @@ where
         mutations: &mut Mutations,
         account_control: Option<AccountControl<<Sync as SyncMode>::StorageLockingPolicyFactory>>,
         key: HoldingsKey,
-        available_delta: PositionSize,
-        held_delta: PositionSize,
-        incoming_delta: PositionSize,
+        rollback: AdjustmentRollback,
     ) where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
+        let AdjustmentRollback {
+            available_delta,
+            held_delta,
+            incoming_delta,
+            realized_pnl_delta,
+            prior_avg,
+            prior_realized,
+        } = rollback;
         let holdings_arc = self.holdings.clone();
         mutations.push(Mutation::new(
             // Commit is a no-op: the new value was written synchronously
@@ -162,8 +202,38 @@ where
                 let became_zero = holdings_arc.with_mut(key, Holdings::zero, |slot, _| {
                     match slot.apply_delta_rollback(available_delta, held_delta, incoming_delta) {
                         Ok(rolled_back) => {
-                            *slot = rolled_back;
-                            rolled_back.is_zero()
+                            // Quantities roll back via the concurrency-safe
+                            // inverse delta above, so a concurrent fill on the
+                            // same slot keeps its quantity contribution.
+                            //
+                            // Average entry price and realized PnL cannot be
+                            // delta-reversed: the weighted-average cost is
+                            // path-dependent, and a forced realized value may
+                            // overwrite a prior untracked `None` that no delta
+                            // can restore. Both are therefore restored from an
+                            // absolute snapshot, and only when this adjustment
+                            // actually force-set the field; an adjustment that
+                            // left a field alone leaves it alone on rollback
+                            // too. Restoring realized to its snapshot returns a
+                            // prior `None` to `None`, so a slot that was
+                            // untracked stays untracked and does not auto-resume
+                            // on the next fill. Residual limitation: if a
+                            // force-set races a concurrent fill on the same
+                            // slot, the absolute restore makes the last writer
+                            // win for the average and realized PnL (quantities
+                            // remain correct).
+                            let restored = match prior_avg {
+                                Some(AvgRestore(avg)) => rolled_back.with_avg_entry_price(avg),
+                                None => rolled_back,
+                            };
+                            let restored = match prior_realized {
+                                Some(PnlRestore(realized)) => {
+                                    restored.with_realized_pnl_opt(realized)
+                                }
+                                None => restored,
+                            };
+                            *slot = restored;
+                            restored.is_zero()
                         }
                         // Overflow during rollback is practically unreachable
                         // for real balances. The slot is left unchanged and
@@ -178,6 +248,7 @@ where
                                      available_delta {available_delta}, \
                                      held_delta {held_delta}, \
                                      incoming_delta {incoming_delta}, \
+                                     realized_pnl_delta {realized_pnl_delta:?}, \
                                      slot {slot:?}",
                                 )
                             });

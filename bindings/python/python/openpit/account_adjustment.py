@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://github.com/openpitkit and the OWNERS file for details.
+# Please see https://openpit.dev and the OWNERS file for details.
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ from .param import (
     AdjustmentAmount,
     Asset,
     Leverage,
+    Pnl,
     PositionMode,
     PositionSize,
     Price,
@@ -128,11 +129,13 @@ class BalanceOperation(_AccountAdjustmentBalanceOperation):
         *,
         asset: Asset,
         average_entry_price: Price | None = None,
+        realized_pnl: Pnl | None = None,
     ) -> None:
         _AccountAdjustmentBalanceOperation.asset.__set__(self, asset)
         _AccountAdjustmentBalanceOperation.average_entry_price.__set__(
             self, average_entry_price
         )
+        _AccountAdjustmentBalanceOperation.realized_pnl.__set__(self, realized_pnl)
 
     # @typing.override
     @property
@@ -143,11 +146,23 @@ class BalanceOperation(_AccountAdjustmentBalanceOperation):
     # @typing.override
     @property
     def average_entry_price(self) -> Price | None:
-        """Optional cost basis for the adjusted physical balance."""
+        """Optional account-currency cost basis force-set.
+
+        The value is caller supplied; no FX is applied.
+        """
         value = _AccountAdjustmentBalanceOperation.average_entry_price.__get__(
             self, type(self)
         )
         return value
+
+    # @typing.override
+    @property
+    def realized_pnl(self) -> Pnl | None:
+        """Optional force-set of absolute realized PnL in account currency.
+
+        The value is caller supplied; no FX is applied.
+        """
+        return _AccountAdjustmentBalanceOperation.realized_pnl.__get__(self, type(self))
 
     def __repr__(self) -> str:
         return _AccountAdjustmentBalanceOperation.__repr__(self)
@@ -207,7 +222,10 @@ class PositionOperation(_AccountAdjustmentPositionOperation):
     # @typing.override
     @property
     def average_entry_price(self) -> Price:
-        """Average entry price for the adjusted position state."""
+        """Account-currency average entry price for the adjusted position state.
+
+        The value is caller supplied; no FX is applied.
+        """
         return _AccountAdjustmentPositionOperation.average_entry_price.__get__(
             self, type(self)
         )

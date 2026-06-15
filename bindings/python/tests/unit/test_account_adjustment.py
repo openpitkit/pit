@@ -11,6 +11,19 @@ def test_balance_operation_construction() -> None:
 
     assert operation.asset == "USD"
     assert str(operation.average_entry_price) == "1"
+    assert operation.realized_pnl is None
+
+
+@pytest.mark.unit
+def test_balance_operation_realized_pnl_round_trips() -> None:
+    operation = openpit.AccountAdjustmentBalanceOperation(
+        asset="USD",
+        realized_pnl=openpit.param.Pnl("12.5"),
+    )
+
+    assert operation.realized_pnl is not None
+    assert str(operation.realized_pnl) == "12.5"
+    assert "realized_pnl=" in repr(operation)
 
 
 @pytest.mark.unit

@@ -107,7 +107,8 @@ impl Quote {
 /// or [`push_patch`](super::service::MarketDataService::push_patch) the quote
 /// is observable through [`get`](super::service::MarketDataService::get) until
 /// at least the effective lifetime has elapsed; reads after that point return
-/// `None` (the entry is not removed from storage, only hidden from consumers).
+/// an expired-quote error (the entry is not removed from storage, only hidden
+/// from optional consumers).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuoteTtl {
     /// Quotes never expire on their own; only

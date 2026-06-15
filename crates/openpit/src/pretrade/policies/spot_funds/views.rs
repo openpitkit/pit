@@ -20,7 +20,8 @@
 
 use crate::core::instrument::Instrument;
 use crate::param::{
-    AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, Trade, TradeAmount,
+    AccountId, AdjustmentAmount, Asset, Pnl, PositionSize, Price, Quantity, Side, Trade,
+    TradeAmount,
 };
 use crate::pretrade::holdings::Holdings;
 use crate::pretrade::PreTradeLock;
@@ -54,6 +55,8 @@ pub(super) struct OrderRequestView<'i> {
 pub(super) struct AdjustmentRequestView {
     pub(super) asset: Asset,
     pub(super) balance: Option<AdjustmentAmount>,
+    pub(super) balance_average_entry_price: Option<Price>,
+    pub(super) balance_realized_pnl: Option<Pnl>,
     pub(super) balance_lower: Option<PositionSize>,
     pub(super) balance_upper: Option<PositionSize>,
     pub(super) held: Option<AdjustmentAmount>,
@@ -75,17 +78,22 @@ pub(super) struct ExecutionRequestView<'i> {
     pub(super) lock: PreTradeLock,
 }
 
-/// Per-asset accumulator for the `held` and `balance` changes produced by an
-/// execution report.
+/// Per-asset accumulator for the `held`, `balance`, and realized-PnL changes
+/// produced by an execution report.
 ///
 /// A single asset can be touched by both the fill and the cancel phase (and,
 /// for a two-leg order, by both legs), so the deltas accumulate additively and
 /// the snapshot tracks the most recent post-mutation `Holdings`. `final_holdings`
-/// is `None` until the asset has been touched at least once.
+/// is `None` until the asset has been touched at least once. `pnl_delta` sums
+/// the realized PnL across this report's tracked underlying-leg fills, or is
+/// `None` when PnL was not tracked; the current average entry price is read
+/// back from `final_holdings` rather than tracked separately, since every
+/// holdings mutation carries it through.
 #[derive(Clone, Copy)]
 pub(super) struct LegDelta {
     pub(super) held_delta: PositionSize,
     pub(super) balance_delta: PositionSize,
+    pub(super) pnl_delta: Option<Pnl>,
     pub(super) final_holdings: Option<Holdings>,
 }
 
@@ -94,6 +102,7 @@ impl LegDelta {
         Self {
             held_delta: PositionSize::ZERO,
             balance_delta: PositionSize::ZERO,
+            pnl_delta: None,
             final_holdings: None,
         }
     }

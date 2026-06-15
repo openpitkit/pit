@@ -5,6 +5,7 @@ from .param import (
     AdjustmentAmount,
     Asset,
     Leverage,
+    Pnl,
     PositionMode,
     PositionSize,
     Price,
@@ -43,12 +44,23 @@ class BalanceOperation:
         *,
         asset: Asset,
         average_entry_price: Price | None = None,
+        realized_pnl: Pnl | None = None,
     ) -> None: ...
     @property
     def asset(self) -> Asset: ...
     @property
     def average_entry_price(self) -> Price | None:
-        """Optional cost basis for the adjusted physical balance."""
+        """Optional account-currency cost basis force-set.
+
+        The value is caller supplied; no FX is applied.
+        """
+
+    @property
+    def realized_pnl(self) -> Pnl | None:
+        """Optional force-set of absolute realized PnL in account currency.
+
+        The value is caller supplied; no FX is applied.
+        """
 
 class PositionOperation:
     """Direct derivatives-like position adjustment."""
@@ -68,7 +80,10 @@ class PositionOperation:
     def collateral_asset(self) -> Asset: ...
     @property
     def average_entry_price(self) -> Price:
-        """Average entry price for the adjusted position state."""
+        """Account-currency average entry price for the adjusted position state.
+
+        The value is caller supplied; no FX is applied.
+        """
 
     @property
     def mode(self) -> PositionMode:

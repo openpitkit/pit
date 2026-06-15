@@ -15,17 +15,18 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use crate::param::{AdjustmentAmount, Asset, Leverage, PositionMode, PositionSize, Price};
+use crate::param::{AdjustmentAmount, Asset, Leverage, Pnl, PositionMode, PositionSize, Price};
 use crate::{impl_request_has_field, impl_request_has_field_passthrough};
 
 use super::{
     HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
-    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
-    HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
-    HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
-    HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
-    HasAccountAdjustmentPositionLeverage, HasAverageEntryPrice, HasBalanceAsset,
-    HasCollateralAsset, HasPositionInstrument, HasPositionMode, Instrument,
+    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceRealizedPnl,
+    HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
+    HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
+    HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
+    HasAccountAdjustmentIncomingUpperBound, HasAccountAdjustmentPositionLeverage,
+    HasAverageEntryPrice, HasBalanceAsset, HasCollateralAsset, HasPositionInstrument,
+    HasPositionMode, Instrument,
 };
 
 /// Grouped balance/held/incoming adjustment payload.
@@ -74,6 +75,7 @@ impl_request_has_field_passthrough!(
     inner,
     HasBalanceAsset, balance_asset, &Asset;
     HasAccountAdjustmentBalanceAverageEntryPrice, balance_average_entry_price, Option<Price>;
+    HasAccountAdjustmentBalanceRealizedPnl, balance_realized_pnl, Option<Pnl>;
     HasPositionInstrument, position_instrument, &Instrument;
     HasCollateralAsset, collateral_asset, &Asset;
     HasAverageEntryPrice, average_entry_price, Price;
@@ -91,8 +93,20 @@ impl_request_has_field_passthrough!(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountAdjustmentBalanceOperation {
     pub asset: Asset,
-    /// Optional cost basis for the adjusted physical balance.
+    /// Optional account-currency cost basis for the adjusted physical balance.
+    ///
+    /// When present, this force-sets the slot's average entry price to the
+    /// caller-supplied account-currency value. `None` leaves the average entry
+    /// price untouched; an untracked average remains absent until force-set.
     pub average_entry_price: Option<Price>,
+    /// Optional force-set of the slot's absolute realized PnL.
+    ///
+    /// When present, the adjustment overwrites the slot's cumulative realized
+    /// PnL with this caller-supplied account-currency value, mirroring how
+    /// `average_entry_price` force-sets the absolute account-currency average.
+    /// `None` leaves realized PnL untouched; an untracked realized PnL remains
+    /// absent until force-set.
+    pub realized_pnl: Option<Pnl>,
 }
 
 /// Adds physical-balance adjustment operation payload.
@@ -113,6 +127,7 @@ impl_request_has_field!(
     WithAccountAdjustmentBalanceOperation,
     operation,
     HasAccountAdjustmentBalanceAverageEntryPrice, balance_average_entry_price, Option<Price>, average_entry_price;
+    HasAccountAdjustmentBalanceRealizedPnl, balance_realized_pnl, Option<Pnl>, realized_pnl;
 );
 impl_request_has_field_passthrough!(
     WithAccountAdjustmentBalanceOperation,
@@ -177,6 +192,7 @@ impl_request_has_field_passthrough!(
     inner,
     HasBalanceAsset, balance_asset, &Asset;
     HasAccountAdjustmentBalanceAverageEntryPrice, balance_average_entry_price, Option<Price>;
+    HasAccountAdjustmentBalanceRealizedPnl, balance_realized_pnl, Option<Pnl>;
     HasAccountAdjustmentBalance, balance, Option<AdjustmentAmount>;
     HasAccountAdjustmentHeld, held, Option<AdjustmentAmount>;
     HasAccountAdjustmentIncoming, incoming, Option<AdjustmentAmount>;
@@ -228,6 +244,7 @@ impl_request_has_field_passthrough!(
     inner,
     HasBalanceAsset, balance_asset, &Asset;
     HasAccountAdjustmentBalanceAverageEntryPrice, balance_average_entry_price, Option<Price>;
+    HasAccountAdjustmentBalanceRealizedPnl, balance_realized_pnl, Option<Pnl>;
     HasPositionInstrument, position_instrument, &Instrument;
     HasCollateralAsset, collateral_asset, &Asset;
     HasAverageEntryPrice, average_entry_price, Price;
@@ -246,28 +263,32 @@ mod tests {
         WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
         WithAccountAdjustmentPositionOperation,
     };
-    use crate::param::{AdjustmentAmount, Asset, Leverage, PositionMode, PositionSize, Price};
+    use crate::param::{AdjustmentAmount, Asset, Leverage, Pnl, PositionMode, PositionSize, Price};
     use crate::{
         HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
-        HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
-        HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
-        HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
-        HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
-        HasAccountAdjustmentPositionLeverage, HasAverageEntryPrice, HasBalanceAsset,
-        HasCollateralAsset, HasPositionInstrument, HasPositionMode, Instrument,
+        HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceRealizedPnl,
+        HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
+        HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
+        HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
+        HasAccountAdjustmentIncomingUpperBound, HasAccountAdjustmentPositionLeverage,
+        HasAverageEntryPrice, HasBalanceAsset, HasCollateralAsset, HasPositionInstrument,
+        HasPositionMode, Instrument,
     };
 
     #[test]
     fn direct_trait_access_for_balance_operation() {
         let asset = Asset::new("USD").expect("must be valid");
         let average = Price::from_str("1.25").expect("must be valid");
+        let realized = Pnl::from_str("42").expect("must be valid");
         let operation = AccountAdjustmentBalanceOperation {
             asset: asset.clone(),
             average_entry_price: Some(average),
+            realized_pnl: Some(realized),
         };
 
         assert_eq!(operation.balance_asset(), Ok(&asset));
         assert_eq!(operation.balance_average_entry_price(), Ok(Some(average)));
+        assert_eq!(operation.balance_realized_pnl(), Ok(Some(realized)));
     }
 
     #[test]
@@ -374,6 +395,7 @@ mod tests {
             operation: AccountAdjustmentBalanceOperation {
                 asset: Asset::new("USD").expect("must be valid"),
                 average_entry_price: None,
+                realized_pnl: None,
             },
         };
 
@@ -428,6 +450,7 @@ mod tests {
         let balance = AccountAdjustmentBalanceOperation {
             asset: collateral.clone(),
             average_entry_price: None,
+            realized_pnl: None,
         };
 
         assert_eq!(balance.balance_asset(), Ok(&collateral));
@@ -493,6 +516,7 @@ mod tests {
     fn outer_amount_wrapper_passthroughs_balance_branch_traits() {
         let asset = Asset::new("EUR").expect("must be valid");
         let average = Price::from_str("1.12").expect("must be valid");
+        let realized = Pnl::from_str("-15").expect("must be valid");
         let held = AdjustmentAmount::Delta(PositionSize::from_str("-3").expect("must be valid"));
         let incoming =
             AdjustmentAmount::Absolute(PositionSize::from_str("4").expect("must be valid"));
@@ -507,6 +531,7 @@ mod tests {
                     operation: AccountAdjustmentBalanceOperation {
                         asset: asset.clone(),
                         average_entry_price: Some(average),
+                        realized_pnl: Some(realized),
                     },
                 },
                 bounds: AccountAdjustmentBounds {
@@ -529,6 +554,7 @@ mod tests {
         assert_eq!(request.incoming(), Ok(Some(incoming)));
         assert_eq!(request.balance_asset(), Ok(&asset));
         assert_eq!(request.balance_average_entry_price(), Ok(Some(average)));
+        assert_eq!(request.balance_realized_pnl(), Ok(Some(realized)));
         assert_eq!(request.balance_lower(), Ok(Some(balance_lower)));
         assert_eq!(request.held_upper(), Ok(Some(held_upper)));
         assert_eq!(request.held_lower(), Ok(Some(held_lower)));

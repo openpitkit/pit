@@ -146,6 +146,7 @@ fn balance_adjustment(asset_code: &str) -> AccountAdjustmentBalanceOperation {
     AccountAdjustmentBalanceOperation {
         asset: openpit::param::Asset::new(asset_code).expect("asset must be valid"),
         average_entry_price: None,
+        realized_pnl: None,
     }
 }
 

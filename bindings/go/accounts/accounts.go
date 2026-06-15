@@ -90,6 +90,60 @@ func (a Accounts) GroupOf(account param.AccountID) optional.Option[param.Account
 	return optional.From(param.NewAccountGroupIDFromHandle(id), ok)
 }
 
+// SetCurrency sets account's explicit currency.
+//
+// Setting or changing currency does not validate existing holdings and does
+// not recompute stored average entry price or realized PnL. The caller owns
+// the risk of changing currency on live state; a control or recompute API may
+// be added later.
+func (a Accounts) SetCurrency(account param.AccountID, asset param.Asset) error {
+	return native.EngineSetAccountCurrency(
+		a.engine,
+		account.Handle(),
+		asset.Handle(),
+	)
+}
+
+// ClearCurrency clears account's explicit currency.
+//
+// Clearing currency does not validate existing holdings and does not recompute
+// stored average entry price or realized PnL. The caller owns the risk of
+// changing currency on live state; a control or recompute API may be added
+// later.
+func (a Accounts) ClearCurrency(account param.AccountID) {
+	native.EngineClearAccountCurrency(a.engine, account.Handle())
+}
+
+// SetGroupCurrency sets the currency inherited by accounts in group.
+//
+// The reserved param.DefaultAccountGroup is allowed here and represents the
+// global default tier.
+//
+// Setting or changing currency does not validate existing holdings and does
+// not recompute stored average entry price or realized PnL. The caller owns
+// the risk of changing currency on live state; a control or recompute API may
+// be added later.
+func (a Accounts) SetGroupCurrency(group param.AccountGroupID, asset param.Asset) error {
+	return native.EngineSetAccountGroupCurrency(
+		a.engine,
+		group.Handle(),
+		asset.Handle(),
+	)
+}
+
+// ClearGroupCurrency clears the currency inherited by accounts in group.
+//
+// The reserved param.DefaultAccountGroup is allowed here and represents the
+// global default tier.
+//
+// Clearing currency does not validate existing holdings and does not recompute
+// stored average entry price or realized PnL. The caller owns the risk of
+// changing currency on live state; a control or recompute API may be added
+// later.
+func (a Accounts) ClearGroupCurrency(group param.AccountGroupID) {
+	native.EngineClearAccountGroupCurrency(a.engine, group.Handle())
+}
+
 // Block blocks account with reason, gating its pre-trade orders until it is
 // unblocked. The first reason recorded for an account wins: blocking an
 // already-blocked account keeps the original reason. reason may be empty.

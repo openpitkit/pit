@@ -19,12 +19,15 @@ use std::fmt::{Display, Formatter};
 use std::time::Instant;
 
 use super::account_control::{AccountBlockHandle, AccountControl};
-use super::account_groups::{AccountGroupsHandle, Accounts};
+use super::account_groups::AccountGroupsHandle;
 use super::account_outcome::{AccountAdjustmentBatchResult, AccountAdjustmentOutcome};
+use super::accounts::Accounts;
 use super::engine_builder::EngineBuilder;
 use super::engine_trait::{EngineTrait, EngineTraitOf};
 use super::sync_mode::{AccountSync, FullSync, LocalSync, SyncMode};
-use super::{AccountGroups, BlockedAccounts, ConfigRegistry, Configurator, HasAccountId};
+use super::{
+    AccountCurrencies, AccountGroups, BlockedAccounts, ConfigRegistry, Configurator, HasAccountId,
+};
 use crate::param::AccountId;
 use crate::pretrade::handle::{RequestHandleImpl, ReservationHandleImpl};
 use crate::pretrade::start_pre_trade_time::with_start_pre_trade_now;
@@ -54,6 +57,10 @@ pub(crate) struct EngineInner<Trait: EngineTrait> {
     pub(crate) account_groups: <<Trait::Sync as SyncMode>::StorageLockingPolicyFactory
         as crate::storage::LockingPolicyFactory>::Shared<
         AccountGroups<<Trait::Sync as SyncMode>::StorageLockingPolicyFactory>,
+    >,
+    pub(crate) account_currencies: <<Trait::Sync as SyncMode>::StorageLockingPolicyFactory
+        as crate::storage::LockingPolicyFactory>::Shared<
+        AccountCurrencies<<Trait::Sync as SyncMode>::StorageLockingPolicyFactory>,
     >,
     pub(crate) config_registry: <<Trait::Sync as SyncMode>::StorageLockingPolicyFactory
         as crate::storage::LockingPolicyFactory>::Shared<
@@ -165,6 +172,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
         Accounts::new(
             AccountGroupsHandle::from_inner(self.inner.account_groups.clone()),
             AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone()),
+            self.inner.account_currencies.clone(),
         )
     }
 
@@ -441,7 +449,9 @@ impl<Trait: EngineTrait> Engine<Trait> {
         let mut account_adjustments = Vec::new();
 
         let account_groups = AccountGroupsHandle::from_inner(inner.account_groups.clone());
-        let ctx = PostTradeContext::with_groups(account_groups, report.account_id().ok());
+        let accounts = self.accounts();
+        let ctx =
+            PostTradeContext::with_accounts(accounts, account_groups, report.account_id().ok());
 
         for policy in &inner.pre_trade_policies {
             let Some(result) = policy.apply_execution_report(&ctx, report) else {
@@ -3467,6 +3477,8 @@ mod tests {
                     absolute: ps("5"),
                 }),
                 incoming: None,
+                realized_pnl: None,
+                average_entry_price: None,
             });
             result
                 .lock_prices

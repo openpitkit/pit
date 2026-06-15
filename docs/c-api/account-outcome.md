@@ -24,6 +24,26 @@ typedef struct OpenPitOutcomeAmountOptional {
 } OpenPitOutcomeAmountOptional;
 ```
 
+## `OpenPitPnlOutcomeAmount`
+
+An account-currency delta/absolute pair for realized PnL.
+
+```c
+typedef struct OpenPitPnlOutcomeAmount {
+    OpenPitParamPnl delta;
+    OpenPitParamPnl absolute;
+} OpenPitPnlOutcomeAmount;
+```
+
+## `OpenPitPnlOutcomeAmountOptional`
+
+```c
+typedef struct OpenPitPnlOutcomeAmountOptional {
+    OpenPitPnlOutcomeAmount value;
+    bool is_set;
+} OpenPitPnlOutcomeAmountOptional;
+```
+
 ## `OpenPitAccountOutcomeEntry`
 
 Raw outcome data produced by a policy for one asset.
@@ -34,6 +54,8 @@ typedef struct OpenPitAccountOutcomeEntry {
     OpenPitOutcomeAmountOptional balance;
     OpenPitOutcomeAmountOptional held;
     OpenPitOutcomeAmountOptional incoming;
+    OpenPitPnlOutcomeAmountOptional realized_pnl;
+    OpenPitParamPriceOptional average_entry_price;
 } OpenPitAccountOutcomeEntry;
 ```
 

@@ -17,6 +17,8 @@
 
 # Workspace build and test shortcuts.
 
+python := justfile_directory() / ".venv/bin/python"
+
 # Rust build.
 build:
     cargo build --workspace
@@ -26,30 +28,30 @@ build-go:
     cd bindings/go && go build
 
 # Format, generate, and lint and test the result.
-check: fmt-all gen-api-c check-dry
+check python=python: (fmt-all python) (gen-api-c python) (check-dry python)
 # Lint and test the result (non-mutating).
-check-dry: lint-all test-all run-examples
+check-dry python=python: (lint-all python) (test-all python) (run-examples python)
 # Format, generate, and lint and test Rust.
-check-rust: fmt-all gen-api-c lint-rust test-rust
+check-rust python=python: (fmt-all python) (gen-api-c python) (lint-rust) (test-rust)
 # Lint and test Rust (non-mutating).
 check-rust-dry: lint-rust test-rust
 # Format, generate, and lint and test Go.
-check-go: fmt-all gen-api-c lint-go test-go
+check-go python=python: (fmt-all python) (gen-api-c python) (lint-go) (test-go)
 # Lint and test Go (non-mutating).
 check-go-dry: lint-go test-go test-go-race
 # Format, generate, and lint and test Python.
-check-python: fmt-all gen-api-c lint-python test-python
+check-python python=python: (fmt-all python) (gen-api-c python) (lint-python python) (test-python python)
 # Lint and test Python (non-mutating).
-check-python-dry: lint-python test-python
+check-python-dry python=python: (lint-python python) (test-python python)
     cargo nextest run -p openpit-python --locked --status-level fail --final-status-level fail
 
 # Run all examples.
 [parallel]
-run-examples: run-examples-go run-examples-python
+run-examples python=python: (run-examples-go) (run-examples-python python)
 
 # Lint all.
 [parallel]
-lint-all: lint-rust lint-python lint-go
+lint-all python=python: (lint-rust) (lint-python python) (lint-go)
 # Lint Rust.
 lint-rust:
     cargo fmt --all -- --check --quiet
@@ -57,9 +59,9 @@ lint-rust:
     cargo clippy -p openpit --all-targets --all-features --locked -q -- -D warnings
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked -q
 # Lint Python.
-lint-python:
-    python -m ruff check --quiet .
-    python -m black . --check --quiet
+lint-python python=python:
+    {{ python }} -m ruff check --quiet .
+    {{ python }} -m black . --check --quiet
 # Lint Go.
 lint-go:
     cd bindings/go && gofmt -l . | (! grep .)
@@ -71,7 +73,7 @@ lint-go:
 
 # Run all tests.
 [parallel]
-test-all: test-rust test-python test-go test-go-race test-c-examples
+test-all python=python: (test-rust) (test-python python) (test-go) (test-go-race) (test-c-examples)
 
 # Rust tests.
 test-rust:
@@ -92,10 +94,10 @@ test-rust:
     cargo test --workspace --doc --locked
     cargo test -p openpit --all-features --doc --locked
 # Rust tests with actionable coverage summary.
-test-rust-cov:
+test-rust-cov python=python:
     mkdir -p target/llvm-cov
     cargo llvm-cov test --workspace --exclude openpit-python --all-features --json --output-path target/llvm-cov/workspace.json
-    python3 scripts/summarize_llvm_cov.py target/llvm-cov/workspace.json --output target/llvm-cov/workspace-summary.json --text
+    {{ python }} scripts/summarize_llvm_cov.py target/llvm-cov/workspace.json --output target/llvm-cov/workspace-summary.json --text
 # Raw cargo-llvm-cov console report.
 test-rust-cov-raw:
     cargo llvm-cov --workspace --exclude openpit-python --all-features
@@ -105,35 +107,35 @@ test-release-e2e version:
     ./e2e/run.sh {{ version }}
 
 # Shared pytest runner helper.
-_pytest args:
+_pytest args python=python:
     # shellcheck disable=SC1083
-    python -m pytest -q --no-header {{ args }}
+    {{ python }} -m pytest -q --no-header {{ args }}
 # Full Python test suite
-test-python: python-develop
+test-python python=python: (python-develop python)
     #!/usr/bin/env bash
     set -euo pipefail
-    just _pytest bindings/python/tests
+    just _pytest bindings/python/tests {{ python }}
     for d in examples/python/*/; do
       [ -f "${d}main.py" ] || continue
-      just _pytest "$d"
+      just _pytest "$d" {{ python }}
     done
 # Python unit tests only.
-test-python-unit: python-develop
-    just _pytest bindings/python/tests/unit
+test-python-unit python=python: (python-develop python)
+    just _pytest bindings/python/tests/unit {{ python }}
 # Python integration test only.
-test-python-integration: python-develop
-    just _pytest bindings/python/tests/integration
+test-python-integration python=python: (python-develop python)
+    just _pytest bindings/python/tests/integration {{ python }}
 # Run a workspace Python example from examples/python against local sources.
-run-examples-python: python-develop
-    python examples/python/rate_pnl_killswitch/main.py
-    python examples/python/spot_funds/main.py
-    just run-examples-python-table
+run-examples-python python=python: (python-develop python)
+    {{ python }} examples/python/rate_pnl_killswitch/main.py
+    {{ python }} examples/python/spot_funds/main.py
+    just run-examples-python-table examples/tables/spot/coverage.md {{ python }}
 # Run a spot-policy scenario table through the Python spot_table example.
-run-examples-python-table test_file="examples/tables/spot/coverage.md": python-develop
-    python examples/python/spot_table/main.py --table $(pwd)/{{ test_file }}
+run-examples-python-table test_file="examples/tables/spot/coverage.md" python=python: (python-develop python)
+    {{ python }} examples/python/spot_table/main.py --table $(pwd)/{{ test_file }}
 # Repeat-run a scenario table through the Python example for `dur` (default 3m).
-run-examples-python-table-repeat test_file="examples/tables/spot/coverage.md" dur="3m": python-develop
-    python examples/python/spot_table/main.py --table $(pwd)/{{ test_file }} --min-duration {{ dur }}
+run-examples-python-table-repeat test_file="examples/tables/spot/coverage.md" dur="3m" python=python: (python-develop python)
+    {{ python }} examples/python/spot_table/main.py --table $(pwd)/{{ test_file }} --min-duration {{ dur }}
 
 # Full Go test suite.
 test-go:
@@ -166,13 +168,13 @@ test-c-examples:
 
 # Format all.
 [parallel]
-fmt-all: fmt-rust fmt-python fmt-go
+fmt-all python=python: (fmt-rust) (fmt-python python) (fmt-go)
 # Format Rust.
 fmt-rust:
     cargo fmt --all
 # Format Python.
-fmt-python:
-    python -m black . -q
+fmt-python python=python:
+    {{ python }} -m black . -q
 # Format Go.
 fmt-go:
     cd bindings/go && gofmt -w .
@@ -187,15 +189,15 @@ release-dry:
     gh workflow run release.yml --ref release-dry-run -f dry_run=true
 
 # Install Python bindings into the current Python environment (debug build).
-python-develop:
-    maturin develop -q --manifest-path bindings/python/Cargo.toml
+python-develop python=python:
+    {{ python }} -m maturin develop -q --manifest-path bindings/python/Cargo.toml
 # Install Python bindings into the current Python environment (release build).
-python-develop-release:
-    maturin develop -q --release --manifest-path bindings/python/Cargo.toml
+python-develop-release python=python:
+    {{ python }} -m maturin develop -q --release --manifest-path bindings/python/Cargo.toml
 
 # Generate the C header and Markdown docs for the FFI crate.
-gen-api-c:
-    python3 scripts/generate_api_c.py > /dev/null
+gen-api-c python=python:
+    {{ python }} scripts/generate_api_c.py > /dev/null
 
 # Build FFI.
 _build-ffi:

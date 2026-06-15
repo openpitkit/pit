@@ -30,6 +30,8 @@ type accountAdjustmentFixture struct {
 	instrument     param.Instrument
 	averagePrice   param.Price
 	altPrice       param.Price
+	realizedPnl    param.Pnl
+	altRealizedPnl param.Pnl
 	leverage       param.Leverage
 	mode           param.PositionMode
 	deltaAmount    param.AdjustmentAmount
@@ -123,6 +125,7 @@ func TestAccountAdjustmentOperationSwitching(t *testing.T) {
 		AccountAdjustmentBalanceOperationValues{
 			Asset:             optional.Some(fixture.asset),
 			AverageEntryPrice: optional.Some(fixture.averagePrice),
+			RealizedPnl:       optional.Some(fixture.realizedPnl),
 		},
 	)
 	adjustment.SetBalanceOperationAndUnsetPositionOperation(balance)
@@ -150,23 +153,30 @@ func TestAccountAdjustmentBalanceOperationView(t *testing.T) {
 	view := adjustment.EnsureBalanceOperationView()
 	assertAssetOptionUnset(t, view.Asset())
 	assertPriceOptionUnset(t, view.AverageEntryPrice())
+	assertPnlOptionUnset(t, view.RealizedPnl())
 
 	view.SetAsset(fixture.asset)
 	view.SetAverageEntryPrice(fixture.averagePrice)
+	view.SetRealizedPnl(fixture.realizedPnl)
 
 	assertAssetOptionEqual(t, view.Asset(), fixture.asset)
 	assertPriceOptionEqual(t, view.AverageEntryPrice(), fixture.averagePrice)
+	assertPnlOptionEqual(t, view.RealizedPnl(), fixture.realizedPnl)
 
 	view.UnsetAsset()
 	view.UnsetAverageEntryPrice()
+	view.UnsetRealizedPnl()
 	assertAssetOptionUnset(t, view.Asset())
 	assertPriceOptionUnset(t, view.AverageEntryPrice())
+	assertPnlOptionUnset(t, view.RealizedPnl())
 
 	view.SetAsset(fixture.altAsset)
 	view.SetAverageEntryPrice(fixture.altPrice)
+	view.SetRealizedPnl(fixture.altRealizedPnl)
 	view.Reset()
 	assertAssetOptionUnset(t, view.Asset())
 	assertPriceOptionUnset(t, view.AverageEntryPrice())
+	assertPnlOptionUnset(t, view.RealizedPnl())
 }
 
 func TestAccountAdjustmentPositionOperationView(t *testing.T) {
@@ -337,6 +347,15 @@ func newAccountAdjustmentFixture(t *testing.T) accountAdjustmentFixture {
 		t.Fatalf("NewPriceFromString() error = %v", err)
 	}
 
+	realizedPnl, err := param.NewPnlFromString("12.5")
+	if err != nil {
+		t.Fatalf("NewPnlFromString() error = %v", err)
+	}
+	altRealizedPnl, err := param.NewPnlFromString("-7.25")
+	if err != nil {
+		t.Fatalf("NewPnlFromString() error = %v", err)
+	}
+
 	balanceUpper, err := param.NewPositionSizeFromString("100")
 	if err != nil {
 		t.Fatalf("NewPositionSizeFromString() error = %v", err)
@@ -368,6 +387,8 @@ func newAccountAdjustmentFixture(t *testing.T) accountAdjustmentFixture {
 		instrument:     param.NewInstrument(mustModelAsset(t, "AAPL"), mustModelAsset(t, "USD")),
 		averagePrice:   averagePrice,
 		altPrice:       altPrice,
+		realizedPnl:    realizedPnl,
+		altRealizedPnl: altRealizedPnl,
 		leverage:       param.NewLeverageFromUint16(5),
 		mode:           param.PositionModeHedged,
 		deltaAmount:    param.NewDeltaAdjustmentAmount(balanceUpper),
@@ -489,6 +510,7 @@ func assertAccountAdjustmentBalanceOperationOptionValuesEqual(
 	assertOptionBy(t, "BalanceOperation", got, want, func(gotValue AccountAdjustmentBalanceOperation, wantValue AccountAdjustmentBalanceOperation) {
 		assertAssetOptionValuesEqual(t, gotValue.Asset(), wantValue.Asset())
 		assertPriceOptionValuesEqual(t, gotValue.AverageEntryPrice(), wantValue.AverageEntryPrice())
+		assertPnlOptionValuesEqual(t, gotValue.RealizedPnl(), wantValue.RealizedPnl())
 	})
 }
 

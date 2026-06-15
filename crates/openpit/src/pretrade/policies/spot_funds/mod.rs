@@ -20,7 +20,8 @@
 use crate::core::sync_mode::SyncMode;
 use crate::core::AccountOutcomeEntry;
 use crate::core::{
-    HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceLowerBound,
+    HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
+    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceRealizedPnl,
     HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
     HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
     HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
@@ -72,6 +73,12 @@ pub(super) type HoldingsKey = (AccountId, Asset);
 /// `apply_account_adjustment` pipeline. Missing `(account, asset)`
 /// holdings are treated as zero and fail reservations through the
 /// regular [`crate::pretrade::RejectCode::InsufficientFunds`] path.
+///
+/// Average entry price and realized PnL accounting is denominated in the
+/// account currency resolved by the engine account registry. When the account
+/// currency or the required FX mark is unavailable, the position quantity is
+/// still applied, the average and realized PnL become untracked, and no reject
+/// or account block is emitted for that accounting gap.
 ///
 /// The runtime-updatable slippage / pricing / override cascade and the policy
 /// group tag live in [`SpotFundsSettings`], stored behind a settings cell read
@@ -191,6 +198,8 @@ where
         + HasPreTradeLock,
     AccountAdjustment: HasBalanceAsset
         + HasAccountAdjustmentBalance
+        + HasAccountAdjustmentBalanceAverageEntryPrice
+        + HasAccountAdjustmentBalanceRealizedPnl
         + HasAccountAdjustmentBalanceLowerBound
         + HasAccountAdjustmentBalanceUpperBound
         + HasAccountAdjustmentHeld
@@ -263,12 +272,12 @@ where
     /// report fixation overflows.
     fn apply_execution_report(
         &self,
-        _ctx: &crate::pretrade::PostTradeContext<
+        ctx: &crate::pretrade::PostTradeContext<
             <Sync as crate::core::SyncMode>::StorageLockingPolicyFactory,
         >,
         report: &ExecutionReport,
     ) -> Option<PostTradeResult> {
-        self.apply_execution_report_impl(report)
+        self.apply_execution_report_impl(ctx, report)
     }
 
     fn perform_pre_trade_check(

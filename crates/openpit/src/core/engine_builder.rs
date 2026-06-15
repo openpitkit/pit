@@ -24,7 +24,7 @@ use std::marker::PhantomData;
 use super::engine::{Engine, EngineInner};
 use super::engine_trait::EngineTraitOf;
 use super::sync_mode::{AccountSync, FullSync, LocalSync, SyncMode};
-use super::{AccountGroups, BlockedAccounts, ConfigRegistry};
+use super::{AccountCurrencies, AccountGroups, BlockedAccounts, ConfigRegistry};
 use crate::marketdata::MarketDataSync;
 use crate::pretrade::PreTradePolicy;
 use crate::storage::{LockingPolicyFactory, StorageBuilder};
@@ -307,11 +307,16 @@ impl<Order: 'static, ExecutionReport: 'static, AccountAdjustment: 'static>
             <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::new_shared(
                 AccountGroups::new(&storage_builder),
             );
+        let account_currencies =
+            <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::new_shared(
+                AccountCurrencies::new(&storage_builder),
+            );
         SyncedEngineBuilder {
             pre_trade_policies: Vec::new(),
             storage_builder,
             blocked_accounts,
             account_groups,
+            account_currencies,
             config_entries: Vec::new(),
             _marker: PhantomData,
         }
@@ -399,6 +404,10 @@ pub struct SyncedEngineBuilder<
     account_groups:
         <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
             AccountGroups<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        >,
+    account_currencies:
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
+            AccountCurrencies<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         >,
     config_entries: Vec<(
         String,
@@ -493,6 +502,7 @@ where
             storage_builder: self.storage_builder,
             blocked_accounts: self.blocked_accounts,
             account_groups: self.account_groups,
+            account_currencies: self.account_currencies,
             config_entries: self.config_entries,
             _marker: PhantomData,
         }
@@ -529,6 +539,10 @@ pub struct ReadyEngineBuilder<
     account_groups:
         <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
             AccountGroups<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        >,
+    account_currencies:
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
+            AccountCurrencies<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         >,
     config_entries: Vec<(
         String,
@@ -611,6 +625,7 @@ where
                 pre_trade_policies: self.pre_trade_policies,
                 blocked_accounts: self.blocked_accounts,
                 account_groups: self.account_groups,
+                account_currencies: self.account_currencies,
                 config_registry,
             },
         )))

@@ -68,6 +68,14 @@ class UnknownInstrument(MarketDataError):
 class QuoteUnavailable(MarketDataError):
     """No usable quote is available."""
 
+class QuoteExpired(MarketDataError):
+    """The selected quote aged past TTL.
+
+    The stale quote selected before the TTL check is available as ``quote``.
+    """
+
+    quote: Quote
+
 class AlreadyRegistered(Exception):
     """Instrument is already registered."""
 
@@ -279,14 +287,21 @@ class MarketDataService:
         account_id: AccountId,
         account_info: _AccountInfo,
         resolution: QuoteResolution,
-    ) -> Quote | None: ...
-    def get_or_err(
+    ) -> Quote:
+        """Return the best available quote for the instrument.
+
+        Raises:
+            QuoteExpired: when the quote exists but its TTL has elapsed;
+                the stale quote is available as ``exception.quote``.
+        """
+
+    def get_optional(
         self,
         instrument_id: InstrumentId,
         account_id: AccountId,
         account_info: _AccountInfo,
         resolution: QuoteResolution,
-    ) -> Quote: ...
+    ) -> Quote | None: ...
     # ── Resolve ───────────────────────────────────────────────────────────────
     def resolve(self, instrument: Instrument) -> InstrumentId | None: ...
 
@@ -1248,17 +1263,32 @@ class AccountAdjustmentBalanceOperation:
         *,
         asset: param.Asset | None = None,
         average_entry_price: param.Price | None = None,
+        realized_pnl: param.Pnl | None = None,
     ) -> None:
-        _ = (asset, average_entry_price)
+        _ = (asset, average_entry_price, realized_pnl)
 
     @property
     def asset(self) -> param.Asset | None: ...
     @asset.setter
     def asset(self, value: param.Asset | None) -> None: ...
     @property
-    def average_entry_price(self) -> param.Price | None: ...
+    def average_entry_price(self) -> param.Price | None:
+        """Average entry price force-set in account currency.
+
+        The value is caller supplied; no FX is applied.
+        """
+
     @average_entry_price.setter
     def average_entry_price(self, value: param.Price | None) -> None: ...
+    @property
+    def realized_pnl(self) -> param.Pnl | None:
+        """Absolute realized PnL force-set in account currency.
+
+        The value is caller supplied; no FX is applied.
+        """
+
+    @realized_pnl.setter
+    def realized_pnl(self, value: param.Pnl | None) -> None: ...
 
 class AccountAdjustmentPositionOperation:
     """Derivatives-like position account-adjustment operation group."""
@@ -1295,7 +1325,12 @@ class AccountAdjustmentPositionOperation:
     @collateral_asset.setter
     def collateral_asset(self, value: param.Asset | None) -> None: ...
     @property
-    def average_entry_price(self) -> param.Price | None: ...
+    def average_entry_price(self) -> param.Price | None:
+        """Average entry price force-set in account currency.
+
+        The value is caller supplied; no FX is applied.
+        """
+
     @average_entry_price.setter
     def average_entry_price(self, value: param.Price | None) -> None: ...
     @property
@@ -1551,6 +1586,23 @@ class OutcomeAmount:
     def absolute(self) -> param.PositionSize:
         """Field value at the moment the policy returned."""
 
+class PnlOutcomeAmount:
+    """Account-currency delta and absolute values for one realized PnL field."""
+
+    def __init__(
+        self,
+        *,
+        delta: param.Pnl,
+        absolute: param.Pnl,
+    ) -> None: ...
+    @property
+    def delta(self) -> param.Pnl:
+        """Signed account-currency PnL change applied by this operation."""
+
+    @property
+    def absolute(self) -> param.Pnl:
+        """Cumulative account-currency realized PnL after this operation."""
+
 class AccountOutcomeEntry:
     """Account position outcome for one asset."""
 
@@ -1561,6 +1613,8 @@ class AccountOutcomeEntry:
         balance: OutcomeAmount | None = None,
         held: OutcomeAmount | None = None,
         incoming: OutcomeAmount | None = None,
+        realized_pnl: PnlOutcomeAmount | None = None,
+        average_entry_price: param.Price | None = None,
     ) -> None: ...
     @property
     def asset(self) -> str:
@@ -1577,6 +1631,22 @@ class AccountOutcomeEntry:
     @property
     def incoming(self) -> OutcomeAmount | None:
         """Incoming amount outcome."""
+
+    @property
+    def realized_pnl(self) -> PnlOutcomeAmount | None:
+        """Account-currency realized PnL outcome.
+
+        ``None`` means realized PnL was not tracked or not emitted. Missing
+        account currency or FX stops tracking without reject/block.
+        """
+
+    @property
+    def average_entry_price(self) -> param.Price | None:
+        """Account-currency average entry price outcome.
+
+        ``None`` means average entry price was not tracked or not emitted.
+        Missing account currency or FX stops tracking without reject/block.
+        """
 
 class AccountAdjustmentOutcome:
     """Account position outcome tagged with a policy group."""
@@ -1795,6 +1865,40 @@ class Accounts:
         group: AccountGroupId,
     ) -> None: ...
     def group_of(self, account: AccountId) -> AccountGroupId | None: ...
+    def set_currency(self, account: AccountId, asset: param.Asset | str) -> None:
+        """Set an account's explicit currency.
+
+        Setting or changing currency does not validate existing holdings and
+        does not recompute stored average entry price or realized PnL. The
+        caller owns the risk of changing currency on live state.
+        """
+
+    def clear_currency(self, account: AccountId) -> None:
+        """Clear an account's explicit currency.
+
+        Clearing currency does not validate existing holdings and does not
+        recompute stored average entry price or realized PnL.
+        """
+
+    def set_group_currency(
+        self, group: AccountGroupId | int, asset: param.Asset | str
+    ) -> None:
+        """Set the currency inherited by accounts in a group.
+
+        ``AccountGroupId.DEFAULT`` is allowed and represents the global
+        default tier. Setting or changing currency does not validate existing
+        holdings and does not recompute stored average entry price or realized
+        PnL.
+        """
+
+    def clear_group_currency(self, group: AccountGroupId | int) -> None:
+        """Clear the currency inherited by accounts in a group.
+
+        ``AccountGroupId.DEFAULT`` is allowed and represents the global
+        default tier. Clearing currency does not validate existing holdings and
+        does not recompute stored average entry price or realized PnL.
+        """
+
     def block(self, account: AccountId, reason: str) -> None: ...
     def unblock(self, account: AccountId) -> None: ...
     def replace_block_reason(self, account: AccountId, reason: str) -> None: ...

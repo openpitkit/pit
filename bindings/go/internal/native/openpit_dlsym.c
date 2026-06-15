@@ -321,6 +321,10 @@ static bool (*_fn_openpit_account_group_error_get_current_group)(const OpenPitAc
 static bool (*_fn_openpit_engine_register_account_group)(OpenPitEngine *, const OpenPitParamAccountId *, size_t, OpenPitParamAccountGroupId, OpenPitAccountGroupError **, OpenPitOutError) = NULL;
 static bool (*_fn_openpit_engine_unregister_account_group)(OpenPitEngine *, const OpenPitParamAccountId *, size_t, OpenPitParamAccountGroupId, OpenPitAccountGroupError **, OpenPitOutError) = NULL;
 static bool (*_fn_openpit_engine_account_group)(const OpenPitEngine *, OpenPitParamAccountId, OpenPitParamAccountGroupId *) = NULL;
+static bool (*_fn_openpit_engine_set_account_currency)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView, OpenPitOutError) = NULL;
+static void (*_fn_openpit_engine_clear_account_currency)(OpenPitEngine *, OpenPitParamAccountId) = NULL;
+static bool (*_fn_openpit_engine_set_account_group_currency)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitStringView, OpenPitOutError) = NULL;
+static void (*_fn_openpit_engine_clear_account_group_currency)(OpenPitEngine *, OpenPitParamAccountGroupId) = NULL;
 static void (*_fn_openpit_destroy_account_block_error)(OpenPitAccountBlockError *) = NULL;
 static OpenPitStringView (*_fn_openpit_account_block_error_get_message)(const OpenPitAccountBlockError *) = NULL;
 static OpenPitAccountBlockErrorKind (*_fn_openpit_account_block_error_get_kind)(const OpenPitAccountBlockError *) = NULL;
@@ -1011,6 +1015,14 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_engine_unregister_account_group == NULL) return "openpit_engine_unregister_account_group";
     _fn_openpit_engine_account_group = (bool (*)(const OpenPitEngine *, OpenPitParamAccountId, OpenPitParamAccountGroupId *))openpit_dlsym(handle, "openpit_engine_account_group");
     if (_fn_openpit_engine_account_group == NULL) return "openpit_engine_account_group";
+    _fn_openpit_engine_set_account_currency = (bool (*)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_set_account_currency");
+    if (_fn_openpit_engine_set_account_currency == NULL) return "openpit_engine_set_account_currency";
+    _fn_openpit_engine_clear_account_currency = (void (*)(OpenPitEngine *, OpenPitParamAccountId))openpit_dlsym(handle, "openpit_engine_clear_account_currency");
+    if (_fn_openpit_engine_clear_account_currency == NULL) return "openpit_engine_clear_account_currency";
+    _fn_openpit_engine_set_account_group_currency = (bool (*)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitStringView, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_set_account_group_currency");
+    if (_fn_openpit_engine_set_account_group_currency == NULL) return "openpit_engine_set_account_group_currency";
+    _fn_openpit_engine_clear_account_group_currency = (void (*)(OpenPitEngine *, OpenPitParamAccountGroupId))openpit_dlsym(handle, "openpit_engine_clear_account_group_currency");
+    if (_fn_openpit_engine_clear_account_group_currency == NULL) return "openpit_engine_clear_account_group_currency";
     _fn_openpit_destroy_account_block_error = (void (*)(OpenPitAccountBlockError *))openpit_dlsym(handle, "openpit_destroy_account_block_error");
     if (_fn_openpit_destroy_account_block_error == NULL) return "openpit_destroy_account_block_error";
     _fn_openpit_account_block_error_get_message = (OpenPitStringView (*)(const OpenPitAccountBlockError *))openpit_dlsym(handle, "openpit_account_block_error_get_message");
@@ -2376,6 +2388,22 @@ bool openpit_engine_unregister_account_group(OpenPitEngine * engine, const OpenP
 
 bool openpit_engine_account_group(const OpenPitEngine * engine, OpenPitParamAccountId account, OpenPitParamAccountGroupId * out_group) {
     return _fn_openpit_engine_account_group(engine, account, out_group);
+}
+
+bool openpit_engine_set_account_currency(OpenPitEngine * engine, OpenPitParamAccountId account_id, OpenPitStringView asset, OpenPitOutError out_error) {
+    return _fn_openpit_engine_set_account_currency(engine, account_id, asset, out_error);
+}
+
+void openpit_engine_clear_account_currency(OpenPitEngine * engine, OpenPitParamAccountId account_id) {
+    _fn_openpit_engine_clear_account_currency(engine, account_id);
+}
+
+bool openpit_engine_set_account_group_currency(OpenPitEngine * engine, OpenPitParamAccountGroupId group, OpenPitStringView asset, OpenPitOutError out_error) {
+    return _fn_openpit_engine_set_account_group_currency(engine, group, asset, out_error);
+}
+
+void openpit_engine_clear_account_group_currency(OpenPitEngine * engine, OpenPitParamAccountGroupId group) {
+    _fn_openpit_engine_clear_account_group_currency(engine, group);
 }
 
 void openpit_destroy_account_block_error(OpenPitAccountBlockError * err) {

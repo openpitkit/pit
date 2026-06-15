@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 // Package model provides engine model types such as Order, ExecutionReport, and AccountAdjustment.
 package model
@@ -298,6 +298,7 @@ type AccountAdjustmentBalanceOperation struct {
 type AccountAdjustmentBalanceOperationValues struct {
 	Asset             optional.Option[param.Asset]
 	AverageEntryPrice optional.Option[param.Price]
+	RealizedPnl       optional.Option[param.Pnl]
 }
 
 // NewAccountAdjustmentBalanceOperation creates a new zeroed balance operation.
@@ -331,6 +332,7 @@ func (o AccountAdjustmentBalanceOperation) Values() AccountAdjustmentBalanceOper
 	return AccountAdjustmentBalanceOperationValues{
 		Asset:             o.Asset(),
 		AverageEntryPrice: o.AverageEntryPrice(),
+		RealizedPnl:       o.RealizedPnl(),
 	}
 }
 
@@ -351,6 +353,9 @@ func (o *AccountAdjustmentBalanceOperation) setValues(
 	if value, ok := values.AverageEntryPrice.Get(); ok {
 		o.SetAverageEntryPrice(value)
 	}
+	if value, ok := values.RealizedPnl.Get(); ok {
+		o.SetRealizedPnl(value)
+	}
 }
 
 // Asset returns the optional balance-operation asset.
@@ -370,14 +375,16 @@ func (o *AccountAdjustmentBalanceOperation) UnsetAsset() {
 	o.retainAsset = param.Asset{}
 }
 
-// AverageEntryPrice returns the optional average entry price.
+// AverageEntryPrice returns the optional account-currency average entry price
+// force-set.
 func (o AccountAdjustmentBalanceOperation) AverageEntryPrice() optional.Option[param.Price] {
 	return param.NewPriceOptionFromHandle(
 		native.AccountAdjustmentBalanceOperationGetAverageEntryPrice(o.value),
 	)
 }
 
-// SetAverageEntryPrice sets the average entry price.
+// SetAverageEntryPrice force-sets the average entry price in account currency.
+// The value is caller supplied; no FX is applied.
 func (o *AccountAdjustmentBalanceOperation) SetAverageEntryPrice(price param.Price) {
 	native.AccountAdjustmentBalanceOperationSetAverageEntryPrice(&o.value, price.Handle())
 }
@@ -385,6 +392,25 @@ func (o *AccountAdjustmentBalanceOperation) SetAverageEntryPrice(price param.Pri
 // UnsetAverageEntryPrice clears the average entry price.
 func (o *AccountAdjustmentBalanceOperation) UnsetAverageEntryPrice() {
 	native.AccountAdjustmentBalanceOperationUnsetAverageEntryPrice(&o.value)
+}
+
+// RealizedPnl returns the optional force-set of the slot's absolute realized
+// PnL in account currency.
+func (o AccountAdjustmentBalanceOperation) RealizedPnl() optional.Option[param.Pnl] {
+	return param.NewPnlOptionFromHandle(
+		native.AccountAdjustmentBalanceOperationGetRealizedPnl(o.value),
+	)
+}
+
+// SetRealizedPnl force-sets the slot's absolute realized PnL in account
+// currency. The value is caller supplied; no FX is applied.
+func (o *AccountAdjustmentBalanceOperation) SetRealizedPnl(value param.Pnl) {
+	native.AccountAdjustmentBalanceOperationSetRealizedPnl(&o.value, value.Handle())
+}
+
+// UnsetRealizedPnl clears the realized PnL force-set.
+func (o *AccountAdjustmentBalanceOperation) UnsetRealizedPnl() {
+	native.AccountAdjustmentBalanceOperationUnsetRealizedPnl(&o.value)
 }
 
 // AccountAdjustmentBalanceOperationView is a mutable view into a balance operation owned by an AccountAdjustment.
@@ -427,14 +453,16 @@ func (o *AccountAdjustmentBalanceOperationView) UnsetAsset() {
 	*o.retainAsset = param.Asset{}
 }
 
-// AverageEntryPrice returns the optional average entry price from the view.
+// AverageEntryPrice returns the optional account-currency average entry price
+// force-set from the view.
 func (o AccountAdjustmentBalanceOperationView) AverageEntryPrice() optional.Option[param.Price] {
 	return param.NewPriceOptionFromHandle(
 		native.AccountAdjustmentBalanceOperationGetAverageEntryPrice(*o.ref),
 	)
 }
 
-// SetAverageEntryPrice sets the average entry price on the view.
+// SetAverageEntryPrice force-sets the average entry price in account currency
+// on the view. The value is caller supplied; no FX is applied.
 func (o *AccountAdjustmentBalanceOperationView) SetAverageEntryPrice(price param.Price) {
 	native.AccountAdjustmentBalanceOperationSetAverageEntryPrice(o.ref, price.Handle())
 }
@@ -442,6 +470,25 @@ func (o *AccountAdjustmentBalanceOperationView) SetAverageEntryPrice(price param
 // UnsetAverageEntryPrice clears the average entry price on the view.
 func (o *AccountAdjustmentBalanceOperationView) UnsetAverageEntryPrice() {
 	native.AccountAdjustmentBalanceOperationUnsetAverageEntryPrice(o.ref)
+}
+
+// RealizedPnl returns the optional account-currency realized PnL force-set from
+// the view.
+func (o AccountAdjustmentBalanceOperationView) RealizedPnl() optional.Option[param.Pnl] {
+	return param.NewPnlOptionFromHandle(
+		native.AccountAdjustmentBalanceOperationGetRealizedPnl(*o.ref),
+	)
+}
+
+// SetRealizedPnl force-sets the slot's absolute realized PnL in account
+// currency on the view. The value is caller supplied; no FX is applied.
+func (o *AccountAdjustmentBalanceOperationView) SetRealizedPnl(value param.Pnl) {
+	native.AccountAdjustmentBalanceOperationSetRealizedPnl(o.ref, value.Handle())
+}
+
+// UnsetRealizedPnl clears the realized PnL force-set on the view.
+func (o *AccountAdjustmentBalanceOperationView) UnsetRealizedPnl() {
+	native.AccountAdjustmentBalanceOperationUnsetRealizedPnl(o.ref)
 }
 
 //------------------------------------------------------------------------------
@@ -573,14 +620,16 @@ func (o *AccountAdjustmentPositionOperation) UnsetCollateralAsset() {
 	o.retainCollateralAsset = param.Asset{}
 }
 
-// AverageEntryPrice returns the optional average entry price for the position operation.
+// AverageEntryPrice returns the optional account-currency average entry price
+// force-set for the position operation.
 func (o AccountAdjustmentPositionOperation) AverageEntryPrice() optional.Option[param.Price] {
 	return param.NewPriceOptionFromHandle(
 		native.AccountAdjustmentPositionOperationGetAverageEntryPrice(o.value),
 	)
 }
 
-// SetAverageEntryPrice sets the average entry price for the position operation.
+// SetAverageEntryPrice force-sets the average entry price in account currency
+// for the position operation. The value is caller supplied; no FX is applied.
 func (o *AccountAdjustmentPositionOperation) SetAverageEntryPrice(price param.Price) {
 	native.AccountAdjustmentPositionOperationSetAverageEntryPrice(&o.value, price.Handle())
 }
@@ -689,14 +738,16 @@ func (o *AccountAdjustmentPositionOperationView) UnsetCollateralAsset() {
 	*o.retainCollateralAsset = param.Asset{}
 }
 
-// AverageEntryPrice returns the optional average entry price from the view.
+// AverageEntryPrice returns the optional account-currency average entry price
+// force-set from the view.
 func (o AccountAdjustmentPositionOperationView) AverageEntryPrice() optional.Option[param.Price] {
 	return param.NewPriceOptionFromHandle(
 		native.AccountAdjustmentPositionOperationGetAverageEntryPrice(*o.ref),
 	)
 }
 
-// SetAverageEntryPrice sets the average entry price on the view.
+// SetAverageEntryPrice force-sets the average entry price in account currency
+// on the view. The value is caller supplied; no FX is applied.
 func (o *AccountAdjustmentPositionOperationView) SetAverageEntryPrice(price param.Price) {
 	native.AccountAdjustmentPositionOperationSetAverageEntryPrice(o.ref, price.Handle())
 }

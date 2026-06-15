@@ -68,6 +68,63 @@ func newNativeOutcomeAmountOptional(
 	return native.NewOutcomeAmountOptionalSet(amount.NewHandle())
 }
 
+// PnlOutcomeAmount is an account-currency delta/absolute pair for a realized
+// PnL field.
+type PnlOutcomeAmount struct {
+	// Delta is the signed account-currency PnL change applied by this
+	// operation.
+	Delta param.Pnl
+	// Absolute is the cumulative account-currency realized PnL after this
+	// operation.
+	Absolute param.Pnl
+}
+
+// NewPnlOutcomeAmountFromHandle creates a PnlOutcomeAmount from a native handle.
+func NewPnlOutcomeAmountFromHandle(handle native.PnlOutcomeAmount) PnlOutcomeAmount {
+	return PnlOutcomeAmount{
+		Delta:    param.NewPnlFromHandle(native.PnlOutcomeAmountGetDelta(handle)),
+		Absolute: param.NewPnlFromHandle(native.PnlOutcomeAmountGetAbsolute(handle)),
+	}
+}
+
+// NewHandle returns a native handle for this PnL outcome amount.
+func (a PnlOutcomeAmount) NewHandle() native.PnlOutcomeAmount {
+	return native.NewPnlOutcomeAmount(a.Delta.Handle(), a.Absolute.Handle())
+}
+
+// NewPnlOutcomeAmountOptionFromHandle creates an optional PnlOutcomeAmount from
+// a native optional handle.
+func NewPnlOutcomeAmountOptionFromHandle(
+	handle native.PnlOutcomeAmountOptional,
+) optional.Option[PnlOutcomeAmount] {
+	if !native.PnlOutcomeAmountOptionalIsSet(handle) {
+		return optional.None[PnlOutcomeAmount]()
+	}
+	return optional.Some(
+		NewPnlOutcomeAmountFromHandle(native.PnlOutcomeAmountOptionalGet(handle)),
+	)
+}
+
+func newNativePnlOutcomeAmountOptional(
+	value optional.Option[PnlOutcomeAmount],
+) native.PnlOutcomeAmountOptional {
+	amount, ok := value.Get()
+	if !ok {
+		return native.NewPnlOutcomeAmountOptionalUnset()
+	}
+	return native.NewPnlOutcomeAmountOptionalSet(amount.NewHandle())
+}
+
+func newNativeParamPriceOptional(
+	value optional.Option[param.Price],
+) native.ParamPriceOptional {
+	price, ok := value.Get()
+	if !ok {
+		return native.NewParamPriceOptionalUnset()
+	}
+	return native.NewParamPriceOptionalSet(price.Handle())
+}
+
 // AccountOutcomeEntry is the raw outcome data produced by a policy for one asset.
 type AccountOutcomeEntry struct {
 	// Asset this outcome refers to.
@@ -78,6 +135,15 @@ type AccountOutcomeEntry struct {
 	Held optional.Option[OutcomeAmount]
 	// Incoming is the incoming (pending inflow) amount outcome.
 	Incoming optional.Option[OutcomeAmount]
+	// RealizedPnl is the account-currency realized PnL. Delta is the change
+	// applied by this operation; absolute is the cumulative value after the
+	// operation. None means realized PnL was not tracked or not emitted; missing
+	// account currency or FX stops tracking without reject/block.
+	RealizedPnl optional.Option[PnlOutcomeAmount]
+	// AverageEntryPrice is the absolute current account-currency average entry
+	// price after the operation. None means it was not tracked or not emitted;
+	// missing account currency or FX stops tracking without reject/block.
+	AverageEntryPrice optional.Option[param.Price]
 }
 
 // NewAccountOutcomeEntryFromHandle creates an AccountOutcomeEntry from a native
@@ -87,9 +153,21 @@ func NewAccountOutcomeEntryFromHandle(handle native.AccountOutcomeEntry) Account
 		Asset: param.NewAssetFromHandle(
 			native.AccountOutcomeEntryGetAsset(handle),
 		).Or(param.Asset{}),
-		Balance:  NewOutcomeAmountOptionFromHandle(native.AccountOutcomeEntryGetBalance(handle)),
-		Held:     NewOutcomeAmountOptionFromHandle(native.AccountOutcomeEntryGetHeld(handle)),
-		Incoming: NewOutcomeAmountOptionFromHandle(native.AccountOutcomeEntryGetIncoming(handle)),
+		Balance: NewOutcomeAmountOptionFromHandle(
+			native.AccountOutcomeEntryGetBalance(handle),
+		),
+		Held: NewOutcomeAmountOptionFromHandle(
+			native.AccountOutcomeEntryGetHeld(handle),
+		),
+		Incoming: NewOutcomeAmountOptionFromHandle(
+			native.AccountOutcomeEntryGetIncoming(handle),
+		),
+		RealizedPnl: NewPnlOutcomeAmountOptionFromHandle(
+			native.AccountOutcomeEntryGetRealizedPnl(handle),
+		),
+		AverageEntryPrice: param.NewPriceOptionFromHandle(
+			native.AccountOutcomeEntryGetAverageEntryPrice(handle),
+		),
 	}
 }
 
@@ -103,6 +181,8 @@ func (e AccountOutcomeEntry) NewHandle() native.AccountOutcomeEntry {
 		newNativeOutcomeAmountOptional(e.Balance),
 		newNativeOutcomeAmountOptional(e.Held),
 		newNativeOutcomeAmountOptional(e.Incoming),
+		newNativePnlOutcomeAmountOptional(e.RealizedPnl),
+		newNativeParamPriceOptional(e.AverageEntryPrice),
 	)
 }
 

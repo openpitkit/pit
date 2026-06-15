@@ -19,14 +19,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use openpit::param::{
-    AccountGroupId, AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, Trade,
-    TradeAmount, DEFAULT_ACCOUNT_GROUP,
+    AccountGroupId, AccountId, AdjustmentAmount, Asset, Pnl, PositionSize, Price, Quantity, Side,
+    Trade, TradeAmount, DEFAULT_ACCOUNT_GROUP,
 };
 use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
 use openpit::pretrade::{PreTradeLock, RejectCode};
 use openpit::{
     AccountInfo, AlreadyRegistered, Engine, FullSync, FullSyncEngine, HasAccountAdjustmentBalance,
-    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
+    HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentBalanceLowerBound,
+    HasAccountAdjustmentBalanceRealizedPnl, HasAccountAdjustmentBalanceUpperBound,
     HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
     HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
     HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound, HasAccountId,
@@ -86,6 +87,7 @@ fn get_default<Sync: openpit::MarketDataSync>(
         &group_source(None),
         QuoteResolution::AccountThenGroupThenDefault,
     )
+    .ok()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -230,14 +232,17 @@ fn finite_ttl_hides_aged_quote() {
     );
 
     let err = svc
-        .get_or_err(
+        .get(
             id,
             acc(1),
             &group_source(None),
             QuoteResolution::AccountThenGroupThenDefault,
         )
-        .expect_err("get_or_err must surface staleness");
-    assert_eq!(err, MarketDataError::QuoteUnavailable);
+        .expect_err("get must surface staleness");
+    assert_eq!(
+        err,
+        MarketDataError::QuoteExpired(Quote::new().with_mark(px("100")))
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -661,6 +666,8 @@ impl HasPreTradeLock for SfTestReport {
 struct SfTestAdjustment {
     asset: Asset,
     balance: Option<AdjustmentAmount>,
+    balance_average_entry_price: Option<Price>,
+    balance_realized_pnl: Option<Pnl>,
 }
 
 impl HasBalanceAsset for SfTestAdjustment {
@@ -671,6 +678,16 @@ impl HasBalanceAsset for SfTestAdjustment {
 impl HasAccountAdjustmentBalance for SfTestAdjustment {
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         Ok(self.balance)
+    }
+}
+impl HasAccountAdjustmentBalanceAverageEntryPrice for SfTestAdjustment {
+    fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+        Ok(self.balance_average_entry_price)
+    }
+}
+impl HasAccountAdjustmentBalanceRealizedPnl for SfTestAdjustment {
+    fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
+        Ok(self.balance_realized_pnl)
     }
 }
 impl HasAccountAdjustmentBalanceLowerBound for SfTestAdjustment {
@@ -765,6 +782,8 @@ fn sf_seed_balance(engine: &SfEngine, asset_code: &str, amount: &str) {
     let adj = SfTestAdjustment {
         asset: asset(asset_code),
         balance: Some(AdjustmentAmount::Absolute(ps(amount))),
+        balance_average_entry_price: None,
+        balance_realized_pnl: None,
     };
     let acc = AccountId::from_u64(12345);
     engine
@@ -1069,6 +1088,7 @@ fn push_for_fans_out_to_account_and_group_buckets() {
             &group_source(None),
             QuoteResolution::AccountOnly
         )
+        .ok()
         .is_none(),
         "account 8 has no per-account quote"
     );
@@ -1094,6 +1114,7 @@ fn push_for_fans_out_to_account_and_group_buckets() {
             &group_source(None),
             QuoteResolution::AccountThenGroup,
         )
+        .ok()
         .is_none(),
         "AccountThenGroup must not fall through to the default bucket"
     );
@@ -1236,14 +1257,14 @@ fn push_for_patch_merges_each_bucket_independently() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn get_or_err_on_unregistered_id_reports_unknown_instrument() {
+fn get_on_unregistered_id_reports_unknown_instrument() {
     use openpit::InstrumentId;
 
     let svc = MarketDataBuilder::<LocalSync>::new(QuoteTtl::Infinite).build();
     let unknown = InstrumentId::new(404);
 
     let err = svc
-        .get_or_err(
+        .get(
             unknown,
             acc(1),
             &group_source(None),
@@ -1291,6 +1312,7 @@ fn ttl_cascade_instrument_account_is_highest_priority() {
             &group_source(Some(grp(3))),
             QuoteResolution::AccountThenGroupThenDefault,
         )
+        .ok()
         .is_none(),
         "instrument-account TTL (tier 1) must expire the account-7 quote"
     );
@@ -1321,6 +1343,7 @@ fn ttl_cascade_account_beats_instrument_only() {
             &group_source(None),
             QuoteResolution::AccountOnly
         )
+        .ok()
         .is_none(),
         "service account TTL (tier 4) must beat the infinite instrument-only TTL (tier 7)"
     );
@@ -1347,6 +1370,7 @@ fn ttl_cascade_group_beats_instrument_only() {
             &group_source(Some(grp(3))),
             QuoteResolution::AccountThenGroup,
         )
+        .ok()
         .is_none(),
         "service group TTL (tier 5) must beat the infinite instrument-only TTL (tier 7)"
     );
@@ -1440,6 +1464,7 @@ fn ttl_cascade_uses_requested_axes_not_found_bucket() {
             &group_source(None),
             QuoteResolution::AccountThenGroupThenDefault,
         )
+        .ok()
         .is_none(),
         "account-7 TTL must govern a quote found in the default bucket"
     );
@@ -1451,6 +1476,7 @@ fn ttl_cascade_uses_requested_axes_not_found_bucket() {
             &group_source(None),
             QuoteResolution::AccountThenGroupThenDefault,
         )
+        .ok()
         .is_some(),
         "account 8 (no override) keeps the infinite default-bucket quote"
     );
@@ -1481,6 +1507,7 @@ fn ttl_cascade_clear_account_ttl_reverts_to_inherit() {
             &group_source(None),
             QuoteResolution::AccountOnly
         )
+        .ok()
         .is_some(),
         "cleared account TTL must fall through to the infinite global default"
     );
@@ -1495,7 +1522,7 @@ fn select_quote_stale_specific_bucket_blocks_fallthrough_to_default() {
     // Test - select_quote picks the FIRST NON-EMPTY bucket the resolution
     // permits, then the TTL check runs separately: a stale quote in the
     // per-account bucket is selected and fails freshness, so the read returns
-    // unavailable WITHOUT falling through to a fresh default-bucket quote.
+    // QuoteExpired WITHOUT falling through to a fresh default-bucket quote.
     let svc = MarketDataBuilder::<LocalSync>::new(QuoteTtl::Infinite).build();
     let id = svc
         .register(instr("AAPL", "USD"))
@@ -1522,7 +1549,7 @@ fn select_quote_stale_specific_bucket_blocks_fallthrough_to_default() {
         .expect("default re-push must succeed");
 
     let err = svc
-        .get_or_err(
+        .get(
             id,
             acc(7),
             &group_source(None),
@@ -1531,7 +1558,7 @@ fn select_quote_stale_specific_bucket_blocks_fallthrough_to_default() {
         .expect_err("stale per-account quote must block fallthrough");
     assert_eq!(
         err,
-        MarketDataError::QuoteUnavailable,
+        MarketDataError::QuoteExpired(Quote::new().with_mark(px("200"))),
         "selection stops at the non-empty per-account bucket; its staleness \
          must not serve the fresh default quote"
     );
@@ -1648,6 +1675,7 @@ fn ttl_cascade_instrument_group_is_sole_setting() {
             &group_source(Some(grp(3))),
             QuoteResolution::AccountThenGroup,
         )
+        .ok()
         .is_none(),
         "instrument-group TTL (tier 2) must expire the group-3 quote"
     );
@@ -1736,6 +1764,7 @@ fn ttl_cascade_clear_account_group_ttl_reverts_to_inherit() {
             &group_source(Some(grp(3))),
             QuoteResolution::AccountThenGroup,
         )
+        .ok()
         .is_some(),
         "cleared service group TTL must fall through to the infinite default"
     );
@@ -1797,6 +1826,7 @@ fn ttl_cascade_clear_instrument_account_ttl_reverts_to_inherit() {
             &group_source(None),
             QuoteResolution::AccountOnly
         )
+        .ok()
         .is_some(),
         "cleared instrument-account TTL must fall through to the infinite \
          default"
@@ -1831,6 +1861,7 @@ fn ttl_cascade_clear_instrument_account_group_ttl_reverts_to_inherit() {
             &group_source(Some(grp(3))),
             QuoteResolution::AccountThenGroup,
         )
+        .ok()
         .is_some(),
         "cleared instrument-group TTL must fall through to the infinite default"
     );

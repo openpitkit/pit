@@ -117,6 +117,149 @@ func TestAccountAdjustmentNativeE2E_BatchAppliesAndInvokesPolicyPerItem(t *testi
 	}
 }
 
+func TestAccountAdjustmentNativeE2E_BalanceRealizedPnlReachesPolicyAndSurfacesInOutcome(t *testing.T) {
+	policy := &accountAdjustmentRealizedPnlEchoPolicy{name: "echo-realized-pnl"}
+
+	engine, err := NewEngineBuilder().FullSync().PreTrade(policy).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	want := mustAdjustmentNativePnl(t, "42.5")
+	adjustment, err := model.NewAccountAdjustmentFromValues(
+		model.AccountAdjustmentValues{
+			BalanceOperation: optional.Some(
+				model.NewAccountAdjustmentBalanceOperationFromValues(
+					model.AccountAdjustmentBalanceOperationValues{
+						Asset:       optional.Some(mustAdjustmentNativeAsset(t, "USD")),
+						RealizedPnl: optional.Some(want),
+					},
+				),
+			),
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewAccountAdjustmentFromValues() error = %v", err)
+	}
+
+	rejects, outcomes, err := engine.ApplyAccountAdjustment(
+		param.NewAccountIDFromUint64(91),
+		[]model.AccountAdjustment{adjustment},
+	)
+	if err != nil {
+		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
+	}
+	if rejects.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", rejects)
+	}
+	if !policy.sawRealizedPnl {
+		t.Fatal("policy did not observe the balance-operation realized PnL input")
+	}
+	if policy.pushErr != nil {
+		t.Fatalf("outcomes.Push() error = %v", policy.pushErr)
+	}
+	if len(outcomes) != 1 {
+		t.Fatalf("outcomes len = %d, want 1", len(outcomes))
+	}
+
+	got, ok := outcomes[0].Entry.RealizedPnl.Get()
+	if !ok {
+		t.Fatal("outcome RealizedPnl is unset, want force-set value")
+	}
+	assertNativePnlEqual(t, got.Absolute, want)
+	assertNativePnlEqual(t, got.Delta, want)
+}
+
+// accountAdjustmentRealizedPnlEchoPolicy reads the balance-operation realized
+// PnL force-set from the incoming adjustment and re-emits it as an outcome,
+// proving the input reaches the engine and surfaces on the outcome side.
+type accountAdjustmentRealizedPnlEchoPolicy struct {
+	name           string
+	sawRealizedPnl bool
+	pushErr        error
+}
+
+func (accountAdjustmentRealizedPnlEchoPolicy) Close() {}
+
+func (p accountAdjustmentRealizedPnlEchoPolicy) Name() string {
+	return p.name
+}
+
+func (accountAdjustmentRealizedPnlEchoPolicy) PolicyGroupID() model.PolicyGroupID {
+	return model.DefaultPolicyGroupID
+}
+
+func (accountAdjustmentRealizedPnlEchoPolicy) CheckPreTradeStart(
+	pretrade.Context,
+	model.Order,
+) []reject.Reject {
+	return nil
+}
+
+func (accountAdjustmentRealizedPnlEchoPolicy) PerformPreTradeCheck(
+	pretrade.Context,
+	model.Order,
+	tx.Mutations,
+	pretrade.Result,
+) []reject.Reject {
+	return nil
+}
+
+func (accountAdjustmentRealizedPnlEchoPolicy) ApplyExecutionReport(
+	_ pretrade.PostTradeContext,
+	_ model.ExecutionReport,
+	_ pretrade.PostTradeAdjustments,
+) []reject.AccountBlock {
+	return nil
+}
+
+func (p *accountAdjustmentRealizedPnlEchoPolicy) ApplyAccountAdjustment(
+	_ accountadjustment.Context,
+	_ param.AccountID,
+	adjustment model.AccountAdjustment,
+	_ tx.Mutations,
+	outcomes pretrade.AccountOutcomes,
+) []reject.Reject {
+	operation, ok := adjustment.BalanceOperation().Get()
+	if !ok {
+		return nil
+	}
+	realizedPnl, ok := operation.RealizedPnl().Get()
+	if !ok {
+		return nil
+	}
+	asset, ok := operation.Asset().Get()
+	if !ok {
+		return nil
+	}
+	p.sawRealizedPnl = true
+	p.pushErr = outcomes.Push(accountadjustment.AccountOutcomeEntry{
+		Asset: asset,
+		RealizedPnl: optional.Some(accountadjustment.PnlOutcomeAmount{
+			Delta:    realizedPnl,
+			Absolute: realizedPnl,
+		}),
+	})
+	return nil
+}
+
+func mustAdjustmentNativePnl(t *testing.T, source string) param.Pnl {
+	t.Helper()
+	value, err := param.NewPnlFromString(source)
+	if err != nil {
+		t.Fatalf("NewPnlFromString(%q) error = %v", source, err)
+	}
+	return value
+}
+
+func assertNativePnlEqual(t *testing.T, got, want param.Pnl) {
+	t.Helper()
+	if !got.Equal(want) {
+		t.Fatalf("Pnl = %s, want %s", got.String(), want.String())
+	}
+}
+
 type accountAdjustmentCountingPolicy struct {
 	name  string
 	calls int

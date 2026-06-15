@@ -15,13 +15,16 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use crate::core::{AccountGroups, AccountGroupsHandle, GroupLookup};
-use crate::param::{AccountGroupId, AccountId};
+#[cfg(test)]
+use crate::core::{AccountBlockHandle, AccountCurrencies, BlockedAccounts};
+use crate::core::{AccountGroups, AccountGroupsHandle, Accounts, GroupLookup};
+use crate::param::{AccountGroupId, AccountId, Asset};
 use crate::storage::{self, StorageBuilder};
 
 /// Context of the current post-trade (execution-report) operation.
 ///
-/// Exposes lazy account-group accessors for the report's account. Unlike
+/// Exposes lazy account-group accessors and account-currency access for the
+/// report's account. Unlike
 /// [`PreTradeContext`](crate::pretrade::PreTradeContext) and
 /// [`AccountAdjustmentContext`](crate::AccountAdjustmentContext) it carries no
 /// `account_control`: post-trade processing reports account blocks through the
@@ -34,6 +37,8 @@ pub struct PostTradeContext<StorageFactory>
 where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
 {
+    accounts: Option<Accounts<StorageFactory>>,
+    account: Option<AccountId>,
     group_lookup: GroupLookup<StorageFactory>,
 }
 
@@ -46,6 +51,20 @@ where
         account: Option<AccountId>,
     ) -> Self {
         Self {
+            accounts: None,
+            account,
+            group_lookup: GroupLookup::new(account_groups, account),
+        }
+    }
+
+    pub(crate) fn with_accounts(
+        accounts: Accounts<StorageFactory>,
+        account_groups: AccountGroupsHandle<StorageFactory>,
+        account: Option<AccountId>,
+    ) -> Self {
+        Self {
+            accounts: Some(accounts),
+            account,
             group_lookup: GroupLookup::new(account_groups, account),
         }
     }
@@ -71,12 +90,40 @@ where
         Self::with_groups(handle, None)
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_account_currency(account: AccountId, currency: Asset) -> Self
+    where
+        StorageFactory: Default + storage::CreateStorageFor<AccountGroupId>,
+    {
+        let builder = StorageBuilder::new(StorageFactory::default());
+        let account_groups = AccountGroupsHandle::from_inner(StorageFactory::new_shared(
+            AccountGroups::new(&builder),
+        ));
+        let block_handle = AccountBlockHandle::from_inner(StorageFactory::new_shared(
+            BlockedAccounts::new(&builder),
+        ));
+        let currencies = StorageFactory::new_shared(AccountCurrencies::new(&builder));
+        let accounts = Accounts::new(account_groups.clone(), block_handle, currencies);
+        accounts.set_currency(account, currency);
+        Self::with_accounts(accounts, account_groups, Some(account))
+    }
+
     /// Returns the group of the report's account, or `None` when the account is
     /// absent or unregistered.
     ///
     /// The lookup is performed once and cached for the lifetime of this context.
     pub fn account_group(&self) -> Option<AccountGroupId> {
         self.group_lookup.group()
+    }
+
+    /// Returns the currency resolved for the report's account.
+    ///
+    /// The engine-backed context uses the same account -> group -> default
+    /// cascade as [`Accounts::currency_of`]. Standalone test contexts have no
+    /// account registry, so they return `None`.
+    pub(crate) fn account_currency(&self) -> Option<Asset> {
+        self.account
+            .and_then(|account| self.accounts.as_ref()?.currency_of(account))
     }
 }
 
@@ -87,5 +134,14 @@ where
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<StorageFactory> crate::marketdata::AccountInfo for PostTradeContext<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    fn group(&self) -> Option<AccountGroupId> {
+        self.account_group()
     }
 }

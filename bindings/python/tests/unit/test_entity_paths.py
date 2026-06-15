@@ -30,6 +30,7 @@ def test_pretrade_entities_have_rust_like_module_paths() -> None:
     assert openpit.pretrade.PostTradeResult is openpit.PostTradeResult
     assert openpit.pretrade.AccountBlock.__module__ == "openpit.pretrade"
     assert openpit.pretrade.OutcomeAmount.__module__ == "openpit.pretrade"
+    assert openpit.pretrade.PnlOutcomeAmount.__module__ == "openpit.pretrade"
     assert openpit.pretrade.AccountOutcomeEntry.__module__ == "openpit.pretrade"
     assert openpit.pretrade.AccountAdjustmentOutcome.__module__ == "openpit.pretrade"
 

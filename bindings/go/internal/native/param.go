@@ -795,6 +795,14 @@ func ParamPriceCalculatePositionSize(
 	return out, nil
 }
 
+func NewParamPriceOptionalSet(value ParamPrice) ParamPriceOptional {
+	return ParamPriceOptional{value: value, is_set: true}
+}
+
+func NewParamPriceOptionalUnset() ParamPriceOptional {
+	return ParamPriceOptional{}
+}
+
 func ParamPriceOptionalIsSet(value ParamPriceOptional) bool {
 	return bool(value.is_set)
 }

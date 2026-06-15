@@ -114,10 +114,10 @@ impl InstrumentRegistry {
 ///   instrument name into the default bucket; auto-registers a named slot on
 ///   first sight.
 ///
-/// Consumers poll via [`get`](Self::get) / [`get_or_err`](Self::get_or_err),
-/// supplying the reading account, an [`AccountInfo`], and a
-/// [`QuoteResolution`] that picks which buckets to consult; quotes older than
-/// their effective TTL surface as "unavailable".
+/// Consumers poll via [`get`](Self::get), supplying the reading account, an
+/// [`AccountInfo`], and a [`QuoteResolution`] that picks which buckets to
+/// consult; quotes older than their effective TTL surface as an expired quote
+/// error.
 ///
 /// # TTL cascade
 ///
@@ -669,25 +669,8 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
     // ── Get ───────────────────────────────────────────────────────────────────
 
     /// Returns the latest quote for `(instrument_id, account_id)` under
-    /// `resolution`, or `None` if the id is unknown, no candidate quote exists,
-    /// or the selected quote has aged past its effective TTL.
-    ///
-    /// `account_info` supplies the account's group for the group/default tiers;
-    /// it is consulted lazily (only when the per-account bucket misses and the
-    /// mode or TTL cascade needs the group).
-    pub fn get(
-        &self,
-        instrument_id: InstrumentId,
-        account_id: AccountId,
-        account_info: &impl AccountInfo,
-        resolution: QuoteResolution,
-    ) -> Option<Quote> {
-        self.get_or_err(instrument_id, account_id, account_info, resolution)
-            .ok()
-    }
-
-    /// Returns the latest quote for `(instrument_id, account_id)` under
-    /// `resolution`, distinguishing "not registered" from "no usable quote".
+    /// `resolution`, distinguishing unknown instruments, unavailable quotes,
+    /// and expired selected quotes.
     ///
     /// Quote selection walks the buckets the `resolution` permits (per-account,
     /// then the account's group, then the default group), stopping at the first
@@ -699,10 +682,11 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
     ///
     /// - [`MarketDataError::UnknownInstrument`] - `instrument_id` is not
     ///   registered.
-    /// - [`MarketDataError::QuoteUnavailable`] - registered but no usable quote
-    ///   (no candidate in the consulted buckets, or the selected quote aged
-    ///   past its effective TTL).
-    pub fn get_or_err(
+    /// - [`MarketDataError::QuoteUnavailable`] - registered but no candidate
+    ///   quote exists in the consulted buckets.
+    /// - [`MarketDataError::QuoteExpired`] - the selected quote aged past its
+    ///   effective TTL.
+    pub fn get(
         &self,
         instrument_id: InstrumentId,
         account_id: AccountId,
@@ -743,7 +727,7 @@ impl<Sync: MarketDataSync> MarketDataService<Sync> {
         };
         if let Some(ttl) = effective_ttl {
             if Instant::now().saturating_duration_since(selected.pushed_at) >= ttl {
-                return Err(MarketDataError::QuoteUnavailable);
+                return Err(MarketDataError::QuoteExpired(selected.quote));
             }
         }
         Ok(selected.quote)

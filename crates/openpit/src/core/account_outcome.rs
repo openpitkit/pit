@@ -16,7 +16,7 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 use crate::core::PolicyGroupId;
-use crate::param::{Asset, PositionSize};
+use crate::param::{Asset, Pnl, PositionSize, Price};
 
 /// A delta/absolute pair for one position field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +35,15 @@ pub struct OutcomeAmount {
     /// caller's read. Use `delta` as the source of truth for position bookkeeping;
     /// treat `absolute` as a convenience hint only.
     pub absolute: PositionSize,
+}
+
+/// A delta/absolute pair for a realized PnL field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PnlOutcomeAmount {
+    /// Signed PnL change applied by this operation.
+    pub delta: Pnl,
+    /// Cumulative realized PnL after this operation.
+    pub absolute: Pnl,
 }
 
 /// Raw outcome data produced by a policy for one asset.
@@ -57,6 +66,24 @@ pub struct AccountOutcomeEntry {
     ///
     /// Covers both working-order expected fills and incoming T+N settlements.
     pub incoming: Option<OutcomeAmount>,
+    /// Realized PnL outcome, denominated in the account currency.
+    ///
+    /// `delta` is the PnL change booked by this operation; `absolute` is the
+    /// cumulative account-currency realized PnL for the `(account, asset)`
+    /// slot. Underlying-leg fills book `delta` as the realized PnL they
+    /// produce; an account adjustment that force-sets realized PnL books the
+    /// forced account-currency value. It is `None` when realized PnL is not
+    /// tracked, including missing account currency or missing FX, and for
+    /// reservations, cancels, settlement legs, zero-realized fills, and
+    /// adjustments that do not force-set realized PnL.
+    pub realized_pnl: Option<PnlOutcomeAmount>,
+    /// Absolute account-currency average entry price of the current net
+    /// position for this `(account, asset)` slot, or `None` when the position
+    /// is flat, average tracking is absent, account currency or FX is missing,
+    /// or the operation does not carry an average (e.g. settlement legs,
+    /// reservations, cancels, or adjustments without a balance change or an
+    /// explicit average force-set).
+    pub average_entry_price: Option<Price>,
 }
 
 /// Account position outcome with the group tag of the business entity that

@@ -276,6 +276,26 @@ func AccountAdjustmentBalanceOperationUnsetAverageEntryPrice(
 	operation.average_entry_price = ParamPriceOptional{}
 }
 
+func AccountAdjustmentBalanceOperationGetRealizedPnl(
+	operation AccountAdjustmentBalanceOperation,
+) ParamPnlOptional {
+	return operation.realized_pnl
+}
+
+func AccountAdjustmentBalanceOperationSetRealizedPnl(
+	operation *AccountAdjustmentBalanceOperation,
+	value ParamPnl,
+) {
+	operation.realized_pnl.value = value
+	operation.realized_pnl.is_set = true
+}
+
+func AccountAdjustmentBalanceOperationUnsetRealizedPnl(
+	operation *AccountAdjustmentBalanceOperation,
+) {
+	operation.realized_pnl = ParamPnlOptional{}
+}
+
 //------------------------------------------------------------------------------
 // AccountAdjustmentPositionOperation
 

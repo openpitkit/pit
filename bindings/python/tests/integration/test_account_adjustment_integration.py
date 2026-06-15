@@ -84,6 +84,52 @@ def _make_balance_adjustment(asset_code: str) -> openpit.AccountAdjustment:
     )
 
 
+class RecordingRealizedPnlCheck(openpit.pretrade.Policy):
+    def __init__(self) -> None:
+        self.seen_realized_pnl: list[str | None] = []
+
+    # @typing.override
+    @property
+    def name(self) -> str:
+        return "RecordingRealizedPnlCheck"
+
+    # @typing.override
+    def apply_account_adjustment(
+        self,
+        ctx: openpit.AccountAdjustmentContext,
+        account_id: openpit.param.AccountId,
+        adjustment: openpit.AccountAdjustment,
+    ) -> list[openpit.pretrade.PolicyReject] | tuple[openpit.Mutation, ...] | None:
+        realized_pnl = adjustment.operation.realized_pnl
+        self.seen_realized_pnl.append(
+            None if realized_pnl is None else str(realized_pnl)
+        )
+        return None
+
+
+@pytest.mark.integration
+def test_account_adjustment_integration_realized_pnl_reaches_policy() -> None:
+    account_id = openpit.param.AccountId.from_int(99224416)
+    policy = RecordingRealizedPnlCheck()
+    engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
+
+    result = engine.apply_account_adjustment(
+        account_id=account_id,
+        adjustments=[
+            openpit.AccountAdjustment(
+                operation=openpit.AccountAdjustmentBalanceOperation(
+                    asset="USD",
+                    realized_pnl=openpit.param.Pnl("42.5"),
+                )
+            ),
+            _make_balance_adjustment("EUR"),
+        ],
+    )
+
+    assert result.ok
+    assert policy.seen_realized_pnl == ["42.5", None]
+
+
 @pytest.mark.integration
 def test_account_adjustment_integration_successful_batch() -> None:
     account_id = openpit.param.AccountId.from_int(99224416)

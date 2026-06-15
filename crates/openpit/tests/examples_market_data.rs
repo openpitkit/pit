@@ -122,12 +122,14 @@ fn example_wiki_market_data_finite_ttl_hides_stale_quote() -> Result<(), Box<dyn
 
     let account = AccountId::from_u64(1);
     let read = |id| {
-        service.get(
-            id,
-            account,
-            &None::<AccountGroupId>,
-            QuoteResolution::AccountThenGroupThenDefault,
-        )
+        service
+            .get(
+                id,
+                account,
+                &None::<AccountGroupId>,
+                QuoteResolution::AccountThenGroupThenDefault,
+            )
+            .ok()
     };
 
     service.push(aapl_id, Quote::new().with_mark(Price::from_str("200")?))?;
@@ -159,12 +161,14 @@ fn example_wiki_market_data_clear_then_recover() -> Result<(), Box<dyn std::erro
 
     let account = AccountId::from_u64(1);
     let read = |id| {
-        service.get(
-            id,
-            account,
-            &None::<AccountGroupId>,
-            QuoteResolution::AccountThenGroupThenDefault,
-        )
+        service
+            .get(
+                id,
+                account,
+                &None::<AccountGroupId>,
+                QuoteResolution::AccountThenGroupThenDefault,
+            )
+            .ok()
     };
 
     service.push(aapl_id, Quote::new().with_mark(Price::from_str("200")?))?;
@@ -249,6 +253,7 @@ fn example_wiki_market_data_market_orders_book_top_override(
                 operation: AccountAdjustmentBalanceOperation {
                     asset: Asset::new("USD")?,
                     average_entry_price: None,
+                    realized_pnl: None,
                 },
             },
             bounds: AccountAdjustmentBounds::default(),
