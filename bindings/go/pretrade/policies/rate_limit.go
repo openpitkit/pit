@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package policies
 
@@ -26,6 +26,10 @@ import (
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/ptr"
 )
+
+func rateLimitWindowNanoseconds(limit RateLimit) int64 {
+	return int64(limit.Window)
+}
 
 // RateLimit defines the maximum number of orders allowed within a
 // sliding window.
@@ -116,7 +120,7 @@ func (b *RateLimitReadyBuilder) BrokerBarrier(
 	if b.err != nil {
 		return b
 	}
-	windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // a negative duration wraps to a large uint64, which the core rejects as InvalidWindow
+	windowNanos := rateLimitWindowNanoseconds(barrier.Limit)
 	b.broker = ptr.New(native.NewPretradePoliciesRateLimitBrokerBarrier(
 		barrier.Limit.MaxOrders,
 		windowNanos,
@@ -139,7 +143,7 @@ func (b *RateLimitReadyBuilder) AssetBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
-		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // a negative duration wraps to a large uint64, which the core rejects as InvalidWindow
+		windowNanos := rateLimitWindowNanoseconds(barrier.Limit)
 		b.assetBarriers = append(
 			b.assetBarriers,
 			native.NewPretradePoliciesRateLimitAssetBarrier(
@@ -168,7 +172,7 @@ func (b *RateLimitReadyBuilder) AccountBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
-		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // a negative duration wraps to a large uint64, which the core rejects as InvalidWindow
+		windowNanos := rateLimitWindowNanoseconds(barrier.Limit)
 		b.accountBarriers = append(
 			b.accountBarriers,
 			native.NewPretradePoliciesRateLimitAccountBarrier(
@@ -199,7 +203,7 @@ func (b *RateLimitReadyBuilder) AccountAssetBarriers(
 		return b
 	}
 	for _, barrier := range barriers {
-		windowNanos := uint64(barrier.Limit.Window) //nolint:gosec // a negative duration wraps to a large uint64, which the core rejects as InvalidWindow
+		windowNanos := rateLimitWindowNanoseconds(barrier.Limit)
 		b.accountAssetBarriers = append(
 			b.accountAssetBarriers,
 			native.NewPretradePoliciesRateLimitAccountAssetBarrier(

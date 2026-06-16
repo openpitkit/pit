@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 #![allow(clippy::missing_safety_doc, clippy::not_unsafe_ptr_arg_deref)]
 
@@ -527,7 +527,7 @@ pub unsafe extern "C" fn openpit_engine_configure_pnl_bounds_killswitch(
 /// - a null `engine` returns `false` and, when `out_error` is non-null, writes
 ///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be released
 ///   with `openpit_destroy_configure_error`.
-pub unsafe extern "C" fn openpit_engine_configure_set_account_pnl(
+pub unsafe extern "C" fn openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
     engine: *mut crate::engine::OpenPitEngine,
     name: OpenPitStringView,
     account_id: OpenPitParamAccountId,
@@ -893,7 +893,7 @@ mod tests {
         // Force account 7's USD P&L to -150, breaching the lower bound -100.
         let mut out_error = std::ptr::null_mut();
         let ok = unsafe {
-            openpit_engine_configure_set_account_pnl(
+            openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
                 engine,
                 OpenPitStringView::from_utf8("PnlBoundsKillSwitchPolicy"),
                 7,
@@ -930,7 +930,7 @@ mod tests {
     fn set_account_pnl_null_engine_reports_validation_error() {
         let mut out_error = std::ptr::null_mut();
         let ok = unsafe {
-            openpit_engine_configure_set_account_pnl(
+            openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
                 std::ptr::null_mut(),
                 OpenPitStringView::from_utf8("PnlBoundsKillSwitchPolicy"),
                 7,

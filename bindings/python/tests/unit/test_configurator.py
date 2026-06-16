@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://github.com/openpitkit and the OWNERS file for details.
+# Please see https://openpit.dev and the OWNERS file for details.
 
 import datetime
 
@@ -146,6 +146,131 @@ def test_order_size_configuration_uses_named_entities() -> None:
     )
     assert not result.ok
     assert result.rejects[0].code == openpit.pretrade.RejectCode.ORDER_QTY_EXCEEDS_LIMIT
+
+
+@pytest.mark.unit
+def test_rate_limit_configuration_can_clear_broker_barrier() -> None:
+    policies = openpit.pretrade.policies
+    account_id = openpit.param.AccountId.from_int(99224416)
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_rate_limit()
+            .broker_barrier(policies.RateLimitBrokerBarrier(limit=_rate_limit(1)))
+            .account_barriers(
+                policies.RateLimitAccountBarrier(
+                    limit=_rate_limit(10),
+                    account_id=account_id,
+                )
+            )
+        )
+        .build()
+    )
+
+    assert engine.start_pre_trade(order=conftest.make_order()).ok
+    blocked = engine.start_pre_trade(order=conftest.make_order())
+    assert not blocked.ok
+    assert blocked.rejects[0].reason == "rate limit exceeded: broker barrier"
+
+    engine.configure().rate_limit(
+        policies.RateLimitBuilder.NAME,
+        clear_broker=True,
+    )
+
+    assert engine.start_pre_trade(order=conftest.make_order()).ok
+
+
+@pytest.mark.unit
+def test_order_size_configuration_can_clear_broker_barrier() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_order_size_limit()
+            .broker_barrier(
+                policies.OrderSizeBrokerBarrier(limit=_order_size_limit("1"))
+            )
+            .asset_barriers(
+                policies.OrderSizeAssetBarrier(
+                    limit=_order_size_limit("10"),
+                    settlement_asset=openpit.param.Asset("USD"),
+                )
+            )
+        )
+        .build()
+    )
+
+    oversized = engine.start_pre_trade(
+        order=conftest.make_order(
+            trade_amount=openpit.param.TradeAmount.quantity("2"),
+        )
+    )
+    assert not oversized.ok
+    assert (
+        oversized.rejects[0].code == openpit.pretrade.RejectCode.ORDER_QTY_EXCEEDS_LIMIT
+    )
+
+    engine.configure().order_size_limit(
+        policies.OrderSizeLimitBuilder.NAME,
+        clear_broker=True,
+    )
+
+    allowed = engine.start_pre_trade(
+        order=conftest.make_order(
+            trade_amount=openpit.param.TradeAmount.quantity("2"),
+        )
+    )
+    assert allowed.ok
+
+
+@pytest.mark.unit
+def test_broker_clear_and_replacement_are_mutually_exclusive() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_rate_limit().broker_barrier(
+                policies.RateLimitBrokerBarrier(limit=_rate_limit(1))
+            )
+        )
+        .build()
+    )
+
+    with pytest.raises(ValueError, match="clear_broker"):
+        engine.configure().rate_limit(
+            policies.RateLimitBuilder.NAME,
+            broker=policies.RateLimitBrokerBarrier(limit=_rate_limit(2)),
+            clear_broker=True,
+        )
+
+
+@pytest.mark.unit
+def test_order_size_broker_clear_and_replacement_are_mutually_exclusive() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_order_size_limit().broker_barrier(
+                policies.OrderSizeBrokerBarrier(
+                    limit=_order_size_limit("100"),
+                )
+            )
+        )
+        .build()
+    )
+
+    with pytest.raises(ValueError, match="clear_broker"):
+        engine.configure().order_size_limit(
+            policies.OrderSizeLimitBuilder.NAME,
+            broker=policies.OrderSizeBrokerBarrier(
+                limit=_order_size_limit("10"),
+            ),
+            clear_broker=True,
+        )
 
 
 @pytest.mark.unit
@@ -386,6 +511,7 @@ def test_spot_funds_configuration_uses_named_entities() -> None:
 @pytest.mark.unit
 def test_configurator_rejects_obsolete_tuple_and_string_inputs() -> None:
     policies = openpit.pretrade.policies
+    _, instrument_id = _market_data()
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -444,10 +570,25 @@ def test_configurator_rejects_obsolete_tuple_and_string_inputs() -> None:
         )
     with pytest.raises(TypeError, match="SpotFundsPricingSource"):
         configurator.spot_funds(policies.SpotFundsBuilder.NAME, pricing_source="Mark")
-    with pytest.raises(TypeError, match="SpotFundsOverride"):
+    with pytest.raises(TypeError, match="SpotFundsOverrideEntry"):
         configurator.spot_funds(
             policies.SpotFundsBuilder.NAME,
             overrides=[(object(), None, None, 10)],
+        )
+    with pytest.raises(
+        TypeError,
+        match=r"expected openpit\.pretrade\.policies\.SpotFundsOverride",
+    ):
+        configurator.spot_funds(
+            policies.SpotFundsBuilder.NAME,
+            overrides=[
+                policies.SpotFundsOverrideEntry(
+                    target=policies.SpotFundsOverrideTargetInstrument(
+                        instrument=instrument_id,
+                    ),
+                    override=object(),  # type: ignore[arg-type]
+                )
+            ],
         )
 
 
@@ -476,6 +617,18 @@ def test_configurator_reports_domain_validation_errors() -> None:
             ),
         )
     assert caught.value.kind == openpit.ConfigureErrorKind.VALIDATION
+
+
+@pytest.mark.unit
+def test_pnl_bounds_builder_rejects_wrong_broker_barrier_type() -> None:
+    policies = openpit.pretrade.policies
+    with pytest.raises(TypeError, match="PnlBoundsBrokerBarrier"):
+        (
+            openpit.Engine.builder()
+            .no_sync()
+            .builtin(policies.build_pnl_bounds_killswitch().broker_barriers(object()))
+            .build()
+        )
 
 
 @pytest.mark.unit

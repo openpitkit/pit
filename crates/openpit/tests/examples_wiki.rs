@@ -1464,7 +1464,7 @@ fn example_wiki_dynamic_policy_reconfiguration_rate_limit() -> Result<(), Box<dy
     // Wiki example: pit.wiki/Dynamic-Policy-Reconfiguration.md - Retune a Built-in Policy
     // This mirror is intentionally wider than the wiki snippet: it adds the test
     // harness (the fn -> Result wrapper and `order` helper) so the example runs.
-    // Keep the shared user-code flow in sync with the wiki.
+    // Keep this example in sync with the wiki.
     use std::time::Duration;
 
     use openpit::pretrade::policies::{
@@ -1535,8 +1535,7 @@ fn example_wiki_dynamic_policy_reconfiguration_set_account_pnl(
     // Wiki example: pit.wiki/Dynamic-Policy-Reconfiguration.md - Force-set Accumulated P&L
     // This mirror is intentionally wider than the wiki snippet: it adds the test
     // harness (the fn -> Result wrapper, the `order` helper, and the `account`
-    // binding) so the example runs. Keep the shared user-code flow in sync with
-    // the wiki.
+    // binding) so the example runs. Keep this example in sync with the wiki.
     use openpit::param::{AccountId, Asset, Pnl};
     use openpit::pretrade::policies::{
         PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchSettings,

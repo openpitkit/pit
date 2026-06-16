@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 // Package configure provides runtime policy-settings updates bound to an engine.
 package configure
@@ -83,6 +83,10 @@ func newErrorFromHandle(handle native.ConfigureError) *Error {
 	}
 }
 
+func rateLimitWindowNanoseconds(limit policies.RateLimit) int64 {
+	return int64(limit.Window)
+}
+
 //------------------------------------------------------------------------------
 // RateLimit
 
@@ -104,10 +108,36 @@ func (c Configurator) RateLimit(
 	accounts []policies.RateLimitAccountBarrier,
 	accountAssets []policies.RateLimitAccountAssetBarrier,
 ) error {
+	return c.RateLimitUpdate(
+		name,
+		optional.From(broker, broker != nil),
+		assets,
+		accounts,
+		accountAssets,
+	)
+}
+
+// RateLimitUpdate updates the named rate-limit policy and can also clear the
+// broker barrier.
+//
+// broker uses three states: optional.None leaves the broker unchanged,
+// optional.Some(nil) clears it, and optional.Some(&barrier) sets/replaces it.
+// Slice arguments use the same semantics as [Configurator.RateLimit].
+func (c Configurator) RateLimitUpdate(
+	name string,
+	broker optional.Option[*policies.RateLimitBrokerBarrier],
+	assets []policies.RateLimitAssetBarrier,
+	accounts []policies.RateLimitAccountBarrier,
+	accountAssets []policies.RateLimitAccountAssetBarrier,
+) error {
 	var nativeBroker *native.PretradePoliciesRateLimitBrokerBarrier
-	if broker != nil {
-		windowNanos := uint64(broker.Limit.Window) //nolint:gosec // negative duration becomes large uint64; core rejects it
-		b := native.NewPretradePoliciesRateLimitBrokerBarrier(broker.Limit.MaxOrders, windowNanos)
+	brokerValue, hasBroker := broker.Get()
+	if hasBroker && brokerValue != nil {
+		windowNanos := rateLimitWindowNanoseconds(brokerValue.Limit)
+		b := native.NewPretradePoliciesRateLimitBrokerBarrier(
+			brokerValue.Limit.MaxOrders,
+			windowNanos,
+		)
 		nativeBroker = ptr.New(b)
 	}
 
@@ -115,7 +145,7 @@ func (c Configurator) RateLimit(
 	if assets != nil {
 		nativeAssets = make([]native.PretradePoliciesRateLimitAssetBarrier, 0, len(assets))
 		for _, a := range assets {
-			windowNanos := uint64(a.Limit.Window) //nolint:gosec // negative duration becomes large uint64; core rejects it
+			windowNanos := rateLimitWindowNanoseconds(a.Limit)
 			nativeAssets = append(nativeAssets, native.NewPretradePoliciesRateLimitAssetBarrier(
 				a.Limit.MaxOrders,
 				windowNanos,
@@ -128,7 +158,7 @@ func (c Configurator) RateLimit(
 	if accounts != nil {
 		nativeAccounts = make([]native.PretradePoliciesRateLimitAccountBarrier, 0, len(accounts))
 		for _, a := range accounts {
-			windowNanos := uint64(a.Limit.Window) //nolint:gosec // negative duration becomes large uint64; core rejects it
+			windowNanos := rateLimitWindowNanoseconds(a.Limit)
 			nativeAccounts = append(nativeAccounts, native.NewPretradePoliciesRateLimitAccountBarrier(
 				a.AccountID.Handle(),
 				a.Limit.MaxOrders,
@@ -141,7 +171,7 @@ func (c Configurator) RateLimit(
 	if accountAssets != nil {
 		nativeAccountAssets = make([]native.PretradePoliciesRateLimitAccountAssetBarrier, 0, len(accountAssets))
 		for _, a := range accountAssets {
-			windowNanos := uint64(a.Limit.Window) //nolint:gosec // negative duration becomes large uint64; core rejects it
+			windowNanos := rateLimitWindowNanoseconds(a.Limit)
 			nativeAccountAssets = append(
 				nativeAccountAssets,
 				native.NewPretradePoliciesRateLimitAccountAssetBarrier(
@@ -158,6 +188,7 @@ func (c Configurator) RateLimit(
 		c.engine,
 		name,
 		nativeBroker,
+		hasBroker,
 		nativeAssets,
 		nativeAccounts,
 		nativeAccountAssets,
@@ -284,12 +315,33 @@ func (c Configurator) OrderSizeLimit(
 	assets []policies.OrderSizeAssetBarrier,
 	accountAssets []policies.OrderSizeAccountAssetBarrier,
 ) error {
+	return c.OrderSizeLimitUpdate(
+		name,
+		optional.From(broker, broker != nil),
+		assets,
+		accountAssets,
+	)
+}
+
+// OrderSizeLimitUpdate updates the named order-size-limit policy and can also
+// clear the broker barrier.
+//
+// broker uses three states: optional.None leaves the broker unchanged,
+// optional.Some(nil) clears it, and optional.Some(&barrier) sets/replaces it.
+// Slice arguments use the same semantics as [Configurator.OrderSizeLimit].
+func (c Configurator) OrderSizeLimitUpdate(
+	name string,
+	broker optional.Option[*policies.OrderSizeBrokerBarrier],
+	assets []policies.OrderSizeAssetBarrier,
+	accountAssets []policies.OrderSizeAccountAssetBarrier,
+) error {
 	var nativeBroker *native.PretradePoliciesOrderSizeBrokerBarrier
-	if broker != nil {
+	brokerValue, hasBroker := broker.Get()
+	if hasBroker && brokerValue != nil {
 		b := native.NewPretradePoliciesOrderSizeBrokerBarrier(
 			native.NewPretradePoliciesOrderSizeLimit(
-				broker.Limit.MaxQuantity.Handle(),
-				broker.Limit.MaxNotional.Handle(),
+				brokerValue.Limit.MaxQuantity.Handle(),
+				brokerValue.Limit.MaxNotional.Handle(),
 			),
 		)
 		nativeBroker = ptr.New(b)
@@ -331,6 +383,7 @@ func (c Configurator) OrderSizeLimit(
 		c.engine,
 		name,
 		nativeBroker,
+		hasBroker,
 		nativeAssets,
 		nativeAccountAssets,
 	)

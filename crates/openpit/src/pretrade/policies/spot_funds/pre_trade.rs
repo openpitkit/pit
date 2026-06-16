@@ -43,6 +43,7 @@ use super::SpotFundsPolicy;
 impl<Sync, MarketDataSyncMode> SpotFundsPolicy<Sync, MarketDataSyncMode>
 where
     Sync: SyncMode,
+    Sync::StorageLockingPolicyFactory: crate::storage::LockingPolicyFactory,
     MarketDataSyncMode: MarketDataSync,
 {
     /// Returns a [`Reject`] appropriate for the given [`SpotFundsPriceError`].

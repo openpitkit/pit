@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -101,15 +101,11 @@ impl std::error::Error for OrderSizeLimitPolicyError {}
 /// on construction and on every setter: at least one barrier across all
 /// axes must always be present.
 ///
-/// `group_id` is set at construction time only; use
-/// [`OrderSizeLimitPolicy::with_policy_group_id`] before the policy is
-/// handed to the engine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrderSizeLimitSettings {
     account_asset_limits: HashMap<(AccountId, Asset), OrderSizeLimit>,
     asset_limits: HashMap<Asset, OrderSizeLimit>,
     broker: Option<OrderSizeBrokerBarrier>,
-    group_id: PolicyGroupId,
 }
 
 impl OrderSizeLimitSettings {
@@ -151,7 +147,6 @@ impl OrderSizeLimitSettings {
             account_asset_limits,
             asset_limits,
             broker,
-            group_id: DEFAULT_POLICY_GROUP_ID,
         })
     }
 
@@ -274,7 +269,10 @@ pub struct OrderSizeLimitPolicy<LockingPolicyFactory>
 where
     LockingPolicyFactory: crate::storage::LockingPolicyFactory,
 {
-    settings: LockingPolicyFactory::Config<OrderSizeLimitSettings>,
+    group_id: PolicyGroupId,
+    settings: <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Config<
+        OrderSizeLimitSettings,
+    >,
 }
 
 impl<LockingPolicyFactory> OrderSizeLimitPolicy<LockingPolicyFactory>
@@ -287,23 +285,18 @@ where
     /// Creates an order-size policy from validated settings.
     pub fn new(settings: OrderSizeLimitSettings) -> Self {
         Self {
-            settings: LockingPolicyFactory::new_config(settings),
+            group_id: DEFAULT_POLICY_GROUP_ID,
+            settings: <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::new_config(
+                settings,
+            ),
         }
     }
 
     /// Assigns a group tag to this policy instance.
     ///
-    /// Updates `group_id` inside the settings cell. See [`PolicyGroupId`]
-    /// and [`DEFAULT_POLICY_GROUP_ID`] for details.
-    pub fn with_policy_group_id(self, id: PolicyGroupId) -> Self {
-        // group_id is construction-only on OrderSizeLimitSettings; we update
-        // it here, before the cell is shared with the engine.
-        self.settings
-            .update::<std::convert::Infallible>(|s| {
-                s.group_id = id;
-                Ok(())
-            })
-            .unwrap_or_else(|e| match e {});
+    /// See [`PolicyGroupId`] and [`DEFAULT_POLICY_GROUP_ID`] for details.
+    pub fn with_policy_group_id(mut self, id: PolicyGroupId) -> Self {
+        self.group_id = id;
         self
     }
 }
@@ -331,15 +324,11 @@ where
     }
 
     fn policy_group_id(&self) -> PolicyGroupId {
-        self.settings.with(|s| s.group_id)
+        self.group_id
     }
 
     #[allow(private_interfaces)]
-    fn built_in_config_entry(
-        &self,
-    ) -> Option<
-        crate::core::ConfigEntry<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
-    > {
+    fn built_in_config_entry(&self) -> Option<crate::core::ConfigEntry<LockingPolicyFactory>> {
         Some(crate::core::ConfigEntry::OrderSizeLimit(
             crate::pretrade::ConfigurablePolicy::settings_cell(self),
         ))
@@ -429,7 +418,11 @@ where
 {
     type Settings = OrderSizeLimitSettings;
 
-    fn settings_cell(&self) -> LockingPolicyFactory::Config<OrderSizeLimitSettings> {
+    fn settings_cell(
+        &self,
+    ) -> <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Config<
+        OrderSizeLimitSettings,
+    > {
         self.settings.clone()
     }
 }

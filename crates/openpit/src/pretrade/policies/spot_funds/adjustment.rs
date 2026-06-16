@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 //! Account-adjustment path for [`SpotFundsPolicy`].
 
@@ -59,6 +59,7 @@ struct AdjustmentSlotUpdate {
 impl<Sync, MarketDataSyncMode> SpotFundsPolicy<Sync, MarketDataSyncMode>
 where
     Sync: SyncMode,
+    Sync::StorageLockingPolicyFactory: crate::storage::LockingPolicyFactory,
     MarketDataSyncMode: MarketDataSync,
 {
     pub(super) fn read_adjustment_request<AccountAdjustment>(

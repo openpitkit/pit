@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package native
 
@@ -50,6 +50,7 @@ func EngineConfigureRateLimit(
 	engine Engine,
 	name string,
 	broker *PretradePoliciesRateLimitBrokerBarrier,
+	hasBroker bool,
 	assets []PretradePoliciesRateLimitAssetBarrier,
 	accounts []PretradePoliciesRateLimitAccountBarrier,
 	accountAssets []PretradePoliciesRateLimitAccountAssetBarrier,
@@ -74,7 +75,7 @@ func EngineConfigureRateLimit(
 		engine,
 		importString(name),
 		broker,
-		C.bool(broker != nil),
+		C.bool(hasBroker),
 		assetsPtr,
 		C.size_t(len(assets)),
 		C.bool(assets != nil),
@@ -139,6 +140,7 @@ func EngineConfigureOrderSizeLimit(
 	engine Engine,
 	name string,
 	broker *PretradePoliciesOrderSizeBrokerBarrier,
+	hasBroker bool,
 	assets []PretradePoliciesOrderSizeAssetBarrier,
 	accountAssets []PretradePoliciesOrderSizeAccountAssetBarrier,
 ) ConfigureError {
@@ -158,7 +160,7 @@ func EngineConfigureOrderSizeLimit(
 		engine,
 		importString(name),
 		broker,
-		C.bool(broker != nil),
+		C.bool(hasBroker),
 		assetsPtr,
 		C.size_t(len(assets)),
 		C.bool(assets != nil),
@@ -232,7 +234,7 @@ func EngineSetAccountPnl(
 	pnl ParamPnl,
 ) ConfigureError {
 	var outError ConfigureError
-	if !C.openpit_engine_configure_set_account_pnl(
+	if !C.openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
 		engine,
 		importString(name),
 		accountID,

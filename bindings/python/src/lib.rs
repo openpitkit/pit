@@ -224,9 +224,8 @@ fn convert_configure_error(error: ConfigureError) -> PyErr {
     let kind = PyConfigureErrorKind::of(&error);
     let err = PolicyConfigureError::new_err(error.to_string());
     Python::attach(|py| {
-        if let Err(set_err) = err.value(py).setattr("kind", kind) {
-            set_err.restore(py);
-        }
+        // Return the primary configure error even if attaching metadata fails.
+        let _ = err.value(py).setattr("kind", kind);
     });
     err
 }
@@ -1096,17 +1095,25 @@ impl PyConfigurator {
     /// at-least-one-barrier rule enforced by the core).  Barriers may be added
     /// and removed at runtime; a barrier key that survives a replacement keeps
     /// its live counter (no reset).  ``broker`` replaces the broker barrier
-    /// when provided and leaves it unchanged when ``None``.
-    #[pyo3(signature = (name, *, broker = None, asset_barriers = None, account_barriers = None, account_asset_barriers = None))]
+    /// when provided and leaves it unchanged when ``None``. Set
+    /// ``clear_broker=True`` to remove the broker barrier.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (name, *, broker = None, clear_broker = false, asset_barriers = None, account_barriers = None, account_asset_barriers = None))]
     fn rate_limit(
         &self,
         py: Python<'_>,
         name: &str,
         broker: Option<Bound<'_, PyAny>>,
+        clear_broker: bool,
         asset_barriers: Option<Vec<Bound<'_, PyAny>>>,
         account_barriers: Option<Vec<Bound<'_, PyAny>>>,
         account_asset_barriers: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<()> {
+        if clear_broker && broker.is_some() {
+            return Err(PyValueError::new_err(
+                "broker and clear_broker cannot both be provided",
+            ));
+        }
         let broker_barrier = broker
             .as_ref()
             .map(parse_rate_limit_broker_barrier)
@@ -1135,7 +1142,9 @@ impl PyConfigurator {
 
         py.detach(|| {
             self.inner.rate_limit(name, |s| {
-                if let Some(b) = &broker_barrier {
+                if clear_broker {
+                    s.set_broker(None)?;
+                } else if let Some(b) = &broker_barrier {
                     s.set_broker(Some(b.clone()))?;
                 }
                 if let Some(v) = &assets {
@@ -1236,16 +1245,23 @@ impl PyConfigurator {
     ///
     /// ``broker=None`` and axis arguments passed as ``None`` are left
     /// unchanged; an empty list replaces that axis with an empty set (subject
-    /// to the at-least-one-barrier rule).
-    #[pyo3(signature = (name, *, broker = None, asset_barriers = None, account_asset_barriers = None))]
+    /// to the at-least-one-barrier rule). Set ``clear_broker=True`` to remove
+    /// the broker barrier.
+    #[pyo3(signature = (name, *, broker = None, clear_broker = false, asset_barriers = None, account_asset_barriers = None))]
     fn order_size_limit<'py>(
         &self,
         py: Python<'py>,
         name: &str,
         broker: Option<Bound<'py, PyAny>>,
+        clear_broker: bool,
         asset_barriers: Option<Vec<Bound<'py, PyAny>>>,
         account_asset_barriers: Option<Vec<Bound<'py, PyAny>>>,
     ) -> PyResult<()> {
+        if clear_broker && broker.is_some() {
+            return Err(PyValueError::new_err(
+                "broker and clear_broker cannot both be provided",
+            ));
+        }
         let broker_barrier = broker
             .as_ref()
             .map(parse_order_size_broker_barrier)
@@ -1267,7 +1283,9 @@ impl PyConfigurator {
 
         py.detach(|| {
             self.inner.order_size_limit(name, |s| {
-                if let Some(b) = &broker_barrier {
+                if clear_broker {
+                    s.set_broker(None)?;
+                } else if let Some(b) = &broker_barrier {
                     s.set_broker(Some(b.clone()))?;
                 }
                 if let Some(a) = &asset {

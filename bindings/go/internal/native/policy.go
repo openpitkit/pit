@@ -31,22 +31,22 @@ import (
 
 func NewPretradePoliciesRateLimitBrokerBarrier(
 	maxOrders uint,
-	windowNanoseconds uint64,
+	windowNanoseconds int64,
 ) PretradePoliciesRateLimitBrokerBarrier {
 	return PretradePoliciesRateLimitBrokerBarrier{
 		max_orders:         C.size_t(maxOrders),
-		window_nanoseconds: C.uint64_t(windowNanoseconds),
+		window_nanoseconds: C.int64_t(windowNanoseconds),
 	}
 }
 
 func NewPretradePoliciesRateLimitAssetBarrier(
 	maxOrders uint,
-	windowNanoseconds uint64,
+	windowNanoseconds int64,
 	settlementAsset string,
 ) PretradePoliciesRateLimitAssetBarrier {
 	return PretradePoliciesRateLimitAssetBarrier{
 		max_orders:         C.size_t(maxOrders),
-		window_nanoseconds: C.uint64_t(windowNanoseconds),
+		window_nanoseconds: C.int64_t(windowNanoseconds),
 		settlement_asset:   importString(settlementAsset),
 	}
 }
@@ -54,25 +54,25 @@ func NewPretradePoliciesRateLimitAssetBarrier(
 func NewPretradePoliciesRateLimitAccountBarrier(
 	accountID ParamAccountID,
 	maxOrders uint,
-	windowNanoseconds uint64,
+	windowNanoseconds int64,
 ) PretradePoliciesRateLimitAccountBarrier {
 	return PretradePoliciesRateLimitAccountBarrier{
 		account_id:         accountID,
 		max_orders:         C.size_t(maxOrders),
-		window_nanoseconds: C.uint64_t(windowNanoseconds),
+		window_nanoseconds: C.int64_t(windowNanoseconds),
 	}
 }
 
 func NewPretradePoliciesRateLimitAccountAssetBarrier(
 	accountID ParamAccountID,
 	maxOrders uint,
-	windowNanoseconds uint64,
+	windowNanoseconds int64,
 	settlementAsset string,
 ) PretradePoliciesRateLimitAccountAssetBarrier {
 	return PretradePoliciesRateLimitAccountAssetBarrier{
 		account_id:         accountID,
 		max_orders:         C.size_t(maxOrders),
-		window_nanoseconds: C.uint64_t(windowNanoseconds),
+		window_nanoseconds: C.int64_t(windowNanoseconds),
 		settlement_asset:   importString(settlementAsset),
 	}
 }

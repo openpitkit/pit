@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 #![allow(clippy::missing_safety_doc, clippy::not_unsafe_ptr_arg_deref)]
 
@@ -37,7 +37,7 @@ pub struct OpenPitPretradePoliciesRateLimitBrokerBarrier {
     /// Maximum number of orders accepted within the window.
     pub max_orders: usize,
     /// Window duration in nanoseconds.
-    pub window_nanoseconds: u64,
+    pub window_nanoseconds: i64,
 }
 
 /// Per-settlement-asset rate-limit barrier for
@@ -50,7 +50,7 @@ pub struct OpenPitPretradePoliciesRateLimitAssetBarrier {
     /// Maximum number of orders accepted within the window.
     pub max_orders: usize,
     /// Window duration in nanoseconds.
-    pub window_nanoseconds: u64,
+    pub window_nanoseconds: i64,
 }
 
 /// Per-account rate-limit barrier for
@@ -63,7 +63,7 @@ pub struct OpenPitPretradePoliciesRateLimitAccountBarrier {
     /// Maximum number of orders accepted within the window.
     pub max_orders: usize,
     /// Window duration in nanoseconds.
-    pub window_nanoseconds: u64,
+    pub window_nanoseconds: i64,
 }
 
 /// Per-(account, settlement-asset) rate-limit barrier for
@@ -78,7 +78,16 @@ pub struct OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
     /// Maximum number of orders accepted within the window.
     pub max_orders: usize,
     /// Window duration in nanoseconds.
-    pub window_nanoseconds: u64,
+    pub window_nanoseconds: i64,
+}
+
+fn rate_limit_window_duration(window_nanoseconds: i64) -> Result<Duration, String> {
+    if window_nanoseconds <= 0 {
+        return Err(format!(
+            "rate limit window must be positive and fit in u64 nanoseconds, got {window_nanoseconds}ns"
+        ));
+    }
+    Ok(Duration::from_nanos(window_nanoseconds as u64))
 }
 
 #[no_mangle]
@@ -146,7 +155,16 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
         Some(RateLimitBrokerBarrier {
             limit: RateLimit {
                 max_orders: b.max_orders,
-                window: Duration::from_nanos(b.window_nanoseconds),
+                window: match rate_limit_window_duration(b.window_nanoseconds) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        write_error(
+                            out_error,
+                            &format!("rate_limit_policy creation failed: {e}"),
+                        );
+                        return false;
+                    }
+                },
             },
         })
     } else {
@@ -167,22 +185,40 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
         asset_barriers.push(RateLimitAssetBarrier {
             limit: RateLimit {
                 max_orders: entry.max_orders,
-                window: Duration::from_nanos(entry.window_nanoseconds),
+                window: match rate_limit_window_duration(entry.window_nanoseconds) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        write_error(
+                            out_error,
+                            &format!("rate_limit_policy creation failed: {e}"),
+                        );
+                        return false;
+                    }
+                },
             },
             settlement_asset: settlement,
         });
     }
 
-    let account_barriers: Vec<RateLimitAccountBarrier> = account_slice
-        .iter()
-        .map(|entry| RateLimitAccountBarrier {
+    let mut account_barriers = Vec::with_capacity(account_slice.len());
+    for entry in account_slice {
+        account_barriers.push(RateLimitAccountBarrier {
             limit: RateLimit {
                 max_orders: entry.max_orders,
-                window: Duration::from_nanos(entry.window_nanoseconds),
+                window: match rate_limit_window_duration(entry.window_nanoseconds) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        write_error(
+                            out_error,
+                            &format!("rate_limit_policy creation failed: {e}"),
+                        );
+                        return false;
+                    }
+                },
             },
             account_id: AccountId::from_u64(entry.account_id),
-        })
-        .collect();
+        });
+    }
 
     let mut account_asset_barriers = Vec::with_capacity(account_asset_slice.len());
     for (index, entry) in account_asset_slice.iter().enumerate() {
@@ -198,7 +234,16 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_rate_limit_policy(
         account_asset_barriers.push(RateLimitAccountAssetBarrier {
             limit: RateLimit {
                 max_orders: entry.max_orders,
-                window: Duration::from_nanos(entry.window_nanoseconds),
+                window: match rate_limit_window_duration(entry.window_nanoseconds) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        write_error(
+                            out_error,
+                            &format!("rate_limit_policy creation failed: {e}"),
+                        );
+                        return false;
+                    }
+                },
             },
             account_id: AccountId::from_u64(entry.account_id),
             settlement_asset: settlement,
@@ -321,7 +366,13 @@ pub unsafe extern "C" fn openpit_engine_configure_rate_limit(
         Some(RateLimitBrokerBarrier {
             limit: RateLimit {
                 max_orders: b.max_orders,
-                window: Duration::from_nanos(b.window_nanoseconds),
+                window: match rate_limit_window_duration(b.window_nanoseconds) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        write_configure_error(out_error, OpenPitConfigureError::validation(e));
+                        return false;
+                    }
+                },
             },
         })
     } else {
@@ -353,7 +404,13 @@ pub unsafe extern "C" fn openpit_engine_configure_rate_limit(
             out.push(RateLimitAssetBarrier {
                 limit: RateLimit {
                     max_orders: entry.max_orders,
-                    window: Duration::from_nanos(entry.window_nanoseconds),
+                    window: match rate_limit_window_duration(entry.window_nanoseconds) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            write_configure_error(out_error, OpenPitConfigureError::validation(e));
+                            return false;
+                        }
+                    },
                 },
                 settlement_asset: settlement,
             });
@@ -381,16 +438,23 @@ pub unsafe extern "C" fn openpit_engine_configure_rate_limit(
                 return false;
             }
         };
-        slice
-            .iter()
-            .map(|entry| RateLimitAccountBarrier {
+        let mut out = Vec::with_capacity(slice.len());
+        for entry in slice {
+            out.push(RateLimitAccountBarrier {
                 limit: RateLimit {
                     max_orders: entry.max_orders,
-                    window: Duration::from_nanos(entry.window_nanoseconds),
+                    window: match rate_limit_window_duration(entry.window_nanoseconds) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            write_configure_error(out_error, OpenPitConfigureError::validation(e));
+                            return false;
+                        }
+                    },
                 },
                 account_id: AccountId::from_u64(entry.account_id),
-            })
-            .collect()
+            });
+        }
+        out
     } else {
         Vec::new()
     };
@@ -428,7 +492,13 @@ pub unsafe extern "C" fn openpit_engine_configure_rate_limit(
             out.push(RateLimitAccountAssetBarrier {
                 limit: RateLimit {
                     max_orders: entry.max_orders,
-                    window: Duration::from_nanos(entry.window_nanoseconds),
+                    window: match rate_limit_window_duration(entry.window_nanoseconds) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            write_configure_error(out_error, OpenPitConfigureError::validation(e));
+                            return false;
+                        }
+                    },
                 },
                 account_id: AccountId::from_u64(entry.account_id),
                 settlement_asset: settlement,
@@ -933,7 +1003,7 @@ mod tests {
             )
         });
 
-        // Zero window is invalid — SDK returns InvalidWindow.
+        // Zero window is invalid.
         let zero_window = OpenPitPretradePoliciesRateLimitBrokerBarrier {
             max_orders: 1,
             window_nanoseconds: 0,
@@ -960,6 +1030,39 @@ mod tests {
         assert!(!ok, "zero-window broker retune must fail");
         let (kind, _message) = configure_error_message(out_error);
         assert_eq!(kind, crate::engine::OpenPitConfigureErrorKind::Validation);
+
+        // Negative windows are rejected at the Rust FFI boundary before they
+        // can be reinterpreted as huge unsigned durations.
+        let negative_window = OpenPitPretradePoliciesRateLimitBrokerBarrier {
+            max_orders: 1,
+            window_nanoseconds: -1_000_000_000,
+        };
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_rate_limit(
+                engine,
+                OpenPitStringView::from_utf8("RateLimitPolicy"),
+                &negative_window,
+                true,
+                std::ptr::null(),
+                0,
+                false,
+                std::ptr::null(),
+                0,
+                false,
+                std::ptr::null(),
+                0,
+                false,
+                &mut out_error,
+            )
+        };
+        assert!(!ok, "negative-window broker retune must fail");
+        let (kind, message) = configure_error_message(out_error);
+        assert_eq!(kind, crate::engine::OpenPitConfigureErrorKind::Validation);
+        assert!(
+            message.contains("-1000000000ns"),
+            "message must preserve the signed input, got: {message}"
+        );
         crate::engine::openpit_destroy_engine(engine);
     }
 

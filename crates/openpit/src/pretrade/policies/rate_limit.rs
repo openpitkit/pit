@@ -136,12 +136,12 @@ struct RateLimitSlot {
 
 /// Runtime-updatable rate-limit configuration for [`RateLimitPolicy`].
 ///
-/// Holds the limit configuration for all four axes plus the policy
-/// `group_id`. It is the only state behind the policy's [`ConfigCell`]. The
-/// broker and asset axes carry their live fixed-window counters here, behind
-/// `Arc`, so the hot path reads limits and mutates counters under a single
-/// lock-free cell read. The account axes keep no slot: their sliding-window
-/// logs live in the policy's storages, keyed lazily per account.
+/// Holds the limit configuration for all four axes. It is the only state
+/// behind the policy's [`ConfigCell`]. The broker and asset axes carry their
+/// live fixed-window counters here, behind `Arc`, so the hot path reads limits
+/// and mutates counters under a single settings-cell read. The account axes
+/// keep no slot: their sliding-window logs live in the policy's storages, keyed
+/// lazily per account.
 ///
 /// All four axes are replace-shaped and fully runtime-updatable: a setter can
 /// add, remove, or retune any barrier on its axis. A key that survives a
@@ -150,8 +150,7 @@ struct RateLimitSlot {
 /// sliding logs survive replacements by construction, since they live in the
 /// policy keyed per account rather than in these settings; a removed account
 /// key leaves its idle log behind (bounded by its window content) and the log
-/// resumes if the key is re-added. The `group_id` is construction-only and has
-/// no setter.
+/// resumes if the key is re-added.
 ///
 /// # Dynamic limits (no counter rebuild)
 ///
@@ -170,7 +169,6 @@ pub struct RateLimitSettings {
     account_limits: HashMap<AccountId, RateLimit>,
     account_asset_limits: HashMap<(AccountId, Asset), RateLimit>,
     broker: Option<RateLimitSlot>,
-    group_id: PolicyGroupId,
 }
 
 impl RateLimitSettings {
@@ -183,8 +181,6 @@ impl RateLimitSettings {
     /// [`RateLimitPolicyError::InvalidWindow`]. Duplicate keys within an
     /// axis: last-write-wins (no error).
     ///
-    /// The `group_id` defaults to [`DEFAULT_POLICY_GROUP_ID`]; set it with
-    /// [`RateLimitPolicy::with_policy_group_id`].
     pub fn new(
         broker: Option<RateLimitBrokerBarrier>,
         asset_barriers: impl IntoIterator<Item = RateLimitAssetBarrier>,
@@ -225,7 +221,6 @@ impl RateLimitSettings {
             account_limits,
             account_asset_limits,
             broker,
-            group_id: DEFAULT_POLICY_GROUP_ID,
         })
     }
 
@@ -468,12 +463,11 @@ impl AtomicWindowCounter {
 /// and account+asset axes use precise sliding-window logs via [`Storage`].
 ///
 /// The limit configuration for all axes lives in [`RateLimitSettings`] behind
-/// a sync-mode-aware [`ConfigCell`]; the hot path reads it lock-free and the
-/// engine can add, remove, or retune barriers at runtime through
+/// a sync-mode-aware [`ConfigCell`]; the hot path reads it through that cell
+/// and the engine can add, remove, or retune barriers at runtime through
 /// [`Engine::configure`](crate::Engine::configure). The broker and asset
-/// fixed-window counters ride
-/// inside that cell behind `Arc`; the account-axis sliding-window logs live in
-/// the policy's storages, keyed lazily per account.
+/// fixed-window counters ride inside that cell behind `Arc`; the account-axis
+/// sliding-window logs live in the policy's storages, keyed lazily per account.
 ///
 /// Constructor rules:
 /// - at least one barrier across all four axes must be configured;
@@ -528,8 +522,10 @@ pub struct RateLimitPolicy<LockingPolicyFactory>
 where
     LockingPolicyFactory: crate::storage::LockingPolicyFactory,
 {
+    group_id: PolicyGroupId,
     epoch: Instant,
-    settings: LockingPolicyFactory::Config<RateLimitSettings>,
+    settings:
+        <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Config<RateLimitSettings>,
     per_account_timestamps: TimestampStorage<AccountId, LockingPolicyFactory>,
     per_account_asset_timestamps: TimestampStorage<(AccountId, Asset), LockingPolicyFactory>,
 }
@@ -549,7 +545,7 @@ where
     /// logs are created lazily per key on the hot path, so barriers added at
     /// runtime start counting immediately; the settings (including the broker
     /// and asset fixed-window counters) are moved into a [`ConfigCell`] for
-    /// lock-free hot-path reads and runtime reconfiguration.
+    /// hot-path reads and runtime reconfiguration.
     pub fn new(
         mut settings: RateLimitSettings,
         storage_builder: &StorageBuilder<LockingPolicyFactory>,
@@ -568,8 +564,11 @@ where
         let per_account_asset_timestamps = storage_builder.create_for_bound_key();
 
         Self {
+            group_id: DEFAULT_POLICY_GROUP_ID,
             epoch,
-            settings: LockingPolicyFactory::new_config(settings),
+            settings: <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::new_config(
+                settings,
+            ),
             per_account_timestamps,
             per_account_asset_timestamps,
         }
@@ -577,15 +576,9 @@ where
 
     /// Assigns a group tag to this policy instance.
     ///
-    /// Updates `group_id` inside the settings cell. See [`PolicyGroupId`]
-    /// and [`DEFAULT_POLICY_GROUP_ID`] for details.
-    pub fn with_policy_group_id(self, id: PolicyGroupId) -> Self {
-        self.settings
-            .update::<std::convert::Infallible>(|s| {
-                s.group_id = id;
-                Ok(())
-            })
-            .unwrap_or_else(|e| match e {});
+    /// See [`PolicyGroupId`] and [`DEFAULT_POLICY_GROUP_ID`] for details.
+    pub fn with_policy_group_id(mut self, id: PolicyGroupId) -> Self {
+        self.group_id = id;
         self
     }
 }
@@ -606,7 +599,10 @@ where
 {
     type Settings = RateLimitSettings;
 
-    fn settings_cell(&self) -> LockingPolicyFactory::Config<RateLimitSettings> {
+    fn settings_cell(
+        &self,
+    ) -> <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Config<RateLimitSettings>
+    {
         self.settings.clone()
     }
 }
@@ -625,15 +621,11 @@ where
     }
 
     fn policy_group_id(&self) -> PolicyGroupId {
-        self.settings.with(|s| s.group_id)
+        self.group_id
     }
 
     #[allow(private_interfaces)]
-    fn built_in_config_entry(
-        &self,
-    ) -> Option<
-        crate::core::ConfigEntry<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
-    > {
+    fn built_in_config_entry(&self) -> Option<crate::core::ConfigEntry<LockingPolicyFactory>> {
         Some(crate::core::ConfigEntry::RateLimit(
             crate::pretrade::ConfigurablePolicy::settings_cell(self),
         ))
@@ -650,14 +642,12 @@ where
             .unwrap_or_default()
             .as_nanos() as u64;
 
-        // The whole check runs under one lock-free settings read: which order
-        // fields are needed depends on the configured axes, which now live in
-        // the cell alongside the broker/asset counters. ALL applicable axes are
-        // pushed before resolving (flood semantics): every applicable axis must
-        // consume its slot even when an earlier-priority axis already breaches,
-        // so a flood cannot bypass a counter by tripping another. The breach is
-        // resolved in priority order: broker -> asset -> account ->
-        // account+asset.
+        // One coherent settings read decides both applicability and the exact
+        // live counter/log to push. ALL applicable axes are pushed before
+        // resolving (flood semantics): every applicable axis must consume its
+        // slot even when an earlier-priority axis already breaches, so a flood
+        // cannot bypass a counter by tripping another. The breach is resolved
+        // in priority order: broker -> asset -> account -> account+asset.
         self.settings.with(|s| -> Result<(), Rejects> {
             let needs_settlement = !s.asset_limits.is_empty() || !s.account_asset_limits.is_empty();
             let needs_account = !s.account_limits.is_empty() || !s.account_asset_limits.is_empty();

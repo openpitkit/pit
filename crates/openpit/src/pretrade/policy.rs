@@ -112,6 +112,7 @@ where
 
     #[doc(hidden)]
     #[allow(private_interfaces)]
+    // Built-in policies override this to register their runtime settings cell.
     fn built_in_config_entry(
         &self,
     ) -> Option<crate::core::ConfigEntry<<Sync as SyncMode>::StorageLockingPolicyFactory>> {

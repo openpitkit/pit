@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 use std::time::Duration;
 
@@ -22,7 +22,7 @@ use openpit::pretrade::policies::{
     OrderSizeAssetBarrier, OrderSizeBrokerBarrier, OrderSizeLimit, OrderSizeLimitPolicy,
     OrderSizeLimitSettings, OrderValidationPolicy, PnlBoundsBrokerBarrier,
     PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchSettings, RateLimit, RateLimitBrokerBarrier,
-    RateLimitPolicy, RateLimitSettings,
+    RateLimitPolicy, RateLimitPolicyError, RateLimitSettings,
 };
 use openpit::storage::NoLocking;
 use openpit::{Engine, Instrument};
@@ -35,6 +35,41 @@ use openpit::{
 // - crates/openpit/README.md
 // - ../pit.wiki/Getting-Started.md
 // If this test changes, update every linked documentation snippet.
+
+#[test]
+fn example_readme_configure_builtin_policy() -> Result<(), Box<dyn std::error::Error>> {
+    // Source: crates/openpit/README.md - Engine
+    // Keep this example in sync with the README.
+    let builder = Engine::builder::<OrderOperation, (), ()>().no_sync();
+    let policy = RateLimitPolicy::new(
+        RateLimitSettings::new(
+            Some(RateLimitBrokerBarrier {
+                limit: RateLimit {
+                    max_orders: 100,
+                    window: Duration::from_secs(1),
+                },
+            }),
+            [],
+            [],
+            [],
+        )?,
+        builder.storage_builder(),
+    );
+    let engine = builder.pre_trade(policy).build()?;
+
+    engine.configure().rate_limit::<RateLimitPolicyError>(
+        RateLimitPolicy::<NoLocking>::NAME,
+        |settings| {
+            settings.set_broker(Some(RateLimitBrokerBarrier {
+                limit: RateLimit {
+                    max_orders: 10,
+                    window: Duration::from_secs(1),
+                },
+            }))
+        },
+    )?;
+    Ok(())
+}
 
 #[test]
 fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
@@ -128,7 +163,7 @@ fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
     // The rollback must be called otherwise to revert all performed reservations.
     reservation.commit();
 
-    // 5. The order goes to the venue and returns with an execution report.
+    // 7. The order goes to the venue and returns with an execution report.
     let report = WithExecutionReportOperation {
         inner: WithFinancialImpact {
             inner: (),
@@ -146,7 +181,7 @@ fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
 
     let result = engine.apply_execution_report(&report);
 
-    // 6. After each execution report is applied, the system may report that it has
+    // 8. After each execution report is applied, the system may report that it has
     // been determined in advance that all subsequent requests will be rejected if
     // the account status does not change.
     assert!(result.account_blocks.is_empty());

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://github.com/openpitkit and the OWNERS file for details.
+# Please see https://openpit.dev and the OWNERS file for details.
 
 """Typing stubs for the native ``openpit._openpit`` extension module."""
 
@@ -1921,6 +1921,7 @@ class Configurator:
         name: str,
         *,
         broker: pretrade.policies.RateLimitBrokerBarrier | None = None,
+        clear_broker: bool = False,
         asset_barriers: list[pretrade.policies.RateLimitAssetBarrier] | None = None,
         account_barriers: list[pretrade.policies.RateLimitAccountBarrier] | None = None,
         account_asset_barriers: (
@@ -1936,7 +1937,8 @@ class Configurator:
         at-least-one-barrier rule enforced by the core).  Barriers may be added
         and removed at runtime; a barrier key that survives a replacement keeps
         its live counter (no reset).  *broker* replaces the broker barrier when
-        provided and leaves it unchanged when ``None``.
+        provided and leaves it unchanged when ``None``. Pass
+        ``clear_broker=True`` to remove it.
 
         Policy settings use the named rate-limit entities from
         ``openpit.pretrade.policies``.
@@ -2000,6 +2002,7 @@ class Configurator:
         name: str,
         *,
         broker: pretrade.policies.OrderSizeBrokerBarrier | None = None,
+        clear_broker: bool = False,
         asset_barriers: list[pretrade.policies.OrderSizeAssetBarrier] | None = None,
         account_asset_barriers: (
             list[pretrade.policies.OrderSizeAccountAssetBarrier] | None
@@ -2013,8 +2016,9 @@ class Configurator:
         ``openpit.pretrade.policies``.
 
         ``broker=None`` and axis arguments passed as ``None`` are left
-        unchanged; an empty list replaces that axis with an empty set (subject
-        to the at-least-one-barrier rule).
+        unchanged; ``clear_broker=True`` removes the broker barrier. An empty
+        list replaces that axis with an empty set (subject to the
+        at-least-one-barrier rule).
 
         Raises:
             PolicyConfigureError: If the policy is not found, has the wrong

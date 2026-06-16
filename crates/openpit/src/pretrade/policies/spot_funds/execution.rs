@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 //! Execution-report fixation path for [`SpotFundsPolicy`].
 
@@ -38,6 +38,7 @@ use super::{HoldingsKey, SpotFundsPolicy};
 impl<Sync, MarketDataSyncMode> SpotFundsPolicy<Sync, MarketDataSyncMode>
 where
     Sync: SyncMode,
+    Sync::StorageLockingPolicyFactory: crate::storage::LockingPolicyFactory,
     MarketDataSyncMode: MarketDataSync,
 {
     /// Creates or modifies the slot at `key` via `mutation`, then prunes

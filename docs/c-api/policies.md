@@ -871,7 +871,7 @@ bool openpit_engine_configure_pnl_bounds_killswitch(
 );
 ```
 
-## `openpit_engine_configure_set_account_pnl`
+## `openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl`
 
 Force-sets the live accumulated P&L for a `(account_id, settlement_asset)` entry
 of the P&L bounds kill-switch policy registered under `name`.
@@ -905,7 +905,7 @@ Error:
   with `openpit_destroy_configure_error`.
 
 ```c
-bool openpit_engine_configure_set_account_pnl(
+bool openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
     OpenPitEngine * engine,
     OpenPitStringView name,
     OpenPitParamAccountId account_id,
@@ -923,7 +923,7 @@ Broker-wide rate-limit barrier for
 ```c
 typedef struct OpenPitPretradePoliciesRateLimitBrokerBarrier {
     size_t max_orders;
-    uint64_t window_nanoseconds;
+    int64_t window_nanoseconds;
 } OpenPitPretradePoliciesRateLimitBrokerBarrier;
 ```
 
@@ -936,7 +936,7 @@ Per-settlement-asset rate-limit barrier for
 typedef struct OpenPitPretradePoliciesRateLimitAssetBarrier {
     OpenPitStringView settlement_asset;
     size_t max_orders;
-    uint64_t window_nanoseconds;
+    int64_t window_nanoseconds;
 } OpenPitPretradePoliciesRateLimitAssetBarrier;
 ```
 
@@ -949,7 +949,7 @@ Per-account rate-limit barrier for
 typedef struct OpenPitPretradePoliciesRateLimitAccountBarrier {
     OpenPitParamAccountId account_id;
     size_t max_orders;
-    uint64_t window_nanoseconds;
+    int64_t window_nanoseconds;
 } OpenPitPretradePoliciesRateLimitAccountBarrier;
 ```
 
@@ -963,7 +963,7 @@ typedef struct OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
     OpenPitParamAccountId account_id;
     OpenPitStringView settlement_asset;
     size_t max_orders;
-    uint64_t window_nanoseconds;
+    int64_t window_nanoseconds;
 } OpenPitPretradePoliciesRateLimitAccountAssetBarrier;
 ```
 

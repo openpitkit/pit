@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 //! Market-data wiring and runtime settings for
 //! [`SpotFundsPolicy`](super::SpotFundsPolicy).
@@ -31,8 +31,6 @@ use crate::marketdata::{
     AccountInfo, InstrumentId, MarketDataService, MarketDataSync, Quote, QuoteResolution,
 };
 use crate::param::{AccountGroupId, AccountId, Price};
-use crate::pretrade::policy::PolicyGroupId;
-use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
 
 use super::market_order_pricer::WithSlippage;
 
@@ -149,8 +147,8 @@ pub enum SpotFundsOverrideTarget {
 
 /// Runtime-updatable settings of [`SpotFundsPolicy`](super::SpotFundsPolicy).
 ///
-/// Carries the slippage / pricing-source / override cascade and the policy
-/// group tag. Slippage resolves per order along three override scopes - per
+/// Carries the slippage / pricing-source / override cascade. Slippage resolves
+/// per order along three override scopes - per
 /// `(instrument, account_id)`, per `(instrument, account_group_id)`, and per
 /// `instrument` - falling back to the global slippage. The validated override
 /// maps are precomputed here so hot-path reads through the policy's settings
@@ -158,8 +156,7 @@ pub enum SpotFundsOverrideTarget {
 ///
 /// Built via [`SpotFundsSettings::new`] and handed to
 /// [`SpotFundsPolicy::new`](super::SpotFundsPolicy::new); the slippage knobs are
-/// then mutable at runtime through the setters, while `group_id` is fixed at
-/// construction.
+/// then mutable at runtime through the setters.
 #[derive(Clone, Debug)]
 pub struct SpotFundsSettings {
     account_overrides: HashMap<(InstrumentId, AccountId), WithSlippage>,
@@ -167,7 +164,6 @@ pub struct SpotFundsSettings {
     instrument_overrides: HashMap<InstrumentId, WithSlippage>,
     global_pricer: WithSlippage,
     pricing_source: SpotFundsPricingSource,
-    group_id: PolicyGroupId,
 }
 
 impl SpotFundsSettings {
@@ -229,7 +225,6 @@ impl SpotFundsSettings {
             instrument_overrides,
             global_pricer,
             pricing_source,
-            group_id: DEFAULT_POLICY_GROUP_ID,
         })
     }
 
@@ -286,16 +281,6 @@ impl SpotFundsSettings {
             }
         }
         Ok(())
-    }
-
-    /// Assigns the policy group tag (construction-time only).
-    pub(super) fn set_group_id(&mut self, group_id: PolicyGroupId) {
-        self.group_id = group_id;
-    }
-
-    /// The policy group tag carried by these settings.
-    pub(super) fn group_id(&self) -> PolicyGroupId {
-        self.group_id
     }
 
     /// Selects the slippage pricer for an order via the resolution cascade.

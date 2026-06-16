@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -301,7 +301,9 @@ pub struct PnlBoundsKillSwitchPolicy<LockingPolicyFactory>
 where
     LockingPolicyFactory: crate::storage::LockingPolicyFactory,
 {
-    settings: LockingPolicyFactory::Config<PnlBoundsKillSwitchSettings>,
+    settings: <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Config<
+        PnlBoundsKillSwitchSettings,
+    >,
     realized: RealizedPnlStorage<LockingPolicyFactory>,
 }
 
@@ -345,10 +347,13 @@ where
 
         // Seed first, then share: the configurator and the hot path observe the
         // same ledger through this handle.
-        let realized = LockingPolicyFactory::new_shared(realized);
+        let realized =
+            <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::new_shared(realized);
 
         Self {
-            settings: LockingPolicyFactory::new_config(settings),
+            settings: <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::new_config(
+                settings,
+            ),
             realized,
         }
     }
@@ -390,7 +395,11 @@ where
     /// same underlying value. The engine can publish a new settings value
     /// through the registry clone and the running policy will observe it on
     /// its next hot-path read.
-    fn settings_cell(&self) -> LockingPolicyFactory::Config<PnlBoundsKillSwitchSettings> {
+    fn settings_cell(
+        &self,
+    ) -> <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Config<
+        PnlBoundsKillSwitchSettings,
+    > {
         self.settings.clone()
     }
 }
@@ -401,8 +410,9 @@ impl<Order, ExecutionReport, AccountAdjustment, LockingPolicyFactory, Sync>
 where
     Order: HasInstrument + HasAccountId,
     ExecutionReport: HasInstrument + HasPnl + HasFee + HasAccountId,
-    LockingPolicyFactory:
-        crate::storage::LockingPolicyFactory + crate::storage::CreateStorageFor<AccountId>,
+    LockingPolicyFactory: crate::storage::LockingPolicyFactory
+        + crate::storage::CreateStorageFor<AccountId>
+        + 'static,
     Sync: crate::core::SyncMode<StorageLockingPolicyFactory = LockingPolicyFactory>,
 {
     fn name(&self) -> &str {
@@ -414,11 +424,7 @@ where
     }
 
     #[allow(private_interfaces)]
-    fn built_in_config_entry(
-        &self,
-    ) -> Option<
-        crate::core::ConfigEntry<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
-    > {
+    fn built_in_config_entry(&self) -> Option<crate::core::ConfigEntry<LockingPolicyFactory>> {
         Some(crate::core::ConfigEntry::PnlBoundsKillSwitch {
             settings: crate::pretrade::ConfigurablePolicy::settings_cell(self),
             realized: self.realized.clone(),

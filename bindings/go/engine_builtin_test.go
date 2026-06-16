@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package openpit
 
@@ -288,6 +288,18 @@ func TestBuiltinRateLimitZeroWindowReturnsError(t *testing.T) {
 	}
 }
 
+func TestBuiltinRateLimitNegativeWindowReturnsError(t *testing.T) {
+	_, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildRateLimit().
+			BrokerBarrier(policies.RateLimitBrokerBarrier{
+				Limit: policies.RateLimit{MaxOrders: 1, Window: -time.Second},
+			}),
+		).Build()
+	if err == nil {
+		t.Fatal("expected error for negative window, got nil")
+	}
+}
+
 func TestBuiltinRateLimitSubMicrosecondWindowAccepted(t *testing.T) {
 	_, err := NewEngineBuilder().NoSync().
 		Builtin(policies.BuildRateLimit().
@@ -300,6 +312,94 @@ func TestBuiltinRateLimitSubMicrosecondWindowAccepted(t *testing.T) {
 	}
 }
 
+func TestConfigureRateLimitRejectsNegativeWindow(t *testing.T) {
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildRateLimit().
+			BrokerBarrier(policies.RateLimitBrokerBarrier{
+				Limit: policies.RateLimit{MaxOrders: 10, Window: time.Minute},
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	err = engine.Configure().RateLimit(
+		policies.RateLimitPolicyName,
+		&policies.RateLimitBrokerBarrier{
+			Limit: policies.RateLimit{MaxOrders: 1, Window: -time.Second},
+		},
+		nil,
+		nil,
+		nil,
+	)
+	if err == nil {
+		t.Fatal("Configure().RateLimit() error = nil, want negative window error")
+	}
+	var configErr *configure.Error
+	if !errors.As(err, &configErr) {
+		t.Fatalf("Configure().RateLimit() error = %T, want *configure.Error", err)
+	}
+	if configErr.Kind != configure.ErrorKindValidation {
+		t.Fatalf("Configure().RateLimit() error kind = %v, want Validation", configErr.Kind)
+	}
+}
+
+func TestConfigureRateLimitUpdateClearsBrokerBarrier(t *testing.T) {
+	accountID := param.NewAccountIDFromUint64(1001)
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildRateLimit().
+			BrokerBarrier(policies.RateLimitBrokerBarrier{
+				Limit: policies.RateLimit{MaxOrders: 1, Window: time.Minute},
+			}).
+			AccountBarriers(policies.RateLimitAccountBarrier{
+				AccountID: accountID,
+				Limit:     policies.RateLimit{MaxOrders: 10, Window: time.Minute},
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	request, rejects, err := engine.StartPreTrade(rateLimitTestOrder(t, 1001))
+	if err != nil {
+		t.Fatalf("first StartPreTrade() error = %v", err)
+	}
+	if len(rejects) != 0 {
+		t.Fatalf("first StartPreTrade() rejects = %v, want none", rejects)
+	}
+	request.Close()
+
+	_, rejects, err = engine.StartPreTrade(rateLimitTestOrder(t, 1001))
+	if err != nil {
+		t.Fatalf("second StartPreTrade() error = %v", err)
+	}
+	if len(rejects) != 1 || rejects[0].Reason != "rate limit exceeded: broker barrier" {
+		t.Fatalf("second StartPreTrade() rejects = %v, want broker reject", rejects)
+	}
+
+	err = engine.Configure().RateLimitUpdate(
+		policies.RateLimitPolicyName,
+		optional.Some[*policies.RateLimitBrokerBarrier](nil),
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Configure().RateLimitUpdate() error = %v", err)
+	}
+
+	request, rejects, err = engine.StartPreTrade(rateLimitTestOrder(t, 1001))
+	if err != nil {
+		t.Fatalf("third StartPreTrade() error = %v", err)
+	}
+	if len(rejects) != 0 {
+		t.Fatalf("third StartPreTrade() rejects = %v, want none", rejects)
+	}
+	request.Close()
+}
+
 // hugeOrderSizeLimit is a broker barrier large enough not to restrict any
 // order in tests that focus on asset- or account-level barriers.
 func hugeOrderSizeLimit(t *testing.T) policies.OrderSizeBrokerBarrier {
@@ -310,6 +410,57 @@ func hugeOrderSizeLimit(t *testing.T) policies.OrderSizeBrokerBarrier {
 			MaxNotional: orderSizeTestVol(t, "1000000000"),
 		},
 	}
+}
+
+func TestConfigureOrderSizeLimitUpdateClearsBrokerBarrier(t *testing.T) {
+	usd := builtinTestAsset(t, "USD")
+	engine, err := NewEngineBuilder().NoSync().
+		Builtin(policies.BuildOrderSizeLimit().
+			BrokerBarrier(policies.OrderSizeBrokerBarrier{
+				Limit: policies.OrderSizeLimit{
+					MaxQuantity: orderSizeTestQty(t, "1"),
+					MaxNotional: orderSizeTestVol(t, "1000000"),
+				},
+			}).
+			AssetBarriers(policies.OrderSizeAssetBarrier{
+				SettlementAsset: usd,
+				Limit: policies.OrderSizeLimit{
+					MaxQuantity: orderSizeTestQty(t, "10"),
+					MaxNotional: orderSizeTestVol(t, "1000000"),
+				},
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	_, rejects, err := engine.StartPreTrade(orderSizeTestOrder(t, 1001, "USD", "2"))
+	if err != nil {
+		t.Fatalf("first StartPreTrade() error = %v", err)
+	}
+	if len(rejects) == 0 || rejects[0].Code != reject.CodeOrderQtyExceedsLimit {
+		t.Fatalf("first StartPreTrade() rejects = %v, want broker qty reject", rejects)
+	}
+
+	err = engine.Configure().OrderSizeLimitUpdate(
+		policies.OrderSizeLimitPolicyName,
+		optional.Some[*policies.OrderSizeBrokerBarrier](nil),
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Configure().OrderSizeLimitUpdate() error = %v", err)
+	}
+
+	request, rejects, err := engine.StartPreTrade(orderSizeTestOrder(t, 1001, "USD", "2"))
+	if err != nil {
+		t.Fatalf("second StartPreTrade() error = %v", err)
+	}
+	if len(rejects) != 0 {
+		t.Fatalf("second StartPreTrade() rejects = %v, want none", rejects)
+	}
+	request.Close()
 }
 
 func TestBuiltinOrderSizeLimitAccountAssetOverridesAssetBaseline(t *testing.T) {

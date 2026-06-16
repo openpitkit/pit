@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -324,10 +324,6 @@ impl LockingPolicyFactory for StorageLockingPolicyFactory {
         EngineHandle(Arc::new(value))
     }
 
-    fn new_config<T: Clone + 'static>(value: T) -> ArcSwapConfigCell<T> {
-        <ArcSwapConfigCell<T> as openpit::storage::ConfigCell<T>>::new(value)
-    }
-
     fn create_policy(&self) -> StorageLockingPolicy {
         let inner = match self.mode {
             SyncMode::None => PolicyImpl::Local,
@@ -337,6 +333,10 @@ impl LockingPolicyFactory for StorageLockingPolicyFactory {
             }
         };
         StorageLockingPolicy { inner }
+    }
+
+    fn new_config<T: Clone + 'static>(value: T) -> ArcSwapConfigCell<T> {
+        <ArcSwapConfigCell<T> as openpit::storage::ConfigCell<T>>::new(value)
     }
 }
 

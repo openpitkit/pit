@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 // Engine-side runtime reconfiguration: builds a FullSync engine with various
 // built-in policies, then drives each through `Engine::configure()`.
@@ -22,22 +22,25 @@
 // three `ConfigureError` paths, and the per-mode `Send`/`Sync` contract of
 // `Configurator`.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use openpit::marketdata::{InstrumentId, MarketDataBuilder, Quote, QuoteTtl};
 use openpit::param::{
     AccountId, AdjustmentAmount, Asset, Fee, Pnl, PositionSize, Price, Quantity, Side, TradeAmount,
     Volume,
 };
 use openpit::pretrade::policies::pnl_bounds_killswitch::PnlBoundsAccountAssetBarrierUpdate;
 use openpit::pretrade::policies::{
-    OrderSizeAccountAssetBarrier, OrderSizeLimit, OrderSizeLimitPolicy, OrderSizeLimitPolicyError,
-    OrderSizeLimitSettings, PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier,
-    PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchPolicyError, PnlBoundsKillSwitchSettings,
-    RateLimit, RateLimitAssetBarrier, RateLimitBrokerBarrier, RateLimitPolicy,
-    RateLimitPolicyError, RateLimitSettings, SpotFundsPolicy, SpotFundsPricingSource,
+    OrderSizeAccountAssetBarrier, OrderSizeAssetBarrier, OrderSizeBrokerBarrier, OrderSizeLimit,
+    OrderSizeLimitPolicy, OrderSizeLimitPolicyError, OrderSizeLimitSettings,
+    PnlBoundsAccountAssetBarrier, PnlBoundsBrokerBarrier, PnlBoundsKillSwitchPolicy,
+    PnlBoundsKillSwitchPolicyError, PnlBoundsKillSwitchSettings, RateLimit, RateLimitAssetBarrier,
+    RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError, RateLimitSettings,
+    SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPolicy, SpotFundsPricingSource,
     SpotFundsSettings,
 };
-use openpit::pretrade::PreTradePolicy;
+use openpit::pretrade::{PreTradePolicy, DEFAULT_POLICY_GROUP_ID};
 use openpit::storage::{FullLocking, IndexLocking, NoLocking};
 use openpit::{
     AccountKeyConstraint, AccountSync, AccountSyncEngine, Configurator, ConfigureError, Engine,
@@ -157,6 +160,38 @@ fn configure_retunes_live_policy_behavior() {
         Err(rejects) => rejects,
     };
     assert_eq!(rejects[0].reason, "rate limit exceeded: broker barrier");
+}
+
+#[test]
+fn configure_rate_limit_retune_does_not_reset_surviving_broker_counter() {
+    let engine = build_engine(5);
+    let name = RateLimitPolicy::<FullLocking>::NAME;
+
+    engine
+        .execute_pre_trade(order(0))
+        .expect("first order under initial limit must pass");
+    engine
+        .execute_pre_trade(order(1))
+        .expect("second order under initial limit must pass");
+
+    engine
+        .configure()
+        .rate_limit::<RateLimitPolicyError>(name, |settings| {
+            settings.set_broker(Some(RateLimitBrokerBarrier {
+                limit: RateLimit {
+                    max_orders: 2,
+                    window: Duration::from_secs(60),
+                },
+            }))
+        })
+        .expect("retune must publish without replacing the counter");
+
+    let rejects = engine
+        .execute_pre_trade(order(2))
+        .err()
+        .expect("third order in the surviving window must be rejected");
+    assert_eq!(rejects[0].reason, "rate limit exceeded: broker barrier");
+    assert!(rejects[0].details.contains("submitted 3 orders"));
 }
 
 #[test]
@@ -328,6 +363,130 @@ fn built_in_configuration_works_in_every_sync_mode() {
     full.execute_pre_trade(order(0))
         .expect("first FullSync order must pass");
     assert!(full.execute_pre_trade(order(1)).is_err());
+}
+
+#[test]
+fn nested_configuration_is_rejected_per_engine_without_poisoning_other_engines() {
+    let engine = build_engine(5);
+    let other = build_engine(5);
+    let name = RateLimitPolicy::<FullLocking>::NAME;
+    let mut nested_error = None;
+
+    let outer = engine
+        .configure()
+        .rate_limit::<ConfigureError>(name, |settings| {
+            nested_error = Some(
+                engine
+                    .configure()
+                    .rate_limit::<RateLimitPolicyError>(name, |nested_settings| {
+                        nested_settings.set_broker(Some(RateLimitBrokerBarrier {
+                            limit: RateLimit {
+                                max_orders: 1,
+                                window: Duration::from_secs(60),
+                            },
+                        }))
+                    })
+                    .expect_err("same-engine nested configure must be rejected"),
+            );
+
+            other
+                .configure()
+                .rate_limit::<RateLimitPolicyError>(name, |other_settings| {
+                    other_settings.set_broker(Some(RateLimitBrokerBarrier {
+                        limit: RateLimit {
+                            max_orders: 1,
+                            window: Duration::from_secs(60),
+                        },
+                    }))
+                })?;
+
+            settings
+                .set_broker(Some(RateLimitBrokerBarrier {
+                    limit: RateLimit {
+                        max_orders: 2,
+                        window: Duration::from_secs(60),
+                    },
+                }))
+                .expect("valid outer retune");
+            Ok(())
+        });
+
+    assert!(
+        matches!(nested_error, Some(ConfigureError::NestedConfiguration)),
+        "expected NestedConfiguration, got {nested_error:?}"
+    );
+    assert!(outer.is_ok(), "outer configure must publish: {outer:?}");
+    assert!(
+        other.execute_pre_trade(order(0)).is_ok(),
+        "first order on other engine must pass"
+    );
+    assert!(
+        other.execute_pre_trade(order(1)).is_err(),
+        "other engine retune inside callback must take effect"
+    );
+}
+
+#[test]
+fn configure_dispatches_by_policy_name_in_multi_policy_engine() {
+    let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
+    let rate_limit =
+        RateLimitPolicy::<FullLocking>::new(broker_settings(100), builder.storage_builder());
+    let order_size = OrderSizeLimitPolicy::<FullLocking>::new(
+        OrderSizeLimitSettings::new(
+            None,
+            [OrderSizeAssetBarrier {
+                limit: OrderSizeLimit {
+                    max_quantity: Quantity::from_str("100")
+                        .expect("quantity literal must be valid"),
+                    max_notional: Volume::from_str("100000").expect("volume literal must be valid"),
+                },
+                settlement_asset: Asset::new("USD").expect("asset code must be valid"),
+            }],
+            [],
+        )
+        .expect("settings must be valid"),
+    );
+    let engine = builder
+        .pre_trade(rate_limit)
+        .pre_trade(order_size)
+        .build()
+        .expect("engine must build");
+
+    engine
+        .configure()
+        .order_size_limit::<OrderSizeLimitPolicyError>(
+            OrderSizeLimitPolicy::<FullLocking>::NAME,
+            |settings| {
+                settings.set_asset_barriers([OrderSizeAssetBarrier {
+                    limit: OrderSizeLimit {
+                        max_quantity: Quantity::from_str("10")
+                            .expect("quantity literal must be valid"),
+                        max_notional: Volume::from_str("100000")
+                            .expect("volume literal must be valid"),
+                    },
+                    settlement_asset: Asset::new("USD").expect("asset code must be valid"),
+                }])
+            },
+        )
+        .expect("order-size retune must dispatch to the named policy");
+
+    let rejects = engine
+        .execute_pre_trade(order_with_price(1, "15", "100"))
+        .err()
+        .expect("order must be rejected by the retuned order-size policy");
+    assert_eq!(rejects[0].reason, "order quantity exceeded");
+
+    let mismatch = engine
+        .configure()
+        .rate_limit::<RateLimitPolicyError>(
+            OrderSizeLimitPolicy::<FullLocking>::NAME,
+            |_settings| Ok(()),
+        )
+        .expect_err("same engine must still reject wrong typed dispatch");
+    assert!(
+        matches!(mismatch, ConfigureError::PolicyTypeMismatch { .. }),
+        "expected PolicyTypeMismatch, got {mismatch:?}"
+    );
 }
 
 #[test]
@@ -746,6 +905,67 @@ fn configure_order_size_limit_account_asset_barrier_tightened_rejects_previously
         .expect("account 2 with no barrier must still pass");
 }
 
+#[test]
+fn configure_order_size_limit_broker_barrier_added_rejects_all_accounts() {
+    let engine = build_order_size_engine(1, "100", "100000");
+    let name = OrderSizeLimitPolicy::<FullLocking>::NAME;
+
+    engine
+        .execute_pre_trade(order_with_price(2, "15", "100"))
+        .expect("account without account+asset barrier must pass before broker limit");
+
+    engine
+        .configure()
+        .order_size_limit::<OrderSizeLimitPolicyError>(name, |settings| {
+            settings.set_broker(Some(OrderSizeBrokerBarrier {
+                limit: OrderSizeLimit {
+                    max_quantity: Quantity::from_str("10")
+                        .expect("max_quantity literal must be valid"),
+                    max_notional: Volume::from_str("100000")
+                        .expect("max_notional literal must be valid"),
+                },
+            }))
+        })
+        .expect("broker barrier add must publish");
+
+    let rejects = engine
+        .execute_pre_trade(order_with_price(2, "15", "100"))
+        .err()
+        .expect("broker limit must reject every account");
+    assert_eq!(rejects[0].reason, "order quantity exceeded");
+}
+
+#[test]
+fn configure_order_size_limit_asset_barrier_added_rejects_matching_settlement() {
+    let engine = build_order_size_engine(1, "100", "100000");
+    let name = OrderSizeLimitPolicy::<FullLocking>::NAME;
+
+    engine
+        .execute_pre_trade(order_with_price(2, "15", "100"))
+        .expect("account without account+asset barrier must pass before asset limit");
+
+    engine
+        .configure()
+        .order_size_limit::<OrderSizeLimitPolicyError>(name, |settings| {
+            settings.set_asset_barriers([OrderSizeAssetBarrier {
+                limit: OrderSizeLimit {
+                    max_quantity: Quantity::from_str("10")
+                        .expect("max_quantity literal must be valid"),
+                    max_notional: Volume::from_str("100000")
+                        .expect("max_notional literal must be valid"),
+                },
+                settlement_asset: Asset::new("USD").expect("asset code must be valid"),
+            }])
+        })
+        .expect("asset barrier add must publish");
+
+    let rejects = engine
+        .execute_pre_trade(order_with_price(2, "15", "100"))
+        .err()
+        .expect("USD asset limit must reject matching settlement");
+    assert_eq!(rejects[0].reason, "order quantity exceeded");
+}
+
 // ─── Spot funds ───────────────────────────────────────────────────────────────
 
 // Minimal account-adjustment stub for SpotFunds seeding.
@@ -857,11 +1077,57 @@ fn build_spot_engine(slippage_bps: u16) -> SpotEngine {
         .expect("engine must build")
 }
 
+fn build_spot_market_engine(slippage_bps: u16, mark: &str) -> (SpotEngine, InstrumentId) {
+    let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
+    let service = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let instrument = Instrument::new(
+        Asset::new("AAPL").expect("asset code must be valid"),
+        Asset::new("USD").expect("asset code must be valid"),
+    );
+    let instrument_id = service
+        .register(instrument)
+        .expect("instrument registration must succeed");
+    service
+        .push(
+            instrument_id,
+            Quote::new().with_mark(Price::from_str(mark).expect("price literal must be valid")),
+        )
+        .expect("quote push must succeed");
+    let settings = SpotFundsSettings::new(slippage_bps, SpotFundsPricingSource::Mark, [])
+        .expect("settings must be valid");
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        settings,
+        Some(SpotFundsMarketData::new(Arc::clone(&service))),
+        builder.storage_builder(),
+    );
+    let engine = builder
+        .pre_trade(policy)
+        .build()
+        .expect("engine must build");
+    (engine, instrument_id)
+}
+
 fn seed_spot(engine: &SpotEngine, account: u64, asset_code: &str, amount: &str) {
     let adj = spot_balance(asset_code, amount);
     engine
         .apply_account_adjustment(AccountId::from_u64(account), &[adj])
         .expect("seed must succeed");
+}
+
+fn assert_market_buy_locks_price(engine: &SpotEngine, account: u64, expected: &str) {
+    let mut reservation = engine
+        .execute_pre_trade(order(account))
+        .expect("market buy must pass with seeded funds");
+    let lock_price = reservation
+        .lock()
+        .prices_of(DEFAULT_POLICY_GROUP_ID)
+        .next()
+        .expect("market buy must record a lock price");
+    reservation.rollback();
+    assert_eq!(
+        lock_price,
+        Price::from_str(expected).expect("price literal must be valid")
+    );
 }
 
 // Build a SpotFunds engine, seed a balance, confirm a limit order passes, then
@@ -921,4 +1187,45 @@ fn configure_spot_funds_settings_retune_takes_effect() {
         .execute_pre_trade(order_with_price(account_id, "5", "100"))
         .expect("engine must remain functional after failed retune")
         .rollback();
+}
+
+#[test]
+fn configure_spot_funds_global_slippage_retune_changes_market_lock_price() {
+    let (engine, _instrument_id) = build_spot_market_engine(0, "100");
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+    let account_id = 1u64;
+    seed_spot(&engine, account_id, "USD", "1000");
+
+    assert_market_buy_locks_price(&engine, account_id, "100");
+
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| settings.set_global_slippage_bps(1000))
+        .expect("global slippage retune must publish");
+
+    assert_market_buy_locks_price(&engine, account_id, "110");
+}
+
+#[test]
+fn configure_spot_funds_override_retune_changes_market_lock_price() {
+    let (engine, instrument_id) = build_spot_market_engine(0, "100");
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+    let account_id = 1u64;
+    seed_spot(&engine, account_id, "USD", "1000");
+
+    assert_market_buy_locks_price(&engine, account_id, "100");
+
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_override(
+                SpotFundsOverrideTarget::Instrument(instrument_id),
+                SpotFundsOverride {
+                    slippage_bps: Some(2500),
+                },
+            )
+        })
+        .expect("instrument override retune must publish");
+
+    assert_market_buy_locks_price(&engine, account_id, "125");
 }

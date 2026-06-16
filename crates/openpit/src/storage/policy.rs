@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 //! Locking policy traits.
 //!
@@ -182,8 +182,10 @@ pub trait LockingPolicyFactory {
     type Shared<T: 'static>: Clone + std::ops::Deref<Target = T>;
 
     /// Sync-mode-aware settings cell for a configurable policy.
-    /// NoLocking -> LocalConfigCell (zero atomics); FullLocking/IndexLocking ->
-    /// ArcSwapConfigCell.
+    ///
+    /// NoLocking uses [`LocalConfigCell`](super::LocalConfigCell), preserving
+    /// zero atomics. FullLocking and IndexLocking use
+    /// [`ArcSwapConfigCell`](super::ArcSwapConfigCell).
     type Config<Settings: Clone + 'static>: super::ConfigCell<Settings>;
 
     /// Builds a fresh policy for a new storage instance.

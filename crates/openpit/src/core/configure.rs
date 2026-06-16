@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 //! Runtime reconfiguration for built-in pre-trade policies.
 //!
@@ -26,7 +26,7 @@
 //! Runtime reconfiguration of custom policies is not supported in this
 //! release.
 
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
@@ -115,11 +115,12 @@ pub enum ConfigureError {
     ///
     /// Configuration is non-reentrant: a [`Configurator`] method runs its
     /// update closure while it owns the settings cell's writer lock, and that
-    /// lock is not reentrant. Re-entering configuration from inside such a
-    /// closure - whether for the same policy or a different one - would
-    /// deadlock, so it is rejected before any lock is taken. Configuration
-    /// from other threads is unaffected and still serializes. The live
-    /// settings are left unchanged.
+    /// lock is not reentrant. Re-entering configuration for the same engine
+    /// from inside such a closure - whether for the same policy or a different
+    /// one - is rejected before any lock is taken, so policy authors do not
+    /// have to reason about configuration lock ordering. Configuration from
+    /// other threads is unaffected and still serializes. The live settings are
+    /// left unchanged.
     NestedConfiguration,
 }
 
@@ -194,37 +195,42 @@ impl<Factory: LockingPolicyFactory> ConfigRegistry<Factory> {
 // ─── Re-entrancy guard ───────────────────────────────────────────────────────
 
 thread_local! {
-    // Set while a configuration call is in progress on the current thread.
-    // Guards every `Configurator` entry against re-entrant configuration,
-    // which would deadlock on a settings cell's non-reentrant writer lock
-    // (see `ConfigureError::NestedConfiguration`).
-    static CONFIGURING: Cell<bool> = const { Cell::new(false) };
+    static CONFIGURING: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 
 /// RAII marker that a configuration is in progress on the current thread.
 ///
 /// [`Self::enter`] fails with [`ConfigureError::NestedConfiguration`] when a
-/// configuration is already active on this thread, so a nested call returns
-/// before it can take any cell writer lock. The flag is cleared on drop -
-/// including on an early `?` return or a panic unwinding through the closure -
-/// so a single thread can configure again once the outer call completes.
-struct ConfiguringGuard;
+/// configuration for the same engine registry is already active on this
+/// thread, so a nested call returns before it can take any cell writer lock.
+/// The flag is cleared on drop - including on an early `?` return or a panic
+/// unwinding through the closure - so a single thread can configure again once
+/// the outer call completes.
+struct ConfiguringGuard {
+    identity: usize,
+}
 
 impl ConfiguringGuard {
-    fn enter() -> Result<Self, ConfigureError> {
+    fn enter(identity: usize) -> Result<Self, ConfigureError> {
         CONFIGURING.with(|configuring| {
-            if configuring.get() {
+            let mut active = configuring.borrow_mut();
+            if active.contains(&identity) {
                 return Err(ConfigureError::NestedConfiguration);
             }
-            configuring.set(true);
-            Ok(Self)
+            active.push(identity);
+            Ok(Self { identity })
         })
     }
 }
 
 impl Drop for ConfiguringGuard {
     fn drop(&mut self) {
-        CONFIGURING.with(|configuring| configuring.set(false));
+        CONFIGURING.with(|configuring| {
+            let mut active = configuring.borrow_mut();
+            if let Some(pos) = active.iter().rposition(|id| *id == self.identity) {
+                active.swap_remove(pos);
+            }
+        });
     }
 }
 
@@ -251,7 +257,7 @@ type RegistryFactory<Sync> = <Sync as SyncMode>::StorageLockingPolicyFactory;
 /// - [`LocalSync`](crate::LocalSync): `!Send + !Sync`.
 pub struct Configurator<Sync: SyncMode> {
     registry: <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
-        ConfigRegistry<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        ConfigRegistry<RegistryFactory<Sync>>,
     >,
 }
 
@@ -267,10 +273,14 @@ impl<Sync: SyncMode> Configurator<Sync> {
     /// Wraps the engine's shared registry in a configurator handle.
     pub(crate) fn from_inner(
         registry: <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
-            ConfigRegistry<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+            ConfigRegistry<RegistryFactory<Sync>>,
         >,
     ) -> Self {
         Self { registry }
+    }
+
+    fn enter_configuration(&self) -> Result<ConfiguringGuard, ConfigureError> {
+        ConfiguringGuard::enter(std::ptr::from_ref(&*self.registry) as usize)
     }
 
     /// Retunes the [`RateLimitPolicy`](crate::pretrade::policies::RateLimitPolicy)
@@ -288,11 +298,13 @@ impl<Sync: SyncMode> Configurator<Sync> {
         name: &str,
         f: impl FnOnce(&mut RateLimitSettings) -> Result<(), Error>,
     ) -> Result<(), ConfigureError> {
-        let _guard = ConfiguringGuard::enter()?;
         match self.registry.entry(name)? {
-            ConfigEntry::RateLimit(cell) => cell
-                .update(f)
-                .map_err(|error| ConfigRegistry::<RegistryFactory<Sync>>::validation(name, error)),
+            ConfigEntry::RateLimit(cell) => {
+                let _guard = self.enter_configuration()?;
+                cell.update(f).map_err(|error| {
+                    ConfigRegistry::<RegistryFactory<Sync>>::validation(name, error)
+                })
+            }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<RateLimitSettings>(
                 name, entry,
             )),
@@ -311,11 +323,13 @@ impl<Sync: SyncMode> Configurator<Sync> {
         name: &str,
         f: impl FnOnce(&mut PnlBoundsKillSwitchSettings) -> Result<(), Error>,
     ) -> Result<(), ConfigureError> {
-        let _guard = ConfiguringGuard::enter()?;
         match self.registry.entry(name)? {
-            ConfigEntry::PnlBoundsKillSwitch { settings, .. } => settings
-                .update(f)
-                .map_err(|error| ConfigRegistry::<RegistryFactory<Sync>>::validation(name, error)),
+            ConfigEntry::PnlBoundsKillSwitch { settings, .. } => {
+                let _guard = self.enter_configuration()?;
+                settings.update(f).map_err(|error| {
+                    ConfigRegistry::<RegistryFactory<Sync>>::validation(name, error)
+                })
+            }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<
                 PnlBoundsKillSwitchSettings,
             >(name, entry)),
@@ -353,10 +367,6 @@ impl<Sync: SyncMode> Configurator<Sync> {
     ) -> Result<(), ConfigureError> {
         match self.registry.entry(name)? {
             ConfigEntry::PnlBoundsKillSwitch { realized, .. } => {
-                // Absolute force-set: upsert the entry, mirroring the
-                // construction-time seed. This writes only the realized ledger
-                // (its own lock) and runs no user closure, so it cannot
-                // re-enter configuration or deadlock on the settings writer.
                 realized.with_mut(
                     (account, settlement_asset),
                     || Pnl::ZERO,
@@ -381,11 +391,13 @@ impl<Sync: SyncMode> Configurator<Sync> {
         name: &str,
         f: impl FnOnce(&mut SpotFundsSettings) -> Result<(), Error>,
     ) -> Result<(), ConfigureError> {
-        let _guard = ConfiguringGuard::enter()?;
         match self.registry.entry(name)? {
-            ConfigEntry::SpotFunds(cell) => cell
-                .update(f)
-                .map_err(|error| ConfigRegistry::<RegistryFactory<Sync>>::validation(name, error)),
+            ConfigEntry::SpotFunds(cell) => {
+                let _guard = self.enter_configuration()?;
+                cell.update(f).map_err(|error| {
+                    ConfigRegistry::<RegistryFactory<Sync>>::validation(name, error)
+                })
+            }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<SpotFundsSettings>(
                 name, entry,
             )),
@@ -404,11 +416,13 @@ impl<Sync: SyncMode> Configurator<Sync> {
         name: &str,
         f: impl FnOnce(&mut OrderSizeLimitSettings) -> Result<(), Error>,
     ) -> Result<(), ConfigureError> {
-        let _guard = ConfiguringGuard::enter()?;
         match self.registry.entry(name)? {
-            ConfigEntry::OrderSizeLimit(cell) => cell
-                .update(f)
-                .map_err(|error| ConfigRegistry::<RegistryFactory<Sync>>::validation(name, error)),
+            ConfigEntry::OrderSizeLimit(cell) => {
+                let _guard = self.enter_configuration()?;
+                cell.update(f).map_err(|error| {
+                    ConfigRegistry::<RegistryFactory<Sync>>::validation(name, error)
+                })
+            }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<OrderSizeLimitSettings>(name, entry)),
         }
     }
@@ -419,9 +433,11 @@ mod tests {
     use std::cell::RefCell;
     use std::time::Duration;
 
-    use crate::param::{AccountId, Asset, Quantity, Side, TradeAmount};
+    use crate::param::{AccountId, Asset, Quantity, Side, TradeAmount, Volume};
     use crate::pretrade::policies::{
-        RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError, RateLimitSettings,
+        OrderSizeBrokerBarrier, OrderSizeLimit, OrderSizeLimitPolicy, OrderSizeLimitPolicyError,
+        OrderSizeLimitSettings, RateLimit, RateLimitBrokerBarrier, RateLimitPolicy,
+        RateLimitPolicyError, RateLimitSettings,
     };
     use crate::storage::FullLocking;
     use crate::{Engine, FullSyncEngine, Instrument, OrderOperation};
@@ -438,6 +454,16 @@ mod tests {
         }
     }
 
+    fn order_size_broker(max_quantity: &str) -> OrderSizeBrokerBarrier {
+        OrderSizeBrokerBarrier {
+            limit: OrderSizeLimit {
+                max_quantity: Quantity::from_str(max_quantity)
+                    .expect("quantity literal must be valid"),
+                max_notional: Volume::from_str("1000000").expect("volume literal must be valid"),
+            },
+        }
+    }
+
     fn build_engine(max_orders: usize) -> FullSyncEngine<OrderOperation> {
         let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
         let settings = RateLimitSettings::new(Some(broker_barrier(max_orders)), [], [], [])
@@ -445,6 +471,22 @@ mod tests {
         let policy = RateLimitPolicy::<FullLocking>::new(settings, builder.storage_builder());
         builder
             .pre_trade(policy)
+            .build()
+            .expect("engine must build")
+    }
+
+    fn build_engine_with_order_size(max_orders: usize) -> FullSyncEngine<OrderOperation> {
+        let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
+        let rate_settings = RateLimitSettings::new(Some(broker_barrier(max_orders)), [], [], [])
+            .expect("broker barrier is a valid configuration");
+        let size_settings = OrderSizeLimitSettings::new(Some(order_size_broker("100")), [], [])
+            .expect("order-size broker barrier is a valid configuration");
+        let rate_policy =
+            RateLimitPolicy::<FullLocking>::new(rate_settings, builder.storage_builder());
+        let size_policy = OrderSizeLimitPolicy::<FullLocking>::new(size_settings);
+        builder
+            .pre_trade(rate_policy)
+            .pre_trade(size_policy)
             .build()
             .expect("engine must build")
     }
@@ -525,5 +567,64 @@ mod tests {
             .err()
             .expect("limit must still be 2 after the rejected retune");
         assert_eq!(rejects[0].reason, "rate limit exceeded: broker barrier");
+    }
+
+    #[test]
+    fn nested_configuration_of_different_policy_in_same_engine_is_rejected() {
+        let engine = build_engine_with_order_size(2);
+        let rate_name = RateLimitPolicy::<FullLocking>::NAME;
+        let size_name = OrderSizeLimitPolicy::<FullLocking>::NAME;
+
+        let nested = RefCell::new(None);
+        let outer = engine
+            .configure()
+            .rate_limit::<ConfigureError>(rate_name, |_settings| {
+                let inner = engine
+                    .configure()
+                    .order_size_limit::<OrderSizeLimitPolicyError>(size_name, |settings| {
+                        settings.set_broker(Some(order_size_broker("200")))
+                    });
+                let error = inner.expect_err("nested configuration must be rejected");
+                *nested.borrow_mut() = Some(error.clone());
+                Err(error)
+            });
+
+        assert_eq!(
+            nested.into_inner(),
+            Some(ConfigureError::NestedConfiguration)
+        );
+        assert_eq!(
+            outer,
+            Err(ConfigureError::Validation {
+                name: rate_name.to_owned(),
+                message: ConfigureError::NestedConfiguration.to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn nested_configuration_of_independent_engine_is_allowed() {
+        let engine_a = build_engine(2);
+        let engine_b = build_engine(2);
+        let name = RateLimitPolicy::<FullLocking>::NAME;
+
+        engine_a
+            .configure()
+            .rate_limit::<RateLimitPolicyError>(name, |_settings| {
+                engine_b
+                    .configure()
+                    .rate_limit(name, |settings| {
+                        settings.set_broker(Some(broker_barrier(9)))
+                    })
+                    .expect("independent engine update must succeed");
+                Ok(())
+            })
+            .expect("independent engine configuration must not be rejected");
+
+        for account in 0..3 {
+            engine_b
+                .execute_pre_trade(order(account))
+                .expect("engine B broker limit must have been widened");
+        }
     }
 }

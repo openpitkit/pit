@@ -1362,7 +1362,7 @@ struct OpenPitPretradePoliciesRateLimitBrokerBarrier {
     /**
      * Window duration in nanoseconds.
      */
-    uint64_t window_nanoseconds;
+    int64_t window_nanoseconds;
 };
 
 /**
@@ -1381,7 +1381,7 @@ struct OpenPitPretradePoliciesRateLimitAccountBarrier {
     /**
      * Window duration in nanoseconds.
      */
-    uint64_t window_nanoseconds;
+    int64_t window_nanoseconds;
 };
 
 /**
@@ -1950,7 +1950,7 @@ struct OpenPitPretradePoliciesRateLimitAssetBarrier {
     /**
      * Window duration in nanoseconds.
      */
-    uint64_t window_nanoseconds;
+    int64_t window_nanoseconds;
 };
 
 /**
@@ -1973,7 +1973,7 @@ struct OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
     /**
      * Window duration in nanoseconds.
      */
-    uint64_t window_nanoseconds;
+    int64_t window_nanoseconds;
 };
 
 /**
@@ -6034,7 +6034,7 @@ bool openpit_engine_configure_pnl_bounds_killswitch(
  *   writes a caller-owned `OpenPitConfigureError` (`Validation`) that must
  *   be released with `openpit_destroy_configure_error`.
  */
-bool openpit_engine_configure_set_account_pnl(
+bool openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
     OpenPitEngine * engine,
     OpenPitStringView name,
     OpenPitParamAccountId account_id,
