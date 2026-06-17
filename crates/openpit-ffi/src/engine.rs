@@ -2433,10 +2433,11 @@ mod tests {
         openpit_destroy_pretrade_pre_trade_dry_run_report,
         openpit_destroy_pretrade_pre_trade_request, openpit_destroy_pretrade_pre_trade_reservation,
         openpit_engine_apply_account_adjustment, openpit_engine_apply_execution_report,
-        openpit_engine_build_error_get_code, openpit_engine_build_error_get_policy_group_id,
-        openpit_engine_build_error_get_policy_name, openpit_engine_builder_build,
-        openpit_engine_execute_pre_trade, openpit_engine_execute_pre_trade_dry_run,
-        openpit_engine_start_pre_trade, openpit_engine_start_pre_trade_dry_run,
+        openpit_engine_block_account, openpit_engine_build_error_get_code,
+        openpit_engine_build_error_get_policy_group_id, openpit_engine_build_error_get_policy_name,
+        openpit_engine_builder_build, openpit_engine_execute_pre_trade,
+        openpit_engine_execute_pre_trade_dry_run, openpit_engine_start_pre_trade,
+        openpit_engine_start_pre_trade_dry_run,
         openpit_pretrade_pre_trade_dry_run_report_get_account_adjustments,
         openpit_pretrade_pre_trade_dry_run_report_get_account_block,
         openpit_pretrade_pre_trade_dry_run_report_get_lock,
@@ -2738,6 +2739,43 @@ mod tests {
         }
         let bytes = unsafe { std::slice::from_raw_parts(view.ptr, view.len) };
         std::str::from_utf8(bytes).expect("utf8").to_string()
+    }
+
+    fn order_for_account(account_id: crate::param::OpenPitParamAccountId) -> OpenPitOrder {
+        OpenPitOrder {
+            operation: crate::order::OpenPitOrderOperationOptional {
+                is_set: true,
+                value: crate::order::OpenPitOrderOperation {
+                    account_id: crate::param::OpenPitParamAccountIdOptional {
+                        is_set: true,
+                        value: account_id,
+                    },
+                    ..Default::default()
+                },
+            },
+            ..Default::default()
+        }
+    }
+
+    fn reject_at(list: *mut OpenPitPretradeRejectList, index: usize) -> OpenPitPretradeReject {
+        let mut reject = OpenPitPretradeReject {
+            policy: OpenPitStringView::not_set(),
+            reason: OpenPitStringView::not_set(),
+            details: OpenPitStringView::not_set(),
+            user_data: std::ptr::null_mut(),
+            code: OpenPitPretradeRejectCode::Other,
+            scope: OpenPitPretradeRejectScope::Order,
+        };
+        assert!(openpit_pretrade_reject_list_get(list, index, &mut reject));
+        reject
+    }
+
+    fn assert_engine_account_block_reject(reject: OpenPitPretradeReject, reason: &str) {
+        assert_eq!(reject.code, OpenPitPretradeRejectCode::AccountBlocked);
+        assert_eq!(reject.scope, OpenPitPretradeRejectScope::Account);
+        assert_eq!(string_view_to_string(reject.policy), "Engine");
+        assert_eq!(string_view_to_string(reject.reason), reason);
+        assert_eq!(string_view_to_string(reject.details), reason);
     }
 
     #[test]
@@ -3727,6 +3765,50 @@ mod tests {
         assert_eq!(status, OpenPitPretradeStatus::Rejected);
         assert!(!out_rejects.is_null());
         openpit_pretrade_destroy_reject_list(out_rejects);
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn execute_pre_trade_and_dry_run_return_owned_account_block_reject_text() {
+        let engine = build_passthrough_engine();
+        let account_id = 1001;
+        let reason = "blocked by operator";
+        openpit_engine_block_account(engine, account_id, OpenPitStringView::from_utf8(reason));
+        let order = order_for_account(account_id);
+
+        let mut out_reservation = std::ptr::null_mut();
+        let mut out_rejects: *mut OpenPitPretradeRejectList = std::ptr::null_mut();
+        let status = openpit_engine_execute_pre_trade(
+            engine,
+            &order,
+            &mut out_reservation,
+            &mut out_rejects,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(status, OpenPitPretradeStatus::Rejected);
+        assert!(out_reservation.is_null());
+        assert!(!out_rejects.is_null());
+        assert_eq!(openpit_pretrade_reject_list_len(out_rejects), 1);
+        assert_engine_account_block_reject(reject_at(out_rejects, 0), reason);
+        openpit_pretrade_destroy_reject_list(out_rejects);
+
+        let mut out_report = std::ptr::null_mut();
+        assert!(openpit_engine_execute_pre_trade_dry_run(
+            engine,
+            &order,
+            &mut out_report,
+            std::ptr::null_mut(),
+        ));
+        assert!(!out_report.is_null());
+        assert!(!openpit_pretrade_pre_trade_dry_run_report_is_pass(
+            out_report
+        ));
+        let dry_run_rejects = openpit_pretrade_pre_trade_dry_run_report_get_rejects(out_report);
+        assert!(!dry_run_rejects.is_null());
+        assert_eq!(openpit_pretrade_reject_list_len(dry_run_rejects), 1);
+        assert_engine_account_block_reject(reject_at(dry_run_rejects, 0), reason);
+        openpit_pretrade_destroy_reject_list(dry_run_rejects);
+        openpit_destroy_pretrade_pre_trade_dry_run_report(out_report);
         openpit_destroy_engine(engine);
     }
 

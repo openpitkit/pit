@@ -20,6 +20,7 @@ package openpit
 import (
 	"errors"
 	"testing"
+	"unicode/utf8"
 
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade/policies"
@@ -171,6 +172,31 @@ func assertAccountBlockedWithReason(t *testing.T, engine *Engine, wantReason str
 	}
 }
 
+func assertEngineAccountBlockRejectText(t *testing.T, got reject.Reject, wantReason string) {
+	t.Helper()
+	if got.Code != reject.CodeAccountBlocked {
+		t.Fatalf("reject code = %v, want %v", got.Code, reject.CodeAccountBlocked)
+	}
+	if got.Scope != reject.ScopeAccount {
+		t.Fatalf("reject scope = %v, want %v", got.Scope, reject.ScopeAccount)
+	}
+	if got.Policy != "Engine" {
+		t.Fatalf("reject policy = %q, want Engine", got.Policy)
+	}
+	if !utf8.ValidString(got.Reason) {
+		t.Fatalf("reject reason is not valid UTF-8: %q", got.Reason)
+	}
+	if !utf8.ValidString(got.Details) {
+		t.Fatalf("reject details are not valid UTF-8: %q", got.Details)
+	}
+	if got.Reason != wantReason {
+		t.Fatalf("reject reason = %q, want %q", got.Reason, wantReason)
+	}
+	if got.Details != wantReason {
+		t.Fatalf("reject details = %q, want %q", got.Details, wantReason)
+	}
+}
+
 // assertAccountPasses drives one StartPreTrade for account 1 and fails unless it
 // is accepted with no rejects.
 func assertAccountPasses(t *testing.T, engine *Engine) {
@@ -203,6 +229,43 @@ func TestAccountsBlockGatesPreTradeAndUnblockRestores(t *testing.T) {
 
 	accounts.Unblock(account)
 	assertAccountPasses(t, engine)
+}
+
+func TestAccountsExecutePreTradeDryRunMatchesExecutePreTradeBlockRejectText(t *testing.T) {
+	engine := newAccountsTestEngine(t)
+	defer engine.Stop()
+
+	const accountID uint64 = 1
+	const reason = "blocked by operator"
+	engine.Accounts().Block(param.NewAccountIDFromUint64(accountID), reason)
+	order := rateLimitTestOrder(t, accountID)
+
+	reservation, execRejects, err := engine.ExecutePreTrade(order)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
+	}
+	if reservation != nil {
+		reservation.Close()
+		t.Fatal("ExecutePreTrade() reservation != nil, want account-block reject")
+	}
+	if len(execRejects) != 1 {
+		t.Fatalf("ExecutePreTrade() rejects len = %d, want 1", len(execRejects))
+	}
+	assertEngineAccountBlockRejectText(t, execRejects[0], reason)
+
+	report, err := engine.ExecutePreTradeDryRun(order)
+	if err != nil {
+		t.Fatalf("ExecutePreTradeDryRun() error = %v", err)
+	}
+	defer report.Close()
+	if report.IsPass() {
+		t.Fatal("ExecutePreTradeDryRun().IsPass() = true, want account-block reject")
+	}
+	dryRunRejects := report.Rejects()
+	if len(dryRunRejects) != 1 {
+		t.Fatalf("ExecutePreTradeDryRun().Rejects() len = %d, want 1", len(dryRunRejects))
+	}
+	assertEngineAccountBlockRejectText(t, dryRunRejects[0], reason)
 }
 
 func TestAccountsUnblockAbsentIsNoOp(t *testing.T) {
