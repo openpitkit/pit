@@ -228,8 +228,8 @@ verify-wheel-version mode version base_version:
     PY
 
 # Run the wheel test suite against a pre-installed wheel (no rebuild).
-test-wheel:
-    just _pytest bindings/python/tests
+test-wheel python="python":
+    just _pytest bindings/python/tests {{ python }}
 
 # Validate wheel metadata with twine.
 check-wheel path:
