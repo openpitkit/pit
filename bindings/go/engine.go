@@ -189,9 +189,15 @@ func (e *Engine) ApplyExecutionReport(report model.ExecutionReport) (PostTradeRe
 		return PostTradeResult{}, err
 	}
 
-	accountBlocks := make([]reject.AccountBlock, len(result.AccountBlocks))
-	for i, b := range result.AccountBlocks {
-		accountBlocks[i] = reject.NewAccountBlockFromHandle(b)
+	var accountBlocks []reject.AccountBlock
+	if result.AccountBlocks != nil {
+		n := native.PretradeAccountBlockListLen(result.AccountBlocks)
+		accountBlocks = make([]reject.AccountBlock, n)
+		for i := range accountBlocks {
+			accountBlocks[i] = reject.NewAccountBlockFromHandle(
+				native.PretradeAccountBlockListGet(result.AccountBlocks, i))
+		}
+		native.DestroyPretradeAccountBlockList(result.AccountBlocks)
 	}
 
 	var outcomes []accountadjustment.Outcome

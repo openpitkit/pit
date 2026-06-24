@@ -380,13 +380,30 @@ func EngineExecutePreTrade(
 }
 
 type PretradePostTradeResult struct {
-	AccountBlocks []PretradeAccountBlock
+	// AccountBlocks is the native account-block list handle the engine recorded,
+	// or nil when none. The caller owns it and must release it with
+	// DestroyPretradeAccountBlockList after reading every block. Each block's
+	// string views borrow the list's buffers, so they must be copied (Safe)
+	// before the list is destroyed; the views dangle once it is released.
+	AccountBlocks PretradeAccountBlockList
 	// Outcomes is the native account-adjustment outcome list handle produced by
 	// policies, or nil. The caller owns it and must release it with
 	// DestroyAccountAdjustmentOutcomeList.
 	Outcomes AccountAdjustmentOutcomeList
 }
 
+// EngineApplyExecutionReport applies a completed execution report to the engine.
+//
+// On success it returns a PretradePostTradeResult whose AccountBlocks and
+// Outcomes are native list handles the caller owns and must release (see the
+// field docs). The block list is returned rather than read and destroyed here
+// on purpose: each block's reason/details are non-owning views into the list's
+// memory, so the caller must copy them (Safe) before destroying the list.
+// Reading the views into Go-owned blocks here and destroying the list before
+// the upper layer copies them is a use-after-free that surfaces as garbage
+// reason/details.
+//
+// On transport failure it returns a Go error and no handles.
 func EngineApplyExecutionReport(
 	engine Engine,
 	report ExecutionReport,
@@ -405,17 +422,7 @@ func EngineApplyExecutionReport(
 			consumeSharedStringAsError(outError, "openpit_engine_apply_execution_report failed")
 	}
 
-	var blocks []PretradeAccountBlock
-	if outBlocks != nil {
-		n := PretradeAccountBlockListLen(outBlocks)
-		blocks = make([]PretradeAccountBlock, n)
-		for i := range blocks {
-			blocks[i] = PretradeAccountBlockListGet(outBlocks, i)
-		}
-		DestroyPretradeAccountBlockList(outBlocks)
-	}
-
-	return PretradePostTradeResult{AccountBlocks: blocks, Outcomes: outAdjustments}, nil
+	return PretradePostTradeResult{AccountBlocks: outBlocks, Outcomes: outAdjustments}, nil
 }
 
 // EngineApplyAccountAdjustment applies a batch of account adjustments.

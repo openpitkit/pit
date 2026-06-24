@@ -19,6 +19,7 @@ package openpit
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -646,6 +647,18 @@ func TestBuiltinPnlBoundsKillswitchBrokerOnlyTriggersAndBlocksAccount(t *testing
 	}
 	if len(result.AccountBlocks) == 0 || result.AccountBlocks[0].Code != reject.CodePnlKillSwitchTriggered {
 		t.Fatalf("AccountBlocks = %v, want kill switch block", result.AccountBlocks)
+	}
+	// Reason/details must survive list destruction: the block string views
+	// borrow the native list's memory, so they must be copied before the list is
+	// freed. A use-after-free here surfaces as garbage rather than these exact
+	// strings.
+	block := result.AccountBlocks[0]
+	if block.Reason != "pnl kill switch triggered" {
+		t.Fatalf("block reason = %q, want %q", block.Reason, "pnl kill switch triggered")
+	}
+	if !strings.Contains(block.Details, "settlement asset USD") ||
+		!strings.Contains(block.Details, "account 1") {
+		t.Fatalf("block details = %q, want realized-pnl summary", block.Details)
 	}
 
 	_, rejects, err = engine.StartPreTrade(pnlTestOrder(t, 1))
