@@ -1068,6 +1068,28 @@ bool openpit_engine_configure_rate_limit(
 );
 ```
 
+## `OpenPitPretradePoliciesSpotFundsLimitMode`
+
+Selects how the spot-funds control reacts to insufficient available funds.
+
+The default is `Enforce`, matching the core [`SpotFundsLimitMode`] default.
+
+```c
+typedef uint8_t OpenPitPretradePoliciesSpotFundsLimitMode;
+/**
+ * Reject a reservation when available funds are insufficient; the reservation
+ * is not recorded.
+ */
+#define OpenPitPretradePoliciesSpotFundsLimitMode_Enforce \
+    ((OpenPitPretradePoliciesSpotFundsLimitMode) 0)
+/**
+ * Always record the reservation; `available` may go negative and a shortfall
+ * never rejects. Arithmetic overflow is still surfaced.
+ */
+#define OpenPitPretradePoliciesSpotFundsLimitMode_TrackOnly \
+    ((OpenPitPretradePoliciesSpotFundsLimitMode) 1)
+```
+
 ## `OpenPitPretradePoliciesSpotFundsOverrideTargetTag`
 
 Tagged target variants for a spot-funds slippage override.
@@ -1272,6 +1294,108 @@ bool openpit_engine_configure_spot_funds(
     const OpenPitPretradePoliciesSpotFundsOverride * instrument_overrides,
     size_t overrides_len,
     bool has_overrides,
+    OpenPitConfigureError ** out_error
+);
+```
+
+## `openpit_engine_configure_spot_funds_global_limit_mode`
+
+Sets the global spot-funds limit mode for the policy registered under `name`.
+
+The global mode applies to every order that resolves to neither a per-account
+nor a per-account-group override.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer.
+- `name` selects the policy; it is interpreted as UTF-8. A built-in policy
+  added via `openpit_engine_builder_add_builtin_spot_funds_policy` registers
+  under its fixed name `"SpotFundsPolicy"`.
+- `mode` selects `Enforce` (0; reject on insufficient funds) or `TrackOnly`
+  (1; always record, allow negative available).
+
+Success:
+
+- returns `true`; the new global mode applies from the next order onward.
+
+Error:
+
+- returns `false`; if `out_error` is non-null, writes a caller-owned
+  `OpenPitConfigureError` (release with `openpit_destroy_configure_error`).
+- a null `engine` or null / invalid-UTF-8 `name` returns `false` and, when
+  `out_error` is non-null, writes a caller-owned `OpenPitConfigureError`
+  (`Validation`) that must be released with `openpit_destroy_configure_error`.
+- an invalid `mode` returns `false` and writes `Validation`.
+
+```c
+bool openpit_engine_configure_spot_funds_global_limit_mode(
+    OpenPitEngine * engine,
+    OpenPitStringView name,
+    uint8_t mode,
+    OpenPitConfigureError ** out_error
+);
+```
+
+## `openpit_engine_configure_spot_funds_account_limit_mode`
+
+Pins or clears the spot-funds limit mode for one account on the policy
+registered under `name`.
+
+The per-account override wins over the account-group and global tiers.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer.
+- `name` selects the policy; see
+  `openpit_engine_configure_spot_funds_global_limit_mode`.
+- `account_id` is the account the override applies to.
+- When `has_mode` is `true`, the account is pinned to `mode`. When `has_mode`
+  is `false`, any existing per-account override is cleared and the cascade
+  falls through to the account-group and global tiers; `mode` is ignored. When
+  `has_mode` is `true`, `mode` must select `Enforce` (0) or `TrackOnly` (1).
+
+Success / error: as `openpit_engine_configure_spot_funds_global_limit_mode`.
+
+```c
+bool openpit_engine_configure_spot_funds_account_limit_mode(
+    OpenPitEngine * engine,
+    OpenPitStringView name,
+    OpenPitParamAccountId account_id,
+    uint8_t mode,
+    bool has_mode,
+    OpenPitConfigureError ** out_error
+);
+```
+
+## `openpit_engine_configure_spot_funds_account_group_limit_mode`
+
+Pins or clears the spot-funds limit mode for one account group on the policy
+registered under `name`.
+
+The override applies to every account in the group that has no per-account
+override.
+
+Contract:
+
+- `engine` must be a valid non-null engine pointer.
+- `name` selects the policy; see
+  `openpit_engine_configure_spot_funds_global_limit_mode`.
+- `account_group_id` is the account group the override applies to; an invalid
+  id fails the call with `Validation`.
+- When `has_mode` is `true`, the group is pinned to `mode`. When `has_mode` is
+  `false`, any existing per-account-group override is cleared and the cascade
+  falls through to the global tier; `mode` is ignored. When `has_mode` is
+  `true`, `mode` must select `Enforce` (0) or `TrackOnly` (1).
+
+Success / error: as `openpit_engine_configure_spot_funds_global_limit_mode`.
+
+```c
+bool openpit_engine_configure_spot_funds_account_group_limit_mode(
+    OpenPitEngine * engine,
+    OpenPitStringView name,
+    OpenPitParamAccountGroupId account_group_id,
+    uint8_t mode,
+    bool has_mode,
     OpenPitConfigureError ** out_error
 );
 ```

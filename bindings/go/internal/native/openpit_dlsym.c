@@ -355,6 +355,9 @@ static bool (*_fn_openpit_engine_builder_add_builtin_rate_limit_policy)(OpenPitE
 static bool (*_fn_openpit_engine_configure_rate_limit)(OpenPitEngine *, OpenPitStringView, const OpenPitPretradePoliciesRateLimitBrokerBarrier *, bool, const OpenPitPretradePoliciesRateLimitAssetBarrier *, size_t, bool, const OpenPitPretradePoliciesRateLimitAccountBarrier *, size_t, bool, const OpenPitPretradePoliciesRateLimitAccountAssetBarrier *, size_t, bool, OpenPitConfigureError **) = NULL;
 static bool (*_fn_openpit_engine_builder_add_builtin_spot_funds_policy)(OpenPitEngineBuilder *, const OpenPitMarketDataService *, const uint16_t *, uint8_t, const OpenPitPretradePoliciesSpotFundsOverride *, size_t, uint16_t, OpenPitOutError) = NULL;
 static bool (*_fn_openpit_engine_configure_spot_funds)(OpenPitEngine *, OpenPitStringView, uint16_t, bool, uint8_t, bool, const OpenPitPretradePoliciesSpotFundsOverride *, size_t, bool, OpenPitConfigureError **) = NULL;
+static bool (*_fn_openpit_engine_configure_spot_funds_global_limit_mode)(OpenPitEngine *, OpenPitStringView, uint8_t, OpenPitConfigureError **) = NULL;
+static bool (*_fn_openpit_engine_configure_spot_funds_account_limit_mode)(OpenPitEngine *, OpenPitStringView, OpenPitParamAccountId, uint8_t, bool, OpenPitConfigureError **) = NULL;
+static bool (*_fn_openpit_engine_configure_spot_funds_account_group_limit_mode)(OpenPitEngine *, OpenPitStringView, OpenPitParamAccountGroupId, uint8_t, bool, OpenPitConfigureError **) = NULL;
 static OpenPitStringView (*_fn_openpit_get_runtime_version)(void) = NULL;
 static OpenPitStringView (*_fn_openpit_get_runtime_build_profile)(void) = NULL;
 static void (*_fn_openpit_account_control_block)(const OpenPitAccountControl *, OpenPitPretradeAccountBlock) = NULL;
@@ -1083,6 +1086,12 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_engine_builder_add_builtin_spot_funds_policy == NULL) return "openpit_engine_builder_add_builtin_spot_funds_policy";
     _fn_openpit_engine_configure_spot_funds = (bool (*)(OpenPitEngine *, OpenPitStringView, uint16_t, bool, uint8_t, bool, const OpenPitPretradePoliciesSpotFundsOverride *, size_t, bool, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_spot_funds");
     if (_fn_openpit_engine_configure_spot_funds == NULL) return "openpit_engine_configure_spot_funds";
+    _fn_openpit_engine_configure_spot_funds_global_limit_mode = (bool (*)(OpenPitEngine *, OpenPitStringView, uint8_t, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_spot_funds_global_limit_mode");
+    if (_fn_openpit_engine_configure_spot_funds_global_limit_mode == NULL) return "openpit_engine_configure_spot_funds_global_limit_mode";
+    _fn_openpit_engine_configure_spot_funds_account_limit_mode = (bool (*)(OpenPitEngine *, OpenPitStringView, OpenPitParamAccountId, uint8_t, bool, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_spot_funds_account_limit_mode");
+    if (_fn_openpit_engine_configure_spot_funds_account_limit_mode == NULL) return "openpit_engine_configure_spot_funds_account_limit_mode";
+    _fn_openpit_engine_configure_spot_funds_account_group_limit_mode = (bool (*)(OpenPitEngine *, OpenPitStringView, OpenPitParamAccountGroupId, uint8_t, bool, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_spot_funds_account_group_limit_mode");
+    if (_fn_openpit_engine_configure_spot_funds_account_group_limit_mode == NULL) return "openpit_engine_configure_spot_funds_account_group_limit_mode";
     _fn_openpit_get_runtime_version = (OpenPitStringView (*)(void))openpit_dlsym(handle, "openpit_get_runtime_version");
     if (_fn_openpit_get_runtime_version == NULL) return "openpit_get_runtime_version";
     _fn_openpit_get_runtime_build_profile = (OpenPitStringView (*)(void))openpit_dlsym(handle, "openpit_get_runtime_build_profile");
@@ -2524,6 +2533,18 @@ bool openpit_engine_builder_add_builtin_spot_funds_policy(OpenPitEngineBuilder *
 
 bool openpit_engine_configure_spot_funds(OpenPitEngine * engine, OpenPitStringView name, uint16_t global_slippage_bps, bool has_global_slippage_bps, uint8_t pricing_source, bool has_pricing_source, const OpenPitPretradePoliciesSpotFundsOverride * instrument_overrides, size_t overrides_len, bool has_overrides, OpenPitConfigureError ** out_error) {
     return _fn_openpit_engine_configure_spot_funds(engine, name, global_slippage_bps, has_global_slippage_bps, pricing_source, has_pricing_source, instrument_overrides, overrides_len, has_overrides, out_error);
+}
+
+bool openpit_engine_configure_spot_funds_global_limit_mode(OpenPitEngine * engine, OpenPitStringView name, uint8_t mode, OpenPitConfigureError ** out_error) {
+    return _fn_openpit_engine_configure_spot_funds_global_limit_mode(engine, name, mode, out_error);
+}
+
+bool openpit_engine_configure_spot_funds_account_limit_mode(OpenPitEngine * engine, OpenPitStringView name, OpenPitParamAccountId account_id, uint8_t mode, bool has_mode, OpenPitConfigureError ** out_error) {
+    return _fn_openpit_engine_configure_spot_funds_account_limit_mode(engine, name, account_id, mode, has_mode, out_error);
+}
+
+bool openpit_engine_configure_spot_funds_account_group_limit_mode(OpenPitEngine * engine, OpenPitStringView name, OpenPitParamAccountGroupId account_group_id, uint8_t mode, bool has_mode, OpenPitConfigureError ** out_error) {
+    return _fn_openpit_engine_configure_spot_funds_account_group_limit_mode(engine, name, account_group_id, mode, has_mode, out_error);
 }
 
 OpenPitStringView openpit_get_runtime_version(void) {

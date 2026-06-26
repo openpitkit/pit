@@ -27,6 +27,7 @@ use crate::core::{
 use crate::marketdata::{AccountInfo, MarketDataSync};
 
 use super::market_data::SpotFundsPriceError;
+use super::SpotFundsLimitMode;
 use crate::param::{AccountId, Asset, PositionSize, Price, Side, TradeAmount};
 use crate::pretrade::holdings::{HoldError, Holdings};
 use crate::pretrade::policy::missing_required_field_reject;
@@ -320,6 +321,14 @@ where
         let underlying_asset = request.instrument.underlying_asset().clone();
         let settlement_asset = request.instrument.settlement_asset().clone();
 
+        // The funds limit mode resolves once per order along the account-centric
+        // cascade (account -> account group -> global) and gates only the `held`
+        // legs below; `incoming`, position, average-entry and realized-PnL
+        // bookkeeping are mode-independent.
+        let limit_mode = self
+            .settings
+            .with(|s| s.limit_mode_for(request.account_id, account_info));
+
         let mut outcome =
             PolicyPreTradeResult::with_capacity(2, legs.lock_price.is_some() as usize);
 
@@ -335,6 +344,7 @@ where
                 &step.asset,
                 step.held,
                 step.incoming,
+                limit_mode,
                 account_control.clone(),
                 mutations,
                 &mut outcome,
@@ -381,6 +391,12 @@ where
         let underlying_asset = request.instrument.underlying_asset().clone();
         let settlement_asset = request.instrument.settlement_asset().clone();
 
+        // Resolve the funds limit mode once, exactly as the mutating path does,
+        // so a track-only dry-run mirrors a track-only reservation byte for byte.
+        let limit_mode = self
+            .settings
+            .with(|s| s.limit_mode_for(request.account_id, account_info));
+
         let mut outcome =
             PolicyPreTradeResult::with_capacity(2, legs.lock_price.is_some() as usize);
 
@@ -395,6 +411,7 @@ where
             &first.asset,
             first.held,
             first.incoming,
+            limit_mode,
             None,
             &mut outcome,
         )?;
@@ -408,6 +425,7 @@ where
             &second.asset,
             second.held,
             second.incoming,
+            limit_mode,
             second_current,
             &mut outcome,
         )?;
@@ -426,12 +444,20 @@ where
     /// temporary holdings or current storage holdings, emits the same outcome
     /// entry and the same rejects as [`Self::reserve_asset`], and mutates
     /// nothing. A step with both amounts zero is a clean no-op.
+    ///
+    /// `limit_mode` selects the hold semantics exactly as the mutating path:
+    /// [`SpotFundsLimitMode::Enforce`] gates on available funds through
+    /// [`Holdings::try_hold`]; [`SpotFundsLimitMode::TrackOnly`] records the hold
+    /// even when it drives `available` negative through
+    /// [`Holdings::hold_allow_negative`], still surfacing arithmetic overflow.
+    #[allow(clippy::too_many_arguments)]
     fn reserve_asset_dry_run(
         &self,
         account_id: AccountId,
         asset: &Asset,
         held_amount: PositionSize,
         incoming_amount: PositionSize,
+        limit_mode: SpotFundsLimitMode,
         current: Option<Holdings>,
         outcome: &mut PolicyPreTradeResult,
     ) -> Result<Option<Holdings>, Rejects> {
@@ -447,7 +473,7 @@ where
         let new_holdings = if held_amount.is_zero() {
             current
         } else {
-            current.try_hold(held_amount).map_err(|err| {
+            hold_with_mode(&current, held_amount, limit_mode).map_err(|err| {
                 reserve_hold_reject(Self::NAME, err, account_id, asset, held_amount)
             })?
         };
@@ -490,6 +516,7 @@ where
         asset: &Asset,
         held_amount: PositionSize,
         incoming_amount: PositionSize,
+        limit_mode: SpotFundsLimitMode,
         account_control: Option<AccountControl<<Sync as SyncMode>::StorageLockingPolicyFactory>>,
         mutations: &mut Mutations,
         outcome: &mut PolicyPreTradeResult,
@@ -508,11 +535,13 @@ where
             Holdings::zero,
             |slot, is_new| {
                 // Hold then project incoming within one slot mutation so no
-                // concurrent check observes a half-applied step.
+                // concurrent check observes a half-applied step. The hold honors
+                // the resolved limit mode: Enforce gates on available funds,
+                // TrackOnly records the hold even into a negative available.
                 let held = if held_amount.is_zero() {
                     Ok(*slot)
                 } else {
-                    slot.try_hold(held_amount).map_err(|err| {
+                    hold_with_mode(slot, held_amount, limit_mode).map_err(|err| {
                         reserve_hold_reject(Self::NAME, err, account_id, asset, held_amount)
                     })
                 }?;
@@ -556,6 +585,26 @@ where
             &new_holdings,
         ));
         Ok(())
+    }
+}
+
+/// Performs one reserve hold under the resolved funds limit mode.
+///
+/// [`SpotFundsLimitMode::Enforce`] gates on available funds via
+/// [`Holdings::try_hold`], so an insufficient hold yields
+/// [`HoldError::InsufficientAvailable`]. [`SpotFundsLimitMode::TrackOnly`]
+/// records the hold even into a negative `available` via
+/// [`Holdings::hold_allow_negative`], so the only error it can return is
+/// [`HoldError::ArithmeticOverflow`] - the integrity guard that no mode
+/// suppresses.
+fn hold_with_mode(
+    holdings: &Holdings,
+    amount: PositionSize,
+    limit_mode: SpotFundsLimitMode,
+) -> Result<Holdings, HoldError> {
+    match limit_mode {
+        SpotFundsLimitMode::Enforce => holdings.try_hold(amount),
+        SpotFundsLimitMode::TrackOnly => holdings.hold_allow_negative(amount),
     }
 }
 

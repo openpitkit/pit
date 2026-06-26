@@ -93,8 +93,8 @@ pub use openpit_derive::RequestFields;
 pub use param::{AdjustmentAmount, PositionMode};
 pub use pretrade::PostTradeResult;
 pub use pretrade::{
-    SpotFundsConfigError, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
-    SpotFundsPricingSource,
+    SpotFundsConfigError, SpotFundsLimitMode, SpotFundsMarketData, SpotFundsOverride,
+    SpotFundsOverrideTarget, SpotFundsPricingSource,
 };
 pub use storage::IndexFlag;
 pub use storage::StorageBuilder;

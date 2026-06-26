@@ -13,15 +13,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package policies_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	openpit "go.openpit.dev/openpit"
+	"go.openpit.dev/openpit/configure"
+	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/marketdata"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
@@ -385,6 +388,128 @@ func TestSpotFundsConfiguratorInvalidOverrideTargets(t *testing.T) {
 // construction, so this scenario cannot be expressed in Go.
 // The C ABI still enforces mutual exclusion, but the Go API prevents it.
 
+func TestSpotFundsLimitModeDefaultIsEnforce(t *testing.T) {
+	var zero policies.SpotFundsLimitMode
+	if zero != policies.SpotFundsLimitModeEnforce {
+		t.Fatalf("zero SpotFundsLimitMode = %v, want Enforce", zero)
+	}
+}
+
+func TestSpotFundsLimitModeNativeRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		mode policies.SpotFundsLimitMode
+		want native.PretradePoliciesSpotFundsLimitMode
+	}{
+		{"enforce", policies.SpotFundsLimitModeEnforce, native.PretradePoliciesSpotFundsLimitModeEnforce},
+		{"track-only", policies.SpotFundsLimitModeTrackOnly, native.PretradePoliciesSpotFundsLimitModeTrackOnly},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := policies.NativeSpotFundsLimitMode(test.mode); got != test.want {
+				t.Fatalf("NativeSpotFundsLimitMode(%v) = %v, want %v", test.mode, got, test.want)
+			}
+			if got := test.mode.Handle(); got != test.want {
+				t.Fatalf("%v.Handle() = %v, want %v", test.mode, got, test.want)
+			}
+		})
+	}
+}
+
+func TestSpotFundsLimitModeOptionPinsAndClears(t *testing.T) {
+	mode, has := policies.NativeSpotFundsLimitModeOption(
+		optional.Some(policies.SpotFundsLimitModeEnforce),
+	)
+	if !has {
+		t.Fatal("Some(Enforce): hasMode = false, want true")
+	}
+	if mode != native.PretradePoliciesSpotFundsLimitModeEnforce {
+		t.Fatalf("Some(Enforce): mode = %v, want Enforce", mode)
+	}
+
+	mode, has = policies.NativeSpotFundsLimitModeOption(
+		optional.Some(policies.SpotFundsLimitModeTrackOnly),
+	)
+	if !has {
+		t.Fatal("Some(TrackOnly): hasMode = false, want true")
+	}
+	if mode != native.PretradePoliciesSpotFundsLimitModeTrackOnly {
+		t.Fatalf("Some(TrackOnly): mode = %v, want TrackOnly", mode)
+	}
+
+	_, has = policies.NativeSpotFundsLimitModeOption(
+		optional.None[policies.SpotFundsLimitMode](),
+	)
+	if has {
+		t.Fatal("None: hasMode = true, want false")
+	}
+}
+
+func TestSpotFundsConfiguratorRejectsInvalidLimitMode(t *testing.T) {
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFunds()).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	invalidMode := policies.SpotFundsLimitMode(99)
+
+	assertConfigureValidationError(
+		t,
+		"SpotFundsGlobalLimitMode(invalid)",
+		engine.Configure().SpotFundsGlobalLimitMode(
+			policies.SpotFundsPolicyName,
+			invalidMode,
+		),
+	)
+
+	assertConfigureValidationError(
+		t,
+		"SpotFundsAccountLimitMode(Some(invalid))",
+		engine.Configure().SpotFundsAccountLimitMode(
+			policies.SpotFundsPolicyName,
+			param.NewAccountIDFromUint64(77002),
+			optional.Some(invalidMode),
+		),
+	)
+
+	assertConfigureValidationError(
+		t,
+		"SpotFundsAccountGroupLimitMode(Some(invalid))",
+		engine.Configure().SpotFundsAccountGroupLimitMode(
+			policies.SpotFundsPolicyName,
+			mustAccountGroupID(t, 43),
+			optional.Some(invalidMode),
+		),
+	)
+}
+
+func assertConfigureValidationError(t *testing.T, label string, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s error = nil, want validation error", label)
+	}
+
+	var configErr *configure.Error
+	if !errors.As(err, &configErr) {
+		t.Fatalf("%s error = %T, want *configure.Error", label, err)
+	}
+	if configErr.Kind != configure.ErrorKindValidation {
+		t.Fatalf("%s kind = %v, want Validation", label, configErr.Kind)
+	}
+}
+
+func TestSpotFundsLimitModeString(t *testing.T) {
+	if got := policies.SpotFundsLimitModeEnforce.String(); got != "enforce" {
+		t.Fatalf("Enforce.String() = %q, want %q", got, "enforce")
+	}
+	if got := policies.SpotFundsLimitModeTrackOnly.String(); got != "track-only" {
+		t.Fatalf("TrackOnly.String() = %q, want %q", got, "track-only")
+	}
+}
+
 func TestSpotFundsBuilderGroupID(t *testing.T) {
 	engine, err := openpit.NewEngineBuilder().NoSync().
 		Builtin(policies.BuildSpotFunds().PolicyGroupID(7)).
@@ -393,6 +518,92 @@ func TestSpotFundsBuilderGroupID(t *testing.T) {
 		t.Fatalf("Build() error = %v", err)
 	}
 	engine.Stop()
+}
+
+// TestSpotFundsConfiguratorGlobalLimitModeRoundTrip exercises the dlsym
+// dispatch path for SpotFundsGlobalLimitMode against a live engine: sets
+// TrackOnly then restores Enforce.
+func TestSpotFundsConfiguratorGlobalLimitModeRoundTrip(t *testing.T) {
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFunds()).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	if err := engine.Configure().SpotFundsGlobalLimitMode(
+		policies.SpotFundsPolicyName,
+		policies.SpotFundsLimitModeTrackOnly,
+	); err != nil {
+		t.Fatalf("SpotFundsGlobalLimitMode(TrackOnly) error = %v", err)
+	}
+	if err := engine.Configure().SpotFundsGlobalLimitMode(
+		policies.SpotFundsPolicyName,
+		policies.SpotFundsLimitModeEnforce,
+	); err != nil {
+		t.Fatalf("SpotFundsGlobalLimitMode(Enforce) error = %v", err)
+	}
+}
+
+// TestSpotFundsConfiguratorAccountLimitModeRoundTrip exercises the dlsym
+// dispatch path for SpotFundsAccountLimitMode: pins an account to TrackOnly,
+// then clears the override.
+func TestSpotFundsConfiguratorAccountLimitModeRoundTrip(t *testing.T) {
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFunds()).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	accountID := param.NewAccountIDFromUint64(77001)
+
+	if err := engine.Configure().SpotFundsAccountLimitMode(
+		policies.SpotFundsPolicyName,
+		accountID,
+		optional.Some(policies.SpotFundsLimitModeTrackOnly),
+	); err != nil {
+		t.Fatalf("SpotFundsAccountLimitMode(Some(TrackOnly)) error = %v", err)
+	}
+	if err := engine.Configure().SpotFundsAccountLimitMode(
+		policies.SpotFundsPolicyName,
+		accountID,
+		optional.None[policies.SpotFundsLimitMode](),
+	); err != nil {
+		t.Fatalf("SpotFundsAccountLimitMode(None) error = %v", err)
+	}
+}
+
+// TestSpotFundsConfiguratorAccountGroupLimitModeRoundTrip exercises the dlsym
+// dispatch path for SpotFundsAccountGroupLimitMode: pins a group to TrackOnly,
+// then clears the override.
+func TestSpotFundsConfiguratorAccountGroupLimitModeRoundTrip(t *testing.T) {
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFunds()).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	groupID := mustAccountGroupID(t, 42)
+
+	if err := engine.Configure().SpotFundsAccountGroupLimitMode(
+		policies.SpotFundsPolicyName,
+		groupID,
+		optional.Some(policies.SpotFundsLimitModeTrackOnly),
+	); err != nil {
+		t.Fatalf("SpotFundsAccountGroupLimitMode(Some(TrackOnly)) error = %v", err)
+	}
+	if err := engine.Configure().SpotFundsAccountGroupLimitMode(
+		policies.SpotFundsPolicyName,
+		groupID,
+		optional.None[policies.SpotFundsLimitMode](),
+	); err != nil {
+		t.Fatalf("SpotFundsAccountGroupLimitMode(None) error = %v", err)
+	}
 }
 
 // TestSpotFundsFullEngineWithLocalMDServiceIsRejected verifies that a

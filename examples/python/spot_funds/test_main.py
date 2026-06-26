@@ -17,11 +17,12 @@
 
 """Assertion-driven counterpart of ``main``.
 
-Drives the same shared helpers main() uses and asserts the three outcomes
-that make the example a lesson: the first buy is accepted (reserving
-funds), the second identical buy is rejected with InsufficientFunds (those
-funds are held), and the fill - carrying the first reservation's lock -
-settles without an account block.
+Drives the same shared helpers main() uses and asserts the outcomes that
+make the example a lesson: the first buy is accepted (reserving funds), the
+second identical buy is rejected with InsufficientFunds (those funds are
+held), the fill - carrying the first reservation's lock - settles without an
+account block, and after switching to track-only a third buy that exceeds
+available funds is accepted instead of rejected.
 """
 
 from __future__ import annotations
@@ -60,3 +61,12 @@ def test_spot_funds_reservation_flow() -> None:
     assert (
         not result.account_blocks
     ), f"fill produced {len(result.account_blocks)} account block(s), want 0"
+
+    # After switching to track-only, an identical buy that needs 60000 with
+    # only 40000 available is accepted (and yields a lock) instead of rejected.
+    example.enable_track_only(engine)
+    buy3 = example.build_order(account)
+    lock3, rejects = example.place_order(engine, buy3)
+    assert (
+        lock3 is not None
+    ), f"buy #3 rejected in track-only mode: {example.describe(rejects)}"

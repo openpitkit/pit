@@ -28,6 +28,9 @@
 //     follow-up BUY that needs the same cash is rejected with InsufficientFunds
 //   - tying a fill back to its reservation by carrying the pre-trade lock on
 //     the execution report, so SpotFunds settles the right held amount
+//   - switching the policy to track-only at runtime so an order that would be
+//     rejected for insufficient funds is instead recorded (available may go
+//     negative)
 //
 // Audience: an integrator who wants to lift the SpotFunds call pattern into
 // their own order/fill pipeline.
@@ -162,6 +165,28 @@ func runExample() error {
 		return fmt.Errorf("fill produced an unexpected account block")
 	}
 	fmt.Printf("buy #1 filled: %d %s reservation settled, no account block\n",
+		orderNotional, scenarioAssetSettle)
+
+	// Step 6 - switch the policy to track-only at runtime. In TrackOnly the
+	// insufficient-funds gate is dropped: a reservation is always recorded and
+	// available funds may go negative. After Step 5 only 40000 USD is back
+	// available, yet an identical 60000-notional buy is now accepted instead of
+	// rejected - the policy tracks the overshoot rather than blocking it.
+	if err := enableTrackOnly(engine); err != nil {
+		return err
+	}
+	buy3, err := buildOrder(account)
+	if err != nil {
+		return err
+	}
+	lock3, rejects, err := placeOrder(engine, buy3)
+	if err != nil {
+		return err
+	}
+	if lock3 == nil {
+		return fmt.Errorf("buy #3 unexpectedly rejected: %s", describe(rejects))
+	}
+	fmt.Printf("buy #3 accepted in track-only: %d %s reserved, available may go negative\n",
 		orderNotional, scenarioAssetSettle)
 
 	return nil
@@ -379,6 +404,20 @@ func applyFill(
 		return openpit.PostTradeResult{}, fmt.Errorf("execution report: %w", err)
 	}
 	return result, nil
+}
+
+// enableTrackOnly switches the SpotFunds policy to global track-only mode at
+// runtime. TrackOnly drops the insufficient-funds reject: reservations are
+// always recorded and available funds may go negative. The change is applied
+// through the runtime configurator, keyed by the policy's registration name.
+func enableTrackOnly(engine *openpit.Engine) error {
+	if err := engine.Configure().SpotFundsGlobalLimitMode(
+		policies.SpotFundsPolicyName,
+		policies.SpotFundsLimitModeTrackOnly,
+	); err != nil {
+		return fmt.Errorf("enable track-only: %w", err)
+	}
+	return nil
 }
 
 // containsCode reports whether the rejects include the given business code.

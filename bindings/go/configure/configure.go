@@ -457,6 +457,111 @@ func (c Configurator) SpotFunds(
 	return nil
 }
 
+func validateSpotFundsLimitMode(mode policies.SpotFundsLimitMode) error {
+	if mode.Valid() {
+		return nil
+	}
+	return &Error{
+		Kind: ErrorKindValidation,
+		Message: fmt.Sprintf(
+			"configure: spot funds limit mode must be Enforce or TrackOnly, got %s",
+			mode,
+		),
+	}
+}
+
+// SpotFundsGlobalLimitMode sets the global limit mode of the named spot-funds
+// policy at runtime. Enforce rejects a reservation that exceeds available
+// funds; TrackOnly always records it and lets available go negative.
+//
+// The mode is the global tier of the cascade; per-account and
+// per-account-group overrides set via [Configurator.SpotFundsAccountLimitMode]
+// and [Configurator.SpotFundsAccountGroupLimitMode] still take precedence.
+//
+// Returns a *Error on a domain error.
+func (c Configurator) SpotFundsGlobalLimitMode(
+	name string,
+	mode policies.SpotFundsLimitMode,
+) error {
+	if err := validateSpotFundsLimitMode(mode); err != nil {
+		return err
+	}
+	configErr := native.EngineConfigureSpotFundsGlobalLimitMode(
+		c.engine,
+		name,
+		policies.NativeSpotFundsLimitMode(mode),
+	)
+	if configErr != nil {
+		return newErrorFromHandle(configErr)
+	}
+	return nil
+}
+
+// SpotFundsAccountLimitMode pins or clears the per-account limit mode of the
+// named spot-funds policy at runtime. The per-account override wins over the
+// account-group and global tiers.
+//
+// optional.Some pins the account to that mode; optional.None clears any
+// existing per-account override so the cascade falls through to the
+// account-group and global tiers.
+//
+// Returns a *Error on a domain error.
+func (c Configurator) SpotFundsAccountLimitMode(
+	name string,
+	accountID param.AccountID,
+	mode optional.Option[policies.SpotFundsLimitMode],
+) error {
+	if v, has := mode.Get(); has {
+		if err := validateSpotFundsLimitMode(v); err != nil {
+			return err
+		}
+	}
+	nativeMode, hasMode := policies.NativeSpotFundsLimitModeOption(mode)
+	configErr := native.EngineConfigureSpotFundsAccountLimitMode(
+		c.engine,
+		name,
+		accountID.Handle(),
+		nativeMode,
+		hasMode,
+	)
+	if configErr != nil {
+		return newErrorFromHandle(configErr)
+	}
+	return nil
+}
+
+// SpotFundsAccountGroupLimitMode pins or clears the per-account-group limit
+// mode of the named spot-funds policy at runtime. The override applies to every
+// account in the group that has no per-account override.
+//
+// optional.Some pins the group to that mode; optional.None clears any existing
+// per-account-group override so the cascade falls through to the global tier.
+//
+// Returns a *Error on a domain error.
+func (c Configurator) SpotFundsAccountGroupLimitMode(
+	name string,
+	accountGroupID param.AccountGroupID,
+	mode optional.Option[policies.SpotFundsLimitMode],
+) error {
+	if v, has := mode.Get(); has {
+		if err := validateSpotFundsLimitMode(v); err != nil {
+			return err
+		}
+	}
+	nativeMode, hasMode := policies.NativeSpotFundsLimitModeOption(mode)
+	configErr := native.EngineConfigureSpotFundsAccountGroupLimitMode(
+		c.engine,
+		name,
+		accountGroupID.Handle(),
+		nativeMode,
+		hasMode,
+	)
+	if configErr != nil {
+		return newErrorFromHandle(configErr)
+	}
+	return nil
+}
+
 //------------------------------------------------------------------------------
 // Helpers
 

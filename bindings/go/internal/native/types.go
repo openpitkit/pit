@@ -89,6 +89,7 @@ type ParamErrorHandle = *C.OpenPitParamError
 type ParamErrorCode = C.OpenPitParamErrorCode
 type ParamRoundingStrategy = C.uint8_t
 type ParamSide = C.OpenPitParamSide
+type PretradePoliciesSpotFundsLimitMode = C.OpenPitPretradePoliciesSpotFundsLimitMode
 type ParamTradeAmount = C.OpenPitParamTradeAmount
 type ParamTradeAmountKind = C.OpenPitParamTradeAmountKind
 type ParamVolume = C.OpenPitParamVolume
@@ -258,6 +259,11 @@ const (
 	ParamRoundingStrategyMidpointAwayFromZero = C.OpenPitParamRoundingStrategy_MidpointAwayFromZero
 	ParamRoundingStrategyUp                   = C.OpenPitParamRoundingStrategy_Up
 	ParamRoundingStrategyDown                 = C.OpenPitParamRoundingStrategy_Down
+)
+
+const (
+	PretradePoliciesSpotFundsLimitModeEnforce   = C.OpenPitPretradePoliciesSpotFundsLimitMode_Enforce
+	PretradePoliciesSpotFundsLimitModeTrackOnly = C.OpenPitPretradePoliciesSpotFundsLimitMode_TrackOnly
 )
 
 const (

@@ -16,14 +16,17 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 use openpit::param::{
-    AccountId, AdjustmentAmount, Asset, Pnl, PositionSize, Price, Quantity, Side, Trade,
-    TradeAmount,
+    AccountGroupId, AccountId, AdjustmentAmount, Asset, Pnl, PositionSize, Price, Quantity, Side,
+    Trade, TradeAmount,
 };
 use openpit::pretrade::policies::{
-    RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings, SpotFundsPolicy,
-    SpotFundsPricingSource, SpotFundsSettings,
+    RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings, SpotFundsConfigError,
+    SpotFundsPolicy, SpotFundsPricingSource, SpotFundsSettings,
 };
-use openpit::pretrade::{PreTradeDryRunReport, PreTradeLock, RejectCode, DEFAULT_POLICY_GROUP_ID};
+use openpit::pretrade::SpotFundsLimitMode;
+use openpit::pretrade::{
+    PreTradeDryRunReport, PreTradeLock, RejectCode, Rejects, DEFAULT_POLICY_GROUP_ID,
+};
 use openpit::{
     Engine, FullSync, FullSyncEngine, HasAccountAdjustmentBalance,
     HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentBalanceLowerBound,
@@ -460,6 +463,276 @@ fn buy_insufficient_funds_rejects_with_state_unchanged() {
             ))
             .is_ok(),
         "Buy 50 @ 200 (= 10000 notional) must succeed after rejection: USD available = 10000"
+    );
+}
+
+// Verifies the funds limit mode is switchable at runtime through
+// the same `Configurator::spot_funds` surface as slippage: an under-funded buy
+// is rejected under the default Enforce mode and accepted after the global mode
+// is flipped to TrackOnly, then rejected again after flipping back.
+#[test]
+fn runtime_limit_mode_switch_toggles_insufficient_funds_gating() {
+    let engine = build_engine();
+    seed(&engine, "USD", "1000");
+
+    let aapl_usd = instr("AAPL", "USD");
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+    let under_funded = || {
+        make_order(
+            Side::Buy,
+            aapl_usd.clone(),
+            // Buy 10 @ 200 = 2000 notional > 1000 available.
+            TradeAmount::Quantity(qty("10")),
+            Some(px("200")),
+        )
+    };
+
+    // Default Enforce: the under-funded buy is rejected.
+    let Err(rejects) = engine.execute_pre_trade(under_funded()) else {
+        panic!("enforce must reject: notional exceeds available")
+    };
+    assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
+
+    // Flip the global mode to TrackOnly at runtime.
+    engine
+        .configure()
+        .spot_funds(name, |s| {
+            s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+            Ok::<(), SpotFundsConfigError>(())
+        })
+        .expect("runtime limit-mode update must publish");
+
+    // The same under-funded buy now passes and records its reservation.
+    engine
+        .execute_pre_trade(under_funded())
+        .expect("track-only must accept the under-funded buy")
+        .commit();
+
+    // Flip back to Enforce: the available balance is now -1000 (held 2000), so a
+    // further buy is rejected on insufficiency once gating is restored.
+    engine
+        .configure()
+        .spot_funds(name, |s| {
+            s.set_global_limit_mode(SpotFundsLimitMode::Enforce);
+            Ok::<(), SpotFundsConfigError>(())
+        })
+        .expect("runtime limit-mode update must publish");
+    let Err(rejects) = engine.execute_pre_trade(under_funded()) else {
+        panic!("enforce must reject again after switching back")
+    };
+    assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
+}
+
+fn assert_insufficient_funds<R>(result: Result<R, Rejects>, ctx: &str) {
+    let Err(rejects) = result else {
+        panic!("{ctx}: expected InsufficientFunds rejection")
+    };
+    assert_eq!(rejects[0].code, RejectCode::InsufficientFunds, "{ctx}");
+}
+
+fn seed_for(engine: &TestEngine, account_id: AccountId, asset_code: &str, amount: &str) {
+    let adj = balance_adjustment(asset_code, AdjustmentAmount::Absolute(ps(amount)));
+    engine
+        .apply_account_adjustment(account_id, &[adj])
+        .expect("seed must succeed");
+}
+
+fn make_order_for(
+    account_id: AccountId,
+    side: Side,
+    instrument: Instrument,
+    trade_amount: TradeAmount,
+    price: Option<Price>,
+) -> TestOrder {
+    OrderOperation {
+        instrument,
+        account_id,
+        side,
+        trade_amount,
+        price,
+    }
+}
+
+// Verifies that a per-account TrackOnly override lets the overridden account
+// through an under-funded reservation while another account without an override
+// remains gated by the global Enforce mode. Clearing the per-account override
+// makes the formerly-overridden account fall back to global Enforce.
+#[test]
+fn per_account_limit_mode_overrides_global_and_clears() {
+    let acc1 = AccountId::from_u64(10000001);
+    let acc2 = AccountId::from_u64(10000002);
+    let engine = build_engine();
+    let aapl_usd = instr("AAPL", "USD");
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+
+    seed_for(&engine, acc1, "USD", "500");
+    seed_for(&engine, acc2, "USD", "500");
+
+    let under_funded = |id: AccountId| {
+        make_order_for(
+            id,
+            Side::Buy,
+            aapl_usd.clone(),
+            TradeAmount::Quantity(qty("5")),
+            Some(px("200")),
+        )
+    };
+
+    // Default Enforce: both accounts reject on insufficient funds.
+    assert_insufficient_funds(
+        engine.execute_pre_trade(under_funded(acc1)),
+        "default: acc1",
+    );
+    assert_insufficient_funds(
+        engine.execute_pre_trade(under_funded(acc2)),
+        "default: acc2",
+    );
+
+    // Pin acc1 to TrackOnly; acc2 stays on global Enforce.
+    engine
+        .configure()
+        .spot_funds(name, |s| {
+            s.set_account_limit_mode(acc1, Some(SpotFundsLimitMode::TrackOnly));
+            Ok::<(), SpotFundsConfigError>(())
+        })
+        .expect("per-account limit-mode update must publish");
+
+    engine
+        .execute_pre_trade(under_funded(acc1))
+        .expect("acc1 TrackOnly must accept")
+        .commit();
+    assert_insufficient_funds(
+        engine.execute_pre_trade(under_funded(acc2)),
+        "acc2 no override",
+    );
+
+    // Clear the per-account override: acc1 falls back to global Enforce.
+    engine
+        .configure()
+        .spot_funds(name, |s| {
+            s.set_account_limit_mode(acc1, None);
+            Ok::<(), SpotFundsConfigError>(())
+        })
+        .expect("per-account limit-mode clear must publish");
+
+    assert_insufficient_funds(
+        engine.execute_pre_trade(under_funded(acc1)),
+        "acc1 after clear",
+    );
+}
+
+// Verifies that a per-account-group TrackOnly override lets all accounts in
+// the group through while accounts outside the group remain on global Enforce.
+// Clearing the per-group override makes group members fall back to global Enforce.
+#[test]
+fn per_account_group_limit_mode_overrides_global_and_clears() {
+    let acc1 = AccountId::from_u64(20000001); // will be in group 7
+    let acc2 = AccountId::from_u64(20000002); // no group
+    let grp = AccountGroupId::from_u32(7).expect("valid group id");
+    let engine = build_engine();
+    let aapl_usd = instr("AAPL", "USD");
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+
+    engine
+        .accounts()
+        .register_group(&[acc1], grp)
+        .expect("registration must succeed");
+    seed_for(&engine, acc1, "USD", "500");
+    seed_for(&engine, acc2, "USD", "500");
+
+    let under_funded = |id: AccountId| {
+        make_order_for(
+            id,
+            Side::Buy,
+            aapl_usd.clone(),
+            TradeAmount::Quantity(qty("5")),
+            Some(px("200")),
+        )
+    };
+
+    // Default Enforce: both accounts reject.
+    assert_insufficient_funds(
+        engine.execute_pre_trade(under_funded(acc1)),
+        "default: acc1",
+    );
+    assert_insufficient_funds(
+        engine.execute_pre_trade(under_funded(acc2)),
+        "default: acc2",
+    );
+
+    // Pin group 7 to TrackOnly; acc2 (outside the group) stays on global Enforce.
+    engine
+        .configure()
+        .spot_funds(name, |s| {
+            s.set_account_group_limit_mode(grp, Some(SpotFundsLimitMode::TrackOnly));
+            Ok::<(), SpotFundsConfigError>(())
+        })
+        .expect("per-group limit-mode update must publish");
+
+    engine
+        .execute_pre_trade(under_funded(acc1))
+        .expect("acc1 in group 7 TrackOnly must accept")
+        .commit();
+    assert_insufficient_funds(
+        engine.execute_pre_trade(under_funded(acc2)),
+        "acc2 no group",
+    );
+
+    // Clear the group override: acc1 falls back to global Enforce.
+    engine
+        .configure()
+        .spot_funds(name, |s| {
+            s.set_account_group_limit_mode(grp, None);
+            Ok::<(), SpotFundsConfigError>(())
+        })
+        .expect("per-group limit-mode clear must publish");
+
+    assert_insufficient_funds(
+        engine.execute_pre_trade(under_funded(acc1)),
+        "acc1 after clear",
+    );
+}
+
+// Verifies that a per-account Enforce override wins over a per-account-group
+// TrackOnly override, keeping the account gated even when its group is relaxed.
+#[test]
+fn per_account_limit_mode_wins_over_group_limit_mode() {
+    let acc = AccountId::from_u64(30000001);
+    let grp = AccountGroupId::from_u32(9).expect("valid group id");
+    let engine = build_engine();
+    let aapl_usd = instr("AAPL", "USD");
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+
+    engine
+        .accounts()
+        .register_group(&[acc], grp)
+        .expect("registration must succeed");
+    seed_for(&engine, acc, "USD", "500");
+
+    let under_funded = || {
+        make_order_for(
+            acc,
+            Side::Buy,
+            aapl_usd.clone(),
+            TradeAmount::Quantity(qty("5")),
+            Some(px("200")),
+        )
+    };
+
+    // Set group to TrackOnly and account to explicit Enforce.
+    engine
+        .configure()
+        .spot_funds(name, |s| {
+            s.set_account_group_limit_mode(grp, Some(SpotFundsLimitMode::TrackOnly));
+            s.set_account_limit_mode(acc, Some(SpotFundsLimitMode::Enforce));
+            Ok::<(), SpotFundsConfigError>(())
+        })
+        .expect("limit-mode update must publish");
+
+    // The per-account Enforce wins over the group TrackOnly.
+    assert_insufficient_funds(
+        engine.execute_pre_trade(under_funded()),
+        "account wins over group",
     );
 }
 

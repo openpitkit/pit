@@ -48,6 +48,7 @@ mod order_validation;
 mod pnl_bounds_killswitch;
 mod rate_limit;
 mod spot_funds;
+pub use spot_funds::OpenPitPretradePoliciesSpotFundsLimitMode;
 
 #[allow(unused_imports)]
 pub use custom::{

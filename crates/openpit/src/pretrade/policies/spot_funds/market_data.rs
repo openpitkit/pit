@@ -26,6 +26,7 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
+use super::SpotFundsLimitMode;
 use crate::core::instrument::Instrument;
 use crate::marketdata::{
     AccountInfo, InstrumentId, MarketDataService, MarketDataSync, Quote, QuoteResolution,
@@ -147,23 +148,30 @@ pub enum SpotFundsOverrideTarget {
 
 /// Runtime-updatable settings of [`SpotFundsPolicy`](super::SpotFundsPolicy).
 ///
-/// Carries the slippage / pricing-source / override cascade. Slippage resolves
-/// per order along three override scopes - per
-/// `(instrument, account_id)`, per `(instrument, account_group_id)`, and per
-/// `instrument` - falling back to the global slippage. The validated override
-/// maps are precomputed here so hot-path reads through the policy's settings
-/// cell allocate nothing and never recompute.
+/// Carries the slippage / pricing-source / override cascade and the funds
+/// limit-mode cascade. Slippage resolves per order along three override scopes -
+/// per `(instrument, account_id)`, per `(instrument, account_group_id)`, and per
+/// `instrument` - falling back to the global slippage. The limit mode resolves
+/// per order along an account-centric cascade - per `account_id`, per
+/// `account_group_id`, then global - and decides whether a reservation that
+/// exceeds available funds is rejected ([`SpotFundsLimitMode::Enforce`]) or
+/// merely tracked ([`SpotFundsLimitMode::TrackOnly`]). The validated maps are
+/// precomputed here so hot-path reads through the policy's settings cell
+/// allocate nothing and never recompute.
 ///
 /// Built via [`SpotFundsSettings::new`] and handed to
-/// [`SpotFundsPolicy::new`](super::SpotFundsPolicy::new); the slippage knobs are
-/// then mutable at runtime through the setters.
+/// [`SpotFundsPolicy::new`](super::SpotFundsPolicy::new); the slippage knobs and
+/// the limit mode are then mutable at runtime through the setters.
 #[derive(Clone, Debug)]
 pub struct SpotFundsSettings {
     account_overrides: HashMap<(InstrumentId, AccountId), WithSlippage>,
     account_group_overrides: HashMap<(InstrumentId, AccountGroupId), WithSlippage>,
     instrument_overrides: HashMap<InstrumentId, WithSlippage>,
+    account_limit_modes: HashMap<AccountId, SpotFundsLimitMode>,
+    account_group_limit_modes: HashMap<AccountGroupId, SpotFundsLimitMode>,
     global_pricer: WithSlippage,
     pricing_source: SpotFundsPricingSource,
+    global_limit_mode: SpotFundsLimitMode,
 }
 
 impl SpotFundsSettings {
@@ -185,6 +193,13 @@ impl SpotFundsSettings {
     /// Returns [`SpotFundsConfigError::SlippageOutOfRange`] when
     /// `slippage_bps > 10_000` or when any override carries a `slippage_bps`
     /// above the same bound.
+    ///
+    /// The funds limit-mode cascade starts at its defaults: the global mode is
+    /// [`SpotFundsLimitMode::Enforce`] and no per-account or per-account-group
+    /// override is set. Configure it through
+    /// [`set_global_limit_mode`](Self::set_global_limit_mode),
+    /// [`set_account_limit_mode`](Self::set_account_limit_mode) and
+    /// [`set_account_group_limit_mode`](Self::set_account_group_limit_mode).
     pub fn new<Overrides>(
         slippage_bps: u16,
         pricing_source: SpotFundsPricingSource,
@@ -223,8 +238,11 @@ impl SpotFundsSettings {
             account_overrides,
             account_group_overrides,
             instrument_overrides,
+            account_limit_modes: HashMap::new(),
+            account_group_limit_modes: HashMap::new(),
             global_pricer,
             pricing_source,
+            global_limit_mode: SpotFundsLimitMode::Enforce,
         })
     }
 
@@ -244,6 +262,48 @@ impl SpotFundsSettings {
     /// Sets the source used to derive the base price before slippage.
     pub fn set_pricing_source(&mut self, pricing_source: SpotFundsPricingSource) {
         self.pricing_source = pricing_source;
+    }
+
+    /// Replaces the global funds limit mode applied when no per-account or
+    /// per-account-group override matches.
+    ///
+    /// [`SpotFundsLimitMode::TrackOnly`] disables the insufficient-funds reject
+    /// for orders that resolve to the global tier; [`SpotFundsLimitMode::Enforce`]
+    /// restores the gating behavior.
+    pub fn set_global_limit_mode(&mut self, mode: SpotFundsLimitMode) {
+        self.global_limit_mode = mode;
+    }
+
+    /// Inserts or clears the funds limit-mode override for one account.
+    ///
+    /// `Some(mode)` pins the account to `mode`, winning over the account-group
+    /// and global tiers. `None` clears any previous override, so the cascade
+    /// falls through to the account-group tier and ultimately the global mode.
+    pub fn set_account_limit_mode(
+        &mut self,
+        account_id: AccountId,
+        mode: Option<SpotFundsLimitMode>,
+    ) {
+        set_or_clear(&mut self.account_limit_modes, account_id, mode);
+    }
+
+    /// Inserts or clears the funds limit-mode override for one account group.
+    ///
+    /// `Some(mode)` applies `mode` to every account in the group that has no
+    /// per-account override. `None` clears any previous override, so the cascade
+    /// falls through to the global mode for accounts in the group.
+    pub fn set_account_group_limit_mode(
+        &mut self,
+        account_group_id: AccountGroupId,
+        mode: Option<SpotFundsLimitMode>,
+    ) {
+        set_or_clear(&mut self.account_group_limit_modes, account_group_id, mode);
+    }
+
+    /// Reads the global funds limit mode applied when no override matches.
+    #[cfg(test)]
+    pub(super) fn global_limit_mode(&self) -> SpotFundsLimitMode {
+        self.global_limit_mode
     }
 
     /// Inserts or replaces a slippage override at the given cascade target.
@@ -305,6 +365,25 @@ impl SpotFundsSettings {
             return p;
         }
         &self.global_pricer
+    }
+
+    /// Resolves the funds limit mode for an order via the account-centric
+    /// cascade: per-account override, then per-account-group override, then the
+    /// global mode. Mirrors the structure of [`Self::pricer_for`].
+    pub(super) fn limit_mode_for(
+        &self,
+        account_id: AccountId,
+        account_info: &impl AccountInfo,
+    ) -> SpotFundsLimitMode {
+        if let Some(mode) = self.account_limit_modes.get(&account_id) {
+            return *mode;
+        }
+        if let Some(account_group_id) = account_info.group() {
+            if let Some(mode) = self.account_group_limit_modes.get(&account_group_id) {
+                return *mode;
+            }
+        }
+        self.global_limit_mode
     }
 
     /// Raw quote field used as the base for buy-side pricing before slippage
@@ -794,6 +873,118 @@ mod tests {
         assert_eq!(
             sell_price(1000, std::iter::empty(), acc, &None),
             Ok(px("90"))
+        );
+    }
+
+    // ── Limit-mode cascade tests ──────────────────────────────────────────────
+    //
+    // Resolution order mirrors `pricer_for`: account -> account group -> global.
+
+    fn default_settings() -> SpotFundsSettings {
+        SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())
+            .expect("settings must build")
+    }
+
+    #[test]
+    fn limit_mode_defaults_to_enforce() {
+        let settings = default_settings();
+        assert_eq!(settings.global_limit_mode(), SpotFundsLimitMode::Enforce);
+        assert_eq!(
+            settings.limit_mode_for(account(7), &None),
+            SpotFundsLimitMode::Enforce
+        );
+    }
+
+    #[test]
+    fn limit_mode_global_applies_when_no_override_matches() {
+        let mut settings = default_settings();
+        settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+        assert_eq!(settings.global_limit_mode(), SpotFundsLimitMode::TrackOnly);
+        // No per-account or per-group override -> global wins, with or without a
+        // bound account group.
+        assert_eq!(
+            settings.limit_mode_for(account(7), &None),
+            SpotFundsLimitMode::TrackOnly
+        );
+        assert_eq!(
+            settings.limit_mode_for(account(7), &Some(group(3))),
+            SpotFundsLimitMode::TrackOnly
+        );
+    }
+
+    #[test]
+    fn limit_mode_account_override_wins_over_group_and_global() {
+        let acc = account(7);
+        let grp = group(3);
+        let mut settings = default_settings();
+        // global Enforce, group TrackOnly, account Enforce -> account wins.
+        settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+        settings.set_account_group_limit_mode(grp, Some(SpotFundsLimitMode::TrackOnly));
+        settings.set_account_limit_mode(acc, Some(SpotFundsLimitMode::Enforce));
+        assert_eq!(
+            settings.limit_mode_for(acc, &Some(grp)),
+            SpotFundsLimitMode::Enforce
+        );
+    }
+
+    #[test]
+    fn limit_mode_group_override_used_when_no_account_override_matches() {
+        let acc = account(7);
+        let grp = group(3);
+        let mut settings = default_settings();
+        // global Enforce, group TrackOnly, no account override -> group wins.
+        settings.set_account_group_limit_mode(grp, Some(SpotFundsLimitMode::TrackOnly));
+        assert_eq!(
+            settings.limit_mode_for(acc, &Some(grp)),
+            SpotFundsLimitMode::TrackOnly
+        );
+        // An account with no override but not in the group falls to global.
+        assert_eq!(
+            settings.limit_mode_for(acc, &None),
+            SpotFundsLimitMode::Enforce
+        );
+        // A present but non-matching group also falls to global.
+        assert_eq!(
+            settings.limit_mode_for(acc, &Some(group(9))),
+            SpotFundsLimitMode::Enforce
+        );
+    }
+
+    #[test]
+    fn limit_mode_account_override_cleared_falls_back_to_group() {
+        let acc = account(7);
+        let grp = group(3);
+        let mut settings = default_settings();
+        settings.set_account_group_limit_mode(grp, Some(SpotFundsLimitMode::TrackOnly));
+        settings.set_account_limit_mode(acc, Some(SpotFundsLimitMode::Enforce));
+        assert_eq!(
+            settings.limit_mode_for(acc, &Some(grp)),
+            SpotFundsLimitMode::Enforce
+        );
+        // Clearing the account override falls back to the group tier.
+        settings.set_account_limit_mode(acc, None);
+        assert_eq!(
+            settings.limit_mode_for(acc, &Some(grp)),
+            SpotFundsLimitMode::TrackOnly
+        );
+    }
+
+    #[test]
+    fn limit_mode_group_override_cleared_falls_back_to_global() {
+        let acc = account(7);
+        let grp = group(3);
+        let mut settings = default_settings();
+        settings.set_global_limit_mode(SpotFundsLimitMode::Enforce);
+        settings.set_account_group_limit_mode(grp, Some(SpotFundsLimitMode::TrackOnly));
+        assert_eq!(
+            settings.limit_mode_for(acc, &Some(grp)),
+            SpotFundsLimitMode::TrackOnly
+        );
+        // Clearing the group override falls back to the global mode.
+        settings.set_account_group_limit_mode(grp, None);
+        assert_eq!(
+            settings.limit_mode_for(acc, &Some(grp)),
+            SpotFundsLimitMode::Enforce
         );
     }
 }

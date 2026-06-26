@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package policies
 
@@ -237,6 +237,30 @@ func (b *SpotFundsReadyBuilder) Build(builder native.EngineBuilder) error {
 // Equivalent to building without calling [SpotFundsBuilder.WithMarketOrders].
 func (b *SpotFundsBuilder) Build(builder native.EngineBuilder) error {
 	return b.builder.Build(builder)
+}
+
+// NativeSpotFundsLimitMode translates a [SpotFundsLimitMode] into the
+// native limit-mode value. It is a thin marshalling helper shared with the
+// runtime configurator; the cascade and resolution logic live in the core.
+func NativeSpotFundsLimitMode(mode SpotFundsLimitMode) native.PretradePoliciesSpotFundsLimitMode {
+	return mode.Handle()
+}
+
+// nativeSpotFundsLimitModeIgnored is sent only when hasMode == false; the
+// native ABI ignores the mode byte in that branch.
+const nativeSpotFundsLimitModeIgnored native.PretradePoliciesSpotFundsLimitMode = 0
+
+// NativeSpotFundsLimitModeOption translates a pin-or-clear limit mode into the
+// native (mode, hasMode) pair the runtime setters expect: Some pins the mode
+// (hasMode == true), None clears any existing override (hasMode == false, mode
+// ignored). Shared with the runtime configurator; no business logic.
+func NativeSpotFundsLimitModeOption(
+	mode optional.Option[SpotFundsLimitMode],
+) (native.PretradePoliciesSpotFundsLimitMode, bool) {
+	if v, has := mode.Get(); has {
+		return v.Handle(), true
+	}
+	return nativeSpotFundsLimitModeIgnored, false
 }
 
 // NewNativeSpotFundsOverride translates a [SpotFundsOverrideTarget] and its

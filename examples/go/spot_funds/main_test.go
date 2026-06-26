@@ -89,4 +89,22 @@ func TestSpotFundsReservationFlow(t *testing.T) {
 		t.Fatalf("fill produced %d account block(s), want 0",
 			len(result.AccountBlocks))
 	}
+
+	// After switching to track-only, an identical buy that needs 60000 against
+	// the 40000 now available is accepted instead of rejected: the policy
+	// records the overshoot rather than gating on insufficient funds.
+	if err := enableTrackOnly(engine); err != nil {
+		t.Fatalf("enableTrackOnly: %v", err)
+	}
+	buy3, err := buildOrder(account)
+	if err != nil {
+		t.Fatalf("buildOrder buy #3: %v", err)
+	}
+	lock3, rejects, err := placeOrder(engine, buy3)
+	if err != nil {
+		t.Fatalf("placeOrder buy #3: %v", err)
+	}
+	if lock3 == nil {
+		t.Fatalf("buy #3 rejected in track-only: %s", describe(rejects))
+	}
 }

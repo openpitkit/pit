@@ -39,6 +39,6 @@ pub use rate_limit::{
 };
 pub use spot_funds::SpotFundsPolicy;
 pub use spot_funds::{
-    SpotFundsConfigError, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
-    SpotFundsPricingSource, SpotFundsSettings,
+    SpotFundsConfigError, SpotFundsLimitMode, SpotFundsMarketData, SpotFundsOverride,
+    SpotFundsOverrideTarget, SpotFundsPricingSource, SpotFundsSettings,
 };

@@ -39,7 +39,8 @@ pub use account_adjustment::AccountAdjustment;
 pub use execution_report::ExecutionReport;
 pub use order::Order;
 pub use policy::{
-    OpenPitPretradePreTradePolicy, OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn,
+    OpenPitPretradePoliciesSpotFundsLimitMode, OpenPitPretradePreTradePolicy,
+    OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn,
     OpenPitPretradePreTradePolicyApplyExecutionReportFn,
     OpenPitPretradePreTradePolicyCheckPreTradeStartFn, OpenPitPretradePreTradePolicyFreeUserDataFn,
     OpenPitPretradePreTradePolicyPerformPreTradeCheckFn,

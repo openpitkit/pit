@@ -30,6 +30,9 @@ What is illustrated:
   follow-up BUY that needs the same cash is rejected with InsufficientFunds
 - tying a fill back to its reservation by carrying the pre-trade lock on
   the execution report, so SpotFunds settles the right held amount
+- switching the policy to track-only at runtime so an order that would be
+  rejected for insufficient funds is instead recorded (available may go
+  negative)
 
 Audience: an integrator who wants to lift the SpotFunds call pattern into
 their own order/fill pipeline.
@@ -129,6 +132,21 @@ def main() -> int:
     print(
         f"buy #1 filled: {ORDER_NOTIONAL} {SCENARIO_ASSET_SETTLE} reservation settled,"
         " no account block"
+    )
+
+    # Step 6 - switch the policy to track-only at runtime. In TrackOnly the
+    # insufficient-funds gate is dropped: a reservation is always recorded and
+    # available funds may go negative. After Step 5 only 40000 USD is back
+    # available, yet an identical 60000-notional buy is now accepted instead of
+    # rejected - the policy tracks the overdraw rather than blocking it.
+    enable_track_only(engine)
+    buy3 = build_order(account)
+    lock3, rejects = place_order(engine, buy3)
+    if lock3 is None:
+        raise RuntimeError(f"buy #3 unexpectedly rejected: {describe(rejects)}")
+    print(
+        f"buy #3 accepted in track-only: {ORDER_NOTIONAL} {SCENARIO_ASSET_SETTLE}"
+        " reserved, available may go negative"
     )
 
     return 0
@@ -279,6 +297,20 @@ def apply_fill(
     account.
     """
     return engine.apply_execution_report(report=report)
+
+
+def enable_track_only(engine: openpit.Engine) -> None:
+    """Switch the SpotFunds policy to global track-only mode at runtime.
+
+    TrackOnly drops the insufficient-funds reject: reservations are always
+    recorded and available funds may go negative. The change is applied
+    through the runtime configurator, keyed by the policy's registration name.
+    """
+    policies = pretrade.policies
+    engine.configure().spot_funds(
+        policies.SpotFundsBuilder.NAME,
+        global_limit_mode=policies.SpotFundsLimitMode.TRACK_ONLY,
+    )
 
 
 def contains_code(rejects: list[pretrade.Reject], want: pretrade.RejectCode) -> bool:

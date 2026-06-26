@@ -19,6 +19,7 @@
 
 use openpit::param::{AccountGroupId, AccountId};
 use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
+use openpit::pretrade::SpotFundsLimitMode;
 use openpit::{
     InstrumentId, PolicyGroupId, SpotFundsConfigError, SpotFundsMarketData, SpotFundsOverride,
     SpotFundsOverrideTarget, SpotFundsPricingSource,
@@ -29,6 +30,34 @@ use crate::account_group_id::OpenPitParamAccountGroupId;
 use crate::engine::{write_configure_error, OpenPitConfigureError};
 use crate::marketdata::{OpenPitMarketDataInstrumentId, OpenPitMarketDataService};
 use crate::param::OpenPitParamAccountId;
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+/// Selects how the spot-funds control reacts to insufficient available funds.
+///
+/// The default is `Enforce`, matching the core
+/// [`SpotFundsLimitMode`] default.
+pub enum OpenPitPretradePoliciesSpotFundsLimitMode {
+    /// Reject a reservation when available funds are insufficient; the
+    /// reservation is not recorded.
+    #[default]
+    Enforce = 0,
+    /// Always record the reservation; `available` may go negative and a
+    /// shortfall never rejects. Arithmetic overflow is still surfaced.
+    TrackOnly = 1,
+}
+
+pub(crate) fn import_spot_funds_limit_mode(
+    value: u8,
+) -> Result<SpotFundsLimitMode, OpenPitConfigureError> {
+    match value {
+        0 => Ok(SpotFundsLimitMode::Enforce),
+        1 => Ok(SpotFundsLimitMode::TrackOnly),
+        other => Err(OpenPitConfigureError::validation(format!(
+            "spot funds limit_mode must be 0 (Enforce) or 1 (TrackOnly), got {other}"
+        ))),
+    }
+}
 
 use super::*;
 
@@ -41,6 +70,19 @@ fn configure_pricing_source(value: u8) -> Result<SpotFundsPricingSource, OpenPit
         other => Err(OpenPitConfigureError::validation(format!(
             "pricing_source must be 0 (Mark) or 1 (BookTop), got {other}"
         ))),
+    }
+}
+
+fn configure_spot_funds_limit_mode(
+    value: u8,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> Option<SpotFundsLimitMode> {
+    match import_spot_funds_limit_mode(value) {
+        Ok(mode) => Some(mode),
+        Err(err) => {
+            write_configure_error(out_error, err);
+            None
+        }
     }
 }
 
@@ -489,6 +531,214 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds(
             Ok(())
         },
     );
+    match result {
+        Ok(()) => true,
+        Err(err) => {
+            write_configure_error(out_error, OpenPitConfigureError::new(err));
+            false
+        }
+    }
+}
+
+/// Sets the global spot-funds limit mode for the policy registered under
+/// `name`.
+///
+/// The global mode applies to every order that resolves to neither a
+/// per-account nor a per-account-group override.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer.
+/// - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
+///   added via `openpit_engine_builder_add_builtin_spot_funds_policy`
+///   registers under its fixed name `"SpotFundsPolicy"`.
+/// - `mode` selects `Enforce` (0; reject on insufficient funds) or `TrackOnly`
+///   (1; always record, allow negative available).
+///
+/// Success:
+/// - returns `true`; the new global mode applies from the next order onward.
+///
+/// Error:
+/// - returns `false`; if `out_error` is non-null, writes a caller-owned
+///   `OpenPitConfigureError` (release with
+///   `openpit_destroy_configure_error`).
+/// - a null `engine` or null / invalid-UTF-8 `name` returns `false` and, when
+///   `out_error` is non-null, writes a caller-owned `OpenPitConfigureError`
+///   (`Validation`) that must be released with
+///   `openpit_destroy_configure_error`.
+/// - an invalid `mode` returns `false` and writes `Validation`.
+#[no_mangle]
+pub unsafe extern "C" fn openpit_engine_configure_spot_funds_global_limit_mode(
+    engine: *mut crate::engine::OpenPitEngine,
+    name: OpenPitStringView,
+    mode: u8,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> bool {
+    let name = match unsafe { configure_spot_funds_name(engine, name, out_error) } {
+        Some(name) => name,
+        None => return false,
+    };
+    let mode = match configure_spot_funds_limit_mode(mode, out_error) {
+        Some(mode) => mode,
+        None => return false,
+    };
+    let result = unsafe { &*engine }.configurator().spot_funds(
+        &name,
+        |settings| -> Result<(), SpotFundsConfigError> {
+            settings.set_global_limit_mode(mode);
+            Ok(())
+        },
+    );
+    finish_configure_spot_funds(result, out_error)
+}
+
+/// Pins or clears the spot-funds limit mode for one account on the policy
+/// registered under `name`.
+///
+/// The per-account override wins over the account-group and global tiers.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer.
+/// - `name` selects the policy; see
+///   `openpit_engine_configure_spot_funds_global_limit_mode`.
+/// - `account_id` is the account the override applies to.
+/// - When `has_mode` is `true`, the account is pinned to `mode`. When
+///   `has_mode` is `false`, any existing per-account override is cleared and
+///   the cascade falls through to the account-group and global tiers;
+///   `mode` is ignored. When `has_mode` is `true`, `mode` must select
+///   `Enforce` (0) or `TrackOnly` (1).
+///
+/// Success / error: as
+/// `openpit_engine_configure_spot_funds_global_limit_mode`.
+#[no_mangle]
+pub unsafe extern "C" fn openpit_engine_configure_spot_funds_account_limit_mode(
+    engine: *mut crate::engine::OpenPitEngine,
+    name: OpenPitStringView,
+    account_id: OpenPitParamAccountId,
+    mode: u8,
+    has_mode: bool,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> bool {
+    let name = match unsafe { configure_spot_funds_name(engine, name, out_error) } {
+        Some(name) => name,
+        None => return false,
+    };
+    let account_id = AccountId::from_u64(account_id);
+    let mode = if has_mode {
+        match configure_spot_funds_limit_mode(mode, out_error) {
+            Some(mode) => Some(mode),
+            None => return false,
+        }
+    } else {
+        None
+    };
+    let result = unsafe { &*engine }.configurator().spot_funds(
+        &name,
+        |settings| -> Result<(), SpotFundsConfigError> {
+            settings.set_account_limit_mode(account_id, mode);
+            Ok(())
+        },
+    );
+    finish_configure_spot_funds(result, out_error)
+}
+
+/// Pins or clears the spot-funds limit mode for one account group on the
+/// policy registered under `name`.
+///
+/// The override applies to every account in the group that has no per-account
+/// override.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer.
+/// - `name` selects the policy; see
+///   `openpit_engine_configure_spot_funds_global_limit_mode`.
+/// - `account_group_id` is the account group the override applies to; an
+///   invalid id fails the call with `Validation`.
+/// - When `has_mode` is `true`, the group is pinned to `mode`. When `has_mode`
+///   is `false`, any existing per-account-group override is cleared and the
+///   cascade falls through to the global tier; `mode` is ignored. When
+///   `has_mode` is `true`, `mode` must select `Enforce` (0) or `TrackOnly` (1).
+///
+/// Success / error: as
+/// `openpit_engine_configure_spot_funds_global_limit_mode`.
+#[no_mangle]
+pub unsafe extern "C" fn openpit_engine_configure_spot_funds_account_group_limit_mode(
+    engine: *mut crate::engine::OpenPitEngine,
+    name: OpenPitStringView,
+    account_group_id: OpenPitParamAccountGroupId,
+    mode: u8,
+    has_mode: bool,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> bool {
+    let name = match unsafe { configure_spot_funds_name(engine, name, out_error) } {
+        Some(name) => name,
+        None => return false,
+    };
+    let account_group_id = match AccountGroupId::from_u32(account_group_id) {
+        Ok(id) => id,
+        Err(error) => {
+            write_configure_error(
+                out_error,
+                OpenPitConfigureError::validation(format!(
+                    "spot funds account group id {account_group_id} is invalid: {error}"
+                )),
+            );
+            return false;
+        }
+    };
+    let mode = if has_mode {
+        match configure_spot_funds_limit_mode(mode, out_error) {
+            Some(mode) => Some(mode),
+            None => return false,
+        }
+    } else {
+        None
+    };
+    let result = unsafe { &*engine }.configurator().spot_funds(
+        &name,
+        |settings| -> Result<(), SpotFundsConfigError> {
+            settings.set_account_group_limit_mode(account_group_id, mode);
+            Ok(())
+        },
+    );
+    finish_configure_spot_funds(result, out_error)
+}
+
+/// Validates the `engine` pointer and `name` shared by the spot-funds
+/// limit-mode configure entry points, returning the decoded name or writing a
+/// `Validation` error and returning `None`.
+unsafe fn configure_spot_funds_name(
+    engine: *mut crate::engine::OpenPitEngine,
+    name: OpenPitStringView,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> Option<String> {
+    if engine.is_null() {
+        write_configure_error(
+            out_error,
+            OpenPitConfigureError::validation("engine is null".to_owned()),
+        );
+        return None;
+    }
+    match unsafe { cstr_arg(name) } {
+        Some(name) => Some(name),
+        None => {
+            write_configure_error(
+                out_error,
+                OpenPitConfigureError::validation(
+                    "policy name is null or invalid UTF-8".to_owned(),
+                ),
+            );
+            None
+        }
+    }
+}
+
+/// Maps the configurator result of a spot-funds limit-mode update to the FFI
+/// boolean convention, writing a caller-owned `OpenPitConfigureError` on
+/// failure.
+fn finish_configure_spot_funds(
+    result: Result<(), openpit::ConfigureError>,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> bool {
     match result {
         Ok(()) => true,
         Err(err) => {
@@ -1115,6 +1365,257 @@ mod tests {
             crate::engine::openpit_configure_error_get_kind(out_error),
             crate::engine::OpenPitConfigureErrorKind::Validation
         );
+        crate::engine::openpit_destroy_configure_error(out_error);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    /// Builds a None-mode engine with a limit-only spot-funds policy named
+    /// `"SpotFundsPolicy"`.
+    fn engine_with_spot_funds() -> *mut crate::engine::OpenPitEngine {
+        let builder = make_local_engine_builder();
+        assert!(unsafe {
+            openpit_engine_builder_add_builtin_spot_funds_policy(
+                builder,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                0,
+                null_out_error(),
+            )
+        });
+        let engine = crate::engine::openpit_engine_builder_build(
+            builder,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        assert!(!engine.is_null());
+        openpit_destroy_engine_builder(builder);
+        engine
+    }
+
+    #[test]
+    fn configure_spot_funds_limit_modes_happy_path() {
+        let engine = engine_with_spot_funds();
+        let name = OpenPitStringView::from_utf8("SpotFundsPolicy");
+
+        assert!(unsafe {
+            openpit_engine_configure_spot_funds_global_limit_mode(
+                engine,
+                name,
+                OpenPitPretradePoliciesSpotFundsLimitMode::TrackOnly as u8,
+                std::ptr::null_mut(),
+            )
+        });
+        assert!(unsafe {
+            openpit_engine_configure_spot_funds_account_limit_mode(
+                engine,
+                name,
+                42,
+                OpenPitPretradePoliciesSpotFundsLimitMode::TrackOnly as u8,
+                true,
+                std::ptr::null_mut(),
+            )
+        });
+        // Clear the per-account override (has_mode == false).
+        assert!(unsafe {
+            openpit_engine_configure_spot_funds_account_limit_mode(
+                engine,
+                name,
+                42,
+                OpenPitPretradePoliciesSpotFundsLimitMode::Enforce as u8,
+                false,
+                std::ptr::null_mut(),
+            )
+        });
+        assert!(unsafe {
+            openpit_engine_configure_spot_funds_account_group_limit_mode(
+                engine,
+                name,
+                3,
+                OpenPitPretradePoliciesSpotFundsLimitMode::TrackOnly as u8,
+                true,
+                std::ptr::null_mut(),
+            )
+        });
+        // Clear the per-account-group override (has_mode == false).
+        assert!(unsafe {
+            openpit_engine_configure_spot_funds_account_group_limit_mode(
+                engine,
+                name,
+                3,
+                OpenPitPretradePoliciesSpotFundsLimitMode::Enforce as u8,
+                false,
+                std::ptr::null_mut(),
+            )
+        });
+
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_spot_funds_global_limit_mode_null_engine_is_validation() {
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_spot_funds_global_limit_mode(
+                std::ptr::null_mut(),
+                OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                OpenPitPretradePoliciesSpotFundsLimitMode::TrackOnly as u8,
+                &mut out_error,
+            )
+        };
+        assert!(!ok);
+        assert!(!out_error.is_null());
+        assert_eq!(
+            crate::engine::openpit_configure_error_get_kind(out_error),
+            crate::engine::OpenPitConfigureErrorKind::Validation
+        );
+        crate::engine::openpit_destroy_configure_error(out_error);
+    }
+
+    #[test]
+    fn configure_spot_funds_global_limit_mode_invalid_mode_is_validation() {
+        let engine = engine_with_spot_funds();
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_spot_funds_global_limit_mode(
+                engine,
+                OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                99,
+                &mut out_error,
+            )
+        };
+        assert!(!ok);
+        assert!(!out_error.is_null());
+        assert_eq!(
+            crate::engine::openpit_configure_error_get_kind(out_error),
+            crate::engine::OpenPitConfigureErrorKind::Validation
+        );
+        crate::engine::openpit_destroy_configure_error(out_error);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_spot_funds_account_limit_mode_ignores_mode_when_clearing() {
+        let engine = engine_with_spot_funds();
+        let ok = unsafe {
+            openpit_engine_configure_spot_funds_account_limit_mode(
+                engine,
+                OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                42,
+                99,
+                false,
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(ok);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_spot_funds_account_limit_mode_invalid_mode_is_validation() {
+        let engine = engine_with_spot_funds();
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_spot_funds_account_limit_mode(
+                engine,
+                OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                42,
+                99,
+                true,
+                &mut out_error,
+            )
+        };
+        assert!(!ok);
+        assert!(!out_error.is_null());
+        assert_eq!(
+            crate::engine::openpit_configure_error_get_kind(out_error),
+            crate::engine::OpenPitConfigureErrorKind::Validation
+        );
+        crate::engine::openpit_destroy_configure_error(out_error);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_spot_funds_account_group_limit_mode_ignores_mode_when_clearing() {
+        let engine = engine_with_spot_funds();
+        let ok = unsafe {
+            openpit_engine_configure_spot_funds_account_group_limit_mode(
+                engine,
+                OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                3,
+                99,
+                false,
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(ok);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_spot_funds_account_group_limit_mode_invalid_mode_is_validation() {
+        let engine = engine_with_spot_funds();
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_spot_funds_account_group_limit_mode(
+                engine,
+                OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                3,
+                99,
+                true,
+                &mut out_error,
+            )
+        };
+        assert!(!ok);
+        assert!(!out_error.is_null());
+        assert_eq!(
+            crate::engine::openpit_configure_error_get_kind(out_error),
+            crate::engine::OpenPitConfigureErrorKind::Validation
+        );
+        crate::engine::openpit_destroy_configure_error(out_error);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_spot_funds_account_group_limit_mode_invalid_group_is_validation() {
+        let engine = engine_with_spot_funds();
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_spot_funds_account_group_limit_mode(
+                engine,
+                OpenPitStringView::from_utf8("SpotFundsPolicy"),
+                0,
+                OpenPitPretradePoliciesSpotFundsLimitMode::TrackOnly as u8,
+                true,
+                &mut out_error,
+            )
+        };
+        assert!(!ok);
+        assert!(!out_error.is_null());
+        assert_eq!(
+            crate::engine::openpit_configure_error_get_kind(out_error),
+            crate::engine::OpenPitConfigureErrorKind::Validation
+        );
+        crate::engine::openpit_destroy_configure_error(out_error);
+        crate::engine::openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn configure_spot_funds_limit_mode_unknown_policy_name() {
+        let engine = engine_with_spot_funds();
+        let mut out_error = std::ptr::null_mut();
+        let ok = unsafe {
+            openpit_engine_configure_spot_funds_global_limit_mode(
+                engine,
+                OpenPitStringView::from_utf8("NoSuchPolicy"),
+                OpenPitPretradePoliciesSpotFundsLimitMode::TrackOnly as u8,
+                &mut out_error,
+            )
+        };
+        assert!(!ok);
+        assert!(!out_error.is_null());
         crate::engine::openpit_destroy_configure_error(out_error);
         crate::engine::openpit_destroy_engine(engine);
     }

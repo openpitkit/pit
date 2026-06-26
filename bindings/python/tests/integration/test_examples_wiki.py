@@ -1076,6 +1076,142 @@ def test_example_wiki_account_groups_register_and_read() -> None:
 
 
 @pytest.mark.integration
+def test_example_wiki_spot_funds_global_limit_mode() -> None:
+    # Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md
+    # Section: Spot Funds: Global Limit Mode
+    # This mirror is intentionally wider than the wiki snippet: it adds the test
+    # harness (seed adjustment via helper) so the example runs. Keep the shared
+    # user-code flow in sync with the wiki.
+    import openpit
+    import openpit.pretrade.policies
+
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(openpit.pretrade.policies.build_spot_funds())
+        .build()
+    )
+
+    account_id = openpit.param.AccountId.from_int(99224416)
+    # Seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000 notional).
+    seed = openpit.AccountAdjustment(
+        operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+        amount=openpit.AccountAdjustmentAmount(
+            balance=openpit.param.AdjustmentAmount.absolute(
+                openpit.param.PositionSize(1000)
+            )
+        ),
+    )
+    engine.apply_account_adjustment(account_id=account_id, adjustments=[seed])
+
+    order = openpit.Order(
+        operation=openpit.OrderOperation(
+            instrument=openpit.Instrument("AAPL", "USD"),
+            account_id=account_id,
+            side=openpit.param.Side.BUY,
+            trade_amount=openpit.param.TradeAmount.quantity("10"),
+            price=openpit.param.Price("200"),
+        ),
+    )
+
+    # Default Enforce: 2 000 notional exceeds 1 000 available - rejected.
+    result = engine.execute_pre_trade(order=order)
+    assert not result.ok
+    assert result.rejects[0].reason == "spot funds insufficient"
+
+    # Switch to TrackOnly: the same order now passes and reserves against deficit.
+    engine.configure().spot_funds(
+        openpit.pretrade.policies.SpotFundsBuilder.NAME,
+        global_limit_mode=openpit.pretrade.policies.SpotFundsLimitMode.TRACK_ONLY,
+    )
+    result = engine.execute_pre_trade(order=order)
+    assert result.ok
+    result.reservation.commit()  # available: 1 000 - 2 000 = -1 000
+
+    # Restore Enforce: available is negative - still rejected.
+    engine.configure().spot_funds(
+        openpit.pretrade.policies.SpotFundsBuilder.NAME,
+        global_limit_mode=openpit.pretrade.policies.SpotFundsLimitMode.ENFORCE,
+    )
+    result = engine.execute_pre_trade(order=order)
+    assert not result.ok
+    assert result.rejects[0].reason == "spot funds insufficient"
+
+
+@pytest.mark.integration
+def test_example_wiki_spot_funds_per_account_limit_mode() -> None:
+    # Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md
+    # Section: Spot Funds: Per-Account Limit Mode
+    # This mirror is intentionally wider than the wiki snippet: it adds the test
+    # harness (seed adjustment via helper) so the example runs. Keep the shared
+    # user-code flow in sync with the wiki.
+    import openpit
+    import openpit.pretrade.policies
+
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(openpit.pretrade.policies.build_spot_funds())
+        .build()
+    )
+
+    account_id = openpit.param.AccountId.from_int(99224416)
+    # Seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000 notional).
+    seed = openpit.AccountAdjustment(
+        operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+        amount=openpit.AccountAdjustmentAmount(
+            balance=openpit.param.AdjustmentAmount.absolute(
+                openpit.param.PositionSize(1000)
+            )
+        ),
+    )
+    engine.apply_account_adjustment(account_id=account_id, adjustments=[seed])
+
+    order = openpit.Order(
+        operation=openpit.OrderOperation(
+            instrument=openpit.Instrument("AAPL", "USD"),
+            account_id=account_id,
+            side=openpit.param.Side.BUY,
+            trade_amount=openpit.param.TradeAmount.quantity("10"),
+            price=openpit.param.Price("200"),
+        ),
+    )
+
+    # Global Enforce: under-funded buy is rejected.
+    result = engine.execute_pre_trade(order=order)
+    assert not result.ok
+    assert result.rejects[0].reason == "spot funds insufficient"
+
+    # Pin this account to TrackOnly: per-account override wins over global Enforce.
+    engine.configure().spot_funds(
+        openpit.pretrade.policies.SpotFundsBuilder.NAME,
+        account_limit_modes=[
+            openpit.pretrade.policies.SpotFundsLimitModeAccountEntry(
+                account_id=account_id,
+                mode=openpit.pretrade.policies.SpotFundsLimitMode.TRACK_ONLY,
+            )
+        ],
+    )
+    result = engine.execute_pre_trade(order=order)
+    assert result.ok
+    result.reservation.commit()  # reservation recorded despite insufficient funds
+
+    # Clear the per-account override: cascade falls back to global Enforce.
+    engine.configure().spot_funds(
+        openpit.pretrade.policies.SpotFundsBuilder.NAME,
+        account_limit_modes=[
+            openpit.pretrade.policies.SpotFundsLimitModeAccountEntry(
+                account_id=account_id,
+                mode=None,
+            )
+        ],
+    )
+    result = engine.execute_pre_trade(order=order)
+    assert not result.ok
+    assert result.rejects[0].reason == "spot funds insufficient"
+
+
+@pytest.mark.integration
 def test_example_wiki_dynamic_policy_reconfiguration_rate_limit() -> None:
     # Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Retune a Built-in Policy
     # This mirror is intentionally wider than the wiki snippet: it adds the test

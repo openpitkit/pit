@@ -2190,6 +2190,156 @@ func TestExampleWikiDryRunCustomPolicyHook(t *testing.T) {
 	}
 }
 
+// Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Spot Funds: Global Limit Mode
+// This mirror is intentionally wider than the wiki snippet: it adds the test
+// harness (t.Fatalf assertions, wikiExampleOrder and wikiSeedBalanceAdjustment)
+// so the example runs. Keep the shared user-code flow in sync with the wiki.
+func TestExampleWikiSpotFundsGlobalLimitMode(t *testing.T) {
+	engine, err := NewEngineBuilder().
+		NoSync().
+		Builtin(policies.BuildSpotFunds()).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	accountID := param.NewAccountIDFromUint64(99224416)
+	// Seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000 notional).
+	seed := wikiSeedBalanceAdjustment(t, "1000")
+	if rejects, _, err := engine.ApplyAccountAdjustment(
+		accountID, []model.AccountAdjustment{seed},
+	); err != nil {
+		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
+	} else if rejects.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() unexpected rejects: %v", rejects)
+	}
+
+	order := wikiExampleOrder(t, "10", "200")
+
+	// Default Enforce: 2 000 notional exceeds 1 000 available - rejected.
+	_, rejects, err := engine.ExecutePreTrade(order)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
+	}
+	if len(rejects) == 0 {
+		t.Fatalf("ExecutePreTrade(): expected InsufficientFunds rejection")
+	}
+	if rejects[0].Reason != "spot funds insufficient" {
+		t.Fatalf("Reason = %q, want %q", rejects[0].Reason, "spot funds insufficient")
+	}
+
+	// Switch to TrackOnly: the same order now passes and reserves against deficit.
+	if err := engine.Configure().SpotFundsGlobalLimitMode(
+		policies.SpotFundsPolicyName,
+		policies.SpotFundsLimitModeTrackOnly,
+	); err != nil {
+		t.Fatalf("SpotFundsGlobalLimitMode(TrackOnly) error = %v", err)
+	}
+	reservation, rejects, err := engine.ExecutePreTrade(order)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
+	}
+	if rejects != nil {
+		t.Fatalf("ExecutePreTrade() unexpected rejects after TrackOnly: %v", rejects)
+	}
+	reservation.CommitAndClose() // available: 1 000 - 2 000 = -1 000
+
+	// Restore Enforce: available is negative - still rejected.
+	if err := engine.Configure().SpotFundsGlobalLimitMode(
+		policies.SpotFundsPolicyName,
+		policies.SpotFundsLimitModeEnforce,
+	); err != nil {
+		t.Fatalf("SpotFundsGlobalLimitMode(Enforce) error = %v", err)
+	}
+	_, rejects, err = engine.ExecutePreTrade(order)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
+	}
+	if len(rejects) == 0 {
+		t.Fatalf("ExecutePreTrade(): expected InsufficientFunds rejection after Enforce restore")
+	}
+	if rejects[0].Reason != "spot funds insufficient" {
+		t.Fatalf("Reason = %q, want %q", rejects[0].Reason, "spot funds insufficient")
+	}
+}
+
+// Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Spot Funds: Per-Account Limit Mode
+// This mirror is intentionally wider than the wiki snippet: it adds the test
+// harness (t.Fatalf assertions, wikiExampleOrder and wikiSeedBalanceAdjustment)
+// so the example runs. Keep the shared user-code flow in sync with the wiki.
+func TestExampleWikiSpotFundsPerAccountLimitMode(t *testing.T) {
+	engine, err := NewEngineBuilder().
+		NoSync().
+		Builtin(policies.BuildSpotFunds()).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	accountID := param.NewAccountIDFromUint64(99224416)
+	// Seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000 notional).
+	seed := wikiSeedBalanceAdjustment(t, "1000")
+	if rejects, _, err := engine.ApplyAccountAdjustment(
+		accountID, []model.AccountAdjustment{seed},
+	); err != nil {
+		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
+	} else if rejects.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() unexpected rejects: %v", rejects)
+	}
+
+	order := wikiExampleOrder(t, "10", "200")
+
+	// Global Enforce: under-funded buy is rejected.
+	_, rejects, err := engine.ExecutePreTrade(order)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
+	}
+	if len(rejects) == 0 {
+		t.Fatalf("ExecutePreTrade(): expected InsufficientFunds rejection")
+	}
+	if rejects[0].Reason != "spot funds insufficient" {
+		t.Fatalf("Reason = %q, want %q", rejects[0].Reason, "spot funds insufficient")
+	}
+
+	// Pin this account to TrackOnly: per-account override wins over global Enforce.
+	if err := engine.Configure().SpotFundsAccountLimitMode(
+		policies.SpotFundsPolicyName,
+		accountID,
+		optional.Some(policies.SpotFundsLimitModeTrackOnly),
+	); err != nil {
+		t.Fatalf("SpotFundsAccountLimitMode(Some(TrackOnly)) error = %v", err)
+	}
+	reservation, rejects, err := engine.ExecutePreTrade(order)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
+	}
+	if rejects != nil {
+		t.Fatalf("ExecutePreTrade() unexpected rejects after per-account TrackOnly: %v", rejects)
+	}
+	reservation.CommitAndClose() // reservation recorded despite insufficient funds
+
+	// Clear the per-account override: cascade falls back to global Enforce.
+	if err := engine.Configure().SpotFundsAccountLimitMode(
+		policies.SpotFundsPolicyName,
+		accountID,
+		optional.None[policies.SpotFundsLimitMode](),
+	); err != nil {
+		t.Fatalf("SpotFundsAccountLimitMode(None) error = %v", err)
+	}
+	_, rejects, err = engine.ExecutePreTrade(order)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
+	}
+	if len(rejects) == 0 {
+		t.Fatalf("ExecutePreTrade(): expected InsufficientFunds rejection after pin cleared")
+	}
+	if rejects[0].Reason != "spot funds insufficient" {
+		t.Fatalf("Reason = %q, want %q", rejects[0].Reason, "spot funds insufficient")
+	}
+}
+
 // Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Force-set Accumulated P&L
 // This mirror is intentionally wider than the wiki snippet: it adds the test
 // harness (t.Fatalf assertions, wikiExampleOrder and the account it carries) so

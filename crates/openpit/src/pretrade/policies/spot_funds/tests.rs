@@ -7441,3 +7441,308 @@ fn batch_force_setting_realized_pnl_then_rejected_rolls_back_to_prior() {
     let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
     assert_eq!(aapl.realized_pnl(), Some(pnl_value("30")));
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Funds limit mode - never-reject TrackOnly path
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Builds a no-market-data policy whose global limit mode is `mode`.
+fn build_policy_with_limit_mode(mode: SpotFundsLimitMode) -> TestPolicy {
+    let b = engine_builder();
+    let mut s = settings(0);
+    s.set_global_limit_mode(mode);
+    SpotFundsPolicy::new(s, None, b.storage_builder())
+}
+
+/// Publishes a new global limit mode through the policy's settings cell, exactly
+/// as the runtime `Configurator::spot_funds` surface would.
+fn set_runtime_global_limit_mode(policy: &TestPolicy, mode: SpotFundsLimitMode) {
+    use crate::pretrade::ConfigurablePolicy;
+    use crate::storage::ConfigCell;
+    let cell =
+        <TestPolicy as ConfigurablePolicy<crate::storage::FullLocking>>::settings_cell(policy);
+    cell.update(|s| {
+        s.set_global_limit_mode(mode);
+        Ok::<(), SpotFundsConfigError>(())
+    })
+    .expect("update must publish");
+}
+
+#[test]
+fn track_only_buy_over_available_is_not_rejected_and_drives_available_negative() {
+    let acc = account(99224416);
+    let policy = build_policy_with_limit_mode(SpotFundsLimitMode::TrackOnly);
+    seed(&policy, acc, asset("USD"), "1000");
+
+    // Buy qty 10 @ 200 owes 2000 settlement but only 1000 is available.
+    let order = make_order(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        TradeAmount::Quantity(qty("10")),
+        Some(px("200")),
+    );
+    let mut mutations = Mutations::with_capacity(1);
+    pre_trade_check(&policy, &order, &mut mutations).expect("track-only must not reject");
+    assert!(!mutations.is_empty());
+
+    // Settlement leg recorded the full hold, driving available negative.
+    let usd = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
+    assert_eq!(usd.held(), ps("2000"));
+    assert_eq!(usd.available(), ps("-1000"));
+
+    // Base incoming projection is still emitted on the buy.
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
+    assert_eq!(aapl.incoming(), ps("10"));
+}
+
+#[test]
+fn track_only_matches_enforce_bookkeeping_for_a_fundable_buy() {
+    // With sufficient funds both modes must produce byte-identical holdings:
+    // the mode only changes the insufficiency path.
+    let acc = account(99224416);
+    let order = make_order(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        TradeAmount::Quantity(qty("10")),
+        Some(px("200")),
+    );
+
+    let enforce = build_policy_with_limit_mode(SpotFundsLimitMode::Enforce);
+    seed(&enforce, acc, asset("USD"), "10000");
+    let mut m1 = Mutations::with_capacity(1);
+    pre_trade_check(&enforce, &order, &mut m1).expect("enforce must pass when funded");
+
+    let track = build_policy_with_limit_mode(SpotFundsLimitMode::TrackOnly);
+    seed(&track, acc, asset("USD"), "10000");
+    let mut m2 = Mutations::with_capacity(1);
+    pre_trade_check(&track, &order, &mut m2).expect("track-only must pass when funded");
+
+    assert_eq!(
+        holdings_of(&enforce, acc, &asset("USD")),
+        holdings_of(&track, acc, &asset("USD")),
+    );
+    assert_eq!(
+        holdings_of(&enforce, acc, &asset("AAPL")),
+        holdings_of(&track, acc, &asset("AAPL")),
+    );
+}
+
+#[test]
+fn track_only_sell_over_available_underlying_is_not_rejected() {
+    let acc = account(99224416);
+    let policy = build_policy_with_limit_mode(SpotFundsLimitMode::TrackOnly);
+    // Owns only 1 AAPL but sells 10: the underlying hold exceeds available.
+    seed(&policy, acc, asset("AAPL"), "1");
+
+    let order = make_order(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Sell,
+        TradeAmount::Quantity(qty("10")),
+        Some(px("200")),
+    );
+    let mut mutations = Mutations::with_capacity(1);
+    pre_trade_check(&policy, &order, &mut mutations).expect("track-only must not reject");
+
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
+    assert_eq!(aapl.held(), ps("10"));
+    assert_eq!(aapl.available(), ps("-9"));
+    // A non-negative sell price projects settlement incoming, never gated.
+    let usd = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
+    assert_eq!(usd.incoming(), ps("2000"));
+}
+
+#[test]
+fn enforce_still_rejects_insufficient_funds() {
+    let acc = account(99224416);
+    let policy = build_policy_with_limit_mode(SpotFundsLimitMode::Enforce);
+    seed(&policy, acc, asset("USD"), "1000");
+
+    let order = make_order(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        TradeAmount::Quantity(qty("10")),
+        Some(px("200")),
+    );
+    let mut mutations = Mutations::new();
+    let rejects = pre_trade_check(&policy, &order, &mut mutations).expect_err("must reject");
+
+    assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
+    assert!(mutations.is_empty());
+    let usd = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
+    assert_eq!(usd.available(), ps("1000"));
+    assert_eq!(usd.held(), ps("0"));
+}
+
+#[test]
+fn track_only_still_rejects_arithmetic_overflow_without_panicking() {
+    let acc = account(99224416);
+    let policy = build_policy_with_limit_mode(SpotFundsLimitMode::TrackOnly);
+    // Force the settlement slot's `held` to the top of the decimal range so the
+    // reserve hold's `held + amount` overflows. Overflow is an integrity guard
+    // that no mode suppresses.
+    let held_max = PositionSize::new(rust_decimal::Decimal::MAX);
+    let adjustment = held_adj(
+        asset("USD"),
+        Some(AdjustmentAmount::Absolute(held_max)),
+        None,
+        None,
+    );
+    let mut seed_mutations = Mutations::with_capacity(1);
+    apply_adj(&policy, acc, &adjustment, &mut seed_mutations).expect("seed must succeed");
+    seed_mutations.commit_all();
+
+    let order = make_order(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        TradeAmount::Quantity(qty("10")),
+        Some(px("200")),
+    );
+    let mut mutations = Mutations::new();
+    let rejects = pre_trade_check(&policy, &order, &mut mutations).expect_err("must reject");
+
+    // Overflow maps to the arithmetic-overflow reject, never InsufficientFunds.
+    assert_eq!(rejects[0].code, RejectCode::ArithmeticOverflow);
+    assert_ne!(rejects[0].code, RejectCode::InsufficientFunds);
+}
+
+#[test]
+fn runtime_switch_to_track_only_changes_gating_for_next_reservation() {
+    let acc = account(99224416);
+    let policy = build_policy_with_limit_mode(SpotFundsLimitMode::Enforce);
+    seed(&policy, acc, asset("USD"), "1000");
+
+    let order = make_order(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        TradeAmount::Quantity(qty("10")),
+        Some(px("200")),
+    );
+
+    // Enforce: the under-funded buy is rejected.
+    let mut m1 = Mutations::new();
+    let rejects = pre_trade_check(&policy, &order, &mut m1).expect_err("enforce must reject");
+    assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
+
+    // Flip the global mode at runtime through the settings cell.
+    set_runtime_global_limit_mode(&policy, SpotFundsLimitMode::TrackOnly);
+
+    // The same under-funded buy now passes and records the hold.
+    let mut m2 = Mutations::with_capacity(1);
+    pre_trade_check(&policy, &order, &mut m2).expect("track-only must pass after switch");
+    let usd = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
+    assert_eq!(usd.held(), ps("2000"));
+    assert_eq!(usd.available(), ps("-1000"));
+
+    // Flip back to Enforce: a further under-funded buy is rejected again.
+    set_runtime_global_limit_mode(&policy, SpotFundsLimitMode::Enforce);
+    let mut m3 = Mutations::new();
+    let rejects = pre_trade_check(&policy, &order, &mut m3)
+        .expect_err("enforce must reject again after switch back");
+    assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
+}
+
+#[test]
+fn track_only_dry_run_buy_over_available_matches_mutating_reservation() {
+    // Regression guard: the dry-run gate must resolve TrackOnly exactly like the
+    // mutating gate. Run the same under-funded buy as
+    // `track_only_buy_over_available_is_not_rejected_and_drives_available_negative`
+    // through both entries on equivalent fresh state and assert the dry-run
+    // outcome byte-matches the holdings the mutating reservation produces. If a
+    // future edit desyncs the two limit-mode gates this fails.
+    let acc = account(99224416);
+    let order = make_order(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        TradeAmount::Quantity(qty("10")),
+        Some(px("200")),
+    );
+
+    // Dry-run path on its own fresh state: must not reject, must report.
+    let dry_policy = build_policy_with_limit_mode(SpotFundsLimitMode::TrackOnly);
+    seed(&dry_policy, acc, asset("USD"), "1000");
+    let outcome = dry_run_check(&dry_policy, &order)
+        .expect("track-only dry-run must not reject")
+        .expect("track-only dry-run must report an outcome");
+
+    // Mutating path on equivalent fresh state.
+    let mut_policy = build_policy_with_limit_mode(SpotFundsLimitMode::TrackOnly);
+    seed(&mut_policy, acc, asset("USD"), "1000");
+    let mut mutations = Mutations::with_capacity(1);
+    pre_trade_check(&mut_policy, &order, &mut mutations).expect("track-only must not reject");
+    let usd = holdings_of(&mut_policy, acc, &asset("USD")).expect("must exist");
+    let aapl = holdings_of(&mut_policy, acc, &asset("AAPL")).expect("must exist");
+
+    // Settlement leg: held is the full requested 2000, available driven negative
+    // to -1000 (seed 1000 minus the 2000 hold). The dry-run reports the same
+    // absolute balance the mutating path's `available()` reaches.
+    assert_eq!(outcome.account_adjustments.len(), 2);
+    let entry = &outcome.account_adjustments[0];
+    assert_eq!(entry.asset, asset("USD"));
+    let held = entry.held.expect("held outcome present");
+    assert_eq!(held.delta, ps("2000"));
+    assert_eq!(held.absolute, ps("2000"));
+    assert_eq!(held.absolute, usd.held());
+    let balance = entry.balance.expect("balance outcome present");
+    assert_eq!(balance.delta, ps("-2000"));
+    assert_eq!(balance.absolute, ps("-1000"));
+    assert_eq!(balance.absolute, usd.available());
+    assert!(entry.incoming.is_none());
+
+    // Base incoming projection matches the mutating path's base leg.
+    let base = &outcome.account_adjustments[1];
+    assert_eq!(base.asset, asset("AAPL"));
+    assert!(base.balance.is_none());
+    assert!(base.held.is_none());
+    let incoming = base.incoming.expect("base incoming outcome present");
+    assert_eq!(incoming.delta, ps("10"));
+    assert_eq!(incoming.absolute, ps("10"));
+    assert_eq!(incoming.absolute, aapl.incoming());
+    assert_eq!(outcome.lock_prices.to_vec(), vec![px("200")]);
+
+    // The dry-run consumed nothing on its own state.
+    let dry_usd = holdings_of(&dry_policy, acc, &asset("USD")).expect("must exist");
+    assert_eq!(dry_usd.available(), ps("1000"));
+    assert_eq!(dry_usd.held(), ps("0"));
+}
+
+#[test]
+fn track_only_dry_run_still_rejects_arithmetic_overflow_without_panicking() {
+    // Mirror of `track_only_still_rejects_arithmetic_overflow_without_panicking`
+    // on the dry-run entry: TrackOnly never suppresses the overflow integrity
+    // guard, so the dry-run twin must also map to ArithmeticOverflow rather than
+    // InsufficientFunds, and must not panic.
+    let acc = account(99224416);
+    let policy = build_policy_with_limit_mode(SpotFundsLimitMode::TrackOnly);
+    // Seed the settlement slot's `held` at the top of the decimal range so the
+    // reserve hold's `held + amount` overflows.
+    let held_max = PositionSize::new(rust_decimal::Decimal::MAX);
+    let adjustment = held_adj(
+        asset("USD"),
+        Some(AdjustmentAmount::Absolute(held_max)),
+        None,
+        None,
+    );
+    let mut seed_mutations = Mutations::with_capacity(1);
+    apply_adj(&policy, acc, &adjustment, &mut seed_mutations).expect("seed must succeed");
+    seed_mutations.commit_all();
+
+    let order = make_order(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        TradeAmount::Quantity(qty("10")),
+        Some(px("200")),
+    );
+    let rejects = dry_run_check(&policy, &order).expect_err("dry-run must reject");
+
+    // Overflow maps to the arithmetic-overflow reject, never InsufficientFunds.
+    assert_eq!(rejects[0].code, RejectCode::ArithmeticOverflow);
+    assert_ne!(rejects[0].code, RejectCode::InsufficientFunds);
+}

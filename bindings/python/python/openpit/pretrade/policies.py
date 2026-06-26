@@ -545,6 +545,48 @@ class SpotFundsPricingSource(_enum.StrEnum):
     BOOK_TOP = "BookTop"
 
 
+@enum.unique
+class SpotFundsLimitMode(_enum.StrEnum):
+    """How the policy treats an order that exceeds available settlement funds.
+
+    ``ENFORCE`` (the default) rejects the order with ``InsufficientFunds`` and
+    records no reservation. ``TRACK_ONLY`` always records the reservation,
+    letting available funds go negative, and never rejects on insufficiency;
+    arithmetic overflow is still surfaced.
+    """
+
+    ENFORCE = "Enforce"
+    TRACK_ONLY = "TrackOnly"
+
+
+@dataclasses.dataclass(frozen=True)
+class SpotFundsLimitModeAccountEntry:
+    """Per-account limit-mode override for the runtime cascade.
+
+    Args:
+        account_id: Account the override applies to.
+        mode: Limit mode to pin for the account, or ``None`` to clear the
+            account pin and defer to the account-group or global tier.
+    """
+
+    account_id: param.AccountId
+    mode: SpotFundsLimitMode | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class SpotFundsLimitModeAccountGroupEntry:
+    """Per-account-group limit-mode override for the runtime cascade.
+
+    Args:
+        account_group_id: Account group the override applies to.
+        mode: Limit mode to pin for the account group, or ``None`` to clear the
+            account-group pin and defer to the global tier.
+    """
+
+    account_group_id: param.AccountGroupId
+    mode: SpotFundsLimitMode | None = None
+
+
 @dataclasses.dataclass(frozen=True)
 class SpotFundsOverrideTargetInstrument:
     """Instrument-level slippage override target.
@@ -782,6 +824,9 @@ __all__ = [
     "PnlBoundsKillswitchBuilder",
     "build_pnl_bounds_killswitch",
     "SpotFundsPricingSource",
+    "SpotFundsLimitMode",
+    "SpotFundsLimitModeAccountEntry",
+    "SpotFundsLimitModeAccountGroupEntry",
     "SpotFundsOverrideTarget",
     "SpotFundsOverrideTargetInstrument",
     "SpotFundsOverrideTargetInstrumentAccount",

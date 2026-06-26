@@ -2063,6 +2063,13 @@ class Configurator:
         global_slippage_bps: int | None = None,
         pricing_source: pretrade.policies.SpotFundsPricingSource | None = None,
         overrides: list[pretrade.policies.SpotFundsOverrideEntry] = ...,
+        global_limit_mode: pretrade.policies.SpotFundsLimitMode | None = None,
+        account_limit_modes: list[
+            pretrade.policies.SpotFundsLimitModeAccountEntry
+        ] = ...,
+        account_group_limit_modes: list[
+            pretrade.policies.SpotFundsLimitModeAccountGroupEntry
+        ] = ...,
     ) -> None:
         """Retune a registered spot-funds policy at runtime.
 
@@ -2077,6 +2084,16 @@ class Configurator:
         *overrides* contains
         :class:`~openpit.pretrade.policies.SpotFundsOverrideEntry` entries that
         replace individual cascade entries.
+
+        *global_limit_mode* is a
+        :class:`~openpit.pretrade.policies.SpotFundsLimitMode`, or ``None`` to
+        leave the global insufficient-funds limit mode unchanged.
+
+        *account_limit_modes* and *account_group_limit_modes* contain
+        :class:`~openpit.pretrade.policies.SpotFundsLimitModeAccountEntry` and
+        :class:`~openpit.pretrade.policies.SpotFundsLimitModeAccountGroupEntry`
+        entries; each pins the entry's ``mode`` for that scope, or clears the
+        pin (deferring to the next cascade tier) when ``mode`` is ``None``.
 
         Raises:
             PolicyConfigureError: If the policy is not found, has the wrong

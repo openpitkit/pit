@@ -49,8 +49,8 @@ pub use context::PreTradeContext;
 pub use dry_run_report::PreTradeDryRunReport;
 pub use lock::PreTradeLock;
 pub use policies::{
-    SpotFundsConfigError, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
-    SpotFundsPricingSource,
+    SpotFundsConfigError, SpotFundsLimitMode, SpotFundsMarketData, SpotFundsOverride,
+    SpotFundsOverrideTarget, SpotFundsPricingSource,
 };
 pub use policy::{PolicyGroupId, PreTradePolicy, DEFAULT_POLICY_GROUP_ID};
 pub use policy_result::PolicyPreTradeResult;

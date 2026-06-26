@@ -217,6 +217,36 @@ impl Holdings {
         })
     }
 
+    /// Moves `amount` from `available` to `held` without the solvency gate.
+    ///
+    /// Sibling of [`Holdings::try_hold`] for the spot-funds track-only mode: it
+    /// performs the same checked `available - amount` / `held + amount`
+    /// arithmetic but never refuses on insufficiency, so `available` is allowed
+    /// to go negative. Decimal-range overflow is still an integrity failure and
+    /// is surfaced, never silently absorbed.
+    ///
+    /// # Errors
+    ///
+    /// - [`HoldError::ArithmeticOverflow`] if the underlying decimal addition or
+    ///   subtraction overflows the value range.
+    pub fn hold_allow_negative(&self, amount: PositionSize) -> Result<Self, HoldError> {
+        let available = self
+            .available
+            .checked_sub(amount)
+            .map_err(|_| HoldError::ArithmeticOverflow)?;
+        let held = self
+            .held
+            .checked_add(amount)
+            .map_err(|_| HoldError::ArithmeticOverflow)?;
+        Ok(Self {
+            avg_entry_price: self.avg_entry_price,
+            available,
+            held,
+            incoming: self.incoming,
+            realized_pnl: self.realized_pnl,
+        })
+    }
+
     /// Moves `amount` from `held` back to `available`.
     ///
     /// Negative `amount` inverts the direction. The result may have
@@ -823,6 +853,49 @@ mod tests {
         value
             .try_hold(ps("10"))
             .expect("must succeed - held is positive, spendable = available");
+    }
+
+    #[test]
+    fn hold_allow_negative_moves_available_to_held_within_balance() {
+        let value = holdings("10", "0");
+        let updated = value.hold_allow_negative(ps("5")).expect("must hold");
+
+        assert_eq!(updated.available(), ps("5"));
+        assert_eq!(updated.held(), ps("5"));
+    }
+
+    #[test]
+    fn hold_allow_negative_drives_available_negative_without_rejecting() {
+        let value = holdings("1000", "0");
+        let updated = value.hold_allow_negative(ps("2000")).expect("must hold");
+
+        // No solvency gate: available goes negative, held records the full hold.
+        assert_eq!(updated.available(), ps("-1000"));
+        assert_eq!(updated.held(), ps("2000"));
+    }
+
+    #[test]
+    fn hold_allow_negative_preserves_incoming_and_position_tracking() {
+        let value = holdings("10", "5")
+            .with_avg_entry_price(Some(px("100")))
+            .with_realized_pnl(pnl("7"))
+            .reserve_incoming(ps("4"))
+            .expect("seed must succeed");
+        let updated = value.hold_allow_negative(ps("20")).expect("must hold");
+
+        assert_eq!(updated.incoming(), ps("4"));
+        assert_eq!(updated.avg_entry_price(), Some(px("100")));
+        assert_eq!(updated.realized_pnl(), Some(pnl("7")));
+    }
+
+    #[test]
+    fn hold_allow_negative_reports_arithmetic_overflow() {
+        // held + amount overflows the value range even though insufficiency is
+        // never enforced.
+        let value = Holdings::new(max_ps(), max_ps());
+        let err = value.hold_allow_negative(max_ps()).expect_err("must fail");
+
+        assert_eq!(err, HoldError::ArithmeticOverflow);
     }
 
     #[test]

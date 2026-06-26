@@ -61,7 +61,8 @@ use openpit::{
 use openpit::{AccountGroupError, Accounts, Configurator, PolicyGroupId, DEFAULT_POLICY_GROUP_ID};
 use openpit::{
     ConfigureError, InstrumentId, MarketDataBuilder, MarketDataService, Quote, QuoteTtl,
-    SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPricingSource,
+    SpotFundsLimitMode, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
+    SpotFundsPricingSource,
 };
 use openpit_interop::{
     AccountAdjustmentAmountAccess, AccountAdjustmentBoundsAccess, AccountAdjustmentOperationAccess,
@@ -1306,7 +1307,12 @@ impl PyConfigurator {
     /// ``global_slippage_bps`` replaces the global slippage when provided.
     /// ``pricing_source`` and ``overrides`` use the named entities from
     /// ``openpit.pretrade.policies``.
-    #[pyo3(signature = (name, *, global_slippage_bps = None, pricing_source = None, overrides = vec![]))]
+    /// ``global_limit_mode`` replaces the global insufficient-funds limit mode
+    /// when provided. ``account_limit_modes`` and ``account_group_limit_modes``
+    /// pin or clear per-account and per-account-group limit-mode overrides via
+    /// the named entities from ``openpit.pretrade.policies``.
+    #[pyo3(signature = (name, *, global_slippage_bps = None, pricing_source = None, overrides = vec![], global_limit_mode = None, account_limit_modes = vec![], account_group_limit_modes = vec![]))]
+    #[allow(clippy::too_many_arguments)]
     fn spot_funds(
         &self,
         py: Python<'_>,
@@ -1314,6 +1320,9 @@ impl PyConfigurator {
         global_slippage_bps: Option<u16>,
         pricing_source: Option<Bound<'_, PyAny>>,
         overrides: Vec<Bound<'_, PyAny>>,
+        global_limit_mode: Option<Bound<'_, PyAny>>,
+        account_limit_modes: Vec<Bound<'_, PyAny>>,
+        account_group_limit_modes: Vec<Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let parsed_pricing_source = pricing_source
             .as_ref()
@@ -1323,6 +1332,20 @@ impl PyConfigurator {
             .iter()
             .map(parse_spot_funds_override_entity)
             .collect::<PyResult<_>>()?;
+        let parsed_global_limit_mode = global_limit_mode
+            .as_ref()
+            .map(parse_spot_funds_limit_mode_entity)
+            .transpose()?;
+        let parsed_account_limit_modes: Vec<(AccountId, Option<SpotFundsLimitMode>)> =
+            account_limit_modes
+                .iter()
+                .map(parse_spot_funds_account_limit_mode_entity)
+                .collect::<PyResult<_>>()?;
+        let parsed_account_group_limit_modes: Vec<(AccountGroupId, Option<SpotFundsLimitMode>)> =
+            account_group_limit_modes
+                .iter()
+                .map(parse_spot_funds_account_group_limit_mode_entity)
+                .collect::<PyResult<_>>()?;
 
         py.detach(|| {
             self.inner.spot_funds(name, |s| {
@@ -1334,6 +1357,15 @@ impl PyConfigurator {
                 }
                 for (target, ovr) in &parsed_overrides {
                     s.set_override(*target, *ovr)?;
+                }
+                if let Some(mode) = parsed_global_limit_mode {
+                    s.set_global_limit_mode(mode);
+                }
+                for (account_id, mode) in &parsed_account_limit_modes {
+                    s.set_account_limit_mode(*account_id, *mode);
+                }
+                for (account_group_id, mode) in &parsed_account_group_limit_modes {
+                    s.set_account_group_limit_mode(*account_group_id, *mode);
                 }
                 Ok::<_, openpit::pretrade::policies::SpotFundsConfigError>(())
             })
@@ -3932,6 +3964,66 @@ fn parse_spot_funds_pricing_source_entity(
 ) -> PyResult<SpotFundsPricingSource> {
     ensure_policy_entity(value, "SpotFundsPricingSource")?;
     parse_spot_funds_pricing_source_str(&value.getattr("value")?.extract::<String>()?)
+}
+
+fn parse_spot_funds_limit_mode_str(value: &str) -> PyResult<SpotFundsLimitMode> {
+    match value {
+        "Enforce" => Ok(SpotFundsLimitMode::Enforce),
+        "TrackOnly" => Ok(SpotFundsLimitMode::TrackOnly),
+        other => Err(PyValueError::new_err(format!(
+            "limit_mode must be 'Enforce' or 'TrackOnly', got {other:?}"
+        ))),
+    }
+}
+
+fn parse_spot_funds_limit_mode_entity(value: &Bound<'_, PyAny>) -> PyResult<SpotFundsLimitMode> {
+    ensure_policy_entity(value, "SpotFundsLimitMode")?;
+    parse_spot_funds_limit_mode_str(&value.getattr("value")?.extract::<String>()?)
+}
+
+fn parse_optional_spot_funds_limit_mode(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Option<SpotFundsLimitMode>> {
+    if value.is_none() {
+        return Ok(None);
+    }
+    parse_spot_funds_limit_mode_entity(value).map(Some)
+}
+
+fn parse_spot_funds_account_limit_mode_entity(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<(AccountId, Option<SpotFundsLimitMode>)> {
+    ensure_policy_entity(value, "SpotFundsLimitModeAccountEntry")?;
+    let account_id = value
+        .getattr("account_id")?
+        .extract::<PyRef<'_, PyAccountId>>()
+        .map_err(|_| {
+            PyTypeError::new_err(
+                "SpotFundsLimitModeAccountEntry.account_id must be \
+                 openpit.param.AccountId",
+            )
+        })?
+        .inner;
+    let mode = parse_optional_spot_funds_limit_mode(&value.getattr("mode")?)?;
+    Ok((account_id, mode))
+}
+
+fn parse_spot_funds_account_group_limit_mode_entity(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<(AccountGroupId, Option<SpotFundsLimitMode>)> {
+    ensure_policy_entity(value, "SpotFundsLimitModeAccountGroupEntry")?;
+    let account_group_id = value
+        .getattr("account_group_id")?
+        .extract::<PyRef<'_, PyAccountGroupId>>()
+        .map_err(|_| {
+            PyTypeError::new_err(
+                "SpotFundsLimitModeAccountGroupEntry.account_group_id must be \
+                 openpit.param.AccountGroupId",
+            )
+        })?
+        .inner;
+    let mode = parse_optional_spot_funds_limit_mode(&value.getattr("mode")?)?;
+    Ok((account_group_id, mode))
 }
 
 fn parse_spot_funds_override_entity(

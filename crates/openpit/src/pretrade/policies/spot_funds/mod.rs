@@ -17,6 +17,9 @@
 
 //! Pre-trade policy that gates spot orders on sufficient self-funds.
 
+mod limit_mode;
+pub use limit_mode::SpotFundsLimitMode;
+
 use crate::core::sync_mode::SyncMode;
 use crate::core::AccountOutcomeEntry;
 use crate::core::{

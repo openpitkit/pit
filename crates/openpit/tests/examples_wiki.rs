@@ -1459,6 +1459,192 @@ fn example_wiki_account_block_unblock() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[test]
+fn example_wiki_spot_funds_global_limit_mode() -> Result<(), Box<dyn std::error::Error>> {
+    // Wiki example: pit.wiki/Dynamic-Policy-Reconfiguration.md - Spot Funds: Global Limit Mode
+    // This mirror is intentionally wider than the wiki snippet: it adds the test
+    // harness (the fn -> Result wrapper and seed/order helpers) so the example runs.
+    // Keep the shared user-code flow in sync with the wiki.
+    use openpit::param::{
+        AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, TradeAmount,
+    };
+    use openpit::pretrade::policies::{SpotFundsConfigError, SpotFundsPolicy, SpotFundsSettings};
+    use openpit::pretrade::SpotFundsLimitMode;
+    use openpit::{
+        AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
+        Engine, FullSync, Instrument, OrderOperation, SpotFundsMarketData, SpotFundsPricingSource,
+        WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
+        WithAccountAdjustmentBounds, WithExecutionReportFillDetails, WithExecutionReportOperation,
+    };
+
+    type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
+    type SpotAdjustment = WithAccountAdjustmentAmount<
+        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+    >;
+
+    let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])?,
+        None::<SpotFundsMarketData<FullSync>>,
+        builder.storage_builder(),
+    );
+    let engine = builder.pre_trade(policy).build()?;
+
+    let account = AccountId::from_u64(99224416);
+    // Harness: seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000 notional).
+    let seed = WithAccountAdjustmentAmount {
+        inner: WithAccountAdjustmentBounds {
+            inner: WithAccountAdjustmentBalanceOperation {
+                inner: (),
+                operation: AccountAdjustmentBalanceOperation {
+                    asset: Asset::new("USD")?,
+                    average_entry_price: None,
+                    realized_pnl: None,
+                },
+            },
+            bounds: AccountAdjustmentBounds::default(),
+        },
+        amount: AccountAdjustmentAmount {
+            balance: Some(AdjustmentAmount::Absolute(PositionSize::from_str("1000")?)),
+            held: None,
+            incoming: None,
+        },
+    };
+    engine.apply_account_adjustment(account, &[seed])?;
+
+    let order = OrderOperation {
+        instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
+        account_id: account,
+        side: Side::Buy,
+        trade_amount: TradeAmount::Quantity(Quantity::from_str("10")?),
+        price: Some(Price::from_str("200")?),
+    };
+
+    // Default Enforce: 2 000 notional exceeds 1 000 available - rejected.
+    let rejects = engine
+        .execute_pre_trade(order.clone())
+        .err()
+        .expect("enforce must reject insufficient funds");
+    assert_eq!(rejects[0].reason, "spot funds insufficient");
+
+    // Switch to TrackOnly: the same order now passes and reserves against deficit.
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+            Ok(())
+        })?;
+    engine.execute_pre_trade(order.clone())?.commit(); // available: -1 000
+
+    // Restore Enforce: available is negative - still rejected.
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_global_limit_mode(SpotFundsLimitMode::Enforce);
+            Ok(())
+        })?;
+    let rejects = engine
+        .execute_pre_trade(order)
+        .err()
+        .expect("enforce must reject negative available");
+    assert_eq!(rejects[0].reason, "spot funds insufficient");
+    Ok(())
+}
+
+#[test]
+fn example_wiki_spot_funds_per_account_limit_mode() -> Result<(), Box<dyn std::error::Error>> {
+    // Wiki example: pit.wiki/Dynamic-Policy-Reconfiguration.md - Spot Funds: Per-Account Limit Mode
+    // This mirror is intentionally wider than the wiki snippet: it adds the test
+    // harness (the fn -> Result wrapper and seed/order helpers) so the example runs.
+    // Keep the shared user-code flow in sync with the wiki.
+    use openpit::param::{
+        AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, TradeAmount,
+    };
+    use openpit::pretrade::policies::{SpotFundsConfigError, SpotFundsPolicy, SpotFundsSettings};
+    use openpit::pretrade::SpotFundsLimitMode;
+    use openpit::{
+        AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
+        Engine, FullSync, Instrument, OrderOperation, SpotFundsMarketData, SpotFundsPricingSource,
+        WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
+        WithAccountAdjustmentBounds, WithExecutionReportFillDetails, WithExecutionReportOperation,
+    };
+
+    type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
+    type SpotAdjustment = WithAccountAdjustmentAmount<
+        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+    >;
+
+    let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])?,
+        None::<SpotFundsMarketData<FullSync>>,
+        builder.storage_builder(),
+    );
+    let engine = builder.pre_trade(policy).build()?;
+
+    let account = AccountId::from_u64(99224416);
+    // Harness: seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000 notional).
+    let seed = WithAccountAdjustmentAmount {
+        inner: WithAccountAdjustmentBounds {
+            inner: WithAccountAdjustmentBalanceOperation {
+                inner: (),
+                operation: AccountAdjustmentBalanceOperation {
+                    asset: Asset::new("USD")?,
+                    average_entry_price: None,
+                    realized_pnl: None,
+                },
+            },
+            bounds: AccountAdjustmentBounds::default(),
+        },
+        amount: AccountAdjustmentAmount {
+            balance: Some(AdjustmentAmount::Absolute(PositionSize::from_str("1000")?)),
+            held: None,
+            incoming: None,
+        },
+    };
+    engine.apply_account_adjustment(account, &[seed])?;
+
+    let order = OrderOperation {
+        instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
+        account_id: account,
+        side: Side::Buy,
+        trade_amount: TradeAmount::Quantity(Quantity::from_str("10")?),
+        price: Some(Price::from_str("200")?),
+    };
+
+    // Global Enforce: under-funded buy is rejected.
+    let rejects = engine
+        .execute_pre_trade(order.clone())
+        .err()
+        .expect("enforce must reject insufficient funds");
+    assert_eq!(rejects[0].reason, "spot funds insufficient");
+
+    // Pin this account to TrackOnly: per-account override wins over global Enforce.
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_account_limit_mode(account, Some(SpotFundsLimitMode::TrackOnly));
+            Ok(())
+        })?;
+    engine.execute_pre_trade(order.clone())?.commit(); // reservation recorded
+
+    // Clear the per-account override: cascade falls back to global Enforce.
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_account_limit_mode(account, None);
+            Ok(())
+        })?;
+    let rejects = engine
+        .execute_pre_trade(order)
+        .err()
+        .expect("enforce must reject after pin is cleared");
+    assert_eq!(rejects[0].reason, "spot funds insufficient");
+    Ok(())
+}
+
+#[test]
 fn example_wiki_dynamic_policy_reconfiguration_rate_limit() -> Result<(), Box<dyn std::error::Error>>
 {
     // Wiki example: pit.wiki/Dynamic-Policy-Reconfiguration.md - Retune a Built-in Policy

@@ -221,6 +221,86 @@ func EngineConfigureSpotFunds(
 	return nil
 }
 
+// EngineConfigureSpotFundsGlobalLimitMode sets the global spot-funds limit mode
+// of the named spot-funds policy at runtime.
+//
+// On success returns nil. On a domain error returns a non-nil ConfigureError
+// (caller must release with DestroyConfigureError).
+func EngineConfigureSpotFundsGlobalLimitMode(
+	engine Engine,
+	name string,
+	mode PretradePoliciesSpotFundsLimitMode,
+) ConfigureError {
+	var outError ConfigureError
+	if !C.openpit_engine_configure_spot_funds_global_limit_mode(
+		engine,
+		importString(name),
+		mode,
+		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return outError
+	}
+	return nil
+}
+
+// EngineConfigureSpotFundsAccountLimitMode pins or clears the spot-funds limit
+// mode for one account of the named spot-funds policy at runtime.
+//
+// When hasMode is true the account is pinned to mode; when false any existing
+// per-account override is cleared and mode is ignored.
+//
+// On success returns nil. On a domain error returns a non-nil ConfigureError
+// (caller must release with DestroyConfigureError).
+func EngineConfigureSpotFundsAccountLimitMode(
+	engine Engine,
+	name string,
+	accountID ParamAccountID,
+	mode PretradePoliciesSpotFundsLimitMode,
+	hasMode bool,
+) ConfigureError {
+	var outError ConfigureError
+	if !C.openpit_engine_configure_spot_funds_account_limit_mode(
+		engine,
+		importString(name),
+		accountID,
+		mode,
+		C.bool(hasMode),
+		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return outError
+	}
+	return nil
+}
+
+// EngineConfigureSpotFundsAccountGroupLimitMode pins or clears the spot-funds
+// limit mode for one account group of the named spot-funds policy at runtime.
+//
+// When hasMode is true the group is pinned to mode; when false any existing
+// per-account-group override is cleared and mode is ignored.
+//
+// On success returns nil. On a domain error returns a non-nil ConfigureError
+// (caller must release with DestroyConfigureError).
+func EngineConfigureSpotFundsAccountGroupLimitMode(
+	engine Engine,
+	name string,
+	accountGroupID ParamAccountGroupID,
+	mode PretradePoliciesSpotFundsLimitMode,
+	hasMode bool,
+) ConfigureError {
+	var outError ConfigureError
+	if !C.openpit_engine_configure_spot_funds_account_group_limit_mode(
+		engine,
+		importString(name),
+		accountGroupID,
+		mode,
+		C.bool(hasMode),
+		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return outError
+	}
+	return nil
+}
+
 // EngineSetAccountPnl force-sets the live accumulated P&L for one
 // (account, settlement asset) entry of the named P&L bounds kill-switch policy.
 //
