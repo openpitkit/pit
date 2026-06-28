@@ -7865,3 +7865,288 @@ fn track_only_dry_run_still_rejects_arithmetic_overflow_without_panicking() {
     assert_eq!(rejects[0].code, RejectCode::ArithmeticOverflow);
     assert_ne!(rejects[0].code, RejectCode::InsufficientFunds);
 }
+
+// ── Volume orders reconcile under price divergence (fill price ≠ lock) ─────
+//
+// Volume orders reconcile under the venue contract
+// Σ(fill qty) + leaves == v / |lock_price|; base-incoming and settlement-held
+// share the same quantity basis, so price divergence alone leaves no residual.
+// The SDK does not compensate a venue that violates this contract.
+//
+// The existing Volume tests use clean numbers where the fill price equals the
+// lock price, so they never exercise a price divergence. These tests deliver
+// fills at prices ≠ the lock while keeping Σ(fill qty) + leaves equal to
+// v / |lock_price|, proving the price gap nets into `available` and leaves
+// neither base-incoming nor settlement-held residual.
+
+#[test]
+fn buy_volume_price_divergent_full_fill_nets_incoming_and_held_to_zero() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    seed(&policy, acc, asset("USD"), "10000");
+
+    // Buy Volume(v=1000) @ lock 100: reserved settlement held = 1000 USD and
+    // reserved base incoming = v / |lock| = 1000 / 100 = 10 AAPL.
+    let order = make_order(
+        acc,
+        aapl_usd.clone(),
+        Side::Buy,
+        TradeAmount::Volume(vol("1000")),
+        Some(px("100")),
+    );
+    let mut mutations = Mutations::with_capacity(2);
+    pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
+    mutations.commit_all();
+    assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("10"));
+    assert_balance(&policy, acc, "USD", "9000", "1000");
+
+    // Fill 6 @ 90 (price below the lock): the settlement leg releases 100*6=600
+    // held and credits the price improvement (100-90)*6=60 to available; the
+    // base leg drains 6 of the projected incoming (10 -> 4) and credits 6 owned.
+    let fill_a = make_report(
+        acc,
+        aapl_usd.clone(),
+        Side::Buy,
+        Some(Trade {
+            price: px("90"),
+            quantity: qty("6"),
+        }),
+        qty("4"),
+        false,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("100"),
+        )])),
+    );
+    assert!(report_blocks(&policy, &fill_a).is_empty());
+    assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("4"));
+
+    // Final fill 4 @ 110 (price above the lock): the settlement leg releases the
+    // remaining 100*4=400 held (-> 0) and debits the deficit (100-110)*4=-40
+    // from available; the base leg drains the last 4 incoming (-> 0).
+    // Σ(fill qty) 6+4 + leaves 0 == 10 == v / |lock|, so both legs converge.
+    let fill_b = make_report(
+        acc,
+        aapl_usd,
+        Side::Buy,
+        Some(Trade {
+            price: px("110"),
+            quantity: qty("4"),
+        }),
+        qty("0"),
+        true,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("100"),
+        )])),
+    );
+    assert!(report_blocks(&policy, &fill_b).is_empty());
+
+    // Base incoming and settlement held both net to zero despite fill != lock.
+    assert_eq!(incoming_of(&policy, acc, "AAPL"), PositionSize::ZERO);
+    // AAPL owned = 10, no residual held or incoming.
+    assert_balance(&policy, acc, "AAPL", "10", "0");
+    // USD available reflects the real cash spent: 6*90 + 4*110 = 980, netted
+    // out of the 1000 reservation (10000 - 980 = 9020); held is fully released.
+    assert_balance(&policy, acc, "USD", "9020", "0");
+}
+
+#[test]
+fn buy_volume_price_divergent_partial_then_fill_nets_incoming_and_held_to_zero() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    seed(&policy, acc, asset("USD"), "10000");
+
+    // Buy Volume(v=1000) @ lock 100: reserved base incoming = 10, held = 1000.
+    let order = make_order(
+        acc,
+        aapl_usd.clone(),
+        Side::Buy,
+        TradeAmount::Volume(vol("1000")),
+        Some(px("100")),
+    );
+    let mut mutations = Mutations::with_capacity(2);
+    pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
+    mutations.commit_all();
+    assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("10"));
+
+    // Partial fill 6 @ 90 (leaves 4, non-final): drains base incoming by 6.
+    let partial = make_report(
+        acc,
+        aapl_usd.clone(),
+        Side::Buy,
+        Some(Trade {
+            price: px("90"),
+            quantity: qty("6"),
+        }),
+        qty("4"),
+        false,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("100"),
+        )])),
+    );
+    assert!(report_blocks(&policy, &partial).is_empty());
+    assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("4"));
+
+    // Final fill 4 @ 110 (leaves 0): drains the remaining base incoming and the
+    // remaining settlement held. Σ(fill qty) 6+4 + leaves 0 == 10 == v / |lock|.
+    let fill = make_report(
+        acc,
+        aapl_usd,
+        Side::Buy,
+        Some(Trade {
+            price: px("110"),
+            quantity: qty("4"),
+        }),
+        qty("0"),
+        true,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("100"),
+        )])),
+    );
+    assert!(report_blocks(&policy, &fill).is_empty());
+    assert_eq!(incoming_of(&policy, acc, "AAPL"), PositionSize::ZERO);
+    assert_balance(&policy, acc, "AAPL", "10", "0");
+    // Both legs drained: no base incoming, no settlement held residual.
+    assert_balance(&policy, acc, "USD", "9020", "0");
+}
+
+#[test]
+fn buy_volume_price_divergent_partial_then_cancel_nets_incoming_and_held_to_zero() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    seed(&policy, acc, asset("USD"), "10000");
+
+    // Buy Volume(v=1000) @ lock 100: reserved base incoming = 10, held = 1000.
+    let order = make_order(
+        acc,
+        aapl_usd.clone(),
+        Side::Buy,
+        TradeAmount::Volume(vol("1000")),
+        Some(px("100")),
+    );
+    let mut mutations = Mutations::with_capacity(2);
+    pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
+    mutations.commit_all();
+    assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("10"));
+
+    // Partial fill 6 @ 90 (leaves 4, non-final): drains base incoming by 6, and
+    // releases 100*6=600 settlement held while crediting (100-90)*6=60 back.
+    let partial = make_report(
+        acc,
+        aapl_usd.clone(),
+        Side::Buy,
+        Some(Trade {
+            price: px("90"),
+            quantity: qty("6"),
+        }),
+        qty("4"),
+        false,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("100"),
+        )])),
+    );
+    assert!(report_blocks(&policy, &partial).is_empty());
+    assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("4"));
+
+    // Final report with no trade, leaves 4: the cancel releases the unfilled
+    // base incoming remainder (4 -> 0) and the settlement held remainder
+    // (100*4=400 -> 0). Convergence: drained 6 + released 4 == reserved 10.
+    let cancel = make_report(
+        acc,
+        aapl_usd,
+        Side::Buy,
+        None,
+        qty("4"),
+        true,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("100"),
+        )])),
+    );
+    assert!(report_blocks(&policy, &cancel).is_empty());
+    assert_eq!(incoming_of(&policy, acc, "AAPL"), PositionSize::ZERO);
+    // AAPL owned = 6 (only the filled leg), no residual incoming.
+    assert_balance(&policy, acc, "AAPL", "6", "0");
+    // USD held fully released; available reflects the 6*90=540 actually spent.
+    assert_balance(&policy, acc, "USD", "9460", "0");
+}
+
+#[test]
+fn sell_volume_price_divergent_full_fill_nets_held_and_incoming_to_zero() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    seed(&policy, acc, asset("AAPL"), "10");
+
+    // Sell Volume(v=1000) @ lock 100: reserved underlying held = v / |lock| =
+    // 1000 / 100 = 10 AAPL and reserved settlement incoming = 100 * 10 = 1000
+    // USD. This is the symmetric counterpart of the buy: the sell underlying-held
+    // leg mirrors the buy base-incoming leg (same quantity basis, factor |lock|).
+    let order = make_order(
+        acc,
+        aapl_usd.clone(),
+        Side::Sell,
+        TradeAmount::Volume(vol("1000")),
+        Some(px("100")),
+    );
+    let mut mutations = Mutations::with_capacity(2);
+    pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
+    mutations.commit_all();
+    assert_balance(&policy, acc, "AAPL", "0", "10");
+    assert_eq!(incoming_of(&policy, acc, "USD"), ps("1000"));
+
+    // Fill 6 @ 110 (price above the lock): the underlying leg consumes 6 held
+    // (10 -> 4); the settlement leg credits 110*6=660 proceeds and drains the
+    // projected incoming by lock*6=600 (1000 -> 400).
+    let fill_a = make_report(
+        acc,
+        aapl_usd.clone(),
+        Side::Sell,
+        Some(Trade {
+            price: px("110"),
+            quantity: qty("6"),
+        }),
+        qty("4"),
+        false,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("100"),
+        )])),
+    );
+    assert!(report_blocks(&policy, &fill_a).is_empty());
+    assert_balance(&policy, acc, "AAPL", "0", "4");
+    assert_eq!(incoming_of(&policy, acc, "USD"), ps("400"));
+
+    // Final fill 4 @ 90 (price below the lock): the underlying leg consumes the
+    // last 4 held (-> 0); the settlement leg credits 90*4=360 and drains the
+    // remaining incoming lock*4=400 (-> 0). Σ(fill qty) 6+4 + leaves 0 == 10.
+    let fill_b = make_report(
+        acc,
+        aapl_usd,
+        Side::Sell,
+        Some(Trade {
+            price: px("90"),
+            quantity: qty("4"),
+        }),
+        qty("0"),
+        true,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("100"),
+        )])),
+    );
+    assert!(report_blocks(&policy, &fill_b).is_empty());
+    // Underlying held converges to zero despite fill != lock (the whole point of
+    // the symmetry), and the reserved settlement incoming drains to zero too.
+    assert_balance(&policy, acc, "AAPL", "0", "0");
+    assert_eq!(incoming_of(&policy, acc, "USD"), PositionSize::ZERO);
+    // Proceeds credited to available: 6*110 + 4*90 = 1020.
+    assert_balance(&policy, acc, "USD", "1020", "0");
+}
