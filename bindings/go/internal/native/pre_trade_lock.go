@@ -24,6 +24,7 @@ import "C"
 
 import (
 	"errors"
+	"runtime"
 	"unsafe"
 )
 
@@ -42,6 +43,7 @@ func CreatePretradePreTradeLockFromRaw(data []byte) (PretradePreTradeLock, error
 		C.size_t(len(data)),
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
+	runtime.KeepAlive(data)
 	if lock == nil {
 		return nil,
 			consumeSharedStringAsError(outError, "openpit_create_pretrade_pre_trade_lock_from_raw failed")
@@ -60,6 +62,7 @@ func CreatePretradePreTradeLockFromMsgPack(data []byte) (PretradePreTradeLock, e
 		C.size_t(len(data)),
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
+	runtime.KeepAlive(data)
 	if lock == nil {
 		return nil,
 			consumeSharedStringAsError(
@@ -81,6 +84,7 @@ func CreatePretradePreTradeLockFromJSON(text []byte) (PretradePreTradeLock, erro
 		C.size_t(len(text)),
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
+	runtime.KeepAlive(text)
 	if lock == nil {
 		return nil,
 			consumeSharedStringAsError(
@@ -102,6 +106,7 @@ func CreatePretradePreTradeLockFromCBOR(data []byte) (PretradePreTradeLock, erro
 		C.size_t(len(data)),
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
+	runtime.KeepAlive(data)
 	if lock == nil {
 		return nil,
 			consumeSharedStringAsError(
@@ -154,12 +159,14 @@ func PretradePreTradeLockPushMany(
 		ptr = (*C.OpenPitPretradePreTradeLockEntry)(unsafe.Pointer(&entries[0]))
 	}
 	var outError SharedString
-	if !C.openpit_pretrade_pre_trade_lock_push_many(
+	ok := C.openpit_pretrade_pre_trade_lock_push_many(
 		lock,
 		ptr,
 		C.size_t(len(entries)),
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
+	)
+	runtime.KeepAlive(entries)
+	if !ok {
 		return consumeSharedStringAsError(outError, "openpit_pretrade_pre_trade_lock_push_many failed")
 	}
 	return nil
@@ -178,6 +185,7 @@ func CreatePretradePreTradeLockFromEntries(
 		C.size_t(len(entries)),
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
+	runtime.KeepAlive(entries)
 	if lock == nil {
 		return nil,
 			consumeSharedStringAsError(

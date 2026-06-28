@@ -56,6 +56,8 @@ var newNotionalZero = sync.OnceValue(
 // NewNotionalZero returns the canonical zero value of Notional.
 func NewNotionalZero() Notional { return newNotionalZero() }
 
+// newNotionalOrPanic returns a Notional or panics on impossible zero errors.
+// The panic is deliberate fail-fast behavior: zero Notional must be valid.
 func newNotionalOrPanic(value Notional, err error) Notional {
 	if err != nil {
 		panic(err)

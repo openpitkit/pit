@@ -54,6 +54,8 @@ func (r *Reservation) Close() {
 //
 // Precondition: the reservation must not be closed.
 // Panics if called after Close, CommitAndClose, or RollbackAndClose.
+// The panic is deliberate fail-fast behavior: continuing with a closed
+// native handle would hide wrong behavior.
 //
 // Commit does not close the reservation; call Close afterwards, or use
 // CommitAndClose.
@@ -66,6 +68,8 @@ func (r *Reservation) Commit() {
 
 // CommitAndClose commits the reservation and then releases it.
 // Panics on the Commit step if the reservation is already closed.
+// The panic is deliberate fail-fast behavior: continuing with a closed
+// native handle would hide wrong behavior.
 func (r *Reservation) CommitAndClose() {
 	r.Commit()
 	r.Close()
@@ -98,6 +102,8 @@ func (r *Reservation) RollbackAndClose() {
 // Lock returns a lock snapshot for the reservation.
 //
 // Panics if the reservation is already closed.
+// The panic is deliberate fail-fast behavior: continuing with a closed
+// native handle would hide wrong behavior.
 func (r Reservation) Lock() Lock {
 	if r.handle == nil {
 		panic("pre-trade reservation already closed")
@@ -112,6 +118,8 @@ func (r Reservation) Lock() Lock {
 // reservation.
 //
 // Panics if the reservation is already closed.
+// The panic is deliberate fail-fast behavior: continuing with a closed
+// native handle would hide wrong behavior.
 func (r Reservation) AccountAdjustments() []accountadjustment.Outcome {
 	if r.handle == nil {
 		panic("pre-trade reservation already closed")

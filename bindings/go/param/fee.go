@@ -47,6 +47,8 @@ var newFeeZero = sync.OnceValue(func() Fee { return newFeeOrPanic(NewFeeFromInt6
 // NewFeeZero returns the canonical zero value of Fee.
 func NewFeeZero() Fee { return newFeeZero() }
 
+// newFeeOrPanic returns a Fee or panics on impossible zero construction errors.
+// The panic is deliberate fail-fast behavior: zero Fee must always be valid.
 func newFeeOrPanic(value Fee, err error) Fee {
 	if err != nil {
 		panic(err)

@@ -22,7 +22,10 @@ package native
 */
 import "C"
 
-import "unsafe"
+import (
+	"runtime"
+	"unsafe"
+)
 
 //------------------------------------------------------------------------------
 // ConfigureError
@@ -71,7 +74,7 @@ func EngineConfigureRateLimit(
 	}
 
 	var outError ConfigureError
-	if !C.openpit_engine_configure_rate_limit(
+	ok := C.openpit_engine_configure_rate_limit(
 		engine,
 		importString(name),
 		broker,
@@ -86,7 +89,11 @@ func EngineConfigureRateLimit(
 		C.size_t(len(accountAssets)),
 		C.bool(accountAssets != nil),
 		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
+	)
+	runtime.KeepAlive(assets)
+	runtime.KeepAlive(accounts)
+	runtime.KeepAlive(accountAssets)
+	if !ok {
 		return outError
 	}
 	return nil
@@ -115,7 +122,7 @@ func EngineConfigurePnlBoundsKillSwitch(
 	}
 
 	var outError ConfigureError
-	if !C.openpit_engine_configure_pnl_bounds_killswitch(
+	ok := C.openpit_engine_configure_pnl_bounds_killswitch(
 		engine,
 		importString(name),
 		brokerPtr,
@@ -125,7 +132,10 @@ func EngineConfigurePnlBoundsKillSwitch(
 		C.size_t(len(accountBarriers)),
 		C.bool(accountBarriers != nil),
 		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
+	)
+	runtime.KeepAlive(brokerBarriers)
+	runtime.KeepAlive(accountBarriers)
+	if !ok {
 		return outError
 	}
 	return nil
@@ -156,7 +166,7 @@ func EngineConfigureOrderSizeLimit(
 	}
 
 	var outError ConfigureError
-	if !C.openpit_engine_configure_order_size_limit(
+	ok := C.openpit_engine_configure_order_size_limit(
 		engine,
 		importString(name),
 		broker,
@@ -168,7 +178,10 @@ func EngineConfigureOrderSizeLimit(
 		C.size_t(len(accountAssets)),
 		C.bool(accountAssets != nil),
 		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
+	)
+	runtime.KeepAlive(assets)
+	runtime.KeepAlive(accountAssets)
+	if !ok {
 		return outError
 	}
 	return nil
@@ -204,7 +217,7 @@ func EngineConfigureSpotFunds(
 	}
 
 	var outError ConfigureError
-	if !C.openpit_engine_configure_spot_funds(
+	ok := C.openpit_engine_configure_spot_funds(
 		engine,
 		importString(name),
 		slippage,
@@ -215,7 +228,9 @@ func EngineConfigureSpotFunds(
 		C.size_t(len(instrumentOverrides)),
 		C.bool(instrumentOverrides != nil),
 		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
+	)
+	runtime.KeepAlive(instrumentOverrides)
+	if !ok {
 		return outError
 	}
 	return nil

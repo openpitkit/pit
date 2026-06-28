@@ -854,6 +854,8 @@ func setExecutionReportFillLock(fill *native.ExecutionReportFill, lock []byte) {
 	}
 	handle, err := native.CreatePretradePreTradeLockFromRaw(lock)
 	if err != nil {
+		// Fail fast: invalid encoded lock bytes mean continuing would use
+		// wrong pre-trade behavior.
 		panic(fmt.Sprintf("failed to decode pre-trade lock bytes: %v", err))
 	}
 	native.ExecutionReportFillSetLock(fill, handle)
@@ -1024,6 +1026,8 @@ func newPositionEffectFromHandle(
 	case native.ParamPositionEffectNotSet:
 		return optional.None[param.PositionEffect]()
 	default:
+		// Fail fast: an unknown native enum means the Go binding is out of
+		// sync with the C ABI.
 		panic(fmt.Sprintf("unknown native ParamPositionEffect value %d", value))
 	}
 }

@@ -47,6 +47,8 @@ var newPriceZero = sync.OnceValue(func() Price { return newPriceOrPanic(NewPrice
 // NewPriceZero returns the canonical zero value of Price.
 func NewPriceZero() Price { return newPriceZero() }
 
+// newPriceOrPanic returns a Price or panics on impossible zero errors.
+// The panic is deliberate fail-fast behavior: zero Price must be valid.
 func newPriceOrPanic(value Price, err error) Price {
 	if err != nil {
 		panic(err)

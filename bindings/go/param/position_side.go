@@ -44,6 +44,8 @@ func NewPositionSideFromHandle(v native.ParamPositionSide) optional.Option[Posit
 	case native.ParamPositionSideNotSet:
 		return optional.None[PositionSide]()
 	default:
+		// Fail fast: an unknown native enum means the Go binding is out of
+		// sync with the C ABI.
 		panic(fmt.Sprintf("unknown native ParamPositionSide value %d", v))
 	}
 }

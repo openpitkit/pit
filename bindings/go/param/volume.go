@@ -47,6 +47,8 @@ var newVolumeZero = sync.OnceValue(func() Volume { return newVolumeOrPanic(NewVo
 // NewVolumeZero returns the canonical zero value of Volume.
 func NewVolumeZero() Volume { return newVolumeZero() }
 
+// newVolumeOrPanic returns a Volume or panics on impossible zero errors.
+// The panic is deliberate fail-fast behavior: zero Volume must be valid.
 func newVolumeOrPanic(value Volume, err error) Volume {
 	if err != nil {
 		panic(err)

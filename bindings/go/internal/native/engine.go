@@ -29,6 +29,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"unsafe"
 )
 
@@ -143,7 +144,7 @@ func EngineBuilderAddBuiltinRateLimit(
 	}
 
 	var outError SharedString
-	if !C.openpit_engine_builder_add_builtin_rate_limit_policy(
+	ok := C.openpit_engine_builder_add_builtin_rate_limit_policy(
 		builder,
 		groupID,
 		broker,
@@ -154,7 +155,11 @@ func EngineBuilderAddBuiltinRateLimit(
 		accountAssetsPtr,
 		C.size_t(len(accountAssets)),
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
+	)
+	runtime.KeepAlive(assets)
+	runtime.KeepAlive(accounts)
+	runtime.KeepAlive(accountAssets)
+	if !ok {
 		return consumeSharedStringAsError(
 			outError,
 			"openpit_engine_builder_add_builtin_rate_limit_policy failed",
@@ -182,7 +187,7 @@ func EngineBuilderAddBuiltinOrderSizeLimit(
 	}
 
 	var outError SharedString
-	if !C.openpit_engine_builder_add_builtin_order_size_limit_policy(
+	ok := C.openpit_engine_builder_add_builtin_order_size_limit_policy(
 		builder,
 		groupID,
 		broker,
@@ -191,7 +196,10 @@ func EngineBuilderAddBuiltinOrderSizeLimit(
 		accountAssetsPtr,
 		C.size_t(len(accountAssets)),
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
+	)
+	runtime.KeepAlive(assets)
+	runtime.KeepAlive(accountAssets)
+	if !ok {
 		return consumeSharedStringAsError(
 			outError,
 			"openpit_engine_builder_add_builtin_order_size_limit_policy failed",
@@ -218,7 +226,7 @@ func EngineBuilderAddBuiltinPnlBoundsKillswitch(
 	}
 
 	var outError SharedString
-	if !C.openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
+	ok := C.openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
 		builder,
 		groupID,
 		brokerPtr,
@@ -226,7 +234,10 @@ func EngineBuilderAddBuiltinPnlBoundsKillswitch(
 		accountPtr,
 		C.size_t(len(accountBarriers)),
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
+	)
+	runtime.KeepAlive(brokerBarriers)
+	runtime.KeepAlive(accountBarriers)
+	if !ok {
 		return consumeSharedStringAsError(
 			outError,
 			"openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy failed",
@@ -287,7 +298,7 @@ func EngineBuilderAddBuiltinSpotFunds(
 	}
 
 	var outError SharedString
-	if !C.openpit_engine_builder_add_builtin_spot_funds_policy(
+	ok := C.openpit_engine_builder_add_builtin_spot_funds_policy(
 		builder,
 		marketData,
 		slippagePtr,
@@ -296,7 +307,9 @@ func EngineBuilderAddBuiltinSpotFunds(
 		C.size_t(len(instrumentOverrides)),
 		groupID,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
+	)
+	runtime.KeepAlive(instrumentOverrides)
+	if !ok {
 		return consumeSharedStringAsError(
 			outError,
 			"openpit_engine_builder_add_builtin_spot_funds_policy failed",
@@ -452,6 +465,7 @@ func EngineApplyAccountAdjustment(
 		&outOutcomes,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
+	runtime.KeepAlive(adjustments)
 
 	switch status {
 	case C.OpenPitAccountAdjustmentApplyStatus_Error:

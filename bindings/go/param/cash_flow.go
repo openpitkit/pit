@@ -51,6 +51,8 @@ var newCashFlowZero = sync.OnceValue(
 // NewCashFlowZero returns the canonical zero value of CashFlow.
 func NewCashFlowZero() CashFlow { return newCashFlowZero() }
 
+// newCashFlowOrPanic returns a CashFlow or panics on impossible zero errors.
+// The panic is deliberate fail-fast behavior: zero CashFlow must be valid.
 func newCashFlowOrPanic(value CashFlow, err error) CashFlow {
 	if err != nil {
 		panic(err)

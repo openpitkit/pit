@@ -49,6 +49,8 @@ func (r *DryRunReport) Close() {
 // IsPass reports whether the order would have passed every pre-trade stage.
 //
 // Panics if the report is already closed.
+// The panic is deliberate fail-fast behavior: continuing with a closed
+// native handle would hide wrong behavior.
 func (r *DryRunReport) IsPass() bool {
 	if r.handle == nil {
 		panic("pre-trade dry-run report already closed")
@@ -62,6 +64,8 @@ func (r *DryRunReport) IsPass() bool {
 // independent of the report lifetime.
 //
 // Panics if the report is already closed.
+// The panic is deliberate fail-fast behavior: continuing with a closed
+// native handle would hide wrong behavior.
 func (r *DryRunReport) Rejects() []reject.Reject {
 	if r.handle == nil {
 		panic("pre-trade dry-run report already closed")
@@ -86,6 +90,8 @@ func (r *DryRunReport) Rejects() []reject.Reject {
 // never runs in that case) or when no policy locks a price.
 //
 // Panics if the report is already closed.
+// The panic is deliberate fail-fast behavior: continuing with a closed
+// native handle would hide wrong behavior.
 func (r *DryRunReport) Lock() Lock {
 	if r.handle == nil {
 		panic("pre-trade dry-run report already closed")
@@ -100,6 +106,8 @@ func (r *DryRunReport) Lock() Lock {
 // would have produced. Returns nil when none were produced.
 //
 // Panics if the report is already closed.
+// The panic is deliberate fail-fast behavior: continuing with a closed
+// native handle would hide wrong behavior.
 func (r *DryRunReport) AccountAdjustments() []accountadjustment.Outcome {
 	if r.handle == nil {
 		panic("pre-trade dry-run report already closed")
@@ -115,6 +123,8 @@ func (r *DryRunReport) AccountAdjustments() []accountadjustment.Outcome {
 // block.
 //
 // Panics if the report is already closed.
+// The panic is deliberate fail-fast behavior: continuing with a closed
+// native handle would hide wrong behavior.
 func (r *DryRunReport) AccountBlock() *reject.AccountBlock {
 	if r.handle == nil {
 		panic("pre-trade dry-run report already closed")

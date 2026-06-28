@@ -72,6 +72,9 @@ func (a TradeAmount) IsVolume() bool {
 }
 
 // MustQuantity returns the quantity or panics if not quantity-denominated.
+//
+// The panic is deliberate fail-fast behavior: callers must check IsQuantity
+// before reading the quantity variant.
 func (a TradeAmount) MustQuantity() Quantity {
 	if !a.IsQuantity() {
 		panic("requested trade amount as quantity, but it is not")
@@ -84,6 +87,9 @@ func (a TradeAmount) MustQuantity() Quantity {
 }
 
 // MustVolume returns the volume or panics if not volume-denominated.
+//
+// The panic is deliberate fail-fast behavior: callers must check IsVolume
+// before reading the volume variant.
 func (a TradeAmount) MustVolume() Volume {
 	if !a.IsVolume() {
 		panic("requested trade amount as volume, but it is not")

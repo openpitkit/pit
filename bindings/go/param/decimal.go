@@ -31,6 +31,8 @@ func newDecimalFromHandle(source native.ParamDecimal) decimal.Decimal {
 // Used for cases where a happy path is implied, since the value has already
 // been checked before and an error should not occur during re-checking or
 // reading under any scenario.
+// The panic is deliberate fail-fast behavior: continuing would hide a broken
+// value invariant.
 func newParamValueOrPanic[T any](value T, err error) T {
 	if err != nil {
 		panic(err)

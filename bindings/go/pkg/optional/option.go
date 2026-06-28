@@ -44,6 +44,9 @@ func (o Option[T]) Get() (T, bool) {
 }
 
 // MustGet returns the stored value or panics if no value is set.
+//
+// The panic is deliberate fail-fast behavior: continuing without a value
+// would hide wrong behavior.
 func (o Option[T]) MustGet() T {
 	if !o.IsSet() {
 		panic("optional: no value")

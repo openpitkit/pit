@@ -44,6 +44,9 @@ func (b Bool) Get() (value bool, isSet bool) {
 }
 
 // MustGet returns the stored value or panics if no value is set.
+//
+// The panic is deliberate fail-fast behavior: continuing without a value
+// would hide wrong behavior.
 func (b Bool) MustGet() bool {
 	if !b.IsSet() {
 		panic("optional bool: no value")

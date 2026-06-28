@@ -51,6 +51,8 @@ var newQuantityZero = sync.OnceValue(
 // NewQuantityZero returns the canonical zero value of Quantity.
 func NewQuantityZero() Quantity { return newQuantityZero() }
 
+// newQuantityOrPanic returns a Quantity or panics on impossible zero errors.
+// The panic is deliberate fail-fast behavior: zero Quantity must be valid.
 func newQuantityOrPanic(value Quantity, err error) Quantity {
 	if err != nil {
 		panic(err)

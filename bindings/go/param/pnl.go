@@ -47,6 +47,8 @@ var newPnlZero = sync.OnceValue(func() Pnl { return newPnlOrPanic(NewPnlFromInt6
 // NewPnlZero returns the canonical zero value of Pnl.
 func NewPnlZero() Pnl { return newPnlZero() }
 
+// newPnlOrPanic returns a Pnl or panics on impossible zero construction errors.
+// The panic is deliberate fail-fast behavior: zero Pnl must always be valid.
 func newPnlOrPanic(value Pnl, err error) Pnl {
 	if err != nil {
 		panic(err)

@@ -72,6 +72,9 @@ func (a AdjustmentAmount) IsAbsolute() bool {
 }
 
 // MustDelta returns the delta value or panics if not a delta adjustment.
+//
+// The panic is deliberate fail-fast behavior: callers must check IsDelta
+// before reading the delta variant.
 func (a AdjustmentAmount) MustDelta() PositionSize {
 	if !a.IsDelta() {
 		panic("requested adjustment amount as delta, but it is not")
@@ -80,6 +83,9 @@ func (a AdjustmentAmount) MustDelta() PositionSize {
 }
 
 // MustAbsolute returns the absolute value or panics if not an absolute adjustment.
+//
+// The panic is deliberate fail-fast behavior: callers must check IsAbsolute
+// before reading the absolute variant.
 func (a AdjustmentAmount) MustAbsolute() PositionSize {
 	if !a.IsAbsolute() {
 		panic("requested adjustment amount as absolute, but it is not")
@@ -93,6 +99,9 @@ func (a AdjustmentAmount) Handle() native.ParamAdjustmentAmount {
 }
 
 // Choose calls getDelta or getAbsolute depending on the adjustment kind.
+//
+// The panic is deliberate fail-fast behavior: a set AdjustmentAmount must have
+// exactly one known variant.
 func (a AdjustmentAmount) Choose(getDelta func(PositionSize), getAbsolute func(PositionSize)) {
 	if a.IsDelta() {
 		getDelta(a.MustDelta())

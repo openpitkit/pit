@@ -51,6 +51,8 @@ var newPositionSizeZero = sync.OnceValue(
 // NewPositionSizeZero returns the canonical zero value of PositionSize.
 func NewPositionSizeZero() PositionSize { return newPositionSizeZero() }
 
+// newPositionSizeOrPanic returns a value or panics on impossible zero errors.
+// The panic is deliberate fail-fast behavior: zero PositionSize must be valid.
 func newPositionSizeOrPanic(value PositionSize, err error) PositionSize {
 	if err != nil {
 		panic(err)
@@ -58,6 +60,8 @@ func newPositionSizeOrPanic(value PositionSize, err error) PositionSize {
 	return value
 }
 
+// newPositionSizeQuantitySideOrPanic returns decoded parts or panics on ABI drift.
+// The panic is deliberate fail-fast behavior: continuing would hide wrong data.
 func newPositionSizeQuantitySideOrPanic(
 	quantity native.ParamQuantity,
 	side native.ParamSide,

@@ -89,6 +89,8 @@ func (v StringView) IsSet() bool {
 	return v.value.ptr != nil && v.value.len > 0
 }
 
+// consumeSharedString reads and releases a required native shared string.
+// The panic is deliberate fail-fast behavior: callers must provide a handle.
 func consumeSharedString(handle SharedString) string {
 	if handle == nil {
 		panic("shared string is not provided")

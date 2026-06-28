@@ -22,7 +22,10 @@ package native
 */
 import "C"
 
-import "unsafe"
+import (
+	"runtime"
+	"unsafe"
+)
 
 //------------------------------------------------------------------------------
 // ParamAccountGroupID
@@ -103,14 +106,16 @@ func EngineRegisterAccountGroup(
 	}
 	var outGroupError AccountGroupError
 	var outError SharedString
-	if !C.openpit_engine_register_account_group(
+	ok := C.openpit_engine_register_account_group(
 		engine,
 		accountsPtr,
 		C.size_t(len(accounts)),
 		group,
 		&outGroupError,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
+	)
+	runtime.KeepAlive(accounts)
+	if !ok {
 		if outGroupError != nil {
 			return outGroupError, nil
 		}
@@ -135,14 +140,16 @@ func EngineUnregisterAccountGroup(
 	}
 	var outGroupError AccountGroupError
 	var outError SharedString
-	if !C.openpit_engine_unregister_account_group(
+	ok := C.openpit_engine_unregister_account_group(
 		engine,
 		accountsPtr,
 		C.size_t(len(accounts)),
 		group,
 		&outGroupError,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
+	)
+	runtime.KeepAlive(accounts)
+	if !ok {
 		if outGroupError != nil {
 			return outGroupError, nil
 		}
