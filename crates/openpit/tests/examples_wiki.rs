@@ -1220,6 +1220,117 @@ fn example_wiki_spot_funds_market_orders() -> Result<(), Box<dyn std::error::Err
 }
 
 #[test]
+fn example_wiki_spot_funds_pnl_kill_switch_builder() -> Result<(), Box<dyn std::error::Error>> {
+    // Wiki example: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch / Configuring Barriers
+    // Keep this example in sync with the matching wiki example.
+    use openpit::param::{AccountId, Asset, Pnl};
+    use openpit::pretrade::policies::{
+        SpotFundsPnlBoundsAccountBarrier, SpotFundsPnlBoundsBarrier, SpotFundsPolicy,
+        SpotFundsPricingSource, SpotFundsSettings,
+    };
+    use openpit::{
+        Engine, FullSync, OrderOperation, SpotFundsMarketData, WithAccountAdjustmentAmount,
+        WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
+        WithExecutionReportFillDetails, WithExecutionReportOperation,
+    };
+
+    type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
+    type SpotAdjustment = WithAccountAdjustmentAmount<
+        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+    >;
+
+    let account = AccountId::from_u64(99224416);
+    let usd = Asset::new("USD")?;
+
+    // The bounds cascade lives in SpotFundsSettings. A global loss barrier of
+    // -1000 USD, plus a tighter per-account barrier that seeds 0 accumulated PnL.
+    let mut settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])?;
+    settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: usd.clone(),
+        lower_bound: Some(Pnl::from_str("-1000")?),
+        upper_bound: None,
+    }])?;
+    let account_barrier = SpotFundsPnlBoundsAccountBarrier {
+        barrier: SpotFundsPnlBoundsBarrier {
+            account_currency: usd,
+            lower_bound: Some(Pnl::from_str("-250")?),
+            upper_bound: None,
+        },
+        account_id: account,
+        initial_pnl: Pnl::from_str("0")?,
+    };
+    let settings = settings.with_initial_pnl_account_barriers([account_barrier])?;
+
+    let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        settings,
+        None::<SpotFundsMarketData<FullSync>>,
+        builder.storage_builder(),
+    );
+    let engine = builder.pre_trade(policy).build()?;
+
+    // Harness only: silence the unused-engine warning; the wiki snippet stops
+    // at the built engine.
+    let _ = &engine;
+    Ok(())
+}
+
+#[test]
+fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn std::error::Error>> {
+    // Wiki example: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch / Runtime Reconfiguration
+    // Keep this example in sync with the matching wiki example. The engine and
+    // account below are harness scaffolding built to match the snippet's world.
+    use openpit::param::{AccountId, Asset, Pnl};
+    use openpit::pretrade::policies::{
+        SpotFundsConfigError, SpotFundsPnlBoundsBarrier, SpotFundsPolicy, SpotFundsPricingSource,
+        SpotFundsSettings,
+    };
+    use openpit::{
+        Engine, FullSync, OrderOperation, SpotFundsMarketData, WithAccountAdjustmentAmount,
+        WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
+        WithExecutionReportFillDetails, WithExecutionReportOperation,
+    };
+
+    type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
+    type SpotAdjustment = WithAccountAdjustmentAmount<
+        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+    >;
+
+    let account = AccountId::from_u64(99224416);
+    let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])?,
+        None::<SpotFundsMarketData<FullSync>>,
+        builder.storage_builder(),
+    );
+    let engine = builder.pre_trade(policy).build()?;
+
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+    let usd = Asset::new("USD")?;
+    let new_lower = Pnl::from_str("-500")?;
+
+    // Retune the account-currency PnL barriers; live accumulated PnL is untouched.
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+                account_currency: usd.clone(),
+                lower_bound: Some(new_lower),
+                upper_bound: None,
+            }])
+        })?;
+
+    // Force-set the live accumulated PnL for one (account, account currency).
+    engine.configure().set_spot_funds_account_pnl(
+        name,
+        account,
+        Asset::new("USD")?,
+        Pnl::from_str("-120")?,
+    )?;
+    Ok(())
+}
+
+#[test]
 fn example_wiki_balance_reconciliation_delta_absolute() -> Result<(), Box<dyn std::error::Error>> {
     // Wiki example: pit.wiki/Balance-Reconciliation.md - Delta Versus Absolute
     // Keep this example in sync with the matching wiki example.
@@ -1380,6 +1491,7 @@ fn example_wiki_pre_trade_lock_persistence() -> Result<(), Box<dyn std::error::E
                     price: Price::from_str("200")?,
                     quantity: Quantity::from_str("10")?,
                 }),
+                fee: None,
                 leaves_quantity: Quantity::from_str("0")?,
                 lock: restored,
                 is_final: true,

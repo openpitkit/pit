@@ -158,10 +158,11 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
     };
     let mut barriers = Vec::with_capacity(broker_slice.len());
     for (index, param) in broker_slice.iter().enumerate() {
-        let settlement = match parse_settlement_asset_or_error(
+        let settlement = match parse_asset_or_error(
             param.settlement_asset,
             "broker",
             index,
+            "settlement_asset",
             out_error,
         ) {
             Some(v) => v,
@@ -208,10 +209,11 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_pnl_bounds_killswitc
     let mut account_barriers = Vec::with_capacity(account_slice.len());
     for (index, param) in account_slice.iter().enumerate() {
         let account_id = AccountId::from_u64(param.account_id);
-        let settlement = match parse_settlement_asset_or_error(
+        let settlement = match parse_asset_or_error(
             param.settlement_asset,
             "account",
             index,
+            "settlement_asset",
             out_error,
         ) {
             Some(v) => v,
@@ -369,7 +371,12 @@ pub unsafe extern "C" fn openpit_engine_configure_pnl_bounds_killswitch(
         };
         let mut out = Vec::with_capacity(slice.len());
         for (index, entry) in slice.iter().enumerate() {
-            let settlement = match parse_configure_asset(entry.settlement_asset, "broker", index) {
+            let settlement = match parse_configure_asset(
+                entry.settlement_asset,
+                "broker",
+                index,
+                "settlement_asset",
+            ) {
                 Ok(v) => v,
                 Err(e) => {
                     write_configure_error(out_error, e);
@@ -431,7 +438,12 @@ pub unsafe extern "C" fn openpit_engine_configure_pnl_bounds_killswitch(
         };
         let mut out = Vec::with_capacity(slice.len());
         for (index, entry) in slice.iter().enumerate() {
-            let settlement = match parse_configure_asset(entry.settlement_asset, "account", index) {
+            let settlement = match parse_configure_asset(
+                entry.settlement_asset,
+                "account",
+                index,
+                "settlement_asset",
+            ) {
                 Ok(v) => v,
                 Err(e) => {
                     write_configure_error(out_error, e);
@@ -554,7 +566,12 @@ pub unsafe extern "C" fn openpit_engine_configure_pnl_bounds_killswitch_set_acco
             return false;
         }
     };
-    let settlement = match parse_configure_asset(settlement_asset, "pnl_bounds settlement", 0) {
+    let settlement = match parse_configure_asset(
+        settlement_asset,
+        "pnl_bounds settlement",
+        0,
+        "settlement_asset",
+    ) {
         Ok(v) => v,
         Err(e) => {
             write_configure_error(out_error, e);

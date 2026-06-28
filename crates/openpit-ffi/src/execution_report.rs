@@ -30,10 +30,11 @@ use openpit_interop::{
 use crate::define_optional;
 use crate::instrument::{import_instrument, OpenPitInstrument};
 use crate::param::{
-    export_position_effect, export_position_side, export_side, import_position_effect,
-    import_position_side, import_side, OpenPitParamAccountIdOptional, OpenPitParamFee,
-    OpenPitParamFeeOptional, OpenPitParamPnl, OpenPitParamPnlOptional, OpenPitParamPositionEffect,
-    OpenPitParamPositionSide, OpenPitParamPrice, OpenPitParamQuantity,
+    export_monetary_amount, export_position_effect, export_position_side, export_side,
+    import_monetary_amount, import_position_effect, import_position_side, import_side,
+    OpenPitParamAccountIdOptional, OpenPitParamFee, OpenPitParamFeeOptional,
+    OpenPitParamMonetaryAmountOptional, OpenPitParamPnl, OpenPitParamPnlOptional,
+    OpenPitParamPositionEffect, OpenPitParamPositionSide, OpenPitParamPrice, OpenPitParamQuantity,
     OpenPitParamQuantityOptional, OpenPitParamSide,
 };
 
@@ -75,6 +76,8 @@ pub struct OpenPitExecutionReportTrade {
 pub struct OpenPitExecutionReportFill {
     /// Optional latest trade payload.
     pub last_trade: OpenPitExecutionReportTradeOptional,
+    /// Optional fill fee amount and currency.
+    pub fee: OpenPitParamMonetaryAmountOptional,
     /// Remaining quantity after applying this report.
     pub leaves_quantity: OpenPitParamQuantityOptional,
     /// Pre-trade lock attached to the order.
@@ -96,6 +99,7 @@ impl Default for OpenPitExecutionReportFill {
     fn default() -> Self {
         Self {
             last_trade: OpenPitExecutionReportTradeOptional::default(),
+            fee: OpenPitParamMonetaryAmountOptional::default(),
             leaves_quantity: OpenPitParamQuantityOptional::default(),
             lock: std::ptr::null(),
             is_final: OpenPitExecutionReportIsFinalOptional::default(),
@@ -234,9 +238,14 @@ fn import_fill(
         unsafe { &*value.value.lock }.inner_clone()
     };
 
-    Ok(ExecutionReportFillAccess::Populated(
+    Ok(ExecutionReportFillAccess::Populated(Box::new(
         PopulatedExecutionReportFill {
             last_trade: import_last_trade(value.value.last_trade)?,
+            fee: if value.value.fee.is_set {
+                Some(import_monetary_amount(value.value.fee.value)?)
+            } else {
+                None
+            },
             leaves_quantity,
             lock,
             is_final: if value.value.is_final.is_set {
@@ -245,7 +254,7 @@ fn import_fill(
                 None
             },
         },
-    ))
+    )))
 }
 
 fn import_position_impact(
@@ -344,6 +353,13 @@ fn export_fill(value: &ExecutionReportFillAccess) -> OpenPitExecutionReportFillO
             is_set: true,
             value: OpenPitExecutionReportFill {
                 last_trade: export_last_trade(fill.last_trade),
+                fee: fill.fee.as_ref().map_or_else(
+                    OpenPitParamMonetaryAmountOptional::default,
+                    |fee| OpenPitParamMonetaryAmountOptional {
+                        is_set: true,
+                        value: export_monetary_amount(fee),
+                    },
+                ),
                 leaves_quantity: match fill.leaves_quantity {
                     Some(leaves_quantity) => OpenPitParamQuantityOptional {
                         is_set: true,
@@ -443,18 +459,21 @@ mod tests {
     };
     use crate::instrument::OpenPitInstrument;
     use crate::param::{
-        OpenPitParamAccountIdOptional, OpenPitParamFee, OpenPitParamFeeOptional, OpenPitParamPnl,
+        OpenPitParamAccountIdOptional, OpenPitParamFee, OpenPitParamFeeOptional,
+        OpenPitParamMonetaryAmount, OpenPitParamMonetaryAmountOptional, OpenPitParamPnl,
         OpenPitParamPnlOptional, OpenPitParamPositionEffect, OpenPitParamPositionSide,
         OpenPitParamPrice, OpenPitParamQuantity, OpenPitParamQuantityOptional, OpenPitParamSide,
     };
     use crate::OpenPitStringView;
     use openpit::param::{
-        AccountId, Asset, Fee, Pnl, PositionEffect, PositionSide, Price, Quantity, Side, Trade,
+        AccountId, Asset, Fee, MonetaryAmount, Pnl, PositionEffect, PositionSide, Price, Quantity,
+        Side, Trade,
     };
     use openpit::pretrade::PreTradeLock;
     use openpit::Instrument;
     use openpit::{
-        HasExecutionReportIsFinal, HasExecutionReportPositionEffect, HasFee, HasInstrument, HasPnl,
+        HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportPositionEffect,
+        HasFee, HasInstrument, HasPnl,
     };
     use openpit_interop::{
         ExecutionReportFillAccess, ExecutionReportOperationAccess,
@@ -500,18 +519,26 @@ mod tests {
             openpit_interop::ExecutionReport {
                 operation: populated_operation(),
                 financial_impact: populated_financial_impact(),
-                fill: ExecutionReportFillAccess::Populated(PopulatedExecutionReportFill {
-                    last_trade: Some(Trade {
-                        price: Price::from_str("101").expect("price must be valid"),
-                        quantity: Quantity::from_str("3").expect("quantity must be valid"),
-                    }),
-                    leaves_quantity: Some(Quantity::from_str("1").expect("quantity must be valid")),
-                    lock: PreTradeLock::from_entries([(
-                        openpit::DEFAULT_POLICY_GROUP_ID,
-                        Price::from_str("101").expect("price must be valid"),
-                    )]),
-                    is_final: Some(true),
-                }),
+                fill: ExecutionReportFillAccess::Populated(Box::new(
+                    PopulatedExecutionReportFill {
+                        last_trade: Some(Trade {
+                            price: Price::from_str("101").expect("price must be valid"),
+                            quantity: Quantity::from_str("3").expect("quantity must be valid"),
+                        }),
+                        fee: Some(MonetaryAmount {
+                            amount: Fee::from_str("0.25").expect("fee amount must be valid"),
+                            currency: Asset::new("USD").expect("asset code must be valid"),
+                        }),
+                        leaves_quantity: Some(
+                            Quantity::from_str("1").expect("quantity must be valid"),
+                        ),
+                        lock: PreTradeLock::from_entries([(
+                            openpit::DEFAULT_POLICY_GROUP_ID,
+                            Price::from_str("101").expect("price must be valid"),
+                        )]),
+                        is_final: Some(true),
+                    },
+                )),
                 position_impact: ExecutionReportPositionImpactAccess::Populated(
                     PopulatedExecutionReportPositionImpact {
                         position_effect: Some(PositionEffect::Open),
@@ -537,6 +564,13 @@ mod tests {
             panic!("expected populated financial impact");
         }
         assert!(report.is_final().expect("is_final"));
+        assert_eq!(
+            report.fill_fee().expect("fill fee"),
+            Some(MonetaryAmount {
+                amount: Fee::from_str("0.25").expect("fee amount must be valid"),
+                currency: Asset::new("USD").expect("asset code must be valid"),
+            })
+        );
         assert_eq!(
             report.position_effect().expect("position_effect"),
             Some(PositionEffect::Open)
@@ -582,6 +616,7 @@ mod tests {
                 is_set: true,
                 value: OpenPitExecutionReportFill {
                     last_trade: OpenPitExecutionReportTradeOptional::default(),
+                    fee: OpenPitParamMonetaryAmountOptional::default(),
                     leaves_quantity: OpenPitParamQuantityOptional::default(),
                     lock: std::ptr::null(),
                     is_final: OpenPitExecutionReportIsFinalOptional::default(),
@@ -609,6 +644,7 @@ mod tests {
                 is_set: true,
                 value: OpenPitExecutionReportFill {
                     last_trade: OpenPitExecutionReportTradeOptional::default(),
+                    fee: OpenPitParamMonetaryAmountOptional::default(),
                     leaves_quantity: OpenPitParamQuantityOptional {
                         is_set: true,
                         value: OpenPitParamQuantity(
@@ -709,6 +745,18 @@ mod tests {
                             ),
                         },
                     },
+                    fee: OpenPitParamMonetaryAmountOptional {
+                        is_set: true,
+                        value: OpenPitParamMonetaryAmount {
+                            amount: OpenPitParamFee(
+                                Fee::from_str("0.50").expect("fee").to_decimal().into(),
+                            ),
+                            currency: OpenPitStringView {
+                                ptr: b"USD".as_ptr(),
+                                len: b"USD".len(),
+                            },
+                        },
+                    },
                     leaves_quantity: OpenPitParamQuantityOptional {
                         is_set: true,
                         value: OpenPitParamQuantity(
@@ -746,6 +794,14 @@ mod tests {
         assert!(exported.operation.is_set);
         assert!(exported.financial_impact.is_set);
         assert!(exported.fill.is_set);
+        assert!(exported.fill.value.fee.is_set);
+        assert_eq!(
+            imported.fill_fee().expect("fill fee"),
+            Some(MonetaryAmount {
+                amount: Fee::from_str("0.50").expect("fee"),
+                currency: Asset::new("USD").expect("asset code must be valid"),
+            })
+        );
         assert!(exported.position_impact.is_set);
 
         crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(

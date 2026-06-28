@@ -259,6 +259,17 @@ typedef struct OpenPitParamTradeAmount {
 } OpenPitParamTradeAmount;
 ```
 
+## `OpenPitParamMonetaryAmount`
+
+Signed fee-style amount plus an explicit currency.
+
+```c
+typedef struct OpenPitParamMonetaryAmount {
+    OpenPitParamFee amount;
+    OpenPitStringView currency;
+} OpenPitParamMonetaryAmount;
+```
+
 ## `OpenPitTriBool`
 
 Tri-state boolean value.
@@ -2684,6 +2695,15 @@ typedef struct OpenPitParamFeeOptional {
     OpenPitParamFee value;
     bool is_set;
 } OpenPitParamFeeOptional;
+```
+
+## `OpenPitParamMonetaryAmountOptional`
+
+```c
+typedef struct OpenPitParamMonetaryAmountOptional {
+    OpenPitParamMonetaryAmount value;
+    bool is_set;
+} OpenPitParamMonetaryAmountOptional;
 ```
 
 ## `OpenPitParamAccountIdOptional`

@@ -101,7 +101,7 @@ from .core import (
     OrderOperation,
     OrderPosition,
 )
-from .param import AdjustmentAmount, Leverage, PositionMode
+from .param import AdjustmentAmount, Leverage, MonetaryAmount, PositionMode
 from .pretrade import PostTradeResult
 
 EngineBuilder.__doc__ = """
@@ -471,6 +471,7 @@ __all__ = [
     "FinancialImpact",
     "Instrument",
     "Leverage",
+    "MonetaryAmount",
     "Mutation",
     "Order",
     "OrderMargin",

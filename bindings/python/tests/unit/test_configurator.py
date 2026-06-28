@@ -53,6 +53,35 @@ def _market_data() -> tuple[
     return service, instrument_id
 
 
+def _spot_funds_fee_fill_report(
+    account_id: openpit.param.AccountId,
+    fee: str,
+) -> openpit.ExecutionReport:
+    price = openpit.param.Price("100")
+    return openpit.ExecutionReport(
+        operation=openpit.ExecutionReportOperation(
+            instrument=openpit.Instrument("AAPL", "USD"),
+            side=openpit.param.Side.BUY,
+            account_id=account_id,
+        ),
+        fill=openpit.ExecutionReportFillDetails(
+            last_trade=openpit.param.Trade(
+                price=price,
+                quantity=openpit.param.Quantity("1"),
+            ),
+            fee=openpit.param.MonetaryAmount(
+                amount=openpit.param.Fee(fee),
+                currency="USD",
+            ),
+            leaves_quantity=openpit.param.Quantity(0),
+            lock=openpit.pretrade.Lock(
+                entries=[(openpit.pretrade.DEFAULT_POLICY_GROUP_ID, price)],
+            ),
+            is_final=True,
+        ),
+    )
+
+
 @pytest.mark.unit
 def test_rate_limit_configuration_uses_named_entities() -> None:
     policies = openpit.pretrade.policies
@@ -223,6 +252,68 @@ def test_order_size_configuration_can_clear_broker_barrier() -> None:
         )
     )
     assert allowed.ok
+
+
+@pytest.mark.unit
+def test_spot_funds_pnl_bounds_builder_and_configurator_use_named_entities() -> None:
+    policies = openpit.pretrade.policies
+    account_id = openpit.param.AccountId.from_int(99224416)
+    account_group_id = openpit.param.AccountGroupId.from_int(7)
+    usd = openpit.param.Asset("USD")
+
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds_pnl_bounds_killswitch().account_barriers(
+                policies.SpotFundsPnlBoundsAccountBarrier(
+                    barrier=policies.SpotFundsPnlBoundsBarrier(
+                        account_currency=usd,
+                        lower_bound=openpit.param.Pnl("-10"),
+                        upper_bound=openpit.param.Pnl("10"),
+                    ),
+                    account_id=account_id,
+                    initial_pnl=openpit.param.Pnl("0"),
+                )
+            )
+        )
+        .build()
+    )
+
+    engine.configure().spot_funds_pnl_bounds_killswitch(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        global_barriers=[
+            policies.SpotFundsPnlBoundsBarrier(
+                account_currency=usd,
+                lower_bound=openpit.param.Pnl("-100"),
+            )
+        ],
+        account_group_barriers=[
+            policies.SpotFundsPnlBoundsAccountGroupBarrier(
+                barrier=policies.SpotFundsPnlBoundsBarrier(
+                    account_currency=usd,
+                    upper_bound=openpit.param.Pnl("100"),
+                ),
+                account_group_id=account_group_id,
+            )
+        ],
+        account_barriers=[
+            policies.SpotFundsPnlBoundsAccountBarrierUpdate(
+                barrier=policies.SpotFundsPnlBoundsBarrier(
+                    account_currency=usd,
+                    lower_bound=openpit.param.Pnl("-20"),
+                    upper_bound=openpit.param.Pnl("20"),
+                ),
+                account_id=account_id,
+            )
+        ],
+    )
+    engine.configure().set_spot_funds_account_pnl(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account=account_id,
+        account_currency=usd,
+        pnl=openpit.param.Pnl("2.5"),
+    )
 
 
 @pytest.mark.unit
@@ -422,6 +513,110 @@ def test_pnl_account_barrier_update_rejects_initial_pnl() -> None:
 
 
 @pytest.mark.unit
+def test_set_spot_funds_account_pnl_force_sets_live_accumulator() -> None:
+    policies = openpit.pretrade.policies
+    account_id = openpit.param.AccountId.from_int(99224416)
+    usd = openpit.param.Asset("USD")
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
+                policies.SpotFundsPnlBoundsBarrier(
+                    account_currency=usd,
+                    lower_bound=openpit.param.Pnl("-100"),
+                )
+            )
+        )
+        .build()
+    )
+    engine.accounts().set_currency(account_id, usd)
+
+    # A 10 USD fee accrues P&L -10, inside the -100 bound: no block.
+    first = engine.apply_execution_report(
+        report=_spot_funds_fee_fill_report(account_id, "10")
+    )
+    assert not first.account_blocks
+
+    # Force the accumulator near the bound. The next identical fee fill takes
+    # it to -105 and breaches; without the force-set it would sit at -20.
+    engine.configure().set_spot_funds_account_pnl(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account=account_id,
+        account_currency=usd,
+        pnl=openpit.param.Pnl("-95"),
+    )
+
+    second = engine.apply_execution_report(
+        report=_spot_funds_fee_fill_report(account_id, "10")
+    )
+    assert second.account_blocks
+    assert (
+        second.account_blocks[0].code
+        == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    )
+
+    # The engine has latched the account block: the next order rejects.
+    blocked = engine.start_pre_trade(order=conftest.make_order(account_id=account_id))
+    assert not blocked.ok
+    assert (
+        blocked.rejects[0].code == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    )
+
+
+@pytest.mark.unit
+def test_set_spot_funds_account_pnl_unknown_policy() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
+                policies.SpotFundsPnlBoundsBarrier(
+                    account_currency=openpit.param.Asset("USD"),
+                    lower_bound=openpit.param.Pnl("-100"),
+                )
+            )
+        )
+        .build()
+    )
+
+    with pytest.raises(openpit.PolicyConfigureError) as caught:
+        engine.configure().set_spot_funds_account_pnl(
+            "NoSuchPolicy",
+            account=openpit.param.AccountId.from_int(99224416),
+            account_currency=openpit.param.Asset("USD"),
+            pnl=openpit.param.Pnl("-150"),
+        )
+    assert caught.value.kind == openpit.ConfigureErrorKind.UNKNOWN
+
+
+@pytest.mark.unit
+def test_set_spot_funds_account_pnl_type_mismatch() -> None:
+    policies = openpit.pretrade.policies
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_rate_limit().broker_barrier(
+                policies.RateLimitBrokerBarrier(limit=_rate_limit(1))
+            )
+        )
+        .build()
+    )
+
+    # The name resolves to a rate-limit policy, not a spot-funds policy.
+    with pytest.raises(openpit.PolicyConfigureError) as caught:
+        engine.configure().set_spot_funds_account_pnl(
+            policies.RateLimitBuilder.NAME,
+            account=openpit.param.AccountId.from_int(99224416),
+            account_currency=openpit.param.Asset("USD"),
+            pnl=openpit.param.Pnl("-150"),
+        )
+    assert caught.value.kind == openpit.ConfigureErrorKind.TYPE_MISMATCH
+
+
+@pytest.mark.unit
 def test_spot_funds_configuration_uses_named_entities() -> None:
     policies = openpit.pretrade.policies
     account_id = openpit.param.AccountId.from_int(99224416)
@@ -568,6 +763,25 @@ def test_configurator_rejects_obsolete_tuple_and_string_inputs() -> None:
                 )
             ],
         )
+    with pytest.raises(TypeError, match="SpotFundsPnlBoundsBarrier"):
+        configurator.spot_funds_pnl_bounds_killswitch(
+            policies.SpotFundsBuilder.NAME,
+            global_barriers=[object()],
+        )
+    with pytest.raises(TypeError, match="SpotFundsPnlBoundsAccountBarrierUpdate"):
+        configurator.spot_funds_pnl_bounds_killswitch(
+            policies.SpotFundsBuilder.NAME,
+            account_barriers=[
+                policies.SpotFundsPnlBoundsAccountBarrier(
+                    barrier=policies.SpotFundsPnlBoundsBarrier(
+                        account_currency=openpit.param.Asset("USD"),
+                        lower_bound=openpit.param.Pnl("-10"),
+                    ),
+                    account_id=openpit.param.AccountId.from_int(99224416),
+                    initial_pnl=openpit.param.Pnl("0"),
+                )
+            ],
+        )
     with pytest.raises(TypeError, match="SpotFundsPricingSource"):
         configurator.spot_funds(policies.SpotFundsBuilder.NAME, pricing_source="Mark")
     with pytest.raises(TypeError, match="SpotFundsOverrideEntry"):
@@ -627,6 +841,58 @@ def test_pnl_bounds_builder_rejects_wrong_broker_barrier_type() -> None:
             openpit.Engine.builder()
             .no_sync()
             .builtin(policies.build_pnl_bounds_killswitch().broker_barriers(object()))
+            .build()
+        )
+
+
+@pytest.mark.unit
+def test_spot_funds_pnl_bounds_builder_rejects_wrong_barrier_types() -> None:
+    policies = openpit.pretrade.policies
+    with pytest.raises(TypeError, match="SpotFundsPnlBoundsBarrier"):
+        (
+            openpit.Engine.builder()
+            .no_sync()
+            .builtin(
+                policies.build_spot_funds_pnl_bounds_killswitch().global_barriers(
+                    object()
+                )
+            )
+            .build()
+        )
+    with pytest.raises(TypeError, match="SpotFundsPnlBoundsAccountGroupBarrier"):
+        (
+            openpit.Engine.builder()
+            .no_sync()
+            .builtin(
+                policies.build_spot_funds_pnl_bounds_killswitch().account_group_barriers(
+                    object()
+                )
+            )
+            .build()
+        )
+    with pytest.raises(TypeError, match="SpotFundsPnlBoundsAccountBarrier"):
+        (
+            openpit.Engine.builder()
+            .no_sync()
+            .builtin(
+                policies.build_spot_funds_pnl_bounds_killswitch().account_barriers(
+                    object()
+                )
+            )
+            .build()
+        )
+
+
+@pytest.mark.unit
+def test_spot_funds_pnl_bounds_builder_requires_at_least_one_barrier() -> None:
+    policies = openpit.pretrade.policies
+    with pytest.raises(ValueError, match="requires at least one barrier"):
+        (
+            openpit.Engine.builder()
+            .no_sync()
+            .builtin(
+                policies.build_spot_funds_pnl_bounds_killswitch().global_barriers()
+            )
             .build()
         )
 

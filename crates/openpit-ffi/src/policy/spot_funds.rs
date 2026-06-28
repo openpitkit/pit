@@ -17,8 +17,12 @@
 
 #![allow(clippy::missing_safety_doc, clippy::not_unsafe_ptr_arg_deref)]
 
-use openpit::param::{AccountGroupId, AccountId};
-use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
+use openpit::param::{AccountGroupId, AccountId, Pnl};
+use openpit::pretrade::policies::{
+    SpotFundsPnlBoundsAccountBarrier, SpotFundsPnlBoundsAccountBarrierUpdate,
+    SpotFundsPnlBoundsAccountGroupBarrier, SpotFundsPnlBoundsBarrier, SpotFundsPolicy,
+    SpotFundsSettings,
+};
 use openpit::pretrade::SpotFundsLimitMode;
 use openpit::{
     InstrumentId, PolicyGroupId, SpotFundsConfigError, SpotFundsMarketData, SpotFundsOverride,
@@ -29,7 +33,7 @@ use openpit_interop::{EngineLocking, SyncMode};
 use crate::account_group_id::OpenPitParamAccountGroupId;
 use crate::engine::{write_configure_error, OpenPitConfigureError};
 use crate::marketdata::{OpenPitMarketDataInstrumentId, OpenPitMarketDataService};
-use crate::param::OpenPitParamAccountId;
+use crate::param::{OpenPitParamAccountId, OpenPitParamPnl, OpenPitParamPnlOptional};
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -84,6 +88,20 @@ fn configure_spot_funds_limit_mode(
             None
         }
     }
+}
+
+fn parse_configure_optional_pnl(
+    bound: OpenPitParamPnlOptional,
+    label: &str,
+    index: usize,
+    field: &str,
+) -> Result<Option<Pnl>, OpenPitConfigureError> {
+    if !bound.is_set {
+        return Ok(None);
+    }
+    bound.value.to_param().map(Some).map_err(|e| {
+        OpenPitConfigureError::validation(format!("{label}[{index}] {field} is invalid: {e}"))
+    })
 }
 
 /// Tagged target variants for a spot-funds slippage override.
@@ -176,6 +194,106 @@ pub struct OpenPitPretradePoliciesSpotFundsOverride {
     pub slippage_bps: u16,
     /// Whether `slippage_bps` carries a value.
     pub has_slippage_bps: bool,
+}
+
+/// Spot-funds account-currency P&L bounds.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+    /// Account currency whose accumulated P&L is monitored.
+    pub account_currency: OpenPitStringView,
+    /// Optional lower bound for accumulated P&L.
+    pub lower_bound: OpenPitParamPnlOptional,
+    /// Optional upper bound for accumulated P&L.
+    pub upper_bound: OpenPitParamPnlOptional,
+}
+
+/// Account-group spot-funds P&L bounds refinement.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
+    /// Account group the barrier applies to.
+    pub account_group_id: OpenPitParamAccountGroupId,
+    /// Account currency and bounds for this group.
+    pub barrier: OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
+}
+
+/// Account spot-funds P&L bounds refinement with construction-time seed.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
+    /// Account the barrier applies to.
+    pub account_id: OpenPitParamAccountId,
+    /// Account currency and bounds for this account.
+    pub barrier: OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
+    /// Initial accumulated P&L, consumed only while adding the policy.
+    pub initial_pnl: OpenPitParamPnl,
+}
+
+/// Runtime account spot-funds P&L bounds replacement.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate {
+    /// Account the barrier applies to.
+    pub account_id: OpenPitParamAccountId,
+    /// Account currency and replacement bounds for this account.
+    pub barrier: OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
+}
+
+fn parse_pnl_barrier_or_error(
+    entry: &OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
+    label: &str,
+    index: usize,
+    out_error: OpenPitOutError,
+) -> Option<SpotFundsPnlBoundsBarrier> {
+    let account_currency = parse_asset_or_error(
+        entry.account_currency,
+        label,
+        index,
+        "account_currency",
+        out_error,
+    )?;
+    let lower_bound = match parse_optional_pnl_or_error(
+        entry.lower_bound,
+        label,
+        index,
+        "lower_bound",
+        out_error,
+    ) {
+        Ok(v) => v,
+        Err(()) => return None,
+    };
+    let upper_bound = match parse_optional_pnl_or_error(
+        entry.upper_bound,
+        label,
+        index,
+        "upper_bound",
+        out_error,
+    ) {
+        Ok(v) => v,
+        Err(()) => return None,
+    };
+    Some(SpotFundsPnlBoundsBarrier {
+        account_currency,
+        lower_bound,
+        upper_bound,
+    })
+}
+
+fn parse_configure_pnl_barrier(
+    entry: &OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
+    label: &str,
+    index: usize,
+) -> Result<SpotFundsPnlBoundsBarrier, OpenPitConfigureError> {
+    let account_currency =
+        parse_configure_asset(entry.account_currency, label, index, "account_currency")?;
+    let lower_bound = parse_configure_optional_pnl(entry.lower_bound, label, index, "lower_bound")?;
+    let upper_bound = parse_configure_optional_pnl(entry.upper_bound, label, index, "upper_bound")?;
+    Ok(SpotFundsPnlBoundsBarrier {
+        account_currency,
+        lower_bound,
+        upper_bound,
+    })
 }
 
 fn override_target(
@@ -398,6 +516,217 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_policy(
 }
 
 #[no_mangle]
+/// Adds the built-in spot-funds policy with account-currency P&L bounds.
+///
+/// This entry point builds the regular `SpotFundsPolicy` and configures only
+/// its P&L-bounds axis. The policy keeps its stable built-in name
+/// `"SpotFundsPolicy"`; no separate policy namespace is created.
+/// It seeds the funds-limit axis as `TrackOnly` and market pricing as
+/// `Mark` / 0 bps / no overrides; tune those regular spot-funds knobs after
+/// build with `openpit_engine_configure_spot_funds`.
+///
+/// Contract:
+/// - `builder` must be a valid engine builder pointer.
+/// - `market_data` is a borrowed market-data service handle or null. A null
+///   handle is accepted, but any controlled account that later needs FX to
+///   compute P&L will be blocked by the core policy fail-safe.
+/// - At least one barrier must be provided across `global`,
+///   `account_group`, or `account`.
+/// - Account barriers include construction-time `initial_pnl`. Runtime
+///   configuration uses the update DTO without `initial_pnl` and preserves the
+///   live accumulator.
+///
+/// Success / error: mirrors
+/// `openpit_engine_builder_add_builtin_spot_funds_policy`.
+pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
+    builder: *mut crate::engine::OpenPitEngineBuilder,
+    market_data: *const OpenPitMarketDataService,
+    policy_group_id: u16,
+    global: *const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
+    global_len: usize,
+    account_group: *const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
+    account_group_len: usize,
+    account: *const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier,
+    account_len: usize,
+    out_error: OpenPitOutError,
+) -> bool {
+    if builder.is_null() {
+        write_error(out_error, "engine builder is null");
+        return false;
+    }
+    if global_len == 0 && account_group_len == 0 && account_len == 0 {
+        write_error(
+            out_error,
+            "spot funds pnl bounds policy requires at least one barrier",
+        );
+        return false;
+    }
+
+    let global_slice = match unsafe {
+        try_slice_arg(
+            global,
+            global_len,
+            "spot_funds_pnl_bounds_policy global",
+            out_error,
+        )
+    } {
+        Some(v) => v,
+        None => return false,
+    };
+    let mut global_barriers = Vec::with_capacity(global_slice.len());
+    for (index, entry) in global_slice.iter().enumerate() {
+        let barrier = match parse_pnl_barrier_or_error(entry, "global", index, out_error) {
+            Some(v) => v,
+            None => return false,
+        };
+        global_barriers.push(barrier);
+    }
+
+    let account_group_slice = match unsafe {
+        try_slice_arg(
+            account_group,
+            account_group_len,
+            "spot_funds_pnl_bounds_policy account_group",
+            out_error,
+        )
+    } {
+        Some(v) => v,
+        None => return false,
+    };
+    let mut account_group_barriers = Vec::with_capacity(account_group_slice.len());
+    for (index, entry) in account_group_slice.iter().enumerate() {
+        let account_group_id = match AccountGroupId::from_u32(entry.account_group_id) {
+            Ok(v) => v,
+            Err(e) => {
+                write_error_format!(
+                    out_error,
+                    "account_group[{index}] account_group_id {} is invalid: {e}",
+                    entry.account_group_id
+                );
+                return false;
+            }
+        };
+        let barrier =
+            match parse_pnl_barrier_or_error(&entry.barrier, "account_group", index, out_error) {
+                Some(v) => v,
+                None => return false,
+            };
+        account_group_barriers.push(SpotFundsPnlBoundsAccountGroupBarrier {
+            barrier,
+            account_group_id,
+        });
+    }
+
+    let account_slice = match unsafe {
+        try_slice_arg(
+            account,
+            account_len,
+            "spot_funds_pnl_bounds_policy account",
+            out_error,
+        )
+    } {
+        Some(v) => v,
+        None => return false,
+    };
+    let mut account_barriers = Vec::with_capacity(account_slice.len());
+    for (index, entry) in account_slice.iter().enumerate() {
+        let barrier = match parse_pnl_barrier_or_error(&entry.barrier, "account", index, out_error)
+        {
+            Some(v) => v,
+            None => return false,
+        };
+        let initial_pnl = match entry.initial_pnl.to_param() {
+            Ok(v) => v,
+            Err(e) => {
+                write_error_format!(
+                    out_error,
+                    "account[{}] initial_pnl is invalid: {}",
+                    index,
+                    e
+                );
+                return false;
+            }
+        };
+        account_barriers.push(SpotFundsPnlBoundsAccountBarrier {
+            barrier,
+            account_id: AccountId::from_u64(entry.account_id),
+            initial_pnl,
+        });
+    }
+
+    let market_orders = if market_data.is_null() {
+        None
+    } else {
+        let svc = unsafe { &*market_data };
+        let engine_sync_mode = unsafe { &*builder }.sync_mode;
+        if matches!(engine_sync_mode, SyncMode::Full | SyncMode::Account)
+            && svc.mode == SyncMode::None
+        {
+            write_error(
+                out_error,
+                "market data service is no-sync (None) but the engine is multi-threaded; \
+                 rebuild the market-data service with full_sync",
+            );
+            return false;
+        }
+        Some(SpotFundsMarketData::<EngineLocking>::new(
+            svc.handle_clone(),
+        ))
+    };
+
+    let mut settings =
+        match SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty()) {
+            Ok(v) => v,
+            Err(e) => {
+                write_error_format!(out_error, "spot funds settings build failed: {}", e);
+                return false;
+            }
+        };
+    settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    if let Err(e) = settings.set_pnl_global_barriers(global_barriers) {
+        write_error_format!(out_error, "spot funds pnl global barriers invalid: {}", e);
+        return false;
+    }
+    if let Err(e) = settings.set_pnl_account_group_barriers(account_group_barriers) {
+        write_error_format!(
+            out_error,
+            "spot funds pnl account group barriers invalid: {}",
+            e
+        );
+        return false;
+    }
+    let settings = match settings.with_initial_pnl_account_barriers(account_barriers) {
+        Ok(settings) => settings,
+        Err(e) => {
+            write_error_format!(out_error, "spot funds pnl account barriers invalid: {}", e);
+            return false;
+        }
+    };
+
+    let builder_ref = unsafe { &mut *builder };
+    let storage_builder = match policy_storage(builder_ref) {
+        Some(s) => s,
+        None => {
+            write_error(out_error, "engine builder is no longer available");
+            return false;
+        }
+    };
+    let policy = SpotFundsPolicy::<EngineLocking, EngineLocking>::new(
+        settings,
+        market_orders,
+        storage_builder,
+    )
+    .with_policy_group_id(PolicyGroupId::new(policy_group_id));
+    match crate::engine::add_pre_trade_policy_to_builder(builder_ref, policy) {
+        Ok(()) => true,
+        Err(err) => {
+            write_error(out_error, &err);
+            false
+        }
+    }
+}
+
+#[no_mangle]
 /// Retunes the built-in spot-funds policy registered under `name`.
 ///
 /// This is a partial update (PATCH): the global slippage, pricing source, and
@@ -538,6 +867,229 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds(
             false
         }
     }
+}
+
+#[no_mangle]
+/// Retunes the P&L-bounds axis of the built-in spot-funds policy registered
+/// under `name`.
+///
+/// This is a partial update (PATCH): each supplied axis is replaced only when
+/// its `has_*` flag is true. Account barriers use the runtime update DTO with
+/// no `initial_pnl`; live accumulated P&L is preserved.
+pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
+    engine: *mut crate::engine::OpenPitEngine,
+    name: OpenPitStringView,
+    global: *const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier,
+    global_len: usize,
+    has_global: bool,
+    account_group: *const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
+    account_group_len: usize,
+    has_account_group: bool,
+    account: *const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate,
+    account_len: usize,
+    has_account: bool,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> bool {
+    let name = match unsafe { configure_spot_funds_name(engine, name, out_error) } {
+        Some(name) => name,
+        None => return false,
+    };
+
+    let global_barriers: Vec<SpotFundsPnlBoundsBarrier> = if has_global {
+        let slice = match unsafe {
+            try_slice_arg(
+                global,
+                global_len,
+                "spot_funds_pnl_bounds global",
+                std::ptr::null_mut(),
+            )
+        } {
+            Some(v) => v,
+            None => {
+                write_configure_error(
+                    out_error,
+                    OpenPitConfigureError::validation(
+                        "spot_funds_pnl_bounds global is null".to_owned(),
+                    ),
+                );
+                return false;
+            }
+        };
+        let mut out = Vec::with_capacity(slice.len());
+        for (index, entry) in slice.iter().enumerate() {
+            match parse_configure_pnl_barrier(entry, "global", index) {
+                Ok(v) => out.push(v),
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            }
+        }
+        out
+    } else {
+        Vec::new()
+    };
+
+    let account_group_barriers: Vec<SpotFundsPnlBoundsAccountGroupBarrier> = if has_account_group {
+        let slice = match unsafe {
+            try_slice_arg(
+                account_group,
+                account_group_len,
+                "spot_funds_pnl_bounds account_group",
+                std::ptr::null_mut(),
+            )
+        } {
+            Some(v) => v,
+            None => {
+                write_configure_error(
+                    out_error,
+                    OpenPitConfigureError::validation(
+                        "spot_funds_pnl_bounds account_group is null".to_owned(),
+                    ),
+                );
+                return false;
+            }
+        };
+        let mut out = Vec::with_capacity(slice.len());
+        for (index, entry) in slice.iter().enumerate() {
+            let account_group_id = match AccountGroupId::from_u32(entry.account_group_id) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(
+                        out_error,
+                        OpenPitConfigureError::validation(format!(
+                            "account_group[{index}] account_group_id {} is invalid: {e}",
+                            entry.account_group_id
+                        )),
+                    );
+                    return false;
+                }
+            };
+            let barrier = match parse_configure_pnl_barrier(&entry.barrier, "account_group", index)
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
+            out.push(SpotFundsPnlBoundsAccountGroupBarrier {
+                barrier,
+                account_group_id,
+            });
+        }
+        out
+    } else {
+        Vec::new()
+    };
+
+    let account_barriers: Vec<SpotFundsPnlBoundsAccountBarrierUpdate> = if has_account {
+        let slice = match unsafe {
+            try_slice_arg(
+                account,
+                account_len,
+                "spot_funds_pnl_bounds account",
+                std::ptr::null_mut(),
+            )
+        } {
+            Some(v) => v,
+            None => {
+                write_configure_error(
+                    out_error,
+                    OpenPitConfigureError::validation(
+                        "spot_funds_pnl_bounds account is null".to_owned(),
+                    ),
+                );
+                return false;
+            }
+        };
+        let mut out = Vec::with_capacity(slice.len());
+        for (index, entry) in slice.iter().enumerate() {
+            let barrier = match parse_configure_pnl_barrier(&entry.barrier, "account", index) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
+            out.push(SpotFundsPnlBoundsAccountBarrierUpdate {
+                barrier,
+                account_id: AccountId::from_u64(entry.account_id),
+            });
+        }
+        out
+    } else {
+        Vec::new()
+    };
+
+    let result = unsafe { &*engine }.configurator().spot_funds(
+        &name,
+        |settings| -> Result<(), SpotFundsConfigError> {
+            if has_global {
+                settings.set_pnl_global_barriers(global_barriers.iter().cloned())?;
+            }
+            if has_account_group {
+                settings.set_pnl_account_group_barriers(account_group_barriers.iter().cloned())?;
+            }
+            if has_account {
+                settings.set_pnl_account_barriers(account_barriers.iter().cloned())?;
+            }
+            Ok(())
+        },
+    );
+    finish_configure_spot_funds(result, out_error)
+}
+
+#[no_mangle]
+/// Force-sets the live accumulated account-currency P&L for the spot-funds
+/// policy registered under `name`.
+///
+/// This is an absolute assignment and is separate from barrier retuning, which
+/// never resets the accumulator.
+pub unsafe extern "C" fn openpit_engine_configure_spot_funds_set_account_pnl(
+    engine: *mut crate::engine::OpenPitEngine,
+    name: OpenPitStringView,
+    account_id: OpenPitParamAccountId,
+    account_currency: OpenPitStringView,
+    pnl: OpenPitParamPnl,
+    out_error: *mut *mut OpenPitConfigureError,
+) -> bool {
+    let name = match unsafe { configure_spot_funds_name(engine, name, out_error) } {
+        Some(name) => name,
+        None => return false,
+    };
+    let account_currency = match parse_configure_asset(
+        account_currency,
+        "spot_funds_account_pnl",
+        0,
+        "account_currency",
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            write_configure_error(out_error, e);
+            return false;
+        }
+    };
+    let pnl = match pnl.to_param() {
+        Ok(v) => v,
+        Err(e) => {
+            write_configure_error(
+                out_error,
+                OpenPitConfigureError::validation(format!("pnl is invalid: {e}")),
+            );
+            return false;
+        }
+    };
+
+    let result = unsafe { &*engine }
+        .configurator()
+        .set_spot_funds_account_pnl(
+            &name,
+            AccountId::from_u64(account_id),
+            account_currency,
+            pnl,
+        );
+    finish_configure_spot_funds(result, out_error)
 }
 
 /// Sets the global spot-funds limit mode for the policy registered under

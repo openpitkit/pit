@@ -200,32 +200,33 @@ pub(super) unsafe fn try_slice_arg<'a, T>(
     Some(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
-pub(super) fn parse_settlement_asset_or_error(
-    settlement: OpenPitStringView,
+/// Parses an asset string view named `field` (for example `"settlement_asset"`
+/// or `"account_currency"`), reporting any failure through the shared-string
+/// builder error channel. The `field` name is used verbatim in the error text so
+/// each caller reports the field its API actually exposes.
+pub(super) fn parse_asset_or_error(
+    value: OpenPitStringView,
     label: &str,
     index: usize,
+    field: &str,
     out_error: OpenPitOutError,
 ) -> Option<Asset> {
-    let settlement_raw = match unsafe { cstr_arg(settlement) } {
+    let raw = match unsafe { cstr_arg(value) } {
         Some(v) => v,
         None => {
-            write_error_format!(
-                out_error,
-                "{}[{}] settlement_asset is not set",
-                label,
-                index
-            );
+            write_error_format!(out_error, "{}[{}] {} is not set", label, index, field);
             return None;
         }
     };
-    match Asset::new(settlement_raw) {
+    match Asset::new(raw) {
         Ok(v) => Some(v),
         Err(e) => {
             write_error_format!(
                 out_error,
-                "{}[{}] settlement_asset is invalid: {}",
+                "{}[{}] {} is invalid: {}",
                 label,
                 index,
+                field,
                 e
             );
             None
@@ -233,23 +234,24 @@ pub(super) fn parse_settlement_asset_or_error(
     }
 }
 
-/// Parses a settlement-asset string view for a configure function, mapping any
-/// failure to an [`OpenPitConfigureError`] (the only error channel those
-/// functions expose). Mirrors [`parse_settlement_asset_or_error`], which
-/// instead targets the shared-string builder error channel.
+/// Parses an asset string view named `field` for a configure function, mapping
+/// any failure to an [`OpenPitConfigureError`] (the only error channel those
+/// functions expose). Mirrors [`parse_asset_or_error`], which instead targets
+/// the shared-string builder error channel.
 pub(super) fn parse_configure_asset(
-    settlement: OpenPitStringView,
+    value: OpenPitStringView,
     label: &str,
     index: usize,
+    field: &str,
 ) -> Result<Asset, crate::engine::OpenPitConfigureError> {
-    let settlement_raw = unsafe { cstr_arg(settlement) }.ok_or_else(|| {
+    let raw = unsafe { cstr_arg(value) }.ok_or_else(|| {
         crate::engine::OpenPitConfigureError::validation(format!(
-            "{label}[{index}] settlement_asset is not set"
+            "{label}[{index}] {field} is not set"
         ))
     })?;
-    Asset::new(&settlement_raw).map_err(|e| {
+    Asset::new(&raw).map_err(|e| {
         crate::engine::OpenPitConfigureError::validation(format!(
-            "{label}[{index}] settlement_asset is invalid: {e}"
+            "{label}[{index}] {field} is invalid: {e}"
         ))
     })
 }

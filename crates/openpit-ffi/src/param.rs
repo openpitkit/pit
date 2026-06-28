@@ -18,13 +18,15 @@
 #![allow(clippy::missing_safety_doc)]
 
 use openpit::param::{
-    AccountId, Asset, CashFlow, Fee, Leverage, Notional, Pnl, PositionEffect, PositionMode,
-    PositionSide, PositionSize, Price, Quantity, RoundingStrategy, Side, TradeAmount, Volume,
+    AccountId, Asset, CashFlow, Fee, Leverage, MonetaryAmount, Notional, Pnl, PositionEffect,
+    PositionMode, PositionSide, PositionSize, Price, Quantity, RoundingStrategy, Side, TradeAmount,
+    Volume,
 };
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use std::cmp::Ordering;
 
+use crate::instrument::parse_asset_view;
 use crate::last_error::{
     consume_param_error_with_code, write_param_error_unspecified, OpenPitOutParamError,
 };
@@ -280,6 +282,16 @@ pub struct OpenPitParamTradeAmount {
     pub value: OpenPitParamDecimal,
     /// Interpretation mode for `value`.
     pub kind: OpenPitParamTradeAmountKind,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+/// Signed fee-style amount plus an explicit currency.
+pub struct OpenPitParamMonetaryAmount {
+    /// Signed amount.
+    pub amount: OpenPitParamFee,
+    /// Currency the amount is denominated in.
+    pub currency: OpenPitStringView,
 }
 
 #[repr(u8)]
@@ -1533,9 +1545,31 @@ define_optional!(
 );
 define_optional!(optional = OpenPitParamFeeOptional, value = OpenPitParamFee);
 define_optional!(
+    optional = OpenPitParamMonetaryAmountOptional,
+    value = OpenPitParamMonetaryAmount
+);
+define_optional!(
     optional = OpenPitParamAccountIdOptional,
     value = OpenPitParamAccountId
 );
+
+pub(crate) fn import_monetary_amount(
+    value: OpenPitParamMonetaryAmount,
+) -> Result<MonetaryAmount, String> {
+    let currency = parse_asset_view(value.currency, "monetary_amount.currency")?
+        .ok_or_else(|| "monetary_amount.currency is not set".to_string())?;
+    Ok(MonetaryAmount {
+        amount: value.amount.to_param()?,
+        currency,
+    })
+}
+
+pub(crate) fn export_monetary_amount(value: &MonetaryAmount) -> OpenPitParamMonetaryAmount {
+    OpenPitParamMonetaryAmount {
+        amount: OpenPitParamFee(value.amount.to_decimal().into()),
+        currency: OpenPitStringView::from_utf8(value.currency.as_ref()),
+    }
+}
 
 pub(crate) fn import_trade_amount(
     value: OpenPitParamTradeAmount,
@@ -2865,6 +2899,38 @@ mod tests {
         let message = view_to_string(openpit_shared_string_view(unsafe { (*out_error).message }));
         assert_eq!(message, "asset must not be empty");
         unsafe { crate::last_error::openpit_destroy_param_error(out_error) };
+    }
+
+    #[test]
+    fn import_monetary_amount_round_trips_when_fully_set() {
+        let amount = OpenPitParamFee(OpenPitParamDecimal {
+            mantissa_lo: 100,
+            mantissa_hi: 0,
+            scale: 0,
+        });
+        let value = OpenPitParamMonetaryAmount {
+            amount,
+            currency: OpenPitStringView::from_utf8("USD"),
+        };
+        let imported = import_monetary_amount(value).expect("fully-set amount must import");
+        assert_eq!(imported.currency.as_ref(), "USD");
+        assert_eq!(imported.amount, amount.to_param().expect("valid fee"));
+    }
+
+    #[test]
+    fn import_monetary_amount_rejects_missing_currency() {
+        // The amount is a valid fee, but the currency view is unset: a partially
+        // set C struct must be rejected rather than importing a defaulted asset.
+        let partial = OpenPitParamMonetaryAmount {
+            amount: OpenPitParamFee(OpenPitParamDecimal {
+                mantissa_lo: 100,
+                mantissa_hi: 0,
+                scale: 0,
+            }),
+            currency: OpenPitStringView::not_set(),
+        };
+        let err = import_monetary_amount(partial).expect_err("missing currency must reject");
+        assert_eq!(err, "monetary_amount.currency is not set");
     }
 
     #[test]

@@ -424,6 +424,18 @@ func ExecutionReportFillUnsetLastTrade(fill *ExecutionReportFill) {
 	ExecutionReportTradeOptionalReset(&fill.last_trade)
 }
 
+func ExecutionReportFillGetFee(fill ExecutionReportFill) ParamMonetaryAmountOptional {
+	return fill.fee
+}
+
+func ExecutionReportFillSetFee(fill *ExecutionReportFill, fee ParamMonetaryAmount) {
+	fill.fee = NewParamMonetaryAmountOptionalSet(fee)
+}
+
+func ExecutionReportFillUnsetFee(fill *ExecutionReportFill) {
+	fill.fee = NewParamMonetaryAmountOptionalUnset()
+}
+
 func ExecutionReportFillGetLeavesQuantity(fill ExecutionReportFill) ParamQuantityOptional {
 	return fill.leaves_quantity
 }

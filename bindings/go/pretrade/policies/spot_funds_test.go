@@ -50,6 +50,24 @@ func mustAccountGroupID(t *testing.T, id uint32) param.AccountGroupID {
 	return g
 }
 
+func mustAsset(t *testing.T, symbol string) param.Asset {
+	t.Helper()
+	asset, err := param.NewAsset(symbol)
+	if err != nil {
+		t.Fatalf("NewAsset(%q) error = %v", symbol, err)
+	}
+	return asset
+}
+
+func mustPnl(t *testing.T, value string) param.Pnl {
+	t.Helper()
+	pnl, err := param.NewPnlFromString(value)
+	if err != nil {
+		t.Fatalf("NewPnlFromString(%q) error = %v", value, err)
+	}
+	return pnl
+}
+
 func TestSpotFundsBuilderLimitOnlyMode(t *testing.T) {
 	engine, err := openpit.NewEngineBuilder().NoSync().
 		Builtin(policies.BuildSpotFunds()).
@@ -518,6 +536,103 @@ func TestSpotFundsBuilderGroupID(t *testing.T) {
 		t.Fatalf("Build() error = %v", err)
 	}
 	engine.Stop()
+}
+
+func TestSpotFundsPnlBoundsKillswitchBuilder(t *testing.T) {
+	usd := mustAsset(t, "USD")
+	account := param.NewAccountIDFromUint64(83001)
+	group := mustAccountGroupID(t, 83)
+
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFundsPnlBoundsKillswitch().
+			GlobalBarriers(policies.SpotFundsPnlBoundsBarrier{
+				AccountCurrency: usd,
+				LowerBound:      optional.Some(mustPnl(t, "-100")),
+			}).
+			AccountGroupBarriers(policies.SpotFundsPnlBoundsAccountGroupBarrier{
+				AccountGroupID: group,
+				Barrier: policies.SpotFundsPnlBoundsBarrier{
+					AccountCurrency: usd,
+					UpperBound:      optional.Some(mustPnl(t, "250")),
+				},
+			}).
+			AccountBarriers(policies.SpotFundsPnlBoundsAccountBarrier{
+				AccountID: account,
+				Barrier: policies.SpotFundsPnlBoundsBarrier{
+					AccountCurrency: usd,
+					LowerBound:      optional.Some(mustPnl(t, "-10")),
+					UpperBound:      optional.Some(mustPnl(t, "10")),
+				},
+				InitialPnl: mustPnl(t, "1"),
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	engine.Stop()
+}
+
+func TestSpotFundsPnlBoundsConfiguratorRoundTrip(t *testing.T) {
+	usd := mustAsset(t, "USD")
+	account := param.NewAccountIDFromUint64(83002)
+	group := mustAccountGroupID(t, 84)
+
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFundsPnlBoundsKillswitch().
+			AccountBarriers(policies.SpotFundsPnlBoundsAccountBarrier{
+				AccountID: account,
+				Barrier: policies.SpotFundsPnlBoundsBarrier{
+					AccountCurrency: usd,
+					LowerBound:      optional.Some(mustPnl(t, "-10")),
+					UpperBound:      optional.Some(mustPnl(t, "10")),
+				},
+				InitialPnl: mustPnl(t, "0"),
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	if err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
+		policies.SpotFundsPolicyName,
+		[]policies.SpotFundsPnlBoundsBarrier{
+			{
+				AccountCurrency: usd,
+				LowerBound:      optional.Some(mustPnl(t, "-100")),
+			},
+		},
+		[]policies.SpotFundsPnlBoundsAccountGroupBarrier{
+			{
+				AccountGroupID: group,
+				Barrier: policies.SpotFundsPnlBoundsBarrier{
+					AccountCurrency: usd,
+					UpperBound:      optional.Some(mustPnl(t, "100")),
+				},
+			},
+		},
+		[]policies.SpotFundsPnlBoundsAccountBarrierUpdate{
+			{
+				AccountID: account,
+				Barrier: policies.SpotFundsPnlBoundsBarrier{
+					AccountCurrency: usd,
+					LowerBound:      optional.Some(mustPnl(t, "-20")),
+					UpperBound:      optional.Some(mustPnl(t, "20")),
+				},
+			},
+		},
+	); err != nil {
+		t.Fatalf("SpotFundsPnlBoundsKillSwitch error = %v", err)
+	}
+
+	if err := engine.Configure().SetSpotFundsAccountPnl(
+		policies.SpotFundsPolicyName,
+		account,
+		usd,
+		mustPnl(t, "2.5"),
+	); err != nil {
+		t.Fatalf("SetSpotFundsAccountPnl error = %v", err)
+	}
 }
 
 // TestSpotFundsConfiguratorGlobalLimitModeRoundTrip exercises the dlsym

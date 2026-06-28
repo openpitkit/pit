@@ -102,6 +102,9 @@ typedef struct OpenPitParamDecimal OpenPitParamDecimal;
 typedef struct OpenPitParamError OpenPitParamError;
 typedef struct OpenPitParamFee OpenPitParamFee;
 typedef struct OpenPitParamFeeOptional OpenPitParamFeeOptional;
+typedef struct OpenPitParamMonetaryAmount OpenPitParamMonetaryAmount;
+typedef struct OpenPitParamMonetaryAmountOptional
+    OpenPitParamMonetaryAmountOptional;
 typedef struct OpenPitParamNotional OpenPitParamNotional;
 typedef struct OpenPitParamNotionalOptional OpenPitParamNotionalOptional;
 typedef struct OpenPitParamPnl OpenPitParamPnl;
@@ -158,6 +161,14 @@ typedef struct
     OpenPitPretradePoliciesSpotFundsOverrideTargetInstrumentAccountGroup;
 typedef union OpenPitPretradePoliciesSpotFundsOverrideTargetPayload
     OpenPitPretradePoliciesSpotFundsOverrideTargetPayload;
+typedef struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier
+    OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier;
+typedef struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate
+    OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate;
+typedef struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
+    OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier;
+typedef struct OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier
+    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier;
 typedef struct OpenPitPretradePreTradeDryRunReport
     OpenPitPretradePreTradeDryRunReport;
 typedef struct OpenPitPretradePreTradeLock OpenPitPretradePreTradeLock;
@@ -1673,6 +1684,25 @@ struct OpenPitParamTradeAmount {
 };
 
 /**
+ * Signed fee-style amount plus an explicit currency.
+ */
+struct OpenPitParamMonetaryAmount {
+    /**
+     * Signed amount.
+     */
+    OpenPitParamFee amount;
+    /**
+     * Currency the amount is denominated in.
+     */
+    OpenPitStringView currency;
+};
+
+struct OpenPitParamMonetaryAmountOptional {
+    OpenPitParamMonetaryAmount value;
+    bool is_set;
+};
+
+/**
  * Optional margin group for an order.
  *
  * The group is absent when every field is `NotSet`.
@@ -1705,6 +1735,10 @@ struct OpenPitExecutionReportFill {
      * Optional latest trade payload.
      */
     OpenPitExecutionReportTradeOptional last_trade;
+    /**
+     * Optional fill fee amount and currency.
+     */
+    OpenPitParamMonetaryAmountOptional fee;
     /**
      * Remaining quantity after applying this report.
      */
@@ -1993,6 +2027,70 @@ struct OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
      * Window duration in nanoseconds.
      */
     int64_t window_nanoseconds;
+};
+
+/**
+ * Spot-funds account-currency P&L bounds.
+ */
+struct OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+    /**
+     * Account currency whose accumulated P&L is monitored.
+     */
+    OpenPitStringView account_currency;
+    /**
+     * Optional lower bound for accumulated P&L.
+     */
+    OpenPitParamPnlOptional lower_bound;
+    /**
+     * Optional upper bound for accumulated P&L.
+     */
+    OpenPitParamPnlOptional upper_bound;
+};
+
+/**
+ * Account-group spot-funds P&L bounds refinement.
+ */
+struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
+    /**
+     * Account group the barrier applies to.
+     */
+    OpenPitParamAccountGroupId account_group_id;
+    /**
+     * Account currency and bounds for this group.
+     */
+    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier barrier;
+};
+
+/**
+ * Account spot-funds P&L bounds refinement with construction-time seed.
+ */
+struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
+    /**
+     * Account the barrier applies to.
+     */
+    OpenPitParamAccountId account_id;
+    /**
+     * Account currency and bounds for this account.
+     */
+    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier barrier;
+    /**
+     * Initial accumulated P&L, consumed only while adding the policy.
+     */
+    OpenPitParamPnl initial_pnl;
+};
+
+/**
+ * Runtime account spot-funds P&L bounds replacement.
+ */
+struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate {
+    /**
+     * Account the barrier applies to.
+     */
+    OpenPitParamAccountId account_id;
+    /**
+     * Account currency and replacement bounds for this account.
+     */
+    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier barrier;
 };
 
 /**
@@ -6202,6 +6300,43 @@ bool openpit_engine_builder_add_builtin_spot_funds_policy(
 );
 
 /**
+ * Adds the built-in spot-funds policy with account-currency P&L bounds.
+ *
+ * This entry point builds the regular `SpotFundsPolicy` and configures only
+ * its P&L-bounds axis. The policy keeps its stable built-in name
+ * `"SpotFundsPolicy"`; no separate policy namespace is created. It seeds the
+ * funds-limit axis as `TrackOnly` and market pricing as `Mark` / 0 bps / no
+ * overrides; tune those regular spot-funds knobs after build with
+ * `openpit_engine_configure_spot_funds`.
+ *
+ * Contract:
+ * - `builder` must be a valid engine builder pointer.
+ * - `market_data` is a borrowed market-data service handle or null. A null
+ *   handle is accepted, but any controlled account that later needs FX to
+ *   compute P&L will be blocked by the core policy fail-safe.
+ * - At least one barrier must be provided across `global`, `account_group`,
+ *   or `account`.
+ * - Account barriers include construction-time `initial_pnl`. Runtime
+ *   configuration uses the update DTO without `initial_pnl` and preserves
+ *   the live accumulator.
+ *
+ * Success / error: mirrors
+ * `openpit_engine_builder_add_builtin_spot_funds_policy`.
+ */
+bool openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
+    OpenPitEngineBuilder * builder,
+    const OpenPitMarketDataService * market_data,
+    uint16_t policy_group_id,
+    const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global,
+    size_t global_len,
+    const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier * account_group,
+    size_t account_group_len,
+    const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier * account,
+    size_t account_len,
+    OpenPitOutError out_error
+);
+
+/**
  * Retunes the built-in spot-funds policy registered under `name`.
  *
  * This is a partial update (PATCH): the global slippage, pricing source, and
@@ -6248,6 +6383,45 @@ bool openpit_engine_configure_spot_funds(
     const OpenPitPretradePoliciesSpotFundsOverride * instrument_overrides,
     size_t overrides_len,
     bool has_overrides,
+    OpenPitConfigureError ** out_error
+);
+
+/**
+ * Retunes the P&L-bounds axis of the built-in spot-funds policy registered
+ * under `name`.
+ *
+ * This is a partial update (PATCH): each supplied axis is replaced only when
+ * its `has_*` flag is true. Account barriers use the runtime update DTO with
+ * no `initial_pnl`; live accumulated P&L is preserved.
+ */
+bool openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
+    OpenPitEngine * engine,
+    OpenPitStringView name,
+    const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global,
+    size_t global_len,
+    bool has_global,
+    const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier * account_group,
+    size_t account_group_len,
+    bool has_account_group,
+    const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate * account,
+    size_t account_len,
+    bool has_account,
+    OpenPitConfigureError ** out_error
+);
+
+/**
+ * Force-sets the live accumulated account-currency P&L for the spot-funds
+ * policy registered under `name`.
+ *
+ * This is an absolute assignment and is separate from barrier retuning, which
+ * never resets the accumulator.
+ */
+bool openpit_engine_configure_spot_funds_set_account_pnl(
+    OpenPitEngine * engine,
+    OpenPitStringView name,
+    OpenPitParamAccountId account_id,
+    OpenPitStringView account_currency,
+    OpenPitParamPnl pnl,
     OpenPitConfigureError ** out_error
 );
 

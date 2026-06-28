@@ -236,6 +236,83 @@ func EngineConfigureSpotFunds(
 	return nil
 }
 
+// EngineConfigureSpotFundsPnlBoundsKillSwitch reconfigures the P&L-bounds
+// axis of the named spot-funds policy at runtime.
+//
+// Nil slices leave an axis untouched; non-nil empty slices clear that axis.
+func EngineConfigureSpotFundsPnlBoundsKillSwitch(
+	engine Engine,
+	name string,
+	globalBarriers []PretradePoliciesSpotFundsPnlBoundsBarrier,
+	accountGroupBarriers []PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
+	accountBarriers []PretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate,
+) ConfigureError {
+	var globalPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier
+	if len(globalBarriers) > 0 {
+		globalPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier)(
+			unsafe.Pointer(&globalBarriers[0]),
+		)
+	}
+	var accountGroupPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
+	if len(accountGroupBarriers) > 0 {
+		accountGroupPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier)(
+			unsafe.Pointer(&accountGroupBarriers[0]),
+		)
+	}
+	var accountPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate
+	if len(accountBarriers) > 0 {
+		accountPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate)(
+			unsafe.Pointer(&accountBarriers[0]),
+		)
+	}
+
+	var outError ConfigureError
+	ok := C.openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
+		engine,
+		importString(name),
+		globalPtr,
+		C.size_t(len(globalBarriers)),
+		C.bool(globalBarriers != nil),
+		accountGroupPtr,
+		C.size_t(len(accountGroupBarriers)),
+		C.bool(accountGroupBarriers != nil),
+		accountPtr,
+		C.size_t(len(accountBarriers)),
+		C.bool(accountBarriers != nil),
+		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
+	)
+	runtime.KeepAlive(globalBarriers)
+	runtime.KeepAlive(accountGroupBarriers)
+	runtime.KeepAlive(accountBarriers)
+	if !ok {
+		return outError
+	}
+	return nil
+}
+
+// EngineSetSpotFundsAccountPnl force-sets the live accumulated account-currency
+// P&L for one account entry of the named spot-funds policy.
+func EngineSetSpotFundsAccountPnl(
+	engine Engine,
+	name string,
+	accountID ParamAccountID,
+	accountCurrency string,
+	pnl ParamPnl,
+) ConfigureError {
+	var outError ConfigureError
+	if !C.openpit_engine_configure_spot_funds_set_account_pnl(
+		engine,
+		importString(name),
+		accountID,
+		importString(accountCurrency),
+		pnl,
+		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return outError
+	}
+	return nil
+}
+
 // EngineConfigureSpotFundsGlobalLimitMode sets the global spot-funds limit mode
 // of the named spot-funds policy at runtime.
 //

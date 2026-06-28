@@ -37,6 +37,7 @@ from .param import (
     Asset,
     Fee,
     Leverage,
+    MonetaryAmount,
     Pnl,
     PositionEffect,
     PositionSide,
@@ -462,6 +463,8 @@ class ExecutionReportFillDetails(_ExecutionReportFillDetails):
     def __new__(
         cls, *args: typing.Any, **kwargs: typing.Any
     ) -> ExecutionReportFillDetails:
+        if "fee" in kwargs:
+            _require_instance(kwargs["fee"], MonetaryAmount, name="fee")
         return _ExecutionReportFillDetails.__new__(cls, *args, **kwargs)
 
     # @typing.override
@@ -469,11 +472,14 @@ class ExecutionReportFillDetails(_ExecutionReportFillDetails):
         self,
         *,
         last_trade: Trade | None = None,
+        fee: MonetaryAmount | None = None,
         leaves_quantity: Quantity | None = None,
         lock: Lock,
         is_final: bool | None = None,
     ) -> None:
+        _require_instance(fee, MonetaryAmount, name="fee")
         _ExecutionReportFillDetails.last_trade.__set__(self, last_trade)
+        _ExecutionReportFillDetails.fee.__set__(self, fee)
         _ExecutionReportFillDetails.leaves_quantity.__set__(self, leaves_quantity)
         _ExecutionReportFillDetails.lock.__set__(self, lock)
         _ExecutionReportFillDetails.is_final.__set__(self, is_final)
@@ -486,6 +492,12 @@ class ExecutionReportFillDetails(_ExecutionReportFillDetails):
         if value is None:
             return None
         return Trade(price=value.price, quantity=value.quantity)
+
+    # @typing.override
+    @property
+    def fee(self) -> MonetaryAmount | None:
+        """Fee amount and currency reported for this fill."""
+        return _ExecutionReportFillDetails.fee.__get__(self, type(self))
 
     # @typing.override
     @property

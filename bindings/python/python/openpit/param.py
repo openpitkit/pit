@@ -1,3 +1,4 @@
+import dataclasses
 import enum
 
 from . import _enum
@@ -154,6 +155,19 @@ class Asset(str):
         except ValueError as error:
             raise AssetError(str(error)) from None
         return str.__new__(cls, value)
+
+
+@dataclasses.dataclass(frozen=True)
+class MonetaryAmount:
+    """Monetary amount paired with its currency."""
+
+    amount: Fee
+    currency: Asset
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.amount, Fee):
+            raise TypeError(f"amount must be {Fee.__module__}.{Fee.__name__}")
+        object.__setattr__(self, "currency", Asset(self.currency))
 
 
 class AdjustmentAmount(_AdjustmentAmount):
@@ -631,6 +645,7 @@ __all__ = [
     "FillType",
     "Kind",
     "Leverage",
+    "MonetaryAmount",
     "Notional",
     "ParamError",
     "Pnl",

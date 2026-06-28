@@ -664,6 +664,74 @@ class SpotFundsOverrideEntry:
     override: SpotFundsOverride
 
 
+@dataclasses.dataclass(frozen=True)
+class SpotFundsPnlBoundsBarrier:
+    """Account-currency P&L bounds used by the spot-funds policy.
+
+    Args:
+        account_currency: Account currency whose accumulated P&L is monitored.
+        lower_bound: Optional lower P&L bound (typically a negative loss limit).
+        upper_bound: Optional upper P&L bound (typically a positive profit limit).
+
+    At least one of *lower_bound* or *upper_bound* must be provided.
+    """
+
+    account_currency: param.Asset
+    lower_bound: param.Pnl | None = None
+    upper_bound: param.Pnl | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class SpotFundsPnlBoundsAccountGroupBarrier:
+    """Per-account-group account-currency P&L bounds refinement.
+
+    Pairs a :class:`SpotFundsPnlBoundsBarrier` (the account currency and
+    bounds configuration) with an account-group identity.
+
+    Args:
+        barrier: Account currency and bounds for this account-group barrier.
+        account_group_id: Account group this barrier applies to.
+    """
+
+    barrier: SpotFundsPnlBoundsBarrier
+    account_group_id: param.AccountGroupId
+
+
+@dataclasses.dataclass(frozen=True)
+class SpotFundsPnlBoundsAccountBarrier:
+    """Per-account account-currency P&L bounds with an initial P&L seed.
+
+    Pairs a :class:`SpotFundsPnlBoundsBarrier` (the account currency and
+    bounds configuration) with an account identity and a starting P&L.
+
+    Args:
+        barrier: Account currency and bounds for this account barrier.
+        account_id: Account this barrier applies to.
+        initial_pnl: Starting accumulated P&L, consumed at construction only.
+            Seeds P&L accrued before the engine started.
+    """
+
+    barrier: SpotFundsPnlBoundsBarrier
+    account_id: param.AccountId
+    initial_pnl: param.Pnl
+
+
+@dataclasses.dataclass(frozen=True)
+class SpotFundsPnlBoundsAccountBarrierUpdate:
+    """Runtime replacement for a per-account P&L bounds barrier.
+
+    Runtime updates preserve the live accumulated P&L and cannot seed or reset
+    it.
+
+    Args:
+        barrier: Account currency and replacement bounds for this account.
+        account_id: Account this replacement barrier applies to.
+    """
+
+    barrier: SpotFundsPnlBoundsBarrier
+    account_id: param.AccountId
+
+
 class SpotFundsReadyBuilder:
     """Fully-configured spot funds policy builder.
 
@@ -777,6 +845,108 @@ def build_spot_funds() -> SpotFundsBuilder:
     return SpotFundsBuilder()
 
 
+class SpotFundsPnlBoundsKillswitchReadyBuilder:
+    """Fully-configured spot-funds account-currency P&L bounds builder."""
+
+    def __init__(self) -> None:
+        self._market_data: marketdata.MarketDataService | None = None
+        self._global: list[SpotFundsPnlBoundsBarrier] = []
+        self._account_group: list[SpotFundsPnlBoundsAccountGroupBarrier] = []
+        self._account: list[SpotFundsPnlBoundsAccountBarrier] = []
+        self._policy_group_id = DEFAULT_POLICY_GROUP_ID
+
+    def with_policy_group_id(
+        self, policy_group_id: int
+    ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
+        """Assign the policy group tag."""
+        self._policy_group_id = policy_group_id
+        return self
+
+    def market_data(
+        self, service: marketdata.MarketDataService
+    ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
+        """Configure the market-data service used for FX conversion."""
+        self._market_data = service
+        return self
+
+    def global_barriers(
+        self, *barriers: SpotFundsPnlBoundsBarrier
+    ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
+        """Append global account-currency P&L bounds barriers."""
+        self._global.extend(barriers)
+        return self
+
+    def account_group_barriers(
+        self, *barriers: SpotFundsPnlBoundsAccountGroupBarrier
+    ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
+        """Append per-account-group account-currency P&L bounds barriers."""
+        self._account_group.extend(barriers)
+        return self
+
+    def account_barriers(
+        self, *barriers: SpotFundsPnlBoundsAccountBarrier
+    ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
+        """Append per-account account-currency P&L bounds barriers."""
+        self._account.extend(barriers)
+        return self
+
+    def _build(self, builder: typing.Any) -> None:
+        """Contract hook invoked by ``builtin()`` to register this policy."""
+        builder._add_builtin_spot_funds_pnl_bounds_killswitch(
+            policy_group_id=self._policy_group_id,
+            market_data=self._market_data,
+            global_barriers=self._global,
+            account_group_barriers=self._account_group,
+            account_barriers=self._account,
+        )
+
+
+class SpotFundsPnlBoundsKillswitchBuilder:
+    """Entry point for spot-funds account-currency P&L bounds policy."""
+
+    #: Registration name of the underlying spot funds policy.
+    NAME: str = "SpotFundsPolicy"
+
+    def __init__(self) -> None:
+        self._ready = SpotFundsPnlBoundsKillswitchReadyBuilder()
+
+    def with_policy_group_id(
+        self, policy_group_id: int
+    ) -> SpotFundsPnlBoundsKillswitchBuilder:
+        """Assign the policy group tag."""
+        self._ready.with_policy_group_id(policy_group_id)
+        return self
+
+    def market_data(
+        self, service: marketdata.MarketDataService
+    ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
+        """Configure the market-data service used for FX conversion."""
+        return self._ready.market_data(service)
+
+    def global_barriers(
+        self, *barriers: SpotFundsPnlBoundsBarrier
+    ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
+        """Add global P&L bounds and return a ready builder."""
+        return self._ready.global_barriers(*barriers)
+
+    def account_group_barriers(
+        self, *barriers: SpotFundsPnlBoundsAccountGroupBarrier
+    ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
+        """Add account-group P&L bounds and return a ready builder."""
+        return self._ready.account_group_barriers(*barriers)
+
+    def account_barriers(
+        self, *barriers: SpotFundsPnlBoundsAccountBarrier
+    ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
+        """Add account P&L bounds and return a ready builder."""
+        return self._ready.account_barriers(*barriers)
+
+
+def build_spot_funds_pnl_bounds_killswitch() -> SpotFundsPnlBoundsKillswitchBuilder:
+    """Return a new spot-funds P&L bounds policy builder."""
+    return SpotFundsPnlBoundsKillswitchBuilder()
+
+
 # ---------------------------------------------------------------------------
 # Order validation
 # ---------------------------------------------------------------------------
@@ -833,9 +1003,16 @@ __all__ = [
     "SpotFundsOverrideTargetInstrumentAccountGroup",
     "SpotFundsOverride",
     "SpotFundsOverrideEntry",
+    "SpotFundsPnlBoundsBarrier",
+    "SpotFundsPnlBoundsAccountGroupBarrier",
+    "SpotFundsPnlBoundsAccountBarrier",
+    "SpotFundsPnlBoundsAccountBarrierUpdate",
     "SpotFundsReadyBuilder",
     "SpotFundsBuilder",
+    "SpotFundsPnlBoundsKillswitchReadyBuilder",
+    "SpotFundsPnlBoundsKillswitchBuilder",
     "build_spot_funds",
+    "build_spot_funds_pnl_bounds_killswitch",
     "RateLimit",
     "RateLimitBrokerBarrier",
     "RateLimitAssetBarrier",

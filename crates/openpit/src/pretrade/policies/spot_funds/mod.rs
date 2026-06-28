@@ -29,8 +29,8 @@ use crate::core::{
     HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
     HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
     HasAccountAdjustmentIncomingUpperBound, HasAccountId, HasBalanceAsset,
-    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasInstrument, HasLeavesQuantity,
-    HasOrderPrice, HasPreTradeLock, HasSide, HasTradeAmount,
+    HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
+    HasInstrument, HasLeavesQuantity, HasOrderPrice, HasPreTradeLock, HasSide, HasTradeAmount,
 };
 use crate::marketdata::MarketDataSync;
 use crate::param::{AccountId, Asset};
@@ -42,10 +42,13 @@ use crate::pretrade::{PolicyPreTradeResult, PostTradeResult, PreTradeContext, Re
 use crate::storage::{CreateStorageFor, LockingPolicyFactory, StorageBuilder};
 use crate::{AccountAdjustmentContext, Mutations};
 
+use super::RealizedPnlStorage;
+
 mod adjustment;
 mod execution;
 mod market_data;
 mod market_order_pricer;
+mod pnl;
 mod pre_trade;
 mod rejects;
 mod rollback;
@@ -58,8 +61,12 @@ pub use market_data::{
     SpotFundsConfigError, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
     SpotFundsPricingSource, SpotFundsSettings,
 };
+pub use pnl::{
+    SpotFundsPnlBoundsAccountBarrier, SpotFundsPnlBoundsAccountBarrierUpdate,
+    SpotFundsPnlBoundsAccountGroupBarrier, SpotFundsPnlBoundsBarrier,
+};
 
-// known cost: every call site does `holdings.with_mut((id, asset.clone()), ...)` —
+// known cost: every call site does `holdings.with_mut((id, asset.clone()), ...)` -
 // Asset::clone per lookup. SmolStr is allocator-free for tickers ≤22 bytes.
 pub(super) type HoldingsKey = (AccountId, Asset);
 
@@ -108,6 +115,7 @@ where
     pub(super) settings: <Sync::StorageLockingPolicyFactory
         as LockingPolicyFactory>::Config<SpotFundsSettings>,
     pub(super) market_orders: Option<SpotFundsMarketData<MarketDataSyncMode>>,
+    pub(super) pnl: RealizedPnlStorage<Sync::StorageLockingPolicyFactory>,
     group_id: PolicyGroupId,
 }
 
@@ -136,13 +144,28 @@ where
     /// holdings storage uses the engine's synchronisation flavor. Initial
     /// balances are seeded at runtime via `apply_account_adjustment`.
     pub fn new(
-        settings: SpotFundsSettings,
+        mut settings: SpotFundsSettings,
         market_orders: Option<SpotFundsMarketData<MarketDataSyncMode>>,
         storage_builder: &StorageBuilder<<Sync as SyncMode>::StorageLockingPolicyFactory>,
     ) -> Self
     where
         <Sync as SyncMode>::StorageLockingPolicyFactory: CreateStorageFor<(AccountId, Asset)>,
     {
+        let pnl = storage_builder.create_for_bound_key();
+        for ((account_id, account_currency), initial_pnl) in settings.take_initial_pnl() {
+            pnl.with_mut(
+                (account_id, account_currency),
+                || crate::param::Pnl::ZERO,
+                |entry, _is_new| {
+                    *entry = initial_pnl;
+                },
+            );
+        }
+        let pnl =
+            <Sync::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::new_shared(
+                pnl,
+            );
+
         Self {
             holdings: <<Sync as SyncMode>::StorageLockingPolicyFactory
                 as crate::storage::LockingPolicyFactory>::new_shared(
@@ -151,6 +174,7 @@ where
             settings: <Sync::StorageLockingPolicyFactory
                 as LockingPolicyFactory>::new_config(settings),
             market_orders,
+            pnl,
             group_id: crate::pretrade::DEFAULT_POLICY_GROUP_ID,
         }
     }
@@ -192,6 +216,7 @@ where
         + HasAccountId
         + HasSide
         + HasExecutionReportLastTrade
+        + HasExecutionReportFillFee
         + HasLeavesQuantity
         + HasExecutionReportIsFinal
         + HasPreTradeLock,
@@ -224,9 +249,10 @@ where
     fn built_in_config_entry(
         &self,
     ) -> Option<crate::core::ConfigEntry<<Sync as SyncMode>::StorageLockingPolicyFactory>> {
-        Some(crate::core::ConfigEntry::SpotFunds(
-            crate::pretrade::ConfigurablePolicy::settings_cell(self),
-        ))
+        Some(crate::core::ConfigEntry::SpotFunds {
+            settings: crate::pretrade::ConfigurablePolicy::settings_cell(self),
+            pnl: self.pnl.clone(),
+        })
     }
 
     /// Applies an account adjustment to the policy's holdings.

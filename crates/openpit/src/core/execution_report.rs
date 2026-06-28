@@ -18,15 +18,17 @@
 use crate::core::request_trait::HasPreTradeLock;
 use crate::impl_request_has_field;
 use crate::impl_request_has_field_passthrough;
-use crate::param::{AccountId, Fee, Pnl, PositionEffect, PositionSide, Quantity, Side, Trade};
+use crate::param::{
+    AccountId, Fee, MonetaryAmount, Pnl, PositionEffect, PositionSide, Quantity, Side, Trade,
+};
 use crate::pretrade::PreTradeLock;
 
 use super::{
-    HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportIsFinal,
-    HasExecutionReportLastTrade, HasExecutionReportPositionEffect, HasExecutionReportPositionSide,
-    HasFee, HasInstrument, HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage,
-    HasOrderPositionSide, HasOrderPrice, HasPnl, HasReduceOnly, HasSide, HasTradeAmount,
-    Instrument,
+    HasAccountId, HasAutoBorrow, HasClosePosition, HasExecutionReportFillFee,
+    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasExecutionReportPositionEffect,
+    HasExecutionReportPositionSide, HasFee, HasInstrument, HasLeavesQuantity,
+    HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl,
+    HasReduceOnly, HasSide, HasTradeAmount, Instrument,
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -72,6 +74,7 @@ impl_request_has_field_passthrough!(
     HasOrderLeverage, leverage, Option<crate::param::Leverage>;
     HasOrderCollateralAsset, collateral_asset, Option<&crate::param::Asset>;
     HasExecutionReportLastTrade, last_trade, Option<Trade>;
+    HasExecutionReportFillFee, fill_fee, Option<MonetaryAmount>;
     HasExecutionReportIsFinal, is_final, bool;
     HasExecutionReportPositionEffect, position_effect, Option<PositionEffect>;
     HasExecutionReportPositionSide, position_side, Option<PositionSide>;
@@ -104,6 +107,7 @@ impl_request_has_field_passthrough!(
     HasOrderLeverage, leverage, Option<crate::param::Leverage>;
     HasOrderCollateralAsset, collateral_asset, Option<&crate::param::Asset>;
     HasExecutionReportLastTrade, last_trade, Option<Trade>;
+    HasExecutionReportFillFee, fill_fee, Option<MonetaryAmount>;
     HasExecutionReportIsFinal, is_final, bool;
     HasExecutionReportPositionEffect, position_effect, Option<PositionEffect>;
     HasExecutionReportPositionSide, position_side, Option<PositionSide>;
@@ -175,6 +179,8 @@ impl_request_has_field_passthrough!(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionReportFillDetails {
     pub last_trade: Option<Trade>,
+    /// Fee amount and currency reported for this fill.
+    pub fee: Option<MonetaryAmount>,
     /// Remaining order quantity after this fill.
     pub leaves_quantity: Quantity,
     /// Order lock payload.
@@ -202,6 +208,19 @@ impl_request_has_field!(
     HasPreTradeLock, lock, PreTradeLock, lock;
     HasExecutionReportIsFinal, is_final, bool, is_final;
 );
+
+impl HasExecutionReportFillFee for ExecutionReportFillDetails {
+    fn fill_fee(&self) -> Result<Option<MonetaryAmount>, crate::RequestFieldAccessError> {
+        Ok(self.fee.clone())
+    }
+}
+
+impl<T> HasExecutionReportFillFee for WithExecutionReportFillDetails<T> {
+    fn fill_fee(&self) -> Result<Option<MonetaryAmount>, crate::RequestFieldAccessError> {
+        self.fill.fill_fee()
+    }
+}
+
 impl_request_has_field_passthrough!(
     WithExecutionReportPositionImpact,
     inner,
@@ -225,6 +244,7 @@ impl_request_has_field_passthrough!(
     HasOrderLeverage, leverage, Option<crate::param::Leverage>;
     HasOrderCollateralAsset, collateral_asset, Option<&crate::param::Asset>;
     HasExecutionReportLastTrade, last_trade, Option<Trade>;
+    HasExecutionReportFillFee, fill_fee, Option<MonetaryAmount>;
     HasExecutionReportIsFinal, is_final, bool;
 );
 
@@ -262,8 +282,9 @@ impl_request_has_field!(
 
 #[cfg(test)]
 mod tests {
-    use crate::param::{AccountId, Quantity};
+    use crate::param::{AccountId, Asset, Fee, MonetaryAmount, Quantity};
     use crate::pretrade::PreTradeLock;
+    use crate::HasExecutionReportFillFee;
 
     use super::{
         ExecutionReportFillDetails, ExecutionReportOperation, WithExecutionReportOperation,
@@ -272,6 +293,7 @@ mod tests {
     fn fill() -> ExecutionReportFillDetails {
         ExecutionReportFillDetails {
             last_trade: None,
+            fee: None,
             leaves_quantity: Quantity::from_str("0").expect("must be valid"),
             lock: PreTradeLock::default(),
             is_final: false,
@@ -280,7 +302,6 @@ mod tests {
 
     #[test]
     fn execution_report_operation_account_id_via_has_account_id() {
-        use crate::param::Asset;
         use crate::param::Side;
         use crate::{HasAccountId, Instrument};
 
@@ -306,11 +327,31 @@ mod tests {
     fn fill_defaults_are_stable() {
         let f = fill();
         assert_eq!(f.last_trade, None);
+        assert_eq!(f.fee, None);
         assert_eq!(
             f.leaves_quantity,
             Quantity::from_str("0").expect("must be valid")
         );
         assert_eq!(f.lock, PreTradeLock::default());
         assert!(!f.is_final);
+    }
+
+    #[test]
+    fn execution_report_fill_fee_via_has_execution_report_fill_fee() {
+        let fee = MonetaryAmount {
+            amount: Fee::from_str("-1.25").expect("must be valid"),
+            currency: Asset::new("USD").expect("must be valid"),
+        };
+        let fill = ExecutionReportFillDetails {
+            fee: Some(fee.clone()),
+            ..fill()
+        };
+
+        let got = fill
+            .fill_fee()
+            .expect("fill fee must be accessible")
+            .expect("fill fee must be set");
+
+        assert_eq!(got, fee);
     }
 }

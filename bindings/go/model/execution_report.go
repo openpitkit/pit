@@ -37,6 +37,7 @@ type ExecutionReport struct {
 	// C-heap buffers.  See param/asset.go and internal/native/asset_buf.go
 	// for the full explanation of the retain pattern.
 	retainOperationInstrument param.Instrument
+	retainFillFeeCurrency     param.Asset
 }
 
 // NewExecutionReport creates a new zeroed ExecutionReport.
@@ -68,6 +69,7 @@ func NewExecutionReportFromHandle(value native.ExecutionReport) ExecutionReport 
 func (r *ExecutionReport) Reset() {
 	native.ExecutionReportReset(&r.value)
 	r.retainOperationInstrument = param.Instrument{}
+	r.retainFillFeeCurrency = param.Asset{}
 }
 
 // Values returns a copy of the current execution report fields.
@@ -178,6 +180,7 @@ func (r ExecutionReport) Fill() optional.Option[ExecutionReportFill] {
 // SetFill sets the fill on the report.
 func (r *ExecutionReport) SetFill(fill ExecutionReportFill) {
 	native.ExecutionReportSetFill(&r.value, fill.value)
+	r.retainFillFeeCurrency = fill.retainFeeCurrency
 }
 
 // EnsureFillView ensures the fill exists and returns a mutable view.
@@ -186,12 +189,16 @@ func (r *ExecutionReport) EnsureFillView() ExecutionReportFillView {
 	if !native.ExecutionReportFillOptionalIsSet(*fill) {
 		native.ExecutionReportFillOptionalSet(fill, native.NewExecutionReportFill())
 	}
-	return newExecutionReportFillView(native.ExecutionReportFillOptionalGetView(fill))
+	return newExecutionReportFillView(
+		native.ExecutionReportFillOptionalGetView(fill),
+		&r.retainFillFeeCurrency,
+	)
 }
 
 // UnsetFill clears the fill on the report.
 func (r *ExecutionReport) UnsetFill() {
 	native.ExecutionReportUnsetFill(&r.value)
+	r.retainFillFeeCurrency = param.Asset{}
 }
 
 // PositionImpact returns the optional position impact of the report.
@@ -276,7 +283,12 @@ func NewExecutionReportOperationFromValues(
 }
 
 func newExecutionReportOperation(value native.ExecutionReportOperation) ExecutionReportOperation {
-	return ExecutionReportOperation{value: value}
+	operation := ExecutionReportOperation{value: value}
+	if instrument, ok := operation.Instrument().Get(); ok {
+		operation.retainInstrument = instrument
+		native.ExecutionReportOperationSetInstrument(&operation.value, instrument.Handle())
+	}
+	return operation
 }
 
 // Reset zeroes out the operation.
@@ -610,11 +622,15 @@ func (t *ExecutionReportTrade) SetQuantity(quantity param.Quantity) {
 // ExecutionReportFill
 
 // ExecutionReportFill holds fill details for an execution report.
-type ExecutionReportFill struct{ value native.ExecutionReportFill }
+type ExecutionReportFill struct {
+	value             native.ExecutionReportFill
+	retainFeeCurrency param.Asset
+}
 
 // ExecutionReportFillValues holds the optional fill fields.
 type ExecutionReportFillValues struct {
 	LastTrade      optional.Option[ExecutionReportTrade]
+	Fee            optional.Option[param.MonetaryAmount]
 	LeavesQuantity optional.Option[param.Quantity]
 	// Lock carries the raw pre-trade lock representation, or nil when no lock is
 	// set. These bytes round-trip with pretrade.Lock via pretrade.NewLockFromBytes
@@ -636,18 +652,25 @@ func NewExecutionReportFillFromValues(values ExecutionReportFillValues) Executio
 }
 
 func newExecutionReportFill(value native.ExecutionReportFill) ExecutionReportFill {
-	return ExecutionReportFill{value: value}
+	fill := ExecutionReportFill{value: value}
+	if fee, ok := fill.Fee().Get(); ok {
+		fill.retainFeeCurrency = fee.Currency
+		native.ExecutionReportFillSetFee(&fill.value, fee.Handle())
+	}
+	return fill
 }
 
 // Reset zeroes out the fill.
 func (f *ExecutionReportFill) Reset() {
 	native.ExecutionReportFillReset(&f.value)
+	f.retainFeeCurrency = param.Asset{}
 }
 
 // Values returns a copy of the current fill fields.
 func (f ExecutionReportFill) Values() ExecutionReportFillValues {
 	return ExecutionReportFillValues{
 		LastTrade:      f.LastTrade(),
+		Fee:            f.Fee(),
 		LeavesQuantity: f.LeavesQuantity(),
 		Lock:           f.Lock(),
 		IsFinal:        f.IsFinal(),
@@ -663,6 +686,9 @@ func (f *ExecutionReportFill) SetValues(values ExecutionReportFillValues) {
 func (f *ExecutionReportFill) setValues(values ExecutionReportFillValues) {
 	if value, ok := values.LastTrade.Get(); ok {
 		f.SetLastTrade(value)
+	}
+	if value, ok := values.Fee.Get(); ok {
+		f.SetFee(value)
 	}
 	if value, ok := values.LeavesQuantity.Get(); ok {
 		f.SetLeavesQuantity(value)
@@ -694,6 +720,23 @@ func (f *ExecutionReportFill) SetLastTrade(trade ExecutionReportTrade) {
 // UnsetLastTrade clears the last trade on the fill.
 func (f *ExecutionReportFill) UnsetLastTrade() {
 	native.ExecutionReportFillUnsetLastTrade(&f.value)
+}
+
+// Fee returns the optional fee attached to this fill.
+func (f ExecutionReportFill) Fee() optional.Option[param.MonetaryAmount] {
+	return param.NewMonetaryAmountOptionFromHandle(native.ExecutionReportFillGetFee(f.value))
+}
+
+// SetFee sets the fee attached to this fill.
+func (f *ExecutionReportFill) SetFee(fee param.MonetaryAmount) {
+	f.retainFeeCurrency = fee.Currency
+	native.ExecutionReportFillSetFee(&f.value, fee.Handle())
+}
+
+// UnsetFee clears the fee attached to this fill.
+func (f *ExecutionReportFill) UnsetFee() {
+	native.ExecutionReportFillUnsetFee(&f.value)
+	f.retainFeeCurrency = param.Asset{}
 }
 
 // LeavesQuantity returns the optional remaining unfilled quantity.
@@ -746,15 +789,22 @@ func (f *ExecutionReportFill) UnsetIsFinal() {
 }
 
 // ExecutionReportFillView is a mutable view into a fill owned by an ExecutionReport.
-type ExecutionReportFillView struct{ ref *native.ExecutionReportFill }
+type ExecutionReportFillView struct {
+	ref               *native.ExecutionReportFill
+	retainFeeCurrency *param.Asset
+}
 
-func newExecutionReportFillView(ref *native.ExecutionReportFill) ExecutionReportFillView {
-	return ExecutionReportFillView{ref: ref}
+func newExecutionReportFillView(
+	ref *native.ExecutionReportFill,
+	retainFeeCurrency *param.Asset,
+) ExecutionReportFillView {
+	return ExecutionReportFillView{ref: ref, retainFeeCurrency: retainFeeCurrency}
 }
 
 // Reset zeroes out the fill view.
 func (v *ExecutionReportFillView) Reset() {
 	native.ExecutionReportFillReset(v.ref)
+	*v.retainFeeCurrency = param.Asset{}
 }
 
 // LastTrade returns the optional last trade from the view.
@@ -774,6 +824,23 @@ func (v *ExecutionReportFillView) SetLastTrade(trade ExecutionReportTrade) {
 // UnsetLastTrade clears the last trade on the view.
 func (v *ExecutionReportFillView) UnsetLastTrade() {
 	native.ExecutionReportFillUnsetLastTrade(v.ref)
+}
+
+// Fee returns the optional fee attached to the view.
+func (v ExecutionReportFillView) Fee() optional.Option[param.MonetaryAmount] {
+	return param.NewMonetaryAmountOptionFromHandle(native.ExecutionReportFillGetFee(*v.ref))
+}
+
+// SetFee sets the fee attached to the view.
+func (v *ExecutionReportFillView) SetFee(fee param.MonetaryAmount) {
+	*v.retainFeeCurrency = fee.Currency
+	native.ExecutionReportFillSetFee(v.ref, fee.Handle())
+}
+
+// UnsetFee clears the fee attached to the view.
+func (v *ExecutionReportFillView) UnsetFee() {
+	native.ExecutionReportFillUnsetFee(v.ref)
+	*v.retainFeeCurrency = param.Asset{}
 }
 
 // LeavesQuantity returns the optional remaining unfilled quantity from the view.

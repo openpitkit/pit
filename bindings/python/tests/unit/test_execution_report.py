@@ -142,7 +142,41 @@ def test_fill_details_happy_path_without_last_trade() -> None:
     assert str(fill.leaves_quantity) == "3"
     assert str(fill.lock.prices_of(pgid)[0]) == "101"
     assert fill.last_trade is None
+    assert fill.fee is None
     assert fill.is_final is None
+
+
+@pytest.mark.unit
+def test_fill_details_accepts_optional_fee() -> None:
+    pgid = openpit.pretrade.DEFAULT_POLICY_GROUP_ID
+    fee = openpit.param.MonetaryAmount(
+        amount=openpit.param.Fee("0.25"),
+        currency="USD",
+    )
+    fill = openpit.ExecutionReportFillDetails(
+        fee=fee,
+        leaves_quantity=openpit.param.Quantity(3),
+        lock=openpit.pretrade.Lock(
+            entries=[(pgid, openpit.param.Price(101))],
+        ),
+    )
+
+    assert fill.fee == fee
+    assert fill.fee.amount == openpit.param.Fee("0.25")
+    assert fill.fee.currency == openpit.param.Asset("USD")
+
+    report = openpit.ExecutionReport(fill=fill)
+    assert report.fill is not None
+    assert report.fill.fee == fee
+
+
+@pytest.mark.unit
+def test_fill_details_rejects_non_monetary_fee() -> None:
+    with pytest.raises(TypeError, match="fee must be openpit.param.MonetaryAmount"):
+        openpit.ExecutionReportFillDetails(
+            fee=openpit.param.Fee("0.25"),  # type: ignore[arg-type]
+            lock=openpit.pretrade.Lock(),
+        )
 
 
 @pytest.mark.unit

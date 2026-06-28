@@ -16,8 +16,8 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 use crate::param::{
-    AccountId, AdjustmentAmount, Asset, Fee, Leverage, Pnl, PositionEffect, PositionMode,
-    PositionSide, PositionSize, Price, Quantity, Side, Trade, TradeAmount,
+    AccountId, AdjustmentAmount, Asset, Fee, Leverage, MonetaryAmount, Pnl, PositionEffect,
+    PositionMode, PositionSide, PositionSize, Price, Quantity, Side, Trade, TradeAmount,
 };
 use crate::pretrade::PreTradeLock;
 
@@ -137,6 +137,12 @@ has_request_field_trait!(HasOrderCollateralAsset, collateral_asset -> Option<&As
 has_request_field_trait!(HasExecutionReportLastTrade, last_trade -> Option<Trade>);
 
 has_request_field_trait!(HasExecutionReportIsFinal, is_final -> bool);
+
+has_request_field_trait!(
+    /// Optional fee amount reported with an execution fill.
+    HasExecutionReportFillFee,
+    fill_fee -> Option<MonetaryAmount>
+);
 
 has_request_field_trait!(
     HasExecutionReportPositionEffect,

@@ -95,6 +95,37 @@ type SpotFundsOverrideEntry struct {
 	Override SpotFundsOverride
 }
 
+// SpotFundsPnlBoundsBarrier defines self-computed account-currency P&L bounds.
+type SpotFundsPnlBoundsBarrier struct {
+	AccountCurrency param.Asset
+	// LowerBound is typically negative and represents the loss limit.
+	LowerBound optional.Option[param.Pnl]
+	// UpperBound is typically positive and represents the profit-taking limit.
+	UpperBound optional.Option[param.Pnl]
+}
+
+// SpotFundsPnlBoundsAccountGroupBarrier defines a per-account-group
+// account-currency P&L bounds override.
+type SpotFundsPnlBoundsAccountGroupBarrier struct {
+	Barrier        SpotFundsPnlBoundsBarrier
+	AccountGroupID param.AccountGroupID
+}
+
+// SpotFundsPnlBoundsAccountBarrier defines a per-account account-currency P&L
+// bounds override with an initial P&L seed.
+type SpotFundsPnlBoundsAccountBarrier struct {
+	Barrier    SpotFundsPnlBoundsBarrier
+	AccountID  param.AccountID
+	InitialPnl param.Pnl
+}
+
+// SpotFundsPnlBoundsAccountBarrierUpdate updates per-account account-currency
+// P&L bounds without replacing the live accumulated P&L.
+type SpotFundsPnlBoundsAccountBarrierUpdate struct {
+	Barrier   SpotFundsPnlBoundsBarrier
+	AccountID param.AccountID
+}
+
 //------------------------------------------------------------------------------
 // SpotFundsBuilder
 
@@ -118,6 +149,23 @@ type SpotFundsReadyBuilder struct {
 	policyGroupID     model.PolicyGroupID
 }
 
+// SpotFundsPnlBoundsKillswitchBuilder is the entry point for the spot-funds
+// self-computed P&L bounds policy.
+type SpotFundsPnlBoundsKillswitchBuilder struct {
+	builder *SpotFundsPnlBoundsKillswitchReadyBuilder
+}
+
+// SpotFundsPnlBoundsKillswitchReadyBuilder holds a fully-configured
+// spot-funds self-computed P&L bounds policy.
+type SpotFundsPnlBoundsKillswitchReadyBuilder struct {
+	marketData           *marketdata.Service
+	globalBarriers       []native.PretradePoliciesSpotFundsPnlBoundsBarrier
+	accountGroupBarriers []native.PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
+	accountBarriers      []native.PretradePoliciesSpotFundsPnlBoundsAccountBarrier
+	policyGroupID        model.PolicyGroupID
+	retainAssets         []param.Asset
+}
+
 // BuildSpotFunds returns a new spot funds policy builder.
 //
 // Initial balances are seeded through the account-adjustment pipeline, not via
@@ -126,6 +174,126 @@ func BuildSpotFunds() *SpotFundsBuilder {
 	return &SpotFundsBuilder{
 		builder: &SpotFundsReadyBuilder{policyGroupID: model.DefaultPolicyGroupID},
 	}
+}
+
+// BuildSpotFundsPnlBoundsKillswitch returns a new spot-funds P&L bounds
+// kill-switch policy builder.
+func BuildSpotFundsPnlBoundsKillswitch() *SpotFundsPnlBoundsKillswitchBuilder {
+	return &SpotFundsPnlBoundsKillswitchBuilder{
+		builder: &SpotFundsPnlBoundsKillswitchReadyBuilder{
+			policyGroupID: model.DefaultPolicyGroupID,
+		},
+	}
+}
+
+// WithMarketData configures the market-data service used for FX conversion.
+func (b *SpotFundsPnlBoundsKillswitchBuilder) WithMarketData(
+	service *marketdata.Service,
+) *SpotFundsPnlBoundsKillswitchReadyBuilder {
+	b.builder.WithMarketData(service)
+	return b.builder
+}
+
+// WithMarketData configures the market-data service used for FX conversion.
+func (b *SpotFundsPnlBoundsKillswitchReadyBuilder) WithMarketData(
+	service *marketdata.Service,
+) *SpotFundsPnlBoundsKillswitchReadyBuilder {
+	b.marketData = service
+	return b
+}
+
+// PolicyGroupID assigns the policy to a pricing group and returns a ready
+// builder. When not set the policy uses model.DefaultPolicyGroupID.
+func (b *SpotFundsPnlBoundsKillswitchBuilder) PolicyGroupID(
+	groupID model.PolicyGroupID,
+) *SpotFundsPnlBoundsKillswitchReadyBuilder {
+	b.builder.PolicyGroupID(groupID)
+	return b.builder
+}
+
+// PolicyGroupID assigns the policy to a pricing group. When not set the policy
+// uses model.DefaultPolicyGroupID.
+func (b *SpotFundsPnlBoundsKillswitchReadyBuilder) PolicyGroupID(
+	groupID model.PolicyGroupID,
+) *SpotFundsPnlBoundsKillswitchReadyBuilder {
+	b.policyGroupID = groupID
+	return b
+}
+
+// GlobalBarriers adds global account-currency P&L bounds and returns a ready
+// builder.
+func (b *SpotFundsPnlBoundsKillswitchBuilder) GlobalBarriers(
+	barriers ...SpotFundsPnlBoundsBarrier,
+) *SpotFundsPnlBoundsKillswitchReadyBuilder {
+	b.builder.GlobalBarriers(barriers...)
+	return b.builder
+}
+
+// GlobalBarriers appends global account-currency P&L bounds.
+func (b *SpotFundsPnlBoundsKillswitchReadyBuilder) GlobalBarriers(
+	barriers ...SpotFundsPnlBoundsBarrier,
+) *SpotFundsPnlBoundsKillswitchReadyBuilder {
+	for _, barrier := range barriers {
+		nativeBarrier := newNativeSpotFundsPnlBoundsBarrier(barrier)
+		b.globalBarriers = append(b.globalBarriers, nativeBarrier)
+		b.retainAssets = append(b.retainAssets, barrier.AccountCurrency)
+	}
+	return b
+}
+
+// AccountGroupBarriers adds per-account-group account-currency P&L bounds and
+// returns a ready builder.
+func (b *SpotFundsPnlBoundsKillswitchBuilder) AccountGroupBarriers(
+	barriers ...SpotFundsPnlBoundsAccountGroupBarrier,
+) *SpotFundsPnlBoundsKillswitchReadyBuilder {
+	b.builder.AccountGroupBarriers(barriers...)
+	return b.builder
+}
+
+// AccountGroupBarriers appends per-account-group account-currency P&L bounds.
+func (b *SpotFundsPnlBoundsKillswitchReadyBuilder) AccountGroupBarriers(
+	barriers ...SpotFundsPnlBoundsAccountGroupBarrier,
+) *SpotFundsPnlBoundsKillswitchReadyBuilder {
+	for _, barrier := range barriers {
+		nativeBarrier := newNativeSpotFundsPnlBoundsBarrier(barrier.Barrier)
+		b.accountGroupBarriers = append(
+			b.accountGroupBarriers,
+			native.NewPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier(
+				barrier.AccountGroupID.Handle(),
+				nativeBarrier,
+			),
+		)
+		b.retainAssets = append(b.retainAssets, barrier.Barrier.AccountCurrency)
+	}
+	return b
+}
+
+// AccountBarriers adds per-account account-currency P&L bounds and returns a
+// ready builder.
+func (b *SpotFundsPnlBoundsKillswitchBuilder) AccountBarriers(
+	barriers ...SpotFundsPnlBoundsAccountBarrier,
+) *SpotFundsPnlBoundsKillswitchReadyBuilder {
+	b.builder.AccountBarriers(barriers...)
+	return b.builder
+}
+
+// AccountBarriers appends per-account account-currency P&L bounds.
+func (b *SpotFundsPnlBoundsKillswitchReadyBuilder) AccountBarriers(
+	barriers ...SpotFundsPnlBoundsAccountBarrier,
+) *SpotFundsPnlBoundsKillswitchReadyBuilder {
+	for _, barrier := range barriers {
+		nativeBarrier := newNativeSpotFundsPnlBoundsBarrier(barrier.Barrier)
+		b.accountBarriers = append(
+			b.accountBarriers,
+			native.NewPretradePoliciesSpotFundsPnlBoundsAccountBarrier(
+				barrier.AccountID.Handle(),
+				nativeBarrier,
+				barrier.InitialPnl.Handle(),
+			),
+		)
+		b.retainAssets = append(b.retainAssets, barrier.Barrier.AccountCurrency)
+	}
+	return b
 }
 
 // WithMarketOrders enables market orders (orders submitted without a limit
@@ -239,6 +407,31 @@ func (b *SpotFundsBuilder) Build(builder native.EngineBuilder) error {
 	return b.builder.Build(builder)
 }
 
+// Build registers the built-in spot-funds P&L bounds kill-switch policy on the
+// given engine builder.
+func (b *SpotFundsPnlBoundsKillswitchReadyBuilder) Build(builder native.EngineBuilder) error {
+	var marketDataHandle native.MarketDataService
+	if b.marketData != nil {
+		marketDataHandle = b.marketData.Handle()
+	}
+	err := native.EngineBuilderAddBuiltinSpotFundsPnlBoundsKillswitch(
+		builder,
+		marketDataHandle,
+		native.PolicyGroupID(b.policyGroupID),
+		b.globalBarriers,
+		b.accountGroupBarriers,
+		b.accountBarriers,
+	)
+	runtime.KeepAlive(b)
+	return err
+}
+
+// Build registers the built-in spot-funds P&L bounds kill-switch policy on the
+// given engine builder.
+func (b *SpotFundsPnlBoundsKillswitchBuilder) Build(builder native.EngineBuilder) error {
+	return b.builder.Build(builder)
+}
+
 // NativeSpotFundsLimitMode translates a [SpotFundsLimitMode] into the
 // native limit-mode value. It is a thin marshalling helper shared with the
 // runtime configurator; the cascade and resolution logic live in the core.
@@ -261,6 +454,16 @@ func NativeSpotFundsLimitModeOption(
 		return v.Handle(), true
 	}
 	return nativeSpotFundsLimitModeIgnored, false
+}
+
+func newNativeSpotFundsPnlBoundsBarrier(
+	barrier SpotFundsPnlBoundsBarrier,
+) native.PretradePoliciesSpotFundsPnlBoundsBarrier {
+	return native.NewPretradePoliciesSpotFundsPnlBoundsBarrier(
+		barrier.AccountCurrency.Handle(),
+		newParamPnlOptionalFromOptional(barrier.LowerBound),
+		newParamPnlOptionalFromOptional(barrier.UpperBound),
+	)
 }
 
 // NewNativeSpotFundsOverride translates a [SpotFundsOverrideTarget] and its

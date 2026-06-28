@@ -19,6 +19,7 @@
 
 pub mod order_size_limit;
 pub mod order_validation;
+mod pnl_bounds;
 pub mod pnl_bounds_killswitch;
 pub mod rate_limit;
 mod spot_funds;
@@ -40,5 +41,7 @@ pub use rate_limit::{
 pub use spot_funds::SpotFundsPolicy;
 pub use spot_funds::{
     SpotFundsConfigError, SpotFundsLimitMode, SpotFundsMarketData, SpotFundsOverride,
-    SpotFundsOverrideTarget, SpotFundsPricingSource, SpotFundsSettings,
+    SpotFundsOverrideTarget, SpotFundsPnlBoundsAccountBarrier,
+    SpotFundsPnlBoundsAccountBarrierUpdate, SpotFundsPnlBoundsAccountGroupBarrier,
+    SpotFundsPnlBoundsBarrier, SpotFundsPricingSource, SpotFundsSettings,
 };

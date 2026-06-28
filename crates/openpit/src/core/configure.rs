@@ -55,8 +55,13 @@ pub(crate) enum ConfigEntry<Factory: LockingPolicyFactory> {
         /// Live accumulated P&L ledger shared with the running policy.
         realized: RealizedPnlStorage<Factory>,
     },
-    /// Spot-funds policy settings.
-    SpotFunds(Factory::Config<SpotFundsSettings>),
+    /// Spot-funds policy handles.
+    SpotFunds {
+        /// Settings cell shared with the running policy.
+        settings: Factory::Config<SpotFundsSettings>,
+        /// Live accumulated self-computed account-currency P&L ledger.
+        pnl: RealizedPnlStorage<Factory>,
+    },
     /// Order-size-limit policy settings.
     OrderSizeLimit(Factory::Config<OrderSizeLimitSettings>),
 }
@@ -68,7 +73,7 @@ impl<Factory: LockingPolicyFactory> ConfigEntry<Factory> {
             Self::PnlBoundsKillSwitch { .. } => {
                 std::any::type_name::<Factory::Config<PnlBoundsKillSwitchSettings>>()
             }
-            Self::SpotFunds(_) => std::any::type_name::<Factory::Config<SpotFundsSettings>>(),
+            Self::SpotFunds { .. } => std::any::type_name::<Factory::Config<SpotFundsSettings>>(),
             Self::OrderSizeLimit(_) => {
                 std::any::type_name::<Factory::Config<OrderSizeLimitSettings>>()
             }
@@ -392,11 +397,46 @@ impl<Sync: SyncMode> Configurator<Sync> {
         f: impl FnOnce(&mut SpotFundsSettings) -> Result<(), Error>,
     ) -> Result<(), ConfigureError> {
         match self.registry.entry(name)? {
-            ConfigEntry::SpotFunds(cell) => {
+            ConfigEntry::SpotFunds { settings, .. } => {
                 let _guard = self.enter_configuration()?;
-                cell.update(f).map_err(|error| {
+                settings.update(f).map_err(|error| {
                     ConfigRegistry::<RegistryFactory<Sync>>::validation(name, error)
                 })
+            }
+            entry => Err(ConfigRegistry::<_>::type_mismatch::<SpotFundsSettings>(
+                name, entry,
+            )),
+        }
+    }
+
+    /// Force-sets the live accumulated account-currency P&L for a spot-funds
+    /// policy.
+    ///
+    /// This updates only the account-scoped current P&L ledger. It does not
+    /// retune bounds and does not reset any other accumulator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigureError::UnknownPolicy`] for an unknown name or
+    /// [`ConfigureError::PolicyTypeMismatch`] when the name belongs to another
+    /// built-in policy type.
+    pub fn set_spot_funds_account_pnl(
+        &self,
+        name: &str,
+        account: AccountId,
+        account_currency: Asset,
+        pnl: Pnl,
+    ) -> Result<(), ConfigureError> {
+        match self.registry.entry(name)? {
+            ConfigEntry::SpotFunds {
+                pnl: account_pnl, ..
+            } => {
+                account_pnl.with_mut(
+                    (account, account_currency),
+                    || Pnl::ZERO,
+                    |entry, _is_new| *entry = pnl,
+                );
+                Ok(())
             }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<SpotFundsSettings>(
                 name, entry,

@@ -318,6 +318,58 @@ func EngineBuilderAddBuiltinSpotFunds(
 	return nil
 }
 
+func EngineBuilderAddBuiltinSpotFundsPnlBoundsKillswitch(
+	builder EngineBuilder,
+	marketData MarketDataService,
+	groupID PolicyGroupID,
+	globalBarriers []PretradePoliciesSpotFundsPnlBoundsBarrier,
+	accountGroupBarriers []PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
+	accountBarriers []PretradePoliciesSpotFundsPnlBoundsAccountBarrier,
+) error {
+	var globalPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier
+	if len(globalBarriers) > 0 {
+		globalPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier)(
+			unsafe.Pointer(&globalBarriers[0]),
+		)
+	}
+	var accountGroupPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
+	if len(accountGroupBarriers) > 0 {
+		accountGroupPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier)(
+			unsafe.Pointer(&accountGroupBarriers[0]),
+		)
+	}
+	var accountPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier
+	if len(accountBarriers) > 0 {
+		accountPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier)(
+			unsafe.Pointer(&accountBarriers[0]),
+		)
+	}
+
+	var outError SharedString
+	ok := C.openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
+		builder,
+		marketData,
+		groupID,
+		globalPtr,
+		C.size_t(len(globalBarriers)),
+		accountGroupPtr,
+		C.size_t(len(accountGroupBarriers)),
+		accountPtr,
+		C.size_t(len(accountBarriers)),
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
+	)
+	runtime.KeepAlive(globalBarriers)
+	runtime.KeepAlive(accountGroupBarriers)
+	runtime.KeepAlive(accountBarriers)
+	if !ok {
+		return consumeSharedStringAsError(
+			outError,
+			"openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy failed",
+		)
+	}
+	return nil
+}
+
 func DestroyEngine(engine Engine) {
 	C.openpit_destroy_engine(engine)
 }

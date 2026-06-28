@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use openpit::param::{
-    AccountGroupId, AccountId, AdjustmentAmount, Asset, Pnl, PositionSize, Price, Quantity, Side,
-    Trade, TradeAmount, DEFAULT_ACCOUNT_GROUP,
+    AccountGroupId, AccountId, AdjustmentAmount, Asset, MonetaryAmount, Pnl, PositionSize, Price,
+    Quantity, Side, Trade, TradeAmount, DEFAULT_ACCOUNT_GROUP,
 };
 use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
 use openpit::pretrade::{PreTradeLock, RejectCode};
@@ -31,11 +31,12 @@ use openpit::{
     HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
     HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
     HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound, HasAccountId,
-    HasBalanceAsset, HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasInstrument,
-    HasLeavesQuantity, HasPreTradeLock, HasSide, Instrument, LocalSync, MarketDataBuilder,
-    MarketDataError, MarketDataService, OrderOperation, PushForError, Quote, QuoteResolution,
-    QuoteTtl, RegistrationError, RequestFieldAccessError, SpotFundsMarketData, SpotFundsOverride,
-    SpotFundsOverrideTarget, SpotFundsPricingSource, UnknownInstrumentId,
+    HasBalanceAsset, HasExecutionReportFillFee, HasExecutionReportIsFinal,
+    HasExecutionReportLastTrade, HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide,
+    Instrument, LocalSync, MarketDataBuilder, MarketDataError, MarketDataService, OrderOperation,
+    PushForError, Quote, QuoteResolution, QuoteTtl, RegistrationError, RequestFieldAccessError,
+    SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPricingSource,
+    UnknownInstrumentId,
 };
 
 // ── Value helpers ─────────────────────────────────────────────────────────────
@@ -645,6 +646,11 @@ impl HasSide for SfTestReport {
 impl HasExecutionReportLastTrade for SfTestReport {
     fn last_trade(&self) -> Result<Option<Trade>, RequestFieldAccessError> {
         Ok(self.last_trade)
+    }
+}
+impl HasExecutionReportFillFee for SfTestReport {
+    fn fill_fee(&self) -> Result<Option<MonetaryAmount>, RequestFieldAccessError> {
+        Ok(None)
     }
 }
 impl HasLeavesQuantity for SfTestReport {

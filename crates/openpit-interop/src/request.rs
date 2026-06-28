@@ -16,8 +16,8 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 use openpit::param::{
-    AccountId, AdjustmentAmount, Asset, Fee, Leverage, Pnl, PositionEffect, PositionMode,
-    PositionSide, PositionSize, Price, Side, Trade, TradeAmount,
+    AccountId, AdjustmentAmount, Asset, Fee, Leverage, MonetaryAmount, Pnl, PositionEffect,
+    PositionMode, PositionSide, PositionSize, Price, Side, Trade, TradeAmount,
 };
 use openpit::{
     HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
@@ -27,11 +27,11 @@ use openpit::{
     HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
     HasAccountAdjustmentIncomingUpperBound, HasAccountAdjustmentPositionLeverage, HasAccountId,
     HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition, HasCollateralAsset,
-    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasExecutionReportPositionEffect,
-    HasExecutionReportPositionSide, HasFee, HasInstrument, HasLeavesQuantity,
-    HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide, HasOrderPrice, HasPnl,
-    HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly, HasSide,
-    HasTradeAmount, Instrument, RequestFieldAccessError,
+    HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
+    HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,
+    HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
+    HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly,
+    HasSide, HasTradeAmount, Instrument, RequestFieldAccessError,
 };
 
 use crate::{
@@ -177,6 +177,12 @@ impl HasFee for ExecutionReport {
 impl HasExecutionReportLastTrade for ExecutionReport {
     fn last_trade(&self) -> Result<Option<Trade>, RequestFieldAccessError> {
         self.fill.last_trade()
+    }
+}
+
+impl HasExecutionReportFillFee for ExecutionReport {
+    fn fill_fee(&self) -> Result<Option<MonetaryAmount>, RequestFieldAccessError> {
+        self.fill.fill_fee()
     }
 }
 
@@ -467,6 +473,14 @@ impl<Request: HasExecutionReportLastTrade, Payload> HasExecutionReportLastTrade
 {
     fn last_trade(&self) -> Result<Option<Trade>, RequestFieldAccessError> {
         self.request.last_trade()
+    }
+}
+
+impl<Request: HasExecutionReportFillFee, Payload> HasExecutionReportFillFee
+    for RequestWithPayload<Request, Payload>
+{
+    fn fill_fee(&self) -> Result<Option<MonetaryAmount>, RequestFieldAccessError> {
+        self.request.fill_fee()
     }
 }
 

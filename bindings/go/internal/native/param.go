@@ -3268,6 +3268,40 @@ func ParamFeeOptionalGet(value ParamFeeOptional) ParamFee {
 }
 
 //------------------------------------------------------------------------------
+// MonetaryAmount
+
+func NewParamMonetaryAmount(amount ParamFee, currency string) ParamMonetaryAmount {
+	return ParamMonetaryAmount{
+		amount:   amount,
+		currency: importString(currency),
+	}
+}
+
+func ParamMonetaryAmountGetAmount(value ParamMonetaryAmount) ParamFee {
+	return value.amount
+}
+
+func ParamMonetaryAmountGetCurrency(value ParamMonetaryAmount) StringView {
+	return newStringView(value.currency)
+}
+
+func NewParamMonetaryAmountOptionalSet(value ParamMonetaryAmount) ParamMonetaryAmountOptional {
+	return ParamMonetaryAmountOptional{value: value, is_set: true}
+}
+
+func NewParamMonetaryAmountOptionalUnset() ParamMonetaryAmountOptional {
+	return ParamMonetaryAmountOptional{}
+}
+
+func ParamMonetaryAmountOptionalIsSet(value ParamMonetaryAmountOptional) bool {
+	return bool(value.is_set)
+}
+
+func ParamMonetaryAmountOptionalGet(value ParamMonetaryAmountOptional) ParamMonetaryAmount {
+	return value.value
+}
+
+//------------------------------------------------------------------------------
 // AccountID
 
 func CreateParamAccountIDFromUint64(value uint64) ParamAccountID {

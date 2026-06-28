@@ -17,11 +17,11 @@
 
 //! Runtime wrapper for the execution-report fill group.
 
-use openpit::param::{Quantity, Trade};
+use openpit::param::{MonetaryAmount, Quantity, Trade};
 use openpit::pretrade::PreTradeLock;
 use openpit::{
-    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasLeavesQuantity, HasPreTradeLock,
-    RequestFieldAccessError,
+    HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
+    HasLeavesQuantity, HasPreTradeLock, RequestFieldAccessError,
 };
 
 /// Populated execution-report fill group.
@@ -29,6 +29,8 @@ use openpit::{
 pub struct PopulatedExecutionReportFill {
     /// Actual execution trade, or `None` if not yet filled.
     pub last_trade: Option<Trade>,
+    /// Fee charged or rebated for this fill.
+    pub fee: Option<MonetaryAmount>,
     /// Remaining order quantity after this fill.
     pub leaves_quantity: Option<Quantity>,
     /// Order lock payload.
@@ -48,6 +50,12 @@ impl HasExecutionReportIsFinal for PopulatedExecutionReportFill {
     fn is_final(&self) -> Result<bool, RequestFieldAccessError> {
         self.is_final
             .ok_or_else(|| RequestFieldAccessError::new("fill.is_final"))
+    }
+}
+
+impl HasExecutionReportFillFee for PopulatedExecutionReportFill {
+    fn fill_fee(&self) -> Result<Option<MonetaryAmount>, RequestFieldAccessError> {
+        Ok(self.fee.clone())
     }
 }
 
@@ -71,7 +79,7 @@ impl HasPreTradeLock for PopulatedExecutionReportFill {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecutionReportFillAccess {
     /// The fill group is present.
-    Populated(PopulatedExecutionReportFill),
+    Populated(Box<PopulatedExecutionReportFill>),
     /// The fill group is absent.
     Absent,
 }
@@ -90,6 +98,15 @@ impl HasExecutionReportIsFinal for ExecutionReportFillAccess {
         match self {
             Self::Populated(f) => f.is_final(),
             Self::Absent => Err(RequestFieldAccessError::new("fill.is_final")),
+        }
+    }
+}
+
+impl HasExecutionReportFillFee for ExecutionReportFillAccess {
+    fn fill_fee(&self) -> Result<Option<MonetaryAmount>, RequestFieldAccessError> {
+        match self {
+            Self::Populated(f) => f.fill_fee(),
+            Self::Absent => Ok(None),
         }
     }
 }
@@ -118,12 +135,13 @@ mod tests {
 
     #[test]
     fn populated_returns_values() {
-        let access = ExecutionReportFillAccess::Populated(PopulatedExecutionReportFill {
+        let access = ExecutionReportFillAccess::Populated(Box::new(PopulatedExecutionReportFill {
             last_trade: None,
+            fee: None,
             leaves_quantity: Some(Quantity::ZERO),
             lock: PreTradeLock::new(),
             is_final: Some(true),
-        });
+        }));
         assert_eq!(access.last_trade().unwrap(), None);
         assert_eq!(access.leaves_quantity().unwrap(), Quantity::ZERO);
         assert_eq!(access.lock().unwrap(), PreTradeLock::new());
@@ -132,23 +150,25 @@ mod tests {
 
     #[test]
     fn populated_without_is_final_returns_err() {
-        let access = ExecutionReportFillAccess::Populated(PopulatedExecutionReportFill {
+        let access = ExecutionReportFillAccess::Populated(Box::new(PopulatedExecutionReportFill {
             last_trade: None,
+            fee: None,
             leaves_quantity: Some(Quantity::ZERO),
             lock: PreTradeLock::new(),
             is_final: None,
-        });
+        }));
         assert!(access.is_final().is_err());
     }
 
     #[test]
     fn populated_without_leaves_quantity_returns_err() {
-        let access = ExecutionReportFillAccess::Populated(PopulatedExecutionReportFill {
+        let access = ExecutionReportFillAccess::Populated(Box::new(PopulatedExecutionReportFill {
             last_trade: None,
+            fee: None,
             leaves_quantity: None,
             lock: PreTradeLock::new(),
             is_final: Some(true),
-        });
+        }));
         assert!(access.leaves_quantity().is_err());
     }
 
@@ -158,6 +178,11 @@ mod tests {
             ExecutionReportFillAccess::Absent.last_trade().unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn absent_fill_fee_returns_none() {
+        assert_eq!(ExecutionReportFillAccess::Absent.fill_fee().unwrap(), None);
     }
 
     #[test]

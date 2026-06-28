@@ -20,6 +20,7 @@ package configure
 
 import (
 	"fmt"
+	"runtime"
 
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/param"
@@ -562,6 +563,110 @@ func (c Configurator) SpotFundsAccountGroupLimitMode(
 	return nil
 }
 
+// SpotFundsPnlBoundsKillSwitch updates the account-currency P&L bounds axis of
+// the named spot-funds policy.
+//
+// Nil slices leave an axis untouched; non-nil empty slices clear that axis
+// (subject to the policy's at-least-one-barrier rule). Runtime account updates
+// retune bounds and preserve the live accumulated P&L.
+//
+// Returns a *Error on a domain error.
+func (c Configurator) SpotFundsPnlBoundsKillSwitch(
+	name string,
+	globalBarriers []policies.SpotFundsPnlBoundsBarrier,
+	accountGroupBarriers []policies.SpotFundsPnlBoundsAccountGroupBarrier,
+	accountBarriers []policies.SpotFundsPnlBoundsAccountBarrierUpdate,
+) error {
+	var nativeGlobal []native.PretradePoliciesSpotFundsPnlBoundsBarrier
+	if globalBarriers != nil {
+		nativeGlobal = make(
+			[]native.PretradePoliciesSpotFundsPnlBoundsBarrier,
+			0,
+			len(globalBarriers),
+		)
+		for _, b := range globalBarriers {
+			nativeGlobal = append(nativeGlobal, nativeSpotFundsPnlBoundsBarrier(b))
+		}
+	}
+
+	var nativeAccountGroups []native.PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
+	if accountGroupBarriers != nil {
+		nativeAccountGroups = make(
+			[]native.PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
+			0,
+			len(accountGroupBarriers),
+		)
+		for _, b := range accountGroupBarriers {
+			nativeAccountGroups = append(
+				nativeAccountGroups,
+				native.NewPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier(
+					b.AccountGroupID.Handle(),
+					nativeSpotFundsPnlBoundsBarrier(b.Barrier),
+				),
+			)
+		}
+	}
+
+	var nativeAccounts []native.PretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate
+	if accountBarriers != nil {
+		nativeAccounts = make(
+			[]native.PretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate,
+			0,
+			len(accountBarriers),
+		)
+		for _, b := range accountBarriers {
+			nativeAccounts = append(
+				nativeAccounts,
+				native.NewPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate(
+					b.AccountID.Handle(),
+					nativeSpotFundsPnlBoundsBarrier(b.Barrier),
+				),
+			)
+		}
+	}
+
+	configErr := native.EngineConfigureSpotFundsPnlBoundsKillSwitch(
+		c.engine,
+		name,
+		nativeGlobal,
+		nativeAccountGroups,
+		nativeAccounts,
+	)
+	runtime.KeepAlive(globalBarriers)
+	runtime.KeepAlive(accountGroupBarriers)
+	runtime.KeepAlive(accountBarriers)
+	if configErr != nil {
+		return newErrorFromHandle(configErr)
+	}
+	return nil
+}
+
+// SetSpotFundsAccountPnl force-sets the live accumulated account-currency P&L
+// for one account entry of the named spot-funds policy.
+//
+// This is an absolute assignment (upsert). It is distinct from
+// [Configurator.SpotFundsPnlBoundsKillSwitch], which retunes bounds and never
+// touches accumulated P&L.
+func (c Configurator) SetSpotFundsAccountPnl(
+	name string,
+	account param.AccountID,
+	accountCurrency param.Asset,
+	pnl param.Pnl,
+) error {
+	configErr := native.EngineSetSpotFundsAccountPnl(
+		c.engine,
+		name,
+		account.Handle(),
+		accountCurrency.Handle(),
+		pnl.Handle(),
+	)
+	runtime.KeepAlive(accountCurrency)
+	if configErr != nil {
+		return newErrorFromHandle(configErr)
+	}
+	return nil
+}
+
 //------------------------------------------------------------------------------
 // Helpers
 
@@ -570,4 +675,14 @@ func pnlOptionalToNative(value optional.Option[param.Pnl]) native.ParamPnlOption
 		return native.NewParamPnlOptional(v.Handle())
 	}
 	return native.ParamPnlOptional{}
+}
+
+func nativeSpotFundsPnlBoundsBarrier(
+	barrier policies.SpotFundsPnlBoundsBarrier,
+) native.PretradePoliciesSpotFundsPnlBoundsBarrier {
+	return native.NewPretradePoliciesSpotFundsPnlBoundsBarrier(
+		barrier.AccountCurrency.Handle(),
+		pnlOptionalToNative(barrier.LowerBound),
+		pnlOptionalToNative(barrier.UpperBound),
+	)
 }

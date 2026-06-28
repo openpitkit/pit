@@ -40,6 +40,7 @@ from .param import (
     Asset,
     Fee,
     Leverage,
+    MonetaryAmount,
     Pnl,
     PositionEffect,
     PositionSide,
@@ -221,6 +222,7 @@ class ExecutionReportFillDetails:
         self,
         *,
         last_trade: Trade | None = None,
+        fee: MonetaryAmount | None = None,
         leaves_quantity: Quantity | None = None,
         lock: Lock,
         is_final: bool | None = None,
@@ -228,6 +230,10 @@ class ExecutionReportFillDetails:
     @property
     def last_trade(self) -> Trade | None:
         """Actual execution trade."""
+
+    @property
+    def fee(self) -> MonetaryAmount | None:
+        """Fee amount and currency reported for this fill."""
 
     @property
     def leaves_quantity(self) -> Quantity | None:

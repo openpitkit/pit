@@ -24,11 +24,10 @@ use crate::pretrade::policy::{
     missing_required_field_account_block, missing_required_field_reject, PolicyGroupId, PolicyName,
 };
 use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
-use crate::pretrade::{
-    AccountBlock, PostTradeResult, PreTradeContext, PreTradePolicy, Reject, RejectCode,
-    RejectScope, Rejects,
-};
+use crate::pretrade::{AccountBlock, PostTradeResult, PreTradeContext, PreTradePolicy, Rejects};
 use crate::storage::{ConfigCell, Storage, StorageBuilder};
+
+use super::pnl_bounds;
 
 /// Per-settlement P&L bounds configuration for the broker barrier.
 ///
@@ -463,33 +462,42 @@ where
                 .unwrap_or(Pnl::ZERO);
 
             let bb = broker_barrier.and_then(|b| {
-                let sides = breached_sides(b.lower_bound, b.upper_bound, current_pnl);
+                let sides = pnl_bounds::breached_sides(b.lower_bound, b.upper_bound, current_pnl);
                 if sides.is_empty() {
                     None
                 } else {
-                    Some(barrier_breach_reject(
+                    Some(pnl_bounds::barrier_breach_reject(
                         Self::NAME,
                         "pnl kill switch triggered: broker barrier",
                         &sides,
-                        b,
+                        b.lower_bound,
+                        b.upper_bound,
                         current_pnl,
+                        "settlement asset",
+                        &b.settlement_asset,
                         account_id,
                     ))
                 }
             });
 
             let ab = account_barrier.and_then(|a| {
-                let sides =
-                    breached_sides(a.barrier.lower_bound, a.barrier.upper_bound, current_pnl);
+                let sides = pnl_bounds::breached_sides(
+                    a.barrier.lower_bound,
+                    a.barrier.upper_bound,
+                    current_pnl,
+                );
                 if sides.is_empty() {
                     None
                 } else {
-                    Some(barrier_breach_reject(
+                    Some(pnl_bounds::barrier_breach_reject(
                         Self::NAME,
                         "pnl kill switch triggered: account + asset barrier",
                         &sides,
-                        &a.barrier,
+                        a.barrier.lower_bound,
+                        a.barrier.upper_bound,
                         current_pnl,
+                        "settlement asset",
+                        &a.barrier.settlement_asset,
                         account_id,
                     ))
                 }
@@ -572,8 +580,9 @@ where
             Ok(v) => v,
             Err(_) => {
                 return Some(PostTradeResult::blocks_only(vec![
-                    pnl_calculation_failed_block(
+                    pnl_bounds::pnl_calculation_failed_block(
                         self,
+                        "pnl accumulation overflow",
                         format!(
                             "pnl + fee overflow: pnl {pnl_delta}, fee {fee}, \
                          settlement asset {settlement}, account {account_id}"
@@ -591,8 +600,9 @@ where
                 let updated = match previous.checked_add(pnl_with_fee) {
                     Ok(value) => value,
                     Err(_) => {
-                        return Some(pnl_calculation_failed_block(
+                        return Some(pnl_bounds::pnl_calculation_failed_block(
                             self,
+                            "pnl accumulation overflow",
                             format!(
                                 "realized pnl + pnl_with_fee overflow: \
                                  previous {previous}, increment {pnl_with_fee}, \
@@ -616,10 +626,8 @@ where
                 });
 
                 if outside {
-                    Some(AccountBlock::new(
+                    Some(pnl_bounds::pnl_breach_account_block(
                         Self::NAME,
-                        RejectCode::PnlKillSwitchTriggered,
-                        "pnl kill switch triggered",
                         format!(
                             "realized pnl {updated}, settlement asset {settlement}, \
                              account {account_id}"
@@ -635,43 +643,6 @@ where
     }
 }
 
-fn barrier_breach_reject(
-    policy_name: &'static str,
-    reason: &'static str,
-    breached_sides: &[&'static str],
-    barrier: &PnlBoundsBrokerBarrier,
-    realized: Pnl,
-    account_id: AccountId,
-) -> Reject {
-    let desc = breached_sides.join(" and ");
-    let settlement = &barrier.settlement_asset;
-    let lower_bound = barrier.lower_bound;
-    let upper_bound = barrier.upper_bound;
-    Reject::new(
-        policy_name,
-        RejectScope::Account,
-        RejectCode::PnlKillSwitchTriggered,
-        reason,
-        format!(
-            "{desc} bound breached: realized pnl {realized}, \
-             lower_bound {lower_bound:?}, upper_bound {upper_bound:?}, \
-             settlement asset {settlement}, account {account_id}"
-        ),
-    )
-}
-
-fn pnl_calculation_failed_block<Policy: PolicyName + ?Sized>(
-    policy: &Policy,
-    details: String,
-) -> AccountBlock {
-    AccountBlock::new(
-        policy.policy_name(),
-        RejectCode::OrderValueCalculationFailed,
-        "pnl accumulation overflow",
-        details,
-    )
-}
-
 fn is_outside_bounds(
     broker_barriers: &HashMap<Asset, PnlBoundsBrokerBarrier>,
     account_barriers: &HashMap<AccountId, HashMap<Asset, PnlBoundsAccountAssetBarrierUpdate>>,
@@ -680,7 +651,7 @@ fn is_outside_bounds(
     account_id: AccountId,
 ) -> bool {
     if let Some(b) = broker_barriers.get(settlement) {
-        if !breached_sides(b.lower_bound, b.upper_bound, pnl).is_empty() {
+        if pnl_bounds::outside_bounds(b.lower_bound, b.upper_bound, pnl) {
             return true;
         }
     }
@@ -688,31 +659,11 @@ fn is_outside_bounds(
         .get(&account_id)
         .and_then(|m| m.get(settlement))
     {
-        if !breached_sides(b.barrier.lower_bound, b.barrier.upper_bound, pnl).is_empty() {
+        if pnl_bounds::outside_bounds(b.barrier.lower_bound, b.barrier.upper_bound, pnl) {
             return true;
         }
     }
     false
-}
-
-/// Returns the breach side labels for a given realized P&L against bounds.
-fn breached_sides(
-    lower_bound: Option<Pnl>,
-    upper_bound: Option<Pnl>,
-    realized: Pnl,
-) -> Vec<&'static str> {
-    let mut sides = Vec::new();
-    if let Some(lb) = lower_bound {
-        if realized < lb {
-            sides.push("lower");
-        }
-    }
-    if let Some(ub) = upper_bound {
-        if realized > ub {
-            sides.push("upper");
-        }
-    }
-    sides
 }
 
 fn validate_bounds(
@@ -720,7 +671,7 @@ fn validate_bounds(
     upper_bound: &Option<Pnl>,
     settlement_asset: &Asset,
 ) -> Result<(), PnlBoundsKillSwitchPolicyError> {
-    if lower_bound.is_none() && upper_bound.is_none() {
+    if !pnl_bounds::has_configured_bound(lower_bound, upper_bound) {
         return Err(PnlBoundsKillSwitchPolicyError::NoBoundsConfigured {
             settlement_asset: settlement_asset.clone(),
         });

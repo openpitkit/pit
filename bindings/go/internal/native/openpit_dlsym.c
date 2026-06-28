@@ -354,7 +354,10 @@ static bool (*_fn_openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl
 static bool (*_fn_openpit_engine_builder_add_builtin_rate_limit_policy)(OpenPitEngineBuilder *, uint16_t, const OpenPitPretradePoliciesRateLimitBrokerBarrier *, const OpenPitPretradePoliciesRateLimitAssetBarrier *, size_t, const OpenPitPretradePoliciesRateLimitAccountBarrier *, size_t, const OpenPitPretradePoliciesRateLimitAccountAssetBarrier *, size_t, OpenPitOutError) = NULL;
 static bool (*_fn_openpit_engine_configure_rate_limit)(OpenPitEngine *, OpenPitStringView, const OpenPitPretradePoliciesRateLimitBrokerBarrier *, bool, const OpenPitPretradePoliciesRateLimitAssetBarrier *, size_t, bool, const OpenPitPretradePoliciesRateLimitAccountBarrier *, size_t, bool, const OpenPitPretradePoliciesRateLimitAccountAssetBarrier *, size_t, bool, OpenPitConfigureError **) = NULL;
 static bool (*_fn_openpit_engine_builder_add_builtin_spot_funds_policy)(OpenPitEngineBuilder *, const OpenPitMarketDataService *, const uint16_t *, uint8_t, const OpenPitPretradePoliciesSpotFundsOverride *, size_t, uint16_t, OpenPitOutError) = NULL;
+static bool (*_fn_openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy)(OpenPitEngineBuilder *, const OpenPitMarketDataService *, uint16_t, const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier *, size_t, const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier *, size_t, const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier *, size_t, OpenPitOutError) = NULL;
 static bool (*_fn_openpit_engine_configure_spot_funds)(OpenPitEngine *, OpenPitStringView, uint16_t, bool, uint8_t, bool, const OpenPitPretradePoliciesSpotFundsOverride *, size_t, bool, OpenPitConfigureError **) = NULL;
+static bool (*_fn_openpit_engine_configure_spot_funds_pnl_bounds_killswitch)(OpenPitEngine *, OpenPitStringView, const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier *, size_t, bool, const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier *, size_t, bool, const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate *, size_t, bool, OpenPitConfigureError **) = NULL;
+static bool (*_fn_openpit_engine_configure_spot_funds_set_account_pnl)(OpenPitEngine *, OpenPitStringView, OpenPitParamAccountId, OpenPitStringView, OpenPitParamPnl, OpenPitConfigureError **) = NULL;
 static bool (*_fn_openpit_engine_configure_spot_funds_global_limit_mode)(OpenPitEngine *, OpenPitStringView, uint8_t, OpenPitConfigureError **) = NULL;
 static bool (*_fn_openpit_engine_configure_spot_funds_account_limit_mode)(OpenPitEngine *, OpenPitStringView, OpenPitParamAccountId, uint8_t, bool, OpenPitConfigureError **) = NULL;
 static bool (*_fn_openpit_engine_configure_spot_funds_account_group_limit_mode)(OpenPitEngine *, OpenPitStringView, OpenPitParamAccountGroupId, uint8_t, bool, OpenPitConfigureError **) = NULL;
@@ -1084,8 +1087,14 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_engine_configure_rate_limit == NULL) return "openpit_engine_configure_rate_limit";
     _fn_openpit_engine_builder_add_builtin_spot_funds_policy = (bool (*)(OpenPitEngineBuilder *, const OpenPitMarketDataService *, const uint16_t *, uint8_t, const OpenPitPretradePoliciesSpotFundsOverride *, size_t, uint16_t, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_builder_add_builtin_spot_funds_policy");
     if (_fn_openpit_engine_builder_add_builtin_spot_funds_policy == NULL) return "openpit_engine_builder_add_builtin_spot_funds_policy";
+    _fn_openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy = (bool (*)(OpenPitEngineBuilder *, const OpenPitMarketDataService *, uint16_t, const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier *, size_t, const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier *, size_t, const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier *, size_t, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy");
+    if (_fn_openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy == NULL) return "openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy";
     _fn_openpit_engine_configure_spot_funds = (bool (*)(OpenPitEngine *, OpenPitStringView, uint16_t, bool, uint8_t, bool, const OpenPitPretradePoliciesSpotFundsOverride *, size_t, bool, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_spot_funds");
     if (_fn_openpit_engine_configure_spot_funds == NULL) return "openpit_engine_configure_spot_funds";
+    _fn_openpit_engine_configure_spot_funds_pnl_bounds_killswitch = (bool (*)(OpenPitEngine *, OpenPitStringView, const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier *, size_t, bool, const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier *, size_t, bool, const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate *, size_t, bool, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_spot_funds_pnl_bounds_killswitch");
+    if (_fn_openpit_engine_configure_spot_funds_pnl_bounds_killswitch == NULL) return "openpit_engine_configure_spot_funds_pnl_bounds_killswitch";
+    _fn_openpit_engine_configure_spot_funds_set_account_pnl = (bool (*)(OpenPitEngine *, OpenPitStringView, OpenPitParamAccountId, OpenPitStringView, OpenPitParamPnl, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_spot_funds_set_account_pnl");
+    if (_fn_openpit_engine_configure_spot_funds_set_account_pnl == NULL) return "openpit_engine_configure_spot_funds_set_account_pnl";
     _fn_openpit_engine_configure_spot_funds_global_limit_mode = (bool (*)(OpenPitEngine *, OpenPitStringView, uint8_t, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_spot_funds_global_limit_mode");
     if (_fn_openpit_engine_configure_spot_funds_global_limit_mode == NULL) return "openpit_engine_configure_spot_funds_global_limit_mode";
     _fn_openpit_engine_configure_spot_funds_account_limit_mode = (bool (*)(OpenPitEngine *, OpenPitStringView, OpenPitParamAccountId, uint8_t, bool, OpenPitConfigureError **))openpit_dlsym(handle, "openpit_engine_configure_spot_funds_account_limit_mode");
@@ -2531,8 +2540,20 @@ bool openpit_engine_builder_add_builtin_spot_funds_policy(OpenPitEngineBuilder *
     return _fn_openpit_engine_builder_add_builtin_spot_funds_policy(builder, market_data, market_slippage_bps, pricing_source, instrument_overrides, overrides_len, policy_group_id, out_error);
 }
 
+bool openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(OpenPitEngineBuilder * builder, const OpenPitMarketDataService * market_data, uint16_t policy_group_id, const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global, size_t global_len, const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier * account_group, size_t account_group_len, const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier * account, size_t account_len, OpenPitOutError out_error) {
+    return _fn_openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(builder, market_data, policy_group_id, global, global_len, account_group, account_group_len, account, account_len, out_error);
+}
+
 bool openpit_engine_configure_spot_funds(OpenPitEngine * engine, OpenPitStringView name, uint16_t global_slippage_bps, bool has_global_slippage_bps, uint8_t pricing_source, bool has_pricing_source, const OpenPitPretradePoliciesSpotFundsOverride * instrument_overrides, size_t overrides_len, bool has_overrides, OpenPitConfigureError ** out_error) {
     return _fn_openpit_engine_configure_spot_funds(engine, name, global_slippage_bps, has_global_slippage_bps, pricing_source, has_pricing_source, instrument_overrides, overrides_len, has_overrides, out_error);
+}
+
+bool openpit_engine_configure_spot_funds_pnl_bounds_killswitch(OpenPitEngine * engine, OpenPitStringView name, const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global, size_t global_len, bool has_global, const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier * account_group, size_t account_group_len, bool has_account_group, const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate * account, size_t account_len, bool has_account, OpenPitConfigureError ** out_error) {
+    return _fn_openpit_engine_configure_spot_funds_pnl_bounds_killswitch(engine, name, global, global_len, has_global, account_group, account_group_len, has_account_group, account, account_len, has_account, out_error);
+}
+
+bool openpit_engine_configure_spot_funds_set_account_pnl(OpenPitEngine * engine, OpenPitStringView name, OpenPitParamAccountId account_id, OpenPitStringView account_currency, OpenPitParamPnl pnl, OpenPitConfigureError ** out_error) {
+    return _fn_openpit_engine_configure_spot_funds_set_account_pnl(engine, name, account_id, account_currency, pnl, out_error);
 }
 
 bool openpit_engine_configure_spot_funds_global_limit_mode(OpenPitEngine * engine, OpenPitStringView name, uint8_t mode, OpenPitConfigureError ** out_error) {

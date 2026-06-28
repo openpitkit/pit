@@ -27,9 +27,9 @@ use std::time::Duration;
 use openpit::marketdata::QuoteResolution;
 use openpit::param::{AccountGroupId, AccountGroupIdError, DEFAULT_ACCOUNT_GROUP};
 use openpit::param::{
-    AccountId, AdjustmentAmount, Asset, CashFlow, Fee, Leverage, Notional, Pnl, PositionEffect,
-    PositionMode, PositionSide, PositionSize, Price, Quantity, RoundingStrategy, Side, Trade,
-    TradeAmount, Volume,
+    AccountId, AdjustmentAmount, Asset, CashFlow, Fee, Leverage, MonetaryAmount, Notional, Pnl,
+    PositionEffect, PositionMode, PositionSide, PositionSize, Price, Quantity, RoundingStrategy,
+    Side, Trade, TradeAmount, Volume,
 };
 use openpit::pretrade::policies::OrderValidationPolicy;
 use openpit::pretrade::policies::PnlBoundsAccountAssetBarrier;
@@ -37,6 +37,10 @@ use openpit::pretrade::policies::PnlBoundsAccountAssetBarrierUpdate;
 use openpit::pretrade::policies::PnlBoundsBrokerBarrier;
 use openpit::pretrade::policies::PnlBoundsKillSwitchPolicy;
 use openpit::pretrade::policies::PnlBoundsKillSwitchSettings;
+use openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrier;
+use openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrierUpdate;
+use openpit::pretrade::policies::SpotFundsPnlBoundsAccountGroupBarrier;
+use openpit::pretrade::policies::SpotFundsPnlBoundsBarrier;
 use openpit::pretrade::policies::SpotFundsPolicy;
 use openpit::pretrade::policies::SpotFundsSettings;
 use openpit::pretrade::policies::{
@@ -1372,6 +1376,96 @@ impl PyConfigurator {
         })
         .map_err(convert_configure_error)
     }
+
+    /// Retune the account-currency P&L bounds axis of a spot-funds policy.
+    ///
+    /// ``name`` must match the name given to the policy at registration time.
+    /// ``account_barriers`` accepts only
+    /// ``SpotFundsPnlBoundsAccountBarrierUpdate`` entities. Runtime updates
+    /// preserve live accumulated P&L and cannot provide construction-only
+    /// ``initial_pnl``.
+    ///
+    /// An axis passed as ``None`` is left unchanged; a supplied list replaces
+    /// the axis wholesale, and an empty list clears it. Each barrier must
+    /// still configure at least one bound.
+    #[pyo3(signature = (name, *, global_barriers = None, account_group_barriers = None, account_barriers = None))]
+    fn spot_funds_pnl_bounds_killswitch(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        global_barriers: Option<Vec<Bound<'_, PyAny>>>,
+        account_group_barriers: Option<Vec<Bound<'_, PyAny>>>,
+        account_barriers: Option<Vec<Bound<'_, PyAny>>>,
+    ) -> PyResult<()> {
+        let global: Option<Vec<SpotFundsPnlBoundsBarrier>> = global_barriers
+            .map(|v| {
+                v.iter()
+                    .map(parse_spot_funds_pnl_bounds_barrier)
+                    .collect::<PyResult<_>>()
+            })
+            .transpose()?;
+        let account_group: Option<Vec<SpotFundsPnlBoundsAccountGroupBarrier>> =
+            account_group_barriers
+                .map(|v| {
+                    v.iter()
+                        .map(parse_spot_funds_pnl_account_group_barrier)
+                        .collect::<PyResult<_>>()
+                })
+                .transpose()?;
+        let account: Option<Vec<SpotFundsPnlBoundsAccountBarrierUpdate>> = account_barriers
+            .map(|v| {
+                v.iter()
+                    .map(parse_spot_funds_pnl_account_barrier_update)
+                    .collect::<PyResult<_>>()
+            })
+            .transpose()?;
+
+        py.detach(|| {
+            self.inner.spot_funds(name, |s| {
+                if let Some(v) = &global {
+                    s.set_pnl_global_barriers(v.iter().cloned())?;
+                }
+                if let Some(v) = &account_group {
+                    s.set_pnl_account_group_barriers(v.iter().cloned())?;
+                }
+                if let Some(v) = &account {
+                    s.set_pnl_account_barriers(v.iter().cloned())?;
+                }
+                Ok::<_, openpit::pretrade::policies::SpotFundsConfigError>(())
+            })
+        })
+        .map_err(convert_configure_error)
+    }
+
+    /// Force-set the live accumulated account-currency P&L for a spot-funds
+    /// policy.
+    ///
+    /// ``name`` must match the name given to the policy at registration time.
+    /// Unlike :meth:`spot_funds_pnl_bounds_killswitch`, which retunes bounds
+    /// and never touches accumulated P&L, this is an absolute assignment
+    /// (upsert) of the live accumulator for ``(account, account_currency)``;
+    /// the new value is evaluated against the live bounds when the next P&L
+    /// delta is applied by an execution report. A breach trips the kill
+    /// switch, which latches an engine-level account block that this call
+    /// does not clear.
+    #[pyo3(signature = (name, *, account, account_currency, pnl))]
+    fn set_spot_funds_account_pnl(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        account: &Bound<'_, PyAny>,
+        account_currency: &Bound<'_, PyAny>,
+        pnl: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let account = parse_account_id_input(account)?;
+        let account_currency = parse_asset_input(account_currency)?;
+        let pnl = parse_pnl_input(pnl)?;
+        py.detach(|| {
+            self.inner
+                .set_spot_funds_account_pnl(name, account, account_currency, pnl)
+        })
+        .map_err(convert_configure_error)
+    }
 }
 
 /// Handle to the engine's account-group registry and pre-trade block controls.
@@ -2642,12 +2736,13 @@ fn extract_python_execution_report(obj: &Bound<'_, PyAny>) -> PyResult<Execution
         None => ExecutionReportFillAccess::Absent,
         Some(py_fill) => {
             let f = py_fill.bind(py).borrow();
-            ExecutionReportFillAccess::Populated(PopulatedExecutionReportFill {
+            ExecutionReportFillAccess::Populated(Box::new(PopulatedExecutionReportFill {
                 last_trade: f.last_trade,
+                fee: f.fee.clone(),
                 leaves_quantity: f.leaves_quantity,
                 lock: f.lock.clone(),
                 is_final: f.is_final,
-            })
+            }))
         }
     };
 
@@ -3563,6 +3658,37 @@ impl PyReadyEngineBuilder {
         Ok(slf)
     }
 
+    #[pyo3(name = "_add_builtin_spot_funds_pnl_bounds_killswitch", signature = (*, policy_group_id = 0, market_data = None, global_barriers = vec![], account_group_barriers = vec![], account_barriers = vec![]))]
+    fn add_builtin_spot_funds_pnl_bounds_killswitch<'py>(
+        slf: PyRef<'py, Self>,
+        policy_group_id: u16,
+        market_data: Option<PyRef<'_, PyMarketDataService>>,
+        global_barriers: Vec<Bound<'_, PyAny>>,
+        account_group_barriers: Vec<Bound<'_, PyAny>>,
+        account_barriers: Vec<Bound<'_, PyAny>>,
+    ) -> PyResult<PyRef<'py, Self>> {
+        let engine_sync = slf.sync_policy;
+        let md_handle = market_data.map(|svc| (svc.inner.clone(), svc.mode));
+        let policy = {
+            let state = slf.state.borrow();
+            let state_ref = state
+                .as_ref()
+                .ok_or_else(|| PyValueError::new_err("engine builder is no longer available"))?;
+            let storage_builder = state_ref.storage_builder();
+            make_spot_funds_pnl_bounds_killswitch_policy(
+                storage_builder,
+                PolicyGroupId::new(policy_group_id),
+                engine_sync,
+                md_handle,
+                global_barriers,
+                account_group_barriers,
+                account_barriers,
+            )?
+        };
+        slf.add_configurable_spot_funds(policy)?;
+        Ok(slf)
+    }
+
     fn builtin<'py>(
         slf: &Bound<'py, Self>,
         builtin_ready_builder: &Bound<'_, PyAny>,
@@ -3943,6 +4069,68 @@ fn make_pnl_killswitch_policy(
         .with_policy_group_id(policy_group_id))
 }
 
+fn parse_spot_funds_pnl_bounds_barrier(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<SpotFundsPnlBoundsBarrier> {
+    ensure_policy_entity(obj, "SpotFundsPnlBoundsBarrier")?;
+    let account_currency = obj.getattr("account_currency")?;
+    let lower_bound_value = obj.getattr("lower_bound")?;
+    let lower_bound = if lower_bound_value.is_none() {
+        None
+    } else {
+        Some(parse_pnl_input(&lower_bound_value)?)
+    };
+    let upper_bound_value = obj.getattr("upper_bound")?;
+    let upper_bound = if upper_bound_value.is_none() {
+        None
+    } else {
+        Some(parse_pnl_input(&upper_bound_value)?)
+    };
+    Ok(SpotFundsPnlBoundsBarrier {
+        account_currency: parse_asset_input(&account_currency)?,
+        lower_bound,
+        upper_bound,
+    })
+}
+
+fn parse_spot_funds_pnl_account_group_barrier(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<SpotFundsPnlBoundsAccountGroupBarrier> {
+    ensure_policy_entity(obj, "SpotFundsPnlBoundsAccountGroupBarrier")?;
+    let barrier_obj = obj.getattr("barrier")?;
+    let account_group_id_obj = obj.getattr("account_group_id")?;
+    Ok(SpotFundsPnlBoundsAccountGroupBarrier {
+        barrier: parse_spot_funds_pnl_bounds_barrier(&barrier_obj)?,
+        account_group_id: parse_account_group_id_input(&account_group_id_obj)?,
+    })
+}
+
+fn parse_spot_funds_pnl_account_barrier(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<SpotFundsPnlBoundsAccountBarrier> {
+    ensure_policy_entity(obj, "SpotFundsPnlBoundsAccountBarrier")?;
+    let barrier_obj = obj.getattr("barrier")?;
+    let account_id_obj = obj.getattr("account_id")?;
+    let initial_pnl_obj = obj.getattr("initial_pnl")?;
+    Ok(SpotFundsPnlBoundsAccountBarrier {
+        barrier: parse_spot_funds_pnl_bounds_barrier(&barrier_obj)?,
+        account_id: parse_account_id_input(&account_id_obj)?,
+        initial_pnl: parse_pnl_input(&initial_pnl_obj)?,
+    })
+}
+
+fn parse_spot_funds_pnl_account_barrier_update(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<SpotFundsPnlBoundsAccountBarrierUpdate> {
+    ensure_policy_entity(obj, "SpotFundsPnlBoundsAccountBarrierUpdate")?;
+    let barrier_obj = obj.getattr("barrier")?;
+    let account_id_obj = obj.getattr("account_id")?;
+    Ok(SpotFundsPnlBoundsAccountBarrierUpdate {
+        barrier: parse_spot_funds_pnl_bounds_barrier(&barrier_obj)?,
+        account_id: parse_account_id_input(&account_id_obj)?,
+    })
+}
+
 fn make_order_validation_start_check(policy_group_id: PolicyGroupId) -> BoxedPreTradePolicy {
     BoxedPreTradePolicy {
         inner: Box::new(OrderValidationPolicy::new().with_policy_group_id(policy_group_id)),
@@ -4153,6 +4341,77 @@ fn make_spot_funds_policy(
         instrument_overrides,
     )
     .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(SpotFundsPolicy::<EngineLocking, EngineLocking>::new(
+        settings,
+        market_orders,
+        storage_builder,
+    )
+    .with_policy_group_id(policy_group_id))
+}
+
+fn make_spot_funds_pnl_bounds_killswitch_policy(
+    storage_builder: &StorageBuilder<openpit_interop::StorageLockingPolicyFactory>,
+    policy_group_id: PolicyGroupId,
+    engine_sync: SyncMode,
+    market_data: Option<(EngineHandle<MarketDataService<EngineLocking>>, SyncMode)>,
+    global_barriers: Vec<Bound<'_, PyAny>>,
+    account_group_barriers: Vec<Bound<'_, PyAny>>,
+    account_barriers: Vec<Bound<'_, PyAny>>,
+) -> PyResult<SpotFundsPolicy<EngineLocking, EngineLocking>> {
+    if global_barriers.is_empty()
+        && account_group_barriers.is_empty()
+        && account_barriers.is_empty()
+    {
+        return Err(PyValueError::new_err(
+            "spot funds pnl bounds policy requires at least one barrier",
+        ));
+    }
+
+    let global = global_barriers
+        .iter()
+        .map(parse_spot_funds_pnl_bounds_barrier)
+        .collect::<PyResult<Vec<_>>>()?;
+    let account_group = account_group_barriers
+        .iter()
+        .map(parse_spot_funds_pnl_account_group_barrier)
+        .collect::<PyResult<Vec<_>>>()?;
+    let account = account_barriers
+        .iter()
+        .map(parse_spot_funds_pnl_account_barrier)
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let market_orders: Option<SpotFundsMarketData<EngineLocking>> = match market_data {
+        Some((handle, md_mode)) => {
+            if matches!(engine_sync, SyncMode::Full | SyncMode::Account)
+                && md_mode == SyncMode::None
+            {
+                return Err(PyValueError::new_err(
+                    "market data service is in no-sync mode but the engine is multi-threaded; \
+                     call .full_sync() on the market-data builder before .build()",
+                ));
+            }
+            Some(SpotFundsMarketData::<EngineLocking>::new(handle))
+        }
+        None => None,
+    };
+
+    let mut settings = SpotFundsSettings::new(
+        0,
+        SpotFundsPricingSource::Mark,
+        std::iter::empty::<(SpotFundsOverrideTarget, SpotFundsOverride)>(),
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    settings
+        .set_pnl_global_barriers(global)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    settings
+        .set_pnl_account_group_barriers(account_group)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let settings = settings
+        .with_initial_pnl_account_barriers(account)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
     Ok(SpotFundsPolicy::<EngineLocking, EngineLocking>::new(
         settings,
         market_orders,
@@ -6836,6 +7095,7 @@ impl PyFinancialImpact {
 #[derive(Clone)]
 struct PyExecutionReportFillDetails {
     last_trade: Option<Trade>,
+    fee: Option<MonetaryAmount>,
     leaves_quantity: Option<Quantity>,
     lock: PreTradeLock,
     is_final: Option<bool>,
@@ -6844,9 +7104,10 @@ struct PyExecutionReportFillDetails {
 #[pymethods]
 impl PyExecutionReportFillDetails {
     #[new]
-    #[pyo3(signature = (*, last_trade = None, leaves_quantity = None, lock, is_final = None))]
+    #[pyo3(signature = (*, last_trade = None, fee = None, leaves_quantity = None, lock, is_final = None))]
     fn new(
         last_trade: Option<&Bound<'_, PyAny>>,
+        fee: Option<&Bound<'_, PyAny>>,
         leaves_quantity: Option<&Bound<'_, PyAny>>,
         lock: &Bound<'_, PyAny>,
         is_final: Option<bool>,
@@ -6858,6 +7119,9 @@ impl PyExecutionReportFillDetails {
                         .extract::<PyRef<'_, PyTrade>>()
                         .map(|value| value.inner)
                 })
+                .transpose()?,
+            fee: fee
+                .map(|value| parse_monetary_amount_input("fee", value))
                 .transpose()?,
             leaves_quantity: leaves_quantity.map(parse_quantity_input).transpose()?,
             lock: lock.extract::<PyRef<'_, PyPreTradeLock>>()?.inner.clone(),
@@ -6878,6 +7142,22 @@ impl PyExecutionReportFillDetails {
                     .extract::<PyRef<'_, PyTrade>>()
                     .map(|value| value.inner)
             })
+            .transpose()?;
+        Ok(())
+    }
+
+    #[getter]
+    fn fee<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        self.fee
+            .as_ref()
+            .map(|inner| make_python_monetary_amount(py, inner))
+            .transpose()
+    }
+
+    #[setter]
+    fn set_fee(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.fee = value
+            .map(|value| parse_monetary_amount_input("fee", value))
             .transpose()?;
         Ok(())
     }
@@ -6920,8 +7200,9 @@ impl PyExecutionReportFillDetails {
 
     fn __repr__(&self) -> String {
         format!(
-            "ExecutionReportFillDetails(last_trade={:?}, leaves_quantity={:?}, lock={:?}, is_final={:?})",
+            "ExecutionReportFillDetails(last_trade={:?}, fee={:?}, leaves_quantity={:?}, lock={:?}, is_final={:?})",
             self.last_trade().map(|trade| trade.__repr__()),
+            self.fee,
             self.leaves_quantity().map(|quantity| quantity.inner.to_string()),
             self.lock().__repr__(),
             self.is_final(),
@@ -7508,6 +7789,32 @@ fn parse_asset_input(value: &Bound<'_, PyAny>) -> PyResult<Asset> {
         return parse_asset(&value);
     }
     Err(PyTypeError::new_err("asset must be a str"))
+}
+
+fn parse_monetary_amount_input(field: &str, value: &Bound<'_, PyAny>) -> PyResult<MonetaryAmount> {
+    let type_error =
+        || PyTypeError::new_err(format!("{field} must be openpit.param.MonetaryAmount"));
+    let amount = value.getattr("amount").map_err(|_| type_error())?;
+    let currency = value.getattr("currency").map_err(|_| type_error())?;
+    Ok(MonetaryAmount {
+        amount: parse_fee_input(&amount)?,
+        currency: parse_asset_input(&currency)?,
+    })
+}
+
+fn make_python_monetary_amount<'py>(
+    py: Python<'py>,
+    value: &MonetaryAmount,
+) -> PyResult<Bound<'py, PyAny>> {
+    let param = py.import("openpit.param")?;
+    let cls = param.getattr("MonetaryAmount")?;
+    let amount = Py::new(
+        py,
+        PyFee {
+            inner: value.amount,
+        },
+    )?;
+    cls.call1((amount, value.currency.to_string()))
 }
 
 #[pyfunction]

@@ -1583,6 +1583,95 @@ func TestExampleWikiSpotFundsMarketOrders(t *testing.T) {
 	reservation.CommitAndClose()
 }
 
+// Used in: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch / Configuring Barriers
+func TestExampleWikiSpotFundsPnlKillSwitchBuilder(t *testing.T) {
+	usd, _ := param.NewAsset("USD")
+	account := param.NewAccountIDFromUint64(99224416)
+	lower, _ := param.NewPnlFromString("-1000")
+	accountLower, _ := param.NewPnlFromString("-250")
+	seed, _ := param.NewPnlFromString("0")
+
+	// The PnL kill switch is a distinct spot-funds builder entry point; it
+	// produces the same SpotFundsPolicy, registered under the same name.
+	engine, err := NewEngineBuilder().
+		NoSync().
+		Builtin(
+			policies.BuildSpotFundsPnlBoundsKillswitch().
+				GlobalBarriers(policies.SpotFundsPnlBoundsBarrier{
+					AccountCurrency: usd,
+					LowerBound:      optional.Some(lower),
+				}).
+				AccountBarriers(policies.SpotFundsPnlBoundsAccountBarrier{
+					AccountID: account,
+					Barrier: policies.SpotFundsPnlBoundsBarrier{
+						AccountCurrency: usd,
+						LowerBound:      optional.Some(accountLower),
+					},
+					InitialPnl: seed,
+				}),
+		).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+}
+
+// Used in: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch / Runtime Reconfiguration
+func TestExampleWikiSpotFundsPnlKillSwitchReconfigure(t *testing.T) {
+	// Harness scaffolding: a spot-funds engine with a per-account barrier the
+	// snippet then retunes and force-sets.
+	usdSeed, _ := param.NewAsset("USD")
+	seedAccount := param.NewAccountIDFromUint64(99224416)
+	seedLower, _ := param.NewPnlFromString("-250")
+	seedZero, _ := param.NewPnlFromString("0")
+	engine, err := NewEngineBuilder().
+		NoSync().
+		Builtin(
+			policies.BuildSpotFundsPnlBoundsKillswitch().
+				AccountBarriers(policies.SpotFundsPnlBoundsAccountBarrier{
+					AccountID: seedAccount,
+					Barrier: policies.SpotFundsPnlBoundsBarrier{
+						AccountCurrency: usdSeed,
+						LowerBound:      optional.Some(seedLower),
+					},
+					InitialPnl: seedZero,
+				}),
+		).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	usd, _ := param.NewAsset("USD")
+	account := param.NewAccountIDFromUint64(99224416)
+	newLower, _ := param.NewPnlFromString("-500")
+	forced, _ := param.NewPnlFromString("-120")
+
+	// Retune the account-currency PnL barriers; live accumulated PnL is untouched.
+	if err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
+		policies.SpotFundsPolicyName,
+		[]policies.SpotFundsPnlBoundsBarrier{
+			{AccountCurrency: usd, LowerBound: optional.Some(newLower)},
+		},
+		nil,
+		nil,
+	); err != nil {
+		t.Fatalf("SpotFundsPnlBoundsKillSwitch() error = %v", err)
+	}
+
+	// Force-set the live accumulated PnL for one (account, account currency).
+	if err := engine.Configure().SetSpotFundsAccountPnl(
+		policies.SpotFundsPolicyName,
+		account,
+		usd,
+		forced,
+	); err != nil {
+		t.Fatalf("SetSpotFundsAccountPnl() error = %v", err)
+	}
+}
+
 // Used in: pit.wiki/Pre-Trade-Lock.md - Persisting and Restoring a Lock
 func TestExampleWikiPreTradeLockPersistence(t *testing.T) {
 	engine, err := NewEngineBuilder().

@@ -16,12 +16,13 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 use openpit::param::{
-    AccountGroupId, AccountId, AdjustmentAmount, Asset, Pnl, PositionSize, Price, Quantity, Side,
-    Trade, TradeAmount,
+    AccountGroupId, AccountId, AdjustmentAmount, Asset, Fee, MonetaryAmount, Pnl, PositionSize,
+    Price, Quantity, Side, Trade, TradeAmount,
 };
 use openpit::pretrade::policies::{
     RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings, SpotFundsConfigError,
-    SpotFundsPolicy, SpotFundsPricingSource, SpotFundsSettings,
+    SpotFundsPnlBoundsAccountGroupBarrier, SpotFundsPnlBoundsBarrier, SpotFundsPolicy,
+    SpotFundsPricingSource, SpotFundsSettings,
 };
 use openpit::pretrade::SpotFundsLimitMode;
 use openpit::pretrade::{
@@ -34,9 +35,9 @@ use openpit::{
     HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
     HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
     HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound, HasAccountId,
-    HasBalanceAsset, HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasInstrument,
-    HasLeavesQuantity, HasPreTradeLock, HasSide, Instrument, OrderOperation,
-    RequestFieldAccessError, SpotFundsMarketData,
+    HasBalanceAsset, HasExecutionReportFillFee, HasExecutionReportIsFinal,
+    HasExecutionReportLastTrade, HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide,
+    Instrument, OrderOperation, RequestFieldAccessError, SpotFundsMarketData,
 };
 
 type TestOrder = OrderOperation;
@@ -51,6 +52,7 @@ struct TestReport {
     account_id: AccountId,
     side: Side,
     last_trade: Option<Trade>,
+    fee: Option<MonetaryAmount>,
     leaves_quantity: Quantity,
     is_final: bool,
     lock: PreTradeLock,
@@ -77,6 +79,12 @@ impl HasSide for TestReport {
 impl HasExecutionReportLastTrade for TestReport {
     fn last_trade(&self) -> Result<Option<Trade>, RequestFieldAccessError> {
         Ok(self.last_trade)
+    }
+}
+
+impl HasExecutionReportFillFee for TestReport {
+    fn fill_fee(&self) -> Result<Option<MonetaryAmount>, RequestFieldAccessError> {
+        Ok(self.fee.clone())
     }
 }
 
@@ -245,6 +253,7 @@ fn make_report(
         account_id: account(),
         side,
         last_trade,
+        fee: None,
         leaves_quantity: leaves,
         is_final,
         lock,
@@ -1276,4 +1285,128 @@ fn rejected_batch_rolls_untracked_realized_pnl_back_to_none() {
         aapl_entry.entry.realized_pnl.is_none(),
         "untracked slot must not auto-resume realized-PnL tracking after rollback"
     );
+}
+
+// ── PnL kill-switch (public engine surface) ─────────────────────────────────────
+
+fn money_fee(amount: &str, currency: &str) -> MonetaryAmount {
+    MonetaryAmount {
+        amount: Fee::from_str(amount).expect("valid fee"),
+        currency: asset(currency),
+    }
+}
+
+/// Builds a final buy fill carrying `fee`, locked at `price` so the settlement
+/// leg reconciles cleanly.
+fn fill_with_fee(
+    account_id: AccountId,
+    instrument: Instrument,
+    price: &str,
+    quantity: &str,
+    fee: MonetaryAmount,
+) -> TestReport {
+    let price = px(price);
+    TestReport {
+        instrument,
+        account_id,
+        side: Side::Buy,
+        last_trade: Some(Trade {
+            price,
+            quantity: qty(quantity),
+        }),
+        fee: Some(fee),
+        leaves_quantity: qty("0"),
+        is_final: true,
+        lock: PreTradeLock::from_entries([(DEFAULT_POLICY_GROUP_ID, price)]),
+    }
+}
+
+/// Builds an engine whose spot-funds policy carries a P&L kill-switch cascade:
+/// a loose global USD barrier and a tighter account-group USD barrier. The
+/// account-group tier is most specific for members of `grp` and wins over the
+/// global tier.
+fn build_pnl_killswitch_engine(grp: AccountGroupId) -> TestEngine {
+    let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    let mut settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())
+        .expect("settings must build");
+    settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    settings
+        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+            account_currency: asset("USD"),
+            lower_bound: Some(pnl_value("-1000")),
+            upper_bound: None,
+        }])
+        .expect("global pnl barrier must set");
+    settings
+        .set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
+            account_group_id: grp,
+            barrier: SpotFundsPnlBoundsBarrier {
+                account_currency: asset("USD"),
+                lower_bound: Some(pnl_value("-10")),
+                upper_bound: None,
+            },
+        }])
+        .expect("group pnl barrier must set");
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+        settings,
+        None::<SpotFundsMarketData<FullSync>>,
+        builder.storage_builder(),
+    );
+    builder
+        .pre_trade(policy)
+        .build()
+        .expect("engine must build")
+}
+
+fn pnl_value(s: &str) -> Pnl {
+    Pnl::from_str(s).expect("valid pnl")
+}
+
+// End-to-end through the public engine surface: an account in the group breaches
+// the tighter account-group P&L barrier (-10) after cumulative USD fees, while a
+// looser global barrier (-1000) alone would not have triggered. The account is
+// blocked with PnlKillSwitchTriggered and its next order rejects.
+#[test]
+fn pnl_killswitch_account_group_barrier_blocks_on_cumulative_fee_loss() {
+    let acc = AccountId::from_u64(40000001);
+    let grp = AccountGroupId::from_u32(11).expect("valid group id");
+    let aapl_usd = instr("AAPL", "USD");
+    let engine = build_pnl_killswitch_engine(grp);
+
+    engine
+        .accounts()
+        .register_group(&[acc], grp)
+        .expect("registration must succeed");
+    engine.accounts().set_currency(acc, asset("USD"));
+
+    // First fill: 6 USD fee -> realized P&L -6, inside the -10 group barrier.
+    let first = fill_with_fee(acc, aapl_usd.clone(), "100", "1", money_fee("6", "USD"));
+    let first_post = engine.apply_execution_report(&first);
+    assert!(
+        first_post.account_blocks.is_empty(),
+        "P&L -6 is inside the -10 group barrier"
+    );
+
+    // Second fill: another 6 USD fee -> cumulative -12, breaching the -10 group
+    // barrier (still inside the -1000 global barrier).
+    let second = fill_with_fee(acc, aapl_usd.clone(), "100", "1", money_fee("6", "USD"));
+    let second_post = engine.apply_execution_report(&second);
+    assert_eq!(second_post.account_blocks.len(), 1);
+    assert_eq!(
+        second_post.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+
+    // The engine has latched the account block: the next order rejects.
+    let rejects = engine
+        .execute_pre_trade(make_order_for(
+            acc,
+            Side::Buy,
+            aapl_usd,
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .err()
+        .expect("blocked account must reject");
+    assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
 }

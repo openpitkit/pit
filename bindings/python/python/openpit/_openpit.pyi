@@ -1049,12 +1049,13 @@ class ExecutionReportFillDetails:
         self,
         *,
         last_trade: Trade | None = None,
+        fee: param.MonetaryAmount | None = None,
         leaves_quantity: param.Quantity | None = None,
         lock: Lock,
         is_final: bool | None = None,
     ) -> None:
         """Create a fill details group."""
-        _ = (last_trade, leaves_quantity, lock, is_final)
+        _ = (last_trade, fee, leaves_quantity, lock, is_final)
 
     @property
     def last_trade(self) -> Trade | None:
@@ -1062,6 +1063,12 @@ class ExecutionReportFillDetails:
 
     @last_trade.setter
     def last_trade(self, value: Trade | None) -> None: ...
+    @property
+    def fee(self) -> param.MonetaryAmount | None:
+        """Fee amount and currency."""
+
+    @fee.setter
+    def fee(self, value: param.MonetaryAmount | None) -> None: ...
     @property
     def leaves_quantity(self) -> param.Quantity | None:
         """Remaining order quantity."""
@@ -2098,6 +2105,67 @@ class Configurator:
         Raises:
             PolicyConfigureError: If the policy is not found, has the wrong
                 type, or the new settings fail validation.
+        """
+
+    def spot_funds_pnl_bounds_killswitch(
+        self,
+        name: str,
+        *,
+        global_barriers: (
+            list[pretrade.policies.SpotFundsPnlBoundsBarrier] | None
+        ) = None,
+        account_group_barriers: (
+            list[pretrade.policies.SpotFundsPnlBoundsAccountGroupBarrier] | None
+        ) = None,
+        account_barriers: (
+            list[pretrade.policies.SpotFundsPnlBoundsAccountBarrierUpdate] | None
+        ) = None,
+    ) -> None:
+        """Retune the account-currency P&L bounds axis of a spot-funds policy.
+
+        *name* must match the name given to the spot-funds policy at
+        registration time.
+
+        The barrier arguments mirror those of
+        ``ReadyEngineBuilder._add_builtin_spot_funds_pnl_bounds_killswitch``,
+        except that the account axis takes
+        :class:`~openpit.pretrade.policies.SpotFundsPnlBoundsAccountBarrierUpdate`
+        entries: runtime account updates preserve the live accumulated P&L and
+        cannot seed or reset it (no ``initial_pnl``).
+
+        An axis passed as ``None`` is left unchanged.  A supplied list REPLACES
+        that axis wholesale: an empty list clears it.  Each barrier must still
+        configure at least one bound.
+
+        Raises:
+            PolicyConfigureError: If the policy is not found, has the wrong
+                type, or the new settings fail validation.
+        """
+
+    def set_spot_funds_account_pnl(
+        self,
+        name: str,
+        *,
+        account: param.AccountId,
+        account_currency: param.Asset,
+        pnl: param.Pnl,
+    ) -> None:
+        """Force-set live spot-funds account-currency P&L for one account.
+
+        *name* must match the name given to the spot-funds policy at
+        registration time.
+
+        Unlike :meth:`spot_funds_pnl_bounds_killswitch`, which retunes bounds
+        and never touches accumulated P&L, this is an absolute assignment
+        (upsert) of the live accumulator for ``(account, account_currency)``;
+        the new value is evaluated against the live bounds when the next P&L
+        delta is applied by an execution report. A breach trips the kill
+        switch, which latches an engine-level account block that this call
+        does not clear.
+
+        Raises:
+            PolicyConfigureError: If the policy is not found or has a different
+                type than a spot-funds policy.
         """
 
 class EngineBuilder:

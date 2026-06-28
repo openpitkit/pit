@@ -872,6 +872,88 @@ def test_example_wiki_spot_funds_limit_only() -> None:
 
 
 @pytest.mark.integration
+def test_example_wiki_spot_funds_pnl_kill_switch_builder() -> None:
+    # Used in: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch /
+    # Configuring Barriers → Python
+    account_id = openpit.param.AccountId.from_int(99224416)
+
+    # The PnL kill switch is a distinct spot-funds builder entry point; it
+    # produces the same SpotFundsPolicy, registered under the same name.
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            openpit.pretrade.policies.build_spot_funds_pnl_bounds_killswitch()
+            .global_barriers(
+                openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
+                    account_currency=openpit.param.Asset("USD"),
+                    lower_bound=openpit.param.Pnl(-1000),
+                ),
+            )
+            .account_barriers(
+                openpit.pretrade.policies.SpotFundsPnlBoundsAccountBarrier(
+                    account_id=account_id,
+                    barrier=openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
+                        account_currency=openpit.param.Asset("USD"),
+                        lower_bound=openpit.param.Pnl(-250),
+                    ),
+                    initial_pnl=openpit.param.Pnl(0),
+                ),
+            )
+        )
+        .build()
+    )
+    assert engine is not None
+
+
+@pytest.mark.integration
+def test_example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> None:
+    # Used in: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch /
+    # Runtime Reconfiguration → Python
+    # Harness scaffolding: a spot-funds engine with a per-account barrier the
+    # snippet then retunes and force-sets.
+    seed_account = openpit.param.AccountId.from_int(99224416)
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            openpit.pretrade.policies.build_spot_funds_pnl_bounds_killswitch().account_barriers(
+                openpit.pretrade.policies.SpotFundsPnlBoundsAccountBarrier(
+                    account_id=seed_account,
+                    barrier=openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
+                        account_currency=openpit.param.Asset("USD"),
+                        lower_bound=openpit.param.Pnl(-250),
+                    ),
+                    initial_pnl=openpit.param.Pnl(0),
+                ),
+            )
+        )
+        .build()
+    )
+
+    account_id = openpit.param.AccountId.from_int(99224416)
+
+    # Retune the account-currency PnL barriers; live accumulated PnL is untouched.
+    engine.configure().spot_funds_pnl_bounds_killswitch(
+        openpit.pretrade.policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        global_barriers=[
+            openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
+                account_currency=openpit.param.Asset("USD"),
+                lower_bound=openpit.param.Pnl(-500),
+            ),
+        ],
+    )
+
+    # Force-set the live accumulated PnL for one (account, account currency).
+    engine.configure().set_spot_funds_account_pnl(
+        openpit.pretrade.policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account=account_id,
+        account_currency=openpit.param.Asset("USD"),
+        pnl=openpit.param.Pnl(-120),
+    )
+
+
+@pytest.mark.integration
 def test_example_wiki_spot_funds_market_orders() -> None:
     # Used in: pit.wiki/Spot-Funds.md - Market Orders → Python
     builder = openpit.Engine.builder().no_sync()

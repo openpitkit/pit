@@ -173,10 +173,11 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_pol
 
     let mut asset_barriers = Vec::with_capacity(asset_slice.len());
     for (index, entry) in asset_slice.iter().enumerate() {
-        let settlement = match parse_settlement_asset_or_error(
+        let settlement = match parse_asset_or_error(
             entry.settlement_asset,
             "asset",
             index,
+            "settlement_asset",
             out_error,
         ) {
             Some(v) => v,
@@ -207,10 +208,11 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_order_size_limit_pol
 
     let mut account_asset_barriers = Vec::with_capacity(account_asset_slice.len());
     for (index, entry) in account_asset_slice.iter().enumerate() {
-        let settlement = match parse_settlement_asset_or_error(
+        let settlement = match parse_asset_or_error(
             entry.settlement_asset,
             "account_asset",
             index,
+            "settlement_asset",
             out_error,
         ) {
             Some(v) => v,
@@ -368,7 +370,12 @@ pub unsafe extern "C" fn openpit_engine_configure_order_size_limit(
         };
         let mut out = Vec::with_capacity(slice.len());
         for (index, entry) in slice.iter().enumerate() {
-            let settlement = match parse_configure_asset(entry.settlement_asset, "asset", index) {
+            let settlement = match parse_configure_asset(
+                entry.settlement_asset,
+                "asset",
+                index,
+                "settlement_asset",
+            ) {
                 Ok(v) => v,
                 Err(e) => {
                     write_configure_error(out_error, e);
@@ -414,14 +421,18 @@ pub unsafe extern "C" fn openpit_engine_configure_order_size_limit(
         };
         let mut out = Vec::with_capacity(slice.len());
         for (index, entry) in slice.iter().enumerate() {
-            let settlement =
-                match parse_configure_asset(entry.settlement_asset, "account_asset", index) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        write_configure_error(out_error, e);
-                        return false;
-                    }
-                };
+            let settlement = match parse_configure_asset(
+                entry.settlement_asset,
+                "account_asset",
+                index,
+                "settlement_asset",
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    write_configure_error(out_error, e);
+                    return false;
+                }
+            };
             let limit = match parse_configure_limit(entry.limit, "account_asset", index) {
                 Ok(v) => v,
                 Err(e) => {

@@ -21,8 +21,8 @@ use super::*;
 use crate::core::AccountAdjustmentContext;
 use crate::marketdata::{MarketDataBuilder, Quote, QuoteTtl};
 use crate::param::{
-    AccountId, AdjustmentAmount, Asset, Pnl, PositionSize, Price, Quantity, Side, Trade,
-    TradeAmount, Volume,
+    AccountGroupId, AccountId, AdjustmentAmount, Asset, Fee, MonetaryAmount, Pnl, PositionSize,
+    Price, Quantity, Side, Trade, TradeAmount, Volume,
 };
 use crate::pretrade::{
     holdings::Holdings, PreTradeContext, PreTradeLock, PreTradePolicy, RejectCode,
@@ -35,8 +35,9 @@ use crate::{
     HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
     HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
     HasAccountAdjustmentIncomingUpperBound, HasAccountId, HasBalanceAsset,
-    HasExecutionReportIsFinal, HasExecutionReportLastTrade, HasInstrument, HasLeavesQuantity,
-    HasPreTradeLock, HasSide, Instrument, Mutations, OrderOperation, RequestFieldAccessError,
+    HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
+    HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide, Instrument, Mutations,
+    OrderOperation, RequestFieldAccessError,
 };
 use std::sync::Arc;
 
@@ -52,6 +53,7 @@ struct TestReport {
     account_id: AccountId,
     side: Side,
     last_trade: Option<Trade>,
+    fee: Option<MonetaryAmount>,
     leaves_quantity: Quantity,
     is_final: bool,
     lock: PreTradeLock,
@@ -78,6 +80,12 @@ impl HasSide for TestReport {
 impl HasExecutionReportLastTrade for TestReport {
     fn last_trade(&self) -> Result<Option<Trade>, RequestFieldAccessError> {
         Ok(self.last_trade)
+    }
+}
+
+impl HasExecutionReportFillFee for TestReport {
+    fn fill_fee(&self) -> Result<Option<MonetaryAmount>, RequestFieldAccessError> {
+        Ok(self.fee.clone())
     }
 }
 
@@ -202,6 +210,10 @@ fn pnl_value(s: &str) -> Pnl {
     Pnl::from_str(s).expect("valid pnl")
 }
 
+fn fee_value(s: &str) -> Fee {
+    Fee::from_str(s).expect("valid fee")
+}
+
 fn px(s: &str) -> Price {
     Price::from_str(s).expect("valid price")
 }
@@ -216,6 +228,10 @@ fn vol(s: &str) -> Volume {
 
 fn account(n: u64) -> AccountId {
     AccountId::from_u64(n)
+}
+
+fn group(n: u32) -> AccountGroupId {
+    AccountGroupId::from_u32(n).expect("valid account group id")
 }
 
 fn dummy_control(
@@ -250,6 +266,14 @@ fn settings(slip_bps: u16) -> SpotFundsSettings {
 fn build_policy(_mark: Option<()>, _slip_bps: Option<u16>) -> TestPolicy {
     let b = engine_builder();
     SpotFundsPolicy::new(settings(0), None, b.storage_builder())
+}
+
+fn build_policy_from_settings(
+    settings: SpotFundsSettings,
+    market_data: Option<SpotFundsMarketData<FullSync>>,
+) -> TestPolicy {
+    let b = engine_builder();
+    SpotFundsPolicy::new(settings, market_data, b.storage_builder())
 }
 
 /// Builds a policy whose market-data service has `instrument` registered
@@ -312,10 +336,46 @@ fn make_report(
         account_id,
         side,
         last_trade,
+        fee: None,
         leaves_quantity: leaves,
         is_final,
         lock: lock.unwrap_or_default(),
     }
+}
+
+fn money_fee(amount: &str, currency: &str) -> MonetaryAmount {
+    MonetaryAmount {
+        amount: fee_value(amount),
+        currency: asset(currency),
+    }
+}
+
+fn fill_with_fee(
+    account_id: AccountId,
+    instrument: Instrument,
+    side: Side,
+    price: &str,
+    quantity: &str,
+    fee: MonetaryAmount,
+) -> TestReport {
+    let price = px(price);
+    let mut report = make_report(
+        account_id,
+        instrument,
+        side,
+        Some(Trade {
+            price,
+            quantity: qty(quantity),
+        }),
+        qty("0"),
+        true,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            price,
+        )])),
+    );
+    report.fee = Some(fee);
+    report
 }
 
 fn adj(asset: Asset, balance: Option<AdjustmentAmount>) -> TestAdjustment {
@@ -485,6 +545,42 @@ fn seed(policy: &TestPolicy, account_id: AccountId, asset: Asset, amount: &str) 
 
 fn holdings_of(policy: &TestPolicy, account_id: AccountId, asset: &Asset) -> Option<Holdings> {
     policy.holdings.get(&(account_id, asset.clone()))
+}
+
+fn account_pnl_of(policy: &TestPolicy, account_id: AccountId, currency: &Asset) -> Option<Pnl> {
+    policy
+        .pnl
+        .with(&(account_id, currency.clone()), |value| *value)
+}
+
+fn post_trade_ctx_with_currency_and_group(
+    report: &TestReport,
+    currency: Asset,
+    group_id: AccountGroupId,
+) -> crate::pretrade::PostTradeContext<crate::storage::FullLocking> {
+    use crate::core::{
+        AccountBlockHandle, AccountCurrencies, AccountGroups, AccountGroupsHandle, Accounts,
+        BlockedAccounts,
+    };
+    use crate::storage::{FullLocking, LockingPolicyFactory, StorageBuilder};
+
+    let storage_builder = StorageBuilder::new(FullLocking);
+    let groups = AccountGroups::new(&storage_builder);
+    groups
+        .register_group(&[report.account_id], group_id)
+        .expect("group registration must succeed");
+    let group_handle = AccountGroupsHandle::from_inner(FullLocking::new_shared(groups));
+    let block_handle = AccountBlockHandle::from_inner(FullLocking::new_shared(
+        BlockedAccounts::new(&storage_builder),
+    ));
+    let currencies = FullLocking::new_shared(AccountCurrencies::new(&storage_builder));
+    let accounts = Accounts::new(group_handle.clone(), block_handle, currencies);
+    accounts.set_currency(report.account_id, currency);
+    crate::pretrade::PostTradeContext::with_accounts(
+        accounts,
+        group_handle,
+        Some(report.account_id),
+    )
 }
 
 // ── trait call wrappers ───────────────────────────────────────────────────
@@ -6612,6 +6708,610 @@ fn missing_fx_resets_tracking_without_block_or_reject() {
     assert_eq!(aapl.available(), ps("2"));
     assert!(aapl.avg_entry_price().is_none());
     assert!(aapl.realized_pnl().is_none());
+}
+
+#[test]
+fn pnl_bounds_cascade_uses_account_group_then_global() {
+    let account_specific = account(99224416);
+    let grouped = account(99224417);
+    let global_only = account(99224418);
+    let grp = group(7);
+    let aapl_usd = instr("AAPL", "USD");
+
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("USD"),
+        lower_bound: Some(pnl_value("-5")),
+        upper_bound: None,
+    }])
+    .expect("global pnl barrier must set");
+    s.set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
+        account_group_id: grp,
+        barrier: SpotFundsPnlBoundsBarrier {
+            account_currency: asset("USD"),
+            lower_bound: Some(pnl_value("-50")),
+            upper_bound: None,
+        },
+    }])
+    .expect("group pnl barrier must set");
+    let s = s
+        .with_initial_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+            account_id: account_specific,
+            barrier: SpotFundsPnlBoundsBarrier {
+                account_currency: asset("USD"),
+                lower_bound: Some(pnl_value("-10")),
+                upper_bound: None,
+            },
+            initial_pnl: Pnl::ZERO,
+        }])
+        .expect("account pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+
+    let account_report = fill_with_fee(
+        account_specific,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("20", "USD"),
+    );
+    let account_result = run_report_with_currency(&policy, &account_report, asset("USD"));
+    assert_eq!(account_result.account_blocks.len(), 1);
+    assert_eq!(
+        account_result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+
+    let grouped_report = fill_with_fee(
+        grouped,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("20", "USD"),
+    );
+    let grouped_result = <TestPolicy as PreTradePolicy<
+        TestOrder,
+        TestReport,
+        TestAdjustment,
+        crate::core::FullSync,
+    >>::apply_execution_report(
+        &policy,
+        &post_trade_ctx_with_currency_and_group(&grouped_report, asset("USD"), grp),
+        &grouped_report,
+    )
+    .expect("grouped report must produce a result");
+    assert!(grouped_result.account_blocks.is_empty());
+    assert_eq!(
+        account_pnl_of(&policy, grouped, &asset("USD")),
+        Some(pnl_value("-20"))
+    );
+
+    let global_report = fill_with_fee(
+        global_only,
+        aapl_usd,
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("20", "USD"),
+    );
+    let global_result = run_report_with_currency(&policy, &global_report, asset("USD"));
+    assert_eq!(global_result.account_blocks.len(), 1);
+    assert_eq!(
+        global_result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+}
+
+#[test]
+fn account_not_under_pnl_control_does_not_require_fx_or_track_account_pnl() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("USD"),
+        lower_bound: Some(pnl_value("-10")),
+        upper_bound: None,
+    }])
+    .expect("global pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("1", "USD"));
+    let result = run_report_with_currency(&policy, &fill, asset("EUR"));
+    assert!(result.account_blocks.is_empty());
+    assert_eq!(account_pnl_of(&policy, acc, &asset("EUR")), None);
+}
+
+#[test]
+fn fee_in_foreign_currency_debits_fee_asset_and_contributes_to_account_pnl() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let eur_usd = instr("EUR", "USD");
+    let b = engine_builder();
+    let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let fx_id = svc.register(eur_usd).expect("register must succeed");
+    svc.push(fx_id, Quote::new().with_mark(px("1.2")))
+        .expect("push must succeed");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("USD"),
+        lower_bound: Some(pnl_value("-10")),
+        upper_bound: None,
+    }])
+    .expect("global pnl barrier must set");
+    let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
+
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("2", "EUR"));
+    let result = run_report_with_currency(&policy, &fill, asset("USD"));
+    assert!(result.account_blocks.is_empty());
+    assert_eq!(
+        account_pnl_of(&policy, acc, &asset("USD")),
+        Some(pnl_value("-2.4"))
+    );
+    let eur = holdings_of(&policy, acc, &asset("EUR")).expect("EUR fee leg must exist");
+    assert_eq!(eur.available(), ps("-2"));
+}
+
+#[test]
+fn missing_fx_blocks_account_under_pnl_control() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("EUR"),
+        lower_bound: Some(pnl_value("-100")),
+        upper_bound: None,
+    }])
+    .expect("global pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("1", "USD"));
+    let result = run_report_with_currency(&policy, &fill, asset("EUR"));
+    assert_eq!(result.account_blocks.len(), 1);
+    let block = &result.account_blocks[0];
+    assert_eq!(block.code, RejectCode::OrderValueCalculationFailed);
+    assert!(block.details.contains("PnL could not be computed"));
+    assert!(block.details.contains("missing FX"));
+    assert_eq!(account_pnl_of(&policy, acc, &asset("EUR")), None);
+}
+
+// The settlement leg needs no FX because settlement asset == account currency
+// (USD), so the settlement-FX guard passes; the fee is in a foreign currency
+// (EUR) with no FX rate, so the fee-conversion branch is the one that blocks the
+// account. This isolates the fee-FX fail-safe from the settlement-FX path.
+#[test]
+fn missing_fee_fx_blocks_account_when_settlement_needs_no_fx() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("USD"),
+        lower_bound: Some(pnl_value("-100")),
+        upper_bound: None,
+    }])
+    .expect("global pnl barrier must set");
+    // No market-data service at all: the EUR->USD fee FX is missing, but the
+    // USD settlement leg needs no FX because it is already in account currency.
+    let policy = build_policy_from_settings(s, None);
+
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("2", "EUR"));
+    let result = run_report_with_currency(&policy, &fill, asset("USD"));
+    assert_eq!(result.account_blocks.len(), 1);
+    let block = &result.account_blocks[0];
+    assert_eq!(block.code, RejectCode::OrderValueCalculationFailed);
+    assert!(block.details.contains("PnL could not be computed"));
+    assert!(block.details.contains("missing FX"));
+    // The missing-FX detail names the fee currency, not the settlement asset.
+    assert!(block.details.contains("source asset EUR"));
+    assert!(
+        result.account_adjustments.is_empty(),
+        "fee-FX fail-fast must not emit already-applied holdings mutations"
+    );
+    assert_eq!(holdings_of(&policy, acc, &asset("EUR")), None);
+    assert_eq!(account_pnl_of(&policy, acc, &asset("USD")), None);
+}
+
+// Positive twin of the fee-FX fail-safe: when the fee currency equals the
+// account currency, no FX is needed and the account is not blocked.
+#[test]
+fn fee_in_account_currency_needs_no_fx_and_does_not_block() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("USD"),
+        lower_bound: Some(pnl_value("-100")),
+        upper_bound: None,
+    }])
+    .expect("global pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("2", "USD"));
+    let result = run_report_with_currency(&policy, &fill, asset("USD"));
+    assert!(result.account_blocks.is_empty());
+    // Fee 2 USD is a cost, so realized P&L is -2 with no FX conversion.
+    assert_eq!(
+        account_pnl_of(&policy, acc, &asset("USD")),
+        Some(pnl_value("-2"))
+    );
+}
+
+// The realized-P&L accumulator itself overflows: seed it at Decimal::MAX (still
+// inside the bounds), then apply a fill whose fee rebate contributes a positive
+// P&L delta. MAX + positive overflows in apply_account_pnl_delta and surfaces as
+// OrderValueCalculationFailed, which the engine latches into an account block.
+#[test]
+fn account_pnl_accumulator_overflow_blocks_account() {
+    use rust_decimal::Decimal;
+
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    let s = s
+        .with_initial_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+            account_id: acc,
+            barrier: SpotFundsPnlBoundsBarrier {
+                account_currency: asset("USD"),
+                lower_bound: Some(pnl_value("-100")),
+                upper_bound: None,
+            },
+            initial_pnl: Pnl::new(Decimal::MAX),
+        }])
+        .expect("account pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+
+    // A negative fee is a rebate -> positive P&L delta of +1; MAX + 1 overflows.
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("-1", "USD"));
+    let result = run_report_with_currency(&policy, &fill, asset("USD"));
+    assert_eq!(result.account_blocks.len(), 1);
+    let block = &result.account_blocks[0];
+    assert_eq!(block.code, RejectCode::OrderValueCalculationFailed);
+    assert_eq!(block.reason, "pnl calculation failed");
+    assert!(block.details.contains("spot-funds account pnl overflow"));
+}
+
+// Negative twin of the accumulator overflow: seed at Decimal::MIN, apply a fill
+// whose positive fee is a cost (negative P&L delta). MIN + negative underflows in
+// apply_account_pnl_delta and surfaces as OrderValueCalculationFailed.
+#[test]
+fn account_pnl_accumulator_negative_overflow_blocks_account() {
+    use rust_decimal::Decimal;
+
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    let s = s
+        .with_initial_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+            account_id: acc,
+            barrier: SpotFundsPnlBoundsBarrier {
+                account_currency: asset("USD"),
+                lower_bound: None,
+                upper_bound: Some(pnl_value("100")),
+            },
+            initial_pnl: Pnl::new(Decimal::MIN),
+        }])
+        .expect("account pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("1", "USD"));
+    let result = run_report_with_currency(&policy, &fill, asset("USD"));
+    assert_eq!(result.account_blocks.len(), 1);
+    let block = &result.account_blocks[0];
+    assert_eq!(block.code, RejectCode::OrderValueCalculationFailed);
+    assert_eq!(block.reason, "pnl calculation failed");
+    assert!(block.details.contains("spot-funds account pnl overflow"));
+}
+
+// The fee->account-currency conversion itself overflows before the accumulator
+// is touched: a Decimal::MAX fee in a foreign currency with an FX mark above 1
+// makes `fee_amount * factor` overflow inside fee_pnl_delta. This is a distinct
+// branch from the accumulator overflow above.
+#[test]
+fn fee_pnl_conversion_overflow_blocks_account() {
+    use rust_decimal::Decimal;
+
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let eur_usd = instr("EUR", "USD");
+    let b = engine_builder();
+    let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let fx_id = svc.register(eur_usd).expect("register must succeed");
+    // EUR->USD mark of 2 turns a Decimal::MAX EUR fee into MAX * 2, overflowing.
+    svc.push(fx_id, Quote::new().with_mark(px("2")))
+        .expect("push must succeed");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("USD"),
+        lower_bound: Some(pnl_value("-100")),
+        upper_bound: None,
+    }])
+    .expect("global pnl barrier must set");
+    let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
+
+    let huge_fee = MonetaryAmount {
+        amount: Fee::new(Decimal::MAX),
+        currency: asset("EUR"),
+    };
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", huge_fee);
+    let result = run_report_with_currency(&policy, &fill, asset("USD"));
+    assert_eq!(result.account_blocks.len(), 1);
+    let block = &result.account_blocks[0];
+    assert_eq!(block.code, RejectCode::OrderValueCalculationFailed);
+    assert_eq!(block.reason, "pnl calculation failed");
+    assert!(block.details.contains("fee pnl conversion overflow"));
+    assert!(
+        result.account_adjustments.is_empty(),
+        "fee conversion overflow must not emit already-applied holdings mutations"
+    );
+    assert_eq!(holdings_of(&policy, acc, &asset("EUR")), None);
+}
+
+// The runtime configuration path cannot inject an initial-P&L seed. The seed
+// setter (with_initial_pnl_account_barriers) consumes `self` and so cannot be
+// called through the runtime `spot_funds` closure, which only hands out
+// `&mut SpotFundsSettings`; the runtime setter it does expose
+// (set_pnl_account_barriers) carries no seed. This test proves that a runtime
+// barrier update leaves the live accumulator untouched.
+#[test]
+fn runtime_barrier_update_cannot_seed_initial_pnl() {
+    use crate::pretrade::ConfigurablePolicy;
+    use crate::storage::ConfigCell;
+
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    let s = s
+        .with_initial_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+            account_id: acc,
+            barrier: SpotFundsPnlBoundsBarrier {
+                account_currency: asset("USD"),
+                lower_bound: Some(pnl_value("-100")),
+                upper_bound: None,
+            },
+            initial_pnl: pnl_value("-40"),
+        }])
+        .expect("account pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+    assert_eq!(
+        account_pnl_of(&policy, acc, &asset("USD")),
+        Some(pnl_value("-40"))
+    );
+
+    // A runtime update replaces the barrier bounds through the only runtime-
+    // reachable setter; it has no initial_pnl notion and must not reset the
+    // accumulator back to any seed.
+    policy
+        .settings_cell()
+        .update::<SpotFundsConfigError>(|settings| {
+            settings.set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrierUpdate {
+                account_id: acc,
+                barrier: SpotFundsPnlBoundsBarrier {
+                    account_currency: asset("USD"),
+                    lower_bound: Some(pnl_value("-30")),
+                    upper_bound: None,
+                },
+            }])
+        })
+        .expect("runtime barrier update must publish");
+
+    // The accumulator still holds -40 from the build-time seed, unchanged by the
+    // runtime update; a zero-delta fill re-evaluates it against the tighter -30
+    // bound and blocks.
+    let recheck = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("0", "USD"));
+    let result = run_report_with_currency(&policy, &recheck, asset("USD"));
+    assert_eq!(result.account_blocks.len(), 1);
+    assert_eq!(
+        result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    assert_eq!(
+        account_pnl_of(&policy, acc, &asset("USD")),
+        Some(pnl_value("-40"))
+    );
+}
+
+#[test]
+fn pnl_bounds_block_lower_and_upper_boundary_breaches() {
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("USD"),
+        lower_bound: Some(pnl_value("-10")),
+        upper_bound: Some(pnl_value("10")),
+    }])
+    .expect("global pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+
+    let lower = fill_with_fee(
+        account(99224416),
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("11", "USD"),
+    );
+    let lower_result = run_report_with_currency(&policy, &lower, asset("USD"));
+    assert_eq!(lower_result.account_blocks.len(), 1);
+    assert_eq!(
+        lower_result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    assert!(lower_result.account_blocks[0]
+        .details
+        .contains("lower bound breached"));
+
+    let upper = fill_with_fee(
+        account(99224417),
+        aapl_usd,
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("-11", "USD"),
+    );
+    let upper_result = run_report_with_currency(&policy, &upper, asset("USD"));
+    assert_eq!(upper_result.account_blocks.len(), 1);
+    assert_eq!(
+        upper_result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    assert!(upper_result.account_blocks[0]
+        .details
+        .contains("upper bound breached"));
+}
+
+#[test]
+fn account_initial_pnl_seed_and_config_correction_are_account_scoped() {
+    let acc_blocked = account(99224416);
+    let acc_corrected = account(99224417);
+    let aapl_usd = instr("AAPL", "USD");
+
+    let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    let s = s
+        .with_initial_pnl_account_barriers([
+            SpotFundsPnlBoundsAccountBarrier {
+                account_id: acc_blocked,
+                barrier: SpotFundsPnlBoundsBarrier {
+                    account_currency: asset("USD"),
+                    lower_bound: Some(pnl_value("-10")),
+                    upper_bound: None,
+                },
+                initial_pnl: pnl_value("-9"),
+            },
+            SpotFundsPnlBoundsAccountBarrier {
+                account_id: acc_corrected,
+                barrier: SpotFundsPnlBoundsBarrier {
+                    account_currency: asset("USD"),
+                    lower_bound: Some(pnl_value("-10")),
+                    upper_bound: None,
+                },
+                initial_pnl: pnl_value("-9"),
+            },
+        ])
+        .expect("account pnl barriers must set");
+    let policy: SpotFundsPolicy<FullSync, FullSync> =
+        SpotFundsPolicy::new(s, None, builder.storage_builder());
+    let engine = builder
+        .pre_trade(policy)
+        .build()
+        .expect("engine must build");
+    engine.accounts().set_currency(acc_blocked, asset("USD"));
+    engine.accounts().set_currency(acc_corrected, asset("USD"));
+
+    let blocked = fill_with_fee(
+        acc_blocked,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("2", "USD"),
+    );
+    let blocked_result = engine.apply_execution_report(&blocked);
+    assert_eq!(blocked_result.account_blocks.len(), 1);
+    assert_eq!(
+        blocked_result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+
+    engine
+        .configure()
+        .set_spot_funds_account_pnl(
+            SpotFundsPolicy::<FullSync, FullSync>::NAME,
+            acc_corrected,
+            asset("USD"),
+            Pnl::ZERO,
+        )
+        .expect("account pnl correction must publish");
+    let corrected = fill_with_fee(
+        acc_corrected,
+        aapl_usd,
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("2", "USD"),
+    );
+    let corrected_result = engine.apply_execution_report(&corrected);
+    assert!(corrected_result.account_blocks.is_empty());
+}
+
+#[test]
+fn runtime_pnl_barrier_update_does_not_reset_accumulator() {
+    use crate::pretrade::ConfigurablePolicy;
+    use crate::storage::ConfigCell;
+
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    let s = s
+        .with_initial_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+            account_id: acc,
+            barrier: SpotFundsPnlBoundsBarrier {
+                account_currency: asset("USD"),
+                lower_bound: Some(pnl_value("-50")),
+                upper_bound: None,
+            },
+            initial_pnl: Pnl::ZERO,
+        }])
+        .expect("account pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+
+    let first = fill_with_fee(
+        acc,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("40", "USD"),
+    );
+    let first_result = run_report_with_currency(&policy, &first, asset("USD"));
+    assert!(first_result.account_blocks.is_empty());
+    assert_eq!(
+        account_pnl_of(&policy, acc, &asset("USD")),
+        Some(pnl_value("-40"))
+    );
+
+    policy
+        .settings_cell()
+        .update::<SpotFundsConfigError>(|settings| {
+            settings.set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrierUpdate {
+                account_id: acc,
+                barrier: SpotFundsPnlBoundsBarrier {
+                    account_currency: asset("USD"),
+                    lower_bound: Some(pnl_value("-30")),
+                    upper_bound: None,
+                },
+            }])
+        })
+        .expect("runtime barrier update must publish");
+
+    let recheck = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("0", "USD"));
+    let result = run_report_with_currency(&policy, &recheck, asset("USD"));
+    assert_eq!(result.account_blocks.len(), 1);
+    assert_eq!(
+        result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    assert_eq!(
+        account_pnl_of(&policy, acc, &asset("USD")),
+        Some(pnl_value("-40"))
+    );
 }
 
 #[test]

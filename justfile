@@ -17,8 +17,8 @@
 
 # Workspace build and test shortcuts.
 
-venv_dir := env_var_or_default("VIRTUAL_ENV", justfile_directory() / ".venv")
-python_path := env_var_or_default("PYTHON_PATH", venv_dir / "bin/python")
+venv_dir := env_var_or_default("PIT_VIRTUAL_ENV", justfile_directory() / ".venv")
+python_path := venv_dir / "bin/python"
 export VIRTUAL_ENV := venv_dir
 export PYO3_PYTHON := python_path
 export PATH := venv_dir / "bin" + ":" + env_var("PATH")

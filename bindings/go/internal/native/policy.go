@@ -156,8 +156,6 @@ func NewPretradePoliciesPnlBoundsAccountBarrier(
 	}
 }
 
-type PretradePoliciesPnlBoundsAccountBarrierUpdate = C.OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate
-
 func NewPretradePoliciesPnlBoundsAccountBarrierUpdate(
 	accountID ParamAccountID,
 	settlementAsset string,
@@ -169,6 +167,50 @@ func NewPretradePoliciesPnlBoundsAccountBarrierUpdate(
 		settlement_asset: importString(settlementAsset),
 		lower_bound:      lowerBound,
 		upper_bound:      upperBound,
+	}
+}
+
+func NewPretradePoliciesSpotFundsPnlBoundsBarrier(
+	accountCurrency string,
+	lowerBound ParamPnlOptional,
+	upperBound ParamPnlOptional,
+) PretradePoliciesSpotFundsPnlBoundsBarrier {
+	return PretradePoliciesSpotFundsPnlBoundsBarrier{
+		account_currency: importString(accountCurrency),
+		lower_bound:      lowerBound,
+		upper_bound:      upperBound,
+	}
+}
+
+func NewPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier(
+	accountGroupID ParamAccountGroupID,
+	barrier PretradePoliciesSpotFundsPnlBoundsBarrier,
+) PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
+	return PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier{
+		account_group_id: accountGroupID,
+		barrier:          barrier,
+	}
+}
+
+func NewPretradePoliciesSpotFundsPnlBoundsAccountBarrier(
+	accountID ParamAccountID,
+	barrier PretradePoliciesSpotFundsPnlBoundsBarrier,
+	initialPnl ParamPnl,
+) PretradePoliciesSpotFundsPnlBoundsAccountBarrier {
+	return PretradePoliciesSpotFundsPnlBoundsAccountBarrier{
+		account_id:  accountID,
+		barrier:     barrier,
+		initial_pnl: initialPnl,
+	}
+}
+
+func NewPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate(
+	accountID ParamAccountID,
+	barrier PretradePoliciesSpotFundsPnlBoundsBarrier,
+) PretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate {
+	return PretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate{
+		account_id: accountID,
+		barrier:    barrier,
 	}
 }
 

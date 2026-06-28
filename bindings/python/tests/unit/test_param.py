@@ -18,6 +18,7 @@ def test_param_types_are_exported_from_openpit_and_param_module() -> None:
         "Price",
         "Pnl",
         "Fee",
+        "MonetaryAmount",
         "Volume",
         "CashFlow",
         "PositionSize",
@@ -50,6 +51,7 @@ def test_param_types_are_exported_from_openpit_and_param_module() -> None:
         assert not hasattr(openpit, name)
 
     assert hasattr(openpit, "Leverage")
+    assert hasattr(openpit, "MonetaryAmount")
 
 
 @pytest.mark.unit
@@ -101,6 +103,7 @@ def test_param_types_have_rust_like_module_paths() -> None:
     assert openpit.param.Price.__module__ == "openpit.param"
     assert openpit.param.Pnl.__module__ == "openpit.param"
     assert openpit.param.Fee.__module__ == "openpit.param"
+    assert openpit.param.MonetaryAmount.__module__ == "openpit.param"
     assert openpit.param.Volume.__module__ == "openpit.param"
     assert openpit.param.CashFlow.__module__ == "openpit.param"
     assert openpit.param.PositionSize.__module__ == "openpit.param"
@@ -500,3 +503,36 @@ def test_account_group_id_equality_and_hash() -> None:
     assert g1 != g3
     assert hash(g1) == hash(g2)
     assert hash(g1) != hash(g3)
+
+
+@pytest.mark.unit
+def test_monetary_amount_wraps_fee_and_currency() -> None:
+    fee = openpit.param.Fee("0.25")
+    amount = openpit.param.MonetaryAmount(amount=fee, currency="USD")
+
+    assert amount.amount == fee
+    assert amount.currency == openpit.param.Asset("USD")
+    assert isinstance(amount.currency, openpit.param.Asset)
+    assert openpit.MonetaryAmount is openpit.param.MonetaryAmount
+
+    with pytest.raises(TypeError, match="amount must be openpit.param.Fee"):
+        openpit.param.MonetaryAmount(
+            amount=openpit.param.Pnl("0.25"),  # type: ignore[arg-type]
+            currency="USD",
+        )
+    with pytest.raises(openpit.param.AssetError):
+        openpit.param.MonetaryAmount(amount=fee, currency="")
+
+
+@pytest.mark.unit
+def test_monetary_amount_is_all_or_nothing() -> None:
+    fee = openpit.param.Fee("0.25")
+
+    with pytest.raises(TypeError):
+        openpit.param.MonetaryAmount(amount=fee)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        openpit.param.MonetaryAmount(currency="USD")  # type: ignore[call-arg]
+
+    amount = openpit.param.MonetaryAmount(amount=fee, currency="USD")
+    assert amount.amount == fee
+    assert amount.currency == openpit.param.Asset("USD")

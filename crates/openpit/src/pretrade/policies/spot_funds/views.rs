@@ -20,8 +20,8 @@
 
 use crate::core::instrument::Instrument;
 use crate::param::{
-    AccountId, AdjustmentAmount, Asset, Pnl, PositionSize, Price, Quantity, Side, Trade,
-    TradeAmount,
+    AccountId, AdjustmentAmount, Asset, MonetaryAmount, Pnl, PositionSize, Price, Quantity, Side,
+    Trade, TradeAmount,
 };
 use crate::pretrade::holdings::Holdings;
 use crate::pretrade::PreTradeLock;
@@ -73,6 +73,7 @@ pub(super) struct ExecutionRequestView<'i> {
     pub(super) account_id: AccountId,
     pub(super) side: Side,
     pub(super) last_trade: Option<Trade>,
+    pub(super) fee: Option<MonetaryAmount>,
     pub(super) leaves_quantity: Quantity,
     pub(super) is_final: bool,
     pub(super) lock: PreTradeLock,
@@ -122,6 +123,7 @@ impl LegDelta {
 pub(super) struct FillCancelDeltas {
     pub(super) underlying: LegDelta,
     pub(super) settlement: LegDelta,
+    pub(super) fee: Option<(Asset, LegDelta)>,
 }
 
 impl FillCancelDeltas {
@@ -129,6 +131,7 @@ impl FillCancelDeltas {
         Self {
             underlying: LegDelta::new(),
             settlement: LegDelta::new(),
+            fee: None,
         }
     }
 
@@ -137,5 +140,23 @@ impl FillCancelDeltas {
             LegKind::Underlying => &mut self.underlying,
             LegKind::Settlement => &mut self.settlement,
         }
+    }
+
+    pub(super) fn fee_leg_mut(
+        &mut self,
+        fee_currency: &Asset,
+        underlying_asset: &Asset,
+        settlement_asset: &Asset,
+    ) -> &mut LegDelta {
+        if fee_currency == underlying_asset {
+            return &mut self.underlying;
+        }
+        if fee_currency == settlement_asset {
+            return &mut self.settlement;
+        }
+        let (_, leg) = self
+            .fee
+            .get_or_insert_with(|| (fee_currency.clone(), LegDelta::new()));
+        leg
     }
 }
