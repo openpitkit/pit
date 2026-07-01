@@ -27,6 +27,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 // Financial value types.
 //
@@ -53,6 +54,18 @@ enum class RoundingStrategy : std::uint8_t {
   Up = OpenPitParamRoundingStrategy_Up,
   Down = OpenPitParamRoundingStrategy_Down,
 };
+
+using AccountGroupIdOptional = OpenPitParamAccountGroupIdOptional;
+using AccountIdOptional = OpenPitParamAccountIdOptional;
+using CashFlowOptional = OpenPitParamCashFlowOptional;
+using FeeOptional = OpenPitParamFeeOptional;
+using MonetaryAmountOptional = OpenPitParamMonetaryAmountOptional;
+using NotionalOptional = OpenPitParamNotionalOptional;
+using PnlOptional = OpenPitParamPnlOptional;
+using PositionSizeOptional = OpenPitParamPositionSizeOptional;
+using PriceOptional = OpenPitParamPriceOptional;
+using QuantityOptional = OpenPitParamQuantityOptional;
+using VolumeOptional = OpenPitParamVolumeOptional;
 
 [[nodiscard]] inline OpenPitParamRoundingStrategy ToRaw(
     RoundingStrategy strategy) noexcept {
@@ -242,6 +255,75 @@ OPENPIT_PARAM_DEFINE_VALUE_TYPE(CashFlow, OpenPitParamCashFlow, cash_flow);
 OPENPIT_PARAM_DEFINE_VALUE_TYPE(Notional, OpenPitParamNotional, notional);
 
 #undef OPENPIT_PARAM_DEFINE_VALUE_TYPE
+
+/// Signed fee-style amount paired with the currency it is denominated in.
+///
+/// The native runtime carries this as `OpenPitParamMonetaryAmount`: an exact
+/// `Fee` value plus a borrowed currency string. The C++ wrapper owns the
+/// currency string and rebuilds the borrowed C view only inside `Raw()`.
+class MonetaryAmount {
+ public:
+  /// Builds a monetary amount from a signed amount and currency.
+  MonetaryAmount(Fee amount, std::string currency)
+      : m_currency(std::move(currency)), m_amount(amount) {}
+
+  /// Adopts a native monetary amount view into owned C++ storage.
+  [[nodiscard]] static MonetaryAmount FromRaw(
+      const OpenPitParamMonetaryAmount& raw) {
+    return MonetaryAmount(Fee::FromRaw(raw.amount),
+                          ::openpit::StringView(raw.currency).ToString());
+  }
+
+  /// Maps a native optional monetary amount to `std::optional`.
+  [[nodiscard]] static std::optional<MonetaryAmount> FromRawOption(
+      const MonetaryAmountOptional& raw) {
+    if (!raw.is_set) {
+      return std::nullopt;
+    }
+    return FromRaw(raw.value);
+  }
+
+  /// Lowers an optional monetary amount to the native optional C payload.
+  [[nodiscard]] static MonetaryAmountOptional RawOption(
+      const std::optional<MonetaryAmount>& value) noexcept {
+    MonetaryAmountOptional raw{};
+    if (value) {
+      raw.value = value->Raw();
+      raw.is_set = true;
+    }
+    return raw;
+  }
+
+  /// Rebuilds the native borrowed C view.
+  [[nodiscard]] OpenPitParamMonetaryAmount Raw() const noexcept {
+    OpenPitParamMonetaryAmount raw{};
+    raw.amount = m_amount.Raw();
+    raw.currency = ::openpit::MakeStringView(m_currency);
+    return raw;
+  }
+
+  /// Returns the signed amount.
+  [[nodiscard]] Fee Amount() const noexcept { return m_amount; }
+
+  /// Returns the owned currency code.
+  [[nodiscard]] const std::string& Currency() const noexcept {
+    return m_currency;
+  }
+
+  /// Reports whether both amount and currency are equal.
+  [[nodiscard]] bool operator==(const MonetaryAmount& other) const {
+    return m_amount == other.m_amount && m_currency == other.m_currency;
+  }
+
+  /// Reports whether either amount or currency differs.
+  [[nodiscard]] bool operator!=(const MonetaryAmount& other) const {
+    return !(*this == other);
+  }
+
+ private:
+  std::string m_currency;
+  Fee m_amount;
+};
 
 // Selects how an `AdjustmentAmount` value is interpreted. Mirrors the set
 // values of `OpenPitParamAdjustmentAmountKind`; the `NotSet` variant is modeled

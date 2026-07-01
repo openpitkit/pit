@@ -585,6 +585,8 @@ struct Trade {
 // owned by their own binding slice. A `Raw()` view leaves it null (no lock).
 struct Fill {
   std::optional<Trade> lastTrade;
+  // Structured fee amount and currency reported for this fill.
+  std::optional<param::MonetaryAmount> fee;
   std::optional<param::Quantity> leavesQuantity;
   std::optional<bool> isFinal;
 
@@ -593,6 +595,7 @@ struct Fill {
     if (raw.last_trade.is_set) {
       out.lastTrade = Trade::FromRaw(raw.last_trade.value);
     }
+    out.fee = param::MonetaryAmount::FromRawOption(raw.fee);
     if (raw.leaves_quantity.is_set) {
       out.leavesQuantity = param::Quantity::FromRaw(raw.leaves_quantity.value);
     }
@@ -608,6 +611,7 @@ struct Fill {
       raw.last_trade.value = lastTrade->Raw();
       raw.last_trade.is_set = true;
     }
+    raw.fee = param::MonetaryAmount::RawOption(fee);
     if (leavesQuantity) {
       raw.leaves_quantity.value = leavesQuantity->Raw();
       raw.leaves_quantity.is_set = true;

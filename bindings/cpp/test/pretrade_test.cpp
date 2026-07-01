@@ -23,6 +23,7 @@
 
 #include "openpit/adapters.hpp"
 #include "openpit/engine.hpp"
+#include "openpit/marketdata.hpp"
 #include "openpit/model.hpp"
 #include "openpit/reject.hpp"
 
@@ -501,39 +502,120 @@ TEST(BuiltinPolicy, SpotFundsLimitOnlyBuilds) {
   EXPECT_NO_THROW({ openpit::Engine engine = builder.Build(); });
 }
 
-TEST(BuiltinPolicy, SpotFundsOverrideConstructsRawCorrectly) {
-  policies::SpotFundsOverride override(OpenPitMarketDataInstrumentId{55});
-  override.slippageBps = 1500;
-  const OpenPitPretradePoliciesSpotFundsOverride raw = override.Raw();
-  EXPECT_EQ(raw.target.tag,
-            OpenPitPretradePoliciesSpotFundsOverrideTargetTag_Instrument);
-  EXPECT_EQ(raw.target.payload.instrument.instrument_id, 55u);
-  EXPECT_TRUE(raw.has_slippage_bps);
-  EXPECT_EQ(raw.slippage_bps, 1500u);
+TEST(BuiltinPolicy, SpotFundsOverridesBuildWithInstrumentIdWrapper) {
+  namespace md = openpit::marketdata;
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+
+  policies::SpotFundsPolicy config;
+  policies::SpotFundsOverride instrument(md::InstrumentId::FromUint64(55));
+  instrument.slippageBps = 1500;
+  config.Override(instrument);
+  config.Override(policies::SpotFundsOverride(
+      md::InstrumentId::FromUint64(56),
+      openpit::param::AccountId::FromUint64(99224416)));
+  config.Override(policies::SpotFundsOverride(
+      md::InstrumentId::FromUint64(57),
+      openpit::param::AccountGroupId::FromUint32(7)));
+
+  builder.Add(config);
+  EXPECT_NO_THROW({ openpit::Engine engine = builder.Build(); });
 }
 
-TEST(BuiltinPolicy, SpotFundsAccountOverrideConstructsRawCorrectly) {
-  policies::SpotFundsOverride override(
-      OpenPitMarketDataInstrumentId{55},
-      openpit::param::AccountId::FromUint64(99224416));
-  const OpenPitPretradePoliciesSpotFundsOverride raw = override.Raw();
-  EXPECT_EQ(
-      raw.target.tag,
-      OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccount);
-  EXPECT_EQ(raw.target.payload.instrument_account.instrument_id, 55u);
-  EXPECT_EQ(raw.target.payload.instrument_account.account_id, 99224416u);
+TEST(BuiltinPolicy, SpotFundsMarketOrdersAcceptServiceWrapper) {
+  namespace md = openpit::marketdata;
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  md::Service marketData =
+      md::Builder::FromEngineSyncPolicy(md::QuoteTtl::Infinite(),
+                                        openpit::SyncPolicy::Full)
+          .Build();
+
+  builder.Add(policies::SpotFundsPolicy{}.WithMarketOrders(marketData, 1500));
+  EXPECT_NO_THROW({ openpit::Engine engine = builder.Build(); });
 }
 
-TEST(BuiltinPolicy, SpotFundsGroupOverrideConstructsRawCorrectly) {
-  policies::SpotFundsOverride override(
-      OpenPitMarketDataInstrumentId{55},
-      openpit::param::AccountGroupId::FromUint32(7));
-  const OpenPitPretradePoliciesSpotFundsOverride raw = override.Raw();
-  EXPECT_EQ(
-      raw.target.tag,
-      OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccountGroup);
-  EXPECT_EQ(raw.target.payload.instrument_account_group.instrument_id, 55u);
-  EXPECT_EQ(raw.target.payload.instrument_account_group.account_group_id, 7u);
+TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierRawUsesAccountCurrency) {
+  policies::SpotFundsPnlBoundsBarrier barrier("USD");
+  barrier.lowerBound = openpit::param::Pnl::FromString("-1000");
+  barrier.upperBound = openpit::param::Pnl::FromString("250");
+
+  const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier raw = barrier.Raw();
+  EXPECT_EQ(openpit::StringView(raw.account_currency).ToString(), "USD");
+  ASSERT_TRUE(raw.lower_bound.is_set);
+  ASSERT_TRUE(raw.upper_bound.is_set);
+  EXPECT_EQ(openpit::param::Pnl::FromRaw(raw.lower_bound.value).ToString(),
+            "-1000");
+  EXPECT_EQ(openpit::param::Pnl::FromRaw(raw.upper_bound.value).ToString(),
+            "250");
+}
+
+TEST(BuiltinPolicy, SpotFundsPnlBoundsPolicyBuildsWithAllBarrierAxes) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+
+  policies::SpotFundsPnlBoundsBarrier global("USD");
+  global.lowerBound = openpit::param::Pnl::FromString("-1000");
+
+  policies::SpotFundsPnlBoundsBarrier group("USD");
+  group.upperBound = openpit::param::Pnl::FromString("1000");
+
+  policies::SpotFundsPnlBoundsBarrier account("USD");
+  account.lowerBound = openpit::param::Pnl::FromString("-250");
+
+  builder.Add(
+      policies::SpotFundsPnlBoundsKillSwitchPolicy{}
+          .GlobalBarrier(std::move(global))
+          .AccountGroupBarrier(policies::SpotFundsPnlBoundsAccountGroupBarrier(
+              openpit::param::AccountGroupId::FromUint32(7), std::move(group)))
+          .AccountBarrier(policies::SpotFundsPnlBoundsAccountBarrier(
+              openpit::param::AccountId::FromUint64(99224416),
+              std::move(account), openpit::param::Pnl::FromString("0"))));
+
+  EXPECT_NO_THROW({ openpit::Engine engine = builder.Build(); });
+}
+
+TEST(BuiltinPolicy, SpotFundsPnlBoundsPolicyRequiresBarrier) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  EXPECT_THROW(
+      { builder.Add(policies::SpotFundsPnlBoundsKillSwitchPolicy{}); },
+      openpit::Error);
+}
+
+TEST(BuiltinPolicy, SpotFundsPnlBoundsConfiguratorUpdatesAxesAndPnl) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  policies::SpotFundsPnlBoundsBarrier account("USD");
+  account.lowerBound = openpit::param::Pnl::FromString("-10");
+  builder.Add(policies::SpotFundsPnlBoundsKillSwitchPolicy{}.AccountBarrier(
+      policies::SpotFundsPnlBoundsAccountBarrier(
+          openpit::param::AccountId::FromUint64(99224416), std::move(account),
+          openpit::param::Pnl::FromString("0"))));
+  openpit::Engine engine = builder.Build();
+
+  policies::SpotFundsPnlBoundsBarrier global("USD");
+  global.lowerBound = openpit::param::Pnl::FromString("-100");
+  policies::SpotFundsPnlBoundsBarrier group("USD");
+  group.upperBound = openpit::param::Pnl::FromString("100");
+  policies::SpotFundsPnlBoundsBarrier update("USD");
+  update.lowerBound = openpit::param::Pnl::FromString("-20");
+  update.upperBound = openpit::param::Pnl::FromString("20");
+
+  EXPECT_NO_THROW({
+    engine.Configure().SpotFundsPnlBoundsKillSwitch(
+        policies::SpotFundsPolicyName,
+        std::vector<policies::SpotFundsPnlBoundsBarrier>{std::move(global)},
+        std::vector<policies::SpotFundsPnlBoundsAccountGroupBarrier>{
+            policies::SpotFundsPnlBoundsAccountGroupBarrier(
+                openpit::param::AccountGroupId::FromUint32(7),
+                std::move(group))},
+        std::vector<policies::SpotFundsPnlBoundsAccountBarrierUpdate>{
+            policies::SpotFundsPnlBoundsAccountBarrierUpdate(
+                openpit::param::AccountId::FromUint64(99224416),
+                std::move(update))});
+  });
+  EXPECT_NO_THROW({
+    engine.Configure().SetSpotFundsAccountPnl(
+        policies::SpotFundsPolicyName,
+        openpit::param::AccountId::FromUint64(99224416), "USD",
+        openpit::param::Pnl::FromString("2.5"));
+  });
 }
 
 //------------------------------------------------------------------------------

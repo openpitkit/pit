@@ -126,7 +126,7 @@ TEST(SpotFundsWiki, MarketBuyPricedFromMarkWithSlippage) {
   // Spot funds with market orders enabled at 1500 bps worst-case slippage,
   // priced from the quote mark.
   policies::SpotFundsPolicy{}
-      .WithMarketOrders(marketData.Get(), 1500)
+      .WithMarketOrders(marketData, 1500)
       .PricingSource(policies::SpotFundsPricingSource::Mark)
       .AddTo(builder);
   openpit::Engine engine = builder.Build();
@@ -159,6 +159,69 @@ TEST(SpotFundsWiki, MarketBuyPricedFromMarkWithSlippage) {
   EXPECT_TRUE(seedResult.Passed());
   EXPECT_TRUE(result.Passed());
   EXPECT_TRUE(result.rejects.empty());
+}
+
+//------------------------------------------------------------------------------
+// Self-Computed PnL Kill Switch - Configuring Barriers
+
+TEST(SpotFundsWiki, PnlBoundsKillSwitchBuilder) {
+  namespace policies = openpit::pretrade::policies;
+  using openpit::param::AccountId;
+  using openpit::param::Pnl;
+
+  const AccountId accountId = AccountId::FromUint64(99224416);
+
+  // The PnL kill switch is a distinct spot-funds builder entry point; it
+  // produces the same SpotFundsPolicy, registered under the same name.
+  policies::SpotFundsPnlBoundsBarrier global("USD");
+  global.lowerBound = Pnl::FromString("-1000");
+
+  policies::SpotFundsPnlBoundsBarrier accountBarrier("USD");
+  accountBarrier.lowerBound = Pnl::FromString("-250");
+
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(
+      policies::SpotFundsPnlBoundsKillSwitchPolicy{}
+          .GlobalBarrier(std::move(global))
+          .AccountBarrier(policies::SpotFundsPnlBoundsAccountBarrier(
+              accountId, std::move(accountBarrier), Pnl::FromString("0"))));
+  openpit::Engine engine = builder.Build();
+
+  // Harness assertion: the builder accepted the SpotFunds PnL barriers.
+  EXPECT_TRUE(static_cast<bool>(engine));
+}
+
+//------------------------------------------------------------------------------
+// Self-Computed PnL Kill Switch - Runtime Reconfiguration
+
+TEST(SpotFundsWiki, PnlBoundsKillSwitchRuntimeReconfiguration) {
+  namespace policies = openpit::pretrade::policies;
+  using openpit::param::AccountId;
+  using openpit::param::Pnl;
+
+  const AccountId accountId = AccountId::FromUint64(99224416);
+  policies::SpotFundsPnlBoundsBarrier initial("USD");
+  initial.lowerBound = Pnl::FromString("-1000");
+
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(policies::SpotFundsPnlBoundsKillSwitchPolicy{}.GlobalBarrier(
+      std::move(initial)));
+  openpit::Engine engine = builder.Build();
+
+  // Retune the account-currency PnL barriers; live accumulated PnL is
+  // untouched.
+  policies::SpotFundsPnlBoundsBarrier global("USD");
+  global.lowerBound = Pnl::FromString("-500");
+  engine.Configure().SpotFundsPnlBoundsKillSwitch(
+      policies::SpotFundsPolicyName,
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{std::move(global)});
+
+  // Force-set the live accumulated PnL for one (account, account currency).
+  engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, accountId, "USD", Pnl::FromString("-120"));
+
+  // Harness assertion: both runtime calls completed without throwing.
+  EXPECT_TRUE(static_cast<bool>(engine));
 }
 
 }  // namespace

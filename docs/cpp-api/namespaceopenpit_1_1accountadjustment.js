@@ -10,5 +10,6 @@ var namespaceopenpit_1_1accountadjustment =
     [ "Outcome", "structopenpit_1_1accountadjustment_1_1Outcome.html", "structopenpit_1_1accountadjustment_1_1Outcome" ],
     [ "OutcomeAmount", "structopenpit_1_1accountadjustment_1_1OutcomeAmount.html", "structopenpit_1_1accountadjustment_1_1OutcomeAmount" ],
     [ "OutcomeList", "classopenpit_1_1accountadjustment_1_1OutcomeList.html", "classopenpit_1_1accountadjustment_1_1OutcomeList" ],
-    [ "PositionOperation", "structopenpit_1_1accountadjustment_1_1PositionOperation.html", "structopenpit_1_1accountadjustment_1_1PositionOperation" ]
+    [ "PositionOperation", "structopenpit_1_1accountadjustment_1_1PositionOperation.html", "structopenpit_1_1accountadjustment_1_1PositionOperation" ],
+    [ "OutcomeAmountOptional", "namespaceopenpit_1_1accountadjustment.html#a60d5e2a8b4f5e3bfb0891fdae73bea29", null ]
 ];

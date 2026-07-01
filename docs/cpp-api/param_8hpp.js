@@ -2,7 +2,19 @@ var param_8hpp =
 [
     [ "openpit::param::AdjustmentAmount", "classopenpit_1_1param_1_1AdjustmentAmount.html", "classopenpit_1_1param_1_1AdjustmentAmount" ],
     [ "openpit::param::Leverage", "classopenpit_1_1param_1_1Leverage.html", "classopenpit_1_1param_1_1Leverage" ],
+    [ "openpit::param::MonetaryAmount", "classopenpit_1_1param_1_1MonetaryAmount.html", "classopenpit_1_1param_1_1MonetaryAmount" ],
     [ "OPENPIT_PARAM_DEFINE_VALUE_TYPE", "param_8hpp.html#af70a024203a2cb99f90db4f35009a332", null ],
+    [ "openpit::param::AccountGroupIdOptional", "namespaceopenpit_1_1param.html#ae8a84d6e1708effb18fc60dd7fd11b0a", null ],
+    [ "openpit::param::AccountIdOptional", "namespaceopenpit_1_1param.html#a7676f3ae14e6a87d13656b8bcbd779ca", null ],
+    [ "openpit::param::CashFlowOptional", "namespaceopenpit_1_1param.html#a95e68aa31c4280e36e271af2d2671689", null ],
+    [ "openpit::param::FeeOptional", "namespaceopenpit_1_1param.html#a888be57ffc50bce2cce43eaf9983a904", null ],
+    [ "openpit::param::MonetaryAmountOptional", "namespaceopenpit_1_1param.html#ada969d1d0130ef7c4d89468acbfe0278", null ],
+    [ "openpit::param::NotionalOptional", "namespaceopenpit_1_1param.html#a587408e7eb339f942494eb9c1710c593", null ],
+    [ "openpit::param::PnlOptional", "namespaceopenpit_1_1param.html#a4c6cf5ea5e4a995494d6f34f2447d13d", null ],
+    [ "openpit::param::PositionSizeOptional", "namespaceopenpit_1_1param.html#a0c253ca233d310141ab097752cc25992", null ],
+    [ "openpit::param::PriceOptional", "namespaceopenpit_1_1param.html#a2134ed6a505bd659d254c48a9cbbaec5", null ],
+    [ "openpit::param::QuantityOptional", "namespaceopenpit_1_1param.html#a4b5274ac4fdf32955cad4469d6a089fb", null ],
+    [ "openpit::param::VolumeOptional", "namespaceopenpit_1_1param.html#afb903b63c7412f19e0ddbcab15582c0a", null ],
     [ "openpit::param::AdjustmentAmountKind", "namespaceopenpit_1_1param.html#ad447e10b1a4c0ebfde8b838c53868f90", [
       [ "openpit::param::AdjustmentAmountKind::Delta", "namespaceopenpit_1_1param.html#ad447e10b1a4c0ebfde8b838c53868f90adb1f4ab5845def61a83d5df13e0c2397", null ],
       [ "openpit::param::AdjustmentAmountKind::Absolute", "namespaceopenpit_1_1param.html#ad447e10b1a4c0ebfde8b838c53868f90ab51ca26c6c89cfc9bec338f7a0d3e0c8", null ]

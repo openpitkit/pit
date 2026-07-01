@@ -22,5 +22,7 @@ var searchData=
   ['missingaccountid_19',['MissingAccountId',['../namespaceopenpit_1_1asyncengine.html#a3ed82bd1ab4cc73a47327fe69f275d66aca8e8bd079d6957bb5ace1e11489ea90',1,'openpit::asyncengine']]],
   ['missingrequiredfield_20',['MissingRequiredField',['../namespaceopenpit_1_1pretrade.html#a9fe9e76687a28aa5a58164c44ddfefedaa4917c3db352ae9cc19d5141ee11316f',1,'openpit::pretrade']]],
   ['mode_21',['mode',['../structopenpit_1_1accountadjustment_1_1PositionOperation.html#aac100e36a51922c16258ea74606a8644',1,'openpit::accountadjustment::PositionOperation']]],
-  ['model_2ehpp_22',['model.hpp',['../model_8hpp.html',1,'']]]
+  ['model_2ehpp_22',['model.hpp',['../model_8hpp.html',1,'']]],
+  ['monetaryamount_23',['MonetaryAmount',['../classopenpit_1_1param_1_1MonetaryAmount.html',1,'openpit::param::MonetaryAmount'],['../classopenpit_1_1param_1_1MonetaryAmount.html#a3968b09e61530200c6b5490f015d5446',1,'openpit::param::MonetaryAmount::MonetaryAmount()']]],
+  ['monetaryamountoptional_24',['MonetaryAmountOptional',['../namespaceopenpit_1_1param.html#ada969d1d0130ef7c4d89468acbfe0278',1,'openpit::param']]]
 ];

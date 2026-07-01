@@ -80,6 +80,7 @@
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1param_1_1AdjustmentAmount.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1param_1_1GroupId.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1param_1_1Leverage.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1param_1_1MonetaryAmount.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1Context.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1CustomPolicy.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1DryRunReport.html</loc></url>
@@ -92,6 +93,7 @@
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1OrderValidationPolicy.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1PnlBoundsKillSwitchPolicy.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1RateLimitPolicy.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/context_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/custom__policy_8hpp.html</loc></url>
@@ -168,5 +170,9 @@
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1RateLimitAssetBarrier.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1RateLimitBrokerBarrier.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1SpotFundsOverride.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrierUpdate.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountGroupBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/typed_8hpp.html</loc></url>
 </urlset>

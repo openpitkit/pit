@@ -47,6 +47,7 @@ class CashFlow;
 class Fee;
 class GroupId;
 class Leverage;
+class MonetaryAmount;
 class Notional;
 class Pnl;
 class PositionSize;
@@ -111,6 +112,7 @@ class OrderSizeLimitPolicy;
 class OrderValidationPolicy;
 class PnlBoundsKillSwitchPolicy;
 class RateLimitPolicy;
+class SpotFundsPnlBoundsKillSwitchPolicy;
 class SpotFundsPolicy;
 
 struct OrderSizeAccountAssetBarrier;
@@ -126,6 +128,10 @@ struct RateLimitAccountBarrier;
 struct RateLimitAssetBarrier;
 struct RateLimitBrokerBarrier;
 struct SpotFundsOverride;
+struct SpotFundsPnlBoundsAccountBarrier;
+struct SpotFundsPnlBoundsAccountBarrierUpdate;
+struct SpotFundsPnlBoundsAccountGroupBarrier;
+struct SpotFundsPnlBoundsBarrier;
 
 enum class SpotFundsLimitMode : std::uint8_t;
 enum class SpotFundsPricingSource : std::uint8_t;

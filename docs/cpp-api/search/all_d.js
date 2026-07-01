@@ -7,5 +7,6 @@ var searchData=
   ['noopobserver_4',['NoopObserver',['../classopenpit_1_1asyncengine_1_1NoopObserver.html',1,'openpit::asyncengine']]],
   ['nosync_5',['NoSync',['../classopenpit_1_1marketdata_1_1Builder.html#a89020219ee3bc7cd5787949386b3478d',1,'openpit::marketdata::Builder']]],
   ['notarget_6',['NoTarget',['../namespaceopenpit_1_1marketdata.html#a2dac77c54543feba4e5a508ae51611d9aff4d8f7b051f09ecae01888dda54c15c',1,'openpit::marketdata']]],
-  ['notset_7',['NotSet',['../classopenpit_1_1param_1_1Leverage.html#a50f79f694d1b24f04b9a0e4461d1e11a',1,'openpit::param::Leverage']]]
+  ['notionaloptional_7',['NotionalOptional',['../namespaceopenpit_1_1param.html#a587408e7eb339f942494eb9c1710c593',1,'openpit::param']]],
+  ['notset_8',['NotSet',['../classopenpit_1_1param_1_1Leverage.html#a50f79f694d1b24f04b9a0e4461d1e11a',1,'openpit::param::Leverage']]]
 ];

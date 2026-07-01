@@ -21,5 +21,6 @@ var searchData=
   ['configureerror_18',['ConfigureError',['../classopenpit_1_1ConfigureError.html#abcd450702bd4e3ae57013d155b37f6d7',1,'openpit::ConfigureError']]],
   ['context_19',['Context',['../classopenpit_1_1pretrade_1_1Context.html#a787b7ce38ecbc76d47d1588249a54862',1,'openpit::pretrade::Context::Context(const ::openpit::Order &amp;order, const OpenPitPretradeContext *native) noexcept'],['../classopenpit_1_1pretrade_1_1Context.html#abbf319387249a7031f5c0fd9e44ece0a',1,'openpit::pretrade::Context::Context(const ::openpit::Order &amp;order) noexcept'],['../classopenpit_1_1pretrade_1_1Context.html#a8293970fa2104d96b3f3538c6b91400f',1,'openpit::pretrade::Context::Context(const Context &amp;)=delete'],['../classopenpit_1_1pretrade_1_1Context.html#ae7858742055a97b86b5edc228819ac16',1,'openpit::pretrade::Context::Context(Context &amp;&amp;) noexcept=default']]],
   ['contextorder_20',['ContextOrder',['../namespaceopenpit_1_1pretrade.html#a10a702a3e46017a3cbad5ef6317c5463',1,'openpit::pretrade']]],
-  ['custompolicy_21',['CustomPolicy',['../classopenpit_1_1pretrade_1_1CustomPolicy.html#a4c12093cff8881293565ef85d73cd522',1,'openpit::pretrade::CustomPolicy']]]
+  ['currency_21',['Currency',['../classopenpit_1_1param_1_1MonetaryAmount.html#a3c708cad41983fd0f3677ec805496972',1,'openpit::param::MonetaryAmount']]],
+  ['custompolicy_22',['CustomPolicy',['../classopenpit_1_1pretrade_1_1CustomPolicy.html#a4c12093cff8881293565ef85d73cd522',1,'openpit::pretrade::CustomPolicy']]]
 ];

@@ -56,6 +56,8 @@
 
 namespace openpit::accountadjustment {
 
+using OutcomeAmountOptional = OpenPitOutcomeAmountOptional;
+
 //------------------------------------------------------------------------------
 // BalanceOperation
 
@@ -303,7 +305,7 @@ struct Bounds {
 
  private:
   [[nodiscard]] static std::optional<param::PositionSize> ReadBound(
-      const OpenPitParamPositionSizeOptional& field) {
+      const param::PositionSizeOptional& field) {
     if (!field.is_set) {
       return std::nullopt;
     }
@@ -311,7 +313,7 @@ struct Bounds {
   }
 
   static void WriteBound(
-      OpenPitParamPositionSizeOptional& field,
+      param::PositionSizeOptional& field,
       const std::optional<param::PositionSize>& value) noexcept {
     if (value) {
       field.value = value->Raw();
@@ -433,14 +435,14 @@ struct AccountOutcomeEntry {
 
  private:
   [[nodiscard]] static std::optional<OutcomeAmount> ReadAmount(
-      const OpenPitOutcomeAmountOptional& field) {
+      const OutcomeAmountOptional& field) {
     if (!field.is_set) {
       return std::nullopt;
     }
     return OutcomeAmount::FromRaw(field.value);
   }
 
-  static void WriteAmount(OpenPitOutcomeAmountOptional& field,
+  static void WriteAmount(OutcomeAmountOptional& field,
                           const std::optional<OutcomeAmount>& value) noexcept {
     if (value) {
       field.value = value->Raw();

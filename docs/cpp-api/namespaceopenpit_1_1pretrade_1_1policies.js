@@ -17,6 +17,11 @@ var namespaceopenpit_1_1pretrade_1_1policies =
     [ "RateLimitBrokerBarrier", "structopenpit_1_1pretrade_1_1policies_1_1RateLimitBrokerBarrier.html", "structopenpit_1_1pretrade_1_1policies_1_1RateLimitBrokerBarrier" ],
     [ "RateLimitPolicy", "classopenpit_1_1pretrade_1_1policies_1_1RateLimitPolicy.html", "classopenpit_1_1pretrade_1_1policies_1_1RateLimitPolicy" ],
     [ "SpotFundsOverride", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsOverride.html", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsOverride" ],
+    [ "SpotFundsPnlBoundsAccountBarrier", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrier.html", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrier" ],
+    [ "SpotFundsPnlBoundsAccountBarrierUpdate", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrierUpdate.html", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrierUpdate" ],
+    [ "SpotFundsPnlBoundsAccountGroupBarrier", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountGroupBarrier.html", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountGroupBarrier" ],
+    [ "SpotFundsPnlBoundsBarrier", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier.html", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier" ],
+    [ "SpotFundsPnlBoundsKillSwitchPolicy", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy.html", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy" ],
     [ "SpotFundsPolicy", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy.html", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy" ],
     [ "SpotFundsLimitMode", "namespaceopenpit_1_1pretrade_1_1policies.html#aa655b2cbe39c0059740c90ff18ac5c77", [
       [ "Enforce", "namespaceopenpit_1_1pretrade_1_1policies.html#aa655b2cbe39c0059740c90ff18ac5c77a5bb2ea671ff70d8e208165bf1cabba2c", null ],

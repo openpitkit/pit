@@ -1,15 +1,14 @@
 var searchData=
 [
-  ['service_0',['Service',['../classopenpit_1_1marketdata_1_1Service.html',1,'openpit::marketdata']]],
-  ['shardedbuilder_1',['ShardedBuilder',['../classopenpit_1_1asyncengine_1_1ShardedBuilder.html',1,'openpit::asyncengine']]],
-  ['sharedbytes_2',['SharedBytes',['../classopenpit_1_1SharedBytes.html',1,'openpit']]],
-  ['sharedstring_3',['SharedString',['../classopenpit_1_1SharedString.html',1,'openpit']]],
-  ['spotfundsoverride_4',['SpotFundsOverride',['../structopenpit_1_1pretrade_1_1policies_1_1SpotFundsOverride.html',1,'openpit::pretrade::policies']]],
-  ['spotfundspolicy_5',['SpotFundsPolicy',['../classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy.html',1,'openpit::pretrade::policies']]],
-  ['startoutcome_6',['StartOutcome',['../structopenpit_1_1asyncengine_1_1StartOutcome.html',1,'openpit::asyncengine']]],
-  ['startpolicyadapter_7',['StartPolicyAdapter',['../classopenpit_1_1pretrade_1_1StartPolicyAdapter.html',1,'openpit::pretrade']]],
-  ['startpolicyadapter_3c_20clientpolicy_2c_20clientorder_2c_20clientreport_2c_20castmode_3a_3asafeslow_20_3e_8',['StartPolicyAdapter&lt; ClientPolicy, ClientOrder, ClientReport, CastMode::SafeSlow &gt;',['../classopenpit_1_1pretrade_1_1StartPolicyAdapter.html',1,'openpit::pretrade']]],
-  ['startpolicyadapter_3c_20clientpolicy_2c_20clientorder_2c_20clientreport_2c_20castmode_3a_3aunsafefast_20_3e_9',['StartPolicyAdapter&lt; ClientPolicy, ClientOrder, ClientReport, CastMode::UnsafeFast &gt;',['../classopenpit_1_1pretrade_1_1StartPolicyAdapter.html',1,'openpit::pretrade']]],
-  ['startresult_10',['StartResult',['../structopenpit_1_1pretrade_1_1StartResult.html',1,'openpit::pretrade']]],
-  ['stringview_11',['StringView',['../classopenpit_1_1StringView.html',1,'openpit']]]
+  ['ratelimit_0',['RateLimit',['../structopenpit_1_1pretrade_1_1policies_1_1RateLimit.html',1,'openpit::pretrade::policies']]],
+  ['ratelimitaccountassetbarrier_1',['RateLimitAccountAssetBarrier',['../structopenpit_1_1pretrade_1_1policies_1_1RateLimitAccountAssetBarrier.html',1,'openpit::pretrade::policies']]],
+  ['ratelimitaccountbarrier_2',['RateLimitAccountBarrier',['../structopenpit_1_1pretrade_1_1policies_1_1RateLimitAccountBarrier.html',1,'openpit::pretrade::policies']]],
+  ['ratelimitassetbarrier_3',['RateLimitAssetBarrier',['../structopenpit_1_1pretrade_1_1policies_1_1RateLimitAssetBarrier.html',1,'openpit::pretrade::policies']]],
+  ['ratelimitbrokerbarrier_4',['RateLimitBrokerBarrier',['../structopenpit_1_1pretrade_1_1policies_1_1RateLimitBrokerBarrier.html',1,'openpit::pretrade::policies']]],
+  ['ratelimitpolicy_5',['RateLimitPolicy',['../classopenpit_1_1pretrade_1_1policies_1_1RateLimitPolicy.html',1,'openpit::pretrade::policies']]],
+  ['registerresult_6',['RegisterResult',['../structopenpit_1_1marketdata_1_1RegisterResult.html',1,'openpit::marketdata']]],
+  ['reject_7',['Reject',['../structopenpit_1_1pretrade_1_1Reject.html',1,'openpit::pretrade']]],
+  ['request_8',['Request',['../classopenpit_1_1pretrade_1_1Request.html',1,'openpit::pretrade']]],
+  ['reservation_9',['Reservation',['../classopenpit_1_1pretrade_1_1Reservation.html',1,'openpit::pretrade']]],
+  ['result_10',['Result',['../classopenpit_1_1asyncengine_1_1Result.html',1,'openpit::asyncengine']]]
 ];

@@ -18,6 +18,11 @@ var policies_8hpp =
     [ "openpit::pretrade::policies::RateLimitBrokerBarrier", "structopenpit_1_1pretrade_1_1policies_1_1RateLimitBrokerBarrier.html", "structopenpit_1_1pretrade_1_1policies_1_1RateLimitBrokerBarrier" ],
     [ "openpit::pretrade::policies::RateLimitPolicy", "classopenpit_1_1pretrade_1_1policies_1_1RateLimitPolicy.html", "classopenpit_1_1pretrade_1_1policies_1_1RateLimitPolicy" ],
     [ "openpit::pretrade::policies::SpotFundsOverride", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsOverride.html", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsOverride" ],
+    [ "openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrier", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrier.html", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrier" ],
+    [ "openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrierUpdate", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrierUpdate.html", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrierUpdate" ],
+    [ "openpit::pretrade::policies::SpotFundsPnlBoundsAccountGroupBarrier", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountGroupBarrier.html", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountGroupBarrier" ],
+    [ "openpit::pretrade::policies::SpotFundsPnlBoundsBarrier", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier.html", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier" ],
+    [ "openpit::pretrade::policies::SpotFundsPnlBoundsKillSwitchPolicy", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy.html", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy" ],
     [ "openpit::pretrade::policies::SpotFundsPolicy", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy.html", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy" ],
     [ "openpit::pretrade::policies::SpotFundsLimitMode", "namespaceopenpit_1_1pretrade_1_1policies.html#aa655b2cbe39c0059740c90ff18ac5c77", [
       [ "openpit::pretrade::policies::SpotFundsLimitMode::Enforce", "namespaceopenpit_1_1pretrade_1_1policies.html#aa655b2cbe39c0059740c90ff18ac5c77a5bb2ea671ff70d8e208165bf1cabba2c", null ],

@@ -55,6 +55,7 @@ var hierarchy =
     [ "openpit::marketdata::InstrumentId", "classopenpit_1_1marketdata_1_1InstrumentId.html", null ],
     [ "openpit::param::Leverage", "classopenpit_1_1param_1_1Leverage.html", null ],
     [ "openpit::pretrade::LockEntry", "structopenpit_1_1pretrade_1_1LockEntry.html", null ],
+    [ "openpit::param::MonetaryAmount", "classopenpit_1_1param_1_1MonetaryAmount.html", null ],
     [ "openpit::asyncengine::Observer", "classopenpit_1_1asyncengine_1_1Observer.html", [
       [ "openpit::asyncengine::NoopObserver", "classopenpit_1_1asyncengine_1_1NoopObserver.html", null ]
     ] ],
@@ -106,6 +107,11 @@ var hierarchy =
     [ "openpit::SharedBytes", "classopenpit_1_1SharedBytes.html", null ],
     [ "openpit::SharedString", "classopenpit_1_1SharedString.html", null ],
     [ "openpit::pretrade::policies::SpotFundsOverride", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsOverride.html", null ],
+    [ "openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrier", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrier.html", null ],
+    [ "openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrierUpdate", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrierUpdate.html", null ],
+    [ "openpit::pretrade::policies::SpotFundsPnlBoundsAccountGroupBarrier", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountGroupBarrier.html", null ],
+    [ "openpit::pretrade::policies::SpotFundsPnlBoundsBarrier", "structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier.html", null ],
+    [ "openpit::pretrade::policies::SpotFundsPnlBoundsKillSwitchPolicy", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy.html", null ],
     [ "openpit::pretrade::policies::SpotFundsPolicy", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy.html", null ],
     [ "openpit::asyncengine::StartOutcome&lt; Driver &gt;", "structopenpit_1_1asyncengine_1_1StartOutcome.html", null ],
     [ "openpit::pretrade::StartPolicyAdapter&lt; ClientPolicy, ClientOrder, ClientReport, mode &gt;", "classopenpit_1_1pretrade_1_1StartPolicyAdapter.html", null ],

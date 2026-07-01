@@ -28,6 +28,8 @@ using openpit::param::AccountGroupId;
 using openpit::param::Fee;
 using openpit::param::GroupId;
 using openpit::param::Leverage;
+using openpit::param::MonetaryAmount;
+using openpit::param::MonetaryAmountOptional;
 using openpit::param::Pnl;
 using openpit::param::Price;
 using openpit::param::Quantity;
@@ -231,6 +233,7 @@ TEST(ModelExecutionReport, FullRawRoundTripPreservesEveryGroup) {
   model::Fill fill;
   fill.lastTrade =
       model::Trade(Price::FromString("100.5"), Quantity::FromString("1"));
+  fill.fee = MonetaryAmount(Fee::FromString("0.25"), "USD");
   fill.leavesQuantity = Quantity::FromString("2");
   fill.isFinal = true;
   report.fill = fill;
@@ -261,6 +264,9 @@ TEST(ModelExecutionReport, FullRawRoundTripPreservesEveryGroup) {
   ASSERT_TRUE(restored.fill->lastTrade.has_value());
   EXPECT_EQ(restored.fill->lastTrade->price.ToString(), "100.5");
   EXPECT_EQ(restored.fill->lastTrade->quantity.ToString(), "1");
+  ASSERT_TRUE(restored.fill->fee.has_value());
+  EXPECT_EQ(restored.fill->fee->Amount().ToString(), "0.25");
+  EXPECT_EQ(restored.fill->fee->Currency(), "USD");
   ASSERT_TRUE(restored.fill->leavesQuantity.has_value());
   EXPECT_EQ(restored.fill->leavesQuantity->ToString(), "2");
   EXPECT_EQ(restored.fill->isFinal, std::optional<bool>(true));
@@ -291,6 +297,20 @@ TEST(ModelExecutionReport, FillRawCarriesNullLock) {
   EXPECT_FALSE(raw.is_final.value);
 }
 
+TEST(ModelExecutionReport, StructuredFillFeeRoundTrips) {
+  model::Fill fill;
+  fill.fee = MonetaryAmount(Fee::FromString("1.25"), "EUR");
+
+  const OpenPitExecutionReportFill raw = fill.Raw();
+  ASSERT_TRUE(raw.fee.is_set);
+  EXPECT_EQ(openpit::StringView(raw.fee.value.currency).ToString(), "EUR");
+
+  const model::Fill restored = model::Fill::FromRaw(raw);
+  ASSERT_TRUE(restored.fee.has_value());
+  EXPECT_EQ(restored.fee->Amount().ToString(), "1.25");
+  EXPECT_EQ(restored.fee->Currency(), "EUR");
+}
+
 TEST(ModelExecutionReport, IsUsableAsPolymorphicBase) {
   model::ExecutionReport concrete;
   concrete.userData = 11;
@@ -314,6 +334,22 @@ TEST(ParamGroupId, CarriesExplicitValue) {
   EXPECT_EQ(group.Raw(), 7u);
   EXPECT_NE(group, GroupId(8));
   EXPECT_EQ(group, GroupId(7));
+}
+
+TEST(ParamMonetaryAmount, RawOptionRoundTripPreservesAmountAndCurrency) {
+  const MonetaryAmount amount(Fee::FromString("-0.125"), "USD");
+  const MonetaryAmountOptional raw =
+      MonetaryAmount::RawOption(std::optional<MonetaryAmount>(amount));
+
+  ASSERT_TRUE(raw.is_set);
+  EXPECT_EQ(Fee::FromRaw(raw.value.amount).ToString(), "-0.125");
+  EXPECT_EQ(openpit::StringView(raw.value.currency).ToString(), "USD");
+
+  const std::optional<MonetaryAmount> restored =
+      MonetaryAmount::FromRawOption(raw);
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_EQ(restored->Amount().ToString(), "-0.125");
+  EXPECT_EQ(restored->Currency(), "USD");
 }
 
 //------------------------------------------------------------------------------

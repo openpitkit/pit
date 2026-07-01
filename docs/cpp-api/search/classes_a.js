@@ -1,19 +1,4 @@
 var searchData=
 [
-  ['observer_0',['Observer',['../classopenpit_1_1asyncengine_1_1Observer.html',1,'openpit::asyncengine']]],
-  ['operation_1',['Operation',['../classopenpit_1_1accountadjustment_1_1Operation.html',1,'openpit::accountadjustment']]],
-  ['order_2',['Order',['../classopenpit_1_1model_1_1Order.html',1,'openpit::model::Order'],['../classopenpit_1_1Order.html',1,'openpit::Order']]],
-  ['ordermargin_3',['OrderMargin',['../structopenpit_1_1model_1_1OrderMargin.html',1,'openpit::model']]],
-  ['orderoperation_4',['OrderOperation',['../structopenpit_1_1model_1_1OrderOperation.html',1,'openpit::model']]],
-  ['orderposition_5',['OrderPosition',['../structopenpit_1_1model_1_1OrderPosition.html',1,'openpit::model']]],
-  ['ordersizeaccountassetbarrier_6',['OrderSizeAccountAssetBarrier',['../structopenpit_1_1pretrade_1_1policies_1_1OrderSizeAccountAssetBarrier.html',1,'openpit::pretrade::policies']]],
-  ['ordersizeassetbarrier_7',['OrderSizeAssetBarrier',['../structopenpit_1_1pretrade_1_1policies_1_1OrderSizeAssetBarrier.html',1,'openpit::pretrade::policies']]],
-  ['ordersizebrokerbarrier_8',['OrderSizeBrokerBarrier',['../structopenpit_1_1pretrade_1_1policies_1_1OrderSizeBrokerBarrier.html',1,'openpit::pretrade::policies']]],
-  ['ordersizelimit_9',['OrderSizeLimit',['../structopenpit_1_1pretrade_1_1policies_1_1OrderSizeLimit.html',1,'openpit::pretrade::policies']]],
-  ['ordersizelimitpolicy_10',['OrderSizeLimitPolicy',['../classopenpit_1_1pretrade_1_1policies_1_1OrderSizeLimitPolicy.html',1,'openpit::pretrade::policies']]],
-  ['ordervalidationpolicy_11',['OrderValidationPolicy',['../classopenpit_1_1pretrade_1_1policies_1_1OrderValidationPolicy.html',1,'openpit::pretrade::policies']]],
-  ['outcome_12',['Outcome',['../structopenpit_1_1accountadjustment_1_1Outcome.html',1,'openpit::accountadjustment']]],
-  ['outcomeamount_13',['OutcomeAmount',['../structopenpit_1_1accountadjustment_1_1OutcomeAmount.html',1,'openpit::accountadjustment']]],
-  ['outcomelist_14',['OutcomeList',['../classopenpit_1_1accountadjustment_1_1OutcomeList.html',1,'openpit::accountadjustment']]],
-  ['ownedtypedasyncengine_15',['OwnedTypedAsyncEngine',['../classopenpit_1_1asyncengine_1_1OwnedTypedAsyncEngine.html',1,'openpit::asyncengine']]]
+  ['noopobserver_0',['NoopObserver',['../classopenpit_1_1asyncengine_1_1NoopObserver.html',1,'openpit::asyncengine']]]
 ];

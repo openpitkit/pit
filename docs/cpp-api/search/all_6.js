@@ -8,8 +8,9 @@ var searchData=
   ['getresult_5',['GetResult',['../structopenpit_1_1marketdata_1_1GetResult.html',1,'openpit::marketdata']]],
   ['getstatus_6',['GetStatus',['../namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98',1,'openpit::marketdata']]],
   ['getversion_7',['GetVersion',['../namespaceopenpit.html#a8e96a0d92c56abf124bcfd9c0b23b232',1,'openpit']]],
-  ['group_8',['group',['../structopenpit_1_1accounts_1_1AccountBlockError.html#a4357ad829db07b5dd0ec1584be38451f',1,'openpit::accounts::AccountBlockError']]],
-  ['groupid_9',['GroupId',['../classopenpit_1_1param_1_1GroupId.html',1,'openpit::param::GroupId'],['../classopenpit_1_1param_1_1GroupId.html#ad566e9a58903bfccba2d598af3e76e3a',1,'openpit::param::GroupId::GroupId() noexcept=default'],['../classopenpit_1_1param_1_1GroupId.html#af8984ed7dc60f13b88a16b94bd9badc5',1,'openpit::param::GroupId::GroupId(std::uint16_t value) noexcept']]],
-  ['groupnotblocked_10',['GroupNotBlocked',['../namespaceopenpit_1_1accounts.html#a799297bafed99e7aa4e0ddcbba33b140a10d77fddab5fa659ed9e01455f99a7ef',1,'openpit::accounts']]],
-  ['groupof_11',['GroupOf',['../classopenpit_1_1accounts_1_1Accounts.html#a7a8b04135e970d68b64344fa9af09970',1,'openpit::accounts::Accounts::GroupOf()'],['../classopenpit_1_1asyncengine_1_1AsyncAccounts.html#aef077db5dac1593ce1de8fb2bbdfc6ec',1,'openpit::asyncengine::AsyncAccounts::GroupOf()']]]
+  ['globalbarrier_8',['GlobalBarrier',['../classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy.html#aa437a806abf3198adadc51f488ab8c6b',1,'openpit::pretrade::policies::SpotFundsPnlBoundsKillSwitchPolicy']]],
+  ['group_9',['group',['../structopenpit_1_1accounts_1_1AccountBlockError.html#a4357ad829db07b5dd0ec1584be38451f',1,'openpit::accounts::AccountBlockError']]],
+  ['groupid_10',['GroupId',['../classopenpit_1_1param_1_1GroupId.html',1,'openpit::param::GroupId'],['../classopenpit_1_1param_1_1GroupId.html#ad566e9a58903bfccba2d598af3e76e3a',1,'openpit::param::GroupId::GroupId() noexcept=default'],['../classopenpit_1_1param_1_1GroupId.html#af8984ed7dc60f13b88a16b94bd9badc5',1,'openpit::param::GroupId::GroupId(std::uint16_t value) noexcept']]],
+  ['groupnotblocked_11',['GroupNotBlocked',['../namespaceopenpit_1_1accounts.html#a799297bafed99e7aa4e0ddcbba33b140a10d77fddab5fa659ed9e01455f99a7ef',1,'openpit::accounts']]],
+  ['groupof_12',['GroupOf',['../classopenpit_1_1accounts_1_1Accounts.html#a7a8b04135e970d68b64344fa9af09970',1,'openpit::accounts::Accounts::GroupOf()'],['../classopenpit_1_1asyncengine_1_1AsyncAccounts.html#aef077db5dac1593ce1de8fb2bbdfc6ec',1,'openpit::asyncengine::AsyncAccounts::GroupOf()']]]
 ];

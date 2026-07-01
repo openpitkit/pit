@@ -51,21 +51,21 @@ class Quote {
   // Returns a copy with the mark price set.
   [[nodiscard]] Quote WithMark(const param::Price& mark) const noexcept {
     Quote out = *this;
-    out.m_value.mark = OpenPitParamPriceOptional{mark.Raw(), true};
+    out.m_value.mark = param::PriceOptional{mark.Raw(), true};
     return out;
   }
 
   // Returns a copy with the best-bid price set.
   [[nodiscard]] Quote WithBid(const param::Price& bid) const noexcept {
     Quote out = *this;
-    out.m_value.bid = OpenPitParamPriceOptional{bid.Raw(), true};
+    out.m_value.bid = param::PriceOptional{bid.Raw(), true};
     return out;
   }
 
   // Returns a copy with the best-ask price set.
   [[nodiscard]] Quote WithAsk(const param::Price& ask) const noexcept {
     Quote out = *this;
-    out.m_value.ask = OpenPitParamPriceOptional{ask.Raw(), true};
+    out.m_value.ask = param::PriceOptional{ask.Raw(), true};
     return out;
   }
 
@@ -85,7 +85,7 @@ class Quote {
 
  private:
   [[nodiscard]] static std::optional<param::Price> Read(
-      const OpenPitParamPriceOptional& field) noexcept {
+      const param::PriceOptional& field) noexcept {
     if (!field.is_set) {
       return std::nullopt;
     }

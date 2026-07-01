@@ -5,6 +5,18 @@ var namespaceopenpit_1_1param =
     [ "AdjustmentAmount", "classopenpit_1_1param_1_1AdjustmentAmount.html", "classopenpit_1_1param_1_1AdjustmentAmount" ],
     [ "GroupId", "classopenpit_1_1param_1_1GroupId.html", "classopenpit_1_1param_1_1GroupId" ],
     [ "Leverage", "classopenpit_1_1param_1_1Leverage.html", "classopenpit_1_1param_1_1Leverage" ],
+    [ "MonetaryAmount", "classopenpit_1_1param_1_1MonetaryAmount.html", "classopenpit_1_1param_1_1MonetaryAmount" ],
+    [ "AccountGroupIdOptional", "namespaceopenpit_1_1param.html#ae8a84d6e1708effb18fc60dd7fd11b0a", null ],
+    [ "AccountIdOptional", "namespaceopenpit_1_1param.html#a7676f3ae14e6a87d13656b8bcbd779ca", null ],
+    [ "CashFlowOptional", "namespaceopenpit_1_1param.html#a95e68aa31c4280e36e271af2d2671689", null ],
+    [ "FeeOptional", "namespaceopenpit_1_1param.html#a888be57ffc50bce2cce43eaf9983a904", null ],
+    [ "MonetaryAmountOptional", "namespaceopenpit_1_1param.html#ada969d1d0130ef7c4d89468acbfe0278", null ],
+    [ "NotionalOptional", "namespaceopenpit_1_1param.html#a587408e7eb339f942494eb9c1710c593", null ],
+    [ "PnlOptional", "namespaceopenpit_1_1param.html#a4c6cf5ea5e4a995494d6f34f2447d13d", null ],
+    [ "PositionSizeOptional", "namespaceopenpit_1_1param.html#a0c253ca233d310141ab097752cc25992", null ],
+    [ "PriceOptional", "namespaceopenpit_1_1param.html#a2134ed6a505bd659d254c48a9cbbaec5", null ],
+    [ "QuantityOptional", "namespaceopenpit_1_1param.html#a4b5274ac4fdf32955cad4469d6a089fb", null ],
+    [ "VolumeOptional", "namespaceopenpit_1_1param.html#afb903b63c7412f19e0ddbcab15582c0a", null ],
     [ "AdjustmentAmountKind", "namespaceopenpit_1_1param.html#ad447e10b1a4c0ebfde8b838c53868f90", [
       [ "Delta", "namespaceopenpit_1_1param.html#ad447e10b1a4c0ebfde8b838c53868f90adb1f4ab5845def61a83d5df13e0c2397", null ],
       [ "Absolute", "namespaceopenpit_1_1param.html#ad447e10b1a4c0ebfde8b838c53868f90ab51ca26c6c89cfc9bec338f7a0d3e0c8", null ]

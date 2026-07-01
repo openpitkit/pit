@@ -82,10 +82,10 @@ TEST(MarketDataPricingWiki, BookTopPricingAndMarkUnavailableReject) {
 
   // Price from the top of book; AAPL overrides the global 100 bps slippage to
   // zero, so a buy is priced exactly at the ask.
-  policies::SpotFundsOverride aaplOverride(aaplId.Raw());
+  policies::SpotFundsOverride aaplOverride(aaplId);
   aaplOverride.slippageBps = 0;
   policies::SpotFundsPolicy{}
-      .WithMarketOrders(marketData.Get(), 100)
+      .WithMarketOrders(marketData, 100)
       .PricingSource(policies::SpotFundsPricingSource::BookTop)
       .Override(aaplOverride)
       .AddTo(builder);
