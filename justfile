@@ -717,8 +717,7 @@ _build-ffi mode:
     set -euo pipefail
     profile="{{ mode }}"
     case "$profile" in
-      debug) cargo_args=() ;;
-      release) cargo_args=(--release) ;;
+      debug|release) ;;
       *) echo "unsupported build mode: $profile" >&2; exit 1 ;;
     esac
     case "$(uname -s)" in
@@ -726,7 +725,10 @@ _build-ffi mode:
         export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C target-feature=+crt-static"
         ;;
     esac
-    cargo build -p openpit-ffi "${cargo_args[@]}" --locked -q
+    case "$profile" in
+      debug) cargo build -p openpit-ffi --locked -q ;;
+      release) cargo build -p openpit-ffi --release --locked -q ;;
+    esac
 [windows]
 _build-ffi mode: _ensure-python-env
     {{ python_path }} {{ just_helper }} build-ffi {{ mode }}
