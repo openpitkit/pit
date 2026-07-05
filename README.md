@@ -108,8 +108,8 @@ constraints that tolerate API evolution during the pre-stable phase.
 - [Rust toolchain](https://rustup.rs/)
 - [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/) if you
   run Rust tests through `just`
-- [Python `>=3.10`](https://www.python.org/downloads/) if you build or test
-  Python bindings
+- [Python `>=3.10`](https://www.python.org/downloads/) for repository build/test
+  recipes, generated API artifacts, and Python bindings
 - [Go `1.22`](https://go.dev/dl/) if you build or test Go bindings
 - [golangci-lint](https://golangci-lint.run/welcome/install/) if you lint Go
 - [CMake `>=3.21`](https://cmake.org/download/), a C++17 compiler,
@@ -124,7 +124,9 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r ./requirements.txt
 ```
 
-This installs local Python tools such as `maturin` and `pytest` into `.venv`.
+The repository build recipes use this local Python environment for helper
+scripts, generated API artifacts, and Python tooling such as `maturin` and
+`pytest`.
 
 ### Build
 
@@ -270,8 +272,8 @@ ctest --test-dir bindings/cpp/build-debug --output-on-failure
 - [rustup](https://rustup.rs/) - Rust toolchain and target `x86_64-pc-windows-msvc`
 - [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/) if you
   run Rust tests through `just`
-- [Python `>=3.10`](https://www.python.org/downloads/) as `python` if you build
-  or test Python bindings
+- [Python `>=3.10`](https://www.python.org/downloads/) as `python` for
+  repository build/test recipes, generated API artifacts, and Python bindings
 - [Go `1.22`](https://go.dev/dl/) if you build or test Go bindings
 - [golangci-lint](https://golangci-lint.run/welcome/install/) if you lint Go
 - [CMake `>=3.21`](https://cmake.org/download/) if you build or test C++
@@ -296,7 +298,9 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r .\requirements.txt
 ```
 
-This installs local Python tools such as `maturin` and `pytest` into `.venv`.
+The repository build recipes use this local Python environment for helper
+scripts, generated API artifacts, and Python tooling such as `maturin` and
+`pytest`.
 
 ### Build
 

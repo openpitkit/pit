@@ -52,8 +52,8 @@ pip install openpit
 <summary>POSIX (Linux, macOS, etc)</summary>
 
 Install [Rust](https://rustup.rs/) and
-[Python 3.10+](https://www.python.org/downloads/). Optional:
-[Just](https://just.systems/).
+[Python 3.10+](https://www.python.org/downloads/). [Just](https://just.systems/)
+is optional but recommended.
 
 If you need local development/debugging, clone this repository and build from
 source with [Maturin](https://github.com/PyO3/maturin):
@@ -85,8 +85,8 @@ python3 -m venv .venv
 <summary>Windows</summary>
 
 Install [rustup](https://rustup.rs/), target `x86_64-pc-windows-msvc`, and
-[Python 3.10+](https://www.python.org/downloads/). Optional:
-[Just](https://just.systems/).
+[Python 3.10+](https://www.python.org/downloads/). [Just](https://just.systems/)
+is optional but recommended.
 
 With [Just](https://just.systems/):
 

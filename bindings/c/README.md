@@ -47,8 +47,8 @@ header plus the reference docs.
 <summary>POSIX (Linux, macOS, etc)</summary>
 
 Dependencies: [Rust](https://rustup.rs/) and
-[Python 3.10+](https://www.python.org/downloads/). Optional:
-[Just](https://just.systems/).
+[Python 3.10+](https://www.python.org/downloads/). [Just](https://just.systems/)
+is optional but recommended.
 
 With [Just](https://just.systems/):
 
@@ -82,8 +82,8 @@ cargo build --workspace
 <summary>Windows</summary>
 
 Install [rustup](https://rustup.rs/), target `x86_64-pc-windows-msvc`, and
-[Python 3.10+](https://www.python.org/downloads/). Optional:
-[Just](https://just.systems/).
+[Python 3.10+](https://www.python.org/downloads/). [Just](https://just.systems/)
+is optional but recommended.
 
 With [Just](https://just.systems/):
 
@@ -557,7 +557,9 @@ The example above uses both channels:
 <details>
 <summary>POSIX (Linux, macOS, etc)</summary>
 
-Dependencies: a C compiler. Optional: [Just](https://just.systems/).
+Dependencies: a C compiler and
+[Python 3.10+](https://www.python.org/downloads/). [Just](https://just.systems/)
+is optional but recommended.
 
 Recommended local flow:
 
@@ -584,8 +586,8 @@ cc -xc -fsyntax-only -include bindings/c/openpit.h /dev/null
 
 Install [rustup](https://rustup.rs/), target `x86_64-pc-windows-msvc`,
 [Python 3.10+](https://www.python.org/downloads/), and
-[LLVM](https://github.com/llvm/llvm-project/releases) for `clang`. Optional:
-[Just](https://just.systems/).
+[LLVM](https://github.com/llvm/llvm-project/releases) for `clang`.
+[Just](https://just.systems/) is optional but recommended.
 
 With [Just](https://just.systems/):
 
