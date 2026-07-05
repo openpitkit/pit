@@ -33,7 +33,6 @@
 #include <gtest/gtest.h>
 #include <openpit.h>
 
-#include <cassert>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -71,7 +70,7 @@ TEST(SpotFundsWiki, LimitOnlyReservesSettlementOnBuy) {
 
   const openpit::AdjustmentResult seedResult = engine.ApplyAccountAdjustment(
       accountId, std::vector<aa::AccountAdjustment>{seed});
-  assert(seedResult.Passed());
+  ASSERT_TRUE(seedResult.Passed());
 
   // Buy 10 AAPL @ 200 holds 2000 USD; available drops to 8000.
   openpit::model::Order order = openpit::model::Order::Limit(
@@ -117,11 +116,12 @@ TEST(SpotFundsWiki, MarketBuyPricedFromMarkWithSlippage) {
           .Build();
   const openpit::model::Instrument aapl("AAPL", "USD");
   const md::RegisterResult registration = marketData.Register(aapl);
-  assert(registration.status == md::RegisterStatus::Ok);
-  assert(registration.instrumentId.has_value());
+  ASSERT_EQ(registration.status, md::RegisterStatus::Ok);
+  ASSERT_TRUE(registration.instrumentId.has_value());
   const md::InstrumentId aaplId = registration.instrumentId.value();
-  assert(marketData.Push(aaplId, md::Quote().WithMark(Price::FromString(
-                                     "200"))) == md::RegisterStatus::Ok);
+  ASSERT_EQ(
+      marketData.Push(aaplId, md::Quote().WithMark(Price::FromString("200"))),
+      md::RegisterStatus::Ok);
 
   // Spot funds with market orders enabled at 1500 bps worst-case slippage,
   // priced from the quote mark.
@@ -143,7 +143,7 @@ TEST(SpotFundsWiki, MarketBuyPricedFromMarkWithSlippage) {
 
   const openpit::AdjustmentResult seedResult = engine.ApplyAccountAdjustment(
       accountId, std::vector<aa::AccountAdjustment>{seed});
-  assert(seedResult.Passed());
+  ASSERT_TRUE(seedResult.Passed());
 
   // Market buy (no price): priced at mark 200 + 15% = 230 per unit worst case.
   openpit::model::Order order = openpit::model::Order::Market(
