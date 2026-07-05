@@ -338,8 +338,8 @@ TEST(ParamGroupId, CarriesExplicitValue) {
 
 TEST(ParamMonetaryAmount, RawOptionRoundTripPreservesAmountAndCurrency) {
   const MonetaryAmount amount(Fee::FromString("-0.125"), "USD");
-  const MonetaryAmountOptional raw =
-      MonetaryAmount::RawOption(std::optional<MonetaryAmount>(amount));
+  const std::optional<MonetaryAmount> optionalAmount(amount);
+  const MonetaryAmountOptional raw = MonetaryAmount::RawOption(optionalAmount);
 
   ASSERT_TRUE(raw.is_set);
   EXPECT_EQ(Fee::FromRaw(raw.value.amount).ToString(), "-0.125");
