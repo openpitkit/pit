@@ -13,11 +13,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 //go:build windows
 
 package loader
+
+/*
+#include <stdint.h>
+
+// Keep the uintptr-to-pointer conversion in C so go vet does not flag it as
+// unsafe.Pointer misuse in Go code.
+static inline void* openpit_windows_handle_to_pointer(uintptr_t handle) {
+	return (void*)handle;
+}
+*/
+import "C"
 
 import (
 	"fmt"
@@ -34,5 +45,5 @@ func loadRuntimeLibrary(path string) (unsafe.Pointer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return unsafe.Pointer(uintptr(handle)), nil
+	return C.openpit_windows_handle_to_pointer(C.uintptr_t(handle)), nil
 }

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package loader
 
@@ -558,7 +558,7 @@ func TestLoadRuntimeLibraryLoadsResolvedPath(t *testing.T) {
 		return
 	}
 
-	cacheRoot := t.TempDir()
+	cacheRoot := runtimeLoadTestCacheDir(t)
 	t.Setenv(envRuntimePath, "")
 	t.Setenv(envRuntimeCache, cacheRoot)
 
@@ -610,4 +610,18 @@ func runtimeOverridePathIfEmbeddedUnavailable(t *testing.T) (string, bool) {
 		t.Fatalf("%s must be set when embedded runtime files are unavailable", envRuntimePath)
 	}
 	return forcedPath, true
+}
+
+func runtimeLoadTestCacheDir(t *testing.T) string {
+	t.Helper()
+
+	if goruntime.GOOS != "windows" {
+		return t.TempDir()
+	}
+	dir, err := os.MkdirTemp("", "openpit-loader-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }
