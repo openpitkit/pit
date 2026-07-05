@@ -16,22 +16,22 @@ The example loads the native OpenPit binding at run time.
 
 ### With [Just](https://just.systems/)
 
-From the repository root (`just python-develop` installs the binding):
+From the repository root (`just python-develop-debug` installs the binding):
 
 ```sh
 # Install the binding once:
-just python-develop
+just python-develop-debug
 
 # Run every Python example, this one included:
-just run-examples-python
+just run-examples-python-debug
 
 # Run the Python test suite (this example's smoke test included):
-just test-python
+just test-python-debug
 ```
 
 ### Manual
 
-After `just python-develop`, from `examples/python/rate_pnl_killswitch/`:
+After `just python-develop-debug`, from `examples/python/rate_pnl_killswitch/`:
 
 ```sh
 python main.py          # run the scenario

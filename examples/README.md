@@ -18,10 +18,10 @@ full story; this page is the index and the one-command entry points.
 From the repository root, run every example against local sources:
 
 ```sh
-just run-examples          # every language
-just run-examples-python   # Python only
-just run-examples-go       # Go only
-just run-examples-cpp      # C++ only
+just run-examples-debug        # every language
+just run-examples-python-debug # Python only
+just run-examples-go-debug     # Go only
+just run-examples-cpp-debug    # C++ only
 ```
 
 To run a single example standalone (against the published package), see its
@@ -33,7 +33,7 @@ own README, e.g. [`python/spot_funds`](python/spot_funds/README.md) or
 Each example ships a smoke test, included in the per-language suites:
 
 ```sh
-just test-python         # Python examples' tests (plus the binding tests)
-just test-go             # Go examples' tests (plus the binding tests)
-just test-examples-cpp   # build the C++ examples and run their smoke tests
+just test-python-debug        # Python examples' tests (plus the binding tests)
+just test-go-debug            # Go examples' tests (plus the binding tests)
+just test-examples-cpp-debug  # build the C++ examples and run their smoke tests
 ```

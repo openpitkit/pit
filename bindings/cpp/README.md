@@ -63,6 +63,12 @@ Runnable end-to-end examples live in [`examples/cpp/`](https://github.com/openpi
 
 ## Install
 
+<details>
+<summary>POSIX (Linux, macOS, etc)</summary>
+
+Dependencies: [Rust](https://rustup.rs/), [CMake](https://cmake.org/download/),
+and a C++17 compiler.
+
 Build and install the C++ package from a local checkout:
 
 ```bash
@@ -73,8 +79,40 @@ cmake --build bindings/cpp/build
 cmake --install bindings/cpp/build --prefix "$PWD/.openpit"
 ```
 
-On Linux, use `libopenpit_ffi.so` instead of `libopenpit_ffi.dylib`. On
-Windows, use `openpit_ffi.dll`.
+The command above uses the macOS `.dylib`; on Linux, point
+`OPENPIT_RUNTIME_LIBRARY` at `target/release/libopenpit_ffi.so`.
+
+</details>
+
+<details>
+<summary>Windows</summary>
+
+Install [rustup](https://rustup.rs/), target `x86_64-pc-windows-msvc`,
+[Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/),
+and [CMake](https://cmake.org/download/). Optional:
+[Just](https://just.systems/).
+
+With [Just](https://just.systems/):
+
+```powershell
+rustup target add x86_64-pc-windows-msvc
+just build-cpp-release
+just test-cpp-release
+```
+
+Manual:
+
+```powershell
+rustup target add x86_64-pc-windows-msvc
+cargo build -p openpit-ffi --release --locked --target x86_64-pc-windows-msvc
+cmake -S bindings/cpp -B bindings/cpp/build `
+  -DOPENPIT_RUNTIME_LIBRARY="$PWD\target\x86_64-pc-windows-msvc\release\openpit_ffi.dll" `
+  -DOPENPIT_RUNTIME_IMPORT_LIBRARY="$PWD\target\x86_64-pc-windows-msvc\release\openpit_ffi.dll.lib"
+cmake --build bindings/cpp/build
+cmake --install bindings/cpp/build --prefix "$PWD\.openpit"
+```
+
+</details>
 
 When a released package is consumed through `find_package(OpenPit CONFIG
 REQUIRED)`, the runtime resolver uses this order:

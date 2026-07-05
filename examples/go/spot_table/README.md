@@ -10,15 +10,15 @@ From the repository root (this builds the native library and wires up the
 runtime path for you, then runs the bundled `coverage` scenario):
 
 ```sh
-just run-examples-go-table
+just run-examples-go-table-debug
 ```
 
 Other tables, and a soak run:
 
 ```sh
-just run-examples-go-table examples/tables/spot/coverage.md       # pick a table
-just run-examples-go-table-repeat examples/tables/spot/coverage.md 5m  # 5m soak
-just test-go                                                      # run the tests
+just run-examples-go-table-debug examples/tables/spot/coverage.md        # pick a table
+just run-examples-go-table-repeat-debug examples/tables/spot/coverage.md 5m # 5m soak
+just test-go-debug                                                       # run the tests
 ```
 
 No `just`? Build the native library once, point the loader at it, then run from

@@ -1,0 +1,4 @@
+# Keep text files stable across Windows and POSIX checkouts.
+* text=auto eol=lf
+*.ico binary
+*.png binary

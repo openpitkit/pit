@@ -518,7 +518,7 @@ jobs:
         shell: bash
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: just --justfile "$JUSTFILE" build-ffi-target "${{ matrix.target }}"
+        run: just --justfile "$JUSTFILE" build-ffi-target-release "${{ matrix.target }}"
 
       - name: Package artifact (unix)
         if: runner.os != 'Windows'
@@ -532,24 +532,7 @@ jobs:
         shell: pwsh
         env:
           VERSION: ${{ needs.verify-tag.outputs.version }}
-        run: |
-          New-Item -ItemType Directory -Path dist -Force | Out-Null
-          $src = "target/${{ matrix.target }}/release/${{ matrix.lib_name }}"
-          $dst = "dist/openpit-ffi--${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.lib_name }}"
-          Copy-Item $src $dst -Force
-          $implibSrc = "$src.lib"
-          if (!(Test-Path $implibSrc)) {
-            throw "MSVC import library not found at $implibSrc"
-          }
-          $implibDst = "$dst.lib"
-          Copy-Item $implibSrc $implibDst -Force
-          Copy-Item bindings/c/openpit.h dist/openpit.h -Force
-          Copy-Item LICENSE dist/LICENSE -Force
-          Copy-Item OWNERS dist/OWNERS -Force
-          $hash = (Get-FileHash -Path $dst -Algorithm SHA256).Hash.ToLower()
-          Set-Content -Path "$dst.sha256" -Value $hash
-          $implibHash = (Get-FileHash -Path $implibDst -Algorithm SHA256).Hash.ToLower()
-          Set-Content -Path "$implibDst.sha256" -Value $implibHash
+        run: just --justfile "$env:JUSTFILE" package-runtime "${{ matrix.target }}" "${{ matrix.goos }}" "${{ matrix.goarch }}" "${{ matrix.lib_name }}"
 
       - name: Upload runtime artifacts
         if: ${{ needs.verify-tag.outputs.release_mode == 'production' }}
@@ -600,7 +583,7 @@ jobs:
 
       - name: Build C++ binding
         shell: bash
-        run: just build-cpp
+        run: just build-cpp-release
 
       - name: Install C++ binding into staging prefix
         shell: bash
@@ -608,7 +591,7 @@ jobs:
           VERSION: ${{ needs.verify-tag.outputs.version }}
         run: |
           set -euo pipefail
-          cmake --install bindings/cpp/build \
+          cmake --install bindings/cpp/build-release \
             --prefix /tmp/openpit-cpp-install \
             --config Release
           cp LICENSE /tmp/openpit-cpp-install/LICENSE

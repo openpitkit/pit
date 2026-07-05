@@ -16,22 +16,22 @@ The example loads the native OpenPit binding at run time.
 
 ### With [Just](https://just.systems/)
 
-From the repository root (`just python-develop` installs the binding):
+From the repository root (`just python-develop-debug` installs the binding):
 
 ```sh
 # Install the binding once:
-just python-develop
+just python-develop-debug
 
-# Run this example (also run by just run-examples-python):
-just run-examples-python
+# Run this example (also run by just run-examples-python-debug):
+just run-examples-python-debug
 
 # Run the Python test suite (this example's smoke test included):
-just test-python
+just test-python-debug
 ```
 
 ### Manual
 
-After `just python-develop`, from `examples/python/spot_funds/`:
+After `just python-develop-debug`, from `examples/python/spot_funds/`:
 
 ```sh
 python main.py          # run the scenario

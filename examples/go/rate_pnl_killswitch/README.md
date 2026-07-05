@@ -21,10 +21,10 @@ runtime path for you):
 
 ```sh
 # Run every Go example, this one included:
-just run-examples-go
+just run-examples-go-debug
 
 # Run the Go test suite (this example's smoke test included):
-just test-go
+just test-go-debug
 ```
 
 ### Manual

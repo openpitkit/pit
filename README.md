@@ -100,20 +100,31 @@ constraints that tolerate API evolution during the pre-stable phase.
 
 ## Local Build And Test
 
+<details>
+<summary>POSIX (Linux, macOS, etc)</summary>
+
 ### Prerequisites
 
-- Rust toolchain
-- Python `>=3.10` if you build or test Python bindings
-- `maturin` and `pytest` if you build or test Python bindings
-- Go `1.22` if you build or test Go bindings
-- CMake `>=3.21`, a C++17 compiler, `clang-format`, `clang-tidy`, and
-  `doxygen` if you build, test, format, lint, or generate C++ bindings,
-  examples, and reference docs
+- [Rust toolchain](https://rustup.rs/)
+- [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/) if you
+  run Rust tests through `just`
+- [Python `>=3.10`](https://www.python.org/downloads/) if you build or test
+  Python bindings
+- [Go `1.22`](https://go.dev/dl/) if you build or test Go bindings
+- [golangci-lint](https://golangci-lint.run/welcome/install/) if you lint Go
+- [CMake `>=3.21`](https://cmake.org/download/), a C++17 compiler,
+  [clang-format and clang-tidy](https://github.com/llvm/llvm-project/releases),
+  and [doxygen](https://www.doxygen.nl/download.html) if you build, test,
+  format, lint, or generate C++ bindings, examples, and reference docs
+- [Graphviz](https://graphviz.org/download/) if you generate docs with diagrams
+- Optional: [Just](https://just.systems/) if you use recipe shortcuts
 
 ```bash
-python3.10 -m venv .venv
+python3 -m venv .venv
 .venv/bin/python -m pip install -r ./requirements.txt
 ```
+
+This installs local Python tools such as `maturin` and `pytest` into `.venv`.
 
 ### Build
 
@@ -122,7 +133,7 @@ python3.10 -m venv .venv
 With [Just](https://just.systems/):
 
 ```bash
-just build
+just build-debug
 ```
 
 Manual:
@@ -136,15 +147,13 @@ cargo build --workspace
 With [Just](https://just.systems/):
 
 ```bash
-just python-develop
-just python-develop-release
+just python-develop-debug
 ```
 
 Manual:
 
 ```bash
 .venv/bin/maturin develop --manifest-path bindings/python/Cargo.toml
-.venv/bin/maturin develop --release --manifest-path bindings/python/Cargo.toml
 ```
 
 The recommended Python test flow is to run `maturin develop` before
@@ -157,7 +166,7 @@ The Go SDK consumes the native runtime through CGo. Build the FFI library
 first:
 
 ```bash
-cargo build -p openpit-ffi --release --locked
+cargo build -p openpit-ffi --locked
 ```
 
 Go tests then expect the path to that library through
@@ -170,18 +179,21 @@ development inside the `pit` repository - consumers installing the SDK with
 The C++ binding is a header-only C++17 SDK. In-repo builds link it against the
 locally built native runtime:
 
+With [Just](https://just.systems/):
+
 ```bash
-just build-cpp
-just build-examples-cpp
+just build-cpp-debug
+just build-examples-cpp-debug
 ```
 
 Manual:
 
 ```bash
-cargo build -p openpit-ffi --release --locked
-cmake -S bindings/cpp -B bindings/cpp/build \
-  -DOPENPIT_RUNTIME_LIBRARY="$PWD/target/release/libopenpit_ffi.dylib"
-cmake --build bindings/cpp/build
+cargo build -p openpit-ffi --locked
+cmake -S bindings/cpp -B bindings/cpp/build-debug \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DOPENPIT_RUNTIME_LIBRARY="$PWD/target/debug/libopenpit_ffi.dylib"
+cmake --build bindings/cpp/build-debug --config Debug
 ```
 
 On Linux, use `libopenpit_ffi.so` instead of `libopenpit_ffi.dylib`. On
@@ -193,23 +205,23 @@ With [Just](https://just.systems/):
 
 ```bash
 # All tests:
-just test-all
+just test-all-debug
 
 # Rust:
-just test-rust
+just test-rust-debug
 
 # Python:
-just test-python
-just test-python-unit
-just test-python-integration
+just test-python-debug
+just test-python-unit-debug
+just test-python-integration-debug
 
 # Go:
-just test-go
+just test-go-debug
 just test-go-race
 
 # C++:
-just test-cpp
-just test-examples-cpp
+just test-cpp-debug
+just test-examples-cpp-debug
 ```
 
 Manual:
@@ -230,19 +242,201 @@ maturin develop --manifest-path bindings/python/Cargo.toml
 .venv/bin/python -m pytest bindings/python/tests/integration
 
 # Go:
-cargo build -p openpit-ffi --release --locked
+cargo build -p openpit-ffi --locked
 cd bindings/go
 # Linux:
-export OPENPIT_RUNTIME_LIBRARY_PATH="$(pwd)/../../target/release/libopenpit_ffi.so"
+export OPENPIT_RUNTIME_LIBRARY_PATH="$(pwd)/../../target/debug/libopenpit_ffi.so"
 # macOS: use libopenpit_ffi.dylib instead.
 go test ./...
 go test -race ./...
 
 # C++:
 cd ../..
-cargo build -p openpit-ffi --release --locked
-cmake -S bindings/cpp -B bindings/cpp/build \
-  -DOPENPIT_RUNTIME_LIBRARY="$PWD/target/release/libopenpit_ffi.dylib"
-cmake --build bindings/cpp/build
-ctest --test-dir bindings/cpp/build --output-on-failure
+cargo build -p openpit-ffi --locked
+cmake -S bindings/cpp -B bindings/cpp/build-debug \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DOPENPIT_RUNTIME_LIBRARY="$PWD/target/debug/libopenpit_ffi.dylib"
+cmake --build bindings/cpp/build-debug --config Debug
+ctest --test-dir bindings/cpp/build-debug --output-on-failure
 ```
+
+</details>
+
+<details>
+<summary>Windows</summary>
+
+### Prerequisites
+
+- [rustup](https://rustup.rs/) - Rust toolchain and target `x86_64-pc-windows-msvc`
+- [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/) if you
+  run Rust tests through `just`
+- [Python `>=3.10`](https://www.python.org/downloads/) as `python` if you build
+  or test Python bindings
+- [Go `1.22`](https://go.dev/dl/) if you build or test Go bindings
+- [golangci-lint](https://golangci-lint.run/welcome/install/) if you lint Go
+- [CMake `>=3.21`](https://cmake.org/download/) if you build or test C++
+  bindings and examples
+- [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/)
+  with MSVC C++ tools if you build or test C++ bindings and examples
+- [LLVM](https://github.com/llvm/llvm-project/releases) if you build or test Go
+  through CGo, format/lint C++, or use `clang`/`lld`
+- [Doxygen](https://www.doxygen.nl/download.html) if you generate C++ reference
+  docs
+- [Graphviz](https://graphviz.org/download/) if you generate docs with diagrams
+- Optional: [Just](https://just.systems/) if you use recipe shortcuts
+
+Set up the Rust target:
+
+```powershell
+rustup target add x86_64-pc-windows-msvc
+```
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r .\requirements.txt
+```
+
+This installs local Python tools such as `maturin` and `pytest` into `.venv`.
+
+### Build
+
+#### SDK
+
+With [Just](https://just.systems/):
+
+```powershell
+just build-debug
+```
+
+Manual:
+
+```powershell
+cargo build --workspace --target x86_64-pc-windows-msvc
+```
+
+#### Python
+
+With [Just](https://just.systems/):
+
+```powershell
+just python-develop-debug
+```
+
+Manual:
+
+```powershell
+.\.venv\Scripts\python.exe -m maturin develop `
+  --manifest-path bindings/python/Cargo.toml `
+  --target x86_64-pc-windows-msvc
+```
+
+The recommended Python test flow is to run `maturin develop` before
+`pytest`. This runs against the current checkout (including a dirty
+worktree).
+
+#### Go
+
+The Go SDK consumes the native runtime through CGo. Build the FFI library
+first:
+
+```powershell
+cargo build -p openpit-ffi --locked --target x86_64-pc-windows-msvc
+```
+
+Go tests then expect the path to that library through
+`OPENPIT_RUNTIME_LIBRARY_PATH`. The variable is needed only for local
+development inside the `pit` repository - consumers installing the SDK with
+`go get` do not need to set it.
+
+#### C++
+
+The C++ binding is a header-only C++17 SDK. In-repo builds link it against the
+locally built native runtime:
+
+With [Just](https://just.systems/):
+
+```powershell
+just build-cpp-debug
+just build-examples-cpp-debug
+```
+
+Manual:
+
+```powershell
+cargo build -p openpit-ffi --locked --target x86_64-pc-windows-msvc
+cmake -S bindings/cpp -B bindings/cpp/build-debug `
+  -DCMAKE_BUILD_TYPE=Debug `
+  -DOPENPIT_RUNTIME_LIBRARY="$PWD\target\x86_64-pc-windows-msvc\debug\openpit_ffi.dll" `
+  -DOPENPIT_RUNTIME_IMPORT_LIBRARY="$PWD\target\x86_64-pc-windows-msvc\debug\openpit_ffi.dll.lib"
+cmake --build bindings/cpp/build-debug --config Debug
+```
+
+### Tests
+
+With [Just](https://just.systems/):
+
+```powershell
+# All tests:
+just test-all-debug
+
+# Rust:
+just test-rust-debug
+
+# Python:
+just test-python-debug
+just test-python-unit-debug
+just test-python-integration-debug
+
+# Go:
+just test-go-debug
+just test-go-race
+
+# C++:
+just test-cpp-debug
+just test-examples-cpp-debug
+```
+
+Manual:
+
+```powershell
+# All tests:
+cargo test --workspace --target x86_64-pc-windows-msvc
+.\.venv\Scripts\python.exe -m maturin develop `
+  --manifest-path bindings/python/Cargo.toml `
+  --target x86_64-pc-windows-msvc
+.\.venv\Scripts\python.exe -m pytest bindings/python/tests
+
+# Rust:
+cargo test --workspace --target x86_64-pc-windows-msvc
+
+# Python
+.\.venv\Scripts\python.exe -m maturin develop `
+  --manifest-path bindings/python/Cargo.toml `
+  --target x86_64-pc-windows-msvc
+.\.venv\Scripts\python.exe -m pytest bindings/python/tests
+.\.venv\Scripts\python.exe -m pytest bindings/python/tests/unit
+.\.venv\Scripts\python.exe -m pytest bindings/python/tests/integration
+
+# Go:
+cargo build -p openpit-ffi --locked --target x86_64-pc-windows-msvc
+$env:OPENPIT_RUNTIME_LIBRARY_PATH = `
+  (Resolve-Path target\x86_64-pc-windows-msvc\debug\openpit_ffi.dll)
+$env:CGO_ENABLED = "1"
+$env:CC = "clang -fuse-ld=lld"
+$env:CXX = "clang++ -fuse-ld=lld"
+Push-Location bindings\go
+go test ./...
+go test -race ./...
+Pop-Location
+
+# C++:
+cargo build -p openpit-ffi --locked --target x86_64-pc-windows-msvc
+cmake -S bindings/cpp -B bindings/cpp/build-debug `
+  -DCMAKE_BUILD_TYPE=Debug `
+  -DOPENPIT_RUNTIME_LIBRARY="$PWD\target\x86_64-pc-windows-msvc\debug\openpit_ffi.dll" `
+  -DOPENPIT_RUNTIME_IMPORT_LIBRARY="$PWD\target\x86_64-pc-windows-msvc\debug\openpit_ffi.dll.lib"
+cmake --build bindings/cpp/build-debug --config Debug
+ctest --test-dir bindings/cpp/build-debug --output-on-failure --build-config Debug
+```
+
+</details>

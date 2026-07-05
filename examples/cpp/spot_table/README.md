@@ -10,14 +10,14 @@ From the repository root (this builds the native library and the example, then
 runs the bundled `coverage` scenario):
 
 ```sh
-just run-examples-cpp-table
+just run-examples-cpp-table-debug
 ```
 
 Other tables, and a soak run:
 
 ```sh
-just run-examples-cpp-table examples/tables/spot/coverage.md   # pick a table
-just test-examples-cpp                                         # build + smoke test
+just run-examples-cpp-table-debug examples/tables/spot/coverage.md # pick a table
+just test-examples-cpp-debug                                      # build + smoke test
 ```
 
 No `just`? Build and run by hand:

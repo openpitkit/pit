@@ -21,31 +21,31 @@ is required; it is a scenario path relative to the repository root.
 
 ### With [Just](https://just.systems/)
 
-From the repository root (`just python-develop` installs the binding):
+From the repository root (`just python-develop-debug` installs the binding):
 
 ```sh
 # Install the binding once:
-just python-develop
+just python-develop-debug
 
 # Run the coverage scenario (the default argument):
-just run-examples-python-table
+just run-examples-python-table-debug
 
 # Run a specific table:
-just run-examples-python-table examples/tables/spot/coverage.md
+just run-examples-python-table-debug examples/tables/spot/coverage.md
 
 # Repeat-run a scenario (runs for 3 minutes by default):
-just run-examples-python-table-repeat
+just run-examples-python-table-repeat-debug
 
 # Repeat for a specific duration:
-just run-examples-python-table-repeat examples/tables/spot/coverage.md 5m
+just run-examples-python-table-repeat-debug examples/tables/spot/coverage.md 5m
 
 # Run the Python test suite (this example's fast test included):
-just test-python
+just test-python-debug
 ```
 
 ### Manual
 
-After `just python-develop`, from `examples/python/spot_table/`:
+After `just python-develop-debug`, from `examples/python/spot_table/`:
 
 ```sh
 python main.py --table ../../tables/spot/coverage.md                   # run once
@@ -73,7 +73,7 @@ python -m pytest .                                     # run the test
   check of the CLI's own scenario.
 
 For a sustained-load / soak run, use the CLI repeat (`--min-duration`, or
-`just run-examples-python-table-repeat`); see "Running" above.
+`just run-examples-python-table-repeat-debug`); see "Running" above.
 
 ## Reading the report
 

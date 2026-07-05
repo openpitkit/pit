@@ -1,2 +1,4 @@
 /_openpit.*.so
 /lib_openpit.dylib.dSYM
+/_openpit.pdb
+/_openpit.pyd

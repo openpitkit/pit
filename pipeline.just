@@ -35,7 +35,6 @@ check-cargo-versions version:
       fi
       echo "${MANIFEST}: ${CARGO_VERSION} OK"
     done
-
 # Validate the tag is a monotonic version bump over the previous tag.
 check-version-bump tag:
     #!/usr/bin/env bash
@@ -97,7 +96,6 @@ check-version-bump tag:
     fi
 
     echo "Valid patch version bump: ${PREVIOUS_VERSION} -> ${CURRENT_VERSION}"
-
 # Ensure crates.io has not already published this version.
 check-crate-unpublished version:
     #!/usr/bin/env bash
@@ -123,7 +121,6 @@ check-crate-unpublished version:
           ;;
       esac
     done
-
 # Rewrite the Python package version for a staging (dry-run) release.
 apply-staging-version version:
     #!/usr/bin/env bash
@@ -143,16 +140,13 @@ apply-staging-version version:
         raise SystemExit("version field not found in bindings/python/Cargo.toml")
     path.write_text("\n".join(lines) + "\n")
     PY
-
 # Build Python API docs; warnings are errors.
-build-python-docs: python-develop
+build-python-docs: python-develop-debug
     cd bindings/python && sphinx-build -b html docs docs/_build -W
-
 # Copy monorepo LICENSE and OWNERS into the Python package.
 copy-python-metadata:
     cp LICENSE bindings/python/LICENSE
     cp OWNERS bindings/python/OWNERS
-
 # Resolve the built wheel path; prints the path to stdout.
 resolve-wheel version:
     #!/usr/bin/env bash
@@ -202,7 +196,6 @@ resolve-wheel version:
     fi
 
     echo "${WHEEL}"
-
 # Verify the installed wheel imports and reports the expected version.
 verify-wheel-version mode version base_version:
     #!/usr/bin/env bash
@@ -226,19 +219,15 @@ verify-wheel-version mode version base_version:
         assert version != base_version, f"expected staging version, got production version {version}"
         assert version.startswith(base_version), f"expected version starting with {base_version}, got {version}"
     PY
-
 # Run the wheel test suite against a pre-installed wheel (no rebuild).
 test-wheel:
     just _pytest bindings/python/tests
-
 # Validate wheel metadata with twine.
 check-wheel path:
     twine check {{ path }}
-
 # Build the Python source distribution.
 build-sdist:
     maturin sdist --manifest-path bindings/python/Cargo.toml --out dist
-
 # Validate that the sdist declares all its License-File entries.
 validate-sdist-license:
     #!/usr/bin/env bash
@@ -282,11 +271,9 @@ validate-sdist-license:
                 + ", ".join(missing)
             )
     PY
-
 # Validate sdist metadata with twine.
 check-sdist:
     twine check dist/*
-
 # Smoke-test installing the sdist into a fresh venv.
 smoke-sdist mode version base_version:
     #!/usr/bin/env bash
@@ -317,9 +304,8 @@ smoke-sdist mode version base_version:
         assert version != base_version, f"expected staging version, got production version {version}"
         assert version.startswith(base_version), f"expected version starting with {base_version}, got {version}"
     PY
-
 # Build the FFI runtime library for a target triple (release).
-build-ffi-target target:
+build-ffi-target-release target:
     #!/usr/bin/env bash
     set -euo pipefail
     rustflags="${RUSTFLAGS:-}"
@@ -331,8 +317,8 @@ build-ffi-target target:
     esac
     export RUSTFLAGS="${rustflags}"
     cargo build -p openpit-ffi --release --locked --target "{{ target }}"
-
 # Package the built runtime library into dist/ with a sha256 sidecar (unix).
+[unix]
 package-runtime target goos goarch lib_name:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -358,6 +344,10 @@ package-runtime target goos goarch lib_name:
     else
       shasum -a 256 "${DST}" | awk '{print $1}' > "${DST}.sha256"
     fi
+
+[windows]
+package-runtime target goos goarch lib_name:
+    {{ bootstrap_python }} {{ just_helper }} package-runtime "{{ target }}" "{{ goos }}" "{{ goarch }}" "{{ lib_name }}"
 
 # Package the C++ binding distributable into dist/ with a sha256 sidecar.
 # Bundles: public headers, generated C ABI header, CMake config-file package
@@ -386,7 +376,6 @@ package-cpp cpp_install_dir:
       shasum -a 256 "dist/${ARCHIVE_NAME}" | awk '{print $1}' > "dist/${ARCHIVE_NAME}.sha256"
     fi
     echo "Packaged dist/${ARCHIVE_NAME}"
-
 # Run Go tests in an in-worktree split dir without the embedded-runtime env.
 test-go-split dir:
     cd {{ dir }} && env -u OPENPIT_RUNTIME_LIBRARY_PATH -u OPENPIT_RUNTIME_CACHE_DIR go test ./...

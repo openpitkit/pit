@@ -48,18 +48,70 @@ For normal end-user installation, use the published
 pip install openpit
 ```
 
+<details>
+<summary>POSIX (Linux, macOS, etc)</summary>
+
+Install [Rust](https://rustup.rs/) and
+[Python 3.10+](https://www.python.org/downloads/). Optional:
+[Just](https://just.systems/).
+
 If you need local development/debugging, clone this repository and build from
 source with [Maturin](https://github.com/PyO3/maturin):
 
+With [Just](https://just.systems/):
+
 ```bash
-maturin develop --manifest-path bindings/python/Cargo.toml
+just python-develop-debug
 ```
 
 Local release build:
 
 ```bash
-maturin develop --release --manifest-path bindings/python/Cargo.toml
+just python-develop-release
 ```
+
+Manual:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r ./requirements.txt
+.venv/bin/python -m maturin develop --manifest-path bindings/python/Cargo.toml
+.venv/bin/python -m maturin develop --release --manifest-path bindings/python/Cargo.toml
+```
+
+</details>
+
+<details>
+<summary>Windows</summary>
+
+Install [rustup](https://rustup.rs/), target `x86_64-pc-windows-msvc`, and
+[Python 3.10+](https://www.python.org/downloads/). Optional:
+[Just](https://just.systems/).
+
+With [Just](https://just.systems/):
+
+```powershell
+rustup target add x86_64-pc-windows-msvc
+just python-develop-debug
+just python-develop-release
+```
+
+Manual:
+
+```powershell
+rustup target add x86_64-pc-windows-msvc
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r .\requirements.txt
+.\.venv\Scripts\python.exe -m maturin develop `
+  --manifest-path bindings/python/Cargo.toml `
+  --target x86_64-pc-windows-msvc
+.\.venv\Scripts\python.exe -m maturin develop `
+  --release `
+  --manifest-path bindings/python/Cargo.toml `
+  --target x86_64-pc-windows-msvc
+```
+
+</details>
 
 ## Engine
 
@@ -261,26 +313,71 @@ Input validation errors and API misuse still raise exceptions:
 
 ## Local Testing
 
+<details>
+<summary>POSIX (Linux, macOS, etc)</summary>
+
 Recommended local flow:
 
+With [Just](https://just.systems/):
+
 ```bash
-maturin develop --manifest-path bindings/python/Cargo.toml
-python -m pytest bindings/python/tests
+just test-python-debug
+just test-python-unit-debug
+just test-python-integration-debug
+```
+
+Manual:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r ./requirements.txt
+.venv/bin/python -m maturin develop --manifest-path bindings/python/Cargo.toml
+.venv/bin/python -m pytest bindings/python/tests
 ```
 
 Run only unit tests:
 
 ```bash
-maturin develop --manifest-path bindings/python/Cargo.toml
-python -m pytest bindings/python/tests/unit
+.venv/bin/python -m maturin develop --manifest-path bindings/python/Cargo.toml
+.venv/bin/python -m pytest bindings/python/tests/unit
 ```
 
 Run only integration test:
 
 ```bash
-maturin develop --manifest-path bindings/python/Cargo.toml
-python -m pytest bindings/python/tests/integration
+.venv/bin/python -m maturin develop --manifest-path bindings/python/Cargo.toml
+.venv/bin/python -m pytest bindings/python/tests/integration
 ```
+
+</details>
+
+<details>
+<summary>Windows</summary>
+
+Optional: [Just](https://just.systems/).
+
+With [Just](https://just.systems/):
+
+```powershell
+just test-python-debug
+just test-python-unit-debug
+just test-python-integration-debug
+```
+
+Manual:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r .\requirements.txt
+.\.venv\Scripts\python.exe -m maturin develop `
+  --manifest-path bindings/python/Cargo.toml `
+  --target x86_64-pc-windows-msvc
+.\.venv\Scripts\python.exe -m pytest bindings/python/tests
+.\.venv\Scripts\python.exe -m pytest bindings/python/tests/unit
+.\.venv\Scripts\python.exe -m pytest bindings/python/tests/integration
+```
+
+</details>
 
 For full build/test command matrix (manual and `just`), see
 [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).

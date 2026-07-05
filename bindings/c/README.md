@@ -43,6 +43,13 @@ For normal end-user installation, use the published [GitHub release assets](http
 If you need local development/debugging, clone this repository and generate the
 header plus the reference docs.
 
+<details>
+<summary>POSIX (Linux, macOS, etc)</summary>
+
+Dependencies: [Rust](https://rustup.rs/) and
+[Python 3.10+](https://www.python.org/downloads/). Optional:
+[Just](https://just.systems/).
+
 With [Just](https://just.systems/):
 
 ```bash
@@ -60,7 +67,7 @@ If you need a workspace build:
 With [Just](https://just.systems/):
 
 ```bash
-just build
+just build-debug
 ```
 
 Manual:
@@ -68,6 +75,33 @@ Manual:
 ```bash
 cargo build --workspace
 ```
+
+</details>
+
+<details>
+<summary>Windows</summary>
+
+Install [rustup](https://rustup.rs/), target `x86_64-pc-windows-msvc`, and
+[Python 3.10+](https://www.python.org/downloads/). Optional:
+[Just](https://just.systems/).
+
+With [Just](https://just.systems/):
+
+```powershell
+rustup target add x86_64-pc-windows-msvc
+just gen-api-c
+just build-debug
+```
+
+Manual:
+
+```powershell
+rustup target add x86_64-pc-windows-msvc
+python scripts\generate_api_c.py
+cargo build --workspace --target x86_64-pc-windows-msvc
+```
+
+</details>
 
 If you need only the release C runtime library:
 
@@ -520,13 +554,18 @@ The example above uses both channels:
 
 ## Local Testing
 
+<details>
+<summary>POSIX (Linux, macOS, etc)</summary>
+
+Dependencies: a C compiler. Optional: [Just](https://just.systems/).
+
 Recommended local flow:
 
 With [Just](https://just.systems/):
 
 ```bash
 just gen-api-c
-just build
+just build-debug
 cc -xc -fsyntax-only -include bindings/c/openpit.h /dev/null
 ```
 
@@ -537,5 +576,35 @@ python3 scripts/generate_api_c.py
 cargo build --workspace
 cc -xc -fsyntax-only -include bindings/c/openpit.h /dev/null
 ```
+
+</details>
+
+<details>
+<summary>Windows</summary>
+
+Install [rustup](https://rustup.rs/), target `x86_64-pc-windows-msvc`,
+[Python 3.10+](https://www.python.org/downloads/), and
+[LLVM](https://github.com/llvm/llvm-project/releases) for `clang`. Optional:
+[Just](https://just.systems/).
+
+With [Just](https://just.systems/):
+
+```powershell
+rustup target add x86_64-pc-windows-msvc
+just gen-api-c
+just build-debug
+just test-c-examples
+```
+
+Manual:
+
+```powershell
+rustup target add x86_64-pc-windows-msvc
+python scripts\generate_api_c.py
+cargo build --workspace --target x86_64-pc-windows-msvc
+clang -x c -fsyntax-only -include bindings/c/openpit.h NUL
+```
+
+</details>
 
 For full build/test command matrix (manual and `just`), see [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).

@@ -1752,6 +1752,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic]
     fn non_negative_new_unchecked_panics_for_negative_quantity_in_debug() {
         let _ = TestUnsigned::new_unchecked(Decimal::NEGATIVE_ONE);

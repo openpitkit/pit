@@ -455,6 +455,7 @@ fn no_locking_nested_with_inside_with_is_allowed() {
 }
 
 #[test]
+#[cfg(debug_assertions)]
 #[should_panic(expected = "closure re-entered the same storage")]
 fn no_locking_with_mut_inside_with_panics_in_debug() {
     let storage = StorageBuilder::new(NoLocking).create_for_bound_key::<u32, u32>();
@@ -467,6 +468,7 @@ fn no_locking_with_mut_inside_with_panics_in_debug() {
 }
 
 #[test]
+#[cfg(debug_assertions)]
 #[should_panic(expected = "closure re-entered the same storage")]
 fn no_locking_with_inside_with_mut_panics_in_debug() {
     let storage = StorageBuilder::new(NoLocking).create_for_bound_key::<u32, u32>();
@@ -506,6 +508,7 @@ fn full_locking_nested_with_inside_with_is_allowed() {
 // index lock, which composes with itself), so the values-domain
 // re-entry check fires deterministically.
 #[test]
+#[cfg(debug_assertions)]
 #[should_panic(expected = "closure re-entered the same storage")]
 fn no_locking_re_entry_in_with_mut_panics_in_debug() {
     let storage = StorageBuilder::new(NoLocking).create_for_bound_key::<u32, u32>();
@@ -524,6 +527,7 @@ fn no_locking_re_entry_in_with_mut_panics_in_debug() {
 }
 
 #[test]
+#[cfg(debug_assertions)]
 #[should_panic(expected = "closure re-entered the same storage")]
 fn index_locking_re_entry_in_with_mut_panics_in_debug() {
     let storage =

@@ -51,6 +51,68 @@ Runnable end-to-end examples live in [`examples/go/`](https://github.com/openpit
 go get go.openpit.dev/openpit
 ```
 
+## Local Repository Testing
+
+Install [Go](https://go.dev/dl/) and
+[golangci-lint](https://golangci-lint.run/welcome/install/) before running
+local checks.
+
+<details>
+<summary>POSIX (Linux, macOS, etc)</summary>
+
+Install a C compiler through your OS package manager. The Go SDK uses cgo.
+Optional: [Just](https://just.systems/).
+
+With [Just](https://just.systems/):
+
+```bash
+just test-go-debug
+just test-go-race
+```
+
+Manual:
+
+```bash
+cargo build -p openpit-ffi --release --locked
+cd bindings/go
+export OPENPIT_RUNTIME_LIBRARY_PATH="$(pwd)/../../target/release/libopenpit_ffi.so"
+# macOS: use libopenpit_ffi.dylib instead.
+go test ./...
+go test -race ./...
+```
+
+</details>
+
+<details>
+<summary>Windows</summary>
+
+Install [LLVM](https://github.com/llvm/llvm-project/releases) and add
+`clang`/`lld` to `PATH`. Optional: [Just](https://just.systems/).
+
+With [Just](https://just.systems/):
+
+```powershell
+just test-go-debug
+just test-go-race
+```
+
+Manual:
+
+```powershell
+cargo build -p openpit-ffi --release --locked --target x86_64-pc-windows-msvc
+$env:OPENPIT_RUNTIME_LIBRARY_PATH = `
+  (Resolve-Path target\x86_64-pc-windows-msvc\release\openpit_ffi.dll)
+$env:CGO_ENABLED = "1"
+$env:CC = "clang -fuse-ld=lld"
+$env:CXX = "clang++ -fuse-ld=lld"
+Push-Location bindings\go
+go test ./...
+go test -race ./...
+Pop-Location
+```
+
+</details>
+
 ## Engine
 
 ### Overview

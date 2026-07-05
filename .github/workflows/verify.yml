@@ -58,7 +58,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Check Rust
-        run: just --justfile "$JUSTFILE" check-rust-dry
+        run: just --justfile "$JUSTFILE" check-rust-full
 
   python:
     name: Python checks
@@ -113,7 +113,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Check Python
-        run: just --justfile "$JUSTFILE" check-python-dry
+        run: just --justfile "$JUSTFILE" check-python-full
 
   c:
     name: C checks
@@ -173,6 +173,12 @@ jobs:
       - name: Setup just
         uses: extractions/setup-just@v3
 
+      - name: Setup MSVC developer environment
+        if: matrix.os == 'windows-2022'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Install C++ tooling (Linux)
         if: startsWith(matrix.os, 'ubuntu')
         run: |
@@ -181,7 +187,14 @@ jobs:
 
       - name: Install C++ tooling (macOS)
         if: startsWith(matrix.os, 'macos')
-        run: brew install doxygen graphviz
+        run: |
+          brew install llvm doxygen graphviz
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Add LLVM to PATH (Windows)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\LLVM\bin'
 
       # clang-format ships a per-OS-divergent format from apt/brew, so pin one
       # wheel-packaged build across every runner to keep fmt-check deterministic.
@@ -196,46 +209,26 @@ jobs:
           echo "$CF_BIN_DIR" >> "$GITHUB_PATH"
           "$CF_BIN_DIR/clang-format" --version
 
-      - name: Build C++ binding
+      - name: Check C++
         shell: bash
         run: |
           if [[ -n "${{ matrix.cc }}" ]]; then
             export CC="${{ matrix.cc }}"
             export CXX="${{ matrix.cxx }}"
           fi
-          just build-cpp
-
-      - name: Test C++ binding
-        shell: bash
-        run: just test-cpp
-
-      - name: Build and test C++ examples
-        shell: bash
-        run: |
-          if [[ -n "${{ matrix.cc }}" ]]; then
-            export CC="${{ matrix.cc }}"
-            export CXX="${{ matrix.cxx }}"
-          fi
-          just test-examples-cpp
-
-      - name: Check C++ formatting
-        if: ${{ matrix.os != 'windows-2022' }}
-        shell: bash
-        run: just fmt-check-cpp
-
-      - name: Generate C++ API reference
-        if: ${{ matrix.os != 'windows-2022' }}
-        shell: bash
-        run: just gen-docs-cpp
-
-      - name: Lint C++ sources
-        if: startsWith(matrix.os, 'ubuntu')
-        shell: bash
-        run: just lint-cpp
+          just --justfile "$JUSTFILE" check-cpp-full
 
   go:
-    name: Go checks
-    runs-on: ubuntu-22.04
+    name: Go checks (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+          - name: windows-msvc
+            os: windows-2022
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -252,19 +245,55 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.CI_PYTHON }}
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.CI_GO }}
 
-      - name: Install golangci-lint
+      - name: Setup MSVC developer environment
+        if: matrix.os == 'windows-2022'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Add LLVM to PATH (Windows)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\LLVM\bin'
+
+      - name: Install golangci-lint (Unix)
+        if: matrix.os != 'windows-2022'
         run: |
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
             | sh -s -- -b "$(go env GOPATH)/bin" "v${CI_GOLANGCI_LINT}"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      - name: Install golangci-lint (Windows)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $version = $env:CI_GOLANGCI_LINT
+          $archive = "$env:RUNNER_TEMP\golangci-lint.zip"
+          $installDir = "$env:RUNNER_TEMP\golangci-lint"
+          $url = "https://github.com/golangci/golangci-lint/releases/download/v$version/golangci-lint-$version-windows-amd64.zip"
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          Expand-Archive -Path $archive -DestinationPath $installDir -Force
+          $bin = Get-ChildItem -Path $installDir -Recurse -Filter golangci-lint.exe |
+            Select-Object -First 1
+          if ($null -eq $bin) {
+            throw "golangci-lint.exe not found in $installDir"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $bin.DirectoryName
+          & $bin.FullName --version
+
       - name: Setup just
         uses: extractions/setup-just@v3
 
       - name: Check Go
-        run: just --justfile "$JUSTFILE" check-go-dry
+        shell: bash
+        run: just --justfile "$JUSTFILE" check-go-full

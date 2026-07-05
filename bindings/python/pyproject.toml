@@ -64,6 +64,12 @@ markers = [
 
 [tool.ruff]
 target-version = "py310" # Python 3.10
+extend-exclude = [
+    "bindings/cpp/build",
+    "bindings/cpp/build-*",
+    "examples/cpp/build",
+    "examples/cpp/build-*",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -71,3 +77,9 @@ ignore = ["D102", "D103"]
 
 [tool.black]
 target-version = ["py313"] # Python 3.13
+extend-exclude = '''
+(^|/)(
+    bindings/cpp/build(-[^/]+)?
+  | examples/cpp/build(-[^/]+)?
+)(/|$)
+'''

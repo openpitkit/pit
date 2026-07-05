@@ -58,7 +58,7 @@ installed package with `find_package(OpenPit)`.
 ### In-repo, against local sources
 
 Build the native runtime once, then configure and build the example against it
-(the path mirrors the workspace `just build-cpp` recipe):
+(the path mirrors the workspace `just build-cpp-debug` recipe):
 
 ```sh
 # From the repository root:
