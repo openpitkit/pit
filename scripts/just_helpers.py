@@ -175,6 +175,15 @@ def prepend_path(env: dict[str, str], directory: Path) -> None:
     env[path_key] = str(directory) + os.pathsep + current
 
 
+def configure_windows_temp_env(env: dict[str, str]) -> None:
+    if not is_windows():
+        return
+    temp_dir = ROOT / ".tmp" / "subprocess-temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    env["TEMP"] = str(temp_dir)
+    env["TMP"] = str(temp_dir)
+
+
 def configure_windows_rust_env(env: dict[str, str], cargo: Sequence[str]) -> bool:
     rustup_fallback = (
         is_windows()
@@ -190,6 +199,100 @@ def configure_windows_rust_env(env: dict[str, str], cargo: Sequence[str]) -> boo
     env["RUSTUP_TOOLCHAIN"] = cargo[2]
     env["CARGO_TARGET_DIR"] = str(ROOT / "target" / f"rustup-{windows_target_triple()}")
     return True
+
+
+def env_get(env: dict[str, str], name: str) -> str:
+    value = env.get(name)
+    if value is not None:
+        return value
+    name_lower = name.lower()
+    for key, current in env.items():
+        if key.lower() == name_lower:
+            return current
+    return ""
+
+
+def cargo_target_linker_env_var(target: str) -> str:
+    normalized = target.upper().replace("-", "_")
+    return f"CARGO_TARGET_{normalized}_LINKER"
+
+
+def msvc_target_arch_dir(target: str) -> str:
+    if target.startswith("x86_64-"):
+        return "x64"
+    if target.startswith("aarch64-"):
+        return "arm64"
+    if target.startswith("i686-"):
+        return "x86"
+    raise SystemExit(f"unsupported MSVC target for linker lookup: {target}")
+
+
+def msvc_host_arch_dir() -> str:
+    if host_arch() == "arm64":
+        return "Hostarm64"
+    return "Hostx64"
+
+
+def msvc_linker_candidates(env: dict[str, str], target: str) -> list[Path]:
+    target_arch = msvc_target_arch_dir(target)
+    host_arch_dir = msvc_host_arch_dir()
+    candidates: list[Path] = []
+
+    tools_dir = env_get(env, "VCToolsInstallDir")
+    if tools_dir:
+        candidates.append(
+            Path(tools_dir) / "bin" / host_arch_dir / target_arch / "link.exe"
+        )
+
+    roots = [
+        env_get(env, "VCINSTALLDIR"),
+        (
+            str(Path(env_get(env, "VSINSTALLDIR")) / "VC")
+            if env_get(env, "VSINSTALLDIR")
+            else ""
+        ),
+    ]
+    for root in roots:
+        if not root:
+            continue
+        tools_root = Path(root) / "Tools" / "MSVC"
+        if not tools_root.is_dir():
+            continue
+        for version in sorted(tools_root.iterdir(), reverse=True):
+            candidates.append(
+                version / "bin" / host_arch_dir / target_arch / "link.exe"
+            )
+
+    return candidates
+
+
+def git_for_windows_linker(path: str | None) -> bool:
+    if not path:
+        return False
+    normalized = str(path).replace("\\", "/").lower()
+    return "/git/usr/bin/link.exe" in normalized
+
+
+def configure_windows_msvc_linker_env(env: dict[str, str]) -> None:
+    if not is_windows():
+        return
+    target = windows_target_triple()
+    if not target.endswith("-pc-windows-msvc"):
+        return
+    linker_var = cargo_target_linker_env_var(target)
+    if env_get(env, linker_var):
+        return
+    for candidate in msvc_linker_candidates(env, target):
+        if candidate.is_file():
+            env[linker_var] = str(candidate)
+            return
+    env_path = env_get(env, "PATH")
+    if git_for_windows_linker(shutil.which("link", path=env_path or None)):
+        raise SystemExit(
+            "MSVC link.exe was not found, and Git for Windows link.exe is first "
+            "in PATH. Run from a Visual Studio developer shell or configure "
+            "ilammy/msvc-dev-cmd before Windows MSVC cargo recipes."
+        )
 
 
 def ensure_windows_target_installed(command_prefix: Sequence[str] = ()) -> None:
@@ -327,10 +430,10 @@ def generate_windows_import_library(dll: Path, implib: Path) -> None:
 def ensure_windows_runtime_import_library(runtime: Path | None = None) -> Path:
     library = runtime or runtime_library_path()
     implib = runtime_import_library_path(library)
-    if implib.is_file():
-        return implib
     if not library.is_file():
         raise SystemExit(f"Windows runtime library not found at {library}")
+    if implib.is_file() and implib.stat().st_mtime_ns >= library.stat().st_mtime_ns:
+        return implib
     generate_windows_import_library(library, implib)
     return implib
 
@@ -576,6 +679,8 @@ def command_compile_c_readme_examples(_: argparse.Namespace) -> None:
 
 def command_build_cpp(args: argparse.Namespace) -> None:
     mode = build_mode(args.mode)
+    env = os.environ.copy()
+    configure_windows_temp_env(env)
     lib = runtime_library_path(mode)
     cmake_args = [
         f"-DOPENPIT_RUNTIME_LIBRARY={lib}",
@@ -589,8 +694,8 @@ def command_build_cpp(args: argparse.Namespace) -> None:
     build = cpp_build_dir(args.kind, mode)
     platform_args = cmake_platform_args()
     prepare_cmake_build_dir(build, platform_args)
-    run(["cmake", "-S", source, "-B", build, *platform_args, *cmake_args])
-    run(["cmake", "--build", build, "--config", cmake_build_type(mode)])
+    run(["cmake", "-S", source, "-B", build, *platform_args, *cmake_args], env=env)
+    run(["cmake", "--build", build, "--config", cmake_build_type(mode)], env=env)
 
 
 def command_ctest(args: argparse.Namespace) -> None:
@@ -646,6 +751,8 @@ def command_cpp_format(args: argparse.Namespace) -> None:
 
 
 def command_lint_cpp(_: argparse.Namespace) -> None:
+    env = os.environ.copy()
+    configure_windows_temp_env(env)
     repo = str(ROOT).replace("\\", "/")
     binding_build = cpp_build_dir("binding", "debug")
     examples_build = cpp_build_dir("examples", "debug")
@@ -666,7 +773,8 @@ def command_lint_cpp(_: argparse.Namespace) -> None:
             *platform_args,
             "-DCMAKE_BUILD_TYPE=Debug",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-        ]
+        ],
+        env=env,
     )
     if is_windows() and not (ROOT / binding_build / "compile_commands.json").is_file():
         print(
@@ -687,7 +795,7 @@ def command_lint_cpp(_: argparse.Namespace) -> None:
         ]
         command.extend(["-p", binding_build])
         command.extend(str(path) for path in group)
-        run(command)
+        run(command, env=env)
 
     prepare_cmake_build_dir(examples_build, platform_args)
     run(
@@ -700,7 +808,8 @@ def command_lint_cpp(_: argparse.Namespace) -> None:
             *platform_args,
             "-DCMAKE_BUILD_TYPE=Debug",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-        ]
+        ],
+        env=env,
     )
     examples = [
         path
@@ -717,7 +826,7 @@ def command_lint_cpp(_: argparse.Namespace) -> None:
         ]
         command.extend(["-p", examples_build])
         command.extend(str(path) for path in group)
-        run(command)
+        run(command, env=env)
 
 
 def command_gen_docs_cpp(_: argparse.Namespace) -> None:
@@ -735,7 +844,23 @@ def command_gen_docs_cpp(_: argparse.Namespace) -> None:
         return
     shutil.rmtree(ROOT / "docs" / "cpp-api", ignore_errors=True)
     run(["doxygen", "bindings/cpp/Doxyfile"])
+    normalize_doxygen_mainpage_anchor()
     run([sys.executable, "scripts/_generate_api_c_sitemap.py"])
+
+
+def normalize_doxygen_mainpage_anchor() -> None:
+    index = ROOT / "docs" / "cpp-api" / "index.html"
+    if not index.is_file():
+        return
+    text = index.read_text(encoding="utf-8")
+    normalized = re.sub(
+        r'id="md_[^"]*DoxygenMainPage"',
+        'id="openpit-cpp-sdk-mainpage"',
+        text,
+        count=1,
+    )
+    if normalized != text:
+        index.write_text(normalized, encoding="utf-8", newline="\n")
 
 
 def command_build_ffi(args: argparse.Namespace) -> None:
@@ -755,6 +880,7 @@ def command_build_ffi(args: argparse.Namespace) -> None:
     if is_windows():
         command_prefix = cargo[:-1] if cargo[-1] == "cargo" else []
         ensure_windows_target_installed(command_prefix)
+        configure_windows_msvc_linker_env(env)
         rustflags = env.get("RUSTFLAGS", "")
         env["RUSTFLAGS"] = f"{rustflags} -C target-feature=+crt-static".strip()
         command.extend(["--target", windows_target_triple()])
@@ -785,6 +911,7 @@ def command_python_develop(args: argparse.Namespace) -> None:
         configure_windows_rust_env(env, cargo)
         command_prefix = cargo[:-1] if cargo[-1] == "cargo" else []
         ensure_windows_target_installed(command_prefix)
+        configure_windows_msvc_linker_env(env)
         command.extend(["--target", windows_target_triple()])
     run(command, env=env)
 

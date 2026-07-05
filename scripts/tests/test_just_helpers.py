@@ -18,7 +18,9 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -371,6 +373,75 @@ def test_configure_windows_rust_env_sets_rustup_proxy_path(
     assert Path(env["CARGO_TARGET_DIR"]).parts[-2:] == ("target", f"rustup-{target}")
 
 
+def test_configure_windows_temp_env_uses_workspace_tmp(tmp_path, monkeypatch) -> None:
+    module = load_module()
+    env = {}
+    monkeypatch.setattr(module, "is_windows", lambda: True)
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+
+    module.configure_windows_temp_env(env)
+
+    assert env["TEMP"] == str(tmp_path / ".tmp" / "subprocess-temp")
+    assert env["TMP"] == env["TEMP"]
+    assert Path(env["TEMP"]).is_dir()
+
+
+def test_configure_windows_msvc_linker_env_uses_vc_tools_dir(
+    tmp_path, monkeypatch
+) -> None:
+    module = load_module()
+    linker = tmp_path / "VC" / "bin" / "Hostx64" / "x64" / "link.exe"
+    linker.parent.mkdir(parents=True)
+    linker.write_text("", encoding="utf-8")
+    env = {"vctoolsinstalldir": str(tmp_path / "VC")}
+
+    monkeypatch.setattr(module, "is_windows", lambda: True)
+    monkeypatch.setattr(module, "host_arch", lambda: "amd64")
+    monkeypatch.setattr(
+        module, "windows_target_triple", lambda: "x86_64-pc-windows-msvc"
+    )
+
+    module.configure_windows_msvc_linker_env(env)
+
+    linker_var = "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"
+    assert env[linker_var] == str(linker)
+
+
+def test_configure_windows_msvc_linker_env_preserves_existing(monkeypatch) -> None:
+    module = load_module()
+    linker_var = "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"
+    env = {linker_var: r"C:\Custom\link.exe"}
+
+    monkeypatch.setattr(module, "is_windows", lambda: True)
+    monkeypatch.setattr(
+        module, "windows_target_triple", lambda: "x86_64-pc-windows-msvc"
+    )
+
+    module.configure_windows_msvc_linker_env(env)
+
+    assert env[linker_var] == r"C:\Custom\link.exe"
+
+
+def test_configure_windows_msvc_linker_env_rejects_git_linker(monkeypatch) -> None:
+    module = load_module()
+
+    monkeypatch.setattr(module, "is_windows", lambda: True)
+    monkeypatch.setattr(
+        module, "windows_target_triple", lambda: "x86_64-pc-windows-msvc"
+    )
+    monkeypatch.setattr(module, "msvc_linker_candidates", lambda env, target: [])
+    monkeypatch.setattr(
+        module.shutil,
+        "which",
+        lambda name, **_: (
+            r"C:\Program Files\Git\usr\bin\link.exe" if name == "link" else None
+        ),
+    )
+
+    with pytest.raises(SystemExit, match="Git for Windows link.exe"):
+        module.configure_windows_msvc_linker_env({})
+
+
 def test_ensure_windows_runtime_import_library_generates_missing_implib(
     tmp_path, monkeypatch
 ) -> None:
@@ -432,3 +503,52 @@ def test_ensure_windows_runtime_import_library_generates_missing_implib(
     assert "LIBRARY openpit_ffi.dll" in observed_definition
     assert "openpit_create_engine_builder" in observed_definition
     assert "openpit_destroy_engine" in observed_definition
+
+
+def test_ensure_windows_runtime_import_library_regenerates_stale_implib(
+    tmp_path, monkeypatch
+) -> None:
+    module = load_module()
+    dll = tmp_path / "openpit_ffi.dll"
+    implib = tmp_path / "openpit_ffi.dll.lib"
+    dll.write_bytes(b"dll")
+    implib.write_bytes(b"old")
+    now_ns = time.time_ns()
+    os.utime(implib, ns=(now_ns - 2_000_000_000, now_ns - 2_000_000_000))
+    os.utime(dll, ns=(now_ns, now_ns))
+    calls = 0
+
+    monkeypatch.setattr(module, "runtime_library_path", lambda: dll)
+
+    def fake_generate(library, output):
+        nonlocal calls
+        calls += 1
+        assert library == dll
+        assert output == implib
+        output.write_bytes(b"new")
+
+    monkeypatch.setattr(module, "generate_windows_import_library", fake_generate)
+
+    assert module.ensure_windows_runtime_import_library() == implib
+    assert calls == 1
+
+
+def test_normalize_doxygen_mainpage_anchor_rewrites_host_path(
+    tmp_path, monkeypatch
+) -> None:
+    module = load_module()
+    index = tmp_path / "docs" / "cpp-api" / "index.html"
+    index.parent.mkdir(parents=True)
+    index.write_text(
+        '<a class="anchor" '
+        'id="md_C_1_2pit_2pit_2bindings_2cpp_2DoxygenMainPage"></a>',
+        encoding="utf-8",
+        newline="\n",
+    )
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+
+    module.normalize_doxygen_mainpage_anchor()
+
+    assert index.read_text(encoding="utf-8") == (
+        '<a class="anchor" id="openpit-cpp-sdk-mainpage"></a>'
+    )

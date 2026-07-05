@@ -312,7 +312,9 @@ build-ffi-target-release target:
     rustflags="${rustflags:+${rustflags} }--remap-path-prefix=$(pwd)=."
     case "{{ target }}" in
       *-pc-windows-msvc)
-        rustflags="${rustflags} -C target-feature=+crt-static"
+        export RUSTFLAGS="${rustflags}"
+        PIT_WINDOWS_TARGET="{{ target }}" {{ bootstrap_python }} {{ just_helper }} build-ffi release
+        exit 0
         ;;
     esac
     export RUSTFLAGS="${rustflags}"

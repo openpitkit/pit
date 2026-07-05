@@ -382,12 +382,12 @@ def main() -> None:
 
     HEADER_PATH.parent.mkdir(parents=True, exist_ok=True)
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
-    HEADER_PATH.write_text(header, encoding="utf-8")
+    HEADER_PATH.write_text(header, encoding="utf-8", newline="\n")
     for path in DOCS_DIR.glob("*.md"):
         path.unlink()
     for rel_path, text in docs.items():
         path = DOCS_DIR / rel_path
-        path.write_text(text, encoding="utf-8")
+        path.write_text(text, encoding="utf-8", newline="\n")
         print(f"Generated {path.relative_to(ROOT)}")
     print(f"Generated {HEADER_PATH.relative_to(ROOT)}")
 

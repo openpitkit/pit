@@ -174,7 +174,7 @@ def generate() -> None:
         if existing == canonical:
             return
     SITEMAP_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SITEMAP_PATH.write_text(render_sitemap(canonical), encoding="utf-8")
+    SITEMAP_PATH.write_text(render_sitemap(canonical), encoding="utf-8", newline="\n")
     print(f"Generated {SITEMAP_PATH.relative_to(ROOT)}")
 
 

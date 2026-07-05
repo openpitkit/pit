@@ -217,7 +217,9 @@ def generate(
     header_path: Path = DLSYM_HEADER_PATH, output_path: Path = DLSYM_OUTPUT_PATH
 ) -> None:
     functions = parse_dlsym_functions(header_path.read_text(encoding="utf-8"))
-    output_path.write_text(render_dlsym_source(functions), encoding="utf-8")
+    output_path.write_text(
+        render_dlsym_source(functions), encoding="utf-8", newline="\n"
+    )
     with contextlib.suppress(ValueError):
         output_path = output_path.relative_to(ROOT)
     print(f"Generated {len(functions)} wrappers -> {output_path}")
