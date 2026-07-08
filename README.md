@@ -41,35 +41,35 @@ The current implementation focuses on the pre-trade pipeline, a small set
 of built-in controls, and an API for building project-specific strategy and
 risk policies. Built-ins:
 
-- [Spot Funds](https://github.com/openpitkit/pit/wiki/Spot-Funds) - per-account
+- [Spot Funds](https://wiki.openpit.dev/Spot-Funds/) - per-account
   solvency gate over spendable funds.
-- [Order Validation](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
+- [Order Validation](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
   \- structural integrity checks on every order.
-- [Rate Limit](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
+- [Rate Limit](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
   \- throttle order flow per broker, asset, or account.
-- [Order Size Limit](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
+- [Order Size Limit](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
   \- fat-finger caps on quantity and notional.
-- [P&L Kill Switch](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
+- [P&L Kill Switch](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
   \- halt an account when realized P&L breaches bounds.
-- plus your own via the [policy SDK](https://github.com/openpitkit/pit/wiki/Policy-API).
+- plus your own via the [policy SDK](https://wiki.openpit.dev/Policy-API/).
 
 Custom policies that maintain state across calls can use the built-in
-[Storage](https://github.com/openpitkit/pit/wiki/Storage) abstraction.
+[Storage](https://wiki.openpit.dev/Storage/) abstraction.
 Synchronization is selected once at engine construction and applied
 transparently, with no overhead in single-threaded embeddings.
 
 Controls can act both by account and by group of accounts: register accounts
-under a compact identifier with [Account Groups](https://github.com/openpitkit/pit/wiki/Account-Groups)
+under a compact identifier with [Account Groups](https://wiki.openpit.dev/Account-Groups/)
 and let a policy branch on the group instead of an enumerated account list.
 
 The engine is intentionally in-memory and deterministic, designed to be
 embedded into a larger trading system rather than replace one. For custom
 policy APIs:
 
-- [Go custom policies](https://github.com/openpitkit/pit/wiki/Policy-API#go-interface)
-- [Python custom policies](https://github.com/openpitkit/pit/wiki/Policy-API#python-interface)
-- [C++ custom policies](https://github.com/openpitkit/pit/wiki/Policy-API#c-interface)
-- [Rust custom policies](https://github.com/openpitkit/pit/wiki/Policy-API#rust-interface)
+- [Go custom policies](https://wiki.openpit.dev/Policy-API/#go-interface)
+- [Python custom policies](https://wiki.openpit.dev/Policy-API/#python-interface)
+- [C++ custom policies](https://wiki.openpit.dev/Policy-API/#c-interface)
+- [Rust custom policies](https://wiki.openpit.dev/Policy-API/#rust-interface)
 
 ## Versioning Policy (Pre‑1.0)
 
@@ -95,7 +95,7 @@ constraints that tolerate API evolution during the pre-stable phase.
 - [C SDK README](bindings/c/README.md) - C interface for environments that
   integrate through C.
 - [examples/](examples/) - end-to-end runnable scenarios.
-- [Wiki](https://github.com/openpitkit/pit/wiki) - conceptual pages and
+- [Wiki](https://wiki.openpit.dev/) - conceptual pages and
   architecture notes.
 
 ## Local Build And Test

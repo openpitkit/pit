@@ -13,7 +13,7 @@ risk checks into trading systems from Go.
 
 For an overview and links to all resources, see the project website [openpit.dev](https://openpit.dev/).
 For full project documentation, see [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
-For conceptual and architectural pages, see [the project wiki](https://github.com/openpitkit/pit/wiki).
+For conceptual and architectural pages, see [the project wiki](https://wiki.openpit.dev/).
 For the public Go module source, see [go.openpit.dev/openpit](https://go.openpit.dev/openpit).
 
 ## Versioning Policy (Pre‑1.0)
@@ -31,7 +31,7 @@ phase.
 ## Getting Started
 
 Visit the [Go module page](https://go.openpit.dev/openpit) and the
-[project wiki](https://github.com/openpitkit/pit/wiki) for conceptual pages
+[project wiki](https://wiki.openpit.dev/) for conceptual pages
 and architecture notes.
 
 ## Examples
@@ -134,21 +134,21 @@ in reverse order when any reject is produced.
 
 Built-in policies:
 
-- [Spot Funds](https://github.com/openpitkit/pit/wiki/Spot-Funds) - per-account
+- [Spot Funds](https://wiki.openpit.dev/Spot-Funds/) - per-account
   solvency gate over spendable funds.
-- [Order Validation](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
+- [Order Validation](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
   \- structural integrity checks on every order.
-- [Rate Limit](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
+- [Rate Limit](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
   \- throttle order flow per broker, asset, or account.
-- [Order Size Limit](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
+- [Order Size Limit](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
   \- fat-finger caps on quantity and notional.
-- [P&L Kill Switch](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
+- [P&L Kill Switch](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
   \- halt an account when realized P&L breaches bounds.
-- plus your own via the [policy SDK](https://github.com/openpitkit/pit/wiki/Policy-API#go-interface).
+- plus your own via the [policy SDK](https://wiki.openpit.dev/Policy-API/#go-interface).
 
 The primary integration model is to write project-specific policies against
 the public Go policy API:
-[Custom Go policies](https://github.com/openpitkit/pit/wiki/Policy-API#go-interface).
+[Custom Go policies](https://wiki.openpit.dev/Policy-API/#go-interface).
 
 Two types of rejections are supported: a full kill switch for the account
 and a rejection of only the current request. Kill switches are intended
@@ -157,14 +157,14 @@ until the situation is analyzed.
 
 ## Threading
 
-Canonical contract: [Threading Contract](https://github.com/openpitkit/pit/wiki/Threading-Contract).
+Canonical contract: [Threading Contract](https://wiki.openpit.dev/Threading-Contract/).
 
 Goroutine migration between OS threads during one SDK call is supported,
 and callbacks invoked by the SDK may run on a different OS thread than the
 goroutine that initiated the call.
 
 Custom policies that need internal state across calls use the built-in
-[Storage](https://github.com/openpitkit/pit/wiki/Storage) abstraction:
+[Storage](https://wiki.openpit.dev/Storage/) abstraction:
 synchronization-aware key-value storage that handles goroutine migration
 correctly without exposing locks to policy code.
 

@@ -44,7 +44,7 @@ go test ./...     # run the smoke test
 
 ## See also
 
-- [SpotFunds wiki page](https://github.com/openpitkit/pit/wiki/Spot-Funds) -
+- [SpotFunds wiki page](https://wiki.openpit.dev/Spot-Funds/) -
   the full policy reference (market orders, slippage, pricing source, fee
   conventions).
 - [`../spot_table`](../spot_table) - a table-driven / load-testing harness

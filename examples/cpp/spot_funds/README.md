@@ -100,7 +100,7 @@ reject-code check, and the no-block fill assertion - uses the high-level
 
 ## See also
 
-- [SpotFunds wiki page](https://github.com/openpitkit/pit/wiki/Spot-Funds) -
+- [SpotFunds wiki page](https://wiki.openpit.dev/Spot-Funds/) -
   the full policy reference (market orders, slippage, pricing source, fee
   conventions).
 - [`examples/go/spot_funds`](../../go/spot_funds) - the Go mirror this example

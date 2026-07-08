@@ -1,0 +1,95 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+name: Wiki
+
+on:
+  gollum:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/wiki.yml
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: wiki-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-deploy:
+    name: Build and deploy wiki
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+
+      - name: Clone wiki repository
+        run: |
+          git clone \
+            --depth 1 \
+            "https://github.com/${{ github.repository }}.wiki.git" \
+            "$RUNNER_TEMP/pit.wiki"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ${{ runner.temp }}/pit.wiki/.site/requirements.txt
+
+      - name: Install wiki build dependencies
+        working-directory: ${{ runner.temp }}/pit.wiki
+        run: python -m pip install -r .site/requirements.txt
+
+      - name: Prepare wiki source
+        working-directory: ${{ runner.temp }}/pit.wiki
+        run: python .site/scripts/prepare_wiki_source.py --source .
+
+      - name: Build wiki
+        working-directory: ${{ runner.temp }}/pit.wiki
+        run: mkdocs build --strict --config-file .site/mkdocs.yml
+
+      - name: Check Cloudflare configuration
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          missing=0
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::CLOUDFLARE_ACCOUNT_ID secret is not configured"
+            missing=1
+          fi
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN secret is not configured"
+            missing=1
+          fi
+          exit "$missing"
+
+      - name: Deploy wiki to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          command: >-
+            pages deploy ${{ runner.temp }}/pit.wiki/.site/site
+            --project-name=openpit-wiki

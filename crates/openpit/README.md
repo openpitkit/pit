@@ -12,7 +12,7 @@ the project website [openpit.dev](https://openpit.dev/).
 For full project documentation, see
 [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
 For conceptual and architectural pages, see
-[the project wiki](https://github.com/openpitkit/pit/wiki).
+[the project wiki](https://wiki.openpit.dev/).
 
 ## Versioning Policy (Pre‑1.0)
 
@@ -57,14 +57,14 @@ in reverse order when any reject is produced.
 
 Built-in policies:
 
-- `SpotFundsPolicy` - [per-account solvency gate over spendable funds](https://github.com/openpitkit/pit/wiki/Spot-Funds)
-- `OrderValidationPolicy` - [structural integrity checks on every order](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
-- `RateLimitPolicy` - [throttle order flow per broker, asset, or account](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
-- `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
-- `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
+- `SpotFundsPolicy` - [per-account solvency gate over spendable funds](https://wiki.openpit.dev/Spot-Funds/)
+- `OrderValidationPolicy` - [structural integrity checks on every order](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
+- `RateLimitPolicy` - [throttle order flow per broker, asset, or account](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
+- `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
+- `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
 
 The primary integration model is to write project-specific policies against
-the public Rust policy API: [Custom Rust policies](https://github.com/openpitkit/pit/wiki/Policy-API#rust-interface).
+the public Rust policy API: [Custom Rust policies](https://wiki.openpit.dev/Policy-API/#rust-interface).
 
 Two types of rejections are supported: a full kill switch for the account
 and a rejection of only the current request. Kill switches are intended
@@ -73,10 +73,10 @@ until the situation is analyzed.
 
 ## Threading
 
-Canonical contract: [Threading Contract](https://github.com/openpitkit/pit/wiki/Threading-Contract).
+Canonical contract: [Threading Contract](https://wiki.openpit.dev/Threading-Contract/).
 
 Custom policies that need internal state across calls use the built-in
-[Storage](https://github.com/openpitkit/pit/wiki/Storage) abstraction. The
+[Storage](https://wiki.openpit.dev/Storage/) abstraction. The
 synchronization policy - no-sync, full-sync, or caller-sharded for per-key
 parallelism - is selected once at engine construction and applied
 transparently. Policy code never names a lock primitive; misuse is

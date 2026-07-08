@@ -13,7 +13,7 @@ is packaged as a CMake config package and exposes the `OpenPit::openpit` target.
 For an overview and links to all resources, see the project website [openpit.dev](https://openpit.dev/).
 For the C++ API reference, see [the C++ API docs](../../docs/cpp-api/index.html).
 For full project documentation, see [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
-For conceptual and architectural pages, see [the project wiki](https://github.com/openpitkit/pit/wiki).
+For conceptual and architectural pages, see [the project wiki](https://wiki.openpit.dev/).
 
 ## Versioning Policy (Pre-1.0)
 
@@ -142,15 +142,15 @@ in reverse order when any reject is produced.
 Built-in policies:
 
 - `SpotFundsPolicy` -
-  [per-account solvency gate over spendable funds](https://github.com/openpitkit/pit/wiki/Spot-Funds)
-- `OrderValidationPolicy` - [structural integrity checks on every order](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
-- `RateLimitPolicy` - [throttle order flow per broker, asset, or account](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
-- `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
-- `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
+  [per-account solvency gate over spendable funds](https://wiki.openpit.dev/Spot-Funds/)
+- `OrderValidationPolicy` - [structural integrity checks on every order](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
+- `RateLimitPolicy` - [throttle order flow per broker, asset, or account](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
+- `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
+- `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
 
 The primary integration model is to write project-specific policies against
 the public C++ policy API:
-[Custom C++ policies](https://github.com/openpitkit/pit/wiki/Policy-API#c-interface).
+[Custom C++ policies](https://wiki.openpit.dev/Policy-API/#c-interface).
 
 ## Usage
 
@@ -205,7 +205,7 @@ wrapper owns the default C++ engine adapter and exposes the typed async methods
 
 ## Threading
 
-Canonical contract: [Threading Contract](https://github.com/openpitkit/pit/wiki/Threading-Contract).
+Canonical contract: [Threading Contract](https://wiki.openpit.dev/Threading-Contract/).
 
 Choose the storage synchronization policy when building the engine:
 
@@ -214,7 +214,7 @@ Choose the storage synchronization policy when building the engine:
 - `openpit::SyncPolicy::Account` - account-sharded synchronization.
 
 Custom policies that need internal state across calls use the built-in
-[Storage](https://github.com/openpitkit/pit/wiki/Storage) abstraction:
+[Storage](https://wiki.openpit.dev/Storage/) abstraction:
 synchronization-aware key-value storage that keeps locking details out of
 policy code.
 

@@ -10,7 +10,7 @@ risk checks into trading systems from Python.
 For an overview and links to all resources, see the project website [openpit.dev](https://openpit.dev/).
 For the Python API guide and reference, see [openpit.readthedocs.io](https://openpit.readthedocs.io/en/stable/).
 For full project documentation, see [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
-For conceptual and architectural pages, see [the project wiki](https://github.com/openpitkit/pit/wiki).
+For conceptual and architectural pages, see [the project wiki](https://wiki.openpit.dev/).
 
 ## Versioning Policy (Pre‑1.0)
 
@@ -133,26 +133,26 @@ order when any reject is produced.
 Built-in policies:
 
 - `SpotFundsPolicy` -
-  [per-account solvency gate over spendable funds](https://github.com/openpitkit/pit/wiki/Spot-Funds)
-- `OrderValidationPolicy` - [structural integrity checks on every order](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
-- `RateLimitPolicy` - [throttle order flow per broker, asset, or account](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
-- `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
-- `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
+  [per-account solvency gate over spendable funds](https://wiki.openpit.dev/Spot-Funds/)
+- `OrderValidationPolicy` - [structural integrity checks on every order](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
+- `RateLimitPolicy` - [throttle order flow per broker, asset, or account](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
+- `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
+- `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
 
 The primary integration model is to write project-specific policies against
 the public Python policy API:
-[Custom Python policies](https://github.com/openpitkit/pit/wiki/Policy-API#python-interface).
+[Custom Python policies](https://wiki.openpit.dev/Policy-API/#python-interface).
 
 ## Threading
 
-Canonical contract: [Threading Contract](https://github.com/openpitkit/pit/wiki/Threading-Contract).
+Canonical contract: [Threading Contract](https://wiki.openpit.dev/Threading-Contract/).
 
 Public methods acquire the GIL when needed; the SDK does not release the
 GIL across callback boundaries, so Python policies execute on the calling
 thread.
 
 Custom policies that need internal state across calls can use the built-in
-[Storage](https://github.com/openpitkit/pit/wiki/Storage) abstraction. In
+[Storage](https://wiki.openpit.dev/Storage/) abstraction. In
 typical Python usage (synchronous code or an asyncio loop pinned to one
 thread) the no-sync policy is sufficient and the storage compiles down to
 direct dictionary access. A synchronizing policy is needed only when the

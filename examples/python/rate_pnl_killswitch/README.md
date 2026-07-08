@@ -51,8 +51,8 @@ python -m pytest .                # run the smoke test
 
 ## See also
 
-- [RateLimitPolicy](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
-  and [PnlBoundsKillSwitchPolicy](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy) -
+- [RateLimitPolicy](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
+  and [PnlBoundsKillSwitchPolicy](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy) -
   the policy references for the two kill switches combined here.
 - [`../spot_funds`](../spot_funds) - the smallest single-policy integration, a
   good starting point before this multi-policy supervisor.

@@ -71,7 +71,7 @@
   <script>
     !function (t, e) { var o, n, p, r; e.__SV || (window.posthog && window.posthog.__loaded) || (window.posthog = e, e._i = [], e.init = function (i, s, a) { function g(t, e) { var o = e.split("."); 2 == o.length && (t = t[o[0]], e = o[1]), t[e] = function () { t.push([e].concat(Array.prototype.slice.call(arguments, 0))) } } (p = t.createElement("script")).type = "text/javascript", p.crossOrigin = "anonymous", p.async = !0, p.src = s.api_host.replace(".i.posthog.com", "-assets.i.posthog.com") + "/static/array.js", (r = t.getElementsByTagName("script")[0]).parentNode.insertBefore(p, r); var u = e; for (void 0 !== a ? u = e[a] = [] : a = "posthog", u.people = u.people || [], u.toString = function (t) { var e = "posthog"; return "posthog" !== a && (e += "." + a), t || (e += " (stub)"), e }, u.people.toString = function () { return u.toString(1) + ".people (stub)" }, o = "Mi Ri init Vi Gi Rr Wi Ji Bi capture calculateEventProperties tn register register_once register_for_session unregister unregister_for_session an getFeatureFlag getFeatureFlagPayload getFeatureFlagResult isFeatureEnabled reloadFeatureFlags updateFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSurveysLoaded onSessionId getSurveys getActiveMatchingSurveys renderSurvey displaySurvey cancelPendingSurvey canRenderSurvey canRenderSurveyAsync un identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset setIdentity clearIdentity get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException addExceptionStep captureLog startExceptionAutocapture stopExceptionAutocapture loadToolbar get_property getSessionProperty nn Xi createPersonProfile setInternalOrTestUser sn Hi cn opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing get_explicit_consent_status is_capturing clear_opt_in_out_capturing Ki debug Lr rn getPageViewId captureTraceFeedback captureTraceMetric Di".split(" "), n = 0; n < o.length; n++)g(u, o[n]); e._i.push([i, s, a]) }, e.__SV = 1) }(document, window.posthog || []);
     posthog.init('phc_q3EM7XmhYeX4xvaWEyfZFPqFJdPaJiGcbALhSBksidxK', {
-      api_host: 'https://g.palchukovsky.com',
+      api_host: 'https://pulse.openpit.dev',
       ui_host: 'https://eu.posthog.com',
       defaults: '2026-01-30',
       person_profiles: 'identified_only',
@@ -139,29 +139,28 @@
       </p>
 
       <div class="pol-chips">
-        <a class="pol-chip" href="https://github.com/openpitkit/pit/wiki/Spot-Funds" target="_blank" rel="noopener"
+        <a class="pol-chip" href="https://wiki.openpit.dev/Spot-Funds/" target="_blank" rel="noopener"
           title="Spot Funds — per-account solvency gate">
           <span class="dot" aria-hidden="true"></span>Spot Funds
         </a>
-        <a class="pol-chip" href="https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy" target="_blank"
+        <a class="pol-chip" href="https://wiki.openpit.dev/Policies/#ordervalidationpolicy" target="_blank"
           rel="noopener" title="Order Validation — structural sanity checks">
           <span class="dot" aria-hidden="true"></span>Order Validation
         </a>
-        <a class="pol-chip" href="https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy" target="_blank"
-          rel="noopener" title="Rate Limit — throttle order flow per broker, asset, or account">
+        <a class="pol-chip" href="https://wiki.openpit.dev/Policies/#ratelimitpolicy" target="_blank" rel="noopener"
+          title="Rate Limit — throttle order flow per broker, asset, or account">
           <span class="dot" aria-hidden="true"></span>Rate Limit
         </a>
-        <a class="pol-chip" href="https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy" target="_blank"
+        <a class="pol-chip" href="https://wiki.openpit.dev/Policies/#ordersizelimitpolicy" target="_blank"
           rel="noopener" title="Order Size Limit — fat-finger caps on quantity and notional">
           <span class="dot" aria-hidden="true"></span>Order Size Limit
         </a>
-        <a class="pol-chip" href="https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy"
-          target="_blank" rel="noopener"
-          title="P&amp;L Kill Switch — halt an account when realized P&amp;L breaches bounds">
+        <a class="pol-chip" href="https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy" target="_blank"
+          rel="noopener" title="P&amp;L Kill Switch — halt an account when realized P&amp;L breaches bounds">
           <span class="dot" aria-hidden="true"></span>P&amp;L Kill Switch
         </a>
-        <a class="pol-chip pol-chip--sdk" href="https://github.com/openpitkit/pit/wiki/Policy-API" target="_blank"
-          rel="noopener" title="Build a custom pre-trade policy with the OpenPit SDK">
+        <a class="pol-chip pol-chip--sdk" href="https://wiki.openpit.dev/Policy-API/" target="_blank" rel="noopener"
+          title="Build a custom pre-trade policy with the OpenPit SDK">
           + your own via SDK
         </a>
       </div>
@@ -266,7 +265,7 @@
           <div class="card-link">→ github.com/openpitkit/pit</div>
         </a>
 
-        <a href="https://github.com/openpitkit/pit/wiki" target="_blank" rel="noopener" class="card">
+        <a href="https://wiki.openpit.dev/" target="_blank" rel="noopener" class="card">
           <div class="card-icon">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
               stroke-linecap="round" stroke-linejoin="round">
@@ -281,7 +280,7 @@
             Architecture, domain types, pipeline design, policies,
             and conceptual documentation.
           </div>
-          <div class="card-link">→ github.com/openpitkit/pit/wiki</div>
+          <div class="card-link">→ wiki.openpit.dev</div>
         </a>
 
         <a href="https://github.com/openpitkit/pit/discussions" target="_blank" rel="noopener" class="card">

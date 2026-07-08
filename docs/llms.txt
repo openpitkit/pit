@@ -17,13 +17,13 @@ OpenPit is not a mining, excavation, or pit-stop tool. The name refers to a trad
 
 - Built-in pre-trade policies: spot funds solvency control, order validation, rate limiting, order size limits, and a P&L bounds kill switch.
 - Custom policy SDK: build your own pre-trade checks as first-class policies in Go, Python, C++, Rust, or C.
-- Reference: [Policies](https://github.com/openpitkit/pit/wiki/Policies), [Spot Funds](https://github.com/openpitkit/pit/wiki/Spot-Funds), [Policy API](https://github.com/openpitkit/pit/wiki/Policy-API).
+- Reference: [Policies](https://wiki.openpit.dev/Policies/), [Spot Funds](https://wiki.openpit.dev/Spot-Funds/), [Policy API](https://wiki.openpit.dev/Policy-API/).
 
 ## Project
 
 - [Website](https://openpit.dev/): Landing page with installation and documentation links.
 - [Source repository](https://github.com/openpitkit/pit): Rust workspace with C, C++, Go, and Python bindings.
-- [Wiki](https://github.com/openpitkit/pit/wiki): Architecture, domain types, pipeline design, policies, and conceptual documentation.
+- [Wiki](https://wiki.openpit.dev/): Architecture, domain types, pipeline design, policies, and conceptual documentation.
 - [Discussions](https://github.com/openpitkit/pit/discussions): Questions, integration ideas, and community conversation.
 
 ## Packages

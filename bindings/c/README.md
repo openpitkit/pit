@@ -10,7 +10,7 @@ that consume a C ABI.
 
 For an overview and links to all resources, see the project website [openpit.dev](https://openpit.dev/).
 For full project documentation, see [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
-For conceptual and architectural pages, see [the project wiki](https://github.com/openpitkit/pit/wiki).
+For conceptual and architectural pages, see [the project wiki](https://wiki.openpit.dev/).
 For the split C reference manual, see [the C API docs](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
 
 ## Versioning Policy (Pre‑1.0)
@@ -133,17 +133,17 @@ reject is produced.
 
 Built-in policies:
 
-- [Spot Funds](https://github.com/openpitkit/pit/wiki/Spot-Funds) - per-account
+- [Spot Funds](https://wiki.openpit.dev/Spot-Funds/) - per-account
   solvency gate over spendable funds.
-- [Order Validation](https://github.com/openpitkit/pit/wiki/Policies#ordervalidationpolicy)
+- [Order Validation](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
   \- structural integrity checks on every order.
-- [Rate Limit](https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy)
+- [Rate Limit](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
   \- throttle order flow per broker, asset, or account.
-- [Order Size Limit](https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy)
+- [Order Size Limit](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
   \- fat-finger caps on quantity and notional.
-- [P&L Kill Switch](https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy)
+- [P&L Kill Switch](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
   \- halt an account when realized P&L breaches bounds.
-- plus your own via the [policy SDK](https://github.com/openpitkit/pit/wiki/Policy-API).
+- plus your own via the [policy SDK](https://wiki.openpit.dev/Policy-API/).
 
 The primary integration model is to build project-specific policies against the
 public C API: [the C API docs](../../docs/c-api/index.md).
@@ -153,7 +153,7 @@ rejection of only the current request. Kill switches are intended for
 algorithmic trading where automatic order submission must be halted until the
 situation is analyzed.
 
-Built-in policies that maintain state across calls use the SDK's [Storage](https://github.com/openpitkit/pit/wiki/Storage)
+Built-in policies that maintain state across calls use the SDK's [Storage](https://wiki.openpit.dev/Storage/)
 abstraction internally. The runtime library handles the necessary memory
 synchronization for policy state; the C consumer is responsible only for the
 threading contract on the SDK handle.
