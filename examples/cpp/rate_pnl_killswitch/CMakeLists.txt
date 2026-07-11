@@ -132,5 +132,7 @@ if(OPENPIT_EXAMPLE_BUILD_TESTS)
       BUILD_RPATH "${_openpit_runtime_dir}")
   endif()
 
-  gtest_discover_tests(rate_pnl_killswitch_tests)
+  gtest_discover_tests(rate_pnl_killswitch_tests
+    DISCOVERY_MODE PRE_TEST
+    DISCOVERY_TIMEOUT 60)
 endif()

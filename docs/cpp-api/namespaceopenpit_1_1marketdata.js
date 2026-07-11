@@ -10,7 +10,8 @@ var namespaceopenpit_1_1marketdata =
     [ "GetStatus", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98", [
       [ "Found", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98a5d695cc28c6a7ea955162fbdd0ae42b9", null ],
       [ "Unavailable", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98a453e6aa38d87b28ccae545967c53004f", null ],
-      [ "UnknownInstrument", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98ab9e51a69f4dd89fc832c1ab9735ab49a", null ]
+      [ "UnknownInstrument", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98ab9e51a69f4dd89fc832c1ab9735ab49a", null ],
+      [ "QuoteExpired", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98a3a7f9417a31e902960db730a4e05e005", null ]
     ] ],
     [ "QuoteResolution", "namespaceopenpit_1_1marketdata.html#a7c736df89df3481cae07bcf3d46d5c2d", [
       [ "AccountOnly", "namespaceopenpit_1_1marketdata.html#a7c736df89df3481cae07bcf3d46d5c2da015981d842ef19d4f5b2c4dbccd41ff2", null ],

@@ -31,7 +31,9 @@ inline void ClearPendingCallbackException() noexcept {
 }
 
 inline void CaptureCurrentCallbackException() noexcept {
-  g_pendingCallbackException = std::current_exception();
+  if (g_pendingCallbackException == nullptr) {
+    g_pendingCallbackException = std::current_exception();
+  }
 }
 
 [[nodiscard]] inline bool HasPendingCallbackException() noexcept {
@@ -39,24 +41,16 @@ inline void CaptureCurrentCallbackException() noexcept {
 }
 
 inline void ThrowIfPendingCallbackException(const char* fallback) {
-  // `fallback` documents the caller's context only when no exception is
-  // pending; on the reachable paths below `pending` is always non-null, so
-  // every `catch` arm rethrows and the function never falls through.
+  // The C++ exception is captured only long enough to cross back over the C
+  // callback frame. Preserve its exact dynamic type and payload when control
+  // returns to the invoking C++ API.
   static_cast<void>(fallback);
   if (g_pendingCallbackException == nullptr) {
     return;
   }
   std::exception_ptr pending =
       std::exchange(g_pendingCallbackException, std::exception_ptr{});
-  try {
-    std::rethrow_exception(pending);
-  } catch (const ::openpit::Error& error) {
-    throw ::openpit::Error(error.Message());
-  } catch (const std::exception& error) {
-    throw ::openpit::Error(error.what());
-  } catch (...) {
-    throw ::openpit::Error("unknown callback error");
-  }
+  std::rethrow_exception(pending);
 }
 
 }  // namespace openpit::detail

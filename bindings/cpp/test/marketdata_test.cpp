@@ -241,6 +241,9 @@ TEST(MarketDataService, RegisterTwiceReportsAlreadyRegistered) {
   const md::RegisterResult second = service.Register(instrument);
   EXPECT_EQ(second.status, md::RegisterStatus::AlreadyRegistered);
   EXPECT_FALSE(second.instrumentId.has_value());
+  ASSERT_TRUE(second.conflictingInstrument.has_value());
+  EXPECT_EQ(second.conflictingInstrument->underlyingAsset, "AAPL");
+  EXPECT_EQ(second.conflictingInstrument->settlementAsset, "USD");
 }
 
 TEST(MarketDataService, RegisterWithExplicitIdRejectsDuplicateId) {
@@ -257,6 +260,8 @@ TEST(MarketDataService, RegisterWithExplicitIdRejectsDuplicateId) {
       service.Register(openpit::model::Instrument("MSFT", "USD"), id);
   EXPECT_EQ(dup.status, md::RegisterStatus::DuplicateId);
   EXPECT_FALSE(dup.instrumentId.has_value());
+  ASSERT_TRUE(dup.conflictingInstrumentId.has_value());
+  EXPECT_EQ(dup.conflictingInstrumentId.value(), id);
 }
 
 TEST(MarketDataService, RegisterExplicitIdRejectsDuplicateInstrument) {
@@ -272,6 +277,9 @@ TEST(MarketDataService, RegisterExplicitIdRejectsDuplicateInstrument) {
       service.Register(instrument, md::InstrumentId::FromUint64(2));
   EXPECT_EQ(dup.status, md::RegisterStatus::DuplicateInstrument);
   EXPECT_FALSE(dup.instrumentId.has_value());
+  ASSERT_TRUE(dup.conflictingInstrument.has_value());
+  EXPECT_EQ(dup.conflictingInstrument->underlyingAsset, "AAPL");
+  EXPECT_EQ(dup.conflictingInstrument->settlementAsset, "USD");
 }
 
 TEST(MarketDataService, ResolveRecoversIdFromName) {
@@ -518,6 +526,13 @@ TEST(MarketDataService, FiniteTtlExpiresQuote) {
 
   // After the (sub-nanosecond) lifetime elapses the quote reads as absent.
   std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  const md::GetResult expired =
+      service.Get(id, account, NoGroupInfo{},
+                  md::QuoteResolution::AccountThenGroupThenDefault);
+  EXPECT_EQ(expired.status, md::GetStatus::QuoteExpired);
+  ASSERT_TRUE(expired.quote.has_value());
+  ASSERT_TRUE(expired.quote->Mark().has_value());
+  EXPECT_EQ(expired.quote->Mark()->ToString(), "200");
   EXPECT_FALSE(service
                    .Find(id, account, NoGroupInfo{},
                          md::QuoteResolution::AccountThenGroupThenDefault)

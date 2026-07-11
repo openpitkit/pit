@@ -161,6 +161,86 @@ typedef uint8_t OpenPitParamPositionEffect;
 #define OpenPitParamPositionEffect_Close ((OpenPitParamPositionEffect) 2)
 ```
 
+## `OpenPitParamFillType`
+
+Type of fill event reported by a venue.
+
+```c
+typedef uint8_t OpenPitParamFillType;
+/**
+ * Value is absent.
+ */
+#define OpenPitParamFillType_NotSet ((OpenPitParamFillType) 0)
+/**
+ * Normal trade execution.
+ */
+#define OpenPitParamFillType_Trade ((OpenPitParamFillType) 1)
+/**
+ * Forced liquidation by the venue.
+ */
+#define OpenPitParamFillType_Liquidation ((OpenPitParamFillType) 2)
+/**
+ * Auto-deleveraging event.
+ */
+#define OpenPitParamFillType_AutoDeleverage ((OpenPitParamFillType) 3)
+/**
+ * Settlement at expiry or delivery.
+ */
+#define OpenPitParamFillType_Settlement ((OpenPitParamFillType) 4)
+/**
+ * Funding payment.
+ */
+#define OpenPitParamFillType_Funding ((OpenPitParamFillType) 5)
+```
+
+## `OpenPitParamKind`
+
+Parameter category carried by validation and arithmetic errors.
+
+```c
+typedef uint8_t OpenPitParamKind;
+/**
+ * No parameter category is available.
+ */
+#define OpenPitParamKind_Unspecified ((OpenPitParamKind) 0)
+/**
+ * Quantity.
+ */
+#define OpenPitParamKind_Quantity ((OpenPitParamKind) 1)
+/**
+ * Volume.
+ */
+#define OpenPitParamKind_Volume ((OpenPitParamKind) 2)
+/**
+ * Notional value.
+ */
+#define OpenPitParamKind_Notional ((OpenPitParamKind) 3)
+/**
+ * Price.
+ */
+#define OpenPitParamKind_Price ((OpenPitParamKind) 4)
+/**
+ * Profit and loss.
+ */
+#define OpenPitParamKind_Pnl ((OpenPitParamKind) 5)
+/**
+ * Cash flow.
+ */
+#define OpenPitParamKind_CashFlow ((OpenPitParamKind) 6)
+/**
+ * Signed position size.
+ */
+#define OpenPitParamKind_PositionSize ((OpenPitParamKind) 7)
+/**
+ * Fee.
+ */
+#define OpenPitParamKind_Fee ((OpenPitParamKind) 8)
+/**
+ * Leverage.
+ */
+#define OpenPitParamKind_Leverage ((OpenPitParamKind) 9)
+```
+
 ## `OpenPitParamTradeAmountKind`
 
 Selects how one trade-amount numeric value should be interpreted.

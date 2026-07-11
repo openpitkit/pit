@@ -1,0 +1,19 @@
+# The published package is built from dist/ with its own generated
+# package.json; the "files" allowlist there is the primary gate. This file is
+# the safety net for any accidental publish from the source tree.
+src-ts
+src
+tests
+scripts
+target
+Cargo.toml
+Cargo.lock
+*.config.ts
+tsconfig*.json
+eslint.config.js
+.prettierrc.json
+.prettierignore
+vitest.config.ts
+typedoc.json
+coverage
+*.map

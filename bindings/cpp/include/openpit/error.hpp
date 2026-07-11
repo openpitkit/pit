@@ -49,6 +49,7 @@ enum class ConfigureErrorKind : std::uint32_t {
   Unknown = OpenPitConfigureErrorKind_Unknown,
   TypeMismatch = OpenPitConfigureErrorKind_TypeMismatch,
   Validation = OpenPitConfigureErrorKind_Validation,
+  NestedConfiguration = OpenPitConfigureErrorKind_NestedConfiguration,
 };
 
 class Error : public std::exception {

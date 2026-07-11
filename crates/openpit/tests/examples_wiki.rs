@@ -21,13 +21,13 @@ use std::rc::Rc;
 use openpit::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume};
 use openpit::pretrade::policies::OrderValidationPolicy;
 use openpit::pretrade::{
-    PolicyPreTradeResult, PostTradeContext, PreTradeContext, PreTradePolicy, Reject, RejectCode,
-    RejectScope, Rejects,
+    AccountBlock, PolicyPreTradeResult, PostTradeContext, PreTradeContext, PreTradePolicy, Reject,
+    RejectCode, RejectScope, Rejects,
 };
 use openpit::{
-    AccountAdjustmentContext, Engine, ExecutionReportOperation, FinancialImpact, HasOrderPrice,
-    HasTradeAmount, Instrument, Mutation, Mutations, OrderOperation, WithExecutionReportOperation,
-    WithFinancialImpact,
+    AccountAdjustmentContext, AccountOutcomeEntry, Engine, ExecutionReportOperation,
+    FinancialImpact, HasOrderPrice, HasTradeAmount, Instrument, Mutation, Mutations,
+    OrderOperation, WithExecutionReportOperation, WithFinancialImpact,
 };
 
 // Mirrors public Rust examples from:
@@ -249,6 +249,36 @@ where
         _report: &R,
     ) -> Option<openpit::PostTradeResult> {
         None
+    }
+}
+
+// --- Policy-API: Block an Account from an Adjustment Callback ---
+
+struct BlockOnAdjustmentPolicy;
+
+impl<Order, ExecutionReport, AccountAdjustment, Sync>
+    PreTradePolicy<Order, ExecutionReport, AccountAdjustment, Sync> for BlockOnAdjustmentPolicy
+where
+    Sync: openpit::SyncMode,
+{
+    fn name(&self) -> &str {
+        "BlockOnAdjustmentPolicy"
+    }
+
+    fn apply_account_adjustment(
+        &self,
+        ctx: &AccountAdjustmentContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
+        _account_id: AccountId,
+        _adjustment: &AccountAdjustment,
+        _mutations: &mut Mutations,
+    ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
+        ctx.account_control.block(AccountBlock::new(
+            "BlockOnAdjustmentPolicy",
+            RejectCode::AccountBlocked,
+            "blocked via account control",
+            "custom policy blocked the account from a callback",
+        ));
+        Ok(Vec::new())
     }
 }
 
@@ -705,6 +735,24 @@ fn example_wiki_policy_notional_cap() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[test]
+fn example_wiki_policy_blocks_account_from_adjustment() -> Result<(), Box<dyn std::error::Error>> {
+    // Wiki example: pit.wiki/Policy-API.md - Block an Account from an Adjustment Callback
+    let engine = Engine::builder::<OrderOperation, (), ()>()
+        .no_sync()
+        .pre_trade(BlockOnAdjustmentPolicy)
+        .build()?;
+    let account = AccountId::from_u64(99224416);
+
+    engine.apply_account_adjustment(account, &[()])?;
+    let rejects = match engine.start_pre_trade(aapl_usd_order("10", "25")) {
+        Ok(_) => panic!("blocked account must fail the start stage"),
+        Err(rejects) => rejects,
+    };
+    assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
+    Ok(())
+}
+
+#[test]
 fn example_wiki_custom_types_manual() -> Result<(), Box<dyn std::error::Error>> {
     // Wiki example: pit.wiki/Custom-Rust-Types.md - Manual Field Implementations
     // Keep this example in sync with the matching wiki example.
@@ -726,6 +774,60 @@ fn example_wiki_custom_types_manual() -> Result<(), Box<dyn std::error::Error>> 
     };
     let instrument = order.instrument()?;
     assert_eq!(instrument.settlement_asset(), &Asset::new("USD")?);
+    Ok(())
+}
+
+#[test]
+fn example_wiki_policy_api_custom_rust_models() -> Result<(), Box<dyn std::error::Error>> {
+    // Wiki example: pit.wiki/Policy-API.md - Rust Custom Models
+    // Keep the model definitions in sync with the matching wiki example.
+    use std::ops::Deref;
+
+    use openpit::{ExecutionReportOperation, OrderOperation};
+
+    struct StrategyOrder {
+        inner: OrderOperation,
+        strategy_tag: String,
+    }
+
+    impl Deref for StrategyOrder {
+        type Target = OrderOperation;
+
+        fn deref(&self) -> &Self::Target {
+            &self.inner
+        }
+    }
+
+    struct StrategyReport {
+        inner: ExecutionReportOperation,
+        venue_exec_id: String,
+    }
+
+    impl Deref for StrategyReport {
+        type Target = ExecutionReportOperation;
+
+        fn deref(&self) -> &Self::Target {
+            &self.inner
+        }
+    }
+
+    let order = StrategyOrder {
+        inner: aapl_usd_order("10", "25"),
+        strategy_tag: "alpha".to_owned(),
+    };
+    let report = StrategyReport {
+        inner: ExecutionReportOperation {
+            instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
+            account_id: AccountId::from_u64(99224416),
+            side: Side::Buy,
+        },
+        venue_exec_id: "venue-42".to_owned(),
+    };
+
+    assert_eq!(order.strategy_tag, "alpha");
+    assert_eq!(order.account_id, AccountId::from_u64(99224416));
+    assert_eq!(report.venue_exec_id, "venue-42");
+    assert_eq!(report.side, Side::Buy);
     Ok(())
 }
 
@@ -1244,12 +1346,11 @@ fn example_wiki_spot_funds_pnl_kill_switch_builder() -> Result<(), Box<dyn std::
 
     // The bounds cascade lives in SpotFundsSettings. A global loss barrier of
     // -1000 USD, plus a tighter per-account barrier that seeds 0 accumulated PnL.
-    let mut settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])?;
-    settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+    let global_barrier = SpotFundsPnlBoundsBarrier {
         account_currency: usd.clone(),
         lower_bound: Some(Pnl::from_str("-1000")?),
         upper_bound: None,
-    }])?;
+    };
     let account_barrier = SpotFundsPnlBoundsAccountBarrier {
         barrier: SpotFundsPnlBoundsBarrier {
             account_currency: usd,
@@ -1259,7 +1360,11 @@ fn example_wiki_spot_funds_pnl_kill_switch_builder() -> Result<(), Box<dyn std::
         account_id: account,
         initial_pnl: Pnl::from_str("0")?,
     };
-    let settings = settings.with_initial_pnl_account_barriers([account_barrier])?;
+    let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])?.with_pnl_barriers(
+        [global_barrier],
+        [],
+        [account_barrier],
+    )?;
 
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
     let policy = SpotFundsPolicy::<FullSync, FullSync>::new(

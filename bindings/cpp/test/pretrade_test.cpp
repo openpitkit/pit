@@ -34,6 +34,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -52,6 +53,18 @@ using openpit::pretrade::PushReject;
 using openpit::pretrade::Reject;
 using openpit::pretrade::RejectCode;
 using openpit::pretrade::RejectScope;
+
+static_assert(!std::is_move_constructible_v<openpit::tx::Mutations>);
+static_assert(
+    !std::is_move_constructible_v<openpit::accountadjustment::Context>);
+static_assert(!std::is_move_constructible_v<openpit::pretrade::Context>);
+static_assert(!std::is_move_constructible_v<openpit::pretrade::Result>);
+static_assert(
+    !std::is_move_constructible_v<openpit::pretrade::PostTradeContext>);
+static_assert(
+    !std::is_move_constructible_v<openpit::pretrade::PostTradeAdjustments>);
+static_assert(
+    !std::is_move_constructible_v<openpit::pretrade::AccountOutcomes>);
 
 namespace policies = openpit::pretrade::policies;
 
@@ -240,6 +253,7 @@ TEST(Context, AccountGroupIsAbsentWithoutNativeContext) {
   const openpit::model::Order order;
   const Context context(order);
   EXPECT_FALSE(context.AccountGroup().has_value());
+  EXPECT_FALSE(context.AccountControl().has_value());
 }
 
 //------------------------------------------------------------------------------
@@ -343,6 +357,19 @@ TEST(StartPolicyAdapter, SafeSlowStartStageHappyPathAndTypeMismatch) {
   EXPECT_EQ(reject->code, RejectCode::Other);
 }
 
+TEST(PolicyAdapter, UnifiedAdapterDelegatesOptionalStartHook) {
+  DeskMainAdapter adapter{DeskPolicy{}};
+
+  DeskOrder good;
+  good.lots = 5;
+  EXPECT_FALSE(adapter.CheckPreTradeStart(good).has_value());
+
+  DeskOrder rejected;
+  const std::optional<Reject> reject = adapter.CheckPreTradeStart(rejected);
+  ASSERT_TRUE(reject.has_value());
+  EXPECT_EQ(reject->code, RejectCode::InvalidFieldValue);
+}
+
 TEST(CustomPolicy, WrapsAdapterAndRegistersOnBuilder) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
   CustomPolicy<DeskMainAdapter> policy("DeskPolicy",
@@ -354,7 +381,7 @@ TEST(CustomPolicy, WrapsAdapterAndRegistersOnBuilder) {
   EXPECT_NO_THROW({ openpit::Engine engine = builder.Build(); });
 }
 
-TEST(CustomPolicy, InvalidNameThrows) {
+TEST(CustomPolicy, AdapterNameMismatchThrows) {
   EXPECT_THROW(
       {
         CustomPolicy<DeskMainAdapter> policy("", DeskMainAdapter{DeskPolicy{}});
@@ -451,6 +478,111 @@ TEST(CustomPolicy, UsesExplicitDryRunHooksForDryRunPipeline) {
 //------------------------------------------------------------------------------
 // Built-in policy configuration construction + registration.
 
+[[nodiscard]] openpit::model::Order SpotFundsLifecycleOrder(
+    const openpit::param::AccountId accountId) {
+  return openpit::model::Order::Limit(
+      openpit::model::Instrument("AAPL", "USD"), accountId,
+      openpit::model::Side::Buy,
+      openpit::model::TradeAmount::OfQuantity(Quantity::FromString("1")),
+      Price::FromString("100"));
+}
+
+void SeedSpotFundsLifecycleAccount(const openpit::Engine& engine,
+                                   const openpit::param::AccountId accountId) {
+  engine.SetAccountCurrency(accountId, "USD");
+
+  openpit::accountadjustment::AccountAdjustment seed;
+  openpit::accountadjustment::BalanceOperation balance;
+  balance.asset = "USD";
+  seed.operation =
+      openpit::accountadjustment::Operation::OfBalance(std::move(balance));
+  openpit::accountadjustment::Amount amount;
+  amount.balance = openpit::param::AdjustmentAmount::OfAbsolute(
+      openpit::param::PositionSize::FromString("1000"));
+  seed.amount = std::move(amount);
+
+  const openpit::AdjustmentResult result = engine.ApplyAccountAdjustment(
+      accountId,
+      std::vector<openpit::accountadjustment::AccountAdjustment>{seed});
+  ASSERT_TRUE(result.Passed());
+}
+
+[[nodiscard]] std::vector<openpit::accounts::AccountBlock>
+ApplySpotFundsLifecycleFill(const openpit::Engine& engine,
+                            const openpit::param::AccountId accountId) {
+  openpit::pretrade::ExecuteResult execution =
+      engine.ExecutePreTrade(SpotFundsLifecycleOrder(accountId));
+  if (!execution.Passed()) {
+    ADD_FAILURE() << "ExecutePreTrade() rejects = " << execution.rejects.size()
+                  << ", want none";
+    return {};
+  }
+
+  // The execution-report lock is a borrowed C ABI pointer. This follows the
+  // existing PreTradeLock test fixture to carry the reservation snapshot into
+  // the matching fill without changing the pending binding lock surface.
+  openpit::pretrade::PreTradeLock lock(
+      openpit_pretrade_pre_trade_reservation_get_lock(
+          execution.reservation->Get()));
+  execution.reservation->Commit();
+
+  const openpit::model::Instrument instrument("AAPL", "USD");
+  OpenPitExecutionReport report{};
+  report.operation.is_set = true;
+  report.operation.value.instrument = instrument.Raw();
+  report.operation.value.account_id.value = accountId.Raw();
+  report.operation.value.account_id.is_set = true;
+  report.operation.value.side = OpenPitParamSide_Buy;
+  report.fill.is_set = true;
+  report.fill.value.last_trade.is_set = true;
+  report.fill.value.last_trade.value.price = Price::FromString("100").Raw();
+  report.fill.value.last_trade.value.quantity = Quantity::FromString("1").Raw();
+  report.fill.value.leaves_quantity.is_set = true;
+  report.fill.value.leaves_quantity.value = Quantity::FromString("0").Raw();
+  report.fill.value.lock = lock.Get();
+  report.fill.value.is_final.is_set = true;
+  report.fill.value.is_final.value = true;
+
+  OpenPitPretradeAccountBlockList* blocks = nullptr;
+  OpenPitAccountAdjustmentOutcomeList* outcomes = nullptr;
+  OpenPitSharedString* error = nullptr;
+  const bool ok = openpit_engine_apply_execution_report(
+      engine.Get(), &report, &blocks, &outcomes, &error);
+  if (!ok) {
+    if (blocks != nullptr) {
+      openpit_pretrade_destroy_account_block_list(blocks);
+    }
+    if (outcomes != nullptr) {
+      openpit_destroy_account_adjustment_outcome_list(outcomes);
+    }
+    openpit_destroy_shared_string(error);
+    ADD_FAILURE() << "openpit_engine_apply_execution_report() failed";
+    return {};
+  }
+
+  std::vector<openpit::accounts::AccountBlock> result;
+  if (blocks != nullptr) {
+    const std::size_t count = openpit_pretrade_account_block_list_len(blocks);
+    result.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+      OpenPitPretradeAccountBlock block{};
+      if (openpit_pretrade_account_block_list_get(blocks, index, &block)) {
+        result.push_back(openpit::accounts::AccountBlock::FromRaw(block));
+      }
+    }
+    openpit_pretrade_destroy_account_block_list(blocks);
+  }
+  openpit_destroy_account_adjustment_outcome_list(outcomes);
+  return result;
+}
+
+void ExpectSpotFundsPnlBlock(
+    const std::vector<openpit::accounts::AccountBlock>& blocks) {
+  ASSERT_EQ(blocks.size(), 1u);
+  EXPECT_EQ(blocks.front().code,
+            openpit::reject::RejectCode::PnlKillSwitchTriggered);
+}
+
 TEST(BuiltinPolicy, OrderValidationRegistersAndBuilds) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
   builder.Add(policies::OrderValidationPolicy{});
@@ -500,6 +632,17 @@ TEST(BuiltinPolicy, SpotFundsLimitOnlyBuilds) {
   policies::SpotFundsPolicy config;
   config.AddTo(builder);
   EXPECT_NO_THROW({ openpit::Engine engine = builder.Build(); });
+}
+
+TEST(BuiltinPolicy, SpotFundsWithoutPnlBarriersExecutesNormalOrder) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(policies::SpotFundsPolicy{});
+  const openpit::Engine engine = builder.Build();
+  const openpit::param::AccountId account =
+      openpit::param::AccountId::FromUint64(83010);
+
+  SeedSpotFundsLifecycleAccount(engine, account);
+  EXPECT_TRUE(ApplySpotFundsLifecycleFill(engine, account).empty());
 }
 
 TEST(BuiltinPolicy, SpotFundsOverridesBuildWithInstrumentIdWrapper) {
@@ -616,6 +759,104 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsConfiguratorUpdatesAxesAndPnl) {
         openpit::param::AccountId::FromUint64(99224416), "USD",
         openpit::param::Pnl::FromString("2.5"));
   });
+}
+
+TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAxisReplacementAndClear) {
+  const openpit::param::AccountGroupId group =
+      openpit::param::AccountGroupId::FromUint32(85);
+  const openpit::param::AccountId accountSpecific =
+      openpit::param::AccountId::FromUint64(83011);
+  const openpit::param::AccountId accountGroup =
+      openpit::param::AccountId::FromUint64(83012);
+  const openpit::param::AccountId accountGlobal =
+      openpit::param::AccountId::FromUint64(83013);
+  const openpit::param::AccountId accountAfterClear =
+      openpit::param::AccountId::FromUint64(83014);
+
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(policies::SpotFundsPolicy{});
+  const openpit::Engine engine = builder.Build();
+  for (const openpit::param::AccountId account :
+       {accountSpecific, accountGroup, accountGlobal, accountAfterClear}) {
+    SeedSpotFundsLifecycleAccount(engine, account);
+  }
+  ASSERT_FALSE(
+      engine.Accounts().RegisterGroup({accountGroup}, group).has_value());
+
+  policies::SpotFundsPnlBoundsBarrier global("USD");
+  global.lowerBound = openpit::param::Pnl::FromString("-20");
+  policies::SpotFundsPnlBoundsBarrier groupBarrier("USD");
+  groupBarrier.lowerBound = openpit::param::Pnl::FromString("-10");
+  policies::SpotFundsPnlBoundsBarrier accountBarrier("USD");
+  accountBarrier.lowerBound = openpit::param::Pnl::FromString("-10");
+  engine.Configure().SpotFundsPnlBoundsKillSwitch(
+      policies::SpotFundsPolicyName,
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{global},
+      std::vector<policies::SpotFundsPnlBoundsAccountGroupBarrier>{
+          policies::SpotFundsPnlBoundsAccountGroupBarrier(group, groupBarrier)},
+      std::vector<policies::SpotFundsPnlBoundsAccountBarrierUpdate>{
+          policies::SpotFundsPnlBoundsAccountBarrierUpdate(accountSpecific,
+                                                           accountBarrier)});
+
+  engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, accountSpecific, "USD",
+      openpit::param::Pnl::FromString("-15"));
+  engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, accountGroup, "USD",
+      openpit::param::Pnl::FromString("-15"));
+  engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, accountGlobal, "USD",
+      openpit::param::Pnl::FromString("-25"));
+  engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, accountAfterClear, "USD",
+      openpit::param::Pnl::FromString("-25"));
+
+  // An engaged empty account axis clears only per-account barriers. The
+  // omitted global and group axes remain in force for their respective keys.
+  engine.Configure().SpotFundsPnlBoundsKillSwitch(
+      policies::SpotFundsPolicyName, std::nullopt, std::nullopt,
+      std::vector<policies::SpotFundsPnlBoundsAccountBarrierUpdate>{});
+  EXPECT_TRUE(ApplySpotFundsLifecycleFill(engine, accountSpecific).empty());
+  ExpectSpotFundsPnlBlock(ApplySpotFundsLifecycleFill(engine, accountGroup));
+  ExpectSpotFundsPnlBlock(ApplySpotFundsLifecycleFill(engine, accountGlobal));
+
+  // Runtime patches may clear every axis, unlike the explicit PnL batch
+  // builder that requires at least one barrier at construction time.
+  engine.Configure().SpotFundsPnlBoundsKillSwitch(
+      policies::SpotFundsPolicyName,
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{},
+      std::vector<policies::SpotFundsPnlBoundsAccountGroupBarrier>{},
+      std::vector<policies::SpotFundsPnlBoundsAccountBarrierUpdate>{});
+  EXPECT_TRUE(ApplySpotFundsLifecycleFill(engine, accountAfterClear).empty());
+}
+
+TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAdditionRetainsLivePnl) {
+  const openpit::param::AccountId account =
+      openpit::param::AccountId::FromUint64(83015);
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(policies::SpotFundsPolicy{});
+  const openpit::Engine engine = builder.Build();
+
+  SeedSpotFundsLifecycleAccount(engine, account);
+  EXPECT_TRUE(ApplySpotFundsLifecycleFill(engine, account).empty());
+
+  policies::SpotFundsPnlBoundsBarrier usd("USD");
+  usd.lowerBound = openpit::param::Pnl::FromString("-30");
+  engine.Configure().SpotFundsPnlBoundsKillSwitch(
+      policies::SpotFundsPolicyName,
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{usd});
+  engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, account, "USD",
+      openpit::param::Pnl::FromString("-40"));
+
+  // Replacing the global axis with the existing USD key plus a new EUR key
+  // must preserve the USD accumulator instead of reseeding it.
+  policies::SpotFundsPnlBoundsBarrier eur("EUR");
+  eur.lowerBound = openpit::param::Pnl::FromString("-1");
+  engine.Configure().SpotFundsPnlBoundsKillSwitch(
+      policies::SpotFundsPolicyName,
+      std::vector<policies::SpotFundsPnlBoundsBarrier>{usd, eur});
+  ExpectSpotFundsPnlBlock(ApplySpotFundsLifecycleFill(engine, account));
 }
 
 //------------------------------------------------------------------------------

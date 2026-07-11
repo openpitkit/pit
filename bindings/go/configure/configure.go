@@ -57,6 +57,9 @@ const (
 	// ErrorKindValidation means the supplied configuration values failed
 	// validation.
 	ErrorKindValidation ErrorKind = ErrorKind(native.ConfigureErrorKindValidation)
+	// ErrorKindNestedConfiguration means configuration was re-entered on the
+	// same thread while another configuration update was active.
+	ErrorKindNestedConfiguration ErrorKind = ErrorKind(native.ConfigureErrorKindNestedConfiguration)
 )
 
 // Error is returned when a runtime configure call fails.

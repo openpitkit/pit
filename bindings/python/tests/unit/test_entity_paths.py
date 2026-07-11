@@ -95,3 +95,7 @@ def test_configurator_entities_have_rust_like_module_paths() -> None:
     assert callable(openpit.Engine.configure)
     assert openpit.PolicyConfigureError.__module__ == "openpit"
     assert openpit.ConfigureErrorKind.__module__ == "openpit"
+    assert (
+        openpit.ConfigureErrorKind.NESTED_CONFIGURATION
+        != openpit.ConfigureErrorKind.VALIDATION
+    )

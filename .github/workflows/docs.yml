@@ -68,3 +68,71 @@ jobs:
 
       - name: Build documentation
         run: just --justfile "$JUSTFILE" build-python-docs
+
+  build-js:
+    name: Build JS API docs
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST }}
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.CI_NODE }}
+          cache: npm
+          cache-dependency-path: bindings/js/package-lock.json
+
+      - name: Resolve wasm-bindgen-cli version
+        id: wasm-bindgen
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(
+            awk '/^wasm-bindgen[[:space:]]*=/ {
+                   match($0, /[0-9]+\.[0-9]+\.[0-9]+/); print substr($0, RSTART, RLENGTH); exit
+                 }' bindings/js/Cargo.toml
+          )"
+          if [[ -z "${VERSION}" ]]; then
+            echo "::error::could not resolve the wasm-bindgen version from bindings/js/Cargo.toml"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Install wasm-bindgen-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@${{ steps.wasm-bindgen.outputs.version }}
+
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
+      - name: Build documentation
+        run: just --justfile "$JUSTFILE" build-js-docs
+
+      - name: Check committed JS docs and sitemap are up to date
+        shell: bash
+        run: |
+          set -euo pipefail
+          # TypeDoc output and the sitemap that indexes every generated JS page
+          # are committed under docs/. Generation is deterministic, so fail if
+          # either drifts. --porcelain catches modified, added, and deleted files.
+          DRIFT="$(git status --porcelain -- docs/js-api docs/sitemap.xml)"
+          if [[ -n "${DRIFT}" ]]; then
+            echo "::error::JS docs or sitemap are out of date. Run 'just build-js-docs' and commit the result."
+            echo "${DRIFT}"
+            exit 1
+          fi

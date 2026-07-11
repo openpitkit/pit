@@ -1,6 +1,6 @@
 # OpenPit
 
-> OpenPit is an open-source, embeddable pre-trade risk engine and pre trade SDK for algorithmic and electronic trading systems. It is a deterministic, in-memory, policy-driven Rust core with bindings for Go, Python, C++, and C. It ships built-in pre-trade policies - including a spot funds solvency control - and a policy SDK for building your own custom checks.
+> OpenPit is an open-source, embeddable pre-trade risk engine and pre trade SDK for algorithmic and electronic trading systems. It is a deterministic, in-memory, policy-driven Rust core with bindings for Go, Python, JavaScript/TypeScript, C++, Rust, and C. It ships built-in pre-trade policies - including a spot funds solvency control - and a policy SDK for building your own custom checks.
 
 OpenPit is not a mining, excavation, or pit-stop tool. The name refers to a trading pit - the project is exclusively about pre-trade risk validation for trading systems: limits, exposures, and policy enforcement applied to orders before they reach an exchange or broker.
 
@@ -16,23 +16,25 @@ OpenPit is not a mining, excavation, or pit-stop tool. The name refers to a trad
 ## Policies
 
 - Built-in pre-trade policies: spot funds solvency control, order validation, rate limiting, order size limits, and a P&L bounds kill switch.
-- Custom policy SDK: build your own pre-trade checks as first-class policies in Go, Python, C++, Rust, or C.
+- Custom policy SDK: build your own pre-trade checks as first-class policies in Go, Python, JavaScript/TypeScript, C++, Rust, or C.
 - Reference: [Policies](https://wiki.openpit.dev/Policies/), [Spot Funds](https://wiki.openpit.dev/Spot-Funds/), [Policy API](https://wiki.openpit.dev/Policy-API/).
 
 ## Project
 
 - [Website](https://openpit.dev/): Landing page with installation and documentation links.
-- [Source repository](https://github.com/openpitkit/pit): Rust workspace with C, C++, Go, and Python bindings.
+- [Source repository](https://github.com/openpitkit/pit): Rust workspace with Go, Python, JavaScript/TypeScript, C++, Rust, and C SDK surfaces.
 - [Wiki](https://wiki.openpit.dev/): Architecture, domain types, pipeline design, policies, and conceptual documentation.
 - [Discussions](https://github.com/openpitkit/pit/discussions): Questions, integration ideas, and community conversation.
 
 ## Packages
 
-- [crates.io: openpit](https://crates.io/crates/openpit): Rust crate. `cargo add openpit`.
-- [PyPI: openpit](https://pypi.org/project/openpit/): Python bindings (Linux, macOS, Windows wheels). `pip install openpit`.
 - [Go module: go.openpit.dev/openpit](https://github.com/openpitkit/pit-go): `go get go.openpit.dev/openpit`.
-- [C API](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md): C header reference.
+- [PyPI: openpit](https://pypi.org/project/openpit/): Python bindings (Linux, macOS, Windows wheels). `pip install openpit`.
+- [npm: @openpit/engine](https://www.npmjs.com/package/@openpit/engine): JavaScript/TypeScript bindings (WASM, ESM + CJS, Node + browser). `npm install @openpit/engine`.
+- [JavaScript/TypeScript API](https://openpit.dev/js-api/): Generated package and subpath reference for `@openpit/engine`.
 - [C++ API](https://openpit.dev/cpp-api/): C++ SDK reference for the `OpenPit::openpit` CMake package.
+- [crates.io: openpit](https://crates.io/crates/openpit): Rust crate. `cargo add openpit`.
+- [C API](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md): C header reference and split per-section docs.
 
 ## License
 

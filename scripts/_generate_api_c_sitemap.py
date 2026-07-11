@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://github.com/openpitkit and the OWNERS file for details.
+# Please see https://openpit.dev and the OWNERS file for details.
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCS_DIR = ROOT / "docs"
 C_API_DIR = DOCS_DIR / "c-api"
 CPP_API_DIR = DOCS_DIR / "cpp-api"
+JS_API_DIR = DOCS_DIR / "js-api"
 SITEMAP_PATH = DOCS_DIR / "sitemap.xml"
 SITE_BASE = "https://openpit.dev"
 
@@ -39,6 +40,7 @@ STATIC_URLS: tuple[str, ...] = (
     f"{SITE_BASE}/",
     f"{SITE_BASE}/c-api/",
     f"{SITE_BASE}/cpp-api/",
+    f"{SITE_BASE}/js-api/",
 )
 
 
@@ -133,6 +135,22 @@ def discover_cpp_api_paths() -> list[str]:
     return sorted(paths)
 
 
+def discover_js_api_paths() -> list[str]:
+    """Return every generated TypeDoc HTML page below ``docs/js-api``.
+
+    TypeDoc's nested class/function/interface pages are canonical content, not
+    alternate navigation URLs, so unlike Doxygen no allowlist is needed. The
+    root ``index.html`` is already represented by the static ``/js-api/`` URL.
+    """
+    if not JS_API_DIR.is_dir():
+        return []
+    return sorted(
+        path.relative_to(JS_API_DIR).as_posix()
+        for path in JS_API_DIR.rglob("*.html")
+        if path.is_file() and path != JS_API_DIR / "index.html"
+    )
+
+
 def build_canonical_urls() -> list[str]:
     urls = list(STATIC_URLS)
     seen: set[str] = set(urls)
@@ -144,6 +162,12 @@ def build_canonical_urls() -> list[str]:
         urls.append(url)
     for rel in discover_cpp_api_paths():
         url = f"{SITE_BASE}/cpp-api/{rel}"
+        if url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+    for rel in discover_js_api_paths():
+        url = f"{SITE_BASE}/js-api/{rel}"
         if url in seen:
             continue
         seen.add(url)

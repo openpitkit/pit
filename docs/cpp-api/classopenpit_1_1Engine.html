@@ -128,7 +128,7 @@ Public Member Functions</h2></td></tr>
 <tr class="memitem:ac7a11bbb6726457d200ee9a325e4bb1b" id="r_ac7a11bbb6726457d200ee9a325e4bb1b"><td class="memItemLeft"><a class="el" href="classopenpit_1_1accounts_1_1Accounts.html">::openpit::accounts::Accounts</a>&#160;</td><td class="memItemRight"><a class="el" href="#ac7a11bbb6726457d200ee9a325e4bb1b">Accounts</a> () const noexcept</td></tr>
 <tr class="memitem:a9e20410fc1a002bc6ee6b62252559dd6" id="r_a9e20410fc1a002bc6ee6b62252559dd6"><td class="memTemplParams" colspan="2">template&lt;typename Adjustment&gt; </td></tr>
 <tr class="memitem:a9e20410fc1a002bc6ee6b62252559dd6 template"><td class="memItemLeft"><a class="el" href="structopenpit_1_1AdjustmentResult.html">AdjustmentResult</a>&#160;</td><td class="memItemRight"><a class="el" href="#a9e20410fc1a002bc6ee6b62252559dd6">ApplyAccountAdjustment</a> (<a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> accountId, const std::vector&lt; Adjustment &gt; &amp;adjustments) const</td></tr>
-<tr class="memitem:a1db8502c36c13528b72fc882db389d02" id="r_a1db8502c36c13528b72fc882db389d02"><td class="memItemLeft"><a class="el" href="structopenpit_1_1PostTradeResult.html">PostTradeResult</a>&#160;</td><td class="memItemRight"><a class="el" href="#a1db8502c36c13528b72fc882db389d02">ApplyExecutionReport</a> (const <a class="el" href="classopenpit_1_1model_1_1ExecutionReport.html">::openpit::model::ExecutionReport</a> &amp;report) const</td></tr>
+<tr class="memitem:a17d0bd007c7aa376aa88050165e10399" id="r_a17d0bd007c7aa376aa88050165e10399"><td class="memItemLeft"><a class="el" href="structopenpit_1_1PostTradeResult.html">PostTradeResult</a>&#160;</td><td class="memItemRight"><a class="el" href="#a17d0bd007c7aa376aa88050165e10399">ApplyExecutionReport</a> (const <a class="el" href="classopenpit_1_1ExecutionReport.html">::openpit::ExecutionReport</a> &amp;report) const</td></tr>
 <tr class="memitem:af55ed1cf5cfa03df188d96c592597eb1" id="r_af55ed1cf5cfa03df188d96c592597eb1"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#af55ed1cf5cfa03df188d96c592597eb1">ClearAccountCurrency</a> (<a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> accountId) const noexcept</td></tr>
 <tr class="memitem:a05c394c843baa02ebb80529679338160" id="r_a05c394c843baa02ebb80529679338160"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a05c394c843baa02ebb80529679338160">ClearAccountGroupCurrency</a> (<a class="el" href="classopenpit_1_1param_1_1AccountGroupId.html">::openpit::param::AccountGroupId</a> groupId) const noexcept</td></tr>
 <tr class="memitem:aa3b09a057d6f5572312610d922b21a8a" id="r_aa3b09a057d6f5572312610d922b21a8a"><td class="memItemLeft"><a class="el" href="classopenpit_1_1Configurator.html">::openpit::Configurator</a>&#160;</td><td class="memItemRight"><a class="el" href="#aa3b09a057d6f5572312610d922b21a8a">Configure</a> () const noexcept</td></tr>
@@ -140,7 +140,9 @@ Public Member Functions</h2></td></tr>
 <tr class="memitem:a684faeec84a674fda743177aa03c89c4" id="r_a684faeec84a674fda743177aa03c89c4"><td class="memItemLeft">&#160;</td><td class="memItemRight"><a class="el" href="#a684faeec84a674fda743177aa03c89c4">operator bool</a> () const noexcept</td></tr>
 <tr class="memitem:a97fe8c78d9a46d24cdc0dc6c265d963a" id="r_a97fe8c78d9a46d24cdc0dc6c265d963a"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a97fe8c78d9a46d24cdc0dc6c265d963a">SetAccountCurrency</a> (<a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> accountId, std::string_view asset) const</td></tr>
 <tr class="memitem:ad31f43ac5765e80300b71e4f8029d616" id="r_ad31f43ac5765e80300b71e4f8029d616"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#ad31f43ac5765e80300b71e4f8029d616">SetAccountGroupCurrency</a> (<a class="el" href="classopenpit_1_1param_1_1AccountGroupId.html">::openpit::param::AccountGroupId</a> groupId, std::string_view asset) const</td></tr>
-<tr class="memitem:aea7e0159d6453f7f60adcbd10595fd4b" id="r_aea7e0159d6453f7f60adcbd10595fd4b"><td class="memItemLeft"><a class="el" href="structopenpit_1_1pretrade_1_1StartResult.html">::openpit::pretrade::StartResult</a>&#160;</td><td class="memItemRight"><a class="el" href="#aea7e0159d6453f7f60adcbd10595fd4b">StartPreTrade</a> (const <a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a> &amp;order) const</td></tr>
+<tr class="memitem:a6f6a97122495f5bc66b81c9f07a60fe1" id="r_a6f6a97122495f5bc66b81c9f07a60fe1"><td class="memTemplParams" colspan="2">template&lt;typename OrderT, std::enable_if_t&lt; std::is_base_of_v&lt;<a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a>, std::decay_t&lt; OrderT &gt; &gt; &amp;&amp;!std::is_same_v&lt;<a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a>, std::decay_t&lt; OrderT &gt; &gt;, int &gt; = 0&gt; </td></tr>
+<tr class="memitem:a6f6a97122495f5bc66b81c9f07a60fe1 template"><td class="memItemLeft"><a class="el" href="structopenpit_1_1pretrade_1_1StartResult.html">::openpit::pretrade::StartResult</a>&#160;</td><td class="memItemRight"><a class="el" href="#a6f6a97122495f5bc66b81c9f07a60fe1">StartPreTrade</a> (OrderT &amp;&amp;order) const</td></tr>
+<tr class="memitem:ab193751b7ba7eefb43ab1a128118fb02" id="r_ab193751b7ba7eefb43ab1a128118fb02"><td class="memItemLeft"><a class="el" href="structopenpit_1_1pretrade_1_1StartResult.html">::openpit::pretrade::StartResult</a>&#160;</td><td class="memItemRight"><a class="el" href="#ab193751b7ba7eefb43ab1a128118fb02">StartPreTrade</a> (std::shared_ptr&lt; const <a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a> &gt; order) const</td></tr>
 <tr class="memitem:ae67d571c2f32fa163a23c4a8cd5e0b34" id="r_ae67d571c2f32fa163a23c4a8cd5e0b34"><td class="memItemLeft"><a class="el" href="classopenpit_1_1pretrade_1_1DryRunReport.html">::openpit::pretrade::DryRunReport</a>&#160;</td><td class="memItemRight"><a class="el" href="#ae67d571c2f32fa163a23c4a8cd5e0b34">StartPreTradeDryRun</a> (const <a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a> &amp;order) const</td></tr>
 </table>
 <a name="doc-constructors" id="doc-constructors"></a><h2 id="header-doc-constructors" class="groupheader">Constructor &amp; Destructor Documentation</h2>
@@ -276,8 +278,8 @@ template&lt;typename Adjustment&gt; </div>
 
 </div>
 </div>
-<a id="a1db8502c36c13528b72fc882db389d02" name="a1db8502c36c13528b72fc882db389d02"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a1db8502c36c13528b72fc882db389d02">&#9670;&#160;</a></span>ApplyExecutionReport()</h2>
+<a id="a17d0bd007c7aa376aa88050165e10399" name="a17d0bd007c7aa376aa88050165e10399"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a17d0bd007c7aa376aa88050165e10399">&#9670;&#160;</a></span>ApplyExecutionReport()</h2>
 
 <div class="memitem">
 <div class="memproto">
@@ -288,7 +290,7 @@ template&lt;typename Adjustment&gt; </div>
         <tr>
           <td class="memname"><a class="el" href="structopenpit_1_1PostTradeResult.html">PostTradeResult</a> openpit::Engine::ApplyExecutionReport </td>
           <td>(</td>
-          <td class="paramtype">const <a class="el" href="classopenpit_1_1model_1_1ExecutionReport.html">::openpit::model::ExecutionReport</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>report</em></span></td><td>)</td>
+          <td class="paramtype">const <a class="el" href="classopenpit_1_1ExecutionReport.html">::openpit::ExecutionReport</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>report</em></span></td><td>)</td>
           <td> const</td>
         </tr>
       </table>
@@ -534,8 +536,35 @@ template&lt;typename Adjustment&gt; </div>
 
 </div>
 </div>
-<a id="aea7e0159d6453f7f60adcbd10595fd4b" name="aea7e0159d6453f7f60adcbd10595fd4b"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#aea7e0159d6453f7f60adcbd10595fd4b">&#9670;&#160;</a></span>StartPreTrade()</h2>
+<a id="a6f6a97122495f5bc66b81c9f07a60fe1" name="a6f6a97122495f5bc66b81c9f07a60fe1"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a6f6a97122495f5bc66b81c9f07a60fe1">&#9670;&#160;</a></span>StartPreTrade() <span class="overload">[1/2]</span></h2>
+
+<div class="memitem">
+<div class="memproto">
+<div class="memtemplate">
+template&lt;typename OrderT, std::enable_if_t&lt; std::is_base_of_v&lt;<a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a>, std::decay_t&lt; OrderT &gt; &gt; &amp;&amp;!std::is_same_v&lt;<a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a>, std::decay_t&lt; OrderT &gt; &gt;, int &gt; = 0&gt; </div>
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname"><a class="el" href="structopenpit_1_1pretrade_1_1StartResult.html">::openpit::pretrade::StartResult</a> openpit::Engine::StartPreTrade </td>
+          <td>(</td>
+          <td class="paramtype">OrderT &amp;&amp;</td>          <td class="paramname"><span class="paramname"><em>order</em></span></td><td>)</td>
+          <td> const</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel nodiscard">nodiscard</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+</div>
+</div>
+<a id="ab193751b7ba7eefb43ab1a128118fb02" name="ab193751b7ba7eefb43ab1a128118fb02"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ab193751b7ba7eefb43ab1a128118fb02">&#9670;&#160;</a></span>StartPreTrade() <span class="overload">[2/2]</span></h2>
 
 <div class="memitem">
 <div class="memproto">
@@ -546,7 +575,7 @@ template&lt;typename Adjustment&gt; </div>
         <tr>
           <td class="memname"><a class="el" href="structopenpit_1_1pretrade_1_1StartResult.html">::openpit::pretrade::StartResult</a> openpit::Engine::StartPreTrade </td>
           <td>(</td>
-          <td class="paramtype">const <a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>order</em></span></td><td>)</td>
+          <td class="paramtype">std::shared_ptr&lt; const <a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a> &gt;</td>          <td class="paramname"><span class="paramname"><em>order</em></span></td><td>)</td>
           <td> const</td>
         </tr>
       </table>

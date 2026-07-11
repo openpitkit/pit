@@ -1,0 +1,7 @@
+dist
+src-ts/wasm
+src-ts/wasm-snippets
+coverage
+node_modules
+target
+*.wasm

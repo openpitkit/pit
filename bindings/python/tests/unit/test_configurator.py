@@ -316,6 +316,112 @@ def test_spot_funds_pnl_bounds_builder_and_configurator_use_named_entities() -> 
     )
 
 
+def test_spot_funds_pnl_axes_can_be_enabled_replaced_and_cleared() -> None:
+    policies = openpit.pretrade.policies
+    survivor = openpit.param.AccountId.from_int(99224416)
+    account_override = openpit.param.AccountId.from_int(99224417)
+    cleared = openpit.param.AccountId.from_int(99224418)
+    usd = openpit.param.Asset("USD")
+    engine = (
+        openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
+    )
+
+    for account_id in (survivor, account_override, cleared):
+        engine.accounts().set_currency(account_id, usd)
+    engine.apply_account_adjustment(
+        account_id=cleared,
+        adjustments=[
+            openpit.AccountAdjustment(
+                operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+                amount=openpit.AccountAdjustmentAmount(
+                    balance=openpit.param.AdjustmentAmount.absolute(
+                        openpit.param.PositionSize("1000")
+                    )
+                ),
+            )
+        ],
+    )
+
+    # Ordinary Spot Funds has no P&L axis, but a funded order still runs.
+    ordinary = engine.execute_pre_trade(order=conftest.make_order(account_id=cleared))
+    assert ordinary.ok
+    ordinary.reservation.rollback()
+
+    engine.configure().spot_funds_pnl_bounds_killswitch(
+        policies.SpotFundsBuilder.NAME,
+        global_barriers=[
+            policies.SpotFundsPnlBoundsBarrier(
+                account_currency=usd,
+                lower_bound=openpit.param.Pnl("-10"),
+            )
+        ],
+    )
+
+    first_survivor_fill = engine.apply_execution_report(
+        report=_spot_funds_fee_fill_report(survivor, "9")
+    )
+    assert not first_survivor_fill.account_blocks
+
+    # Adding an account barrier leaves the global axis and its live P&L intact.
+    engine.configure().spot_funds_pnl_bounds_killswitch(
+        policies.SpotFundsBuilder.NAME,
+        account_barriers=[
+            policies.SpotFundsPnlBoundsAccountBarrierUpdate(
+                barrier=policies.SpotFundsPnlBoundsBarrier(
+                    account_currency=usd,
+                    lower_bound=openpit.param.Pnl("-20"),
+                ),
+                account_id=account_override,
+            )
+        ],
+    )
+
+    survivor_breach = engine.apply_execution_report(
+        report=_spot_funds_fee_fill_report(survivor, "2")
+    )
+    assert survivor_breach.account_blocks
+    assert (
+        survivor_breach.account_blocks[0].code
+        == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    )
+
+    override_fill = engine.apply_execution_report(
+        report=_spot_funds_fee_fill_report(account_override, "15")
+    )
+    assert not override_fill.account_blocks
+
+    # Omitted global barriers remain in place while the account axis is cleared.
+    engine.configure().spot_funds_pnl_bounds_killswitch(
+        policies.SpotFundsBuilder.NAME,
+        account_barriers=[],
+    )
+    override_recheck = engine.apply_execution_report(
+        report=_spot_funds_fee_fill_report(account_override, "0")
+    )
+    assert override_recheck.account_blocks
+    assert (
+        override_recheck.account_blocks[0].code
+        == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    )
+
+    engine.configure().spot_funds_pnl_bounds_killswitch(
+        policies.SpotFundsBuilder.NAME,
+        global_barriers=[],
+        account_group_barriers=[],
+        account_barriers=[],
+    )
+    cleared_fill = engine.apply_execution_report(
+        report=_spot_funds_fee_fill_report(cleared, "15")
+    )
+    assert not cleared_fill.account_blocks
+
+    after_clear = engine.execute_pre_trade(
+        order=conftest.make_order(account_id=cleared)
+    )
+    assert after_clear.ok
+    after_clear.reservation.rollback()
+
+
 @pytest.mark.unit
 def test_broker_clear_and_replacement_are_mutually_exclusive() -> None:
     policies = openpit.pretrade.policies
@@ -884,9 +990,11 @@ def test_spot_funds_pnl_bounds_builder_rejects_wrong_barrier_types() -> None:
 
 
 @pytest.mark.unit
-def test_spot_funds_pnl_bounds_builder_requires_at_least_one_barrier() -> None:
+def test_spot_funds_pnl_bounds_builder_surfaces_core_empty_batch_error() -> None:
     policies = openpit.pretrade.policies
-    with pytest.raises(ValueError, match="requires at least one barrier"):
+    with pytest.raises(
+        ValueError, match="^spot funds P&L bounds require at least one barrier$"
+    ):
         (
             openpit.Engine.builder()
             .no_sync()

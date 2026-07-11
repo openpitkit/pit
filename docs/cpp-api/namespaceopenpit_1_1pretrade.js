@@ -1,6 +1,7 @@
 var namespaceopenpit_1_1pretrade =
 [
     [ "policies", "namespaceopenpit_1_1pretrade_1_1policies.html", "namespaceopenpit_1_1pretrade_1_1policies" ],
+    [ "AccountOutcomes", "classopenpit_1_1pretrade_1_1AccountOutcomes.html", "classopenpit_1_1pretrade_1_1AccountOutcomes" ],
     [ "Context", "classopenpit_1_1pretrade_1_1Context.html", "classopenpit_1_1pretrade_1_1Context" ],
     [ "CustomPolicy", "classopenpit_1_1pretrade_1_1CustomPolicy.html", "classopenpit_1_1pretrade_1_1CustomPolicy" ],
     [ "DryRunReport", "classopenpit_1_1pretrade_1_1DryRunReport.html", "classopenpit_1_1pretrade_1_1DryRunReport" ],
@@ -8,10 +9,13 @@ var namespaceopenpit_1_1pretrade =
     [ "LockEntry", "structopenpit_1_1pretrade_1_1LockEntry.html", "structopenpit_1_1pretrade_1_1LockEntry" ],
     [ "PolicyAdapter", "classopenpit_1_1pretrade_1_1PolicyAdapter.html", "classopenpit_1_1pretrade_1_1PolicyAdapter" ],
     [ "PolicyDecision", "structopenpit_1_1pretrade_1_1PolicyDecision.html", "structopenpit_1_1pretrade_1_1PolicyDecision" ],
+    [ "PostTradeAdjustments", "classopenpit_1_1pretrade_1_1PostTradeAdjustments.html", "classopenpit_1_1pretrade_1_1PostTradeAdjustments" ],
+    [ "PostTradeContext", "classopenpit_1_1pretrade_1_1PostTradeContext.html", "classopenpit_1_1pretrade_1_1PostTradeContext" ],
     [ "PreTradeLock", "classopenpit_1_1pretrade_1_1PreTradeLock.html", "classopenpit_1_1pretrade_1_1PreTradeLock" ],
     [ "Reject", "structopenpit_1_1pretrade_1_1Reject.html", "structopenpit_1_1pretrade_1_1Reject" ],
     [ "Request", "classopenpit_1_1pretrade_1_1Request.html", "classopenpit_1_1pretrade_1_1Request" ],
     [ "Reservation", "classopenpit_1_1pretrade_1_1Reservation.html", "classopenpit_1_1pretrade_1_1Reservation" ],
+    [ "Result", "classopenpit_1_1pretrade_1_1Result.html", "classopenpit_1_1pretrade_1_1Result" ],
     [ "StartPolicyAdapter", "classopenpit_1_1pretrade_1_1StartPolicyAdapter.html", "classopenpit_1_1pretrade_1_1StartPolicyAdapter" ],
     [ "StartResult", "structopenpit_1_1pretrade_1_1StartResult.html", "structopenpit_1_1pretrade_1_1StartResult" ],
     [ "PolicyAdapterWithSafeSlowArgType", "namespaceopenpit_1_1pretrade.html#a185c0883bca20c9fddb5b4f58414998b", null ],

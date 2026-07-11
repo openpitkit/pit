@@ -27,87 +27,150 @@
 #include "openpit/engine.hpp"
 #include "openpit/model.hpp"
 #include "openpit/param.hpp"
+#include "openpit/pretrade/custom_policy.hpp"
 #include "openpit/pretrade/policies.hpp"
+#include "openpit/reject.hpp"
+#include "openpit/tx.hpp"
 
 #include <gtest/gtest.h>
 
 #include <cassert>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace {
 
-// Caller-side cumulative limit: the maximum absolute balance any single asset
-// may reach across the adjustments seen so far. Money value types are opaque
-// and carry no arithmetic, so the running totals live in a host-side ledger
-// keyed by asset; the engine still receives exact `param` absolute values.
+struct CumulativeLimitState {
+  std::map<std::string, openpit::param::PositionSize> totals;
+  std::size_t commits = 0;
+  std::size_t rollbacks = 0;
+};
+
+// Tracks the last accepted absolute balance per asset. Each accepted element
+// mutates eagerly so the next element in the same batch sees it, then registers
+// commit/rollback callbacks with the engine transaction.
 class CumulativeLimitPolicy {
  public:
-  explicit CumulativeLimitPolicy(std::int64_t maxCumulative)
-      : m_maxCumulative(maxCumulative) {}
+  CumulativeLimitPolicy(openpit::param::PositionSize maxCumulative,
+                        std::shared_ptr<CumulativeLimitState> state)
+      : m_maxCumulative(maxCumulative), m_state(std::move(state)) {}
 
-  // Returns true when `asset` may be set to `absoluteUnits`; records the new
-  // total only when it stays within the limit, so a rejected screen leaves the
-  // ledger untouched (rollback by absolute value is safe here).
-  [[nodiscard]] bool Admit(const std::string& asset,
-                           std::int64_t absoluteUnits) {
-    if (absoluteUnits > m_maxCumulative) {
-      return false;
+  [[nodiscard]] std::string_view Name() const noexcept {
+    return "CumulativeLimitPolicy";
+  }
+
+  [[nodiscard]] openpit::pretrade::PolicyDecision ApplyAccountAdjustment(
+      const openpit::accountadjustment::Context& context,
+      openpit::param::AccountId accountId,
+      const openpit::accountadjustment::AccountAdjustment& adjustment,
+      openpit::tx::Mutations& mutations,
+      openpit::pretrade::AccountOutcomes& outcomes) const {
+    static_cast<void>(context);
+    static_cast<void>(accountId);
+    static_cast<void>(outcomes);
+
+    const auto* balance =
+        adjustment.operation ? adjustment.operation->AsBalance() : nullptr;
+    if (balance == nullptr || !balance->asset || !adjustment.amount ||
+        !adjustment.amount->balance ||
+        !adjustment.amount->balance->IsAbsolute()) {
+      return {};
     }
-    m_totals[asset] = absoluteUnits;
-    return true;
+
+    const std::string asset = *balance->asset;
+    const openpit::param::PositionSize next =
+        adjustment.amount->balance->Value();
+    if (next > m_maxCumulative) {
+      openpit::pretrade::PolicyDecision decision;
+      decision.Push(openpit::pretrade::Reject(
+          std::string(Name()), openpit::pretrade::RejectScope::Account,
+          openpit::pretrade::RejectCode::RiskLimitExceeded,
+          "cumulative limit exceeded",
+          asset + " absolute balance exceeds the configured limit"));
+      return decision;
+    }
+
+    std::optional<openpit::param::PositionSize> previous;
+    if (const auto it = m_state->totals.find(asset);
+        it != m_state->totals.end()) {
+      previous = it->second;
+    }
+    m_state->totals.insert_or_assign(asset, next);
+
+    const auto state = m_state;
+    mutations.Push([state] { ++state->commits; },
+                   [state, asset, previous] {
+                     ++state->rollbacks;
+                     if (previous) {
+                       state->totals.insert_or_assign(asset, *previous);
+                     } else {
+                       state->totals.erase(asset);
+                     }
+                   });
+    return {};
   }
 
  private:
-  std::int64_t m_maxCumulative;
-  std::map<std::string, std::int64_t> m_totals;
+  openpit::param::PositionSize m_maxCumulative;
+  std::shared_ptr<CumulativeLimitState> m_state;
 };
 
-// Mirrors the "Example: Balance Limit Policy" C++ block. A caller-side
-// cumulative limit screens the prospective USD total before the engine call;
-// the atomic batch supplies the rollback, so on accept the returned optional is
-// empty and no engine state is left dirty.
-TEST(AccountAdjustmentsWiki, CumulativeBalanceLimitScreensThenApplies) {
-  namespace aa = openpit::accountadjustment;
-  namespace param = openpit::param;
-  namespace policies = openpit::pretrade::policies;
+[[nodiscard]] openpit::accountadjustment::AccountAdjustment AbsoluteBalance(
+    std::string asset, std::string_view value) {
+  openpit::accountadjustment::BalanceOperation balance;
+  balance.asset = std::move(asset);
 
-  // Build one batch that tops a USD cash balance up to an absolute value.
-  const param::AccountId accountId = param::AccountId::FromUint64(99224416);
+  openpit::accountadjustment::Amount amount;
+  amount.balance = openpit::param::AdjustmentAmount::OfAbsolute(
+      openpit::param::PositionSize::FromString(value));
 
-  CumulativeLimitPolicy limit(/*maxCumulative=*/1'000'000);
+  openpit::accountadjustment::AccountAdjustment adjustment;
+  adjustment.operation =
+      openpit::accountadjustment::Operation::OfBalance(std::move(balance));
+  adjustment.amount = std::move(amount);
+  return adjustment;
+}
 
-  aa::AccountAdjustment cashAdj;
-  {
-    aa::BalanceOperation balance;
-    balance.asset = "USD";
-    cashAdj.operation = aa::Operation::OfBalance(std::move(balance));
-    aa::Amount amount;
-    amount.balance = param::AdjustmentAmount::OfAbsolute(
-        param::PositionSize::FromString("10000"));
-    cashAdj.amount = std::move(amount);
-  }
-
-  // Screen the prospective total before touching the engine.
-  assert(limit.Admit("USD", 10000));
-
-  const std::vector<aa::AccountAdjustment> adjustments{std::move(cashAdj)};
-
+// Mirrors the "Example: Balance Limit Policy" C++ block. The first batch
+// commits one value. In the second batch, the first element mutates policy
+// state, the second rejects, and the engine rolls the earlier mutation back.
+TEST(AccountAdjustmentsWiki, CumulativeBalanceLimitCommitsAndRollsBack) {
+  const auto state = std::make_shared<CumulativeLimitState>();
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
-  builder.Add(policies::OrderValidationPolicy{});
+  openpit::pretrade::CustomPolicy<CumulativeLimitPolicy> policy(
+      "CumulativeLimitPolicy",
+      CumulativeLimitPolicy(openpit::param::PositionSize::FromString("1000000"),
+                            state));
+  builder.Add(policy);
   const openpit::Engine engine = builder.Build();
 
-  // The atomic batch is the rollback: on reject no engine state changes; on
-  // accept the result passes.
-  const openpit::AdjustmentResult result =
-      engine.ApplyAccountAdjustment(accountId, adjustments);
-  assert(result.Passed());
+  const openpit::param::AccountId accountId =
+      openpit::param::AccountId::FromUint64(99224416);
 
-  EXPECT_TRUE(result.Passed());
+  const openpit::AdjustmentResult accepted = engine.ApplyAccountAdjustment(
+      accountId, std::vector<openpit::accountadjustment::AccountAdjustment>{
+                     AbsoluteBalance("USD", "100")});
+  assert(accepted.Passed());
+  assert(state->totals.at("USD").ToString() == "100");
+  assert(state->commits == 1);
+
+  const openpit::AdjustmentResult rejected = engine.ApplyAccountAdjustment(
+      accountId,
+      std::vector<openpit::accountadjustment::AccountAdjustment>{
+          AbsoluteBalance("USD", "200"), AbsoluteBalance("USD", "2000000")});
+  assert(!rejected.Passed());
+  assert(rejected.batchError->FailedAdjustmentIndex() == 1);
+  assert(state->totals.at("USD").ToString() == "100");
+  assert(state->commits == 1);
+  assert(state->rollbacks == 1);
+
+  EXPECT_FALSE(rejected.Passed());
 }
 
 // Mirrors the "Examples" mixed balance/position batch block. Builds one batch

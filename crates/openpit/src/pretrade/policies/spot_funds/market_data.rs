@@ -58,6 +58,8 @@ pub enum SpotFundsConfigError {
         /// Account currency whose barrier is empty.
         account_currency: Asset,
     },
+    /// A P&L-bounds policy was built without any barriers.
+    NoPnlBarriersConfigured,
 }
 
 impl Display for SpotFundsConfigError {
@@ -75,6 +77,9 @@ impl Display for SpotFundsConfigError {
                     "spot-funds P&L bounds for account currency {account_currency} \
                      must configure at least one bound"
                 )
+            }
+            Self::NoPnlBarriersConfigured => {
+                write!(f, "spot funds P&L bounds require at least one barrier")
             }
         }
     }
@@ -399,6 +404,31 @@ impl SpotFundsSettings {
         Ok(self)
     }
 
+    /// Installs the complete construction-time P&L-bounds configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SpotFundsConfigError::NoPnlBarriersConfigured`] when all
+    /// three inputs are empty. Individual barriers retain the bounds
+    /// validation performed by the corresponding settings operations.
+    pub fn with_pnl_barriers(
+        mut self,
+        global_barriers: impl IntoIterator<Item = SpotFundsPnlBoundsBarrier>,
+        account_group_barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountGroupBarrier>,
+        account_barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountBarrier>,
+    ) -> Result<Self, SpotFundsConfigError> {
+        self.set_pnl_global_barriers(global_barriers)?;
+        self.set_pnl_account_group_barriers(account_group_barriers)?;
+        self = self.with_initial_pnl_account_barriers(account_barriers)?;
+        if self.pnl_global_barriers.is_empty()
+            && self.pnl_account_group_barriers.is_empty()
+            && self.pnl_account_barriers.is_empty()
+        {
+            return Err(SpotFundsConfigError::NoPnlBarriersConfigured);
+        }
+        Ok(self)
+    }
+
     pub(super) fn take_initial_pnl(&mut self) -> HashMap<(AccountId, Asset), Pnl> {
         std::mem::take(&mut self.initial_pnl)
     }
@@ -685,6 +715,37 @@ mod tests {
 
     fn group(n: u32) -> AccountGroupId {
         AccountGroupId::from_u32(n).expect("valid account group id")
+    }
+
+    #[test]
+    fn pnl_barrier_builder_rejects_an_empty_configuration() {
+        let error = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])
+            .expect("base settings must build")
+            .with_pnl_barriers([], [], [])
+            .expect_err("empty P&L barriers must fail");
+
+        assert_eq!(error, SpotFundsConfigError::NoPnlBarriersConfigured);
+        assert_eq!(
+            error.to_string(),
+            "spot funds P&L bounds require at least one barrier"
+        );
+    }
+
+    #[test]
+    fn pnl_barrier_builder_accepts_a_global_barrier() {
+        let result = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])
+            .expect("base settings must build")
+            .with_pnl_barriers(
+                [SpotFundsPnlBoundsBarrier {
+                    account_currency: asset("USD"),
+                    lower_bound: Some(Pnl::from_str("-100").expect("valid pnl")),
+                    upper_bound: None,
+                }],
+                [],
+                [],
+            );
+
+        assert!(result.is_ok());
     }
 
     /// Registers `AAPL/USD` with `mark = 100` in the default bucket and returns

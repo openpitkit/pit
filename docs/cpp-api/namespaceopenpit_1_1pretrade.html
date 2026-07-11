@@ -126,6 +126,7 @@ Namespaces</h2></td></tr>
 </table><table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-nested-classes" class="groupheader"><a id="nested-classes" name="nested-classes"></a>
 Classes</h2></td></tr>
+<tr class="memitem:AccountOutcomes" id="r_AccountOutcomes"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1AccountOutcomes.html">AccountOutcomes</a></td></tr>
 <tr class="memitem:Context" id="r_Context"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1Context.html">Context</a></td></tr>
 <tr class="memdesc:"><td class="mdescLeft">&#160;</td><td class="mdescRight">Main-stage pre-trade context passed to a custom policy check.  <a href="classopenpit_1_1pretrade_1_1Context.html#details">More...</a><br /></td></tr>
 <tr class="memitem:CustomPolicy" id="r_CustomPolicy"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1CustomPolicy.html">CustomPolicy</a></td></tr>
@@ -135,10 +136,13 @@ Classes</h2></td></tr>
 <tr class="memitem:LockEntry" id="r_LockEntry"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1pretrade_1_1LockEntry.html">LockEntry</a></td></tr>
 <tr class="memitem:PolicyAdapter" id="r_PolicyAdapter"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">PolicyAdapter</a></td></tr>
 <tr class="memitem:PolicyDecision" id="r_PolicyDecision"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1pretrade_1_1PolicyDecision.html">PolicyDecision</a></td></tr>
+<tr class="memitem:PostTradeAdjustments" id="r_PostTradeAdjustments"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1PostTradeAdjustments.html">PostTradeAdjustments</a></td></tr>
+<tr class="memitem:PostTradeContext" id="r_PostTradeContext"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1PostTradeContext.html">PostTradeContext</a></td></tr>
 <tr class="memitem:PreTradeLock" id="r_PreTradeLock"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1PreTradeLock.html">PreTradeLock</a></td></tr>
 <tr class="memitem:Reject" id="r_Reject"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1pretrade_1_1Reject.html">Reject</a></td></tr>
 <tr class="memitem:Request" id="r_Request"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1Request.html">Request</a></td></tr>
 <tr class="memitem:Reservation" id="r_Reservation"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1Reservation.html">Reservation</a></td></tr>
+<tr class="memitem:Result" id="r_Result"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1Result.html">Result</a></td></tr>
 <tr class="memitem:StartPolicyAdapter" id="r_StartPolicyAdapter"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1StartPolicyAdapter.html">StartPolicyAdapter</a></td></tr>
 <tr class="memdesc:"><td class="mdescLeft">&#160;</td><td class="mdescRight">Adapts a client start-stage policy to the engine callback seam.  <a href="classopenpit_1_1pretrade_1_1StartPolicyAdapter.html#details">More...</a><br /></td></tr>
 <tr class="memitem:StartResult" id="r_StartResult"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1pretrade_1_1StartResult.html">StartResult</a></td></tr>
@@ -242,7 +246,7 @@ template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport&g
 </div><div class="memdoc">
 <b>Initial value:</b><div class="fragment"><div class="line"> </div>
 <div class="line"><a class="code hl_class" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">PolicyAdapter&lt;ClientPolicy, ClientOrder, ClientReport, CastMode::SafeSlow&gt;</a></div>
-<div class="ttc" id="aclassopenpit_1_1pretrade_1_1PolicyAdapter_html"><div class="ttname"><a href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">openpit::pretrade::PolicyAdapter</a></div><div class="ttdef"><b>Definition</b> adapters.hpp:155</div></div>
+<div class="ttc" id="aclassopenpit_1_1pretrade_1_1PolicyAdapter_html"><div class="ttname"><a href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">openpit::pretrade::PolicyAdapter</a></div><div class="ttdef"><b>Definition</b> adapters.hpp:319</div></div>
 </div><!-- fragment -->
 </div>
 </div>
@@ -262,7 +266,7 @@ template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport&g
 <b>Initial value:</b><div class="fragment"><div class="line"> </div>
 <div class="line"><a class="code hl_class" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">PolicyAdapter</a>&lt;ClientPolicy, ClientOrder, ClientReport,</div>
 <div class="line">              <a class="code hl_enumvalue" href="#ad88d6888d2b6d5d1db4507842cf81472a2e64ec41b0609f6d954d228fc7913a66">CastMode::UnsafeFast</a>&gt;</div>
-<div class="ttc" id="anamespaceopenpit_1_1pretrade_html_ad88d6888d2b6d5d1db4507842cf81472a2e64ec41b0609f6d954d228fc7913a66"><div class="ttname"><a href="#ad88d6888d2b6d5d1db4507842cf81472a2e64ec41b0609f6d954d228fc7913a66">openpit::pretrade::CastMode::UnsafeFast</a></div><div class="ttdeci">@ UnsafeFast</div><div class="ttdef"><b>Definition</b> adapters.hpp:69</div></div>
+<div class="ttc" id="anamespaceopenpit_1_1pretrade_html_ad88d6888d2b6d5d1db4507842cf81472a2e64ec41b0609f6d954d228fc7913a66"><div class="ttname"><a href="#ad88d6888d2b6d5d1db4507842cf81472a2e64ec41b0609f6d954d228fc7913a66">openpit::pretrade::CastMode::UnsafeFast</a></div><div class="ttdeci">@ UnsafeFast</div><div class="ttdef"><b>Definition</b> adapters.hpp:163</div></div>
 </div><!-- fragment -->
 </div>
 </div>
@@ -282,8 +286,8 @@ template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport&g
 <b>Initial value:</b><div class="fragment"><div class="line"> </div>
 <div class="line"><a class="code hl_class" href="classopenpit_1_1pretrade_1_1StartPolicyAdapter.html">StartPolicyAdapter</a>&lt;ClientPolicy, ClientOrder, ClientReport,</div>
 <div class="line">                   <a class="code hl_enumvalue" href="#ad88d6888d2b6d5d1db4507842cf81472a54329890e63ec48a9e6cc3bf3b0155c7">CastMode::SafeSlow</a>&gt;</div>
-<div class="ttc" id="aclassopenpit_1_1pretrade_1_1StartPolicyAdapter_html"><div class="ttname"><a href="classopenpit_1_1pretrade_1_1StartPolicyAdapter.html">openpit::pretrade::StartPolicyAdapter</a></div><div class="ttdoc">Adapts a client start-stage policy to the engine callback seam.</div><div class="ttdef"><b>Definition</b> adapters.hpp:85</div></div>
-<div class="ttc" id="anamespaceopenpit_1_1pretrade_html_ad88d6888d2b6d5d1db4507842cf81472a54329890e63ec48a9e6cc3bf3b0155c7"><div class="ttname"><a href="#ad88d6888d2b6d5d1db4507842cf81472a54329890e63ec48a9e6cc3bf3b0155c7">openpit::pretrade::CastMode::SafeSlow</a></div><div class="ttdeci">@ SafeSlow</div><div class="ttdef"><b>Definition</b> adapters.hpp:68</div></div>
+<div class="ttc" id="aclassopenpit_1_1pretrade_1_1StartPolicyAdapter_html"><div class="ttname"><a href="classopenpit_1_1pretrade_1_1StartPolicyAdapter.html">openpit::pretrade::StartPolicyAdapter</a></div><div class="ttdoc">Adapts a client start-stage policy to the engine callback seam.</div><div class="ttdef"><b>Definition</b> adapters.hpp:179</div></div>
+<div class="ttc" id="anamespaceopenpit_1_1pretrade_html_ad88d6888d2b6d5d1db4507842cf81472a54329890e63ec48a9e6cc3bf3b0155c7"><div class="ttname"><a href="#ad88d6888d2b6d5d1db4507842cf81472a54329890e63ec48a9e6cc3bf3b0155c7">openpit::pretrade::CastMode::SafeSlow</a></div><div class="ttdeci">@ SafeSlow</div><div class="ttdef"><b>Definition</b> adapters.hpp:162</div></div>
 </div><!-- fragment -->
 </div>
 </div>

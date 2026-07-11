@@ -18,5 +18,6 @@ var dir_c80da2b5d7b91228ea76e5f99a7db834 =
     [ "param.hpp", "param_8hpp.html", "param_8hpp" ],
     [ "reject.hpp", "reject_8hpp.html", "reject_8hpp" ],
     [ "runtime.hpp", "runtime_8hpp.html", "runtime_8hpp" ],
-    [ "string.hpp", "string_8hpp.html", "string_8hpp" ]
+    [ "string.hpp", "string_8hpp.html", "string_8hpp" ],
+    [ "tx.hpp", "tx_8hpp.html", "tx_8hpp" ]
 ];

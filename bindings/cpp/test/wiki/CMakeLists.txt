@@ -34,5 +34,7 @@ foreach(openpit_wiki_test_source IN LISTS openpit_wiki_test_sources)
             GTest::gmock_main)
 
   openpit_copy_runtime_dll(${openpit_wiki_target})
-  gtest_discover_tests(${openpit_wiki_target})
+  gtest_discover_tests(${openpit_wiki_target}
+    DISCOVERY_MODE PRE_TEST
+    DISCOVERY_TIMEOUT 60)
 endforeach()

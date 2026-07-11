@@ -9,5 +9,6 @@ var searchData=
   ['openpit_3a_3aparam_6',['param',['../namespaceopenpit_1_1param.html',1,'openpit']]],
   ['openpit_3a_3apretrade_7',['pretrade',['../namespaceopenpit_1_1pretrade.html',1,'openpit']]],
   ['openpit_3a_3apretrade_3a_3apolicies_8',['policies',['../namespaceopenpit_1_1pretrade_1_1policies.html',1,'openpit::pretrade']]],
-  ['openpit_3a_3areject_9',['reject',['../namespaceopenpit_1_1reject.html',1,'openpit']]]
+  ['openpit_3a_3areject_9',['reject',['../namespaceopenpit_1_1reject.html',1,'openpit']]],
+  ['openpit_3a_3atx_10',['tx',['../namespaceopenpit_1_1tx.html',1,'openpit']]]
 ];

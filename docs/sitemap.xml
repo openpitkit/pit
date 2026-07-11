@@ -3,6 +3,7 @@
   <url><loc>https://openpit.dev/</loc></url>
   <url><loc>https://openpit.dev/c-api/</loc></url>
   <url><loc>https://openpit.dev/cpp-api/</loc></url>
+  <url><loc>https://openpit.dev/js-api/</loc></url>
   <url><loc>https://openpit.dev/c-api/params.html</loc></url>
   <url><loc>https://openpit.dev/c-api/orders.html</loc></url>
   <url><loc>https://openpit.dev/c-api/execution-reports.html</loc></url>
@@ -29,6 +30,7 @@
   <url><loc>https://openpit.dev/cpp-api/async__engine_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/asyncengine_2engine_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/bytes_8hpp.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/callbacks_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1BytesView.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1Configurator.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1ConfigureError.html</loc></url>
@@ -42,6 +44,7 @@
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1SharedString.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1StringView.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1accountadjustment_1_1BatchError.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1accountadjustment_1_1Context.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1accountadjustment_1_1Operation.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1accountadjustment_1_1OutcomeList.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1accounts_1_1AccountControl.html</loc></url>
@@ -81,13 +84,17 @@
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1param_1_1GroupId.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1param_1_1Leverage.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1param_1_1MonetaryAmount.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1AccountOutcomes.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1Context.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1CustomPolicy.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1DryRunReport.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1PolicyAdapter.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1PostTradeAdjustments.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1PostTradeContext.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1PreTradeLock.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1Request.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1Reservation.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1Result.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1StartPolicyAdapter.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1OrderSizeLimitPolicy.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1OrderValidationPolicy.html</loc></url>
@@ -95,6 +102,7 @@
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1RateLimitPolicy.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1tx_1_1Mutations.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/context_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/custom__policy_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/engine_8hpp.html</loc></url>
@@ -114,6 +122,7 @@
   <url><loc>https://openpit.dev/cpp-api/namespaceopenpit_1_1pretrade.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/namespaceopenpit_1_1pretrade_1_1policies.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/namespaceopenpit_1_1reject.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/namespaceopenpit_1_1tx.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/observer_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/openpit_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/param_8hpp.html</loc></url>
@@ -174,5 +183,210 @@
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrierUpdate.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountGroupBarrier.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/tx_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/typed_8hpp.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/accountadjustment.AccountAdjustmentContext.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/accountadjustment.AccountAdjustmentOutcome.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/accountadjustment.AccountOutcomeEntry.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/accountadjustment.OutcomeAmount.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/accountadjustment.PnlOutcomeAmount.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/accounts.Accounts.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.AccountBlockError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.AccountGroupRegistrationError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.AccountIdError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.AlreadyRegistered.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.AssetError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.Configurator.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.Engine.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.EngineBuildError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.EngineBuilder.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.LifecycleError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.MarketDataError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.OpenpitError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.OpenpitValueError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.ParamError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.PolicyCallbackError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.PolicyConfigureError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.QuoteExpired.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.QuoteUnavailable.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.ReadyEngineBuilder.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.RegistrationError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.UnknownInstrument.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.UnknownInstrumentId.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/marketdata.InstrumentId.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/marketdata.MarketDataBuilder.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/marketdata.MarketDataService.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/marketdata.Quote.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/marketdata.QuoteResolution.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/marketdata.QuoteTtl.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.AccountAdjustment.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.AccountAdjustmentAmount.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.AccountAdjustmentBalanceOperation.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.AccountAdjustmentBounds.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.AccountAdjustmentPositionOperation.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.ExecutionReport.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.ExecutionReportFillDetails.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.ExecutionReportOperation.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.ExecutionReportPositionImpact.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.FinancialImpact.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.Order.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.OrderMargin.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.OrderOperation.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.OrderPosition.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.Trade.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.TradeAmount.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.AccountGroupId.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.AccountId.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.AdjustmentAmount.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.CashFlow.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.Fee.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.Instrument.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.Leverage.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.MonetaryAmount.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.Notional.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.Pnl.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.PositionEffect.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.PositionMode.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.PositionSide.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.PositionSize.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.Price.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.Quantity.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.Side.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/param.Volume.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.AccountAdjustmentBatchResult.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.Context.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.DryRunReport.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.ExecuteResult.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.Lock.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.PostTradeContext.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.PostTradeResult.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.Request.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.Reservation.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.StartResult.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.OrderSizeAccountAssetBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.OrderSizeAssetBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.OrderSizeBrokerBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.OrderSizeLimit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.OrderSizeLimitBuilder.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.OrderValidationBuilder.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.PnlBoundsAccountAssetBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.PnlBoundsAccountAssetBarrierUpdate.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.PnlBoundsBrokerBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.PnlBoundsKillswitchBuilder.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.RateLimit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.RateLimitAccountAssetBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.RateLimitAccountBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.RateLimitAssetBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.RateLimitBrokerBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.RateLimitBuilder.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsBuilder.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsOverride.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsPnlBoundsAccountBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsPnlBoundsAccountBarrierUpdate.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsPnlBoundsAccountGroupBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsPnlBoundsBarrier.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsPnlBoundsKillswitchBuilder.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/reject.AccountBlock.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/reject.AccountControl.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/reject.Reject.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/tx.Mutation.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/functions/index.ensureInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/functions/index.makeError.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/functions/pretrade.DEFAULT_POLICY_GROUP_ID.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/functions/pretrade_policies.buildOrderSizeLimit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/functions/pretrade_policies.buildOrderValidation.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/functions/pretrade_policies.buildPnlBoundsKillswitch.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/functions/pretrade_policies.buildRateLimit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/functions/pretrade_policies.buildSpotFunds.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/functions/pretrade_policies.buildSpotFundsPnlBoundsKillswitch.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/hierarchy.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/index.ErrorPayload.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/index.OpenpitErrorOptions.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/index.ValueErrorOptions.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/marketdata.AccountInfo.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/marketdata.QuoteInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.AccountAdjustmentAmountInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.AccountAdjustmentBalanceOperationInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.AccountAdjustmentBoundsInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.AccountAdjustmentInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.AccountAdjustmentPositionOperationInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.ExecutionReportFillDetailsInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.ExecutionReportInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.ExecutionReportOperationInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.ExecutionReportPositionImpactInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.FinancialImpactInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.OrderInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.OrderMarginInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.OrderOperationInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.OrderPositionInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.TradeInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/param.InstrumentInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/param.MonetaryAmountInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.OrderSizeLimitConfigureOptions.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PnlBoundsKillswitchConfigureOptions.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.Policy.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyAccountOutcomeEntry.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyDecision.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyOutcomeAmount.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyPnlOutcomeAmount.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyPreTradeResult.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyReject.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.RateLimitConfigureOptions.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.SetAccountPnlOptions.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.SetSpotFundsAccountPnlOptions.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.SpotFundsConfigureOptions.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.SpotFundsLimitModeAccountEntry.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.SpotFundsLimitModeAccountGroupEntry.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.SpotFundsPnlBoundsKillswitchConfigureOptions.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade_policies.OrderSizeLimitInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade_policies.RateLimitInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/modules.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/modules/accountadjustment.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/modules/accounts.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/modules/index.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/modules/marketdata.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/modules/model.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/modules/param.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/modules/pretrade.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/modules/pretrade_policies.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/modules/reject.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/modules/tx.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/index.AccountBlockErrorKind.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/index.AccountGroupRegistrationErrorKind.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/index.ConfigureErrorKind.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/index.DecimalInput.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/index.EngineBuildErrorKind.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/index.ErrorCode.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/index.PolicyCallbackResult.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/index.RegistrationErrorKind.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/param.FillType.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/param.ParamKind.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/param.PositionEffectValue.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/param.PositionModeValue.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/param.PositionSideValue.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/param.RoundingStrategy.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/param.SideValue.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/pretrade.LockEntries.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/pretrade.LockEntry.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/pretrade.PolicyAccountAdjustmentResult.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/pretrade.PolicyMutation.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/pretrade_policies.SpotFundsLimitMode.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/pretrade_policies.SpotFundsPricingSource.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/reject.RejectCode.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/reject.RejectScope.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/tx.MutationFn.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/index.AccountBlockErrorKind-1.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/index.AccountGroupRegistrationErrorKind-1.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/index.ConfigureErrorKind-1.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/index.EngineBuildErrorKind-1.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/index.ErrorCode-1.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/index.RegistrationErrorKind-1.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/index.ready.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/param.FillType-1.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/param.ParamKind-1.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/param.RoundingStrategies.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/pretrade_policies.SpotFundsLimitMode-1.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/pretrade_policies.SpotFundsPricingSource-1.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/reject.RejectCode-1.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/reject.RejectScope-1.html</loc></url>
 </urlset>

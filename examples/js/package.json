@@ -1,0 +1,31 @@
+{
+  "name": "@openpit/examples",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable Node examples for the @openpit/engine SDK",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "rate_pnl_killswitch",
+    "spot_funds",
+    "spot_table",
+    "browser_terminal"
+  ],
+  "scripts": {
+    "rate_pnl_killswitch": "tsx rate_pnl_killswitch/main.ts",
+    "spot_funds": "tsx spot_funds/main.ts",
+    "spot_table": "tsx spot_table/main.ts --table ../tables/spot/coverage.md",
+    "test:node": "vitest run",
+    "test:browser": "npm run build --workspace=@openpit/example-browser-terminal",
+    "test": "npm run test:node && npm run test:browser"
+  },
+  "dependencies": {
+    "@openpit/engine": "file:../../bindings/js/dist"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

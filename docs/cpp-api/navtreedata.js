@@ -60,13 +60,14 @@ var NAVTREE =
 var NAVTREEINDEX =
 [
 "account__adjustment_8hpp.html",
-"classopenpit_1_1accountadjustment_1_1OutcomeList.html#ab2b1b42fddb9f0b55031217824c3e5d1",
-"classopenpit_1_1asyncengine_1_1OwnedTypedAsyncEngine.html#ae1999c3eb40623677d80abf09b016999",
-"classopenpit_1_1model_1_1ExecutionReport.html#a01bcdee60d5a73ed4eff695601e24242",
-"classopenpit_1_1pretrade_1_1PreTradeLock.html#a5bee4453bc1e5be116b048803749cbe2",
-"namespaceopenpit_1_1asyncengine.html#ab4f34587cb0ebe71c516c7000824348d",
-"structopenpit_1_1accountadjustment_1_1Outcome.html",
-"structopenpit_1_1pretrade_1_1LockEntry.html#ac07977e372c36293aa1ccf211a46f1ff"
+"classopenpit_1_1accountadjustment_1_1Operation.html#a9e7b0858e2bb5460ad82ced821f5ab00",
+"classopenpit_1_1asyncengine_1_1OwnedTypedAsyncEngine.html#a29863f19cf8babe4ecab02558cd7e426",
+"classopenpit_1_1marketdata_1_1Service.html#a7b032e012cf4f4207124e0e430cb17ae",
+"classopenpit_1_1pretrade_1_1CustomPolicy.html#adc344fcf4f53fcb04750d2ce3651ec85",
+"classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy.html#a62135696aae48890af25174bb87d4c96",
+"namespaceopenpit_1_1pretrade.html#a9fe9e76687a28aa5a58164c44ddfefedaa0b0df5e6fde220e1f24bdddcc45d5aa",
+"structopenpit_1_1asyncengine_1_1StartOutcome.html#a145d722cd6336aaeddf122764399d0ab",
+"structopenpit_1_1pretrade_1_1policies_1_1PnlBoundsAccountBarrierUpdate.html#a51031a6abc4fbaa45d4cffb5f77b334f"
 ];
 
 const SYNCONMSG = 'click to disable panel synchronization';

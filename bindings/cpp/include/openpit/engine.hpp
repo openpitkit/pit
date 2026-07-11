@@ -32,6 +32,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -173,7 +174,12 @@ struct PreTradeRequestDeleter {
 
 struct PreTradeReservationDeleter {
   void operator()(OpenPitPretradePreTradeReservation* handle) const noexcept {
+    // An unresolved reservation rolls back during destruction. Destructors
+    // cannot report user callback failures, so suppress only that rollback's
+    // captured exception; explicit Rollback() reports it to the caller.
+    ::openpit::detail::ClearPendingCallbackException();
     openpit_destroy_pretrade_pre_trade_reservation(handle);
+    ::openpit::detail::ClearPendingCallbackException();
   }
 };
 
@@ -208,13 +214,19 @@ class Reservation {
   }
 
   // Finalizes the reservation, applying the reserved state permanently.
-  void Commit() noexcept {
+  void Commit() {
+    ::openpit::detail::ClearPendingCallbackException();
     openpit_pretrade_pre_trade_reservation_commit(m_handle.Get());
+    ::openpit::detail::ThrowIfPendingCallbackException(
+        "pre-trade mutation commit callback failed");
   }
 
   // Cancels the reservation, releasing the reserved state.
-  void Rollback() noexcept {
+  void Rollback() {
+    ::openpit::detail::ClearPendingCallbackException();
     openpit_pretrade_pre_trade_reservation_rollback(m_handle.Get());
+    ::openpit::detail::ThrowIfPendingCallbackException(
+        "pre-trade mutation rollback callback failed");
   }
 
   [[nodiscard]] OpenPitPretradePreTradeReservation* Get() const noexcept {
@@ -234,9 +246,10 @@ class Request {
  public:
   Request() = default;
 
-  explicit Request(OpenPitPretradePreTradeRequest* handle,
-                   const ::openpit::Order* order = nullptr) noexcept
-      : m_handle(handle), m_order(order) {}
+  explicit Request(
+      OpenPitPretradePreTradeRequest* handle,
+      std::shared_ptr<const ::openpit::Order> order = nullptr) noexcept
+      : m_handle(handle), m_order(std::move(order)) {}
 
   [[nodiscard]] explicit operator bool() const noexcept {
     return static_cast<bool>(m_handle);
@@ -253,11 +266,10 @@ class Request {
   ::openpit::detail::Handle<OpenPitPretradePreTradeRequest,
                             detail::PreTradeRequestDeleter>
       m_handle;
-  // Borrowed pointer to the polymorphic order this request was started from, so
-  // the deferred main stage can recover the client order type. The caller must
-  // keep the order alive until the request is executed; null when started
-  // without a polymorphic order (e.g. a default-constructed request).
-  const ::openpit::Order* m_order = nullptr;
+  // Owned polymorphic order this request was started from, so the deferred main
+  // stage can recover the client order type without depending on caller
+  // lifetime. Empty only for a default-constructed request.
+  std::shared_ptr<const ::openpit::Order> m_order;
 };
 
 struct ExecuteResult {
@@ -417,13 +429,19 @@ class Engine {
   // carries a `pretrade::Request` to drive the remaining stages; on reject it
   // carries the rejects. Throws `openpit::Error` on a boundary failure (invalid
   // pointers, undecodable order payload).
+  // Starts a deferred pre-trade request from an explicitly owned polymorphic
+  // order. This overload is the escape hatch for type-erased code: the shared
+  // owner keeps the exact dynamic type alive through `Request::Execute()`.
   [[nodiscard]] ::openpit::pretrade::StartResult StartPreTrade(
-      const ::openpit::Order& order) const {
-    const OpenPitOrder raw = order.EngineRaw();
+      std::shared_ptr<const ::openpit::Order> order) const {
+    if (order == nullptr) {
+      throw ::openpit::Error("StartPreTrade requires a non-null order");
+    }
+    const OpenPitOrder raw = order->EngineRaw();
     OpenPitPretradePreTradeRequest* request = nullptr;
     OpenPitPretradeRejectList* rejects = nullptr;
     OpenPitSharedString* error = nullptr;
-    const ::openpit::detail::CurrentOrderGuard orderGuard(order);
+    const ::openpit::detail::CurrentOrderGuard orderGuard(*order);
     detail::ClearPendingCallbackException();
     const OpenPitPretradeStatus status = openpit_engine_start_pre_trade(
         m_handle.Get(), &raw, &request, &rejects, &error);
@@ -445,8 +463,24 @@ class Engine {
       }
       return out;
     }
-    out.request.emplace(request, &order);
+    out.request.emplace(request, std::move(order));
     return out;
+  }
+
+  // Starts a deferred request from a concrete order value. Lvalues are copied
+  // and rvalues are moved into the returned request, preserving the exact
+  // client type and making execution independent of the caller's lifetime.
+  // Code that has already erased the static type to `openpit::Order` must use
+  // the shared_ptr overload above so slicing is impossible.
+  template <typename OrderT,
+            std::enable_if_t<
+                std::is_base_of_v<::openpit::Order, std::decay_t<OrderT>> &&
+                    !std::is_same_v<::openpit::Order, std::decay_t<OrderT>>,
+                int> = 0>
+  [[nodiscard]] ::openpit::pretrade::StartResult StartPreTrade(
+      OrderT&& order) const {
+    return StartPreTrade(
+        std::make_shared<std::decay_t<OrderT>>(std::forward<OrderT>(order)));
   }
 
   // Runs the complete pre-trade pipeline. On accept the result carries a
@@ -539,11 +573,12 @@ class Engine {
   // `openpit::Error` on a boundary failure (invalid pointers, undecodable
   // report payload).
   [[nodiscard]] PostTradeResult ApplyExecutionReport(
-      const ::openpit::model::ExecutionReport& report) const {
-    const OpenPitExecutionReport raw = report.Raw();
+      const ::openpit::ExecutionReport& report) const {
+    const OpenPitExecutionReport raw = report.EngineRaw();
     OpenPitPretradeAccountBlockList* blocks = nullptr;
     OpenPitAccountAdjustmentOutcomeList* outcomes = nullptr;
     OpenPitSharedString* error = nullptr;
+    const ::openpit::detail::CurrentReportGuard reportGuard(report);
     detail::ClearPendingCallbackException();
     const bool ok = openpit_engine_apply_execution_report(
         m_handle.Get(), &raw, &blocks, &outcomes, &error);

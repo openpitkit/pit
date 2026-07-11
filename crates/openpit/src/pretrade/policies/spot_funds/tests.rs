@@ -7315,6 +7315,160 @@ fn runtime_pnl_barrier_update_does_not_reset_accumulator() {
 }
 
 #[test]
+fn runtime_pnl_axes_can_be_enabled_replaced_and_cleared() {
+    let survivor = account(99224416);
+    let account_override = account(99224417);
+    let cleared = account(99224418);
+    let aapl_usd = instr("AAPL", "USD");
+    let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    let policy: SpotFundsPolicy<FullSync, FullSync> =
+        SpotFundsPolicy::new(settings(0), None, builder.storage_builder());
+    let engine = builder
+        .pre_trade(policy)
+        .build()
+        .expect("ordinary spot-funds engine must build");
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+
+    for account_id in [survivor, account_override, cleared] {
+        engine.accounts().set_currency(account_id, asset("USD"));
+    }
+    seed_balance_via_engine(&engine, cleared, asset("USD"), ps("1000"));
+
+    // A plain spot-funds policy has no P&L control, but normal orders still run.
+    let mut reservation = engine
+        .execute_pre_trade(make_order(
+            cleared,
+            aapl_usd.clone(),
+            Side::Buy,
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .expect("ordinary spot-funds policy must admit a funded order");
+    reservation.rollback();
+
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+                account_currency: asset("USD"),
+                lower_bound: Some(pnl_value("-10")),
+                upper_bound: None,
+            }])
+        })
+        .expect("runtime configuration must add a P&L axis to ordinary spot funds");
+
+    let first_survivor_fill = fill_with_fee(
+        survivor,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("9", "USD"),
+    );
+    assert!(engine
+        .apply_execution_report(&first_survivor_fill)
+        .account_blocks
+        .is_empty());
+
+    // Adding an account override leaves the global axis and its live P&L intact.
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrierUpdate {
+                account_id: account_override,
+                barrier: SpotFundsPnlBoundsBarrier {
+                    account_currency: asset("USD"),
+                    lower_bound: Some(pnl_value("-20")),
+                    upper_bound: None,
+                },
+            }])
+        })
+        .expect("runtime configuration must add an account P&L axis");
+
+    let survivor_breach = fill_with_fee(
+        survivor,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("2", "USD"),
+    );
+    assert_eq!(
+        engine
+            .apply_execution_report(&survivor_breach)
+            .account_blocks[0]
+            .code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+
+    let override_fill = fill_with_fee(
+        account_override,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("15", "USD"),
+    );
+    assert!(engine
+        .apply_execution_report(&override_fill)
+        .account_blocks
+        .is_empty());
+
+    // Clearing only the account axis exposes its still-live P&L to the global bound.
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| settings.set_pnl_account_barriers([]))
+        .expect("runtime configuration must clear only the account P&L axis");
+    let override_recheck = fill_with_fee(
+        account_override,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("0", "USD"),
+    );
+    assert_eq!(
+        engine
+            .apply_execution_report(&override_recheck)
+            .account_blocks[0]
+            .code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_pnl_global_barriers([])?;
+            settings.set_pnl_account_group_barriers([])?;
+            settings.set_pnl_account_barriers([])
+        })
+        .expect("runtime configuration must clear every P&L axis");
+    let cleared_fill = fill_with_fee(
+        cleared,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("15", "USD"),
+    );
+    assert!(engine
+        .apply_execution_report(&cleared_fill)
+        .account_blocks
+        .is_empty());
+
+    let mut reservation = engine
+        .execute_pre_trade(make_order(
+            cleared,
+            aapl_usd,
+            Side::Buy,
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .expect("clearing all P&L axes must restore normal order handling");
+    reservation.rollback();
+}
+
+#[test]
 fn force_set_revives_reset_slot_then_missing_fx_resets_again() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");

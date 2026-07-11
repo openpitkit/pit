@@ -10,5 +10,5 @@ var searchData=
   ['reject_7',['Reject',['../structopenpit_1_1pretrade_1_1Reject.html',1,'openpit::pretrade']]],
   ['request_8',['Request',['../classopenpit_1_1pretrade_1_1Request.html',1,'openpit::pretrade']]],
   ['reservation_9',['Reservation',['../classopenpit_1_1pretrade_1_1Reservation.html',1,'openpit::pretrade']]],
-  ['result_10',['Result',['../classopenpit_1_1asyncengine_1_1Result.html',1,'openpit::asyncengine']]]
+  ['result_10',['Result',['../classopenpit_1_1asyncengine_1_1Result.html',1,'openpit::asyncengine::Result&lt; T &gt;'],['../classopenpit_1_1pretrade_1_1Result.html',1,'openpit::pretrade::Result']]]
 ];

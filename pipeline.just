@@ -22,12 +22,17 @@
 
 import 'justfile'
 
+# Includes bindings/js/Cargo.toml: cargo-release shared-version bumps the
+# openpit-js crate in lockstep, and the npm package version is derived from it
+# at build time (see bindings/js/scripts/sync-version.mjs), so it is the JS
+# source of truth and must stay consistent with the rest of the workspace.
+
 # Verify all crate manifest versions match the release version.
 check-cargo-versions version:
     #!/usr/bin/env bash
     set -euo pipefail
     VERSION="{{ version }}"
-    for MANIFEST in crates/openpit/Cargo.toml crates/openpit-derive/Cargo.toml crates/openpit-ffi/Cargo.toml bindings/python/Cargo.toml; do
+    for MANIFEST in crates/openpit/Cargo.toml crates/openpit-derive/Cargo.toml crates/openpit-ffi/Cargo.toml bindings/python/Cargo.toml bindings/js/Cargo.toml; do
       CARGO_VERSION="$(grep -m1 '^version\s*=' "${MANIFEST}" | sed 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/')"
       if [[ "${CARGO_VERSION}" != "${VERSION}" ]]; then
         echo "::error::Tag version ${VERSION} does not match ${MANIFEST} version ${CARGO_VERSION}"
@@ -140,6 +145,99 @@ apply-staging-version version:
         raise SystemExit("version field not found in bindings/python/Cargo.toml")
     path.write_text("\n".join(lines) + "\n")
     PY
+
+# The npm version is derived from bindings/js/Cargo.toml (the openpit-js crate)
+# by scripts/sync-version.mjs, so rewriting that manifest (the JS analog of
+# apply-staging-version) flows into the subsequent build. Uses node, the
+# toolchain the JS jobs guarantee on PATH.
+
+# Rewrite the JS package version for a staging (dry-run) release.
+apply-staging-version-js version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    STAGING_VERSION="{{ version }}" node - <<'JS'
+    import { readFileSync, writeFileSync } from "node:fs";
+
+    const path = "bindings/js/Cargo.toml";
+    const staging = process.env.STAGING_VERSION;
+    const lines = readFileSync(path, "utf8").split("\n");
+    const index = lines.findIndex((line) => line.startsWith("version = "));
+    if (index === -1) {
+      throw new Error("version field not found in bindings/js/Cargo.toml");
+    }
+    lines[index] = `version = "${staging}"`;
+    writeFileSync(path, lines.join("\n"));
+    JS
+
+# Ensure the npm registry has not already published this package version.
+check-npm-unpublished version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    VERSION="{{ version }}"
+    PACKAGE="@openpit/engine"
+    URL="https://registry.npmjs.org/${PACKAGE}/${VERSION}"
+    HTTP_CODE="$(curl -H "User-Agent: openpit-release-ci" --retry 3 --retry-delay 2 -sS -o /tmp/openpit-npm-version.json -w '%{http_code}' "${URL}")"
+
+    case "${HTTP_CODE}" in
+      200)
+        echo "::error::${PACKAGE} version ${VERSION} already exists on npm"
+        exit 1
+        ;;
+      404)
+        echo "${PACKAGE} version ${VERSION} is not published on npm yet"
+        ;;
+      *)
+        echo "::error::Failed to query npm for ${PACKAGE} (HTTP ${HTTP_CODE})"
+        cat /tmp/openpit-npm-version.json || true
+        exit 1
+        ;;
+    esac
+
+# Reads the generated dist/package.json (written by make-package-json.mjs).
+# Mirrors verify-wheel-version for Python; uses node, the toolchain the JS jobs
+# guarantee on PATH.
+
+# Verify the built npm package reports the expected version.
+verify-npm-version mode version base_version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    RELEASE_MODE="{{ mode }}" VERSION="{{ version }}" BASE_VERSION="{{ base_version }}" node - <<'JS'
+    import { readFileSync } from "node:fs";
+
+    const { RELEASE_MODE, VERSION, BASE_VERSION } = process.env;
+    const manifest = JSON.parse(
+      readFileSync("bindings/js/dist/package.json", "utf8"),
+    );
+    const version = manifest.version;
+    console.log(version);
+
+    if (RELEASE_MODE === "production") {
+      if (version !== VERSION) {
+        throw new Error(`expected ${VERSION}, got ${version}`);
+      }
+    } else {
+      if (version === BASE_VERSION) {
+        throw new Error(`expected staging version, got production version ${version}`);
+      }
+      if (!version.startsWith(BASE_VERSION)) {
+        throw new Error(`expected version starting with ${BASE_VERSION}, got ${version}`);
+      }
+    }
+    JS
+
+# Dry-run artifact; the analog of build-sdist for Python.
+
+# Pack the built npm package into a publishable tarball under dist/.
+pack-js:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd bindings/js/dist && npm pack --pack-destination .
+
+# Documentation-workflow entry point; generation itself is canonical in the
+# imported development justfile so `gen-all` and CI use the same command.
+build-js-docs: gen-docs-js
+
 # Build Python API docs; warnings are errors.
 build-python-docs: python-develop-debug
     cd bindings/python && sphinx-build -b html docs docs/_build -W

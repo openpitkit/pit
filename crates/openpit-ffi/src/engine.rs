@@ -1994,6 +1994,8 @@ pub enum OpenPitConfigureErrorKind {
     /// The applied update was rejected by the policy's settings validation; the
     /// prior configuration still applies.
     Validation = 2,
+    /// A configuration call re-entered configuration on the same thread.
+    NestedConfiguration = 3,
 }
 
 /// Structured error returned by runtime policy reconfiguration.
@@ -2018,9 +2020,9 @@ impl OpenPitConfigureError {
                 OpenPitConfigureErrorKind::TypeMismatch
             }
             openpit::ConfigureError::Validation { .. } => OpenPitConfigureErrorKind::Validation,
-            // Unreachable via FFI (the configure closure runs no user callback,
-            // so no same-thread re-entry), mapped to Validation for completeness.
-            openpit::ConfigureError::NestedConfiguration => OpenPitConfigureErrorKind::Validation,
+            openpit::ConfigureError::NestedConfiguration => {
+                OpenPitConfigureErrorKind::NestedConfiguration
+            }
             // `ConfigureError` is #[non_exhaustive]; treat any future variant as
             // a generic validation failure so the ABI stays forward-compatible.
             _ => OpenPitConfigureErrorKind::Validation,
@@ -2781,6 +2783,16 @@ mod tests {
     #[test]
     fn string_view_to_string_handles_null_pointer() {
         assert_eq!(string_view_to_string(OpenPitStringView::not_set()), "");
+    }
+
+    #[test]
+    fn configure_error_preserves_nested_configuration_variant() {
+        let error = super::OpenPitConfigureError::new(openpit::ConfigureError::NestedConfiguration);
+
+        assert_eq!(
+            error.kind,
+            super::OpenPitConfigureErrorKind::NestedConfiguration
+        );
     }
 
     fn shared_string_to_owned(handle: *mut crate::string::OpenPitSharedString) -> String {
