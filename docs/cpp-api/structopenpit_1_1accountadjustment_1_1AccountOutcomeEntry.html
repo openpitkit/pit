@@ -134,9 +134,13 @@ Static Public Member Functions</h2></td></tr>
 <tr class="heading"><td colspan="2"><h2 id="header-pub-attribs" class="groupheader"><a id="pub-attribs" name="pub-attribs"></a>
 Public Attributes</h2></td></tr>
 <tr class="memitem:a425395346dc29a1642347c3499471f4f" id="r_a425395346dc29a1642347c3499471f4f"><td class="memItemLeft">std::string&#160;</td><td class="memItemRight"><a class="el" href="#a425395346dc29a1642347c3499471f4f">asset</a></td></tr>
+<tr class="memitem:a2643bfb5b22aec16760e65c8d3ab1894" id="r_a2643bfb5b22aec16760e65c8d3ab1894"><td class="memItemLeft">std::optional&lt; <a class="el" href="namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa3601146c4e948c32b6424d2c0a7f0118">param::Price</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a2643bfb5b22aec16760e65c8d3ab1894">averageEntryPrice</a></td></tr>
+<tr class="memdesc:a2643bfb5b22aec16760e65c8d3ab1894"><td class="mdescLeft">&#160;</td><td class="mdescRight">Average entry price after the adjustment when the policy reports it.  <br /></td></tr>
 <tr class="memitem:afe73b340b7e6467b1935a7ea1454fa55" id="r_afe73b340b7e6467b1935a7ea1454fa55"><td class="memItemLeft">std::optional&lt; <a class="el" href="structopenpit_1_1accountadjustment_1_1OutcomeAmount.html">OutcomeAmount</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#afe73b340b7e6467b1935a7ea1454fa55">balance</a></td></tr>
 <tr class="memitem:a99e3fb66f4e1cc06413e6ee218dd88b5" id="r_a99e3fb66f4e1cc06413e6ee218dd88b5"><td class="memItemLeft">std::optional&lt; <a class="el" href="structopenpit_1_1accountadjustment_1_1OutcomeAmount.html">OutcomeAmount</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a99e3fb66f4e1cc06413e6ee218dd88b5">held</a></td></tr>
 <tr class="memitem:a7e6ca89b47e1917a6a696beeaec9bd06" id="r_a7e6ca89b47e1917a6a696beeaec9bd06"><td class="memItemLeft">std::optional&lt; <a class="el" href="structopenpit_1_1accountadjustment_1_1OutcomeAmount.html">OutcomeAmount</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a7e6ca89b47e1917a6a696beeaec9bd06">incoming</a></td></tr>
+<tr class="memitem:a4e888680d00516bb85538708ca92df9e" id="r_a4e888680d00516bb85538708ca92df9e"><td class="memItemLeft">std::optional&lt; <a class="el" href="structopenpit_1_1accountadjustment_1_1PnlOutcomeAmount.html">PnlOutcomeAmount</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a4e888680d00516bb85538708ca92df9e">realizedPnl</a></td></tr>
+<tr class="memdesc:a4e888680d00516bb85538708ca92df9e"><td class="mdescLeft">&#160;</td><td class="mdescRight">Realized-PnL delta and absolute value when the adjustment force-set it.  <br /></td></tr>
 </table>
 <a name="doc-constructors" id="doc-constructors"></a><h2 id="header-doc-constructors" class="groupheader">Constructor &amp; Destructor Documentation</h2>
 <a id="a91dc25464f209d57c7b2b0d6e99c2019" name="a91dc25464f209d57c7b2b0d6e99c2019"></a>
@@ -230,6 +234,22 @@ Public Attributes</h2></td></tr>
 
 </div>
 </div>
+<a id="a2643bfb5b22aec16760e65c8d3ab1894" name="a2643bfb5b22aec16760e65c8d3ab1894"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a2643bfb5b22aec16760e65c8d3ab1894">&#9670;&#160;</a></span>averageEntryPrice</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">std::optional&lt;<a class="el" href="namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa3601146c4e948c32b6424d2c0a7f0118">param::Price</a>&gt; openpit::accountadjustment::AccountOutcomeEntry::averageEntryPrice</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>Average entry price after the adjustment when the policy reports it. </p>
+
+</div>
+</div>
 <a id="afe73b340b7e6467b1935a7ea1454fa55" name="afe73b340b7e6467b1935a7ea1454fa55"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#afe73b340b7e6467b1935a7ea1454fa55">&#9670;&#160;</a></span>balance</h2>
 
@@ -269,6 +289,22 @@ Public Attributes</h2></td></tr>
         </tr>
       </table>
 </div><div class="memdoc">
+
+</div>
+</div>
+<a id="a4e888680d00516bb85538708ca92df9e" name="a4e888680d00516bb85538708ca92df9e"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a4e888680d00516bb85538708ca92df9e">&#9670;&#160;</a></span>realizedPnl</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">std::optional&lt;<a class="el" href="structopenpit_1_1accountadjustment_1_1PnlOutcomeAmount.html">PnlOutcomeAmount</a>&gt; openpit::accountadjustment::AccountOutcomeEntry::realizedPnl</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>Realized-PnL delta and absolute value when the adjustment force-set it. </p>
 
 </div>
 </div>

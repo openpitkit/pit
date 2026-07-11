@@ -57,16 +57,22 @@
 namespace openpit::accountadjustment {
 
 using OutcomeAmountOptional = OpenPitOutcomeAmountOptional;
+using PnlOutcomeAmountOptional = OpenPitPnlOutcomeAmountOptional;
 
 //------------------------------------------------------------------------------
 // BalanceOperation
 
-// Balance-operation payload of an adjustment: the asset whose balance is
-// touched and an optional average entry price. `asset` is absent (empty
-// optional) when its C view is unset.
+/// Balance-operation payload of an account adjustment.
+///
+/// `realizedPnl` force-sets the absolute account-currency realized PnL. It is
+/// not a delta and does not perform FX conversion. When absent, the current
+/// value is left unchanged and no realized-PnL outcome is emitted. A force-set
+/// outcome reports `delta = new - prior` and `absolute = new`.
 struct BalanceOperation {
   std::optional<std::string> asset;
   std::optional<param::Price> averageEntryPrice;
+  /// Optional absolute realized-PnL force-set.
+  std::optional<param::Pnl> realizedPnl;
 
   BalanceOperation() = default;
 
@@ -81,6 +87,9 @@ struct BalanceOperation {
       out.averageEntryPrice =
           param::Price::FromRaw(raw.average_entry_price.value);
     }
+    if (raw.realized_pnl.is_set) {
+      out.realizedPnl = param::Pnl::FromRaw(raw.realized_pnl.value);
+    }
     return out;
   }
 
@@ -93,6 +102,10 @@ struct BalanceOperation {
     if (averageEntryPrice) {
       raw.average_entry_price.value = averageEntryPrice->Raw();
       raw.average_entry_price.is_set = true;
+    }
+    if (realizedPnl) {
+      raw.realized_pnl.value = realizedPnl->Raw();
+      raw.realized_pnl.is_set = true;
     }
     return raw;
   }
@@ -400,16 +413,48 @@ struct OutcomeAmount {
 };
 
 //------------------------------------------------------------------------------
+// PnlOutcomeAmount
+
+/// Realized-PnL change and resulting absolute value reported by an adjustment.
+struct PnlOutcomeAmount {
+  /// Signed realized-PnL change applied by the adjustment.
+  param::Pnl delta;
+  /// Cumulative realized PnL after the adjustment.
+  param::Pnl absolute;
+
+  PnlOutcomeAmount(param::Pnl outcomeDelta, param::Pnl outcomeAbsolute)
+      : delta(outcomeDelta), absolute(outcomeAbsolute) {}
+
+  [[nodiscard]] static PnlOutcomeAmount FromRaw(
+      const OpenPitPnlOutcomeAmount& raw) {
+    return PnlOutcomeAmount(param::Pnl::FromRaw(raw.delta),
+                            param::Pnl::FromRaw(raw.absolute));
+  }
+
+  [[nodiscard]] OpenPitPnlOutcomeAmount Raw() const noexcept {
+    OpenPitPnlOutcomeAmount raw{};
+    raw.delta = delta.Raw();
+    raw.absolute = absolute.Raw();
+    return raw;
+  }
+};
+
+//------------------------------------------------------------------------------
 // AccountOutcomeEntry
 
 // Per-asset outcome an adjustment produced: the affected `asset` plus the
-// settled `balance`, `held`, and `incoming` amounts. Each amount is absent
-// (empty optional) when its C `is_set` flag is false.
+// settled `balance`, `held`, `incoming`, realized PnL, and average-entry-price
+// amounts. Each amount is absent (empty optional) when its C `is_set` flag is
+// false.
 struct AccountOutcomeEntry {
   std::string asset;
   std::optional<OutcomeAmount> balance;
   std::optional<OutcomeAmount> held;
   std::optional<OutcomeAmount> incoming;
+  /// Realized-PnL delta and absolute value when the adjustment force-set it.
+  std::optional<PnlOutcomeAmount> realizedPnl;
+  /// Average entry price after the adjustment when the policy reports it.
+  std::optional<param::Price> averageEntryPrice;
 
   AccountOutcomeEntry() = default;
 
@@ -420,6 +465,11 @@ struct AccountOutcomeEntry {
     out.balance = ReadAmount(raw.balance);
     out.held = ReadAmount(raw.held);
     out.incoming = ReadAmount(raw.incoming);
+    out.realizedPnl = ReadPnlAmount(raw.realized_pnl);
+    if (raw.average_entry_price.is_set) {
+      out.averageEntryPrice =
+          param::Price::FromRaw(raw.average_entry_price.value);
+    }
     return out;
   }
 
@@ -430,6 +480,11 @@ struct AccountOutcomeEntry {
     WriteAmount(raw.balance, balance);
     WriteAmount(raw.held, held);
     WriteAmount(raw.incoming, incoming);
+    WritePnlAmount(raw.realized_pnl, realizedPnl);
+    if (averageEntryPrice) {
+      raw.average_entry_price.value = averageEntryPrice->Raw();
+      raw.average_entry_price.is_set = true;
+    }
     return raw;
   }
 
@@ -444,6 +499,23 @@ struct AccountOutcomeEntry {
 
   static void WriteAmount(OutcomeAmountOptional& field,
                           const std::optional<OutcomeAmount>& value) noexcept {
+    if (value) {
+      field.value = value->Raw();
+      field.is_set = true;
+    }
+  }
+
+  [[nodiscard]] static std::optional<PnlOutcomeAmount> ReadPnlAmount(
+      const PnlOutcomeAmountOptional& field) {
+    if (!field.is_set) {
+      return std::nullopt;
+    }
+    return PnlOutcomeAmount::FromRaw(field.value);
+  }
+
+  static void WritePnlAmount(
+      PnlOutcomeAmountOptional& field,
+      const std::optional<PnlOutcomeAmount>& value) noexcept {
     if (value) {
       field.value = value->Raw();
       field.is_set = true;

@@ -13,6 +13,7 @@ var annotated_dup =
         [ "Outcome", "structopenpit_1_1accountadjustment_1_1Outcome.html", "structopenpit_1_1accountadjustment_1_1Outcome" ],
         [ "OutcomeAmount", "structopenpit_1_1accountadjustment_1_1OutcomeAmount.html", "structopenpit_1_1accountadjustment_1_1OutcomeAmount" ],
         [ "OutcomeList", "classopenpit_1_1accountadjustment_1_1OutcomeList.html", "classopenpit_1_1accountadjustment_1_1OutcomeList" ],
+        [ "PnlOutcomeAmount", "structopenpit_1_1accountadjustment_1_1PnlOutcomeAmount.html", "structopenpit_1_1accountadjustment_1_1PnlOutcomeAmount" ],
         [ "PositionOperation", "structopenpit_1_1accountadjustment_1_1PositionOperation.html", "structopenpit_1_1accountadjustment_1_1PositionOperation" ]
       ] ],
       [ "accounts", "namespaceopenpit_1_1accounts.html", [

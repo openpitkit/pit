@@ -114,7 +114,8 @@ var NAVTREEINDEX5 =
 "namespaceopenpit.html#ac0c042292e7aeb3a25088b00a146755ba6adf97f83acf6453d4a6a4b1070f3754":[0,0,0,25,0],
 "namespaceopenpit.html#ac0c042292e7aeb3a25088b00a146755babbd47109890259c0127154db1af26c75":[0,0,0,25,1],
 "namespaceopenpit_1_1accountadjustment.html":[0,0,0,0],
-"namespaceopenpit_1_1accountadjustment.html#a60d5e2a8b4f5e3bfb0891fdae73bea29":[0,0,0,0,12],
+"namespaceopenpit_1_1accountadjustment.html#a5875a4e9bd3c39cc9dc97872ac64f31d":[0,0,0,0,14],
+"namespaceopenpit_1_1accountadjustment.html#a60d5e2a8b4f5e3bfb0891fdae73bea29":[0,0,0,0,13],
 "namespaceopenpit_1_1accounts.html":[0,0,0,1],
 "namespaceopenpit_1_1accounts.html#a799297bafed99e7aa4e0ddcbba33b140":[0,0,0,1,5],
 "namespaceopenpit_1_1accounts.html#a799297bafed99e7aa4e0ddcbba33b140a10d77fddab5fa659ed9e01455f99a7ef":[0,0,0,1,5,2],
@@ -248,6 +249,5 @@ var NAVTREEINDEX5 =
 "namespaceopenpit_1_1pretrade.html#a9fe9e76687a28aa5a58164c44ddfefeda65aa80fb9938cb91ef4475d8bb128e26":[0,0,0,6,23,34],
 "namespaceopenpit_1_1pretrade.html#a9fe9e76687a28aa5a58164c44ddfefeda6e6de49c883081ea44501d0b56606bf3":[0,0,0,6,23,7],
 "namespaceopenpit_1_1pretrade.html#a9fe9e76687a28aa5a58164c44ddfefeda74948d2cbeaf62316c4fda9166a1ff72":[0,0,0,6,23,41],
-"namespaceopenpit_1_1pretrade.html#a9fe9e76687a28aa5a58164c44ddfefeda7d94081551698f8e49674257e65998e5":[0,0,0,6,23,18],
-"namespaceopenpit_1_1pretrade.html#a9fe9e76687a28aa5a58164c44ddfefeda90589c47f06eb971d548591f23c285af":[0,0,0,6,23,42]
+"namespaceopenpit_1_1pretrade.html#a9fe9e76687a28aa5a58164c44ddfefeda7d94081551698f8e49674257e65998e5":[0,0,0,6,23,18]
 };

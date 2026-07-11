@@ -143,6 +143,7 @@
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1Bounds.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1Outcome.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1OutcomeAmount.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1PnlOutcomeAmount.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1PositionOperation.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accounts_1_1AccountBlock.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accounts_1_1AccountBlockError.html</loc></url>

@@ -4,7 +4,7 @@ var searchData=
   ['defaultaccountgroup_1',['DefaultAccountGroup',['../namespaceopenpit_1_1param.html#a29bbba0103564c647aa148967afdb431',1,'openpit::param']]],
   ['defaultpolicygroupid_2',['DefaultPolicyGroupId',['../namespaceopenpit_1_1param.html#a99e74ab7c247ed37b3bd826e62d9aacc',1,'openpit::param']]],
   ['delta_3',['Delta',['../namespaceopenpit_1_1param.html#ad447e10b1a4c0ebfde8b838c53868f90adb1f4ab5845def61a83d5df13e0c2397',1,'openpit::param']]],
-  ['delta_4',['delta',['../structopenpit_1_1accountadjustment_1_1OutcomeAmount.html#a969b100c2a2e72f28f342e1eb1245763',1,'openpit::accountadjustment::OutcomeAmount']]],
+  ['delta_4',['delta',['../structopenpit_1_1accountadjustment_1_1OutcomeAmount.html#a969b100c2a2e72f28f342e1eb1245763',1,'openpit::accountadjustment::OutcomeAmount::delta'],['../structopenpit_1_1accountadjustment_1_1PnlOutcomeAmount.html#ad05194cde5953c9e0dc70edb4fddc4a6',1,'openpit::accountadjustment::PnlOutcomeAmount::delta']]],
   ['details_5',['details',['../structopenpit_1_1accounts_1_1AccountBlock.html#adcc4301369b0c4328c5a0ab4c45a43c3',1,'openpit::accounts::AccountBlock::details'],['../structopenpit_1_1pretrade_1_1Reject.html#a98b7eae25e1625ce2e0c92be22e0b64c',1,'openpit::pretrade::Reject::details']]],
   ['done_6',['Done',['../classopenpit_1_1asyncengine_1_1Future.html#ae921c1812d1172f1bd3c6bd655e40b6d',1,'openpit::asyncengine::Future::Done()'],['../classopenpit_1_1asyncengine_1_1PairFuture.html#ab1236d735ac03356a1e5b912b4667bfe',1,'openpit::asyncengine::PairFuture::Done()']]],
   ['down_7',['Down',['../namespaceopenpit_1_1param.html#a0f919e842c6de532d11078c10329be7aa08a38277b0309070706f6652eeae9a53',1,'openpit::param']]],

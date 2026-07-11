@@ -188,6 +188,7 @@ struct BalanceOperation;
 struct Bounds;
 struct Outcome;
 struct OutcomeAmount;
+struct PnlOutcomeAmount;
 struct PositionOperation;
 
 }  // namespace openpit::accountadjustment

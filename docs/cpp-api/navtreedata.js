@@ -65,9 +65,9 @@ var NAVTREEINDEX =
 "classopenpit_1_1marketdata_1_1Service.html#a7b032e012cf4f4207124e0e430cb17ae",
 "classopenpit_1_1pretrade_1_1CustomPolicy.html#adc344fcf4f53fcb04750d2ce3651ec85",
 "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy.html#a62135696aae48890af25174bb87d4c96",
-"namespaceopenpit_1_1pretrade.html#a9fe9e76687a28aa5a58164c44ddfefedaa0b0df5e6fde220e1f24bdddcc45d5aa",
-"structopenpit_1_1asyncengine_1_1StartOutcome.html#a145d722cd6336aaeddf122764399d0ab",
-"structopenpit_1_1pretrade_1_1policies_1_1PnlBoundsAccountBarrierUpdate.html#a51031a6abc4fbaa45d4cffb5f77b334f"
+"namespaceopenpit_1_1pretrade.html#a9fe9e76687a28aa5a58164c44ddfefeda90589c47f06eb971d548591f23c285af",
+"structopenpit_1_1asyncengine_1_1AdjustmentOutcome.html",
+"structopenpit_1_1pretrade_1_1policies_1_1PnlBoundsAccountBarrier.html"
 ];
 
 const SYNCONMSG = 'click to disable panel synchronization';

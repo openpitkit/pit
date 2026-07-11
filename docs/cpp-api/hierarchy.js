@@ -85,6 +85,7 @@ var hierarchy =
     [ "openpit::pretrade::policies::PnlBoundsAccountBarrierUpdate", "structopenpit_1_1pretrade_1_1policies_1_1PnlBoundsAccountBarrierUpdate.html", null ],
     [ "openpit::pretrade::policies::PnlBoundsBrokerBarrier", "structopenpit_1_1pretrade_1_1policies_1_1PnlBoundsBrokerBarrier.html", null ],
     [ "openpit::pretrade::policies::PnlBoundsKillSwitchPolicy", "classopenpit_1_1pretrade_1_1policies_1_1PnlBoundsKillSwitchPolicy.html", null ],
+    [ "openpit::accountadjustment::PnlOutcomeAmount", "structopenpit_1_1accountadjustment_1_1PnlOutcomeAmount.html", null ],
     [ "openpit::pretrade::PolicyAdapter&lt; ClientPolicy, ClientOrder, ClientReport, mode &gt;", "classopenpit_1_1pretrade_1_1PolicyAdapter.html", null ],
     [ "openpit::pretrade::PolicyDecision", "structopenpit_1_1pretrade_1_1PolicyDecision.html", null ],
     [ "openpit::model::PositionImpact", "structopenpit_1_1model_1_1PositionImpact.html", null ],
