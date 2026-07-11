@@ -650,9 +650,7 @@ gen-docs-cpp:
       echo "graphviz dot is required to generate docs/cpp-api" >&2
       exit 1
     }
-    rm -rf docs/cpp-api
-    doxygen bindings/cpp/Doxyfile
-    {{ python_path }} scripts/_generate_api_c_sitemap.py
+    {{ python_path }} {{ just_helper }} gen-docs-cpp
 [windows]
 gen-docs-cpp: _ensure-python-env
     {{ python_path }} {{ just_helper }} gen-docs-cpp

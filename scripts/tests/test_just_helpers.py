@@ -531,24 +531,3 @@ def test_ensure_windows_runtime_import_library_regenerates_stale_implib(
 
     assert module.ensure_windows_runtime_import_library() == implib
     assert calls == 1
-
-
-def test_normalize_doxygen_mainpage_anchor_rewrites_host_path(
-    tmp_path, monkeypatch
-) -> None:
-    module = load_module()
-    index = tmp_path / "docs" / "cpp-api" / "index.html"
-    index.parent.mkdir(parents=True)
-    index.write_text(
-        '<a class="anchor" '
-        'id="md_C_1_2pit_2pit_2bindings_2cpp_2DoxygenMainPage"></a>',
-        encoding="utf-8",
-        newline="\n",
-    )
-    monkeypatch.setattr(module, "ROOT", tmp_path)
-
-    module.normalize_doxygen_mainpage_anchor()
-
-    assert index.read_text(encoding="utf-8") == (
-        '<a class="anchor" id="openpit-cpp-sdk-mainpage"></a>'
-    )

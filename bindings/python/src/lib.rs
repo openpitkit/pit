@@ -2740,7 +2740,7 @@ fn extract_python_execution_report(obj: &Bound<'_, PyAny>) -> PyResult<Execution
                 last_trade: f.last_trade,
                 fee: f.fee.clone(),
                 leaves_quantity: f.leaves_quantity,
-                lock: f.lock.clone(),
+                lock: Some(f.lock.clone()),
                 is_final: f.is_final,
             }))
         }

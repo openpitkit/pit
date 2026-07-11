@@ -404,6 +404,13 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
         let c_ctx =
             (ctx as *const PostTradeContext<StorageFactory>).cast::<OpenPitPostTradeContext>();
         let raw = unsafe { apply_fn(c_ctx, &input, &mut out_adjustments, self.user_data) };
+        // `export_execution_report` owns the lock handle it allocates inside
+        // `input` (via `export_fill`); the callback only borrows it. Release it
+        // exactly once now that the callback has returned. Null-safe, so the
+        // absent-lock case is a no-op.
+        crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(
+            input.fill.value.lock as *mut _,
+        );
         let account_blocks = if raw.is_null() {
             Vec::new()
         } else {

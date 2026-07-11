@@ -20,7 +20,6 @@
 use std::ffi::c_void;
 
 use openpit::param::{AccountId, Trade};
-use openpit::pretrade::PreTradeLock;
 use openpit_interop::{
     ExecutionReportFillAccess, ExecutionReportOperationAccess, ExecutionReportPositionImpactAccess,
     FinancialImpactAccess, PopulatedExecutionReportFill, PopulatedExecutionReportOperation,
@@ -82,13 +81,14 @@ pub struct OpenPitExecutionReportFill {
     pub leaves_quantity: OpenPitParamQuantityOptional,
     /// Pre-trade lock attached to the order.
     ///
+    /// Optional field: null means the lock is absent (maps to `None`), not
+    /// an empty lock. No lock record is fabricated on import for a null
+    /// pointer, and an absent lock is exported as null.
+    ///
     /// Ownership contract:
     /// - the caller owns the pointer when present (build it through
     ///   `openpit_pretrade_lock_*` functions) and remains responsible for
-    ///   releasing it with `openpit_destroy_pretrade_pre_trade_lock`;
-    /// - null is equivalent to an empty lock; passing null does *not* mean
-    ///   "default group" - no record is created on import unless the caller
-    ///   supplied one through this pointer.
+    ///   releasing it with `openpit_destroy_pretrade_pre_trade_lock`.
     pub lock: *const crate::pre_trade_lock::OpenPitPretradePreTradeLock,
     /// Whether this report closes the order's report stream.
     /// The order is filled, cancelled, or rejected.
@@ -233,9 +233,9 @@ fn import_fill(
     };
 
     let lock = if value.value.lock.is_null() {
-        PreTradeLock::new()
+        None
     } else {
-        unsafe { &*value.value.lock }.inner_clone()
+        Some(unsafe { &*value.value.lock }.inner_clone())
     };
 
     Ok(ExecutionReportFillAccess::Populated(Box::new(
@@ -367,9 +367,12 @@ fn export_fill(value: &ExecutionReportFillAccess) -> OpenPitExecutionReportFillO
                     },
                     None => OpenPitParamQuantityOptional::default(),
                 },
-                lock: crate::pre_trade_lock::OpenPitPretradePreTradeLock::from_inner(
-                    fill.lock.clone(),
-                ),
+                lock: match &fill.lock {
+                    Some(lock) => {
+                        crate::pre_trade_lock::OpenPitPretradePreTradeLock::from_inner(lock.clone())
+                    }
+                    None => std::ptr::null(),
+                },
                 is_final: match fill.is_final {
                     Some(value) => OpenPitExecutionReportIsFinalOptional {
                         value,
@@ -473,7 +476,7 @@ mod tests {
     use openpit::Instrument;
     use openpit::{
         HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportPositionEffect,
-        HasFee, HasInstrument, HasPnl,
+        HasFee, HasInstrument, HasPnl, HasPreTradeLock,
     };
     use openpit_interop::{
         ExecutionReportFillAccess, ExecutionReportOperationAccess,
@@ -532,10 +535,10 @@ mod tests {
                         leaves_quantity: Some(
                             Quantity::from_str("1").expect("quantity must be valid"),
                         ),
-                        lock: PreTradeLock::from_entries([(
+                        lock: Some(PreTradeLock::from_entries([(
                             openpit::DEFAULT_POLICY_GROUP_ID,
                             Price::from_str("101").expect("price must be valid"),
-                        )]),
+                        )])),
                         is_final: Some(true),
                     },
                 )),
@@ -669,6 +672,43 @@ mod tests {
         } else {
             panic!("fill must be present");
         }
+    }
+
+    #[test]
+    fn import_execution_report_null_lock_pointer_stays_absent() {
+        let report = OpenPitExecutionReport {
+            operation: OpenPitExecutionReportOperationOptional::default(),
+            financial_impact: OpenPitFinancialImpactOptional::default(),
+            fill: OpenPitExecutionReportFillOptional {
+                is_set: true,
+                value: OpenPitExecutionReportFill {
+                    last_trade: OpenPitExecutionReportTradeOptional::default(),
+                    fee: OpenPitParamMonetaryAmountOptional::default(),
+                    leaves_quantity: OpenPitParamQuantityOptional::default(),
+                    lock: std::ptr::null(),
+                    is_final: OpenPitExecutionReportIsFinalOptional::default(),
+                },
+            },
+            position_impact: OpenPitExecutionReportPositionImpactOptional::default(),
+            user_data: std::ptr::null_mut(),
+        };
+
+        let imported = import_execution_report(&report).expect("import");
+        if let ExecutionReportFillAccess::Populated(fill) = &imported.request.fill {
+            assert_eq!(fill.lock, None);
+        } else {
+            panic!("fill must be present");
+        }
+        assert_eq!(
+            imported
+                .lock()
+                .expect_err("null lock pointer must not fabricate an empty lock")
+                .to_string(),
+            "failed to access field 'fill.lock'"
+        );
+
+        let exported = export_execution_report(&imported);
+        assert!(exported.fill.value.lock.is_null());
     }
 
     #[test]

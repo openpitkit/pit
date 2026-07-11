@@ -3630,6 +3630,113 @@ mod tests {
         openpit_destroy_engine(callback_engine);
     }
 
+    #[derive(Default)]
+    struct ObservedFillLock {
+        invoked: bool,
+        lock_was_null: bool,
+        lock_len: usize,
+    }
+
+    unsafe extern "C" fn record_fill_lock_apply(
+        _ctx: *const crate::policy::custom::OpenPitPostTradeContext,
+        report: *const OpenPitExecutionReport,
+        _out_adjustments: *mut crate::account_outcome::OpenPitPostTradeAdjustmentList,
+        user_data: *mut c_void,
+    ) -> *mut crate::reject::OpenPitPretradeAccountBlockList {
+        let observed = unsafe { &mut *(user_data as *mut ObservedFillLock) };
+        observed.invoked = true;
+        let lock = unsafe { &*report }.fill.value.lock;
+        if lock.is_null() {
+            observed.lock_was_null = true;
+        } else {
+            observed.lock_len = crate::pre_trade_lock::openpit_pretrade_pre_trade_lock_len(lock);
+        }
+        std::ptr::null_mut()
+    }
+
+    #[test]
+    fn apply_execution_report_frees_exported_fill_lock() {
+        use openpit::param::Price;
+        use openpit::pretrade::PreTradeLock;
+        use openpit::PolicyGroupId;
+
+        let mut observed = ObservedFillLock::default();
+
+        let builder =
+            openpit_create_engine_builder(OpenPitSyncPolicy::Full as u8, std::ptr::null_mut());
+        let policy = unsafe {
+            openpit_create_pretrade_custom_pre_trade_policy(
+                OpenPitStringView::from_utf8("record.fill.lock"),
+                0,
+                None,
+                None,
+                Some(record_fill_lock_apply),
+                None,
+                noop_free_user_data,
+                (&mut observed as *mut ObservedFillLock).cast::<c_void>(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(!policy.is_null(), "failed to create policy");
+        assert!(openpit_engine_builder_add_pre_trade_policy(
+            builder,
+            policy,
+            std::ptr::null_mut()
+        ));
+        openpit_destroy_pretrade_pre_trade_policy(policy);
+        let engine =
+            openpit_engine_builder_build(builder, std::ptr::null_mut(), std::ptr::null_mut());
+        assert!(!engine.is_null(), "engine build failed");
+
+        // Input report carrying a one-entry lock. The engine imports it
+        // (lock -> Some(PreTradeLock)); the custom-policy trampoline then
+        // re-exports it for the callback, allocating a fresh owned lock handle
+        // that the trampoline must release exactly once after the callback.
+        let input_lock = crate::pre_trade_lock::OpenPitPretradePreTradeLock::from_inner(
+            PreTradeLock::from_entries([(
+                PolicyGroupId::new(7),
+                Price::from_str("101").expect("price must be valid"),
+            )]),
+        );
+        let report = OpenPitExecutionReport {
+            operation: OpenPitExecutionReportOperationOptional::default(),
+            financial_impact: OpenPitFinancialImpactOptional::default(),
+            fill: crate::execution_report::OpenPitExecutionReportFillOptional {
+                is_set: true,
+                value: crate::execution_report::OpenPitExecutionReportFill {
+                    last_trade:
+                        crate::execution_report::OpenPitExecutionReportTradeOptional::default(),
+                    fee: crate::param::OpenPitParamMonetaryAmountOptional::default(),
+                    leaves_quantity: crate::param::OpenPitParamQuantityOptional::default(),
+                    lock: input_lock,
+                    is_final:
+                        crate::execution_report::OpenPitExecutionReportIsFinalOptional::default(),
+                },
+            },
+            position_impact: OpenPitExecutionReportPositionImpactOptional::default(),
+            user_data: std::ptr::null_mut(),
+        };
+
+        assert!(openpit_engine_apply_execution_report(
+            engine,
+            &report,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ));
+
+        // The callback observed the re-exported lock (non-null, one entry).
+        // Completing without abort proves the trampoline freed the exported
+        // lock exactly once - no double-free and no use-after-free.
+        assert!(observed.invoked);
+        assert!(!observed.lock_was_null);
+        assert_eq!(observed.lock_len, 1);
+
+        openpit_destroy_engine(engine);
+        // Release the caller-owned input lock built for this test.
+        crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(input_lock);
+    }
+
     #[test]
     fn account_group_outputs_change_only_for_their_error_channel() {
         let engine = build_passthrough_engine();

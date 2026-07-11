@@ -1746,13 +1746,14 @@ struct OpenPitExecutionReportFill {
     /**
      * Pre-trade lock attached to the order.
      *
+     * Optional field: null means the lock is absent (maps to `None`), not an empty
+     * lock. No lock record is fabricated on import for a null pointer, and an
+     * absent lock is exported as null.
+     *
      * Ownership contract:
      * - the caller owns the pointer when present (build it through
      *   `openpit_pretrade_lock_*` functions) and remains responsible for
-     *   releasing it with `openpit_destroy_pretrade_pre_trade_lock`;
-     * - null is equivalent to an empty lock; passing null does *not* mean
-     *   "default group" - no record is created on import unless the caller
-     *   supplied one through this pointer.
+     *   releasing it with `openpit_destroy_pretrade_pre_trade_lock`.
      */
     const OpenPitPretradePreTradeLock * lock;
     /**

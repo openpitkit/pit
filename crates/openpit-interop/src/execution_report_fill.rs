@@ -33,8 +33,8 @@ pub struct PopulatedExecutionReportFill {
     pub fee: Option<MonetaryAmount>,
     /// Remaining order quantity after this fill.
     pub leaves_quantity: Option<Quantity>,
-    /// Order lock payload.
-    pub lock: PreTradeLock,
+    /// Order lock payload, if provided.
+    pub lock: Option<PreTradeLock>,
     /// Whether this report closes the order's report stream.
     /// The order is filled, cancelled, or rejected.
     pub is_final: Option<bool>,
@@ -68,7 +68,9 @@ impl HasLeavesQuantity for PopulatedExecutionReportFill {
 
 impl HasPreTradeLock for PopulatedExecutionReportFill {
     fn lock(&self) -> Result<PreTradeLock, RequestFieldAccessError> {
-        Ok(self.lock.clone())
+        self.lock
+            .clone()
+            .ok_or_else(|| RequestFieldAccessError::new("fill.lock"))
     }
 }
 
@@ -139,7 +141,7 @@ mod tests {
             last_trade: None,
             fee: None,
             leaves_quantity: Some(Quantity::ZERO),
-            lock: PreTradeLock::new(),
+            lock: Some(PreTradeLock::new()),
             is_final: Some(true),
         }));
         assert_eq!(access.last_trade().unwrap(), None);
@@ -154,7 +156,7 @@ mod tests {
             last_trade: None,
             fee: None,
             leaves_quantity: Some(Quantity::ZERO),
-            lock: PreTradeLock::new(),
+            lock: Some(PreTradeLock::new()),
             is_final: None,
         }));
         assert!(access.is_final().is_err());
@@ -166,10 +168,29 @@ mod tests {
             last_trade: None,
             fee: None,
             leaves_quantity: None,
-            lock: PreTradeLock::new(),
+            lock: Some(PreTradeLock::new()),
             is_final: Some(true),
         }));
         assert!(access.leaves_quantity().is_err());
+    }
+
+    #[test]
+    fn populated_without_lock_returns_core_field_error() {
+        let access = ExecutionReportFillAccess::Populated(Box::new(PopulatedExecutionReportFill {
+            last_trade: None,
+            fee: None,
+            leaves_quantity: Some(Quantity::ZERO),
+            lock: None,
+            is_final: Some(true),
+        }));
+
+        assert_eq!(
+            access
+                .lock()
+                .expect_err("missing lock must be rejected")
+                .to_string(),
+            "failed to access field 'fill.lock'"
+        );
     }
 
     #[test]
