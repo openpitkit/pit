@@ -112,6 +112,7 @@ jobs:
       - verify-tag
       - publish-wheels
       - publish-sdist
+      - publish-npm
       - build-runtime-artifacts
     runs-on: ubuntu-22.04
     permissions:
@@ -163,8 +164,10 @@ jobs:
 
   publish-wheels:
     name: Publish wheels (${{ matrix.name }})
+    # Keep the first npm publication serialized before other registries. Restore
+    # parallel publishing after the npm release path has been proven in production.
     needs:
-      - verify
+      - publish-npm
       - verify-tag
     runs-on: ${{ matrix.os }}
     strategy:
@@ -440,6 +443,152 @@ jobs:
             fi
             TWINE_USERNAME=__token__ TWINE_PASSWORD="${PYPI_TOKEN}" \
               twine upload --skip-existing --non-interactive dist/*
+          fi
+
+  publish-npm:
+    name: Publish npm package
+    needs:
+      - verify
+      - verify-tag
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write # npm provenance attestation
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST }}
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.CI_NODE }}
+          cache: npm
+          cache-dependency-path: bindings/js/package-lock.json
+          registry-url: https://registry.npmjs.org
+
+      - name: Resolve wasm-bindgen-cli version
+        id: wasm-bindgen
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(
+            awk '/^wasm-bindgen[[:space:]]*=/ {
+                   match($0, /[0-9]+\.[0-9]+\.[0-9]+/); print substr($0, RSTART, RLENGTH); exit
+                 }' bindings/js/Cargo.toml
+          )"
+          if [[ -z "${VERSION}" ]]; then
+            echo "::error::could not resolve the wasm-bindgen version from bindings/js/Cargo.toml"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Install wasm-bindgen-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@${{ steps.wasm-bindgen.outputs.version }}
+
+      - name: Install pinned Binaryen
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="binaryen-version_${CI_BINARYEN}-x86_64-linux.tar.gz"
+          release="https://github.com/WebAssembly/binaryen/releases/download/version_${CI_BINARYEN}"
+          curl --proto '=https' --tlsv1.2 --retry 3 --fail --location --silent \
+            --show-error --output "$RUNNER_TEMP/$archive" "$release/$archive"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
+          binaryen_bin="$RUNNER_TEMP/binaryen-version_${CI_BINARYEN}/bin"
+          wasm_opt_version="$("$binaryen_bin/wasm-opt" --version)"
+          if [[ "$wasm_opt_version" != *"version ${CI_BINARYEN}"* ]]; then
+            echo "::error::unexpected wasm-opt version: $wasm_opt_version"
+            exit 1
+          fi
+          echo "$wasm_opt_version"
+          echo "$binaryen_bin" >> "$GITHUB_PATH"
+
+      - name: Apply staging npm package version
+        if: ${{ needs.verify-tag.outputs.release_mode == 'dry-run' }}
+        shell: bash
+        env:
+          STAGING_VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: just --justfile "$JUSTFILE" apply-staging-version-js "$STAGING_VERSION"
+
+      - name: Build npm package
+        shell: bash
+        env:
+          # Publish path: wasm-opt is mandatory (build-wasm.mjs fails hard if it
+          # is missing or errors) so the released artifact is always optimized.
+          OPENPIT_WASM_OPT: require
+        run: just --justfile "$JUSTFILE" build-js
+
+      - name: Verify npm package version
+        shell: bash
+        env:
+          BASE_VERSION: ${{ needs.verify-tag.outputs.base_version }}
+          RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: just --justfile "$JUSTFILE" verify-npm-version "$RELEASE_MODE" "$VERSION" "$BASE_VERSION"
+
+      - name: Ensure npm version is not published
+        if: ${{ needs.verify-tag.outputs.release_mode == 'production' }}
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+        run: just --justfile "$JUSTFILE" check-npm-unpublished "$VERSION"
+
+      - name: Pack npm tarball
+        if: ${{ needs.verify-tag.outputs.release_mode == 'dry-run' }}
+        shell: bash
+        run: just --justfile "$JUSTFILE" pack-js
+
+      - name: Upload npm tarball artifact
+        if: ${{ needs.verify-tag.outputs.release_mode == 'dry-run' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: bindings/js/dist/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Dry-run npm publication
+        shell: bash
+        working-directory: bindings/js/dist
+        run: npm publish --dry-run --access public --provenance
+
+      - name: Publish npm package
+        shell: bash
+        working-directory: bindings/js/dist
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_API_TOKEN }}
+          RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
+        run: |
+          set -euo pipefail
+          if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
+            echo "npm publish --dry-run completed successfully"
+          else
+            if [[ -z "${NODE_AUTH_TOKEN}" ]]; then
+              echo "::error::NPM_API_TOKEN is required for production npm publish"
+              exit 1
+            fi
+            # publishConfig in the generated package.json sets access=public and
+            # provenance=true; --access public is passed explicitly to mirror the
+            # other publish jobs. Provenance requires the id-token permission.
+            npm publish --access public --provenance
           fi
 
   build-runtime-artifacts:

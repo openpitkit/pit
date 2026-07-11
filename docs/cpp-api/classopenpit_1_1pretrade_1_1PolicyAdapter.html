@@ -124,9 +124,21 @@ document.addEventListener('DOMContentLoaded',() => { initNavTree('classopenpit_1
 <table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-pub-methods" class="groupheader"><a id="pub-methods" name="pub-methods"></a>
 Public Member Functions</h2></td></tr>
-<tr class="memitem:a69ff010c1ab303af0e30a25c8cf5a5e3" id="r_a69ff010c1ab303af0e30a25c8cf5a5e3"><td class="memItemLeft">bool&#160;</td><td class="memItemRight"><a class="el" href="#a69ff010c1ab303af0e30a25c8cf5a5e3">ApplyExecutionReport</a> (const <a class="el" href="classopenpit_1_1ExecutionReport.html">openpit::ExecutionReport</a> &amp;report) const</td></tr>
+<tr class="memitem:ab1571f10dece315d1089c663c996a5cd" id="r_ab1571f10dece315d1089c663c996a5cd"><td class="memTemplParams" colspan="2">template&lt;typename P = ClientPolicy, std::enable_if_t&lt; detail::HasAdjustment&lt; P &gt;::value, int &gt; = 0&gt; </td></tr>
+<tr class="memitem:ab1571f10dece315d1089c663c996a5cd template"><td class="memItemLeft"><a class="el" href="structopenpit_1_1pretrade_1_1PolicyDecision.html">PolicyDecision</a>&#160;</td><td class="memItemRight"><a class="el" href="#ab1571f10dece315d1089c663c996a5cd">ApplyAccountAdjustment</a> (const <a class="el" href="classopenpit_1_1accountadjustment_1_1Context.html">::openpit::accountadjustment::Context</a> &amp;context, <a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> accountId, const <a class="el" href="structopenpit_1_1accountadjustment_1_1AccountAdjustment.html">::openpit::accountadjustment::AccountAdjustment</a> &amp;adjustment, <a class="el" href="classopenpit_1_1tx_1_1Mutations.html">::openpit::tx::Mutations</a> &amp;mutations, <a class="el" href="classopenpit_1_1pretrade_1_1AccountOutcomes.html">AccountOutcomes</a> &amp;outcomes) const</td></tr>
+<tr class="memitem:acafa6f13b2f0a89065c2baac4ae73e43" id="r_acafa6f13b2f0a89065c2baac4ae73e43"><td class="memTemplParams" colspan="2">template&lt;typename P = ClientPolicy, std::enable_if_t&lt; detail::HasReportLegacy&lt; P, ClientReport &gt;::value, int &gt; = 0&gt; </td></tr>
+<tr class="memitem:acafa6f13b2f0a89065c2baac4ae73e43 template"><td class="memItemLeft">bool&#160;</td><td class="memItemRight"><a class="el" href="#acafa6f13b2f0a89065c2baac4ae73e43">ApplyExecutionReport</a> (const <a class="el" href="classopenpit_1_1ExecutionReport.html">openpit::ExecutionReport</a> &amp;report) const</td></tr>
+<tr class="memitem:a2e2145030aa9dc74188db9f5889088b5" id="r_a2e2145030aa9dc74188db9f5889088b5"><td class="memTemplParams" colspan="2">template&lt;typename P = ClientPolicy, std::enable_if_t&lt; detail::HasReportFull&lt; P, ClientReport &gt;::value||detail::HasReportLegacy&lt; P, ClientReport &gt;::value, int &gt; = 0&gt; </td></tr>
+<tr class="memitem:a2e2145030aa9dc74188db9f5889088b5 template"><td class="memItemLeft">std::vector&lt;<a class="el" href="structopenpit_1_1accounts_1_1AccountBlock.html">::openpit::accounts::AccountBlock</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a2e2145030aa9dc74188db9f5889088b5">ApplyExecutionReport</a> (const <a class="el" href="classopenpit_1_1pretrade_1_1PostTradeContext.html">PostTradeContext</a> &amp;context, const <a class="el" href="classopenpit_1_1ExecutionReport.html">openpit::ExecutionReport</a> &amp;report, <a class="el" href="classopenpit_1_1pretrade_1_1PostTradeAdjustments.html">PostTradeAdjustments</a> &amp;adjustments) const</td></tr>
+<tr class="memitem:a8a8e1a517eba5472015b7aacf6f96715" id="r_a8a8e1a517eba5472015b7aacf6f96715"><td class="memTemplParams" colspan="2">template&lt;typename P = ClientPolicy, std::enable_if_t&lt; detail::HasStart&lt; P, ClientOrder &gt;::value, int &gt; = 0&gt; </td></tr>
+<tr class="memitem:a8a8e1a517eba5472015b7aacf6f96715 template"><td class="memItemLeft">std::optional&lt; <a class="el" href="structopenpit_1_1pretrade_1_1Reject.html">Reject</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a8a8e1a517eba5472015b7aacf6f96715">CheckPreTradeStart</a> (const <a class="el" href="classopenpit_1_1Order.html">openpit::Order</a> &amp;order) const</td></tr>
+<tr class="memitem:aa8ed2eac5ad6893b1bf37c047f9439a3" id="r_aa8ed2eac5ad6893b1bf37c047f9439a3"><td class="memTemplParams" colspan="2">template&lt;typename P = ClientPolicy, std::enable_if_t&lt; detail::HasStartDryRun&lt; P, ClientOrder &gt;::value, int &gt; = 0&gt; </td></tr>
+<tr class="memitem:aa8ed2eac5ad6893b1bf37c047f9439a3 template"><td class="memItemLeft">std::optional&lt; <a class="el" href="structopenpit_1_1pretrade_1_1Reject.html">Reject</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#aa8ed2eac5ad6893b1bf37c047f9439a3">CheckPreTradeStartDryRun</a> (const <a class="el" href="classopenpit_1_1Order.html">openpit::Order</a> &amp;order) const</td></tr>
 <tr class="memitem:a4e50cb9f63ffc15fe04346c1d7967296" id="r_a4e50cb9f63ffc15fe04346c1d7967296"><td class="memItemLeft">std::string_view&#160;</td><td class="memItemRight"><a class="el" href="#a4e50cb9f63ffc15fe04346c1d7967296">Name</a> () const noexcept</td></tr>
+<tr class="memitem:a6a24e3867f8f3b6e14939372fe28eb75" id="r_a6a24e3867f8f3b6e14939372fe28eb75"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a6a24e3867f8f3b6e14939372fe28eb75">PerformPreTradeCheck</a> (const <a class="el" href="classopenpit_1_1pretrade_1_1Context.html">Context</a> &amp;context, <a class="el" href="classopenpit_1_1tx_1_1Mutations.html">::openpit::tx::Mutations</a> &amp;mutations, <a class="el" href="classopenpit_1_1pretrade_1_1Result.html">Result</a> &amp;result, <a class="el" href="structopenpit_1_1pretrade_1_1PolicyDecision.html">PolicyDecision</a> &amp;decision) const</td></tr>
 <tr class="memitem:a2aac34e73a48fcebc8633f185699bde1" id="r_a2aac34e73a48fcebc8633f185699bde1"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a2aac34e73a48fcebc8633f185699bde1">PerformPreTradeCheck</a> (const <a class="el" href="classopenpit_1_1pretrade_1_1Context.html">Context</a> &amp;context, <a class="el" href="structopenpit_1_1pretrade_1_1PolicyDecision.html">PolicyDecision</a> &amp;decision) const</td></tr>
+<tr class="memitem:a2ef46b4a046f8781e24413c4d04ff004" id="r_a2ef46b4a046f8781e24413c4d04ff004"><td class="memTemplParams" colspan="2">template&lt;typename P = ClientPolicy, std::enable_if_t&lt; detail::HasMainDryRunFull&lt; P, ClientOrder &gt;::value||detail::HasMainDryRunLegacy&lt; P, ClientOrder &gt;::value, int &gt; = 0&gt; </td></tr>
+<tr class="memitem:a2ef46b4a046f8781e24413c4d04ff004 template"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a2ef46b4a046f8781e24413c4d04ff004">PerformPreTradeCheckDryRun</a> (const <a class="el" href="classopenpit_1_1pretrade_1_1Context.html">Context</a> &amp;context, <a class="el" href="classopenpit_1_1tx_1_1Mutations.html">::openpit::tx::Mutations</a> &amp;mutations, <a class="el" href="classopenpit_1_1pretrade_1_1Result.html">Result</a> &amp;result, <a class="el" href="structopenpit_1_1pretrade_1_1PolicyDecision.html">PolicyDecision</a> &amp;decision) const</td></tr>
 <tr class="memitem:ac3fe0d26ce88cc4ff0df10532c2f1f1e" id="r_ac3fe0d26ce88cc4ff0df10532c2f1f1e"><td class="memItemLeft">&#160;</td><td class="memItemRight"><a class="el" href="#ac3fe0d26ce88cc4ff0df10532c2f1f1e">PolicyAdapter</a> (ClientPolicy policy)</td></tr>
 </table>
 <a name="doc-constructors" id="doc-constructors"></a><h2 id="header-doc-constructors" class="groupheader">Constructor &amp; Destructor Documentation</h2>
@@ -158,13 +170,63 @@ template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport, 
 </div>
 </div>
 <a name="doc-func-members" id="doc-func-members"></a><h2 id="header-doc-func-members" class="groupheader">Member Function Documentation</h2>
-<a id="a69ff010c1ab303af0e30a25c8cf5a5e3" name="a69ff010c1ab303af0e30a25c8cf5a5e3"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a69ff010c1ab303af0e30a25c8cf5a5e3">&#9670;&#160;</a></span>ApplyExecutionReport()</h2>
+<a id="ab1571f10dece315d1089c663c996a5cd" name="ab1571f10dece315d1089c663c996a5cd"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ab1571f10dece315d1089c663c996a5cd">&#9670;&#160;</a></span>ApplyAccountAdjustment()</h2>
 
 <div class="memitem">
 <div class="memproto">
 <div class="memtemplate">
 template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport, <a class="el" href="namespaceopenpit_1_1pretrade.html#ad88d6888d2b6d5d1db4507842cf81472">CastMode</a> mode&gt; </div>
+<div class="memtemplate">
+template&lt;typename P = ClientPolicy, std::enable_if_t&lt; detail::HasAdjustment&lt; P &gt;::value, int &gt; = 0&gt; </div>
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname"><a class="el" href="structopenpit_1_1pretrade_1_1PolicyDecision.html">PolicyDecision</a> <a class="el" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">openpit::pretrade::PolicyAdapter</a>&lt; ClientPolicy, ClientOrder, ClientReport, mode &gt;::ApplyAccountAdjustment </td>
+          <td>(</td>
+          <td class="paramtype">const <a class="el" href="classopenpit_1_1accountadjustment_1_1Context.html">::openpit::accountadjustment::Context</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>context</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a></td>          <td class="paramname"><span class="paramname"><em>accountId</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype">const <a class="el" href="structopenpit_1_1accountadjustment_1_1AccountAdjustment.html">::openpit::accountadjustment::AccountAdjustment</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>adjustment</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="classopenpit_1_1tx_1_1Mutations.html">::openpit::tx::Mutations</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>mutations</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="classopenpit_1_1pretrade_1_1AccountOutcomes.html">AccountOutcomes</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>outcomes</em></span>&#160;) const</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel nodiscard">nodiscard</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+</div>
+</div>
+<a id="acafa6f13b2f0a89065c2baac4ae73e43" name="acafa6f13b2f0a89065c2baac4ae73e43"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#acafa6f13b2f0a89065c2baac4ae73e43">&#9670;&#160;</a></span>ApplyExecutionReport() <span class="overload">[1/2]</span></h2>
+
+<div class="memitem">
+<div class="memproto">
+<div class="memtemplate">
+template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport, <a class="el" href="namespaceopenpit_1_1pretrade.html#ad88d6888d2b6d5d1db4507842cf81472">CastMode</a> mode&gt; </div>
+<div class="memtemplate">
+template&lt;typename P = ClientPolicy, std::enable_if_t&lt; detail::HasReportLegacy&lt; P, ClientReport &gt;::value, int &gt; = 0&gt; </div>
 <table class="mlabels">
   <tr>
   <td class="mlabels-left">
@@ -173,6 +235,102 @@ template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport, 
           <td class="memname">bool <a class="el" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">openpit::pretrade::PolicyAdapter</a>&lt; ClientPolicy, ClientOrder, ClientReport, mode &gt;::ApplyExecutionReport </td>
           <td>(</td>
           <td class="paramtype">const <a class="el" href="classopenpit_1_1ExecutionReport.html">openpit::ExecutionReport</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>report</em></span></td><td>)</td>
+          <td> const</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel nodiscard">nodiscard</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+</div>
+</div>
+<a id="a2e2145030aa9dc74188db9f5889088b5" name="a2e2145030aa9dc74188db9f5889088b5"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a2e2145030aa9dc74188db9f5889088b5">&#9670;&#160;</a></span>ApplyExecutionReport() <span class="overload">[2/2]</span></h2>
+
+<div class="memitem">
+<div class="memproto">
+<div class="memtemplate">
+template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport, <a class="el" href="namespaceopenpit_1_1pretrade.html#ad88d6888d2b6d5d1db4507842cf81472">CastMode</a> mode&gt; </div>
+<div class="memtemplate">
+template&lt;typename P = ClientPolicy, std::enable_if_t&lt; detail::HasReportFull&lt; P, ClientReport &gt;::value||detail::HasReportLegacy&lt; P, ClientReport &gt;::value, int &gt; = 0&gt; </div>
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">std::vector&lt;<a class="el" href="structopenpit_1_1accounts_1_1AccountBlock.html">::openpit::accounts::AccountBlock</a> &gt; <a class="el" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">openpit::pretrade::PolicyAdapter</a>&lt; ClientPolicy, ClientOrder, ClientReport, mode &gt;::ApplyExecutionReport </td>
+          <td>(</td>
+          <td class="paramtype">const <a class="el" href="classopenpit_1_1pretrade_1_1PostTradeContext.html">PostTradeContext</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>context</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype">const <a class="el" href="classopenpit_1_1ExecutionReport.html">openpit::ExecutionReport</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>report</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="classopenpit_1_1pretrade_1_1PostTradeAdjustments.html">PostTradeAdjustments</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>adjustments</em></span>&#160;) const</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel nodiscard">nodiscard</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+</div>
+</div>
+<a id="a8a8e1a517eba5472015b7aacf6f96715" name="a8a8e1a517eba5472015b7aacf6f96715"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a8a8e1a517eba5472015b7aacf6f96715">&#9670;&#160;</a></span>CheckPreTradeStart()</h2>
+
+<div class="memitem">
+<div class="memproto">
+<div class="memtemplate">
+template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport, <a class="el" href="namespaceopenpit_1_1pretrade.html#ad88d6888d2b6d5d1db4507842cf81472">CastMode</a> mode&gt; </div>
+<div class="memtemplate">
+template&lt;typename P = ClientPolicy, std::enable_if_t&lt; detail::HasStart&lt; P, ClientOrder &gt;::value, int &gt; = 0&gt; </div>
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">std::optional&lt; <a class="el" href="structopenpit_1_1pretrade_1_1Reject.html">Reject</a> &gt; <a class="el" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">openpit::pretrade::PolicyAdapter</a>&lt; ClientPolicy, ClientOrder, ClientReport, mode &gt;::CheckPreTradeStart </td>
+          <td>(</td>
+          <td class="paramtype">const <a class="el" href="classopenpit_1_1Order.html">openpit::Order</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>order</em></span></td><td>)</td>
+          <td> const</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel nodiscard">nodiscard</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+</div>
+</div>
+<a id="aa8ed2eac5ad6893b1bf37c047f9439a3" name="aa8ed2eac5ad6893b1bf37c047f9439a3"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#aa8ed2eac5ad6893b1bf37c047f9439a3">&#9670;&#160;</a></span>CheckPreTradeStartDryRun()</h2>
+
+<div class="memitem">
+<div class="memproto">
+<div class="memtemplate">
+template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport, <a class="el" href="namespaceopenpit_1_1pretrade.html#ad88d6888d2b6d5d1db4507842cf81472">CastMode</a> mode&gt; </div>
+<div class="memtemplate">
+template&lt;typename P = ClientPolicy, std::enable_if_t&lt; detail::HasStartDryRun&lt; P, ClientOrder &gt;::value, int &gt; = 0&gt; </div>
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">std::optional&lt; <a class="el" href="structopenpit_1_1pretrade_1_1Reject.html">Reject</a> &gt; <a class="el" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">openpit::pretrade::PolicyAdapter</a>&lt; ClientPolicy, ClientOrder, ClientReport, mode &gt;::CheckPreTradeStartDryRun </td>
+          <td>(</td>
+          <td class="paramtype">const <a class="el" href="classopenpit_1_1Order.html">openpit::Order</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>order</em></span></td><td>)</td>
           <td> const</td>
         </tr>
       </table>
@@ -212,8 +370,8 @@ template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport, 
 
 </div>
 </div>
-<a id="a2aac34e73a48fcebc8633f185699bde1" name="a2aac34e73a48fcebc8633f185699bde1"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a2aac34e73a48fcebc8633f185699bde1">&#9670;&#160;</a></span>PerformPreTradeCheck()</h2>
+<a id="a6a24e3867f8f3b6e14939372fe28eb75" name="a6a24e3867f8f3b6e14939372fe28eb75"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a6a24e3867f8f3b6e14939372fe28eb75">&#9670;&#160;</a></span>PerformPreTradeCheck() <span class="overload">[1/2]</span></h2>
 
 <div class="memitem">
 <div class="memproto">
@@ -227,6 +385,90 @@ template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport, 
           <td class="memname">void <a class="el" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">openpit::pretrade::PolicyAdapter</a>&lt; ClientPolicy, ClientOrder, ClientReport, mode &gt;::PerformPreTradeCheck </td>
           <td>(</td>
           <td class="paramtype">const <a class="el" href="classopenpit_1_1pretrade_1_1Context.html">Context</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>context</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="classopenpit_1_1tx_1_1Mutations.html">::openpit::tx::Mutations</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>mutations</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="classopenpit_1_1pretrade_1_1Result.html">Result</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>result</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="structopenpit_1_1pretrade_1_1PolicyDecision.html">PolicyDecision</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>decision</em></span>&#160;) const</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+</div>
+</div>
+<a id="a2aac34e73a48fcebc8633f185699bde1" name="a2aac34e73a48fcebc8633f185699bde1"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a2aac34e73a48fcebc8633f185699bde1">&#9670;&#160;</a></span>PerformPreTradeCheck() <span class="overload">[2/2]</span></h2>
+
+<div class="memitem">
+<div class="memproto">
+<div class="memtemplate">
+template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport, <a class="el" href="namespaceopenpit_1_1pretrade.html#ad88d6888d2b6d5d1db4507842cf81472">CastMode</a> mode&gt; </div>
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">void <a class="el" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">openpit::pretrade::PolicyAdapter</a>&lt; ClientPolicy, ClientOrder, ClientReport, mode &gt;::PerformPreTradeCheck </td>
+          <td>(</td>
+          <td class="paramtype">const <a class="el" href="classopenpit_1_1pretrade_1_1Context.html">Context</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>context</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="structopenpit_1_1pretrade_1_1PolicyDecision.html">PolicyDecision</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>decision</em></span>&#160;) const</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+</div>
+</div>
+<a id="a2ef46b4a046f8781e24413c4d04ff004" name="a2ef46b4a046f8781e24413c4d04ff004"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a2ef46b4a046f8781e24413c4d04ff004">&#9670;&#160;</a></span>PerformPreTradeCheckDryRun()</h2>
+
+<div class="memitem">
+<div class="memproto">
+<div class="memtemplate">
+template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport, <a class="el" href="namespaceopenpit_1_1pretrade.html#ad88d6888d2b6d5d1db4507842cf81472">CastMode</a> mode&gt; </div>
+<div class="memtemplate">
+template&lt;typename P = ClientPolicy, std::enable_if_t&lt; detail::HasMainDryRunFull&lt; P, ClientOrder &gt;::value||detail::HasMainDryRunLegacy&lt; P, ClientOrder &gt;::value, int &gt; = 0&gt; </div>
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">void <a class="el" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">openpit::pretrade::PolicyAdapter</a>&lt; ClientPolicy, ClientOrder, ClientReport, mode &gt;::PerformPreTradeCheckDryRun </td>
+          <td>(</td>
+          <td class="paramtype">const <a class="el" href="classopenpit_1_1pretrade_1_1Context.html">Context</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>context</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="classopenpit_1_1tx_1_1Mutations.html">::openpit::tx::Mutations</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>mutations</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="classopenpit_1_1pretrade_1_1Result.html">Result</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>result</em></span>, </td>
         </tr>
         <tr>
           <td class="paramkey"></td>

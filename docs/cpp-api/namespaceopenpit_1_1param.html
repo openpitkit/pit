@@ -150,6 +150,29 @@ Enumerations</h2></td></tr>
 <tr class="memitem:ad447e10b1a4c0ebfde8b838c53868f90" id="r_ad447e10b1a4c0ebfde8b838c53868f90"><td class="memItemLeft">enum class &#160;</td><td class="memItemRight"><a class="el" href="#ad447e10b1a4c0ebfde8b838c53868f90">AdjustmentAmountKind</a> : std::uint8_t { <a class="el" href="#ad447e10b1a4c0ebfde8b838c53868f90adb1f4ab5845def61a83d5df13e0c2397">Delta</a> = OpenPitParamAdjustmentAmountKind_Delta
 , <a class="el" href="#ad447e10b1a4c0ebfde8b838c53868f90ab51ca26c6c89cfc9bec338f7a0d3e0c8">Absolute</a> = OpenPitParamAdjustmentAmountKind_Absolute
  }</td></tr>
+<tr class="memitem:aca93319eb8d371d7f91860bf40c03e36" id="r_aca93319eb8d371d7f91860bf40c03e36"><td class="memItemLeft">enum class &#160;</td><td class="memItemRight"><a class="el" href="#aca93319eb8d371d7f91860bf40c03e36">FillType</a> : std::uint8_t { <br />
+&#160;&#160;<a class="el" href="#aca93319eb8d371d7f91860bf40c03e36a5f390d80b20daad8f5d2f483fb0ae9d8">Trade</a> = OpenPitParamFillType_Trade
+, <a class="el" href="#aca93319eb8d371d7f91860bf40c03e36af9eac3c017853796aa88325dccbea364">Liquidation</a> = OpenPitParamFillType_Liquidation
+, <a class="el" href="#aca93319eb8d371d7f91860bf40c03e36ac4e6eabc356cccaa07f4c3a67b1e9081">AutoDeleverage</a> = OpenPitParamFillType_AutoDeleverage
+, <a class="el" href="#aca93319eb8d371d7f91860bf40c03e36a1610f44571feba48aa8a30a8112a06fe">Settlement</a> = OpenPitParamFillType_Settlement
+, <br />
+&#160;&#160;<a class="el" href="#aca93319eb8d371d7f91860bf40c03e36a682889d0a1d3b50267a69346a750433d">Funding</a> = OpenPitParamFillType_Funding
+<br />
+ }</td></tr>
+<tr class="memitem:a41bdb60811ad4d8c3a7f2d7b86bed19f" id="r_a41bdb60811ad4d8c3a7f2d7b86bed19f"><td class="memItemLeft">enum class &#160;</td><td class="memItemRight"><a class="el" href="#a41bdb60811ad4d8c3a7f2d7b86bed19f">Kind</a> : std::uint8_t { <br />
+&#160;&#160;<a class="el" href="#a41bdb60811ad4d8c3a7f2d7b86bed19fa694e8d1f2ee056f98ee488bdc4982d73">Quantity</a> = OpenPitParamKind_Quantity
+, <a class="el" href="#a41bdb60811ad4d8c3a7f2d7b86bed19fabd7a9717d29c5ddcab1bc175eda1e298">Volume</a> = OpenPitParamKind_Volume
+, <a class="el" href="#a41bdb60811ad4d8c3a7f2d7b86bed19fa50bb1497341bd4b45df430255f0c0bf2">Notional</a> = OpenPitParamKind_Notional
+, <a class="el" href="#a41bdb60811ad4d8c3a7f2d7b86bed19fa3601146c4e948c32b6424d2c0a7f0118">Price</a> = OpenPitParamKind_Price
+, <br />
+&#160;&#160;<a class="el" href="#a41bdb60811ad4d8c3a7f2d7b86bed19fa73a90c39f7f1402dd9f42119cc15aecc">Pnl</a> = OpenPitParamKind_Pnl
+, <a class="el" href="#a41bdb60811ad4d8c3a7f2d7b86bed19fa2321c32b54571b180ff5960982822378">CashFlow</a> = OpenPitParamKind_CashFlow
+, <a class="el" href="#a41bdb60811ad4d8c3a7f2d7b86bed19fa54c95732782078d630e0235f38b2a422">PositionSize</a> = OpenPitParamKind_PositionSize
+, <a class="el" href="#a41bdb60811ad4d8c3a7f2d7b86bed19faeb7297e94e2cb86e90a6ead067666717">Fee</a> = OpenPitParamKind_Fee
+, <br />
+&#160;&#160;<a class="el" href="#a41bdb60811ad4d8c3a7f2d7b86bed19faf6d322d1c8b6e0b3c0eff040b7c6c9a0">Leverage</a> = OpenPitParamKind_Leverage
+<br />
+ }</td></tr>
 <tr class="memitem:a0f919e842c6de532d11078c10329be7a" id="r_a0f919e842c6de532d11078c10329be7a"><td class="memItemLeft">enum class &#160;</td><td class="memItemRight"><a class="el" href="#a0f919e842c6de532d11078c10329be7a">RoundingStrategy</a> : std::uint8_t { <a class="el" href="#a0f919e842c6de532d11078c10329be7aa8a3085fad3124053fcc31d08ca3b3097">MidpointNearestEven</a> = OpenPitParamRoundingStrategy_MidpointNearestEven
 , <a class="el" href="#a0f919e842c6de532d11078c10329be7aa334ab3eb125db6a7e7bd0773a371b670">MidpointAwayFromZero</a> = OpenPitParamRoundingStrategy_MidpointAwayFromZero
 , <a class="el" href="#a0f919e842c6de532d11078c10329be7aa258f49887ef8d14ac268c92b02503aaa">Up</a> = OpenPitParamRoundingStrategy_Up
@@ -351,6 +374,68 @@ Variables</h2></td></tr>
 <table class="fieldtable">
 <tr><th colspan="2">Enumerator</th></tr><tr><td class="fieldname"><a id="ad447e10b1a4c0ebfde8b838c53868f90adb1f4ab5845def61a83d5df13e0c2397" name="ad447e10b1a4c0ebfde8b838c53868f90adb1f4ab5845def61a83d5df13e0c2397"></a>Delta&#160;</td><td class="fielddoc"></td></tr>
 <tr><td class="fieldname"><a id="ad447e10b1a4c0ebfde8b838c53868f90ab51ca26c6c89cfc9bec338f7a0d3e0c8" name="ad447e10b1a4c0ebfde8b838c53868f90ab51ca26c6c89cfc9bec338f7a0d3e0c8"></a>Absolute&#160;</td><td class="fielddoc"></td></tr>
+</table>
+
+</div>
+</div>
+<a id="aca93319eb8d371d7f91860bf40c03e36" name="aca93319eb8d371d7f91860bf40c03e36"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#aca93319eb8d371d7f91860bf40c03e36">&#9670;&#160;</a></span>FillType</h2>
+
+<div class="memitem">
+<div class="memproto">
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">enum class <a class="el" href="#aca93319eb8d371d7f91860bf40c03e36">openpit::param::FillType</a> : std::uint8_t</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel strong">strong</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+<table class="fieldtable">
+<tr><th colspan="2">Enumerator</th></tr><tr><td class="fieldname"><a id="aca93319eb8d371d7f91860bf40c03e36a5f390d80b20daad8f5d2f483fb0ae9d8" name="aca93319eb8d371d7f91860bf40c03e36a5f390d80b20daad8f5d2f483fb0ae9d8"></a>Trade&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="aca93319eb8d371d7f91860bf40c03e36af9eac3c017853796aa88325dccbea364" name="aca93319eb8d371d7f91860bf40c03e36af9eac3c017853796aa88325dccbea364"></a>Liquidation&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="aca93319eb8d371d7f91860bf40c03e36ac4e6eabc356cccaa07f4c3a67b1e9081" name="aca93319eb8d371d7f91860bf40c03e36ac4e6eabc356cccaa07f4c3a67b1e9081"></a>AutoDeleverage&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="aca93319eb8d371d7f91860bf40c03e36a1610f44571feba48aa8a30a8112a06fe" name="aca93319eb8d371d7f91860bf40c03e36a1610f44571feba48aa8a30a8112a06fe"></a>Settlement&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="aca93319eb8d371d7f91860bf40c03e36a682889d0a1d3b50267a69346a750433d" name="aca93319eb8d371d7f91860bf40c03e36a682889d0a1d3b50267a69346a750433d"></a>Funding&#160;</td><td class="fielddoc"></td></tr>
+</table>
+
+</div>
+</div>
+<a id="a41bdb60811ad4d8c3a7f2d7b86bed19f" name="a41bdb60811ad4d8c3a7f2d7b86bed19f"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a41bdb60811ad4d8c3a7f2d7b86bed19f">&#9670;&#160;</a></span>Kind</h2>
+
+<div class="memitem">
+<div class="memproto">
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">enum class <a class="el" href="#a41bdb60811ad4d8c3a7f2d7b86bed19f">openpit::param::Kind</a> : std::uint8_t</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel strong">strong</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+<table class="fieldtable">
+<tr><th colspan="2">Enumerator</th></tr><tr><td class="fieldname"><a id="a41bdb60811ad4d8c3a7f2d7b86bed19fa694e8d1f2ee056f98ee488bdc4982d73" name="a41bdb60811ad4d8c3a7f2d7b86bed19fa694e8d1f2ee056f98ee488bdc4982d73"></a>Quantity&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="a41bdb60811ad4d8c3a7f2d7b86bed19fabd7a9717d29c5ddcab1bc175eda1e298" name="a41bdb60811ad4d8c3a7f2d7b86bed19fabd7a9717d29c5ddcab1bc175eda1e298"></a>Volume&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="a41bdb60811ad4d8c3a7f2d7b86bed19fa50bb1497341bd4b45df430255f0c0bf2" name="a41bdb60811ad4d8c3a7f2d7b86bed19fa50bb1497341bd4b45df430255f0c0bf2"></a>Notional&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="a41bdb60811ad4d8c3a7f2d7b86bed19fa3601146c4e948c32b6424d2c0a7f0118" name="a41bdb60811ad4d8c3a7f2d7b86bed19fa3601146c4e948c32b6424d2c0a7f0118"></a>Price&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="a41bdb60811ad4d8c3a7f2d7b86bed19fa73a90c39f7f1402dd9f42119cc15aecc" name="a41bdb60811ad4d8c3a7f2d7b86bed19fa73a90c39f7f1402dd9f42119cc15aecc"></a>Pnl&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="a41bdb60811ad4d8c3a7f2d7b86bed19fa2321c32b54571b180ff5960982822378" name="a41bdb60811ad4d8c3a7f2d7b86bed19fa2321c32b54571b180ff5960982822378"></a>CashFlow&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="a41bdb60811ad4d8c3a7f2d7b86bed19fa54c95732782078d630e0235f38b2a422" name="a41bdb60811ad4d8c3a7f2d7b86bed19fa54c95732782078d630e0235f38b2a422"></a>PositionSize&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="a41bdb60811ad4d8c3a7f2d7b86bed19faeb7297e94e2cb86e90a6ead067666717" name="a41bdb60811ad4d8c3a7f2d7b86bed19faeb7297e94e2cb86e90a6ead067666717"></a>Fee&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="a41bdb60811ad4d8c3a7f2d7b86bed19faf6d322d1c8b6e0b3c0eff040b7c6c9a0" name="a41bdb60811ad4d8c3a7f2d7b86bed19faf6d322d1c8b6e0b3c0eff040b7c6c9a0"></a>Leverage&#160;</td><td class="fielddoc"></td></tr>
 </table>
 
 </div>

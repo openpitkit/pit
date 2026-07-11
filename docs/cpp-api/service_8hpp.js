@@ -7,7 +7,8 @@ var service_8hpp =
     [ "openpit::marketdata::GetStatus", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98", [
       [ "openpit::marketdata::GetStatus::Found", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98a5d695cc28c6a7ea955162fbdd0ae42b9", null ],
       [ "openpit::marketdata::GetStatus::Unavailable", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98a453e6aa38d87b28ccae545967c53004f", null ],
-      [ "openpit::marketdata::GetStatus::UnknownInstrument", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98ab9e51a69f4dd89fc832c1ab9735ab49a", null ]
+      [ "openpit::marketdata::GetStatus::UnknownInstrument", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98ab9e51a69f4dd89fc832c1ab9735ab49a", null ],
+      [ "openpit::marketdata::GetStatus::QuoteExpired", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98a3a7f9417a31e902960db730a4e05e005", null ]
     ] ],
     [ "openpit::marketdata::RegisterStatus", "namespaceopenpit_1_1marketdata.html#a2dac77c54543feba4e5a508ae51611d9", [
       [ "openpit::marketdata::RegisterStatus::Ok", "namespaceopenpit_1_1marketdata.html#a2dac77c54543feba4e5a508ae51611d9aa60852f204ed8028c1c58808b746d115", null ],

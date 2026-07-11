@@ -143,7 +143,9 @@ if(SPOT_LOADTEST_BUILD_TESTS)
     # load the shipped reference file directly.
     target_compile_definitions(${name} PRIVATE
       "SPOT_LOADTEST_BASELINE_INI=\"${CMAKE_CURRENT_SOURCE_DIR}/configs/baseline.ini\"")
-    gtest_discover_tests(${name})
+    gtest_discover_tests(${name}
+      DISCOVERY_MODE PRE_TEST
+      DISCOVERY_TIMEOUT 60)
   endfunction()
 
   spot_loadtest_add_test(spot_loadtest_measurement_tests test/measurement_test.cpp)

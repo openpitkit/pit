@@ -17,13 +17,19 @@
 
 #pragma once
 
+#include "openpit/account_adjustment.hpp"
+#include "openpit/accounts.hpp"
+#include "openpit/pretrade/callbacks.hpp"
 #include "openpit/reject.hpp"
+#include "openpit/tx.hpp"
 
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <type_traits>
 #include <typeinfo>
 #include <utility>
+#include <vector>
 
 namespace openpit {
 class Order;
@@ -39,6 +45,94 @@ namespace openpit::pretrade {
 
 class Context;
 struct PolicyDecision;
+
+namespace detail {
+
+template <typename Policy, typename Order, typename = void>
+struct HasMainFull : std::false_type {};
+
+template <typename Policy, typename Order>
+struct HasMainFull<
+    Policy, Order,
+    std::void_t<decltype(std::declval<const Policy&>().PerformPreTradeCheck(
+        std::declval<const Order&>(), std::declval<const Context&>(),
+        std::declval<::openpit::tx::Mutations&>(), std::declval<Result&>(),
+        std::declval<PolicyDecision&>()))>> : std::true_type {};
+
+template <typename Policy, typename Order, typename = void>
+struct HasMainDryRunFull : std::false_type {};
+
+template <typename Policy, typename Order>
+struct HasMainDryRunFull<
+    Policy, Order,
+    std::void_t<
+        decltype(std::declval<const Policy&>().PerformPreTradeCheckDryRun(
+            std::declval<const Order&>(), std::declval<const Context&>(),
+            std::declval<::openpit::tx::Mutations&>(), std::declval<Result&>(),
+            std::declval<PolicyDecision&>()))>> : std::true_type {};
+
+template <typename Policy, typename Order, typename = void>
+struct HasMainDryRunLegacy : std::false_type {};
+
+template <typename Policy, typename Order>
+struct HasMainDryRunLegacy<
+    Policy, Order,
+    std::void_t<
+        decltype(std::declval<const Policy&>().PerformPreTradeCheckDryRun(
+            std::declval<const Order&>(), std::declval<const Context&>(),
+            std::declval<PolicyDecision&>()))>> : std::true_type {};
+
+template <typename Policy, typename Report, typename = void>
+struct HasReportFull : std::false_type {};
+
+template <typename Policy, typename Report>
+struct HasReportFull<
+    Policy, Report,
+    std::void_t<decltype(std::declval<const Policy&>().ApplyExecutionReport(
+        std::declval<const PostTradeContext&>(), std::declval<const Report&>(),
+        std::declval<PostTradeAdjustments&>()))>> : std::true_type {};
+
+template <typename Policy, typename Report, typename = void>
+struct HasReportLegacy : std::false_type {};
+
+template <typename Policy, typename Report>
+struct HasReportLegacy<
+    Policy, Report,
+    std::void_t<decltype(std::declval<const Policy&>().ApplyExecutionReport(
+        std::declval<const Report&>()))>> : std::true_type {};
+
+template <typename Policy, typename = void>
+struct HasAdjustment : std::false_type {};
+
+template <typename Policy>
+struct HasAdjustment<
+    Policy,
+    std::void_t<decltype(std::declval<const Policy&>().ApplyAccountAdjustment(
+        std::declval<const ::openpit::accountadjustment::Context&>(),
+        std::declval<::openpit::param::AccountId>(),
+        std::declval<const ::openpit::accountadjustment::AccountAdjustment&>(),
+        std::declval<::openpit::tx::Mutations&>(),
+        std::declval<AccountOutcomes&>()))>> : std::true_type {};
+
+template <typename Policy, typename Order, typename = void>
+struct HasStart : std::false_type {};
+
+template <typename Policy, typename Order>
+struct HasStart<
+    Policy, Order,
+    std::void_t<decltype(std::declval<const Policy&>().CheckPreTradeStart(
+        std::declval<const Order&>()))>> : std::true_type {};
+
+template <typename Policy, typename Order, typename = void>
+struct HasStartDryRun : std::false_type {};
+
+template <typename Policy, typename Order>
+struct HasStartDryRun<
+    Policy, Order,
+    std::void_t<decltype(std::declval<const Policy&>().CheckPreTradeStartDryRun(
+        std::declval<const Order&>()))>> : std::true_type {};
+
+}  // namespace detail
 
 // Implemented by binding layer.
 [[nodiscard]] Reject MakeTypeMismatchReject(
@@ -56,7 +150,7 @@ void PushReject(PolicyDecision& decision, Reject reject);
 // `SafeSlow`:
 // - Uses `dynamic_cast` to verify runtime type compatibility.
 // - Produces deterministic reject on order mismatch.
-// - Returns `false` on report mismatch.
+// - Returns no account blocks on report mismatch.
 // - Risk profile: safe default at dynamic boundaries.
 //
 // `UnsafeFast`:
@@ -116,32 +210,102 @@ class StartPolicyAdapter {
     }
   }
 
+  template <
+      typename P = ClientPolicy,
+      std::enable_if_t<detail::HasStartDryRun<P, ClientOrder>::value, int> = 0>
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStartDryRun(
+      const openpit::Order& order) const {
+    if constexpr (mode == CastMode::SafeSlow) {
+      const auto* concrete_order = dynamic_cast<const ClientOrder*>(&order);
+      if (concrete_order == nullptr) {
+        return MakeTypeMismatchReject(Name(), RejectScope::Order,
+                                      RejectCode::Other, "order type mismatch",
+                                      typeid(ClientOrder).name());
+      }
+      return m_policy.CheckPreTradeStartDryRun(*concrete_order);
+    } else {
+      return m_policy.CheckPreTradeStartDryRun(
+          static_cast<const ClientOrder&>(order));
+    }
+  }
+
   // Adapts execution-report callback to client report type.
   //
   // SafeSlow:
-  // - type mismatch -> `false`
+  // - type mismatch -> empty account-block list
   //
   // UnsafeFast:
   // - direct cast, mismatch is undefined behavior
+  template <
+      typename P = ClientPolicy,
+      std::enable_if_t<detail::HasReportFull<P, ClientReport>::value ||
+                           detail::HasReportLegacy<P, ClientReport>::value,
+                       int> = 0>
+  [[nodiscard]] std::vector<::openpit::accounts::AccountBlock>
+  ApplyExecutionReport(const PostTradeContext& context,
+                       const openpit::ExecutionReport& report,
+                       PostTradeAdjustments& adjustments) const {
+    if constexpr (mode == CastMode::SafeSlow) {
+      const auto* concrete_report = dynamic_cast<const ClientReport*>(&report);
+      if (concrete_report == nullptr) {
+        return {};
+      }
+      if constexpr (detail::HasReportFull<P, ClientReport>::value) {
+        return m_policy.ApplyExecutionReport(context, *concrete_report,
+                                             adjustments);
+      } else if constexpr (detail::HasReportLegacy<P, ClientReport>::value) {
+        static_cast<void>(m_policy.ApplyExecutionReport(*concrete_report));
+        return {};
+      } else {
+        return {};
+      }
+    } else {
+      const auto& concrete_report = static_cast<const ClientReport&>(report);
+      if constexpr (detail::HasReportFull<P, ClientReport>::value) {
+        return m_policy.ApplyExecutionReport(context, concrete_report,
+                                             adjustments);
+      } else if constexpr (detail::HasReportLegacy<P, ClientReport>::value) {
+        static_cast<void>(m_policy.ApplyExecutionReport(concrete_report));
+        return {};
+      } else {
+        return {};
+      }
+    }
+  }
+
+  template <typename P = ClientPolicy,
+            std::enable_if_t<detail::HasReportLegacy<P, ClientReport>::value,
+                             int> = 0>
   [[nodiscard]] bool ApplyExecutionReport(
       const openpit::ExecutionReport& report) const {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_report = dynamic_cast<const ClientReport*>(&report);
-      if (concrete_report == nullptr) {
-        return false;
-      }
-      return m_policy.ApplyExecutionReport(*concrete_report);
+      return concrete_report != nullptr &&
+             m_policy.ApplyExecutionReport(*concrete_report);
     } else {
       return m_policy.ApplyExecutionReport(
           static_cast<const ClientReport&>(report));
     }
   }
 
+  template <typename P = ClientPolicy,
+            std::enable_if_t<detail::HasAdjustment<P>::value, int> = 0>
+  [[nodiscard]] PolicyDecision ApplyAccountAdjustment(
+      const ::openpit::accountadjustment::Context& context,
+      ::openpit::param::AccountId accountId,
+      const ::openpit::accountadjustment::AccountAdjustment& adjustment,
+      ::openpit::tx::Mutations& mutations, AccountOutcomes& outcomes) const {
+    return m_policy.ApplyAccountAdjustment(context, accountId, adjustment,
+                                           mutations, outcomes);
+  }
+
  private:
   ClientPolicy m_policy;
 };
 
-// Main-stage adapter for client policy object.
+// Unified adapter for a client policy with a main-stage hook. Optional start,
+// dry-run, post-trade, and account-adjustment hooks on the same object are
+// forwarded through the same native policy registration.
 //
 // Why this adapter exists:
 // - Keeps main-stage client policy API typed to client payloads.
@@ -160,6 +324,46 @@ class PolicyAdapter {
   // Returns stable policy name forwarded from client policy object.
   [[nodiscard]] std::string_view Name() const noexcept {
     return m_policy.Name();
+  }
+
+  // A main-stage adapter is also the unified adapter for any optional start
+  // hooks exposed by the same client policy. This keeps all stages and their
+  // policy state behind one native registration.
+  template <typename P = ClientPolicy,
+            std::enable_if_t<detail::HasStart<P, ClientOrder>::value, int> = 0>
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStart(
+      const openpit::Order& order) const {
+    if constexpr (mode == CastMode::SafeSlow) {
+      const auto* concrete_order = dynamic_cast<const ClientOrder*>(&order);
+      if (concrete_order == nullptr) {
+        return MakeTypeMismatchReject(Name(), RejectScope::Order,
+                                      RejectCode::Other, "order type mismatch",
+                                      typeid(ClientOrder).name());
+      }
+      return m_policy.CheckPreTradeStart(*concrete_order);
+    } else {
+      return m_policy.CheckPreTradeStart(
+          static_cast<const ClientOrder&>(order));
+    }
+  }
+
+  template <
+      typename P = ClientPolicy,
+      std::enable_if_t<detail::HasStartDryRun<P, ClientOrder>::value, int> = 0>
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStartDryRun(
+      const openpit::Order& order) const {
+    if constexpr (mode == CastMode::SafeSlow) {
+      const auto* concrete_order = dynamic_cast<const ClientOrder*>(&order);
+      if (concrete_order == nullptr) {
+        return MakeTypeMismatchReject(Name(), RejectScope::Order,
+                                      RejectCode::Other, "order type mismatch",
+                                      typeid(ClientOrder).name());
+      }
+      return m_policy.CheckPreTradeStartDryRun(*concrete_order);
+    } else {
+      return m_policy.CheckPreTradeStartDryRun(
+          static_cast<const ClientOrder&>(order));
+    }
   }
 
   // Adapts main-stage callback to client order type and decision object.
@@ -188,25 +392,136 @@ class PolicyAdapter {
     }
   }
 
+  void PerformPreTradeCheck(const Context& context,
+                            ::openpit::tx::Mutations& mutations, Result& result,
+                            PolicyDecision& decision) const {
+    const openpit::Order& order = ContextOrder(context);
+    if constexpr (mode == CastMode::SafeSlow) {
+      const auto* concrete_order = dynamic_cast<const ClientOrder*>(&order);
+      if (concrete_order == nullptr) {
+        PushReject(decision,
+                   MakeTypeMismatchReject(
+                       Name(), RejectScope::Order, RejectCode::Other,
+                       "order type mismatch", typeid(ClientOrder).name()));
+        return;
+      }
+      if constexpr (detail::HasMainFull<ClientPolicy, ClientOrder>::value) {
+        m_policy.PerformPreTradeCheck(*concrete_order, context, mutations,
+                                      result, decision);
+      } else {
+        m_policy.PerformPreTradeCheck(*concrete_order, context, decision);
+      }
+    } else {
+      const auto& concrete_order = static_cast<const ClientOrder&>(order);
+      if constexpr (detail::HasMainFull<ClientPolicy, ClientOrder>::value) {
+        m_policy.PerformPreTradeCheck(concrete_order, context, mutations,
+                                      result, decision);
+      } else {
+        m_policy.PerformPreTradeCheck(concrete_order, context, decision);
+      }
+    }
+  }
+
+  template <
+      typename P = ClientPolicy,
+      std::enable_if_t<detail::HasMainDryRunFull<P, ClientOrder>::value ||
+                           detail::HasMainDryRunLegacy<P, ClientOrder>::value,
+                       int> = 0>
+  void PerformPreTradeCheckDryRun(const Context& context,
+                                  ::openpit::tx::Mutations& mutations,
+                                  Result& result,
+                                  PolicyDecision& decision) const {
+    const openpit::Order& order = ContextOrder(context);
+    if constexpr (mode == CastMode::SafeSlow) {
+      const auto* concrete_order = dynamic_cast<const ClientOrder*>(&order);
+      if (concrete_order == nullptr) {
+        PushReject(decision,
+                   MakeTypeMismatchReject(
+                       Name(), RejectScope::Order, RejectCode::Other,
+                       "order type mismatch", typeid(ClientOrder).name()));
+        return;
+      }
+      if constexpr (detail::HasMainDryRunFull<P, ClientOrder>::value) {
+        m_policy.PerformPreTradeCheckDryRun(*concrete_order, context, mutations,
+                                            result, decision);
+      } else {
+        m_policy.PerformPreTradeCheckDryRun(*concrete_order, context, decision);
+      }
+    } else {
+      const auto& concrete_order = static_cast<const ClientOrder&>(order);
+      if constexpr (detail::HasMainDryRunFull<P, ClientOrder>::value) {
+        m_policy.PerformPreTradeCheckDryRun(concrete_order, context, mutations,
+                                            result, decision);
+      } else {
+        m_policy.PerformPreTradeCheckDryRun(concrete_order, context, decision);
+      }
+    }
+  }
+
   // Adapts execution-report callback to client report type.
   //
   // SafeSlow:
-  // - type mismatch -> `false`
+  // - type mismatch -> empty account-block list
   //
   // UnsafeFast:
   // - direct cast, mismatch is undefined behavior
+  template <
+      typename P = ClientPolicy,
+      std::enable_if_t<detail::HasReportFull<P, ClientReport>::value ||
+                           detail::HasReportLegacy<P, ClientReport>::value,
+                       int> = 0>
+  [[nodiscard]] std::vector<::openpit::accounts::AccountBlock>
+  ApplyExecutionReport(const PostTradeContext& context,
+                       const openpit::ExecutionReport& report,
+                       PostTradeAdjustments& adjustments) const {
+    if constexpr (mode == CastMode::SafeSlow) {
+      const auto* concrete_report = dynamic_cast<const ClientReport*>(&report);
+      if (concrete_report == nullptr) {
+        return {};
+      }
+      if constexpr (detail::HasReportFull<P, ClientReport>::value) {
+        return m_policy.ApplyExecutionReport(context, *concrete_report,
+                                             adjustments);
+      } else {
+        static_cast<void>(m_policy.ApplyExecutionReport(*concrete_report));
+        return {};
+      }
+    } else {
+      const auto& concrete_report = static_cast<const ClientReport&>(report);
+      if constexpr (detail::HasReportFull<P, ClientReport>::value) {
+        return m_policy.ApplyExecutionReport(context, concrete_report,
+                                             adjustments);
+      } else {
+        static_cast<void>(m_policy.ApplyExecutionReport(concrete_report));
+        return {};
+      }
+    }
+  }
+
+  template <typename P = ClientPolicy,
+            std::enable_if_t<detail::HasReportLegacy<P, ClientReport>::value,
+                             int> = 0>
   [[nodiscard]] bool ApplyExecutionReport(
       const openpit::ExecutionReport& report) const {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_report = dynamic_cast<const ClientReport*>(&report);
-      if (concrete_report == nullptr) {
-        return false;
-      }
-      return m_policy.ApplyExecutionReport(*concrete_report);
+      return concrete_report != nullptr &&
+             m_policy.ApplyExecutionReport(*concrete_report);
     } else {
       return m_policy.ApplyExecutionReport(
           static_cast<const ClientReport&>(report));
     }
+  }
+
+  template <typename P = ClientPolicy,
+            std::enable_if_t<detail::HasAdjustment<P>::value, int> = 0>
+  [[nodiscard]] PolicyDecision ApplyAccountAdjustment(
+      const ::openpit::accountadjustment::Context& context,
+      ::openpit::param::AccountId accountId,
+      const ::openpit::accountadjustment::AccountAdjustment& adjustment,
+      ::openpit::tx::Mutations& mutations, AccountOutcomes& outcomes) const {
+    return m_policy.ApplyAccountAdjustment(context, accountId, adjustment,
+                                           mutations, outcomes);
   }
 
  private:

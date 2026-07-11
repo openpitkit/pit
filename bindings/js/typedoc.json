@@ -1,0 +1,22 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": [
+    "src-ts/index.ts",
+    "src-ts/param/index.ts",
+    "src-ts/model/index.ts",
+    "src-ts/pretrade/index.ts",
+    "src-ts/pretrade/policies/index.ts",
+    "src-ts/marketdata/index.ts",
+    "src-ts/reject/index.ts",
+    "src-ts/accountadjustment/index.ts",
+    "src-ts/accounts/index.ts",
+    "src-ts/tx/index.ts"
+  ],
+  "out": "../../docs/js-api",
+  "excludeInternal": true,
+  "readme": "README.md",
+  "name": "@openpit/engine",
+  "tsconfig": "tsconfig.json",
+  "treatWarningsAsErrors": true,
+  "gitRevision": "main"
+}

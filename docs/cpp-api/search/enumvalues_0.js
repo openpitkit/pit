@@ -10,5 +10,6 @@ var searchData=
   ['accountthengroup_7',['AccountThenGroup',['../namespaceopenpit_1_1marketdata.html#a7c736df89df3481cae07bcf3d46d5c2daff5b78a3145a8fe66d09755ff24aacb3',1,'openpit::marketdata']]],
   ['accountthengroupthendefault_8',['AccountThenGroupThenDefault',['../namespaceopenpit_1_1marketdata.html#a7c736df89df3481cae07bcf3d46d5c2dad766d1be7ce62961331ff0e432f26536',1,'openpit::marketdata']]],
   ['alreadyregistered_9',['AlreadyRegistered',['../namespaceopenpit_1_1marketdata.html#a2dac77c54543feba4e5a508ae51611d9a835f31bbbcb0f81ff2756bd7fc89a0f5',1,'openpit::marketdata']]],
-  ['arithmeticoverflow_10',['ArithmeticOverflow',['../namespaceopenpit_1_1pretrade.html#a9fe9e76687a28aa5a58164c44ddfefeda74948d2cbeaf62316c4fda9166a1ff72',1,'openpit::pretrade']]]
+  ['arithmeticoverflow_10',['ArithmeticOverflow',['../namespaceopenpit_1_1pretrade.html#a9fe9e76687a28aa5a58164c44ddfefeda74948d2cbeaf62316c4fda9166a1ff72',1,'openpit::pretrade']]],
+  ['autodeleverage_11',['AutoDeleverage',['../namespaceopenpit_1_1param.html#aca93319eb8d371d7f91860bf40c03e36ac4e6eabc356cccaa07f4c3a67b1e9081',1,'openpit::param']]]
 ];

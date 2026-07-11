@@ -17,12 +17,14 @@
 
 #pragma once
 
-// Aggregate header for the pre-trade module: context wrapper, pre-trade lock,
-// built-in policy configurations, and custom-policy authoring glue. The
+// Aggregate header for the pre-trade module: callback-scoped collectors and
+// contexts, pre-trade lock, built-in policy configurations, and custom-policy
+// authoring glue. The
 // client-facing policy adapter templates live in the separate
 // `openpit/adapters.hpp`; their declared free functions are defined in
 // `openpit/pretrade/context.hpp`.
 
+#include "openpit/pretrade/callbacks.hpp"
 #include "openpit/pretrade/context.hpp"
 #include "openpit/pretrade/custom_policy.hpp"
 #include "openpit/pretrade/policies.hpp"

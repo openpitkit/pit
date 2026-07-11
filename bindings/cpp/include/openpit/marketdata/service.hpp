@@ -76,6 +76,8 @@ enum class RegisterStatus : std::uint8_t {
 struct RegisterResult {
   RegisterStatus status = RegisterStatus::Ok;
   std::optional<InstrumentId> instrumentId;
+  std::optional<InstrumentId> conflictingInstrumentId;
+  std::optional<model::Instrument> conflictingInstrument;
 
   [[nodiscard]] bool Ok() const noexcept {
     return status == RegisterStatus::Ok;
@@ -91,18 +93,24 @@ enum class GetStatus : std::uint8_t {
   Unavailable = OpenPitMarketDataGetStatus_Unavailable,
   // The instrument id is not registered.
   UnknownInstrument = OpenPitMarketDataGetStatus_UnknownInstrument,
+  // The selected quote exists but aged past its effective TTL.
+  QuoteExpired = OpenPitMarketDataGetStatus_QuoteExpired,
 };
 
 /// \brief Value result returned by account-aware quote reads.
 //
-// `quote` is set only for `GetStatus::Found`; the status still distinguishes
-// unknown instruments from known-but-unavailable quotes.
+// `quote` is set for `GetStatus::Found` and `GetStatus::QuoteExpired`; the
+// latter preserves the stale quote for diagnostics and reconciliation.
 struct GetResult {
   GetStatus status = GetStatus::UnknownInstrument;
   std::optional<Quote> quote;
 
   [[nodiscard]] bool Found() const noexcept {
     return status == GetStatus::Found;
+  }
+
+  [[nodiscard]] bool Expired() const noexcept {
+    return status == GetStatus::QuoteExpired;
   }
 };
 
@@ -158,7 +166,7 @@ class Service {
     const OpenPitMarketDataRegisterStatus status =
         openpit_marketdata_service_register(m_handle.Get(), &raw, &id, &error);
     return MapRegister(status, error, "openpit_marketdata_service_register",
-                       &id);
+                       &id, instrument, std::nullopt);
   }
 
   // Registers `instrument` with a per-instrument TTL override.
@@ -171,7 +179,8 @@ class Service {
         openpit_marketdata_service_register_with_ttl(m_handle.Get(), &raw,
                                                      ttl.Raw(), &id, &error);
     return MapRegister(status, error,
-                       "openpit_marketdata_service_register_with_ttl", &id);
+                       "openpit_marketdata_service_register_with_ttl", &id,
+                       instrument, std::nullopt);
   }
 
   // Registers `instrument` under the caller-supplied `id` with the service-wide
@@ -185,8 +194,8 @@ class Service {
         openpit_marketdata_service_register_with_id(
             m_handle.Get(), &raw, id.Raw(), &resolved, &error);
     return MapRegister(status, error,
-                       "openpit_marketdata_service_register_with_id",
-                       &resolved);
+                       "openpit_marketdata_service_register_with_id", &resolved,
+                       instrument, id);
   }
 
   // Registers `instrument` under the caller-supplied `id` with a per-instrument
@@ -201,7 +210,7 @@ class Service {
             m_handle.Get(), &raw, id.Raw(), ttl.Raw(), &resolved, &error);
     return MapRegister(status, error,
                        "openpit_marketdata_service_register_with_id_and_ttl",
-                       &resolved);
+                       &resolved, instrument, id);
   }
 
   // Resolves `instrument` to its registered id, returning `std::nullopt` when
@@ -327,21 +336,26 @@ class Service {
         const_cast<AccountInfo*>(&accountInfo), ToRaw(resolution), &raw);
     GetResult result;
     result.status = static_cast<GetStatus>(status);
-    if (result.Found()) {
+    if (result.Found() || result.Expired()) {
       result.quote = Quote::FromRaw(raw);
     }
     return result;
   }
 
   // Reads the latest quote for `instrumentId`, returning `std::nullopt` for
-  // both non-`Found` outcomes (unknown instrument or no usable quote). Use
-  // `Get` when those two cases must be distinguished.
+  // every non-`Found` outcome (unknown instrument, unavailable quote, or
+  // expired quote). Use `Get` when those cases or a stale quote must be
+  // inspected.
   template <typename AccountInfo>
   [[nodiscard]] std::optional<Quote> Find(InstrumentId instrumentId,
                                           param::AccountId accountId,
                                           const AccountInfo& accountInfo,
                                           QuoteResolution resolution) {
-    return Get(instrumentId, accountId, accountInfo, resolution).quote;
+    GetResult result = Get(instrumentId, accountId, accountInfo, resolution);
+    if (!result.Found()) {
+      return std::nullopt;
+    }
+    return result.quote;
   }
 
   //----------------------------------------------------------------------------
@@ -448,7 +462,9 @@ class Service {
   // carrying the resolved id on `Ok`.
   [[nodiscard]] static RegisterResult MapRegister(
       OpenPitMarketDataRegisterStatus status, OpenPitSharedString* error,
-      const char* fallback, const OpenPitMarketDataInstrumentId* id) {
+      const char* fallback, const OpenPitMarketDataInstrumentId* id,
+      const model::Instrument& instrument,
+      std::optional<InstrumentId> requestedId) {
     if (status == OpenPitMarketDataRegisterStatus_Error) {
       ::openpit::detail::ThrowFromSharedString(error, fallback);
     }
@@ -456,6 +472,11 @@ class Service {
     result.status = static_cast<RegisterStatus>(status);
     if (status == OpenPitMarketDataRegisterStatus_Ok) {
       result.instrumentId = InstrumentId(*id);
+    } else if (status == OpenPitMarketDataRegisterStatus_AlreadyRegistered ||
+               status == OpenPitMarketDataRegisterStatus_DuplicateInstrument) {
+      result.conflictingInstrument = instrument;
+    } else if (status == OpenPitMarketDataRegisterStatus_DuplicateId) {
+      result.conflictingInstrumentId = requestedId;
     }
     return result;
   }

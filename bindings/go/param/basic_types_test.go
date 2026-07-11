@@ -210,6 +210,44 @@ func TestPositionEffectString(t *testing.T) {
 	}
 }
 
+func TestFillTypeStrings(t *testing.T) {
+	t.Parallel()
+
+	tests := map[FillType]string{
+		FillTypeTrade:          "TRADE",
+		FillTypeLiquidation:    "LIQUIDATION",
+		FillTypeAutoDeleverage: "AUTO_DELEVERAGE",
+		FillTypeSettlement:     "SETTLEMENT",
+		FillTypeFunding:        "FUNDING",
+	}
+	for fillType, want := range tests {
+		if got := fillType.String(); got != want {
+			t.Errorf("FillType(%d).String() = %q, want %q", fillType, got, want)
+		}
+	}
+}
+
+func TestParamKindStrings(t *testing.T) {
+	t.Parallel()
+
+	tests := map[Kind]string{
+		KindQuantity:     "Quantity",
+		KindVolume:       "Volume",
+		KindNotional:     "Notional",
+		KindPrice:        "Price",
+		KindPnl:          "Pnl",
+		KindCashFlow:     "CashFlow",
+		KindPositionSize: "PositionSize",
+		KindFee:          "Fee",
+		KindLeverage:     "Leverage",
+	}
+	for kind, want := range tests {
+		if got := kind.String(); got != want {
+			t.Errorf("Kind(%d).String() = %q, want %q", kind, got, want)
+		}
+	}
+}
+
 func TestRoundingStrategyStringAndNative(t *testing.T) {
 	t.Parallel()
 

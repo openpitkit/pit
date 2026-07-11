@@ -31,12 +31,17 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
+import urllib.error
+import urllib.request
+import zipfile
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_MODES = {"debug", "release"}
+NODE_DIST_URL = "https://nodejs.org/dist"
 _WINDOWS_CGO_COMPILER_COMMANDS: dict[tuple[str, ...], str] = {}
 _WINDOWS_CGO_WRAPPER_DIRS: set[Path] = set()
 
@@ -126,6 +131,177 @@ def host_arch() -> str:
     if machine in {"aarch64", "arm64"}:
         return "arm64"
     return machine
+
+
+def node_platform() -> str:
+    platforms = {
+        "Darwin": "darwin",
+        "Linux": "linux",
+        "Windows": "win",
+    }
+    try:
+        return platforms[platform.system()]
+    except KeyError:
+        raise SystemExit(
+            f"unsupported platform for project-local Node.js: {platform.system()}"
+        ) from None
+
+
+def node_arch() -> str:
+    machine = platform.machine().lower()
+    architectures = {
+        "amd64": "x64",
+        "x86_64": "x64",
+        "aarch64": "arm64",
+        "arm64": "arm64",
+    }
+    try:
+        return architectures[machine]
+    except KeyError:
+        raise SystemExit(
+            f"unsupported architecture for project-local Node.js: {machine}"
+        ) from None
+
+
+def node_archive_name(version: str) -> str:
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise SystemExit(f"invalid CI_NODE version: {version!r}")
+    platform_name = node_platform()
+    extension = "zip" if platform_name == "win" else "tar.xz"
+    return f"node-v{version}-{platform_name}-{node_arch()}.{extension}"
+
+
+def node_bin_dir(node_dir: Path) -> Path:
+    return node_dir if is_windows() else node_dir / "bin"
+
+
+def node_executable(node_dir: Path) -> Path:
+    name = "node.exe" if is_windows() else "node"
+    return node_bin_dir(node_dir) / name
+
+
+def node_runtime_version(node_dir: Path) -> str | None:
+    executable = node_executable(node_dir)
+    if not executable.is_file():
+        return None
+    try:
+        result = subprocess.run(
+            [str(executable), "--version"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    match = re.fullmatch(r"v?(\d+\.\d+\.\d+)", result.stdout.strip())
+    return match.group(1) if match is not None else None
+
+
+def sha256_bytes(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def download(url: str, destination: Path) -> None:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "openpit-project-node-bootstrap"},
+    )
+    try:
+        with (
+            urllib.request.urlopen(request, timeout=60) as response,
+            destination.open("wb") as output,
+        ):
+            shutil.copyfileobj(response, output)
+    except urllib.error.URLError as exc:
+        raise SystemExit(f"could not download {url}: {exc.reason}") from None
+
+
+def node_archive_sha256(checksums: Path, archive_name: str) -> str:
+    for line in checksums.read_text(encoding="utf-8").splitlines():
+        digest, separator, filename = line.partition("  ")
+        if separator and filename == archive_name:
+            if re.fullmatch(r"[0-9a-f]{64}", digest):
+                return digest
+            break
+    raise SystemExit(f"checksum for {archive_name} was not found")
+
+
+def extract_node_archive(archive: Path, destination: Path) -> Path:
+    destination.mkdir()
+    if archive.suffix == ".zip":
+        with zipfile.ZipFile(archive) as package:
+            package.extractall(destination)
+    else:
+        with tarfile.open(archive, "r:xz") as package:
+            if sys.version_info >= (3, 12):
+                package.extractall(destination, filter="data")
+            else:
+                package.extractall(destination)
+    roots = [path for path in destination.iterdir() if path.is_dir()]
+    if len(roots) != 1:
+        raise SystemExit(f"unexpected Node.js archive layout in {archive.name}")
+    return roots[0]
+
+
+def install_node_runtime(node_dir: Path, version: str) -> None:
+    archive_name = node_archive_name(version)
+    release_url = f"{NODE_DIST_URL}/v{version}"
+    node_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="openpit-node-", dir=node_dir.parent
+    ) as temp_dir_string:
+        temp_dir = Path(temp_dir_string)
+        archive = temp_dir / archive_name
+        checksums = temp_dir / "SHASUMS256.txt"
+        download(f"{release_url}/{archive_name}", archive)
+        download(f"{release_url}/SHASUMS256.txt", checksums)
+        expected_sha256 = node_archive_sha256(checksums, archive_name)
+        actual_sha256 = sha256_bytes(archive)
+        if actual_sha256 != expected_sha256:
+            raise SystemExit(
+                f"checksum mismatch for {archive_name}: "
+                f"expected {expected_sha256}, got {actual_sha256}"
+            )
+        extracted = extract_node_archive(archive, temp_dir / "extracted")
+        backup = node_dir.with_name(f"{node_dir.name}.previous")
+        if backup.exists():
+            shutil.rmtree(backup)
+        if node_dir.exists():
+            node_dir.replace(backup)
+        try:
+            extracted.replace(node_dir)
+            installed = node_runtime_version(node_dir)
+            if installed != version:
+                raise SystemExit(
+                    f"project-local Node.js installation expected {version}, got "
+                    f"{installed or 'an unreadable runtime'}"
+                )
+        except BaseException:
+            if node_dir.exists():
+                shutil.rmtree(node_dir)
+            if backup.exists():
+                backup.replace(node_dir)
+            raise
+        else:
+            if backup.exists():
+                shutil.rmtree(backup)
+
+
+def command_ensure_node(args: argparse.Namespace) -> None:
+    expected = ci_version("CI_NODE")
+    node_dir = Path(args.node_dir)
+    installed = node_runtime_version(node_dir)
+    if installed == expected:
+        print(f"Node.js {expected}: project-local runtime is current")
+        return
+    action = "installing" if installed is None else f"upgrading from {installed}"
+    print(f"Node.js {expected}: {action} project-local runtime")
+    install_node_runtime(node_dir, expected)
+    print(f"Node.js {expected}: project-local runtime installed")
 
 
 def rust_host_triple(command_prefix: Sequence[str] = ()) -> str:
@@ -1034,6 +1210,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparser.add_argument("python_path")
     subparser.add_argument("requirements")
     subparser.set_defaults(func=command_ensure_python_env)
+
+    subparser = subparsers.add_parser("ensure-node")
+    subparser.add_argument("node_dir")
+    subparser.set_defaults(func=command_ensure_node)
 
     subparsers.add_parser("cargo-doc-warnings").set_defaults(
         func=command_cargo_doc_warnings

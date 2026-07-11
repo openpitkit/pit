@@ -313,12 +313,38 @@ def test_sitemap_build_canonical_urls_includes_static_and_section_pages() -> Non
     assert urls[0] == f"{module.SITE_BASE}/"
     assert urls[1] == f"{module.SITE_BASE}/c-api/"
     assert urls[2] == f"{module.SITE_BASE}/cpp-api/"
-    section_urls = urls[3:]
+    assert urls[3] == f"{module.SITE_BASE}/js-api/"
+    section_urls = urls[4:]
     expected_prefix = f"{module.SITE_BASE}/c-api/"
     for url in [url for url in section_urls if "/c-api/" in url]:
         assert url.startswith(expected_prefix)
         assert url.endswith(module.PAGE_SUFFIX)
     assert len(urls) == len(set(urls))
+
+
+def test_sitemap_includes_all_nested_js_api_pages(tmp_path: Path, monkeypatch) -> None:
+    module = load_sitemap_module()
+    js_api_dir = tmp_path / "js-api"
+    (js_api_dir / "classes").mkdir(parents=True)
+    (js_api_dir / "interfaces").mkdir()
+    (js_api_dir / "index.html").write_text("", encoding="utf-8")
+    (js_api_dir / "modules.html").write_text("", encoding="utf-8")
+    (js_api_dir / "classes" / "index.Engine.html").write_text("", encoding="utf-8")
+    (js_api_dir / "interfaces" / "model.OrderInit.html").write_text(
+        "", encoding="utf-8"
+    )
+    (js_api_dir / "assets").mkdir()
+    (js_api_dir / "assets" / "ignored.js").write_text("", encoding="utf-8")
+    monkeypatch.setattr(module, "JS_API_DIR", js_api_dir)
+
+    urls = module.build_canonical_urls()
+
+    assert urls.count(f"{module.SITE_BASE}/js-api/") == 1
+    assert f"{module.SITE_BASE}/js-api/modules.html" in urls
+    assert f"{module.SITE_BASE}/js-api/classes/index.Engine.html" in urls
+    assert f"{module.SITE_BASE}/js-api/interfaces/model.OrderInit.html" in urls
+    assert f"{module.SITE_BASE}/js-api/index.html" not in urls
+    assert not any(url.endswith("ignored.js") for url in urls)
 
 
 def _write_cpp_api_fixture(cpp_api_dir: Path) -> None:

@@ -114,6 +114,59 @@ func (wikiStrategyTagPolicy) ApplyAccountAdjustment(
 	return nil
 }
 
+// Used in: pit.wiki/Policy-API.md - Block an Account from an Adjustment Callback.
+type BlockOnAdjustmentPolicy struct{}
+
+func (*BlockOnAdjustmentPolicy) Close() {}
+
+func (*BlockOnAdjustmentPolicy) Name() string {
+	return "BlockOnAdjustmentPolicy"
+}
+
+func (*BlockOnAdjustmentPolicy) PolicyGroupID() model.PolicyGroupID {
+	return model.DefaultPolicyGroupID
+}
+
+func (*BlockOnAdjustmentPolicy) CheckPreTradeStart(
+	pretrade.Context,
+	model.Order,
+) []reject.Reject {
+	return nil
+}
+
+func (*BlockOnAdjustmentPolicy) PerformPreTradeCheck(
+	pretrade.Context,
+	model.Order,
+	tx.Mutations,
+	pretrade.Result,
+) []reject.Reject {
+	return nil
+}
+
+func (*BlockOnAdjustmentPolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	model.ExecutionReport,
+	pretrade.PostTradeAdjustments,
+) []reject.AccountBlock {
+	return nil
+}
+
+func (p *BlockOnAdjustmentPolicy) ApplyAccountAdjustment(
+	ctx accountadjustment.Context,
+	_ param.AccountID,
+	_ model.AccountAdjustment,
+	_ tx.Mutations,
+	_ pretrade.AccountOutcomes,
+) []reject.Reject {
+	ctx.AccountControl().Block(reject.NewAccountBlock(
+		reject.CodeAccountBlocked,
+		p.Name(),
+		"blocked via account control",
+		"custom policy blocked the account from a callback",
+	))
+	return nil
+}
+
 // --- Shared helpers ---
 
 // Used in: pit.wiki/Domain-Types.md - Create Validated Values.
@@ -860,6 +913,53 @@ func TestExampleWikiCustomGoModels(t *testing.T) {
 			blockedRejects[0].Code, reject.CodeComplianceRestriction,
 		)
 	}
+}
+
+func TestExampleWikiPolicyBlocksAccountFromAdjustment(t *testing.T) {
+	engine, err := NewEngineBuilder().
+		NoSync().
+		PreTrade(&BlockOnAdjustmentPolicy{}).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	accountID := param.NewAccountIDFromUint64(99224416)
+	rejects, _, err := engine.ApplyAccountAdjustment(
+		accountID,
+		[]model.AccountAdjustment{model.NewAccountAdjustment()},
+	)
+	if err != nil {
+		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
+	}
+	if rejects.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() unexpected rejects: %v", rejects)
+	}
+
+	request, blocked, err := engine.StartPreTrade(wikiExampleOrder(t, "10", "25"))
+	if err != nil {
+		t.Fatalf("StartPreTrade() error = %v", err)
+	}
+	if request != nil {
+		request.Close()
+		t.Fatal("StartPreTrade() passed for a blocked account")
+	}
+	if len(blocked) == 0 || blocked[0].Code != reject.CodeAccountBlocked {
+		t.Fatalf("StartPreTrade() rejects = %v, want AccountBlocked", blocked)
+	}
+}
+
+// Used in: pit.wiki/Policies.md - SpotFundsPolicy
+func TestExampleWikiPoliciesSpotFunds(t *testing.T) {
+	engine, err := NewEngineBuilder().
+		NoSync().
+		Builtin(policies.BuildSpotFunds()).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
 }
 
 // Used in: pit.wiki/Policies.md - OrderValidationPolicy

@@ -6,6 +6,7 @@ var namespaceopenpit_1_1accountadjustment =
     [ "BalanceOperation", "structopenpit_1_1accountadjustment_1_1BalanceOperation.html", "structopenpit_1_1accountadjustment_1_1BalanceOperation" ],
     [ "BatchError", "classopenpit_1_1accountadjustment_1_1BatchError.html", "classopenpit_1_1accountadjustment_1_1BatchError" ],
     [ "Bounds", "structopenpit_1_1accountadjustment_1_1Bounds.html", "structopenpit_1_1accountadjustment_1_1Bounds" ],
+    [ "Context", "classopenpit_1_1accountadjustment_1_1Context.html", "classopenpit_1_1accountadjustment_1_1Context" ],
     [ "Operation", "classopenpit_1_1accountadjustment_1_1Operation.html", "classopenpit_1_1accountadjustment_1_1Operation" ],
     [ "Outcome", "structopenpit_1_1accountadjustment_1_1Outcome.html", "structopenpit_1_1accountadjustment_1_1Outcome" ],
     [ "OutcomeAmount", "structopenpit_1_1accountadjustment_1_1OutcomeAmount.html", "structopenpit_1_1accountadjustment_1_1OutcomeAmount" ],

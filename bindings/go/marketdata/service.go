@@ -44,21 +44,6 @@ var (
 	ErrQuoteExpired = errors.New("quote expired")
 )
 
-// Errors returned by the registration methods, mirroring the SDK
-// AlreadyRegistered and RegistrationError variants.
-var (
-	// ErrAlreadyRegistered reports that the instrument is already registered,
-	// returned by Register and RegisterWithTTL.
-	ErrAlreadyRegistered = errors.New("instrument is already registered")
-	// ErrDuplicateID reports that the caller-supplied id is already registered,
-	// returned by RegisterWithID and RegisterWithIDAndTTL.
-	ErrDuplicateID = errors.New("instrument id is already registered")
-	// ErrDuplicateInstrument reports that the instrument is already registered
-	// under a different id, returned by RegisterWithID and
-	// RegisterWithIDAndTTL.
-	ErrDuplicateInstrument = errors.New("instrument is already registered under a different id")
-)
-
 // ErrNoTarget is returned by PushFor and PushForPatch when both the account and
 // account-group slices are empty (no target was specified).
 var ErrNoTarget = errors.New("no target accounts or groups specified")
@@ -106,7 +91,7 @@ func (s *Service) Register(instrument param.Instrument) (InstrumentID, error) {
 	case native.MarketDataRegisterStatusOk:
 		return newInstrumentIDFromHandle(id), nil
 	case native.MarketDataRegisterStatusAlreadyRegistered:
-		return InstrumentID{}, ErrAlreadyRegistered
+		return InstrumentID{}, &AlreadyRegisteredError{Instrument: instrument}
 	default:
 		return InstrumentID{}, err
 	}
@@ -128,7 +113,7 @@ func (s *Service) RegisterWithTTL(
 	case native.MarketDataRegisterStatusOk:
 		return newInstrumentIDFromHandle(id), nil
 	case native.MarketDataRegisterStatusAlreadyRegistered:
-		return InstrumentID{}, ErrAlreadyRegistered
+		return InstrumentID{}, &AlreadyRegisteredError{Instrument: instrument}
 	default:
 		return InstrumentID{}, err
 	}
@@ -150,9 +135,15 @@ func (s *Service) RegisterWithID(
 	case native.MarketDataRegisterStatusOk:
 		return newInstrumentIDFromHandle(outID), nil
 	case native.MarketDataRegisterStatusDuplicateID:
-		return InstrumentID{}, ErrDuplicateID
+		return InstrumentID{}, &RegistrationError{
+			Kind:         RegistrationErrorKindDuplicateID,
+			InstrumentID: &id,
+		}
 	case native.MarketDataRegisterStatusDuplicateInstrument:
-		return InstrumentID{}, ErrDuplicateInstrument
+		return InstrumentID{}, &RegistrationError{
+			Kind:       RegistrationErrorKindDuplicateInstrument,
+			Instrument: &instrument,
+		}
 	default:
 		return InstrumentID{}, err
 	}
@@ -176,9 +167,15 @@ func (s *Service) RegisterWithIDAndTTL(
 	case native.MarketDataRegisterStatusOk:
 		return newInstrumentIDFromHandle(outID), nil
 	case native.MarketDataRegisterStatusDuplicateID:
-		return InstrumentID{}, ErrDuplicateID
+		return InstrumentID{}, &RegistrationError{
+			Kind:         RegistrationErrorKindDuplicateID,
+			InstrumentID: &id,
+		}
 	case native.MarketDataRegisterStatusDuplicateInstrument:
-		return InstrumentID{}, ErrDuplicateInstrument
+		return InstrumentID{}, &RegistrationError{
+			Kind:       RegistrationErrorKindDuplicateInstrument,
+			Instrument: &instrument,
+		}
 	default:
 		return InstrumentID{}, err
 	}
@@ -214,7 +211,7 @@ func (s *Service) PushFor(
 	case native.MarketDataRegisterStatusOk:
 		return nil
 	case native.MarketDataRegisterStatusUnknownInstrument:
-		return ErrUnknownInstrument
+		return newUnknownInstrumentIDError(instrumentID)
 	case native.MarketDataRegisterStatusNoTarget:
 		return ErrNoTarget
 	default:
@@ -252,7 +249,7 @@ func (s *Service) PushForPatch(
 	case native.MarketDataRegisterStatusOk:
 		return nil
 	case native.MarketDataRegisterStatusUnknownInstrument:
-		return ErrUnknownInstrument
+		return newUnknownInstrumentIDError(instrumentID)
 	case native.MarketDataRegisterStatusNoTarget:
 		return ErrNoTarget
 	default:
@@ -270,7 +267,7 @@ func (s *Service) SetInstrumentTTL(instrumentID InstrumentID, ttl QuoteTTL) erro
 	if status == native.MarketDataRegisterStatusOk {
 		return nil
 	}
-	return ErrUnknownInstrument
+	return newUnknownInstrumentIDError(instrumentID)
 }
 
 // ClearInstrumentTTL removes the per-instrument TTL override for instrumentID,
@@ -280,7 +277,7 @@ func (s *Service) ClearInstrumentTTL(instrumentID InstrumentID) error {
 	if status == native.MarketDataRegisterStatusOk {
 		return nil
 	}
-	return ErrUnknownInstrument
+	return newUnknownInstrumentIDError(instrumentID)
 }
 
 // SetAccountTTL sets a service-wide TTL override for all instruments when
@@ -322,7 +319,7 @@ func (s *Service) SetInstrumentAccountTTL(
 	if status == native.MarketDataRegisterStatusOk {
 		return nil
 	}
-	return ErrUnknownInstrument
+	return newUnknownInstrumentIDError(instrumentID)
 }
 
 // ClearInstrumentAccountTTL removes the per-instrument, per-account TTL
@@ -339,7 +336,7 @@ func (s *Service) ClearInstrumentAccountTTL(
 	if status == native.MarketDataRegisterStatusOk {
 		return nil
 	}
-	return ErrUnknownInstrument
+	return newUnknownInstrumentIDError(instrumentID)
 }
 
 // SetInstrumentAccountGroupTTL sets a per-instrument, per-group TTL override.
@@ -359,7 +356,7 @@ func (s *Service) SetInstrumentAccountGroupTTL(
 	if status == native.MarketDataRegisterStatusOk {
 		return nil
 	}
-	return ErrUnknownInstrument
+	return newUnknownInstrumentIDError(instrumentID)
 }
 
 // ClearInstrumentAccountGroupTTL removes the per-instrument, per-group TTL
@@ -377,7 +374,7 @@ func (s *Service) ClearInstrumentAccountGroupTTL(
 	if status == native.MarketDataRegisterStatusOk {
 		return nil
 	}
-	return ErrUnknownInstrument
+	return newUnknownInstrumentIDError(instrumentID)
 }
 
 // Clear clears the stored quote for instrumentID. It is a no-op if
@@ -393,7 +390,7 @@ func (s *Service) Push(instrumentID InstrumentID, quote Quote) error {
 	case native.MarketDataRegisterStatusOk:
 		return nil
 	case native.MarketDataRegisterStatusUnknownInstrument:
-		return ErrUnknownInstrument
+		return newUnknownInstrumentIDError(instrumentID)
 	default:
 		return err
 	}
@@ -407,7 +404,7 @@ func (s *Service) PushPatch(instrumentID InstrumentID, quote Quote) error {
 	case native.MarketDataRegisterStatusOk:
 		return nil
 	case native.MarketDataRegisterStatusUnknownInstrument:
-		return ErrUnknownInstrument
+		return newUnknownInstrumentIDError(instrumentID)
 	default:
 		return err
 	}

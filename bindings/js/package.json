@@ -1,0 +1,183 @@
+{
+  "name": "@openpit/engine",
+  "version": "0.0.0-dev",
+  "description": "Embeddable pre-trade risk SDK - WASM engine for Node, browsers, Deno, Bun, and Workers",
+  "license": "Apache-2.0",
+  "author": "Eugene V. Palchukovsky <maintainers@palchukovsky.com>",
+  "homepage": "https://openpit.dev/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openpitkit/pit.git",
+    "directory": "bindings/js"
+  },
+  "bugs": {
+    "url": "https://github.com/openpitkit/pit/issues"
+  },
+  "keywords": [
+    "pre-trade",
+    "risk-management",
+    "trading",
+    "fintech",
+    "algorithmic-trading",
+    "risk-engine",
+    "wasm"
+  ],
+  "type": "module",
+  "sideEffects": [
+    "./src-ts/runtime.node.ts",
+    "./src-ts/runtime.browser.ts",
+    "./node/**/*.js",
+    "./node/**/*.cjs",
+    "./browser/**/*.js",
+    "./browser/**/*.cjs"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "imports": {
+    "#runtime": {
+      "browser": "./src-ts/runtime.browser.ts",
+      "default": "./src-ts/runtime.node.ts"
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "browser": {
+        "import": "./browser/index.js",
+        "require": "./browser/index.cjs"
+      },
+      "import": "./node/index.js",
+      "require": "./node/index.cjs"
+    },
+    "./param": {
+      "types": "./types/param/index.d.ts",
+      "browser": {
+        "import": "./browser/param.js",
+        "require": "./browser/param.cjs"
+      },
+      "import": "./node/param.js",
+      "require": "./node/param.cjs"
+    },
+    "./model": {
+      "types": "./types/model/index.d.ts",
+      "browser": {
+        "import": "./browser/model.js",
+        "require": "./browser/model.cjs"
+      },
+      "import": "./node/model.js",
+      "require": "./node/model.cjs"
+    },
+    "./pretrade": {
+      "types": "./types/pretrade/index.d.ts",
+      "browser": {
+        "import": "./browser/pretrade.js",
+        "require": "./browser/pretrade.cjs"
+      },
+      "import": "./node/pretrade.js",
+      "require": "./node/pretrade.cjs"
+    },
+    "./pretrade/policies": {
+      "types": "./types/pretrade/policies/index.d.ts",
+      "browser": {
+        "import": "./browser/pretrade/policies.js",
+        "require": "./browser/pretrade/policies.cjs"
+      },
+      "import": "./node/pretrade/policies.js",
+      "require": "./node/pretrade/policies.cjs"
+    },
+    "./marketdata": {
+      "types": "./types/marketdata/index.d.ts",
+      "browser": {
+        "import": "./browser/marketdata.js",
+        "require": "./browser/marketdata.cjs"
+      },
+      "import": "./node/marketdata.js",
+      "require": "./node/marketdata.cjs"
+    },
+    "./reject": {
+      "types": "./types/reject/index.d.ts",
+      "browser": {
+        "import": "./browser/reject.js",
+        "require": "./browser/reject.cjs"
+      },
+      "import": "./node/reject.js",
+      "require": "./node/reject.cjs"
+    },
+    "./accountadjustment": {
+      "types": "./types/accountadjustment/index.d.ts",
+      "browser": {
+        "import": "./browser/accountadjustment.js",
+        "require": "./browser/accountadjustment.cjs"
+      },
+      "import": "./node/accountadjustment.js",
+      "require": "./node/accountadjustment.cjs"
+    },
+    "./accounts": {
+      "types": "./types/accounts/index.d.ts",
+      "browser": {
+        "import": "./browser/accounts.js",
+        "require": "./browser/accounts.cjs"
+      },
+      "import": "./node/accounts.js",
+      "require": "./node/accounts.cjs"
+    },
+    "./tx": {
+      "types": "./types/tx/index.d.ts",
+      "browser": {
+        "import": "./browser/tx.js",
+        "require": "./browser/tx.cjs"
+      },
+      "import": "./node/tx.js",
+      "require": "./node/tx.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./node/index.cjs",
+  "module": "./node/index.js",
+  "types": "./types/index.d.ts",
+  "browser": "./browser/index.js",
+  "files": [
+    "node",
+    "browser",
+    "types",
+    "README.md",
+    "LICENSE",
+    "OWNERS"
+  ],
+  "scripts": {
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "build:inline": "node scripts/inline-wasm.mjs",
+    "build:ts": "tsup",
+    "build:dts": "tsc -p tsconfig.build.json",
+    "build:pkg": "node scripts/make-package-json.mjs",
+    "build": "npm run build:wasm && npm run build:inline && npm run build:ts && npm run build:dts && npm run build:pkg",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "docs": "typedoc && node scripts/normalize-typedoc-assets.mjs",
+    "sync-version": "node scripts/sync-version.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@types/node": "^22.19.20",
+    "esbuild": "^0.27.7",
+    "eslint": "^9.13.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.0",
+    "tsup": "^8.3.0",
+    "typedoc": "^0.26.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.10.0",
+    "vitest": "^2.1.0"
+  }
+}

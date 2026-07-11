@@ -89,6 +89,8 @@ type ParamQuantityOptional = C.OpenPitParamQuantityOptional
 type ParamError = *C.OpenPitParamError
 type ParamErrorHandle = *C.OpenPitParamError
 type ParamErrorCode = C.OpenPitParamErrorCode
+type ParamFillType = C.OpenPitParamFillType
+type ParamKind = C.OpenPitParamKind
 type ParamRoundingStrategy = C.uint8_t
 type ParamSide = C.OpenPitParamSide
 type PretradePoliciesSpotFundsLimitMode = C.OpenPitPretradePoliciesSpotFundsLimitMode
@@ -177,9 +179,10 @@ const (
 )
 
 const (
-	ConfigureErrorKindUnknown      ConfigureErrorKind = C.OpenPitConfigureErrorKind_Unknown
-	ConfigureErrorKindTypeMismatch ConfigureErrorKind = C.OpenPitConfigureErrorKind_TypeMismatch
-	ConfigureErrorKindValidation   ConfigureErrorKind = C.OpenPitConfigureErrorKind_Validation
+	ConfigureErrorKindUnknown             ConfigureErrorKind = C.OpenPitConfigureErrorKind_Unknown
+	ConfigureErrorKindTypeMismatch        ConfigureErrorKind = C.OpenPitConfigureErrorKind_TypeMismatch
+	ConfigureErrorKindValidation          ConfigureErrorKind = C.OpenPitConfigureErrorKind_Validation
+	ConfigureErrorKindNestedConfiguration ConfigureErrorKind = C.OpenPitConfigureErrorKind_NestedConfiguration
 )
 
 const (
@@ -266,6 +269,28 @@ const (
 	ParamRoundingStrategyMidpointAwayFromZero = C.OpenPitParamRoundingStrategy_MidpointAwayFromZero
 	ParamRoundingStrategyUp                   = C.OpenPitParamRoundingStrategy_Up
 	ParamRoundingStrategyDown                 = C.OpenPitParamRoundingStrategy_Down
+)
+
+const (
+	ParamFillTypeNotSet         = C.OpenPitParamFillType_NotSet
+	ParamFillTypeTrade          = C.OpenPitParamFillType_Trade
+	ParamFillTypeLiquidation    = C.OpenPitParamFillType_Liquidation
+	ParamFillTypeAutoDeleverage = C.OpenPitParamFillType_AutoDeleverage
+	ParamFillTypeSettlement     = C.OpenPitParamFillType_Settlement
+	ParamFillTypeFunding        = C.OpenPitParamFillType_Funding
+)
+
+const (
+	ParamKindUnspecified  = C.OpenPitParamKind_Unspecified
+	ParamKindQuantity     = C.OpenPitParamKind_Quantity
+	ParamKindVolume       = C.OpenPitParamKind_Volume
+	ParamKindNotional     = C.OpenPitParamKind_Notional
+	ParamKindPrice        = C.OpenPitParamKind_Price
+	ParamKindPnl          = C.OpenPitParamKind_Pnl
+	ParamKindCashFlow     = C.OpenPitParamKind_CashFlow
+	ParamKindPositionSize = C.OpenPitParamKind_PositionSize
+	ParamKindFee          = C.OpenPitParamKind_Fee
+	ParamKindLeverage     = C.OpenPitParamKind_Leverage
 )
 
 const (

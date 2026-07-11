@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<!--
+  Copyright The Pit Project Owners. All rights reserved.
+  SPDX-License-Identifier: Apache-2.0
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+
+  Please see https://openpit.dev and the OWNERS file for details.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenPit - risk engine in a browser terminal</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0e14;
+        --panel: #11151f;
+        --fg: #c5c8c6;
+        --accent: #7aa2f7;
+        --muted: #565f89;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        font-family:
+          "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+      }
+
+      #app {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        box-sizing: border-box;
+        padding: 16px;
+        gap: 12px;
+      }
+
+      header {
+        flex: 0 0 auto;
+      }
+
+      header h1 {
+        margin: 0 0 4px;
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--accent);
+      }
+
+      header p {
+        margin: 0;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      header code {
+        color: var(--fg);
+      }
+
+      #terminal {
+        flex: 1 1 auto;
+        min-height: 0;
+        background: var(--panel);
+        border: 1px solid #1b2130;
+        border-radius: 8px;
+        padding: 10px;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>OpenPit - pre-trade risk engine, in your browser</h1>
+        <p>
+          The full risk engine is compiled to WebAssembly and runs entirely
+          client-side. No backend, no network. Type <code>help</code> and press
+          Enter.
+        </p>
+      </header>
+      <div id="terminal"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

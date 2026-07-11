@@ -79,11 +79,18 @@ class QuoteExpired(MarketDataError):
 class AlreadyRegistered(Exception):
     """Instrument is already registered."""
 
+    instrument: Instrument
+
 class RegistrationError(Exception):
     """Explicit market-data registration conflicts with existing state."""
 
+    instrument: Instrument | None
+    instrument_id: InstrumentId | None
+
 class UnknownInstrumentId(Exception):
     """Instrument id is unknown to the market-data service."""
+
+    instrument_id: InstrumentId
 
 class AccountGroupRegistrationError(Exception):
     """Account-group registration conflicts with existing state."""
@@ -104,16 +111,19 @@ class ConfigureErrorKind:
     """The named policy exists but its settings type differs from the target."""
     VALIDATION: typing.ClassVar[ConfigureErrorKind]
     """The update was rejected; the prior value still applies."""
+    NESTED_CONFIGURATION: typing.ClassVar[ConfigureErrorKind]
+    """Configuration was re-entered on the same thread."""
 
 class PolicyConfigureError(Exception):
     """Runtime policy reconfiguration failed.
 
     Raised by ``Configurator`` methods when the policy name is unknown,
-    has the wrong type, or the new settings fail validation.
+    has the wrong type, the new settings fail validation, or configuration is
+    re-entered on the same thread.
     """
 
     kind: ConfigureErrorKind
-    """Classifies the failure (unknown policy, type mismatch, or validation)."""
+    """Classifies the configuration failure."""
 
 class InstrumentId:
     """Market-data instrument identifier."""

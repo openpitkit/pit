@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -74,20 +75,10 @@ namespace policies = openpit::pretrade::policies;
 template <typename Handler>
 [[nodiscard]] Engine CustomPolicyEngine(Handler handler) {
   EngineBuilder builder(SyncPolicy::Full);
-  openpit::pretrade::CustomPolicy<Handler> policy("ThrowingPolicy",
-                                                  std::move(handler));
+  const std::string name(handler.Name());
+  openpit::pretrade::CustomPolicy<Handler> policy(name, std::move(handler));
   builder.Add(policy);
   return builder.Build();
-}
-
-template <typename Callable>
-[[nodiscard]] std::string ErrorMessageFrom(Callable&& call) {
-  try {
-    call();
-  } catch (const openpit::Error& error) {
-    return error.Message();
-  }
-  return {};
 }
 
 class ThrowingStartPolicy {
@@ -137,6 +128,29 @@ class ThrowingReportPolicy {
       const openpit::ExecutionReport& /*report*/) const {
     throw std::runtime_error("report callback failed");
   }
+};
+
+struct DeferredOrder : public openpit::model::Order {
+  std::string strategyTag;
+};
+
+class DeferredOrderPolicy {
+ public:
+  explicit DeferredOrderPolicy(std::shared_ptr<std::string> observedTag)
+      : m_observedTag(std::move(observedTag)) {}
+
+  void PerformPreTradeCheck(
+      const openpit::pretrade::Context& context,
+      openpit::pretrade::PolicyDecision& /*decision*/) const {
+    const auto* order = dynamic_cast<const DeferredOrder*>(&context.Order());
+    if (order == nullptr) {
+      throw std::runtime_error("deferred order type was not preserved");
+    }
+    *m_observedTag = order->strategyTag;
+  }
+
+ private:
+  std::shared_ptr<std::string> m_observedTag;
 };
 
 //------------------------------------------------------------------------------
@@ -201,13 +215,12 @@ TEST(EngineStartPreTrade, AbiFailureThrows) {
       { auto result = engine.StartPreTrade(TestOrder(1)); }, openpit::Error);
 }
 
-TEST(EngineStartPreTrade, CallbackExceptionThrowsError) {
+TEST(EngineStartPreTrade, CallbackExceptionRethrowsOriginalType) {
   Engine engine = CustomPolicyEngine(ThrowingStartPolicy{});
 
-  const std::string message = ErrorMessageFrom(
-      [&] { static_cast<void>(engine.StartPreTrade(TestOrder(1))); });
-
-  EXPECT_NE(message.find("start callback failed"), std::string::npos);
+  EXPECT_THROW(
+      { static_cast<void>(engine.StartPreTrade(TestOrder(1))); },
+      std::runtime_error);
 }
 
 //------------------------------------------------------------------------------
@@ -251,13 +264,17 @@ TEST(EngineDryRun, ExecuteDryRunDoesNotConsumeRateLimitBudget) {
   EXPECT_EQ(second.rejects.front().code, RejectCode::RateLimitExceeded);
 }
 
-TEST(EngineDryRun, UnknownCallbackExceptionThrowsError) {
+TEST(EngineDryRun, NonStandardCallbackExceptionIsRethrown) {
   Engine engine = CustomPolicyEngine(ThrowingDryRunPolicy{});
 
-  const std::string message = ErrorMessageFrom(
-      [&] { static_cast<void>(engine.StartPreTradeDryRun(TestOrder(1))); });
-
-  EXPECT_EQ(message, "unknown callback error");
+  try {
+    static_cast<void>(engine.StartPreTradeDryRun(TestOrder(1)));
+    FAIL() << "expected the callback's integer exception";
+  } catch (int value) {
+    EXPECT_EQ(value, 17);
+  } catch (...) {
+    FAIL() << "callback exception type was not preserved";
+  }
 }
 
 //------------------------------------------------------------------------------
@@ -320,13 +337,12 @@ TEST(EngineExecutePreTrade, AbiFailureThrows) {
       { auto result = engine.ExecutePreTrade(TestOrder(1)); }, openpit::Error);
 }
 
-TEST(EngineExecutePreTrade, CallbackExceptionThrowsError) {
+TEST(EngineExecutePreTrade, CallbackExceptionRethrowsOriginalType) {
   Engine engine = CustomPolicyEngine(ThrowingMainPolicy{});
 
-  const std::string message = ErrorMessageFrom(
-      [&] { static_cast<void>(engine.ExecutePreTrade(TestOrder(1))); });
-
-  EXPECT_NE(message.find("main callback failed"), std::string::npos);
+  EXPECT_THROW(
+      { static_cast<void>(engine.ExecutePreTrade(TestOrder(1))); },
+      std::runtime_error);
 }
 
 //------------------------------------------------------------------------------
@@ -364,16 +380,35 @@ TEST(EngineRequest, SecondDeferredFlowIsRejectedAtStart) {
   EXPECT_EQ(second.rejects.front().code, RejectCode::RateLimitExceeded);
 }
 
-TEST(EngineRequest, CallbackExceptionThrowsError) {
+TEST(EngineRequest, CallbackExceptionRethrowsOriginalType) {
   Engine engine = CustomPolicyEngine(ThrowingMainPolicy{});
 
   openpit::pretrade::StartResult start = engine.StartPreTrade(TestOrder(1));
   ASSERT_TRUE(start.request.has_value());
 
-  const std::string message =
-      ErrorMessageFrom([&] { static_cast<void>(start.request->Execute()); });
+  EXPECT_THROW(
+      { static_cast<void>(start.request->Execute()); }, std::runtime_error);
+}
 
-  EXPECT_NE(message.find("main callback failed"), std::string::npos);
+TEST(EngineRequest, OwnsConcreteOrderUntilDeferredExecution) {
+  const auto observedTag = std::make_shared<std::string>();
+  EngineBuilder builder(SyncPolicy::Full);
+  openpit::pretrade::CustomPolicy<DeferredOrderPolicy> policy(
+      "DeferredOrderPolicy", DeferredOrderPolicy(observedTag));
+  builder.Add(policy);
+  Engine engine = builder.Build();
+
+  std::optional<openpit::pretrade::StartResult> start;
+  {
+    DeferredOrder order;
+    order.strategyTag = "survives-caller-scope";
+    start.emplace(engine.StartPreTrade(order));
+    ASSERT_TRUE(start->request.has_value());
+  }
+
+  openpit::pretrade::ExecuteResult executed = start->request->Execute();
+  ASSERT_TRUE(executed.Passed());
+  EXPECT_EQ(*observedTag, "survives-caller-scope");
 }
 
 //------------------------------------------------------------------------------
@@ -411,13 +446,12 @@ TEST(EngineApplyExecutionReport, AbiFailureThrows) {
       openpit::Error);
 }
 
-TEST(EngineApplyExecutionReport, CallbackExceptionThrowsError) {
+TEST(EngineApplyExecutionReport, CallbackExceptionRethrowsOriginalType) {
   Engine engine = CustomPolicyEngine(ThrowingReportPolicy{});
 
-  const std::string message = ErrorMessageFrom(
-      [&] { static_cast<void>(engine.ApplyExecutionReport(TestReport(1))); });
-
-  EXPECT_NE(message.find("report callback failed"), std::string::npos);
+  EXPECT_THROW(
+      { static_cast<void>(engine.ApplyExecutionReport(TestReport(1))); },
+      std::runtime_error);
 }
 
 //------------------------------------------------------------------------------

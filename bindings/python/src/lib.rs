@@ -137,15 +137,56 @@ fn create_param_error(message: impl Into<String>) -> PyErr {
 }
 
 fn create_already_registered_error(error: openpit::AlreadyRegistered) -> PyErr {
-    AlreadyRegistered::new_err(error.to_string())
+    let message = error.to_string();
+    let err = AlreadyRegistered::new_err(message);
+    Python::attach(|py| {
+        let _ = err.value(py).setattr(
+            "instrument",
+            PyInstrument {
+                inner: error.instrument,
+            },
+        );
+    });
+    err
 }
 
 fn create_registration_error(error: openpit::RegistrationError) -> PyErr {
-    RegistrationError::new_err(error.to_string())
+    let message = error.to_string();
+    let err = RegistrationError::new_err(message);
+    Python::attach(|py| {
+        let value = err.value(py);
+        let _ = value.setattr("instrument", py.None());
+        let _ = value.setattr("instrument_id", py.None());
+        match error {
+            openpit::RegistrationError::DuplicateId { instrument_id } => {
+                let _ = value.setattr(
+                    "instrument_id",
+                    PyInstrumentId {
+                        inner: instrument_id,
+                    },
+                );
+            }
+            openpit::RegistrationError::DuplicateInstrument { instrument } => {
+                let _ = value.setattr("instrument", PyInstrument { inner: instrument });
+            }
+            _ => {}
+        }
+    });
+    err
 }
 
 fn create_unknown_instrument_id_error(error: openpit::UnknownInstrumentId) -> PyErr {
-    UnknownInstrumentId::new_err(error.to_string())
+    let message = error.to_string();
+    let err = UnknownInstrumentId::new_err(message);
+    Python::attach(|py| {
+        let _ = err.value(py).setattr(
+            "instrument_id",
+            PyInstrumentId {
+                inner: error.instrument_id,
+            },
+        );
+    });
+    err
 }
 
 fn create_market_data_error(error: openpit::MarketDataError) -> PyErr {
@@ -207,6 +248,9 @@ enum PyConfigureErrorKind {
     /// The update was rejected; the prior value still applies.
     #[pyo3(name = "VALIDATION")]
     Validation = 2,
+    /// Configuration was re-entered on the same thread.
+    #[pyo3(name = "NESTED_CONFIGURATION")]
+    NestedConfiguration = 3,
 }
 
 impl PyConfigureErrorKind {
@@ -215,9 +259,7 @@ impl PyConfigureErrorKind {
             ConfigureError::UnknownPolicy { .. } => Self::Unknown,
             ConfigureError::PolicyTypeMismatch { .. } => Self::TypeMismatch,
             ConfigureError::Validation { .. } => Self::Validation,
-            // Unreachable via FFI (the configure closure runs no user callback,
-            // so no same-thread re-entry), mapped to Validation for completeness.
-            ConfigureError::NestedConfiguration => Self::Validation,
+            ConfigureError::NestedConfiguration => Self::NestedConfiguration,
             // `ConfigureError` is `#[non_exhaustive]`; an unforeseen variant is
             // reported as a validation failure, matching the C binding default.
             _ => Self::Validation,
@@ -4358,15 +4400,6 @@ fn make_spot_funds_pnl_bounds_killswitch_policy(
     account_group_barriers: Vec<Bound<'_, PyAny>>,
     account_barriers: Vec<Bound<'_, PyAny>>,
 ) -> PyResult<SpotFundsPolicy<EngineLocking, EngineLocking>> {
-    if global_barriers.is_empty()
-        && account_group_barriers.is_empty()
-        && account_barriers.is_empty()
-    {
-        return Err(PyValueError::new_err(
-            "spot funds pnl bounds policy requires at least one barrier",
-        ));
-    }
-
     let global = global_barriers
         .iter()
         .map(parse_spot_funds_pnl_bounds_barrier)
@@ -4402,14 +4435,8 @@ fn make_spot_funds_pnl_bounds_killswitch_policy(
     )
     .map_err(|e| PyValueError::new_err(e.to_string()))?;
     settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    settings
-        .set_pnl_global_barriers(global)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    settings
-        .set_pnl_account_group_barriers(account_group)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
     let settings = settings
-        .with_initial_pnl_account_barriers(account)
+        .with_pnl_barriers(global, account_group, account)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
     Ok(SpotFundsPolicy::<EngineLocking, EngineLocking>::new(

@@ -217,6 +217,26 @@ where
         Ok(Some(Pnl::new(value)))
     }
 
+    fn fee_pnl_delta_if_controlled(
+        &self,
+        account_id: AccountId,
+        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        fee: &MonetaryAmount,
+        account_currency: &Asset,
+        pnl_barrier: Option<&super::SpotFundsPnlBoundsBarrier>,
+    ) -> Result<Option<Pnl>, AccountBlock>
+    where
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
+    {
+        if pnl_barrier.is_none() {
+            return Ok(None);
+        }
+        match self.fee_pnl_delta(account_id, ctx, fee, account_currency)? {
+            Some(delta) => Ok(Some(delta)),
+            None => Err(self.pnl_missing_fx_block(account_id, &fee.currency, account_currency)),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn apply_fee_debit(
         &self,
@@ -259,6 +279,52 @@ where
             )
         })?;
         leg.final_holdings = Some(new_h);
+        Ok(())
+    }
+
+    /// Applies a structured execution-report fee as a standalone economic
+    /// event. A venue may report a commission correction without a trade, so
+    /// fee accounting must not depend on `last_trade` being present.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_execution_fee(
+        &self,
+        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        account_id: AccountId,
+        underlying_asset: &Asset,
+        settlement_asset: &Asset,
+        fee: &MonetaryAmount,
+        deltas: &mut FillCancelDeltas,
+    ) -> Result<(), AccountBlock>
+    where
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
+    {
+        let account_currency = ctx.account_currency();
+        let pnl_barrier = account_currency
+            .as_ref()
+            .and_then(|currency| self.pnl_barrier_for(account_id, ctx.account_group(), currency));
+        let fee_pnl_delta = match account_currency.as_ref() {
+            Some(account_currency) => self.fee_pnl_delta_if_controlled(
+                account_id,
+                ctx,
+                fee,
+                account_currency,
+                pnl_barrier.as_ref(),
+            )?,
+            None => None,
+        };
+
+        self.apply_fee_debit(account_id, underlying_asset, settlement_asset, fee, deltas)?;
+        if let (Some(account_currency), Some(barrier), Some(delta)) = (
+            account_currency.as_ref(),
+            pnl_barrier.as_ref(),
+            fee_pnl_delta,
+        ) {
+            if let Some(block) =
+                self.apply_account_pnl_delta(account_id, account_currency, barrier, delta)
+            {
+                return Err(block);
+            }
+        }
         Ok(())
     }
 
@@ -467,21 +533,15 @@ where
         let settlement_incoming_consume =
             self.settlement_incoming_amount(account_id, settlement_asset, side, trade, lock)?;
 
-        let fee_pnl_delta = if let (Some(account_currency), Some(_), Some(fee)) =
-            (account_currency.as_ref(), pnl_barrier.as_ref(), fee)
-        {
-            match self.fee_pnl_delta(account_id, ctx, fee, account_currency)? {
-                Some(delta) => Some(delta),
-                None => {
-                    return Err(self.pnl_missing_fx_block(
-                        account_id,
-                        &fee.currency,
-                        account_currency,
-                    ));
-                }
-            }
-        } else {
-            None
+        let fee_pnl_delta = match (account_currency.as_ref(), fee) {
+            (Some(account_currency), Some(fee)) => self.fee_pnl_delta_if_controlled(
+                account_id,
+                ctx,
+                fee,
+                account_currency,
+                pnl_barrier.as_ref(),
+            )?,
+            _ => None,
         };
 
         // Process the charge leg (the one consuming reserved `held`) before the
@@ -963,6 +1023,20 @@ where
                 trade,
                 request.fee.as_ref(),
                 &request.lock,
+                &mut deltas,
+            ) {
+                account_blocks.push(block);
+            }
+        } else if let Some(fee) = request.fee.as_ref() {
+            // A structured fee belongs to the execution report, not to its
+            // optional last trade. Fee-only corrections must reach balances
+            // and account PnL through the same accounting rules.
+            if let Err(block) = self.apply_execution_fee(
+                ctx,
+                request.account_id,
+                &underlying_asset,
+                &settlement_asset,
+                fee,
                 &mut deltas,
             ) {
                 account_blocks.push(block);

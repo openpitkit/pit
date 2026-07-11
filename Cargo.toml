@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "bindings/js",
     "bindings/python",
     "crates/openpit",
     "crates/openpit-derive",

@@ -5,6 +5,7 @@
 [![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Go version](https://img.shields.io/badge/go-1.22%2B-00ADD8)](https://pkg.go.dev/go.openpit.dev/openpit) [![Module](https://img.shields.io/badge/module-go.openpit.dev%2Fopenpit-00ADD8)](https://pkg.go.dev/go.openpit.dev/openpit)
 [![Python versions](https://img.shields.io/pypi/pyversions/openpit)](https://pypi.org/project/openpit/) [![PyPI](https://img.shields.io/pypi/v/openpit)](https://pypi.org/project/openpit/)
+[![npm](https://img.shields.io/npm/v/@openpit/engine)](https://www.npmjs.com/package/@openpit/engine) [![node](https://img.shields.io/node/v/@openpit/engine)](https://www.npmjs.com/package/@openpit/engine)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C)](bindings/cpp/README.md)
 [![Rust](https://img.shields.io/badge/rust-1.75+-orange)](https://crates.io/crates/openpit) [![crates.io](https://img.shields.io/crates/v/openpit)](https://crates.io/crates/openpit)
 [![C API](https://img.shields.io/badge/C%20API-blue)](bindings/c/README.md)
@@ -68,6 +69,7 @@ policy APIs:
 
 - [Go custom policies](https://wiki.openpit.dev/Policy-API/#go-interface)
 - [Python custom policies](https://wiki.openpit.dev/Policy-API/#python-interface)
+- [JavaScript custom policies](https://wiki.openpit.dev/Policy-API/)
 - [C++ custom policies](https://wiki.openpit.dev/Policy-API/#c-interface)
 - [Rust custom policies](https://wiki.openpit.dev/Policy-API/#rust-interface)
 
@@ -89,6 +91,8 @@ constraints that tolerate API evolution during the pre-stable phase.
 - [Go SDK README](bindings/go/README.md) - integrate OpenPit from Go.
 - [Python SDK README](bindings/python/README.md) - the `openpit` Python
   package.
+- [JavaScript SDK README](bindings/js/README.md) - the `@openpit/engine`
+  package for JavaScript and TypeScript.
 - [C++ SDK README](bindings/cpp/README.md) - C++17 CMake package.
 - [`openpit` crate README](crates/openpit/README.md) - Rust interface with a
   runnable example.
@@ -112,6 +116,8 @@ constraints that tolerate API evolution during the pre-stable phase.
   recipes, generated API artifacts, and Python bindings
 - [Go `1.22`](https://go.dev/dl/) if you build or test Go bindings
 - [golangci-lint](https://golangci-lint.run/welcome/install/) if you lint Go
+- [Node.js `>=18`](https://nodejs.org/) if you build or test the
+  JavaScript/WASM binding
 - [CMake `>=3.21`](https://cmake.org/download/), a C++17 compiler,
   [clang-format and clang-tidy](https://github.com/llvm/llvm-project/releases),
   and [doxygen](https://www.doxygen.nl/download.html) if you build, test,
@@ -129,6 +135,21 @@ scripts, generated API artifacts, and Python tooling such as `maturin` and
 `pytest`.
 
 ### Build
+
+#### Toolchain Setup
+
+`just install` provisions the full build toolchain in one shot: the wasm32
+Rust target, `wasm-bindgen-cli` (pinned to the version the crate resolved to),
+the JS dev dependencies, and the Python dev install.
+
+```bash
+just install
+```
+
+This installs a lot. If you do not need the full build, do not run it blindly
+
+- read the `install` recipe in the [`justfile`](justfile) and install or build
+only the parts you actually use.
 
 #### SDK
 
@@ -161,6 +182,25 @@ Manual:
 The recommended Python test flow is to run `maturin develop` before
 `pytest`. This runs against the current checkout (including a dirty
 worktree).
+
+#### JavaScript
+
+The JavaScript/TypeScript binding (`@openpit/engine`) is a WebAssembly build;
+there is no native add-on to compile.
+
+With [Just](https://just.systems/):
+
+```bash
+just build-js
+```
+
+Manual:
+
+```bash
+cd bindings/js
+npm install
+npm run build
+```
 
 #### Go
 
@@ -224,6 +264,9 @@ just test-go-race
 # C++:
 just test-cpp-debug
 just test-examples-cpp-debug
+
+# JavaScript:
+just test-js-debug
 ```
 
 Manual:
@@ -260,6 +303,12 @@ cmake -S bindings/cpp -B bindings/cpp/build-debug \
   -DOPENPIT_RUNTIME_LIBRARY="$PWD/target/debug/libopenpit_ffi.dylib"
 cmake --build bindings/cpp/build-debug --config Debug
 ctest --test-dir bindings/cpp/build-debug --output-on-failure
+
+# JavaScript:
+cd bindings/js
+npm install
+npm run build
+npm test
 ```
 
 </details>

@@ -139,5 +139,7 @@ if(OPENPIT_EXAMPLE_BUILD_TESTS)
   target_compile_definitions(spot_table_tests
     PRIVATE "SPOT_TABLE_COVERAGE_PATH=\"${SPOT_TABLE_COVERAGE_PATH}\"")
 
-  gtest_discover_tests(spot_table_tests)
+  gtest_discover_tests(spot_table_tests
+    DISCOVERY_MODE PRE_TEST
+    DISCOVERY_TIMEOUT 60)
 endif()

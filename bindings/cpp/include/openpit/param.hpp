@@ -55,6 +55,28 @@ enum class RoundingStrategy : std::uint8_t {
   Down = OpenPitParamRoundingStrategy_Down,
 };
 
+// Type of fill event reported by a venue.
+enum class FillType : std::uint8_t {
+  Trade = OpenPitParamFillType_Trade,
+  Liquidation = OpenPitParamFillType_Liquidation,
+  AutoDeleverage = OpenPitParamFillType_AutoDeleverage,
+  Settlement = OpenPitParamFillType_Settlement,
+  Funding = OpenPitParamFillType_Funding,
+};
+
+// Numeric domain value category carried by parameter errors.
+enum class Kind : std::uint8_t {
+  Quantity = OpenPitParamKind_Quantity,
+  Volume = OpenPitParamKind_Volume,
+  Notional = OpenPitParamKind_Notional,
+  Price = OpenPitParamKind_Price,
+  Pnl = OpenPitParamKind_Pnl,
+  CashFlow = OpenPitParamKind_CashFlow,
+  PositionSize = OpenPitParamKind_PositionSize,
+  Fee = OpenPitParamKind_Fee,
+  Leverage = OpenPitParamKind_Leverage,
+};
+
 using AccountGroupIdOptional = OpenPitParamAccountGroupIdOptional;
 using AccountIdOptional = OpenPitParamAccountIdOptional;
 using CashFlowOptional = OpenPitParamCashFlowOptional;

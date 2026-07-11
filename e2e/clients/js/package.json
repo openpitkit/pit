@@ -1,0 +1,11 @@
+{
+  "name": "openpit-release-e2e-js",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal consumer for the published @openpit/engine package",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18"
+  }
+}

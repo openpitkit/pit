@@ -56,6 +56,8 @@ class Quantity;
 class Volume;
 
 enum class AdjustmentAmountKind : std::uint8_t;
+enum class FillType : std::uint8_t;
+enum class Kind : std::uint8_t;
 enum class RoundingStrategy : std::uint8_t;
 
 }  // namespace openpit::param
@@ -86,10 +88,14 @@ enum class TradeAmountKind : std::uint8_t;
 
 namespace openpit::pretrade {
 
+class AccountOutcomes;
 class Context;
 class DryRunReport;
+class PostTradeAdjustments;
+class PostTradeContext;
 class PreTradeLock;
 class Request;
+class Result;
 class Reservation;
 
 template <typename Handler>
@@ -105,6 +111,18 @@ enum class RejectCode : std::uint16_t;
 enum class RejectScope : std::uint8_t;
 
 }  // namespace openpit::pretrade
+
+namespace openpit::tx {
+
+class Mutations;
+
+}  // namespace openpit::tx
+
+namespace openpit::accountadjustment {
+
+class Context;
+
+}  // namespace openpit::accountadjustment
 
 namespace openpit::pretrade::policies {
 

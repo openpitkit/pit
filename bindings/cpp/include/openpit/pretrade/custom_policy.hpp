@@ -17,13 +17,17 @@
 
 #pragma once
 
+#include "openpit/account_adjustment.hpp"
+#include "openpit/accounts.hpp"
 #include "openpit/detail/callback_error.hpp"
 #include "openpit/detail/handle.hpp"
 #include "openpit/error.hpp"
 #include "openpit/model.hpp"
+#include "openpit/pretrade/callbacks.hpp"
 #include "openpit/pretrade/context.hpp"
 #include "openpit/reject.hpp"
 #include "openpit/string.hpp"
+#include "openpit/tx.hpp"
 
 #include <openpit.h>
 
@@ -33,42 +37,59 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 // Custom-policy authoring glue.
 //
 // `CustomPolicy<Handler>` lets a plain C++ object act as a pre-trade policy
 // through the native runtime custom-policy vtable
 // (`openpit_create_pretrade_custom_pre_trade_policy`). The C callbacks receive
-// borrowed C order/report POD views; this glue copies each view into the owned
-// `openpit::model::Order` / `openpit::model::ExecutionReport`, wraps the order
-// in a `Context`, dispatches to the handler, and translates the handler's
+// borrowed C order/report POD views. During a normal C++ engine call the glue
+// recovers the exact submitted polymorphic object from a thread-local guard;
+// otherwise it copies the view into an owned `openpit::model::Order` /
+// `openpit::model::ExecutionReport`. It wraps the order in a `Context`,
+// dispatches to the handler, and translates the handler's
 // `std::optional<Reject>` / `PolicyDecision` outcome back into the C
 // reject-list the engine expects.
 //
-// `Handler` is any object exposing zero or more of the methods below. Each hook
+// `Handler` is any object exposing one or more of the methods below. Each hook
 // is wired to the native runtime only when the corresponding method is present
 // (detected at compile time); an absent hook is registered as null, which the
-// engine treats as "accept by default". This lets a `StartPolicyAdapter` (start
-// hook), a `PolicyAdapter` (main hook), or a combined handler exposing both be
-// wrapped directly:
-//   - std::string_view Name() const                                  (required)
+// engine treats as "accept by default". This lets a `StartPolicyAdapter`
+// (start-only), a unified `PolicyAdapter` (main plus any optional stages), or a
+// direct handler be wrapped directly:
 //   - std::optional<Reject> CheckPreTradeStart(const openpit::Order&) const
 //   - std::optional<Reject> CheckPreTradeStartDryRun(const openpit::Order&)
 //   const
-//   - void PerformPreTradeCheck(const Context&, PolicyDecision&) const
-//   - void PerformPreTradeCheckDryRun(const Context&, PolicyDecision&) const
-//   - bool ApplyExecutionReport(const openpit::ExecutionReport&) const
+//   - void PerformPreTradeCheck(const Context&, tx::Mutations&, Result&,
+//                              PolicyDecision&) const
+//   - void PerformPreTradeCheckDryRun(const Context&, tx::Mutations&, Result&,
+//                                    PolicyDecision&) const
+//   - std::vector<accounts::AccountBlock> ApplyExecutionReport(
+//         const PostTradeContext&, const openpit::ExecutionReport&,
+//         PostTradeAdjustments&) const
+//   - PolicyDecision ApplyAccountAdjustment(
+//         const accountadjustment::Context&, param::AccountId,
+//         const accountadjustment::AccountAdjustment&, tx::Mutations&,
+//         AccountOutcomes&) const
+//
+// The policy name is supplied to `CustomPolicy` itself. A direct handler does
+// not need a `Name()` method. Adapter handlers do expose `Name()` through their
+// client policy; when present, it must match the constructor name so runtime
+// registration and adapter-produced rejects use one stable identity.
+//
+// The legacy two-argument main-stage and one-argument report hooks remain
+// accepted for source compatibility. They cannot use the added collectors.
 //
 // When a dry-run hook is present, the C++ binding registers the policy through
 // `openpit_create_pretrade_custom_pre_trade_policy_with_dry_run`. Missing
 // dry-run hooks are left null so the native runtime delegates them to the
 // normal hook.
 //
-// Hot path: the start and main callbacks run under the engine. They never throw
-// across the C boundary — a handler exception would be undefined behavior at
-// the runtime level, so handlers must not let exceptions escape (the SafeSlow
-// adapter mode already turns a payload mismatch into a value reject rather than
-// an exception).
+// Handler exceptions never cross the C boundary. The trampoline captures the
+// first exception and the owning Engine call rethrows that exact exception
+// after native cleanup. SafeSlow adapter payload mismatches remain value
+// rejects rather than exceptions.
 //
 // The policy is a move-only owning RAII handle. Registration on the engine
 // builder keeps its own reference; the caller still owns this handle and must
@@ -103,6 +124,19 @@ struct PreTradePolicyDeleter {
       openpit_pretrade_create_reject_list(decision.rejects.size());
   for (const Reject& reject : decision.rejects) {
     openpit_pretrade_reject_list_push(list, reject.Raw());
+  }
+  return list;
+}
+
+[[nodiscard]] inline OpenPitPretradeAccountBlockList* AccountBlocksToList(
+    const std::vector<::openpit::accounts::AccountBlock>& blocks) {
+  if (blocks.empty()) {
+    return nullptr;
+  }
+  OpenPitPretradeAccountBlockList* list =
+      openpit_pretrade_create_account_block_list(blocks.size());
+  for (const auto& block : blocks) {
+    openpit_pretrade_account_block_list_push(list, block.Raw());
   }
   return list;
 }
@@ -159,6 +193,16 @@ struct HasPerformPreTradeCheck<
     : std::true_type {};
 
 template <typename Handler, typename = void>
+struct HasPerformPreTradeCheckFull : std::false_type {};
+template <typename Handler>
+struct HasPerformPreTradeCheckFull<
+    Handler,
+    std::void_t<decltype(std::declval<const Handler&>().PerformPreTradeCheck(
+        std::declval<const Context&>(),
+        std::declval<::openpit::tx::Mutations&>(), std::declval<Result&>(),
+        std::declval<PolicyDecision&>()))>> : std::true_type {};
+
+template <typename Handler, typename = void>
 struct HasPerformPreTradeCheckDryRun : std::false_type {};
 template <typename Handler>
 struct HasPerformPreTradeCheckDryRun<
@@ -169,6 +213,17 @@ struct HasPerformPreTradeCheckDryRun<
     : std::true_type {};
 
 template <typename Handler, typename = void>
+struct HasPerformPreTradeCheckDryRunFull : std::false_type {};
+template <typename Handler>
+struct HasPerformPreTradeCheckDryRunFull<
+    Handler,
+    std::void_t<
+        decltype(std::declval<const Handler&>().PerformPreTradeCheckDryRun(
+            std::declval<const Context&>(),
+            std::declval<::openpit::tx::Mutations&>(), std::declval<Result&>(),
+            std::declval<PolicyDecision&>()))>> : std::true_type {};
+
+template <typename Handler, typename = void>
 struct HasApplyExecutionReport : std::false_type {};
 template <typename Handler>
 struct HasApplyExecutionReport<
@@ -176,6 +231,35 @@ struct HasApplyExecutionReport<
     std::void_t<decltype(std::declval<const Handler&>().ApplyExecutionReport(
         std::declval<const ::openpit::ExecutionReport&>()))>> : std::true_type {
 };
+
+template <typename Handler, typename = void>
+struct HasApplyExecutionReportFull : std::false_type {};
+template <typename Handler>
+struct HasApplyExecutionReportFull<
+    Handler,
+    std::void_t<decltype(std::declval<const Handler&>().ApplyExecutionReport(
+        std::declval<const PostTradeContext&>(),
+        std::declval<const ::openpit::ExecutionReport&>(),
+        std::declval<PostTradeAdjustments&>()))>> : std::true_type {};
+
+template <typename Handler, typename = void>
+struct HasApplyAccountAdjustment : std::false_type {};
+template <typename Handler>
+struct HasApplyAccountAdjustment<
+    Handler,
+    std::void_t<decltype(std::declval<const Handler&>().ApplyAccountAdjustment(
+        std::declval<const ::openpit::accountadjustment::Context&>(),
+        std::declval<::openpit::param::AccountId>(),
+        std::declval<const ::openpit::accountadjustment::AccountAdjustment&>(),
+        std::declval<::openpit::tx::Mutations&>(),
+        std::declval<AccountOutcomes&>()))>> : std::true_type {};
+
+template <typename Handler, typename = void>
+struct HasName : std::false_type {};
+template <typename Handler>
+struct HasName<Handler,
+               std::void_t<decltype(std::declval<const Handler&>().Name())>>
+    : std::true_type {};
 
 }  // namespace detail
 
@@ -191,8 +275,12 @@ class CustomPolicy {
   static_assert(detail::HasCheckPreTradeStart<Handler>::value ||
                     detail::HasCheckPreTradeStartDryRun<Handler>::value ||
                     detail::HasPerformPreTradeCheck<Handler>::value ||
+                    detail::HasPerformPreTradeCheckFull<Handler>::value ||
                     detail::HasPerformPreTradeCheckDryRun<Handler>::value ||
-                    detail::HasApplyExecutionReport<Handler>::value,
+                    detail::HasPerformPreTradeCheckDryRunFull<Handler>::value ||
+                    detail::HasApplyExecutionReport<Handler>::value ||
+                    detail::HasApplyExecutionReportFull<Handler>::value ||
+                    detail::HasApplyAccountAdjustment<Handler>::value,
                 "Handler must expose at least one pre-trade hook");
 
  public:
@@ -202,19 +290,25 @@ class CustomPolicy {
   CustomPolicy(std::string_view name, Handler handler,
                std::uint16_t policyGroupId = OPENPIT_DEFAULT_POLICY_GROUP_ID)
       : m_handler(std::make_unique<Handler>(std::move(handler))) {
+    if constexpr (detail::HasName<Handler>::value) {
+      const std::string handlerName(m_handler->Name());
+      if (handlerName != name) {
+        throw ::openpit::Error("custom policy name \"" + std::string(name) +
+                               "\" does not match handler name \"" +
+                               handlerName + "\"");
+      }
+    }
     OpenPitSharedString* error = nullptr;
     OpenPitPretradePreTradePolicy* raw = nullptr;
     if constexpr (UsesDryRunHooks()) {
       raw = openpit_create_pretrade_custom_pre_trade_policy_with_dry_run(
           ::openpit::MakeStringView(name), policyGroupId, StartHook(),
           StartDryRunHook(), MainHook(), MainDryRunHook(), ReportHook(),
-          /*apply_account_adjustment_fn=*/nullptr, &FreeTrampoline,
-          m_handler.get(), &error);
+          AdjustmentHook(), &FreeTrampoline, m_handler.get(), &error);
     } else {
       raw = openpit_create_pretrade_custom_pre_trade_policy(
           ::openpit::MakeStringView(name), policyGroupId, StartHook(),
-          MainHook(), ReportHook(),
-          /*apply_account_adjustment_fn=*/nullptr, &FreeTrampoline,
+          MainHook(), ReportHook(), AdjustmentHook(), &FreeTrampoline,
           m_handler.get(), &error);
     }
     if (raw == nullptr) {
@@ -250,7 +344,8 @@ class CustomPolicy {
  private:
   static constexpr bool UsesDryRunHooks() noexcept {
     return detail::HasCheckPreTradeStartDryRun<Handler>::value ||
-           detail::HasPerformPreTradeCheckDryRun<Handler>::value;
+           detail::HasPerformPreTradeCheckDryRun<Handler>::value ||
+           detail::HasPerformPreTradeCheckDryRunFull<Handler>::value;
   }
 
   static OpenPitPretradePreTradePolicyCheckPreTradeStartFn StartHook() {
@@ -270,7 +365,8 @@ class CustomPolicy {
   }
 
   static OpenPitPretradePreTradePolicyPerformPreTradeCheckFn MainHook() {
-    if constexpr (detail::HasPerformPreTradeCheck<Handler>::value) {
+    if constexpr (detail::HasPerformPreTradeCheckFull<Handler>::value ||
+                  detail::HasPerformPreTradeCheck<Handler>::value) {
       return &PerformCheckTrampoline;
     } else {
       return nullptr;
@@ -278,7 +374,8 @@ class CustomPolicy {
   }
 
   static OpenPitPretradePreTradePolicyPerformPreTradeCheckFn MainDryRunHook() {
-    if constexpr (detail::HasPerformPreTradeCheckDryRun<Handler>::value) {
+    if constexpr (detail::HasPerformPreTradeCheckDryRunFull<Handler>::value ||
+                  detail::HasPerformPreTradeCheckDryRun<Handler>::value) {
       return &PerformCheckDryRunTrampoline;
     } else {
       return nullptr;
@@ -286,8 +383,18 @@ class CustomPolicy {
   }
 
   static OpenPitPretradePreTradePolicyApplyExecutionReportFn ReportHook() {
-    if constexpr (detail::HasApplyExecutionReport<Handler>::value) {
+    if constexpr (detail::HasApplyExecutionReportFull<Handler>::value ||
+                  detail::HasApplyExecutionReport<Handler>::value) {
       return &ApplyReportTrampoline;
+    } else {
+      return nullptr;
+    }
+  }
+
+  static OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn
+  AdjustmentHook() {
+    if constexpr (detail::HasApplyAccountAdjustment<Handler>::value) {
+      return &ApplyAdjustmentTrampoline;
     } else {
       return nullptr;
     }
@@ -348,8 +455,8 @@ class CustomPolicy {
 
   static OpenPitPretradeRejectList* PerformCheckTrampoline(
       const OpenPitPretradeContext* ctx, const OpenPitOrder* order,
-      OpenPitMutations* /*mutations*/,
-      OpenPitPretradePreTradeResult* /*out_result*/, void* userData) noexcept {
+      OpenPitMutations* mutations, OpenPitPretradePreTradeResult* outResult,
+      void* userData) noexcept {
     try {
       const auto* handler = static_cast<const Handler*>(userData);
       const ::openpit::Order* original =
@@ -360,8 +467,15 @@ class CustomPolicy {
         original = &*parsed;
       }
       const Context context(*original, ctx);
+      ::openpit::tx::Mutations mutationCollector(mutations);
+      Result result(outResult);
       PolicyDecision decision;
-      handler->PerformPreTradeCheck(context, decision);
+      if constexpr (detail::HasPerformPreTradeCheckFull<Handler>::value) {
+        handler->PerformPreTradeCheck(context, mutationCollector, result,
+                                      decision);
+      } else {
+        handler->PerformPreTradeCheck(context, decision);
+      }
       return detail::DecisionToList(decision);
     } catch (...) {
       ::openpit::detail::CaptureCurrentCallbackException();
@@ -371,8 +485,8 @@ class CustomPolicy {
 
   static OpenPitPretradeRejectList* PerformCheckDryRunTrampoline(
       const OpenPitPretradeContext* ctx, const OpenPitOrder* order,
-      OpenPitMutations* /*mutations*/,
-      OpenPitPretradePreTradeResult* /*out_result*/, void* userData) noexcept {
+      OpenPitMutations* mutations, OpenPitPretradePreTradeResult* outResult,
+      void* userData) noexcept {
     try {
       const auto* handler = static_cast<const Handler*>(userData);
       const ::openpit::Order* original =
@@ -383,8 +497,15 @@ class CustomPolicy {
         original = &*parsed;
       }
       const Context context(*original, ctx);
+      ::openpit::tx::Mutations mutationCollector(mutations);
+      Result result(outResult);
       PolicyDecision decision;
-      handler->PerformPreTradeCheckDryRun(context, decision);
+      if constexpr (detail::HasPerformPreTradeCheckDryRunFull<Handler>::value) {
+        handler->PerformPreTradeCheckDryRun(context, mutationCollector, result,
+                                            decision);
+      } else {
+        handler->PerformPreTradeCheckDryRun(context, decision);
+      }
       return detail::DecisionToList(decision);
     } catch (...) {
       ::openpit::detail::CaptureCurrentCallbackException();
@@ -393,22 +514,53 @@ class CustomPolicy {
   }
 
   static OpenPitPretradeAccountBlockList* ApplyReportTrampoline(
-      const OpenPitPostTradeContext* /*ctx*/,
-      const OpenPitExecutionReport* report,
-      OpenPitPostTradeAdjustmentList* /*out_adjustments*/,
-      void* userData) noexcept {
+      const OpenPitPostTradeContext* ctx, const OpenPitExecutionReport* report,
+      OpenPitPostTradeAdjustmentList* outAdjustments, void* userData) noexcept {
     try {
       const auto* handler = static_cast<const Handler*>(userData);
-      const ::openpit::model::ExecutionReport parsed =
-          ::openpit::model::ExecutionReport::FromRaw(*report);
-      // The handler signals a kill-switch via `true`; the value reject channel
-      // is not exposed through this hook, so a triggered block carries no
-      // payload.
-      static_cast<void>(handler->ApplyExecutionReport(parsed));
-      return nullptr;
+      const ::openpit::ExecutionReport* original =
+          ::openpit::detail::CurrentSubmittedReport();
+      std::optional<::openpit::model::ExecutionReport> parsed;
+      if (original == nullptr) {
+        parsed = ::openpit::model::ExecutionReport::FromRaw(*report);
+        original = &*parsed;
+      }
+      if constexpr (detail::HasApplyExecutionReportFull<Handler>::value) {
+        const PostTradeContext context(ctx);
+        PostTradeAdjustments adjustments(outAdjustments);
+        return detail::AccountBlocksToList(
+            handler->ApplyExecutionReport(context, *original, adjustments));
+      } else {
+        // Legacy report hooks were boolean notifications and could not return
+        // a structured block. Preserve their notification behavior.
+        static_cast<void>(handler->ApplyExecutionReport(*original));
+        return nullptr;
+      }
     } catch (...) {
       ::openpit::detail::CaptureCurrentCallbackException();
       return detail::CallbackErrorAccountBlockList();
+    }
+  }
+
+  static OpenPitPretradeRejectList* ApplyAdjustmentTrampoline(
+      const OpenPitAccountAdjustmentContext* ctx,
+      OpenPitParamAccountId accountId,
+      const OpenPitAccountAdjustment* adjustment, OpenPitMutations* mutations,
+      OpenPitAccountOutcomeEntryList* outOutcomes, void* userData) noexcept {
+    try {
+      const auto* handler = static_cast<const Handler*>(userData);
+      const ::openpit::accountadjustment::Context context(ctx);
+      const ::openpit::accountadjustment::AccountAdjustment parsed =
+          ::openpit::accountadjustment::AccountAdjustment::FromRaw(*adjustment);
+      ::openpit::tx::Mutations mutationCollector(mutations);
+      AccountOutcomes outcomes(outOutcomes);
+      const PolicyDecision decision = handler->ApplyAccountAdjustment(
+          context, ::openpit::param::AccountId::FromRaw(accountId), parsed,
+          mutationCollector, outcomes);
+      return detail::DecisionToList(decision);
+    } catch (...) {
+      ::openpit::detail::CaptureCurrentCallbackException();
+      return detail::CallbackErrorRejectList();
     }
   }
 

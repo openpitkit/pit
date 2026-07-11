@@ -12,8 +12,10 @@ var searchData=
   ['policydecision_9',['PolicyDecision',['../structopenpit_1_1pretrade_1_1PolicyDecision.html',1,'openpit::pretrade']]],
   ['positionimpact_10',['PositionImpact',['../structopenpit_1_1model_1_1PositionImpact.html',1,'openpit::model']]],
   ['positionoperation_11',['PositionOperation',['../structopenpit_1_1accountadjustment_1_1PositionOperation.html',1,'openpit::accountadjustment']]],
-  ['posttraderesult_12',['PostTradeResult',['../structopenpit_1_1PostTradeResult.html',1,'openpit']]],
-  ['pretradelock_13',['PreTradeLock',['../classopenpit_1_1pretrade_1_1PreTradeLock.html',1,'openpit::pretrade']]],
-  ['promise_14',['Promise',['../classopenpit_1_1asyncengine_1_1Promise.html',1,'openpit::asyncengine']]],
-  ['promise_3c_20std_3a_3apair_3c_20a_2c_20b_20_3e_20_3e_15',['Promise&lt; std::pair&lt; A, B &gt; &gt;',['../classopenpit_1_1asyncengine_1_1Promise.html',1,'openpit::asyncengine']]]
+  ['posttradeadjustments_12',['PostTradeAdjustments',['../classopenpit_1_1pretrade_1_1PostTradeAdjustments.html',1,'openpit::pretrade']]],
+  ['posttradecontext_13',['PostTradeContext',['../classopenpit_1_1pretrade_1_1PostTradeContext.html',1,'openpit::pretrade']]],
+  ['posttraderesult_14',['PostTradeResult',['../structopenpit_1_1PostTradeResult.html',1,'openpit']]],
+  ['pretradelock_15',['PreTradeLock',['../classopenpit_1_1pretrade_1_1PreTradeLock.html',1,'openpit::pretrade']]],
+  ['promise_16',['Promise',['../classopenpit_1_1asyncengine_1_1Promise.html',1,'openpit::asyncengine']]],
+  ['promise_3c_20std_3a_3apair_3c_20a_2c_20b_20_3e_20_3e_17',['Promise&lt; std::pair&lt; A, B &gt; &gt;',['../classopenpit_1_1asyncengine_1_1Promise.html',1,'openpit::asyncengine']]]
 ];

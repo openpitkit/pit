@@ -21,6 +21,24 @@ var namespaceopenpit_1_1param =
       [ "Delta", "namespaceopenpit_1_1param.html#ad447e10b1a4c0ebfde8b838c53868f90adb1f4ab5845def61a83d5df13e0c2397", null ],
       [ "Absolute", "namespaceopenpit_1_1param.html#ad447e10b1a4c0ebfde8b838c53868f90ab51ca26c6c89cfc9bec338f7a0d3e0c8", null ]
     ] ],
+    [ "FillType", "namespaceopenpit_1_1param.html#aca93319eb8d371d7f91860bf40c03e36", [
+      [ "Trade", "namespaceopenpit_1_1param.html#aca93319eb8d371d7f91860bf40c03e36a5f390d80b20daad8f5d2f483fb0ae9d8", null ],
+      [ "Liquidation", "namespaceopenpit_1_1param.html#aca93319eb8d371d7f91860bf40c03e36af9eac3c017853796aa88325dccbea364", null ],
+      [ "AutoDeleverage", "namespaceopenpit_1_1param.html#aca93319eb8d371d7f91860bf40c03e36ac4e6eabc356cccaa07f4c3a67b1e9081", null ],
+      [ "Settlement", "namespaceopenpit_1_1param.html#aca93319eb8d371d7f91860bf40c03e36a1610f44571feba48aa8a30a8112a06fe", null ],
+      [ "Funding", "namespaceopenpit_1_1param.html#aca93319eb8d371d7f91860bf40c03e36a682889d0a1d3b50267a69346a750433d", null ]
+    ] ],
+    [ "Kind", "namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19f", [
+      [ "Quantity", "namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa694e8d1f2ee056f98ee488bdc4982d73", null ],
+      [ "Volume", "namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fabd7a9717d29c5ddcab1bc175eda1e298", null ],
+      [ "Notional", "namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa50bb1497341bd4b45df430255f0c0bf2", null ],
+      [ "Price", "namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa3601146c4e948c32b6424d2c0a7f0118", null ],
+      [ "Pnl", "namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa73a90c39f7f1402dd9f42119cc15aecc", null ],
+      [ "CashFlow", "namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa2321c32b54571b180ff5960982822378", null ],
+      [ "PositionSize", "namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa54c95732782078d630e0235f38b2a422", null ],
+      [ "Fee", "namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19faeb7297e94e2cb86e90a6ead067666717", null ],
+      [ "Leverage", "namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19faf6d322d1c8b6e0b3c0eff040b7c6c9a0", null ]
+    ] ],
     [ "RoundingStrategy", "namespaceopenpit_1_1param.html#a0f919e842c6de532d11078c10329be7a", [
       [ "MidpointNearestEven", "namespaceopenpit_1_1param.html#a0f919e842c6de532d11078c10329be7aa8a3085fad3124053fcc31d08ca3b3097", null ],
       [ "MidpointAwayFromZero", "namespaceopenpit_1_1param.html#a0f919e842c6de532d11078c10329be7aa334ab3eb125db6a7e7bd0773a371b670", null ],

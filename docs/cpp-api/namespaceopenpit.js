@@ -13,6 +13,7 @@ var namespaceopenpit =
       [ "RejectCode", "namespaceopenpit_1_1reject.html#a05a6091a6a2a6c9b515685b1c82c3516", null ],
       [ "RejectScope", "namespaceopenpit_1_1reject.html#a4a952e96684bd9c71181849f9fb5a2c2", null ]
     ] ],
+    [ "tx", "namespaceopenpit_1_1tx.html", "namespaceopenpit_1_1tx" ],
     [ "AdjustmentResult", "structopenpit_1_1AdjustmentResult.html", "structopenpit_1_1AdjustmentResult" ],
     [ "BytesView", "classopenpit_1_1BytesView.html", "classopenpit_1_1BytesView" ],
     [ "Configurator", "classopenpit_1_1Configurator.html", "classopenpit_1_1Configurator" ],
@@ -30,7 +31,8 @@ var namespaceopenpit =
     [ "ConfigureErrorKind", "namespaceopenpit.html#ac070e2d72dfd9d568d40c50f9514bda1", [
       [ "Unknown", "namespaceopenpit.html#ac070e2d72dfd9d568d40c50f9514bda1a88183b946cc5f0e8c96b2e66e1c74a7e", null ],
       [ "TypeMismatch", "namespaceopenpit.html#ac070e2d72dfd9d568d40c50f9514bda1a2782c4707c245684aa95545098e1b70b", null ],
-      [ "Validation", "namespaceopenpit.html#ac070e2d72dfd9d568d40c50f9514bda1a13148717f8faa9037f37d28971dfc219", null ]
+      [ "Validation", "namespaceopenpit.html#ac070e2d72dfd9d568d40c50f9514bda1a13148717f8faa9037f37d28971dfc219", null ],
+      [ "NestedConfiguration", "namespaceopenpit.html#ac070e2d72dfd9d568d40c50f9514bda1a531043bdcb4a8c52167c2f922634afee", null ]
     ] ],
     [ "EngineBuildErrorCode", "namespaceopenpit.html#a850932464d3c094d4d9891068796c23a", [
       [ "DuplicatePolicyName", "namespaceopenpit.html#a850932464d3c094d4d9891068796c23aa7af6c6e68494c48e8e05426046d8de44", null ],

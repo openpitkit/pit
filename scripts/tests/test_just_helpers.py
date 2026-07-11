@@ -177,6 +177,63 @@ def test_run_shell_delegates_argv(tmp_path, monkeypatch) -> None:
     assert observed["kwargs"] == {"cwd": tmp_path, "env": {"OPENPIT_TEST": "1"}}
 
 
+@pytest.mark.parametrize(
+    ("system", "machine", "expected"),
+    [
+        ("Darwin", "arm64", "node-v22.12.0-darwin-arm64.tar.xz"),
+        ("Linux", "x86_64", "node-v22.12.0-linux-x64.tar.xz"),
+        ("Windows", "AMD64", "node-v22.12.0-win-x64.zip"),
+    ],
+)
+def test_node_archive_name_uses_supported_platforms(
+    monkeypatch, system: str, machine: str, expected: str
+) -> None:
+    module = load_module()
+    monkeypatch.setattr(module.platform, "system", lambda: system)
+    monkeypatch.setattr(module.platform, "machine", lambda: machine)
+
+    assert module.node_archive_name("22.12.0") == expected
+
+
+def test_node_archive_name_rejects_unpinned_version() -> None:
+    module = load_module()
+
+    with pytest.raises(SystemExit, match="invalid CI_NODE"):
+        module.node_archive_name("22")
+
+
+def test_ensure_node_skips_download_when_runtime_matches_ci(
+    tmp_path, monkeypatch
+) -> None:
+    module = load_module()
+    monkeypatch.setattr(module, "ci_version", lambda name: "22.12.0")
+    monkeypatch.setattr(module, "node_runtime_version", lambda path: "22.12.0")
+    monkeypatch.setattr(
+        module,
+        "install_node_runtime",
+        lambda path, version: pytest.fail("install should not be called"),
+    )
+
+    module.command_ensure_node(module.argparse.Namespace(node_dir=str(tmp_path)))
+
+
+def test_ensure_node_replaces_outdated_runtime(tmp_path, monkeypatch) -> None:
+    module = load_module()
+    observed = {}
+    monkeypatch.setattr(module, "ci_version", lambda name: "22.12.0")
+    monkeypatch.setattr(module, "node_runtime_version", lambda path: "26.4.0")
+
+    def install(path, version) -> None:
+        observed["path"] = path
+        observed["version"] = version
+
+    monkeypatch.setattr(module, "install_node_runtime", install)
+
+    module.command_ensure_node(module.argparse.Namespace(node_dir=str(tmp_path)))
+
+    assert observed == {"path": tmp_path, "version": "22.12.0"}
+
+
 def test_golangci_lint_version_accepts_plain_version() -> None:
     module = load_module()
 

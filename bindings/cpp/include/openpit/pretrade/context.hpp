@@ -18,6 +18,7 @@
 #pragma once
 
 #include "openpit/account_id.hpp"
+#include "openpit/accounts.hpp"
 #include "openpit/model.hpp"
 #include "openpit/reject.hpp"
 
@@ -41,8 +42,8 @@
 //
 // A `Context` is non-owning and valid only for the duration of the callback
 // that produced it: the referenced order and the native context pointer both
-// outlive it only within that callback. It is move-only to discourage retaining
-// it past the callback.
+// outlive it only within that callback. It is neither copyable nor movable, to
+// discourage retaining it past the callback.
 //
 // This header also defines the three free functions the existing adapter header
 // (`openpit/adapters.hpp`) forward-declares and calls:
@@ -71,8 +72,8 @@ class Context {
 
   Context(const Context&) = delete;
   Context& operator=(const Context&) = delete;
-  Context(Context&&) noexcept = default;
-  Context& operator=(Context&&) noexcept = default;
+  Context(Context&&) = delete;
+  Context& operator=(Context&&) = delete;
   ~Context() = default;
 
   // The order under check, as the polymorphic base. Same reference
@@ -84,6 +85,23 @@ class Context {
   // The borrowed native context pointer; null when none was supplied.
   [[nodiscard]] const OpenPitPretradeContext* Native() const noexcept {
     return m_native;
+  }
+
+  // Account-control handle for the account bound to this request, or
+  // `std::nullopt` when the order carries no account id. The handle may be
+  // cloned into a mutation callback, but must not outlive this pre-trade
+  // transaction.
+  [[nodiscard]] std::optional<::openpit::accounts::AccountControl>
+  AccountControl() const {
+    if (m_native == nullptr) {
+      return std::nullopt;
+    }
+    OpenPitAccountControl* control =
+        openpit_pretrade_context_get_account_control(m_native);
+    if (control == nullptr) {
+      return std::nullopt;
+    }
+    return ::openpit::accounts::AccountControl(control);
   }
 
   // The account-group id for the order's bound account, or `std::nullopt` when

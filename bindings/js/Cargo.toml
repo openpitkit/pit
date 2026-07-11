@@ -1,0 +1,38 @@
+[package]
+name = "openpit-js"
+version = "0.6.0"
+edition = "2021"
+rust-version = "1.78"
+publish = false
+license = "Apache-2.0"
+repository = "https://github.com/openpitkit/pit"
+description = "JavaScript/WASM bindings for the openpit crate"
+
+[features]
+default = []
+# Installs console_error_panic_hook to route Rust panics to the browser
+# console. Development aid only; keep off in release builds.
+console_error_panic_hook = ["dep:console_error_panic_hook"]
+
+[lib]
+name = "openpit_js"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+openpit = { version = "0.6.0", path = "../../crates/openpit", features = [
+  "serde",
+  "wasm-clock",
+] }
+openpit-interop = { version = "0.6.0", path = "../../crates/openpit-interop" }
+wasm-bindgen = "=0.2.122"
+js-sys = "0.3"
+rust_decimal = "1.41"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde-wasm-bindgen = "0.6"
+# MessagePack and CBOR preserve the shared `PreTradeLock` wire contract. The
+# core serde implementation is format-agnostic, so serialized locks remain
+# portable across SDK surfaces.
+rmp-serde = "1"
+ciborium = "0.2"
+console_error_panic_hook = { version = "0.1", optional = true }

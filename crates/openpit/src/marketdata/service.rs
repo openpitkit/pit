@@ -13,13 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::core::Instrument;
 use crate::param::{AccountGroupId, AccountId, DEFAULT_ACCOUNT_GROUP};
+use crate::time::Instant;
 
 use super::builder::MarketDataSync;
 use super::error::{

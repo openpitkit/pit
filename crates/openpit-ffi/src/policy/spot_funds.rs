@@ -554,14 +554,6 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_pnl_bound
         write_error(out_error, "engine builder is null");
         return false;
     }
-    if global_len == 0 && account_group_len == 0 && account_len == 0 {
-        write_error(
-            out_error,
-            "spot funds pnl bounds policy requires at least one barrier",
-        );
-        return false;
-    }
-
     let global_slice = match unsafe {
         try_slice_arg(
             global,
@@ -683,25 +675,15 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_pnl_bound
             }
         };
     settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    if let Err(e) = settings.set_pnl_global_barriers(global_barriers) {
-        write_error_format!(out_error, "spot funds pnl global barriers invalid: {}", e);
-        return false;
-    }
-    if let Err(e) = settings.set_pnl_account_group_barriers(account_group_barriers) {
-        write_error_format!(
-            out_error,
-            "spot funds pnl account group barriers invalid: {}",
-            e
-        );
-        return false;
-    }
-    let settings = match settings.with_initial_pnl_account_barriers(account_barriers) {
-        Ok(settings) => settings,
-        Err(e) => {
-            write_error_format!(out_error, "spot funds pnl account barriers invalid: {}", e);
-            return false;
-        }
-    };
+    let settings =
+        match settings.with_pnl_barriers(global_barriers, account_group_barriers, account_barriers)
+        {
+            Ok(settings) => settings,
+            Err(e) => {
+                write_error_format!(out_error, "spot funds pnl barriers invalid: {}", e);
+                return false;
+            }
+        };
 
     let builder_ref = unsafe { &mut *builder };
     let storage_builder = match policy_storage(builder_ref) {
@@ -1443,6 +1425,33 @@ mod tests {
             )
         };
         assert!(result);
+    }
+
+    #[test]
+    fn add_builtin_spot_funds_pnl_bounds_requires_barrier_via_core() {
+        let builder = make_builder();
+        let mut err: *mut crate::string::OpenPitSharedString = std::ptr::null_mut();
+        let result = unsafe {
+            openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
+                builder,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                &mut err as *mut _ as OpenPitOutError,
+            )
+        };
+
+        assert!(!result);
+        assert_eq!(
+            cstr_to_string(err),
+            "spot funds pnl barriers invalid: spot funds P&L bounds require at least one barrier"
+        );
+        openpit_destroy_engine_builder(builder);
     }
 
     #[test]

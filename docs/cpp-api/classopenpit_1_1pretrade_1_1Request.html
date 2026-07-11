@@ -128,7 +128,7 @@ Public Member Functions</h2></td></tr>
 <tr class="memitem:a0913642cd5bcd8533ccb6969c25bfbe7" id="r_a0913642cd5bcd8533ccb6969c25bfbe7"><td class="memItemLeft">OpenPitPretradePreTradeRequest *&#160;</td><td class="memItemRight"><a class="el" href="#a0913642cd5bcd8533ccb6969c25bfbe7">Get</a> () const noexcept</td></tr>
 <tr class="memitem:ae7fc75588a4ce7e296a55b4ac3cd1666" id="r_ae7fc75588a4ce7e296a55b4ac3cd1666"><td class="memItemLeft">&#160;</td><td class="memItemRight"><a class="el" href="#ae7fc75588a4ce7e296a55b4ac3cd1666">operator bool</a> () const noexcept</td></tr>
 <tr class="memitem:afc5461b3fe7e52f68f0f184d36c02399" id="r_afc5461b3fe7e52f68f0f184d36c02399"><td class="memItemLeft">&#160;</td><td class="memItemRight"><a class="el" href="#afc5461b3fe7e52f68f0f184d36c02399">Request</a> ()=default</td></tr>
-<tr class="memitem:aab3d6814fb5158b3f3a970ed07ad69a8" id="r_aab3d6814fb5158b3f3a970ed07ad69a8"><td class="memItemLeft">&#160;</td><td class="memItemRight"><a class="el" href="#aab3d6814fb5158b3f3a970ed07ad69a8">Request</a> (OpenPitPretradePreTradeRequest *handle, const <a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a> *order=nullptr) noexcept</td></tr>
+<tr class="memitem:afd481b113df129fd962348097892f1e6" id="r_afd481b113df129fd962348097892f1e6"><td class="memItemLeft">&#160;</td><td class="memItemRight"><a class="el" href="#afd481b113df129fd962348097892f1e6">Request</a> (OpenPitPretradePreTradeRequest *handle, std::shared_ptr&lt; const <a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a> &gt; order=nullptr) noexcept</td></tr>
 </table>
 <a name="doc-constructors" id="doc-constructors"></a><h2 id="header-doc-constructors" class="groupheader">Constructor &amp; Destructor Documentation</h2>
 <a id="afc5461b3fe7e52f68f0f184d36c02399" name="afc5461b3fe7e52f68f0f184d36c02399"></a>
@@ -156,8 +156,8 @@ Public Member Functions</h2></td></tr>
 
 </div>
 </div>
-<a id="aab3d6814fb5158b3f3a970ed07ad69a8" name="aab3d6814fb5158b3f3a970ed07ad69a8"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#aab3d6814fb5158b3f3a970ed07ad69a8">&#9670;&#160;</a></span>Request() <span class="overload">[2/2]</span></h2>
+<a id="afd481b113df129fd962348097892f1e6" name="afd481b113df129fd962348097892f1e6"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#afd481b113df129fd962348097892f1e6">&#9670;&#160;</a></span>Request() <span class="overload">[2/2]</span></h2>
 
 <div class="memitem">
 <div class="memproto">
@@ -173,7 +173,7 @@ Public Member Functions</h2></td></tr>
         <tr>
           <td class="paramkey"></td>
           <td></td>
-          <td class="paramtype">const <a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a> *</td>          <td class="paramname"><span class="paramname"><em>order</em></span><span class="paramdefsep"> = </span><span class="paramdefval">nullptr</span>&#160;)</td>
+          <td class="paramtype">std::shared_ptr&lt; const <a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a> &gt;</td>          <td class="paramname"><span class="paramname"><em>order</em></span><span class="paramdefsep"> = </span><span class="paramdefval">nullptr</span>&#160;)</td>
         </tr>
       </table>
   </td>

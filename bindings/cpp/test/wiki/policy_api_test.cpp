@@ -35,10 +35,14 @@
 
 #include <gtest/gtest.h>
 
+#include <cassert>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -69,8 +73,9 @@ using openpit::pretrade::RejectScope;
 // the result is bit-for-bit identical across language bindings. Returns
 // nullopt when the engine reports the multiplication as a value error, which
 // the caller turns into an explicit reject rather than an exception.
-[[nodiscard]] std::optional<Volume> CalculateNotional(
-    const Price& price, const Quantity& quantity) {
+[[nodiscard]] std::optional<openpit::param::Volume> CalculateNotional(
+    const openpit::param::Price& price,
+    const openpit::param::Quantity& quantity) {
   OpenPitParamVolume raw{};
   OpenPitParamError* error = nullptr;
   if (!openpit_param_price_calculate_volume(price.Raw(), quantity.Raw(), &raw,
@@ -80,13 +85,13 @@ using openpit::pretrade::RejectScope;
     }
     return std::nullopt;
   }
-  return Volume::FromRaw(raw);
+  return openpit::param::Volume::FromRaw(raw);
 }
 
 class NotionalCapPolicy {
  public:
   // Policy-local config: reject any order above this absolute notional.
-  explicit NotionalCapPolicy(Volume maxAbsNotional)
+  explicit NotionalCapPolicy(openpit::param::Volume maxAbsNotional)
       : m_maxAbsNotional(maxAbsNotional) {}
 
   [[nodiscard]] std::string_view Name() const noexcept {
@@ -94,14 +99,20 @@ class NotionalCapPolicy {
   }
 
   void PerformPreTradeCheck(const openpit::model::Order& order,
-                            const Context& context,
-                            PolicyDecision& decision) const {
+                            const openpit::pretrade::Context& context,
+                            openpit::tx::Mutations& mutations,
+                            openpit::pretrade::Result& result,
+                            openpit::pretrade::PolicyDecision& decision) const {
     static_cast<void>(context);
+    static_cast<void>(mutations);
+    static_cast<void>(result);
     if (!order.operation.has_value()) {
-      PushReject(decision, Reject(std::string(Name()), RejectScope::Order,
-                                  RejectCode::MissingRequiredField,
-                                  "required order field missing",
-                                  "operation is not set"));
+      openpit::pretrade::PushReject(
+          decision,
+          openpit::pretrade::Reject(
+              std::string(Name()), openpit::pretrade::RejectScope::Order,
+              openpit::pretrade::RejectCode::MissingRequiredField,
+              "required order field missing", "operation is not set"));
       return;
     }
     const openpit::model::OrderOperation& operation = *order.operation;
@@ -109,60 +120,75 @@ class NotionalCapPolicy {
     // Translate the public order surface into one number that this policy can
     // reason about: requested notional.
     if (!operation.tradeAmount.has_value()) {
-      PushReject(decision, Reject(std::string(Name()), RejectScope::Order,
-                                  RejectCode::MissingRequiredField,
-                                  "required order field missing",
-                                  "trade_amount is not set"));
+      openpit::pretrade::PushReject(
+          decision,
+          openpit::pretrade::Reject(
+              std::string(Name()), openpit::pretrade::RejectScope::Order,
+              openpit::pretrade::RejectCode::MissingRequiredField,
+              "required order field missing", "trade_amount is not set"));
       return;
     }
     const openpit::model::TradeAmount& tradeAmount = *operation.tradeAmount;
 
     // A volume trade amount is already the notional; a quantity trade amount
     // must be priced into a notional (notional = price * quantity).
-    std::optional<Volume> requestedNotional = tradeAmount.AsVolume();
+    std::optional<openpit::param::Volume> requestedNotional =
+        tradeAmount.AsVolume();
     if (!requestedNotional.has_value()) {
-      const std::optional<Quantity> quantity = tradeAmount.AsQuantity();
+      const std::optional<openpit::param::Quantity> quantity =
+          tradeAmount.AsQuantity();
       if (!operation.price.has_value()) {
-        PushReject(decision,
-                   Reject(std::string(Name()), RejectScope::Order,
-                          RejectCode::OrderValueCalculationFailed,
-                          "order value calculation failed",
-                          "price not provided for evaluating notional"));
+        openpit::pretrade::PushReject(
+            decision,
+            openpit::pretrade::Reject(
+                std::string(Name()), openpit::pretrade::RejectScope::Order,
+                openpit::pretrade::RejectCode::OrderValueCalculationFailed,
+                "order value calculation failed",
+                "price not provided for evaluating notional"));
         return;
       }
       requestedNotional = CalculateNotional(*operation.price, *quantity);
       if (!requestedNotional.has_value()) {
-        PushReject(decision,
-                   Reject(std::string(Name()), RejectScope::Order,
-                          RejectCode::OrderValueCalculationFailed,
-                          "order value calculation failed",
-                          "price and quantity could not be used to evaluate "
-                          "notional"));
+        openpit::pretrade::PushReject(
+            decision,
+            openpit::pretrade::Reject(
+                std::string(Name()), openpit::pretrade::RejectScope::Order,
+                openpit::pretrade::RejectCode::OrderValueCalculationFailed,
+                "order value calculation failed",
+                "price and quantity could not be used to evaluate notional"));
         return;
       }
     }
 
     if (*requestedNotional > m_maxAbsNotional) {
       // Business validation failures should become explicit rejects.
-      PushReject(decision,
-                 Reject(std::string(Name()), RejectScope::Order,
-                        RejectCode::RiskLimitExceeded, "strategy cap exceeded",
-                        "requested notional " + requestedNotional->ToString() +
-                            ", max allowed: " + m_maxAbsNotional.ToString()));
+      openpit::pretrade::PushReject(
+          decision,
+          openpit::pretrade::Reject(
+              std::string(Name()), openpit::pretrade::RejectScope::Order,
+              openpit::pretrade::RejectCode::RiskLimitExceeded,
+              "strategy cap exceeded",
+              "requested notional " + requestedNotional->ToString() +
+                  ", max allowed: " + m_maxAbsNotional.ToString()));
       return;
     }
 
     // This policy only validates. It does not reserve mutable state.
   }
 
-  [[nodiscard]] bool ApplyExecutionReport(
-      const openpit::ExecutionReport& report) const {
+  [[nodiscard]] std::vector<openpit::accounts::AccountBlock>
+  ApplyExecutionReport(
+      const openpit::pretrade::PostTradeContext& context,
+      const openpit::ExecutionReport& report,
+      openpit::pretrade::PostTradeAdjustments& adjustments) const {
+    static_cast<void>(context);
     static_cast<void>(report);
-    return false;
+    static_cast<void>(adjustments);
+    return {};
   }
 
  private:
-  Volume m_maxAbsNotional;
+  openpit::param::Volume m_maxAbsNotional;
 };
 // <<< WIKI SNIPPET END: Custom Main-Stage Policy
 
@@ -170,6 +196,14 @@ class NotionalCapPolicy {
 // recovered as `openpit::model::Order` before the check runs.
 using NotionalCapAdapter = openpit::pretrade::PolicyAdapterWithSafeSlowArgType<
     NotionalCapPolicy, openpit::model::Order, openpit::ExecutionReport>;
+
+template <typename Adapter>
+void RunMainCheck(const Adapter& adapter, const Context& context,
+                  PolicyDecision& decision) {
+  openpit::tx::Mutations mutations(nullptr);
+  openpit::pretrade::Result result(nullptr);
+  adapter.PerformPreTradeCheck(context, mutations, result, decision);
+}
 
 // Builds a notional order carrying `volume` settlement notional on `accountId`.
 [[nodiscard]] openpit::model::Order NotionalOrder(std::uint64_t accountId,
@@ -211,7 +245,7 @@ TEST(PolicyApiCustomMainStage, UnderCapAccepts) {
   const Context context(order);
 
   PolicyDecision decision;
-  adapter.PerformPreTradeCheck(context, decision);
+  RunMainCheck(adapter, context, decision);
   EXPECT_FALSE(decision.IsRejected());
 }
 
@@ -222,7 +256,7 @@ TEST(PolicyApiCustomMainStage, OverCapRejectsWithRiskLimit) {
   const Context context(order);
 
   PolicyDecision decision;
-  adapter.PerformPreTradeCheck(context, decision);
+  RunMainCheck(adapter, context, decision);
   ASSERT_TRUE(decision.IsRejected());
   EXPECT_EQ(decision.rejects.front().code, RejectCode::RiskLimitExceeded);
   EXPECT_EQ(decision.rejects.front().policy, "NotionalCapPolicy");
@@ -235,7 +269,7 @@ TEST(PolicyApiCustomMainStage, MissingOperationRejects) {
   const Context context(order);
 
   PolicyDecision decision;
-  adapter.PerformPreTradeCheck(context, decision);
+  RunMainCheck(adapter, context, decision);
   ASSERT_TRUE(decision.IsRejected());
   EXPECT_EQ(decision.rejects.front().code, RejectCode::MissingRequiredField);
 }
@@ -248,7 +282,7 @@ TEST(PolicyApiCustomMainStage, QuantityUnderCapAccepts) {
   const Context context(order);
 
   PolicyDecision decision;
-  adapter.PerformPreTradeCheck(context, decision);
+  RunMainCheck(adapter, context, decision);
   EXPECT_FALSE(decision.IsRejected());
 }
 
@@ -260,7 +294,7 @@ TEST(PolicyApiCustomMainStage, QuantityOverCapRejectsWithRiskLimit) {
   const Context context(order);
 
   PolicyDecision decision;
-  adapter.PerformPreTradeCheck(context, decision);
+  RunMainCheck(adapter, context, decision);
   ASSERT_TRUE(decision.IsRejected());
   EXPECT_EQ(decision.rejects.front().code, RejectCode::RiskLimitExceeded);
 }
@@ -273,7 +307,7 @@ TEST(PolicyApiCustomMainStage, QuantityWithoutPriceRejectsWithValueCalc) {
   const Context context(order);
 
   PolicyDecision decision;
-  adapter.PerformPreTradeCheck(context, decision);
+  RunMainCheck(adapter, context, decision);
   ASSERT_TRUE(decision.IsRejected());
   EXPECT_EQ(decision.rejects.front().code,
             RejectCode::OrderValueCalculationFailed);
@@ -298,39 +332,53 @@ class ReserveThenValidatePolicy {
   }
 
   void PerformPreTradeCheck(const openpit::model::Order& order,
-                            const Context& context,
-                            PolicyDecision& decision) const {
+                            const openpit::pretrade::Context& context,
+                            openpit::tx::Mutations& mutations,
+                            openpit::pretrade::Result& result,
+                            openpit::pretrade::PolicyDecision& decision) const {
     static_cast<void>(order);
     static_cast<void>(context);
+    static_cast<void>(mutations);
+    static_cast<void>(result);
 
     // Pretend that this request needs a temporary reservation of 100. We apply
     // it eagerly because downstream logic wants to observe the tentative state
     // immediately.
-    const Volume prevReserved = m_reserved;
-    const Volume nextReserved = Volume::FromString("100");
+    const openpit::param::Volume prevReserved = m_reserved;
+    const openpit::param::Volume nextReserved =
+        openpit::param::Volume::FromString("100");
     m_reserved = nextReserved;
 
     if (m_reserved > m_limit) {
       // The decision is rejected, so the engine will not apply this request:
       // restore the previous state before returning the reject.
       m_reserved = prevReserved;
-      PushReject(decision, Reject(std::string(Name()), RejectScope::Order,
-                                  RejectCode::RiskLimitExceeded,
-                                  "temporary reservation exceeds limit",
-                                  "reserved " + nextReserved.ToString() +
-                                      ", limit: " + m_limit.ToString()));
+      openpit::pretrade::PushReject(
+          decision,
+          openpit::pretrade::Reject(
+              std::string(Name()), openpit::pretrade::RejectScope::Order,
+              openpit::pretrade::RejectCode::RiskLimitExceeded,
+              "temporary reservation exceeds limit",
+              "reserved " + nextReserved.ToString() +
+                  ", limit: " + m_limit.ToString()));
     }
   }
 
-  [[nodiscard]] bool ApplyExecutionReport(
-      const openpit::ExecutionReport& report) const {
+  [[nodiscard]] std::vector<openpit::accounts::AccountBlock>
+  ApplyExecutionReport(
+      const openpit::pretrade::PostTradeContext& context,
+      const openpit::ExecutionReport& report,
+      openpit::pretrade::PostTradeAdjustments& adjustments) const {
+    static_cast<void>(context);
     static_cast<void>(report);
-    return false;
+    static_cast<void>(adjustments);
+    return {};
   }
 
  private:
-  mutable Volume m_reserved = Volume::FromString("0");
-  Volume m_limit = Volume::FromString("50");
+  mutable openpit::param::Volume m_reserved =
+      openpit::param::Volume::FromString("0");
+  openpit::param::Volume m_limit = openpit::param::Volume::FromString("50");
 };
 // <<< WIKI SNIPPET END: Rollback Safety Pattern
 
@@ -345,7 +393,7 @@ TEST(PolicyApiRollbackSafety, OverLimitRejectsAndRestoresState) {
   const Context context(order);
 
   PolicyDecision decision;
-  adapter.PerformPreTradeCheck(context, decision);
+  RunMainCheck(adapter, context, decision);
   ASSERT_TRUE(decision.IsRejected());
   EXPECT_EQ(decision.rejects.front().code, RejectCode::RiskLimitExceeded);
 }
@@ -353,10 +401,9 @@ TEST(PolicyApiRollbackSafety, OverLimitRejectsAndRestoresState) {
 //------------------------------------------------------------------------------
 // Custom `Order` and `Execution Report` Models
 //
-// A client order type carrying project-specific metadata derives from
-// `openpit::Order`. A start-stage policy reads the typed field; the SafeSlow
-// start adapter recovers the concrete type from the context order. The order is
-// driven through the full pre-trade pipeline of a live engine.
+// Client order/report types carry project-specific metadata on the concrete
+// standard models. The SafeSlow adapter recovers each dynamic type before
+// invoking the typed start/post-trade hook in a live engine.
 
 // >>> WIKI SNIPPET BEGIN: Custom Order and Execution Report Models
 // StrategyOrder carries project-specific metadata alongside the standard order.
@@ -373,25 +420,38 @@ struct StrategyReport : public openpit::model::ExecutionReport {
 // StrategyTagPolicy rejects orders from blocked strategy tags.
 class StrategyTagPolicy {
  public:
+  explicit StrategyTagPolicy(std::shared_ptr<std::string> appliedVenueExecId)
+      : m_appliedVenueExecId(std::move(appliedVenueExecId)) {}
+
   [[nodiscard]] std::string_view Name() const noexcept {
     return "StrategyTagPolicy";
   }
 
-  [[nodiscard]] std::optional<Reject> CheckPreTradeStart(
+  [[nodiscard]] std::optional<openpit::pretrade::Reject> CheckPreTradeStart(
       const StrategyOrder& order) const {
     if (order.strategyTag == "blocked") {
-      return Reject(
-          std::string(Name()), RejectScope::Order,
-          RejectCode::ComplianceRestriction, "strategy blocked",
+      return openpit::pretrade::Reject(
+          std::string(Name()), openpit::pretrade::RejectScope::Order,
+          openpit::pretrade::RejectCode::ComplianceRestriction,
+          "strategy blocked",
           "strategy tag \"" + order.strategyTag + "\" is not allowed");
     }
     return std::nullopt;
   }
 
-  [[nodiscard]] bool ApplyExecutionReport(const StrategyReport& report) const {
-    static_cast<void>(report);
-    return false;
+  [[nodiscard]] std::vector<openpit::accounts::AccountBlock>
+  ApplyExecutionReport(
+      const openpit::pretrade::PostTradeContext& context,
+      const StrategyReport& report,
+      openpit::pretrade::PostTradeAdjustments& adjustments) const {
+    static_cast<void>(context);
+    static_cast<void>(adjustments);
+    *m_appliedVenueExecId = report.venueExecId;
+    return {};
   }
+
+ private:
+  std::shared_ptr<std::string> m_appliedVenueExecId;
 };
 // <<< WIKI SNIPPET END: Custom Order and Execution Report Models
 
@@ -401,8 +461,10 @@ using StrategyStartAdapter =
 
 TEST(PolicyApiCustomModels, AllowedStrategyTagPassesPipeline) {
   // >>> WIKI SNIPPET BEGIN: Custom Models driver
-  CustomPolicy<StrategyStartAdapter> policy(
-      "StrategyTagPolicy", StrategyStartAdapter{StrategyTagPolicy{}});
+  const auto appliedVenueExecId = std::make_shared<std::string>();
+  openpit::pretrade::CustomPolicy<StrategyStartAdapter> policy(
+      "StrategyTagPolicy",
+      StrategyStartAdapter{StrategyTagPolicy{appliedVenueExecId}});
 
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
   builder.Add(policy);
@@ -413,24 +475,37 @@ TEST(PolicyApiCustomModels, AllowedStrategyTagPassesPipeline) {
   op.instrument = openpit::model::Instrument("AAPL", "USD");
   op.accountId = ::openpit::param::AccountId::FromUint64(99224416);
   op.side = openpit::model::Side::Buy;
-  op.tradeAmount =
-      openpit::model::TradeAmount::OfQuantity(Quantity::FromString("10"));
-  op.price = Price::FromString("25");
+  op.tradeAmount = openpit::model::TradeAmount::OfQuantity(
+      openpit::param::Quantity::FromString("10"));
+  op.price = openpit::param::Price::FromString("25");
   order.operation = std::move(op);
   order.strategyTag = "alpha";
 
   openpit::pretrade::StartResult start = engine.StartPreTrade(order);
-  ASSERT_TRUE(start.Passed());
+  assert(start.Passed());
 
   openpit::pretrade::ExecuteResult execute = start.request->Execute();
-  ASSERT_TRUE(execute.Passed());
+  assert(execute.Passed());
   execute.reservation->Commit();
+
+  StrategyReport report;
+  openpit::model::ExecutionReportOperation reportOp;
+  reportOp.instrument = openpit::model::Instrument("AAPL", "USD");
+  reportOp.accountId = ::openpit::param::AccountId::FromUint64(99224416);
+  reportOp.side = openpit::model::Side::Buy;
+  report.operation = std::move(reportOp);
+  report.venueExecId = "venue-42";
+
+  const openpit::PostTradeResult post = engine.ApplyExecutionReport(report);
+  assert(post.accountBlocks.empty());
+  assert(*appliedVenueExecId == "venue-42");
   // <<< WIKI SNIPPET END: Custom Models driver
 }
 
 TEST(PolicyApiCustomModels, BlockedStrategyTagRejectsAtStart) {
   CustomPolicy<StrategyStartAdapter> policy(
-      "StrategyTagPolicy", StrategyStartAdapter{StrategyTagPolicy{}});
+      "StrategyTagPolicy",
+      StrategyStartAdapter{StrategyTagPolicy{std::make_shared<std::string>()}});
 
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
   builder.Add(policy);
@@ -441,9 +516,9 @@ TEST(PolicyApiCustomModels, BlockedStrategyTagRejectsAtStart) {
   op.instrument = openpit::model::Instrument("AAPL", "USD");
   op.accountId = ::openpit::param::AccountId::FromUint64(99224416);
   op.side = openpit::model::Side::Buy;
-  op.tradeAmount =
-      openpit::model::TradeAmount::OfQuantity(Quantity::FromString("10"));
-  op.price = Price::FromString("25");
+  op.tradeAmount = openpit::model::TradeAmount::OfQuantity(
+      openpit::param::Quantity::FromString("10"));
+  op.price = openpit::param::Price::FromString("25");
   order.operation = std::move(op);
   order.strategyTag = "blocked";
 
@@ -454,12 +529,38 @@ TEST(PolicyApiCustomModels, BlockedStrategyTagRejectsAtStart) {
 }
 
 //------------------------------------------------------------------------------
-// Example: Block an Account (Kill Switch)
+// Example: Block an Account from an Adjustment Callback
 //
-// The C++ binding records a kill-switch block through the engine's
-// account-administration handle (`Engine::Accounts()`). Once an account is
-// blocked, every later start stage for that account is rejected with
-// `ACCOUNT_BLOCKED`, without involving any policy start-check.
+// The adjustment context always carries account control. A policy can record
+// the kill switch while accepting the adjustment; every later start stage for
+// that account is then rejected with ACCOUNT_BLOCKED.
+
+// >>> WIKI SNIPPET BEGIN: Block an Account from an Adjustment Callback
+// BlockOnAdjustmentPolicy blocks the adjusted account from its callback.
+class BlockOnAdjustmentPolicy {
+ public:
+  [[nodiscard]] std::string_view Name() const noexcept {
+    return "BlockOnAdjustmentPolicy";
+  }
+
+  [[nodiscard]] openpit::pretrade::PolicyDecision ApplyAccountAdjustment(
+      const openpit::accountadjustment::Context& context,
+      openpit::param::AccountId accountId,
+      const openpit::accountadjustment::AccountAdjustment& adjustment,
+      openpit::tx::Mutations& mutations,
+      openpit::pretrade::AccountOutcomes& outcomes) const {
+    static_cast<void>(accountId);
+    static_cast<void>(adjustment);
+    static_cast<void>(mutations);
+    static_cast<void>(outcomes);
+    // The adjustment context always exposes the account-block facility.
+    context.AccountControl().Block(openpit::accounts::AccountBlock(
+        openpit::pretrade::RejectCode::AccountBlocked, std::string(Name()),
+        "blocked via account control",
+        "custom policy blocked the account from a callback"));
+    return {};  // Accept the adjustment; the block is the side effect.
+  }
+};
 
 // Builds the canonical single-leg order for `accountId`.
 [[nodiscard]] openpit::model::Order AccountOrder(std::uint64_t accountId) {
@@ -476,22 +577,36 @@ TEST(PolicyApiCustomModels, BlockedStrategyTagRejectsAtStart) {
 }
 
 TEST(PolicyApiBlockAccount, BlockedAccountIsRejectedWithAccountBlocked) {
-  // >>> WIKI SNIPPET BEGIN: Block an Account
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
-  builder.Add(openpit::pretrade::policies::OrderValidationPolicy{});
+  openpit::pretrade::CustomPolicy<BlockOnAdjustmentPolicy> policy(
+      "BlockOnAdjustmentPolicy", BlockOnAdjustmentPolicy{});
+  builder.Add(policy);
   openpit::Engine engine = builder.Build();
 
   const openpit::param::AccountId accountId =
       openpit::param::AccountId::FromUint64(99224416);
 
-  // Record the kill-switch block through the engine's account-control handle.
-  engine.Accounts().Block(accountId, "blocked via account control");
+  // Driving an adjustment triggers the block.
+  openpit::accountadjustment::BalanceOperation balanceOp;
+  balanceOp.asset = "USD";
+  openpit::accountadjustment::AccountAdjustment adjustment;
+  adjustment.operation =
+      openpit::accountadjustment::Operation::OfBalance(std::move(balanceOp));
+  openpit::accountadjustment::Amount amount;
+  amount.balance = openpit::param::AdjustmentAmount::OfAbsolute(
+      openpit::param::PositionSize::FromString("0"));
+  adjustment.amount = std::move(amount);
+  const openpit::AdjustmentResult adjustmentResult =
+      engine.ApplyAccountAdjustment(
+          accountId, std::vector<openpit::accountadjustment::AccountAdjustment>{
+                         adjustment});
+  assert(adjustmentResult.Passed());
 
   // A later order on the same account is rejected with ACCOUNT_BLOCKED, without
   // any start-check involvement.
   openpit::pretrade::StartResult blocked =
       engine.StartPreTrade(AccountOrder(99224416));
-  // <<< WIKI SNIPPET END: Block an Account
+  // <<< WIKI SNIPPET END: Block an Account from an Adjustment Callback
 
   ASSERT_FALSE(blocked.Passed());
   ASSERT_EQ(blocked.rejects.size(), 1u);

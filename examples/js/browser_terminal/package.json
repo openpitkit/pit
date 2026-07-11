@@ -1,0 +1,21 @@
+{
+  "name": "@openpit/example-browser-terminal",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "In-browser terminal that runs the @openpit/engine risk engine client-side via wasm",
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@openpit/engine": "file:../../../bindings/js/dist",
+    "@xterm/xterm": "^5.5.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}

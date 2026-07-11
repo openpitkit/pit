@@ -24,5 +24,6 @@ var searchData=
   ['mode_21',['mode',['../structopenpit_1_1accountadjustment_1_1PositionOperation.html#aac100e36a51922c16258ea74606a8644',1,'openpit::accountadjustment::PositionOperation']]],
   ['model_2ehpp_22',['model.hpp',['../model_8hpp.html',1,'']]],
   ['monetaryamount_23',['MonetaryAmount',['../classopenpit_1_1param_1_1MonetaryAmount.html',1,'openpit::param::MonetaryAmount'],['../classopenpit_1_1param_1_1MonetaryAmount.html#a3968b09e61530200c6b5490f015d5446',1,'openpit::param::MonetaryAmount::MonetaryAmount()']]],
-  ['monetaryamountoptional_24',['MonetaryAmountOptional',['../namespaceopenpit_1_1param.html#ada969d1d0130ef7c4d89468acbfe0278',1,'openpit::param']]]
+  ['monetaryamountoptional_24',['MonetaryAmountOptional',['../namespaceopenpit_1_1param.html#ada969d1d0130ef7c4d89468acbfe0278',1,'openpit::param']]],
+  ['mutations_25',['Mutations',['../classopenpit_1_1tx_1_1Mutations.html',1,'openpit::tx::Mutations'],['../classopenpit_1_1tx_1_1Mutations.html#a2e4dcc50f2e0be2bbb32b5eeae8e8306',1,'openpit::tx::Mutations::Mutations(OpenPitMutations *native) noexcept'],['../classopenpit_1_1tx_1_1Mutations.html#a4167b569ef568b5cd940b563e2090ee7',1,'openpit::tx::Mutations::Mutations(const Mutations &amp;)=delete'],['../classopenpit_1_1tx_1_1Mutations.html#a00dfe9c0cade7ad1798ebbdd61047e1e',1,'openpit::tx::Mutations::Mutations(Mutations &amp;&amp;)=delete']]]
 ];

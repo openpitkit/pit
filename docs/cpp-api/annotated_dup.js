@@ -8,6 +8,7 @@ var annotated_dup =
         [ "BalanceOperation", "structopenpit_1_1accountadjustment_1_1BalanceOperation.html", "structopenpit_1_1accountadjustment_1_1BalanceOperation" ],
         [ "BatchError", "classopenpit_1_1accountadjustment_1_1BatchError.html", "classopenpit_1_1accountadjustment_1_1BatchError" ],
         [ "Bounds", "structopenpit_1_1accountadjustment_1_1Bounds.html", "structopenpit_1_1accountadjustment_1_1Bounds" ],
+        [ "Context", "classopenpit_1_1accountadjustment_1_1Context.html", "classopenpit_1_1accountadjustment_1_1Context" ],
         [ "Operation", "classopenpit_1_1accountadjustment_1_1Operation.html", "classopenpit_1_1accountadjustment_1_1Operation" ],
         [ "Outcome", "structopenpit_1_1accountadjustment_1_1Outcome.html", "structopenpit_1_1accountadjustment_1_1Outcome" ],
         [ "OutcomeAmount", "structopenpit_1_1accountadjustment_1_1OutcomeAmount.html", "structopenpit_1_1accountadjustment_1_1OutcomeAmount" ],
@@ -104,6 +105,7 @@ var annotated_dup =
           [ "SpotFundsPnlBoundsKillSwitchPolicy", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy.html", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy" ],
           [ "SpotFundsPolicy", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy.html", "classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy" ]
         ] ],
+        [ "AccountOutcomes", "classopenpit_1_1pretrade_1_1AccountOutcomes.html", "classopenpit_1_1pretrade_1_1AccountOutcomes" ],
         [ "Context", "classopenpit_1_1pretrade_1_1Context.html", "classopenpit_1_1pretrade_1_1Context" ],
         [ "CustomPolicy", "classopenpit_1_1pretrade_1_1CustomPolicy.html", "classopenpit_1_1pretrade_1_1CustomPolicy" ],
         [ "DryRunReport", "classopenpit_1_1pretrade_1_1DryRunReport.html", "classopenpit_1_1pretrade_1_1DryRunReport" ],
@@ -111,12 +113,18 @@ var annotated_dup =
         [ "LockEntry", "structopenpit_1_1pretrade_1_1LockEntry.html", "structopenpit_1_1pretrade_1_1LockEntry" ],
         [ "PolicyAdapter", "classopenpit_1_1pretrade_1_1PolicyAdapter.html", "classopenpit_1_1pretrade_1_1PolicyAdapter" ],
         [ "PolicyDecision", "structopenpit_1_1pretrade_1_1PolicyDecision.html", "structopenpit_1_1pretrade_1_1PolicyDecision" ],
+        [ "PostTradeAdjustments", "classopenpit_1_1pretrade_1_1PostTradeAdjustments.html", "classopenpit_1_1pretrade_1_1PostTradeAdjustments" ],
+        [ "PostTradeContext", "classopenpit_1_1pretrade_1_1PostTradeContext.html", "classopenpit_1_1pretrade_1_1PostTradeContext" ],
         [ "PreTradeLock", "classopenpit_1_1pretrade_1_1PreTradeLock.html", "classopenpit_1_1pretrade_1_1PreTradeLock" ],
         [ "Reject", "structopenpit_1_1pretrade_1_1Reject.html", "structopenpit_1_1pretrade_1_1Reject" ],
         [ "Request", "classopenpit_1_1pretrade_1_1Request.html", "classopenpit_1_1pretrade_1_1Request" ],
         [ "Reservation", "classopenpit_1_1pretrade_1_1Reservation.html", "classopenpit_1_1pretrade_1_1Reservation" ],
+        [ "Result", "classopenpit_1_1pretrade_1_1Result.html", "classopenpit_1_1pretrade_1_1Result" ],
         [ "StartPolicyAdapter", "classopenpit_1_1pretrade_1_1StartPolicyAdapter.html", "classopenpit_1_1pretrade_1_1StartPolicyAdapter" ],
         [ "StartResult", "structopenpit_1_1pretrade_1_1StartResult.html", "structopenpit_1_1pretrade_1_1StartResult" ]
+      ] ],
+      [ "tx", "namespaceopenpit_1_1tx.html", [
+        [ "Mutations", "classopenpit_1_1tx_1_1Mutations.html", "classopenpit_1_1tx_1_1Mutations" ]
       ] ],
       [ "AdjustmentResult", "structopenpit_1_1AdjustmentResult.html", "structopenpit_1_1AdjustmentResult" ],
       [ "BytesView", "classopenpit_1_1BytesView.html", "classopenpit_1_1BytesView" ],

@@ -79,6 +79,7 @@ const (
 	CodeSystemUnavailable               Code = native.RejectCodeSystemUnavailable
 	CodeMarkPriceUnavailable            Code = native.RejectCodeMarkPriceUnavailable
 	CodeAccountAdjustmentBoundsExceeded Code = native.RejectCodeAccountAdjustmentBoundsExceeded
+	CodeArithmeticOverflow              Code = native.RejectCodeArithmeticOverflow
 	CodeCustom                          Code = native.RejectCodeCustom
 	CodeOther                           Code = native.RejectCodeOther
 )

@@ -37,7 +37,9 @@ include(GoogleTest)
 function(openpit_add_test_target target)
   target_link_libraries(${target} PRIVATE OpenPit::project_warnings)
   openpit_copy_runtime_dll(${target})
-  gtest_discover_tests(${target})
+  gtest_discover_tests(${target}
+    DISCOVERY_MODE PRE_TEST
+    DISCOVERY_TIMEOUT 60)
 endfunction()
 
 add_executable(openpit_smoke_tests smoke_test.cpp)

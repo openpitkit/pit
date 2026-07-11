@@ -378,6 +378,27 @@ fn fill_with_fee(
     report
 }
 
+fn fee_only_report(
+    account_id: AccountId,
+    instrument: Instrument,
+    side: Side,
+    leaves_quantity: &str,
+    is_final: bool,
+    fee: MonetaryAmount,
+) -> TestReport {
+    let mut report = make_report(
+        account_id,
+        instrument,
+        side,
+        None,
+        qty(leaves_quantity),
+        is_final,
+        None,
+    );
+    report.fee = Some(fee);
+    report
+}
+
 fn adj(asset: Asset, balance: Option<AdjustmentAmount>) -> TestAdjustment {
     TestAdjustment {
         asset,
@@ -6854,7 +6875,103 @@ fn fee_in_foreign_currency_debits_fee_asset_and_contributes_to_account_pnl() {
         Some(pnl_value("-2.4"))
     );
     let eur = holdings_of(&policy, acc, &asset("EUR")).expect("EUR fee leg must exist");
-    assert_eq!(eur.available(), ps("-2"));
+    assert_eq!(
+        eur.available(),
+        ps("-2"),
+        "trade and fee report must debit the fee exactly once"
+    );
+}
+
+#[test]
+fn fee_only_execution_report_debits_fee_asset_and_contributes_to_account_pnl() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let eur_usd = instr("EUR", "USD");
+    let b = engine_builder();
+    let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let fx_id = svc.register(eur_usd).expect("register must succeed");
+    svc.push(fx_id, Quote::new().with_mark(px("1.2")))
+        .expect("push must succeed");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("USD"),
+        lower_bound: Some(pnl_value("-10")),
+        upper_bound: None,
+    }])
+    .expect("global pnl barrier must set");
+    let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
+    seed(&policy, acc, asset("EUR"), "10");
+
+    let report = fee_only_report(acc, aapl_usd, Side::Buy, "1", false, money_fee("2", "EUR"));
+    let result = run_report_with_currency(&policy, &report, asset("USD"));
+
+    assert!(result.account_blocks.is_empty());
+    assert_eq!(
+        account_pnl_of(&policy, acc, &asset("USD")),
+        Some(pnl_value("-2.4"))
+    );
+    let eur = holdings_of(&policy, acc, &asset("EUR")).expect("EUR fee leg must exist");
+    assert_eq!(eur.available(), ps("8"));
+    let outcome = result
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("EUR"))
+        .expect("EUR fee outcome must exist");
+    let balance = outcome
+        .entry
+        .balance
+        .as_ref()
+        .expect("EUR fee balance outcome must exist");
+    assert_eq!(balance.delta, ps("-2"));
+    assert_eq!(balance.absolute, ps("8"));
+}
+
+#[test]
+fn fee_only_execution_report_without_pnl_control_does_not_require_fx() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    let policy = build_policy_from_settings(s, None);
+    seed(&policy, acc, asset("EUR"), "10");
+
+    let report = fee_only_report(acc, aapl_usd, Side::Buy, "1", false, money_fee("2", "EUR"));
+    let result = run_report_with_currency(&policy, &report, asset("USD"));
+
+    assert!(result.account_blocks.is_empty());
+    let eur = holdings_of(&policy, acc, &asset("EUR")).expect("EUR fee leg must exist");
+    assert_eq!(eur.available(), ps("8"));
+    assert_eq!(account_pnl_of(&policy, acc, &asset("USD")), None);
+}
+
+#[test]
+fn fee_only_execution_report_missing_fx_blocks_before_balance_mutation() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("USD"),
+        lower_bound: Some(pnl_value("-100")),
+        upper_bound: None,
+    }])
+    .expect("global pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+
+    let report = fee_only_report(acc, aapl_usd, Side::Buy, "1", false, money_fee("2", "EUR"));
+    let result = run_report_with_currency(&policy, &report, asset("USD"));
+
+    assert_eq!(result.account_blocks.len(), 1);
+    let block = &result.account_blocks[0];
+    assert_eq!(block.code, RejectCode::OrderValueCalculationFailed);
+    assert!(block.details.contains("PnL could not be computed"));
+    assert!(block.details.contains("source asset EUR"));
+    assert!(result.account_adjustments.is_empty());
+    assert_eq!(holdings_of(&policy, acc, &asset("EUR")), None);
+    assert_eq!(account_pnl_of(&policy, acc, &asset("USD")), None);
 }
 
 #[test]
@@ -7312,6 +7429,160 @@ fn runtime_pnl_barrier_update_does_not_reset_accumulator() {
         account_pnl_of(&policy, acc, &asset("USD")),
         Some(pnl_value("-40"))
     );
+}
+
+#[test]
+fn runtime_pnl_axes_can_be_enabled_replaced_and_cleared() {
+    let survivor = account(99224416);
+    let account_override = account(99224417);
+    let cleared = account(99224418);
+    let aapl_usd = instr("AAPL", "USD");
+    let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    let policy: SpotFundsPolicy<FullSync, FullSync> =
+        SpotFundsPolicy::new(settings(0), None, builder.storage_builder());
+    let engine = builder
+        .pre_trade(policy)
+        .build()
+        .expect("ordinary spot-funds engine must build");
+    let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
+
+    for account_id in [survivor, account_override, cleared] {
+        engine.accounts().set_currency(account_id, asset("USD"));
+    }
+    seed_balance_via_engine(&engine, cleared, asset("USD"), ps("1000"));
+
+    // A plain spot-funds policy has no P&L control, but normal orders still run.
+    let mut reservation = engine
+        .execute_pre_trade(make_order(
+            cleared,
+            aapl_usd.clone(),
+            Side::Buy,
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .expect("ordinary spot-funds policy must admit a funded order");
+    reservation.rollback();
+
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+                account_currency: asset("USD"),
+                lower_bound: Some(pnl_value("-10")),
+                upper_bound: None,
+            }])
+        })
+        .expect("runtime configuration must add a P&L axis to ordinary spot funds");
+
+    let first_survivor_fill = fill_with_fee(
+        survivor,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("9", "USD"),
+    );
+    assert!(engine
+        .apply_execution_report(&first_survivor_fill)
+        .account_blocks
+        .is_empty());
+
+    // Adding an account override leaves the global axis and its live P&L intact.
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrierUpdate {
+                account_id: account_override,
+                barrier: SpotFundsPnlBoundsBarrier {
+                    account_currency: asset("USD"),
+                    lower_bound: Some(pnl_value("-20")),
+                    upper_bound: None,
+                },
+            }])
+        })
+        .expect("runtime configuration must add an account P&L axis");
+
+    let survivor_breach = fill_with_fee(
+        survivor,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("2", "USD"),
+    );
+    assert_eq!(
+        engine
+            .apply_execution_report(&survivor_breach)
+            .account_blocks[0]
+            .code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+
+    let override_fill = fill_with_fee(
+        account_override,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("15", "USD"),
+    );
+    assert!(engine
+        .apply_execution_report(&override_fill)
+        .account_blocks
+        .is_empty());
+
+    // Clearing only the account axis exposes its still-live P&L to the global bound.
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| settings.set_pnl_account_barriers([]))
+        .expect("runtime configuration must clear only the account P&L axis");
+    let override_recheck = fill_with_fee(
+        account_override,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("0", "USD"),
+    );
+    assert_eq!(
+        engine
+            .apply_execution_report(&override_recheck)
+            .account_blocks[0]
+            .code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+
+    engine
+        .configure()
+        .spot_funds::<SpotFundsConfigError>(name, |settings| {
+            settings.set_pnl_global_barriers([])?;
+            settings.set_pnl_account_group_barriers([])?;
+            settings.set_pnl_account_barriers([])
+        })
+        .expect("runtime configuration must clear every P&L axis");
+    let cleared_fill = fill_with_fee(
+        cleared,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("15", "USD"),
+    );
+    assert!(engine
+        .apply_execution_report(&cleared_fill)
+        .account_blocks
+        .is_empty());
+
+    let mut reservation = engine
+        .execute_pre_trade(make_order(
+            cleared,
+            aapl_usd,
+            Side::Buy,
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .expect("clearing all P&L axes must restore normal order handling");
+    reservation.rollback();
 }
 
 #[test]

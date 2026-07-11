@@ -74,7 +74,8 @@ class Order {
 
 // Polymorphic base for an execution-report payload applied by a policy. Client
 // report types derive from this so `openpit/adapters.hpp` can recover the
-// concrete type via `dynamic_cast`.
+// concrete type via `dynamic_cast`. `EngineRaw()` follows the same borrowed-
+// view contract as `Order::EngineRaw()`.
 class ExecutionReport {
  public:
   ExecutionReport() = default;
@@ -83,6 +84,10 @@ class ExecutionReport {
   ExecutionReport& operator=(const ExecutionReport&) = default;
   ExecutionReport& operator=(ExecutionReport&&) = default;
   virtual ~ExecutionReport() = default;
+
+  [[nodiscard]] virtual OpenPitExecutionReport EngineRaw() const noexcept {
+    return OpenPitExecutionReport{};
+  }
 };
 
 namespace detail {
@@ -90,12 +95,13 @@ namespace detail {
 // Thread-local pointer to the polymorphic order currently being submitted on
 // this thread.
 //
-// The pre-trade pipeline runs policy callbacks synchronously on the submitting
-// thread while the original `openpit::Order` is alive, so the custom-policy
-// trampolines can hand the policy the original object - preserving its dynamic
-// type for `dynamic_cast` recovery - instead of a base view rebuilt from the C
-// POD. `nullptr` when no submission is in flight (the trampolines then fall
-// back to reconstructing the order from the C view).
+// The pre-trade pipeline runs policy callbacks synchronously on the invoking
+// thread while the exact submitted `openpit::Order` is alive. Deferred
+// `StartPreTrade` requests own that object through `Request::Execute()`, so the
+// custom-policy trampolines can preserve its dynamic type for `dynamic_cast`
+// recovery instead of rebuilding only the base C POD view. `nullptr` when no
+// submission is in flight (the trampolines then reconstruct the order from the
+// C view).
 [[nodiscard]] inline const Order*& CurrentSubmittedOrder() noexcept {
   static thread_local const Order* current = nullptr;
   return current;
@@ -118,6 +124,29 @@ class CurrentOrderGuard {
 
  private:
   const Order* m_previous;
+};
+
+// Thread-local report counterpart to `CurrentSubmittedOrder()`. It lets a
+// synchronous post-trade callback recover the client report's dynamic type.
+[[nodiscard]] inline const ExecutionReport*& CurrentSubmittedReport() noexcept {
+  static thread_local const ExecutionReport* current = nullptr;
+  return current;
+}
+
+class CurrentReportGuard {
+ public:
+  explicit CurrentReportGuard(const ExecutionReport& report) noexcept
+      : m_previous(CurrentSubmittedReport()) {
+    CurrentSubmittedReport() = &report;
+  }
+
+  CurrentReportGuard(const CurrentReportGuard&) = delete;
+  CurrentReportGuard& operator=(const CurrentReportGuard&) = delete;
+
+  ~CurrentReportGuard() { CurrentSubmittedReport() = m_previous; }
+
+ private:
+  const ExecutionReport* m_previous;
 };
 
 }  // namespace detail
@@ -710,6 +739,10 @@ class ExecutionReport : public ::openpit::ExecutionReport {
     }
     raw.user_data = reinterpret_cast<void*>(userData);
     return raw;
+  }
+
+  [[nodiscard]] OpenPitExecutionReport EngineRaw() const noexcept override {
+    return Raw();
   }
 };
 

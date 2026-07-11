@@ -19,7 +19,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::core::{HasAccountId, HasInstrument};
 use crate::param::{AccountId, Asset};
@@ -29,6 +29,7 @@ use crate::pretrade::ConfigurablePolicy;
 use crate::pretrade::DEFAULT_POLICY_GROUP_ID;
 use crate::pretrade::{PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects};
 use crate::storage::{ConfigCell, Storage, StorageBuilder};
+use crate::time::Instant;
 
 type StoragePolicy<LPF> = <LPF as crate::storage::LockingPolicyFactory>::Policy;
 type TimestampStorage<K, LPF> = Storage<K, VecDeque<Instant>, StoragePolicy<LPF>>;
@@ -981,8 +982,25 @@ mod tests {
     }
 
     #[test]
+    fn maximum_window_accepted_by_settings() {
+        let result = RateLimitSettings::new(
+            Some(RateLimitBrokerBarrier {
+                limit: RateLimit {
+                    max_orders: 1,
+                    window: Duration::from_nanos(u64::MAX),
+                },
+            }),
+            [],
+            [],
+            [],
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn excessive_window_rejected_by_settings() {
-        let max_plus_one = Duration::new(u64::MAX, 0) + Duration::from_nanos(1);
+        let max_plus_one = Duration::from_nanos(u64::MAX) + Duration::from_nanos(1);
         let err = RateLimitSettings::new(
             Some(RateLimitBrokerBarrier {
                 limit: RateLimit {

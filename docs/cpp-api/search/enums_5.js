@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['quoteresolution_0',['QuoteResolution',['../namespaceopenpit_1_1marketdata.html#a7c736df89df3481cae07bcf3d46d5c2d',1,'openpit::marketdata']]]
+  ['kind_0',['Kind',['../namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19f',1,'openpit::param']]]
 ];

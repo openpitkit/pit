@@ -214,6 +214,52 @@ pub enum OpenPitParamPositionEffect {
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+/// Type of fill event reported by a venue.
+pub enum OpenPitParamFillType {
+    /// Value is absent.
+    #[default]
+    NotSet = 0,
+    /// Normal trade execution.
+    Trade = 1,
+    /// Forced liquidation by the venue.
+    Liquidation = 2,
+    /// Auto-deleveraging event.
+    AutoDeleverage = 3,
+    /// Settlement at expiry or delivery.
+    Settlement = 4,
+    /// Funding payment.
+    Funding = 5,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+/// Parameter category carried by validation and arithmetic errors.
+pub enum OpenPitParamKind {
+    /// No parameter category is available.
+    #[default]
+    Unspecified = 0,
+    /// Quantity.
+    Quantity = 1,
+    /// Volume.
+    Volume = 2,
+    /// Notional value.
+    Notional = 3,
+    /// Price.
+    Price = 4,
+    /// Profit and loss.
+    Pnl = 5,
+    /// Cash flow.
+    CashFlow = 6,
+    /// Signed position size.
+    PositionSize = 7,
+    /// Fee.
+    Fee = 8,
+    /// Leverage.
+    Leverage = 9,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 /// Selects how one trade-amount numeric value should be interpreted.
 pub enum OpenPitParamTradeAmountKind {
     /// No amount field is selected.

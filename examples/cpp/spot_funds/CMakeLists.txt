@@ -108,5 +108,7 @@ if(OPENPIT_EXAMPLE_BUILD_TESTS)
     openpit_copy_runtime_dll(spot_funds_smoke_tests)
   endif()
 
-  gtest_discover_tests(spot_funds_smoke_tests)
+  gtest_discover_tests(spot_funds_smoke_tests
+    DISCOVERY_MODE PRE_TEST
+    DISCOVERY_TIMEOUT 60)
 endif()

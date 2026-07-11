@@ -1,0 +1,21 @@
+{
+  "name": "@openpit/example-spot-funds",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal SpotFunds reservation example for @openpit/engine",
+  "license": "Apache-2.0",
+  "scripts": {
+    "start": "tsx main.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openpit/engine": "file:../../../bindings/js/dist"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.0"
+  }
+}
