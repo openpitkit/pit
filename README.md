@@ -102,7 +102,19 @@ constraints that tolerate API evolution during the pre-stable phase.
 - [Wiki](https://wiki.openpit.dev/) - conceptual pages and
   architecture notes.
 
+## Community And Support
+
+- Ask questions and discuss integration ideas in
+  [GitHub Discussions](https://github.com/openpitkit/pit/discussions).
+- Report confirmed bugs and scoped feature requests in
+  [GitHub Issues](https://github.com/openpitkit/pit/issues).
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+- Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
+- Follow the project [Code of Conduct](CODE_OF_CONDUCT.md) in community spaces.
+
 ## Local Build And Test
+
+<!-- markdownlint-disable MD013 MD024 MD033 -->
 
 <details>
 <summary>POSIX (Linux, macOS, etc)</summary>
@@ -313,6 +325,10 @@ npm test
 
 </details>
 
+<!-- markdownlint-enable MD013 MD024 MD033 -->
+
+<!-- markdownlint-disable MD013 MD024 MD033 -->
+
 <details>
 <summary>Windows</summary>
 
@@ -493,3 +509,5 @@ ctest --test-dir bindings/cpp/build-debug --output-on-failure --build-config Deb
 ```
 
 </details>
+
+<!-- markdownlint-enable MD013 MD024 MD033 -->
