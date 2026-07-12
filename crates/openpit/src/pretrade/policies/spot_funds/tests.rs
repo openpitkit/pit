@@ -6904,6 +6904,9 @@ fn fee_only_execution_report_debits_fee_asset_and_contributes_to_account_pnl() {
     .expect("global pnl barrier must set");
     let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
     seed(&policy, acc, asset("EUR"), "10");
+    // A tracked AAPL position: the fee-only correction folds into its realized
+    // P&L (account currency) and reaches the barrier through the same net delta.
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
 
     let report = fee_only_report(acc, aapl_usd, Side::Buy, "1", false, money_fee("2", "EUR"));
     let result = run_report_with_currency(&policy, &report, asset("USD"));
@@ -6927,6 +6930,18 @@ fn fee_only_execution_report_debits_fee_asset_and_contributes_to_account_pnl() {
         .expect("EUR fee balance outcome must exist");
     assert_eq!(balance.delta, ps("-2"));
     assert_eq!(balance.absolute, ps("8"));
+    // The fee reduces the underlying position's realized P&L, surfaced as an
+    // AAPL realized-P&L outcome delta.
+    let aapl_realized = result
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .and_then(|outcome| outcome.entry.realized_pnl.as_ref())
+        .expect("AAPL realized pnl outcome must exist");
+    assert_eq!(aapl_realized.delta, pnl_value("-2.4"));
+    assert_eq!(aapl_realized.absolute, pnl_value("-2.4"));
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(aapl.realized_pnl(), Some(pnl_value("-2.4")));
 }
 
 #[test]
@@ -6960,7 +6975,6 @@ fn fee_only_execution_report_missing_fx_blocks_before_balance_mutation() {
     }])
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
-
     let report = fee_only_report(acc, aapl_usd, Side::Buy, "1", false, money_fee("2", "EUR"));
     let result = run_report_with_currency(&policy, &report, asset("USD"));
 
@@ -7025,12 +7039,8 @@ fn missing_fee_fx_blocks_account_when_settlement_needs_no_fx() {
     assert_eq!(block.code, RejectCode::OrderValueCalculationFailed);
     assert!(block.details.contains("PnL could not be computed"));
     assert!(block.details.contains("missing FX"));
-    // The missing-FX detail names the fee currency, not the settlement asset.
     assert!(block.details.contains("source asset EUR"));
-    assert!(
-        result.account_adjustments.is_empty(),
-        "fee-FX fail-fast must not emit already-applied holdings mutations"
-    );
+    assert!(result.account_adjustments.is_empty());
     assert_eq!(holdings_of(&policy, acc, &asset("EUR")), None);
     assert_eq!(account_pnl_of(&policy, acc, &asset("USD")), None);
 }
@@ -7059,6 +7069,352 @@ fn fee_in_account_currency_needs_no_fx_and_does_not_block() {
         account_pnl_of(&policy, acc, &asset("USD")),
         Some(pnl_value("-2"))
     );
+    // The reported realized P&L and the AAPL slot are net of the fee, and the
+    // barrier reads the same figure.
+    let aapl_realized = result
+        .account_adjustments
+        .iter()
+        .find(|o| o.entry.asset == asset("AAPL"))
+        .and_then(|o| o.entry.realized_pnl.as_ref())
+        .expect("AAPL realized pnl outcome must exist");
+    assert_eq!(aapl_realized.delta, pnl_value("-2"));
+    assert_eq!(aapl_realized.absolute, pnl_value("-2"));
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(aapl.realized_pnl(), Some(pnl_value("-2")));
+}
+
+// A fee'd fill with no barrier configured still folds the fee into the reported
+// realized P&L. Previously the fee was ignored entirely without a barrier.
+#[test]
+fn fill_with_fee_folds_into_reported_realized_pnl_without_barrier() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    seed(&policy, acc, asset("USD"), "10000");
+
+    // Open a long from flat: the price-based realized delta is zero, so the
+    // reported realized P&L is exactly the folded 3 USD fee cost.
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("3", "USD"));
+    let result = run_report_with_currency(&policy, &fill, asset("USD"));
+    assert!(result.account_blocks.is_empty());
+
+    let realized = result
+        .account_adjustments
+        .iter()
+        .find(|o| o.entry.asset == asset("AAPL"))
+        .and_then(|o| o.entry.realized_pnl.as_ref())
+        .expect("realized pnl must be reported net of the fee");
+    assert_eq!(realized.delta, pnl_value("-3"));
+    assert_eq!(realized.absolute, pnl_value("-3"));
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(aapl.realized_pnl(), Some(pnl_value("-3")));
+    // No barrier configured, so the kill-switch accumulator is never created.
+    assert_eq!(account_pnl_of(&policy, acc, &asset("USD")), None);
+}
+
+// With a barrier configured, the reported realized P&L and the kill-switch
+// accumulator agree exactly: the fee is counted once, inside realized P&L, not
+// added to the barrier separately.
+#[test]
+fn fill_with_fee_reported_realized_pnl_agrees_with_barrier_no_double_count() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("USD"),
+        lower_bound: Some(pnl_value("-1000")),
+        upper_bound: Some(pnl_value("1000")),
+    }])
+    .expect("global pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
+
+    // Close 4 lots at 130: price P&L +120, minus a 5 USD fee => net +115.
+    let close = fill_with_fee(acc, aapl_usd, Side::Sell, "130", "4", money_fee("5", "USD"));
+    let result = run_report_with_currency(&policy, &close, asset("USD"));
+    assert!(result.account_blocks.is_empty());
+
+    let realized = result
+        .account_adjustments
+        .iter()
+        .find(|o| o.entry.asset == asset("AAPL"))
+        .and_then(|o| o.entry.realized_pnl.as_ref())
+        .expect("realized pnl must be reported");
+    assert_eq!(realized.delta, pnl_value("115"));
+    assert_eq!(realized.absolute, pnl_value("115"));
+    assert_eq!(
+        account_pnl_of(&policy, acc, &asset("USD")),
+        Some(pnl_value("115"))
+    );
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(aapl.realized_pnl(), Some(pnl_value("115")));
+}
+
+// A negative fee (rebate) increases realized P&L.
+#[test]
+fn rebate_fee_increases_reported_realized_pnl() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    seed(&policy, acc, asset("USD"), "10000");
+
+    // Open from flat with a -4 USD fee (a rebate): realized P&L is +4.
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("-4", "USD"));
+    let result = run_report_with_currency(&policy, &fill, asset("USD"));
+    assert!(result.account_blocks.is_empty());
+
+    let realized = result
+        .account_adjustments
+        .iter()
+        .find(|o| o.entry.asset == asset("AAPL"))
+        .and_then(|o| o.entry.realized_pnl.as_ref())
+        .expect("realized pnl must be reported");
+    assert_eq!(realized.delta, pnl_value("4"));
+    assert_eq!(realized.absolute, pnl_value("4"));
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(aapl.realized_pnl(), Some(pnl_value("4")));
+}
+
+// A fee'd fill whose realized P&L is untracked (no account currency in context)
+// still debits the fee from the settlement balance, leaves realized P&L
+// untracked, and blocks nothing.
+#[test]
+fn fill_with_fee_untracked_realized_pnl_debits_balance_without_folding() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    seed(&policy, acc, asset("USD"), "10000");
+
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("3", "USD"));
+    let result = run_report_without_account_currency(&policy, &fill);
+    assert!(result.account_blocks.is_empty());
+
+    let aapl_entry = result
+        .account_adjustments
+        .iter()
+        .find(|o| o.entry.asset == asset("AAPL"))
+        .expect("AAPL entry must exist");
+    assert!(aapl_entry.entry.realized_pnl.is_none());
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert!(aapl.realized_pnl().is_none());
+
+    // The settlement balance still absorbs the fee debit: the buy consumed 100
+    // from held with zero net available flow, then the 3 USD fee reduced it.
+    let usd = holdings_of(&policy, acc, &asset("USD")).expect("USD slot must exist");
+    assert_eq!(usd.available(), ps("9997"));
+}
+
+// A fee-only correction contributes to the account-level barrier even when the
+// underlying slot is untracked. Per-position folding is additive behavior and
+// must not replace the independent kill-switch fee path.
+#[test]
+fn fee_only_execution_report_untracked_slot_still_contributes_to_barrier() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let eur_usd = instr("EUR", "USD");
+    let b = engine_builder();
+    let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let fx_id = svc.register(eur_usd).expect("register must succeed");
+    svc.push(fx_id, Quote::new().with_mark(px("1.2")))
+        .expect("push must succeed");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("USD"),
+        lower_bound: Some(pnl_value("-2")),
+        upper_bound: None,
+    }])
+    .expect("global pnl barrier must set");
+    let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
+    seed(&policy, acc, asset("EUR"), "10");
+
+    // AAPL was never traded, so its slot is absent/untracked.
+    let report = fee_only_report(acc, aapl_usd, Side::Buy, "1", false, money_fee("2", "EUR"));
+    let result = run_report_with_currency(&policy, &report, asset("USD"));
+
+    assert_eq!(result.account_blocks.len(), 1);
+    assert!(result.account_blocks[0]
+        .details
+        .contains("lower bound breached"));
+    let eur = holdings_of(&policy, acc, &asset("EUR")).expect("EUR fee leg must exist");
+    assert_eq!(eur.available(), ps("8"));
+    assert_eq!(
+        account_pnl_of(&policy, acc, &asset("USD")),
+        Some(pnl_value("-2.4"))
+    );
+    assert_eq!(holdings_of(&policy, acc, &asset("AAPL")), None);
+}
+
+#[test]
+fn fee_only_untracked_slot_skips_unneeded_fx_conversion_without_barrier() {
+    use rust_decimal::Decimal;
+
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let eur_usd = instr("EUR", "USD");
+    let b = engine_builder();
+    let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let fx_id = svc.register(eur_usd).expect("register must succeed");
+    svc.push(fx_id, Quote::new().with_mark(px("2")))
+        .expect("push must succeed");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+    let policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
+    let huge_fee = MonetaryAmount {
+        amount: Fee::new(Decimal::MAX),
+        currency: asset("EUR"),
+    };
+
+    let report = fee_only_report(acc, aapl_usd, Side::Buy, "1", false, huge_fee);
+    let result = run_report_with_currency(&policy, &report, asset("USD"));
+
+    assert!(result.account_blocks.is_empty());
+    let eur = holdings_of(&policy, acc, &asset("EUR")).expect("EUR fee leg must exist");
+    assert_eq!(eur.available(), PositionSize::new(Decimal::MIN));
+    assert_eq!(holdings_of(&policy, acc, &asset("AAPL")), None);
+    assert_eq!(account_pnl_of(&policy, acc, &asset("USD")), None);
+}
+
+#[test]
+fn zero_fee_only_report_is_a_no_op_for_tracked_position() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
+    let before = holdings_of(&policy, acc, &asset("AAPL"));
+    let report = fee_only_report(acc, aapl_usd, Side::Buy, "1", false, money_fee("0", "USD"));
+    let ctx = crate::pretrade::PostTradeContext::with_account_currency(acc, asset("USD"));
+
+    let result = policy.apply_execution_report_impl(&ctx, &report);
+
+    assert!(result.is_none());
+    assert_eq!(holdings_of(&policy, acc, &asset("AAPL")), before);
+}
+
+#[test]
+fn fee_report_delta_overflow_does_not_mutate_position_pnl() {
+    use rust_decimal::Decimal;
+
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let eur_usd = instr("EUR", "USD");
+    let b = engine_builder();
+    let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let fx_id = svc.register(eur_usd).expect("register must succeed");
+    svc.push(fx_id, Quote::new().with_mark(px("1")))
+        .expect("push must succeed");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+    let policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
+    seed_with_avg(&policy, acc, asset("AAPL"), "1", px("0"));
+    let adjustment = adj_with_realized_pnl(asset("AAPL"), None, Some(Pnl::new(Decimal::MIN)));
+    let mut mutations = Mutations::with_capacity(1);
+    apply_adj(&policy, acc, &adjustment, &mut mutations).expect("seed must succeed");
+    mutations.commit_all();
+
+    let fill = fill_with_fee(
+        acc,
+        aapl_usd,
+        Side::Sell,
+        &Decimal::MAX.to_string(),
+        "1",
+        money_fee("-1", "EUR"),
+    );
+    let result = run_report_with_currency(&policy, &fill, asset("USD"));
+
+    assert_eq!(result.account_blocks.len(), 1);
+    assert!(result.account_blocks[0]
+        .details
+        .contains("fee realized pnl overflow"));
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(aapl.realized_pnl(), Some(Pnl::ZERO));
+    let outcome = result
+        .account_adjustments
+        .iter()
+        .find(|entry| entry.entry.asset == asset("AAPL"))
+        .and_then(|entry| entry.entry.realized_pnl.as_ref())
+        .expect("AAPL realized pnl outcome must exist");
+    assert_eq!(outcome.delta, Pnl::new(Decimal::MAX));
+    assert_eq!(outcome.absolute, Pnl::ZERO);
+}
+
+#[test]
+fn fee_only_position_pnl_overflow_still_updates_account_pnl() {
+    use rust_decimal::Decimal;
+
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("USD"),
+        lower_bound: Some(pnl_value("-100")),
+        upper_bound: None,
+    }])
+    .expect("global pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+    seed(&policy, acc, asset("USD"), "1000");
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
+    let adjustment = adj_with_realized_pnl(asset("AAPL"), None, Some(Pnl::new(Decimal::MIN)));
+    let mut mutations = Mutations::with_capacity(1);
+    apply_adj(&policy, acc, &adjustment, &mut mutations).expect("seed must succeed");
+    mutations.commit_all();
+
+    let report = fee_only_report(acc, aapl_usd, Side::Buy, "0", false, money_fee("1", "USD"));
+    let result = run_report_with_currency(&policy, &report, asset("USD"));
+
+    assert_eq!(result.account_blocks.len(), 1);
+    assert!(result.account_blocks[0]
+        .details
+        .contains("fee realized pnl overflow"));
+    assert_eq!(
+        account_pnl_of(&policy, acc, &asset("USD")),
+        Some(pnl_value("-1"))
+    );
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(aapl.realized_pnl(), Some(Pnl::new(Decimal::MIN)));
+    let usd = holdings_of(&policy, acc, &asset("USD")).expect("USD slot must exist");
+    assert_eq!(usd.available(), ps("999"));
+}
+
+#[test]
+fn fill_position_pnl_overflow_still_updates_account_pnl() {
+    use rust_decimal::Decimal;
+
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
+        account_currency: asset("USD"),
+        lower_bound: Some(pnl_value("-100")),
+        upper_bound: None,
+    }])
+    .expect("global pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+    seed(&policy, acc, asset("USD"), "1000");
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
+    let adjustment = adj_with_realized_pnl(asset("AAPL"), None, Some(Pnl::new(Decimal::MIN)));
+    let mut mutations = Mutations::with_capacity(1);
+    apply_adj(&policy, acc, &adjustment, &mut mutations).expect("seed must succeed");
+    mutations.commit_all();
+
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("1", "USD"));
+    let result = run_report_with_currency(&policy, &fill, asset("USD"));
+
+    assert_eq!(result.account_blocks.len(), 1);
+    assert!(result.account_blocks[0]
+        .details
+        .contains("fee realized pnl overflow"));
+    assert_eq!(
+        account_pnl_of(&policy, acc, &asset("USD")),
+        Some(pnl_value("-1"))
+    );
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(aapl.realized_pnl(), Some(Pnl::new(Decimal::MIN)));
+    let usd = holdings_of(&policy, acc, &asset("USD")).expect("USD slot must exist");
+    assert_eq!(usd.available(), ps("999"));
 }
 
 // The realized-P&L accumulator itself overflows: seed it at Decimal::MAX (still

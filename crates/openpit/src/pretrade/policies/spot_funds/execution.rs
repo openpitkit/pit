@@ -228,13 +228,102 @@ where
     where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
-        if pnl_barrier.is_none() {
+        if fee.amount.is_zero() || pnl_barrier.is_none() {
             return Ok(None);
         }
         match self.fee_pnl_delta(account_id, ctx, fee, account_currency)? {
             Some(delta) => Ok(Some(delta)),
             None => Err(self.pnl_missing_fx_block(account_id, &fee.currency, account_currency)),
         }
+    }
+
+    fn fee_pnl_delta_for_tracked_slot(
+        &self,
+        account_id: AccountId,
+        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        underlying_asset: &Asset,
+        fee: &MonetaryAmount,
+        account_currency: &Asset,
+        deltas: &FillCancelDeltas,
+    ) -> Result<Option<Pnl>, AccountBlock>
+    where
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
+    {
+        if fee.amount.is_zero() {
+            return Ok(None);
+        }
+        let tracked = deltas
+            .underlying
+            .final_holdings
+            .or_else(|| self.holdings.get(&(account_id, underlying_asset.clone())))
+            .and_then(|holdings| holdings.realized_pnl())
+            .is_some();
+        if !tracked {
+            return Ok(None);
+        }
+        self.fee_pnl_delta(account_id, ctx, fee, account_currency)
+    }
+
+    /// Folds an execution-report fee's account-currency P&L delta into the
+    /// underlying position's realized P&L, updating both the slot's cumulative
+    /// value and the reported delta in `deltas.underlying`.
+    ///
+    /// The fee follows the same tracking rule as position realized P&L: it is
+    /// folded only when the underlying slot's realized P&L is tracked (its
+    /// `realized_pnl` is `Some`) and an FX-converted `fee_pnl_delta` is
+    /// available. An untracked slot leaves realized P&L untracked and keeps the
+    /// fee as a pure balance debit. When the fee moves realized P&L the
+    /// underlying leg's outcome is (re)populated so [`push_leg_outcome`] emits
+    /// it. Account-level kill-switch accounting remains independent of whether
+    /// the slot is tracked.
+    fn fold_fee_into_realized_pnl(
+        &self,
+        account_id: AccountId,
+        underlying_asset: &Asset,
+        fee_pnl_delta: Option<Pnl>,
+        deltas: &mut FillCancelDeltas,
+    ) -> Result<(), AccountBlock>
+    where
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
+    {
+        let Some(fee_delta) = fee_pnl_delta.filter(|delta| !delta.is_zero()) else {
+            return Ok(());
+        };
+        // Whether the slot was tracked and thus actually took the fee. Captured
+        // out of the mutate_slot closure, which runs exactly once synchronously.
+        let existing_delta = deltas.underlying.pnl_delta;
+        let mut reported = None;
+        let new_h = self
+            .mutate_slot((account_id, underlying_asset.clone()), |h| {
+                match h.realized_pnl() {
+                    Some(current) => {
+                        let net_delta = match existing_delta {
+                            Some(existing) => existing
+                                .checked_add(fee_delta)
+                                .map_err(|_| AdjustmentOverflowError::ArithmeticOverflow)?,
+                            None => fee_delta,
+                        };
+                        let updated = current
+                            .checked_add(fee_delta)
+                            .map_err(|_| AdjustmentOverflowError::ArithmeticOverflow)?;
+                        reported = Some(net_delta);
+                        Ok(h.with_realized_pnl(updated))
+                    }
+                    None => Ok(h),
+                }
+            })
+            .map_err(|_| {
+                self.pnl_arithmetic_failed_block(format!(
+                    "spot-funds fee realized pnl overflow: fee pnl {fee_delta}, \
+                     account {account_id}, asset {underlying_asset}"
+                ))
+            })?;
+        let Some(reported) = reported else {
+            return Ok(());
+        };
+        deltas.underlying.pnl_delta = Some(reported);
+        deltas.underlying.final_holdings = Some(new_h);
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -303,27 +392,40 @@ where
             .as_ref()
             .and_then(|currency| self.pnl_barrier_for(account_id, ctx.account_group(), currency));
         let fee_pnl_delta = match account_currency.as_ref() {
-            Some(account_currency) => self.fee_pnl_delta_if_controlled(
+            Some(account_currency) if pnl_barrier.is_some() => self.fee_pnl_delta_if_controlled(
                 account_id,
                 ctx,
                 fee,
                 account_currency,
                 pnl_barrier.as_ref(),
             )?,
+            Some(account_currency) => self.fee_pnl_delta_for_tracked_slot(
+                account_id,
+                ctx,
+                underlying_asset,
+                fee,
+                account_currency,
+                deltas,
+            )?,
             None => None,
         };
 
         self.apply_fee_debit(account_id, underlying_asset, settlement_asset, fee, deltas)?;
-        if let (Some(account_currency), Some(barrier), Some(delta)) = (
+        let fold_block = self
+            .fold_fee_into_realized_pnl(account_id, underlying_asset, fee_pnl_delta, deltas)
+            .err();
+        let account_pnl_block = match (
             account_currency.as_ref(),
             pnl_barrier.as_ref(),
             fee_pnl_delta,
         ) {
-            if let Some(block) =
+            (Some(account_currency), Some(barrier), Some(delta)) => {
                 self.apply_account_pnl_delta(account_id, account_currency, barrier, delta)
-            {
-                return Err(block);
             }
+            _ => None,
+        };
+        if let Some(block) = fold_block.or(account_pnl_block) {
+            return Err(block);
         }
         Ok(())
     }
@@ -533,7 +635,7 @@ where
         let settlement_incoming_consume =
             self.settlement_incoming_amount(account_id, settlement_asset, side, trade, lock)?;
 
-        let fee_pnl_delta = match (account_currency.as_ref(), fee) {
+        let controlled_fee_pnl_delta = match (account_currency.as_ref(), fee) {
             (Some(account_currency), Some(fee)) => self.fee_pnl_delta_if_controlled(
                 account_id,
                 ctx,
@@ -585,27 +687,50 @@ where
                 deltas,
             )?;
         }
+        let fee_pnl_delta = match (controlled_fee_pnl_delta, account_currency.as_ref(), fee) {
+            (Some(delta), _, _) => Some(delta),
+            (None, Some(account_currency), Some(fee)) => self.fee_pnl_delta_for_tracked_slot(
+                account_id,
+                ctx,
+                underlying_asset,
+                fee,
+                account_currency,
+                deltas,
+            )?,
+            _ => None,
+        };
         if let Some(fee) = fee {
             self.apply_fee_debit(account_id, underlying_asset, settlement_asset, fee, deltas)?;
         }
-        if let (Some(account_currency), Some(barrier)) =
-            (account_currency.as_ref(), pnl_barrier.as_ref())
-        {
-            let mut pnl_delta = deltas.underlying.pnl_delta.unwrap_or(Pnl::ZERO);
-            if let Some(fee_delta) = fee_pnl_delta {
-                pnl_delta = pnl_delta.checked_add(fee_delta).map_err(|_| {
+        let account_pnl_delta = match (pnl_barrier.as_ref(), fee_pnl_delta) {
+            (Some(_), Some(fee_delta)) => {
+                let position_delta = deltas.underlying.pnl_delta.unwrap_or(Pnl::ZERO);
+                Some(position_delta.checked_add(fee_delta).map_err(|_| {
                     self.pnl_arithmetic_failed_block(format!(
-                        "spot-funds fill pnl + fee pnl overflow: pnl {pnl_delta}, \
-                         fee pnl {fee_delta}, account currency {account_currency}, \
-                         account {account_id}"
+                        "spot-funds fill pnl + fee pnl overflow: pnl {position_delta}, \
+                         fee pnl {fee_delta}, account {account_id}"
                     ))
-                })?;
+                })?)
             }
-            if let Some(block) =
-                self.apply_account_pnl_delta(account_id, account_currency, barrier, pnl_delta)
-            {
-                return Err(block);
-            }
+            (Some(_), None) => Some(deltas.underlying.pnl_delta.unwrap_or(Pnl::ZERO)),
+            (None, _) => None,
+        };
+        // Folding enriches the per-position cumulative value and outcome. It
+        // does not replace the independent account-level fee path above.
+        let fold_block = self
+            .fold_fee_into_realized_pnl(account_id, underlying_asset, fee_pnl_delta, deltas)
+            .err();
+        let account_pnl_block = if let (Some(account_currency), Some(barrier), Some(delta)) = (
+            account_currency.as_ref(),
+            pnl_barrier.as_ref(),
+            account_pnl_delta,
+        ) {
+            self.apply_account_pnl_delta(account_id, account_currency, barrier, delta)
+        } else {
+            None
+        };
+        if let Some(block) = fold_block.or(account_pnl_block) {
+            return Err(block);
         }
         Ok(())
     }

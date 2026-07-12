@@ -42,9 +42,10 @@ use super::error::{AdjustmentOverflowError, HoldError};
 /// tracked. Missing account currency or missing FX clears both fields and does
 /// not reject or block the fill. Both fields evolve online via
 /// [`Holdings::realize_position_fill`] on the underlying leg of a fill and can
-/// be force-set through account-adjustment balance operations; reservation and
-/// cancel move funds between `available` and `held` without touching either
-/// field.
+/// be force-set through account-adjustment balance operations or, for
+/// `realized_pnl`, by folding an execution-report fee into a tracked slot;
+/// reservation and cancel move funds between `available` and `held` without
+/// touching either field.
 ///
 /// `try_hold` is the only operation that enforces a financial invariant:
 /// the reservation requires `amount <= available + min(held, 0)`. A
@@ -135,10 +136,12 @@ impl Holdings {
 
     /// Force-sets `realized_pnl` to an absolute account-currency value.
     ///
-    /// Used by the account-adjustment path when a balance operation carries
-    /// a realized-PnL override, mirroring how
-    /// [`Holdings::with_avg_entry_price`] force-sets the average. Online fills
-    /// never call this; they accrue realized PnL through
+    /// Used where a caller writes a new absolute cumulative realized PnL
+    /// directly: the account-adjustment path when a balance operation carries a
+    /// realized-PnL override, and the spot-funds execution path when it folds an
+    /// execution-report fee into a tracked slot's realized PnL. Both mirror how
+    /// [`Holdings::with_avg_entry_price`] force-sets the average. Price-based
+    /// fill realization instead accrues through
     /// [`Holdings::realize_position_fill`].
     pub fn with_realized_pnl(&self, realized_pnl: Pnl) -> Self {
         Self {
