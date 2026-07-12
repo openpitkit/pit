@@ -20,6 +20,7 @@
   <url><loc>https://openpit.dev/c-api/instrument.html</loc></url>
   <url><loc>https://openpit.dev/c-api/marketdata.html</loc></url>
   <url><loc>https://openpit.dev/c-api/pre-trade-lock.html</loc></url>
+  <url><loc>https://openpit.dev/c-api/reference-book.html</loc></url>
   <url><loc>https://openpit.dev/c-api/string.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/DoxygenMainPage_8md.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/account__adjustment_8hpp.html</loc></url>
@@ -39,7 +40,9 @@
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1EngineBuilder.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1Error.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1ExecutionReport.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1InstrumentId.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1Order.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1ReferenceBook.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1SharedBytes.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1SharedString.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1StringView.html</loc></url>
@@ -71,7 +74,6 @@
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1asyncengine_1_1TypedDynamicBuilder.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1asyncengine_1_1TypedShardedBuilder.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1marketdata_1_1Builder.html</loc></url>
-  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1marketdata_1_1InstrumentId.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1marketdata_1_1Quote.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1marketdata_1_1QuoteTtl.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1marketdata_1_1Service.html</loc></url>
@@ -110,6 +112,7 @@
   <url><loc>https://openpit.dev/cpp-api/future_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/fwd_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/instrument__id_8hpp.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/marketdata_2instrument__id_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/marketdata_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/model_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/namespaceopenpit.html</loc></url>
@@ -130,12 +133,17 @@
   <url><loc>https://openpit.dev/cpp-api/pre__trade__lock_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/pretrade_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/quote_8hpp.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/reference__book_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/reject_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/runtime_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/service_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/string_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1AdjustmentResult.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1PostTradeResult.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1ReferenceBookRegisterResult.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1ReferenceBookSettlementSchemeResult.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1SettlementLag.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1SettlementScheme.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1AccountAdjustment.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1AccountOutcomeEntry.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1Amount.html</loc></url>
@@ -192,6 +200,10 @@
   <url><loc>https://openpit.dev/js-api/classes/accountadjustment.OutcomeAmount.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/accountadjustment.PnlOutcomeAmount.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/accounts.Accounts.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/core.InstrumentId.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/core.ReferenceBook.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/core.SettlementLag.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/core.SettlementScheme.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/index.AccountBlockError.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/index.AccountGroupRegistrationError.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/index.AccountIdError.html</loc></url>
@@ -211,10 +223,11 @@
   <url><loc>https://openpit.dev/js-api/classes/index.QuoteExpired.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/index.QuoteUnavailable.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/index.ReadyEngineBuilder.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.ReferenceBookRegistrationError.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/index.RegistrationError.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/index.UnknownInstrument.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/index.UnknownInstrumentId.html</loc></url>
-  <url><loc>https://openpit.dev/js-api/classes/marketdata.InstrumentId.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/index.UnknownReferenceBookInstrumentId.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/marketdata.MarketDataBuilder.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/marketdata.MarketDataService.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/marketdata.Quote.html</loc></url>
@@ -291,6 +304,7 @@
   <url><loc>https://openpit.dev/js-api/classes/reject.AccountControl.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/reject.Reject.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/tx.Mutation.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/enums/core.SettlementUnit.html</loc></url>
   <url><loc>https://openpit.dev/js-api/functions/index.ensureInit.html</loc></url>
   <url><loc>https://openpit.dev/js-api/functions/pretrade.DEFAULT_POLICY_GROUP_ID.html</loc></url>
   <url><loc>https://openpit.dev/js-api/functions/pretrade_policies.buildOrderSizeLimit.html</loc></url>
@@ -348,6 +362,7 @@
   <url><loc>https://openpit.dev/js-api/modules.html</loc></url>
   <url><loc>https://openpit.dev/js-api/modules/accountadjustment.html</loc></url>
   <url><loc>https://openpit.dev/js-api/modules/accounts.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/modules/core.html</loc></url>
   <url><loc>https://openpit.dev/js-api/modules/index.html</loc></url>
   <url><loc>https://openpit.dev/js-api/modules/marketdata.html</loc></url>
   <url><loc>https://openpit.dev/js-api/modules/model.html</loc></url>
@@ -363,6 +378,7 @@
   <url><loc>https://openpit.dev/js-api/types/index.EngineBuildErrorKind.html</loc></url>
   <url><loc>https://openpit.dev/js-api/types/index.ErrorCode.html</loc></url>
   <url><loc>https://openpit.dev/js-api/types/index.PolicyCallbackResult.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/index.ReferenceBookRegistrationErrorKind.html</loc></url>
   <url><loc>https://openpit.dev/js-api/types/index.RegistrationErrorKind.html</loc></url>
   <url><loc>https://openpit.dev/js-api/types/param.FillType.html</loc></url>
   <url><loc>https://openpit.dev/js-api/types/param.ParamKind.html</loc></url>
@@ -386,6 +402,7 @@
   <url><loc>https://openpit.dev/js-api/variables/index.ConfigureErrorKind-1.html</loc></url>
   <url><loc>https://openpit.dev/js-api/variables/index.EngineBuildErrorKind-1.html</loc></url>
   <url><loc>https://openpit.dev/js-api/variables/index.ErrorCode-1.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/variables/index.ReferenceBookRegistrationErrorKind-1.html</loc></url>
   <url><loc>https://openpit.dev/js-api/variables/index.RegistrationErrorKind-1.html</loc></url>
   <url><loc>https://openpit.dev/js-api/variables/index.ready.html</loc></url>
   <url><loc>https://openpit.dev/js-api/variables/param.FillType-1.html</loc></url>

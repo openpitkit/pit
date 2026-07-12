@@ -28,8 +28,10 @@ pub(crate) mod engine_builder;
 pub(crate) mod engine_trait;
 pub(crate) mod execution_report;
 pub(crate) mod instrument;
+pub(crate) mod instrument_id;
 pub(crate) mod mutation;
 pub(crate) mod order;
+pub(crate) mod reference_book;
 pub(crate) mod request_trait;
 pub(crate) mod sync_mode;
 
@@ -62,10 +64,15 @@ pub use execution_report::{
     WithExecutionReportPositionImpact, WithFinancialImpact,
 };
 pub use instrument::Instrument;
+pub use instrument_id::InstrumentId;
 pub use mutation::{Mutation, Mutations};
 pub use order::{
     OrderMargin, OrderOperation, OrderPosition, WithOrderMargin, WithOrderOperation,
     WithOrderPosition,
+};
+pub use reference_book::{
+    ReferenceBook, ReferenceBookRegistrationError, SettlementLag, SettlementScheme, SettlementUnit,
+    UnknownReferenceBookInstrumentId,
 };
 pub use request_trait::{
     HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,

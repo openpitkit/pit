@@ -23,8 +23,14 @@ var namespaceopenpit =
     [ "EngineBuildError", "classopenpit_1_1EngineBuildError.html", "classopenpit_1_1EngineBuildError" ],
     [ "Error", "classopenpit_1_1Error.html", "classopenpit_1_1Error" ],
     [ "ExecutionReport", "classopenpit_1_1ExecutionReport.html", "classopenpit_1_1ExecutionReport" ],
+    [ "InstrumentId", "classopenpit_1_1InstrumentId.html", "classopenpit_1_1InstrumentId" ],
     [ "Order", "classopenpit_1_1Order.html", "classopenpit_1_1Order" ],
     [ "PostTradeResult", "structopenpit_1_1PostTradeResult.html", "structopenpit_1_1PostTradeResult" ],
+    [ "ReferenceBook", "classopenpit_1_1ReferenceBook.html", "classopenpit_1_1ReferenceBook" ],
+    [ "ReferenceBookRegisterResult", "structopenpit_1_1ReferenceBookRegisterResult.html", "structopenpit_1_1ReferenceBookRegisterResult" ],
+    [ "ReferenceBookSettlementSchemeResult", "structopenpit_1_1ReferenceBookSettlementSchemeResult.html", "structopenpit_1_1ReferenceBookSettlementSchemeResult" ],
+    [ "SettlementLag", "structopenpit_1_1SettlementLag.html", "structopenpit_1_1SettlementLag" ],
+    [ "SettlementScheme", "structopenpit_1_1SettlementScheme.html", "structopenpit_1_1SettlementScheme" ],
     [ "SharedBytes", "classopenpit_1_1SharedBytes.html", "classopenpit_1_1SharedBytes" ],
     [ "SharedString", "classopenpit_1_1SharedString.html", "classopenpit_1_1SharedString" ],
     [ "StringView", "classopenpit_1_1StringView.html", "classopenpit_1_1StringView" ],
@@ -38,6 +44,19 @@ var namespaceopenpit =
       [ "DuplicatePolicyName", "namespaceopenpit.html#a850932464d3c094d4d9891068796c23aa7af6c6e68494c48e8e05426046d8de44", null ],
       [ "DuplicatePolicyGroupId", "namespaceopenpit.html#a850932464d3c094d4d9891068796c23aa64e4e5f6a10301040b106f3fb872baab", null ],
       [ "Other", "namespaceopenpit.html#a850932464d3c094d4d9891068796c23aa6311ae17c1ee52b36e68aaf4ad066387", null ]
+    ] ],
+    [ "ReferenceBookRegisterStatus", "namespaceopenpit.html#a2b098a834f3e15478d050c9bdd4343ee", [
+      [ "Ok", "namespaceopenpit.html#a2b098a834f3e15478d050c9bdd4343eeaa60852f204ed8028c1c58808b746d115", null ],
+      [ "DuplicateId", "namespaceopenpit.html#a2b098a834f3e15478d050c9bdd4343eead4c63c28ec149d5fa5212cb03253d63a", null ],
+      [ "DuplicateInstrument", "namespaceopenpit.html#a2b098a834f3e15478d050c9bdd4343eea70c78fcf4f9b06e19a2852f61e1252ab", null ]
+    ] ],
+    [ "ReferenceBookStatus", "namespaceopenpit.html#a45bafa6da7650693ce1015ca1267375d", [
+      [ "Ok", "namespaceopenpit.html#a45bafa6da7650693ce1015ca1267375daa60852f204ed8028c1c58808b746d115", null ],
+      [ "UnknownInstrument", "namespaceopenpit.html#a45bafa6da7650693ce1015ca1267375dab9e51a69f4dd89fc832c1ab9735ab49a", null ]
+    ] ],
+    [ "SettlementUnit", "namespaceopenpit.html#a3e941f0120630fa0e41bf1d83126e69e", [
+      [ "BusinessDays", "namespaceopenpit.html#a3e941f0120630fa0e41bf1d83126e69ea02bb94d75fc62f58eda0ce54fa7f7619", null ],
+      [ "CalendarDays", "namespaceopenpit.html#a3e941f0120630fa0e41bf1d83126e69ea7c3be1d449cde8ac7de2bf0ad5b0abf3", null ]
     ] ],
     [ "SyncPolicy", "namespaceopenpit.html#ac0c042292e7aeb3a25088b00a146755b", [
       [ "None", "namespaceopenpit.html#ac0c042292e7aeb3a25088b00a146755ba6adf97f83acf6453d4a6a4b1070f3754", null ],

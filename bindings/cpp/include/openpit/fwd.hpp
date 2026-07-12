@@ -26,13 +26,18 @@ class ConfigureError;
 class EngineBuildError;
 class Engine;
 class EngineBuilder;
+class InstrumentId;
 class Order;
+class ReferenceBook;
 class ExecutionReport;
 
 struct AdjustmentResult;
 struct PostTradeResult;
+struct SettlementLag;
+struct SettlementScheme;
 
 enum class ConfigureErrorKind : std::uint32_t;
+enum class SettlementUnit : std::uint8_t;
 enum class SyncPolicy : std::uint8_t;
 enum class EngineBuildErrorCode : std::uint8_t;
 
@@ -196,7 +201,6 @@ struct PositionOperation;
 namespace openpit::marketdata {
 
 class Builder;
-class InstrumentId;
 class Quote;
 class QuoteTtl;
 class Service;
@@ -208,6 +212,8 @@ enum class SyncPolicy : std::uint8_t;
 
 struct GetResult;
 struct RegisterResult;
+
+using InstrumentId = ::openpit::InstrumentId;
 
 }  // namespace openpit::marketdata
 

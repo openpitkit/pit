@@ -63,6 +63,15 @@
       "import": "./node/param.js",
       "require": "./node/param.cjs"
     },
+    "./core": {
+      "types": "./types/core/index.d.ts",
+      "browser": {
+        "import": "./browser/core.js",
+        "require": "./browser/core.cjs"
+      },
+      "import": "./node/core.js",
+      "require": "./node/core.cjs"
+    },
     "./model": {
       "types": "./types/model/index.d.ts",
       "browser": {

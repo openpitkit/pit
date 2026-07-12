@@ -92,6 +92,17 @@ class UnknownInstrumentId(Exception):
 
     instrument_id: InstrumentId
 
+class ReferenceBookRegistrationError(Exception):
+    """Reference-book registration conflicts with existing state."""
+
+    instrument: Instrument | None
+    instrument_id: InstrumentId | None
+
+class UnknownReferenceBookInstrumentId(Exception):
+    """Instrument id is unknown to the reference book."""
+
+    instrument_id: InstrumentId
+
 class AccountGroupRegistrationError(Exception):
     """Account-group registration conflicts with existing state."""
 
@@ -126,7 +137,7 @@ class PolicyConfigureError(Exception):
     """Classifies the configuration failure."""
 
 class InstrumentId:
-    """Market-data instrument identifier."""
+    """Stable identifier shared by OpenPit subsystems."""
 
     def __init__(self, value: int) -> None: ...
     @property
@@ -135,6 +146,49 @@ class InstrumentId:
     def __ne__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
     def __repr__(self) -> str: ...
+
+class SettlementUnit:
+    """Unit used to express a settlement delay."""
+
+    BUSINESS_DAYS: typing.ClassVar[SettlementUnit]
+    CALENDAR_DAYS: typing.ClassVar[SettlementUnit]
+
+class SettlementLag:
+    """Settlement delay for one delivery or payment leg."""
+
+    def __init__(self, n: int, unit: SettlementUnit) -> None: ...
+    @property
+    def n(self) -> int: ...
+    @property
+    def unit(self) -> SettlementUnit: ...
+
+class SettlementScheme:
+    """Independent delivery and payment settlement delays."""
+
+    def __init__(self, delivery: SettlementLag, payment: SettlementLag) -> None: ...
+    @staticmethod
+    def uniform(n: int) -> SettlementScheme: ...
+    @property
+    def delivery(self) -> SettlementLag: ...
+    @property
+    def payment(self) -> SettlementLag: ...
+
+class ReferenceBook:
+    """Instrument registry and typed reference attributes."""
+
+    def __init__(self) -> None: ...
+    def register(self, instrument: typing.Any) -> InstrumentId: ...
+    def register_with_id(
+        self, instrument: typing.Any, instrument_id: InstrumentId
+    ) -> InstrumentId: ...
+    def resolve(self, instrument: typing.Any) -> InstrumentId | None: ...
+    def set_settlement_scheme(
+        self, instrument_id: InstrumentId, settlement_scheme: SettlementScheme
+    ) -> None: ...
+    def clear_settlement_scheme(self, instrument_id: InstrumentId) -> None: ...
+    def settlement_scheme(
+        self, instrument_id: InstrumentId
+    ) -> SettlementScheme | None: ...
 
 class QuoteTtl:
     """Quote lifetime policy."""

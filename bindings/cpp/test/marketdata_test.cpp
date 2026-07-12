@@ -22,6 +22,7 @@
 #include "openpit/error.hpp"
 #include "openpit/model.hpp"
 #include "openpit/param.hpp"
+#include "openpit/reference_book.hpp"
 
 #include <gtest/gtest.h>
 #include <openpit.h>
@@ -29,6 +30,7 @@
 #include <chrono>
 #include <optional>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -83,6 +85,86 @@ TEST(MarketDataInstrumentId, FromUint64RoundTrips) {
   EXPECT_EQ(id.ToString(), "42");
   EXPECT_EQ(id, md::InstrumentId::FromUint64(42));
   EXPECT_NE(id, md::InstrumentId::FromUint64(43));
+}
+
+TEST(CoreInstrumentId, MarketDataAliasIsTheRootType) {
+  static_assert(std::is_same_v<openpit::InstrumentId, md::InstrumentId>);
+
+  const openpit::InstrumentId root = openpit::InstrumentId::FromUint64(42);
+  const md::InstrumentId marketData = root;
+  EXPECT_EQ(marketData.Raw(), 42u);
+}
+
+//------------------------------------------------------------------------------
+// ReferenceBook
+
+TEST(ReferenceBook, ResolvesInstrumentAndStoresSettlementScheme) {
+  openpit::ReferenceBook book;
+  const openpit::model::Instrument instrument("AAPL", "USD");
+  const openpit::InstrumentId id = openpit::InstrumentId::FromUint64(42);
+
+  const openpit::ReferenceBookRegisterResult registration =
+      book.Register(instrument, id);
+  ASSERT_TRUE(registration.Ok());
+  ASSERT_TRUE(registration.instrumentId.has_value());
+  EXPECT_EQ(*registration.instrumentId, id);
+  EXPECT_EQ(book.Resolve(instrument), id);
+
+  const auto absent = book.SettlementSchemeFor(id);
+  EXPECT_EQ(absent.status, openpit::ReferenceBookStatus::Ok);
+  EXPECT_FALSE(absent.settlementScheme.has_value());
+
+  const openpit::SettlementScheme scheme{
+      openpit::SettlementLag{2, openpit::SettlementUnit::BusinessDays},
+      openpit::SettlementLag{1, openpit::SettlementUnit::CalendarDays},
+  };
+  EXPECT_EQ(book.SetSettlementScheme(id, scheme),
+            openpit::ReferenceBookStatus::Ok);
+  const auto configured = book.SettlementSchemeFor(id);
+  EXPECT_EQ(configured.status, openpit::ReferenceBookStatus::Ok);
+  ASSERT_TRUE(configured.settlementScheme.has_value());
+  EXPECT_EQ(*configured.settlementScheme, scheme);
+
+  const auto unknown =
+      book.SettlementSchemeFor(openpit::InstrumentId::FromUint64(99));
+  EXPECT_EQ(unknown.status, openpit::ReferenceBookStatus::UnknownInstrument);
+  EXPECT_FALSE(unknown.settlementScheme.has_value());
+}
+
+TEST(ReferenceBook, ReportsDuplicateAndUnknownInputs) {
+  openpit::ReferenceBook book;
+  const openpit::model::Instrument aapl("AAPL", "USD");
+  const openpit::model::Instrument msft("MSFT", "USD");
+  const openpit::InstrumentId id = openpit::InstrumentId::FromUint64(42);
+
+  EXPECT_TRUE(book.Register(aapl, id).Ok());
+  const auto duplicateId = book.Register(msft, id);
+  EXPECT_EQ(duplicateId.status,
+            openpit::ReferenceBookRegisterStatus::DuplicateId);
+  ASSERT_TRUE(duplicateId.conflictingInstrumentId.has_value());
+  EXPECT_EQ(*duplicateId.conflictingInstrumentId, id);
+
+  const auto duplicateInstrument =
+      book.Register(aapl, openpit::InstrumentId::FromUint64(43));
+  EXPECT_EQ(duplicateInstrument.status,
+            openpit::ReferenceBookRegisterStatus::DuplicateInstrument);
+  ASSERT_TRUE(duplicateInstrument.conflictingInstrument.has_value());
+  EXPECT_EQ(duplicateInstrument.conflictingInstrument->underlyingAsset,
+            "AAPL");
+  EXPECT_EQ(book.SetSettlementScheme(openpit::InstrumentId::FromUint64(99),
+                                     openpit::SettlementScheme::Uniform(1)),
+            openpit::ReferenceBookStatus::UnknownInstrument);
+}
+
+TEST(ReferenceBook, UniformSettlementUsesBusinessDays) {
+  const openpit::SettlementScheme scheme =
+      openpit::SettlementScheme::Uniform(2);
+  EXPECT_EQ(scheme.delivery,
+            (openpit::SettlementLag{2, openpit::SettlementUnit::BusinessDays}));
+  EXPECT_EQ(scheme.payment,
+            (openpit::SettlementLag{2, openpit::SettlementUnit::BusinessDays}));
+  EXPECT_EQ(openpit::SettlementLag{}.unit,
+            openpit::SettlementUnit::BusinessDays);
 }
 
 //------------------------------------------------------------------------------

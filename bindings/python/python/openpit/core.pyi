@@ -19,7 +19,16 @@ from __future__ import annotations
 
 import collections.abc
 
-from ._openpit import AccountGroupId
+from ._openpit import (
+    AccountGroupId,
+    InstrumentId,
+    ReferenceBook,
+    ReferenceBookRegistrationError,
+    SettlementLag,
+    SettlementScheme,
+    SettlementUnit,
+    UnknownReferenceBookInstrumentId,
+)
 from .account_adjustment import (
     Adjustment as AccountAdjustment,
 )
@@ -306,8 +315,15 @@ __all__ = [
     "ExecutionReportPositionImpact",
     "FinancialImpact",
     "Instrument",
+    "InstrumentId",
     "Order",
     "OrderMargin",
     "OrderOperation",
     "OrderPosition",
+    "ReferenceBook",
+    "ReferenceBookRegistrationError",
+    "SettlementLag",
+    "SettlementScheme",
+    "SettlementUnit",
+    "UnknownReferenceBookInstrumentId",
 ]

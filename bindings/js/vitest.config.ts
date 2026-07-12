@@ -52,6 +52,12 @@ export default defineConfig({
         ),
       },
       {
+        find: "@openpit/engine/core",
+        replacement: fileURLToPath(
+          new URL("./dist/node/core.js", import.meta.url),
+        ),
+      },
+      {
         find: "@openpit/engine/model",
         replacement: fileURLToPath(
           new URL("./dist/node/model.js", import.meta.url),

@@ -2,11 +2,11 @@ var namespaceopenpit_1_1marketdata =
 [
     [ "Builder", "classopenpit_1_1marketdata_1_1Builder.html", "classopenpit_1_1marketdata_1_1Builder" ],
     [ "GetResult", "structopenpit_1_1marketdata_1_1GetResult.html", "structopenpit_1_1marketdata_1_1GetResult" ],
-    [ "InstrumentId", "classopenpit_1_1marketdata_1_1InstrumentId.html", "classopenpit_1_1marketdata_1_1InstrumentId" ],
     [ "Quote", "classopenpit_1_1marketdata_1_1Quote.html", "classopenpit_1_1marketdata_1_1Quote" ],
     [ "QuoteTtl", "classopenpit_1_1marketdata_1_1QuoteTtl.html", "classopenpit_1_1marketdata_1_1QuoteTtl" ],
     [ "RegisterResult", "structopenpit_1_1marketdata_1_1RegisterResult.html", "structopenpit_1_1marketdata_1_1RegisterResult" ],
     [ "Service", "classopenpit_1_1marketdata_1_1Service.html", "classopenpit_1_1marketdata_1_1Service" ],
+    [ "InstrumentId", "namespaceopenpit_1_1marketdata.html#a3e1661e05638d91be95977fd2715f18c", null ],
     [ "GetStatus", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98", [
       [ "Found", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98a5d695cc28c6a7ea955162fbdd0ae42b9", null ],
       [ "Unavailable", "namespaceopenpit_1_1marketdata.html#ad372e0b9a9e53d78808b5c78a985ed98a453e6aa38d87b28ccae545967c53004f", null ],

@@ -28,10 +28,19 @@ from ._openpit import ExecutionReportOperation as _ExecutionReportOperation
 from ._openpit import ExecutionReportPositionImpact as _ExecutionReportPositionImpact
 from ._openpit import FinancialImpact as _FinancialImpact
 from ._openpit import Instrument as _Instrument
+from ._openpit import InstrumentId as InstrumentId
 from ._openpit import Order as _Order
 from ._openpit import OrderMargin as _OrderMargin
 from ._openpit import OrderOperation as _OrderOperation
 from ._openpit import OrderPosition as _OrderPosition
+from ._openpit import ReferenceBook as ReferenceBook
+from ._openpit import ReferenceBookRegistrationError as ReferenceBookRegistrationError
+from ._openpit import SettlementLag as SettlementLag
+from ._openpit import SettlementScheme as SettlementScheme
+from ._openpit import SettlementUnit as SettlementUnit
+from ._openpit import (
+    UnknownReferenceBookInstrumentId as UnknownReferenceBookInstrumentId,
+)
 from .param import (
     AccountId,
     Asset,
@@ -63,6 +72,16 @@ the account directly or capture it into a :class:`openpit.Mutation`
 rollback/commit closure to block on a deferred failure. The handle is valid only
 within the processing of this account-adjustment request (through its commit or
 rollback); using it afterwards is unspecified.
+"""
+
+InstrumentId.__doc__ = """Stable identifier shared by OpenPit subsystems."""
+SettlementUnit.__doc__ = """Unit used to express a settlement delay."""
+SettlementLag.__doc__ = """Settlement delay for one delivery or payment leg."""
+SettlementScheme.__doc__ = """Independent delivery and payment settlement delays."""
+ReferenceBook.__doc__ = """Instrument registry and typed reference attributes.
+
+It is independent from ``openpit.marketdata``. To use the same identity in a
+market-data service, register a caller-assigned ``InstrumentId`` in both.
 """
 
 
@@ -684,8 +703,15 @@ __all__ = [
     "ExecutionReportPositionImpact",
     "FinancialImpact",
     "Instrument",
+    "InstrumentId",
     "Order",
     "OrderMargin",
     "OrderOperation",
     "OrderPosition",
+    "ReferenceBook",
+    "ReferenceBookRegistrationError",
+    "SettlementLag",
+    "SettlementScheme",
+    "SettlementUnit",
+    "UnknownReferenceBookInstrumentId",
 ]

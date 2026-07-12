@@ -17,49 +17,11 @@
 
 #pragma once
 
-#include <openpit.h>
-
-#include <cstdint>
-#include <string>
+#include "openpit/instrument_id.hpp"
 
 namespace openpit::marketdata {
 
-// Type-safe market-data instrument identifier.
-//
-// A service assigns a stable id the first time an instrument is registered; all
-// later reads and writes use that id rather than resolving the instrument by
-// name. Trivial wrapper over the native runtime `uint64_t`.
-class InstrumentId {
- public:
-  constexpr InstrumentId() noexcept = default;
-
-  explicit constexpr InstrumentId(OpenPitMarketDataInstrumentId value) noexcept
-      : m_value(value) {}
-
-  // Constructs an instrument id from a raw `uint64` value.
-  [[nodiscard]] static constexpr InstrumentId FromUint64(
-      std::uint64_t value) noexcept {
-    return InstrumentId(value);
-  }
-
-  [[nodiscard]] constexpr OpenPitMarketDataInstrumentId Raw() const noexcept {
-    return m_value;
-  }
-
-  // Decimal rendering of the underlying id.
-  [[nodiscard]] std::string ToString() const { return std::to_string(m_value); }
-
-  [[nodiscard]] constexpr bool operator==(
-      const InstrumentId& other) const noexcept {
-    return m_value == other.m_value;
-  }
-  [[nodiscard]] constexpr bool operator!=(
-      const InstrumentId& other) const noexcept {
-    return m_value != other.m_value;
-  }
-
- private:
-  OpenPitMarketDataInstrumentId m_value = 0;
-};
+// Backwards-compatible market-data spelling of the core instrument identity.
+using InstrumentId = ::openpit::InstrumentId;
 
 }  // namespace openpit::marketdata

@@ -49,7 +49,6 @@
 
 pub(crate) mod builder;
 pub(crate) mod error;
-pub(crate) mod instrument_id;
 pub(crate) mod internals;
 pub(crate) mod lock;
 pub(crate) mod quote;
@@ -57,11 +56,11 @@ pub(crate) mod resolution;
 pub(crate) mod service;
 pub(crate) mod ttl;
 
+pub use crate::core::InstrumentId;
 pub use builder::{sealed, MarketDataBuilder, MarketDataSync};
 pub use error::{
     AlreadyRegistered, MarketDataError, PushForError, RegistrationError, UnknownInstrumentId,
 };
-pub use instrument_id::InstrumentId;
 pub use lock::{
     LocalTtlGate, MarketDataLock, NoopLock, NoopReadGuard, NoopWriteGuard, RuntimeLock,
     RuntimeReadGuard, RuntimeWriteGuard, ServiceTtlGate,

@@ -3,6 +3,7 @@
   "entryPoints": [
     "src-ts/index.ts",
     "src-ts/param/index.ts",
+    "src-ts/core/index.ts",
     "src-ts/model/index.ts",
     "src-ts/pretrade/index.ts",
     "src-ts/pretrade/policies/index.ts",

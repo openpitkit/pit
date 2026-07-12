@@ -6,9 +6,12 @@ var searchData=
   ['ratelimitassetbarrier_3',['RateLimitAssetBarrier',['../structopenpit_1_1pretrade_1_1policies_1_1RateLimitAssetBarrier.html',1,'openpit::pretrade::policies']]],
   ['ratelimitbrokerbarrier_4',['RateLimitBrokerBarrier',['../structopenpit_1_1pretrade_1_1policies_1_1RateLimitBrokerBarrier.html',1,'openpit::pretrade::policies']]],
   ['ratelimitpolicy_5',['RateLimitPolicy',['../classopenpit_1_1pretrade_1_1policies_1_1RateLimitPolicy.html',1,'openpit::pretrade::policies']]],
-  ['registerresult_6',['RegisterResult',['../structopenpit_1_1marketdata_1_1RegisterResult.html',1,'openpit::marketdata']]],
-  ['reject_7',['Reject',['../structopenpit_1_1pretrade_1_1Reject.html',1,'openpit::pretrade']]],
-  ['request_8',['Request',['../classopenpit_1_1pretrade_1_1Request.html',1,'openpit::pretrade']]],
-  ['reservation_9',['Reservation',['../classopenpit_1_1pretrade_1_1Reservation.html',1,'openpit::pretrade']]],
-  ['result_10',['Result',['../classopenpit_1_1asyncengine_1_1Result.html',1,'openpit::asyncengine::Result&lt; T &gt;'],['../classopenpit_1_1pretrade_1_1Result.html',1,'openpit::pretrade::Result']]]
+  ['referencebook_6',['ReferenceBook',['../classopenpit_1_1ReferenceBook.html',1,'openpit']]],
+  ['referencebookregisterresult_7',['ReferenceBookRegisterResult',['../structopenpit_1_1ReferenceBookRegisterResult.html',1,'openpit']]],
+  ['referencebooksettlementschemeresult_8',['ReferenceBookSettlementSchemeResult',['../structopenpit_1_1ReferenceBookSettlementSchemeResult.html',1,'openpit']]],
+  ['registerresult_9',['RegisterResult',['../structopenpit_1_1marketdata_1_1RegisterResult.html',1,'openpit::marketdata']]],
+  ['reject_10',['Reject',['../structopenpit_1_1pretrade_1_1Reject.html',1,'openpit::pretrade']]],
+  ['request_11',['Request',['../classopenpit_1_1pretrade_1_1Request.html',1,'openpit::pretrade']]],
+  ['reservation_12',['Reservation',['../classopenpit_1_1pretrade_1_1Reservation.html',1,'openpit::pretrade']]],
+  ['result_13',['Result',['../classopenpit_1_1asyncengine_1_1Result.html',1,'openpit::asyncengine::Result&lt; T &gt;'],['../classopenpit_1_1pretrade_1_1Result.html',1,'openpit::pretrade::Result']]]
 ];

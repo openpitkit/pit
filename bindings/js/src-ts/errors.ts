@@ -79,6 +79,20 @@ export const RegistrationErrorKind = {
 export type RegistrationErrorKind =
   (typeof RegistrationErrorKind)[keyof typeof RegistrationErrorKind];
 
+/** Reference-book registration conflict. */
+export const ReferenceBookRegistrationErrorKind = {
+  /** Requested instrument id is already occupied. */
+  DuplicateId: "DuplicateId",
+  /** Requested instrument is already registered under another id. */
+  DuplicateInstrument: "DuplicateInstrument",
+  /** A newer runtime reported a conflict unknown to this binding. */
+  Unknown: "Unknown",
+} as const;
+
+/** Reference-book registration conflict. */
+export type ReferenceBookRegistrationErrorKind =
+  (typeof ReferenceBookRegistrationErrorKind)[keyof typeof ReferenceBookRegistrationErrorKind];
+
 /** Account-group registration failure. */
 export const AccountGroupRegistrationErrorKind = {
   /** The reserved default group cannot be explicitly registered. */
@@ -351,6 +365,47 @@ export class UnknownInstrumentId extends OpenpitError {
   }
 }
 
+/** Reference-book registration conflict. */
+export class ReferenceBookRegistrationError extends OpenpitError {
+  readonly kind: ReferenceBookRegistrationErrorKind;
+  readonly instrumentId?: InstrumentId;
+  readonly instrument?: Instrument;
+
+  constructor(
+    message: string,
+    options: {
+      kind: ReferenceBookRegistrationErrorKind;
+      instrumentId?: InstrumentId | undefined;
+      instrument?: Instrument | undefined;
+      cause?: unknown;
+    },
+  ) {
+    super(message, options);
+    this.name = "ReferenceBookRegistrationError";
+    this.kind = options.kind;
+    if (options.instrumentId !== undefined) {
+      this.instrumentId = options.instrumentId;
+    }
+    if (options.instrument !== undefined) {
+      this.instrument = options.instrument;
+    }
+  }
+}
+
+/** Reference-book operation targeting an unregistered instrument id. */
+export class UnknownReferenceBookInstrumentId extends OpenpitError {
+  readonly instrumentId: InstrumentId;
+
+  constructor(
+    message: string,
+    options: { instrumentId: InstrumentId; cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "UnknownReferenceBookInstrumentId";
+    this.instrumentId = options.instrumentId;
+  }
+}
+
 /** Account-group register/unregister conflict. */
 export class AccountGroupRegistrationError extends OpenpitError {
   readonly kind: AccountGroupRegistrationErrorKind;
@@ -571,6 +626,18 @@ export function makeError(
       });
     case "UnknownInstrumentId":
       return new UnknownInstrumentId(message, {
+        instrumentId: payload?.instrumentId as InstrumentId,
+        cause,
+      });
+    case "ReferenceBookRegistrationError":
+      return new ReferenceBookRegistrationError(message, {
+        kind: (payload?.kind ?? code) as ReferenceBookRegistrationErrorKind,
+        instrumentId: payload?.instrumentId,
+        instrument: payload?.instrument,
+        cause,
+      });
+    case "UnknownReferenceBookInstrumentId":
+      return new UnknownReferenceBookInstrumentId(message, {
         instrumentId: payload?.instrumentId as InstrumentId,
         cause,
       });

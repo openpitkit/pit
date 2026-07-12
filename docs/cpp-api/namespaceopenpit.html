@@ -143,8 +143,14 @@ Classes</h2></td></tr>
 <tr class="memitem:EngineBuildError" id="r_EngineBuildError"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1EngineBuildError.html">EngineBuildError</a></td></tr>
 <tr class="memitem:Error" id="r_Error"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1Error.html">Error</a></td></tr>
 <tr class="memitem:ExecutionReport" id="r_ExecutionReport"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1ExecutionReport.html">ExecutionReport</a></td></tr>
+<tr class="memitem:InstrumentId" id="r_InstrumentId"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1InstrumentId.html">InstrumentId</a></td></tr>
 <tr class="memitem:Order" id="r_Order"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1Order.html">Order</a></td></tr>
 <tr class="memitem:PostTradeResult" id="r_PostTradeResult"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1PostTradeResult.html">PostTradeResult</a></td></tr>
+<tr class="memitem:ReferenceBook" id="r_ReferenceBook"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1ReferenceBook.html">ReferenceBook</a></td></tr>
+<tr class="memitem:ReferenceBookRegisterResult" id="r_ReferenceBookRegisterResult"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1ReferenceBookRegisterResult.html">ReferenceBookRegisterResult</a></td></tr>
+<tr class="memitem:ReferenceBookSettlementSchemeResult" id="r_ReferenceBookSettlementSchemeResult"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1ReferenceBookSettlementSchemeResult.html">ReferenceBookSettlementSchemeResult</a></td></tr>
+<tr class="memitem:SettlementLag" id="r_SettlementLag"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1SettlementLag.html">SettlementLag</a></td></tr>
+<tr class="memitem:SettlementScheme" id="r_SettlementScheme"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1SettlementScheme.html">SettlementScheme</a></td></tr>
 <tr class="memitem:SharedBytes" id="r_SharedBytes"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1SharedBytes.html">SharedBytes</a></td></tr>
 <tr class="memitem:SharedString" id="r_SharedString"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1SharedString.html">SharedString</a></td></tr>
 <tr class="memitem:StringView" id="r_StringView"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1StringView.html">StringView</a></td></tr>
@@ -159,6 +165,16 @@ Enumerations</h2></td></tr>
 <tr class="memitem:a850932464d3c094d4d9891068796c23a" id="r_a850932464d3c094d4d9891068796c23a"><td class="memItemLeft">enum class &#160;</td><td class="memItemRight"><a class="el" href="#a850932464d3c094d4d9891068796c23a">EngineBuildErrorCode</a> : std::uint8_t { <a class="el" href="#a850932464d3c094d4d9891068796c23aa7af6c6e68494c48e8e05426046d8de44">DuplicatePolicyName</a> = OpenPitEngineBuildErrorCode_DuplicatePolicyName
 , <a class="el" href="#a850932464d3c094d4d9891068796c23aa64e4e5f6a10301040b106f3fb872baab">DuplicatePolicyGroupId</a> = OpenPitEngineBuildErrorCode_DuplicatePolicyGroupId
 , <a class="el" href="#a850932464d3c094d4d9891068796c23aa6311ae17c1ee52b36e68aaf4ad066387">Other</a> = OpenPitEngineBuildErrorCode_Other
+ }</td></tr>
+<tr class="memitem:a2b098a834f3e15478d050c9bdd4343ee" id="r_a2b098a834f3e15478d050c9bdd4343ee"><td class="memItemLeft">enum class &#160;</td><td class="memItemRight"><a class="el" href="#a2b098a834f3e15478d050c9bdd4343ee">ReferenceBookRegisterStatus</a> : std::uint8_t { <a class="el" href="#a2b098a834f3e15478d050c9bdd4343eeaa60852f204ed8028c1c58808b746d115">Ok</a> = OpenPitReferenceBookRegisterStatus_Ok
+, <a class="el" href="#a2b098a834f3e15478d050c9bdd4343eead4c63c28ec149d5fa5212cb03253d63a">DuplicateId</a> = OpenPitReferenceBookRegisterStatus_DuplicateId
+, <a class="el" href="#a2b098a834f3e15478d050c9bdd4343eea70c78fcf4f9b06e19a2852f61e1252ab">DuplicateInstrument</a> = OpenPitReferenceBookRegisterStatus_DuplicateInstrument
+ }</td></tr>
+<tr class="memitem:a45bafa6da7650693ce1015ca1267375d" id="r_a45bafa6da7650693ce1015ca1267375d"><td class="memItemLeft">enum class &#160;</td><td class="memItemRight"><a class="el" href="#a45bafa6da7650693ce1015ca1267375d">ReferenceBookStatus</a> : std::uint8_t { <a class="el" href="#a45bafa6da7650693ce1015ca1267375daa60852f204ed8028c1c58808b746d115">Ok</a> = OpenPitReferenceBookStatus_Ok
+, <a class="el" href="#a45bafa6da7650693ce1015ca1267375dab9e51a69f4dd89fc832c1ab9735ab49a">UnknownInstrument</a> = OpenPitReferenceBookStatus_UnknownInstrument
+ }</td></tr>
+<tr class="memitem:a3e941f0120630fa0e41bf1d83126e69e" id="r_a3e941f0120630fa0e41bf1d83126e69e"><td class="memItemLeft">enum class &#160;</td><td class="memItemRight"><a class="el" href="#a3e941f0120630fa0e41bf1d83126e69e">SettlementUnit</a> : std::uint8_t { <a class="el" href="#a3e941f0120630fa0e41bf1d83126e69ea02bb94d75fc62f58eda0ce54fa7f7619">BusinessDays</a> = OPENPIT_SETTLEMENT_UNIT_BUSINESS_DAYS
+, <a class="el" href="#a3e941f0120630fa0e41bf1d83126e69ea7c3be1d449cde8ac7de2bf0ad5b0abf3">CalendarDays</a> = OPENPIT_SETTLEMENT_UNIT_CALENDAR_DAYS
  }</td></tr>
 <tr class="memitem:ac0c042292e7aeb3a25088b00a146755b" id="r_ac0c042292e7aeb3a25088b00a146755b"><td class="memItemLeft">enum class &#160;</td><td class="memItemRight"><a class="el" href="#ac0c042292e7aeb3a25088b00a146755b">SyncPolicy</a> : std::uint8_t { <a class="el" href="#ac0c042292e7aeb3a25088b00a146755ba6adf97f83acf6453d4a6a4b1070f3754">None</a> = OpenPitSyncPolicy_None
 , <a class="el" href="#ac0c042292e7aeb3a25088b00a146755babbd47109890259c0127154db1af26c75">Full</a> = OpenPitSyncPolicy_Full
@@ -224,6 +240,85 @@ Functions</h2></td></tr>
 <tr><th colspan="2">Enumerator</th></tr><tr><td class="fieldname"><a id="a850932464d3c094d4d9891068796c23aa7af6c6e68494c48e8e05426046d8de44" name="a850932464d3c094d4d9891068796c23aa7af6c6e68494c48e8e05426046d8de44"></a>DuplicatePolicyName&#160;</td><td class="fielddoc"></td></tr>
 <tr><td class="fieldname"><a id="a850932464d3c094d4d9891068796c23aa64e4e5f6a10301040b106f3fb872baab" name="a850932464d3c094d4d9891068796c23aa64e4e5f6a10301040b106f3fb872baab"></a>DuplicatePolicyGroupId&#160;</td><td class="fielddoc"></td></tr>
 <tr><td class="fieldname"><a id="a850932464d3c094d4d9891068796c23aa6311ae17c1ee52b36e68aaf4ad066387" name="a850932464d3c094d4d9891068796c23aa6311ae17c1ee52b36e68aaf4ad066387"></a>Other&#160;</td><td class="fielddoc"></td></tr>
+</table>
+
+</div>
+</div>
+<a id="a2b098a834f3e15478d050c9bdd4343ee" name="a2b098a834f3e15478d050c9bdd4343ee"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a2b098a834f3e15478d050c9bdd4343ee">&#9670;&#160;</a></span>ReferenceBookRegisterStatus</h2>
+
+<div class="memitem">
+<div class="memproto">
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">enum class <a class="el" href="#a2b098a834f3e15478d050c9bdd4343ee">openpit::ReferenceBookRegisterStatus</a> : std::uint8_t</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel strong">strong</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+<table class="fieldtable">
+<tr><th colspan="2">Enumerator</th></tr><tr><td class="fieldname"><a id="a2b098a834f3e15478d050c9bdd4343eeaa60852f204ed8028c1c58808b746d115" name="a2b098a834f3e15478d050c9bdd4343eeaa60852f204ed8028c1c58808b746d115"></a>Ok&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="a2b098a834f3e15478d050c9bdd4343eead4c63c28ec149d5fa5212cb03253d63a" name="a2b098a834f3e15478d050c9bdd4343eead4c63c28ec149d5fa5212cb03253d63a"></a>DuplicateId&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="a2b098a834f3e15478d050c9bdd4343eea70c78fcf4f9b06e19a2852f61e1252ab" name="a2b098a834f3e15478d050c9bdd4343eea70c78fcf4f9b06e19a2852f61e1252ab"></a>DuplicateInstrument&#160;</td><td class="fielddoc"></td></tr>
+</table>
+
+</div>
+</div>
+<a id="a45bafa6da7650693ce1015ca1267375d" name="a45bafa6da7650693ce1015ca1267375d"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a45bafa6da7650693ce1015ca1267375d">&#9670;&#160;</a></span>ReferenceBookStatus</h2>
+
+<div class="memitem">
+<div class="memproto">
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">enum class <a class="el" href="#a45bafa6da7650693ce1015ca1267375d">openpit::ReferenceBookStatus</a> : std::uint8_t</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel strong">strong</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+<table class="fieldtable">
+<tr><th colspan="2">Enumerator</th></tr><tr><td class="fieldname"><a id="a45bafa6da7650693ce1015ca1267375daa60852f204ed8028c1c58808b746d115" name="a45bafa6da7650693ce1015ca1267375daa60852f204ed8028c1c58808b746d115"></a>Ok&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="a45bafa6da7650693ce1015ca1267375dab9e51a69f4dd89fc832c1ab9735ab49a" name="a45bafa6da7650693ce1015ca1267375dab9e51a69f4dd89fc832c1ab9735ab49a"></a>UnknownInstrument&#160;</td><td class="fielddoc"></td></tr>
+</table>
+
+</div>
+</div>
+<a id="a3e941f0120630fa0e41bf1d83126e69e" name="a3e941f0120630fa0e41bf1d83126e69e"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a3e941f0120630fa0e41bf1d83126e69e">&#9670;&#160;</a></span>SettlementUnit</h2>
+
+<div class="memitem">
+<div class="memproto">
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">enum class <a class="el" href="#a3e941f0120630fa0e41bf1d83126e69e">openpit::SettlementUnit</a> : std::uint8_t</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel strong">strong</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+<table class="fieldtable">
+<tr><th colspan="2">Enumerator</th></tr><tr><td class="fieldname"><a id="a3e941f0120630fa0e41bf1d83126e69ea02bb94d75fc62f58eda0ce54fa7f7619" name="a3e941f0120630fa0e41bf1d83126e69ea02bb94d75fc62f58eda0ce54fa7f7619"></a>BusinessDays&#160;</td><td class="fielddoc"></td></tr>
+<tr><td class="fieldname"><a id="a3e941f0120630fa0e41bf1d83126e69ea7c3be1d449cde8ac7de2bf0ad5b0abf3" name="a3e941f0120630fa0e41bf1d83126e69ea7c3be1d449cde8ac7de2bf0ad5b0abf3"></a>CalendarDays&#160;</td><td class="fielddoc"></td></tr>
 </table>
 
 </div>

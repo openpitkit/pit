@@ -144,10 +144,18 @@ type ConfigureErrorKind = C.OpenPitConfigureErrorKind
 type MarketDataService = *C.OpenPitMarketDataService
 type MarketDataQuote = C.OpenPitMarketDataQuote
 type MarketDataQuoteTTL = C.OpenPitMarketDataQuoteTtl
-type MarketDataInstrumentID = C.OpenPitMarketDataInstrumentId
+type InstrumentID = C.OpenPitInstrumentId
+type MarketDataInstrumentID = InstrumentID
 type MarketDataGetStatus = C.OpenPitMarketDataGetStatus
 type MarketDataRegisterStatus = C.OpenPitMarketDataRegisterStatus
 type MarketDataQuoteResolution = C.OpenPitMarketDataQuoteResolution
+
+type ReferenceBook = *C.OpenPitReferenceBook
+type ReferenceBookRegisterStatus = C.OpenPitReferenceBookRegisterStatus
+type ReferenceBookStatus = C.OpenPitReferenceBookStatus
+type SettlementUnit = C.OpenPitSettlementUnit
+type SettlementLag = C.OpenPitSettlementLag
+type SettlementScheme = C.OpenPitSettlementScheme
 
 type PretradePreTradeResult = *C.OpenPitPretradePreTradeResult
 type PostTradeAdjustmentList = *C.OpenPitPostTradeAdjustmentList
@@ -176,6 +184,24 @@ const (
 	AccountBlockErrorKindReservedGroup     = C.OpenPitAccountBlockErrorKind_ReservedGroup
 	AccountBlockErrorKindAccountNotBlocked = C.OpenPitAccountBlockErrorKind_AccountNotBlocked
 	AccountBlockErrorKindGroupNotBlocked   = C.OpenPitAccountBlockErrorKind_GroupNotBlocked
+)
+
+const (
+	SettlementUnitBusinessDays SettlementUnit = C.OPENPIT_SETTLEMENT_UNIT_BUSINESS_DAYS
+	SettlementUnitCalendarDays SettlementUnit = C.OPENPIT_SETTLEMENT_UNIT_CALENDAR_DAYS
+)
+
+const (
+	ReferenceBookRegisterStatusOK                  ReferenceBookRegisterStatus = C.OpenPitReferenceBookRegisterStatus_Ok
+	ReferenceBookRegisterStatusDuplicateID         ReferenceBookRegisterStatus = C.OpenPitReferenceBookRegisterStatus_DuplicateId
+	ReferenceBookRegisterStatusDuplicateInstrument ReferenceBookRegisterStatus = C.OpenPitReferenceBookRegisterStatus_DuplicateInstrument
+	ReferenceBookRegisterStatusError               ReferenceBookRegisterStatus = C.OpenPitReferenceBookRegisterStatus_Error
+)
+
+const (
+	ReferenceBookStatusOK                ReferenceBookStatus = C.OpenPitReferenceBookStatus_Ok
+	ReferenceBookStatusUnknownInstrument ReferenceBookStatus = C.OpenPitReferenceBookStatus_UnknownInstrument
+	ReferenceBookStatusError             ReferenceBookStatus = C.OpenPitReferenceBookStatus_Error
 )
 
 const (

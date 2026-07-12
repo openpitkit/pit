@@ -17,10 +17,8 @@
 
 use std::fmt::{Display, Formatter};
 
-use crate::core::Instrument;
-
-use super::instrument_id::InstrumentId;
 use super::quote::Quote;
+use crate::core::{Instrument, InstrumentId};
 
 // ─── MarketDataError ──────────────────────────────────────────────────────────
 

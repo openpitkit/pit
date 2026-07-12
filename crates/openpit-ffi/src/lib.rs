@@ -32,6 +32,7 @@ pub mod order;
 pub mod param;
 pub(crate) mod policy;
 pub mod pre_trade_lock;
+pub mod reference_book;
 pub(crate) mod reject;
 pub mod string;
 

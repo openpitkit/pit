@@ -24,6 +24,7 @@
  * Everything else lives under a subpath that mirrors the SDK module tree:
  *
  * - `@openpit/engine/param` - value types, identifiers, and enums.
+ * - `@openpit/engine/core` - global instrument reference data.
  * - `@openpit/engine/model` - order, execution-report, and adjustment models.
  * - `@openpit/engine/pretrade` - pipeline handles, results, contexts, and the
  *   custom-policy contract.
@@ -87,6 +88,9 @@ export {
   AlreadyRegistered,
   RegistrationError,
   UnknownInstrumentId,
+  ReferenceBookRegistrationError,
+  ReferenceBookRegistrationErrorKind,
+  UnknownReferenceBookInstrumentId,
   AccountGroupRegistrationError,
   AccountBlockError,
   LifecycleError,

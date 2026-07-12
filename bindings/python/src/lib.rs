@@ -65,8 +65,10 @@ use openpit::{
 use openpit::{AccountGroupError, Accounts, Configurator, PolicyGroupId, DEFAULT_POLICY_GROUP_ID};
 use openpit::{
     ConfigureError, InstrumentId, MarketDataBuilder, MarketDataService, Quote, QuoteTtl,
-    SpotFundsLimitMode, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
-    SpotFundsPricingSource,
+    ReferenceBook, ReferenceBookRegistrationError as CoreReferenceBookRegistrationError,
+    SettlementLag, SettlementScheme, SettlementUnit, SpotFundsLimitMode, SpotFundsMarketData,
+    SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPricingSource,
+    UnknownReferenceBookInstrumentId as CoreUnknownReferenceBookInstrumentId,
 };
 use openpit_interop::{
     AccountAdjustmentAmountAccess, AccountAdjustmentBoundsAccess, AccountAdjustmentOperationAccess,
@@ -93,6 +95,8 @@ create_exception!(openpit, QuoteExpired, MarketDataError);
 create_exception!(openpit, AlreadyRegistered, PyException);
 create_exception!(openpit, RegistrationError, PyException);
 create_exception!(openpit, UnknownInstrumentId, PyException);
+create_exception!(openpit, ReferenceBookRegistrationError, PyException);
+create_exception!(openpit, UnknownReferenceBookInstrumentId, PyException);
 create_exception!(openpit, AccountGroupRegistrationError, PyException);
 create_exception!(openpit, AccountBlockError, PyException);
 create_exception!(openpit, PolicyConfigureError, PyException);
@@ -178,6 +182,47 @@ fn create_registration_error(error: openpit::RegistrationError) -> PyErr {
 fn create_unknown_instrument_id_error(error: openpit::UnknownInstrumentId) -> PyErr {
     let message = error.to_string();
     let err = UnknownInstrumentId::new_err(message);
+    Python::attach(|py| {
+        let _ = err.value(py).setattr(
+            "instrument_id",
+            PyInstrumentId {
+                inner: error.instrument_id,
+            },
+        );
+    });
+    err
+}
+
+fn create_reference_book_registration_error(error: CoreReferenceBookRegistrationError) -> PyErr {
+    let message = error.to_string();
+    let err = ReferenceBookRegistrationError::new_err(message);
+    Python::attach(|py| {
+        let value = err.value(py);
+        let _ = value.setattr("instrument", py.None());
+        let _ = value.setattr("instrument_id", py.None());
+        match error {
+            CoreReferenceBookRegistrationError::DuplicateId { instrument_id } => {
+                let _ = value.setattr(
+                    "instrument_id",
+                    PyInstrumentId {
+                        inner: instrument_id,
+                    },
+                );
+            }
+            CoreReferenceBookRegistrationError::DuplicateInstrument { instrument } => {
+                let _ = value.setattr("instrument", PyInstrument { inner: instrument });
+            }
+            _ => {}
+        }
+    });
+    err
+}
+
+fn create_unknown_reference_book_instrument_id_error(
+    error: CoreUnknownReferenceBookInstrumentId,
+) -> PyErr {
+    let message = error.to_string();
+    let err = UnknownReferenceBookInstrumentId::new_err(message);
     Python::attach(|py| {
         let _ = err.value(py).setattr(
             "instrument_id",
@@ -289,12 +334,7 @@ type AccountAdjustment =
 
 type PyEngineTrait = openpit_interop::InteropEngineTrait<Order, ExecutionReport, AccountAdjustment>;
 
-#[pyclass(
-    name = "InstrumentId",
-    module = "openpit.marketdata",
-    frozen,
-    from_py_object
-)]
+#[pyclass(name = "InstrumentId", module = "openpit.core", frozen, from_py_object)]
 #[derive(Clone, Copy)]
 struct PyInstrumentId {
     inner: InstrumentId,
@@ -330,6 +370,199 @@ impl PyInstrumentId {
 
     fn __repr__(&self) -> String {
         format!("InstrumentId({})", self.inner.as_u64())
+    }
+}
+
+#[pyclass(
+    name = "SettlementUnit",
+    module = "openpit.core",
+    frozen,
+    eq,
+    eq_int,
+    from_py_object
+)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PySettlementUnit {
+    #[pyo3(name = "BUSINESS_DAYS")]
+    BusinessDays = 0,
+    #[pyo3(name = "CALENDAR_DAYS")]
+    CalendarDays = 1,
+}
+
+impl From<PySettlementUnit> for SettlementUnit {
+    fn from(value: PySettlementUnit) -> Self {
+        match value {
+            PySettlementUnit::BusinessDays => SettlementUnit::BusinessDays,
+            PySettlementUnit::CalendarDays => SettlementUnit::CalendarDays,
+        }
+    }
+}
+
+impl From<SettlementUnit> for PySettlementUnit {
+    fn from(value: SettlementUnit) -> Self {
+        match value {
+            SettlementUnit::BusinessDays => Self::BusinessDays,
+            SettlementUnit::CalendarDays => Self::CalendarDays,
+        }
+    }
+}
+
+#[pyclass(
+    name = "SettlementLag",
+    module = "openpit.core",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone, Copy)]
+struct PySettlementLag {
+    inner: SettlementLag,
+}
+
+#[pymethods]
+impl PySettlementLag {
+    #[new]
+    fn new(n: u64, unit: PySettlementUnit) -> Self {
+        Self {
+            inner: SettlementLag::new(n, unit.into()),
+        }
+    }
+
+    #[getter]
+    fn n(&self) -> u64 {
+        self.inner.n()
+    }
+
+    #[getter]
+    fn unit(&self) -> PySettlementUnit {
+        self.inner.unit().into()
+    }
+
+    fn __richcmp__(&self, other: &Self, op: CompareOp) -> PyResult<bool> {
+        match op {
+            CompareOp::Eq => Ok(self.inner == other.inner),
+            CompareOp::Ne => Ok(self.inner != other.inner),
+            _ => Err(PyTypeError::new_err(
+                "SettlementLag supports only == and !=",
+            )),
+        }
+    }
+}
+
+#[pyclass(
+    name = "SettlementScheme",
+    module = "openpit.core",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone, Copy)]
+struct PySettlementScheme {
+    inner: SettlementScheme,
+}
+
+#[pymethods]
+impl PySettlementScheme {
+    #[new]
+    fn new(delivery: &PySettlementLag, payment: &PySettlementLag) -> Self {
+        Self {
+            inner: SettlementScheme::new(delivery.inner, payment.inner),
+        }
+    }
+
+    #[staticmethod]
+    fn uniform(n: u64) -> Self {
+        Self {
+            inner: SettlementScheme::uniform(n),
+        }
+    }
+
+    #[getter]
+    fn delivery(&self) -> PySettlementLag {
+        PySettlementLag {
+            inner: self.inner.delivery(),
+        }
+    }
+
+    #[getter]
+    fn payment(&self) -> PySettlementLag {
+        PySettlementLag {
+            inner: self.inner.payment(),
+        }
+    }
+
+    fn __richcmp__(&self, other: &Self, op: CompareOp) -> PyResult<bool> {
+        match op {
+            CompareOp::Eq => Ok(self.inner == other.inner),
+            CompareOp::Ne => Ok(self.inner != other.inner),
+            _ => Err(PyTypeError::new_err(
+                "SettlementScheme supports only == and !=",
+            )),
+        }
+    }
+}
+
+#[pyclass(name = "ReferenceBook", module = "openpit.core")]
+struct PyReferenceBook {
+    inner: ReferenceBook,
+}
+
+#[pymethods]
+impl PyReferenceBook {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: ReferenceBook::new(),
+        }
+    }
+
+    fn register(&mut self, instrument: &Bound<'_, PyAny>) -> PyResult<PyInstrumentId> {
+        self.inner
+            .register(parse_instrument_input(instrument)?)
+            .map(|inner| PyInstrumentId { inner })
+            .map_err(create_reference_book_registration_error)
+    }
+
+    fn register_with_id(
+        &mut self,
+        instrument: &Bound<'_, PyAny>,
+        instrument_id: &PyInstrumentId,
+    ) -> PyResult<PyInstrumentId> {
+        self.inner
+            .register_with_id(parse_instrument_input(instrument)?, instrument_id.inner)
+            .map(|inner| PyInstrumentId { inner })
+            .map_err(create_reference_book_registration_error)
+    }
+
+    fn resolve(&self, instrument: &Bound<'_, PyAny>) -> PyResult<Option<PyInstrumentId>> {
+        Ok(self
+            .inner
+            .resolve(&parse_instrument_input(instrument)?)
+            .map(|inner| PyInstrumentId { inner }))
+    }
+
+    fn set_settlement_scheme(
+        &mut self,
+        instrument_id: &PyInstrumentId,
+        settlement_scheme: &PySettlementScheme,
+    ) -> PyResult<()> {
+        self.inner
+            .set_settlement_scheme(instrument_id.inner, settlement_scheme.inner)
+            .map_err(create_unknown_reference_book_instrument_id_error)
+    }
+
+    fn clear_settlement_scheme(&mut self, instrument_id: &PyInstrumentId) -> PyResult<()> {
+        self.inner
+            .clear_settlement_scheme(instrument_id.inner)
+            .map_err(create_unknown_reference_book_instrument_id_error)
+    }
+
+    fn settlement_scheme(
+        &self,
+        instrument_id: &PyInstrumentId,
+    ) -> PyResult<Option<PySettlementScheme>> {
+        self.inner
+            .settlement_scheme(instrument_id.inner)
+            .map(|scheme| scheme.map(|inner| PySettlementScheme { inner }))
+            .map_err(create_unknown_reference_book_instrument_id_error)
     }
 }
 
@@ -4291,7 +4524,7 @@ fn parse_spot_funds_override_target_entity(
             .map_err(|_| {
                 PyTypeError::new_err(
                     "spot funds override target instrument must be \
-                     openpit.marketdata.InstrumentId",
+                     openpit.core.InstrumentId",
                 )
             })
     };
@@ -8159,6 +8392,14 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("RegistrationError", py.get_type::<RegistrationError>())?;
     module.add("UnknownInstrumentId", py.get_type::<UnknownInstrumentId>())?;
     module.add(
+        "ReferenceBookRegistrationError",
+        py.get_type::<ReferenceBookRegistrationError>(),
+    )?;
+    module.add(
+        "UnknownReferenceBookInstrumentId",
+        py.get_type::<UnknownReferenceBookInstrumentId>(),
+    )?;
+    module.add(
         "AccountGroupRegistrationError",
         py.get_type::<AccountGroupRegistrationError>(),
     )?;
@@ -8202,6 +8443,10 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCashFlow>()?;
     module.add_class::<PyPositionSize>()?;
     module.add_class::<PyInstrumentId>()?;
+    module.add_class::<PySettlementUnit>()?;
+    module.add_class::<PySettlementLag>()?;
+    module.add_class::<PySettlementScheme>()?;
+    module.add_class::<PyReferenceBook>()?;
     module.add_class::<PyQuoteTtl>()?;
     module.add_class::<PyQuote>()?;
     module.add_class::<PyQuoteResolution>()?;

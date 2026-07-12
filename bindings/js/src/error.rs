@@ -80,6 +80,10 @@ pub enum ErrorKind {
     Registration,
     /// Operation referencing an instrument id that is not registered.
     UnknownInstrumentId,
+    /// Reference-book registration that conflicts with an existing entry.
+    ReferenceBookRegistration,
+    /// Reference-book operation referencing an unknown instrument id.
+    UnknownReferenceBookInstrumentId,
     /// Account-group register/unregister conflict.
     AccountGroupRegistration,
     /// Admin block/unblock/replace-reason failure.
@@ -113,6 +117,8 @@ impl ErrorKind {
             Self::AlreadyRegistered => "AlreadyRegistered",
             Self::Registration => "RegistrationError",
             Self::UnknownInstrumentId => "UnknownInstrumentId",
+            Self::ReferenceBookRegistration => "ReferenceBookRegistrationError",
+            Self::UnknownReferenceBookInstrumentId => "UnknownReferenceBookInstrumentId",
             Self::AccountGroupRegistration => "AccountGroupRegistrationError",
             Self::AccountBlock => "AccountBlockError",
             Self::Lifecycle => "LifecycleError",

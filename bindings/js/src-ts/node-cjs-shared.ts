@@ -22,6 +22,7 @@
 
 export * as root from "./index.js";
 export * as param from "./param/index.js";
+export * as core from "./core/index.js";
 export * as model from "./model/index.js";
 export * as pretrade from "./pretrade/index.js";
 export * as pretradePolicies from "./pretrade/policies/index.js";

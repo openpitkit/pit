@@ -18,4 +18,5 @@
   - [Instrument](instrument.md)
   - [Marketdata](marketdata.md)
   - [Pre Trade Lock](pre-trade-lock.md)
+  - [Reference Book](reference-book.md)
   - [String](string.md)

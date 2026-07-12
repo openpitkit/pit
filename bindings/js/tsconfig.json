@@ -21,6 +21,7 @@
       "npm:@openpit/engine": ["./src-ts/index.ts"],
       "@openpit/engine": ["./src-ts/index.ts"],
       "@openpit/engine/param": ["./src-ts/param/index.ts"],
+      "@openpit/engine/core": ["./src-ts/core/index.ts"],
       "@openpit/engine/model": ["./src-ts/model/index.ts"],
       "@openpit/engine/pretrade": ["./src-ts/pretrade/index.ts"],
       "@openpit/engine/pretrade/policies": [

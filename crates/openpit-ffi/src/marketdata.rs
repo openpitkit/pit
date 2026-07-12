@@ -42,8 +42,11 @@ use crate::param::{OpenPitParamAccountId, OpenPitParamPrice, OpenPitParamPriceOp
 //--------------------------------------------------------------------------------------------------
 // InstrumentId
 
-/// Stable instrument identifier for FFI payloads.
-pub type OpenPitMarketDataInstrumentId = u64;
+/// Stable instrument identifier for all FFI payloads.
+pub type OpenPitInstrumentId = u64;
+
+/// Backwards-compatible market-data spelling of [`OpenPitInstrumentId`].
+pub type OpenPitMarketDataInstrumentId = OpenPitInstrumentId;
 
 //--------------------------------------------------------------------------------------------------
 // Quote

@@ -1,6 +1,6 @@
 var searchData=
 [
-  ['startpolicyadapterwithsafeslowargtype_0',['StartPolicyAdapterWithSafeSlowArgType',['../namespaceopenpit_1_1pretrade.html#a5f67bd3ab429cc946d3212f47fc585e6',1,'openpit::pretrade']]],
-  ['startpolicyadapterwithunsafefastargtype_1',['StartPolicyAdapterWithUnsafeFastArgType',['../namespaceopenpit_1_1pretrade.html#a4c6b33fca1fc81088b90dff62348685f',1,'openpit::pretrade']]],
-  ['stopunderlying_2',['StopUnderlying',['../namespaceopenpit_1_1asyncengine.html#ab4f34587cb0ebe71c516c7000824348d',1,'openpit::asyncengine']]]
+  ['reject_0',['Reject',['../namespaceopenpit_1_1reject.html#ace0b56f25c3eead8cd0c5284985543e9',1,'openpit::reject']]],
+  ['rejectcode_1',['RejectCode',['../namespaceopenpit_1_1reject.html#a05a6091a6a2a6c9b515685b1c82c3516',1,'openpit::reject']]],
+  ['rejectscope_2',['RejectScope',['../namespaceopenpit_1_1reject.html#a4a952e96684bd9c71181849f9fb5a2c2',1,'openpit::reject']]]
 ];

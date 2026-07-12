@@ -320,7 +320,7 @@ impl JsInstrument {
     ///
     /// Throws `AssetError` on an empty asset, or `TypeError` when the value is
     /// neither an `Instrument` nor a plain object with both assets.
-    fn coerce(value: JsValue) -> Result<Instrument, JsValue> {
+    pub(crate) fn coerce(value: JsValue) -> Result<Instrument, JsValue> {
         if let Some(wrapped) = extract_cloned_wrapper::<JsInstrument>(&value)? {
             return Ok(wrapped.inner());
         }

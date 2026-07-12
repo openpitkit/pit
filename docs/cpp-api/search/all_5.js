@@ -24,7 +24,7 @@ var searchData=
   ['fromstring_21',['FromString',['../classopenpit_1_1param_1_1AccountId.html#ade272b3d946b9e5203657b4b88f8b1ac',1,'openpit::param::AccountId::FromString()'],['../classopenpit_1_1param_1_1AccountGroupId.html#a8ad0f4978bf09464c2a0cb986be899af',1,'openpit::param::AccountGroupId::FromString()']]],
   ['fromuint16_22',['FromUint16',['../classopenpit_1_1param_1_1Leverage.html#a18b87bdf9fae132752380ee696d04dde',1,'openpit::param::Leverage']]],
   ['fromuint32_23',['FromUint32',['../classopenpit_1_1param_1_1AccountGroupId.html#a0a7a80c6f39e1aed8ec792e188d3f8fd',1,'openpit::param::AccountGroupId']]],
-  ['fromuint64_24',['FromUint64',['../classopenpit_1_1param_1_1AccountId.html#abd320fee4415f49d5c61e7cfd7375db2',1,'openpit::param::AccountId::FromUint64()'],['../classopenpit_1_1marketdata_1_1InstrumentId.html#a3b2326d239fec689e452fbe22ec108d1',1,'openpit::marketdata::InstrumentId::FromUint64()']]],
+  ['fromuint64_24',['FromUint64',['../classopenpit_1_1param_1_1AccountId.html#abd320fee4415f49d5c61e7cfd7375db2',1,'openpit::param::AccountId::FromUint64()'],['../classopenpit_1_1InstrumentId.html#aee78a9fb98c056f25f15db37f07aa082',1,'openpit::InstrumentId::FromUint64()']]],
   ['full_25',['Full',['../namespaceopenpit.html#ac0c042292e7aeb3a25088b00a146755babbd47109890259c0127154db1af26c75',1,'openpit::Full'],['../namespaceopenpit_1_1marketdata.html#a2a734d57b948fd572b59fba9d6c991c0abbd47109890259c0127154db1af26c75',1,'openpit::marketdata::Full']]],
   ['fullsync_26',['FullSync',['../classopenpit_1_1marketdata_1_1Builder.html#a5cb40c3bcc25c183c885e443a1ba36bb',1,'openpit::marketdata::Builder']]],
   ['funding_27',['Funding',['../namespaceopenpit_1_1param.html#aca93319eb8d371d7f91860bf40c03e36a682889d0a1d3b50267a69346a750433d',1,'openpit::param']]],

@@ -189,6 +189,9 @@ typedef struct OpenPitPretradePreTradeReservation
 typedef struct OpenPitPretradePreTradeResult OpenPitPretradePreTradeResult;
 typedef struct OpenPitPretradeReject OpenPitPretradeReject;
 typedef struct OpenPitPretradeRejectList OpenPitPretradeRejectList;
+typedef struct OpenPitReferenceBook OpenPitReferenceBook;
+typedef struct OpenPitSettlementLag OpenPitSettlementLag;
+typedef struct OpenPitSettlementScheme OpenPitSettlementScheme;
 typedef struct OpenPitSharedBytes OpenPitSharedBytes;
 typedef struct OpenPitSharedString OpenPitSharedString;
 typedef struct OpenPitStringView OpenPitStringView;
@@ -249,9 +252,22 @@ typedef OpenPitParamError ** OpenPitOutParamError;
 typedef uint32_t OpenPitParamAccountGroupId;
 
 /**
- * Stable instrument identifier for FFI payloads.
+ * Stable instrument identifier for all FFI payloads.
  */
-typedef uint64_t OpenPitMarketDataInstrumentId;
+typedef uint64_t OpenPitInstrumentId;
+
+/**
+ * Backwards-compatible market-data spelling of [`OpenPitInstrumentId`].
+ */
+typedef OpenPitInstrumentId OpenPitMarketDataInstrumentId;
+
+/**
+ * Raw settlement-unit code for FFI payloads.
+ *
+ * The value is validated before it is converted into the Rust
+ * [`SettlementUnit`].
+ */
+typedef uint8_t OpenPitSettlementUnit;
 
 /**
  * Sentinel value indicating leverage is not set.
@@ -314,6 +330,16 @@ typedef uint64_t OpenPitMarketDataInstrumentId;
  * policy to a specific group. Mirrors `openpit::DEFAULT_POLICY_GROUP_ID`.
  */
 #define OPENPIT_DEFAULT_POLICY_GROUP_ID ((uint16_t) 0)
+
+/**
+ * Business-day settlement delay.
+ */
+#define OPENPIT_SETTLEMENT_UNIT_BUSINESS_DAYS ((OpenPitSettlementUnit) 0)
+
+/**
+ * Calendar-day settlement delay.
+ */
+#define OPENPIT_SETTLEMENT_UNIT_CALENDAR_DAYS ((OpenPitSettlementUnit) 1)
 
 /**
  * Order side.
@@ -1134,6 +1160,49 @@ typedef uint8_t OpenPitPretradePreTradeLockPricesStatus;
     ((OpenPitPretradePreTradeLockPricesStatus) 3)
 
 /**
+ * Registration result for a reference book.
+ */
+typedef uint8_t OpenPitReferenceBookRegisterStatus;
+/**
+ * The instrument was registered and `out_id` was populated.
+ */
+#define OpenPitReferenceBookRegisterStatus_Ok \
+    ((OpenPitReferenceBookRegisterStatus) 0)
+/**
+ * The supplied ID is already registered.
+ */
+#define OpenPitReferenceBookRegisterStatus_DuplicateId \
+    ((OpenPitReferenceBookRegisterStatus) 1)
+/**
+ * The supplied instrument is already registered.
+ */
+#define OpenPitReferenceBookRegisterStatus_DuplicateInstrument \
+    ((OpenPitReferenceBookRegisterStatus) 2)
+/**
+ * The input payload or handle was invalid.
+ */
+#define OpenPitReferenceBookRegisterStatus_Error \
+    ((OpenPitReferenceBookRegisterStatus) 255)
+
+/**
+ * Result for reference-book attribute updates.
+ */
+typedef uint8_t OpenPitReferenceBookStatus;
+/**
+ * The operation completed successfully.
+ */
+#define OpenPitReferenceBookStatus_Ok ((OpenPitReferenceBookStatus) 0)
+/**
+ * The requested instrument ID is not registered.
+ */
+#define OpenPitReferenceBookStatus_UnknownInstrument \
+    ((OpenPitReferenceBookStatus) 1)
+/**
+ * The input payload or handle was invalid.
+ */
+#define OpenPitReferenceBookStatus_Error ((OpenPitReferenceBookStatus) 255)
+
+/**
  * Decimal value represented as `mantissa * 10^-scale`.
  */
 struct OpenPitParamDecimal {
@@ -1718,6 +1787,34 @@ struct OpenPitPretradePreTradeLockEntry {
 struct OpenPitPretradePreTradeLockEntriesView {
     const OpenPitPretradePreTradeLockEntry * ptr;
     size_t len;
+};
+
+/**
+ * Flat settlement delay payload.
+ */
+struct OpenPitSettlementLag {
+    /**
+     * Number of elapsed settlement units.
+     */
+    uint64_t n;
+    /**
+     * One of the `OPENPIT_SETTLEMENT_UNIT_*` codes.
+     */
+    OpenPitSettlementUnit unit;
+};
+
+/**
+ * Flat settlement payload with independent delivery and payment legs.
+ */
+struct OpenPitSettlementScheme {
+    /**
+     * Settlement delay for delivery of the traded asset.
+     */
+    OpenPitSettlementLag delivery;
+    /**
+     * Settlement delay for payment in the settlement asset.
+     */
+    OpenPitSettlementLag payment;
 };
 
 /**
@@ -8060,6 +8157,100 @@ OpenPitSharedBytes * openpit_pretrade_pre_trade_lock_to_raw(
 OpenPitPretradePreTradeLock * openpit_create_pretrade_pre_trade_lock_from_raw(
     const uint8_t * data_ptr,
     size_t data_len,
+    OpenPitOutError out_error
+);
+
+/**
+ * Creates an empty core instrument reference book.
+ *
+ * The returned handle is caller-owned and must be released with
+ * [`openpit_destroy_reference_book`].
+ */
+OpenPitReferenceBook * openpit_create_reference_book(void);
+
+/**
+ * Releases a caller-owned reference-book handle.
+ *
+ * Passing null is allowed and has no effect.
+ */
+void openpit_destroy_reference_book(
+    OpenPitReferenceBook * book
+);
+
+/**
+ * Registers `instrument` under the next available reference-book ID.
+ *
+ * `out_id` receives the assigned ID on success. The function reports duplicate
+ * registrations through its return status; malformed inputs use `out_error`.
+ */
+OpenPitReferenceBookRegisterStatus openpit_reference_book_register(
+    OpenPitReferenceBook * book,
+    const OpenPitInstrument * instrument,
+    OpenPitInstrumentId * out_id,
+    OpenPitOutError out_error
+);
+
+/**
+ * Registers `instrument` under a caller-assigned `instrument_id`.
+ *
+ * `out_id` receives the same ID on success. The supplied ID can be reused in
+ * an independent market-data registration.
+ */
+OpenPitReferenceBookRegisterStatus openpit_reference_book_register_with_id(
+    OpenPitReferenceBook * book,
+    const OpenPitInstrument * instrument,
+    OpenPitInstrumentId instrument_id,
+    OpenPitInstrumentId * out_id,
+    OpenPitOutError out_error
+);
+
+/**
+ * Resolves an instrument to its reference-book ID.
+ *
+ * Returns `true` and populates `out_id` when the instrument is registered.
+ * Returns `false` when it is absent or an input pointer is null.
+ */
+bool openpit_reference_book_resolve(
+    const OpenPitReferenceBook * book,
+    const OpenPitInstrument * instrument,
+    OpenPitInstrumentId * out_id
+);
+
+/**
+ * Sets the settlement scheme for a registered instrument.
+ *
+ * Invalid raw settlement-unit codes are rejected before a core enum is
+ * constructed. `UnknownInstrument` means the book has no matching ID.
+ */
+OpenPitReferenceBookStatus openpit_reference_book_set_settlement_scheme(
+    OpenPitReferenceBook * book,
+    OpenPitInstrumentId instrument_id,
+    OpenPitSettlementScheme settlement_scheme,
+    OpenPitOutError out_error
+);
+
+/**
+ * Clears the settlement scheme for a registered instrument.
+ */
+OpenPitReferenceBookStatus openpit_reference_book_clear_settlement_scheme(
+    OpenPitReferenceBook * book,
+    OpenPitInstrumentId instrument_id,
+    OpenPitOutError out_error
+);
+
+/**
+ * Retrieves the settlement scheme for a registered instrument.
+ *
+ * `Ok` with `out_is_set == false` means that the instrument is registered but
+ * has no settlement scheme. `UnknownInstrument` means that `instrument_id` is
+ * not registered. On `Ok` with `out_is_set == true`, `out_scheme` receives the
+ * configured value.
+ */
+OpenPitReferenceBookStatus openpit_reference_book_get_settlement_scheme(
+    const OpenPitReferenceBook * book,
+    OpenPitInstrumentId instrument_id,
+    OpenPitSettlementScheme * out_scheme,
+    bool * out_is_set,
     OpenPitOutError out_error
 );
 

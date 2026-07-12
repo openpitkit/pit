@@ -18,32 +18,21 @@
 package marketdata
 
 import (
-	"strconv"
-
+	"go.openpit.dev/openpit/internal/core"
 	"go.openpit.dev/openpit/internal/native"
 )
 
-// InstrumentID is a type-safe market-data instrument identifier.
-type InstrumentID struct {
-	native native.MarketDataInstrumentID
-}
+// InstrumentID is the core OpenPit instrument identity.
+//
+// It remains available from marketdata for source compatibility.
+type InstrumentID = core.InstrumentID
 
 // NewInstrumentIDFromUint64 constructs an instrument identifier from a uint64
 // value.
 func NewInstrumentIDFromUint64(source uint64) InstrumentID {
-	return newInstrumentIDFromHandle(native.MarketDataInstrumentID(source))
+	return core.NewInstrumentIDFromUint64(source)
 }
 
-func newInstrumentIDFromHandle(source native.MarketDataInstrumentID) InstrumentID {
-	return InstrumentID{native: source}
-}
-
-// String formats the instrument identifier as a decimal string.
-func (v InstrumentID) String() string {
-	return strconv.FormatUint(uint64(v.native), 10)
-}
-
-// Handle exposes the underlying native instrument identifier.
-func (v InstrumentID) Handle() native.MarketDataInstrumentID {
-	return v.native
+func newInstrumentIDFromHandle(source native.InstrumentID) InstrumentID {
+	return core.NewInstrumentIDFromHandle(source)
 }

@@ -13,36 +13,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
-/// Identifies a registered instrument within a
-/// [`MarketDataService`](super::service::MarketDataService).
+/// Identifies an instrument across OpenPit subsystems.
 ///
-/// Assigned by
-/// [`MarketDataService::register`](super::service::MarketDataService::register)
-/// or
-/// [`MarketDataService::register_with_id`](super::service::MarketDataService::register_with_id)
-/// and valid for the lifetime of the instrument's registration. Use the id
-/// for all hot-path lookups to avoid hash-map overhead.
+/// The underlying value maps naturally to database primary keys, sequence
+/// numbers, and external integer identifiers. Callers can assign an explicit
+/// value when registering an instrument with a [`ReferenceBook`] or a
+/// market-data service.
 ///
-/// The underlying value is a `u64` that maps naturally to primary keys in
-/// most databases, sequence numbers, and other integer identifiers.
+/// [`ReferenceBook`]: super::ReferenceBook
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InstrumentId(pub(crate) u64);
 
 impl InstrumentId {
-    /// Wraps the given integer as an `InstrumentId`.
-    ///
-    /// Callers using a caller-assigned identity scheme (database primary keys,
-    /// sequence numbers, external IDs) can pass any `u64` value here and feed
-    /// it to
-    /// [`MarketDataService::register_with_id`](super::service::MarketDataService::register_with_id).
-    pub fn new(id: u64) -> Self {
+    /// Wraps an integer as an instrument identity.
+    pub const fn new(id: u64) -> Self {
         Self(id)
     }
 
     /// Returns the underlying integer.
-    pub fn as_u64(self) -> u64 {
+    pub const fn as_u64(self) -> u64 {
         self.0
     }
 }

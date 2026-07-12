@@ -44,6 +44,7 @@ mod order;
 mod outcome;
 mod param;
 mod policy;
+mod reference_book;
 mod reject;
 mod result;
 
@@ -74,6 +75,7 @@ pub use order::{JsOrder, JsOrderMargin, JsOrderOperation, JsOrderPosition, JsTra
 pub use outcome::{
     JsAccountAdjustmentOutcome, JsAccountOutcomeEntry, JsOutcomeAmount, JsPnlOutcomeAmount,
 };
+pub use reference_book::{JsReferenceBook, JsSettlementLag, JsSettlementScheme, JsSettlementUnit};
 pub use reject::{JsAccountBlock, JsReject};
 
 pub use context::{JsAccountAdjustmentContext, JsAccountControl, JsContext, JsPostTradeContext};

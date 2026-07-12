@@ -52,7 +52,6 @@ var annotated_dup =
       [ "marketdata", "namespaceopenpit_1_1marketdata.html", [
         [ "Builder", "classopenpit_1_1marketdata_1_1Builder.html", "classopenpit_1_1marketdata_1_1Builder" ],
         [ "GetResult", "structopenpit_1_1marketdata_1_1GetResult.html", "structopenpit_1_1marketdata_1_1GetResult" ],
-        [ "InstrumentId", "classopenpit_1_1marketdata_1_1InstrumentId.html", "classopenpit_1_1marketdata_1_1InstrumentId" ],
         [ "Quote", "classopenpit_1_1marketdata_1_1Quote.html", "classopenpit_1_1marketdata_1_1Quote" ],
         [ "QuoteTtl", "classopenpit_1_1marketdata_1_1QuoteTtl.html", "classopenpit_1_1marketdata_1_1QuoteTtl" ],
         [ "RegisterResult", "structopenpit_1_1marketdata_1_1RegisterResult.html", "structopenpit_1_1marketdata_1_1RegisterResult" ],
@@ -136,8 +135,14 @@ var annotated_dup =
       [ "EngineBuildError", "classopenpit_1_1EngineBuildError.html", "classopenpit_1_1EngineBuildError" ],
       [ "Error", "classopenpit_1_1Error.html", "classopenpit_1_1Error" ],
       [ "ExecutionReport", "classopenpit_1_1ExecutionReport.html", "classopenpit_1_1ExecutionReport" ],
+      [ "InstrumentId", "classopenpit_1_1InstrumentId.html", "classopenpit_1_1InstrumentId" ],
       [ "Order", "classopenpit_1_1Order.html", "classopenpit_1_1Order" ],
       [ "PostTradeResult", "structopenpit_1_1PostTradeResult.html", "structopenpit_1_1PostTradeResult" ],
+      [ "ReferenceBook", "classopenpit_1_1ReferenceBook.html", "classopenpit_1_1ReferenceBook" ],
+      [ "ReferenceBookRegisterResult", "structopenpit_1_1ReferenceBookRegisterResult.html", "structopenpit_1_1ReferenceBookRegisterResult" ],
+      [ "ReferenceBookSettlementSchemeResult", "structopenpit_1_1ReferenceBookSettlementSchemeResult.html", "structopenpit_1_1ReferenceBookSettlementSchemeResult" ],
+      [ "SettlementLag", "structopenpit_1_1SettlementLag.html", "structopenpit_1_1SettlementLag" ],
+      [ "SettlementScheme", "structopenpit_1_1SettlementScheme.html", "structopenpit_1_1SettlementScheme" ],
       [ "SharedBytes", "classopenpit_1_1SharedBytes.html", "classopenpit_1_1SharedBytes" ],
       [ "SharedString", "classopenpit_1_1SharedString.html", "classopenpit_1_1SharedString" ],
       [ "StringView", "classopenpit_1_1StringView.html", "classopenpit_1_1StringView" ]

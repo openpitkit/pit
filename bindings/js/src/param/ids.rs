@@ -192,7 +192,7 @@ impl JsAccountGroupId {
     }
 }
 
-/// Market-data instrument identifier (64-bit).
+/// Stable instrument identifier shared by OpenPit subsystems (64-bit).
 #[wasm_bindgen(js_name = InstrumentId)]
 #[derive(Clone, Copy)]
 pub struct JsInstrumentId {

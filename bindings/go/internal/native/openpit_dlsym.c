@@ -437,6 +437,14 @@ static OpenPitSharedBytes * (*_fn_openpit_pretrade_pre_trade_lock_to_cbor)(const
 static OpenPitPretradePreTradeLock * (*_fn_openpit_create_pretrade_pre_trade_lock_from_cbor)(const uint8_t *, size_t, OpenPitOutError) = NULL;
 static OpenPitSharedBytes * (*_fn_openpit_pretrade_pre_trade_lock_to_raw)(const OpenPitPretradePreTradeLock *) = NULL;
 static OpenPitPretradePreTradeLock * (*_fn_openpit_create_pretrade_pre_trade_lock_from_raw)(const uint8_t *, size_t, OpenPitOutError) = NULL;
+static OpenPitReferenceBook * (*_fn_openpit_create_reference_book)(void) = NULL;
+static void (*_fn_openpit_destroy_reference_book)(OpenPitReferenceBook *) = NULL;
+static OpenPitReferenceBookRegisterStatus (*_fn_openpit_reference_book_register)(OpenPitReferenceBook *, const OpenPitInstrument *, OpenPitInstrumentId *, OpenPitOutError) = NULL;
+static OpenPitReferenceBookRegisterStatus (*_fn_openpit_reference_book_register_with_id)(OpenPitReferenceBook *, const OpenPitInstrument *, OpenPitInstrumentId, OpenPitInstrumentId *, OpenPitOutError) = NULL;
+static bool (*_fn_openpit_reference_book_resolve)(const OpenPitReferenceBook *, const OpenPitInstrument *, OpenPitInstrumentId *) = NULL;
+static OpenPitReferenceBookStatus (*_fn_openpit_reference_book_set_settlement_scheme)(OpenPitReferenceBook *, OpenPitInstrumentId, OpenPitSettlementScheme, OpenPitOutError) = NULL;
+static OpenPitReferenceBookStatus (*_fn_openpit_reference_book_clear_settlement_scheme)(OpenPitReferenceBook *, OpenPitInstrumentId, OpenPitOutError) = NULL;
+static OpenPitReferenceBookStatus (*_fn_openpit_reference_book_get_settlement_scheme)(const OpenPitReferenceBook *, OpenPitInstrumentId, OpenPitSettlementScheme *, bool *, OpenPitOutError) = NULL;
 static void (*_fn_openpit_destroy_shared_string)(OpenPitSharedString *) = NULL;
 static OpenPitStringView (*_fn_openpit_shared_string_view)(const OpenPitSharedString *) = NULL;
 
@@ -1253,6 +1261,22 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_pretrade_pre_trade_lock_to_raw == NULL) return "openpit_pretrade_pre_trade_lock_to_raw";
     _fn_openpit_create_pretrade_pre_trade_lock_from_raw = (OpenPitPretradePreTradeLock * (*)(const uint8_t *, size_t, OpenPitOutError))openpit_dlsym(handle, "openpit_create_pretrade_pre_trade_lock_from_raw");
     if (_fn_openpit_create_pretrade_pre_trade_lock_from_raw == NULL) return "openpit_create_pretrade_pre_trade_lock_from_raw";
+    _fn_openpit_create_reference_book = (OpenPitReferenceBook * (*)(void))openpit_dlsym(handle, "openpit_create_reference_book");
+    if (_fn_openpit_create_reference_book == NULL) return "openpit_create_reference_book";
+    _fn_openpit_destroy_reference_book = (void (*)(OpenPitReferenceBook *))openpit_dlsym(handle, "openpit_destroy_reference_book");
+    if (_fn_openpit_destroy_reference_book == NULL) return "openpit_destroy_reference_book";
+    _fn_openpit_reference_book_register = (OpenPitReferenceBookRegisterStatus (*)(OpenPitReferenceBook *, const OpenPitInstrument *, OpenPitInstrumentId *, OpenPitOutError))openpit_dlsym(handle, "openpit_reference_book_register");
+    if (_fn_openpit_reference_book_register == NULL) return "openpit_reference_book_register";
+    _fn_openpit_reference_book_register_with_id = (OpenPitReferenceBookRegisterStatus (*)(OpenPitReferenceBook *, const OpenPitInstrument *, OpenPitInstrumentId, OpenPitInstrumentId *, OpenPitOutError))openpit_dlsym(handle, "openpit_reference_book_register_with_id");
+    if (_fn_openpit_reference_book_register_with_id == NULL) return "openpit_reference_book_register_with_id";
+    _fn_openpit_reference_book_resolve = (bool (*)(const OpenPitReferenceBook *, const OpenPitInstrument *, OpenPitInstrumentId *))openpit_dlsym(handle, "openpit_reference_book_resolve");
+    if (_fn_openpit_reference_book_resolve == NULL) return "openpit_reference_book_resolve";
+    _fn_openpit_reference_book_set_settlement_scheme = (OpenPitReferenceBookStatus (*)(OpenPitReferenceBook *, OpenPitInstrumentId, OpenPitSettlementScheme, OpenPitOutError))openpit_dlsym(handle, "openpit_reference_book_set_settlement_scheme");
+    if (_fn_openpit_reference_book_set_settlement_scheme == NULL) return "openpit_reference_book_set_settlement_scheme";
+    _fn_openpit_reference_book_clear_settlement_scheme = (OpenPitReferenceBookStatus (*)(OpenPitReferenceBook *, OpenPitInstrumentId, OpenPitOutError))openpit_dlsym(handle, "openpit_reference_book_clear_settlement_scheme");
+    if (_fn_openpit_reference_book_clear_settlement_scheme == NULL) return "openpit_reference_book_clear_settlement_scheme";
+    _fn_openpit_reference_book_get_settlement_scheme = (OpenPitReferenceBookStatus (*)(const OpenPitReferenceBook *, OpenPitInstrumentId, OpenPitSettlementScheme *, bool *, OpenPitOutError))openpit_dlsym(handle, "openpit_reference_book_get_settlement_scheme");
+    if (_fn_openpit_reference_book_get_settlement_scheme == NULL) return "openpit_reference_book_get_settlement_scheme";
     _fn_openpit_destroy_shared_string = (void (*)(OpenPitSharedString *))openpit_dlsym(handle, "openpit_destroy_shared_string");
     if (_fn_openpit_destroy_shared_string == NULL) return "openpit_destroy_shared_string";
     _fn_openpit_shared_string_view = (OpenPitStringView (*)(const OpenPitSharedString *))openpit_dlsym(handle, "openpit_shared_string_view");
@@ -2870,6 +2894,38 @@ OpenPitSharedBytes * openpit_pretrade_pre_trade_lock_to_raw(const OpenPitPretrad
 
 OpenPitPretradePreTradeLock * openpit_create_pretrade_pre_trade_lock_from_raw(const uint8_t * data_ptr, size_t data_len, OpenPitOutError out_error) {
     return _fn_openpit_create_pretrade_pre_trade_lock_from_raw(data_ptr, data_len, out_error);
+}
+
+OpenPitReferenceBook * openpit_create_reference_book(void) {
+    return _fn_openpit_create_reference_book();
+}
+
+void openpit_destroy_reference_book(OpenPitReferenceBook * book) {
+    _fn_openpit_destroy_reference_book(book);
+}
+
+OpenPitReferenceBookRegisterStatus openpit_reference_book_register(OpenPitReferenceBook * book, const OpenPitInstrument * instrument, OpenPitInstrumentId * out_id, OpenPitOutError out_error) {
+    return _fn_openpit_reference_book_register(book, instrument, out_id, out_error);
+}
+
+OpenPitReferenceBookRegisterStatus openpit_reference_book_register_with_id(OpenPitReferenceBook * book, const OpenPitInstrument * instrument, OpenPitInstrumentId instrument_id, OpenPitInstrumentId * out_id, OpenPitOutError out_error) {
+    return _fn_openpit_reference_book_register_with_id(book, instrument, instrument_id, out_id, out_error);
+}
+
+bool openpit_reference_book_resolve(const OpenPitReferenceBook * book, const OpenPitInstrument * instrument, OpenPitInstrumentId * out_id) {
+    return _fn_openpit_reference_book_resolve(book, instrument, out_id);
+}
+
+OpenPitReferenceBookStatus openpit_reference_book_set_settlement_scheme(OpenPitReferenceBook * book, OpenPitInstrumentId instrument_id, OpenPitSettlementScheme settlement_scheme, OpenPitOutError out_error) {
+    return _fn_openpit_reference_book_set_settlement_scheme(book, instrument_id, settlement_scheme, out_error);
+}
+
+OpenPitReferenceBookStatus openpit_reference_book_clear_settlement_scheme(OpenPitReferenceBook * book, OpenPitInstrumentId instrument_id, OpenPitOutError out_error) {
+    return _fn_openpit_reference_book_clear_settlement_scheme(book, instrument_id, out_error);
+}
+
+OpenPitReferenceBookStatus openpit_reference_book_get_settlement_scheme(const OpenPitReferenceBook * book, OpenPitInstrumentId instrument_id, OpenPitSettlementScheme * out_scheme, bool * out_is_set, OpenPitOutError out_error) {
+    return _fn_openpit_reference_book_get_settlement_scheme(book, instrument_id, out_scheme, out_is_set, out_error);
 }
 
 void openpit_destroy_shared_string(OpenPitSharedString * handle) {

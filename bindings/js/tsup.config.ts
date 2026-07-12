@@ -41,6 +41,7 @@ function entryFor(platform: "node" | "browser"): Record<string, string> {
   return {
     index: "src-ts/index.ts",
     param: "src-ts/param/index.ts",
+    core: "src-ts/core/index.ts",
     model: "src-ts/model/index.ts",
     pretrade: "src-ts/pretrade/index.ts",
     "pretrade/policies": "src-ts/pretrade/policies/index.ts",

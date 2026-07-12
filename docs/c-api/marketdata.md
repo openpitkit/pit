@@ -4,12 +4,20 @@
 
 [Back to index](index.md)
 
-## `OpenPitMarketDataInstrumentId`
+## `OpenPitInstrumentId`
 
-Stable instrument identifier for FFI payloads.
+Stable instrument identifier for all FFI payloads.
 
 ```c
-typedef uint64_t OpenPitMarketDataInstrumentId;
+typedef uint64_t OpenPitInstrumentId;
+```
+
+## `OpenPitMarketDataInstrumentId`
+
+Backwards-compatible market-data spelling of [`OpenPitInstrumentId`].
+
+```c
+typedef OpenPitInstrumentId OpenPitMarketDataInstrumentId;
 ```
 
 ## `OpenPitMarketDataQuote`

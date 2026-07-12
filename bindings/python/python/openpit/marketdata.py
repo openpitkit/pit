@@ -22,7 +22,6 @@ from __future__ import annotations
 from contextlib import suppress
 
 from ._openpit import AlreadyRegistered as AlreadyRegistered
-from ._openpit import InstrumentId as InstrumentId
 from ._openpit import MarketDataBuilder as MarketDataBuilder
 from ._openpit import MarketDataError as MarketDataError
 from ._openpit import MarketDataService as MarketDataService
@@ -34,6 +33,7 @@ from ._openpit import QuoteUnavailable as QuoteUnavailable
 from ._openpit import RegistrationError as RegistrationError
 from ._openpit import UnknownInstrument as UnknownInstrument
 from ._openpit import UnknownInstrumentId as UnknownInstrumentId
+from .core import InstrumentId as InstrumentId
 
 
 def _set_doc(obj, doc: str) -> None:
@@ -43,7 +43,7 @@ def _set_doc(obj, doc: str) -> None:
 
 _set_doc(
     InstrumentId,
-    """Identifier assigned to a registered market-data instrument.""",
+    """Core instrument identity, re-exported for market-data compatibility.""",
 )
 _set_doc(
     QuoteTtl,
