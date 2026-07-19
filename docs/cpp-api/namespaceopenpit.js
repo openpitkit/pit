@@ -25,6 +25,7 @@ var namespaceopenpit =
     [ "ExecutionReport", "classopenpit_1_1ExecutionReport.html", "classopenpit_1_1ExecutionReport" ],
     [ "InstrumentId", "classopenpit_1_1InstrumentId.html", "classopenpit_1_1InstrumentId" ],
     [ "Order", "classopenpit_1_1Order.html", "classopenpit_1_1Order" ],
+    [ "PolicyConfigurationResult", "structopenpit_1_1PolicyConfigurationResult.html", "structopenpit_1_1PolicyConfigurationResult" ],
     [ "PostTradeResult", "structopenpit_1_1PostTradeResult.html", "structopenpit_1_1PostTradeResult" ],
     [ "ReferenceBook", "classopenpit_1_1ReferenceBook.html", "classopenpit_1_1ReferenceBook" ],
     [ "ReferenceBookRegisterResult", "structopenpit_1_1ReferenceBookRegisterResult.html", "structopenpit_1_1ReferenceBookRegisterResult" ],

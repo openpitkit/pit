@@ -23,7 +23,7 @@
 // the published assertions). Keep the bodies in sync with the published
 // snippets whenever either side changes.
 
-#include "openpit/account_adjustment.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/model.hpp"
 #include "openpit/param.hpp"
@@ -65,7 +65,8 @@ class CumulativeLimitPolicy {
     return "CumulativeLimitPolicy";
   }
 
-  [[nodiscard]] openpit::pretrade::PolicyDecision ApplyAccountAdjustment(
+  [[nodiscard]] openpit::pretrade::PolicyAccountAdjustmentResult
+  ApplyAccountAdjustment(
       const openpit::accountadjustment::Context& context,
       openpit::param::AccountId accountId,
       const openpit::accountadjustment::AccountAdjustment& adjustment,
@@ -87,13 +88,13 @@ class CumulativeLimitPolicy {
     const openpit::param::PositionSize next =
         adjustment.amount->balance->Value();
     if (next > m_maxCumulative) {
-      openpit::pretrade::PolicyDecision decision;
-      decision.Push(openpit::pretrade::Reject(
+      openpit::pretrade::PolicyAccountAdjustmentResult result;
+      result.decision.Push(openpit::pretrade::Reject(
           std::string(Name()), openpit::pretrade::RejectScope::Account,
           openpit::pretrade::RejectCode::RiskLimitExceeded,
           "cumulative limit exceeded",
           asset + " absolute balance exceeds the configured limit"));
-      return decision;
+      return result;
     }
 
     std::optional<openpit::param::PositionSize> previous;
@@ -222,6 +223,7 @@ TEST(AccountAdjustmentsWiki, MixedBalanceAndPositionBatchApplies) {
   const openpit::AdjustmentResult result =
       engine.ApplyAccountAdjustment(accountId, adjustments);
   assert(result.Passed());
+  assert(result.accountBlocks.empty());
 
   EXPECT_TRUE(result.Passed());
 }

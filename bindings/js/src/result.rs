@@ -37,7 +37,7 @@ use crate::domain::extract_cloned_wrapper;
 use crate::engine::Order;
 use crate::error::{make_error, policy_callback_error, ErrorKind};
 use crate::lock::JsLock;
-use crate::outcome::JsAccountAdjustmentOutcome;
+use crate::outcome::{JsAccountAdjustmentOutcome, JsAccountPnlOutcome};
 use crate::policy::CallbackErrorScope;
 use crate::reject::{JsAccountBlock, JsReject};
 
@@ -405,13 +405,15 @@ impl JsDryRunReport {
 /// Outcome of `engine.applyAccountAdjustment`.
 ///
 /// On success `ok` is `true`, `failedIndex` is `undefined`, and `outcomes`
-/// holds the produced outcomes. On rejection `ok` is `false`, `failedIndex`
-/// points at the failing adjustment, and `rejects` is non-empty.
+/// and `accountBlocks` hold the produced outcomes and blocks. On rejection
+/// `ok` is `false`, `failedIndex` points at the failing adjustment, and
+/// `rejects` is non-empty.
 #[wasm_bindgen(js_name = AccountAdjustmentBatchResult)]
 pub struct JsAccountAdjustmentBatchResult {
     failed_index: Option<usize>,
     rejects: Vec<JsReject>,
     outcomes: Vec<JsAccountAdjustmentOutcome>,
+    account_blocks: Vec<JsAccountBlock>,
 }
 
 #[wasm_bindgen(js_class = AccountAdjustmentBatchResult)]
@@ -439,6 +441,12 @@ impl JsAccountAdjustmentBatchResult {
     pub fn outcomes(&self) -> Vec<JsAccountAdjustmentOutcome> {
         self.outcomes.clone()
     }
+
+    /// The account blocks reported after the accepted batch commits.
+    #[wasm_bindgen(getter, js_name = accountBlocks)]
+    pub fn account_blocks(&self) -> Vec<JsAccountBlock> {
+        self.account_blocks.clone()
+    }
 }
 
 impl JsAccountAdjustmentBatchResult {
@@ -448,6 +456,11 @@ impl JsAccountAdjustmentBatchResult {
             failed_index: None,
             rejects: Vec::new(),
             outcomes: convert_outcomes(&result.outcomes),
+            account_blocks: result
+                .account_blocks
+                .iter()
+                .map(JsAccountBlock::from_core)
+                .collect(),
         }
     }
 
@@ -457,6 +470,43 @@ impl JsAccountAdjustmentBatchResult {
             failed_index: Some(error.failed_adjustment_index),
             rejects: convert_rejects(&error.rejects),
             outcomes: Vec::new(),
+            account_blocks: Vec::new(),
+        }
+    }
+}
+
+// ─── PolicyConfigurationResult ───────────────────────────────────────────────
+
+/// Result of an accepted runtime policy configuration operation.
+#[wasm_bindgen(js_name = PolicyConfigurationResult)]
+#[derive(Clone)]
+pub struct JsPolicyConfigurationResult {
+    account_blocks: Vec<JsAccountBlock>,
+}
+
+#[wasm_bindgen(js_class = PolicyConfigurationResult)]
+impl JsPolicyConfigurationResult {
+    /// Blocks recorded by the engine before configuration returned.
+    #[wasm_bindgen(getter, js_name = accountBlocks)]
+    pub fn account_blocks(&self) -> Vec<JsAccountBlock> {
+        self.account_blocks.clone()
+    }
+
+    /// Returns a deep copy of this result.
+    #[wasm_bindgen(js_name = clone)]
+    pub fn js_clone(&self) -> JsPolicyConfigurationResult {
+        self.clone()
+    }
+}
+
+impl JsPolicyConfigurationResult {
+    pub(crate) fn from_core(result: &openpit::PolicyConfigurationResult) -> Self {
+        Self {
+            account_blocks: result
+                .account_blocks
+                .iter()
+                .map(JsAccountBlock::from_core)
+                .collect(),
         }
     }
 }
@@ -466,34 +516,40 @@ impl JsAccountAdjustmentBatchResult {
 /// Result of `engine.applyExecutionReport`, also constructible for a custom
 /// policy's post-trade return.
 ///
-/// A non-empty `accountBlocks` means a kill switch fired. `accountAdjustments`
-/// are already applied and must be propagated even when a block is present.
+/// A non-empty `accountBlocks` means a kill switch fired. `accountPnls`
+/// and `accountAdjustments` are already applied and must be consumed even when
+/// a block is present.
 #[wasm_bindgen(js_name = PostTradeResult)]
 #[derive(Clone)]
 pub struct JsPostTradeResult {
     account_blocks: Vec<JsAccountBlock>,
+    account_pnls: Vec<JsAccountPnlOutcome>,
     account_adjustments: Vec<JsAccountAdjustmentOutcome>,
 }
 
 #[wasm_bindgen(js_class = PostTradeResult)]
 impl JsPostTradeResult {
-    /// Constructs a post-trade result from optional block and adjustment lists.
+    /// Constructs a post-trade result from optional block, PnL, and adjustment
+    /// outcome lists.
     ///
-    /// Both default to empty. Used by a custom policy's `applyExecutionReport`
-    /// return path.
+    /// All three default to empty. Used by a custom policy's
+    /// `applyExecutionReport` return path.
     ///
     /// # Errors
     ///
-    /// Throws `TypeError` when either array contains a value of the wrong type.
+    /// Throws `TypeError` when an array contains a value of the wrong type.
     #[wasm_bindgen(constructor)]
     pub fn new(
         #[wasm_bindgen(unchecked_optional_param_type = "readonly AccountBlock[]")]
         account_blocks: Option<Array>,
+        #[wasm_bindgen(unchecked_optional_param_type = "readonly AccountPnlOutcome[]")]
+        account_pnls: Option<Array>,
         #[wasm_bindgen(unchecked_optional_param_type = "readonly AccountAdjustmentOutcome[]")]
         account_adjustments: Option<Array>,
     ) -> Result<JsPostTradeResult, JsValue> {
         Ok(Self {
             account_blocks: clone_array(account_blocks, "AccountBlock")?,
+            account_pnls: clone_array(account_pnls, "AccountPnlOutcome")?,
             account_adjustments: clone_array(account_adjustments, "AccountAdjustmentOutcome")?,
         })
     }
@@ -502,6 +558,20 @@ impl JsPostTradeResult {
     #[wasm_bindgen(getter, js_name = accountBlocks)]
     pub fn account_blocks(&self) -> Vec<JsAccountBlock> {
         self.account_blocks.clone()
+    }
+
+    /// Account-level PnL outcomes reported by policies.
+    ///
+    /// A computed outcome with a nonzero delta changed the ledger; a zero delta
+    /// recomputed it unchanged. A halt-reason outcome has no authoritative PnL
+    /// value and must not be interpreted as zero. SpotFunds emits a halt reason
+    /// only when the current report transitions the account accumulator to
+    /// halted; later reports omit the unchanged halt. Position force-sets do not
+    /// re-arm it, and unchanged halted position PnL is likewise omitted from
+    /// `accountAdjustments`.
+    #[wasm_bindgen(getter, js_name = accountPnls)]
+    pub fn account_pnls(&self) -> Vec<JsAccountPnlOutcome> {
+        self.account_pnls.clone()
     }
 
     /// The already-applied account adjustments.
@@ -555,6 +625,11 @@ impl JsPostTradeResult {
                 .iter()
                 .map(JsAccountBlock::from_core)
                 .collect(),
+            account_pnls: result
+                .account_pnls
+                .iter()
+                .map(JsAccountPnlOutcome::from_core)
+                .collect(),
             account_adjustments: convert_outcomes(&result.account_adjustments),
         }
     }
@@ -574,9 +649,15 @@ impl JsPostTradeResult {
             .account_adjustments
             .iter()
             .map(JsAccountAdjustmentOutcome::to_core)
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
+        let account_pnls = self
+            .account_pnls
+            .iter()
+            .map(JsAccountPnlOutcome::to_core)
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(PostTradeResult {
             account_blocks,
+            account_pnls,
             account_adjustments,
         })
     }

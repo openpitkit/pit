@@ -60,7 +60,7 @@ impl ReservationHandle for ReservationHandleImpl {
     }
 
     fn rollback(self: Box<Self>) {
-        self.mutations.rollback_all();
+        let _ = self.mutations.rollback_all();
     }
 }
 

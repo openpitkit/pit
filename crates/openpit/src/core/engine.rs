@@ -33,8 +33,9 @@ use crate::pretrade::start_pre_trade_time::with_start_pre_trade_now;
 use crate::pretrade::PostTradeContext;
 use crate::pretrade::PreTradePolicy;
 use crate::pretrade::{
-    AccountBlock, PolicyPreTradeResult, PostTradeResult, PreTradeContext, PreTradeDryRunReport,
-    PreTradeLock, PreTradeRequest, PreTradeReservation, Reject, RejectCode, RejectScope, Rejects,
+    AccountBlock, PolicyAccountAdjustmentResult, PolicyPreTradeResult, PostTradeResult,
+    PreTradeContext, PreTradeDryRunReport, PreTradeLock, PreTradeRequest, PreTradeReservation,
+    Reject, RejectCode, RejectScope, Rejects,
 };
 use crate::time::Instant;
 use crate::{AccountAdjustmentContext, Mutations};
@@ -183,8 +184,8 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// next hot-path read. The handle is cloneable and inherits the engine's
     /// synchronization mode. Custom-policy runtime reconfiguration is planned
     /// for a later release.
-    pub fn configure(&self) -> Configurator<Trait::Sync> {
-        Configurator::from_inner(self.inner.config_registry.clone())
+    pub fn configure(&self) -> Configurator<Trait> {
+        Configurator::from_inner(self.inner.clone())
     }
 }
 
@@ -446,6 +447,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
     {
         let inner: &EngineInner<Trait> = &self.inner;
         let mut blocks: Vec<AccountBlock> = Vec::new();
+        let mut account_pnls = Vec::new();
         let mut account_adjustments = Vec::new();
 
         let account_groups = AccountGroupsHandle::from_inner(inner.account_groups.clone());
@@ -458,6 +460,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
                 continue;
             };
             blocks.extend(result.account_blocks);
+            account_pnls.extend(result.account_pnls);
             account_adjustments.extend(result.account_adjustments);
         }
 
@@ -467,6 +470,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
 
         PostTradeResult {
             account_blocks: blocks,
+            account_pnls,
             account_adjustments,
         }
     }
@@ -480,11 +484,14 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// Policies are evaluated in registration order for each adjustment, and
     /// adjustments are traversed in slice order.
     ///
-    /// On success returns [`crate::AccountAdjustmentBatchResult`] whose `outcomes` field is a
-    /// flat list of [`crate::AccountAdjustmentOutcome`] in policy registration order.
-    /// Each entry carries the [`crate::PolicyGroupId`] of the policy that produced it.
-    /// A single asset may appear more than once. Policies that report nothing contribute no
-    /// entries.
+    /// On success returns [`crate::AccountAdjustmentBatchResult`]. Its `outcomes` field is a
+    /// flat list of [`crate::AccountAdjustmentOutcome`] in policy registration order. Each entry
+    /// carries the [`crate::PolicyGroupId`] of the policy that produced it. A single asset may
+    /// appear more than once. Policies that report nothing contribute no entries.
+    ///
+    /// The engine commits accepted mutations, records every policy-reported account block for
+    /// `account_id`, and then returns the same blocks in `account_blocks`. The first reported
+    /// block remains the stored cause if more than one block is reported for the account.
     ///
     /// # Errors
     ///
@@ -503,6 +510,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
         let mut mutations = Mutations::with_capacity(adjustments.len());
         let mut batch_error: Option<AccountAdjustmentBatchError> = None;
         let mut outcomes: Vec<AccountAdjustmentOutcome> = Vec::new();
+        let mut account_blocks: Vec<AccountBlock> = Vec::new();
         let handle = AccountBlockHandle::from_inner(inner.blocked_accounts.clone());
         let account_control = AccountControl::new(handle, account_id);
         let account_groups = AccountGroupsHandle::from_inner(inner.account_groups.clone());
@@ -513,14 +521,20 @@ impl<Trait: EngineTrait> Engine<Trait> {
             for policy in &inner.pre_trade_policies {
                 match policy.apply_account_adjustment(&ctx, account_id, adjustment, &mut mutations)
                 {
-                    Ok(items) if !items.is_empty() => {
+                    Ok(result) => {
+                        let PolicyAccountAdjustmentResult {
+                            account_adjustments,
+                            account_blocks: reported_blocks,
+                        } = result;
                         let policy_group_id = policy.policy_group_id();
-                        outcomes.extend(items.into_iter().map(|e| AccountAdjustmentOutcome {
-                            policy_group_id,
-                            entry: e,
+                        outcomes.extend(account_adjustments.into_iter().map(|e| {
+                            AccountAdjustmentOutcome {
+                                policy_group_id,
+                                entry: e,
+                            }
                         }));
+                        account_blocks.extend(reported_blocks);
                     }
-                    Ok(_) => {}
                     Err(rejects) => {
                         debug_assert!(
                             !rejects.is_empty(),
@@ -542,7 +556,15 @@ impl<Trait: EngineTrait> Engine<Trait> {
         }
 
         mutations.commit_all();
-        Ok(AccountAdjustmentBatchResult { outcomes })
+        for block in &account_blocks {
+            inner
+                .blocked_accounts
+                .block_account(account_id, block.clone());
+        }
+        Ok(AccountAdjustmentBatchResult {
+            outcomes,
+            account_blocks,
+        })
     }
 }
 
@@ -763,8 +785,9 @@ mod tests {
         AccountId, Asset, Fee, Pnl, PositionSize, Price, Quantity, Side, TradeAmount, Volume,
     };
     use crate::pretrade::{
-        PolicyPreTradeResult, PostTradeResult, PreTradeContext, PreTradeDryRunReport,
-        PreTradePolicy, Reject, RejectCode, RejectScope, Rejects, DEFAULT_POLICY_GROUP_ID,
+        PolicyAccountAdjustmentResult, PolicyPreTradeResult, PostTradeResult, PreTradeContext,
+        PreTradeDryRunReport, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects,
+        DEFAULT_POLICY_GROUP_ID,
     };
     use crate::storage::NoLocking;
     use crate::{
@@ -3314,7 +3337,7 @@ mod tests {
             _account_id: AccountId,
             adjustment: &MockAdjustment,
             mutations: &mut Mutations,
-        ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
+        ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
             self.seen.borrow_mut().push(*adjustment);
             if let Some(ref on_apply) = self.on_apply {
                 on_apply(mutations);
@@ -3328,7 +3351,7 @@ mod tests {
                     "mock account adjustment policy rejected the adjustment",
                 )));
             }
-            Ok(Vec::new())
+            Ok(PolicyAccountAdjustmentResult::default())
         }
     }
 

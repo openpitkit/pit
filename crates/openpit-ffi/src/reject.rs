@@ -19,122 +19,115 @@ use crate::OpenPitStringView;
 use openpit::pretrade::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
 use std::ffi::c_void;
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// Broad area to which a reject applies.
+/// Raw reject-scope code accepted from C callers.
 ///
-/// Valid values: `Order` (1), `Account` (2). Zero is not a valid scope value;
-/// the caller must always set this field explicitly.
-pub enum OpenPitPretradeRejectScope {
-    /// The reject applies to one order or order-like request.
-    Order = 1,
-    /// The reject applies to account state rather than to one order only.
-    Account = 2,
-}
+/// Zero is not valid; callers must set this field explicitly.
+pub type OpenPitPretradeRejectScope = u8;
 
-#[repr(u16)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// Stable classification code for a reject.
+/// The reject applies to one order or order-like request.
+pub const OPENPIT_PRETRADE_REJECT_SCOPE_ORDER: OpenPitPretradeRejectScope = 1;
+/// The reject applies to account state rather than to one order only.
+pub const OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT: OpenPitPretradeRejectScope = 2;
+
+/// Raw stable classification code for a reject.
 ///
 /// Read this first when you need machine-readable handling. The textual fields
 /// in [`OpenPitPretradeReject`] provide operator-facing explanation and extra context.
 ///
-/// Valid codes are `1..=42` and `255` (`Other`). Unknown incoming codes are
-/// mapped to `Other` (`255`).
-pub enum OpenPitPretradeRejectCode {
-    /// A required field is absent.
-    MissingRequiredField = 1,
-    /// A field cannot be parsed from the supplied wire value.
-    InvalidFieldFormat = 2,
-    /// A field is syntactically valid but semantically unacceptable.
-    InvalidFieldValue = 3,
-    /// The requested order type is not supported.
-    UnsupportedOrderType = 4,
-    /// The requested time-in-force is not supported.
-    UnsupportedTimeInForce = 5,
-    /// Another order attribute is unsupported.
-    UnsupportedOrderAttribute = 6,
-    /// The client order identifier duplicates an active order.
-    DuplicateClientOrderId = 7,
-    /// The order arrived after the allowed entry deadline.
-    TooLateToEnter = 8,
-    /// Trading is closed for the relevant venue or session.
-    ExchangeClosed = 9,
-    /// The instrument cannot be resolved.
-    UnknownInstrument = 10,
-    /// The account cannot be resolved.
-    UnknownAccount = 11,
-    /// The venue cannot be resolved.
-    UnknownVenue = 12,
-    /// The clearing account cannot be resolved.
-    UnknownClearingAccount = 13,
-    /// The collateral asset cannot be resolved.
-    UnknownCollateralAsset = 14,
-    /// Available balance is insufficient.
-    InsufficientFunds = 15,
-    /// Available margin is insufficient.
-    InsufficientMargin = 16,
-    /// Available position is insufficient.
-    InsufficientPosition = 17,
-    /// A credit limit was exceeded.
-    CreditLimitExceeded = 18,
-    /// A risk limit was exceeded.
-    RiskLimitExceeded = 19,
-    /// The order exceeds a generic configured limit.
-    OrderExceedsLimit = 20,
-    /// The order quantity exceeds a configured limit.
-    OrderQtyExceedsLimit = 21,
-    /// The order notional exceeds a configured limit.
-    OrderNotionalExceedsLimit = 22,
-    /// The resulting position exceeds a configured limit.
-    PositionLimitExceeded = 23,
-    /// Concentration constraints were violated.
-    ConcentrationLimitExceeded = 24,
-    /// Leverage constraints were violated.
-    LeverageLimitExceeded = 25,
-    /// The request rate exceeded a configured limit.
-    RateLimitExceeded = 26,
-    /// A loss barrier has blocked further risk-taking.
-    PnlKillSwitchTriggered = 27,
-    /// The account is blocked.
-    AccountBlocked = 28,
-    /// The account is not authorized for this action.
-    AccountNotAuthorized = 29,
-    /// A compliance restriction blocked the action.
-    ComplianceRestriction = 30,
-    /// The instrument is restricted.
-    InstrumentRestricted = 31,
-    /// A jurisdiction restriction blocked the action.
-    JurisdictionRestriction = 32,
-    /// The action would violate wash-trade prevention.
-    WashTradePrevention = 33,
-    /// The action would violate self-match prevention.
-    SelfMatchPrevention = 34,
-    /// Short-sale restriction blocked the action.
-    ShortSaleRestriction = 35,
-    /// Required risk configuration is missing.
-    RiskConfigurationMissing = 36,
-    /// Required reference data is unavailable.
-    ReferenceDataUnavailable = 37,
-    /// The system could not compute an order value needed for validation.
-    OrderValueCalculationFailed = 38,
-    /// A required service or subsystem is unavailable.
-    SystemUnavailable = 39,
-    /// Required mark price is unavailable.
-    MarkPriceUnavailable = 40,
-    /// Account adjustment would violate configured bounds.
-    AccountAdjustmentBoundsExceeded = 41,
-    /// Underlying decimal arithmetic overflowed during evaluation.
-    ArithmeticOverflow = 42,
-    /// Reserved discriminant for caller-defined reject classes.
-    ///
-    /// Use together with `Reject::with_user_data` to attach a caller-defined
-    /// payload that the receiving code can decode. The SDK does not interpret
-    /// this code beyond mapping it to FFI value 254.
-    Custom = 254,
-    /// A catch-all code for rejects that do not fit a more specific class.
-    Other = 255,
-}
+/// Valid codes are `1..=42`, `254` (`Custom`), and `255` (`Other`). Unknown
+/// incoming codes are mapped to `Other` (`255`).
+pub type OpenPitPretradeRejectCode = u16;
+
+/// A required field is absent.
+pub const OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD: OpenPitPretradeRejectCode = 1;
+/// A field cannot be parsed from the supplied wire value.
+pub const OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_FORMAT: OpenPitPretradeRejectCode = 2;
+/// A field is syntactically valid but semantically unacceptable.
+pub const OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_VALUE: OpenPitPretradeRejectCode = 3;
+/// The requested order type is not supported.
+pub const OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_TYPE: OpenPitPretradeRejectCode = 4;
+/// The requested time-in-force is not supported.
+pub const OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_TIME_IN_FORCE: OpenPitPretradeRejectCode = 5;
+/// Another order attribute is unsupported.
+pub const OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_ATTRIBUTE: OpenPitPretradeRejectCode = 6;
+/// The client order identifier duplicates an active order.
+pub const OPENPIT_PRETRADE_REJECT_CODE_DUPLICATE_CLIENT_ORDER_ID: OpenPitPretradeRejectCode = 7;
+/// The order arrived after the allowed entry deadline.
+pub const OPENPIT_PRETRADE_REJECT_CODE_TOO_LATE_TO_ENTER: OpenPitPretradeRejectCode = 8;
+/// Trading is closed for the relevant venue or session.
+pub const OPENPIT_PRETRADE_REJECT_CODE_EXCHANGE_CLOSED: OpenPitPretradeRejectCode = 9;
+/// The instrument cannot be resolved.
+pub const OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_INSTRUMENT: OpenPitPretradeRejectCode = 10;
+/// The account cannot be resolved.
+pub const OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_ACCOUNT: OpenPitPretradeRejectCode = 11;
+/// The venue cannot be resolved.
+pub const OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_VENUE: OpenPitPretradeRejectCode = 12;
+/// The clearing account cannot be resolved.
+pub const OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_CLEARING_ACCOUNT: OpenPitPretradeRejectCode = 13;
+/// The collateral asset cannot be resolved.
+pub const OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_COLLATERAL_ASSET: OpenPitPretradeRejectCode = 14;
+/// Available balance is insufficient.
+pub const OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_FUNDS: OpenPitPretradeRejectCode = 15;
+/// Available margin is insufficient.
+pub const OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_MARGIN: OpenPitPretradeRejectCode = 16;
+/// Available position is insufficient.
+pub const OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_POSITION: OpenPitPretradeRejectCode = 17;
+/// A credit limit was exceeded.
+pub const OPENPIT_PRETRADE_REJECT_CODE_CREDIT_LIMIT_EXCEEDED: OpenPitPretradeRejectCode = 18;
+/// A risk limit was exceeded.
+pub const OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED: OpenPitPretradeRejectCode = 19;
+/// The order exceeds a generic configured limit.
+pub const OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT: OpenPitPretradeRejectCode = 20;
+/// The order quantity exceeds a configured limit.
+pub const OPENPIT_PRETRADE_REJECT_CODE_ORDER_QTY_EXCEEDS_LIMIT: OpenPitPretradeRejectCode = 21;
+/// The order notional exceeds a configured limit.
+pub const OPENPIT_PRETRADE_REJECT_CODE_ORDER_NOTIONAL_EXCEEDS_LIMIT: OpenPitPretradeRejectCode = 22;
+/// The resulting position exceeds a configured limit.
+pub const OPENPIT_PRETRADE_REJECT_CODE_POSITION_LIMIT_EXCEEDED: OpenPitPretradeRejectCode = 23;
+/// Concentration constraints were violated.
+pub const OPENPIT_PRETRADE_REJECT_CODE_CONCENTRATION_LIMIT_EXCEEDED: OpenPitPretradeRejectCode = 24;
+/// Leverage constraints were violated.
+pub const OPENPIT_PRETRADE_REJECT_CODE_LEVERAGE_LIMIT_EXCEEDED: OpenPitPretradeRejectCode = 25;
+/// The request rate exceeded a configured limit.
+pub const OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED: OpenPitPretradeRejectCode = 26;
+/// A loss barrier has blocked further risk-taking.
+pub const OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED: OpenPitPretradeRejectCode = 27;
+/// The account is blocked.
+pub const OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED: OpenPitPretradeRejectCode = 28;
+/// The account is not authorized for this action.
+pub const OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_NOT_AUTHORIZED: OpenPitPretradeRejectCode = 29;
+/// A compliance restriction blocked the action.
+pub const OPENPIT_PRETRADE_REJECT_CODE_COMPLIANCE_RESTRICTION: OpenPitPretradeRejectCode = 30;
+/// The instrument is restricted.
+pub const OPENPIT_PRETRADE_REJECT_CODE_INSTRUMENT_RESTRICTED: OpenPitPretradeRejectCode = 31;
+/// A jurisdiction restriction blocked the action.
+pub const OPENPIT_PRETRADE_REJECT_CODE_JURISDICTION_RESTRICTION: OpenPitPretradeRejectCode = 32;
+/// The action would violate wash-trade prevention.
+pub const OPENPIT_PRETRADE_REJECT_CODE_WASH_TRADE_PREVENTION: OpenPitPretradeRejectCode = 33;
+/// The action would violate self-match prevention.
+pub const OPENPIT_PRETRADE_REJECT_CODE_SELF_MATCH_PREVENTION: OpenPitPretradeRejectCode = 34;
+/// Short-sale restriction blocked the action.
+pub const OPENPIT_PRETRADE_REJECT_CODE_SHORT_SALE_RESTRICTION: OpenPitPretradeRejectCode = 35;
+/// Required risk configuration is missing.
+pub const OPENPIT_PRETRADE_REJECT_CODE_RISK_CONFIGURATION_MISSING: OpenPitPretradeRejectCode = 36;
+/// Required reference data is unavailable.
+pub const OPENPIT_PRETRADE_REJECT_CODE_REFERENCE_DATA_UNAVAILABLE: OpenPitPretradeRejectCode = 37;
+/// The system could not compute an order value needed for validation.
+pub const OPENPIT_PRETRADE_REJECT_CODE_ORDER_VALUE_CALCULATION_FAILED: OpenPitPretradeRejectCode =
+    38;
+/// A required service or subsystem is unavailable.
+pub const OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE: OpenPitPretradeRejectCode = 39;
+/// Required mark price is unavailable.
+pub const OPENPIT_PRETRADE_REJECT_CODE_MARK_PRICE_UNAVAILABLE: OpenPitPretradeRejectCode = 40;
+/// Account adjustment would violate configured bounds.
+pub const OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_ADJUSTMENT_BOUNDS_EXCEEDED:
+    OpenPitPretradeRejectCode = 41;
+/// Underlying decimal arithmetic overflowed during evaluation.
+pub const OPENPIT_PRETRADE_REJECT_CODE_ARITHMETIC_OVERFLOW: OpenPitPretradeRejectCode = 42;
+/// Reserved code for caller-defined reject classes.
+pub const OPENPIT_PRETRADE_REJECT_CODE_CUSTOM: OpenPitPretradeRejectCode = 254;
+/// A catch-all code for rejects that do not fit a more specific class.
+pub const OPENPIT_PRETRADE_REJECT_CODE_OTHER: OpenPitPretradeRejectCode = 255;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,20 +163,22 @@ impl OpenPitPretradeReject {
             reason: OpenPitStringView::from_utf8(inner.reason.as_str()),
             details: OpenPitStringView::from_utf8(inner.details.as_str()),
             user_data: inner.user_data as *mut c_void,
-            code: OpenPitPretradeRejectCode::from(inner.code),
+            code: export_reject_code(inner.code),
             scope: export_reject_scope(inner.scope.clone()),
         }
     }
 
-    pub(crate) fn to_reject(self) -> Reject {
-        Reject::new(
-            import_string(self.policy),
-            import_reject_scope(self.scope),
-            RejectCode::from(self.code),
-            import_string(self.reason),
-            import_string(self.details),
+    pub(crate) fn to_reject(self) -> Option<Reject> {
+        Some(
+            Reject::new(
+                import_string(self.policy),
+                import_reject_scope(self.scope)?,
+                import_reject_code(self.code),
+                import_string(self.reason),
+                import_string(self.details),
+            )
+            .with_user_data(self.user_data as usize),
         )
-        .with_user_data(self.user_data as usize)
     }
 }
 
@@ -192,126 +187,162 @@ pub struct OpenPitPretradeRejectList {
     pub(crate) items: Vec<Reject>,
 }
 
-impl From<OpenPitPretradeRejectCode> for RejectCode {
-    fn from(value: OpenPitPretradeRejectCode) -> Self {
-        match value {
-            OpenPitPretradeRejectCode::MissingRequiredField => Self::MissingRequiredField,
-            OpenPitPretradeRejectCode::InvalidFieldFormat => Self::InvalidFieldFormat,
-            OpenPitPretradeRejectCode::InvalidFieldValue => Self::InvalidFieldValue,
-            OpenPitPretradeRejectCode::UnsupportedOrderType => Self::UnsupportedOrderType,
-            OpenPitPretradeRejectCode::UnsupportedTimeInForce => Self::UnsupportedTimeInForce,
-            OpenPitPretradeRejectCode::UnsupportedOrderAttribute => Self::UnsupportedOrderAttribute,
-            OpenPitPretradeRejectCode::DuplicateClientOrderId => Self::DuplicateClientOrderId,
-            OpenPitPretradeRejectCode::TooLateToEnter => Self::TooLateToEnter,
-            OpenPitPretradeRejectCode::ExchangeClosed => Self::ExchangeClosed,
-            OpenPitPretradeRejectCode::UnknownInstrument => Self::UnknownInstrument,
-            OpenPitPretradeRejectCode::UnknownAccount => Self::UnknownAccount,
-            OpenPitPretradeRejectCode::UnknownVenue => Self::UnknownVenue,
-            OpenPitPretradeRejectCode::UnknownClearingAccount => Self::UnknownClearingAccount,
-            OpenPitPretradeRejectCode::UnknownCollateralAsset => Self::UnknownCollateralAsset,
-            OpenPitPretradeRejectCode::InsufficientFunds => Self::InsufficientFunds,
-            OpenPitPretradeRejectCode::InsufficientMargin => Self::InsufficientMargin,
-            OpenPitPretradeRejectCode::InsufficientPosition => Self::InsufficientPosition,
-            OpenPitPretradeRejectCode::CreditLimitExceeded => Self::CreditLimitExceeded,
-            OpenPitPretradeRejectCode::RiskLimitExceeded => Self::RiskLimitExceeded,
-            OpenPitPretradeRejectCode::OrderExceedsLimit => Self::OrderExceedsLimit,
-            OpenPitPretradeRejectCode::OrderQtyExceedsLimit => Self::OrderQtyExceedsLimit,
-            OpenPitPretradeRejectCode::OrderNotionalExceedsLimit => Self::OrderNotionalExceedsLimit,
-            OpenPitPretradeRejectCode::PositionLimitExceeded => Self::PositionLimitExceeded,
-            OpenPitPretradeRejectCode::ConcentrationLimitExceeded => {
-                Self::ConcentrationLimitExceeded
-            }
-            OpenPitPretradeRejectCode::LeverageLimitExceeded => Self::LeverageLimitExceeded,
-            OpenPitPretradeRejectCode::RateLimitExceeded => Self::RateLimitExceeded,
-            OpenPitPretradeRejectCode::PnlKillSwitchTriggered => Self::PnlKillSwitchTriggered,
-            OpenPitPretradeRejectCode::AccountBlocked => Self::AccountBlocked,
-            OpenPitPretradeRejectCode::AccountNotAuthorized => Self::AccountNotAuthorized,
-            OpenPitPretradeRejectCode::ComplianceRestriction => Self::ComplianceRestriction,
-            OpenPitPretradeRejectCode::InstrumentRestricted => Self::InstrumentRestricted,
-            OpenPitPretradeRejectCode::JurisdictionRestriction => Self::JurisdictionRestriction,
-            OpenPitPretradeRejectCode::WashTradePrevention => Self::WashTradePrevention,
-            OpenPitPretradeRejectCode::SelfMatchPrevention => Self::SelfMatchPrevention,
-            OpenPitPretradeRejectCode::ShortSaleRestriction => Self::ShortSaleRestriction,
-            OpenPitPretradeRejectCode::RiskConfigurationMissing => Self::RiskConfigurationMissing,
-            OpenPitPretradeRejectCode::ReferenceDataUnavailable => Self::ReferenceDataUnavailable,
-            OpenPitPretradeRejectCode::OrderValueCalculationFailed => {
-                Self::OrderValueCalculationFailed
-            }
-            OpenPitPretradeRejectCode::SystemUnavailable => Self::SystemUnavailable,
-            OpenPitPretradeRejectCode::MarkPriceUnavailable => Self::MarkPriceUnavailable,
-            OpenPitPretradeRejectCode::AccountAdjustmentBoundsExceeded => {
-                Self::AccountAdjustmentBoundsExceeded
-            }
-            OpenPitPretradeRejectCode::ArithmeticOverflow => Self::ArithmeticOverflow,
-            OpenPitPretradeRejectCode::Custom => Self::Custom,
-            OpenPitPretradeRejectCode::Other => Self::Other,
+fn import_reject_code(value: OpenPitPretradeRejectCode) -> RejectCode {
+    match value {
+        OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD => RejectCode::MissingRequiredField,
+        OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_FORMAT => RejectCode::InvalidFieldFormat,
+        OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_VALUE => RejectCode::InvalidFieldValue,
+        OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_TYPE => RejectCode::UnsupportedOrderType,
+        OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_TIME_IN_FORCE => {
+            RejectCode::UnsupportedTimeInForce
         }
+        OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_ATTRIBUTE => {
+            RejectCode::UnsupportedOrderAttribute
+        }
+        OPENPIT_PRETRADE_REJECT_CODE_DUPLICATE_CLIENT_ORDER_ID => {
+            RejectCode::DuplicateClientOrderId
+        }
+        OPENPIT_PRETRADE_REJECT_CODE_TOO_LATE_TO_ENTER => RejectCode::TooLateToEnter,
+        OPENPIT_PRETRADE_REJECT_CODE_EXCHANGE_CLOSED => RejectCode::ExchangeClosed,
+        OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_INSTRUMENT => RejectCode::UnknownInstrument,
+        OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_ACCOUNT => RejectCode::UnknownAccount,
+        OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_VENUE => RejectCode::UnknownVenue,
+        OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_CLEARING_ACCOUNT => RejectCode::UnknownClearingAccount,
+        OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_COLLATERAL_ASSET => RejectCode::UnknownCollateralAsset,
+        OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_FUNDS => RejectCode::InsufficientFunds,
+        OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_MARGIN => RejectCode::InsufficientMargin,
+        OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_POSITION => RejectCode::InsufficientPosition,
+        OPENPIT_PRETRADE_REJECT_CODE_CREDIT_LIMIT_EXCEEDED => RejectCode::CreditLimitExceeded,
+        OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED => RejectCode::RiskLimitExceeded,
+        OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT => RejectCode::OrderExceedsLimit,
+        OPENPIT_PRETRADE_REJECT_CODE_ORDER_QTY_EXCEEDS_LIMIT => RejectCode::OrderQtyExceedsLimit,
+        OPENPIT_PRETRADE_REJECT_CODE_ORDER_NOTIONAL_EXCEEDS_LIMIT => {
+            RejectCode::OrderNotionalExceedsLimit
+        }
+        OPENPIT_PRETRADE_REJECT_CODE_POSITION_LIMIT_EXCEEDED => RejectCode::PositionLimitExceeded,
+        OPENPIT_PRETRADE_REJECT_CODE_CONCENTRATION_LIMIT_EXCEEDED => {
+            RejectCode::ConcentrationLimitExceeded
+        }
+        OPENPIT_PRETRADE_REJECT_CODE_LEVERAGE_LIMIT_EXCEEDED => RejectCode::LeverageLimitExceeded,
+        OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED => RejectCode::RateLimitExceeded,
+        OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED => {
+            RejectCode::PnlKillSwitchTriggered
+        }
+        OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED => RejectCode::AccountBlocked,
+        OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_NOT_AUTHORIZED => RejectCode::AccountNotAuthorized,
+        OPENPIT_PRETRADE_REJECT_CODE_COMPLIANCE_RESTRICTION => RejectCode::ComplianceRestriction,
+        OPENPIT_PRETRADE_REJECT_CODE_INSTRUMENT_RESTRICTED => RejectCode::InstrumentRestricted,
+        OPENPIT_PRETRADE_REJECT_CODE_JURISDICTION_RESTRICTION => {
+            RejectCode::JurisdictionRestriction
+        }
+        OPENPIT_PRETRADE_REJECT_CODE_WASH_TRADE_PREVENTION => RejectCode::WashTradePrevention,
+        OPENPIT_PRETRADE_REJECT_CODE_SELF_MATCH_PREVENTION => RejectCode::SelfMatchPrevention,
+        OPENPIT_PRETRADE_REJECT_CODE_SHORT_SALE_RESTRICTION => RejectCode::ShortSaleRestriction,
+        OPENPIT_PRETRADE_REJECT_CODE_RISK_CONFIGURATION_MISSING => {
+            RejectCode::RiskConfigurationMissing
+        }
+        OPENPIT_PRETRADE_REJECT_CODE_REFERENCE_DATA_UNAVAILABLE => {
+            RejectCode::ReferenceDataUnavailable
+        }
+        OPENPIT_PRETRADE_REJECT_CODE_ORDER_VALUE_CALCULATION_FAILED => {
+            RejectCode::OrderValueCalculationFailed
+        }
+        OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE => RejectCode::SystemUnavailable,
+        OPENPIT_PRETRADE_REJECT_CODE_MARK_PRICE_UNAVAILABLE => RejectCode::MarkPriceUnavailable,
+        OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_ADJUSTMENT_BOUNDS_EXCEEDED => {
+            RejectCode::AccountAdjustmentBoundsExceeded
+        }
+        OPENPIT_PRETRADE_REJECT_CODE_ARITHMETIC_OVERFLOW => RejectCode::ArithmeticOverflow,
+        OPENPIT_PRETRADE_REJECT_CODE_CUSTOM => RejectCode::Custom,
+        OPENPIT_PRETRADE_REJECT_CODE_OTHER => RejectCode::Other,
+        _ => RejectCode::Other,
     }
 }
 
-impl From<RejectCode> for OpenPitPretradeRejectCode {
-    fn from(value: RejectCode) -> Self {
-        match value {
-            RejectCode::MissingRequiredField => Self::MissingRequiredField,
-            RejectCode::InvalidFieldFormat => Self::InvalidFieldFormat,
-            RejectCode::InvalidFieldValue => Self::InvalidFieldValue,
-            RejectCode::UnsupportedOrderType => Self::UnsupportedOrderType,
-            RejectCode::UnsupportedTimeInForce => Self::UnsupportedTimeInForce,
-            RejectCode::UnsupportedOrderAttribute => Self::UnsupportedOrderAttribute,
-            RejectCode::DuplicateClientOrderId => Self::DuplicateClientOrderId,
-            RejectCode::TooLateToEnter => Self::TooLateToEnter,
-            RejectCode::ExchangeClosed => Self::ExchangeClosed,
-            RejectCode::UnknownInstrument => Self::UnknownInstrument,
-            RejectCode::UnknownAccount => Self::UnknownAccount,
-            RejectCode::UnknownVenue => Self::UnknownVenue,
-            RejectCode::UnknownClearingAccount => Self::UnknownClearingAccount,
-            RejectCode::UnknownCollateralAsset => Self::UnknownCollateralAsset,
-            RejectCode::InsufficientFunds => Self::InsufficientFunds,
-            RejectCode::InsufficientMargin => Self::InsufficientMargin,
-            RejectCode::InsufficientPosition => Self::InsufficientPosition,
-            RejectCode::CreditLimitExceeded => Self::CreditLimitExceeded,
-            RejectCode::RiskLimitExceeded => Self::RiskLimitExceeded,
-            RejectCode::OrderExceedsLimit => Self::OrderExceedsLimit,
-            RejectCode::OrderQtyExceedsLimit => Self::OrderQtyExceedsLimit,
-            RejectCode::OrderNotionalExceedsLimit => Self::OrderNotionalExceedsLimit,
-            RejectCode::PositionLimitExceeded => Self::PositionLimitExceeded,
-            RejectCode::ConcentrationLimitExceeded => Self::ConcentrationLimitExceeded,
-            RejectCode::LeverageLimitExceeded => Self::LeverageLimitExceeded,
-            RejectCode::RateLimitExceeded => Self::RateLimitExceeded,
-            RejectCode::PnlKillSwitchTriggered => Self::PnlKillSwitchTriggered,
-            RejectCode::AccountBlocked => Self::AccountBlocked,
-            RejectCode::AccountNotAuthorized => Self::AccountNotAuthorized,
-            RejectCode::ComplianceRestriction => Self::ComplianceRestriction,
-            RejectCode::InstrumentRestricted => Self::InstrumentRestricted,
-            RejectCode::JurisdictionRestriction => Self::JurisdictionRestriction,
-            RejectCode::WashTradePrevention => Self::WashTradePrevention,
-            RejectCode::SelfMatchPrevention => Self::SelfMatchPrevention,
-            RejectCode::ShortSaleRestriction => Self::ShortSaleRestriction,
-            RejectCode::RiskConfigurationMissing => Self::RiskConfigurationMissing,
-            RejectCode::ReferenceDataUnavailable => Self::ReferenceDataUnavailable,
-            RejectCode::OrderValueCalculationFailed => Self::OrderValueCalculationFailed,
-            RejectCode::SystemUnavailable => Self::SystemUnavailable,
-            RejectCode::MarkPriceUnavailable => Self::MarkPriceUnavailable,
-            RejectCode::AccountAdjustmentBoundsExceeded => Self::AccountAdjustmentBoundsExceeded,
-            RejectCode::ArithmeticOverflow => Self::ArithmeticOverflow,
-            RejectCode::Custom => Self::Custom,
-            RejectCode::Other => Self::Other,
-            _ => Self::Other,
+fn export_reject_code(value: RejectCode) -> OpenPitPretradeRejectCode {
+    match value {
+        RejectCode::MissingRequiredField => OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD,
+        RejectCode::InvalidFieldFormat => OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_FORMAT,
+        RejectCode::InvalidFieldValue => OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_VALUE,
+        RejectCode::UnsupportedOrderType => OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_TYPE,
+        RejectCode::UnsupportedTimeInForce => {
+            OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_TIME_IN_FORCE
         }
+        RejectCode::UnsupportedOrderAttribute => {
+            OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_ATTRIBUTE
+        }
+        RejectCode::DuplicateClientOrderId => {
+            OPENPIT_PRETRADE_REJECT_CODE_DUPLICATE_CLIENT_ORDER_ID
+        }
+        RejectCode::TooLateToEnter => OPENPIT_PRETRADE_REJECT_CODE_TOO_LATE_TO_ENTER,
+        RejectCode::ExchangeClosed => OPENPIT_PRETRADE_REJECT_CODE_EXCHANGE_CLOSED,
+        RejectCode::UnknownInstrument => OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_INSTRUMENT,
+        RejectCode::UnknownAccount => OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_ACCOUNT,
+        RejectCode::UnknownVenue => OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_VENUE,
+        RejectCode::UnknownClearingAccount => OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_CLEARING_ACCOUNT,
+        RejectCode::UnknownCollateralAsset => OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_COLLATERAL_ASSET,
+        RejectCode::InsufficientFunds => OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_FUNDS,
+        RejectCode::InsufficientMargin => OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_MARGIN,
+        RejectCode::InsufficientPosition => OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_POSITION,
+        RejectCode::CreditLimitExceeded => OPENPIT_PRETRADE_REJECT_CODE_CREDIT_LIMIT_EXCEEDED,
+        RejectCode::RiskLimitExceeded => OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+        RejectCode::OrderExceedsLimit => OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT,
+        RejectCode::OrderQtyExceedsLimit => OPENPIT_PRETRADE_REJECT_CODE_ORDER_QTY_EXCEEDS_LIMIT,
+        RejectCode::OrderNotionalExceedsLimit => {
+            OPENPIT_PRETRADE_REJECT_CODE_ORDER_NOTIONAL_EXCEEDS_LIMIT
+        }
+        RejectCode::PositionLimitExceeded => OPENPIT_PRETRADE_REJECT_CODE_POSITION_LIMIT_EXCEEDED,
+        RejectCode::ConcentrationLimitExceeded => {
+            OPENPIT_PRETRADE_REJECT_CODE_CONCENTRATION_LIMIT_EXCEEDED
+        }
+        RejectCode::LeverageLimitExceeded => OPENPIT_PRETRADE_REJECT_CODE_LEVERAGE_LIMIT_EXCEEDED,
+        RejectCode::RateLimitExceeded => OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED,
+        RejectCode::PnlKillSwitchTriggered => {
+            OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED
+        }
+        RejectCode::AccountBlocked => OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED,
+        RejectCode::AccountNotAuthorized => OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_NOT_AUTHORIZED,
+        RejectCode::ComplianceRestriction => OPENPIT_PRETRADE_REJECT_CODE_COMPLIANCE_RESTRICTION,
+        RejectCode::InstrumentRestricted => OPENPIT_PRETRADE_REJECT_CODE_INSTRUMENT_RESTRICTED,
+        RejectCode::JurisdictionRestriction => {
+            OPENPIT_PRETRADE_REJECT_CODE_JURISDICTION_RESTRICTION
+        }
+        RejectCode::WashTradePrevention => OPENPIT_PRETRADE_REJECT_CODE_WASH_TRADE_PREVENTION,
+        RejectCode::SelfMatchPrevention => OPENPIT_PRETRADE_REJECT_CODE_SELF_MATCH_PREVENTION,
+        RejectCode::ShortSaleRestriction => OPENPIT_PRETRADE_REJECT_CODE_SHORT_SALE_RESTRICTION,
+        RejectCode::RiskConfigurationMissing => {
+            OPENPIT_PRETRADE_REJECT_CODE_RISK_CONFIGURATION_MISSING
+        }
+        RejectCode::ReferenceDataUnavailable => {
+            OPENPIT_PRETRADE_REJECT_CODE_REFERENCE_DATA_UNAVAILABLE
+        }
+        RejectCode::OrderValueCalculationFailed => {
+            OPENPIT_PRETRADE_REJECT_CODE_ORDER_VALUE_CALCULATION_FAILED
+        }
+        RejectCode::SystemUnavailable => OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE,
+        RejectCode::MarkPriceUnavailable => OPENPIT_PRETRADE_REJECT_CODE_MARK_PRICE_UNAVAILABLE,
+        RejectCode::AccountAdjustmentBoundsExceeded => {
+            OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_ADJUSTMENT_BOUNDS_EXCEEDED
+        }
+        RejectCode::ArithmeticOverflow => OPENPIT_PRETRADE_REJECT_CODE_ARITHMETIC_OVERFLOW,
+        RejectCode::Custom => OPENPIT_PRETRADE_REJECT_CODE_CUSTOM,
+        RejectCode::Other => OPENPIT_PRETRADE_REJECT_CODE_OTHER,
+        _ => OPENPIT_PRETRADE_REJECT_CODE_OTHER,
     }
 }
 
 fn export_reject_scope(value: RejectScope) -> OpenPitPretradeRejectScope {
     match value {
-        RejectScope::Order => OpenPitPretradeRejectScope::Order,
-        RejectScope::Account => OpenPitPretradeRejectScope::Account,
+        RejectScope::Order => OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+        RejectScope::Account => OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT,
     }
 }
 
-fn import_reject_scope(value: OpenPitPretradeRejectScope) -> RejectScope {
+fn import_reject_scope(value: OpenPitPretradeRejectScope) -> Option<RejectScope> {
     match value {
-        OpenPitPretradeRejectScope::Order => RejectScope::Order,
-        OpenPitPretradeRejectScope::Account => RejectScope::Account,
+        OPENPIT_PRETRADE_REJECT_SCOPE_ORDER => Some(RejectScope::Order),
+        OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT => Some(RejectScope::Account),
+        _ => None,
     }
 }
 
@@ -368,15 +399,20 @@ pub extern "C" fn openpit_pretrade_destroy_reject_list(rejects: *mut OpenPitPret
 /// Contract:
 /// - `list` must be a valid non-null pointer;
 /// - string views in `reject` are copied before this function returns;
-/// - this function never fails;
+/// - returns `true` after appending a reject with a valid scope;
+/// - returns `false` for an unknown scope and leaves the list unchanged;
 /// - violating the pointer contract aborts the call.
 pub extern "C" fn openpit_pretrade_reject_list_push(
     list: *mut OpenPitPretradeRejectList,
     reject: OpenPitPretradeReject,
-) {
+) -> bool {
     assert!(!list.is_null(), "reject list pointer is null");
+    let Some(reject) = reject.to_reject() else {
+        return false;
+    };
     let list = unsafe { &mut *list };
-    list.items.push(reject.to_reject());
+    list.items.push(reject);
+    true
 }
 
 #[no_mangle]
@@ -451,14 +487,14 @@ impl OpenPitPretradeAccountBlock {
             reason: OpenPitStringView::from_utf8(inner.reason.as_str()),
             details: OpenPitStringView::from_utf8(inner.details.as_str()),
             user_data: inner.user_data as *mut c_void,
-            code: OpenPitPretradeRejectCode::from(inner.code),
+            code: export_reject_code(inner.code),
         }
     }
 
     pub(crate) fn to_block(self) -> AccountBlock {
         AccountBlock::new(
             import_string(self.policy),
-            RejectCode::from(self.code),
+            import_reject_code(self.code),
             import_string(self.reason),
             import_string(self.details),
         )
@@ -612,10 +648,10 @@ mod tests {
             reason: OpenPitStringView::from_utf8("reason"),
             details: OpenPitStringView::from_utf8("details"),
             user_data: 55usize as *mut std::ffi::c_void,
-            code: OpenPitPretradeRejectCode::Other,
-            scope: OpenPitPretradeRejectScope::Order,
+            code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
+            scope: OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
-        openpit_pretrade_reject_list_push(list, reject);
+        assert!(openpit_pretrade_reject_list_push(list, reject));
         assert_eq!(openpit_pretrade_reject_list_len(list), 1);
         let stored = unsafe { &*list };
         assert_eq!(stored.items[0].user_data, 55usize);
@@ -624,11 +660,11 @@ mod tests {
             reason: OpenPitStringView::not_set(),
             details: OpenPitStringView::not_set(),
             user_data: std::ptr::null_mut(),
-            code: OpenPitPretradeRejectCode::Other,
-            scope: OpenPitPretradeRejectScope::Order,
+            code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
+            scope: OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
         assert!(openpit_pretrade_reject_list_get(list, 0, &mut first));
-        assert_eq!(first.code, OpenPitPretradeRejectCode::Other);
+        assert_eq!(first.code, OPENPIT_PRETRADE_REJECT_CODE_OTHER);
         assert_eq!(first.user_data, 55usize as *mut std::ffi::c_void);
         assert_eq!(string_view_to_string(first.policy), "policy");
         assert!(!openpit_pretrade_reject_list_get(list, 1, &mut first));
@@ -642,10 +678,10 @@ mod tests {
             reason: OpenPitStringView::from_utf8("reason"),
             details: OpenPitStringView::from_utf8("details"),
             user_data: 77usize as *mut std::ffi::c_void,
-            code: OpenPitPretradeRejectCode::RateLimitExceeded,
-            scope: OpenPitPretradeRejectScope::Account,
+            code: OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED,
+            scope: OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT,
         };
-        let imported = view.to_reject();
+        let imported = view.to_reject().expect("valid scope");
         assert_eq!(imported.policy, "policy");
         assert_eq!(imported.reason, "reason");
         assert_eq!(imported.details, "details");
@@ -657,56 +693,87 @@ mod tests {
     #[test]
     fn reject_code_roundtrip_covers_all_ffi_variants() {
         let all = [
-            OpenPitPretradeRejectCode::MissingRequiredField,
-            OpenPitPretradeRejectCode::InvalidFieldFormat,
-            OpenPitPretradeRejectCode::InvalidFieldValue,
-            OpenPitPretradeRejectCode::UnsupportedOrderType,
-            OpenPitPretradeRejectCode::UnsupportedTimeInForce,
-            OpenPitPretradeRejectCode::UnsupportedOrderAttribute,
-            OpenPitPretradeRejectCode::DuplicateClientOrderId,
-            OpenPitPretradeRejectCode::TooLateToEnter,
-            OpenPitPretradeRejectCode::ExchangeClosed,
-            OpenPitPretradeRejectCode::UnknownInstrument,
-            OpenPitPretradeRejectCode::UnknownAccount,
-            OpenPitPretradeRejectCode::UnknownVenue,
-            OpenPitPretradeRejectCode::UnknownClearingAccount,
-            OpenPitPretradeRejectCode::UnknownCollateralAsset,
-            OpenPitPretradeRejectCode::InsufficientFunds,
-            OpenPitPretradeRejectCode::InsufficientMargin,
-            OpenPitPretradeRejectCode::InsufficientPosition,
-            OpenPitPretradeRejectCode::CreditLimitExceeded,
-            OpenPitPretradeRejectCode::RiskLimitExceeded,
-            OpenPitPretradeRejectCode::OrderExceedsLimit,
-            OpenPitPretradeRejectCode::OrderQtyExceedsLimit,
-            OpenPitPretradeRejectCode::OrderNotionalExceedsLimit,
-            OpenPitPretradeRejectCode::PositionLimitExceeded,
-            OpenPitPretradeRejectCode::ConcentrationLimitExceeded,
-            OpenPitPretradeRejectCode::LeverageLimitExceeded,
-            OpenPitPretradeRejectCode::RateLimitExceeded,
-            OpenPitPretradeRejectCode::PnlKillSwitchTriggered,
-            OpenPitPretradeRejectCode::AccountBlocked,
-            OpenPitPretradeRejectCode::AccountNotAuthorized,
-            OpenPitPretradeRejectCode::ComplianceRestriction,
-            OpenPitPretradeRejectCode::InstrumentRestricted,
-            OpenPitPretradeRejectCode::JurisdictionRestriction,
-            OpenPitPretradeRejectCode::WashTradePrevention,
-            OpenPitPretradeRejectCode::SelfMatchPrevention,
-            OpenPitPretradeRejectCode::ShortSaleRestriction,
-            OpenPitPretradeRejectCode::RiskConfigurationMissing,
-            OpenPitPretradeRejectCode::ReferenceDataUnavailable,
-            OpenPitPretradeRejectCode::OrderValueCalculationFailed,
-            OpenPitPretradeRejectCode::SystemUnavailable,
-            OpenPitPretradeRejectCode::MarkPriceUnavailable,
-            OpenPitPretradeRejectCode::AccountAdjustmentBoundsExceeded,
-            OpenPitPretradeRejectCode::ArithmeticOverflow,
-            OpenPitPretradeRejectCode::Custom,
-            OpenPitPretradeRejectCode::Other,
+            OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD,
+            OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_FORMAT,
+            OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_VALUE,
+            OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_TYPE,
+            OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_TIME_IN_FORCE,
+            OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_ATTRIBUTE,
+            OPENPIT_PRETRADE_REJECT_CODE_DUPLICATE_CLIENT_ORDER_ID,
+            OPENPIT_PRETRADE_REJECT_CODE_TOO_LATE_TO_ENTER,
+            OPENPIT_PRETRADE_REJECT_CODE_EXCHANGE_CLOSED,
+            OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_INSTRUMENT,
+            OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_ACCOUNT,
+            OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_VENUE,
+            OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_CLEARING_ACCOUNT,
+            OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_COLLATERAL_ASSET,
+            OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_FUNDS,
+            OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_MARGIN,
+            OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_POSITION,
+            OPENPIT_PRETRADE_REJECT_CODE_CREDIT_LIMIT_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT,
+            OPENPIT_PRETRADE_REJECT_CODE_ORDER_QTY_EXCEEDS_LIMIT,
+            OPENPIT_PRETRADE_REJECT_CODE_ORDER_NOTIONAL_EXCEEDS_LIMIT,
+            OPENPIT_PRETRADE_REJECT_CODE_POSITION_LIMIT_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_CONCENTRATION_LIMIT_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_LEVERAGE_LIMIT_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED,
+            OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED,
+            OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_NOT_AUTHORIZED,
+            OPENPIT_PRETRADE_REJECT_CODE_COMPLIANCE_RESTRICTION,
+            OPENPIT_PRETRADE_REJECT_CODE_INSTRUMENT_RESTRICTED,
+            OPENPIT_PRETRADE_REJECT_CODE_JURISDICTION_RESTRICTION,
+            OPENPIT_PRETRADE_REJECT_CODE_WASH_TRADE_PREVENTION,
+            OPENPIT_PRETRADE_REJECT_CODE_SELF_MATCH_PREVENTION,
+            OPENPIT_PRETRADE_REJECT_CODE_SHORT_SALE_RESTRICTION,
+            OPENPIT_PRETRADE_REJECT_CODE_RISK_CONFIGURATION_MISSING,
+            OPENPIT_PRETRADE_REJECT_CODE_REFERENCE_DATA_UNAVAILABLE,
+            OPENPIT_PRETRADE_REJECT_CODE_ORDER_VALUE_CALCULATION_FAILED,
+            OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE,
+            OPENPIT_PRETRADE_REJECT_CODE_MARK_PRICE_UNAVAILABLE,
+            OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_ADJUSTMENT_BOUNDS_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_ARITHMETIC_OVERFLOW,
+            OPENPIT_PRETRADE_REJECT_CODE_CUSTOM,
+            OPENPIT_PRETRADE_REJECT_CODE_OTHER,
         ];
         for code in all {
-            let domain = RejectCode::from(code);
-            let ffi = OpenPitPretradeRejectCode::from(domain);
+            let domain = import_reject_code(code);
+            let ffi = export_reject_code(domain);
             assert_eq!(ffi, code);
         }
+    }
+
+    #[test]
+    fn reject_list_push_rejects_unknown_scope_without_appending() {
+        let list = openpit_pretrade_create_reject_list(1);
+        let reject = OpenPitPretradeReject {
+            policy: OpenPitStringView::from_utf8("policy"),
+            reason: OpenPitStringView::from_utf8("reason"),
+            details: OpenPitStringView::from_utf8("details"),
+            user_data: std::ptr::null_mut(),
+            code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
+            scope: u8::MAX,
+        };
+
+        assert!(!openpit_pretrade_reject_list_push(list, reject));
+        assert_eq!(openpit_pretrade_reject_list_len(list), 0);
+        openpit_pretrade_destroy_reject_list(list);
+    }
+
+    #[test]
+    fn unknown_reject_code_maps_to_other() {
+        assert_eq!(import_reject_code(u16::MAX), RejectCode::Other);
+
+        let block = OpenPitPretradeAccountBlock {
+            policy: OpenPitStringView::from_utf8("policy"),
+            reason: OpenPitStringView::from_utf8("reason"),
+            details: OpenPitStringView::from_utf8("details"),
+            user_data: std::ptr::null_mut(),
+            code: u16::MAX,
+        };
+        assert_eq!(block.to_block().code, RejectCode::Other);
     }
 
     #[test]
@@ -727,7 +794,7 @@ mod tests {
             reason: OpenPitStringView::from_utf8("reason"),
             details: OpenPitStringView::from_utf8("details"),
             user_data: 42usize as *mut std::ffi::c_void,
-            code: OpenPitPretradeRejectCode::PnlKillSwitchTriggered,
+            code: OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED,
         };
         openpit_pretrade_account_block_list_push(list, block);
         assert_eq!(openpit_pretrade_account_block_list_len(list), 1);
@@ -738,10 +805,13 @@ mod tests {
             reason: OpenPitStringView::not_set(),
             details: OpenPitStringView::not_set(),
             user_data: std::ptr::null_mut(),
-            code: OpenPitPretradeRejectCode::Other,
+            code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
         };
         assert!(openpit_pretrade_account_block_list_get(list, 0, &mut out));
-        assert_eq!(out.code, OpenPitPretradeRejectCode::PnlKillSwitchTriggered);
+        assert_eq!(
+            out.code,
+            OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED
+        );
         assert_eq!(out.user_data, 42usize as *mut std::ffi::c_void);
         assert_eq!(string_view_to_string(out.policy), "policy");
         assert!(!openpit_pretrade_account_block_list_get(list, 1, &mut out));
@@ -773,7 +843,7 @@ mod tests {
         assert_eq!(exported.user_data, 99usize as *mut std::ffi::c_void);
         assert_eq!(
             exported.code,
-            OpenPitPretradeRejectCode::PnlKillSwitchTriggered
+            OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED
         );
 
         let imported = exported.to_block();

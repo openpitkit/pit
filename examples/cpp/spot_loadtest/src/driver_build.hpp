@@ -19,8 +19,8 @@
 
 #include "spot_loadtest/generator/event.hpp"
 
-#include "openpit/account_adjustment.hpp"
 #include "openpit/account_id.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/accounts.hpp"
 #include "openpit/asyncengine/typed.hpp"
 #include "openpit/engine.hpp"
@@ -37,25 +37,14 @@
 #include <utility>
 #include <vector>
 
-// Internal driver build helpers (mirror of build.go).
+// Internal driver build helpers.
 //
-// event -> engine object mapping plus the engine driver, mirroring build.go
-// exactly. The order/report/adjustment construction uses only real openpit::
-// value types.
+// Event-to-engine object mapping plus the engine driver. The
+// order/report/adjustment construction uses only public `openpit` value types.
 //
-// LOCK-BEARING SETTLEMENT. The Go harness attaches a pre-trade lock to the
-// execution-report fill (built from `pretrade.NewLockFromEntries`) so the
-// spot-funds policy can resolve the held leg of a BUY fill at the reserved
-// price. The public C++ `model::Fill::Raw()` deliberately leaves the fill lock
-// null, so a plain `model::ExecutionReport` cannot carry a lock. To mirror the
-// Go settlement faithfully through the public surface we use a custom report
-// type
-// (`ReportWithLock`) whose `Raw()` sets the fill lock pointer from a real
-// `openpit::pretrade::PreTradeLock`, and a custom engine driver
-// (`LockingEngineAdapter`) that mirrors `asyncengine::EngineAdapter` but
-// applies such reports. Everything else (orders, adjustments) uses the stock
-// model types. This keeps the methodology one-to-one with Go while using only
-// real openpit:: symbols.
+// Lock-bearing settlement keeps the report and pre-trade lock together. The
+// engine overload attaches the lock while applying the report, so the policy
+// can reconcile a BUY fill against the reserved price.
 
 namespace spot_loadtest::driver::detail {
 
@@ -78,8 +67,7 @@ InstrumentOf(const std::string &underlying, const std::string &settlement) {
   return ::openpit::model::Instrument(underlying, settlement);
 }
 
-// Maps an OrderCheck event to a limit, quantity-denominated model::Order. The
-// account id is the FNV-hashed string id, matching the Go binding.
+// Maps an OrderCheck event to a limit, quantity-denominated model::Order.
 [[nodiscard]] inline ::openpit::model::Order
 BuildOrder(const generator::Event &ev,
            ::openpit::param::AccountId &outAccount) {
@@ -96,12 +84,11 @@ BuildOrder(const generator::Event &ev,
   return order;
 }
 
-// A custom execution-report payload that mirrors model::ExecutionReport but
-// attaches a pre-trade lock to the fill, exactly as Go's buildReport does. The
-// lock pins the single reserved price under the default policy group so the
-// spot-funds policy resolves a BUY fill's held leg.
+// An execution-report payload paired with its pre-trade lock. The lock pins the
+// reserved price under the default policy group so the spot-funds policy
+// resolves a BUY fill's held leg.
 //
-// Move-only: it owns the PreTradeLock the Raw() view borrows.
+// Move-only because it owns the `PreTradeLock` handle.
 class ReportWithLock {
 public:
   ReportWithLock(::openpit::model::ExecutionReport report,
@@ -113,14 +100,13 @@ public:
   ReportWithLock(const ReportWithLock &) = delete;
   ReportWithLock &operator=(const ReportWithLock &) = delete;
 
-  // Borrows this object's storage; valid only while it stays alive and
-  // unchanged. The fill lock pointer is set from the owned PreTradeLock.
-  [[nodiscard]] OpenPitExecutionReport Raw() const noexcept {
-    OpenPitExecutionReport raw = m_report.Raw();
-    if (raw.fill.is_set) {
-      raw.fill.value.lock = m_lock.Get();
-    }
-    return raw;
+  [[nodiscard]] const ::openpit::model::ExecutionReport &
+  Report() const noexcept {
+    return m_report;
+  }
+
+  [[nodiscard]] const ::openpit::pretrade::PreTradeLock &Lock() const noexcept {
+    return m_lock;
   }
 
 private:
@@ -162,8 +148,7 @@ BuildReport(const generator::Event &ev,
   report.fill = std::move(fill);
 
   // The fill lock ties the report back to the reservation the order committed:
-  // one entry under the default policy group at the SAME price the order
-  // reserved at (the analogue of Go's NewLockFromEntries).
+  // one entry under the default policy group at the reserved price.
   ::openpit::pretrade::PreTradeLock lock;
   lock.Push(::openpit::param::DefaultPolicyGroupId, price);
 
@@ -235,15 +220,9 @@ public:
   }
 
   // Applies a report carrying a fill lock, so a BUY fill's held leg resolves.
-  // The public `Engine::ApplyExecutionReport` takes a `model::ExecutionReport`
-  // whose `Fill::Raw()` always nulls the lock, so it cannot carry one; we apply
-  // the lock-bearing raw view through the engine's C ABI entry point (the same
-  // symbol `Engine::ApplyExecutionReport` uses internally) and decode the
-  // result with the binding's public value types, so the settlement path stays
-  // bit-identical to the synchronous engine while preserving the lock.
   [[nodiscard]] ::openpit::PostTradeResult
   ApplyExecutionReport(const ReportWithLock &report) const {
-    return ApplyRaw(report.Raw());
+    return m_engine->ApplyExecutionReport(report.Report(), report.Lock());
   }
 
   template <typename Adjustment>
@@ -258,41 +237,6 @@ public:
   }
 
 private:
-  // Applies a raw execution-report view (with its fill lock set) through the
-  // engine's C ABI entry point — the identical call
-  // `Engine::ApplyExecutionReport` makes — then decodes the result with the
-  // binding's public value types
-  // (`accounts::AccountBlock`, `accountadjustment::OutcomeList`). This is the
-  // only way to apply a lock-bearing report through the public surface, because
-  // `model::Fill::Raw()` deliberately nulls the lock.
-  [[nodiscard]] ::openpit::PostTradeResult
-  ApplyRaw(OpenPitExecutionReport raw) const {
-    OpenPitPretradeAccountBlockList *blocks = nullptr;
-    OpenPitAccountAdjustmentOutcomeList *outcomes = nullptr;
-    OpenPitSharedString *error = nullptr;
-    if (!openpit_engine_apply_execution_report(m_engine->Get(), &raw, &blocks,
-                                               &outcomes, &error)) {
-      ::openpit::detail::ThrowFromSharedString(
-          error, "openpit_engine_apply_execution_report failed");
-    }
-    ::openpit::PostTradeResult out;
-    if (blocks != nullptr) {
-      const std::size_t count = openpit_pretrade_account_block_list_len(blocks);
-      out.accountBlocks.reserve(count);
-      for (std::size_t i = 0; i < count; ++i) {
-        OpenPitPretradeAccountBlock block{};
-        if (openpit_pretrade_account_block_list_get(blocks, i, &block)) {
-          out.accountBlocks.push_back(
-              ::openpit::accounts::AccountBlock::FromRaw(block));
-        }
-      }
-      openpit_pretrade_destroy_account_block_list(blocks);
-    }
-    const ::openpit::accountadjustment::OutcomeList outcomeList(outcomes);
-    out.accountAdjustmentOutcomes = outcomeList.ToVector();
-    return out;
-  }
-
   const ::openpit::Engine *m_engine;
 };
 

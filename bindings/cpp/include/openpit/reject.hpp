@@ -42,63 +42,71 @@ namespace openpit::pretrade {
 // zero is not a valid scope.
 //
 enum class RejectScope : std::uint8_t {
-  Order = OpenPitPretradeRejectScope_Order,
-  Account = OpenPitPretradeRejectScope_Account,
+  Order = OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+  Account = OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT,
 };
 
 // Stable machine-readable reject classification. Mirrors
 // `OpenPitPretradeRejectCode`. Unknown incoming codes map to `Other`.
 //
 enum class RejectCode : std::uint16_t {
-  MissingRequiredField = OpenPitPretradeRejectCode_MissingRequiredField,
-  InvalidFieldFormat = OpenPitPretradeRejectCode_InvalidFieldFormat,
-  InvalidFieldValue = OpenPitPretradeRejectCode_InvalidFieldValue,
-  UnsupportedOrderType = OpenPitPretradeRejectCode_UnsupportedOrderType,
-  UnsupportedTimeInForce = OpenPitPretradeRejectCode_UnsupportedTimeInForce,
+  MissingRequiredField = OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD,
+  InvalidFieldFormat = OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_FORMAT,
+  InvalidFieldValue = OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_VALUE,
+  UnsupportedOrderType = OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_TYPE,
+  UnsupportedTimeInForce =
+      OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_TIME_IN_FORCE,
   UnsupportedOrderAttribute =
-      OpenPitPretradeRejectCode_UnsupportedOrderAttribute,
-  DuplicateClientOrderId = OpenPitPretradeRejectCode_DuplicateClientOrderId,
-  TooLateToEnter = OpenPitPretradeRejectCode_TooLateToEnter,
-  ExchangeClosed = OpenPitPretradeRejectCode_ExchangeClosed,
-  UnknownInstrument = OpenPitPretradeRejectCode_UnknownInstrument,
-  UnknownAccount = OpenPitPretradeRejectCode_UnknownAccount,
-  UnknownVenue = OpenPitPretradeRejectCode_UnknownVenue,
-  UnknownClearingAccount = OpenPitPretradeRejectCode_UnknownClearingAccount,
-  UnknownCollateralAsset = OpenPitPretradeRejectCode_UnknownCollateralAsset,
-  InsufficientFunds = OpenPitPretradeRejectCode_InsufficientFunds,
-  InsufficientMargin = OpenPitPretradeRejectCode_InsufficientMargin,
-  InsufficientPosition = OpenPitPretradeRejectCode_InsufficientPosition,
-  CreditLimitExceeded = OpenPitPretradeRejectCode_CreditLimitExceeded,
-  RiskLimitExceeded = OpenPitPretradeRejectCode_RiskLimitExceeded,
-  OrderExceedsLimit = OpenPitPretradeRejectCode_OrderExceedsLimit,
-  OrderQtyExceedsLimit = OpenPitPretradeRejectCode_OrderQtyExceedsLimit,
+      OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_ATTRIBUTE,
+  DuplicateClientOrderId =
+      OPENPIT_PRETRADE_REJECT_CODE_DUPLICATE_CLIENT_ORDER_ID,
+  TooLateToEnter = OPENPIT_PRETRADE_REJECT_CODE_TOO_LATE_TO_ENTER,
+  ExchangeClosed = OPENPIT_PRETRADE_REJECT_CODE_EXCHANGE_CLOSED,
+  UnknownInstrument = OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_INSTRUMENT,
+  UnknownAccount = OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_ACCOUNT,
+  UnknownVenue = OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_VENUE,
+  UnknownClearingAccount =
+      OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_CLEARING_ACCOUNT,
+  UnknownCollateralAsset =
+      OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_COLLATERAL_ASSET,
+  InsufficientFunds = OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_FUNDS,
+  InsufficientMargin = OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_MARGIN,
+  InsufficientPosition = OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_POSITION,
+  CreditLimitExceeded = OPENPIT_PRETRADE_REJECT_CODE_CREDIT_LIMIT_EXCEEDED,
+  RiskLimitExceeded = OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+  OrderExceedsLimit = OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT,
+  OrderQtyExceedsLimit = OPENPIT_PRETRADE_REJECT_CODE_ORDER_QTY_EXCEEDS_LIMIT,
   OrderNotionalExceedsLimit =
-      OpenPitPretradeRejectCode_OrderNotionalExceedsLimit,
-  PositionLimitExceeded = OpenPitPretradeRejectCode_PositionLimitExceeded,
+      OPENPIT_PRETRADE_REJECT_CODE_ORDER_NOTIONAL_EXCEEDS_LIMIT,
+  PositionLimitExceeded = OPENPIT_PRETRADE_REJECT_CODE_POSITION_LIMIT_EXCEEDED,
   ConcentrationLimitExceeded =
-      OpenPitPretradeRejectCode_ConcentrationLimitExceeded,
-  LeverageLimitExceeded = OpenPitPretradeRejectCode_LeverageLimitExceeded,
-  RateLimitExceeded = OpenPitPretradeRejectCode_RateLimitExceeded,
-  PnlKillSwitchTriggered = OpenPitPretradeRejectCode_PnlKillSwitchTriggered,
-  AccountBlocked = OpenPitPretradeRejectCode_AccountBlocked,
-  AccountNotAuthorized = OpenPitPretradeRejectCode_AccountNotAuthorized,
-  ComplianceRestriction = OpenPitPretradeRejectCode_ComplianceRestriction,
-  InstrumentRestricted = OpenPitPretradeRejectCode_InstrumentRestricted,
-  JurisdictionRestriction = OpenPitPretradeRejectCode_JurisdictionRestriction,
-  WashTradePrevention = OpenPitPretradeRejectCode_WashTradePrevention,
-  SelfMatchPrevention = OpenPitPretradeRejectCode_SelfMatchPrevention,
-  ShortSaleRestriction = OpenPitPretradeRejectCode_ShortSaleRestriction,
-  RiskConfigurationMissing = OpenPitPretradeRejectCode_RiskConfigurationMissing,
-  ReferenceDataUnavailable = OpenPitPretradeRejectCode_ReferenceDataUnavailable,
+      OPENPIT_PRETRADE_REJECT_CODE_CONCENTRATION_LIMIT_EXCEEDED,
+  LeverageLimitExceeded = OPENPIT_PRETRADE_REJECT_CODE_LEVERAGE_LIMIT_EXCEEDED,
+  RateLimitExceeded = OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED,
+  PnlKillSwitchTriggered =
+      OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED,
+  AccountBlocked = OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED,
+  AccountNotAuthorized = OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_NOT_AUTHORIZED,
+  ComplianceRestriction = OPENPIT_PRETRADE_REJECT_CODE_COMPLIANCE_RESTRICTION,
+  InstrumentRestricted = OPENPIT_PRETRADE_REJECT_CODE_INSTRUMENT_RESTRICTED,
+  JurisdictionRestriction =
+      OPENPIT_PRETRADE_REJECT_CODE_JURISDICTION_RESTRICTION,
+  WashTradePrevention = OPENPIT_PRETRADE_REJECT_CODE_WASH_TRADE_PREVENTION,
+  SelfMatchPrevention = OPENPIT_PRETRADE_REJECT_CODE_SELF_MATCH_PREVENTION,
+  ShortSaleRestriction = OPENPIT_PRETRADE_REJECT_CODE_SHORT_SALE_RESTRICTION,
+  RiskConfigurationMissing =
+      OPENPIT_PRETRADE_REJECT_CODE_RISK_CONFIGURATION_MISSING,
+  ReferenceDataUnavailable =
+      OPENPIT_PRETRADE_REJECT_CODE_REFERENCE_DATA_UNAVAILABLE,
   OrderValueCalculationFailed =
-      OpenPitPretradeRejectCode_OrderValueCalculationFailed,
-  SystemUnavailable = OpenPitPretradeRejectCode_SystemUnavailable,
-  MarkPriceUnavailable = OpenPitPretradeRejectCode_MarkPriceUnavailable,
+      OPENPIT_PRETRADE_REJECT_CODE_ORDER_VALUE_CALCULATION_FAILED,
+  SystemUnavailable = OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE,
+  MarkPriceUnavailable = OPENPIT_PRETRADE_REJECT_CODE_MARK_PRICE_UNAVAILABLE,
   AccountAdjustmentBoundsExceeded =
-      OpenPitPretradeRejectCode_AccountAdjustmentBoundsExceeded,
-  ArithmeticOverflow = OpenPitPretradeRejectCode_ArithmeticOverflow,
-  Custom = OpenPitPretradeRejectCode_Custom,
-  Other = OpenPitPretradeRejectCode_Other,
+      OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_ADJUSTMENT_BOUNDS_EXCEEDED,
+  ArithmeticOverflow = OPENPIT_PRETRADE_REJECT_CODE_ARITHMETIC_OVERFLOW,
+  Custom = OPENPIT_PRETRADE_REJECT_CODE_CUSTOM,
+  Other = OPENPIT_PRETRADE_REJECT_CODE_OTHER,
 };
 
 // A single pre-trade rejection record.

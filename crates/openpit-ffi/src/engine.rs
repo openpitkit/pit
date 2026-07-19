@@ -21,7 +21,10 @@ use crate::account_adjustment::{
     import_account_adjustment, AccountAdjustment, OpenPitAccountAdjustment,
     OpenPitAccountAdjustmentApplyStatus,
 };
-use crate::account_outcome::{outcomes_to_list_owned, OpenPitAccountAdjustmentOutcomeList};
+use crate::account_outcome::{
+    account_pnls_to_list, outcomes_to_list_owned, OpenPitAccountAdjustmentOutcomeList,
+    OpenPitAccountPnlOutcomeList,
+};
 use crate::execution_report::{import_execution_report, ExecutionReport, OpenPitExecutionReport};
 use crate::instrument::parse_asset_view;
 use crate::last_error::{write_error, OpenPitOutError};
@@ -40,6 +43,28 @@ use openpit::pretrade::Rejects;
 
 type EngineTrait = openpit_interop::InteropEngineTrait<Order, ExecutionReport, AccountAdjustment>;
 type Engine = openpit::Engine<EngineTrait>;
+
+/// Caller-owned aggregate returned by the post-trade engine operation.
+pub struct OpenPitPostTradeResult {
+    account_blocks: Box<OpenPitPretradeAccountBlockList>,
+    account_adjustments: Box<OpenPitAccountAdjustmentOutcomeList>,
+    account_pnls: Box<OpenPitAccountPnlOutcomeList>,
+}
+
+impl OpenPitPostTradeResult {
+    fn from_core(result: openpit::PostTradeResult) -> Self {
+        let openpit::PostTradeResult {
+            account_blocks,
+            account_adjustments,
+            account_pnls,
+        } = result;
+        Self {
+            account_blocks: Box::new(blocks_to_list_owned(account_blocks)),
+            account_adjustments: Box::new(outcomes_to_list_owned(account_adjustments)),
+            account_pnls: Box::new(account_pnls_to_list(account_pnls)),
+        }
+    }
+}
 
 pub(crate) enum BuilderState {
     Synced(
@@ -104,7 +129,7 @@ impl OpenPitEngine {
     /// Used by the `openpit_engine_configure_*` functions, which live in the
     /// policy submodules next to their corresponding builders so they can
     /// reuse those modules' barrier structs.
-    pub(crate) fn configurator(&self) -> openpit::Configurator<openpit_interop::EngineLocking> {
+    pub(crate) fn configurator(&self) -> openpit::Configurator<EngineTrait> {
         self.inner.configure()
     }
 }
@@ -1121,19 +1146,15 @@ pub extern "C" fn openpit_destroy_pretrade_pre_trade_dry_run_report(
 ///
 /// Success:
 /// - returns `true`;
-/// - if `out_blocks` is not null and at least one policy entered a blocked
-///   state, writes a caller-owned `OpenPitPretradeAccountBlockList` pointer;
-///   release it with `openpit_pretrade_destroy_account_block_list`;
-/// - when no policy blocked, `out_blocks` is left untouched;
-/// - if `out_adjustments` is not null and at least one policy produced an
-///   account-adjustment outcome, writes a caller-owned
-///   `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
-///   `openpit_destroy_account_adjustment_outcome_list`;
-/// - when no outcome was produced, `out_adjustments` is left untouched.
+/// - if `out_result` is not null, writes one caller-owned
+///   `OpenPitPostTradeResult` pointer; release it with
+///   `openpit_destroy_post_trade_result`;
+/// - if `out_result` is null, applies the report without allocating a result.
 ///
 /// Error:
 /// - returns `false` when input pointers are invalid or the report payload
 ///   cannot be decoded;
+/// - `out_result` is left untouched;
 /// - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
 ///   error handle that MUST be released with `openpit_destroy_shared_string`.
 ///
@@ -1144,8 +1165,7 @@ pub extern "C" fn openpit_destroy_pretrade_pre_trade_dry_run_report(
 pub extern "C" fn openpit_engine_apply_execution_report(
     engine: *mut OpenPitEngine,
     report: *const OpenPitExecutionReport,
-    out_blocks: *mut *mut OpenPitPretradeAccountBlockList,
-    out_adjustments: *mut *mut OpenPitAccountAdjustmentOutcomeList,
+    out_result: *mut *mut OpenPitPostTradeResult,
     out_error: OpenPitOutError,
 ) -> bool {
     if engine.is_null() {
@@ -1167,17 +1187,75 @@ pub extern "C" fn openpit_engine_apply_execution_report(
 
     let result = unsafe { &*engine }.inner.apply_execution_report(&report);
 
-    if !out_blocks.is_null() && !result.account_blocks.is_empty() {
-        let list = blocks_to_list_owned(result.account_blocks);
-        unsafe { *out_blocks = Box::into_raw(Box::new(list)) };
-    }
-
-    if !out_adjustments.is_null() && !result.account_adjustments.is_empty() {
-        let list = outcomes_to_list_owned(result.account_adjustments);
-        unsafe { *out_adjustments = Box::into_raw(Box::new(list)) };
+    if !out_result.is_null() {
+        unsafe {
+            *out_result = Box::into_raw(Box::new(OpenPitPostTradeResult::from_core(result)));
+        }
     }
 
     true
+}
+
+#[no_mangle]
+/// Releases a caller-owned post-trade result.
+pub extern "C" fn openpit_destroy_post_trade_result(result: *mut OpenPitPostTradeResult) {
+    if result.is_null() {
+        return;
+    }
+    unsafe { drop(Box::from_raw(result)) };
+}
+
+#[no_mangle]
+/// Returns the borrowed account-block list from a post-trade result.
+///
+/// A valid result always returns a non-null list, including when it is empty.
+/// The list and every view copied from it remain valid only while `result` is
+/// alive.
+///
+/// Contract:
+/// - `result` must be a valid non-null pointer;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_post_trade_result_get_account_blocks(
+    result: *const OpenPitPostTradeResult,
+) -> *const OpenPitPretradeAccountBlockList {
+    assert!(!result.is_null(), "post-trade result pointer is null");
+    unsafe { (*result).account_blocks.as_ref() }
+}
+
+#[no_mangle]
+/// Returns the borrowed account-adjustment outcome list from a post-trade
+/// result.
+///
+/// A valid result always returns a non-null list, including when it is empty.
+/// The list and every view copied from it remain valid only while `result` is
+/// alive.
+///
+/// Contract:
+/// - `result` must be a valid non-null pointer;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_post_trade_result_get_account_adjustments(
+    result: *const OpenPitPostTradeResult,
+) -> *const OpenPitAccountAdjustmentOutcomeList {
+    assert!(!result.is_null(), "post-trade result pointer is null");
+    unsafe { (*result).account_adjustments.as_ref() }
+}
+
+#[no_mangle]
+/// Returns the borrowed account-level PnL outcome list from a post-trade
+/// result.
+///
+/// A valid result always returns a non-null list, including when it is empty.
+/// The list and every view copied from it remain valid only while `result` is
+/// alive.
+///
+/// Contract:
+/// - `result` must be a valid non-null pointer;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_post_trade_result_get_account_pnls(
+    result: *const OpenPitPostTradeResult,
+) -> *const OpenPitAccountPnlOutcomeList {
+    assert!(!result.is_null(), "post-trade result pointer is null");
+    unsafe { (*result).account_pnls.as_ref() }
 }
 
 #[no_mangle]
@@ -1248,6 +1326,12 @@ pub extern "C" fn openpit_account_adjustment_batch_error_get_rejects(
 ///   `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
 ///   `openpit_destroy_account_adjustment_outcome_list`; if no outcome was
 ///   produced, `out_outcomes` is left untouched;
+/// - on `Applied`, if `out_blocks` is not null and a policy reported one or
+///   more account blocks, writes a caller-owned
+///   `OpenPitPretradeAccountBlockList` pointer; release it with
+///   `openpit_pretrade_destroy_account_block_list`; if no block was produced,
+///   `out_blocks` is left untouched. The engine has already recorded every
+///   returned block;
 /// - `Rejected` stores batch error details in `out_reject`, the caller must
 ///   release a returned object with `openpit_destroy_account_adjustment_batch_error`;
 /// - rejects returned by `openpit_account_adjustment_batch_error_get_rejects`
@@ -1260,7 +1344,9 @@ pub extern "C" fn openpit_account_adjustment_batch_error_get_rejects(
 /// - every `adjustment` entry from the contiguous input array is read as a
 ///   borrowed view during this call only;
 /// - release a returned batch error with
-///   `openpit_destroy_account_adjustment_batch_error`.
+///   `openpit_destroy_account_adjustment_batch_error`;
+/// - release a returned account-block list with
+///   `openpit_pretrade_destroy_account_block_list`.
 pub extern "C" fn openpit_engine_apply_account_adjustment(
     engine: *mut OpenPitEngine,
     account_id: OpenPitParamAccountId,
@@ -1268,6 +1354,7 @@ pub extern "C" fn openpit_engine_apply_account_adjustment(
     adjustments_len: usize,
     out_reject: *mut *mut OpenPitAccountAdjustmentBatchError,
     out_outcomes: *mut *mut OpenPitAccountAdjustmentOutcomeList,
+    out_blocks: *mut *mut OpenPitPretradeAccountBlockList,
     out_error: OpenPitOutError,
 ) -> OpenPitAccountAdjustmentApplyStatus {
     if engine.is_null() {
@@ -1302,9 +1389,17 @@ pub extern "C" fn openpit_engine_apply_account_adjustment(
         .apply_account_adjustment(AccountId::from_u64(account_id), &adjustments)
     {
         Ok(batch) => {
-            if !out_outcomes.is_null() && !batch.outcomes.is_empty() {
-                let list = outcomes_to_list_owned(batch.outcomes);
+            let openpit::AccountAdjustmentBatchResult {
+                outcomes,
+                account_blocks,
+            } = batch;
+            if !out_outcomes.is_null() && !outcomes.is_empty() {
+                let list = outcomes_to_list_owned(outcomes);
                 unsafe { *out_outcomes = Box::into_raw(Box::new(list)) };
+            }
+            if !out_blocks.is_null() && !account_blocks.is_empty() {
+                let list = blocks_to_list_owned(account_blocks);
+                unsafe { *out_blocks = Box::into_raw(Box::new(list)) };
             }
             OpenPitAccountAdjustmentApplyStatus::Applied
         }
@@ -2422,8 +2517,8 @@ mod tests {
     };
     use crate::reject::{
         openpit_pretrade_create_reject_list, openpit_pretrade_destroy_reject_list,
-        openpit_pretrade_reject_list_get, openpit_pretrade_reject_list_len, OpenPitPretradeReject,
-        OpenPitPretradeRejectCode, OpenPitPretradeRejectList, OpenPitPretradeRejectScope,
+        openpit_pretrade_reject_list_get, openpit_pretrade_reject_list_len,
+        OpenPitPretradeAccountBlockList, OpenPitPretradeReject, OpenPitPretradeRejectList,
     };
     use crate::OpenPitStringView;
 
@@ -2432,14 +2527,15 @@ mod tests {
         openpit_account_adjustment_batch_error_get_rejects, openpit_create_engine_builder,
         openpit_destroy_account_adjustment_batch_error, openpit_destroy_engine,
         openpit_destroy_engine_build_error, openpit_destroy_engine_builder,
-        openpit_destroy_pretrade_pre_trade_dry_run_report,
+        openpit_destroy_post_trade_result, openpit_destroy_pretrade_pre_trade_dry_run_report,
         openpit_destroy_pretrade_pre_trade_request, openpit_destroy_pretrade_pre_trade_reservation,
         openpit_engine_apply_account_adjustment, openpit_engine_apply_execution_report,
         openpit_engine_block_account, openpit_engine_build_error_get_code,
         openpit_engine_build_error_get_policy_group_id, openpit_engine_build_error_get_policy_name,
         openpit_engine_builder_build, openpit_engine_execute_pre_trade,
         openpit_engine_execute_pre_trade_dry_run, openpit_engine_start_pre_trade,
-        openpit_engine_start_pre_trade_dry_run,
+        openpit_engine_start_pre_trade_dry_run, openpit_post_trade_result_get_account_adjustments,
+        openpit_post_trade_result_get_account_blocks, openpit_post_trade_result_get_account_pnls,
         openpit_pretrade_pre_trade_dry_run_report_get_account_adjustments,
         openpit_pretrade_pre_trade_dry_run_report_get_account_block,
         openpit_pretrade_pre_trade_dry_run_report_get_lock,
@@ -2448,8 +2544,36 @@ mod tests {
         openpit_pretrade_pre_trade_request_execute, openpit_pretrade_pre_trade_reservation_commit,
         openpit_pretrade_pre_trade_reservation_get_lock,
         openpit_pretrade_pre_trade_reservation_rollback, OpenPitAccountAdjustmentBatchError,
-        OpenPitEngineBuildError, OpenPitEngineBuildErrorCode,
+        OpenPitEngineBuildError, OpenPitEngineBuildErrorCode, OpenPitPostTradeResult,
     };
+
+    #[test]
+    fn post_trade_result_exposes_stable_empty_borrowed_lists() {
+        let result = OpenPitPostTradeResult::from_core(openpit::PostTradeResult::default());
+        let result_ptr = &result as *const OpenPitPostTradeResult;
+
+        let blocks = openpit_post_trade_result_get_account_blocks(result_ptr);
+        let account_pnls = openpit_post_trade_result_get_account_pnls(result_ptr);
+        let adjustments = openpit_post_trade_result_get_account_adjustments(result_ptr);
+
+        assert!(!blocks.is_null());
+        assert!(!account_pnls.is_null());
+        assert!(!adjustments.is_null());
+        assert_eq!(
+            crate::reject::openpit_pretrade_account_block_list_len(blocks),
+            0
+        );
+        assert_eq!(
+            unsafe { crate::account_outcome::openpit_account_pnl_outcome_list_len(account_pnls) },
+            0
+        );
+        assert_eq!(
+            unsafe {
+                crate::account_outcome::openpit_account_adjustment_outcome_list_len(adjustments)
+            },
+            0
+        );
+    }
 
     struct AlwaysRejectStart;
 
@@ -2485,7 +2609,7 @@ mod tests {
         _account_id: crate::param::OpenPitParamAccountId,
         _adjustment: *const OpenPitAccountAdjustment,
         _mutations: *mut crate::policy::OpenPitMutations,
-        _out_outcomes: *mut crate::account_outcome::OpenPitAccountOutcomeEntryList,
+        _out_result: *mut crate::account_outcome::OpenPitPretradeAccountAdjustmentResult,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList {
         let rejects = openpit_pretrade_create_reject_list(1);
@@ -2496,8 +2620,8 @@ mod tests {
                 reason: OpenPitStringView::from_utf8("test_reason"),
                 details: OpenPitStringView::from_utf8("test_details"),
                 user_data: std::ptr::null_mut(),
-                code: OpenPitPretradeRejectCode::AccountBlocked,
-                scope: OpenPitPretradeRejectScope::Account,
+                code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED,
+                scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT,
             },
         );
         rejects
@@ -2524,8 +2648,8 @@ mod tests {
                 reason: OpenPitStringView::from_utf8("blocked"),
                 details: OpenPitStringView::from_utf8("by test"),
                 user_data: std::ptr::null_mut(),
-                code: OpenPitPretradeRejectCode::OrderExceedsLimit,
-                scope: OpenPitPretradeRejectScope::Order,
+                code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT,
+                scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
             },
         );
         rejects
@@ -2544,8 +2668,8 @@ mod tests {
             reason: OpenPitStringView::from_utf8("blocked"),
             details: OpenPitStringView::from_utf8("by test"),
             user_data: std::ptr::null_mut(),
-            code: OpenPitPretradeRejectCode::RiskLimitExceeded,
-            scope: OpenPitPretradeRejectScope::Order,
+            code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+            scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
         crate::reject::openpit_pretrade_reject_list_push(rejects, reject);
         rejects
@@ -2555,6 +2679,7 @@ mod tests {
         _ctx: *const crate::policy::custom::OpenPitPostTradeContext,
         _report: *const crate::execution_report::OpenPitExecutionReport,
         _out_adjustments: *mut crate::account_outcome::OpenPitPostTradeAdjustmentList,
+        _out_account_pnls: *mut crate::account_outcome::OpenPitPostTradeAccountPnlList,
         _user_data: *mut c_void,
     ) -> *mut crate::reject::OpenPitPretradeAccountBlockList {
         std::ptr::null_mut()
@@ -2765,16 +2890,22 @@ mod tests {
             reason: OpenPitStringView::not_set(),
             details: OpenPitStringView::not_set(),
             user_data: std::ptr::null_mut(),
-            code: OpenPitPretradeRejectCode::Other,
-            scope: OpenPitPretradeRejectScope::Order,
+            code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
+            scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
         assert!(openpit_pretrade_reject_list_get(list, index, &mut reject));
         reject
     }
 
     fn assert_engine_account_block_reject(reject: OpenPitPretradeReject, reason: &str) {
-        assert_eq!(reject.code, OpenPitPretradeRejectCode::AccountBlocked);
-        assert_eq!(reject.scope, OpenPitPretradeRejectScope::Account);
+        assert_eq!(
+            reject.code,
+            crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED
+        );
+        assert_eq!(
+            reject.scope,
+            crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT
+        );
         assert_eq!(string_view_to_string(reject.policy), "Engine");
         assert_eq!(string_view_to_string(reject.reason), reason);
         assert_eq!(string_view_to_string(reject.details), reason);
@@ -3221,10 +3352,13 @@ mod tests {
             crate::account_outcome::OpenPitAccountAdjustmentOutcomeList,
         >::dangling()
         .as_ptr();
+        let blocks_sentinel =
+            core::ptr::NonNull::<OpenPitPretradeAccountBlockList>::dangling().as_ptr();
         let error_sentinel =
             core::ptr::NonNull::<crate::string::OpenPitSharedString>::dangling().as_ptr();
         let mut out_reject = reject_sentinel;
         let mut out_outcomes = outcomes_sentinel;
+        let mut out_blocks = blocks_sentinel;
         let mut out_error = error_sentinel;
 
         let status = openpit_engine_apply_account_adjustment(
@@ -3234,12 +3368,14 @@ mod tests {
             0,
             &mut out_reject,
             &mut out_outcomes,
+            &mut out_blocks,
             &mut out_error,
         );
 
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Applied);
         assert_eq!(out_reject, reject_sentinel);
         assert_eq!(out_outcomes, outcomes_sentinel);
+        assert_eq!(out_blocks, blocks_sentinel);
         assert_eq!(out_error, error_sentinel);
         openpit_destroy_engine(engine);
     }
@@ -3257,6 +3393,7 @@ mod tests {
             &mut out_reject,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
+            std::ptr::null_mut(),
         );
 
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Error);
@@ -3272,13 +3409,13 @@ mod tests {
         // rejected at import time — "both or neither" is the rule.
         let invalid = crate::account_adjustment::OpenPitAccountAdjustment {
             operation: crate::account_adjustment::OpenPitAccountAdjustmentOperation {
-                kind: crate::account_adjustment::OpenPitAccountAdjustmentOperationKind::Position,
+                kind: crate::account_adjustment::OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_POSITION,
                 position: crate::account_adjustment::OpenPitAccountAdjustmentPositionOperation {
                     instrument: crate::instrument::OpenPitInstrument {
                         underlying_asset: OpenPitStringView::from_utf8("SPX"),
                         settlement_asset: OpenPitStringView::not_set(),
                     },
-                    mode: crate::param::OpenPitParamPositionMode::Hedged,
+                    mode: crate::param::OPENPIT_PARAM_POSITION_MODE_HEDGED,
                     ..Default::default()
                 },
                 ..Default::default()
@@ -3297,9 +3434,43 @@ mod tests {
             &mut out_reject,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
+            std::ptr::null_mut(),
         );
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Error);
         assert!(out_reject.is_null());
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn apply_account_adjustment_rejects_unknown_operation_kind() {
+        let engine = build_passthrough_engine();
+        let invalid = crate::account_adjustment::OpenPitAccountAdjustment {
+            operation: crate::account_adjustment::OpenPitAccountAdjustmentOperation {
+                kind: u8::MAX,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut out_error = std::ptr::null_mut();
+
+        let status = openpit_engine_apply_account_adjustment(
+            engine,
+            1,
+            &invalid,
+            1,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut out_error,
+        );
+
+        assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Error);
+        assert!(!out_error.is_null());
+        assert_eq!(
+            string_view_to_string(crate::string::openpit_shared_string_view(out_error)),
+            "invalid account adjustment operation kind 255"
+        );
+        crate::string::openpit_destroy_shared_string(out_error);
         openpit_destroy_engine(engine);
     }
 
@@ -3310,6 +3481,7 @@ mod tests {
             1,
             std::ptr::null(),
             0,
+            std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -3382,6 +3554,7 @@ mod tests {
             &mut out_reject,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
+            std::ptr::null_mut(),
         );
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Rejected);
         assert!(!out_reject.is_null());
@@ -3392,15 +3565,18 @@ mod tests {
         assert!(!rejects.is_null());
         assert_eq!(openpit_pretrade_reject_list_len(rejects), 1);
         let mut reject = OpenPitPretradeReject {
-            code: OpenPitPretradeRejectCode::Other,
+            code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             reason: OpenPitStringView::not_set(),
             details: OpenPitStringView::not_set(),
             policy: OpenPitStringView::not_set(),
             user_data: std::ptr::null_mut(),
-            scope: OpenPitPretradeRejectScope::Order,
+            scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
         assert!(openpit_pretrade_reject_list_get(rejects, 0, &mut reject));
-        assert_eq!(reject.code, OpenPitPretradeRejectCode::AccountBlocked);
+        assert_eq!(
+            reject.code,
+            crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED
+        );
 
         openpit_destroy_account_adjustment_batch_error(out_reject);
         openpit_destroy_engine(engine);
@@ -3421,6 +3597,7 @@ mod tests {
             &mut out_reject,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
+            std::ptr::null_mut(),
         );
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Rejected);
         assert!(!out_reject.is_null());
@@ -3429,20 +3606,26 @@ mod tests {
         assert!(!rejects.is_null());
         assert_eq!(openpit_pretrade_reject_list_len(rejects), 1);
         let mut reject_ptr = OpenPitPretradeReject {
-            code: OpenPitPretradeRejectCode::Other,
+            code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
             reason: OpenPitStringView::not_set(),
             details: OpenPitStringView::not_set(),
             policy: OpenPitStringView::not_set(),
             user_data: std::ptr::null_mut(),
-            scope: OpenPitPretradeRejectScope::Order,
+            scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
         assert!(openpit_pretrade_reject_list_get(
             rejects,
             0,
             &mut reject_ptr
         ));
-        assert_eq!(reject_ptr.code, OpenPitPretradeRejectCode::AccountBlocked);
-        assert_eq!(reject_ptr.scope, OpenPitPretradeRejectScope::Account);
+        assert_eq!(
+            reject_ptr.code,
+            crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED
+        );
+        assert_eq!(
+            reject_ptr.scope,
+            crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT
+        );
         assert_eq!(reject_ptr.user_data, std::ptr::null_mut());
 
         let policy = string_view_to_string(reject_ptr.policy);
@@ -3470,6 +3653,7 @@ mod tests {
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
+            std::ptr::null_mut(),
         );
         assert_eq!(status, OpenPitAccountAdjustmentApplyStatus::Rejected);
 
@@ -3487,6 +3671,7 @@ mod tests {
             std::ptr::null(),
             1,
             &mut out_reject,
+            std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
         );
@@ -3563,7 +3748,6 @@ mod tests {
             &report,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            std::ptr::null_mut(),
         );
         assert!(ok);
 
@@ -3572,23 +3756,27 @@ mod tests {
 
     #[test]
     fn apply_execution_report_covers_error_paths_and_custom_apply_callback() {
+        let result_sentinel =
+            core::ptr::NonNull::<crate::engine::OpenPitPostTradeResult>::dangling().as_ptr();
+        let mut out_result = result_sentinel;
         assert!(!openpit_engine_apply_execution_report(
             std::ptr::null_mut(),
             std::ptr::null(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            &mut out_result,
             std::ptr::null_mut(),
         ));
+        assert_eq!(out_result, result_sentinel);
 
         let engine = build_passthrough_engine();
 
+        out_result = result_sentinel;
         assert!(!openpit_engine_apply_execution_report(
             engine,
             std::ptr::null(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            &mut out_result,
             std::ptr::null_mut(),
         ));
+        assert_eq!(out_result, result_sentinel);
 
         let invalid = OpenPitExecutionReport {
             operation: OpenPitExecutionReportOperationOptional {
@@ -3606,38 +3794,30 @@ mod tests {
             position_impact: OpenPitExecutionReportPositionImpactOptional::default(),
             user_data: std::ptr::null_mut(),
         };
+        out_result = result_sentinel;
         assert!(!openpit_engine_apply_execution_report(
             engine,
             &invalid,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            &mut out_result,
             std::ptr::null_mut(),
         ));
+        assert_eq!(out_result, result_sentinel);
         openpit_destroy_engine(engine);
 
         let callback_engine = build_engine_with_main_reject_policy();
         let report = OpenPitExecutionReport::default();
-        let blocks_sentinel =
-            core::ptr::NonNull::<crate::reject::OpenPitPretradeAccountBlockList>::dangling()
-                .as_ptr();
-        let adjustments_sentinel = core::ptr::NonNull::<
-            crate::account_outcome::OpenPitAccountAdjustmentOutcomeList,
-        >::dangling()
-        .as_ptr();
         let error_sentinel =
             core::ptr::NonNull::<crate::string::OpenPitSharedString>::dangling().as_ptr();
-        let mut out_blocks = blocks_sentinel;
-        let mut out_adjustments = adjustments_sentinel;
+        out_result = result_sentinel;
         let mut out_error = error_sentinel;
         assert!(openpit_engine_apply_execution_report(
             callback_engine,
             &report,
-            &mut out_blocks,
-            &mut out_adjustments,
+            &mut out_result,
             &mut out_error,
         ));
-        assert_eq!(out_blocks, blocks_sentinel);
-        assert_eq!(out_adjustments, adjustments_sentinel);
+        assert_ne!(out_result, result_sentinel);
+        openpit_destroy_post_trade_result(out_result);
         assert_eq!(out_error, error_sentinel);
         openpit_destroy_engine(callback_engine);
     }
@@ -3653,6 +3833,7 @@ mod tests {
         _ctx: *const crate::policy::custom::OpenPitPostTradeContext,
         report: *const OpenPitExecutionReport,
         _out_adjustments: *mut crate::account_outcome::OpenPitPostTradeAdjustmentList,
+        _out_account_pnls: *mut crate::account_outcome::OpenPitPostTradeAccountPnlList,
         user_data: *mut c_void,
     ) -> *mut crate::reject::OpenPitPretradeAccountBlockList {
         let observed = unsafe { &mut *(user_data as *mut ObservedFillLock) };
@@ -3732,7 +3913,6 @@ mod tests {
         assert!(openpit_engine_apply_execution_report(
             engine,
             &report,
-            std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
         ));
@@ -3988,8 +4168,8 @@ mod tests {
                 reason: OpenPitStringView::from_utf8("blocked"),
                 details: OpenPitStringView::from_utf8("by test"),
                 user_data: std::ptr::null_mut(),
-                code: OpenPitPretradeRejectCode::AccountBlocked,
-                scope: OpenPitPretradeRejectScope::Account,
+                code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED,
+                scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT,
             },
         );
         rejects
@@ -4197,7 +4377,7 @@ mod tests {
             reason: OpenPitStringView::not_set(),
             details: OpenPitStringView::not_set(),
             user_data: std::ptr::null_mut(),
-            code: OpenPitPretradeRejectCode::Other,
+            code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
         };
         assert!(crate::reject::openpit_pretrade_account_block_list_get(
             blocks, 0, &mut block

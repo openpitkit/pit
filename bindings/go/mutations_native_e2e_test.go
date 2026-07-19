@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package openpit
 
@@ -150,7 +150,12 @@ func (mutationTrackingPolicy) CheckPreTradeStart(pretrade.Context, model.Order) 
 	return nil
 }
 
-func (mutationTrackingPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ model.ExecutionReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
+func (mutationTrackingPolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	model.ExecutionReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
+) []reject.AccountBlock {
 	return nil
 }
 
@@ -160,8 +165,8 @@ func (mutationTrackingPolicy) ApplyAccountAdjustment(
 	model.AccountAdjustment,
 	tx.Mutations,
 	pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 func newEngineWithPreTradePolicyForNativeE2E(

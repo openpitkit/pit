@@ -80,7 +80,7 @@ def test_readme_quickstart() -> None:
         .builtin(
             policies.build_pnl_bounds_killswitch().broker_barriers(
                 policies.PnlBoundsBrokerBarrier(
-                    settlement_asset=openpit.param.Asset("USD"),
+                    settlement_asset="USD",
                     lower_bound=openpit.param.Pnl("-1000"),
                 )
             )
@@ -111,7 +111,7 @@ def test_readme_quickstart() -> None:
                         max_quantity=max_qty,
                         max_notional=max_notional,
                     ),
-                    settlement_asset=openpit.param.Asset("USD"),
+                    settlement_asset="USD",
                 )
             )
         )
@@ -191,6 +191,10 @@ def test_readme_quickstart() -> None:
     )
 
     result = engine.apply_execution_report(report=report)
+    for outcome in result.account_pnls:
+        print(f"account P&L outcome for {outcome.account_id}")
+    for outcome in result.account_adjustments:
+        print(f"account adjustment from group {outcome.policy_group_id}")
 
     # 7. After each execution report is applied, the system may report that it has
     # been determined in advance that all subsequent requests will be rejected if

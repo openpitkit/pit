@@ -23,7 +23,7 @@
 // the snippet elides for readability. The published snippet body and the test
 // body must stay in lock-step.
 
-#include "openpit/account_adjustment.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/marketdata.hpp"
 #include "openpit/model.hpp"
@@ -173,18 +173,17 @@ TEST(SpotFundsWiki, PnlBoundsKillSwitchBuilder) {
 
   // The PnL kill switch is a distinct spot-funds builder entry point; it
   // produces the same SpotFundsPolicy, registered under the same name.
-  policies::SpotFundsPnlBoundsBarrier global("USD");
+  policies::SpotFundsPnlBoundsBarrier global;
   global.lowerBound = Pnl::FromString("-1000");
 
-  policies::SpotFundsPnlBoundsBarrier accountBarrier("USD");
+  policies::SpotFundsPnlBoundsBarrier accountBarrier;
   accountBarrier.lowerBound = Pnl::FromString("-250");
 
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
-  builder.Add(
-      policies::SpotFundsPnlBoundsKillSwitchPolicy{}
-          .GlobalBarrier(std::move(global))
-          .AccountBarrier(policies::SpotFundsPnlBoundsAccountBarrier(
-              accountId, std::move(accountBarrier), Pnl::FromString("0"))));
+  builder.Add(policies::SpotFundsPnlBoundsKillSwitchPolicy{}
+                  .GlobalBarrier(std::move(global))
+                  .AccountBarrier(policies::SpotFundsPnlBoundsAccountBarrier(
+                      accountId, std::move(accountBarrier))));
   openpit::Engine engine = builder.Build();
 
   // Harness assertion: the builder accepted the SpotFunds PnL barriers.
@@ -200,7 +199,7 @@ TEST(SpotFundsWiki, PnlBoundsKillSwitchRuntimeReconfiguration) {
   using openpit::param::Pnl;
 
   const AccountId accountId = AccountId::FromUint64(99224416);
-  policies::SpotFundsPnlBoundsBarrier initial("USD");
+  policies::SpotFundsPnlBoundsBarrier initial;
   initial.lowerBound = Pnl::FromString("-1000");
 
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
@@ -208,19 +207,19 @@ TEST(SpotFundsWiki, PnlBoundsKillSwitchRuntimeReconfiguration) {
       std::move(initial)));
   openpit::Engine engine = builder.Build();
 
-  // Retune the account-currency PnL barriers; live accumulated PnL is
-  // untouched.
-  policies::SpotFundsPnlBoundsBarrier global("USD");
+  // Retune the account PnL barrier; live accumulated PnL is untouched.
+  policies::SpotFundsPnlBoundsBarrier global;
   global.lowerBound = Pnl::FromString("-500");
   engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
-      std::vector<policies::SpotFundsPnlBoundsBarrier>{std::move(global)});
+      policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Set(std::move(global)));
 
-  // Force-set the live accumulated PnL for one (account, account currency).
-  engine.Configure().SetSpotFundsAccountPnl(
-      policies::SpotFundsPolicyName, accountId, "USD", Pnl::FromString("-120"));
+  // Force-set the live accumulated PnL for one account.
+  const auto result = engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, accountId, Pnl::FromString("-600"));
+  EXPECT_EQ(result.accountBlocks.size(), 1U);
 
-  // Harness assertion: both runtime calls completed without throwing.
+  // Harness assertion: the engine remains usable after both runtime calls.
   EXPECT_TRUE(static_cast<bool>(engine));
 }
 

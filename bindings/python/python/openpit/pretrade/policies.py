@@ -549,8 +549,9 @@ class SpotFundsPricingSource(_enum.StrEnum):
 class SpotFundsLimitMode(_enum.StrEnum):
     """How the policy treats an order that exceeds available settlement funds.
 
-    ``ENFORCE`` (the default) rejects the order with ``InsufficientFunds`` and
-    records no reservation. ``TRACK_ONLY`` always records the reservation,
+    ``ENFORCE`` (the default) rejects the order with
+    ``RejectCode.INSUFFICIENT_FUNDS`` and records no reservation.
+    ``TRACK_ONLY`` always records the reservation,
     letting available funds go negative, and never rejects on insufficiency;
     arithmetic overflow is still surfaced.
     """
@@ -666,30 +667,27 @@ class SpotFundsOverrideEntry:
 
 @dataclasses.dataclass(frozen=True)
 class SpotFundsPnlBoundsBarrier:
-    """Account-currency P&L bounds used by the spot-funds policy.
+    """Account P&L bounds used by the spot-funds policy.
 
     Args:
-        account_currency: Account currency whose accumulated P&L is monitored.
         lower_bound: Optional lower P&L bound (typically a negative loss limit).
         upper_bound: Optional upper P&L bound (typically a positive profit limit).
 
     At least one of *lower_bound* or *upper_bound* must be provided.
     """
 
-    account_currency: param.Asset
     lower_bound: param.Pnl | None = None
     upper_bound: param.Pnl | None = None
 
 
 @dataclasses.dataclass(frozen=True)
 class SpotFundsPnlBoundsAccountGroupBarrier:
-    """Per-account-group account-currency P&L bounds refinement.
+    """Per-account-group account P&L bounds refinement.
 
-    Pairs a :class:`SpotFundsPnlBoundsBarrier` (the account currency and
-    bounds configuration) with an account-group identity.
+    Pairs bounds with an account-group identity.
 
     Args:
-        barrier: Account currency and bounds for this account-group barrier.
+        barrier: Bounds for this account-group barrier.
         account_group_id: Account group this barrier applies to.
     """
 
@@ -699,33 +697,13 @@ class SpotFundsPnlBoundsAccountGroupBarrier:
 
 @dataclasses.dataclass(frozen=True)
 class SpotFundsPnlBoundsAccountBarrier:
-    """Per-account account-currency P&L bounds with an initial P&L seed.
+    """Per-account P&L bounds refinement.
 
-    Pairs a :class:`SpotFundsPnlBoundsBarrier` (the account currency and
-    bounds configuration) with an account identity and a starting P&L.
+    Pairs bounds with an account identity.
 
     Args:
-        barrier: Account currency and bounds for this account barrier.
+        barrier: Bounds for this account barrier.
         account_id: Account this barrier applies to.
-        initial_pnl: Starting accumulated P&L, consumed at construction only.
-            Seeds P&L accrued before the engine started.
-    """
-
-    barrier: SpotFundsPnlBoundsBarrier
-    account_id: param.AccountId
-    initial_pnl: param.Pnl
-
-
-@dataclasses.dataclass(frozen=True)
-class SpotFundsPnlBoundsAccountBarrierUpdate:
-    """Runtime replacement for a per-account P&L bounds barrier.
-
-    Runtime updates preserve the live accumulated P&L and cannot seed or reset
-    it.
-
-    Args:
-        barrier: Account currency and replacement bounds for this account.
-        account_id: Account this replacement barrier applies to.
     """
 
     barrier: SpotFundsPnlBoundsBarrier
@@ -846,11 +824,15 @@ def build_spot_funds() -> SpotFundsBuilder:
 
 
 class SpotFundsPnlBoundsKillswitchReadyBuilder:
-    """Fully-configured spot-funds account-currency P&L bounds builder."""
+    """Fully-configured spot-funds account P&L bounds builder.
+
+    The resulting preset uses ``SpotFundsLimitMode.TRACK_ONLY`` funds limits
+    and does not produce ``RejectCode.INSUFFICIENT_FUNDS`` rejects.
+    """
 
     def __init__(self) -> None:
         self._market_data: marketdata.MarketDataService | None = None
-        self._global: list[SpotFundsPnlBoundsBarrier] = []
+        self._global: SpotFundsPnlBoundsBarrier | None = None
         self._account_group: list[SpotFundsPnlBoundsAccountGroupBarrier] = []
         self._account: list[SpotFundsPnlBoundsAccountBarrier] = []
         self._policy_group_id = DEFAULT_POLICY_GROUP_ID
@@ -869,24 +851,24 @@ class SpotFundsPnlBoundsKillswitchReadyBuilder:
         self._market_data = service
         return self
 
-    def global_barriers(
-        self, *barriers: SpotFundsPnlBoundsBarrier
+    def global_barrier(
+        self, barrier: SpotFundsPnlBoundsBarrier
     ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
-        """Append global account-currency P&L bounds barriers."""
-        self._global.extend(barriers)
+        """Set the global account P&L bounds barrier."""
+        self._global = barrier
         return self
 
     def account_group_barriers(
         self, *barriers: SpotFundsPnlBoundsAccountGroupBarrier
     ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
-        """Append per-account-group account-currency P&L bounds barriers."""
+        """Append per-account-group account P&L bounds barriers."""
         self._account_group.extend(barriers)
         return self
 
     def account_barriers(
         self, *barriers: SpotFundsPnlBoundsAccountBarrier
     ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
-        """Append per-account account-currency P&L bounds barriers."""
+        """Append per-account account P&L bounds barriers."""
         self._account.extend(barriers)
         return self
 
@@ -895,14 +877,20 @@ class SpotFundsPnlBoundsKillswitchReadyBuilder:
         builder._add_builtin_spot_funds_pnl_bounds_killswitch(
             policy_group_id=self._policy_group_id,
             market_data=self._market_data,
-            global_barriers=self._global,
+            global_barrier=self._global,
             account_group_barriers=self._account_group,
             account_barriers=self._account,
         )
 
 
 class SpotFundsPnlBoundsKillswitchBuilder:
-    """Entry point for spot-funds account-currency P&L bounds policy."""
+    """Entry point for the spot-funds account P&L bounds preset.
+
+    The preset uses ``SpotFundsLimitMode.TRACK_ONLY`` funds limits: it records
+    reservations and may let available funds go negative instead of rejecting
+    an order with ``RejectCode.INSUFFICIENT_FUNDS``. Arithmetic overflow is
+    still surfaced.
+    """
 
     #: Registration name of the underlying spot funds policy.
     NAME: str = "SpotFundsPolicy"
@@ -923,11 +911,11 @@ class SpotFundsPnlBoundsKillswitchBuilder:
         """Configure the market-data service used for FX conversion."""
         return self._ready.market_data(service)
 
-    def global_barriers(
-        self, *barriers: SpotFundsPnlBoundsBarrier
+    def global_barrier(
+        self, barrier: SpotFundsPnlBoundsBarrier
     ) -> SpotFundsPnlBoundsKillswitchReadyBuilder:
-        """Add global P&L bounds and return a ready builder."""
-        return self._ready.global_barriers(*barriers)
+        """Set global P&L bounds and return a ready builder."""
+        return self._ready.global_barrier(barrier)
 
     def account_group_barriers(
         self, *barriers: SpotFundsPnlBoundsAccountGroupBarrier
@@ -941,9 +929,13 @@ class SpotFundsPnlBoundsKillswitchBuilder:
         """Add account P&L bounds and return a ready builder."""
         return self._ready.account_barriers(*barriers)
 
+    def _build(self, builder: typing.Any) -> None:
+        """Contract hook invoked by ``builtin()`` to register this policy."""
+        self._ready._build(builder)
+
 
 def build_spot_funds_pnl_bounds_killswitch() -> SpotFundsPnlBoundsKillswitchBuilder:
-    """Return a new spot-funds P&L bounds policy builder."""
+    """Return a track-only spot-funds P&L bounds policy builder."""
     return SpotFundsPnlBoundsKillswitchBuilder()
 
 
@@ -1006,7 +998,6 @@ __all__ = [
     "SpotFundsPnlBoundsBarrier",
     "SpotFundsPnlBoundsAccountGroupBarrier",
     "SpotFundsPnlBoundsAccountBarrier",
-    "SpotFundsPnlBoundsAccountBarrierUpdate",
     "SpotFundsReadyBuilder",
     "SpotFundsBuilder",
     "SpotFundsPnlBoundsKillswitchReadyBuilder",

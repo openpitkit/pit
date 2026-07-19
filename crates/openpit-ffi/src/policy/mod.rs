@@ -32,7 +32,7 @@ use openpit::pretrade::{
     Rejects,
 };
 use openpit::storage::StorageBuilder;
-use openpit::{AccountAdjustmentContext, AccountOutcomeEntry, Mutation, Mutations};
+use openpit::{AccountAdjustmentContext, Mutation, Mutations, PolicyAccountAdjustmentResult};
 
 use crate::OpenPitStringView;
 use crate::{AccountAdjustment, ExecutionReport, Order};
@@ -372,7 +372,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
         account_id: openpit::param::AccountId,
         adjustment: &AccountAdjustment,
         mutations: &mut Mutations,
-    ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
+    ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
         self.inner
             .apply_account_adjustment(ctx, account_id, adjustment, mutations)
     }
@@ -557,6 +557,7 @@ mod tests {
         _ctx: *const super::custom::OpenPitPostTradeContext,
         _report: *const crate::execution_report::OpenPitExecutionReport,
         _out_adjustments: *mut crate::account_outcome::OpenPitPostTradeAdjustmentList,
+        _out_account_pnls: *mut crate::account_outcome::OpenPitPostTradeAccountPnlList,
         _user_data: *mut c_void,
     ) -> *mut crate::reject::OpenPitPretradeAccountBlockList {
         std::ptr::null_mut()

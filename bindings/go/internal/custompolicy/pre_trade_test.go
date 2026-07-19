@@ -59,6 +59,7 @@ func (fakePreTradePolicy) ApplyExecutionReport(
 	_ pretrade.PostTradeContext,
 	_ model.ExecutionReport,
 	_ pretrade.PostTradeAdjustments,
+	_ pretrade.PostTradePnls,
 ) []reject.AccountBlock {
 	return nil
 }
@@ -69,8 +70,8 @@ func (fakePreTradePolicy) ApplyAccountAdjustment(
 	_ model.AccountAdjustment,
 	_ tx.Mutations,
 	_ pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 func TestStartPreTradeSuccess(t *testing.T) {

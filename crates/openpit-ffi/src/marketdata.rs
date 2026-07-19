@@ -187,28 +187,29 @@ pub extern "C" fn openpit_create_marketdata_quote_ttl_within(
 ///
 /// When the more-specific bucket has no quote, the read falls through
 /// to the next bucket permitted by this value.
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OpenPitMarketDataQuoteResolution {
-    /// Consult only the per-account bucket for the reading account.
-    AccountOnly = 0,
-    /// Consult the per-account bucket, then fall back to the account's group
-    /// bucket when the account bucket has no quote.
-    AccountThenGroup = 1,
-    /// Consult the per-account bucket, then the account's group bucket, then
-    /// the default-group ("everyone-else") bucket, in that order.
-    AccountThenGroupThenDefault = 2,
-}
+pub type OpenPitMarketDataQuoteResolution = u8;
 
-impl From<OpenPitMarketDataQuoteResolution> for QuoteResolution {
-    fn from(value: OpenPitMarketDataQuoteResolution) -> Self {
-        match value {
-            OpenPitMarketDataQuoteResolution::AccountOnly => QuoteResolution::AccountOnly,
-            OpenPitMarketDataQuoteResolution::AccountThenGroup => QuoteResolution::AccountThenGroup,
-            OpenPitMarketDataQuoteResolution::AccountThenGroupThenDefault => {
-                QuoteResolution::AccountThenGroupThenDefault
-            }
+/// Consult only the per-account bucket for the reading account.
+pub const OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_ONLY: OpenPitMarketDataQuoteResolution = 0;
+/// Consult the per-account bucket, then fall back to the account's group
+/// bucket when the account bucket has no quote.
+pub const OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP:
+    OpenPitMarketDataQuoteResolution = 1;
+/// Consult the per-account bucket, then the account's group bucket, then the
+/// default-group ("everyone-else") bucket, in that order.
+pub const OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT:
+    OpenPitMarketDataQuoteResolution = 2;
+
+fn import_quote_resolution(value: OpenPitMarketDataQuoteResolution) -> Option<QuoteResolution> {
+    match value {
+        OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_ONLY => Some(QuoteResolution::AccountOnly),
+        OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP => {
+            Some(QuoteResolution::AccountThenGroup)
         }
+        OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT => {
+            Some(QuoteResolution::AccountThenGroupThenDefault)
+        }
+        _ => None,
     }
 }
 
@@ -229,6 +230,8 @@ pub enum OpenPitMarketDataGetStatus {
     /// The selected quote exists but aged past its effective TTL; the stale
     /// quote was written to `out_quote`.
     QuoteExpired = 3,
+    /// The supplied quote-resolution selector is invalid.
+    Error = 255,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -1256,7 +1259,8 @@ pub extern "C" fn openpit_marketdata_service_push_by_instrument_patch(
 /// - `Unavailable`: registered but no usable quote (never pushed or cleared);
 /// - `UnknownInstrument`: `instrument_id` is not registered;
 /// - `QuoteExpired`: selected quote aged past TTL; the stale quote was written
-///   to `out_quote`.
+///   to `out_quote`;
+/// - `Error`: `resolution` is not one of the documented selector constants.
 ///
 /// Contract:
 /// - `service`, `resolve_account_group`, and `out_quote` must be valid non-null
@@ -1277,6 +1281,9 @@ pub extern "C" fn openpit_marketdata_service_get(
         "resolve_account_group must be non-null"
     );
     assert!(!out_quote.is_null(), "out_quote must be non-null");
+    let Some(resolution) = import_quote_resolution(resolution) else {
+        return OpenPitMarketDataGetStatus::Error;
+    };
     let adapter = CallbackAccountInfo {
         resolve: resolve_account_group.unwrap(),
         user_data,
@@ -1285,7 +1292,7 @@ pub extern "C" fn openpit_marketdata_service_get(
         InstrumentId::new(instrument_id),
         AccountId::from_u64(account_id),
         &adapter,
-        resolution.into(),
+        resolution,
     ) {
         Ok(quote) => {
             unsafe { *out_quote = OpenPitMarketDataQuote::from_quote(quote) };
@@ -1402,7 +1409,7 @@ mod tests {
             0,
             Some(no_group_resolver),
             std::ptr::null_mut(),
-            OpenPitMarketDataQuoteResolution::AccountThenGroupThenDefault,
+            OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT,
             out,
         )
     }
@@ -1467,6 +1474,23 @@ mod tests {
         let mut out_quote = OpenPitMarketDataQuote::default();
         let status = get_default(service, 999, &mut out_quote);
         assert_eq!(status, OpenPitMarketDataGetStatus::UnknownInstrument);
+        openpit_destroy_marketdata_service(service);
+    }
+
+    #[test]
+    fn get_rejects_unknown_quote_resolution() {
+        let service = build_service();
+        let mut out_quote = OpenPitMarketDataQuote::default();
+        let status = openpit_marketdata_service_get(
+            service,
+            999,
+            0,
+            Some(no_group_resolver),
+            std::ptr::null_mut(),
+            u8::MAX,
+            &mut out_quote,
+        );
+        assert_eq!(status, OpenPitMarketDataGetStatus::Error);
         openpit_destroy_marketdata_service(service);
     }
 
@@ -1744,7 +1768,7 @@ mod tests {
             account,
             Some(no_group_resolver),
             std::ptr::null_mut(),
-            OpenPitMarketDataQuoteResolution::AccountOnly,
+            OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_ONLY,
             &mut out,
         );
         assert_eq!(status, OpenPitMarketDataGetStatus::Found);
@@ -1759,7 +1783,7 @@ mod tests {
             99,
             Some(no_group_resolver),
             std::ptr::null_mut(),
-            OpenPitMarketDataQuoteResolution::AccountThenGroupThenDefault,
+            OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT,
             &mut out2,
         );
         assert_eq!(status2, OpenPitMarketDataGetStatus::Found);
@@ -1815,7 +1839,7 @@ mod tests {
             1,
             Some(no_group_resolver),
             std::ptr::null_mut(),
-            OpenPitMarketDataQuoteResolution::AccountOnly,
+            OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_ONLY,
             &mut out,
         );
         assert_eq!(status, OpenPitMarketDataGetStatus::Unavailable);
@@ -1848,7 +1872,7 @@ mod tests {
             7, // account_id
             Some(no_group_resolver),
             std::ptr::null_mut(),
-            OpenPitMarketDataQuoteResolution::AccountThenGroupThenDefault,
+            OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT,
             &mut out,
         );
         assert_eq!(status, OpenPitMarketDataGetStatus::Found);
@@ -1888,7 +1912,7 @@ mod tests {
             77, // account_id — no per-account quote
             Some(fixed_group_resolver),
             std::ptr::null_mut(),
-            OpenPitMarketDataQuoteResolution::AccountThenGroup,
+            OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP,
             &mut out,
         );
         assert_eq!(status, OpenPitMarketDataGetStatus::Found);

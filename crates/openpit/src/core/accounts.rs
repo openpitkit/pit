@@ -305,6 +305,9 @@ where
     ///
     /// Unlike [`block`](Self::block), which preserves the first cause, this
     /// overwrites the stored cause with `reason`, leaving the account blocked.
+    /// The block becomes yours: whatever raised the overwritten cause - an
+    /// engine kill-switch included - no longer owns it, so the account stays
+    /// blocked by `reason` until it is explicitly unblocked.
     ///
     /// # Errors
     ///

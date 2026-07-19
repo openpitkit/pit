@@ -23,10 +23,12 @@ import (
 	"runtime"
 
 	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pkg/ptr"
 	"go.openpit.dev/openpit/pretrade/policies"
+	"go.openpit.dev/openpit/reject"
 )
 
 // Configurator updates the runtime settings of built-in policies registered on
@@ -210,7 +212,7 @@ func (c Configurator) RateLimitUpdate(
 // kill-switch policy.
 //
 // brokerBarriers mirrors the broker axis accepted by
-// [policies.PnlBoundsKillswitchReadyBuilder]. accountBarriers updates bounds
+// [policies.PnlBoundsKillSwitchReadyBuilder]. accountBarriers updates bounds
 // without replacing the live P&L accumulated for each account and settlement
 // asset. An axis passed as nil is left unchanged; an empty non-nil slice
 // replaces the axis with an empty set (subject to the policy's
@@ -461,19 +463,6 @@ func (c Configurator) SpotFunds(
 	return nil
 }
 
-func validateSpotFundsLimitMode(mode policies.SpotFundsLimitMode) error {
-	if mode.Valid() {
-		return nil
-	}
-	return &Error{
-		Kind: ErrorKindValidation,
-		Message: fmt.Sprintf(
-			"configure: spot funds limit mode must be Enforce or TrackOnly, got %s",
-			mode,
-		),
-	}
-}
-
 // SpotFundsGlobalLimitMode sets the global limit mode of the named spot-funds
 // policy at runtime. Enforce rejects a reservation that exceeds available
 // funds; TrackOnly always records it and lets available go negative.
@@ -487,9 +476,6 @@ func (c Configurator) SpotFundsGlobalLimitMode(
 	name string,
 	mode policies.SpotFundsLimitMode,
 ) error {
-	if err := validateSpotFundsLimitMode(mode); err != nil {
-		return err
-	}
 	configErr := native.EngineConfigureSpotFundsGlobalLimitMode(
 		c.engine,
 		name,
@@ -515,11 +501,6 @@ func (c Configurator) SpotFundsAccountLimitMode(
 	accountID param.AccountID,
 	mode optional.Option[policies.SpotFundsLimitMode],
 ) error {
-	if v, has := mode.Get(); has {
-		if err := validateSpotFundsLimitMode(v); err != nil {
-			return err
-		}
-	}
 	nativeMode, hasMode := policies.NativeSpotFundsLimitModeOption(mode)
 	configErr := native.EngineConfigureSpotFundsAccountLimitMode(
 		c.engine,
@@ -547,11 +528,6 @@ func (c Configurator) SpotFundsAccountGroupLimitMode(
 	accountGroupID param.AccountGroupID,
 	mode optional.Option[policies.SpotFundsLimitMode],
 ) error {
-	if v, has := mode.Get(); has {
-		if err := validateSpotFundsLimitMode(v); err != nil {
-			return err
-		}
-	}
 	nativeMode, hasMode := policies.NativeSpotFundsLimitModeOption(mode)
 	configErr := native.EngineConfigureSpotFundsAccountGroupLimitMode(
 		c.engine,
@@ -566,30 +542,26 @@ func (c Configurator) SpotFundsAccountGroupLimitMode(
 	return nil
 }
 
-// SpotFundsPnlBoundsKillSwitch updates the account-currency P&L bounds axis of
+// SpotFundsPnlBoundsKillSwitch updates the account P&L bounds axis of
 // the named spot-funds policy.
 //
-// Nil slices leave an axis untouched; non-nil empty slices clear that axis
-// (subject to the policy's at-least-one-barrier rule). Runtime account updates
-// retune bounds and preserve the live accumulated P&L.
+// globalBarrier uses three states: optional.None leaves the global barrier
+// unchanged, optional.Some(nil) clears it, and optional.Some(&barrier) sets it.
+// Nil slices leave their axes untouched; non-nil empty slices clear them.
+// Barrier updates preserve live accumulated P&L.
 //
 // Returns a *Error on a domain error.
 func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 	name string,
-	globalBarriers []policies.SpotFundsPnlBoundsBarrier,
+	globalBarrier optional.Option[*policies.SpotFundsPnlBoundsBarrier],
 	accountGroupBarriers []policies.SpotFundsPnlBoundsAccountGroupBarrier,
-	accountBarriers []policies.SpotFundsPnlBoundsAccountBarrierUpdate,
+	accountBarriers []policies.SpotFundsPnlBoundsAccountBarrier,
 ) error {
-	var nativeGlobal []native.PretradePoliciesSpotFundsPnlBoundsBarrier
-	if globalBarriers != nil {
-		nativeGlobal = make(
-			[]native.PretradePoliciesSpotFundsPnlBoundsBarrier,
-			0,
-			len(globalBarriers),
-		)
-		for _, b := range globalBarriers {
-			nativeGlobal = append(nativeGlobal, nativeSpotFundsPnlBoundsBarrier(b))
-		}
+	var nativeGlobal *native.PretradePoliciesSpotFundsPnlBoundsBarrier
+	globalValue, hasGlobal := globalBarrier.Get()
+	if hasGlobal && globalValue != nil {
+		barrier := nativeSpotFundsPnlBoundsBarrier(*globalValue)
+		nativeGlobal = &barrier
 	}
 
 	var nativeAccountGroups []native.PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
@@ -610,17 +582,17 @@ func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 		}
 	}
 
-	var nativeAccounts []native.PretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate
+	var nativeAccounts []native.PretradePoliciesSpotFundsPnlBoundsAccountBarrier
 	if accountBarriers != nil {
 		nativeAccounts = make(
-			[]native.PretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate,
+			[]native.PretradePoliciesSpotFundsPnlBoundsAccountBarrier,
 			0,
 			len(accountBarriers),
 		)
 		for _, b := range accountBarriers {
 			nativeAccounts = append(
 				nativeAccounts,
-				native.NewPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate(
+				native.NewPretradePoliciesSpotFundsPnlBoundsAccountBarrier(
 					b.AccountID.Handle(),
 					nativeSpotFundsPnlBoundsBarrier(b.Barrier),
 				),
@@ -632,10 +604,11 @@ func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 		c.engine,
 		name,
 		nativeGlobal,
+		hasGlobal,
 		nativeAccountGroups,
 		nativeAccounts,
 	)
-	runtime.KeepAlive(globalBarriers)
+	runtime.KeepAlive(globalBarrier)
 	runtime.KeepAlive(accountGroupBarriers)
 	runtime.KeepAlive(accountBarriers)
 	if configErr != nil {
@@ -644,30 +617,51 @@ func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 	return nil
 }
 
-// SetSpotFundsAccountPnl force-sets the live accumulated account-currency P&L
-// for one account entry of the named spot-funds policy.
+// SetSpotFundsAccountPnl force-sets the live accumulated account P&L state for
+// one account entry of the named spot-funds policy.
 //
 // This is an absolute assignment (upsert). It is distinct from
 // [Configurator.SpotFundsPnlBoundsKillSwitch], which retunes bounds and never
 // touches accumulated P&L.
+//
+// On success it returns PolicyConfigurationResult. AccountBlocks is non-empty
+// when the assignment immediately causes the configured P&L kill switch to
+// block the account, including a numeric value beyond a barrier. A
+// configuration failure returns the existing configure error.
 func (c Configurator) SetSpotFundsAccountPnl(
 	name string,
 	account param.AccountID,
-	accountCurrency param.Asset,
-	pnl param.Pnl,
-) error {
-	configErr := native.EngineSetSpotFundsAccountPnl(
+	state model.PnlState,
+) (PolicyConfigurationResult, error) {
+	blocks, configErr := native.EngineSetSpotFundsAccountPnl(
 		c.engine,
 		name,
 		account.Handle(),
-		accountCurrency.Handle(),
-		pnl.Handle(),
+		state.Handle(),
 	)
-	runtime.KeepAlive(accountCurrency)
 	if configErr != nil {
-		return newErrorFromHandle(configErr)
+		return PolicyConfigurationResult{}, newErrorFromHandle(configErr)
 	}
-	return nil
+	defer native.DestroyPretradeAccountBlockList(blocks)
+	accountBlocks := make(
+		[]reject.AccountBlock,
+		native.PretradeAccountBlockListLen(blocks),
+	)
+	for index := range accountBlocks {
+		accountBlocks[index] = reject.NewAccountBlockFromHandle(
+			native.PretradeAccountBlockListGet(blocks, index),
+		)
+	}
+	return PolicyConfigurationResult{AccountBlocks: accountBlocks}, nil
+}
+
+// PolicyConfigurationResult describes an accepted runtime policy update.
+//
+// AccountBlocks is non-empty when the update immediately caused the engine to
+// block an account. An empty list means the update was accepted without an
+// account block.
+type PolicyConfigurationResult struct {
+	AccountBlocks []reject.AccountBlock
 }
 
 //------------------------------------------------------------------------------
@@ -684,7 +678,6 @@ func nativeSpotFundsPnlBoundsBarrier(
 	barrier policies.SpotFundsPnlBoundsBarrier,
 ) native.PretradePoliciesSpotFundsPnlBoundsBarrier {
 	return native.NewPretradePoliciesSpotFundsPnlBoundsBarrier(
-		barrier.AccountCurrency.Handle(),
 		pnlOptionalToNative(barrier.LowerBound),
 		pnlOptionalToNative(barrier.UpperBound),
 	)

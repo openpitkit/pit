@@ -20,7 +20,7 @@
 #include "spot_loadtest/decimal.hpp"
 #include "spot_loadtest/generator/event.hpp"
 
-#include "openpit/account_adjustment.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/reject.hpp"
 
 #include <map>
@@ -249,7 +249,7 @@ Oracle::CheckInvariants(const std::vector<generator::Event> &events) {
     case generator::EventKind::Settlement: {
       // q*p via a full scale-2 decimal multiply (the analogue of Go's
       // ev.Quantity.Mul(ev.Price)): exact at the pinned scales, and — unlike
-      // MulInt(ToWholeInt()) — it never truncates a fractional quantity first.
+      // MulInt(ToWholeInt()) never truncates a fractional quantity first.
       const Decimal notional = ev.quantity.Mul(ev.price);
       if (ev.side == generator::Side::Buy) {
         addExpected(ev.settlement, -notional);

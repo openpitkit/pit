@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package openpit
 
@@ -308,9 +308,9 @@ func TestExampleWikiMarketDataMarketOrdersBookTopOverride(t *testing.T) {
 		t.Fatalf("Push() error = %v", err)
 	}
 
-	// Price market orders from the top of book (ask for buys, bid for sells).
-	// The global slippage is 100 bps, but AAPL overrides it to zero, so a buy
-	// is priced exactly at the ask.
+	// Price from the top of book; AAPL overrides the global 100 bps slippage to
+	// zero, so a buy is priced exactly at the ask. An instrument-level override
+	// leaves the account and group ids unset.
 	engine, err := eb.
 		Builtin(
 			policies.BuildSpotFunds().
@@ -329,13 +329,13 @@ func TestExampleWikiMarketDataMarketOrdersBookTopOverride(t *testing.T) {
 
 	accountID := param.NewAccountIDFromUint64(99224416)
 	seed := marketDataSeedBalance(t, "1000")
-	if rejects, _, err := engine.ApplyAccountAdjustment(
+	if result, err := engine.ApplyAccountAdjustment(
 		accountID,
 		[]model.AccountAdjustment{seed},
 	); err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
-	} else if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", rejects)
+	} else if result.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", result.BatchError)
 	}
 
 	// Market buy (no price): priced at the ask 200.5 because the override pins

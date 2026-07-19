@@ -128,13 +128,13 @@ document.addEventListener('DOMContentLoaded',() => { initNavTree('classopenpit_1
 <tr class="heading"><td colspan="2"><h2 id="header-pub-methods" class="groupheader"><a id="pub-methods" name="pub-methods"></a>
 Public Member Functions</h2></td></tr>
 <tr class="memitem:a8508b2ab074d9b1a335dbcdf698523ef" id="r_a8508b2ab074d9b1a335dbcdf698523ef"><td class="memItemLeft"><a class="el" href="classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy.html">SpotFundsPnlBoundsKillSwitchPolicy</a> &amp;&#160;</td><td class="memItemRight"><a class="el" href="#a8508b2ab074d9b1a335dbcdf698523ef">AccountBarrier</a> (<a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrier.html">SpotFundsPnlBoundsAccountBarrier</a> barrier)</td></tr>
-<tr class="memdesc:a8508b2ab074d9b1a335dbcdf698523ef"><td class="mdescLeft">&#160;</td><td class="mdescRight">Adds an account account-currency P&amp;L barrier.  <br /></td></tr>
+<tr class="memdesc:a8508b2ab074d9b1a335dbcdf698523ef"><td class="mdescLeft">&#160;</td><td class="mdescRight">Adds an account P&amp;L barrier.  <br /></td></tr>
 <tr class="memitem:a0b6600f46367bd75770653c137ff7b6b" id="r_a0b6600f46367bd75770653c137ff7b6b"><td class="memItemLeft"><a class="el" href="classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy.html">SpotFundsPnlBoundsKillSwitchPolicy</a> &amp;&#160;</td><td class="memItemRight"><a class="el" href="#a0b6600f46367bd75770653c137ff7b6b">AccountGroupBarrier</a> (<a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountGroupBarrier.html">SpotFundsPnlBoundsAccountGroupBarrier</a> barrier)</td></tr>
-<tr class="memdesc:a0b6600f46367bd75770653c137ff7b6b"><td class="mdescLeft">&#160;</td><td class="mdescRight">Adds an account-group account-currency P&amp;L barrier.  <br /></td></tr>
+<tr class="memdesc:a0b6600f46367bd75770653c137ff7b6b"><td class="mdescLeft">&#160;</td><td class="mdescRight">Adds an account-group account P&amp;L barrier.  <br /></td></tr>
 <tr class="memitem:aa1e00d8e697ad0444752333182579d93" id="r_aa1e00d8e697ad0444752333182579d93"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#aa1e00d8e697ad0444752333182579d93">AddTo</a> (<a class="el" href="classopenpit_1_1EngineBuilder.html">::openpit::EngineBuilder</a> &amp;builder) const</td></tr>
 <tr class="memdesc:aa1e00d8e697ad0444752333182579d93"><td class="mdescLeft">&#160;</td><td class="mdescRight">Registers the policy on <span class="tt">builder</span>.  <br /></td></tr>
 <tr class="memitem:aa437a806abf3198adadc51f488ab8c6b" id="r_aa437a806abf3198adadc51f488ab8c6b"><td class="memItemLeft"><a class="el" href="classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy.html">SpotFundsPnlBoundsKillSwitchPolicy</a> &amp;&#160;</td><td class="memItemRight"><a class="el" href="#aa437a806abf3198adadc51f488ab8c6b">GlobalBarrier</a> (<a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier.html">SpotFundsPnlBoundsBarrier</a> barrier)</td></tr>
-<tr class="memdesc:aa437a806abf3198adadc51f488ab8c6b"><td class="mdescLeft">&#160;</td><td class="mdescRight">Adds a global account-currency P&amp;L barrier.  <br /></td></tr>
+<tr class="memdesc:aa437a806abf3198adadc51f488ab8c6b"><td class="mdescLeft">&#160;</td><td class="mdescRight">Sets the global account P&amp;L barrier.  <br /></td></tr>
 <tr class="memitem:a9d37301c2446f9b6f1438060862dd666" id="r_a9d37301c2446f9b6f1438060862dd666"><td class="memItemLeft"><a class="el" href="classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy.html">SpotFundsPnlBoundsKillSwitchPolicy</a> &amp;&#160;</td><td class="memItemRight"><a class="el" href="#a9d37301c2446f9b6f1438060862dd666">PolicyGroupId</a> (std::uint16_t policyGroupId)</td></tr>
 <tr class="memdesc:a9d37301c2446f9b6f1438060862dd666"><td class="mdescLeft">&#160;</td><td class="mdescRight">Assigns the policy to a pricing group.  <br /></td></tr>
 <tr class="memitem:ad98b7d2e3b974432578516b65ef89590" id="r_ad98b7d2e3b974432578516b65ef89590"><td class="memItemLeft"><a class="el" href="classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy.html">SpotFundsPnlBoundsKillSwitchPolicy</a> &amp;&#160;</td><td class="memItemRight"><a class="el" href="#ad98b7d2e3b974432578516b65ef89590">WithMarketData</a> (const <a class="el" href="classopenpit_1_1marketdata_1_1Service.html">::openpit::marketdata::Service</a> &amp;marketData) noexcept</td></tr>
@@ -144,7 +144,7 @@ Public Member Functions</h2></td></tr>
 </table>
 <a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
 <div class="textblock"><p>Built-in spot-funds self-computed P&amp;L bounds kill switch. </p>
-<p>This registers the regular <span class="tt"><a class="el" href="classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy.html">SpotFundsPolicy</a></span> name and configures its account-currency P&amp;L-bounds axis. The policy computes realized P&amp;L from reconciled fills instead of trusting an externally supplied P&amp;L figure. </p>
+<p>This registers the regular <span class="tt"><a class="el" href="classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy.html">SpotFundsPolicy</a></span> name and configures its account P&amp;L-bounds axis. The policy computes realized P&amp;L from reconciled fills instead of trusting an externally supplied P&amp;L figure. Its SpotFunds limit mode is <span class="tt">TrackOnly</span>: holdings and P&amp;L are updated, but insufficient-funds gating is disabled. Mark pricing is used for market orders. </p>
 </div><a name="doc-func-members" id="doc-func-members"></a><h2 id="header-doc-func-members" class="groupheader">Member Function Documentation</h2>
 <a id="a8508b2ab074d9b1a335dbcdf698523ef" name="a8508b2ab074d9b1a335dbcdf698523ef"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#a8508b2ab074d9b1a335dbcdf698523ef">&#9670;&#160;</a></span>AccountBarrier()</h2>
@@ -169,7 +169,7 @@ Public Member Functions</h2></td></tr>
 </table>
 </div><div class="memdoc">
 
-<p>Adds an account account-currency P&amp;L barrier. </p>
+<p>Adds an account P&amp;L barrier. </p>
 
 </div>
 </div>
@@ -196,7 +196,7 @@ Public Member Functions</h2></td></tr>
 </table>
 </div><div class="memdoc">
 
-<p>Adds an account-group account-currency P&amp;L barrier. </p>
+<p>Adds an account-group account P&amp;L barrier. </p>
 
 </div>
 </div>
@@ -250,7 +250,7 @@ Public Member Functions</h2></td></tr>
 </table>
 </div><div class="memdoc">
 
-<p>Adds a global account-currency P&amp;L barrier. </p>
+<p>Sets the global account P&amp;L barrier. </p>
 
 </div>
 </div>

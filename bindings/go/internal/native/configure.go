@@ -243,14 +243,15 @@ func EngineConfigureSpotFunds(
 func EngineConfigureSpotFundsPnlBoundsKillSwitch(
 	engine Engine,
 	name string,
-	globalBarriers []PretradePoliciesSpotFundsPnlBoundsBarrier,
+	globalBarrier *PretradePoliciesSpotFundsPnlBoundsBarrier,
+	hasGlobalBarrier bool,
 	accountGroupBarriers []PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
-	accountBarriers []PretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate,
+	accountBarriers []PretradePoliciesSpotFundsPnlBoundsAccountBarrier,
 ) ConfigureError {
 	var globalPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier
-	if len(globalBarriers) > 0 {
+	if globalBarrier != nil {
 		globalPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier)(
-			unsafe.Pointer(&globalBarriers[0]),
+			unsafe.Pointer(globalBarrier),
 		)
 	}
 	var accountGroupPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
@@ -259,9 +260,9 @@ func EngineConfigureSpotFundsPnlBoundsKillSwitch(
 			unsafe.Pointer(&accountGroupBarriers[0]),
 		)
 	}
-	var accountPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate
+	var accountPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier
 	if len(accountBarriers) > 0 {
-		accountPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate)(
+		accountPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier)(
 			unsafe.Pointer(&accountBarriers[0]),
 		)
 	}
@@ -271,8 +272,7 @@ func EngineConfigureSpotFundsPnlBoundsKillSwitch(
 		engine,
 		importString(name),
 		globalPtr,
-		C.size_t(len(globalBarriers)),
-		C.bool(globalBarriers != nil),
+		C.bool(hasGlobalBarrier),
 		accountGroupPtr,
 		C.size_t(len(accountGroupBarriers)),
 		C.bool(accountGroupBarriers != nil),
@@ -281,7 +281,7 @@ func EngineConfigureSpotFundsPnlBoundsKillSwitch(
 		C.bool(accountBarriers != nil),
 		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
-	runtime.KeepAlive(globalBarriers)
+	runtime.KeepAlive(globalBarrier)
 	runtime.KeepAlive(accountGroupBarriers)
 	runtime.KeepAlive(accountBarriers)
 	if !ok {
@@ -290,27 +290,29 @@ func EngineConfigureSpotFundsPnlBoundsKillSwitch(
 	return nil
 }
 
-// EngineSetSpotFundsAccountPnl force-sets the live accumulated account-currency
-// P&L for one account entry of the named spot-funds policy.
+// EngineSetSpotFundsAccountPnl force-sets the live accumulated account P&L
+// state for one account entry of the named spot-funds policy.
+//
+// On success it returns a caller-owned account-block list, possibly empty.
+// The caller must release it with DestroyPretradeAccountBlockList.
 func EngineSetSpotFundsAccountPnl(
 	engine Engine,
 	name string,
 	accountID ParamAccountID,
-	accountCurrency string,
-	pnl ParamPnl,
-) ConfigureError {
+	state PnlState,
+) (PretradeAccountBlockList, ConfigureError) {
 	var outError ConfigureError
-	if !C.openpit_engine_configure_spot_funds_set_account_pnl(
+	blocks := C.openpit_engine_configure_spot_funds_set_account_pnl(
 		engine,
 		importString(name),
 		accountID,
-		importString(accountCurrency),
-		pnl,
+		state,
 		&outError, //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
-		return outError
+	)
+	if blocks == nil {
+		return nil, outError
 	}
-	return nil
+	return blocks, nil
 }
 
 // EngineConfigureSpotFundsGlobalLimitMode sets the global spot-funds limit mode

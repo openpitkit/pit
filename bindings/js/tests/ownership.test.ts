@@ -25,6 +25,15 @@ import {
 } from "@openpit/engine/accountadjustment";
 import { Price } from "@openpit/engine/param";
 import {
+  AccountAdjustmentAccountPnlOperation,
+  AccountAdjustmentBalanceOperation,
+} from "@openpit/engine/model";
+import {
+  AccountPnlOutcome,
+  PnlHaltReason,
+  PnlOutcome,
+} from "@openpit/engine/pretrade";
+import {
   buildOrderSizeLimit,
   buildOrderValidation,
   buildPnlBoundsKillswitch,
@@ -64,9 +73,9 @@ describe("wasm wrapper ownership", () => {
     expect(() => ready.builtin(incomplete as never)).toThrow(
       /require at least one barrier/,
     );
-    const corrected = incomplete.globalBarriers([
-      new SpotFundsPnlBoundsBarrier("USD", "-100", undefined),
-    ]);
+    const corrected = incomplete.globalBarrier(
+      new SpotFundsPnlBoundsBarrier("-100", undefined),
+    );
     expect(() => ready.builtin(corrected)).not.toThrow();
     expect(() => ready.build()).not.toThrow();
   });
@@ -117,40 +126,50 @@ describe("wasm wrapper ownership", () => {
     expect(() => pnlBuilder.brokerBarriers([brokerPnl])).not.toThrow();
     expect(() => pnlBuilder.accountBarriers([accountPnl])).not.toThrow();
 
-    const globalSpot = new SpotFundsPnlBoundsBarrier("USD", "-100", undefined);
-    const groupSpot = new SpotFundsPnlBoundsAccountGroupBarrier(
-      8,
-      "USD",
-      "-100",
-      undefined,
-    );
-    const accountSpot = new SpotFundsPnlBoundsAccountBarrier(
-      7,
-      "USD",
-      "0",
-      "-100",
-      undefined,
-    );
+    const globalSpot = new SpotFundsPnlBoundsBarrier("-100", undefined);
+    const groupSpot = new SpotFundsPnlBoundsAccountGroupBarrier(8, globalSpot);
+    const accountSpot = new SpotFundsPnlBoundsAccountBarrier(7, globalSpot);
     const spotBuilder = buildSpotFundsPnlBoundsKillswitch();
-    spotBuilder.globalBarriers([globalSpot]);
+    spotBuilder.globalBarrier(globalSpot);
     spotBuilder.accountGroupBarriers([groupSpot]);
     spotBuilder.accountBarriers([accountSpot]);
-    expect(() => spotBuilder.globalBarriers([globalSpot])).not.toThrow();
+    expect(() => spotBuilder.globalBarrier(globalSpot)).not.toThrow();
     expect(() => spotBuilder.accountGroupBarriers([groupSpot])).not.toThrow();
     expect(() => spotBuilder.accountBarriers([accountSpot])).not.toThrow();
+    expect(() => globalSpot.clone()).not.toThrow();
+  });
+
+  it("does not consume PnL states passed to adjustment operations", () => {
+    const haltReason = PnlHaltReason.fromMissingFx();
+    const accountPnl = new AccountAdjustmentAccountPnlOperation(haltReason);
+    const balancePnl = new AccountAdjustmentBalanceOperation();
+    balancePnl.asset = "AAPL";
+    balancePnl.realizedPnl = haltReason;
+
+    expect(() => accountPnl.clone()).not.toThrow();
+    expect(accountPnl.state).toBeInstanceOf(PnlHaltReason);
+    expect(() => balancePnl.clone()).not.toThrow();
+    expect(haltReason.isMissingFx).toBe(true);
   });
 
   it("does not consume exported values passed to outcome constructors", () => {
     const balance = new OutcomeAmount("1", "10");
     const pnl = new PnlOutcomeAmount("2", "20");
     const averageEntryPrice = Price.fromString("100");
+    const haltReason = PnlHaltReason.fromMissingAccountCurrency();
+    const accountPnl = new AccountPnlOutcome(
+      7,
+      99224416n,
+      undefined,
+      haltReason,
+    );
 
     const entry = new AccountOutcomeEntry(
       "USD",
       balance,
       undefined,
       undefined,
-      pnl,
+      new PnlOutcome(pnl, undefined),
       averageEntryPrice,
     );
 
@@ -158,5 +177,8 @@ describe("wasm wrapper ownership", () => {
     expect(balance.absolute.toString()).toBe("10");
     expect(pnl.absolute.toString()).toBe("20");
     expect(averageEntryPrice.toString()).toBe("100");
+    expect(haltReason.isMissingAccountCurrency).toBe(true);
+    expect(accountPnl.policyGroupId).toBe(7);
+    expect(accountPnl.haltReason?.isMissingAccountCurrency).toBe(true);
   });
 });

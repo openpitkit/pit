@@ -539,17 +539,20 @@ func (r *run) applySeeds(syncEngine *openpit.Engine, events []generator.Event) e
 			return fmt.Errorf("driver: build seed adjustment (account %s asset %s): %w",
 				ev.Account, ev.FundingAsset, err)
 		}
-		batchErr, outcomes, err := syncEngine.ApplyAccountAdjustment(acc, []model.AccountAdjustment{adj})
+		result, err := syncEngine.ApplyAccountAdjustment(acc, []model.AccountAdjustment{adj})
 		if err != nil {
 			return fmt.Errorf("driver: apply seed (account %s asset %s): %w",
 				ev.Account, ev.FundingAsset, err)
 		}
 		// Verify the seed outcome against the shadow's predicted post-seed balance,
 		// exactly as a runtime funding adjustment is checked on the async path.
-		r.oracle.checkFunding(ev, fundingObservation{rejected: batchErr.IsSet(), outcomes: outcomes})
+		r.oracle.checkFunding(ev, fundingObservation{
+			rejected: result.BatchError.IsSet(),
+			outcomes: result.Outcomes,
+		})
 		// A rejected seed is a setup failure: surface it loudly rather than
 		// starting a run whose accounts cannot trade.
-		if batchErr.IsSet() {
+		if result.BatchError.IsSet() {
 			return fmt.Errorf("driver: seed rejected for account %s asset %s (setup must succeed)",
 				ev.Account, ev.FundingAsset)
 		}

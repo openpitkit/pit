@@ -13,15 +13,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 //! View structs that flatten policy inputs into compact, locally-named bundles
 //! so the per-stage helpers do not have to thread trait-object accessors.
 
 use crate::core::instrument::Instrument;
+use crate::core::{PnlOutcome, PnlState};
 use crate::param::{
-    AccountId, AdjustmentAmount, Asset, MonetaryAmount, Pnl, PositionSize, Price, Quantity, Side,
-    Trade, TradeAmount,
+    AccountId, AdjustmentAmount, Asset, MonetaryAmount, PositionSize, Price, Quantity, Side, Trade,
+    TradeAmount,
 };
 use crate::pretrade::holdings::Holdings;
 use crate::pretrade::PreTradeLock;
@@ -56,7 +57,7 @@ pub(super) struct AdjustmentRequestView {
     pub(super) asset: Asset,
     pub(super) balance: Option<AdjustmentAmount>,
     pub(super) balance_average_entry_price: Option<Price>,
-    pub(super) balance_realized_pnl: Option<Pnl>,
+    pub(super) balance_realized_pnl: Option<PnlState>,
     pub(super) balance_lower: Option<PositionSize>,
     pub(super) balance_upper: Option<PositionSize>,
     pub(super) held: Option<AdjustmentAmount>,
@@ -85,19 +86,20 @@ pub(super) struct ExecutionRequestView<'i> {
 /// A single asset can be touched by both the fill and the cancel phase (and,
 /// for a two-leg order, by both legs), so the deltas accumulate additively and
 /// the snapshot tracks the most recent post-mutation `Holdings`. `final_holdings`
-/// is `None` until the asset has been touched at least once. `pnl_delta` sums
-/// the realized PnL across this report's tracked underlying-leg fills, or is
-/// `None` when PnL was not tracked; the current average entry price is read
-/// back from `final_holdings` rather than tracked separately, since every
-/// holdings mutation carries it through. `incoming_delta` accumulates the
-/// projected inflow consumed on fills or released on cancels for the acquiring
-/// leg (negative as it drains toward zero).
+/// is `None` until the asset has been touched at least once. `pnl_outcome` is
+/// the underlying position-PnL result of this report: a changed PnL amount or
+/// the first halt reason, never a reconstruction from persistent state.
+/// `average_entry_price` is set by a fill that performed position accounting.
+/// `incoming_delta` accumulates the projected inflow consumed on fills or
+/// released on cancels for the acquiring leg (negative as it drains toward
+/// zero).
 #[derive(Clone, Copy)]
 pub(super) struct LegDelta {
     pub(super) held_delta: PositionSize,
     pub(super) balance_delta: PositionSize,
     pub(super) incoming_delta: PositionSize,
-    pub(super) pnl_delta: Option<Pnl>,
+    pub(super) pnl_outcome: Option<PnlOutcome>,
+    pub(super) average_entry_price: Option<Price>,
     pub(super) final_holdings: Option<Holdings>,
 }
 
@@ -107,7 +109,8 @@ impl LegDelta {
             held_delta: PositionSize::ZERO,
             balance_delta: PositionSize::ZERO,
             incoming_delta: PositionSize::ZERO,
-            pnl_delta: None,
+            pnl_outcome: None,
+            average_entry_price: None,
             final_holdings: None,
         }
     }

@@ -339,7 +339,7 @@ impl std::error::Error for Rejects {}
 /// assert_eq!(reject.scope, RejectScope::Account);
 /// assert_eq!(reject.code, RejectCode::PnlKillSwitchTriggered);
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct AccountBlock {
     /// Human-readable reject reason.
@@ -357,7 +357,23 @@ pub struct AccountBlock {
     pub user_data: usize,
     /// Stable machine-readable reject code.
     pub code: RejectCode,
+    /// Engine-owned provenance for a block produced from a provisional
+    /// account-PnL assertion. It is deliberately absent from every public
+    /// binding and constructor.
+    pub(crate) provenance: Option<u64>,
 }
+
+impl PartialEq for AccountBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self.reason == other.reason
+            && self.details == other.details
+            && self.policy == other.policy
+            && self.user_data == other.user_data
+            && self.code == other.code
+    }
+}
+
+impl Eq for AccountBlock {}
 
 impl AccountBlock {
     /// Creates an account block with human-readable reason and details.
@@ -373,6 +389,7 @@ impl AccountBlock {
             details: details.into(),
             policy: policy.into(),
             user_data: 0,
+            provenance: None,
         }
     }
 
@@ -380,6 +397,15 @@ impl AccountBlock {
     pub fn with_user_data(mut self, user_data: usize) -> Self {
         self.user_data = user_data;
         self
+    }
+
+    pub(crate) fn with_provenance(mut self, provenance: Option<u64>) -> Self {
+        self.provenance = provenance;
+        self
+    }
+
+    pub(crate) fn provenance(&self) -> Option<u64> {
+        self.provenance
     }
 }
 
@@ -431,7 +457,15 @@ impl Reject {
 
 #[cfg(test)]
 mod tests {
-    use super::RejectCode;
+    use super::{AccountBlock, RejectCode};
+
+    #[test]
+    fn account_block_equality_ignores_engine_provenance() {
+        let visible = AccountBlock::new("Policy", RejectCode::Other, "reason", "details");
+        let provisional = visible.clone().with_provenance(Some(42));
+
+        assert_eq!(visible, provisional);
+    }
 
     #[test]
     fn reject_code_as_str_and_display_are_stable_for_all_values() {

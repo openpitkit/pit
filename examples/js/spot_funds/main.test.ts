@@ -80,9 +80,12 @@ describe("spot_funds", () => {
       `buy #3 rejected after TrackOnly: ${describeRejects(placed3.rejects)}`,
     ).not.toBeNull();
 
-    // Step 7 exercises the spot-funds P&L axis surface: retune the per-account
-    // barrier and force-set live accumulated P&L.
+    // Step 7 exercises the account-wide P&L surface: retune the account barrier
+    // and force-set the single live account P&L state. -120 is inside the
+    // [-250, 250] barrier just configured, so the returned
+    // PolicyConfigurationResult carries no account block.
     expect(() => configureSpotFundsPnlAxis(engine)).not.toThrow();
-    expect(() => forceSpotFundsPnl(engine, "-120")).not.toThrow();
+    const pnlResult = forceSpotFundsPnl(engine, "-120");
+    expect(pnlResult.accountBlocks).toEqual([]);
   });
 });

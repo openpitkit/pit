@@ -17,14 +17,16 @@
 
 #pragma once
 
-#include "openpit/account_adjustment.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/accounts.hpp"
 #include "openpit/error.hpp"
 #include "openpit/param.hpp"
+#include "openpit/reject.hpp"
 
 #include <openpit.h>
 
 #include <optional>
+#include <vector>
 
 // Non-owning collectors and contexts passed to custom-policy callbacks. Every
 // wrapper is valid only for the duration of the callback that created it.
@@ -166,9 +168,37 @@ class PostTradeAdjustments {
   OpenPitPostTradeAdjustmentList* m_native = nullptr;
 };
 
+class PostTradePnls {
+ public:
+  explicit PostTradePnls(OpenPitPostTradeAccountPnlList* native) noexcept
+      : m_native(native) {}
+
+  PostTradePnls(const PostTradePnls&) = delete;
+  PostTradePnls& operator=(const PostTradePnls&) = delete;
+  PostTradePnls(PostTradePnls&&) = delete;
+  PostTradePnls& operator=(PostTradePnls&&) = delete;
+
+  void Push(const ::openpit::accountadjustment::AccountPnlOutcome& outcome) {
+    OpenPitSharedString* error = nullptr;
+    if (!openpit_pretrade_post_trade_account_pnl_list_push(
+            m_native, outcome.Raw(), &error)) {
+      ::openpit::detail::ThrowFromSharedString(
+          error, "openpit_pretrade_post_trade_account_pnl_list_push failed");
+    }
+  }
+
+  [[nodiscard]] OpenPitPostTradeAccountPnlList* Native() const noexcept {
+    return m_native;
+  }
+
+ private:
+  OpenPitPostTradeAccountPnlList* m_native = nullptr;
+};
+
 class AccountOutcomes {
  public:
-  explicit AccountOutcomes(OpenPitAccountOutcomeEntryList* native) noexcept
+  explicit AccountOutcomes(
+      OpenPitPretradeAccountAdjustmentResult* native) noexcept
       : m_native(native) {}
 
   AccountOutcomes(const AccountOutcomes&) = delete;
@@ -178,19 +208,29 @@ class AccountOutcomes {
 
   void Push(const ::openpit::accountadjustment::AccountOutcomeEntry& entry) {
     OpenPitSharedString* error = nullptr;
-    if (!openpit_account_outcome_entry_list_push(m_native, entry.Raw(),
-                                                 &error)) {
+    if (!openpit_pretrade_account_adjustment_result_push_account_outcome(
+            m_native, entry.Raw(), &error)) {
       ::openpit::detail::ThrowFromSharedString(
-          error, "openpit_account_outcome_entry_list_push failed");
+          error,
+          "openpit_pretrade_account_adjustment_result_push_account_outcome "
+          "failed");
     }
   }
 
-  [[nodiscard]] OpenPitAccountOutcomeEntryList* Native() const noexcept {
+  [[nodiscard]] OpenPitPretradeAccountAdjustmentResult* Native()
+      const noexcept {
     return m_native;
   }
 
  private:
-  OpenPitAccountOutcomeEntryList* m_native = nullptr;
+  OpenPitPretradeAccountAdjustmentResult* m_native = nullptr;
+};
+
+// Accepted result of a custom account-adjustment callback. The engine commits
+// its mutations before recording every account block in `accountBlocks`.
+struct PolicyAccountAdjustmentResult {
+  PolicyDecision decision;
+  std::vector<::openpit::accounts::AccountBlock> accountBlocks;
 };
 
 }  // namespace openpit::pretrade

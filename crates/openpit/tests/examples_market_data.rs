@@ -207,7 +207,9 @@ fn example_wiki_market_data_market_orders_book_top_override(
 
     type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
     type SpotAdjustment = WithAccountAdjustmentAmount<
-        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+        WithAccountAdjustmentBounds<
+            WithAccountAdjustmentBalanceOperation<openpit::AccountAdjustmentAmount>,
+        >,
     >;
 
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
@@ -249,11 +251,10 @@ fn example_wiki_market_data_market_orders_book_top_override(
     let seed = WithAccountAdjustmentAmount {
         inner: WithAccountAdjustmentBounds {
             inner: WithAccountAdjustmentBalanceOperation {
-                inner: (),
+                inner: AccountAdjustmentAmount::default(),
                 operation: AccountAdjustmentBalanceOperation {
                     asset: Asset::new("USD")?,
                     average_entry_price: None,
-                    realized_pnl: None,
                 },
             },
             bounds: AccountAdjustmentBounds::default(),

@@ -48,7 +48,7 @@ fn import_operation(
         } else {
             None
         },
-        side: import_side(value.value.side),
+        side: import_side(value.value.side)?,
         trade_amount: import_trade_amount(value.value.trade_amount)?,
         price: if value.value.price.is_set {
             Some(value.value.price.value.to_param()?)
@@ -58,16 +58,16 @@ fn import_operation(
     }))
 }
 
-fn import_position(value: OpenPitOrderPositionOptional) -> OrderPositionAccess {
+fn import_position(value: OpenPitOrderPositionOptional) -> Result<OrderPositionAccess, String> {
     if !value.is_set {
-        return OrderPositionAccess::Absent;
+        return Ok(OrderPositionAccess::Absent);
     }
 
-    OrderPositionAccess::Populated(PopulatedOrderPosition {
-        position_side: import_position_side(value.value.position_side),
-        reduce_only: import_bool(value.value.reduce_only).unwrap_or(false),
-        close_position: import_bool(value.value.close_position).unwrap_or(false),
-    })
+    Ok(OrderPositionAccess::Populated(PopulatedOrderPosition {
+        position_side: import_position_side(value.value.position_side)?,
+        reduce_only: import_bool(value.value.reduce_only)?.unwrap_or(false),
+        close_position: import_bool(value.value.close_position)?.unwrap_or(false),
+    }))
 }
 
 fn import_margin(value: OpenPitOrderMarginOptional) -> Result<OrderMarginAccess, String> {
@@ -81,7 +81,7 @@ fn import_margin(value: OpenPitOrderMarginOptional) -> Result<OrderMarginAccess,
             value.value.collateral_asset,
             "margin.collateral_asset",
         )?,
-        auto_borrow: import_bool(value.value.auto_borrow).unwrap_or(false),
+        auto_borrow: import_bool(value.value.auto_borrow)?.unwrap_or(false),
     }))
 }
 
@@ -176,7 +176,7 @@ pub(crate) fn import_order(value: &OpenPitOrder) -> Result<Order, String> {
                 Some(v) => OrderOperationAccess::Populated(v),
                 None => OrderOperationAccess::Absent,
             },
-            position: import_position(value.position),
+            position: import_position(value.position)?,
             margin: import_margin(value.margin)?,
         },
         value.user_data,
@@ -294,9 +294,8 @@ mod tests {
         OpenPitOrderPositionOptional,
     };
     use crate::param::{
-        OpenPitParamAccountIdOptional, OpenPitParamLeverage, OpenPitParamPositionSide,
-        OpenPitParamPrice, OpenPitParamPriceOptional, OpenPitParamQuantity, OpenPitParamSide,
-        OpenPitParamTradeAmount, OpenPitParamTradeAmountKind, OpenPitTriBool,
+        OpenPitParamAccountIdOptional, OpenPitParamLeverage, OpenPitParamPrice,
+        OpenPitParamPriceOptional, OpenPitParamQuantity, OpenPitParamTradeAmount,
     };
     use crate::{instrument::OpenPitInstrument, OpenPitStringView};
 
@@ -332,21 +331,21 @@ mod tests {
                                 .into(),
                         )
                         .0,
-                        kind: OpenPitParamTradeAmountKind::Quantity,
+                        kind: crate::param::OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY,
                     },
                     account_id: OpenPitParamAccountIdOptional {
                         value: 7,
                         is_set: true,
                     },
-                    side: OpenPitParamSide::Buy,
+                    side: crate::param::OPENPIT_PARAM_SIDE_BUY,
                 },
             },
             position: OpenPitOrderPositionOptional {
                 is_set: true,
                 value: OpenPitOrderPosition {
-                    position_side: OpenPitParamPositionSide::Long,
-                    reduce_only: OpenPitTriBool::True,
-                    close_position: OpenPitTriBool::False,
+                    position_side: crate::param::OPENPIT_PARAM_POSITION_SIDE_LONG,
+                    reduce_only: crate::param::OPENPIT_TRI_BOOL_TRUE,
+                    close_position: crate::param::OPENPIT_TRI_BOOL_FALSE,
                 },
             },
             margin: OpenPitOrderMarginOptional {
@@ -357,7 +356,7 @@ mod tests {
                         len: 3,
                     },
                     leverage: 200 as OpenPitParamLeverage,
-                    auto_borrow: OpenPitTriBool::True,
+                    auto_borrow: crate::param::OPENPIT_TRI_BOOL_TRUE,
                 },
             },
             user_data: std::ptr::null_mut(),
@@ -445,17 +444,23 @@ mod tests {
 
         let exported = export_order(&order);
         assert!(exported.operation.is_set);
-        assert_eq!(exported.operation.value.side, OpenPitParamSide::Sell);
+        assert_eq!(
+            exported.operation.value.side,
+            crate::param::OPENPIT_PARAM_SIDE_SELL
+        );
         assert_eq!(
             exported.operation.value.trade_amount,
             OpenPitParamTradeAmount {
                 value: Volume::from_str("1500").expect("valid").to_decimal().into(),
-                kind: OpenPitParamTradeAmountKind::Volume
+                kind: crate::param::OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME
             }
         );
         assert_eq!(exported.operation.value.instrument.underlying_asset.len, 4);
         assert_eq!(exported.margin.value.collateral_asset.len, 3);
-        assert_eq!(exported.margin.value.auto_borrow, OpenPitTriBool::False);
+        assert_eq!(
+            exported.margin.value.auto_borrow,
+            crate::param::OPENPIT_TRI_BOOL_FALSE
+        );
     }
 
     #[test]
@@ -467,15 +472,15 @@ mod tests {
                 value: OpenPitOrderMargin {
                     collateral_asset: OpenPitStringView::not_set(),
                     leverage: OpenPitParamLeverage::default(),
-                    auto_borrow: OpenPitTriBool::False,
+                    auto_borrow: crate::param::OPENPIT_TRI_BOOL_FALSE,
                 },
             },
             position: OpenPitOrderPositionOptional {
                 is_set: true,
                 value: OpenPitOrderPosition {
-                    position_side: OpenPitParamPositionSide::NotSet,
-                    reduce_only: OpenPitTriBool::False,
-                    close_position: OpenPitTriBool::False,
+                    position_side: crate::param::OPENPIT_PARAM_POSITION_SIDE_NOT_SET,
+                    reduce_only: crate::param::OPENPIT_TRI_BOOL_FALSE,
+                    close_position: crate::param::OPENPIT_TRI_BOOL_FALSE,
                 },
             },
             user_data: std::ptr::null_mut(),

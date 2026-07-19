@@ -1,7 +1,7 @@
 # rate_pnl_killswitch
 
 An independent supervisor that wraps OpenPit's **RateLimit** and
-**PnlBoundsKillswitch** policies around a Go strategy, so a runaway strategy is
+**PnlBoundsKillSwitch** policies around a Go strategy, so a runaway strategy is
 halted before it floods the venue with orders or burns through its loss budget.
 `main()` builds an engine with the two kill-switch policies side-by-side, feeds
 it a single `Event` stream (orders + fills), keeps venue/strategy side-effects
@@ -31,10 +31,14 @@ just test-go-debug
 
 Build the native library once and point the loader at it:
 
+<!-- markdownlint-disable MD013 -->
+
 ```sh
 cargo build -p openpit-ffi --release
 export OPENPIT_RUNTIME_LIBRARY_PATH="$PWD/target/release/libopenpit_ffi.dylib"  # .so on Linux
 ```
+
+<!-- markdownlint-enable MD013 -->
 
 Then, from `examples/go/rate_pnl_killswitch/`:
 
@@ -49,8 +53,12 @@ version so the example exercises exactly what an SDK consumer sees.
 
 ## See also
 
+<!-- markdownlint-disable MD013 -->
+
 - [RateLimitPolicy](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
   and [PnlBoundsKillSwitchPolicy](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy) -
   the policy references for the two kill switches combined here.
 - [`../spot_funds`](../spot_funds) - the smallest single-policy integration, a
   good starting point before this multi-policy supervisor.
+
+<!-- markdownlint-enable MD013 -->

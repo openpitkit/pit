@@ -22,7 +22,14 @@ import (
 	"testing"
 
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
 )
+
+type noGroupAccountInfo struct{}
+
+func (noGroupAccountInfo) AccountGroup() optional.Option[param.AccountGroupID] {
+	return optional.None[param.AccountGroupID]()
+}
 
 func testInstrument(t *testing.T, underlying string) param.Instrument {
 	t.Helper()
@@ -115,5 +122,23 @@ func TestRegistrationErrorZeroValueIsSafe(t *testing.T) {
 	missingID := &RegistrationError{Kind: RegistrationErrorKindDuplicateID}
 	if got := missingID.Error(); got != "market-data registration failed" {
 		t.Fatalf("missing-id Error() = %q", got)
+	}
+}
+
+func TestGetRejectsUnknownQuoteResolution(t *testing.T) {
+	service, err := NewBuilder(InfiniteTTL()).NoSync().Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer service.Close()
+
+	_, err = service.Get(
+		NewInstrumentIDFromUint64(999),
+		param.NewAccountIDFromUint64(1),
+		noGroupAccountInfo{},
+		QuoteResolution(255),
+	)
+	if !errors.Is(err, ErrInvalidQuoteResolution) {
+		t.Fatalf("Get() error = %v, want ErrInvalidQuoteResolution", err)
 	}
 }

@@ -4,6 +4,14 @@
 
 [Back to index](index.md)
 
+## `OpenPitPostTradeResult`
+
+Caller-owned aggregate returned by the post-trade engine operation.
+
+```c
+typedef struct OpenPitPostTradeResult OpenPitPostTradeResult;
+```
+
 ## `OpenPitSyncPolicy`
 
 Runtime selector for the engine's storage synchronization policy.
@@ -858,20 +866,16 @@ Returns `true` on success, `false` on error.
 Success:
 
 - returns `true`;
-- if `out_blocks` is not null and at least one policy entered a blocked state,
-  writes a caller-owned `OpenPitPretradeAccountBlockList` pointer; release it
-  with `openpit_pretrade_destroy_account_block_list`;
-- when no policy blocked, `out_blocks` is left untouched;
-- if `out_adjustments` is not null and at least one policy produced an
-  account-adjustment outcome, writes a caller-owned
-  `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
-  `openpit_destroy_account_adjustment_outcome_list`;
-- when no outcome was produced, `out_adjustments` is left untouched.
+- if `out_result` is not null, writes one caller-owned
+  `OpenPitPostTradeResult` pointer; release it with
+  `openpit_destroy_post_trade_result`;
+- if `out_result` is null, applies the report without allocating a result.
 
 Error:
 
 - returns `false` when input pointers are invalid or the report payload cannot
   be decoded;
+- `out_result` is left untouched;
 - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
   error handle that MUST be released with `openpit_destroy_shared_string`.
 
@@ -885,9 +889,74 @@ Lifetime contract:
 bool openpit_engine_apply_execution_report(
     OpenPitEngine * engine,
     const OpenPitExecutionReport * report,
-    OpenPitPretradeAccountBlockList ** out_blocks,
-    OpenPitAccountAdjustmentOutcomeList ** out_adjustments,
+    OpenPitPostTradeResult ** out_result,
     OpenPitOutError out_error
+);
+```
+
+## `openpit_destroy_post_trade_result`
+
+Releases a caller-owned post-trade result.
+
+```c
+void openpit_destroy_post_trade_result(
+    OpenPitPostTradeResult * result
+);
+```
+
+## `openpit_post_trade_result_get_account_blocks`
+
+Returns the borrowed account-block list from a post-trade result.
+
+A valid result always returns a non-null list, including when it is empty. The
+list and every view copied from it remain valid only while `result` is alive.
+
+Contract:
+
+- `result` must be a valid non-null pointer;
+- violating the pointer contract aborts the call.
+
+```c
+const OpenPitPretradeAccountBlockList *
+openpit_post_trade_result_get_account_blocks(
+    const OpenPitPostTradeResult * result
+);
+```
+
+## `openpit_post_trade_result_get_account_adjustments`
+
+Returns the borrowed account-adjustment outcome list from a post-trade result.
+
+A valid result always returns a non-null list, including when it is empty. The
+list and every view copied from it remain valid only while `result` is alive.
+
+Contract:
+
+- `result` must be a valid non-null pointer;
+- violating the pointer contract aborts the call.
+
+```c
+const OpenPitAccountAdjustmentOutcomeList *
+openpit_post_trade_result_get_account_adjustments(
+    const OpenPitPostTradeResult * result
+);
+```
+
+## `openpit_post_trade_result_get_account_pnls`
+
+Returns the borrowed account-level PnL outcome list from a post-trade result.
+
+A valid result always returns a non-null list, including when it is empty. The
+list and every view copied from it remain valid only while `result` is alive.
+
+Contract:
+
+- `result` must be a valid non-null pointer;
+- violating the pointer contract aborts the call.
+
+```c
+const OpenPitAccountPnlOutcomeList * openpit_post_trade_result_get_account_pnls(
+    const OpenPitPostTradeResult * result
 );
 ```
 
@@ -966,6 +1035,11 @@ Result handling:
   `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
   `openpit_destroy_account_adjustment_outcome_list`; if no outcome was
   produced, `out_outcomes` is left untouched;
+- on `Applied`, if `out_blocks` is not null and a policy reported one or more
+  account blocks, writes a caller-owned `OpenPitPretradeAccountBlockList`
+  pointer; release it with `openpit_pretrade_destroy_account_block_list`; if
+  no block was produced, `out_blocks` is left untouched. The engine has
+  already recorded every returned block;
 - `Rejected` stores batch error details in `out_reject`, the caller must
   release a returned object with
   `openpit_destroy_account_adjustment_batch_error`;
@@ -980,7 +1054,9 @@ Lifetime contract:
 - every `adjustment` entry from the contiguous input array is read as a
   borrowed view during this call only;
 - release a returned batch error with
-  `openpit_destroy_account_adjustment_batch_error`.
+  `openpit_destroy_account_adjustment_batch_error`;
+- release a returned account-block list with
+  `openpit_pretrade_destroy_account_block_list`.
 
 ```c
 OpenPitAccountAdjustmentApplyStatus openpit_engine_apply_account_adjustment(
@@ -990,6 +1066,7 @@ OpenPitAccountAdjustmentApplyStatus openpit_engine_apply_account_adjustment(
     size_t adjustments_len,
     OpenPitAccountAdjustmentBatchError ** out_reject,
     OpenPitAccountAdjustmentOutcomeList ** out_outcomes,
+    OpenPitPretradeAccountBlockList ** out_blocks,
     OpenPitOutError out_error
 );
 ```

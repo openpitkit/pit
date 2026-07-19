@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package main
 
@@ -416,13 +416,13 @@ func runSyncSeed(
 	if err != nil {
 		return &Failure{Row: row, Message: err.Error()}
 	}
-	r, _, err := engine.ApplyAccountAdjustment(
+	result, err := engine.ApplyAccountAdjustment(
 		acc, []model.AccountAdjustment{adj},
 	)
 	if err != nil {
 		return &Failure{Row: row, Message: "engine: " + err.Error()}
 	}
-	return checkSeedVerdict(row, r.IsSet())
+	return checkSeedVerdict(row, result.BatchError.IsSet())
 }
 
 // checkSeedVerdict compares a SEED outcome against the row's expected
@@ -851,15 +851,15 @@ func submitAsyncSeed(
 	return asyncStep{
 		row: row,
 		await: func(ctx context.Context) *Failure {
-			result, _, err := fut.Await(ctx)
+			result, err := fut.Await(ctx)
 			if err != nil {
 				return &Failure{
 					Row: row, Message: "engine: " + err.Error(),
 				}
 			}
-			return checkSeedVerdict(row, result.IsSet())
+			return checkSeedVerdict(row, result.BatchError.IsSet())
 		},
-		wait: func(ctx context.Context) { _, _, _ = fut.Await(ctx) },
+		wait: func(ctx context.Context) { _, _ = fut.Await(ctx) },
 	}, nil
 }
 

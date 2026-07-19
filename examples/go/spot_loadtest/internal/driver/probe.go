@@ -66,7 +66,7 @@ func (r *run) overheadProbe(ctx context.Context) (time.Duration, error) {
 
 	t0 := time.Now()
 	fut := r.engine.ApplyAccountAdjustment(ctx, acc, []model.AccountAdjustment{adj})
-	_, _, err = fut.Await(ctx)
+	_, err = fut.Await(ctx)
 	latency := time.Since(t0)
 	if err != nil {
 		return 0, fmt.Errorf("probe await: %w", err)

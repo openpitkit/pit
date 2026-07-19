@@ -84,236 +84,221 @@ pub(crate) fn export_leverage(value: Option<Leverage>) -> OpenPitParamLeverage {
 /// logical key in maps and engine state.
 pub type OpenPitParamAccountId = u64;
 
-pub(crate) fn import_side(value: OpenPitParamSide) -> Option<Side> {
+pub(crate) fn import_side(value: OpenPitParamSide) -> Result<Option<Side>, String> {
     match value {
-        OpenPitParamSide::Buy => Some(Side::Buy),
-        OpenPitParamSide::Sell => Some(Side::Sell),
-        OpenPitParamSide::NotSet => None,
+        OPENPIT_PARAM_SIDE_BUY => Ok(Some(Side::Buy)),
+        OPENPIT_PARAM_SIDE_SELL => Ok(Some(Side::Sell)),
+        OPENPIT_PARAM_SIDE_NOT_SET => Ok(None),
+        raw => Err(format!("invalid side code {raw}")),
     }
 }
 
 pub(crate) fn export_side(value: Side) -> OpenPitParamSide {
     match value {
-        Side::Buy => OpenPitParamSide::Buy,
-        Side::Sell => OpenPitParamSide::Sell,
+        Side::Buy => OPENPIT_PARAM_SIDE_BUY,
+        Side::Sell => OPENPIT_PARAM_SIDE_SELL,
     }
 }
 
-pub(crate) fn import_position_side(value: OpenPitParamPositionSide) -> Option<PositionSide> {
+pub(crate) fn import_position_side(
+    value: OpenPitParamPositionSide,
+) -> Result<Option<PositionSide>, String> {
     match value {
-        OpenPitParamPositionSide::Long => Some(PositionSide::Long),
-        OpenPitParamPositionSide::Short => Some(PositionSide::Short),
-        OpenPitParamPositionSide::NotSet => None,
+        OPENPIT_PARAM_POSITION_SIDE_LONG => Ok(Some(PositionSide::Long)),
+        OPENPIT_PARAM_POSITION_SIDE_SHORT => Ok(Some(PositionSide::Short)),
+        OPENPIT_PARAM_POSITION_SIDE_NOT_SET => Ok(None),
+        raw => Err(format!("invalid position side code {raw}")),
     }
 }
 
 pub(crate) fn export_position_side(value: PositionSide) -> OpenPitParamPositionSide {
     match value {
-        PositionSide::Long => OpenPitParamPositionSide::Long,
-        PositionSide::Short => OpenPitParamPositionSide::Short,
+        PositionSide::Long => OPENPIT_PARAM_POSITION_SIDE_LONG,
+        PositionSide::Short => OPENPIT_PARAM_POSITION_SIDE_SHORT,
     }
 }
 
-pub(crate) fn import_position_effect(value: OpenPitParamPositionEffect) -> Option<PositionEffect> {
+pub(crate) fn import_position_effect(
+    value: OpenPitParamPositionEffect,
+) -> Result<Option<PositionEffect>, String> {
     match value {
-        OpenPitParamPositionEffect::Open => Some(PositionEffect::Open),
-        OpenPitParamPositionEffect::Close => Some(PositionEffect::Close),
-        OpenPitParamPositionEffect::NotSet => None,
+        OPENPIT_PARAM_POSITION_EFFECT_OPEN => Ok(Some(PositionEffect::Open)),
+        OPENPIT_PARAM_POSITION_EFFECT_CLOSE => Ok(Some(PositionEffect::Close)),
+        OPENPIT_PARAM_POSITION_EFFECT_NOT_SET => Ok(None),
+        raw => Err(format!("invalid position effect code {raw}")),
     }
 }
 
 pub(crate) fn export_position_effect(value: PositionEffect) -> OpenPitParamPositionEffect {
     match value {
-        PositionEffect::Open => OpenPitParamPositionEffect::Open,
-        PositionEffect::Close => OpenPitParamPositionEffect::Close,
+        PositionEffect::Open => OPENPIT_PARAM_POSITION_EFFECT_OPEN,
+        PositionEffect::Close => OPENPIT_PARAM_POSITION_EFFECT_CLOSE,
     }
 }
 
-pub(crate) fn import_position_mode(value: OpenPitParamPositionMode) -> Option<PositionMode> {
+pub(crate) fn import_position_mode(
+    value: OpenPitParamPositionMode,
+) -> Result<Option<PositionMode>, String> {
     match value {
-        OpenPitParamPositionMode::Netting => Some(PositionMode::Netting),
-        OpenPitParamPositionMode::Hedged => Some(PositionMode::Hedged),
-        OpenPitParamPositionMode::NotSet => None,
+        OPENPIT_PARAM_POSITION_MODE_NETTING => Ok(Some(PositionMode::Netting)),
+        OPENPIT_PARAM_POSITION_MODE_HEDGED => Ok(Some(PositionMode::Hedged)),
+        OPENPIT_PARAM_POSITION_MODE_NOT_SET => Ok(None),
+        raw => Err(format!("invalid position mode code {raw}")),
     }
 }
 
 pub(crate) fn export_position_mode(value: PositionMode) -> OpenPitParamPositionMode {
     match value {
-        PositionMode::Netting => OpenPitParamPositionMode::Netting,
-        PositionMode::Hedged => OpenPitParamPositionMode::Hedged,
+        PositionMode::Netting => OPENPIT_PARAM_POSITION_MODE_NETTING,
+        PositionMode::Hedged => OPENPIT_PARAM_POSITION_MODE_HEDGED,
     }
 }
 
-pub(crate) fn import_bool(value: OpenPitTriBool) -> Option<bool> {
+pub(crate) fn import_bool(value: OpenPitTriBool) -> Result<Option<bool>, String> {
     match value {
-        OpenPitTriBool::False => Some(false),
-        OpenPitTriBool::True => Some(true),
-        OpenPitTriBool::NotSet => None,
+        OPENPIT_TRI_BOOL_FALSE => Ok(Some(false)),
+        OPENPIT_TRI_BOOL_TRUE => Ok(Some(true)),
+        OPENPIT_TRI_BOOL_NOT_SET => Ok(None),
+        raw => Err(format!("invalid tri-state boolean code {raw}")),
     }
 }
 
 pub(crate) fn export_bool(value: bool) -> OpenPitTriBool {
     if value {
-        OpenPitTriBool::True
+        OPENPIT_TRI_BOOL_TRUE
     } else {
-        OpenPitTriBool::False
+        OPENPIT_TRI_BOOL_FALSE
     }
 }
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-/// Order side.
-pub enum OpenPitParamSide {
-    /// Value is absent.
-    #[default]
-    NotSet = 0,
-    /// Buy side.
-    Buy = 1,
-    /// Sell side.
-    Sell = 2,
-}
+/// Raw order-side code accepted from C callers.
+pub type OpenPitParamSide = u8;
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-/// Position direction.
-pub enum OpenPitParamPositionSide {
-    /// Value is absent.
-    #[default]
-    NotSet = 0,
-    /// Long exposure.
-    Long = 1,
-    /// Short exposure.
-    Short = 2,
-}
+/// The order side is absent.
+pub const OPENPIT_PARAM_SIDE_NOT_SET: OpenPitParamSide = 0;
+/// Buy side.
+pub const OPENPIT_PARAM_SIDE_BUY: OpenPitParamSide = 1;
+/// Sell side.
+pub const OPENPIT_PARAM_SIDE_SELL: OpenPitParamSide = 2;
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-/// Position accounting mode.
-pub enum OpenPitParamPositionMode {
-    /// Value is absent.
-    #[default]
-    NotSet = 0,
-    /// Opposite trades net into one position.
-    Netting = 1,
-    /// Long and short positions are tracked separately.
-    Hedged = 2,
-}
+/// Raw position-side code accepted from C callers.
+pub type OpenPitParamPositionSide = u8;
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-/// Whether a trade opens or closes exposure.
-pub enum OpenPitParamPositionEffect {
-    /// Value is absent.
-    #[default]
-    NotSet = 0,
-    /// The trade opens or increases exposure.
-    Open = 1,
-    /// The trade closes or reduces exposure.
-    Close = 2,
-}
+/// The position side is absent.
+pub const OPENPIT_PARAM_POSITION_SIDE_NOT_SET: OpenPitParamPositionSide = 0;
+/// Long exposure.
+pub const OPENPIT_PARAM_POSITION_SIDE_LONG: OpenPitParamPositionSide = 1;
+/// Short exposure.
+pub const OPENPIT_PARAM_POSITION_SIDE_SHORT: OpenPitParamPositionSide = 2;
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-/// Type of fill event reported by a venue.
-pub enum OpenPitParamFillType {
-    /// Value is absent.
-    #[default]
-    NotSet = 0,
-    /// Normal trade execution.
-    Trade = 1,
-    /// Forced liquidation by the venue.
-    Liquidation = 2,
-    /// Auto-deleveraging event.
-    AutoDeleverage = 3,
-    /// Settlement at expiry or delivery.
-    Settlement = 4,
-    /// Funding payment.
-    Funding = 5,
-}
+/// Raw position-accounting-mode code accepted from C callers.
+pub type OpenPitParamPositionMode = u8;
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-/// Parameter category carried by validation and arithmetic errors.
-pub enum OpenPitParamKind {
-    /// No parameter category is available.
-    #[default]
-    Unspecified = 0,
-    /// Quantity.
-    Quantity = 1,
-    /// Volume.
-    Volume = 2,
-    /// Notional value.
-    Notional = 3,
-    /// Price.
-    Price = 4,
-    /// Profit and loss.
-    Pnl = 5,
-    /// Cash flow.
-    CashFlow = 6,
-    /// Signed position size.
-    PositionSize = 7,
-    /// Fee.
-    Fee = 8,
-    /// Leverage.
-    Leverage = 9,
-}
+/// The position mode is absent.
+pub const OPENPIT_PARAM_POSITION_MODE_NOT_SET: OpenPitParamPositionMode = 0;
+/// Opposite trades net into one position.
+pub const OPENPIT_PARAM_POSITION_MODE_NETTING: OpenPitParamPositionMode = 1;
+/// Long and short positions are tracked separately.
+pub const OPENPIT_PARAM_POSITION_MODE_HEDGED: OpenPitParamPositionMode = 2;
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-/// Selects how one trade-amount numeric value should be interpreted.
-pub enum OpenPitParamTradeAmountKind {
-    /// No amount field is selected.
-    #[default]
-    NotSet = 0,
-    /// The value is instrument quantity.
-    Quantity = 1,
-    /// The value is settlement volume.
-    Volume = 2,
-}
+/// Raw position-effect code accepted from C callers.
+pub type OpenPitParamPositionEffect = u8;
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-/// Decimal rounding strategy for typed parameter constructors.
-pub enum OpenPitParamRoundingStrategy {
-    /// Round half to nearest even number.
-    #[default]
-    MidpointNearestEven = 0,
-    /// Round half away from zero.
-    MidpointAwayFromZero = 1,
-    /// Round towards positive infinity.
-    Up = 2,
-    /// Round towards negative infinity.
-    Down = 3,
-}
+/// The position effect is absent.
+pub const OPENPIT_PARAM_POSITION_EFFECT_NOT_SET: OpenPitParamPositionEffect = 0;
+/// The trade opens or increases exposure.
+pub const OPENPIT_PARAM_POSITION_EFFECT_OPEN: OpenPitParamPositionEffect = 1;
+/// The trade closes or reduces exposure.
+pub const OPENPIT_PARAM_POSITION_EFFECT_CLOSE: OpenPitParamPositionEffect = 2;
+
+/// Raw fill-event vocabulary code exposed to C callers.
+pub type OpenPitParamFillType = u8;
+
+/// No fill-event type is supplied.
+pub const OPENPIT_PARAM_FILL_TYPE_NOT_SET: OpenPitParamFillType = 0;
+/// Normal trade execution.
+pub const OPENPIT_PARAM_FILL_TYPE_TRADE: OpenPitParamFillType = 1;
+/// Forced liquidation by the venue.
+pub const OPENPIT_PARAM_FILL_TYPE_LIQUIDATION: OpenPitParamFillType = 2;
+/// Auto-deleveraging event.
+pub const OPENPIT_PARAM_FILL_TYPE_AUTO_DELEVERAGE: OpenPitParamFillType = 3;
+/// Settlement at expiry or delivery.
+pub const OPENPIT_PARAM_FILL_TYPE_SETTLEMENT: OpenPitParamFillType = 4;
+/// Funding payment.
+pub const OPENPIT_PARAM_FILL_TYPE_FUNDING: OpenPitParamFillType = 5;
+
+/// Raw parameter-category vocabulary code exposed to C callers.
+pub type OpenPitParamKind = u8;
+
+/// No parameter category is available.
+pub const OPENPIT_PARAM_KIND_UNSPECIFIED: OpenPitParamKind = 0;
+/// Quantity.
+pub const OPENPIT_PARAM_KIND_QUANTITY: OpenPitParamKind = 1;
+/// Volume.
+pub const OPENPIT_PARAM_KIND_VOLUME: OpenPitParamKind = 2;
+/// Notional value.
+pub const OPENPIT_PARAM_KIND_NOTIONAL: OpenPitParamKind = 3;
+/// Price.
+pub const OPENPIT_PARAM_KIND_PRICE: OpenPitParamKind = 4;
+/// Profit and loss.
+pub const OPENPIT_PARAM_KIND_PNL: OpenPitParamKind = 5;
+/// Cash flow.
+pub const OPENPIT_PARAM_KIND_CASH_FLOW: OpenPitParamKind = 6;
+/// Signed position size.
+pub const OPENPIT_PARAM_KIND_POSITION_SIZE: OpenPitParamKind = 7;
+/// Fee.
+pub const OPENPIT_PARAM_KIND_FEE: OpenPitParamKind = 8;
+/// Leverage.
+pub const OPENPIT_PARAM_KIND_LEVERAGE: OpenPitParamKind = 9;
+
+/// Raw trade-amount selector accepted from C callers.
+pub type OpenPitParamTradeAmountKind = u8;
+
+/// No trade-amount field is selected.
+pub const OPENPIT_PARAM_TRADE_AMOUNT_KIND_NOT_SET: OpenPitParamTradeAmountKind = 0;
+/// The trade amount is an instrument quantity.
+pub const OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY: OpenPitParamTradeAmountKind = 1;
+/// The trade amount is a settlement volume.
+pub const OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME: OpenPitParamTradeAmountKind = 2;
+
+/// Raw rounding-strategy code accepted from C callers.
+pub type OpenPitParamRoundingStrategy = u8;
+
+/// Round half to the nearest even number.
+pub const OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN: OpenPitParamRoundingStrategy = 0;
+/// Round half away from zero.
+pub const OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_AWAY_FROM_ZERO: OpenPitParamRoundingStrategy = 1;
+/// Round towards positive infinity.
+pub const OPENPIT_PARAM_ROUNDING_STRATEGY_UP: OpenPitParamRoundingStrategy = 2;
+/// Round towards negative infinity.
+pub const OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN: OpenPitParamRoundingStrategy = 3;
 
 /// Default rounding strategy alias.
 pub const OPENPIT_PARAM_ROUNDING_STRATEGY_DEFAULT: OpenPitParamRoundingStrategy =
-    OpenPitParamRoundingStrategy::MidpointNearestEven;
+    OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN;
 /// Banker's rounding alias.
 pub const OPENPIT_PARAM_ROUNDING_STRATEGY_BANKER: OpenPitParamRoundingStrategy =
-    OpenPitParamRoundingStrategy::MidpointNearestEven;
+    OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN;
 /// Conservative profit rounding alias.
 pub const OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT: OpenPitParamRoundingStrategy =
-    OpenPitParamRoundingStrategy::Down;
+    OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN;
 /// Conservative loss rounding alias.
 pub const OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS: OpenPitParamRoundingStrategy =
-    OpenPitParamRoundingStrategy::Down;
+    OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN;
 
 const _: () = assert!(
-    OPENPIT_PARAM_ROUNDING_STRATEGY_DEFAULT as u8
-        == export_rounding_strategy(RoundingStrategy::DEFAULT) as u8
+    OPENPIT_PARAM_ROUNDING_STRATEGY_DEFAULT == export_rounding_strategy(RoundingStrategy::DEFAULT)
 );
 const _: () = assert!(
-    OPENPIT_PARAM_ROUNDING_STRATEGY_BANKER as u8
-        == export_rounding_strategy(RoundingStrategy::BANKER) as u8
+    OPENPIT_PARAM_ROUNDING_STRATEGY_BANKER == export_rounding_strategy(RoundingStrategy::BANKER)
 );
 const _: () = assert!(
-    OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT as u8
-        == export_rounding_strategy(RoundingStrategy::CONSERVATIVE_PROFIT) as u8
+    OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT
+        == export_rounding_strategy(RoundingStrategy::CONSERVATIVE_PROFIT)
 );
 const _: () = assert!(
-    OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS as u8
-        == export_rounding_strategy(RoundingStrategy::CONSERVATIVE_LOSS) as u8
+    OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS
+        == export_rounding_strategy(RoundingStrategy::CONSERVATIVE_LOSS)
 );
 
 #[repr(C)]
@@ -340,31 +325,25 @@ pub struct OpenPitParamMonetaryAmount {
     pub currency: OpenPitStringView,
 }
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-/// Tri-state boolean value.
-pub enum OpenPitTriBool {
-    /// Value is absent.
-    #[default]
-    NotSet = 0,
-    /// Boolean false.
-    False = 1,
-    /// Boolean true.
-    True = 2,
-}
+/// Raw tri-state boolean code accepted from C callers.
+pub type OpenPitTriBool = u8;
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-/// Selects how an account-adjustment amount should be interpreted.
-pub enum OpenPitParamAdjustmentAmountKind {
-    /// No amount is specified.
-    #[default]
-    NotSet = 0,
-    /// Change current state by the supplied signed amount.
-    Delta = 1,
-    /// Set current state to the supplied signed amount.
-    Absolute = 2,
-}
+/// The boolean value is absent.
+pub const OPENPIT_TRI_BOOL_NOT_SET: OpenPitTriBool = 0;
+/// Boolean false.
+pub const OPENPIT_TRI_BOOL_FALSE: OpenPitTriBool = 1;
+/// Boolean true.
+pub const OPENPIT_TRI_BOOL_TRUE: OpenPitTriBool = 2;
+
+/// Raw account-adjustment amount selector accepted from C callers.
+pub type OpenPitParamAdjustmentAmountKind = u8;
+
+/// No adjustment amount is specified.
+pub const OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_NOT_SET: OpenPitParamAdjustmentAmountKind = 0;
+/// Change current state by the supplied signed amount.
+pub const OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA: OpenPitParamAdjustmentAmountKind = 1;
+/// Set current state to the supplied signed amount.
+pub const OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE: OpenPitParamAdjustmentAmountKind = 2;
 
 //--------------------------------------------------------------------------------------------------
 
@@ -431,25 +410,32 @@ fn compare_decimals(lhs: Decimal, rhs: Decimal) -> i8 {
     }
 }
 
-fn import_rounding_strategy(value: OpenPitParamRoundingStrategy) -> RoundingStrategy {
+fn import_rounding_strategy(
+    value: OpenPitParamRoundingStrategy,
+) -> Result<RoundingStrategy, String> {
     match value {
-        OpenPitParamRoundingStrategy::MidpointNearestEven => RoundingStrategy::MidpointNearestEven,
-        OpenPitParamRoundingStrategy::MidpointAwayFromZero => {
-            RoundingStrategy::MidpointAwayFromZero
+        OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN => {
+            Ok(RoundingStrategy::MidpointNearestEven)
         }
-        OpenPitParamRoundingStrategy::Up => RoundingStrategy::Up,
-        OpenPitParamRoundingStrategy::Down => RoundingStrategy::Down,
+        OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_AWAY_FROM_ZERO => {
+            Ok(RoundingStrategy::MidpointAwayFromZero)
+        }
+        OPENPIT_PARAM_ROUNDING_STRATEGY_UP => Ok(RoundingStrategy::Up),
+        OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN => Ok(RoundingStrategy::Down),
+        raw => Err(format!("invalid rounding strategy code {raw}")),
     }
 }
 
 const fn export_rounding_strategy(value: RoundingStrategy) -> OpenPitParamRoundingStrategy {
     match value {
-        RoundingStrategy::MidpointNearestEven => OpenPitParamRoundingStrategy::MidpointNearestEven,
-        RoundingStrategy::MidpointAwayFromZero => {
-            OpenPitParamRoundingStrategy::MidpointAwayFromZero
+        RoundingStrategy::MidpointNearestEven => {
+            OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN
         }
-        RoundingStrategy::Up => OpenPitParamRoundingStrategy::Up,
-        RoundingStrategy::Down => OpenPitParamRoundingStrategy::Down,
+        RoundingStrategy::MidpointAwayFromZero => {
+            OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_AWAY_FROM_ZERO
+        }
+        RoundingStrategy::Up => OPENPIT_PARAM_ROUNDING_STRATEGY_UP,
+        RoundingStrategy::Down => OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN,
     }
 }
 
@@ -807,12 +793,15 @@ macro_rules! define_decimal_param_ffi_common {
                     return false;
                 }
             };
+            let rounding = match import_rounding_strategy(rounding) {
+                Ok(rounding) => rounding,
+                Err(error) => {
+                    write_param_error_unspecified(out_error, error.as_str());
+                    return false;
+                }
+            };
 
-            match <$domain>::from_str_rounded(
-                text.as_str(),
-                scale,
-                import_rounding_strategy(rounding),
-            ) {
+            match <$domain>::from_str_rounded(text.as_str(), scale, rounding) {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(OpenPitParamDecimal::from_decimal(parsed.to_decimal())),
@@ -833,7 +822,14 @@ macro_rules! define_decimal_param_ffi_common {
             out: *mut $wrapper,
             out_error: OpenPitOutParamError,
         ) -> bool {
-            match <$domain>::from_f64_rounded(value, scale, import_rounding_strategy(rounding)) {
+            let rounding = match import_rounding_strategy(rounding) {
+                Ok(rounding) => rounding,
+                Err(error) => {
+                    write_param_error_unspecified(out_error, error.as_str());
+                    return false;
+                }
+            };
+            match <$domain>::from_f64_rounded(value, scale, rounding) {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(OpenPitParamDecimal::from_decimal(parsed.to_decimal())),
@@ -861,11 +857,14 @@ macro_rules! define_decimal_param_ffi_common {
                     return false;
                 }
             };
-            match <$domain>::from_decimal_rounded(
-                decimal,
-                scale,
-                import_rounding_strategy(rounding),
-            ) {
+            let rounding = match import_rounding_strategy(rounding) {
+                Ok(rounding) => rounding,
+                Err(error) => {
+                    write_param_error_unspecified(out_error, error.as_str());
+                    return false;
+                }
+            };
+            match <$domain>::from_decimal_rounded(decimal, scale, rounding) {
                 Ok(parsed) => write_out(
                     out,
                     $wrapper(OpenPitParamDecimal::from_decimal(parsed.to_decimal())),
@@ -1621,13 +1620,14 @@ pub(crate) fn import_trade_amount(
     value: OpenPitParamTradeAmount,
 ) -> Result<Option<TradeAmount>, String> {
     match value.kind {
-        OpenPitParamTradeAmountKind::NotSet => Ok(None),
-        OpenPitParamTradeAmountKind::Quantity => Ok(Some(TradeAmount::Quantity(
+        OPENPIT_PARAM_TRADE_AMOUNT_KIND_NOT_SET => Ok(None),
+        OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY => Ok(Some(TradeAmount::Quantity(
             OpenPitParamQuantity(value.value).to_param()?,
         ))),
-        OpenPitParamTradeAmountKind::Volume => Ok(Some(TradeAmount::Volume(
+        OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME => Ok(Some(TradeAmount::Volume(
             OpenPitParamVolume(value.value).to_param()?,
         ))),
+        raw => Err(format!("invalid trade amount kind {raw}")),
     }
 }
 
@@ -1635,11 +1635,11 @@ pub(crate) fn export_trade_amount(value: Option<TradeAmount>) -> OpenPitParamTra
     match value {
         Some(TradeAmount::Quantity(quantity)) => OpenPitParamTradeAmount {
             value: quantity.to_decimal().into(),
-            kind: OpenPitParamTradeAmountKind::Quantity,
+            kind: OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY,
         },
         Some(TradeAmount::Volume(volume)) => OpenPitParamTradeAmount {
             value: volume.to_decimal().into(),
-            kind: OpenPitParamTradeAmountKind::Volume,
+            kind: OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME,
         },
         _ => OpenPitParamTradeAmount::default(),
     }
@@ -2186,9 +2186,13 @@ pub unsafe extern "C" fn openpit_param_position_size_from_quantity_and_side(
         }
     };
     let parsed_side = match import_side(side) {
-        Some(side) => side,
-        None => {
+        Ok(Some(side)) => side,
+        Ok(None) => {
             write_param_error_unspecified(out_error, "side is not set");
+            return false;
+        }
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -2251,7 +2255,7 @@ pub unsafe extern "C" fn openpit_param_position_size_to_close_quantity(
     unsafe {
         *out_quantity =
             OpenPitParamQuantity(OpenPitParamDecimal::from_decimal(quantity.to_decimal()));
-        *out_side = side.map(export_side).unwrap_or(OpenPitParamSide::NotSet);
+        *out_side = side.map(export_side).unwrap_or(OPENPIT_PARAM_SIDE_NOT_SET);
     }
     true
 }
@@ -2279,9 +2283,13 @@ pub unsafe extern "C" fn openpit_param_position_size_checked_add_quantity(
         }
     };
     let side = match import_side(side) {
-        Some(side) => side,
-        None => {
+        Ok(Some(side)) => side,
+        Ok(None) => {
             write_param_error_unspecified(out_error, "side is not set");
+            return false;
+        }
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.as_str());
             return false;
         }
     };
@@ -2574,9 +2582,13 @@ pub unsafe extern "C" fn openpit_param_side_to_string(
     out_error: OpenPitOutParamError,
 ) -> *mut OpenPitSharedString {
     match import_side(value) {
-        Some(side) => OpenPitSharedString::new_handle(side.to_string().as_str()),
-        None => {
+        Ok(Some(side)) => OpenPitSharedString::new_handle(side.to_string().as_str()),
+        Ok(None) => {
             write_param_error_unspecified(out_error, "side is not set");
+            std::ptr::null_mut()
+        }
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.as_str());
             std::ptr::null_mut()
         }
     }
@@ -2591,9 +2603,15 @@ pub unsafe extern "C" fn openpit_param_position_side_to_string(
     out_error: OpenPitOutParamError,
 ) -> *mut OpenPitSharedString {
     match import_position_side(value) {
-        Some(position_side) => OpenPitSharedString::new_handle(position_side.to_string().as_str()),
-        None => {
+        Ok(Some(position_side)) => {
+            OpenPitSharedString::new_handle(position_side.to_string().as_str())
+        }
+        Ok(None) => {
             write_param_error_unspecified(out_error, "position side is not set");
+            std::ptr::null_mut()
+        }
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.as_str());
             std::ptr::null_mut()
         }
     }
@@ -2608,11 +2626,15 @@ pub unsafe extern "C" fn openpit_param_position_effect_to_string(
     out_error: OpenPitOutParamError,
 ) -> *mut OpenPitSharedString {
     match import_position_effect(value) {
-        Some(position_effect) => {
+        Ok(Some(position_effect)) => {
             OpenPitSharedString::new_handle(position_effect.to_string().as_str())
         }
-        None => {
+        Ok(None) => {
             write_param_error_unspecified(out_error, "position effect is not set");
+            std::ptr::null_mut()
+        }
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.as_str());
             std::ptr::null_mut()
         }
     }
@@ -2627,9 +2649,15 @@ pub unsafe extern "C" fn openpit_param_position_mode_to_string(
     out_error: OpenPitOutParamError,
 ) -> *mut OpenPitSharedString {
     match import_position_mode(value) {
-        Some(position_mode) => OpenPitSharedString::new_handle(position_mode.to_string().as_str()),
-        None => {
+        Ok(Some(position_mode)) => {
+            OpenPitSharedString::new_handle(position_mode.to_string().as_str())
+        }
+        Ok(None) => {
             write_param_error_unspecified(out_error, "position mode is not set");
+            std::ptr::null_mut()
+        }
+        Err(error) => {
+            write_param_error_unspecified(out_error, error.as_str());
             std::ptr::null_mut()
         }
     }
@@ -2700,37 +2728,37 @@ mod tests {
     #[test]
     fn rounding_strategy_aliases_match_openpit() {
         assert_eq!(
-            OPENPIT_PARAM_ROUNDING_STRATEGY_DEFAULT as u8,
+            OPENPIT_PARAM_ROUNDING_STRATEGY_DEFAULT,
             RoundingStrategy::DEFAULT as u8
         );
         assert_eq!(
-            OPENPIT_PARAM_ROUNDING_STRATEGY_BANKER as u8,
+            OPENPIT_PARAM_ROUNDING_STRATEGY_BANKER,
             RoundingStrategy::BANKER as u8
         );
         assert_eq!(
-            OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT as u8,
+            OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT,
             RoundingStrategy::CONSERVATIVE_PROFIT as u8
         );
         assert_eq!(
-            OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS as u8,
+            OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS,
             RoundingStrategy::CONSERVATIVE_LOSS as u8
         );
 
         assert_eq!(
             import_rounding_strategy(OPENPIT_PARAM_ROUNDING_STRATEGY_DEFAULT),
-            RoundingStrategy::DEFAULT
+            Ok(RoundingStrategy::DEFAULT)
         );
         assert_eq!(
             import_rounding_strategy(OPENPIT_PARAM_ROUNDING_STRATEGY_BANKER),
-            RoundingStrategy::BANKER
+            Ok(RoundingStrategy::BANKER)
         );
         assert_eq!(
             import_rounding_strategy(OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT),
-            RoundingStrategy::CONSERVATIVE_PROFIT
+            Ok(RoundingStrategy::CONSERVATIVE_PROFIT)
         );
         assert_eq!(
             import_rounding_strategy(OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS),
-            RoundingStrategy::CONSERVATIVE_LOSS
+            Ok(RoundingStrategy::CONSERVATIVE_LOSS)
         );
     }
 
@@ -2981,74 +3009,92 @@ mod tests {
 
     #[test]
     fn enum_import_export_cover_all_public_branches() {
-        assert_eq!(import_side(OpenPitParamSide::Buy), Some(Side::Buy));
-        assert_eq!(import_side(OpenPitParamSide::Sell), Some(Side::Sell));
-        assert_eq!(import_side(OpenPitParamSide::NotSet), None);
-        assert_eq!(export_side(Side::Buy), OpenPitParamSide::Buy);
-        assert_eq!(export_side(Side::Sell), OpenPitParamSide::Sell);
+        assert_eq!(import_side(OPENPIT_PARAM_SIDE_BUY), Ok(Some(Side::Buy)));
+        assert_eq!(import_side(OPENPIT_PARAM_SIDE_SELL), Ok(Some(Side::Sell)));
+        assert_eq!(import_side(OPENPIT_PARAM_SIDE_NOT_SET), Ok(None));
+        assert_eq!(export_side(Side::Buy), OPENPIT_PARAM_SIDE_BUY);
+        assert_eq!(export_side(Side::Sell), OPENPIT_PARAM_SIDE_SELL);
 
         assert_eq!(
-            import_position_side(OpenPitParamPositionSide::Long),
-            Some(PositionSide::Long)
+            import_position_side(OPENPIT_PARAM_POSITION_SIDE_LONG),
+            Ok(Some(PositionSide::Long))
         );
         assert_eq!(
-            import_position_side(OpenPitParamPositionSide::Short),
-            Some(PositionSide::Short)
+            import_position_side(OPENPIT_PARAM_POSITION_SIDE_SHORT),
+            Ok(Some(PositionSide::Short))
         );
-        assert_eq!(import_position_side(OpenPitParamPositionSide::NotSet), None);
+        assert_eq!(
+            import_position_side(OPENPIT_PARAM_POSITION_SIDE_NOT_SET),
+            Ok(None)
+        );
         assert_eq!(
             export_position_side(PositionSide::Long),
-            OpenPitParamPositionSide::Long
+            OPENPIT_PARAM_POSITION_SIDE_LONG
         );
         assert_eq!(
             export_position_side(PositionSide::Short),
-            OpenPitParamPositionSide::Short
+            OPENPIT_PARAM_POSITION_SIDE_SHORT
         );
 
         assert_eq!(
-            import_position_effect(OpenPitParamPositionEffect::Open),
-            Some(PositionEffect::Open)
+            import_position_effect(OPENPIT_PARAM_POSITION_EFFECT_OPEN),
+            Ok(Some(PositionEffect::Open))
         );
         assert_eq!(
-            import_position_effect(OpenPitParamPositionEffect::Close),
-            Some(PositionEffect::Close)
+            import_position_effect(OPENPIT_PARAM_POSITION_EFFECT_CLOSE),
+            Ok(Some(PositionEffect::Close))
         );
         assert_eq!(
-            import_position_effect(OpenPitParamPositionEffect::NotSet),
-            None
+            import_position_effect(OPENPIT_PARAM_POSITION_EFFECT_NOT_SET),
+            Ok(None)
         );
         assert_eq!(
             export_position_effect(PositionEffect::Open),
-            OpenPitParamPositionEffect::Open
+            OPENPIT_PARAM_POSITION_EFFECT_OPEN
         );
         assert_eq!(
             export_position_effect(PositionEffect::Close),
-            OpenPitParamPositionEffect::Close
+            OPENPIT_PARAM_POSITION_EFFECT_CLOSE
         );
 
         assert_eq!(
-            import_position_mode(OpenPitParamPositionMode::Netting),
-            Some(PositionMode::Netting)
+            import_position_mode(OPENPIT_PARAM_POSITION_MODE_NETTING),
+            Ok(Some(PositionMode::Netting))
         );
         assert_eq!(
-            import_position_mode(OpenPitParamPositionMode::Hedged),
-            Some(PositionMode::Hedged)
+            import_position_mode(OPENPIT_PARAM_POSITION_MODE_HEDGED),
+            Ok(Some(PositionMode::Hedged))
         );
-        assert_eq!(import_position_mode(OpenPitParamPositionMode::NotSet), None);
+        assert_eq!(
+            import_position_mode(OPENPIT_PARAM_POSITION_MODE_NOT_SET),
+            Ok(None)
+        );
         assert_eq!(
             export_position_mode(PositionMode::Netting),
-            OpenPitParamPositionMode::Netting
+            OPENPIT_PARAM_POSITION_MODE_NETTING
         );
         assert_eq!(
             export_position_mode(PositionMode::Hedged),
-            OpenPitParamPositionMode::Hedged
+            OPENPIT_PARAM_POSITION_MODE_HEDGED
         );
 
-        assert_eq!(import_bool(OpenPitTriBool::NotSet), None);
-        assert_eq!(import_bool(OpenPitTriBool::False), Some(false));
-        assert_eq!(import_bool(OpenPitTriBool::True), Some(true));
-        assert_eq!(export_bool(false), OpenPitTriBool::False);
-        assert_eq!(export_bool(true), OpenPitTriBool::True);
+        assert_eq!(import_bool(OPENPIT_TRI_BOOL_NOT_SET), Ok(None));
+        assert_eq!(import_bool(OPENPIT_TRI_BOOL_FALSE), Ok(Some(false)));
+        assert_eq!(import_bool(OPENPIT_TRI_BOOL_TRUE), Ok(Some(true)));
+        assert_eq!(export_bool(false), OPENPIT_TRI_BOOL_FALSE);
+        assert_eq!(export_bool(true), OPENPIT_TRI_BOOL_TRUE);
+
+        assert!(import_side(u8::MAX).is_err());
+        assert!(import_position_side(u8::MAX).is_err());
+        assert!(import_position_effect(u8::MAX).is_err());
+        assert!(import_position_mode(u8::MAX).is_err());
+        assert!(import_bool(u8::MAX).is_err());
+        assert!(import_rounding_strategy(u8::MAX).is_err());
+        assert!(import_trade_amount(OpenPitParamTradeAmount {
+            value: OpenPitParamDecimal::default(),
+            kind: u8::MAX,
+        })
+        .is_err());
     }
 
     #[test]
@@ -3176,7 +3222,7 @@ mod tests {
                 $from_str_rounded(
                     sv("1.255"),
                     2,
-                    OpenPitParamRoundingStrategy::MidpointNearestEven,
+                    OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN,
                     &mut c,
                     std::ptr::null_mut(),
                 )
@@ -3185,7 +3231,7 @@ mod tests {
                 $from_f64_rounded(
                     1.255,
                     2,
-                    OpenPitParamRoundingStrategy::MidpointNearestEven,
+                    OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN,
                     &mut c,
                     std::ptr::null_mut(),
                 )
@@ -3198,7 +3244,7 @@ mod tests {
                         scale: 3,
                     },
                     2,
-                    OpenPitParamRoundingStrategy::MidpointNearestEven,
+                    OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN,
                     &mut c,
                     std::ptr::null_mut(),
                 )
@@ -3270,7 +3316,7 @@ mod tests {
                 $from_str_rounded(
                     sv("1.255"),
                     2,
-                    OpenPitParamRoundingStrategy::MidpointNearestEven,
+                    OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN,
                     &mut c,
                     std::ptr::null_mut(),
                 )
@@ -3279,7 +3325,7 @@ mod tests {
                 $from_f64_rounded(
                     1.255,
                     2,
-                    OpenPitParamRoundingStrategy::MidpointNearestEven,
+                    OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN,
                     &mut c,
                     std::ptr::null_mut(),
                 )
@@ -3292,7 +3338,7 @@ mod tests {
                         scale: 3,
                     },
                     2,
-                    OpenPitParamRoundingStrategy::MidpointNearestEven,
+                    OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN,
                     &mut c,
                     std::ptr::null_mut(),
                 )
@@ -3634,14 +3680,14 @@ mod tests {
         assert!(unsafe {
             openpit_param_position_size_from_quantity_and_side(
                 quantity,
-                OpenPitParamSide::Buy,
+                OPENPIT_PARAM_SIDE_BUY,
                 &mut out_position_size,
                 std::ptr::null_mut(),
             )
         });
 
         let mut out_quantity = OpenPitParamQuantity::default();
-        let mut out_side = OpenPitParamSide::NotSet;
+        let mut out_side = OPENPIT_PARAM_SIDE_NOT_SET;
         assert!(unsafe {
             openpit_param_position_size_to_open_quantity(
                 position,
@@ -3664,7 +3710,7 @@ mod tests {
             openpit_param_position_size_checked_add_quantity(
                 position,
                 quantity,
-                OpenPitParamSide::Buy,
+                OPENPIT_PARAM_SIDE_BUY,
                 &mut out_position,
                 std::ptr::null_mut(),
             )

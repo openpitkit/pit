@@ -22,6 +22,11 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
+// NewNativeRejectListOrNil copies callback rejects into a native list.
+//
+// An invalid scope invalidates the whole callback result. The native list is
+// replaced with one SystemUnavailable reject so the engine never applies a
+// partial decision.
 func NewNativeRejectListOrNil(source []reject.Reject) native.PretradeRejectList {
 	if len(source) == 0 {
 		return nil
@@ -29,7 +34,23 @@ func NewNativeRejectListOrNil(source []reject.Reject) native.PretradeRejectList 
 	result := native.CreatePretradeRejectList(len(source))
 	for _, r := range source {
 		// Reject data will be copied here, source reject must be existing before.
-		native.PretradeRejectListPush(result, r.NewHandle())
+		if native.PretradeRejectListPush(result, r.NewHandle()) {
+			continue
+		}
+		native.DestroyPretradeRejectList(result)
+		fallback := reject.New(
+			reject.CodeSystemUnavailable,
+			"openpit.callback",
+			"custom policy callback failed",
+			"reject scope is invalid",
+			reject.ScopeOrder,
+		)
+		result = native.CreatePretradeRejectList(1)
+		if native.PretradeRejectListPush(result, fallback.NewHandle()) {
+			return result
+		}
+		native.DestroyPretradeRejectList(result)
+		return nil
 	}
 	return result
 }

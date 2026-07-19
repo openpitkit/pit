@@ -156,7 +156,12 @@ impl SyncMode for LocalSync {
 ///
 /// The engine handle inherits `Send + Sync` from its inner state and can be
 /// shared across threads when registered policies are `Send + Sync`. Storage
-/// tables use [`FullLocking`](crate::storage::FullLocking).
+/// tables use [`FullLocking`](crate::storage::FullLocking). Each individual
+/// storage access is synchronized; a multi-step engine operation does not hold
+/// one account-wide lock from entry to return. Calls for the same account may
+/// therefore interleave, and rollback paths must preserve accepted concurrent
+/// deltas rather than restoring mutable snapshots. Operations that require a
+/// stronger invariant provide their own narrowly scoped synchronization.
 ///
 /// # Examples
 ///

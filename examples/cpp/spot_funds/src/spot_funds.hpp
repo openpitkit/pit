@@ -17,16 +17,14 @@
 
 #pragma once
 
-#include "openpit/account_adjustment.hpp"
 #include "openpit/account_id.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/error.hpp"
 #include "openpit/model.hpp"
 #include "openpit/param.hpp"
 #include "openpit/pretrade/pretrade.hpp"
 #include "openpit/reject.hpp"
-
-#include <openpit.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -36,8 +34,7 @@
 
 // Shared helpers for the spot_funds example. main() and the gtest smoke test
 // both call these; each wraps one engine interaction so the linear story in
-// main() stays readable. This mirrors the Go example's shared-helper layout
-// (examples/go/spot_funds/main.go), one C++ helper per Go function.
+// main() stays readable.
 
 namespace spot_funds {
 
@@ -66,9 +63,8 @@ inline constexpr int kAvailableAfterBuy1 = 40'000; // seed - notional
 
 //------------------------------------------------------------------------------
 // Outcome of placing an order: either a committed reservation's lock (the order
-// was accepted) or the rejects (the order was rejected). Exactly one channel is
-// populated. Mirrors the Go `placeOrder` `([]byte, []reject.Reject)` return: a
-// `PreTradeLock` snapshot replaces the raw lock bytes.
+// was accepted) or the rejects (the order was rejected). Exactly one channel
+// is populated.
 
 struct PlaceResult {
   std::optional<::openpit::pretrade::PreTradeLock> lock;
@@ -78,7 +74,7 @@ struct PlaceResult {
 };
 
 // Outcome of applying a fill: the account blocks a policy produced. Empty when
-// settlement succeeded. Mirrors the Go `PostTradeResult.AccountBlocks` check.
+// settlement succeeded.
 struct FillResult {
   std::vector<::openpit::accounts::AccountBlock> accountBlocks;
 };
@@ -150,13 +146,9 @@ BuildOrder(::openpit::param::AccountId account) {
 // detached snapshot) so the caller can later attach it to the matching fill; on
 // reject it returns no lock and the rejects.
 //
-// The Go helper reads `reservation.Lock().Bytes()` *before* CommitAndClose. The
-// C++ `pretrade::Reservation` wrapper surfaces only `Commit`/`Rollback`, so
-// this instead reconstructs the equivalent lock the engine would have produced:
-// a single record under the default policy group at the lock/reservation price.
-// This is the path the Go doc comment points to for callers that did not keep
-// the reservation's bytes (pretrade.NewLockFromEntries), and the only one the
-// C++ binding exposes.
+// The reservation wrapper does not expose its lock snapshot directly, so this
+// reconstructs the equivalent lock: one record under the default policy group
+// at the reservation price.
 [[nodiscard]] inline PlaceResult
 PlaceOrder(const ::openpit::Engine &engine,
            const ::openpit::model::Order &order) {
@@ -220,50 +212,15 @@ BuildFillReport(::openpit::param::AccountId account) {
 // pre-trade lock captured when the order's reservation was committed so
 // SpotFunds matches the fill to that reservation and settles the held amount.
 //
-// The C++ `model::ExecutionReport` deliberately omits the fill's `lock` pointer
-// (pre-trade locks are a separate handle slice), and `Engine::ApplyExecution
-// Report` therefore has no way to carry one. This helper bridges that single
-// gap: it materializes the borrowed C report view, patches in the lock handle,
-// and applies it through the C ABI, draining any account blocks back into the
-// binding's `accounts::AccountBlock` value type. The returned FillResult
-// mirrors the Go `PostTradeResult.AccountBlocks` channel: empty means
-// settlement succeeded; a non-empty slice would mean a policy permanently
-// blocked the account.
+// The engine overload attaches the separately owned lock to the report for the
+// duration of the call.
 [[nodiscard]] inline FillResult
 ApplyFill(const ::openpit::Engine &engine,
           const ::openpit::model::ExecutionReport &report,
           const ::openpit::pretrade::PreTradeLock &lock) {
-  OpenPitExecutionReport raw = report.Raw();
-  // report.Raw() leaves the fill's lock null; attach the reservation lock so
-  // the engine settles the held funds instead of reporting a missing-lock
-  // block.
-  raw.fill.value.lock = lock.Get();
-
-  OpenPitPretradeAccountBlockList *blocks = nullptr;
-  OpenPitAccountAdjustmentOutcomeList *outcomes = nullptr;
-  OpenPitSharedString *error = nullptr;
-  if (!openpit_engine_apply_execution_report(engine.Get(), &raw, &blocks,
-                                             &outcomes, &error)) {
-    ::openpit::detail::ThrowFromSharedString(
-        error, "openpit_engine_apply_execution_report failed");
-  }
-
+  ::openpit::PostTradeResult result = engine.ApplyExecutionReport(report, lock);
   FillResult out;
-  if (blocks != nullptr) {
-    const std::size_t count = openpit_pretrade_account_block_list_len(blocks);
-    out.accountBlocks.reserve(count);
-    for (std::size_t i = 0; i < count; ++i) {
-      OpenPitPretradeAccountBlock block{};
-      if (openpit_pretrade_account_block_list_get(blocks, i, &block)) {
-        out.accountBlocks.push_back(
-            ::openpit::accounts::AccountBlock::FromRaw(block));
-      }
-    }
-    openpit_pretrade_destroy_account_block_list(blocks);
-  }
-  if (outcomes != nullptr) {
-    openpit_destroy_account_adjustment_outcome_list(outcomes);
-  }
+  out.accountBlocks = std::move(result.accountBlocks);
   return out;
 }
 

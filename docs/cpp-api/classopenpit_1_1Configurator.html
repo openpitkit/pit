@@ -130,14 +130,16 @@ Public Member Functions</h2></td></tr>
 <tr class="memitem:a7ca85c87305f3d376bc4ffe6878b47e5" id="r_a7ca85c87305f3d376bc4ffe6878b47e5"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a7ca85c87305f3d376bc4ffe6878b47e5">PnlBoundsKillSwitch</a> (std::string_view name, std::optional&lt; std::vector&lt;<a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1PnlBoundsBrokerBarrier.html">::openpit::pretrade::policies::PnlBoundsBrokerBarrier</a> &gt; &gt; brokers=std::nullopt, std::optional&lt; std::vector&lt; <a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1PnlBoundsAccountBarrierUpdate.html">::openpit::pretrade::policies::PnlBoundsAccountBarrierUpdate</a> &gt; &gt; accounts=std::nullopt) const</td></tr>
 <tr class="memitem:a240fdab050976948d145b412824153d0" id="r_a240fdab050976948d145b412824153d0"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a240fdab050976948d145b412824153d0">RateLimit</a> (std::string_view name, std::optional&lt;<a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1RateLimitBrokerBarrier.html">::openpit::pretrade::policies::RateLimitBrokerBarrier</a> &gt; broker, std::optional&lt; std::vector&lt;<a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1RateLimitAssetBarrier.html">::openpit::pretrade::policies::RateLimitAssetBarrier</a> &gt; &gt; assets=std::nullopt, std::optional&lt; std::vector&lt;<a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1RateLimitAccountBarrier.html">::openpit::pretrade::policies::RateLimitAccountBarrier</a> &gt; &gt; accounts=std::nullopt, std::optional&lt; std::vector&lt; <a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1RateLimitAccountAssetBarrier.html">::openpit::pretrade::policies::RateLimitAccountAssetBarrier</a> &gt; &gt; accountAssets=std::nullopt) const</td></tr>
 <tr class="memitem:ad0edd6b0d9c1dc09c4be43d91163e756" id="r_ad0edd6b0d9c1dc09c4be43d91163e756"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#ad0edd6b0d9c1dc09c4be43d91163e756">SetAccountPnl</a> (std::string_view name, <a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> accountId, std::string_view settlementAsset, <a class="el" href="namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa73a90c39f7f1402dd9f42119cc15aecc">::openpit::param::Pnl</a> pnl) const</td></tr>
-<tr class="memitem:a442c0a21c70330f1989b5bd54d761f7d" id="r_a442c0a21c70330f1989b5bd54d761f7d"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a442c0a21c70330f1989b5bd54d761f7d">SetSpotFundsAccountPnl</a> (std::string_view name, <a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> accountId, std::string_view accountCurrency, <a class="el" href="namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa73a90c39f7f1402dd9f42119cc15aecc">::openpit::param::Pnl</a> pnl) const</td></tr>
-<tr class="memdesc:a442c0a21c70330f1989b5bd54d761f7d"><td class="mdescLeft">&#160;</td><td class="mdescRight">Force-sets one SpotFunds live account-currency P&amp;L accumulator.  <br /></td></tr>
+<tr class="memitem:aa4bfd12bb0f26a1d5ac2bfb10f63be69" id="r_aa4bfd12bb0f26a1d5ac2bfb10f63be69"><td class="memItemLeft"><a class="el" href="structopenpit_1_1PolicyConfigurationResult.html">::openpit::PolicyConfigurationResult</a>&#160;</td><td class="memItemRight"><a class="el" href="#aa4bfd12bb0f26a1d5ac2bfb10f63be69">SetSpotFundsAccountPnl</a> (std::string_view name, <a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> accountId, <a class="el" href="namespaceopenpit_1_1accountadjustment.html#af4b87a71496cd37769b8c74a1319f502">::openpit::accountadjustment::PnlHaltReason</a> reason) const</td></tr>
+<tr class="memdesc:aa4bfd12bb0f26a1d5ac2bfb10f63be69"><td class="mdescLeft">&#160;</td><td class="mdescRight">Replaces one SpotFunds live account P&amp;L accumulator with a halt reason.  <br /></td></tr>
+<tr class="memitem:aed16654a6552c8bdf20812ef56b1b001" id="r_aed16654a6552c8bdf20812ef56b1b001"><td class="memItemLeft"><a class="el" href="structopenpit_1_1PolicyConfigurationResult.html">::openpit::PolicyConfigurationResult</a>&#160;</td><td class="memItemRight"><a class="el" href="#aed16654a6552c8bdf20812ef56b1b001">SetSpotFundsAccountPnl</a> (std::string_view name, <a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> accountId, <a class="el" href="namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa73a90c39f7f1402dd9f42119cc15aecc">::openpit::param::Pnl</a> pnl) const</td></tr>
+<tr class="memdesc:aed16654a6552c8bdf20812ef56b1b001"><td class="mdescLeft">&#160;</td><td class="mdescRight">Replaces one SpotFunds live account P&amp;L accumulator with a numeric value.  <br /></td></tr>
 <tr class="memitem:aa4c9e5205fac24387930765f0fdc32cf" id="r_aa4c9e5205fac24387930765f0fdc32cf"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#aa4c9e5205fac24387930765f0fdc32cf">SpotFunds</a> (std::string_view name, std::optional&lt; std::uint16_t &gt; globalSlippageBps=std::nullopt, std::optional&lt;<a class="el" href="namespaceopenpit_1_1pretrade_1_1policies.html#afe663379b1ff21161015d468b8ea8876">::openpit::pretrade::policies::SpotFundsPricingSource</a> &gt; pricingSource=std::nullopt, std::optional&lt; std::vector&lt;<a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsOverride.html">::openpit::pretrade::policies::SpotFundsOverride</a> &gt; &gt; overrides=std::nullopt) const</td></tr>
 <tr class="memitem:a75c06930fe605512c1420bce1af4f874" id="r_a75c06930fe605512c1420bce1af4f874"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a75c06930fe605512c1420bce1af4f874">SpotFundsAccountGroupLimitMode</a> (std::string_view name, <a class="el" href="classopenpit_1_1param_1_1AccountGroupId.html">::openpit::param::AccountGroupId</a> accountGroupId, std::optional&lt;<a class="el" href="namespaceopenpit_1_1pretrade_1_1policies.html#aa655b2cbe39c0059740c90ff18ac5c77">::openpit::pretrade::policies::SpotFundsLimitMode</a> &gt; mode) const</td></tr>
 <tr class="memitem:a33cfdae634bff9d9d40d6e9ed0b90e15" id="r_a33cfdae634bff9d9d40d6e9ed0b90e15"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a33cfdae634bff9d9d40d6e9ed0b90e15">SpotFundsAccountLimitMode</a> (std::string_view name, <a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> accountId, std::optional&lt;<a class="el" href="namespaceopenpit_1_1pretrade_1_1policies.html#aa655b2cbe39c0059740c90ff18ac5c77">::openpit::pretrade::policies::SpotFundsLimitMode</a> &gt; mode) const</td></tr>
 <tr class="memitem:a06bed638c2b94db7cada097e418818d7" id="r_a06bed638c2b94db7cada097e418818d7"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a06bed638c2b94db7cada097e418818d7">SpotFundsGlobalLimitMode</a> (std::string_view name, <a class="el" href="namespaceopenpit_1_1pretrade_1_1policies.html#aa655b2cbe39c0059740c90ff18ac5c77">::openpit::pretrade::policies::SpotFundsLimitMode</a> mode) const</td></tr>
-<tr class="memitem:a416df630f888bfcf3d58c6a70608cfb1" id="r_a416df630f888bfcf3d58c6a70608cfb1"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a416df630f888bfcf3d58c6a70608cfb1">SpotFundsPnlBoundsKillSwitch</a> (std::string_view name, std::optional&lt; std::vector&lt;<a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier.html">::openpit::pretrade::policies::SpotFundsPnlBoundsBarrier</a> &gt; &gt; global=std::nullopt, std::optional&lt; std::vector&lt; <a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountGroupBarrier.html">::openpit::pretrade::policies::SpotFundsPnlBoundsAccountGroupBarrier</a> &gt; &gt; accountGroups=std::nullopt, std::optional&lt; std::vector&lt;<a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrierUpdate.html">::openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrierUpdate</a> &gt; &gt; accounts=std::nullopt) const</td></tr>
-<tr class="memdesc:a416df630f888bfcf3d58c6a70608cfb1"><td class="mdescLeft">&#160;</td><td class="mdescRight">Retunes the SpotFunds self-computed P&amp;L bounds axis.  <br /></td></tr>
+<tr class="memitem:aff969ba41ae8cf3b49ede396d0bc485a" id="r_aff969ba41ae8cf3b49ede396d0bc485a"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#aff969ba41ae8cf3b49ede396d0bc485a">SpotFundsPnlBoundsKillSwitch</a> (std::string_view name, <a class="el" href="classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsGlobalBarrierUpdate.html">::openpit::pretrade::policies::SpotFundsPnlBoundsGlobalBarrierUpdate</a> global=<a class="el" href="classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsGlobalBarrierUpdate.html#a0a53f4c3d10e2ae094d9ed3367ed45d7">::openpit::pretrade::policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Unchanged</a>(), std::optional&lt; std::vector&lt; <a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountGroupBarrier.html">::openpit::pretrade::policies::SpotFundsPnlBoundsAccountGroupBarrier</a> &gt; &gt; accountGroups=std::nullopt, std::optional&lt; std::vector&lt; <a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrier.html">::openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrier</a> &gt; &gt; accounts=std::nullopt) const</td></tr>
+<tr class="memdesc:aff969ba41ae8cf3b49ede396d0bc485a"><td class="mdescLeft">&#160;</td><td class="mdescRight">Retunes the SpotFunds self-computed P&amp;L bounds axis.  <br /></td></tr>
 </table>
 <a name="doc-constructors" id="doc-constructors"></a><h2 id="header-doc-constructors" class="groupheader">Constructor &amp; Destructor Documentation</h2>
 <a id="af25c89605825b7de2fe3d265681857c2" name="af25c89605825b7de2fe3d265681857c2"></a>
@@ -347,8 +349,8 @@ Public Member Functions</h2></td></tr>
 
 </div>
 </div>
-<a id="a442c0a21c70330f1989b5bd54d761f7d" name="a442c0a21c70330f1989b5bd54d761f7d"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a442c0a21c70330f1989b5bd54d761f7d">&#9670;&#160;</a></span>SetSpotFundsAccountPnl()</h2>
+<a id="aa4bfd12bb0f26a1d5ac2bfb10f63be69" name="aa4bfd12bb0f26a1d5ac2bfb10f63be69"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#aa4bfd12bb0f26a1d5ac2bfb10f63be69">&#9670;&#160;</a></span>SetSpotFundsAccountPnl() <span class="overload">[1/2]</span></h2>
 
 <div class="memitem">
 <div class="memproto">
@@ -357,7 +359,7 @@ Public Member Functions</h2></td></tr>
   <td class="mlabels-left">
       <table class="memname">
         <tr>
-          <td class="memname">void openpit::Configurator::SetSpotFundsAccountPnl </td>
+          <td class="memname"><a class="el" href="structopenpit_1_1PolicyConfigurationResult.html">::openpit::PolicyConfigurationResult</a> openpit::Configurator::SetSpotFundsAccountPnl </td>
           <td>(</td>
           <td class="paramtype">std::string_view</td>          <td class="paramname"><span class="paramname"><em>name</em></span>, </td>
         </tr>
@@ -369,7 +371,39 @@ Public Member Functions</h2></td></tr>
         <tr>
           <td class="paramkey"></td>
           <td></td>
-          <td class="paramtype">std::string_view</td>          <td class="paramname"><span class="paramname"><em>accountCurrency</em></span>, </td>
+          <td class="paramtype"><a class="el" href="namespaceopenpit_1_1accountadjustment.html#af4b87a71496cd37769b8c74a1319f502">::openpit::accountadjustment::PnlHaltReason</a></td>          <td class="paramname"><span class="paramname"><em>reason</em></span>&#160;) const</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel nodiscard">nodiscard</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+<p>Replaces one SpotFunds live account P&amp;L accumulator with a halt reason. </p>
+<p>This is separate from barrier retuning and does not affect any position-level accumulator. When an effective account P&amp;L barrier is configured, the result reports the block immediately recorded by the engine. </p>
+
+</div>
+</div>
+<a id="aed16654a6552c8bdf20812ef56b1b001" name="aed16654a6552c8bdf20812ef56b1b001"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#aed16654a6552c8bdf20812ef56b1b001">&#9670;&#160;</a></span>SetSpotFundsAccountPnl() <span class="overload">[2/2]</span></h2>
+
+<div class="memitem">
+<div class="memproto">
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname"><a class="el" href="structopenpit_1_1PolicyConfigurationResult.html">::openpit::PolicyConfigurationResult</a> openpit::Configurator::SetSpotFundsAccountPnl </td>
+          <td>(</td>
+          <td class="paramtype">std::string_view</td>          <td class="paramname"><span class="paramname"><em>name</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a></td>          <td class="paramname"><span class="paramname"><em>accountId</em></span>, </td>
         </tr>
         <tr>
           <td class="paramkey"></td>
@@ -379,13 +413,13 @@ Public Member Functions</h2></td></tr>
       </table>
   </td>
   <td class="mlabels-right">
-<span class="mlabels"><span class="mlabel inline">inline</span></span>  </td>
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel nodiscard">nodiscard</span></span>  </td>
   </tr>
 </table>
 </div><div class="memdoc">
 
-<p>Force-sets one SpotFunds live account-currency P&amp;L accumulator. </p>
-<p>This is an absolute assignment and is separate from barrier retuning. </p>
+<p>Replaces one SpotFunds live account P&amp;L accumulator with a numeric value. </p>
+<p>This is separate from barrier retuning and re-arms the accumulator after a calculation halt. It does not affect any position-level accumulator. A value outside the effective bounds returns the account block recorded by the engine immediately; otherwise the returned block list is empty. </p>
 
 </div>
 </div>
@@ -525,8 +559,8 @@ Public Member Functions</h2></td></tr>
 
 </div>
 </div>
-<a id="a416df630f888bfcf3d58c6a70608cfb1" name="a416df630f888bfcf3d58c6a70608cfb1"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a416df630f888bfcf3d58c6a70608cfb1">&#9670;&#160;</a></span>SpotFundsPnlBoundsKillSwitch()</h2>
+<a id="aff969ba41ae8cf3b49ede396d0bc485a" name="aff969ba41ae8cf3b49ede396d0bc485a"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#aff969ba41ae8cf3b49ede396d0bc485a">&#9670;&#160;</a></span>SpotFundsPnlBoundsKillSwitch()</h2>
 
 <div class="memitem">
 <div class="memproto">
@@ -542,7 +576,7 @@ Public Member Functions</h2></td></tr>
         <tr>
           <td class="paramkey"></td>
           <td></td>
-          <td class="paramtype">std::optional&lt; std::vector&lt;<a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier.html">::openpit::pretrade::policies::SpotFundsPnlBoundsBarrier</a> &gt; &gt;</td>          <td class="paramname"><span class="paramname"><em>global</em></span><span class="paramdefsep"> = </span><span class="paramdefval">std::nullopt</span>, </td>
+          <td class="paramtype"><a class="el" href="classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsGlobalBarrierUpdate.html">::openpit::pretrade::policies::SpotFundsPnlBoundsGlobalBarrierUpdate</a></td>          <td class="paramname"><span class="paramname"><em>global</em></span><span class="paramdefsep"> = </span><span class="paramdefval">::openpit::pretrade::policies::&#160;SpotFundsPnlBoundsGlobalBarrierUpdate::Unchanged()</span>, </td>
         </tr>
         <tr>
           <td class="paramkey"></td>
@@ -552,7 +586,7 @@ Public Member Functions</h2></td></tr>
         <tr>
           <td class="paramkey"></td>
           <td></td>
-          <td class="paramtype">std::optional&lt; std::vector&lt;<a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrierUpdate.html">::openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrierUpdate</a> &gt; &gt;</td>          <td class="paramname"><span class="paramname"><em>accounts</em></span><span class="paramdefsep"> = </span><span class="paramdefval">std::nullopt</span>&#160;) const</td>
+          <td class="paramtype">std::optional&lt; std::vector&lt; <a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrier.html">::openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrier</a> &gt; &gt;</td>          <td class="paramname"><span class="paramname"><em>accounts</em></span><span class="paramdefsep"> = </span><span class="paramdefval">std::nullopt</span>&#160;) const</td>
         </tr>
       </table>
   </td>
@@ -563,7 +597,7 @@ Public Member Functions</h2></td></tr>
 </div><div class="memdoc">
 
 <p>Retunes the SpotFunds self-computed P&amp;L bounds axis. </p>
-<p>Each optional vector is a PATCH axis: <span class="tt">std::nullopt</span> leaves that axis unchanged; an engaged empty vector clears it. Account updates preserve each live accumulated P&amp;L value. </p>
+<p>The global update uses the explicitly named <span class="tt">Unchanged</span>, <span class="tt">Clear</span>, and <span class="tt">Set</span> operations. Optional group/account vectors are PATCH axes: <span class="tt">std::nullopt</span> leaves the axis unchanged and an engaged empty vector clears it. Account updates preserve each live accumulated P&amp;L value. </p>
 
 </div>
 </div>

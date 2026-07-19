@@ -17,8 +17,8 @@
 
 #pragma once
 
-#include "openpit/account_adjustment.hpp"
 #include "openpit/account_id.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/accounts.hpp"
 #include "openpit/asyncengine/engine.hpp"
 #include "openpit/asyncengine/future.hpp"
@@ -73,7 +73,7 @@
 // dispatch errors the generic layer uses. Pre-trade rejects and adjustment
 // batch rejects are values in the accepted-or-rejected tuple, not errors. A
 // runtime failure inside a driver call surfaces as `ErrorCode::TaskFailed`
-// carrying the thrown message — an exception from the engine never crosses the
+// carrying the thrown message. An exception from the engine never crosses the
 // worker boundary.
 
 namespace openpit::asyncengine {
@@ -106,6 +106,12 @@ class EngineAdapter {
   [[nodiscard]] ::openpit::PostTradeResult ApplyExecutionReport(
       const ::openpit::model::ExecutionReport& report) const {
     return m_engine->ApplyExecutionReport(report);
+  }
+
+  [[nodiscard]] ::openpit::PostTradeResult ApplyExecutionReport(
+      const ::openpit::model::ExecutionReport& report,
+      const ::openpit::pretrade::PreTradeLock& lock) const {
+    return m_engine->ApplyExecutionReport(report, lock);
   }
 
   // Applies a batch adjustment, returning the (batch-reject-or-none, outcomes)
@@ -167,11 +173,13 @@ struct ExecuteOutcome {
 /// \brief Result value for an async account-adjustment batch.
 //
 // Accepted-or-rejected adjustment outcome. On accept `batchError` is null and
-// `outcomes` carries the per-adjustment outcomes; on reject `batchError` is
-// set. This mirrors the synchronous `AdjustmentResult` value shape.
+// `outcomes` and `accountBlocks` carry the per-adjustment outcomes and
+// recorded account blocks; on reject `batchError` is set. This mirrors the
+// synchronous `AdjustmentResult` value shape.
 struct AdjustmentOutcome {
   std::shared_ptr<::openpit::accountadjustment::BatchError> batchError;
   std::vector<::openpit::accountadjustment::Outcome> outcomes;
+  std::vector<::openpit::accounts::AccountBlock> accountBlocks;
 
   [[nodiscard]] bool Passed() const noexcept { return !batchError; }
 };
@@ -548,7 +556,7 @@ class TypedAsyncEngine {
 
   // Enqueues a batch adjustment for `accountId` (supplied explicitly because
   // adjustments carry no account). Resolves with an `AdjustmentOutcome`: a
-  // non-null batch error on reject, the outcomes on accept.
+  // non-null batch error on reject, or outcomes and account blocks on accept.
   template <typename Adjustment>
   [[nodiscard]] Future<AdjustmentOutcome> ApplyAccountAdjustment(
       ::openpit::param::AccountId accountId,
@@ -567,6 +575,7 @@ class TypedAsyncEngine {
                     std::move(*result.batchError));
           }
           out.outcomes = std::move(result.accountAdjustmentOutcomes);
+          out.accountBlocks = std::move(result.accountBlocks);
           return out;
         },
         timeout);

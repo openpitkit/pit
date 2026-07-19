@@ -32,6 +32,8 @@ extern "C" {
 #endif
 
 typedef struct OpenPitAccountAdjustment OpenPitAccountAdjustment;
+typedef struct OpenPitAccountAdjustmentAccountPnlOperation
+    OpenPitAccountAdjustmentAccountPnlOperation;
 typedef struct OpenPitAccountAdjustmentAmount OpenPitAccountAdjustmentAmount;
 typedef struct OpenPitAccountAdjustmentAmountOptional
     OpenPitAccountAdjustmentAmountOptional;
@@ -54,7 +56,8 @@ typedef struct OpenPitAccountBlockError OpenPitAccountBlockError;
 typedef struct OpenPitAccountControl OpenPitAccountControl;
 typedef struct OpenPitAccountGroupError OpenPitAccountGroupError;
 typedef struct OpenPitAccountOutcomeEntry OpenPitAccountOutcomeEntry;
-typedef struct OpenPitAccountOutcomeEntryList OpenPitAccountOutcomeEntryList;
+typedef struct OpenPitAccountPnlOutcome OpenPitAccountPnlOutcome;
+typedef struct OpenPitAccountPnlOutcomeList OpenPitAccountPnlOutcomeList;
 typedef struct OpenPitBytesView OpenPitBytesView;
 typedef struct OpenPitConfigureError OpenPitConfigureError;
 typedef struct OpenPitEngine OpenPitEngine;
@@ -119,10 +122,18 @@ typedef struct OpenPitParamQuantityOptional OpenPitParamQuantityOptional;
 typedef struct OpenPitParamTradeAmount OpenPitParamTradeAmount;
 typedef struct OpenPitParamVolume OpenPitParamVolume;
 typedef struct OpenPitParamVolumeOptional OpenPitParamVolumeOptional;
+typedef struct OpenPitPnlOutcome OpenPitPnlOutcome;
 typedef struct OpenPitPnlOutcomeAmount OpenPitPnlOutcomeAmount;
 typedef struct OpenPitPnlOutcomeAmountOptional OpenPitPnlOutcomeAmountOptional;
+typedef struct OpenPitPnlOutcomeOptional OpenPitPnlOutcomeOptional;
+typedef struct OpenPitPnlState OpenPitPnlState;
+typedef struct OpenPitPnlStateOptional OpenPitPnlStateOptional;
+typedef struct OpenPitPostTradeAccountPnlList OpenPitPostTradeAccountPnlList;
 typedef struct OpenPitPostTradeAdjustmentList OpenPitPostTradeAdjustmentList;
 typedef struct OpenPitPostTradeContext OpenPitPostTradeContext;
+typedef struct OpenPitPostTradeResult OpenPitPostTradeResult;
+typedef struct OpenPitPretradeAccountAdjustmentResult
+    OpenPitPretradeAccountAdjustmentResult;
 typedef struct OpenPitPretradeAccountBlock OpenPitPretradeAccountBlock;
 typedef struct OpenPitPretradeAccountBlockList OpenPitPretradeAccountBlockList;
 typedef struct OpenPitPretradeContext OpenPitPretradeContext;
@@ -163,8 +174,6 @@ typedef union OpenPitPretradePoliciesSpotFundsOverrideTargetPayload
     OpenPitPretradePoliciesSpotFundsOverrideTargetPayload;
 typedef struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier
     OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier;
-typedef struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate
-    OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate;
 typedef struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
     OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier;
 typedef struct OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier
@@ -227,6 +236,83 @@ typedef uint16_t OpenPitParamLeverage;
 typedef uint64_t OpenPitParamAccountId;
 
 /**
+ * Raw order-side code accepted from C callers.
+ */
+typedef uint8_t OpenPitParamSide;
+
+/**
+ * Raw position-side code accepted from C callers.
+ */
+typedef uint8_t OpenPitParamPositionSide;
+
+/**
+ * Raw position-accounting-mode code accepted from C callers.
+ */
+typedef uint8_t OpenPitParamPositionMode;
+
+/**
+ * Raw position-effect code accepted from C callers.
+ */
+typedef uint8_t OpenPitParamPositionEffect;
+
+/**
+ * Raw fill-event vocabulary code exposed to C callers.
+ */
+typedef uint8_t OpenPitParamFillType;
+
+/**
+ * Raw parameter-category vocabulary code exposed to C callers.
+ */
+typedef uint8_t OpenPitParamKind;
+
+/**
+ * Raw trade-amount selector accepted from C callers.
+ */
+typedef uint8_t OpenPitParamTradeAmountKind;
+
+/**
+ * Raw rounding-strategy code accepted from C callers.
+ */
+typedef uint8_t OpenPitParamRoundingStrategy;
+
+/**
+ * Raw tri-state boolean code accepted from C callers.
+ */
+typedef uint8_t OpenPitTriBool;
+
+/**
+ * Raw account-adjustment amount selector accepted from C callers.
+ */
+typedef uint8_t OpenPitParamAdjustmentAmountKind;
+
+/**
+ * Raw selector for the meaningful account-adjustment operation payload.
+ *
+ * Use the `OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_*` constants. Unknown
+ * values are rejected before any operation payload is imported.
+ */
+typedef uint8_t OpenPitAccountAdjustmentOperationKind;
+
+/**
+ * Raw reject-scope code accepted from C callers.
+ *
+ * Zero is not valid; callers must set this field explicitly.
+ */
+typedef uint8_t OpenPitPretradeRejectScope;
+
+/**
+ * Raw stable classification code for a reject.
+ *
+ * Read this first when you need machine-readable handling. The textual fields
+ * in [`OpenPitPretradeReject`] provide operator-facing explanation and extra
+ * context.
+ *
+ * Valid codes are `1..=42`, `254` (`Custom`), and `255` (`Other`). Unknown
+ * incoming codes are mapped to `Other` (`255`).
+ */
+typedef uint16_t OpenPitPretradeRejectCode;
+
+/**
  * Error out-pointer used by fallible FFI calls.
  */
 typedef OpenPitSharedString ** OpenPitOutError;
@@ -235,6 +321,20 @@ typedef OpenPitSharedString ** OpenPitOutError;
  * Parameter error out-pointer used by fallible param FFI calls.
  */
 typedef OpenPitParamError ** OpenPitOutParamError;
+
+/**
+ * Raw selector for the spot-funds insufficient-funds behavior.
+ */
+typedef uint8_t OpenPitPretradePoliciesSpotFundsLimitMode;
+
+/**
+ * Tagged target variants for a spot-funds slippage override.
+ *
+ * Spot funds overrides use an explicit tagged hierarchy matching the Rust
+ * [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget) variants:
+ * `Instrument`, `InstrumentAccount`, and `InstrumentAccountGroup`.
+ */
+typedef uint8_t OpenPitPretradePoliciesSpotFundsOverrideTargetTag;
 
 /**
  * Stable account-group identifier type for FFI payloads.
@@ -252,6 +352,21 @@ typedef OpenPitParamError ** OpenPitOutParamError;
 typedef uint32_t OpenPitParamAccountGroupId;
 
 /**
+ * Raw reason code for a realized-PnL calculation halt.
+ *
+ * This is a primitive rather than a Rust enum so callers can pass arbitrary
+ * bytes without creating an invalid Rust enum discriminant at the FFI
+ * boundary. Inbound values are validated before conversion to
+ * `OpenPitPnlHaltReason` values.
+ */
+typedef uint8_t OpenPitPnlHaltReason;
+
+/**
+ * Raw discriminator for [`OpenPitPnlState`].
+ */
+typedef uint8_t OpenPitPnlStateKind;
+
+/**
  * Stable instrument identifier for all FFI payloads.
  */
 typedef uint64_t OpenPitInstrumentId;
@@ -260,6 +375,14 @@ typedef uint64_t OpenPitInstrumentId;
  * Backwards-compatible market-data spelling of [`OpenPitInstrumentId`].
  */
 typedef OpenPitInstrumentId OpenPitMarketDataInstrumentId;
+
+/**
+ * Selects which quote buckets a read will consult, in order.
+ *
+ * When the more-specific bucket has no quote, the read falls through to the
+ * next bucket permitted by this value.
+ */
+typedef uint8_t OpenPitMarketDataQuoteResolution;
 
 /**
  * Raw settlement-unit code for FFI payloads.
@@ -295,28 +418,568 @@ typedef uint8_t OpenPitSettlementUnit;
 #define OPENPIT_PARAM_LEVERAGE_STEP ((float) 0.1)
 
 /**
+ * The order side is absent.
+ */
+#define OPENPIT_PARAM_SIDE_NOT_SET ((OpenPitParamSide) 0)
+
+/**
+ * Buy side.
+ */
+#define OPENPIT_PARAM_SIDE_BUY ((OpenPitParamSide) 1)
+
+/**
+ * Sell side.
+ */
+#define OPENPIT_PARAM_SIDE_SELL ((OpenPitParamSide) 2)
+
+/**
+ * The position side is absent.
+ */
+#define OPENPIT_PARAM_POSITION_SIDE_NOT_SET ((OpenPitParamPositionSide) 0)
+
+/**
+ * Long exposure.
+ */
+#define OPENPIT_PARAM_POSITION_SIDE_LONG ((OpenPitParamPositionSide) 1)
+
+/**
+ * Short exposure.
+ */
+#define OPENPIT_PARAM_POSITION_SIDE_SHORT ((OpenPitParamPositionSide) 2)
+
+/**
+ * The position mode is absent.
+ */
+#define OPENPIT_PARAM_POSITION_MODE_NOT_SET ((OpenPitParamPositionMode) 0)
+
+/**
+ * Opposite trades net into one position.
+ */
+#define OPENPIT_PARAM_POSITION_MODE_NETTING ((OpenPitParamPositionMode) 1)
+
+/**
+ * Long and short positions are tracked separately.
+ */
+#define OPENPIT_PARAM_POSITION_MODE_HEDGED ((OpenPitParamPositionMode) 2)
+
+/**
+ * The position effect is absent.
+ */
+#define OPENPIT_PARAM_POSITION_EFFECT_NOT_SET ((OpenPitParamPositionEffect) 0)
+
+/**
+ * The trade opens or increases exposure.
+ */
+#define OPENPIT_PARAM_POSITION_EFFECT_OPEN ((OpenPitParamPositionEffect) 1)
+
+/**
+ * The trade closes or reduces exposure.
+ */
+#define OPENPIT_PARAM_POSITION_EFFECT_CLOSE ((OpenPitParamPositionEffect) 2)
+
+/**
+ * No fill-event type is supplied.
+ */
+#define OPENPIT_PARAM_FILL_TYPE_NOT_SET ((OpenPitParamFillType) 0)
+
+/**
+ * Normal trade execution.
+ */
+#define OPENPIT_PARAM_FILL_TYPE_TRADE ((OpenPitParamFillType) 1)
+
+/**
+ * Forced liquidation by the venue.
+ */
+#define OPENPIT_PARAM_FILL_TYPE_LIQUIDATION ((OpenPitParamFillType) 2)
+
+/**
+ * Auto-deleveraging event.
+ */
+#define OPENPIT_PARAM_FILL_TYPE_AUTO_DELEVERAGE ((OpenPitParamFillType) 3)
+
+/**
+ * Settlement at expiry or delivery.
+ */
+#define OPENPIT_PARAM_FILL_TYPE_SETTLEMENT ((OpenPitParamFillType) 4)
+
+/**
+ * Funding payment.
+ */
+#define OPENPIT_PARAM_FILL_TYPE_FUNDING ((OpenPitParamFillType) 5)
+
+/**
+ * No parameter category is available.
+ */
+#define OPENPIT_PARAM_KIND_UNSPECIFIED ((OpenPitParamKind) 0)
+
+/**
+ * Quantity.
+ */
+#define OPENPIT_PARAM_KIND_QUANTITY ((OpenPitParamKind) 1)
+
+/**
+ * Volume.
+ */
+#define OPENPIT_PARAM_KIND_VOLUME ((OpenPitParamKind) 2)
+
+/**
+ * Notional value.
+ */
+#define OPENPIT_PARAM_KIND_NOTIONAL ((OpenPitParamKind) 3)
+
+/**
+ * Price.
+ */
+#define OPENPIT_PARAM_KIND_PRICE ((OpenPitParamKind) 4)
+
+/**
+ * Profit and loss.
+ */
+#define OPENPIT_PARAM_KIND_PNL ((OpenPitParamKind) 5)
+
+/**
+ * Cash flow.
+ */
+#define OPENPIT_PARAM_KIND_CASH_FLOW ((OpenPitParamKind) 6)
+
+/**
+ * Signed position size.
+ */
+#define OPENPIT_PARAM_KIND_POSITION_SIZE ((OpenPitParamKind) 7)
+
+/**
+ * Fee.
+ */
+#define OPENPIT_PARAM_KIND_FEE ((OpenPitParamKind) 8)
+
+/**
+ * Leverage.
+ */
+#define OPENPIT_PARAM_KIND_LEVERAGE ((OpenPitParamKind) 9)
+
+/**
+ * No trade-amount field is selected.
+ */
+#define OPENPIT_PARAM_TRADE_AMOUNT_KIND_NOT_SET \
+    ((OpenPitParamTradeAmountKind) 0)
+
+/**
+ * The trade amount is an instrument quantity.
+ */
+#define OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY \
+    ((OpenPitParamTradeAmountKind) 1)
+
+/**
+ * The trade amount is a settlement volume.
+ */
+#define OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME ((OpenPitParamTradeAmountKind) 2)
+
+/**
+ * Round half to the nearest even number.
+ */
+#define OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN \
+    ((OpenPitParamRoundingStrategy) 0)
+
+/**
+ * Round half away from zero.
+ */
+#define OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_AWAY_FROM_ZERO \
+    ((OpenPitParamRoundingStrategy) 1)
+
+/**
+ * Round towards positive infinity.
+ */
+#define OPENPIT_PARAM_ROUNDING_STRATEGY_UP ((OpenPitParamRoundingStrategy) 2)
+
+/**
+ * Round towards negative infinity.
+ */
+#define OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN ((OpenPitParamRoundingStrategy) 3)
+
+/**
  * Default rounding strategy alias.
  */
 #define OPENPIT_PARAM_ROUNDING_STRATEGY_DEFAULT \
-    ((OpenPitParamRoundingStrategy) OpenPitParamRoundingStrategy_MidpointNearestEven)
+    ((OpenPitParamRoundingStrategy) OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN)
 
 /**
  * Banker's rounding alias.
  */
 #define OPENPIT_PARAM_ROUNDING_STRATEGY_BANKER \
-    ((OpenPitParamRoundingStrategy) OpenPitParamRoundingStrategy_MidpointNearestEven)
+    ((OpenPitParamRoundingStrategy) OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN)
 
 /**
  * Conservative profit rounding alias.
  */
 #define OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT \
-    ((OpenPitParamRoundingStrategy) OpenPitParamRoundingStrategy_Down)
+    ((OpenPitParamRoundingStrategy) OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN)
 
 /**
  * Conservative loss rounding alias.
  */
 #define OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS \
-    ((OpenPitParamRoundingStrategy) OpenPitParamRoundingStrategy_Down)
+    ((OpenPitParamRoundingStrategy) OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN)
+
+/**
+ * The boolean value is absent.
+ */
+#define OPENPIT_TRI_BOOL_NOT_SET ((OpenPitTriBool) 0)
+
+/**
+ * Boolean false.
+ */
+#define OPENPIT_TRI_BOOL_FALSE ((OpenPitTriBool) 1)
+
+/**
+ * Boolean true.
+ */
+#define OPENPIT_TRI_BOOL_TRUE ((OpenPitTriBool) 2)
+
+/**
+ * No adjustment amount is specified.
+ */
+#define OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_NOT_SET \
+    ((OpenPitParamAdjustmentAmountKind) 0)
+
+/**
+ * Change current state by the supplied signed amount.
+ */
+#define OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA \
+    ((OpenPitParamAdjustmentAmountKind) 1)
+
+/**
+ * Set current state to the supplied signed amount.
+ */
+#define OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE \
+    ((OpenPitParamAdjustmentAmountKind) 2)
+
+/**
+ * No operation is supplied.
+ */
+#define OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ABSENT \
+    ((OpenPitAccountAdjustmentOperationKind) 0)
+
+/**
+ * The balance-operation payload is selected.
+ */
+#define OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_BALANCE \
+    ((OpenPitAccountAdjustmentOperationKind) 1)
+
+/**
+ * The position-operation payload is selected.
+ */
+#define OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_POSITION \
+    ((OpenPitAccountAdjustmentOperationKind) 2)
+
+/**
+ * The account-wide PnL payload is selected.
+ */
+#define OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ACCOUNT_PNL \
+    ((OpenPitAccountAdjustmentOperationKind) 3)
+
+/**
+ * The reject applies to one order or order-like request.
+ */
+#define OPENPIT_PRETRADE_REJECT_SCOPE_ORDER ((OpenPitPretradeRejectScope) 1)
+
+/**
+ * The reject applies to account state rather than to one order only.
+ */
+#define OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT ((OpenPitPretradeRejectScope) 2)
+
+/**
+ * A required field is absent.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD \
+    ((OpenPitPretradeRejectCode) 1)
+
+/**
+ * A field cannot be parsed from the supplied wire value.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_FORMAT \
+    ((OpenPitPretradeRejectCode) 2)
+
+/**
+ * A field is syntactically valid but semantically unacceptable.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_VALUE \
+    ((OpenPitPretradeRejectCode) 3)
+
+/**
+ * The requested order type is not supported.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_TYPE \
+    ((OpenPitPretradeRejectCode) 4)
+
+/**
+ * The requested time-in-force is not supported.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_TIME_IN_FORCE \
+    ((OpenPitPretradeRejectCode) 5)
+
+/**
+ * Another order attribute is unsupported.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_ATTRIBUTE \
+    ((OpenPitPretradeRejectCode) 6)
+
+/**
+ * The client order identifier duplicates an active order.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_DUPLICATE_CLIENT_ORDER_ID \
+    ((OpenPitPretradeRejectCode) 7)
+
+/**
+ * The order arrived after the allowed entry deadline.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_TOO_LATE_TO_ENTER \
+    ((OpenPitPretradeRejectCode) 8)
+
+/**
+ * Trading is closed for the relevant venue or session.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_EXCHANGE_CLOSED \
+    ((OpenPitPretradeRejectCode) 9)
+
+/**
+ * The instrument cannot be resolved.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_INSTRUMENT \
+    ((OpenPitPretradeRejectCode) 10)
+
+/**
+ * The account cannot be resolved.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_ACCOUNT \
+    ((OpenPitPretradeRejectCode) 11)
+
+/**
+ * The venue cannot be resolved.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_VENUE \
+    ((OpenPitPretradeRejectCode) 12)
+
+/**
+ * The clearing account cannot be resolved.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_CLEARING_ACCOUNT \
+    ((OpenPitPretradeRejectCode) 13)
+
+/**
+ * The collateral asset cannot be resolved.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_COLLATERAL_ASSET \
+    ((OpenPitPretradeRejectCode) 14)
+
+/**
+ * Available balance is insufficient.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_FUNDS \
+    ((OpenPitPretradeRejectCode) 15)
+
+/**
+ * Available margin is insufficient.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_MARGIN \
+    ((OpenPitPretradeRejectCode) 16)
+
+/**
+ * Available position is insufficient.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_POSITION \
+    ((OpenPitPretradeRejectCode) 17)
+
+/**
+ * A credit limit was exceeded.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_CREDIT_LIMIT_EXCEEDED \
+    ((OpenPitPretradeRejectCode) 18)
+
+/**
+ * A risk limit was exceeded.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED \
+    ((OpenPitPretradeRejectCode) 19)
+
+/**
+ * The order exceeds a generic configured limit.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT \
+    ((OpenPitPretradeRejectCode) 20)
+
+/**
+ * The order quantity exceeds a configured limit.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_ORDER_QTY_EXCEEDS_LIMIT \
+    ((OpenPitPretradeRejectCode) 21)
+
+/**
+ * The order notional exceeds a configured limit.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_ORDER_NOTIONAL_EXCEEDS_LIMIT \
+    ((OpenPitPretradeRejectCode) 22)
+
+/**
+ * The resulting position exceeds a configured limit.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_POSITION_LIMIT_EXCEEDED \
+    ((OpenPitPretradeRejectCode) 23)
+
+/**
+ * Concentration constraints were violated.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_CONCENTRATION_LIMIT_EXCEEDED \
+    ((OpenPitPretradeRejectCode) 24)
+
+/**
+ * Leverage constraints were violated.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_LEVERAGE_LIMIT_EXCEEDED \
+    ((OpenPitPretradeRejectCode) 25)
+
+/**
+ * The request rate exceeded a configured limit.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED \
+    ((OpenPitPretradeRejectCode) 26)
+
+/**
+ * A loss barrier has blocked further risk-taking.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED \
+    ((OpenPitPretradeRejectCode) 27)
+
+/**
+ * The account is blocked.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED \
+    ((OpenPitPretradeRejectCode) 28)
+
+/**
+ * The account is not authorized for this action.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_NOT_AUTHORIZED \
+    ((OpenPitPretradeRejectCode) 29)
+
+/**
+ * A compliance restriction blocked the action.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_COMPLIANCE_RESTRICTION \
+    ((OpenPitPretradeRejectCode) 30)
+
+/**
+ * The instrument is restricted.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_INSTRUMENT_RESTRICTED \
+    ((OpenPitPretradeRejectCode) 31)
+
+/**
+ * A jurisdiction restriction blocked the action.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_JURISDICTION_RESTRICTION \
+    ((OpenPitPretradeRejectCode) 32)
+
+/**
+ * The action would violate wash-trade prevention.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_WASH_TRADE_PREVENTION \
+    ((OpenPitPretradeRejectCode) 33)
+
+/**
+ * The action would violate self-match prevention.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_SELF_MATCH_PREVENTION \
+    ((OpenPitPretradeRejectCode) 34)
+
+/**
+ * Short-sale restriction blocked the action.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_SHORT_SALE_RESTRICTION \
+    ((OpenPitPretradeRejectCode) 35)
+
+/**
+ * Required risk configuration is missing.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_RISK_CONFIGURATION_MISSING \
+    ((OpenPitPretradeRejectCode) 36)
+
+/**
+ * Required reference data is unavailable.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_REFERENCE_DATA_UNAVAILABLE \
+    ((OpenPitPretradeRejectCode) 37)
+
+/**
+ * The system could not compute an order value needed for validation.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_ORDER_VALUE_CALCULATION_FAILED \
+    ((OpenPitPretradeRejectCode) 38)
+
+/**
+ * A required service or subsystem is unavailable.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE \
+    ((OpenPitPretradeRejectCode) 39)
+
+/**
+ * Required mark price is unavailable.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_MARK_PRICE_UNAVAILABLE \
+    ((OpenPitPretradeRejectCode) 40)
+
+/**
+ * Account adjustment would violate configured bounds.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_ADJUSTMENT_BOUNDS_EXCEEDED \
+    ((OpenPitPretradeRejectCode) 41)
+
+/**
+ * Underlying decimal arithmetic overflowed during evaluation.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_ARITHMETIC_OVERFLOW \
+    ((OpenPitPretradeRejectCode) 42)
+
+/**
+ * Reserved code for caller-defined reject classes.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_CUSTOM ((OpenPitPretradeRejectCode) 254)
+
+/**
+ * A catch-all code for rejects that do not fit a more specific class.
+ */
+#define OPENPIT_PRETRADE_REJECT_CODE_OTHER ((OpenPitPretradeRejectCode) 255)
+
+/**
+ * Reject a reservation when available funds are insufficient; the reservation
+ * is not recorded. This is the default mode.
+ */
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE \
+    ((OpenPitPretradePoliciesSpotFundsLimitMode) 0)
+
+/**
+ * Always record the reservation; `available` may go negative and a shortfall
+ * never rejects. Arithmetic overflow is still surfaced.
+ */
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY \
+    ((OpenPitPretradePoliciesSpotFundsLimitMode) 1)
+
+/**
+ * Instrument-level override.
+ */
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT \
+    ((OpenPitPretradePoliciesSpotFundsOverrideTargetTag) 0)
+
+/**
+ * Override for one instrument and account.
+ */
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT_ACCOUNT \
+    ((OpenPitPretradePoliciesSpotFundsOverrideTargetTag) 1)
+
+/**
+ * Override for one instrument and account group.
+ */
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT_ACCOUNT_GROUP \
+    ((OpenPitPretradePoliciesSpotFundsOverrideTargetTag) 2)
 
 /**
  * The reserved default account-group identifier. Every account belongs to this
@@ -326,10 +989,71 @@ typedef uint8_t OpenPitSettlementUnit;
 #define OPENPIT_DEFAULT_ACCOUNT_GROUP ((OpenPitParamAccountGroupId) 0)
 
 /**
+ * The realized-PnL amount is available.
+ */
+#define OPENPIT_PNL_HALT_REASON_NONE ((OpenPitPnlHaltReason) 0)
+
+/**
+ * A required FX quote was unavailable.
+ */
+#define OPENPIT_PNL_HALT_REASON_MISSING_FX ((OpenPitPnlHaltReason) 1)
+
+/**
+ * The current account currency was unavailable.
+ */
+#define OPENPIT_PNL_HALT_REASON_MISSING_ACCOUNT_CURRENCY \
+    ((OpenPitPnlHaltReason) 2)
+
+/**
+ * The initial realized PnL needed to continue the ledger was unavailable.
+ */
+#define OPENPIT_PNL_HALT_REASON_MISSING_INITIAL_PNL ((OpenPitPnlHaltReason) 3)
+
+/**
+ * The position cost basis needed to calculate realized PnL was unavailable.
+ */
+#define OPENPIT_PNL_HALT_REASON_MISSING_COST_BASIS ((OpenPitPnlHaltReason) 4)
+
+/**
+ * Exact realized-PnL arithmetic overflowed.
+ */
+#define OPENPIT_PNL_HALT_REASON_ARITHMETIC_OVERFLOW ((OpenPitPnlHaltReason) 5)
+
+/**
+ * `OpenPitPnlState::value` contains the authoritative accumulated PnL.
+ */
+#define OPENPIT_PNL_STATE_VALUE ((OpenPitPnlStateKind) 0)
+
+/**
+ * `OpenPitPnlState::halt_reason` contains the reason calculation stopped.
+ */
+#define OPENPIT_PNL_STATE_HALTED ((OpenPitPnlStateKind) 1)
+
+/**
  * The default policy-group identifier used when a caller does not assign a
  * policy to a specific group. Mirrors `openpit::DEFAULT_POLICY_GROUP_ID`.
  */
 #define OPENPIT_DEFAULT_POLICY_GROUP_ID ((uint16_t) 0)
+
+/**
+ * Consult only the per-account bucket for the reading account.
+ */
+#define OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_ONLY \
+    ((OpenPitMarketDataQuoteResolution) 0)
+
+/**
+ * Consult the per-account bucket, then fall back to the account's group bucket
+ * when the account bucket has no quote.
+ */
+#define OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP \
+    ((OpenPitMarketDataQuoteResolution) 1)
+
+/**
+ * Consult the per-account bucket, then the account's group bucket, then the
+ * default-group ("everyone-else") bucket, in that order.
+ */
+#define OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT \
+    ((OpenPitMarketDataQuoteResolution) 2)
 
 /**
  * Business-day settlement delay.
@@ -340,250 +1064,6 @@ typedef uint8_t OpenPitSettlementUnit;
  * Calendar-day settlement delay.
  */
 #define OPENPIT_SETTLEMENT_UNIT_CALENDAR_DAYS ((OpenPitSettlementUnit) 1)
-
-/**
- * Order side.
- */
-typedef uint8_t OpenPitParamSide;
-/**
- * Value is absent.
- */
-#define OpenPitParamSide_NotSet ((OpenPitParamSide) 0)
-/**
- * Buy side.
- */
-#define OpenPitParamSide_Buy ((OpenPitParamSide) 1)
-/**
- * Sell side.
- */
-#define OpenPitParamSide_Sell ((OpenPitParamSide) 2)
-
-/**
- * Position direction.
- */
-typedef uint8_t OpenPitParamPositionSide;
-/**
- * Value is absent.
- */
-#define OpenPitParamPositionSide_NotSet ((OpenPitParamPositionSide) 0)
-/**
- * Long exposure.
- */
-#define OpenPitParamPositionSide_Long ((OpenPitParamPositionSide) 1)
-/**
- * Short exposure.
- */
-#define OpenPitParamPositionSide_Short ((OpenPitParamPositionSide) 2)
-
-/**
- * Position accounting mode.
- */
-typedef uint8_t OpenPitParamPositionMode;
-/**
- * Value is absent.
- */
-#define OpenPitParamPositionMode_NotSet ((OpenPitParamPositionMode) 0)
-/**
- * Opposite trades net into one position.
- */
-#define OpenPitParamPositionMode_Netting ((OpenPitParamPositionMode) 1)
-/**
- * Long and short positions are tracked separately.
- */
-#define OpenPitParamPositionMode_Hedged ((OpenPitParamPositionMode) 2)
-
-/**
- * Whether a trade opens or closes exposure.
- */
-typedef uint8_t OpenPitParamPositionEffect;
-/**
- * Value is absent.
- */
-#define OpenPitParamPositionEffect_NotSet ((OpenPitParamPositionEffect) 0)
-/**
- * The trade opens or increases exposure.
- */
-#define OpenPitParamPositionEffect_Open ((OpenPitParamPositionEffect) 1)
-/**
- * The trade closes or reduces exposure.
- */
-#define OpenPitParamPositionEffect_Close ((OpenPitParamPositionEffect) 2)
-
-/**
- * Type of fill event reported by a venue.
- */
-typedef uint8_t OpenPitParamFillType;
-/**
- * Value is absent.
- */
-#define OpenPitParamFillType_NotSet ((OpenPitParamFillType) 0)
-/**
- * Normal trade execution.
- */
-#define OpenPitParamFillType_Trade ((OpenPitParamFillType) 1)
-/**
- * Forced liquidation by the venue.
- */
-#define OpenPitParamFillType_Liquidation ((OpenPitParamFillType) 2)
-/**
- * Auto-deleveraging event.
- */
-#define OpenPitParamFillType_AutoDeleverage ((OpenPitParamFillType) 3)
-/**
- * Settlement at expiry or delivery.
- */
-#define OpenPitParamFillType_Settlement ((OpenPitParamFillType) 4)
-/**
- * Funding payment.
- */
-#define OpenPitParamFillType_Funding ((OpenPitParamFillType) 5)
-
-/**
- * Parameter category carried by validation and arithmetic errors.
- */
-typedef uint8_t OpenPitParamKind;
-/**
- * No parameter category is available.
- */
-#define OpenPitParamKind_Unspecified ((OpenPitParamKind) 0)
-/**
- * Quantity.
- */
-#define OpenPitParamKind_Quantity ((OpenPitParamKind) 1)
-/**
- * Volume.
- */
-#define OpenPitParamKind_Volume ((OpenPitParamKind) 2)
-/**
- * Notional value.
- */
-#define OpenPitParamKind_Notional ((OpenPitParamKind) 3)
-/**
- * Price.
- */
-#define OpenPitParamKind_Price ((OpenPitParamKind) 4)
-/**
- * Profit and loss.
- */
-#define OpenPitParamKind_Pnl ((OpenPitParamKind) 5)
-/**
- * Cash flow.
- */
-#define OpenPitParamKind_CashFlow ((OpenPitParamKind) 6)
-/**
- * Signed position size.
- */
-#define OpenPitParamKind_PositionSize ((OpenPitParamKind) 7)
-/**
- * Fee.
- */
-#define OpenPitParamKind_Fee ((OpenPitParamKind) 8)
-/**
- * Leverage.
- */
-#define OpenPitParamKind_Leverage ((OpenPitParamKind) 9)
-
-/**
- * Selects how one trade-amount numeric value should be interpreted.
- */
-typedef uint8_t OpenPitParamTradeAmountKind;
-/**
- * No amount field is selected.
- */
-#define OpenPitParamTradeAmountKind_NotSet ((OpenPitParamTradeAmountKind) 0)
-/**
- * The value is instrument quantity.
- */
-#define OpenPitParamTradeAmountKind_Quantity ((OpenPitParamTradeAmountKind) 1)
-/**
- * The value is settlement volume.
- */
-#define OpenPitParamTradeAmountKind_Volume ((OpenPitParamTradeAmountKind) 2)
-
-/**
- * Decimal rounding strategy for typed parameter constructors.
- */
-typedef uint8_t OpenPitParamRoundingStrategy;
-/**
- * Round half to nearest even number.
- */
-#define OpenPitParamRoundingStrategy_MidpointNearestEven \
-    ((OpenPitParamRoundingStrategy) 0)
-/**
- * Round half away from zero.
- */
-#define OpenPitParamRoundingStrategy_MidpointAwayFromZero \
-    ((OpenPitParamRoundingStrategy) 1)
-/**
- * Round towards positive infinity.
- */
-#define OpenPitParamRoundingStrategy_Up ((OpenPitParamRoundingStrategy) 2)
-/**
- * Round towards negative infinity.
- */
-#define OpenPitParamRoundingStrategy_Down ((OpenPitParamRoundingStrategy) 3)
-
-/**
- * Tri-state boolean value.
- */
-typedef uint8_t OpenPitTriBool;
-/**
- * Value is absent.
- */
-#define OpenPitTriBool_NotSet ((OpenPitTriBool) 0)
-/**
- * Boolean false.
- */
-#define OpenPitTriBool_False ((OpenPitTriBool) 1)
-/**
- * Boolean true.
- */
-#define OpenPitTriBool_True ((OpenPitTriBool) 2)
-
-/**
- * Selects how an account-adjustment amount should be interpreted.
- */
-typedef uint8_t OpenPitParamAdjustmentAmountKind;
-/**
- * No amount is specified.
- */
-#define OpenPitParamAdjustmentAmountKind_NotSet \
-    ((OpenPitParamAdjustmentAmountKind) 0)
-/**
- * Change current state by the supplied signed amount.
- */
-#define OpenPitParamAdjustmentAmountKind_Delta \
-    ((OpenPitParamAdjustmentAmountKind) 1)
-/**
- * Set current state to the supplied signed amount.
- */
-#define OpenPitParamAdjustmentAmountKind_Absolute \
-    ((OpenPitParamAdjustmentAmountKind) 2)
-
-/**
- * Selects which account-adjustment operation payload is present.
- *
- * At most one operation payload can be selected at a time:
- * - `Absent` means no operation is supplied;
- * - `Balance` selects the balance-operation payload;
- * - `Position` selects the position-operation payload.
- */
-typedef uint8_t OpenPitAccountAdjustmentOperationKind;
-/**
- * No operation is supplied.
- */
-#define OpenPitAccountAdjustmentOperationKind_Absent \
-    ((OpenPitAccountAdjustmentOperationKind) 0)
-/**
- * The balance-operation payload is selected.
- */
-#define OpenPitAccountAdjustmentOperationKind_Balance \
-    ((OpenPitAccountAdjustmentOperationKind) 1)
-/**
- * The position-operation payload is selected.
- */
-#define OpenPitAccountAdjustmentOperationKind_Position \
-    ((OpenPitAccountAdjustmentOperationKind) 2)
 
 /**
  * Result of `openpit_engine_apply_account_adjustment`.
@@ -604,253 +1084,6 @@ typedef uint8_t OpenPitAccountAdjustmentApplyStatus;
  */
 #define OpenPitAccountAdjustmentApplyStatus_Rejected \
     ((OpenPitAccountAdjustmentApplyStatus) 2)
-
-/**
- * Broad area to which a reject applies.
- *
- * Valid values: `Order` (1), `Account` (2). Zero is not a valid scope value;
- * the caller must always set this field explicitly.
- */
-typedef uint8_t OpenPitPretradeRejectScope;
-/**
- * The reject applies to one order or order-like request.
- */
-#define OpenPitPretradeRejectScope_Order ((OpenPitPretradeRejectScope) 1)
-/**
- * The reject applies to account state rather than to one order only.
- */
-#define OpenPitPretradeRejectScope_Account ((OpenPitPretradeRejectScope) 2)
-
-/**
- * Stable classification code for a reject.
- *
- * Read this first when you need machine-readable handling. The textual fields
- * in [`OpenPitPretradeReject`] provide operator-facing explanation and extra
- * context.
- *
- * Valid codes are `1..=42` and `255` (`Other`). Unknown incoming codes are
- * mapped to `Other` (`255`).
- */
-typedef uint16_t OpenPitPretradeRejectCode;
-/**
- * A required field is absent.
- */
-#define OpenPitPretradeRejectCode_MissingRequiredField \
-    ((OpenPitPretradeRejectCode) 1)
-/**
- * A field cannot be parsed from the supplied wire value.
- */
-#define OpenPitPretradeRejectCode_InvalidFieldFormat \
-    ((OpenPitPretradeRejectCode) 2)
-/**
- * A field is syntactically valid but semantically unacceptable.
- */
-#define OpenPitPretradeRejectCode_InvalidFieldValue \
-    ((OpenPitPretradeRejectCode) 3)
-/**
- * The requested order type is not supported.
- */
-#define OpenPitPretradeRejectCode_UnsupportedOrderType \
-    ((OpenPitPretradeRejectCode) 4)
-/**
- * The requested time-in-force is not supported.
- */
-#define OpenPitPretradeRejectCode_UnsupportedTimeInForce \
-    ((OpenPitPretradeRejectCode) 5)
-/**
- * Another order attribute is unsupported.
- */
-#define OpenPitPretradeRejectCode_UnsupportedOrderAttribute \
-    ((OpenPitPretradeRejectCode) 6)
-/**
- * The client order identifier duplicates an active order.
- */
-#define OpenPitPretradeRejectCode_DuplicateClientOrderId \
-    ((OpenPitPretradeRejectCode) 7)
-/**
- * The order arrived after the allowed entry deadline.
- */
-#define OpenPitPretradeRejectCode_TooLateToEnter ((OpenPitPretradeRejectCode) 8)
-/**
- * Trading is closed for the relevant venue or session.
- */
-#define OpenPitPretradeRejectCode_ExchangeClosed ((OpenPitPretradeRejectCode) 9)
-/**
- * The instrument cannot be resolved.
- */
-#define OpenPitPretradeRejectCode_UnknownInstrument \
-    ((OpenPitPretradeRejectCode) 10)
-/**
- * The account cannot be resolved.
- */
-#define OpenPitPretradeRejectCode_UnknownAccount \
-    ((OpenPitPretradeRejectCode) 11)
-/**
- * The venue cannot be resolved.
- */
-#define OpenPitPretradeRejectCode_UnknownVenue ((OpenPitPretradeRejectCode) 12)
-/**
- * The clearing account cannot be resolved.
- */
-#define OpenPitPretradeRejectCode_UnknownClearingAccount \
-    ((OpenPitPretradeRejectCode) 13)
-/**
- * The collateral asset cannot be resolved.
- */
-#define OpenPitPretradeRejectCode_UnknownCollateralAsset \
-    ((OpenPitPretradeRejectCode) 14)
-/**
- * Available balance is insufficient.
- */
-#define OpenPitPretradeRejectCode_InsufficientFunds \
-    ((OpenPitPretradeRejectCode) 15)
-/**
- * Available margin is insufficient.
- */
-#define OpenPitPretradeRejectCode_InsufficientMargin \
-    ((OpenPitPretradeRejectCode) 16)
-/**
- * Available position is insufficient.
- */
-#define OpenPitPretradeRejectCode_InsufficientPosition \
-    ((OpenPitPretradeRejectCode) 17)
-/**
- * A credit limit was exceeded.
- */
-#define OpenPitPretradeRejectCode_CreditLimitExceeded \
-    ((OpenPitPretradeRejectCode) 18)
-/**
- * A risk limit was exceeded.
- */
-#define OpenPitPretradeRejectCode_RiskLimitExceeded \
-    ((OpenPitPretradeRejectCode) 19)
-/**
- * The order exceeds a generic configured limit.
- */
-#define OpenPitPretradeRejectCode_OrderExceedsLimit \
-    ((OpenPitPretradeRejectCode) 20)
-/**
- * The order quantity exceeds a configured limit.
- */
-#define OpenPitPretradeRejectCode_OrderQtyExceedsLimit \
-    ((OpenPitPretradeRejectCode) 21)
-/**
- * The order notional exceeds a configured limit.
- */
-#define OpenPitPretradeRejectCode_OrderNotionalExceedsLimit \
-    ((OpenPitPretradeRejectCode) 22)
-/**
- * The resulting position exceeds a configured limit.
- */
-#define OpenPitPretradeRejectCode_PositionLimitExceeded \
-    ((OpenPitPretradeRejectCode) 23)
-/**
- * Concentration constraints were violated.
- */
-#define OpenPitPretradeRejectCode_ConcentrationLimitExceeded \
-    ((OpenPitPretradeRejectCode) 24)
-/**
- * Leverage constraints were violated.
- */
-#define OpenPitPretradeRejectCode_LeverageLimitExceeded \
-    ((OpenPitPretradeRejectCode) 25)
-/**
- * The request rate exceeded a configured limit.
- */
-#define OpenPitPretradeRejectCode_RateLimitExceeded \
-    ((OpenPitPretradeRejectCode) 26)
-/**
- * A loss barrier has blocked further risk-taking.
- */
-#define OpenPitPretradeRejectCode_PnlKillSwitchTriggered \
-    ((OpenPitPretradeRejectCode) 27)
-/**
- * The account is blocked.
- */
-#define OpenPitPretradeRejectCode_AccountBlocked \
-    ((OpenPitPretradeRejectCode) 28)
-/**
- * The account is not authorized for this action.
- */
-#define OpenPitPretradeRejectCode_AccountNotAuthorized \
-    ((OpenPitPretradeRejectCode) 29)
-/**
- * A compliance restriction blocked the action.
- */
-#define OpenPitPretradeRejectCode_ComplianceRestriction \
-    ((OpenPitPretradeRejectCode) 30)
-/**
- * The instrument is restricted.
- */
-#define OpenPitPretradeRejectCode_InstrumentRestricted \
-    ((OpenPitPretradeRejectCode) 31)
-/**
- * A jurisdiction restriction blocked the action.
- */
-#define OpenPitPretradeRejectCode_JurisdictionRestriction \
-    ((OpenPitPretradeRejectCode) 32)
-/**
- * The action would violate wash-trade prevention.
- */
-#define OpenPitPretradeRejectCode_WashTradePrevention \
-    ((OpenPitPretradeRejectCode) 33)
-/**
- * The action would violate self-match prevention.
- */
-#define OpenPitPretradeRejectCode_SelfMatchPrevention \
-    ((OpenPitPretradeRejectCode) 34)
-/**
- * Short-sale restriction blocked the action.
- */
-#define OpenPitPretradeRejectCode_ShortSaleRestriction \
-    ((OpenPitPretradeRejectCode) 35)
-/**
- * Required risk configuration is missing.
- */
-#define OpenPitPretradeRejectCode_RiskConfigurationMissing \
-    ((OpenPitPretradeRejectCode) 36)
-/**
- * Required reference data is unavailable.
- */
-#define OpenPitPretradeRejectCode_ReferenceDataUnavailable \
-    ((OpenPitPretradeRejectCode) 37)
-/**
- * The system could not compute an order value needed for validation.
- */
-#define OpenPitPretradeRejectCode_OrderValueCalculationFailed \
-    ((OpenPitPretradeRejectCode) 38)
-/**
- * A required service or subsystem is unavailable.
- */
-#define OpenPitPretradeRejectCode_SystemUnavailable \
-    ((OpenPitPretradeRejectCode) 39)
-/**
- * Required mark price is unavailable.
- */
-#define OpenPitPretradeRejectCode_MarkPriceUnavailable \
-    ((OpenPitPretradeRejectCode) 40)
-/**
- * Account adjustment would violate configured bounds.
- */
-#define OpenPitPretradeRejectCode_AccountAdjustmentBoundsExceeded \
-    ((OpenPitPretradeRejectCode) 41)
-/**
- * Underlying decimal arithmetic overflowed during evaluation.
- */
-#define OpenPitPretradeRejectCode_ArithmeticOverflow \
-    ((OpenPitPretradeRejectCode) 42)
-/**
- * Reserved discriminant for caller-defined reject classes.
- *
- * Use together with `Reject::with_user_data` to attach a caller-defined
- * payload that the receiving code can decode. The SDK does not interpret this
- * code beyond mapping it to FFI value 254.
- */
-#define OpenPitPretradeRejectCode_Custom ((OpenPitPretradeRejectCode) 254)
-/**
- * A catch-all code for rejects that do not fit a more specific class.
- */
-#define OpenPitPretradeRejectCode_Other ((OpenPitPretradeRejectCode) 255)
 
 /**
  * Parameter error code transported through FFI.
@@ -1014,74 +1247,6 @@ typedef uint32_t OpenPitConfigureErrorKind;
     ((OpenPitConfigureErrorKind) 3)
 
 /**
- * Selects how the spot-funds control reacts to insufficient available funds.
- *
- * The default is `Enforce`, matching the core [`SpotFundsLimitMode`] default.
- */
-typedef uint8_t OpenPitPretradePoliciesSpotFundsLimitMode;
-/**
- * Reject a reservation when available funds are insufficient; the reservation
- * is not recorded.
- */
-#define OpenPitPretradePoliciesSpotFundsLimitMode_Enforce \
-    ((OpenPitPretradePoliciesSpotFundsLimitMode) 0)
-/**
- * Always record the reservation; `available` may go negative and a shortfall
- * never rejects. Arithmetic overflow is still surfaced.
- */
-#define OpenPitPretradePoliciesSpotFundsLimitMode_TrackOnly \
-    ((OpenPitPretradePoliciesSpotFundsLimitMode) 1)
-
-/**
- * Tagged target variants for a spot-funds slippage override.
- *
- * Spot funds overrides use an explicit tagged hierarchy matching the Rust
- * [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget) variants:
- * `Instrument`, `InstrumentAccount`, and `InstrumentAccountGroup`.
- */
-typedef uint8_t OpenPitPretradePoliciesSpotFundsOverrideTargetTag;
-/**
- * Instrument-level override.
- */
-#define OpenPitPretradePoliciesSpotFundsOverrideTargetTag_Instrument \
-    ((OpenPitPretradePoliciesSpotFundsOverrideTargetTag) 0)
-/**
- * Override for one instrument and account.
- */
-#define OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccount \
-    ((OpenPitPretradePoliciesSpotFundsOverrideTargetTag) 1)
-/**
- * Override for one instrument and account group.
- */
-#define OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccountGroup \
-    ((OpenPitPretradePoliciesSpotFundsOverrideTargetTag) 2)
-
-/**
- * Selects which quote buckets a read will consult, in order.
- *
- * When the more-specific bucket has no quote, the read falls through to the
- * next bucket permitted by this value.
- */
-typedef uint8_t OpenPitMarketDataQuoteResolution;
-/**
- * Consult only the per-account bucket for the reading account.
- */
-#define OpenPitMarketDataQuoteResolution_AccountOnly \
-    ((OpenPitMarketDataQuoteResolution) 0)
-/**
- * Consult the per-account bucket, then fall back to the account's group bucket
- * when the account bucket has no quote.
- */
-#define OpenPitMarketDataQuoteResolution_AccountThenGroup \
-    ((OpenPitMarketDataQuoteResolution) 1)
-/**
- * Consult the per-account bucket, then the account's group bucket, then the
- * default-group ("everyone-else") bucket, in that order.
- */
-#define OpenPitMarketDataQuoteResolution_AccountThenGroupThenDefault \
-    ((OpenPitMarketDataQuoteResolution) 2)
-
-/**
  * Result of a market-data read.
  */
 typedef uint8_t OpenPitMarketDataGetStatus;
@@ -1104,6 +1269,10 @@ typedef uint8_t OpenPitMarketDataGetStatus;
  * was written to `out_quote`.
  */
 #define OpenPitMarketDataGetStatus_QuoteExpired ((OpenPitMarketDataGetStatus) 3)
+/**
+ * The supplied quote-resolution selector is invalid.
+ */
+#define OpenPitMarketDataGetStatus_Error ((OpenPitMarketDataGetStatus) 255)
 
 /**
  * Result of a market-data registration or update.
@@ -1628,12 +1797,10 @@ union OpenPitPretradePoliciesSpotFundsOverrideTargetPayload {
  */
 struct OpenPitPretradePoliciesSpotFundsOverrideTarget {
     /**
-     * One of [`OpenPitPretradePoliciesSpotFundsOverrideTargetTag`].
-     *
-     * Stored as `u8` so unknown C values can be rejected without constructing an
-     * invalid Rust enum discriminant.
+     * One of the `OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_*`
+     * constants. Unknown values are rejected before the payload is read.
      */
-    uint8_t tag;
+    OpenPitPretradePoliciesSpotFundsOverrideTargetTag tag;
     /**
      * Payload selected by `tag`.
      */
@@ -1663,6 +1830,48 @@ struct OpenPitPretradePoliciesSpotFundsOverride {
      * Whether `slippage_bps` carries a value.
      */
     bool has_slippage_bps;
+};
+
+/**
+ * Spot-funds account P&L bounds.
+ */
+struct OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+    /**
+     * Optional lower bound for accumulated P&L.
+     */
+    OpenPitParamPnlOptional lower_bound;
+    /**
+     * Optional upper bound for accumulated P&L.
+     */
+    OpenPitParamPnlOptional upper_bound;
+};
+
+/**
+ * Account-group spot-funds P&L bounds refinement.
+ */
+struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
+    /**
+     * Account group the barrier applies to.
+     */
+    OpenPitParamAccountGroupId account_group_id;
+    /**
+     * Bounds for this group.
+     */
+    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier barrier;
+};
+
+/**
+ * Account spot-funds P&L bounds refinement.
+ */
+struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
+    /**
+     * Account the barrier applies to.
+     */
+    OpenPitParamAccountId account_id;
+    /**
+     * Bounds for this account.
+     */
+    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier barrier;
 };
 
 struct OpenPitParamAccountGroupIdOptional {
@@ -1708,6 +1917,74 @@ struct OpenPitPnlOutcomeAmount {
 struct OpenPitPnlOutcomeAmountOptional {
     OpenPitPnlOutcomeAmount value;
     bool is_set;
+};
+
+/**
+ * Realized-PnL result: either the amount or a halt reason.
+ */
+struct OpenPitPnlOutcome {
+    /**
+     * Reason why the PnL amount is unavailable.
+     */
+    OpenPitPnlHaltReason halt_reason;
+    /**
+     * Optional computed PnL change and resulting absolute value. It is set only
+     * when `halt_reason` is `OPENPIT_PNL_HALT_REASON_NONE`.
+     */
+    OpenPitPnlOutcomeAmountOptional amount;
+};
+
+/**
+ * Explicit realized-PnL accumulator state.
+ */
+struct OpenPitPnlState {
+    /**
+     * Selects the meaningful payload.
+     */
+    OpenPitPnlStateKind kind;
+    /**
+     * Authoritative value when `kind` is `OPENPIT_PNL_STATE_VALUE`.
+     */
+    OpenPitParamPnl value;
+    /**
+     * Halt reason when `kind` is `OPENPIT_PNL_STATE_HALTED`.
+     */
+    OpenPitPnlHaltReason halt_reason;
+};
+
+struct OpenPitPnlOutcomeOptional {
+    OpenPitPnlOutcome value;
+    bool is_set;
+};
+
+/**
+ * Account-level realized-PnL result for one account.
+ *
+ * When `halt_reason` is `OPENPIT_PNL_HALT_REASON_NONE`, `amount` is
+ * authoritative. Otherwise `halt_reason` explains why `amount` is not
+ * authoritative; do not interpret it as zero or read any stored PnL value as
+ * current. Position accumulators are independent. SpotFunds emits a halted
+ * account outcome only for the operation that transitions the accumulator to
+ * halted; later operations omit the unchanged halt.
+ */
+struct OpenPitAccountPnlOutcome {
+    /**
+     * Account whose PnL was considered.
+     */
+    OpenPitParamAccountId account_id;
+    /**
+     * Policy-group tag of the policy that produced this outcome.
+     */
+    uint16_t policy_group_id;
+    /**
+     * Reason why the account-level PnL amount is unavailable.
+     */
+    OpenPitPnlHaltReason halt_reason;
+    /**
+     * Optional computed PnL change and resulting absolute value. It is set only
+     * when `halt_reason` is `OPENPIT_PNL_HALT_REASON_NONE`.
+     */
+    OpenPitPnlOutcomeAmountOptional amount;
 };
 
 /**
@@ -1945,30 +2222,18 @@ struct OpenPitExecutionReportFillOptional {
 };
 
 /**
- * Balance-operation payload for account adjustment.
+ * Account-wide PnL adjustment payload.
  */
-struct OpenPitAccountAdjustmentBalanceOperation {
+struct OpenPitAccountAdjustmentAccountPnlOperation {
     /**
-     * Balance asset code.
+     * Replacement account-PnL state.
      */
-    OpenPitStringView asset;
-    /**
-     * Optional force-set of the average entry price in account currency. No FX is
-     * applied by this adjustment.
-     */
-    OpenPitParamPriceOptional average_entry_price;
-    /**
-     * Optional force-set of the slot's absolute realized PnL in account currency.
-     * No FX is applied by this adjustment.
-     *
-     * When set, the adjustment overwrites the slot's cumulative realized PnL with
-     * this caller-supplied account-currency value, the same way
-     * `average_entry_price` force-sets the average. The change is surfaced on the
-     * outcome's `realized_pnl` field as a delta/absolute pair, where `delta` is
-     * `new - prior` and `absolute` is this value; leaving it unset keeps the
-     * slot's realized PnL untouched and emits no outcome.
-     */
-    OpenPitParamPnlOptional realized_pnl;
+    OpenPitPnlState state;
+};
+
+struct OpenPitPnlStateOptional {
+    OpenPitPnlState value;
+    bool is_set;
 };
 
 /**
@@ -2207,70 +2472,6 @@ struct OpenPitPretradePoliciesRateLimitAccountAssetBarrier {
 };
 
 /**
- * Spot-funds account-currency P&L bounds.
- */
-struct OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
-    /**
-     * Account currency whose accumulated P&L is monitored.
-     */
-    OpenPitStringView account_currency;
-    /**
-     * Optional lower bound for accumulated P&L.
-     */
-    OpenPitParamPnlOptional lower_bound;
-    /**
-     * Optional upper bound for accumulated P&L.
-     */
-    OpenPitParamPnlOptional upper_bound;
-};
-
-/**
- * Account-group spot-funds P&L bounds refinement.
- */
-struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
-    /**
-     * Account group the barrier applies to.
-     */
-    OpenPitParamAccountGroupId account_group_id;
-    /**
-     * Account currency and bounds for this group.
-     */
-    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier barrier;
-};
-
-/**
- * Account spot-funds P&L bounds refinement with construction-time seed.
- */
-struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
-    /**
-     * Account the barrier applies to.
-     */
-    OpenPitParamAccountId account_id;
-    /**
-     * Account currency and bounds for this account.
-     */
-    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier barrier;
-    /**
-     * Initial accumulated P&L, consumed only while adding the policy.
-     */
-    OpenPitParamPnl initial_pnl;
-};
-
-/**
- * Runtime account spot-funds P&L bounds replacement.
- */
-struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate {
-    /**
-     * Account the barrier applies to.
-     */
-    OpenPitParamAccountId account_id;
-    /**
-     * Account currency and replacement bounds for this account.
-     */
-    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier barrier;
-};
-
-/**
  * Raw outcome data produced by a policy for one asset.
  */
 struct OpenPitAccountOutcomeEntry {
@@ -2291,15 +2492,18 @@ struct OpenPitAccountOutcomeEntry {
      */
     OpenPitOutcomeAmountOptional incoming;
     /**
-     * Account-currency realized PnL outcome (delta = this op, absolute =
-     * cumulative). Unset means realized PnL was not tracked or not emitted;
-     * missing account currency or FX stops tracking without reject/block.
+     * Optional position realized-PnL result in the account currency. It is set to
+     * either an amount or the halt reason from the operation that first failed.
+     * Later operations omit it until an asset-scoped balance adjustment force-sets
+     * a new realized PnL. Position and account PnL halt independently; this field
+     * never drives the account kill switch.
      */
-    OpenPitPnlOutcomeAmountOptional realized_pnl;
+    OpenPitPnlOutcomeOptional realized_pnl;
     /**
-     * Current account-currency average entry price (absolute). Unset means average
-     * entry price was not tracked or not emitted; missing account currency or FX
-     * stops tracking without reject/block.
+     * Current account-currency average entry price (absolute) for the `(account,
+     * asset)` holdings slot. The underlying asset identifies one slot even when it
+     * is traded against multiple quote currencies. Unset means the average was not
+     * tracked or not emitted.
      */
     OpenPitParamPriceOptional average_entry_price;
 };
@@ -2431,6 +2635,26 @@ struct OpenPitExecutionReport {
 };
 
 /**
+ * Balance-operation payload for account adjustment.
+ */
+struct OpenPitAccountAdjustmentBalanceOperation {
+    /**
+     * Balance asset code.
+     */
+    OpenPitStringView asset;
+    /**
+     * Optional force-set of the average entry price in account currency. No FX is
+     * applied by this adjustment.
+     */
+    OpenPitParamPriceOptional average_entry_price;
+    /**
+     * Optional force-set of this asset slot's realized PnL state in account
+     * currency.
+     */
+    OpenPitPnlStateOptional realized_pnl;
+};
+
+/**
  * Position-operation payload for account adjustment.
  */
 struct OpenPitAccountAdjustmentPositionOperation {
@@ -2467,7 +2691,8 @@ struct OpenPitAccountAdjustmentPositionOperation {
  */
 struct OpenPitAccountAdjustmentOperation {
     /**
-     * Selects which payload below is meaningful.
+     * Raw selector for the meaningful payload below. Unknown values are rejected
+     * during import.
      */
     OpenPitAccountAdjustmentOperationKind kind;
     /**
@@ -2478,6 +2703,10 @@ struct OpenPitAccountAdjustmentOperation {
      * Position-operation payload, meaningful only when `kind` is `Position`.
      */
     OpenPitAccountAdjustmentPositionOperation position;
+    /**
+     * Account-PnL payload, meaningful only when `kind` is `AccountPnl`.
+     */
+    OpenPitAccountAdjustmentAccountPnlOperation account_pnl;
 };
 
 /**
@@ -2632,29 +2861,32 @@ typedef OpenPitPretradeRejectList *
  *   data before returning.
  * - `out_adjustments` is a callback-scoped non-owning collector the callback
  *   may fill with group-tagged account-adjustment outcomes via
- *   `openpit_pretrade_post_trade_adjustment_list_push`. This channel IS
- *   group-tagged. The callback must not store or use `out_adjustments` after
- *   return.
- * - The account-block return and the `out_adjustments` channel are
- *   independent: a callback may report blocks, adjustments, both, or
- *   neither.
+ *   `openpit_pretrade_post_trade_adjustment_list_push`.
+ * - `out_account_pnls` is a callback-scoped non-owning collector the
+ *   callback may fill with group-tagged account-level PnL outcomes via
+ *   `openpit_pretrade_post_trade_account_pnl_list_push`.
+ * - The callback must not retain or use either collector after return.
+ * - The account-block return and both collector channels are independent: a
+ *   callback may populate any combination of them.
  * - Return a non-null account-block list when this policy reports a
  *   kill-switch trigger. The returned list ownership is transferred to the
  *   engine; create it with `openpit_pretrade_create_account_block_list`.
  * - Return null to indicate no kill-switch condition.
- * - A null `apply_execution_report_fn` means that hook returns no blocks and
- *   no adjustments.
+ * - A null `apply_execution_report_fn` means that hook returns no blocks,
+ *   adjustments, or account-level PnL outcomes.
  * - `user_data` is passed through unchanged from policy creation.
  *
  * Parameter ordering convention: read-only context first (`ctx`), then
- * read-only input (`report`), then the callback-scoped collector
- * (`out_adjustments`), then the trailing opaque `user_data`.
+ * read-only input (`report`), then callback-scoped collectors
+ * (`out_adjustments`, `out_account_pnls`), then the trailing opaque
+ * `user_data`.
  */
 typedef OpenPitPretradeAccountBlockList *
 (*OpenPitPretradePreTradePolicyApplyExecutionReportFn)(
     const OpenPitPostTradeContext * ctx,
     const OpenPitExecutionReport * report,
     OpenPitPostTradeAdjustmentList * out_adjustments,
+    OpenPitPostTradeAccountPnlList * out_account_pnls,
     void * user_data
 );
 
@@ -2676,14 +2908,17 @@ typedef OpenPitPretradeAccountBlockList *
  * - `mutations` is a callback-scoped non-owning pointer that allows the
  *   callback to register commit/rollback mutations.
  * - The callback must not store or use `mutations` after return.
- * - `out_outcomes` is a callback-scoped non-owning collector the callback
- *   may fill with account-outcome entries via
- *   `openpit_account_outcome_entry_list_push`. No `policy_group_id` is
- *   carried; the engine assigns the policy group. The callback must not
- *   store or use `out_outcomes` after return.
- * - The reject channel and the `out_outcomes` channel are independent: the
- *   engine only keeps `out_outcomes` when the callback accepts (returns null
- *   or an empty list).
+ * - `out_result` is a callback-scoped non-owning collector the callback may
+ *   fill with account-outcome entries via
+ *   `openpit_pretrade_account_adjustment_result_push_account_outcome` and
+ *   account blocks via
+ *   `openpit_pretrade_account_adjustment_result_push_account_block`. No
+ *   `policy_group_id` is carried for outcome entries; the engine assigns the
+ *   policy group. The callback must not store or use `out_result` after
+ *   return.
+ * - The reject and `out_result` channels are independent: the engine keeps
+ *   the collector payload only when the callback accepts (returns null or an
+ *   empty list).
  * - Return null to accept the adjustment.
  * - Return a non-empty reject list to reject the adjustment.
  * - Returned reject list ownership is transferred to the callee.
@@ -2691,7 +2926,7 @@ typedef OpenPitPretradeAccountBlockList *
  *
  * Parameter ordering convention: read-only inputs first (`ctx`, `account_id`,
  * `adjustment`), then callback-scoped collectors in the order (`mutations`,
- * `out_outcomes`), then the trailing opaque `user_data`.
+ * `out_result`), then the trailing opaque `user_data`.
  */
 typedef OpenPitPretradeRejectList *
 (*OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn)(
@@ -2699,7 +2934,7 @@ typedef OpenPitPretradeRejectList *
     OpenPitParamAccountId account_id,
     const OpenPitAccountAdjustment * adjustment,
     OpenPitMutations * mutations,
-    OpenPitAccountOutcomeEntryList * out_outcomes,
+    OpenPitPretradeAccountAdjustmentResult * out_result,
     void * user_data
 );
 
@@ -4561,10 +4796,11 @@ void openpit_pretrade_destroy_reject_list(
  * Contract:
  * - `list` must be a valid non-null pointer;
  * - string views in `reject` are copied before this function returns;
- * - this function never fails;
+ * - returns `true` after appending a reject with a valid scope;
+ * - returns `false` for an unknown scope and leaves the list unchanged;
  * - violating the pointer contract aborts the call.
  */
-void openpit_pretrade_reject_list_push(
+bool openpit_pretrade_reject_list_push(
     OpenPitPretradeRejectList * list,
     OpenPitPretradeReject reject
 );
@@ -5249,19 +5485,15 @@ void openpit_destroy_pretrade_pre_trade_dry_run_report(
  *
  * Success:
  * - returns `true`;
- * - if `out_blocks` is not null and at least one policy entered a blocked
- *   state, writes a caller-owned `OpenPitPretradeAccountBlockList` pointer;
- *   release it with `openpit_pretrade_destroy_account_block_list`;
- * - when no policy blocked, `out_blocks` is left untouched;
- * - if `out_adjustments` is not null and at least one policy produced an
- *   account-adjustment outcome, writes a caller-owned
- *   `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
- *   `openpit_destroy_account_adjustment_outcome_list`;
- * - when no outcome was produced, `out_adjustments` is left untouched.
+ * - if `out_result` is not null, writes one caller-owned
+ *   `OpenPitPostTradeResult` pointer; release it with
+ *   `openpit_destroy_post_trade_result`;
+ * - if `out_result` is null, applies the report without allocating a result.
  *
  * Error:
  * - returns `false` when input pointers are invalid or the report payload
  *   cannot be decoded;
+ * - `out_result` is left untouched;
  * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
  *   error handle that MUST be released with `openpit_destroy_shared_string`.
  *
@@ -5273,9 +5505,64 @@ void openpit_destroy_pretrade_pre_trade_dry_run_report(
 bool openpit_engine_apply_execution_report(
     OpenPitEngine * engine,
     const OpenPitExecutionReport * report,
-    OpenPitPretradeAccountBlockList ** out_blocks,
-    OpenPitAccountAdjustmentOutcomeList ** out_adjustments,
+    OpenPitPostTradeResult ** out_result,
     OpenPitOutError out_error
+);
+
+/**
+ * Releases a caller-owned post-trade result.
+ */
+void openpit_destroy_post_trade_result(
+    OpenPitPostTradeResult * result
+);
+
+/**
+ * Returns the borrowed account-block list from a post-trade result.
+ *
+ * A valid result always returns a non-null list, including when it is empty.
+ * The list and every view copied from it remain valid only while `result` is
+ * alive.
+ *
+ * Contract:
+ * - `result` must be a valid non-null pointer;
+ * - violating the pointer contract aborts the call.
+ */
+const OpenPitPretradeAccountBlockList *
+openpit_post_trade_result_get_account_blocks(
+    const OpenPitPostTradeResult * result
+);
+
+/**
+ * Returns the borrowed account-adjustment outcome list from a post-trade
+ * result.
+ *
+ * A valid result always returns a non-null list, including when it is empty.
+ * The list and every view copied from it remain valid only while `result` is
+ * alive.
+ *
+ * Contract:
+ * - `result` must be a valid non-null pointer;
+ * - violating the pointer contract aborts the call.
+ */
+const OpenPitAccountAdjustmentOutcomeList *
+openpit_post_trade_result_get_account_adjustments(
+    const OpenPitPostTradeResult * result
+);
+
+/**
+ * Returns the borrowed account-level PnL outcome list from a post-trade
+ * result.
+ *
+ * A valid result always returns a non-null list, including when it is empty.
+ * The list and every view copied from it remain valid only while `result` is
+ * alive.
+ *
+ * Contract:
+ * - `result` must be a valid non-null pointer;
+ * - violating the pointer contract aborts the call.
+ */
+const OpenPitAccountPnlOutcomeList * openpit_post_trade_result_get_account_pnls(
+    const OpenPitPostTradeResult * result
 );
 
 /**
@@ -5338,6 +5625,12 @@ openpit_account_adjustment_batch_error_get_rejects(
  *   `OpenPitAccountAdjustmentOutcomeList` pointer; release it with
  *   `openpit_destroy_account_adjustment_outcome_list`; if no outcome was
  *   produced, `out_outcomes` is left untouched;
+ * - on `Applied`, if `out_blocks` is not null and a policy reported one or
+ *   more account blocks, writes a caller-owned
+ *   `OpenPitPretradeAccountBlockList` pointer; release it with
+ *   `openpit_pretrade_destroy_account_block_list`; if no block was produced,
+ *   `out_blocks` is left untouched. The engine has already recorded every
+ *   returned block;
  * - `Rejected` stores batch error details in `out_reject`, the caller must
  *   release a returned object with
  *   `openpit_destroy_account_adjustment_batch_error`;
@@ -5351,7 +5644,9 @@ openpit_account_adjustment_batch_error_get_rejects(
  * - every `adjustment` entry from the contiguous input array is read as a
  *   borrowed view during this call only;
  * - release a returned batch error with
- *   `openpit_destroy_account_adjustment_batch_error`.
+ *   `openpit_destroy_account_adjustment_batch_error`;
+ * - release a returned account-block list with
+ *   `openpit_pretrade_destroy_account_block_list`.
  */
 OpenPitAccountAdjustmentApplyStatus openpit_engine_apply_account_adjustment(
     OpenPitEngine * engine,
@@ -5360,6 +5655,7 @@ OpenPitAccountAdjustmentApplyStatus openpit_engine_apply_account_adjustment(
     size_t adjustments_len,
     OpenPitAccountAdjustmentBatchError ** out_reject,
     OpenPitAccountAdjustmentOutcomeList ** out_outcomes,
+    OpenPitPretradeAccountBlockList ** out_blocks,
     OpenPitOutError out_error
 );
 
@@ -5889,8 +6185,8 @@ bool openpit_engine_replace_account_group_block_reason(
  *   null.
  * - A null `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`, or
  *   `apply_account_adjustment_fn` means that hook accepts by default.
- * - A null `apply_execution_report_fn` means that hook returns an empty list
- *   (no kill switch).
+ * - A null `apply_execution_report_fn` means that hook returns no post-trade
+ *   result.
  * - Non-null callbacks and `free_user_data_fn` must remain callable for as
  *   long as the policy may still be used by either the caller pointer or the
  *   engine.
@@ -6477,7 +6773,7 @@ bool openpit_engine_builder_add_builtin_spot_funds_policy(
 );
 
 /**
- * Adds the built-in spot-funds policy with account-currency P&L bounds.
+ * Adds the built-in spot-funds policy with account P&L bounds.
  *
  * This entry point builds the regular `SpotFundsPolicy` and configures only
  * its P&L-bounds axis. The policy keeps its stable built-in name
@@ -6493,9 +6789,7 @@ bool openpit_engine_builder_add_builtin_spot_funds_policy(
  *   compute P&L will be blocked by the core policy fail-safe.
  * - At least one barrier must be provided across `global`, `account_group`,
  *   or `account`.
- * - Account barriers include construction-time `initial_pnl`. Runtime
- *   configuration uses the update DTO without `initial_pnl` and preserves
- *   the live accumulator.
+ * - Barrier configuration never seeds or resets live account P&L.
  *
  * Success / error: mirrors
  * `openpit_engine_builder_add_builtin_spot_funds_policy`.
@@ -6505,7 +6799,6 @@ bool openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
     const OpenPitMarketDataService * market_data,
     uint16_t policy_group_id,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global,
-    size_t global_len,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier * account_group,
     size_t account_group_len,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier * account,
@@ -6567,38 +6860,80 @@ bool openpit_engine_configure_spot_funds(
  * Retunes the P&L-bounds axis of the built-in spot-funds policy registered
  * under `name`.
  *
- * This is a partial update (PATCH): each supplied axis is replaced only when
- * its `has_*` flag is true. Account barriers use the runtime update DTO with
- * no `initial_pnl`; live accumulated P&L is preserved.
+ * Contract:
+ * - `engine` must be a valid non-null engine pointer.
+ * - `name` selects the policy; it is interpreted as UTF-8. A built-in policy
+ *   added via
+ *   openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy
+ *   registers under its fixed name `"SpotFundsPolicy"`, so pass that string
+ *   here.
+ * - This is a partial update (PATCH): each of the three axes (global,
+ *   `account_group`, `account`) is replaced only when its `has_*` flag is
+ *   `true`; a `has_*` flag set to `false` leaves that axis unchanged.
+ * - When `has_global` is `true`, a null `global` clears the global barrier;
+ *   a non-null `global` sets it.
+ * - When `has_account_group` is `true`, the `account_group_len` entries at
+ *   `account_group` replace the whole per-account-group axis; an engaged
+ *   empty list (`has_account_group == true`, `account_group_len == 0`)
+ *   clears it.
+ * - When `has_account` is `true`, the `account_len` entries at `account`
+ *   replace the whole per-account axis; an engaged empty list (`has_account
+ *   == true`, `account_len == 0`) clears it.
+ * - Barrier retuning never resets a live accumulated P&L value.
+ *
+ * Success:
+ * - returns `true`; subsequent P&L-bound evaluations use the new bounds,
+ *   including pre-trade checks, execution reports, account-P&L adjustments
+ *   and account-P&L force-sets. Retuning alone does not re-evaluate the
+ *   stored accumulator or record an account block.
+ *
+ * Error:
+ * - returns `false`; if `out_error` is non-null, writes a caller-owned
+ *   `OpenPitConfigureError` (release with
+ *   `openpit_destroy_configure_error`).
+ * - a null `engine` returns `false` and, when `out_error` is non-null,
+ *   writes a caller-owned `OpenPitConfigureError` (`Validation`) that must
+ *   be released with `openpit_destroy_configure_error`.
  */
 bool openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
     OpenPitEngine * engine,
     OpenPitStringView name,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global,
-    size_t global_len,
     bool has_global,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier * account_group,
     size_t account_group_len,
     bool has_account_group,
-    const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate * account,
+    const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier * account,
     size_t account_len,
     bool has_account,
     OpenPitConfigureError ** out_error
 );
 
 /**
- * Force-sets the live accumulated account-currency P&L for the spot-funds
- * policy registered under `name`.
+ * Force-sets the live accumulated account P&L state for the spot-funds policy
+ * registered under `name`.
  *
  * This is an absolute assignment and is separate from barrier retuning, which
- * never resets the accumulator.
+ * never resets the accumulator. A numeric state re-arms this account
+ * accumulator after a calculation halt. A halted state sets or keeps it halted
+ * and replaces the stored halt reason. Neither form affects a position-level
+ * accumulator. When the policy accepts a halted state while an effective
+ * account P&L barrier is configured, the returned list contains the block
+ * already recorded by the engine.
+ *
+ * Contract:
+ * - on success, returns a caller-owned account-block list, possibly empty;
+ *   release it with `openpit_pretrade_destroy_account_block_list`;
+ * - on failure, returns null and, when `out_error` is non-null, writes a
+ *   caller-owned `OpenPitConfigureError` that must be released with
+ *   `openpit_destroy_configure_error`.
  */
-bool openpit_engine_configure_spot_funds_set_account_pnl(
+OpenPitPretradeAccountBlockList *
+openpit_engine_configure_spot_funds_set_account_pnl(
     OpenPitEngine * engine,
     OpenPitStringView name,
     OpenPitParamAccountId account_id,
-    OpenPitStringView account_currency,
-    OpenPitParamPnl pnl,
+    OpenPitPnlState state,
     OpenPitConfigureError ** out_error
 );
 
@@ -6633,7 +6968,7 @@ bool openpit_engine_configure_spot_funds_set_account_pnl(
 bool openpit_engine_configure_spot_funds_global_limit_mode(
     OpenPitEngine * engine,
     OpenPitStringView name,
-    uint8_t mode,
+    OpenPitPretradePoliciesSpotFundsLimitMode mode,
     OpenPitConfigureError ** out_error
 );
 
@@ -6660,7 +6995,7 @@ bool openpit_engine_configure_spot_funds_account_limit_mode(
     OpenPitEngine * engine,
     OpenPitStringView name,
     OpenPitParamAccountId account_id,
-    uint8_t mode,
+    OpenPitPretradePoliciesSpotFundsLimitMode mode,
     bool has_mode,
     OpenPitConfigureError ** out_error
 );
@@ -6690,7 +7025,7 @@ bool openpit_engine_configure_spot_funds_account_group_limit_mode(
     OpenPitEngine * engine,
     OpenPitStringView name,
     OpenPitParamAccountGroupId account_group_id,
-    uint8_t mode,
+    OpenPitPretradePoliciesSpotFundsLimitMode mode,
     bool has_mode,
     OpenPitConfigureError ** out_error
 );
@@ -7056,14 +7391,55 @@ size_t openpit_account_adjustment_outcome_list_len(
  *
  * # Safety
  *
- * `list` and `out_outcome` must be valid non-null pointers returned by or
- * provided to this library and must remain alive for the duration of this
- * call.
+ * `list` must be returned by this library. `out_outcome` must be valid and
+ * writable for the duration of this call.
  */
 bool openpit_account_adjustment_outcome_list_get(
     const OpenPitAccountAdjustmentOutcomeList * list,
     size_t index,
     OpenPitAccountAdjustmentOutcome * out_outcome
+);
+
+/**
+ * Returns the number of account-level PnL outcomes in the list.
+ *
+ * Contract:
+ * - `list` must be a valid non-null pointer;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ *
+ * # Safety
+ *
+ * `list` must be borrowed from a live `OpenPitPostTradeResult` and remain
+ * alive for the duration of this call.
+ */
+size_t openpit_account_pnl_outcome_list_len(
+    const OpenPitAccountPnlOutcomeList * list
+);
+
+/**
+ * Copies the self-contained account-level PnL outcome at `index` into
+ * `out_outcome`.
+ *
+ * Contract:
+ * - `list` must be a valid non-null pointer;
+ * - `out_outcome` must be a valid non-null pointer;
+ * - returns `true` when a value exists and was copied;
+ * - returns `false` when `index` is out of bounds and does not write
+ *   `out_outcome`;
+ * - the copied value remains valid independently of the owning result;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ *
+ * # Safety
+ *
+ * `list` must be borrowed from a live `OpenPitPostTradeResult`. `out_outcome`
+ * must be valid and writable for the duration of this call.
+ */
+bool openpit_account_pnl_outcome_list_get(
+    const OpenPitAccountPnlOutcomeList * list,
+    size_t index,
+    OpenPitAccountPnlOutcome * out_outcome
 );
 
 /**
@@ -7155,67 +7531,79 @@ bool openpit_pretrade_post_trade_adjustment_list_push(
 );
 
 /**
- * Appends one account-outcome entry to the account-adjustment outcome list.
+ * Appends one group-tagged account-level PnL outcome to the post-trade list.
  *
  * # Safety
  *
  * If `list` is non-null it must be a valid, properly aligned pointer to an
- * `OpenPitAccountOutcomeEntryList` that is exclusively accessible for the
+ * `OpenPitPostTradeAccountPnlList` that is exclusively accessible for the
  * duration of this call.
  *
  * Contract:
  * - `list` must be a valid non-null callback-scoped pointer;
+ * - `outcome` carries the producing policy's `policy_group_id` and is fully
+ *   validated before it is appended.
+ *
+ * Success:
+ * - returns `true`; the list now carries one extra outcome.
+ *
+ * Error:
+ * - returns `false` when `list` is null or `outcome` fails validation;
+ * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
+ *   error handle that MUST be released with `openpit_destroy_shared_string`.
+ */
+bool openpit_pretrade_post_trade_account_pnl_list_push(
+    OpenPitPostTradeAccountPnlList * list,
+    OpenPitAccountPnlOutcome outcome,
+    OpenPitOutError out_error
+);
+
+/**
+ * Appends one account-outcome entry to an account-adjustment policy result.
+ *
+ * # Safety
+ *
+ * If `result` is non-null it must be a valid, properly aligned pointer to an
+ * `OpenPitPretradeAccountAdjustmentResult` that is exclusively accessible for
+ * the duration of this call.
+ *
+ * Contract:
+ * - `result` must be a valid non-null callback-scoped pointer;
  * - `entry` is validated with `OpenPitAccountOutcomeEntry::to_entry`;
  * - no `policy_group_id` is accepted: the engine assigns the policy's group.
  *
  * Success:
- * - returns `true`; the list now carries one extra entry.
+ * - returns `true`; the result now carries one extra outcome entry.
  *
  * Error:
- * - returns `false` when `list` is null or `entry` fails validation;
+ * - returns `false` when `result` is null or `entry` fails validation;
  * - if `out_error` is not null, writes a caller-owned `OpenPitSharedString`
  *   error handle that MUST be released with `openpit_destroy_shared_string`.
  */
-bool openpit_account_outcome_entry_list_push(
-    OpenPitAccountOutcomeEntryList * list,
+bool openpit_pretrade_account_adjustment_result_push_account_outcome(
+    OpenPitPretradeAccountAdjustmentResult * result,
     OpenPitAccountOutcomeEntry entry,
     OpenPitOutError out_error
 );
 
 /**
- * Releases a main-stage pre-trade result collector. Passing null is allowed.
+ * Appends one account block to an account-adjustment policy result.
  *
  * # Safety
  *
- * `result` must be either null or a pointer returned by this library, and must
- * be destroyed at most once.
+ * If `result` is non-null it must be a valid, properly aligned pointer to an
+ * `OpenPitPretradeAccountAdjustmentResult` that is exclusively accessible for
+ * the duration of this call.
+ *
+ * Contract:
+ * - `result` must be a valid non-null callback-scoped pointer;
+ * - string views in `block` are copied before this function returns;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
  */
-void openpit_destroy_pretrade_pre_trade_result(
-    OpenPitPretradePreTradeResult * result
-);
-
-/**
- * Releases a post-trade adjustment list collector. Passing null is allowed.
- *
- * # Safety
- *
- * `list` must be either null or a pointer returned by this library, and must
- * be destroyed at most once.
- */
-void openpit_destroy_post_trade_adjustment_list(
-    OpenPitPostTradeAdjustmentList * list
-);
-
-/**
- * Releases an account-outcome entry list collector. Passing null is allowed.
- *
- * # Safety
- *
- * `list` must be either null or a pointer returned by this library, and must
- * be destroyed at most once.
- */
-void openpit_destroy_account_outcome_entry_list(
-    OpenPitAccountOutcomeEntryList * list
+void openpit_pretrade_account_adjustment_result_push_account_block(
+    OpenPitPretradeAccountAdjustmentResult * result,
+    OpenPitPretradeAccountBlock block
 );
 
 /**
@@ -7711,7 +8099,8 @@ bool openpit_marketdata_service_push_by_instrument_patch(
  * - `Unavailable`: registered but no usable quote (never pushed or cleared);
  * - `UnknownInstrument`: `instrument_id` is not registered;
  * - `QuoteExpired`: selected quote aged past TTL; the stale quote was
- *   written to `out_quote`.
+ *   written to `out_quote`;
+ * - `Error`: `resolution` is not one of the documented selector constants.
  *
  * Contract:
  * - `service`, `resolve_account_group`, and `out_quote` must be valid

@@ -8,5 +8,5 @@ var structopenpit_1_1accountadjustment_1_1AccountOutcomeEntry =
     [ "balance", "structopenpit_1_1accountadjustment_1_1AccountOutcomeEntry.html#afe73b340b7e6467b1935a7ea1454fa55", null ],
     [ "held", "structopenpit_1_1accountadjustment_1_1AccountOutcomeEntry.html#a99e3fb66f4e1cc06413e6ee218dd88b5", null ],
     [ "incoming", "structopenpit_1_1accountadjustment_1_1AccountOutcomeEntry.html#a7e6ca89b47e1917a6a696beeaec9bd06", null ],
-    [ "realizedPnl", "structopenpit_1_1accountadjustment_1_1AccountOutcomeEntry.html#a4e888680d00516bb85538708ca92df9e", null ]
+    [ "realizedPnl", "structopenpit_1_1accountadjustment_1_1AccountOutcomeEntry.html#a5ed8ac2f894a93d7653810bfe0547686", null ]
 ];

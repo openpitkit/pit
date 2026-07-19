@@ -19,6 +19,9 @@
 
 import type { Accounts } from "@openpit/engine/accounts";
 import {
+  AccountAdjustmentAccountPnlOperation,
+  type AccountAdjustmentAccountPnlOperationInit,
+  AccountAdjustmentBalanceOperation,
   AccountAdjustmentBounds,
   FinancialImpact,
   OrderOperation,
@@ -29,8 +32,14 @@ import {
   type LockEntries,
   type PolicyAccountOutcomeEntry,
   type PolicyOutcomeAmount,
+  type PolicyPnlOutcome,
   type PolicyPnlOutcomeAmount,
 } from "@openpit/engine/pretrade";
+import {
+  PnlHaltReason,
+  type PnlHaltReasonKind,
+  PnlOutcome,
+} from "@openpit/engine/accountadjustment";
 import {
   PnlBoundsBrokerBarrier,
   SpotFundsOverride,
@@ -48,15 +57,50 @@ bounds.incomingLower = undefined;
 
 new PnlBoundsBrokerBarrier("USD", null, undefined);
 new SpotFundsOverride(1, null, undefined, null);
+const accountPnlOperation = new AccountAdjustmentAccountPnlOperation("0");
+accountPnlOperation.state = PnlHaltReason.fromMissingFx();
+const accountPnlOperationInit: AccountAdjustmentAccountPnlOperationInit = {
+  state: "0",
+};
+const haltReasonKind: PnlHaltReasonKind = PnlHaltReason.fromMissingFx().kind;
+new PnlOutcome(undefined, PnlHaltReason.fromMissingFx());
+void accountPnlOperation.state;
+void accountPnlOperationInit;
+void haltReasonKind;
+type AccountPnlOperationHasPnlAlias =
+  "pnl" extends keyof AccountAdjustmentAccountPnlOperation ? true : false;
+const accountPnlOperationHasPnlAlias: AccountPnlOperationHasPnlAlias = false;
+void accountPnlOperationHasPnlAlias;
+const legacyAccountPnlOperationInit: AccountAdjustmentAccountPnlOperationInit =
+  {
+    state: "0",
+    // @ts-expect-error - plain-object operations require `state`, not `pnl`.
+    pnl: "0",
+  };
+void legacyAccountPnlOperationInit;
+const balancePnl = new AccountAdjustmentBalanceOperation();
+balancePnl.asset = "AAPL";
+balancePnl.realizedPnl = PnlHaltReason.fromMissingFx();
 
 // Public outcome interfaces and the full primitive-friendly lock entry shape
 // are exported from the pretrade barrel.
 const amount: PolicyOutcomeAmount = { delta: "1", absolute: 2n };
 const pnlAmount: PolicyPnlOutcomeAmount = { delta: -1, absolute: "0" };
+const pnlOutcome: PolicyPnlOutcome = { pnl: pnlAmount };
+const haltedPnlOutcome: PolicyPnlOutcome = {
+  haltReason: PnlHaltReason.fromMissingFx(),
+};
+// @ts-expect-error - a policy PnL outcome requires one variant.
+const emptyPnlOutcome: PolicyPnlOutcome = {};
+// @ts-expect-error - a policy PnL outcome cannot contain both variants.
+const ambiguousPnlOutcome: PolicyPnlOutcome = {
+  pnl: pnlAmount,
+  haltReason: PnlHaltReason.fromMissingFx(),
+};
 const outcome: PolicyAccountOutcomeEntry = {
   asset: "USD",
   balance: amount,
-  realizedPnl: pnlAmount,
+  realizedPnl: pnlOutcome,
 };
 const lockEntries: LockEntries = [
   [0, "100.25"],
@@ -65,6 +109,9 @@ const lockEntries: LockEntries = [
 ];
 new Lock(lockEntries);
 void outcome;
+void haltedPnlOutcome;
+void emptyPnlOutcome;
+void ambiguousPnlOutcome;
 
 declare const accounts: Accounts;
 
@@ -85,6 +132,8 @@ TradeAmount.volume(undefined);
 AdjustmentAmount.delta(null);
 // @ts-expect-error - an adjustment absolute value requires a position size.
 AdjustmentAmount.absolute(undefined);
+// @ts-expect-error - an account PnL adjustment requires an explicit state.
+new AccountAdjustmentAccountPnlOperation(null);
 // @ts-expect-error - account controls require an account id.
 accounts.block(null, "manual block");
 // @ts-expect-error - group controls require an account-group id.

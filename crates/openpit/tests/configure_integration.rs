@@ -44,15 +44,15 @@ use openpit::pretrade::{PreTradePolicy, DEFAULT_POLICY_GROUP_ID};
 use openpit::storage::{FullLocking, IndexLocking, NoLocking};
 use openpit::{
     AccountKeyConstraint, AccountSync, AccountSyncEngine, Configurator, ConfigureError, Engine,
-    ExecutionReportOperation, FinancialImpact, FullSync, FullSyncEngine,
+    EngineTraitOf, ExecutionReportOperation, FinancialImpact, FullSync, FullSyncEngine,
     HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
-    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceRealizedPnl,
-    HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
-    HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
-    HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
-    HasAccountAdjustmentIncomingUpperBound, HasBalanceAsset, Instrument, LocalEngine, LocalSync,
-    OrderOperation, RequestFieldAccessError, SpotFundsConfigError, SpotFundsMarketData,
-    WithExecutionReportFillDetails, WithExecutionReportOperation, WithFinancialImpact,
+    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
+    HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
+    HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
+    HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
+    HasBalanceAsset, Instrument, LocalEngine, LocalSync, OrderOperation, RequestFieldAccessError,
+    SpotFundsConfigError, SpotFundsMarketData, WithExecutionReportFillDetails,
+    WithExecutionReportOperation, WithFinancialImpact,
 };
 
 type AccountLocking = IndexLocking<AccountKeyConstraint>;
@@ -307,10 +307,10 @@ fn configurator_send_sync_per_mode() {
     fn assert_sync<T: Sync>() {}
 
     // FullSync: shareable across threads.
-    assert_send::<Configurator<FullSync>>();
-    assert_sync::<Configurator<FullSync>>();
+    assert_send::<Configurator<EngineTraitOf<OrderOperation, (), (), FullSync>>>();
+    assert_sync::<Configurator<EngineTraitOf<OrderOperation, (), (), FullSync>>>();
     // AccountSync: movable between threads, not shareable.
-    assert_send::<Configurator<AccountSync>>();
+    assert_send::<Configurator<EngineTraitOf<OrderOperation, (), (), AccountSync>>>();
 }
 
 #[test]
@@ -973,12 +973,19 @@ struct SpotAdjustment {
     asset: Asset,
     balance: Option<AdjustmentAmount>,
     balance_average_entry_price: Option<Price>,
-    balance_realized_pnl: Option<Pnl>,
 }
 
 impl HasBalanceAsset for SpotAdjustment {
     fn balance_asset(&self) -> Result<&Asset, RequestFieldAccessError> {
         Ok(&self.asset)
+    }
+}
+
+impl openpit::HasAccountAdjustmentPnlOperation for SpotAdjustment {
+    fn account_adjustment_pnl_operation(
+        &self,
+    ) -> Result<Option<openpit::PnlState>, RequestFieldAccessError> {
+        Ok(None)
     }
 }
 
@@ -991,12 +998,6 @@ impl HasAccountAdjustmentBalance for SpotAdjustment {
 impl HasAccountAdjustmentBalanceAverageEntryPrice for SpotAdjustment {
     fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
         Ok(self.balance_average_entry_price)
-    }
-}
-
-impl HasAccountAdjustmentBalanceRealizedPnl for SpotAdjustment {
-    fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
-        Ok(self.balance_realized_pnl)
     }
 }
 
@@ -1055,7 +1056,6 @@ fn spot_balance(asset_code: &str, amount: &str) -> SpotAdjustment {
             PositionSize::from_str(amount).expect("position size literal must be valid"),
         )),
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
     }
 }
 

@@ -34,7 +34,6 @@
 // - ../../../../pit.wiki/Policies.md
 // - ../../../../pit.wiki/Spot-Funds.md
 // - ../../../../pit.wiki/Policy-API.md
-// - ../../../../pit.wiki/Custom-JS-Types.md
 //
 // See engine.test.ts for the import-resolution scheme. Run `npm run build`
 // first. The import block of each snippet is hoisted to this file header (TS
@@ -283,6 +282,12 @@ describe("Pre-trade-Pipeline.md wiki examples", () => {
 
     // Execution reports feed realized outcomes back into cumulative policy state.
     const result = engine.applyExecutionReport(report);
+    for (const outcome of result.accountPnls) {
+      console.log(`account P&L outcome for ${outcome.accountId.toString()}`);
+    }
+    for (const outcome of result.accountAdjustments) {
+      console.log(`account adjustment from group ${outcome.policyGroupId}`);
+    }
     if (result.accountBlocks.length > 0) {
       console.log("halt new orders until the blocked state is cleared");
     }
@@ -324,7 +329,7 @@ describe("Getting-Started.md wiki examples", () => {
 
     const engine = ready.build();
 
-    // 3. Check an order. Scalars accept plain values (the account id as a number,
+    // 2. Check an order. Scalars accept plain values (the account id as a number,
     // the price as a decimal string); the order is an object literal.
     const order: OrderInit = {
       operation: {
@@ -345,11 +350,11 @@ describe("Getting-Started.md wiki examples", () => {
       throw new Error(reasons);
     }
 
-    // 4. Quick, lightweight checks were performed during the start stage. The
+    // 3. Quick, lightweight checks were performed during the start stage. The
     // system state has not yet changed. Before the heavy-duty checks, other work on
     // the request can be performed by holding the request object.
 
-    // 5. Real pre-trade and risk control.
+    // 4. Real pre-trade and risk control.
     const request = start.request;
     if (request === undefined) {
       throw new Error("accepted start result is missing its request");
@@ -365,7 +370,7 @@ describe("Getting-Started.md wiki examples", () => {
     // Optional shortcut for the same two-stage flow:
     // const execute = engine.executePreTrade(order);
 
-    // 6. If the request is successfully sent to the venue, commit; roll back
+    // 5. If the request is successfully sent to the venue, commit; roll back
     // otherwise to revert all performed reservations.
     const reservation = execute.reservation;
     if (reservation === undefined) {
@@ -379,7 +384,7 @@ describe("Getting-Started.md wiki examples", () => {
       throw err;
     }
 
-    // 7. The order goes to the venue and returns with an execution report.
+    // 6. The order goes to the venue and returns with an execution report.
     const report: ExecutionReportInit = {
       operation: {
         underlyingAsset: "AAPL",
@@ -391,8 +396,14 @@ describe("Getting-Started.md wiki examples", () => {
     };
 
     const result = engine.applyExecutionReport(report);
+    for (const outcome of result.accountPnls) {
+      console.log(`account P&L outcome for ${outcome.accountId.toString()}`);
+    }
+    for (const outcome of result.accountAdjustments) {
+      console.log(`account adjustment from group ${outcome.policyGroupId}`);
+    }
 
-    // 8. A non-empty accountBlocks means a kill switch has fired for the account.
+    // 7. A non-empty accountBlocks means a kill switch has fired for the account.
     if (result.accountBlocks.length > 0) {
       console.log("halt new orders until the blocked state is cleared");
     }
@@ -495,6 +506,12 @@ describe("Getting-Started.md wiki examples", () => {
 
     // Execution reports feed realized outcomes back into cumulative policy state.
     const result = engine.applyExecutionReport(report);
+    for (const outcome of result.accountPnls) {
+      console.log(`account P&L outcome for ${outcome.accountId.toString()}`);
+    }
+    for (const outcome of result.accountAdjustments) {
+      console.log(`account adjustment from group ${outcome.policyGroupId}`);
+    }
     if (result.accountBlocks.length > 0) {
       console.log("halt new orders until the blocked state is cleared");
     }
@@ -537,6 +554,7 @@ describe("Account-Adjustments.md wiki examples", () => {
     // result.ok is true: the whole batch was accepted.
 
     expect(result.ok).toBe(true);
+    expect(result.accountBlocks).toHaveLength(0);
   });
 
   it("drives a balance-limit policy from the adjustment path", () => {
@@ -574,7 +592,7 @@ describe("Account-Adjustments.md wiki examples", () => {
         const current = previous ?? PositionSize.fromInt(0n);
         const balance = adjustment.amount?.balance;
         if (balance === undefined) {
-          return [];
+          return { accountBlocks: [] };
         }
 
         const absolute = balance.asAbsolute;
@@ -584,21 +602,24 @@ describe("Account-Adjustments.md wiki examples", () => {
         } else {
           const delta = balance.asDelta;
           if (delta === undefined) {
-            return [];
+            return { accountBlocks: [] };
           }
           newTotal = current.add(delta);
         }
 
         // Reject if the limit is breached.
         if (newTotal.compare(this.maxCumulative) > 0) {
-          return [
-            {
-              code: "RiskLimitExceeded",
-              reason: "cumulative limit exceeded",
-              details: `${assetId}: ${newTotal.toString()} > ${this.maxCumulative.toString()}`,
-              scope: "account",
-            },
-          ];
+          return {
+            rejects: [
+              {
+                code: "RiskLimitExceeded",
+                reason: "cumulative limit exceeded",
+                details: `${assetId}: ${newTotal.toString()} > ${this.maxCumulative.toString()}`,
+                scope: "account",
+              },
+            ],
+            accountBlocks: [],
+          };
         }
 
         // Apply immediately so later adjustments in the same batch see the updated
@@ -608,18 +629,21 @@ describe("Account-Adjustments.md wiki examples", () => {
         // Rollback by absolute value - safe in the account-adjustment pipeline
         // because no external system sees intermediate batch state. Commit is empty:
         // the state was applied eagerly.
-        return [
-          {
-            commit: () => {},
-            rollback: () => {
-              if (previous === undefined) {
-                this.totals.delete(assetId);
-              } else {
-                this.totals.set(assetId, previous);
-              }
+        return {
+          mutations: [
+            {
+              commit: () => {},
+              rollback: () => {
+                if (previous === undefined) {
+                  this.totals.delete(assetId);
+                } else {
+                  this.totals.set(assetId, previous);
+                }
+              },
             },
-          },
-        ];
+          ],
+          accountBlocks: [],
+        };
       }
     }
 
@@ -866,7 +890,7 @@ describe("Policies.md wiki examples", () => {
             ),
           ])
           .brokerBarrier(
-            new OrderSizeBrokerBarrier(new OrderSizeLimit("10000", "5000000")),
+            new OrderSizeBrokerBarrier(new OrderSizeLimit("100", "50000")),
           ),
       )
       .build();
@@ -1302,22 +1326,23 @@ describe("Policy-API.md wiki examples", () => {
       },
 
       applyAccountAdjustment(
-        ctx: AccountAdjustmentContext,
-        accountId: AccountId,
-        adjustment: AccountAdjustment,
-      ) {
-        void accountId;
-        void adjustment;
-        // The adjustment context always exposes the account-block facility.
-        ctx.accountControl.block(
-          new AccountBlock(
-            "BlockOnAdjustmentPolicy",
-            "AccountBlocked",
-            "blocked via accountControl",
-            "custom policy blocked the account from a callback",
-          ),
-        );
-        return null;
+        _ctx: AccountAdjustmentContext,
+        _accountId: AccountId,
+        _adjustment: AccountAdjustment,
+      ): PolicyAccountAdjustmentResult {
+        void _ctx;
+        void _accountId;
+        void _adjustment;
+        return {
+          accountBlocks: [
+            new AccountBlock(
+              "BlockOnAdjustmentPolicy",
+              "AccountBlocked",
+              "blocked by account-adjustment policy",
+              "custom policy reported an account block from a callback",
+            ),
+          ],
+        };
       },
     };
 
@@ -1326,8 +1351,13 @@ describe("Policy-API.md wiki examples", () => {
       .preTrade(blockOnAdjustmentPolicy)
       .build();
 
-    // Driving an adjustment triggers the block.
-    engine.applyAccountAdjustment(99224416, [{ operation: { asset: "USD" } }]);
+    // The accepted adjustment reports a block that the engine has already recorded.
+    const adjustmentResult = engine.applyAccountAdjustment(99224416, [
+      { operation: { asset: "USD" } },
+    ]);
+    if (!adjustmentResult.ok || adjustmentResult.accountBlocks.length !== 1) {
+      throw new Error("accepted adjustment must report one account block");
+    }
 
     // A later order on the same account is rejected with AccountBlocked, without
     // any start-check involvement.
@@ -1350,98 +1380,5 @@ describe("Policy-API.md wiki examples", () => {
 
     expect(blocked.ok).toBe(false);
     expect(blocked.rejects[0]!.code).toBe("AccountBlocked");
-  });
-});
-
-describe("Custom-JS-Types.md wiki example", () => {
-  it("gates SELL orders through a typed custom policy", () => {
-    // Source: Custom-JS-Types.md - Complete typed policy and engine
-    type DeskOrder = Order & { deskId: string };
-
-    // Rejects SELL orders for this desk; accepts everything else. The callback
-    // reads both the validated OpenPit fields and application-owned metadata.
-    const sellGate: Policy<DeskOrder> = {
-      name: "sell-gate",
-      policyGroupId: 0,
-
-      checkPreTradeStart(
-        ctx: Context,
-        order: DeskOrder,
-      ): Iterable<PolicyReject> {
-        void ctx;
-        if (
-          order.deskId === "cash-equities" &&
-          order.operation?.side === "SELL"
-        ) {
-          return [
-            {
-              code: "InvalidFieldValue",
-              reason: "sells are disabled for this desk",
-              details: "sell-gate",
-              scope: "order",
-            },
-          ];
-        }
-        return [];
-      },
-
-      performPreTradeCheck(
-        ctx: Context,
-        order: DeskOrder,
-      ): PolicyPreTradeResult | null {
-        void ctx;
-        void order;
-        return null;
-      },
-    };
-
-    const engine = Engine.builder().preTrade(sellGate).build();
-
-    const order: DeskOrder = Object.assign(new Order(), {
-      deskId: "cash-equities",
-    });
-    order.operation = {
-      underlyingAsset: "AAPL",
-      settlementAsset: "USD",
-      accountId: 99224416,
-      side: "BUY",
-      tradeAmount: TradeAmount.quantity("100"),
-      price: "185.00",
-    };
-
-    const result = engine.executePreTrade(order);
-    if (result.ok) {
-      // The policy accepted; finalize the reservation it produced.
-      const reservation = result.reservation;
-      if (reservation === undefined) {
-        throw new Error("accepted execute result is missing its reservation");
-      }
-      reservation.commit();
-    } else {
-      for (const reject of result.rejects) {
-        console.log(
-          `rejected by ${reject.policy} [${reject.code}]: ${reject.reason}`,
-        );
-      }
-    }
-
-    expect(result.ok).toBe(true);
-
-    // A SELL order through the same engine returns result.ok === false with the
-    // sell-gate reject.
-    const sellOrder: DeskOrder = Object.assign(new Order(), {
-      deskId: "cash-equities",
-    });
-    sellOrder.operation = {
-      underlyingAsset: "AAPL",
-      settlementAsset: "USD",
-      accountId: 99224416,
-      side: "SELL",
-      tradeAmount: TradeAmount.quantity("100"),
-      price: "185.00",
-    };
-    const sellResult = engine.executePreTrade(sellOrder);
-    expect(sellResult.ok).toBe(false);
-    expect(sellResult.rejects[0]!.policy).toBe("sell-gate");
   });
 });

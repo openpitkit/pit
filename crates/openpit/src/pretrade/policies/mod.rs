@@ -42,6 +42,6 @@ pub use spot_funds::SpotFundsPolicy;
 pub use spot_funds::{
     SpotFundsConfigError, SpotFundsLimitMode, SpotFundsMarketData, SpotFundsOverride,
     SpotFundsOverrideTarget, SpotFundsPnlBoundsAccountBarrier,
-    SpotFundsPnlBoundsAccountBarrierUpdate, SpotFundsPnlBoundsAccountGroupBarrier,
-    SpotFundsPnlBoundsBarrier, SpotFundsPricingSource, SpotFundsSettings,
+    SpotFundsPnlBoundsAccountGroupBarrier, SpotFundsPnlBoundsBarrier, SpotFundsPricingSource,
+    SpotFundsSettings,
 };

@@ -208,7 +208,7 @@ func EngineBuilderAddBuiltinOrderSizeLimit(
 	return nil
 }
 
-func EngineBuilderAddBuiltinPnlBoundsKillswitch(
+func EngineBuilderAddBuiltinPnlBoundsKillSwitch(
 	builder EngineBuilder,
 	groupID PolicyGroupID,
 	brokerBarriers []PretradePoliciesPnlBoundsBarrier,
@@ -318,18 +318,18 @@ func EngineBuilderAddBuiltinSpotFunds(
 	return nil
 }
 
-func EngineBuilderAddBuiltinSpotFundsPnlBoundsKillswitch(
+func EngineBuilderAddBuiltinSpotFundsPnlBoundsKillSwitch(
 	builder EngineBuilder,
 	marketData MarketDataService,
 	groupID PolicyGroupID,
-	globalBarriers []PretradePoliciesSpotFundsPnlBoundsBarrier,
+	globalBarrier *PretradePoliciesSpotFundsPnlBoundsBarrier,
 	accountGroupBarriers []PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
 	accountBarriers []PretradePoliciesSpotFundsPnlBoundsAccountBarrier,
 ) error {
 	var globalPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier
-	if len(globalBarriers) > 0 {
+	if globalBarrier != nil {
 		globalPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier)(
-			unsafe.Pointer(&globalBarriers[0]),
+			unsafe.Pointer(globalBarrier),
 		)
 	}
 	var accountGroupPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
@@ -351,14 +351,13 @@ func EngineBuilderAddBuiltinSpotFundsPnlBoundsKillswitch(
 		marketData,
 		groupID,
 		globalPtr,
-		C.size_t(len(globalBarriers)),
 		accountGroupPtr,
 		C.size_t(len(accountGroupBarriers)),
 		accountPtr,
 		C.size_t(len(accountBarriers)),
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
-	runtime.KeepAlive(globalBarriers)
+	runtime.KeepAlive(globalBarrier)
 	runtime.KeepAlive(accountGroupBarriers)
 	runtime.KeepAlive(accountBarriers)
 	if !ok {
@@ -444,62 +443,53 @@ func EngineExecutePreTrade(
 	}
 }
 
-type PretradePostTradeResult struct {
-	// AccountBlocks is the native account-block list handle the engine recorded,
-	// or nil when none. The caller owns it and must release it with
-	// DestroyPretradeAccountBlockList after reading every block. Each block's
-	// string views borrow the list's buffers, so they must be copied (Safe)
-	// before the list is destroyed; the views dangle once it is released.
-	AccountBlocks PretradeAccountBlockList
-	// Outcomes is the native account-adjustment outcome list handle produced by
-	// policies, or nil. The caller owns it and must release it with
-	// DestroyAccountAdjustmentOutcomeList.
-	Outcomes AccountAdjustmentOutcomeList
-}
+// EngineApplyExecutionReport returns one native aggregate. Its lists are
+// borrowed from the aggregate and must be copied before it is destroyed.
 
-// EngineApplyExecutionReport applies a completed execution report to the engine.
-//
-// On success it returns a PretradePostTradeResult whose AccountBlocks and
-// Outcomes are native list handles the caller owns and must release (see the
-// field docs). The block list is returned rather than read and destroyed here
-// on purpose: each block's reason/details are non-owning views into the list's
-// memory, so the caller must copy them (Safe) before destroying the list.
-// Reading the views into Go-owned blocks here and destroying the list before
-// the upper layer copies them is a use-after-free that surfaces as garbage
-// reason/details.
-//
-// On transport failure it returns a Go error and no handles.
 func EngineApplyExecutionReport(
 	engine Engine,
 	report ExecutionReport,
-) (PretradePostTradeResult, error) {
+) (PostTradeResult, error) {
 	var outError SharedString
-	var outBlocks PretradeAccountBlockList
-	var outAdjustments AccountAdjustmentOutcomeList
+	var outResult PostTradeResult
 	if !C.openpit_engine_apply_execution_report(
 		engine,
 		&report,
-		&outBlocks,
-		&outAdjustments,
+		&outResult,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
-		return PretradePostTradeResult{},
+		return nil,
 			consumeSharedStringAsError(outError, "openpit_engine_apply_execution_report failed")
 	}
+	return outResult, nil
+}
 
-	return PretradePostTradeResult{AccountBlocks: outBlocks, Outcomes: outAdjustments}, nil
+// DestroyPostTradeResult releases the aggregate and all lists it owns.
+func DestroyPostTradeResult(result PostTradeResult) {
+	C.openpit_destroy_post_trade_result(result)
+}
+
+func PostTradeResultGetAccountBlocks(result PostTradeResult) PretradeAccountBlockList {
+	return C.openpit_post_trade_result_get_account_blocks(result)
+}
+
+func PostTradeResultGetAccountAdjustments(result PostTradeResult) AccountAdjustmentOutcomeList {
+	return C.openpit_post_trade_result_get_account_adjustments(result)
+}
+
+func PostTradeResultGetAccountPnls(result PostTradeResult) AccountPnlOutcomeList {
+	return C.openpit_post_trade_result_get_account_pnls(result)
 }
 
 // EngineApplyAccountAdjustment applies a batch of account adjustments.
 //
-// On the Applied status it returns the native account-adjustment outcome list
-// handle (or nil), which the caller owns and must release with
-// DestroyAccountAdjustmentOutcomeList.
+// On the Applied status it returns the native account-adjustment outcome and
+// account-block lists (either may be nil). The caller owns both handles.
 func EngineApplyAccountAdjustment(
 	engine Engine,
 	accountID ParamAccountID,
 	adjustments []AccountAdjustment,
-) (AccountAdjustmentBatchError, AccountAdjustmentOutcomeList, error) {
+) (AccountAdjustmentBatchError, AccountAdjustmentOutcomeList, PretradeAccountBlockList, error) {
 	var adjustmentsPtr *C.OpenPitAccountAdjustment
 	if len(adjustments) > 0 {
 		adjustmentsPtr = (*C.OpenPitAccountAdjustment)(unsafe.Pointer(&adjustments[0]))
@@ -507,6 +497,7 @@ func EngineApplyAccountAdjustment(
 
 	var reject AccountAdjustmentBatchError
 	var outOutcomes AccountAdjustmentOutcomeList
+	var outBlocks PretradeAccountBlockList
 	var outError SharedString
 	status := C.openpit_engine_apply_account_adjustment(
 		engine,
@@ -515,22 +506,25 @@ func EngineApplyAccountAdjustment(
 		C.size_t(len(adjustments)),
 		&reject,
 		&outOutcomes,
+		&outBlocks,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	)
 	runtime.KeepAlive(adjustments)
 
 	switch status {
 	case C.OpenPitAccountAdjustmentApplyStatus_Error:
-		return nil, nil, consumeSharedStringAsError(outError, "openpit_engine_apply_account_adjustment failed")
+		return nil, nil, nil,
+			consumeSharedStringAsError(outError, "openpit_engine_apply_account_adjustment failed")
 	case C.OpenPitAccountAdjustmentApplyStatus_Applied:
-		return nil, outOutcomes, nil
+		return nil, outOutcomes, outBlocks, nil
 	case C.OpenPitAccountAdjustmentApplyStatus_Rejected:
-		return reject, nil, nil
+		return reject, nil, nil, nil
 	default:
 		DestroyAccountAdjustmentBatchError(reject)
+		DestroyAccountAdjustmentOutcomeList(outOutcomes)
+		DestroyPretradeAccountBlockList(outBlocks)
 		DestroySharedString(outError)
-		return nil,
-			nil,
+		return nil, nil, nil,
 			fmt.Errorf("openpit_engine_apply_account_adjustment failed with unexpected status %d", status)
 	}
 }

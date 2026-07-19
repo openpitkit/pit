@@ -123,7 +123,7 @@ TEST(GettingStartedWiki, BuildAnEngine) {
 
   const openpit::Engine engine = builder.Build();
 
-  // 3. Check an order.
+  // 2. Check an order.
   openpit::model::Order order = openpit::model::Order::Limit(
       openpit::model::Instrument("AAPL", "USD"),
       ::openpit::param::AccountId::FromUint64(99224416),
@@ -142,12 +142,12 @@ TEST(GettingStartedWiki, BuildAnEngine) {
   }
   openpit::pretrade::Request request = std::move(*start.request);
 
-  // 4. Quick, lightweight checks were performed during the start stage. The
+  // 3. Quick, lightweight checks were performed during the start stage. The
   // system state has not yet changed (except controls that must observe every
   // request). Before the heavy-duty checks, other work on the request can be
   // performed simply by holding the request object.
 
-  // 5. Real pre-trade and risk control.
+  // 4. Real pre-trade and risk control.
   openpit::pretrade::ExecuteResult executed = request.Execute();
 
   // Optional shortcut for the same two-stage flow:
@@ -163,11 +163,11 @@ TEST(GettingStartedWiki, BuildAnEngine) {
   }
   openpit::pretrade::Reservation reservation = std::move(*executed.reservation);
 
-  // 6. If the request is successfully sent to the venue, it must be committed.
+  // 5. If the request is successfully sent to the venue, it must be committed.
   // The rollback must be called otherwise to revert all performed reservations.
   reservation.Commit();
 
-  // 7. The order goes to the venue and returns with an execution report.
+  // 6. The order goes to the venue and returns with an execution report.
   openpit::model::ExecutionReport report;
   openpit::model::ExecutionReportOperation reportOp;
   reportOp.instrument = openpit::model::Instrument("AAPL", "USD");
@@ -182,7 +182,15 @@ TEST(GettingStartedWiki, BuildAnEngine) {
 
   const openpit::PostTradeResult result = engine.ApplyExecutionReport(report);
 
-  // 8. After each execution report is applied, the system may report that it
+  for (const auto& outcome : result.accountPnls) {
+    std::cout << "account P&L outcome for " << outcome.accountId.Raw() << '\n';
+  }
+  for (const auto& outcome : result.accountAdjustments) {
+    std::cout << "account adjustment from group " << outcome.policyGroupId.Raw()
+              << '\n';
+  }
+
+  // 7. After each execution report is applied, the system may report that it
   // has been determined in advance that all subsequent requests will be
   // rejected if the account status does not change.
   if (!result.accountBlocks.empty()) {
@@ -256,6 +264,13 @@ TEST(GettingStartedWiki, ApplyPostTradeFeedback) {
 
   // Execution reports feed realized outcomes back into cumulative policy state.
   const openpit::PostTradeResult result = engine.ApplyExecutionReport(report);
+  for (const auto& outcome : result.accountPnls) {
+    std::cerr << "account P&L outcome for " << outcome.accountId.Raw() << '\n';
+  }
+  for (const auto& outcome : result.accountAdjustments) {
+    std::cerr << "account adjustment from group " << outcome.policyGroupId.Raw()
+              << '\n';
+  }
   if (!result.accountBlocks.empty()) {
     std::cerr << "halt new orders until the blocked state is cleared\n";
   }

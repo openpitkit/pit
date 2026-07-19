@@ -31,7 +31,9 @@ func TestCreateRejectListClampsNegativeReserve(t *testing.T) {
 		NewStringView("details"),
 		nil,
 	)
-	PretradeRejectListPush(list, reject)
+	if !PretradeRejectListPush(list, reject) {
+		t.Fatal("PretradeRejectListPush() = false, want true")
+	}
 
 	if got := PretradeRejectListLen(list); got != 1 {
 		t.Fatalf("PretradeRejectListLen() = %d, want 1", got)
@@ -42,7 +44,7 @@ func TestRejectListGetReturnsZeroValueOutOfBounds(t *testing.T) {
 	list := CreatePretradeRejectList(1)
 	t.Cleanup(func() { DestroyPretradeRejectList(list) })
 
-	PretradeRejectListPush(
+	if !PretradeRejectListPush(
 		list,
 		CreatePretradeReject(
 			RejectCodeOther,
@@ -52,7 +54,9 @@ func TestRejectListGetReturnsZeroValueOutOfBounds(t *testing.T) {
 			NewStringView("details"),
 			nil,
 		),
-	)
+	) {
+		t.Fatal("PretradeRejectListPush() = false, want true")
+	}
 
 	outOfBounds := PretradeRejectListGet(list, 10)
 	if PretradeRejectGetCode(outOfBounds) != 0 {
@@ -72,5 +76,28 @@ func TestRejectListGetReturnsZeroValueOutOfBounds(t *testing.T) {
 	}
 	if PretradeRejectGetUserData(outOfBounds) != nil {
 		t.Fatalf("PretradeRejectGetUserData(outOfBounds) = %v, want nil", PretradeRejectGetUserData(outOfBounds))
+	}
+}
+
+func TestRejectListPushRejectsUnknownScope(t *testing.T) {
+	list := CreatePretradeRejectList(1)
+	t.Cleanup(func() { DestroyPretradeRejectList(list) })
+
+	ok := PretradeRejectListPush(
+		list,
+		CreatePretradeReject(
+			RejectCodeOther,
+			PretradeRejectScope(255),
+			NewStringView("policy"),
+			NewStringView("reason"),
+			NewStringView("details"),
+			nil,
+		),
+	)
+	if ok {
+		t.Fatal("PretradeRejectListPush() = true, want false")
+	}
+	if got := PretradeRejectListLen(list); got != 0 {
+		t.Fatalf("PretradeRejectListLen() = %d, want 0", got)
 	}
 }

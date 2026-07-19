@@ -84,13 +84,15 @@ prevented at compile time.
 
 1. The SDK never spawns OS threads. Every public method runs on the OS
    thread that invoked it.
-2. Preventing concurrent invocation of any public method on the same SDK
-   handle is the caller's responsibility. Entering one handle concurrently
-   from multiple threads is undefined behavior.
-3. Sequential calls to public methods on the same handle from different OS
-   threads are supported. Handles, contexts, and callbacks are not pinned
-   to a specific thread.
-4. `Reject.user_data` / `Order.user_data` / `ExecutionReport.user_data` /
+2. `FullSync` handles permit concurrent invocation, including calls for the
+   same account. `LocalSync` is single-threaded. The pure-Rust `AccountSync`
+   handle is `Send + !Sync` and therefore forbids concurrent entry.
+3. `FullSync` synchronizes individual storage accesses, not whole pipelines.
+   Same-account calls can interleave between accesses; operation-level
+   atomicity is provided only where an API explicitly promises it.
+4. Sequential calls to public methods on a movable handle may run on different
+   OS threads. Handles, contexts, and callbacks are not OS-thread-pinned.
+5. `Reject.user_data` / `Order.user_data` / `ExecutionReport.user_data` /
    `AccountAdjustment.user_data` are opaque caller tokens. The SDK never
    inspects, dereferences, or frees them. Lifetime, thread-safety, and
    meaning are entirely caller-managed.
@@ -230,6 +232,15 @@ let report = WithExecutionReportOperation {
 };
 
 let result = engine.apply_execution_report(&report);
+for outcome in &result.account_pnls {
+    eprintln!("account P&L outcome for {}", outcome.account_id);
+}
+for outcome in &result.account_adjustments {
+    eprintln!(
+        "account adjustment from group {}",
+        outcome.policy_group_id.value()
+    );
+}
 
 // 8. After each execution report is applied, the system may report that it has
 // been determined in advance that all subsequent requests will be rejected if

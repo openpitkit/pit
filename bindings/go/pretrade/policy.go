@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package pretrade
 
@@ -76,9 +76,8 @@ type Policy interface {
 	//
 	// Returns account blocks representing the kill-switch state. An empty list
 	// means no kill switch. A non-empty list means this policy entered a
-	// blocked state after the report was applied. Policies may also fill the
-	// adjustments collector with group-tagged account-adjustment outcomes; the
-	// block return and the collector are independent channels.
+	// blocked state after the report was applied. Policies may independently
+	// fill the adjustment and account-PnL collectors.
 	//
 	// Implementations must not let panics escape this method. A panic raised
 	// here may propagate across the SDK boundary and terminate the process;
@@ -87,14 +86,14 @@ type Policy interface {
 		PostTradeContext,
 		model.ExecutionReport,
 		PostTradeAdjustments,
+		PostTradePnls,
 	) []reject.AccountBlock
 
 	// ApplyAccountAdjustment validates one account adjustment.
 	//
-	// Returns zero or more rejects when an adjustment violates policy
-	// constraints. Empty list means accept. Policies may fill the outcomes
-	// collector with account-outcome entries; the engine keeps them only when
-	// the policy accepts.
+	// Returns the accepted account blocks and zero or more rejects. Policies
+	// may fill the outcomes collector with account-outcome entries; the engine
+	// keeps outcomes and account blocks only when the policy accepts.
 	//
 	// Implementations must not let panics escape this method. A panic raised
 	// here may propagate across the SDK boundary and terminate the process;
@@ -105,5 +104,5 @@ type Policy interface {
 		model.AccountAdjustment,
 		tx.Mutations,
 		AccountOutcomes,
-	) []reject.Reject
+	) (PolicyAccountAdjustmentResult, []reject.Reject)
 }

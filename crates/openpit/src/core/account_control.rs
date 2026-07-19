@@ -125,6 +125,14 @@ where
     pub fn block(&self, block: AccountBlock) {
         self.handle.record(self.account_id, block);
     }
+
+    /// Unblocks the bound account when its cause is the one `provenance`
+    /// raised, and does nothing otherwise. See
+    /// [`BlockedAccounts::invalidate_provenance`].
+    pub(crate) fn invalidate_provenance(&self, provenance: u64) -> Option<AccountBlock> {
+        self.handle
+            .invalidate_provenance(self.account_id, provenance)
+    }
 }
 
 // ─── AccountBlockHandle ──────────────────────────────────────────────────────
@@ -193,13 +201,26 @@ where
         self.inner.block_account(account_id, block);
     }
 
+    /// Unblocks `account_id` when its cause is the one `provenance` raised, and
+    /// does nothing otherwise. See
+    /// [`BlockedAccounts::invalidate_provenance`].
+    pub(crate) fn invalidate_provenance(
+        &self,
+        account_id: AccountId,
+        provenance: u64,
+    ) -> Option<AccountBlock> {
+        self.inner.invalidate_provenance(account_id, provenance)
+    }
+
     /// Unblocks `account_id` on the shared [`BlockedAccounts`], clearing any
     /// block (kill-switch or admin). A no-op when the account is not blocked.
     pub(crate) fn unblock_account(&self, account_id: AccountId) {
         self.inner.unblock_account(account_id);
     }
 
-    /// Overwrites the stored cause of an already-blocked account.
+    /// Overwrites the stored cause of an already-blocked account, which makes
+    /// the block the caller's own. See
+    /// [`BlockedAccounts::replace_reason`].
     ///
     /// # Errors
     ///
@@ -446,10 +467,42 @@ where
         }
     }
 
+    /// Blocks `id` with `cause`. An account holds one cause: the first one
+    /// wins, so blocking an already-blocked account is a no-op.
     pub(crate) fn block_account(&self, id: AccountId, cause: AccountBlock) {
         let _guard = self.mutation_guard.write_index();
         self.accounts.with_mut(id, || cause, |_, _| ());
         self.any_flag.store(true);
+    }
+
+    /// Retires the block raised by the assertion holding `provenance`: when the
+    /// stored cause carries that token it is removed and the account unblocks,
+    /// since it is the account's only cause. When the cause is no longer the
+    /// assertion's own - another cause won the account first, or an operator
+    /// overwrote the reason via [`replace_reason`](Self::replace_reason) and so
+    /// took ownership of the block - nothing is removed and the account stays
+    /// blocked.
+    ///
+    /// A committed assertion needs no counterpart: its token is never reissued
+    /// and its only holder is gone, so no later call can match its cause, which
+    /// stays as the legitimate block it is.
+    pub(crate) fn invalidate_provenance(
+        &self,
+        id: AccountId,
+        provenance: u64,
+    ) -> Option<AccountBlock> {
+        let _guard = self.mutation_guard.write_index();
+        let removed = self
+            .accounts
+            .with(&id, |cause| {
+                (cause.provenance() == Some(provenance)).then(|| cause.clone())
+            })
+            .flatten()?;
+        self.accounts.remove(&id);
+        if self.accounts.is_empty() && !self.all_flag.load() {
+            self.any_flag.store(false);
+        }
+        Some(removed)
     }
 
     fn block_all(&self) {
@@ -476,6 +529,10 @@ where
     }
 
     /// Overwrites the stored cause of an already-blocked account.
+    ///
+    /// The new cause is the caller's own, so it takes ownership of the block:
+    /// an operator reason carries no provenance, hence a pending assertion that
+    /// raised the overwritten cause will no longer unblock the account.
     ///
     /// # Errors
     ///
@@ -735,6 +792,87 @@ mod tests {
             .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
             .expect("blocked account must return rejects");
         assert_eq!(rejects[0].policy, "First");
+    }
+
+    #[test]
+    fn blocking_an_already_blocked_account_keeps_the_first_cause() {
+        let set = new_set();
+        let groups = empty_groups();
+        let id = account(1);
+        set.block_account(id, admin("first"));
+        for provenance in 1..=32 {
+            set.block_account(
+                id,
+                cause("Later", RejectCode::PnlKillSwitchTriggered)
+                    .with_provenance(Some(provenance)),
+            );
+            set.block_account(id, admin("later"));
+        }
+
+        let rejects = set
+            .check(&groups, &AccountOrder(id), RejectScope::Order)
+            .expect("blocked account must return rejects");
+        assert_eq!(rejects[0].reason, "first");
+    }
+
+    #[test]
+    fn invalidating_an_own_provenance_unblocks_the_account() {
+        let set = new_set();
+        let groups = empty_groups();
+        let id = account(1);
+        set.block_account(
+            id,
+            cause("Provisional", RejectCode::PnlKillSwitchTriggered).with_provenance(Some(42)),
+        );
+
+        let removed = set
+            .invalidate_provenance(id, 42)
+            .expect("an own cause must be removed");
+        assert_eq!(removed.policy, "Provisional");
+        assert!(
+            set.check(&groups, &AccountOrder(id), RejectScope::Order)
+                .is_none(),
+            "removing the only cause must unblock the account"
+        );
+    }
+
+    #[test]
+    fn invalidating_a_provenance_an_operator_overwrote_keeps_the_block() {
+        let set = new_set();
+        let groups = empty_groups();
+        let id = account(1);
+        set.block_account(
+            id,
+            cause("Provisional", RejectCode::PnlKillSwitchTriggered).with_provenance(Some(42)),
+        );
+        set.replace_reason(id, admin("manual review"))
+            .expect("replacing the reason of a blocked account must succeed");
+
+        assert!(
+            set.invalidate_provenance(id, 42).is_none(),
+            "an overwritten cause is the operator's, not the assertion's"
+        );
+        let rejects = set
+            .check(&groups, &AccountOrder(id), RejectScope::Order)
+            .expect("the operator's block must stay active");
+        assert_eq!(rejects[0].reason, "manual review");
+    }
+
+    #[test]
+    fn invalidating_a_foreign_provenance_keeps_the_block() {
+        let set = new_set();
+        let groups = empty_groups();
+        let id = account(1);
+        set.block_account(id, admin("manual review"));
+
+        assert!(
+            set.invalidate_provenance(id, 42).is_none(),
+            "a cause that is not the assertion's own must not be removed"
+        );
+        let rejects = set
+            .check(&groups, &AccountOrder(id), RejectScope::Order)
+            .expect("the independent block must stay active");
+        assert_eq!(rejects[0].reason, "manual review");
     }
 
     // ─── Admin per-account blocking ───────────────────────────────────────

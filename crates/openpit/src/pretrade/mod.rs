@@ -53,7 +53,10 @@ pub use policies::{
     SpotFundsOverrideTarget, SpotFundsPricingSource,
 };
 pub use policy::{PolicyGroupId, PreTradePolicy, DEFAULT_POLICY_GROUP_ID};
-pub use policy_result::PolicyPreTradeResult;
+pub use policy_result::{
+    PolicyAccountAdjustmentResult, PolicyConfigurationResult, PolicyPreTradeResult,
+    PolicyRuntimeConfiguration,
+};
 pub use post_trade_context::PostTradeContext;
 pub use post_trade_result::PostTradeResult;
 pub use reject::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};

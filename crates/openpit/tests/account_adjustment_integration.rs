@@ -23,7 +23,7 @@ use openpit::pretrade::PreTradePolicy;
 use openpit::pretrade::{Reject, RejectCode, RejectScope, Rejects};
 use openpit::{
     AccountAdjustmentBalanceOperation, AccountAdjustmentContext, Engine, HasBalanceAsset,
-    LocalEngine, Mutation, Mutations,
+    LocalEngine, Mutation, Mutations, PolicyAccountAdjustmentResult,
 };
 
 type TestAdjustment = AccountAdjustmentBalanceOperation;
@@ -62,7 +62,7 @@ where
         account_id: AccountId,
         adjustment: &TestAdjustment,
         _mutations: &mut Mutations,
-    ) -> Result<Vec<openpit::AccountOutcomeEntry>, Rejects> {
+    ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
         self.seen_account_ids.borrow_mut().push(account_id);
         let asset_code = adjustment
             .balance_asset()
@@ -78,7 +78,7 @@ where
                 format!("asset {} blocked by test policy", asset_code),
             )));
         }
-        Ok(Vec::new())
+        Ok(PolicyAccountAdjustmentResult::default())
     }
 }
 
@@ -108,7 +108,7 @@ where
         _account_id: AccountId,
         adjustment: &TestAdjustment,
         mutations: &mut Mutations,
-    ) -> Result<Vec<openpit::AccountOutcomeEntry>, Rejects> {
+    ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
         let asset = adjustment
             .balance_asset()
             .expect("balance_asset must be accessible")
@@ -138,7 +138,7 @@ where
             },
         ));
 
-        Ok(Vec::new())
+        Ok(PolicyAccountAdjustmentResult::default())
     }
 }
 
@@ -146,7 +146,6 @@ fn balance_adjustment(asset_code: &str) -> AccountAdjustmentBalanceOperation {
     AccountAdjustmentBalanceOperation {
         asset: openpit::param::Asset::new(asset_code).expect("asset must be valid"),
         average_entry_price: None,
-        realized_pnl: None,
     }
 }
 

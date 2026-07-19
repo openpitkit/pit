@@ -59,8 +59,9 @@ pub use param::value_types::{
 };
 
 pub use account_adjustment::{
-    JsAccountAdjustment, JsAccountAdjustmentAmount, JsAccountAdjustmentBalanceOperation,
-    JsAccountAdjustmentBounds, JsAccountAdjustmentPositionOperation, JsAdjustmentAmount,
+    JsAccountAdjustment, JsAccountAdjustmentAccountPnlOperation, JsAccountAdjustmentAmount,
+    JsAccountAdjustmentBalanceOperation, JsAccountAdjustmentBounds,
+    JsAccountAdjustmentPositionOperation, JsAdjustmentAmount,
 };
 pub use configure::JsConfigurator;
 pub use execution_report::{
@@ -73,7 +74,8 @@ pub use marketdata::{
 };
 pub use order::{JsOrder, JsOrderMargin, JsOrderOperation, JsOrderPosition, JsTradeAmount};
 pub use outcome::{
-    JsAccountAdjustmentOutcome, JsAccountOutcomeEntry, JsOutcomeAmount, JsPnlOutcomeAmount,
+    JsAccountAdjustmentOutcome, JsAccountOutcomeEntry, JsAccountPnlOutcome, JsOutcomeAmount,
+    JsPnlHaltReason, JsPnlOutcome, JsPnlOutcomeAmount,
 };
 pub use reference_book::{JsReferenceBook, JsSettlementLag, JsSettlementScheme, JsSettlementUnit};
 pub use reject::{JsAccountBlock, JsReject};
@@ -81,8 +83,8 @@ pub use reject::{JsAccountBlock, JsReject};
 pub use context::{JsAccountAdjustmentContext, JsAccountControl, JsContext, JsPostTradeContext};
 pub use engine::{JsAccounts, JsEngine, JsEngineBuilder, JsReadyEngineBuilder};
 pub use result::{
-    JsAccountAdjustmentBatchResult, JsDryRunReport, JsExecuteResult, JsPostTradeResult, JsRequest,
-    JsReservation, JsStartResult,
+    JsAccountAdjustmentBatchResult, JsDryRunReport, JsExecuteResult, JsPolicyConfigurationResult,
+    JsPostTradeResult, JsRequest, JsReservation, JsStartResult,
 };
 
 pub use policy::order_size_limit::{
@@ -101,8 +103,8 @@ pub use policy::rate_limit::{
 pub use policy::spot_funds::{
     build_spot_funds, build_spot_funds_pnl_bounds_killswitch, JsSpotFundsBuilder,
     JsSpotFundsOverride, JsSpotFundsPnlBoundsAccountBarrier,
-    JsSpotFundsPnlBoundsAccountBarrierUpdate, JsSpotFundsPnlBoundsAccountGroupBarrier,
-    JsSpotFundsPnlBoundsBarrier, JsSpotFundsPnlBoundsKillswitchBuilder,
+    JsSpotFundsPnlBoundsAccountGroupBarrier, JsSpotFundsPnlBoundsBarrier,
+    JsSpotFundsPnlBoundsKillswitchBuilder,
 };
 
 use wasm_bindgen::prelude::*;

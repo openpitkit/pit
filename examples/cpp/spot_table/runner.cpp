@@ -17,8 +17,8 @@
 
 #include "runner.hpp"
 
-#include "openpit/account_adjustment.hpp"
 #include "openpit/account_id.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/accounts.hpp"
 #include "openpit/async_engine.hpp"
 #include "openpit/engine.hpp"
@@ -141,43 +141,6 @@ const std::unordered_map<std::string, RejectCode> &CodeNames() {
     out << names[i];
   }
   return out.str();
-}
-
-//------------------------------------------------------------------------------
-// FILL application below the model value types.
-//
-// `model::ExecutionReport::Raw()` nulls the fill lock, so the engine slice's
-// `Engine::ApplyExecutionReport` cannot carry one. This helper marshals a raw
-// report (with the lock patched in by `FillReport::Raw`) the same way the
-// binding does, and is shared by the sync and async FILL paths.
-
-[[nodiscard]] openpit::PostTradeResult
-ApplyExecutionReportWithLock(OpenPitEngine *engine,
-                             const OpenPitExecutionReport &raw) {
-  OpenPitPretradeAccountBlockList *blocks = nullptr;
-  OpenPitAccountAdjustmentOutcomeList *outcomes = nullptr;
-  OpenPitSharedString *error = nullptr;
-  if (!openpit_engine_apply_execution_report(engine, &raw, &blocks, &outcomes,
-                                             &error)) {
-    openpit::detail::ThrowFromSharedString(
-        error, "openpit_engine_apply_execution_report failed");
-  }
-  openpit::PostTradeResult out;
-  if (blocks != nullptr) {
-    const std::size_t count = openpit_pretrade_account_block_list_len(blocks);
-    out.accountBlocks.reserve(count);
-    for (std::size_t i = 0; i < count; ++i) {
-      OpenPitPretradeAccountBlock block{};
-      if (openpit_pretrade_account_block_list_get(blocks, i, &block)) {
-        out.accountBlocks.push_back(
-            openpit::accounts::AccountBlock::FromRaw(block));
-      }
-    }
-    openpit_pretrade_destroy_account_block_list(blocks);
-  }
-  const adj::OutcomeList outcomeList(outcomes);
-  out.accountAdjustmentOutcomes = outcomeList.ToVector();
-  return out;
 }
 
 //------------------------------------------------------------------------------
@@ -442,11 +405,10 @@ RunSyncFill(openpit::Engine &engine, param::AccountId acc, const Row &row,
   } catch (const std::exception &err) {
     return {Failure{row, err.what()}, std::chrono::nanoseconds(0)};
   }
-  const OpenPitExecutionReport raw = report->Raw();
   const auto start = std::chrono::steady_clock::now();
   openpit::PostTradeResult result;
   try {
-    result = ApplyExecutionReportWithLock(engine.Get(), raw);
+    result = engine.ApplyExecutionReport(report->Report(), report->Lock());
   } catch (const openpit::Error &err) {
     const auto dur = std::chrono::steady_clock::now() - start;
     return {Failure{row, std::string("engine: ") + err.what()}, dur};
@@ -620,7 +582,7 @@ struct AsyncSubmission {
   Report *report = nullptr;
   Deadline deadline{};
   std::vector<AsyncStep> steps;
-  // FillReports outlive their raw views, which the worker closures borrow.
+  // Fill reports outlive the worker closures that borrow them.
   std::vector<std::shared_ptr<FillReport>> fillReports;
   std::map<OpenPitParamAccountId, std::vector<std::function<void()>>> waiters;
   std::mutex statsMu;
@@ -784,21 +746,16 @@ void FinalizeReservation(
   return step;
 }
 
-// submitFill submits a final execution report carrying its lock, routed through
-// the generic per-account `Call` seam (the typed `ApplyExecutionReport` cannot
 [[nodiscard]] AsyncStep SubmitAsyncFill(AsyncSubmission &s, AsyncEngine &engine,
-                                        param::AccountId acc, const Row &row,
-                                        OpenPitEngine *engineHandle) {
+                                        param::AccountId acc, const Row &row) {
   auto fillReport =
       std::make_shared<FillReport>(BuildFillReport(row, acc, *s.feed));
   s.fillReports.push_back(fillReport);
   const auto start = std::chrono::steady_clock::now();
-  // The closure ignores the driver and applies the raw report (with the lock)
-  // on the captured engine handle, pinned to this account's serial queue.
   auto future = std::make_shared<ae::Future<openpit::PostTradeResult>>(
-      engine.Generic().Call(acc, [engineHandle,
-                                  fillReport](ae::EngineAdapter &) {
-        return ApplyExecutionReportWithLock(engineHandle, fillReport->Raw());
+      engine.Generic().Call(acc, [fillReport](ae::EngineAdapter &driver) {
+        return driver.ApplyExecutionReport(fillReport->Report(),
+                                           fillReport->Lock());
       }));
   s.ObserveOnResolve(*future, start, &s.report->fill);
 
@@ -865,8 +822,7 @@ void ReplayTick(AsyncSubmission &s, const Row &row) {
 // Submits every non-TICK row and replays addressed TICKs in order. A TICK
 // `submitAsyncSteps`.
 void SubmitAsyncSteps(Deadline deadline, AsyncEngine &engine,
-                      OpenPitEngine *engineHandle, AsyncSubmission &s,
-                      const std::vector<Row> &rows) {
+                      AsyncSubmission &s, const std::vector<Row> &rows) {
   for (const Row &row : rows) {
     if (Expired(deadline)) {
       break;
@@ -900,7 +856,7 @@ void SubmitAsyncSteps(Deadline deadline, AsyncEngine &engine,
     } else if (row.action == "ORDER") {
       step = SubmitAsyncOrder(s, engine, acc, row);
     } else if (row.action == "FILL") {
-      step = SubmitAsyncFill(s, engine, acc, row, engineHandle);
+      step = SubmitAsyncFill(s, engine, acc, row);
     }
     s.waiters[acc.Raw()].push_back(step.wait);
     s.steps.push_back(std::move(step));
@@ -925,8 +881,6 @@ Report RunAsync(Deadline deadline, const Frontmatter &fm,
       .PricingSource(policies::SpotFundsPricingSource::Mark);
   builder.Add(policy);
   openpit::Engine engine = builder.Build();
-  OpenPitEngine *engineHandle = engine.Get();
-
   // Wrap the engine in the typed async engine, Dynamic strategy (one serial
   // queue per account). The driver borrows the engine; both must outlive the
   // async engine.
@@ -956,7 +910,7 @@ Report RunAsync(Deadline deadline, const Frontmatter &fm,
   s.groups = &groups;
   s.report = &report;
   s.deadline = deadline;
-  SubmitAsyncSteps(deadline, asyncEngine, engineHandle, s, rows);
+  SubmitAsyncSteps(deadline, asyncEngine, s, rows);
 
   // A TICK replay failure during submission is recorded in report.firstFail;
   // the verdict loop below still finalizes the steps submitted before it. Keep

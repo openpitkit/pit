@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package pretrade
 
@@ -25,16 +25,27 @@ import (
 // PostTradeResult holds the outcome of applying an execution report.
 //
 // This is the canonical post-trade result type for the SDK. It lives in the
-// pretrade package — the shared home of the pre-/post-trade domain — so that
-// the synchronous engine, the typed ClientEngine, and the optional async
-// facade all speak the same type without any of them depending on another for
-// it. The async engine returns this type directly; openpit.PostTradeResult is
-// a thin alias to it for the root package's public surface.
+// pretrade package - the shared home of the pre-/post-trade domain - so
+// that the synchronous engine, the typed ClientEngine, and the optional
+// async facade all speak the same type without any of them depending on
+// another for it. The async engine returns this type directly;
+// openpit.PostTradeResult is a thin alias to it for the root package's
+// public surface.
+//
+// AccountPnls and AccountAdjustments describe already-applied state
+// changes. Callers must consume both even when AccountBlocks is
+// non-empty.
 type PostTradeResult struct {
 	// AccountBlocks lists the accounts that have been blocked after the
 	// execution report was applied.
 	AccountBlocks []reject.AccountBlock
-	// AccountAdjustmentOutcomes lists the account-adjustment outcomes
+	// AccountPnls lists policy-tagged account-level realized-PnL
+	// computations. Amount returns an authoritative PnL when available;
+	// HaltReason identifies the failure. SpotFunds emits a halted outcome only
+	// for the report that transitions the accumulator to halted; later reports
+	// omit the unchanged halt. Position force-sets do not re-arm it.
+	AccountPnls []accountadjustment.AccountPnlOutcome
+	// AccountAdjustments lists the account-adjustment outcomes
 	// policies produced while applying the report.
-	AccountAdjustmentOutcomes []accountadjustment.Outcome
+	AccountAdjustments []accountadjustment.Outcome
 }

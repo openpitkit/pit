@@ -83,6 +83,7 @@ from ._openpit import (
 )
 from .core import (
     AccountAdjustment,
+    AccountAdjustmentAccountPnlOperation,
     AccountAdjustmentAmount,
     AccountAdjustmentBalanceOperation,
     AccountAdjustmentBounds,
@@ -218,8 +219,8 @@ Args:
 
 Returns:
     openpit.pretrade.PostTradeResult: Carries any account blocks raised by
-    policies and the per-asset ``account_adjustments`` outcomes produced
-    while processing the report.
+    policies, account-level ``account_pnls`` outcomes, and per-asset
+    ``account_adjustments`` outcomes produced while processing the report.
     """,
 )
 _set_doc(
@@ -457,6 +458,7 @@ __all__ = [
     "SyncedEngineBuilder",
     "ReadyEngineBuilder",
     "AccountAdjustment",
+    "AccountAdjustmentAccountPnlOperation",
     "AccountAdjustmentAmount",
     "AccountAdjustmentBalanceOperation",
     "AccountAdjustmentBounds",

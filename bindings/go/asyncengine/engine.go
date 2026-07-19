@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package asyncengine
 
@@ -180,22 +180,13 @@ func (t *applyReportTask) abort(err error) {
 // ApplyAccountAdjustment enqueues a batch adjustment call. The account
 // ID is supplied explicitly because adjustments do not carry it.
 //
-// The future mirrors the synchronous adjustment tuple: the first value is the
-// batch reject (set when the batch was rejected, in which case the outcomes
-// slice is nil), the second is the per-adjustment outcomes (set on full
-// acceptance).
+// The future resolves with the synchronous batch result.
 func (e *AsyncEngine) ApplyAccountAdjustment(
 	ctx context.Context,
 	accountID param.AccountID,
 	adjustments []model.AccountAdjustment,
-) *future.Future2[
-	optional.Option[reject.AccountAdjustmentBatchError],
-	[]accountadjustment.Outcome,
-] {
-	f := future.New2[
-		optional.Option[reject.AccountAdjustmentBatchError],
-		[]accountadjustment.Outcome,
-	]()
+) *future.Future[accountadjustment.BatchResult] {
+	f := future.New[accountadjustment.BatchResult]()
 	task := &applyAdjustmentTask{
 		f:           f,
 		engine:      e,
@@ -203,31 +194,26 @@ func (e *AsyncEngine) ApplyAccountAdjustment(
 		accountID:   accountID,
 	}
 	if err := e.strategy.submit(ctx, accountID, task); err != nil {
-		f.Resolve(optional.None[reject.AccountAdjustmentBatchError](), nil, err)
+		f.Resolve(accountadjustment.BatchResult{}, err)
 	}
 	return f
 }
 
 // applyAdjustmentTask carries one ApplyAccountAdjustment call to its worker.
 type applyAdjustmentTask struct {
-	f *future.Future2[
-		optional.Option[reject.AccountAdjustmentBatchError],
-		[]accountadjustment.Outcome,
-	]
+	f           *future.Future[accountadjustment.BatchResult]
 	engine      *AsyncEngine
 	adjustments []model.AccountAdjustment
 	accountID   param.AccountID
 }
 
 func (t *applyAdjustmentTask) run() {
-	batchReject, outcomes, err := t.engine.driver.ApplyAccountAdjustment(
-		t.accountID, t.adjustments,
-	)
-	t.f.Resolve(batchReject, outcomes, err)
+	result, err := t.engine.driver.ApplyAccountAdjustment(t.accountID, t.adjustments)
+	t.f.Resolve(result, err)
 }
 
 func (t *applyAdjustmentTask) abort(err error) {
-	t.f.Resolve(optional.None[reject.AccountAdjustmentBatchError](), nil, err)
+	t.f.Resolve(accountadjustment.BatchResult{}, err)
 }
 
 // Submit enqueues an arbitrary caller-supplied function into the queue

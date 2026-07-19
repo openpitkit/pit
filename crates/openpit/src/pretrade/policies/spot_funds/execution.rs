@@ -17,7 +17,9 @@
 
 //! Execution-report fixation path for [`SpotFundsPolicy`].
 
-use crate::core::account_outcome::{AccountAdjustmentOutcome, OutcomeAmount, PnlOutcomeAmount};
+use crate::core::account_outcome::{
+    AccountAdjustmentOutcome, AccountPnlOutcome, OutcomeAmount, PnlHaltReason, PnlOutcomeAmount,
+};
 use rust_decimal::Decimal;
 
 use crate::core::sync_mode::SyncMode;
@@ -30,15 +32,19 @@ use crate::marketdata::{MarketDataError, MarketDataSync, Quote, QuoteResolution}
 use crate::param::{
     AccountId, Asset, MonetaryAmount, Pnl, PositionSize, Price, Quantity, Side, Trade,
 };
-use crate::pretrade::holdings::{AdjustmentOverflowError, Holdings};
+use crate::pretrade::holdings::{AdjustmentOverflowError, Holdings, PositionPnlOperation};
 use crate::pretrade::policy::{missing_required_field_account_block, PolicyGroupId};
 use crate::pretrade::{AccountBlock, PostTradeContext, PostTradeResult, PreTradeLock, RejectCode};
 use crate::storage::ConfigCell;
 
+struct AccountPnlApplication {
+    account_pnl: Option<AccountPnlOutcome>,
+    account_block: Option<AccountBlock>,
+}
+
 use super::rejects::arithmetic_overflow_account_block;
 use super::views::{ExecutionRequestView, FillCancelDeltas, LegDelta, LegKind};
 use super::{HoldingsKey, SpotFundsPolicy};
-use crate::pretrade::policies::pnl_bounds;
 
 impl<Sync, MarketDataSyncMode> SpotFundsPolicy<Sync, MarketDataSyncMode>
 where
@@ -109,12 +115,12 @@ where
         ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         source_asset: &Asset,
         account_currency: &Asset,
-    ) -> Result<Option<Decimal>, AccountBlock>
+    ) -> Option<Decimal>
     where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         if source_asset == account_currency {
-            return Ok(Some(Decimal::ONE));
+            return Some(Decimal::ONE);
         }
 
         let direct = Instrument::new(source_asset.clone(), account_currency.clone());
@@ -122,7 +128,7 @@ where
             .accounting_quote(account_id, ctx, &direct)
             .and_then(|quote| quote.mark)
         {
-            return Ok(Some(mark.to_decimal()));
+            return Some(mark.to_decimal());
         }
 
         let inverse = Instrument::new(account_currency.clone(), source_asset.clone());
@@ -130,13 +136,11 @@ where
             .accounting_quote(account_id, ctx, &inverse)
             .and_then(|quote| quote.mark)
         {
-            let Some(factor) = Decimal::ONE.checked_div(mark.to_decimal()) else {
-                return Ok(None);
-            };
-            return Ok(Some(factor));
+            let factor = Decimal::ONE.checked_div(mark.to_decimal())?;
+            return Some(factor);
         }
 
-        Ok(None)
+        None
     }
 
     fn account_currency_price(
@@ -146,50 +150,28 @@ where
         quote_asset: &Asset,
         account_currency: &Asset,
         trade_price: Price,
-    ) -> Result<Option<Price>, AccountBlock>
+    ) -> Result<Option<Price>, PnlHaltReason>
     where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         let Some(factor) =
-            self.account_currency_factor(account_id, ctx, quote_asset, account_currency)?
+            self.account_currency_factor(account_id, ctx, quote_asset, account_currency)
         else {
             return Ok(None);
         };
-        trade_price_with_factor(Self::NAME, trade_price, factor).map(Some)
+        trade_price_with_factor(trade_price, factor).map(Some)
     }
 
-    fn pnl_barrier_for(
+    pub(super) fn pnl_barrier_for(
         &self,
         account_id: AccountId,
         account_group_id: Option<crate::param::AccountGroupId>,
-        account_currency: &Asset,
     ) -> Option<super::SpotFundsPnlBoundsBarrier> {
         self.settings.with(|settings| {
             settings
-                .pnl_barrier_for(account_id, account_group_id, account_currency)
+                .pnl_barrier_for(account_id, account_group_id)
                 .cloned()
         })
-    }
-
-    fn pnl_missing_fx_block(
-        &self,
-        account_id: AccountId,
-        source_asset: &Asset,
-        account_currency: &Asset,
-    ) -> AccountBlock {
-        pnl_bounds::pnl_calculation_failed_block(
-            self,
-            "pnl calculation failed",
-            format!(
-                "pnl calculation failed: PnL could not be computed due to \
-                 missing FX for account {account_id}, source asset \
-                 {source_asset}, account currency {account_currency}"
-            ),
-        )
-    }
-
-    fn pnl_arithmetic_failed_block(&self, details: String) -> AccountBlock {
-        pnl_bounds::pnl_calculation_failed_block(self, "pnl calculation failed", details)
     }
 
     fn fee_pnl_delta(
@@ -198,132 +180,212 @@ where
         ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         fee: &MonetaryAmount,
         account_currency: &Asset,
-    ) -> Result<Option<Pnl>, AccountBlock>
+    ) -> Result<Option<Pnl>, PnlHaltReason>
     where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         let Some(factor) =
-            self.account_currency_factor(account_id, ctx, &fee.currency, account_currency)?
+            self.account_currency_factor(account_id, ctx, &fee.currency, account_currency)
         else {
             return Ok(None);
         };
         let Some(value) = fee.amount.to_pnl().to_decimal().checked_mul(factor) else {
-            return Err(self.pnl_arithmetic_failed_block(format!(
-                "fee pnl conversion overflow: account {account_id}, fee {} {}, \
-                 account currency {account_currency}",
-                fee.amount, fee.currency
-            )));
+            return Err(PnlHaltReason::ArithmeticOverflow);
         };
         Ok(Some(Pnl::new(value)))
     }
 
-    fn fee_pnl_delta_if_controlled(
+    fn fee_account_pnl_delta(
         &self,
         account_id: AccountId,
         ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         fee: &MonetaryAmount,
         account_currency: &Asset,
-        pnl_barrier: Option<&super::SpotFundsPnlBoundsBarrier>,
-    ) -> Result<Option<Pnl>, AccountBlock>
-    where
-        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
-    {
-        if fee.amount.is_zero() || pnl_barrier.is_none() {
-            return Ok(None);
-        }
-        match self.fee_pnl_delta(account_id, ctx, fee, account_currency)? {
-            Some(delta) => Ok(Some(delta)),
-            None => Err(self.pnl_missing_fx_block(account_id, &fee.currency, account_currency)),
-        }
-    }
-
-    fn fee_pnl_delta_for_tracked_slot(
-        &self,
-        account_id: AccountId,
-        ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
-        underlying_asset: &Asset,
-        fee: &MonetaryAmount,
-        account_currency: &Asset,
-        deltas: &FillCancelDeltas,
-    ) -> Result<Option<Pnl>, AccountBlock>
+    ) -> Result<Pnl, PnlHaltReason>
     where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         if fee.amount.is_zero() {
-            return Ok(None);
+            return Ok(Pnl::ZERO);
         }
-        let tracked = deltas
-            .underlying
-            .final_holdings
-            .or_else(|| self.holdings.get(&(account_id, underlying_asset.clone())))
-            .and_then(|holdings| holdings.realized_pnl())
-            .is_some();
-        if !tracked {
-            return Ok(None);
+        match self.fee_pnl_delta(account_id, ctx, fee, account_currency)? {
+            Some(delta) => Ok(delta),
+            None => Err(PnlHaltReason::MissingFx),
         }
-        self.fee_pnl_delta(account_id, ctx, fee, account_currency)
     }
 
-    /// Folds an execution-report fee's account-currency P&L delta into the
-    /// underlying position's realized P&L, updating both the slot's cumulative
-    /// value and the reported delta in `deltas.underlying`.
-    ///
-    /// The fee follows the same tracking rule as position realized P&L: it is
-    /// folded only when the underlying slot's realized P&L is tracked (its
-    /// `realized_pnl` is `Some`) and an FX-converted `fee_pnl_delta` is
-    /// available. An untracked slot leaves realized P&L untracked and keeps the
-    /// fee as a pure balance debit. When the fee moves realized P&L the
-    /// underlying leg's outcome is (re)populated so [`push_leg_outcome`] emits
-    /// it. Account-level kill-switch accounting remains independent of whether
-    /// the slot is tracked.
+    // A fill realizes P&L only when it reduces, closes or reverses what is
+    // owned. Yields the signed owned size for such a fill, and `None` when the
+    // event's realized contribution is a computable zero.
+    fn position_pnl_realizing_owned(
+        holdings: Holdings,
+        signed_quantity: PositionSize,
+    ) -> Result<Option<PositionSize>, PnlHaltReason> {
+        let owned = holdings
+            .available()
+            .checked_add(holdings.held())
+            .map_err(|_| PnlHaltReason::ArithmeticOverflow)?;
+        let owned_decimal = owned.to_decimal();
+        let signed_quantity = signed_quantity.to_decimal();
+        let realizes = owned_decimal != Decimal::ZERO
+            && signed_quantity != Decimal::ZERO
+            && (owned_decimal > Decimal::ZERO) != (signed_quantity > Decimal::ZERO);
+        Ok(realizes.then_some(owned))
+    }
+
+    // Halt reasons name the operator action to take, so their choice follows
+    // the contract priority rather than the order of cascade evaluation.
+    fn pnl_halt_reason_priority(reason: PnlHaltReason) -> u8 {
+        match reason {
+            PnlHaltReason::ArithmeticOverflow => 0,
+            PnlHaltReason::MissingAccountCurrency => 1,
+            PnlHaltReason::MissingFx => 2,
+            PnlHaltReason::MissingCostBasis => 3,
+            PnlHaltReason::MissingInitialPnl => 4,
+        }
+    }
+
+    fn select_pnl_halt_reason(halt_reason: &mut Option<PnlHaltReason>, candidate: PnlHaltReason) {
+        let replace = match *halt_reason {
+            Some(current) => {
+                Self::pnl_halt_reason_priority(candidate) < Self::pnl_halt_reason_priority(current)
+            }
+            None => true,
+        };
+        if replace {
+            *halt_reason = Some(candidate);
+        }
+    }
+
+    // Account PnL derives the event contribution from quantity and cost basis,
+    // never from the position ledger's sticky state or emitted delta.
+    fn account_position_pnl_delta(
+        holdings: Holdings,
+        signed_quantity: PositionSize,
+        price: Option<Price>,
+    ) -> Result<Pnl, PnlHaltReason> {
+        let Some(owned) = Self::position_pnl_realizing_owned(holdings, signed_quantity)? else {
+            return Ok(Pnl::ZERO);
+        };
+        let price = price.ok_or(PnlHaltReason::MissingFx)?;
+        let owned = owned.to_decimal();
+        let signed_quantity = signed_quantity.to_decimal();
+        let average_entry_price = holdings
+            .avg_entry_price()
+            .ok_or(PnlHaltReason::MissingCostBasis)?;
+        let closing_quantity = if signed_quantity.abs() <= owned.abs() {
+            -signed_quantity
+        } else {
+            owned
+        };
+        let price_difference = price
+            .to_decimal()
+            .checked_sub(average_entry_price.to_decimal())
+            .ok_or(PnlHaltReason::ArithmeticOverflow)?;
+        let realized = price_difference
+            .checked_mul(closing_quantity)
+            .ok_or(PnlHaltReason::ArithmeticOverflow)?;
+        Ok(Pnl::new(realized))
+    }
+
+    fn record_position_pnl_operation(
+        deltas: &mut FillCancelDeltas,
+        operation: PositionPnlOperation,
+    ) -> bool {
+        // A silent nonzero economic delta is valid only while the position
+        // ledger is halted; account PnL computes its delta independently.
+        debug_assert!(
+            operation.outcome().is_some()
+                || operation.holdings().realized_pnl_is_halted()
+                || operation
+                    .realized_delta()
+                    .map_or(true, |delta| delta.is_zero())
+        );
+        let leg = &mut deltas.underlying;
+        let mut overflowed = false;
+        leg.pnl_outcome = match (leg.pnl_outcome, operation.outcome()) {
+            (current, None) => current,
+            (_, Some(Err(reason))) => Some(Err(reason)),
+            (None, Some(Ok(amount))) => Some(Ok(amount)),
+            (Some(Ok(current)), Some(Ok(next))) => match current.delta.checked_add(next.delta) {
+                Ok(delta) => (!delta.is_zero()).then_some(Ok(PnlOutcomeAmount {
+                    delta,
+                    absolute: next.absolute,
+                })),
+                Err(_) => {
+                    overflowed = true;
+                    Some(Err(PnlHaltReason::ArithmeticOverflow))
+                }
+            },
+            (Some(Err(reason)), Some(Ok(_))) => Some(Err(reason)),
+        };
+        if let Some(average_entry_price) = operation.average_entry_price() {
+            leg.average_entry_price = Some(average_entry_price);
+        }
+        overflowed
+    }
+
     fn fold_fee_into_realized_pnl(
         &self,
         account_id: AccountId,
         underlying_asset: &Asset,
         fee_pnl_delta: Option<Pnl>,
         deltas: &mut FillCancelDeltas,
-    ) -> Result<(), AccountBlock>
+    )
     where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         let Some(fee_delta) = fee_pnl_delta.filter(|delta| !delta.is_zero()) else {
-            return Ok(());
+            return;
         };
-        // Whether the slot was tracked and thus actually took the fee. Captured
-        // out of the mutate_slot closure, which runs exactly once synchronously.
-        let existing_delta = deltas.underlying.pnl_delta;
-        let mut reported = None;
-        let new_h = self
-            .mutate_slot((account_id, underlying_asset.clone()), |h| {
-                match h.realized_pnl() {
-                    Some(current) => {
-                        let net_delta = match existing_delta {
-                            Some(existing) => existing
-                                .checked_add(fee_delta)
-                                .map_err(|_| AdjustmentOverflowError::ArithmeticOverflow)?,
-                            None => fee_delta,
-                        };
-                        let updated = current
-                            .checked_add(fee_delta)
-                            .map_err(|_| AdjustmentOverflowError::ArithmeticOverflow)?;
-                        reported = Some(net_delta);
-                        Ok(h.with_realized_pnl(updated))
-                    }
-                    None => Ok(h),
-                }
-            })
-            .map_err(|_| {
-                self.pnl_arithmetic_failed_block(format!(
-                    "spot-funds fee realized pnl overflow: fee pnl {fee_delta}, \
-                     account {account_id}, asset {underlying_asset}"
-                ))
-            })?;
-        let Some(reported) = reported else {
-            return Ok(());
+        let Some((holdings, operation)) =
+            self.holdings
+                .with_mut_if_present(&(account_id, underlying_asset.clone()), |slot| {
+                    let operation = slot.add_realized_pnl(fee_delta);
+                    *slot = operation.holdings();
+                    (*slot, operation)
+                })
+        else {
+            return;
         };
-        deltas.underlying.pnl_delta = Some(reported);
-        deltas.underlying.final_holdings = Some(new_h);
-        Ok(())
+        let aggregation_overflowed = Self::record_position_pnl_operation(deltas, operation);
+        if aggregation_overflowed {
+            self.halt_position_pnl(
+                account_id,
+                underlying_asset,
+                PnlHaltReason::ArithmeticOverflow,
+                deltas,
+            );
+            return;
+        }
+        if operation.outcome().is_some() {
+            deltas.underlying.final_holdings = Some(holdings);
+        }
+    }
+
+    fn halt_position_pnl(
+        &self,
+        account_id: AccountId,
+        underlying_asset: &Asset,
+        halt_reason: PnlHaltReason,
+        deltas: &mut FillCancelDeltas,
+    )
+    where
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
+    {
+        let (holdings, operation) = self.holdings.with_mut(
+            (account_id, underlying_asset.clone()),
+            Holdings::zero,
+            |slot, _is_new| {
+                let operation = slot.halt_realized_pnl_preserving_average(halt_reason);
+                *slot = operation.holdings();
+                (*slot, operation)
+            },
+        );
+        let _ = Self::record_position_pnl_operation(deltas, operation);
+        if operation.outcome().is_some() {
+            deltas.underlying.final_holdings = Some(holdings);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -350,7 +412,7 @@ where
                 arithmetic_overflow_account_block(
                     Self::NAME,
                     format!(
-                        "fee debit overflow: account {account_id}, currency {}, \
+                        "fee debit overflow: currency {}, \
                          fee {}",
                         fee.currency, fee.amount
                     ),
@@ -361,7 +423,7 @@ where
             arithmetic_overflow_account_block(
                 Self::NAME,
                 format!(
-                    "fee balance delta overflow: account {account_id}, \
+                    "fee balance delta overflow: \
                      currency {}, fee {}",
                     fee.currency, fee.amount
                 ),
@@ -373,7 +435,7 @@ where
 
     /// Applies a structured execution-report fee as a standalone economic
     /// event. A venue may report a commission correction without a trade, so
-    /// fee accounting must not depend on `last_trade` being present.
+    /// fee accounting must not depend on last_trade being present.
     #[allow(clippy::too_many_arguments)]
     fn apply_execution_fee(
         &self,
@@ -383,98 +445,237 @@ where
         settlement_asset: &Asset,
         fee: &MonetaryAmount,
         deltas: &mut FillCancelDeltas,
-    ) -> Result<(), AccountBlock>
+    ) -> Result<AccountPnlApplication, AccountBlock>
     where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
+        if fee.amount.is_zero() {
+            return Ok(AccountPnlApplication {
+                account_pnl: None,
+                account_block: None,
+            });
+        }
+
         let account_currency = ctx.account_currency();
-        let pnl_barrier = account_currency
-            .as_ref()
-            .and_then(|currency| self.pnl_barrier_for(account_id, ctx.account_group(), currency));
+        let account_pnl_halt_reason_before = match self.account_pnl_state(account_id) {
+            crate::PnlState::Value(_) => None,
+            crate::PnlState::Halted(reason) => Some(reason),
+        };
+        let position_pnl_was_halted = self
+            .holdings
+            .with(&(account_id, underlying_asset.clone()), |holdings| {
+                holdings.realized_pnl_is_halted()
+            })
+            .unwrap_or(false);
+        let mut position_pnl_halt = false;
+        let mut position_pnl_halt_reason = None;
+        let pnl_barrier = self.pnl_barrier_for(account_id, ctx.account_group());
+        let mut account_pnl_halt_reason = None;
         let fee_pnl_delta = match account_currency.as_ref() {
-            Some(account_currency) if pnl_barrier.is_some() => self.fee_pnl_delta_if_controlled(
-                account_id,
-                ctx,
-                fee,
-                account_currency,
-                pnl_barrier.as_ref(),
-            )?,
-            Some(account_currency) => self.fee_pnl_delta_for_tracked_slot(
-                account_id,
-                ctx,
-                underlying_asset,
-                fee,
-                account_currency,
-                deltas,
-            )?,
-            None => None,
+            Some(account_currency) => {
+                match self.fee_account_pnl_delta(account_id, ctx, fee, account_currency) {
+                    Ok(delta) => Some(delta),
+                    Err(reason) => {
+                        position_pnl_halt = true;
+                        if !position_pnl_was_halted {
+                            Self::select_pnl_halt_reason(&mut position_pnl_halt_reason, reason);
+                        }
+                        if account_pnl_halt_reason_before.is_none() {
+                            Self::select_pnl_halt_reason(&mut account_pnl_halt_reason, reason);
+                        }
+                        None
+                    }
+                }
+            }
+            None => {
+                position_pnl_halt = true;
+                if !position_pnl_was_halted {
+                    Self::select_pnl_halt_reason(
+                        &mut position_pnl_halt_reason,
+                        PnlHaltReason::MissingAccountCurrency,
+                    );
+                }
+                if account_pnl_halt_reason_before.is_none() {
+                    Self::select_pnl_halt_reason(
+                        &mut account_pnl_halt_reason,
+                        PnlHaltReason::MissingAccountCurrency,
+                    );
+                }
+                None
+            }
         };
 
         self.apply_fee_debit(account_id, underlying_asset, settlement_asset, fee, deltas)?;
-        let fold_block = self
-            .fold_fee_into_realized_pnl(account_id, underlying_asset, fee_pnl_delta, deltas)
-            .err();
-        let account_pnl_block = match (
-            account_currency.as_ref(),
-            pnl_barrier.as_ref(),
-            fee_pnl_delta,
-        ) {
-            (Some(account_currency), Some(barrier), Some(delta)) => {
-                self.apply_account_pnl_delta(account_id, account_currency, barrier, delta)
-            }
-            _ => None,
-        };
-        if let Some(block) = fold_block.or(account_pnl_block) {
-            return Err(block);
+        if let Some(reason) = position_pnl_halt_reason {
+            self.halt_position_pnl(account_id, underlying_asset, reason, deltas);
         }
-        Ok(())
+        self.fold_fee_into_realized_pnl(
+            account_id,
+            underlying_asset,
+            if position_pnl_halt {
+                None
+            } else {
+                fee_pnl_delta
+            },
+            deltas,
+        );
+        let stored_halt_block = account_pnl_halt_reason_before.and_then(|reason| {
+            pnl_barrier
+                .as_ref()
+                .map(|_| self.account_pnl_halted_block(account_id, reason))
+        });
+        let (account_pnl, new_halt_block) = match (account_pnl_halt_reason, fee_pnl_delta) {
+            (None, Some(delta)) if account_pnl_halt_reason_before.is_none() => {
+                let (result, block) =
+                    self.apply_account_pnl_delta(account_id, pnl_barrier.as_ref(), delta);
+                (
+                    Some(AccountPnlOutcome {
+                        result,
+                        account_id,
+                        policy_group_id: self.group_id(),
+                    }),
+                    block,
+                )
+            }
+            (Some(reason), _) if account_pnl_halt_reason_before.is_none() => {
+                let reason = self.halt_account_pnl(account_id, reason);
+                let block = pnl_barrier
+                    .as_ref()
+                    .map(|_| self.account_pnl_halted_block(account_id, reason));
+                (
+                    Some(AccountPnlOutcome {
+                        result: Err(reason),
+                        account_id,
+                        policy_group_id: self.group_id(),
+                    }),
+                    block,
+                )
+            }
+            _ => (None, None),
+        };
+        Ok(AccountPnlApplication {
+            account_pnl,
+            account_block: stored_halt_block.or(new_halt_block),
+        })
+    }
+
+    pub(super) fn update_account_pnl(
+        &self,
+        account_id: AccountId,
+        delta: Pnl,
+    ) -> (crate::core::PnlOutcome, Option<u64>)
+    where
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
+    {
+        let first_attempt = self.pnl.with_mut(
+            account_id,
+            super::AccountPnlEntry::zero,
+            |entry, _is_new| {
+                let previous = match entry.state {
+                    crate::PnlState::Value(previous) => previous,
+                    crate::PnlState::Halted(reason) => {
+                        return Some((Err(reason), entry.assertion_token));
+                    }
+                };
+                match previous.checked_add(delta) {
+                    Ok(updated) => {
+                        entry.state = crate::PnlState::Value(updated);
+                        Some((
+                            Ok(PnlOutcomeAmount {
+                                delta,
+                                absolute: updated,
+                            }),
+                            entry.assertion_token,
+                        ))
+                    }
+                    Err(_) => None,
+                }
+            },
+        );
+        if let Some(result) = first_attempt {
+            return result;
+        }
+
+        // Overflow is an absolute transition. Wait for any provisional
+        // force-set to finalize, then recompute from the standing base before
+        // committing the halt.
+        let owner_id = crate::core::mutation::next_mutation_owner_id();
+        let _lease = self.acquire_account_pnl_lease(account_id, owner_id);
+        let result = self.pnl.with_mut(
+            account_id,
+            super::AccountPnlEntry::zero,
+            |entry, _is_new| match entry.state {
+                crate::PnlState::Value(previous) => match previous.checked_add(delta) {
+                    Ok(updated) => {
+                        entry.state = crate::PnlState::Value(updated);
+                        Ok(PnlOutcomeAmount {
+                            delta,
+                            absolute: updated,
+                        })
+                    }
+                    Err(_) => {
+                        *entry = super::AccountPnlEntry {
+                            state: crate::PnlState::Halted(PnlHaltReason::ArithmeticOverflow),
+                            assertion_token: None,
+                        };
+                        Err(PnlHaltReason::ArithmeticOverflow)
+                    }
+                },
+                crate::PnlState::Halted(reason) => Err(reason),
+            },
+        );
+        (result, None)
+    }
+
+    pub(super) fn halt_account_pnl(
+        &self,
+        account_id: AccountId,
+        reason: PnlHaltReason,
+    ) -> PnlHaltReason {
+        let owner_id = crate::core::mutation::next_mutation_owner_id();
+        let _lease = self.acquire_account_pnl_lease(account_id, owner_id);
+        self.pnl.with_mut(
+            account_id,
+            super::AccountPnlEntry::zero,
+            |entry, _is_new| match entry.state {
+                crate::PnlState::Value(_) => {
+                    *entry = super::AccountPnlEntry {
+                        state: crate::PnlState::Halted(reason),
+                        assertion_token: None,
+                    };
+                    reason
+                }
+                crate::PnlState::Halted(existing) => existing,
+            },
+        )
+    }
+
+    pub(super) fn account_pnl_halted_block(
+        &self,
+        account_id: AccountId,
+        reason: PnlHaltReason,
+    ) -> AccountBlock {
+        super::rejects::account_pnl_halted_block(Self::NAME, account_id, reason)
     }
 
     fn apply_account_pnl_delta(
         &self,
         account_id: AccountId,
-        account_currency: &Asset,
-        barrier: &super::SpotFundsPnlBoundsBarrier,
+        barrier: Option<&super::SpotFundsPnlBoundsBarrier>,
         delta: Pnl,
-    ) -> Option<AccountBlock>
+    ) -> (crate::core::PnlOutcome, Option<AccountBlock>)
     where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
-        self.pnl.with_mut(
-            (account_id, account_currency.clone()),
-            || Pnl::ZERO,
-            |entry, _is_new| {
-                let previous = *entry;
-                let updated = match previous.checked_add(delta) {
-                    Ok(updated) => updated,
-                    Err(_) => {
-                        return Some(self.pnl_arithmetic_failed_block(format!(
-                            "spot-funds account pnl overflow: previous {previous}, \
-                             delta {delta}, account currency {account_currency}, \
-                             account {account_id}"
-                        )));
-                    }
-                };
-                *entry = updated;
-                let sides =
-                    pnl_bounds::breached_sides(barrier.lower_bound, barrier.upper_bound, updated);
-                if sides.is_empty() {
-                    None
-                } else {
-                    Some(pnl_bounds::pnl_breach_account_block(
-                        Self::NAME,
-                        format!(
-                            "{} bound breached: realized pnl {updated}, \
-                             lower_bound {:?}, upper_bound {:?}, \
-                             account currency {account_currency}, account {account_id}",
-                            sides.join(" and "),
-                            barrier.lower_bound,
-                            barrier.upper_bound
-                        ),
-                    ))
-                }
-            },
-        )
+        let (result, provenance) = self.update_account_pnl(account_id, delta);
+        let state = match result {
+            Ok(amount) => crate::PnlState::Value(amount.absolute),
+            Err(reason) => crate::PnlState::Halted(reason),
+        };
+        let block = barrier.and_then(|barrier| {
+            super::rejects::account_pnl_block_for_state(account_id, state, barrier, provenance)
+        });
+        (result, block)
     }
 
     pub(super) fn read_execution_request<'i, ExecutionReport>(
@@ -530,21 +731,21 @@ where
     /// Applies a venue-authoritative fill, reconciling both the underlying and
     /// settlement legs in signed terms.
     ///
-    /// Each leg moves money in its signed flow direction: the reserved `held`
-    /// is consumed by the portion of this fill that was actually reserved
-    /// (`max(0, outflow)`), and `available` absorbs the net of the consumed
+    /// Each leg moves money in its signed flow direction: the reserved held is
+    /// consumed by the portion of this fill that was actually reserved
+    /// (max(0, outflow)), and available absorbs the net of the consumed
     /// reservation and the real signed cash flow. A leg that reserved nothing
-    /// (e.g. the settlement of a buy at a negative price) simply credits the
-    /// inflow to `available`.
+    /// (for example, the settlement of a buy at a negative price) simply
+    /// credits the inflow to available.
     ///
-    /// Any [`AccountBlock`] returned (e.g. overflow, or a missing lock price on
-    /// either side) is propagated up to [`Self::apply_execution_report_impl`] and
-    /// collected into [`PostTradeResult::account_blocks`]; the engine's
-    /// [`BlockedAccounts`](crate::core::BlockedAccounts) records the first
-    /// block for the account, so policy code does not need to wire a
-    /// separate sink.
+    /// Any [AccountBlock] returned (for example, overflow or a missing lock
+    /// price on either side) is propagated up to
+    /// [Self::apply_execution_report_impl] and collected into
+    /// [PostTradeResult::account_blocks]; the engine's
+    /// [BlockedAccounts](crate::core::BlockedAccounts) records the first block
+    /// for the account, so policy code does not need to wire a separate sink.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn apply_trade_fill(
+    fn apply_trade_fill(
         &self,
         ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         account_id: AccountId,
@@ -555,13 +756,15 @@ where
         fee: Option<&MonetaryAmount>,
         lock: &PreTradeLock,
         deltas: &mut FillCancelDeltas,
-    ) -> Result<(), AccountBlock>
+    ) -> Result<AccountPnlApplication, AccountBlock>
     where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
+        // A zero fee is a complete P&L no-op: keeping only the economic fee
+        // here prevents that fee from engaging either ledger or requiring an
+        // account currency later in this fill.
+        let nonzero_fee = fee.filter(|fee| !fee.amount.is_zero());
         let qty_pos = trade.quantity.to_position_size();
-        // Signed settlement notional `price * qty`; negative when the venue
-        // fills at a negative price.
         let settlement_notional = trade
             .price
             .calculate_position_size(trade.quantity)
@@ -569,24 +772,81 @@ where
                 arithmetic_overflow_account_block(
                     Self::NAME,
                     format!(
-                        "fill notional volume overflow: account {account_id}, \
+                        "fill notional volume overflow: \
                          asset {settlement_asset}, px {}, qty {}",
                         trade.price, trade.quantity,
                     ),
                 )
             })?;
 
-        // Underlying leg: buys receive `+qty`, sells give `-qty`. Only sells
-        // reserved underlying `held`, so only sells consume on fill.
         let (underlying_consume, underlying_flow) = match side {
             Side::Buy => (PositionSize::ZERO, qty_pos),
             Side::Sell => (qty_pos, neg(qty_pos)),
         };
         let touches_position_accounting = !underlying_flow.is_zero();
+        let account_pnl_engaged = touches_position_accounting || nonzero_fee.is_some();
+        let account_pnl_halt_reason_before = match self.account_pnl_state(account_id) {
+            crate::PnlState::Value(_) => None,
+            crate::PnlState::Halted(reason) => Some(reason),
+        };
+        let position_pnl_halt_reason_before = self
+            .holdings
+            .with(&(account_id, underlying_asset.clone()), |h| {
+                h.realized_pnl_halt_reason()
+            })
+            .flatten();
+        let position_pnl_was_halted = position_pnl_halt_reason_before.is_some();
         let account_currency = ctx.account_currency();
-        let pnl_barrier = account_currency
-            .as_ref()
-            .and_then(|currency| self.pnl_barrier_for(account_id, ctx.account_group(), currency));
+        let pnl_barrier = self.pnl_barrier_for(account_id, ctx.account_group());
+        let position_pnl_price_requirement = if touches_position_accounting {
+            self.holdings
+                .with(&(account_id, underlying_asset.clone()), |holdings| {
+                    Self::position_pnl_realizing_owned(*holdings, underlying_flow)
+                        .map(|owned| owned.is_some())
+                })
+                .unwrap_or(Ok(false))
+        } else {
+            Ok(false)
+        };
+        // The account line needs the account currency only for a contribution
+        // it has to denominate in it: a non-zero fee to convert, or a fill
+        // that was not established as a computable zero. The position ledger
+        // is stricter: it stores a cost basis for every fill, hence the
+        // separate check below.
+        let account_pnl_requires_currency =
+            nonzero_fee.is_some() || !matches!(position_pnl_price_requirement, Ok(false));
+        let mut position_pnl_halt = false;
+        let mut position_pnl_halt_reason = None;
+        let mut account_pnl_halt_reason = None;
+        if account_pnl_halt_reason_before.is_none()
+            && account_pnl_requires_currency
+            && account_currency.is_none()
+        {
+            Self::select_pnl_halt_reason(
+                &mut account_pnl_halt_reason,
+                PnlHaltReason::MissingAccountCurrency,
+            );
+        }
+        if touches_position_accounting && account_currency.is_none() {
+            position_pnl_halt = true;
+            if !position_pnl_was_halted {
+                Self::select_pnl_halt_reason(
+                    &mut position_pnl_halt_reason,
+                    PnlHaltReason::MissingAccountCurrency,
+                );
+            }
+        }
+        let position_pnl_requires_price = match position_pnl_price_requirement {
+            Ok(requires_price) => requires_price,
+            Err(reason) => {
+                position_pnl_halt = true;
+                if !position_pnl_was_halted {
+                    Self::select_pnl_halt_reason(&mut position_pnl_halt_reason, reason);
+                }
+                Self::select_pnl_halt_reason(&mut account_pnl_halt_reason, reason);
+                false
+            }
+        };
         let account_currency_price = if touches_position_accounting {
             match account_currency.as_ref() {
                 Some(account_currency) => match self.account_currency_price(
@@ -595,66 +855,77 @@ where
                     settlement_asset,
                     account_currency,
                     trade.price,
-                )? {
-                    Some(price) => Some(price),
-                    None if pnl_barrier.is_some() => {
-                        return Err(self.pnl_missing_fx_block(
-                            account_id,
-                            settlement_asset,
-                            account_currency,
-                        ));
+                ) {
+                    Ok(Some(price)) => Some(price),
+                    Ok(None) if position_pnl_requires_price => {
+                        position_pnl_halt = true;
+                        if !position_pnl_was_halted {
+                            Self::select_pnl_halt_reason(
+                                &mut position_pnl_halt_reason,
+                                PnlHaltReason::MissingFx,
+                            );
+                        }
+                        Self::select_pnl_halt_reason(
+                            &mut account_pnl_halt_reason,
+                            PnlHaltReason::MissingFx,
+                        );
+                        None
                     }
-                    None => None,
+                    Ok(None) => None,
+                    Err(reason) if position_pnl_requires_price => {
+                        position_pnl_halt = true;
+                        if !position_pnl_was_halted {
+                            Self::select_pnl_halt_reason(&mut position_pnl_halt_reason, reason);
+                        }
+                        Self::select_pnl_halt_reason(&mut account_pnl_halt_reason, reason);
+                        None
+                    }
+                    Err(_) => None,
                 },
                 None => None,
             }
         } else {
             None
         };
-        // Settlement leg: buys pay `price*qty` (flow `-notional`), sells
-        // receive it (flow `+notional`). The consumed reservation is the
-        // portion priced at the lock; a leg that reserved nothing consumes 0
-        // and credits the full inflow.
         let settlement_consume =
-            self.settlement_fill_consume(account_id, settlement_asset, side, trade, lock)?;
+            self.settlement_fill_consume(settlement_asset, side, trade, lock)?;
         let settlement_flow = match side {
             Side::Buy => neg(settlement_notional),
             Side::Sell => settlement_notional,
         };
 
-        // Incoming reconciliation: the acquiring leg drains the projected inflow
-        // for this fill. A buy acquires base units, so the underlying leg drains
-        // `filled_q` (quantity-based, no price); a priced sell acquires quote
-        // proceeds, so the settlement leg drains `max(0, lock*filled_q)`. The
-        // non-acquiring leg drains nothing. `incoming` never feeds the available
-        // credit - it is reconciled independently.
         let underlying_incoming_consume = match side {
             Side::Buy => qty_pos,
             Side::Sell => PositionSize::ZERO,
         };
         let settlement_incoming_consume =
-            self.settlement_incoming_amount(account_id, settlement_asset, side, trade, lock)?;
+            self.settlement_incoming_amount(settlement_asset, side, trade, lock)?;
 
-        let controlled_fee_pnl_delta = match (account_currency.as_ref(), fee) {
-            (Some(account_currency), Some(fee)) => self.fee_pnl_delta_if_controlled(
-                account_id,
-                ctx,
-                fee,
-                account_currency,
-                pnl_barrier.as_ref(),
-            )?,
+        let fee_pnl_delta = match (account_currency.as_ref(), nonzero_fee) {
+            (Some(account_currency), Some(fee)) => {
+                match self.fee_account_pnl_delta(account_id, ctx, fee, account_currency) {
+                    Ok(delta) => Some(delta),
+                    Err(reason) => {
+                        position_pnl_halt = true;
+                        if !position_pnl_was_halted {
+                            Self::select_pnl_halt_reason(&mut position_pnl_halt_reason, reason);
+                        }
+                        Self::select_pnl_halt_reason(&mut account_pnl_halt_reason, reason);
+                        None
+                    }
+                }
+            }
             _ => None,
         };
 
-        // Process the charge leg (the one consuming reserved `held`) before the
-        // credit leg, so that if the credit leg overflows the already-applied
-        // charge mutation is still reported (the non-atomicity contract). The
-        // charge side is settlement for a buy and underlying for a sell.
-        //
-        // Only the underlying leg carries the account-currency fill price for
-        // average-cost / realized-PnL accounting; its net `owned` change equals
-        // `flow_received` (the signed base quantity). The settlement leg passes
-        // `None` and never touches the average or realized PnL.
+        // An unpriced closing fill carries the fresh or sticky halt reason.
+        // Opening and same-direction fills may remain active without FX, but
+        // cannot retain an authoritative average entry price.
+        let underlying_pnl_halt_reason = if touches_position_accounting {
+            position_pnl_halt_reason.or(position_pnl_halt_reason_before)
+        } else {
+            None
+        };
         let underlying_leg = (
             LegKind::Underlying,
             underlying_asset,
@@ -662,6 +933,7 @@ where
             underlying_flow,
             underlying_incoming_consume,
             account_currency_price,
+            underlying_pnl_halt_reason,
         );
         let settlement_leg = (
             LegKind::Settlement,
@@ -670,13 +942,24 @@ where
             settlement_flow,
             settlement_incoming_consume,
             None,
+            None,
         );
         let ordered = match side {
             Side::Buy => [settlement_leg, underlying_leg],
             Side::Sell => [underlying_leg, settlement_leg],
         };
-        for (kind, asset, consume, flow, incoming_consume, realize_price) in ordered {
-            self.settle_fill_leg(
+        let mut account_position_pnl_delta = None;
+        for (
+            kind,
+            asset,
+            consume,
+            flow,
+            incoming_consume,
+            realize_price,
+            position_pnl_halt_reason,
+        ) in ordered
+        {
+            let economic_delta = self.settle_fill_leg(
                 account_id,
                 asset,
                 kind,
@@ -684,55 +967,123 @@ where
                 flow,
                 incoming_consume,
                 realize_price,
+                position_pnl_halt_reason,
                 deltas,
             )?;
+            if kind == LegKind::Underlying {
+                account_position_pnl_delta = economic_delta;
+            }
         }
-        let fee_pnl_delta = match (controlled_fee_pnl_delta, account_currency.as_ref(), fee) {
-            (Some(delta), _, _) => Some(delta),
-            (None, Some(account_currency), Some(fee)) => self.fee_pnl_delta_for_tracked_slot(
-                account_id,
-                ctx,
-                underlying_asset,
-                fee,
-                account_currency,
-                deltas,
-            )?,
-            _ => None,
-        };
-        if let Some(fee) = fee {
+        if let Some(fee) = nonzero_fee {
             self.apply_fee_debit(account_id, underlying_asset, settlement_asset, fee, deltas)?;
         }
-        let account_pnl_delta = match (pnl_barrier.as_ref(), fee_pnl_delta) {
-            (Some(_), Some(fee_delta)) => {
-                let position_delta = deltas.underlying.pnl_delta.unwrap_or(Pnl::ZERO);
-                Some(position_delta.checked_add(fee_delta).map_err(|_| {
-                    self.pnl_arithmetic_failed_block(format!(
-                        "spot-funds fill pnl + fee pnl overflow: pnl {position_delta}, \
-                         fee pnl {fee_delta}, account {account_id}"
-                    ))
-                })?)
+        if let Some(reason) = position_pnl_halt_reason {
+            if !matches!(deltas.underlying.pnl_outcome, Some(Err(_))) {
+                self.halt_position_pnl(account_id, underlying_asset, reason, deltas);
             }
-            (Some(_), None) => Some(deltas.underlying.pnl_delta.unwrap_or(Pnl::ZERO)),
-            (None, _) => None,
-        };
-        // Folding enriches the per-position cumulative value and outcome. It
-        // does not replace the independent account-level fee path above.
-        let fold_block = self
-            .fold_fee_into_realized_pnl(account_id, underlying_asset, fee_pnl_delta, deltas)
-            .err();
-        let account_pnl_block = if let (Some(account_currency), Some(barrier), Some(delta)) = (
-            account_currency.as_ref(),
-            pnl_barrier.as_ref(),
-            account_pnl_delta,
+        }
+
+        let account_pnl_delta = match (
+            account_pnl_engaged,
+            account_pnl_halt_reason_before.is_some(),
+            account_pnl_halt_reason,
         ) {
-            self.apply_account_pnl_delta(account_id, account_currency, barrier, delta)
+            (true, false, None) => {
+                let position_delta = if touches_position_accounting {
+                    match account_position_pnl_delta {
+                        Some(Ok(delta)) => Some(delta),
+                        Some(Err(reason)) => {
+                            Self::select_pnl_halt_reason(&mut account_pnl_halt_reason, reason);
+                            None
+                        }
+                        None => {
+                            Self::select_pnl_halt_reason(
+                                &mut account_pnl_halt_reason,
+                                PnlHaltReason::MissingInitialPnl,
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    Some(Pnl::ZERO)
+                };
+                let fee_delta = if nonzero_fee.is_some() {
+                    fee_pnl_delta
+                } else {
+                    Some(Pnl::ZERO)
+                };
+                match (position_delta, fee_delta) {
+                    (Some(position_delta), Some(fee_delta)) => {
+                        match position_delta.checked_add(fee_delta) {
+                            Ok(delta) => Some(delta),
+                            Err(_) => {
+                                Self::select_pnl_halt_reason(
+                                    &mut account_pnl_halt_reason,
+                                    PnlHaltReason::ArithmeticOverflow,
+                                );
+                                None
+                            }
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        self.fold_fee_into_realized_pnl(
+            account_id,
+            underlying_asset,
+            if position_pnl_halt {
+                None
+            } else {
+                fee_pnl_delta
+            },
+            deltas,
+        );
+        let stored_halt_block = if account_pnl_engaged {
+            account_pnl_halt_reason_before.and_then(|reason| {
+                pnl_barrier
+                    .as_ref()
+                    .map(|_| self.account_pnl_halted_block(account_id, reason))
+            })
         } else {
             None
         };
-        if let Some(block) = fold_block.or(account_pnl_block) {
-            return Err(block);
-        }
-        Ok(())
+        let (account_pnl, new_halt_block) = match (account_pnl_halt_reason, account_pnl_delta) {
+            (Some(halt_reason), _)
+                if account_pnl_engaged && account_pnl_halt_reason_before.is_none() =>
+            {
+                let halt_reason = self.halt_account_pnl(account_id, halt_reason);
+                let block = pnl_barrier
+                    .as_ref()
+                    .map(|_| self.account_pnl_halted_block(account_id, halt_reason));
+                (
+                    Some(AccountPnlOutcome {
+                        result: Err(halt_reason),
+                        account_id,
+                        policy_group_id: self.group_id(),
+                    }),
+                    block,
+                )
+            }
+            (None, Some(delta)) => {
+                let (result, block) =
+                    self.apply_account_pnl_delta(account_id, pnl_barrier.as_ref(), delta);
+                (
+                    Some(AccountPnlOutcome {
+                        result,
+                        account_id,
+                        policy_group_id: self.group_id(),
+                    }),
+                    block,
+                )
+            }
+            _ => (None, None),
+        };
+        Ok(AccountPnlApplication {
+            account_pnl,
+            account_block: stored_halt_block.or(new_halt_block),
+        })
     }
 
     /// Reconciles one asset leg of a fill: `held -= consume`,
@@ -754,8 +1105,9 @@ where
         flow_received: PositionSize,
         incoming_consume: PositionSize,
         realize_price: Option<Price>,
+        position_pnl_halt_reason: Option<PnlHaltReason>,
         deltas: &mut FillCancelDeltas,
-    ) -> Result<(), AccountBlock>
+    ) -> Result<Option<Result<Pnl, PnlHaltReason>>, AccountBlock>
     where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
@@ -768,39 +1120,46 @@ where
             arithmetic_overflow_account_block(
                 Self::NAME,
                 format!(
-                    "fill balance credit overflow: account {account_id}, asset {asset}, \
+                    "fill balance credit overflow: asset {asset}, \
                      consume {consume}, flow {flow_received}"
                 ),
             )
         })?;
         if consume.is_zero() && balance_credit.is_zero() && incoming_consume.is_zero() {
-            return Ok(());
+            return Ok(None);
         }
 
-        // Average-cost / realized-PnL accounting for the underlying leg. The
-        // net `owned` change for the leg is `flow_received`, so it is the signed
-        // fill quantity fed to `realize_position_fill`. The realized delta is
-        // captured out of the mutate_slot closure (which runs exactly once,
-        // synchronously) so it can be recorded into the leg accumulator.
-        let mut pnl_delta = None;
-
-        // Held reduction, the available credit, and the average/PnL update are
-        // merged into a single mutate_slot call so no concurrent pre-trade check
-        // ever observes a partially-applied leg.
+        let mut pnl_operation = None;
+        let mut account_pnl_delta = None;
         let new_h = self
             .mutate_slot((account_id, asset.clone()), |h| {
-                // Realize first: the average-cost formula reads `owned` before
-                // the quantity mutation, and `realize_position_fill` changes
-                // only the average / realized PnL (not available/held).
-                let realized = match (kind, realize_price) {
-                    (LegKind::Underlying, Some(price)) => {
-                        let (with_pnl, delta) = h.realize_position_fill(flow_received, price)?;
-                        pnl_delta = delta;
-                        with_pnl
+                if kind == LegKind::Underlying {
+                    account_pnl_delta = Some(Self::account_position_pnl_delta(
+                        h,
+                        flow_received,
+                        realize_price,
+                    ));
+                }
+                let realized = match (kind, realize_price, position_pnl_halt_reason) {
+                    (LegKind::Underlying, Some(price), _) => {
+                        let updated = match h.realize_position_fill(flow_received, price) {
+                            Ok(updated) => updated,
+                            Err(_) => h.halt_realized_pnl(PnlHaltReason::ArithmeticOverflow),
+                        };
+                        pnl_operation = Some(updated);
+                        updated.holdings()
                     }
-                    (LegKind::Underlying, None) if flow_received.is_zero() => h,
-                    (LegKind::Underlying, None) => h.without_position_tracking(),
-                    (LegKind::Settlement, _) => h,
+                    (LegKind::Underlying, None, Some(reason)) => {
+                        let updated =
+                            match h.halt_realized_pnl_for_unpriced_fill(flow_received, reason) {
+                                Ok(updated) => updated,
+                                Err(_) => h.halt_realized_pnl(PnlHaltReason::ArithmeticOverflow),
+                            };
+                        pnl_operation = Some(updated);
+                        updated.holdings()
+                    }
+                    (LegKind::Underlying, None, None) => h.with_avg_entry_price(None),
+                    (LegKind::Settlement, _, _) => h,
                 };
                 let after_outflow = realized.apply_fill_outflow(consume)?;
                 let after_credit = if balance_credit.is_zero() {
@@ -820,18 +1179,29 @@ where
                 arithmetic_overflow_account_block(
                     Self::NAME,
                     format!(
-                        "fill leg mutation overflow: account {account_id}, asset {asset}, \
+                        "fill leg mutation overflow: asset {asset}, \
                          consume {consume}, credit {balance_credit}"
                     ),
                 )
             })?;
+
+        if let Some(operation) = pnl_operation {
+            if Self::record_position_pnl_operation(deltas, operation) {
+                self.halt_position_pnl(
+                    account_id,
+                    asset,
+                    PnlHaltReason::ArithmeticOverflow,
+                    deltas,
+                );
+            }
+        }
 
         let leg = deltas.leg_mut(kind);
         leg.held_delta = leg.held_delta.checked_sub(consume).map_err(|_| {
             arithmetic_overflow_account_block(
                 Self::NAME,
                 format!(
-                    "fill held delta overflow: account {account_id}, asset {asset}, \
+                    "fill held delta overflow: asset {asset}, \
                      consume {consume}"
                 ),
             )
@@ -843,7 +1213,7 @@ where
                 arithmetic_overflow_account_block(
                     Self::NAME,
                     format!(
-                        "fill incoming delta overflow: account {account_id}, asset {asset}, \
+                        "fill incoming delta overflow: asset {asset}, \
                      incoming {incoming_consume}"
                     ),
                 )
@@ -852,27 +1222,13 @@ where
             arithmetic_overflow_account_block(
                 Self::NAME,
                 format!(
-                    "fill balance delta overflow: account {account_id}, asset {asset}, \
+                    "fill balance delta overflow: asset {asset}, \
                      credit {balance_credit}"
                 ),
             )
         })?;
-        if let Some(pnl_delta) = pnl_delta {
-            leg.pnl_delta = Some(match leg.pnl_delta {
-                Some(current) => current.checked_add(pnl_delta).map_err(|_| {
-                    arithmetic_overflow_account_block(
-                        Self::NAME,
-                        format!(
-                            "fill pnl delta overflow: account {account_id}, asset {asset}, \
-                             pnl {pnl_delta}"
-                        ),
-                    )
-                })?,
-                None => pnl_delta,
-            });
-        }
         leg.final_holdings = Some(new_h);
-        Ok(())
+        Ok(account_pnl_delta)
     }
 
     /// Computes the settlement `held` consumed by one fill.
@@ -883,7 +1239,6 @@ where
     /// negative price, zero otherwise.
     fn settlement_fill_consume(
         &self,
-        account_id: AccountId,
         settlement_asset: &Asset,
         side: Side,
         trade: Trade,
@@ -896,7 +1251,6 @@ where
             side,
             lock_price,
             trade.quantity,
-            account_id,
             settlement_asset,
         )
     }
@@ -907,7 +1261,6 @@ where
     /// mandatory, and a missing lock blocks the account.
     fn settlement_incoming_amount(
         &self,
-        account_id: AccountId,
         settlement_asset: &Asset,
         side: Side,
         trade: Trade,
@@ -919,7 +1272,6 @@ where
             side,
             lock_price,
             trade.quantity,
-            account_id,
             settlement_asset,
         )
     }
@@ -950,14 +1302,9 @@ where
         // lock price; computing them first keeps the block ahead of the
         // underlying mutation below.
         let settlement_held_release =
-            self.settlement_release(account_id, settlement_asset, side, leaves_quantity, lock)?;
-        let settlement_incoming_release = self.settlement_incoming_release(
-            account_id,
-            settlement_asset,
-            side,
-            leaves_quantity,
-            lock,
-        )?;
+            self.settlement_release(settlement_asset, side, leaves_quantity, lock)?;
+        let settlement_incoming_release =
+            self.settlement_incoming_release(settlement_asset, side, leaves_quantity, lock)?;
 
         // Underlying release: only sells reserved underlying held, by quantity;
         // only buys projected base incoming, by quantity. The unfilled remainder
@@ -998,7 +1345,6 @@ where
     /// Lock handling mirrors [`Self::settlement_fill_consume`].
     fn settlement_release(
         &self,
-        account_id: AccountId,
         settlement_asset: &Asset,
         side: Side,
         leaves_quantity: Quantity,
@@ -1011,7 +1357,6 @@ where
             side,
             lock_price,
             leaves_quantity,
-            account_id,
             settlement_asset,
         )
     }
@@ -1021,7 +1366,6 @@ where
     /// sell, zero otherwise. Mirrors [`Self::settlement_incoming_amount`].
     fn settlement_incoming_release(
         &self,
-        account_id: AccountId,
         settlement_asset: &Asset,
         side: Side,
         leaves_quantity: Quantity,
@@ -1033,7 +1377,6 @@ where
             side,
             lock_price,
             leaves_quantity,
-            account_id,
             settlement_asset,
         )
     }
@@ -1071,7 +1414,7 @@ where
                 arithmetic_overflow_account_block(
                     Self::NAME,
                     format!(
-                        "cancel release overflow: account {account_id}, asset {asset}, \
+                        "cancel release overflow: asset {asset}, \
                          held {held_release}, incoming {incoming_release}"
                     ),
                 )
@@ -1081,7 +1424,7 @@ where
             arithmetic_overflow_account_block(
                 Self::NAME,
                 format!(
-                    "cancel held delta overflow: account {account_id}, asset {asset}, \
+                    "cancel held delta overflow: asset {asset}, \
                      release {held_release}"
                 ),
             )
@@ -1090,7 +1433,7 @@ where
             arithmetic_overflow_account_block(
                 Self::NAME,
                 format!(
-                    "cancel balance delta overflow: account {account_id}, asset {asset}, \
+                    "cancel balance delta overflow: asset {asset}, \
                      release {held_release}"
                 ),
             )
@@ -1102,7 +1445,7 @@ where
                 arithmetic_overflow_account_block(
                     Self::NAME,
                     format!(
-                        "cancel incoming delta overflow: account {account_id}, asset {asset}, \
+                        "cancel incoming delta overflow: asset {asset}, \
                      release {incoming_release}"
                     ),
                 )
@@ -1136,10 +1479,11 @@ where
         let settlement_asset = request.instrument.settlement_asset().clone();
 
         let mut account_blocks: Vec<AccountBlock> = Vec::new();
+        let mut account_pnls: Vec<AccountPnlOutcome> = Vec::with_capacity(1);
         let mut deltas = FillCancelDeltas::new();
 
         if let Some(trade) = request.last_trade {
-            if let Err(block) = self.apply_trade_fill(
+            match self.apply_trade_fill(
                 ctx,
                 request.account_id,
                 &underlying_asset,
@@ -1150,13 +1494,21 @@ where
                 &request.lock,
                 &mut deltas,
             ) {
-                account_blocks.push(block);
+                Ok(application) => {
+                    if let Some(account_pnl) = application.account_pnl {
+                        account_pnls.push(account_pnl);
+                    }
+                    if let Some(block) = application.account_block {
+                        account_blocks.push(block);
+                    }
+                }
+                Err(block) => account_blocks.push(block),
             }
         } else if let Some(fee) = request.fee.as_ref() {
             // A structured fee belongs to the execution report, not to its
             // optional last trade. Fee-only corrections must reach balances
             // and account PnL through the same accounting rules.
-            if let Err(block) = self.apply_execution_fee(
+            match self.apply_execution_fee(
                 ctx,
                 request.account_id,
                 &underlying_asset,
@@ -1164,7 +1516,15 @@ where
                 fee,
                 &mut deltas,
             ) {
-                account_blocks.push(block);
+                Ok(application) => {
+                    if let Some(account_pnl) = application.account_pnl {
+                        account_pnls.push(account_pnl);
+                    }
+                    if let Some(block) = application.account_block {
+                        account_blocks.push(block);
+                    }
+                }
+                Err(block) => account_blocks.push(block),
             }
         }
 
@@ -1208,11 +1568,12 @@ where
             );
         }
 
-        if account_blocks.is_empty() && adjustments.is_empty() {
+        if account_blocks.is_empty() && account_pnls.is_empty() && adjustments.is_empty() {
             None
         } else {
             Some(PostTradeResult {
                 account_blocks,
+                account_pnls,
                 account_adjustments: adjustments,
             })
         }
@@ -1292,7 +1653,6 @@ fn settlement_reserved_amount(
     side: Side,
     lock_price: Option<Price>,
     quantity: Quantity,
-    account_id: AccountId,
     settlement_asset: &Asset,
 ) -> Result<PositionSize, AccountBlock> {
     let Some(price) = lock_price else {
@@ -1302,7 +1662,7 @@ fn settlement_reserved_amount(
         arithmetic_overflow_account_block(
             policy,
             format!(
-                "settlement notional overflow: account {account_id}, \
+                "settlement notional overflow: \
                  asset {settlement_asset}, lock_px {price}, qty {quantity}"
             ),
         )
@@ -1324,7 +1684,6 @@ fn settlement_incoming_proceeds(
     side: Side,
     lock_price: Option<Price>,
     quantity: Quantity,
-    account_id: AccountId,
     settlement_asset: &Asset,
 ) -> Result<PositionSize, AccountBlock> {
     let Side::Sell = side else {
@@ -1337,7 +1696,7 @@ fn settlement_incoming_proceeds(
         arithmetic_overflow_account_block(
             policy,
             format!(
-                "settlement proceeds overflow: account {account_id}, \
+                "settlement proceeds overflow: \
                  asset {settlement_asset}, lock_px {price}, qty {quantity}"
             ),
         )
@@ -1355,33 +1714,21 @@ fn neg(value: PositionSize) -> PositionSize {
     -value
 }
 
-fn trade_price_with_factor(
-    policy_name: &str,
-    price: Price,
-    factor: Decimal,
-) -> Result<Price, AccountBlock> {
+fn trade_price_with_factor(price: Price, factor: Decimal) -> Result<Price, PnlHaltReason> {
     price
         .to_decimal()
         .checked_mul(factor)
         .map(Price::new)
-        .ok_or_else(|| {
-            arithmetic_overflow_account_block(
-                policy_name,
-                format!("account-currency price conversion overflow: px {price}, factor {factor}"),
-            )
-        })
+        .ok_or(PnlHaltReason::ArithmeticOverflow)
 }
 
 /// Appends a per-asset outcome entry for a leg, omitting zero-delta fields and
 /// the entry entirely when the leg was never touched.
 ///
 /// Realized PnL and the average entry price are emitted only for the underlying
-/// leg while tracking is active: `realized_pnl` carries the realized delta
-/// (omitted when zero, like the quantity fields) against the cumulative
-/// realized PnL, and `average_entry_price` is the absolute current average of
-/// the net position. When account currency or FX is unavailable, both are
-/// `None`. The settlement leg never realizes PnL and carries no average, so
-/// both are `None` there.
+/// leg. `realized_pnl` comes directly from that position's operation result:
+/// either the changed PnL or the halt reason from this operation. The
+/// settlement leg never realizes PnL and carries no average.
 fn push_leg_outcome(
     adjustments: &mut Vec<AccountAdjustmentOutcome>,
     group_id: PolicyGroupId,
@@ -1391,21 +1738,31 @@ fn push_leg_outcome(
 ) {
     if let Some(h) = leg.final_holdings {
         let (realized_pnl, average_entry_price) = match kind {
-            LegKind::Underlying => match (leg.pnl_delta, h.realized_pnl()) {
-                (Some(delta), Some(absolute)) => {
-                    (nonzero_pnl_outcome(delta, absolute), h.avg_entry_price())
-                }
-                _ => (None, None),
+            LegKind::Underlying => match leg.pnl_outcome {
+                Some(Err(reason)) => (Some(Err(reason)), None),
+                Some(Ok(amount)) => (Some(Ok(amount)), leg.average_entry_price),
+                None => (None, leg.average_entry_price),
             },
             LegKind::Settlement => (None, None),
         };
+        let balance = nonzero_outcome(leg.balance_delta, h.available());
+        let held = nonzero_outcome(leg.held_delta, h.held());
+        let incoming = nonzero_outcome(leg.incoming_delta, h.incoming());
+        if balance.is_none()
+            && held.is_none()
+            && incoming.is_none()
+            && realized_pnl.is_none()
+            && average_entry_price.is_none()
+        {
+            return;
+        }
         adjustments.push(AccountAdjustmentOutcome {
             policy_group_id: group_id,
             entry: AccountOutcomeEntry {
                 asset,
-                balance: nonzero_outcome(leg.balance_delta, h.available()),
-                held: nonzero_outcome(leg.held_delta, h.held()),
-                incoming: nonzero_outcome(leg.incoming_delta, h.incoming()),
+                balance,
+                held,
+                incoming,
                 realized_pnl,
                 average_entry_price,
             },
@@ -1418,13 +1775,5 @@ fn nonzero_outcome(delta: PositionSize, absolute: PositionSize) -> Option<Outcom
         None
     } else {
         Some(OutcomeAmount { delta, absolute })
-    }
-}
-
-fn nonzero_pnl_outcome(delta: Pnl, absolute: Pnl) -> Option<PnlOutcomeAmount> {
-    if delta.is_zero() {
-        None
-    } else {
-        Some(PnlOutcomeAmount { delta, absolute })
     }
 }

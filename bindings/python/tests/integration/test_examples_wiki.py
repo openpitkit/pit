@@ -16,6 +16,8 @@
 # Please see https://openpit.dev and the OWNERS file for details.
 
 
+import typing
+
 import openpit
 import pytest
 
@@ -74,17 +76,14 @@ def _aapl_usd_report(pnl: str, fee: str) -> openpit.ExecutionReport:
 
 
 class ReserveThenValidatePolicy(openpit.pretrade.Policy):
-    # @typing.override
     def __init__(self) -> None:
         self._reserved = openpit.param.Volume(0.0)
         self._limit = openpit.param.Volume(50.0)
 
-    # @typing.override
     @property
     def name(self) -> str:
         return "ReserveThenValidatePolicy"
 
-    # @typing.override
     def perform_pre_trade_check(
         self,
         ctx: openpit.pretrade.Context,
@@ -114,7 +113,6 @@ class ReserveThenValidatePolicy(openpit.pretrade.Policy):
 
         return openpit.pretrade.PolicyPreTradeResult.accept(mutations=[rollback])
 
-    # @typing.override
     def apply_execution_report(
         self,
         ctx: openpit.pretrade.PostTradeContext,
@@ -128,17 +126,14 @@ class ReserveThenValidatePolicy(openpit.pretrade.Policy):
 
 
 class NotionalCapPolicy(openpit.pretrade.Policy):
-    # @typing.override
     def __init__(self, max_abs_notional: openpit.param.Volume) -> None:
         # Policy-local config: reject any order above this absolute notional.
         self._max_abs_notional = max_abs_notional
 
     @property
-    # @typing.override
     def name(self) -> str:
         return "NotionalCapPolicy"
 
-    # @typing.override
     def perform_pre_trade_check(
         self,
         ctx: openpit.pretrade.Context,
@@ -180,7 +175,6 @@ class NotionalCapPolicy(openpit.pretrade.Policy):
         # This policy only validates. It does not reserve mutable state.
         return openpit.pretrade.PolicyPreTradeResult.accept()
 
-    # @typing.override
     def apply_execution_report(
         self,
         ctx: openpit.pretrade.PostTradeContext,
@@ -196,9 +190,9 @@ class NotionalCapPolicy(openpit.pretrade.Policy):
 class CumulativeLimitPolicy(openpit.pretrade.Policy):
     """Tracks cumulative totals per asset, rejects batch on limit breach."""
 
-    def __init__(self, max_cumulative: openpit.param.Volume) -> None:
+    def __init__(self, max_cumulative: openpit.param.PositionSize) -> None:
         self._max = max_cumulative
-        self._totals: dict[str, openpit.param.Volume] = {}
+        self._totals: dict[str, openpit.param.PositionSize] = {}
 
     @property
     def name(self) -> str:
@@ -209,39 +203,57 @@ class CumulativeLimitPolicy(openpit.pretrade.Policy):
         ctx: openpit.AccountAdjustmentContext,
         account_id: openpit.param.AccountId,
         adjustment: openpit.AccountAdjustment,
-    ) -> list[openpit.pretrade.PolicyReject] | tuple[openpit.Mutation, ...] | None:
+    ) -> openpit.pretrade.PolicyAccountAdjustmentResult:
         del ctx, account_id
-        # Use the asset as the aggregation key for the cumulative limit.
-        asset_id = adjustment.operation.asset
+        operation = adjustment.operation
+        if not isinstance(operation, openpit.AccountAdjustmentBalanceOperation):
+            return openpit.pretrade.PolicyAccountAdjustmentResult()
 
-        prev = self._totals.get(asset_id, openpit.param.Volume("0"))
-        # Simplified - real code would add delta to prev.
-        new_total = prev
+        asset_id = operation.asset
+        amount = adjustment.amount
+        balance = amount.balance if amount is not None else None
+        if asset_id is None or balance is None:
+            return openpit.pretrade.PolicyAccountAdjustmentResult()
 
-        # Reject if limit breached.
+        previous = self._totals.get(asset_id)
+        current = previous if previous is not None else openpit.param.PositionSize("0")
+        absolute = balance.as_absolute
+        if absolute is not None:
+            new_total = absolute
+        else:
+            delta = balance.as_delta
+            if delta is None:
+                return openpit.pretrade.PolicyAccountAdjustmentResult()
+            new_total = current + delta
+
+        # Reject if the limit is breached.
         if new_total > self._max:
-            return [
-                openpit.pretrade.PolicyReject(
-                    code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
-                    reason="cumulative limit exceeded",
-                    details=f"{asset_id}: {new_total} > {self._max}",
-                    scope=openpit.pretrade.RejectScope.ACCOUNT,
-                )
-            ]
+            return openpit.pretrade.PolicyAccountAdjustmentResult(
+                rejects=(
+                    openpit.pretrade.PolicyReject(
+                        code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
+                        reason="cumulative limit exceeded",
+                        details=f"{asset_id}: {new_total} > {self._max}",
+                        scope=openpit.pretrade.RejectScope.ACCOUNT,
+                    ),
+                ),
+            )
 
-        # Apply immediately so later adjustments in the same batch see the updated
-        # total.
+        # Apply immediately so later adjustments in the same batch see it.
         self._totals[asset_id] = new_total
 
-        # Rollback by absolute value - safe in account adjustment pipeline
-        # because no external system sees intermediate batch state.
-        prev_value = prev
-        asset_key = asset_id
-        return (
-            openpit.Mutation(
-                # Commit is empty: state was applied eagerly.
-                commit=lambda: None,
-                rollback=lambda: self._totals.__setitem__(asset_key, prev_value),
+        def rollback() -> None:
+            if previous is None:
+                self._totals.pop(asset_id, None)
+            else:
+                self._totals[asset_id] = previous
+
+        return openpit.pretrade.PolicyAccountAdjustmentResult(
+            mutations=(
+                openpit.Mutation(
+                    commit=lambda: None,
+                    rollback=rollback,
+                ),
             ),
         )
 
@@ -256,22 +268,21 @@ class BlockOnAdjustmentPolicy(openpit.pretrade.Policy):
 
     def apply_account_adjustment(
         self,
-        ctx: openpit.AccountAdjustmentContext,
+        _ctx: openpit.AccountAdjustmentContext,
         account_id: openpit.param.AccountId,
         adjustment: openpit.AccountAdjustment,
-    ) -> None:
+    ) -> openpit.pretrade.PolicyAccountAdjustmentResult:
         del account_id, adjustment
-        # The adjustment context always exposes the account-block facility.
-        control: openpit.AccountControl = ctx.account_control
-        control.block(
-            openpit.pretrade.AccountBlock(
-                policy=self.name,
-                code=openpit.pretrade.RejectCode.ACCOUNT_BLOCKED,
-                reason="blocked via account_control",
-                details="custom policy blocked the account from a callback",
-            )
+        return openpit.pretrade.PolicyAccountAdjustmentResult(
+            account_blocks=(
+                openpit.pretrade.AccountBlock(
+                    policy=self.name,
+                    code=openpit.pretrade.RejectCode.ACCOUNT_BLOCKED,
+                    reason="blocked by account-adjustment policy",
+                    details="custom policy reported an account block from a callback",
+                ),
+            ),
         )
-        return None
 
 
 # --- Tests ---
@@ -450,32 +461,60 @@ def test_example_wiki_account_adjustments() -> None:
         account_id=account_id, adjustments=adjustments
     )
     assert result.ok
+    assert not result.account_blocks
 
 
 @pytest.mark.integration
 def test_example_wiki_account_adjustments_cumulative_limit() -> None:
-    # Used in: pit.wiki/Account-Adjustments.md - Example: Balance Limit Policy
-    policy = CumulativeLimitPolicy(max_cumulative=openpit.param.Volume("1000000"))
+    # Used in: pit.wiki/Account-Adjustments.md - Example: Balance Limit Policy;
+    # bindings/python/docs/examples/index.md - Account-adjustment check.
+    def balance_adjustment(
+        amount: openpit.param.AdjustmentAmount,
+    ) -> openpit.AccountAdjustment:
+        return openpit.AccountAdjustment(
+            operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+            amount=openpit.AccountAdjustmentAmount(balance=amount),
+        )
+
+    policy = CumulativeLimitPolicy(openpit.param.PositionSize("100"))
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
+    account_id = openpit.param.AccountId.from_int(99224416)
 
-    adjustments = [
-        openpit.AccountAdjustment(
-            operation=openpit.AccountAdjustmentBalanceOperation(
-                asset="USD",
-            ),
-            amount=openpit.AccountAdjustmentAmount(
-                balance=openpit.param.AdjustmentAmount.absolute(
-                    openpit.param.PositionSize(100)
+    seed = engine.apply_account_adjustment(
+        account_id=account_id,
+        adjustments=[
+            balance_adjustment(
+                openpit.param.AdjustmentAmount.absolute(
+                    openpit.param.PositionSize("40")
                 )
-            ),
-        ),
-    ]
-
-    result = engine.apply_account_adjustment(
-        account_id=openpit.param.AccountId.from_int(99224416),
-        adjustments=adjustments,
+            )
+        ],
     )
-    assert result.ok
+    rejected = engine.apply_account_adjustment(
+        account_id=account_id,
+        adjustments=[
+            balance_adjustment(
+                openpit.param.AdjustmentAmount.delta(openpit.param.PositionSize("30"))
+            ),
+            balance_adjustment(
+                openpit.param.AdjustmentAmount.delta(openpit.param.PositionSize("40"))
+            ),
+        ],
+    )
+    after_rollback = engine.apply_account_adjustment(
+        account_id=account_id,
+        adjustments=[
+            balance_adjustment(
+                openpit.param.AdjustmentAmount.delta(openpit.param.PositionSize("60"))
+            )
+        ],
+    )
+
+    assert seed.ok
+    assert not rejected.ok
+    assert rejected.failed_index == 1
+    assert rejected.rejects[0].code == openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED
+    assert after_rollback.ok
 
 
 @pytest.mark.integration
@@ -488,8 +527,8 @@ def test_example_wiki_account_control_block() -> None:
         .build()
     )
 
-    # Driving an adjustment triggers the block.
-    engine.apply_account_adjustment(
+    # The accepted adjustment reports a block that the engine has already recorded.
+    result = engine.apply_account_adjustment(
         account_id=openpit.param.AccountId.from_int(99224416),
         adjustments=[
             openpit.AccountAdjustment(
@@ -497,6 +536,8 @@ def test_example_wiki_account_control_block() -> None:
             )
         ],
     )
+    assert result.ok
+    assert len(result.account_blocks) == 1
 
     # A later order on the same account is rejected with ACCOUNT_BLOCKED, without
     # any start-check involvement.
@@ -564,7 +605,7 @@ def test_example_wiki_policy_notional_cap() -> None:
     )
 
 
-# --- Policy-API: Custom Order and Execution Report Models ---
+# --- Policy-API: Custom Models ---
 
 
 class StrategyOrder(openpit.Order):
@@ -575,6 +616,7 @@ class StrategyOrder(openpit.Order):
         strategy_tag: str,
     ) -> None:
         super().__init__(operation=operation)
+        # Project-specific metadata carried alongside the standard order fields.
         self.strategy_tag = strategy_tag
 
 
@@ -587,10 +629,14 @@ class StrategyReport(openpit.ExecutionReport):
         venue_exec_id: str,
     ) -> None:
         super().__init__(operation=operation, financial_impact=financial_impact)
+        # Project-specific metadata alongside the standard report fields.
         self.venue_exec_id = venue_exec_id
 
 
 class StrategyTagPolicy(openpit.pretrade.Policy):
+    def __init__(self) -> None:
+        self.last_venue_exec_id: str | None = None
+
     @property
     def name(self) -> str:
         return "StrategyTagPolicy"
@@ -600,8 +646,7 @@ class StrategyTagPolicy(openpit.pretrade.Policy):
         ctx: openpit.pretrade.Context,
         order: openpit.Order,
     ) -> list[openpit.pretrade.PolicyReject]:
-        import typing
-
+        # The original subclass instance reaches the callback unchanged.
         strategy_order = typing.cast(StrategyOrder, order)
         if strategy_order.strategy_tag == "blocked":
             return [
@@ -609,16 +654,33 @@ class StrategyTagPolicy(openpit.pretrade.Policy):
                     code=openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION,
                     reason="strategy blocked",
                     details=(
-                        f"strategy tag {strategy_order.strategy_tag!r} is not allowed"
+                        "strategy tag "
+                        f"{strategy_order.strategy_tag!r}"
+                        " is not allowed"
                     ),
                     scope=openpit.pretrade.RejectScope.ORDER,
                 )
             ]
         return []
 
+    def apply_execution_report(
+        self,
+        ctx: openpit.pretrade.PostTradeContext,
+        report: openpit.ExecutionReport,
+    ) -> openpit.pretrade.PostTradeResult | None:
+        del ctx
+        strategy_report = typing.cast(StrategyReport, report)
+        self.last_venue_exec_id = strategy_report.venue_exec_id
+        return None
 
-def _make_strategy_order(strategy_tag: str) -> StrategyOrder:
-    return StrategyOrder(
+
+@pytest.mark.integration
+def test_example_wiki_custom_python_models() -> None:
+    # Used in: pit.wiki/Policy-API.md - Python Custom Models
+    policy = StrategyTagPolicy()
+    engine = openpit.Engine.builder().no_sync().pre_trade(policy).build()
+
+    order = StrategyOrder(
         operation=openpit.OrderOperation(
             instrument=openpit.Instrument("AAPL", "USD"),
             account_id=openpit.param.AccountId.from_int(99224416),
@@ -626,37 +688,46 @@ def _make_strategy_order(strategy_tag: str) -> StrategyOrder:
             trade_amount=openpit.param.TradeAmount.quantity(10),
             price=openpit.param.Price(25),
         ),
-        strategy_tag=strategy_tag,
+        strategy_tag="alpha",
     )
 
-
-@pytest.mark.integration
-def test_example_wiki_custom_python_models() -> None:
-    # Used in: pit.wiki/Policy-API.md - Example: Python Custom Models
-    engine = (
-        openpit.Engine.builder().no_sync().pre_trade(policy=StrategyTagPolicy()).build()
-    )
-
-    # Allowed order must pass both stages.
-    order = _make_strategy_order("alpha")
     start_result = engine.start_pre_trade(order=order)
-    assert start_result.ok
-    assert start_result.request is not None
+    if not start_result:
+        messages = ", ".join(
+            f"{r.policy} [{r.code}]: {r.reason}: {r.details}"
+            for r in start_result.rejects
+        )
+        raise RuntimeError(messages)
 
     execute_result = start_result.request.execute()
-    assert execute_result.ok
+    if not execute_result:
+        messages = ", ".join(
+            f"{r.policy} [{r.code}]: {r.reason}: {r.details}"
+            for r in execute_result.rejects
+        )
+        raise RuntimeError(messages)
+
     execute_result.reservation.commit()
 
-    # Blocked order must be rejected at the start stage.
-    blocked = _make_strategy_order("blocked")
-    blocked_start = engine.start_pre_trade(order=blocked)
-    assert not blocked_start.ok
-    assert len(blocked_start.rejects) == 1
-    assert (
-        blocked_start.rejects[0].code
-        == openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION
+    order.strategy_tag = "blocked"
+    blocked = engine.start_pre_trade(order=order)
+    assert not blocked
+    assert blocked.rejects[0].code == openpit.pretrade.RejectCode.COMPLIANCE_RESTRICTION
+
+    report = StrategyReport(
+        operation=openpit.ExecutionReportOperation(
+            instrument=openpit.Instrument("AAPL", "USD"),
+            account_id=openpit.param.AccountId.from_int(99224416),
+            side=openpit.param.Side.BUY,
+        ),
+        financial_impact=openpit.FinancialImpact(
+            pnl=openpit.param.Pnl(0),
+            fee=openpit.param.Fee(0),
+        ),
+        venue_exec_id="venue-123",
     )
-    assert blocked_start.rejects[0].policy == "StrategyTagPolicy"
+    engine.apply_execution_report(report=report)
+    assert policy.last_venue_exec_id == "venue-123"
 
 
 @pytest.mark.integration
@@ -736,8 +807,8 @@ def test_example_wiki_policies_order_size_limit() -> None:
             .broker_barrier(
                 openpit.pretrade.policies.OrderSizeBrokerBarrier(
                     limit=openpit.pretrade.policies.OrderSizeLimit(
-                        max_quantity=openpit.param.Quantity(10000),
-                        max_notional=openpit.param.Volume(5000000),
+                        max_quantity=openpit.param.Quantity(100),
+                        max_notional=openpit.param.Volume(50000),
                     ),
                 ),
             )
@@ -765,6 +836,10 @@ def test_example_wiki_pipeline_apply_post_trade_feedback() -> None:
 
     # Execution reports feed realized outcomes back into cumulative policy state.
     result = engine.apply_execution_report(report=report)
+    for outcome in result.account_pnls:
+        print(f"account P&L outcome for {outcome.account_id}")
+    for outcome in result.account_adjustments:
+        print(f"account adjustment from group {outcome.policy_group_id}")
     if result.account_blocks:
         print("halt new orders until the blocked state is cleared")
 
@@ -783,10 +858,20 @@ def test_example_wiki_getting_started_run_order() -> None:
     order = _aapl_usd_order("100", "185")
 
     start_result = engine.start_pre_trade(order=order)
-    assert start_result.ok
+    if not start_result:
+        messages = ", ".join(
+            f"{r.policy} [{r.code}]: {r.reason}: {r.details}"
+            for r in start_result.rejects
+        )
+        raise RuntimeError(messages)
 
     execute_result = start_result.request.execute()
-    assert execute_result.ok
+    if not execute_result:
+        messages = ", ".join(
+            f"{reject.policy} [{reject.code}]: {reject.reason}: {reject.details}"
+            for reject in execute_result.rejects
+        )
+        raise RuntimeError(messages)
     execute_result.reservation.commit()
 
 
@@ -821,6 +906,7 @@ def test_example_wiki_policies_pnl_bounds_killswitch() -> None:
 @pytest.mark.integration
 def test_example_wiki_policies_spot_funds() -> None:
     # Used in: pit.wiki/Policies.md - SpotFundsPolicy → Python
+    # Limit-only spot funds, registered first in the policy list.
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -833,6 +919,7 @@ def test_example_wiki_policies_spot_funds() -> None:
 @pytest.mark.integration
 def test_example_wiki_spot_funds_limit_only() -> None:
     # Used in: pit.wiki/Spot-Funds.md - Limit-Only Mode → Python
+    # Limit-only spot funds: register first in the policy list.
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -884,9 +971,8 @@ def test_example_wiki_spot_funds_pnl_kill_switch_builder() -> None:
         .no_sync()
         .builtin(
             openpit.pretrade.policies.build_spot_funds_pnl_bounds_killswitch()
-            .global_barriers(
+            .global_barrier(
                 openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
-                    account_currency=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl(-1000),
                 ),
             )
@@ -894,10 +980,8 @@ def test_example_wiki_spot_funds_pnl_kill_switch_builder() -> None:
                 openpit.pretrade.policies.SpotFundsPnlBoundsAccountBarrier(
                     account_id=account_id,
                     barrier=openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
-                        account_currency=openpit.param.Asset("USD"),
                         lower_bound=openpit.param.Pnl(-250),
                     ),
-                    initial_pnl=openpit.param.Pnl(0),
                 ),
             )
         )
@@ -921,10 +1005,8 @@ def test_example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> None:
                 openpit.pretrade.policies.SpotFundsPnlBoundsAccountBarrier(
                     account_id=seed_account,
                     barrier=openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
-                        account_currency=openpit.param.Asset("USD"),
                         lower_bound=openpit.param.Pnl(-250),
                     ),
-                    initial_pnl=openpit.param.Pnl(0),
                 ),
             )
         )
@@ -933,24 +1015,21 @@ def test_example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> None:
 
     account_id = openpit.param.AccountId.from_int(99224416)
 
-    # Retune the account-currency PnL barriers; live accumulated PnL is untouched.
+    # Retune the account PnL barrier; live accumulated PnL is untouched.
     engine.configure().spot_funds_pnl_bounds_killswitch(
         openpit.pretrade.policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
-        global_barriers=[
-            openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
-                account_currency=openpit.param.Asset("USD"),
-                lower_bound=openpit.param.Pnl(-500),
-            ),
-        ],
+        global_barrier=openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
+            lower_bound=openpit.param.Pnl(-500),
+        ),
     )
 
-    # Force-set the live accumulated PnL for one (account, account currency).
-    engine.configure().set_spot_funds_account_pnl(
+    # Force-set the live accumulated PnL for one account.
+    result = engine.configure().set_spot_funds_account_pnl(
         openpit.pretrade.policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
         account=account_id,
-        account_currency=openpit.param.Asset("USD"),
-        pnl=openpit.param.Pnl(-120),
+        state=openpit.param.Pnl(-600),
     )
+    assert len(result.account_blocks) == 1
 
 
 @pytest.mark.integration

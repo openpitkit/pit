@@ -21,7 +21,7 @@ use crate::param::{
 };
 use crate::pretrade::PreTradeLock;
 
-use super::Instrument;
+use super::{Instrument, PnlState};
 
 /// Returned when a request field could not be delivered to the caller.
 #[non_exhaustive]
@@ -158,16 +158,33 @@ has_request_field_trait!(
     balance_average_entry_price -> Option<Price>
 );
 
-has_request_field_trait!(
-    HasAccountAdjustmentBalanceRealizedPnl,
-    balance_realized_pnl -> Option<Pnl>
-);
-
-has_request_field_trait!(
+/// Provides balance fields for an account adjustment.
+pub trait HasAccountAdjustmentBalance {
     /// Actual resulting balance/position value after applying the adjustment.
-    HasAccountAdjustmentBalance,
-    balance -> Option<AdjustmentAmount>
-);
+    fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError>;
+
+    /// Optional force-set of the realized PnL for the selected balance slot.
+    ///
+    /// Request shapes that do not carry a PnL correction use the default and
+    /// remain valid balance adjustments.
+    fn balance_realized_pnl(&self) -> Result<Option<PnlState>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+
+impl<T> HasAccountAdjustmentBalance for T
+where
+    T: std::ops::Deref,
+    T::Target: HasAccountAdjustmentBalance,
+{
+    fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
+        self.deref().balance()
+    }
+
+    fn balance_realized_pnl(&self) -> Result<Option<PnlState>, RequestFieldAccessError> {
+        self.deref().balance_realized_pnl()
+    }
+}
 
 has_request_field_trait!(
     /// Amount earmarked for outgoing settlement and unavailable for immediate use.
@@ -218,6 +235,12 @@ has_request_field_trait!(
 );
 
 has_request_field_trait!(HasAccountAdjustmentPositionLeverage, position_leverage -> Option<Leverage>);
+
+has_request_field_trait!(
+    /// Optional account-wide realized-PnL operation carried by an account adjustment.
+    HasAccountAdjustmentPnlOperation,
+    account_adjustment_pnl_operation -> Option<PnlState>
+);
 
 #[cfg(test)]
 mod tests {

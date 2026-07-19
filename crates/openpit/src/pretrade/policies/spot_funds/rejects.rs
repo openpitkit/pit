@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 //! Small constructors for [`Reject`] / [`AccountBlock`] values used by
 //! [`SpotFundsPolicy`](super::SpotFundsPolicy).
@@ -21,6 +21,42 @@
 use crate::param::{AccountId, Asset, PositionSize};
 use crate::pretrade::policy::{field_access_error_account_adjustment_reject, PolicyName};
 use crate::pretrade::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
+use crate::PnlHaltReason;
+
+pub(super) fn account_pnl_block_for_state(
+    account_id: AccountId,
+    state: crate::PnlState,
+    barrier: &super::SpotFundsPnlBoundsBarrier,
+    provenance: Option<u64>,
+) -> Option<AccountBlock> {
+    let block = match state {
+        crate::PnlState::Value(absolute) => {
+            let sides = super::super::pnl_bounds::breached_sides(
+                barrier.lower_bound,
+                barrier.upper_bound,
+                absolute,
+            );
+            (!sides.is_empty()).then(|| {
+                super::super::pnl_bounds::pnl_breach_account_block(
+                    super::SPOT_FUNDS_POLICY_NAME,
+                    format!(
+                        "{} bound breached: realized pnl {absolute}, lower_bound {:?}, \
+                         upper_bound {:?}",
+                        sides.join(" and "),
+                        barrier.lower_bound,
+                        barrier.upper_bound
+                    ),
+                )
+            })
+        }
+        crate::PnlState::Halted(reason) => Some(account_pnl_halted_block(
+            super::SPOT_FUNDS_POLICY_NAME,
+            account_id,
+            reason,
+        )),
+    };
+    block.map(|block| block.with_provenance(provenance))
+}
 
 pub(super) fn insufficient_funds_reject(
     policy: &str,
@@ -62,6 +98,33 @@ pub(super) fn order_value_calculation_failed_reject(
         RejectCode::OrderValueCalculationFailed,
         "order value calculation failed",
         details.into(),
+    )
+}
+
+pub(super) fn account_pnl_halted_reject(
+    policy: &str,
+    account_id: AccountId,
+    reason: PnlHaltReason,
+) -> Reject {
+    Reject::new(
+        policy,
+        RejectScope::Account,
+        RejectCode::PnlKillSwitchTriggered,
+        "account pnl calculation halted",
+        format!("account {account_id}, halt reason {reason:?}"),
+    )
+}
+
+pub(super) fn account_pnl_halted_block(
+    policy: &str,
+    account_id: AccountId,
+    reason: PnlHaltReason,
+) -> AccountBlock {
+    AccountBlock::new(
+        policy,
+        RejectCode::PnlKillSwitchTriggered,
+        "account pnl calculation halted",
+        format!("account {account_id}, halt reason {reason:?}"),
     )
 }
 

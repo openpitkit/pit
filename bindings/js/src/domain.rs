@@ -585,6 +585,14 @@ pub fn is_plain_object(value: &JsValue) -> bool {
     is_plain_record_js(value)
 }
 
+/// Returns whether `value` carries its own (not inherited) property named
+/// `field`, distinguishing a present-but-`undefined` field from an absent one.
+pub fn has_own_field(value: &JsValue, field: &str) -> Result<bool, JsValue> {
+    Ok(js_sys::Reflect::own_keys(value)?
+        .iter()
+        .any(|key| key.as_string().is_some_and(|key| key == field)))
+}
+
 /// Reads an optional string property off a JS object literal.
 ///
 /// A missing/`undefined`/`null` value maps to `None`; any other type is a

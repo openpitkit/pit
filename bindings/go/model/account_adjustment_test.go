@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package model
 
@@ -30,8 +30,8 @@ type accountAdjustmentFixture struct {
 	instrument     param.Instrument
 	averagePrice   param.Price
 	altPrice       param.Price
-	realizedPnl    param.Pnl
-	altRealizedPnl param.Pnl
+	pnl            param.Pnl
+	altPnl         param.Pnl
 	leverage       param.Leverage
 	mode           param.PositionMode
 	deltaAmount    param.AdjustmentAmount
@@ -125,10 +125,9 @@ func TestAccountAdjustmentOperationSwitching(t *testing.T) {
 		AccountAdjustmentBalanceOperationValues{
 			Asset:             optional.Some(fixture.asset),
 			AverageEntryPrice: optional.Some(fixture.averagePrice),
-			RealizedPnl:       optional.Some(fixture.realizedPnl),
 		},
 	)
-	adjustment.SetBalanceOperationAndUnsetPositionOperation(balance)
+	adjustment.SetBalanceOperationAndUnsetOtherOperations(balance)
 	assertAccountAdjustmentBalanceOperationOptionEqual(t, adjustment.BalanceOperation(), balance)
 	assertAccountAdjustmentPositionOperationOptionUnset(t, adjustment.PositionOperation())
 
@@ -141,9 +140,36 @@ func TestAccountAdjustmentOperationSwitching(t *testing.T) {
 			Mode:              optional.Some(fixture.mode),
 		},
 	)
-	adjustment.SetPositionOperationAndUnsetBalanceOperation(position)
+	adjustment.SetPositionOperationAndUnsetOtherOperations(position)
 	assertAccountAdjustmentBalanceOperationOptionUnset(t, adjustment.BalanceOperation())
 	assertAccountAdjustmentPositionOperationOptionEqual(t, adjustment.PositionOperation(), position)
+
+	accountPnl := NewAccountAdjustmentAccountPnlOperation(NewPnlState(fixture.pnl))
+	adjustment.SetAccountPnlOperationAndUnsetOtherOperations(accountPnl)
+	assertAccountAdjustmentPositionOperationOptionUnset(t, adjustment.PositionOperation())
+	assertAccountAdjustmentAccountPnlOperationOptionValuesEqual(
+		t,
+		adjustment.AccountPnlOperation(),
+		optional.Some(accountPnl),
+	)
+
+	halted, err := NewPnlHaltedState(PnlHaltReasonMissingFx)
+	if err != nil {
+		t.Fatalf("NewPnlHaltedState() error = %v", err)
+	}
+	positionPnl := NewAccountAdjustmentBalanceOperationFromValues(
+		AccountAdjustmentBalanceOperationValues{
+			Asset:       optional.Some(fixture.asset),
+			RealizedPnl: optional.Some(halted),
+		},
+	)
+	adjustment.SetBalanceOperationAndUnsetOtherOperations(positionPnl)
+	assertAccountAdjustmentAccountPnlOperationOptionValuesEqual(
+		t,
+		adjustment.AccountPnlOperation(),
+		optional.None[AccountAdjustmentAccountPnlOperation](),
+	)
+	assertAccountAdjustmentBalanceOperationOptionEqual(t, adjustment.BalanceOperation(), positionPnl)
 }
 
 func TestAccountAdjustmentBalanceOperationView(t *testing.T) {
@@ -153,30 +179,30 @@ func TestAccountAdjustmentBalanceOperationView(t *testing.T) {
 	view := adjustment.EnsureBalanceOperationView()
 	assertAssetOptionUnset(t, view.Asset())
 	assertPriceOptionUnset(t, view.AverageEntryPrice())
-	assertPnlOptionUnset(t, view.RealizedPnl())
+	assertPnlStateOptionUnset(t, view.RealizedPnl())
 
 	view.SetAsset(fixture.asset)
 	view.SetAverageEntryPrice(fixture.averagePrice)
-	view.SetRealizedPnl(fixture.realizedPnl)
+	view.SetRealizedPnl(NewPnlState(fixture.pnl))
 
 	assertAssetOptionEqual(t, view.Asset(), fixture.asset)
 	assertPriceOptionEqual(t, view.AverageEntryPrice(), fixture.averagePrice)
-	assertPnlOptionEqual(t, view.RealizedPnl(), fixture.realizedPnl)
+	assertPnlStateOptionEqual(t, view.RealizedPnl(), NewPnlState(fixture.pnl))
 
 	view.UnsetAsset()
 	view.UnsetAverageEntryPrice()
 	view.UnsetRealizedPnl()
 	assertAssetOptionUnset(t, view.Asset())
 	assertPriceOptionUnset(t, view.AverageEntryPrice())
-	assertPnlOptionUnset(t, view.RealizedPnl())
+	assertPnlStateOptionUnset(t, view.RealizedPnl())
 
 	view.SetAsset(fixture.altAsset)
 	view.SetAverageEntryPrice(fixture.altPrice)
-	view.SetRealizedPnl(fixture.altRealizedPnl)
+	view.SetRealizedPnl(NewPnlState(fixture.altPnl))
 	view.Reset()
 	assertAssetOptionUnset(t, view.Asset())
 	assertPriceOptionUnset(t, view.AverageEntryPrice())
-	assertPnlOptionUnset(t, view.RealizedPnl())
+	assertPnlStateOptionUnset(t, view.RealizedPnl())
 }
 
 func TestAccountAdjustmentPositionOperationView(t *testing.T) {
@@ -347,11 +373,11 @@ func newAccountAdjustmentFixture(t *testing.T) accountAdjustmentFixture {
 		t.Fatalf("NewPriceFromString() error = %v", err)
 	}
 
-	realizedPnl, err := param.NewPnlFromString("12.5")
+	pnl, err := param.NewPnlFromString("12.5")
 	if err != nil {
 		t.Fatalf("NewPnlFromString() error = %v", err)
 	}
-	altRealizedPnl, err := param.NewPnlFromString("-7.25")
+	altPnl, err := param.NewPnlFromString("-7.25")
 	if err != nil {
 		t.Fatalf("NewPnlFromString() error = %v", err)
 	}
@@ -387,8 +413,8 @@ func newAccountAdjustmentFixture(t *testing.T) accountAdjustmentFixture {
 		instrument:     param.NewInstrument(mustModelAsset(t, "AAPL"), mustModelAsset(t, "USD")),
 		averagePrice:   averagePrice,
 		altPrice:       altPrice,
-		realizedPnl:    realizedPnl,
-		altRealizedPnl: altRealizedPnl,
+		pnl:            pnl,
+		altPnl:         altPnl,
 		leverage:       param.NewLeverageFromUint16(5),
 		mode:           param.PositionModeHedged,
 		deltaAmount:    param.NewDeltaAdjustmentAmount(balanceUpper),
@@ -456,6 +482,11 @@ func assertAccountAdjustmentUnset(t *testing.T, adjustment AccountAdjustment) {
 	t.Helper()
 	assertAccountAdjustmentBalanceOperationOptionUnset(t, adjustment.BalanceOperation())
 	assertAccountAdjustmentPositionOperationOptionUnset(t, adjustment.PositionOperation())
+	assertAccountAdjustmentAccountPnlOperationOptionValuesEqual(
+		t,
+		adjustment.AccountPnlOperation(),
+		optional.None[AccountAdjustmentAccountPnlOperation](),
+	)
 	assertAccountAdjustmentAmountOptionUnset(t, adjustment.Amount())
 	assertAccountAdjustmentBoundsOptionUnset(t, adjustment.Bounds())
 }
@@ -475,6 +506,11 @@ func assertAccountAdjustmentValuesEqual(
 		t,
 		got.PositionOperation,
 		want.PositionOperation,
+	)
+	assertAccountAdjustmentAccountPnlOperationOptionValuesEqual(
+		t,
+		got.AccountPnlOperation,
+		want.AccountPnlOperation,
 	)
 	assertAccountAdjustmentAmountOptionValuesEqual(t, got.Amount, want.Amount)
 	assertAccountAdjustmentBoundsOptionValuesEqual(t, got.Bounds, want.Bounds)
@@ -510,8 +546,72 @@ func assertAccountAdjustmentBalanceOperationOptionValuesEqual(
 	assertOptionBy(t, "BalanceOperation", got, want, func(gotValue AccountAdjustmentBalanceOperation, wantValue AccountAdjustmentBalanceOperation) {
 		assertAssetOptionValuesEqual(t, gotValue.Asset(), wantValue.Asset())
 		assertPriceOptionValuesEqual(t, gotValue.AverageEntryPrice(), wantValue.AverageEntryPrice())
-		assertPnlOptionValuesEqual(t, gotValue.RealizedPnl(), wantValue.RealizedPnl())
+		assertOptionBy(
+			t,
+			"RealizedPnl",
+			gotValue.RealizedPnl(),
+			wantValue.RealizedPnl(),
+			func(got PnlState, want PnlState) { assertPnlStateEqual(t, got, want) },
+		)
 	})
+}
+
+func assertAccountAdjustmentAccountPnlOperationOptionValuesEqual(
+	t *testing.T,
+	got optional.Option[AccountAdjustmentAccountPnlOperation],
+	want optional.Option[AccountAdjustmentAccountPnlOperation],
+) {
+	t.Helper()
+	assertOptionBy(t, "AccountPnlOperation", got, want, func(
+		gotValue AccountAdjustmentAccountPnlOperation,
+		wantValue AccountAdjustmentAccountPnlOperation,
+	) {
+		assertPnlStateEqual(t, gotValue.State(), wantValue.State())
+	})
+}
+
+func assertPnlStateEqual(t *testing.T, got PnlState, want PnlState) {
+	t.Helper()
+	gotValue, gotHasValue := got.Value()
+	wantValue, wantHasValue := want.Value()
+	if gotHasValue != wantHasValue || (gotHasValue && !gotValue.Equal(wantValue)) {
+		t.Fatalf("PnlState.Value() = (%v, %v), want (%v, %v)", gotValue, gotHasValue, wantValue, wantHasValue)
+	}
+	gotReason, gotHalted := got.HaltReason()
+	wantReason, wantHalted := want.HaltReason()
+	if gotHalted != wantHalted || gotReason != wantReason {
+		t.Fatalf("PnlState.HaltReason() = (%v, %v), want (%v, %v)", gotReason, gotHalted, wantReason, wantHalted)
+	}
+}
+
+func assertPnlStateOptionEqual(
+	t *testing.T,
+	got optional.Option[PnlState],
+	want PnlState,
+) {
+	t.Helper()
+	assertOptionBy(
+		t,
+		"PnlState",
+		got,
+		optional.Some(want),
+		func(gotValue PnlState, wantValue PnlState) {
+			assertPnlStateEqual(t, gotValue, wantValue)
+		},
+	)
+}
+
+func assertPnlStateOptionUnset(t *testing.T, got optional.Option[PnlState]) {
+	t.Helper()
+	assertOptionBy(
+		t,
+		"PnlState",
+		got,
+		optional.None[PnlState](),
+		func(gotValue PnlState, wantValue PnlState) {
+			assertPnlStateEqual(t, gotValue, wantValue)
+		},
+	)
 }
 
 func assertAccountAdjustmentPositionOperationOptionEqual(

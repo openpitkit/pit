@@ -6,6 +6,7 @@ var classopenpit_1_1Engine =
     [ "Accounts", "classopenpit_1_1Engine.html#ac7a11bbb6726457d200ee9a325e4bb1b", null ],
     [ "ApplyAccountAdjustment", "classopenpit_1_1Engine.html#a9e20410fc1a002bc6ee6b62252559dd6", null ],
     [ "ApplyExecutionReport", "classopenpit_1_1Engine.html#a17d0bd007c7aa376aa88050165e10399", null ],
+    [ "ApplyExecutionReport", "classopenpit_1_1Engine.html#ade641be34527ec363052916dd91fbe73", null ],
     [ "ClearAccountCurrency", "classopenpit_1_1Engine.html#af55ed1cf5cfa03df188d96c592597eb1", null ],
     [ "ClearAccountGroupCurrency", "classopenpit_1_1Engine.html#a05c394c843baa02ebb80529679338160", null ],
     [ "Configure", "classopenpit_1_1Engine.html#aa3b09a057d6f5572312610d922b21a8a", null ],

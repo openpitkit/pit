@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package openpit
 
@@ -29,7 +29,6 @@ import (
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
-	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/reject"
 )
@@ -133,16 +132,12 @@ func (e *ClientEngine[Order, Report, Adjustment]) ApplyExecutionReport(
 func (e *ClientEngine[Order, Report, Adjustment]) ApplyAccountAdjustment(
 	accountID param.AccountID,
 	adjustments []Adjustment,
-) (
-	optional.Option[reject.AccountAdjustmentBatchError],
-	[]accountadjustment.Outcome,
-	error,
-) {
+) (accountadjustment.BatchResult, error) {
 	engineAdjustments, payloads := newClientAdjustmentPayloads(adjustments)
 	defer payloads.release()
-	rejects, outcomes, err := e.engine.ApplyAccountAdjustment(accountID, engineAdjustments)
+	result, err := e.engine.ApplyAccountAdjustment(accountID, engineAdjustments)
 	runtime.KeepAlive(adjustments)
-	return rejects, outcomes, err
+	return result, err
 }
 
 // Accounts returns an accessor for account-group management bound to this

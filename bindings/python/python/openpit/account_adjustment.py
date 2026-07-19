@@ -20,6 +20,9 @@ from __future__ import annotations
 import typing
 
 from ._openpit import AccountAdjustment as _AccountAdjustment
+from ._openpit import (
+    AccountAdjustmentAccountPnlOperation as _AccountAdjustmentAccountPnlOperation,
+)
 from ._openpit import AccountAdjustmentAmount as _AccountAdjustmentAmount
 from ._openpit import (
     AccountAdjustmentBalanceOperation as _AccountAdjustmentBalanceOperation,
@@ -28,6 +31,7 @@ from ._openpit import AccountAdjustmentBounds as _AccountAdjustmentBounds
 from ._openpit import (
     AccountAdjustmentPositionOperation as _AccountAdjustmentPositionOperation,
 )
+from ._openpit import PnlHaltReason
 from .core import Instrument
 from .param import (
     AdjustmentAmount,
@@ -129,7 +133,7 @@ class BalanceOperation(_AccountAdjustmentBalanceOperation):
         *,
         asset: Asset,
         average_entry_price: Price | None = None,
-        realized_pnl: Pnl | None = None,
+        realized_pnl: Pnl | PnlHaltReason | None = None,
     ) -> None:
         _AccountAdjustmentBalanceOperation.asset.__set__(self, asset)
         _AccountAdjustmentBalanceOperation.average_entry_price.__set__(
@@ -157,11 +161,8 @@ class BalanceOperation(_AccountAdjustmentBalanceOperation):
 
     # @typing.override
     @property
-    def realized_pnl(self) -> Pnl | None:
-        """Optional force-set of absolute realized PnL in account currency.
-
-        The value is caller supplied; no FX is applied.
-        """
+    def realized_pnl(self) -> Pnl | PnlHaltReason | None:
+        """Optional account-currency realized PnL replacement or explicit halt."""
         return _AccountAdjustmentBalanceOperation.realized_pnl.__get__(self, type(self))
 
     def __repr__(self) -> str:
@@ -246,6 +247,27 @@ class PositionOperation(_AccountAdjustmentPositionOperation):
         return _AccountAdjustmentPositionOperation.__repr__(self)
 
 
+class AccountPnlOperation(_AccountAdjustmentAccountPnlOperation):
+    """Direct account-wide PnL state adjustment."""
+
+    # @typing.override
+    def __new__(cls, *args: typing.Any, **kwargs: typing.Any) -> AccountPnlOperation:
+        return _AccountAdjustmentAccountPnlOperation.__new__(cls, *args, **kwargs)
+
+    # @typing.override
+    def __init__(self, *, state: Pnl | PnlHaltReason) -> None:
+        _AccountAdjustmentAccountPnlOperation.state.__set__(self, state)
+
+    # @typing.override
+    @property
+    def state(self) -> Pnl | PnlHaltReason:
+        """Replacement account PnL value or explicit halt reason."""
+        return _AccountAdjustmentAccountPnlOperation.state.__get__(self, type(self))
+
+    def __repr__(self) -> str:
+        return _AccountAdjustmentAccountPnlOperation.__repr__(self)
+
+
 class Bounds(_AccountAdjustmentBounds):
     """Optional post-adjustment inclusive limits."""
 
@@ -324,7 +346,9 @@ class Adjustment(_AccountAdjustment):
     def __init__(
         self,
         *,
-        operation: BalanceOperation | PositionOperation | None = None,
+        operation: (
+            BalanceOperation | PositionOperation | AccountPnlOperation | None
+        ) = None,
         amount: Amount | None = None,
         bounds: Bounds | None = None,
     ) -> None:
@@ -332,12 +356,17 @@ class Adjustment(_AccountAdjustment):
         # operation is a Python-only union wrapper at the public boundary.
         if operation is not None and not isinstance(
             operation,
-            (BalanceOperation, PositionOperation),
+            (
+                BalanceOperation,
+                PositionOperation,
+                AccountPnlOperation,
+            ),
         ):
             raise TypeError(
                 "operation must be "
-                "openpit.account_adjustment.BalanceOperation or "
-                "openpit.account_adjustment.PositionOperation"
+                "openpit.account_adjustment.BalanceOperation, "
+                "openpit.account_adjustment.PositionOperation, or "
+                "openpit.account_adjustment.AccountPnlOperation"
             )
         # Structural checks for aggregate groups stay at Python boundary to keep
         # explicit API-contract errors for wrong wrapper types.
@@ -353,7 +382,7 @@ class Adjustment(_AccountAdjustment):
     @property
     def operation(
         self,
-    ) -> BalanceOperation | PositionOperation | None:
+    ) -> BalanceOperation | PositionOperation | AccountPnlOperation | None:
         """Adjustment operation details group."""
         return self.__dict__.get("_py_operation")
 
@@ -372,6 +401,7 @@ class Adjustment(_AccountAdjustment):
 
 
 __all__ = [
+    "AccountPnlOperation",
     "Adjustment",
     "Amount",
     "BalanceOperation",

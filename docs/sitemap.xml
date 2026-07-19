@@ -28,8 +28,11 @@
   <url><loc>https://openpit.dev/cpp-api/account__info_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/accounts_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/adapters_8hpp.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/amount_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/async__engine_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/asyncengine_2engine_8hpp.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/batch__error_8hpp.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/bounds_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/bytes_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/callbacks_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1BytesView.html</loc></url>
@@ -46,6 +49,7 @@
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1SharedBytes.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1SharedString.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1StringView.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1accountadjustment_1_1AccountPnlOperation.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1accountadjustment_1_1BatchError.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1accountadjustment_1_1Context.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1accountadjustment_1_1Operation.html</loc></url>
@@ -93,6 +97,7 @@
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1PolicyAdapter.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1PostTradeAdjustments.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1PostTradeContext.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1PostTradePnls.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1PreTradeLock.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1Request.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1Reservation.html</loc></url>
@@ -102,6 +107,7 @@
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1OrderValidationPolicy.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1PnlBoundsKillSwitchPolicy.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1RateLimitPolicy.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsGlobalBarrierUpdate.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsKillSwitchPolicy.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPolicy.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/classopenpit_1_1tx_1_1Mutations.html</loc></url>
@@ -128,17 +134,22 @@
   <url><loc>https://openpit.dev/cpp-api/namespaceopenpit_1_1tx.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/observer_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/openpit_8hpp.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/operation_8hpp.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/outcome_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/param_8hpp.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/pnl_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/policies_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/pre__trade__lock_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/pretrade_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/quote_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/reference__book_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/reject_8hpp.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/request_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/runtime_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/service_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/string_8hpp.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1AdjustmentResult.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1PolicyConfigurationResult.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1PostTradeResult.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1ReferenceBookRegisterResult.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1ReferenceBookSettlementSchemeResult.html</loc></url>
@@ -146,11 +157,13 @@
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1SettlementScheme.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1AccountAdjustment.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1AccountOutcomeEntry.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1AccountPnlOutcome.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1Amount.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1BalanceOperation.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1Bounds.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1Outcome.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1OutcomeAmount.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1PnlOutcome.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1PnlOutcomeAmount.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accountadjustment_1_1PositionOperation.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1accounts_1_1AccountBlock.html</loc></url>
@@ -172,6 +185,7 @@
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1model_1_1Trade.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1ExecuteResult.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1LockEntry.html</loc></url>
+  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1PolicyAccountAdjustmentResult.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1PolicyDecision.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1Reject.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1StartResult.html</loc></url>
@@ -189,7 +203,6 @@
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1RateLimitBrokerBarrier.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1SpotFundsOverride.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrier.html</loc></url>
-  <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrierUpdate.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountGroupBarrier.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier.html</loc></url>
   <url><loc>https://openpit.dev/cpp-api/tx_8hpp.html</loc></url>
@@ -234,6 +247,7 @@
   <url><loc>https://openpit.dev/js-api/classes/marketdata.QuoteResolution.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/marketdata.QuoteTtl.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/model.AccountAdjustment.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/model.AccountAdjustmentAccountPnlOperation.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/model.AccountAdjustmentAmount.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/model.AccountAdjustmentBalanceOperation.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/model.AccountAdjustmentBounds.html</loc></url>
@@ -268,10 +282,14 @@
   <url><loc>https://openpit.dev/js-api/classes/param.TradeAmount.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/param.Volume.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/pretrade.AccountAdjustmentBatchResult.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.AccountPnlOutcome.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/pretrade.Context.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/pretrade.DryRunReport.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/pretrade.ExecuteResult.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/pretrade.Lock.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.PnlHaltReason.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.PnlOutcome.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/classes/pretrade.PolicyConfigurationResult.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/pretrade.PostTradeContext.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/pretrade.PostTradeResult.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/pretrade.Request.html</loc></url>
@@ -296,7 +314,6 @@
   <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsBuilder.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsOverride.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsPnlBoundsAccountBarrier.html</loc></url>
-  <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsPnlBoundsAccountBarrierUpdate.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsPnlBoundsAccountGroupBarrier.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsPnlBoundsBarrier.html</loc></url>
   <url><loc>https://openpit.dev/js-api/classes/pretrade_policies.SpotFundsPnlBoundsKillswitchBuilder.html</loc></url>
@@ -318,6 +335,7 @@
   <url><loc>https://openpit.dev/js-api/interfaces/index.ValueErrorOptions.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/marketdata.AccountInfo.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/marketdata.QuoteInit.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/model.AccountAdjustmentAccountPnlOperationInit.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/model.AccountAdjustmentAmountInit.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/model.AccountAdjustmentBalanceOperationInit.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/model.AccountAdjustmentBoundsInit.html</loc></url>
@@ -338,10 +356,12 @@
   <url><loc>https://openpit.dev/js-api/interfaces/pretrade.OrderSizeLimitConfigureOptions.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PnlBoundsKillswitchConfigureOptions.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/pretrade.Policy.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyAccountAdjustmentResult.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyAccountOutcomeEntry.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyDecision.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyOutcomeAmount.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyPnlOutcomeAmount.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyPostTradeResult.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyPreTradeResult.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/pretrade.PolicyReject.html</loc></url>
   <url><loc>https://openpit.dev/js-api/interfaces/pretrade.RateLimitConfigureOptions.html</loc></url>
@@ -389,8 +409,9 @@
   <url><loc>https://openpit.dev/js-api/types/param.SideValue.html</loc></url>
   <url><loc>https://openpit.dev/js-api/types/pretrade.LockEntries.html</loc></url>
   <url><loc>https://openpit.dev/js-api/types/pretrade.LockEntry.html</loc></url>
-  <url><loc>https://openpit.dev/js-api/types/pretrade.PolicyAccountAdjustmentResult.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/pretrade.PnlHaltReasonKind.html</loc></url>
   <url><loc>https://openpit.dev/js-api/types/pretrade.PolicyMutation.html</loc></url>
+  <url><loc>https://openpit.dev/js-api/types/pretrade.PolicyPnlOutcome.html</loc></url>
   <url><loc>https://openpit.dev/js-api/types/pretrade_policies.SpotFundsLimitMode.html</loc></url>
   <url><loc>https://openpit.dev/js-api/types/pretrade_policies.SpotFundsPricingSource.html</loc></url>
   <url><loc>https://openpit.dev/js-api/types/reject.RejectCode.html</loc></url>

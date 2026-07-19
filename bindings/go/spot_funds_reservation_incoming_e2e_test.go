@@ -65,12 +65,12 @@ func TestSpotFundsReservationIncoming_BuyBaseIncomingSurfacesOnReservation(t *te
 		t.Fatalf("NewAccountAdjustmentFromValues() error = %v", err)
 	}
 
-	seedReject, _, err := engine.ApplyAccountAdjustment(accountID, []model.AccountAdjustment{seedAdj})
+	seedResult, err := engine.ApplyAccountAdjustment(accountID, []model.AccountAdjustment{seedAdj})
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if seedReject.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() reject = %v, want none", seedReject)
+	if seedResult.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() reject = %v, want none", seedResult.BatchError)
 	}
 
 	// Buy 3 AAPL @ 100: holds 300 USD (settlement) and reserves 3 AAPL incoming
@@ -196,12 +196,12 @@ func TestSpotFundsReservationIncoming_SellQuoteIncomingSurfacesOnReservation(t *
 		t.Fatalf("NewAccountAdjustmentFromValues() error = %v", err)
 	}
 
-	seedReject, _, err := engine.ApplyAccountAdjustment(accountID, []model.AccountAdjustment{seedAdj})
+	seedResult, err := engine.ApplyAccountAdjustment(accountID, []model.AccountAdjustment{seedAdj})
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if seedReject.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() reject = %v, want none", seedReject)
+	if seedResult.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() reject = %v, want none", seedResult.BatchError)
 	}
 
 	// Sell 2 AAPL @ 150: holds 2 AAPL (underlying) and reserves 300 USD incoming
@@ -322,12 +322,12 @@ func TestSpotFundsReservationIncoming_PricelessSellWithoutMarketDataBundleReject
 		t.Fatalf("NewAccountAdjustmentFromValues() error = %v", err)
 	}
 
-	seedReject, _, err := engine.ApplyAccountAdjustment(accountID, []model.AccountAdjustment{seedAdj})
+	seedResult, err := engine.ApplyAccountAdjustment(accountID, []model.AccountAdjustment{seedAdj})
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if seedReject.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() reject = %v, want none", seedReject)
+	if seedResult.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() reject = %v, want none", seedResult.BatchError)
 	}
 
 	// Sell 2 AAPL with no price in limit-only mode: must be rejected because
@@ -397,12 +397,12 @@ func TestSpotFundsReservationIncoming_SellFillWithoutLockBlocksAccount(t *testin
 		t.Fatalf("NewAccountAdjustmentFromValues() error = %v", err)
 	}
 
-	seedReject, _, err := engine.ApplyAccountAdjustment(accountID, []model.AccountAdjustment{seedAdj})
+	seedResult, err := engine.ApplyAccountAdjustment(accountID, []model.AccountAdjustment{seedAdj})
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if seedReject.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() reject = %v, want none", seedReject)
+	if seedResult.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() reject = %v, want none", seedResult.BatchError)
 	}
 
 	// Sell 2 AAPL @ 150: priced sell, reservation succeeds and records a lock.
@@ -518,12 +518,12 @@ func TestSpotFundsReservationIncoming_SellCancelWithoutLockBlocksAccount(t *test
 		t.Fatalf("NewAccountAdjustmentFromValues() error = %v", err)
 	}
 
-	seedReject, _, err := engine.ApplyAccountAdjustment(accountID, []model.AccountAdjustment{seedAdj})
+	seedResult, err := engine.ApplyAccountAdjustment(accountID, []model.AccountAdjustment{seedAdj})
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if seedReject.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() reject = %v, want none", seedReject)
+	if seedResult.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() reject = %v, want none", seedResult.BatchError)
 	}
 
 	// Sell 2 AAPL @ 150: priced sell, reservation succeeds and records a lock.

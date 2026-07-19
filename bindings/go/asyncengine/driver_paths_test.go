@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package asyncengine
 
@@ -26,7 +26,6 @@ import (
 	"go.openpit.dev/openpit/accounts"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
-	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/reject"
 )
@@ -69,12 +68,8 @@ func (*rejectDriver) ApplyExecutionReport(
 func (*rejectDriver) ApplyAccountAdjustment(
 	_ param.AccountID,
 	_ []model.AccountAdjustment,
-) (
-	optional.Option[reject.AccountAdjustmentBatchError],
-	[]accountadjustment.Outcome,
-	error,
-) {
-	return optional.None[reject.AccountAdjustmentBatchError](), nil, nil
+) (accountadjustment.BatchResult, error) {
+	return accountadjustment.BatchResult{}, nil
 }
 
 func (*rejectDriver) Accounts() accounts.Accounts {
@@ -116,12 +111,8 @@ func (*transportErrorDriver) ApplyExecutionReport(
 func (*transportErrorDriver) ApplyAccountAdjustment(
 	_ param.AccountID,
 	_ []model.AccountAdjustment,
-) (
-	optional.Option[reject.AccountAdjustmentBatchError],
-	[]accountadjustment.Outcome,
-	error,
-) {
-	return optional.None[reject.AccountAdjustmentBatchError](), nil, nil
+) (accountadjustment.BatchResult, error) {
+	return accountadjustment.BatchResult{}, nil
 }
 
 func (*transportErrorDriver) Accounts() accounts.Accounts {

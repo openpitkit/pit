@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package openpit
 
@@ -57,7 +57,7 @@ func TestReadmeQuickstart(t *testing.T) {
 		FullSync().
 		Builtin(policies.BuildOrderValidation()).
 		Builtin(
-			policies.BuildPnlBoundsKillswitch().BrokerBarriers(
+			policies.BuildPnlBoundsKillSwitch().BrokerBarriers(
 				policies.PnlBoundsBrokerBarrier{
 					SettlementAsset: usd,
 					LowerBound:      optional.Some(lowerBound),

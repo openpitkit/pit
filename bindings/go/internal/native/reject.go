@@ -83,8 +83,8 @@ func DestroyPretradeRejectList(rejects PretradeRejectList) {
 	C.openpit_pretrade_destroy_reject_list(rejects)
 }
 
-func PretradeRejectListPush(list PretradeRejectList, reject PretradeReject) {
-	C.openpit_pretrade_reject_list_push(list, reject)
+func PretradeRejectListPush(list PretradeRejectList, reject PretradeReject) bool {
+	return bool(C.openpit_pretrade_reject_list_push(list, reject))
 }
 
 func PretradeRejectListLen(list PretradeRejectList) int {

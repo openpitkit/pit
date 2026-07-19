@@ -29,11 +29,12 @@ use openpit::pretrade::PostTradeContext;
 use openpit::pretrade::{
     PolicyPreTradeResult, PostTradeResult, PreTradeContext, PreTradePolicy, Rejects,
 };
-use openpit::{AccountAdjustmentContext, AccountOutcomeEntry, Mutations, PolicyGroupId};
+use openpit::{AccountAdjustmentContext, Mutations, PolicyAccountAdjustmentResult, PolicyGroupId};
 
 use crate::account_adjustment::{export_account_adjustment, OpenPitAccountAdjustment};
 use crate::account_outcome::{
-    OpenPitAccountOutcomeEntryList, OpenPitPostTradeAdjustmentList, OpenPitPretradePreTradeResult,
+    OpenPitPostTradeAccountPnlList, OpenPitPostTradeAdjustmentList,
+    OpenPitPretradeAccountAdjustmentResult, OpenPitPretradePreTradeResult,
 };
 use crate::execution_report::{export_execution_report, OpenPitExecutionReport};
 use crate::order::{export_order, OpenPitOrder};
@@ -149,27 +150,31 @@ pub type OpenPitPretradePreTradePolicyPerformPreTradeCheckFn =
 ///   data before returning.
 /// - `out_adjustments` is a callback-scoped non-owning collector the callback
 ///   may fill with group-tagged account-adjustment outcomes via
-///   `openpit_pretrade_post_trade_adjustment_list_push`. This channel IS
-///   group-tagged. The callback must not store or use `out_adjustments` after
-///   return.
-/// - The account-block return and the `out_adjustments` channel are
-///   independent: a callback may report blocks, adjustments, both, or neither.
+///   `openpit_pretrade_post_trade_adjustment_list_push`.
+/// - `out_account_pnls` is a callback-scoped non-owning collector the callback
+///   may fill with group-tagged account-level PnL outcomes via
+///   `openpit_pretrade_post_trade_account_pnl_list_push`.
+/// - The callback must not retain or use either collector after return.
+/// - The account-block return and both collector channels are independent: a
+///   callback may populate any combination of them.
 /// - Return a non-null account-block list when this policy reports a
 ///   kill-switch trigger. The returned list ownership is transferred to the
 ///   engine; create it with `openpit_pretrade_create_account_block_list`.
 /// - Return null to indicate no kill-switch condition.
-/// - A null `apply_execution_report_fn` means that hook returns no blocks and
-///   no adjustments.
+/// - A null `apply_execution_report_fn` means that hook returns no blocks,
+///   adjustments, or account-level PnL outcomes.
 /// - `user_data` is passed through unchanged from policy creation.
 ///
 /// Parameter ordering convention: read-only context first (`ctx`), then
-/// read-only input (`report`), then the callback-scoped collector
-/// (`out_adjustments`), then the trailing opaque `user_data`.
+/// read-only input (`report`), then callback-scoped collectors
+/// (`out_adjustments`, `out_account_pnls`), then the trailing opaque
+/// `user_data`.
 pub type OpenPitPretradePreTradePolicyApplyExecutionReportFn =
     unsafe extern "C" fn(
         ctx: *const OpenPitPostTradeContext,
         report: *const OpenPitExecutionReport,
         out_adjustments: *mut OpenPitPostTradeAdjustmentList,
+        out_account_pnls: *mut OpenPitPostTradeAccountPnlList,
         user_data: *mut c_void,
     ) -> *mut OpenPitPretradeAccountBlockList;
 
@@ -189,14 +194,17 @@ pub type OpenPitPretradePreTradePolicyApplyExecutionReportFn =
 /// - `mutations` is a callback-scoped non-owning pointer that allows the
 ///   callback to register commit/rollback mutations.
 /// - The callback must not store or use `mutations` after return.
-/// - `out_outcomes` is a callback-scoped non-owning collector the callback may
+/// - `out_result` is a callback-scoped non-owning collector the callback may
 ///   fill with account-outcome entries via
-///   `openpit_account_outcome_entry_list_push`. No `policy_group_id` is carried;
-///   the engine assigns the policy group. The callback must not store or use
-///   `out_outcomes` after return.
-/// - The reject channel and the `out_outcomes` channel are independent: the
-///   engine only keeps `out_outcomes` when the callback accepts (returns null
-///   or an empty list).
+///   `openpit_pretrade_account_adjustment_result_push_account_outcome` and
+///   account blocks via
+///   `openpit_pretrade_account_adjustment_result_push_account_block`. No
+///   `policy_group_id` is carried for outcome entries; the engine assigns the
+///   policy group. The callback must not store or use `out_result` after
+///   return.
+/// - The reject and `out_result` channels are independent: the engine keeps
+///   the collector payload only when the callback accepts (returns null or an
+///   empty list).
 /// - Return null to accept the adjustment.
 /// - Return a non-empty reject list to reject the adjustment.
 /// - Returned reject list ownership is transferred to the callee.
@@ -204,14 +212,14 @@ pub type OpenPitPretradePreTradePolicyApplyExecutionReportFn =
 ///
 /// Parameter ordering convention: read-only inputs first (`ctx`, `account_id`,
 /// `adjustment`), then callback-scoped collectors in the order
-/// (`mutations`, `out_outcomes`), then the trailing opaque `user_data`.
+/// (`mutations`, `out_result`), then the trailing opaque `user_data`.
 pub type OpenPitPretradePreTradePolicyApplyAccountAdjustmentFn =
     unsafe extern "C" fn(
         ctx: *const OpenPitAccountAdjustmentContext,
         account_id: OpenPitParamAccountId,
         adjustment: *const OpenPitAccountAdjustment,
         mutations: *mut OpenPitMutations,
-        out_outcomes: *mut OpenPitAccountOutcomeEntryList,
+        out_result: *mut OpenPitPretradeAccountAdjustmentResult,
         user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList;
 
@@ -401,9 +409,18 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
         let apply_fn = self.apply_execution_report_fn?;
         let input = export_execution_report(report);
         let mut out_adjustments = OpenPitPostTradeAdjustmentList { items: Vec::new() };
+        let mut out_account_pnls = OpenPitPostTradeAccountPnlList { items: Vec::new() };
         let c_ctx =
             (ctx as *const PostTradeContext<StorageFactory>).cast::<OpenPitPostTradeContext>();
-        let raw = unsafe { apply_fn(c_ctx, &input, &mut out_adjustments, self.user_data) };
+        let raw = unsafe {
+            apply_fn(
+                c_ctx,
+                &input,
+                &mut out_adjustments,
+                &mut out_account_pnls,
+                self.user_data,
+            )
+        };
         // `export_execution_report` owns the lock handle it allocates inside
         // `input` (via `export_fill`); the callback only borrows it. Release it
         // exactly once now that the callback has returned. Null-safe, so the
@@ -417,12 +434,14 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
             unsafe { Box::from_raw(raw) }.items
         };
         let account_adjustments = out_adjustments.items;
-        if account_blocks.is_empty() && account_adjustments.is_empty() {
+        let account_pnls = out_account_pnls.items;
+        if account_blocks.is_empty() && account_adjustments.is_empty() && account_pnls.is_empty() {
             None
         } else {
             Some(PostTradeResult {
                 account_blocks,
                 account_adjustments,
+                account_pnls,
             })
         }
     }
@@ -433,14 +452,14 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
         account_id: openpit::param::AccountId,
         adjustment: &AccountAdjustment,
         mutations: &mut Mutations,
-    ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
+    ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
         let Some(apply_fn) = self.apply_account_adjustment_fn else {
-            return Ok(vec![]);
+            return Ok(PolicyAccountAdjustmentResult::default());
         };
         let mut mutations_handle = OpenPitMutations {
             mutations: mutations as *mut Mutations,
         };
-        let mut out_outcomes = OpenPitAccountOutcomeEntryList { items: Vec::new() };
+        let mut out_result = OpenPitPretradeAccountAdjustmentResult::default();
         let input = export_account_adjustment(adjustment);
         let c_ctx = (ctx as *const AccountAdjustmentContext<StorageFactory>)
             .cast::<OpenPitAccountAdjustmentContext>();
@@ -450,12 +469,15 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
                 account_id.as_u64(),
                 &input,
                 &mut mutations_handle,
-                &mut out_outcomes,
+                &mut out_result,
                 self.user_data,
             )
         };
         import_reject_list_result(rejects)?;
-        Ok(out_outcomes.items)
+        Ok(PolicyAccountAdjustmentResult {
+            account_adjustments: out_result.account_outcomes.items,
+            account_blocks: out_result.account_blocks.items,
+        })
     }
 }
 
@@ -516,7 +538,8 @@ pub(super) fn import_reject_list_result(
 ///   `apply_execution_report_fn`, and `apply_account_adjustment_fn` may be null.
 /// - A null `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`, or
 ///   `apply_account_adjustment_fn` means that hook accepts by default.
-/// - A null `apply_execution_report_fn` means that hook returns an empty list (no kill switch).
+/// - A null `apply_execution_report_fn` means that hook returns no post-trade
+///   result.
 /// - Non-null callbacks and `free_user_data_fn` must remain callable for as long
 ///   as the policy may still be used by either the caller pointer or the engine.
 /// - Custom main-stage and account-adjustment callbacks can register
@@ -755,6 +778,7 @@ mod tests {
         _ctx: *const OpenPitPostTradeContext,
         _report: *const OpenPitExecutionReport,
         _out_adjustments: *mut OpenPitPostTradeAdjustmentList,
+        _out_account_pnls: *mut OpenPitPostTradeAccountPnlList,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeAccountBlockList {
         std::ptr::null_mut()
@@ -776,9 +800,21 @@ mod tests {
         _account_id: OpenPitParamAccountId,
         _adjustment: *const OpenPitAccountAdjustment,
         _mutations: *mut OpenPitMutations,
-        _out_outcomes: *mut OpenPitAccountOutcomeEntryList,
+        out_result: *mut OpenPitPretradeAccountAdjustmentResult,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList {
+        unsafe {
+            crate::account_outcome::openpit_pretrade_account_adjustment_result_push_account_block(
+                out_result,
+                crate::reject::OpenPitPretradeAccountBlock {
+                    policy: OpenPitStringView::from_utf8("custom.account.adjustment"),
+                    reason: OpenPitStringView::from_utf8("accepted"),
+                    details: OpenPitStringView::from_utf8("block after apply"),
+                    user_data: std::ptr::null_mut(),
+                    code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_OTHER,
+                },
+            );
+        }
         std::ptr::null_mut()
     }
 
@@ -1312,7 +1348,6 @@ mod tests {
             &report,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            std::ptr::null_mut(),
         ));
         crate::engine::openpit_destroy_engine(engine);
         crate::engine::openpit_destroy_engine_builder(builder);
@@ -1404,12 +1439,12 @@ mod tests {
             &report,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            std::ptr::null_mut(),
         ));
 
         let adjustment = crate::account_adjustment::OpenPitAccountAdjustment::default();
         let batch = [adjustment];
         let mut out_reject = std::ptr::null_mut();
+        let mut out_blocks = std::ptr::null_mut();
         let status = crate::engine::openpit_engine_apply_account_adjustment(
             engine,
             1,
@@ -1417,6 +1452,7 @@ mod tests {
             batch.len(),
             &mut out_reject,
             std::ptr::null_mut(),
+            &mut out_blocks,
             std::ptr::null_mut(),
         );
         assert_eq!(
@@ -1424,6 +1460,12 @@ mod tests {
             crate::account_adjustment::OpenPitAccountAdjustmentApplyStatus::Applied
         );
         assert!(out_reject.is_null());
+        assert!(!out_blocks.is_null());
+        assert_eq!(
+            crate::reject::openpit_pretrade_account_block_list_len(out_blocks),
+            1
+        );
+        crate::reject::openpit_pretrade_destroy_account_block_list(out_blocks);
 
         crate::engine::openpit_destroy_engine(engine);
         crate::engine::openpit_destroy_engine_builder(builder);
@@ -1444,8 +1486,8 @@ mod tests {
                 reason: OpenPitStringView::from_utf8("blocked"),
                 details: OpenPitStringView::from_utf8("by normal hook"),
                 user_data: std::ptr::null_mut(),
-                code: crate::reject::OpenPitPretradeRejectCode::RiskLimitExceeded,
-                scope: crate::reject::OpenPitPretradeRejectScope::Order,
+                code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+                scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
             },
         );
         rejects

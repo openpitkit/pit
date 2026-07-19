@@ -120,12 +120,14 @@ document.addEventListener('DOMContentLoaded',() => { initNavTree('classopenpit_1
 </div><!--header-->
 <div class="contents">
 
-<p><code>#include &lt;account_adjustment.hpp&gt;</code></p>
+<p><code>#include &lt;operation.hpp&gt;</code></p>
 <table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-pub-methods" class="groupheader"><a id="pub-methods" name="pub-methods"></a>
 Public Member Functions</h2></td></tr>
+<tr class="memitem:a3b3171d0c46cff1ee830d801d04c212f" id="r_a3b3171d0c46cff1ee830d801d04c212f"><td class="memItemLeft">const <a class="el" href="classopenpit_1_1accountadjustment_1_1AccountPnlOperation.html">AccountPnlOperation</a> *&#160;</td><td class="memItemRight"><a class="el" href="#a3b3171d0c46cff1ee830d801d04c212f">AsAccountPnl</a> () const noexcept</td></tr>
 <tr class="memitem:ac73aef923ce3a2f9e2f10c1fed57fa80" id="r_ac73aef923ce3a2f9e2f10c1fed57fa80"><td class="memItemLeft">const <a class="el" href="structopenpit_1_1accountadjustment_1_1BalanceOperation.html">BalanceOperation</a> *&#160;</td><td class="memItemRight"><a class="el" href="#ac73aef923ce3a2f9e2f10c1fed57fa80">AsBalance</a> () const noexcept</td></tr>
 <tr class="memitem:a7d739affbd244a6ec23c1d511ff9ee20" id="r_a7d739affbd244a6ec23c1d511ff9ee20"><td class="memItemLeft">const <a class="el" href="structopenpit_1_1accountadjustment_1_1PositionOperation.html">PositionOperation</a> *&#160;</td><td class="memItemRight"><a class="el" href="#a7d739affbd244a6ec23c1d511ff9ee20">AsPosition</a> () const noexcept</td></tr>
+<tr class="memitem:ab458b22177eb52a8ab349153a3e38b72" id="r_ab458b22177eb52a8ab349153a3e38b72"><td class="memItemLeft">bool&#160;</td><td class="memItemRight"><a class="el" href="#ab458b22177eb52a8ab349153a3e38b72">IsAccountPnl</a> () const noexcept</td></tr>
 <tr class="memitem:afafc25383027d4a55ff43bfd18a993d7" id="r_afafc25383027d4a55ff43bfd18a993d7"><td class="memItemLeft">bool&#160;</td><td class="memItemRight"><a class="el" href="#afafc25383027d4a55ff43bfd18a993d7">IsBalance</a> () const noexcept</td></tr>
 <tr class="memitem:a566b874a99fa74c2e58bedc208626539" id="r_a566b874a99fa74c2e58bedc208626539"><td class="memItemLeft">bool&#160;</td><td class="memItemRight"><a class="el" href="#a566b874a99fa74c2e58bedc208626539">IsPosition</a> () const noexcept</td></tr>
 <tr class="memitem:a1bd5a7cc46f1bac5b53baa8e91a25179" id="r_a1bd5a7cc46f1bac5b53baa8e91a25179"><td class="memItemLeft">OpenPitAccountAdjustmentOperation&#160;</td><td class="memItemRight"><a class="el" href="#a1bd5a7cc46f1bac5b53baa8e91a25179">Raw</a> () const noexcept</td></tr>
@@ -133,10 +135,36 @@ Public Member Functions</h2></td></tr>
 <tr class="heading"><td colspan="2"><h2 id="header-pub-static-methods" class="groupheader"><a id="pub-static-methods" name="pub-static-methods"></a>
 Static Public Member Functions</h2></td></tr>
 <tr class="memitem:ad3c0c8bd208546c8643340c8b69c14ba" id="r_ad3c0c8bd208546c8643340c8b69c14ba"><td class="memItemLeft">static std::optional&lt; Operation &gt;&#160;</td><td class="memItemRight"><a class="el" href="#ad3c0c8bd208546c8643340c8b69c14ba">FromRaw</a> (const OpenPitAccountAdjustmentOperation &amp;raw)</td></tr>
+<tr class="memitem:aa627072c55f20bd9e77a25e4efa7459b" id="r_aa627072c55f20bd9e77a25e4efa7459b"><td class="memItemLeft">static Operation&#160;</td><td class="memItemRight"><a class="el" href="#aa627072c55f20bd9e77a25e4efa7459b">OfAccountPnl</a> (<a class="el" href="classopenpit_1_1accountadjustment_1_1AccountPnlOperation.html">AccountPnlOperation</a> pnl)</td></tr>
 <tr class="memitem:aefe47c69af1031925018dc9435416b18" id="r_aefe47c69af1031925018dc9435416b18"><td class="memItemLeft">static Operation&#160;</td><td class="memItemRight"><a class="el" href="#aefe47c69af1031925018dc9435416b18">OfBalance</a> (<a class="el" href="structopenpit_1_1accountadjustment_1_1BalanceOperation.html">BalanceOperation</a> balance)</td></tr>
 <tr class="memitem:a9e7b0858e2bb5460ad82ced821f5ab00" id="r_a9e7b0858e2bb5460ad82ced821f5ab00"><td class="memItemLeft">static Operation&#160;</td><td class="memItemRight"><a class="el" href="#a9e7b0858e2bb5460ad82ced821f5ab00">OfPosition</a> (<a class="el" href="structopenpit_1_1accountadjustment_1_1PositionOperation.html">PositionOperation</a> position)</td></tr>
 </table>
 <a name="doc-func-members" id="doc-func-members"></a><h2 id="header-doc-func-members" class="groupheader">Member Function Documentation</h2>
+<a id="a3b3171d0c46cff1ee830d801d04c212f" name="a3b3171d0c46cff1ee830d801d04c212f"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a3b3171d0c46cff1ee830d801d04c212f">&#9670;&#160;</a></span>AsAccountPnl()</h2>
+
+<div class="memitem">
+<div class="memproto">
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">const <a class="el" href="classopenpit_1_1accountadjustment_1_1AccountPnlOperation.html">AccountPnlOperation</a> * openpit::accountadjustment::Operation::AsAccountPnl </td>
+          <td>(</td>
+          <td class="paramname"><span class="paramname"><em></em></span></td><td>)</td>
+          <td> const</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel nodiscard">nodiscard</span><span class="mlabel noexcept">noexcept</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+</div>
+</div>
 <a id="ac73aef923ce3a2f9e2f10c1fed57fa80" name="ac73aef923ce3a2f9e2f10c1fed57fa80"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#ac73aef923ce3a2f9e2f10c1fed57fa80">&#9670;&#160;</a></span>AsBalance()</h2>
 
@@ -212,6 +240,31 @@ Static Public Member Functions</h2></td></tr>
 
 </div>
 </div>
+<a id="ab458b22177eb52a8ab349153a3e38b72" name="ab458b22177eb52a8ab349153a3e38b72"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ab458b22177eb52a8ab349153a3e38b72">&#9670;&#160;</a></span>IsAccountPnl()</h2>
+
+<div class="memitem">
+<div class="memproto">
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">bool openpit::accountadjustment::Operation::IsAccountPnl </td>
+          <td>(</td>
+          <td class="paramname"><span class="paramname"><em></em></span></td><td>)</td>
+          <td> const</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel nodiscard">nodiscard</span><span class="mlabel noexcept">noexcept</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+</div>
+</div>
 <a id="afafc25383027d4a55ff43bfd18a993d7" name="afafc25383027d4a55ff43bfd18a993d7"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#afafc25383027d4a55ff43bfd18a993d7">&#9670;&#160;</a></span>IsBalance()</h2>
 
@@ -256,6 +309,31 @@ Static Public Member Functions</h2></td></tr>
   </td>
   <td class="mlabels-right">
 <span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel nodiscard">nodiscard</span><span class="mlabel noexcept">noexcept</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+</div>
+</div>
+<a id="aa627072c55f20bd9e77a25e4efa7459b" name="aa627072c55f20bd9e77a25e4efa7459b"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#aa627072c55f20bd9e77a25e4efa7459b">&#9670;&#160;</a></span>OfAccountPnl()</h2>
+
+<div class="memitem">
+<div class="memproto">
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">Operation openpit::accountadjustment::Operation::OfAccountPnl </td>
+          <td>(</td>
+          <td class="paramtype"><a class="el" href="classopenpit_1_1accountadjustment_1_1AccountPnlOperation.html">AccountPnlOperation</a></td>          <td class="paramname"><span class="paramname"><em>pnl</em></span></td><td>)</td>
+          <td></td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel static">static</span><span class="mlabel nodiscard">nodiscard</span></span>  </td>
   </tr>
 </table>
 </div><div class="memdoc">

@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-#include "openpit/account_adjustment.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 
 #include "openpit/engine.hpp"
 #include "openpit/model.hpp"
@@ -56,8 +56,8 @@ namespace policies = openpit::pretrade::policies;
 TEST(AccountAdjustmentBalanceOperation, FullRawRoundTripPreservesFields) {
   aa::BalanceOperation operation;
   operation.asset = "USD";
-  operation.averageEntryPrice = param::Price::FromString("101.5");
   operation.realizedPnl = param::Pnl::FromString("-12.75");
+  operation.averageEntryPrice = param::Price::FromString("101.5");
 
   const aa::BalanceOperation restored =
       aa::BalanceOperation::FromRaw(operation.Raw());
@@ -67,7 +67,8 @@ TEST(AccountAdjustmentBalanceOperation, FullRawRoundTripPreservesFields) {
   ASSERT_TRUE(restored.averageEntryPrice.has_value());
   EXPECT_EQ(restored.averageEntryPrice->ToString(), "101.5");
   ASSERT_TRUE(restored.realizedPnl.has_value());
-  EXPECT_EQ(restored.realizedPnl->ToString(), "-12.75");
+  ASSERT_TRUE(std::holds_alternative<param::Pnl>(*restored.realizedPnl));
+  EXPECT_EQ(std::get<param::Pnl>(*restored.realizedPnl).ToString(), "-12.75");
 }
 
 TEST(AccountAdjustmentBalanceOperation, AbsentFieldsReadAsEmptyOptional) {
@@ -75,8 +76,22 @@ TEST(AccountAdjustmentBalanceOperation, AbsentFieldsReadAsEmptyOptional) {
       aa::BalanceOperation::FromRaw(aa::BalanceOperation().Raw());
 
   EXPECT_FALSE(restored.asset.has_value());
-  EXPECT_FALSE(restored.averageEntryPrice.has_value());
   EXPECT_FALSE(restored.realizedPnl.has_value());
+  EXPECT_FALSE(restored.averageEntryPrice.has_value());
+}
+
+TEST(AccountAdjustmentBalanceOperation, HaltedPnlRoundTrips) {
+  aa::BalanceOperation operation;
+  operation.asset = "AAPL";
+  operation.realizedPnl = aa::PnlHaltReason::MissingCostBasis;
+
+  const aa::BalanceOperation restored =
+      aa::BalanceOperation::FromRaw(operation.Raw());
+
+  ASSERT_TRUE(restored.realizedPnl.has_value());
+  ASSERT_TRUE(std::holds_alternative<aa::PnlHaltReason>(*restored.realizedPnl));
+  EXPECT_EQ(std::get<aa::PnlHaltReason>(*restored.realizedPnl),
+            aa::PnlHaltReason::MissingCostBasis);
 }
 
 //------------------------------------------------------------------------------
@@ -119,6 +134,19 @@ TEST(AccountAdjustmentPositionOperation, AbsentFieldsReadAsEmptyOptional) {
 }
 
 //------------------------------------------------------------------------------
+// AccountPnlOperation
+
+TEST(AccountAdjustmentAccountPnlOperation, ValueRoundTrips) {
+  const aa::AccountPnlOperation operation(param::Pnl::FromString("-12.75"));
+
+  const aa::AccountPnlOperation restored =
+      aa::AccountPnlOperation::FromRaw(operation.Raw());
+
+  ASSERT_TRUE(std::holds_alternative<param::Pnl>(restored.Get()));
+  EXPECT_EQ(std::get<param::Pnl>(restored.Get()).ToString(), "-12.75");
+}
+
+//------------------------------------------------------------------------------
 // Operation (discriminated)
 
 TEST(AccountAdjustmentOperation, BalanceVariantRoundTrips) {
@@ -127,6 +155,7 @@ TEST(AccountAdjustmentOperation, BalanceVariantRoundTrips) {
   const aa::Operation operation = aa::Operation::OfBalance(balance);
   EXPECT_TRUE(operation.IsBalance());
   EXPECT_FALSE(operation.IsPosition());
+  EXPECT_FALSE(operation.IsAccountPnl());
 
   const std::optional<aa::Operation> restored =
       aa::Operation::FromRaw(operation.Raw());
@@ -136,6 +165,7 @@ TEST(AccountAdjustmentOperation, BalanceVariantRoundTrips) {
   ASSERT_TRUE(restored->AsBalance()->asset.has_value());
   EXPECT_EQ(*restored->AsBalance()->asset, "BTC");
   EXPECT_EQ(restored->AsPosition(), nullptr);
+  EXPECT_EQ(restored->AsAccountPnl(), nullptr);
 }
 
 TEST(AccountAdjustmentOperation, PositionVariantRoundTrips) {
@@ -154,9 +184,25 @@ TEST(AccountAdjustmentOperation, PositionVariantRoundTrips) {
   EXPECT_EQ(restored->AsBalance(), nullptr);
 }
 
+TEST(AccountAdjustmentOperation, AccountPnlVariantRoundTrips) {
+  const aa::Operation operation = aa::Operation::OfAccountPnl(
+      aa::AccountPnlOperation(param::Pnl::FromString("15")));
+  EXPECT_TRUE(operation.IsAccountPnl());
+
+  const std::optional<aa::Operation> restored =
+      aa::Operation::FromRaw(operation.Raw());
+  ASSERT_TRUE(restored.has_value());
+  ASSERT_TRUE(restored->IsAccountPnl());
+  ASSERT_NE(restored->AsAccountPnl(), nullptr);
+  ASSERT_TRUE(
+      std::holds_alternative<param::Pnl>(restored->AsAccountPnl()->Get()));
+  EXPECT_EQ(std::get<param::Pnl>(restored->AsAccountPnl()->Get()).ToString(),
+            "15");
+}
+
 TEST(AccountAdjustmentOperation, AbsentKindReadsAsEmptyOptional) {
   OpenPitAccountAdjustmentOperation raw{};
-  raw.kind = OpenPitAccountAdjustmentOperationKind_Absent;
+  raw.kind = OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ABSENT;
   EXPECT_FALSE(aa::Operation::FromRaw(raw).has_value());
 }
 
@@ -165,9 +211,9 @@ TEST(AccountAdjustmentOperation, AbsentKindReadsAsEmptyOptional) {
 
 TEST(AccountAdjustmentAmount, DeltaAndAbsoluteComponentsRoundTripExactly) {
   OpenPitAccountAdjustmentAmount raw{};
-  raw.balance = MakeRawAmount(OpenPitParamAdjustmentAmountKind_Delta, "10");
+  raw.balance = MakeRawAmount(OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA, "10");
   raw.incoming =
-      MakeRawAmount(OpenPitParamAdjustmentAmountKind_Absolute, "250");
+      MakeRawAmount(OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE, "250");
   // held intentionally left NotSet.
 
   const aa::Amount amount = aa::Amount::FromRaw(raw);
@@ -176,9 +222,10 @@ TEST(AccountAdjustmentAmount, DeltaAndAbsoluteComponentsRoundTripExactly) {
   ASSERT_TRUE(amount.incoming.has_value());
 
   const OpenPitAccountAdjustmentAmount rebuilt = amount.Raw();
-  EXPECT_EQ(rebuilt.balance.kind, OpenPitParamAdjustmentAmountKind_Delta);
-  EXPECT_EQ(rebuilt.held.kind, OpenPitParamAdjustmentAmountKind_NotSet);
-  EXPECT_EQ(rebuilt.incoming.kind, OpenPitParamAdjustmentAmountKind_Absolute);
+  EXPECT_EQ(rebuilt.balance.kind, OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA);
+  EXPECT_EQ(rebuilt.held.kind, OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_NOT_SET);
+  EXPECT_EQ(rebuilt.incoming.kind,
+            OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE);
   EXPECT_EQ(param::PositionSize::FromRaw(rebuilt.balance.value).ToString(),
             "10");
   EXPECT_EQ(param::PositionSize::FromRaw(rebuilt.incoming.value).ToString(),
@@ -187,13 +234,14 @@ TEST(AccountAdjustmentAmount, DeltaAndAbsoluteComponentsRoundTripExactly) {
 
 TEST(AccountAdjustmentAmount, NegativeComponentIsPermitted) {
   OpenPitAccountAdjustmentAmount raw{};
-  raw.balance = MakeRawAmount(OpenPitParamAdjustmentAmountKind_Delta, "-42.5");
+  raw.balance =
+      MakeRawAmount(OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA, "-42.5");
 
   const aa::Amount amount = aa::Amount::FromRaw(raw);
   ASSERT_TRUE(amount.balance.has_value());
 
   const OpenPitAccountAdjustmentAmount rebuilt = amount.Raw();
-  EXPECT_EQ(rebuilt.balance.kind, OpenPitParamAdjustmentAmountKind_Delta);
+  EXPECT_EQ(rebuilt.balance.kind, OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA);
   EXPECT_EQ(param::PositionSize::FromRaw(rebuilt.balance.value).ToString(),
             "-42.5");
 }
@@ -250,12 +298,11 @@ TEST(AccountAdjustment, FullRawRoundTripPreservesEveryGroup) {
   aa::BalanceOperation balance;
   balance.asset = "USD";
   balance.averageEntryPrice = param::Price::FromString("101.5");
-  balance.realizedPnl = param::Pnl::FromString("12.5");
   adjustment.operation = aa::Operation::OfBalance(balance);
 
   OpenPitAccountAdjustmentAmount amountRaw{};
   amountRaw.balance =
-      MakeRawAmount(OpenPitParamAdjustmentAmountKind_Delta, "10");
+      MakeRawAmount(OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA, "10");
   adjustment.amount = aa::Amount::FromRaw(amountRaw);
 
   aa::Bounds bounds;
@@ -273,8 +320,6 @@ TEST(AccountAdjustment, FullRawRoundTripPreservesEveryGroup) {
   EXPECT_EQ(*restored.operation->AsBalance()->asset, "USD");
   EXPECT_EQ(restored.operation->AsBalance()->averageEntryPrice->ToString(),
             "101.5");
-  ASSERT_TRUE(restored.operation->AsBalance()->realizedPnl.has_value());
-  EXPECT_EQ(restored.operation->AsBalance()->realizedPnl->ToString(), "12.5");
 
   ASSERT_TRUE(restored.amount.has_value());
   ASSERT_TRUE(restored.amount->balance.has_value());
@@ -322,8 +367,8 @@ TEST(AccountAdjustmentOutcomeEntry, PresentAndAbsentAmountsRoundTrip) {
   entry.asset = "USD";
   entry.balance = aa::OutcomeAmount(param::PositionSize::FromString("5"),
                                     param::PositionSize::FromString("5"));
-  entry.realizedPnl = aa::PnlOutcomeAmount(param::Pnl::FromString("-2.5"),
-                                           param::Pnl::FromString("7.5"));
+  entry.realizedPnl = aa::PnlOutcome{aa::PnlOutcomeAmount(
+      param::Pnl::FromString("-2.5"), param::Pnl::FromString("7.5"))};
   entry.averageEntryPrice = param::Price::FromString("101.25");
   // held and incoming intentionally left absent.
 
@@ -336,8 +381,9 @@ TEST(AccountAdjustmentOutcomeEntry, PresentAndAbsentAmountsRoundTrip) {
   EXPECT_FALSE(restored.held.has_value());
   EXPECT_FALSE(restored.incoming.has_value());
   ASSERT_TRUE(restored.realizedPnl.has_value());
-  EXPECT_EQ(restored.realizedPnl->delta.ToString(), "-2.5");
-  EXPECT_EQ(restored.realizedPnl->absolute.ToString(), "7.5");
+  const auto& pnl = std::get<aa::PnlOutcomeAmount>(restored.realizedPnl->Get());
+  EXPECT_EQ(pnl.delta.ToString(), "-2.5");
+  EXPECT_EQ(pnl.absolute.ToString(), "7.5");
   ASSERT_TRUE(restored.averageEntryPrice.has_value());
   EXPECT_EQ(restored.averageEntryPrice->ToString(), "101.25");
 }
@@ -359,8 +405,7 @@ TEST(AccountAdjustmentOutcome, RawRoundTripPreservesGroupAndEntry) {
   EXPECT_FALSE(restored.entry.averageEntryPrice.has_value());
 }
 
-TEST(AccountAdjustmentEngine,
-     ForceSetRealizedPnlAndAverageEntryPriceSurfacesOutcome) {
+TEST(AccountAdjustmentEngine, ForceSetPositionPnlSurfacesOutcome) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
   builder.Add(policies::SpotFundsPolicy{});
   const openpit::Engine engine = builder.Build();
@@ -368,34 +413,20 @@ TEST(AccountAdjustmentEngine,
   const param::AccountId accountId = param::AccountId::FromUint64(99224416);
 
   aa::AccountAdjustment seed;
-  {
-    aa::BalanceOperation balance;
-    balance.asset = "AAPL";
-    balance.averageEntryPrice = param::Price::FromString("100");
-    balance.realizedPnl = param::Pnl::FromString("30");
-    seed.operation = aa::Operation::OfBalance(std::move(balance));
-    aa::Amount amount;
-    amount.balance = param::AdjustmentAmount::OfAbsolute(
-        param::PositionSize::FromString("10"));
-    seed.amount = std::move(amount);
-  }
+  aa::BalanceOperation seedOperation;
+  seedOperation.asset = "AAPL";
+  seedOperation.realizedPnl = param::Pnl::FromString("30");
+  seed.operation = aa::Operation::OfBalance(std::move(seedOperation));
 
   const openpit::AdjustmentResult seedResult = engine.ApplyAccountAdjustment(
       accountId, std::vector<aa::AccountAdjustment>{seed});
   ASSERT_TRUE(seedResult.Passed());
 
   aa::AccountAdjustment forceSet;
-  {
-    aa::BalanceOperation balance;
-    balance.asset = "AAPL";
-    balance.averageEntryPrice = param::Price::FromString("150");
-    balance.realizedPnl = param::Pnl::FromString("50");
-    forceSet.operation = aa::Operation::OfBalance(std::move(balance));
-    aa::Amount amount;
-    amount.balance =
-        param::AdjustmentAmount::OfDelta(param::PositionSize::FromString("0"));
-    forceSet.amount = std::move(amount);
-  }
+  aa::BalanceOperation forceSetOperation;
+  forceSetOperation.asset = "AAPL";
+  forceSetOperation.realizedPnl = param::Pnl::FromString("50");
+  forceSet.operation = aa::Operation::OfBalance(std::move(forceSetOperation));
 
   const openpit::AdjustmentResult result = engine.ApplyAccountAdjustment(
       accountId, std::vector<aa::AccountAdjustment>{forceSet});
@@ -406,10 +437,9 @@ TEST(AccountAdjustmentEngine,
       result.accountAdjustmentOutcomes.front().entry;
   EXPECT_EQ(entry.asset, "AAPL");
   ASSERT_TRUE(entry.realizedPnl.has_value());
-  EXPECT_EQ(entry.realizedPnl->delta.ToString(), "20");
-  EXPECT_EQ(entry.realizedPnl->absolute.ToString(), "50");
-  ASSERT_TRUE(entry.averageEntryPrice.has_value());
-  EXPECT_EQ(entry.averageEntryPrice->ToString(), "150");
+  const auto& pnl = std::get<aa::PnlOutcomeAmount>(entry.realizedPnl->Get());
+  EXPECT_EQ(pnl.delta.ToString(), "20");
+  EXPECT_EQ(pnl.absolute.ToString(), "50");
 }
 
 //------------------------------------------------------------------------------

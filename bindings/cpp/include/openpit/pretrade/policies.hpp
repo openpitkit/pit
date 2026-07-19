@@ -59,8 +59,8 @@ enum class SpotFundsPricingSource : std::uint8_t {
 
 // Runtime limit mode for spot-funds reservations.
 enum class SpotFundsLimitMode : std::uint8_t {
-  Enforce = OpenPitPretradePoliciesSpotFundsLimitMode_Enforce,
-  TrackOnly = OpenPitPretradePoliciesSpotFundsLimitMode_TrackOnly,
+  Enforce = OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE,
+  TrackOnly = OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY,
 };
 
 inline constexpr std::string_view RateLimitPolicyName = "RateLimitPolicy";
@@ -542,7 +542,8 @@ struct SpotFundsOverride {
   [[nodiscard]] static OpenPitPretradePoliciesSpotFundsOverrideTarget
   InstrumentTarget(::openpit::marketdata::InstrumentId instrument) noexcept {
     OpenPitPretradePoliciesSpotFundsOverrideTarget result{};
-    result.tag = OpenPitPretradePoliciesSpotFundsOverrideTargetTag_Instrument;
+    result.tag =
+        OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT;
     result.payload.instrument.instrument_id = instrument.Raw();
     return result;
   }
@@ -552,7 +553,7 @@ struct SpotFundsOverride {
                           ::openpit::param::AccountId accountId) noexcept {
     OpenPitPretradePoliciesSpotFundsOverrideTarget result{};
     result.tag =
-        OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccount;
+        OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT_ACCOUNT;
     result.payload.instrument_account.instrument_id = instrument.Raw();
     result.payload.instrument_account.account_id = accountId.Raw();
     return result;
@@ -564,7 +565,7 @@ struct SpotFundsOverride {
       ::openpit::param::AccountGroupId accountGroupId) noexcept {
     OpenPitPretradePoliciesSpotFundsOverrideTarget result{};
     result.tag =
-        OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccountGroup;
+        OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT_ACCOUNT_GROUP;
     result.payload.instrument_account_group.instrument_id = instrument.Raw();
     result.payload.instrument_account_group.account_group_id =
         accountGroupId.Raw();
@@ -574,24 +575,19 @@ struct SpotFundsOverride {
   OpenPitPretradePoliciesSpotFundsOverrideTarget m_target{};
 };
 
-/// Account-currency P&L bounds computed by the spot-funds ledger.
+/// Account-wide P&L bounds computed by the spot-funds ledger.
 ///
 /// Lower and upper bounds are optional; lower is typically a negative loss
-/// limit and upper is typically a positive profit-taking limit.
+/// limit and upper is typically a positive profit-taking limit. At least one
+/// bound must be set whenever a barrier is installed.
 struct SpotFundsPnlBoundsBarrier {
-  std::string accountCurrency;
   std::optional<::openpit::param::Pnl> lowerBound;
   std::optional<::openpit::param::Pnl> upperBound;
-
-  /// Creates a barrier for one account currency.
-  explicit SpotFundsPnlBoundsBarrier(std::string currency)
-      : accountCurrency(std::move(currency)) {}
 
   /// Lowers the barrier to the native C payload.
   [[nodiscard]] OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier Raw()
       const noexcept {
     OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier raw{};
-    raw.account_currency = ::openpit::MakeStringView(accountCurrency);
     raw.lower_bound =
         ::openpit::pretrade::policies::detail::PnlOptional(lowerBound);
     raw.upper_bound =
@@ -609,7 +605,7 @@ struct SpotFundsPnlBoundsAccountGroupBarrier {
   SpotFundsPnlBoundsAccountGroupBarrier(
       ::openpit::param::AccountGroupId groupId,
       SpotFundsPnlBoundsBarrier groupBarrier)
-      : barrier(std::move(groupBarrier)), accountGroupId(groupId) {}
+      : barrier(groupBarrier), accountGroupId(groupId) {}
 
   /// Lowers the account-group refinement to the native C payload.
   [[nodiscard]] OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
@@ -621,19 +617,15 @@ struct SpotFundsPnlBoundsAccountGroupBarrier {
   }
 };
 
-/// Per-account spot-funds P&L bounds with a construction-time P&L seed.
+/// Per-account spot-funds P&L bounds refinement.
 struct SpotFundsPnlBoundsAccountBarrier {
   SpotFundsPnlBoundsBarrier barrier;
   ::openpit::param::AccountId accountId;
-  ::openpit::param::Pnl initialPnl;
 
-  /// Creates an account P&L barrier with an initial accumulated P&L.
+  /// Creates an account P&L barrier.
   SpotFundsPnlBoundsAccountBarrier(::openpit::param::AccountId account,
-                                   SpotFundsPnlBoundsBarrier accountBarrier,
-                                   ::openpit::param::Pnl initial)
-      : barrier(std::move(accountBarrier)),
-        accountId(account),
-        initialPnl(initial) {}
+                                   SpotFundsPnlBoundsBarrier accountBarrier)
+      : barrier(accountBarrier), accountId(account) {}
 
   /// Lowers the account barrier to the native C payload.
   [[nodiscard]] OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier Raw()
@@ -641,41 +633,59 @@ struct SpotFundsPnlBoundsAccountBarrier {
     OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier raw{};
     raw.account_id = accountId.Raw();
     raw.barrier = barrier.Raw();
-    raw.initial_pnl = initialPnl.Raw();
     return raw;
   }
 };
 
-/// Runtime replacement for per-account spot-funds P&L bounds.
+/// Tri-state runtime update for the singular SpotFunds global P&L barrier.
 ///
-/// This update intentionally carries no `initialPnl`; runtime reconfiguration
-/// preserves the live accumulator.
-struct SpotFundsPnlBoundsAccountBarrierUpdate {
-  SpotFundsPnlBoundsBarrier barrier;
-  ::openpit::param::AccountId accountId;
-
-  /// Creates an account P&L barrier update.
-  SpotFundsPnlBoundsAccountBarrierUpdate(
-      ::openpit::param::AccountId account,
-      SpotFundsPnlBoundsBarrier accountBarrier)
-      : barrier(std::move(accountBarrier)), accountId(account) {}
-
-  /// Lowers the account update to the native C payload.
-  [[nodiscard]]
-  OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate Raw()
-      const noexcept {
-    OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate raw{};
-    raw.account_id = accountId.Raw();
-    raw.barrier = barrier.Raw();
-    return raw;
+/// Use the explicitly named `Unchanged`, `Clear`, and `Set` factories. Direct
+/// construction is intentionally unavailable so legacy `std::nullopt` and
+/// barrier arguments fail to compile instead of silently changing meaning. A
+/// collection state is not representable because this axis is singular.
+class SpotFundsPnlBoundsGlobalBarrierUpdate {
+ public:
+  /// Leaves the current global barrier unchanged.
+  [[nodiscard]] static SpotFundsPnlBoundsGlobalBarrierUpdate
+  Unchanged() noexcept {
+    return SpotFundsPnlBoundsGlobalBarrierUpdate(false, std::nullopt);
   }
+
+  /// Clears the current global barrier.
+  [[nodiscard]] static SpotFundsPnlBoundsGlobalBarrierUpdate Clear() noexcept {
+    return SpotFundsPnlBoundsGlobalBarrierUpdate(true, std::nullopt);
+  }
+
+  /// Replaces the current global barrier.
+  [[nodiscard]] static SpotFundsPnlBoundsGlobalBarrierUpdate Set(
+      SpotFundsPnlBoundsBarrier barrier) {
+    return SpotFundsPnlBoundsGlobalBarrierUpdate(true, barrier);
+  }
+
+  [[nodiscard]] bool HasUpdate() const noexcept { return m_hasUpdate; }
+
+  [[nodiscard]] const std::optional<SpotFundsPnlBoundsBarrier>& Barrier()
+      const noexcept {
+    return m_barrier;
+  }
+
+ private:
+  SpotFundsPnlBoundsGlobalBarrierUpdate(
+      bool hasUpdate, std::optional<SpotFundsPnlBoundsBarrier> barrier) noexcept
+      : m_hasUpdate(hasUpdate), m_barrier(barrier) {}
+
+  bool m_hasUpdate{false};
+  std::optional<SpotFundsPnlBoundsBarrier> m_barrier;
 };
 
 /// Built-in spot-funds self-computed P&L bounds kill switch.
 ///
 /// This registers the regular `SpotFundsPolicy` name and configures its
-/// account-currency P&L-bounds axis. The policy computes realized P&L from
+/// account P&L-bounds axis. The policy computes realized P&L from
 /// reconciled fills instead of trusting an externally supplied P&L figure.
+/// Its SpotFunds limit mode is `TrackOnly`: holdings and P&L are updated, but
+/// insufficient-funds gating is disabled. Mark pricing is used for market
+/// orders.
 class SpotFundsPnlBoundsKillSwitchPolicy {
  public:
   /// Assigns the policy to a pricing group.
@@ -698,33 +708,34 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
     return *this;
   }
 
-  /// Adds a global account-currency P&L barrier.
+  /// Sets the global account P&L barrier.
   SpotFundsPnlBoundsKillSwitchPolicy& GlobalBarrier(
       SpotFundsPnlBoundsBarrier barrier) {
-    m_globalBarriers.push_back(std::move(barrier));
+    m_globalBarrier = barrier;
     return *this;
   }
 
-  /// Adds an account-group account-currency P&L barrier.
+  /// Adds an account-group account P&L barrier.
   SpotFundsPnlBoundsKillSwitchPolicy& AccountGroupBarrier(
       SpotFundsPnlBoundsAccountGroupBarrier barrier) {
-    m_accountGroupBarriers.push_back(std::move(barrier));
+    m_accountGroupBarriers.push_back(barrier);
     return *this;
   }
 
-  /// Adds an account account-currency P&L barrier.
+  /// Adds an account P&L barrier.
   SpotFundsPnlBoundsKillSwitchPolicy& AccountBarrier(
       SpotFundsPnlBoundsAccountBarrier barrier) {
-    m_accountBarriers.push_back(std::move(barrier));
+    m_accountBarriers.push_back(barrier);
     return *this;
   }
 
   /// Registers the policy on `builder`.
   void AddTo(::openpit::EngineBuilder& builder) const {
-    std::vector<OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier> globalRaw;
-    globalRaw.reserve(m_globalBarriers.size());
-    for (const SpotFundsPnlBoundsBarrier& barrier : m_globalBarriers) {
-      globalRaw.push_back(barrier.Raw());
+    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier globalRaw{};
+    const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier* globalPtr = nullptr;
+    if (m_globalBarrier) {
+      globalRaw = m_globalBarrier->Raw();
+      globalPtr = &globalRaw;
     }
 
     std::vector<OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier>
@@ -744,9 +755,9 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
 
     OpenPitSharedString* error = nullptr;
     if (!openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
-            builder.Get(), m_marketData, m_policyGroupId, globalRaw.data(),
-            globalRaw.size(), accountGroupRaw.data(), accountGroupRaw.size(),
-            accountRaw.data(), accountRaw.size(), &error)) {
+            builder.Get(), m_marketData, m_policyGroupId, globalPtr,
+            accountGroupRaw.data(), accountGroupRaw.size(), accountRaw.data(),
+            accountRaw.size(), &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error,
           "openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_"
@@ -756,7 +767,7 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
 
  private:
   const OpenPitMarketDataService* m_marketData = nullptr;
-  std::vector<SpotFundsPnlBoundsBarrier> m_globalBarriers;
+  std::optional<SpotFundsPnlBoundsBarrier> m_globalBarrier;
   std::vector<SpotFundsPnlBoundsAccountGroupBarrier> m_accountGroupBarriers;
   std::vector<SpotFundsPnlBoundsAccountBarrier> m_accountBarriers;
   std::uint16_t m_policyGroupId = OPENPIT_DEFAULT_POLICY_GROUP_ID;
@@ -1082,26 +1093,26 @@ class Configurator {
 
   /// Retunes the SpotFunds self-computed P&L bounds axis.
   ///
-  /// Each optional vector is a PATCH axis: `std::nullopt` leaves that axis
-  /// unchanged; an engaged empty vector clears it. Account updates preserve
-  /// each live accumulated P&L value.
+  /// The global update uses the explicitly named `Unchanged`, `Clear`, and
+  /// `Set` operations. Optional group/account vectors are PATCH axes:
+  /// `std::nullopt` leaves the axis unchanged and an engaged empty vector
+  /// clears it. Account updates preserve each live accumulated P&L value.
   void SpotFundsPnlBoundsKillSwitch(
       std::string_view name,
-      std::optional<
-          std::vector<::openpit::pretrade::policies::SpotFundsPnlBoundsBarrier>>
-          global = std::nullopt,
+      ::openpit::pretrade::policies::SpotFundsPnlBoundsGlobalBarrierUpdate
+          global = ::openpit::pretrade::policies::
+              SpotFundsPnlBoundsGlobalBarrierUpdate::Unchanged(),
       std::optional<std::vector<
           ::openpit::pretrade::policies::SpotFundsPnlBoundsAccountGroupBarrier>>
           accountGroups = std::nullopt,
-      std::optional<std::vector<::openpit::pretrade::policies::
-                                    SpotFundsPnlBoundsAccountBarrierUpdate>>
+      std::optional<std::vector<
+          ::openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrier>>
           accounts = std::nullopt) const {
-    std::vector<OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier> globalRaw;
-    if (global) {
-      globalRaw.reserve(global->size());
-      for (const auto& barrier : *global) {
-        globalRaw.push_back(barrier.Raw());
-      }
+    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier globalRaw{};
+    const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier* globalPtr = nullptr;
+    if (global.HasUpdate() && global.Barrier()) {
+      globalRaw = global.Barrier()->Raw();
+      globalPtr = &globalRaw;
     }
 
     std::vector<OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier>
@@ -1113,7 +1124,7 @@ class Configurator {
       }
     }
 
-    std::vector<OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate>
+    std::vector<OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier>
         accountRaw;
     if (accounts) {
       accountRaw.reserve(accounts->size());
@@ -1124,31 +1135,42 @@ class Configurator {
 
     OpenPitConfigureError* error = nullptr;
     if (!openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
-            m_engine, ::openpit::MakeStringView(name), globalRaw.data(),
-            globalRaw.size(), global.has_value(), accountGroupRaw.data(),
-            accountGroupRaw.size(), accountGroups.has_value(),
-            accountRaw.data(), accountRaw.size(), accounts.has_value(),
-            &error)) {
+            m_engine, ::openpit::MakeStringView(name), globalPtr,
+            global.HasUpdate(), accountGroupRaw.data(), accountGroupRaw.size(),
+            accountGroups.has_value(), accountRaw.data(), accountRaw.size(),
+            accounts.has_value(), &error)) {
       ::openpit::detail::ThrowFromConfigureError(
           error,
           "openpit_engine_configure_spot_funds_pnl_bounds_killswitch failed");
     }
   }
 
-  /// Force-sets one SpotFunds live account-currency P&L accumulator.
+  /// Replaces one SpotFunds live account P&L accumulator with a numeric value.
   ///
-  /// This is an absolute assignment and is separate from barrier retuning.
-  void SetSpotFundsAccountPnl(std::string_view name,
-                              ::openpit::param::AccountId accountId,
-                              std::string_view accountCurrency,
-                              ::openpit::param::Pnl pnl) const {
-    OpenPitConfigureError* error = nullptr;
-    if (!openpit_engine_configure_spot_funds_set_account_pnl(
-            m_engine, ::openpit::MakeStringView(name), accountId.Raw(),
-            ::openpit::MakeStringView(accountCurrency), pnl.Raw(), &error)) {
-      ::openpit::detail::ThrowFromConfigureError(
-          error, "openpit_engine_configure_spot_funds_set_account_pnl failed");
-    }
+  /// This is separate from barrier retuning and re-arms the accumulator after
+  /// a calculation halt. It does not affect any position-level accumulator.
+  /// A value outside the effective bounds returns the account block recorded
+  /// by the engine immediately; otherwise the returned block list is empty.
+  [[nodiscard]] ::openpit::PolicyConfigurationResult SetSpotFundsAccountPnl(
+      std::string_view name, ::openpit::param::AccountId accountId,
+      ::openpit::param::Pnl pnl) const {
+    return SetSpotFundsAccountPnlRaw(
+        name, accountId,
+        ::openpit::accountadjustment::detail::PnlValueRaw(pnl));
+  }
+
+  /// Replaces one SpotFunds live account P&L accumulator with a halt reason.
+  ///
+  /// This is separate from barrier retuning and does not affect any
+  /// position-level accumulator. When an effective account P&L barrier is
+  /// configured, the result reports the block immediately recorded by the
+  /// engine.
+  [[nodiscard]] ::openpit::PolicyConfigurationResult SetSpotFundsAccountPnl(
+      std::string_view name, ::openpit::param::AccountId accountId,
+      ::openpit::accountadjustment::PnlHaltReason reason) const {
+    return SetSpotFundsAccountPnlRaw(
+        name, accountId,
+        ::openpit::accountadjustment::detail::PnlValueRaw(reason));
   }
 
   void SpotFundsGlobalLimitMode(
@@ -1197,6 +1219,23 @@ class Configurator {
   }
 
  private:
+  [[nodiscard]] ::openpit::PolicyConfigurationResult SetSpotFundsAccountPnlRaw(
+      std::string_view name, ::openpit::param::AccountId accountId,
+      OpenPitPnlState state) const {
+    OpenPitConfigureError* error = nullptr;
+    OpenPitPretradeAccountBlockList* blocks =
+        openpit_engine_configure_spot_funds_set_account_pnl(
+            m_engine, ::openpit::MakeStringView(name), accountId.Raw(), state,
+            &error);
+    if (blocks == nullptr) {
+      ::openpit::detail::ThrowFromConfigureError(
+          error, "openpit_engine_configure_spot_funds_set_account_pnl failed");
+    }
+    ::openpit::PolicyConfigurationResult result;
+    result.accountBlocks = ::openpit::detail::DrainAccountBlockList(blocks);
+    return result;
+  }
+
   OpenPitEngine* m_engine = nullptr;
 };
 

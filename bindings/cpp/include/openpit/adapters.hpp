@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "openpit/account_adjustment.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/accounts.hpp"
 #include "openpit/pretrade/callbacks.hpp"
 #include "openpit/reject.hpp"
@@ -90,7 +90,8 @@ struct HasReportFull<
     Policy, Report,
     std::void_t<decltype(std::declval<const Policy&>().ApplyExecutionReport(
         std::declval<const PostTradeContext&>(), std::declval<const Report&>(),
-        std::declval<PostTradeAdjustments&>()))>> : std::true_type {};
+        std::declval<PostTradeAdjustments&>(),
+        std::declval<PostTradePnls&>()))>> : std::true_type {};
 
 template <typename Policy, typename Report, typename = void>
 struct HasReportLegacy : std::false_type {};
@@ -100,6 +101,18 @@ struct HasReportLegacy<
     Policy, Report,
     std::void_t<decltype(std::declval<const Policy&>().ApplyExecutionReport(
         std::declval<const Report&>()))>> : std::true_type {};
+
+// Detects the removed three-argument post-trade form. Matching it is an error:
+// without it the adapter would silently expose no report hook at all.
+template <typename Policy, typename Report, typename = void>
+struct HasLegacyReportFull : std::false_type {};
+
+template <typename Policy, typename Report>
+struct HasLegacyReportFull<
+    Policy, Report,
+    std::void_t<decltype(std::declval<const Policy&>().ApplyExecutionReport(
+        std::declval<const PostTradeContext&>(), std::declval<const Report&>(),
+        std::declval<PostTradeAdjustments&>()))>> : std::true_type {};
 
 template <typename Policy, typename = void>
 struct HasAdjustment : std::false_type {};
@@ -177,6 +190,11 @@ enum class CastMode : std::uint8_t {
 template <typename ClientPolicy, typename ClientOrder, typename ClientReport,
           CastMode mode>
 class StartPolicyAdapter {
+  static_assert(
+      !detail::HasLegacyReportFull<ClientPolicy, ClientReport>::value,
+      "ClientPolicy::ApplyExecutionReport(context, report, adjustments) was "
+      "removed; add PostTradePnls& as the fourth argument");
+
  public:
   // Creates adapter around a client start-stage policy instance.
   explicit StartPolicyAdapter(ClientPolicy policy)
@@ -244,7 +262,8 @@ class StartPolicyAdapter {
   [[nodiscard]] std::vector<::openpit::accounts::AccountBlock>
   ApplyExecutionReport(const PostTradeContext& context,
                        const openpit::ExecutionReport& report,
-                       PostTradeAdjustments& adjustments) const {
+                       PostTradeAdjustments& adjustments,
+                       PostTradePnls& pnls) const {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_report = dynamic_cast<const ClientReport*>(&report);
       if (concrete_report == nullptr) {
@@ -252,7 +271,7 @@ class StartPolicyAdapter {
       }
       if constexpr (detail::HasReportFull<P, ClientReport>::value) {
         return m_policy.ApplyExecutionReport(context, *concrete_report,
-                                             adjustments);
+                                             adjustments, pnls);
       } else if constexpr (detail::HasReportLegacy<P, ClientReport>::value) {
         static_cast<void>(m_policy.ApplyExecutionReport(*concrete_report));
         return {};
@@ -263,7 +282,7 @@ class StartPolicyAdapter {
       const auto& concrete_report = static_cast<const ClientReport&>(report);
       if constexpr (detail::HasReportFull<P, ClientReport>::value) {
         return m_policy.ApplyExecutionReport(context, concrete_report,
-                                             adjustments);
+                                             adjustments, pnls);
       } else if constexpr (detail::HasReportLegacy<P, ClientReport>::value) {
         static_cast<void>(m_policy.ApplyExecutionReport(concrete_report));
         return {};
@@ -290,7 +309,7 @@ class StartPolicyAdapter {
 
   template <typename P = ClientPolicy,
             std::enable_if_t<detail::HasAdjustment<P>::value, int> = 0>
-  [[nodiscard]] PolicyDecision ApplyAccountAdjustment(
+  [[nodiscard]] PolicyAccountAdjustmentResult ApplyAccountAdjustment(
       const ::openpit::accountadjustment::Context& context,
       ::openpit::param::AccountId accountId,
       const ::openpit::accountadjustment::AccountAdjustment& adjustment,
@@ -317,6 +336,11 @@ class StartPolicyAdapter {
 template <typename ClientPolicy, typename ClientOrder, typename ClientReport,
           CastMode mode>
 class PolicyAdapter {
+  static_assert(
+      !detail::HasLegacyReportFull<ClientPolicy, ClientReport>::value,
+      "ClientPolicy::ApplyExecutionReport(context, report, adjustments) was "
+      "removed; add PostTradePnls& as the fourth argument");
+
  public:
   // Creates adapter around a client main-stage policy instance.
   explicit PolicyAdapter(ClientPolicy policy) : m_policy(std::move(policy)) {}
@@ -473,7 +497,8 @@ class PolicyAdapter {
   [[nodiscard]] std::vector<::openpit::accounts::AccountBlock>
   ApplyExecutionReport(const PostTradeContext& context,
                        const openpit::ExecutionReport& report,
-                       PostTradeAdjustments& adjustments) const {
+                       PostTradeAdjustments& adjustments,
+                       PostTradePnls& pnls) const {
     if constexpr (mode == CastMode::SafeSlow) {
       const auto* concrete_report = dynamic_cast<const ClientReport*>(&report);
       if (concrete_report == nullptr) {
@@ -481,7 +506,7 @@ class PolicyAdapter {
       }
       if constexpr (detail::HasReportFull<P, ClientReport>::value) {
         return m_policy.ApplyExecutionReport(context, *concrete_report,
-                                             adjustments);
+                                             adjustments, pnls);
       } else {
         static_cast<void>(m_policy.ApplyExecutionReport(*concrete_report));
         return {};
@@ -490,7 +515,7 @@ class PolicyAdapter {
       const auto& concrete_report = static_cast<const ClientReport&>(report);
       if constexpr (detail::HasReportFull<P, ClientReport>::value) {
         return m_policy.ApplyExecutionReport(context, concrete_report,
-                                             adjustments);
+                                             adjustments, pnls);
       } else {
         static_cast<void>(m_policy.ApplyExecutionReport(concrete_report));
         return {};
@@ -515,7 +540,7 @@ class PolicyAdapter {
 
   template <typename P = ClientPolicy,
             std::enable_if_t<detail::HasAdjustment<P>::value, int> = 0>
-  [[nodiscard]] PolicyDecision ApplyAccountAdjustment(
+  [[nodiscard]] PolicyAccountAdjustmentResult ApplyAccountAdjustment(
       const ::openpit::accountadjustment::Context& context,
       ::openpit::param::AccountId accountId,
       const ::openpit::accountadjustment::AccountAdjustment& adjustment,

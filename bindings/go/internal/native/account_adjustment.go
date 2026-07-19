@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package native
 
@@ -52,16 +52,17 @@ func AccountAdjustmentGetBalanceOperationView(
 	return &adjustment.operation.balance
 }
 
-func AccountAdjustmentSetBalanceOperationAndUnsetPositionOperation(
+func AccountAdjustmentSetBalanceOperationAndUnsetOtherOperations(
 	adjustment *AccountAdjustment,
 	operation AccountAdjustmentBalanceOperation,
 ) {
 	adjustment.operation.kind = AccountAdjustmentOperationKindBalance
 	adjustment.operation.balance = operation
 	AccountAdjustmentPositionOperationReset(&adjustment.operation.position)
+	AccountAdjustmentAccountPnlOperationReset(&adjustment.operation.account_pnl)
 }
 
-func AccountAdjustmentSelectBalanceOperationAndUnsetPositionOperation(
+func AccountAdjustmentSelectBalanceOperationAndUnsetOtherOperations(
 	adjustment *AccountAdjustment,
 ) {
 	if adjustment.operation.kind != AccountAdjustmentOperationKindBalance {
@@ -69,6 +70,7 @@ func AccountAdjustmentSelectBalanceOperationAndUnsetPositionOperation(
 	}
 	adjustment.operation.kind = AccountAdjustmentOperationKindBalance
 	AccountAdjustmentPositionOperationReset(&adjustment.operation.position)
+	AccountAdjustmentAccountPnlOperationReset(&adjustment.operation.account_pnl)
 }
 
 func AccountAdjustmentUnsetBalanceOperation(adjustment *AccountAdjustment) {
@@ -90,16 +92,17 @@ func AccountAdjustmentGetPositionOperationView(
 	return &adjustment.operation.position
 }
 
-func AccountAdjustmentSetPositionOperationAndUnsetBalanceOperation(
+func AccountAdjustmentSetPositionOperationAndUnsetOtherOperations(
 	adjustment *AccountAdjustment,
 	operation AccountAdjustmentPositionOperation,
 ) {
 	adjustment.operation.kind = AccountAdjustmentOperationKindPosition
 	adjustment.operation.position = operation
 	AccountAdjustmentBalanceOperationReset(&adjustment.operation.balance)
+	AccountAdjustmentAccountPnlOperationReset(&adjustment.operation.account_pnl)
 }
 
-func AccountAdjustmentSelectPositionOperationAndUnsetBalanceOperation(
+func AccountAdjustmentSelectPositionOperationAndUnsetOtherOperations(
 	adjustment *AccountAdjustment,
 ) {
 	if adjustment.operation.kind != AccountAdjustmentOperationKindPosition {
@@ -107,6 +110,7 @@ func AccountAdjustmentSelectPositionOperationAndUnsetBalanceOperation(
 	}
 	adjustment.operation.kind = AccountAdjustmentOperationKindPosition
 	AccountAdjustmentBalanceOperationReset(&adjustment.operation.balance)
+	AccountAdjustmentAccountPnlOperationReset(&adjustment.operation.account_pnl)
 }
 
 func AccountAdjustmentUnsetPositionOperation(adjustment *AccountAdjustment) {
@@ -114,6 +118,29 @@ func AccountAdjustmentUnsetPositionOperation(adjustment *AccountAdjustment) {
 		adjustment.operation.kind = AccountAdjustmentOperationKindAbsent
 	}
 	AccountAdjustmentPositionOperationReset(&adjustment.operation.position)
+}
+
+func AccountAdjustmentGetAccountPnlOperation(
+	adjustment AccountAdjustment,
+) AccountAdjustmentAccountPnlOperation {
+	return adjustment.operation.account_pnl
+}
+
+func AccountAdjustmentSetAccountPnlOperationAndUnsetOtherOperations(
+	adjustment *AccountAdjustment,
+	operation AccountAdjustmentAccountPnlOperation,
+) {
+	adjustment.operation.kind = AccountAdjustmentOperationKindAccountPnl
+	adjustment.operation.account_pnl = operation
+	AccountAdjustmentBalanceOperationReset(&adjustment.operation.balance)
+	AccountAdjustmentPositionOperationReset(&adjustment.operation.position)
+}
+
+func AccountAdjustmentUnsetAccountPnlOperation(adjustment *AccountAdjustment) {
+	if adjustment.operation.kind == AccountAdjustmentOperationKindAccountPnl {
+		adjustment.operation.kind = AccountAdjustmentOperationKindAbsent
+	}
+	AccountAdjustmentAccountPnlOperationReset(&adjustment.operation.account_pnl)
 }
 
 func AccountAdjustmentGetAmount(adjustment AccountAdjustment) AccountAdjustmentAmountOptional {
@@ -278,13 +305,13 @@ func AccountAdjustmentBalanceOperationUnsetAverageEntryPrice(
 
 func AccountAdjustmentBalanceOperationGetRealizedPnl(
 	operation AccountAdjustmentBalanceOperation,
-) ParamPnlOptional {
+) PnlStateOptional {
 	return operation.realized_pnl
 }
 
 func AccountAdjustmentBalanceOperationSetRealizedPnl(
 	operation *AccountAdjustmentBalanceOperation,
-	value ParamPnl,
+	value PnlState,
 ) {
 	operation.realized_pnl.value = value
 	operation.realized_pnl.is_set = true
@@ -293,7 +320,28 @@ func AccountAdjustmentBalanceOperationSetRealizedPnl(
 func AccountAdjustmentBalanceOperationUnsetRealizedPnl(
 	operation *AccountAdjustmentBalanceOperation,
 ) {
-	operation.realized_pnl = ParamPnlOptional{}
+	operation.realized_pnl = PnlStateOptional{}
+}
+
+//------------------------------------------------------------------------------
+// AccountAdjustmentAccountPnlOperation
+
+func NewAccountAdjustmentAccountPnlOperation(
+	state PnlState,
+) AccountAdjustmentAccountPnlOperation {
+	return AccountAdjustmentAccountPnlOperation{state: state}
+}
+
+func AccountAdjustmentAccountPnlOperationReset(
+	operation *AccountAdjustmentAccountPnlOperation,
+) {
+	*operation = AccountAdjustmentAccountPnlOperation{}
+}
+
+func AccountAdjustmentAccountPnlOperationGetState(
+	operation AccountAdjustmentAccountPnlOperation,
+) PnlState {
+	return operation.state
 }
 
 //------------------------------------------------------------------------------

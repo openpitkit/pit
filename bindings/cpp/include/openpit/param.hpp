@@ -49,32 +49,33 @@ namespace openpit::param {
 
 // Decimal rounding strategy mapped 1:1 from the native runtime enum.
 enum class RoundingStrategy : std::uint8_t {
-  MidpointNearestEven = OpenPitParamRoundingStrategy_MidpointNearestEven,
-  MidpointAwayFromZero = OpenPitParamRoundingStrategy_MidpointAwayFromZero,
-  Up = OpenPitParamRoundingStrategy_Up,
-  Down = OpenPitParamRoundingStrategy_Down,
+  MidpointNearestEven = OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN,
+  MidpointAwayFromZero =
+      OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_AWAY_FROM_ZERO,
+  Up = OPENPIT_PARAM_ROUNDING_STRATEGY_UP,
+  Down = OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN,
 };
 
 // Type of fill event reported by a venue.
 enum class FillType : std::uint8_t {
-  Trade = OpenPitParamFillType_Trade,
-  Liquidation = OpenPitParamFillType_Liquidation,
-  AutoDeleverage = OpenPitParamFillType_AutoDeleverage,
-  Settlement = OpenPitParamFillType_Settlement,
-  Funding = OpenPitParamFillType_Funding,
+  Trade = OPENPIT_PARAM_FILL_TYPE_TRADE,
+  Liquidation = OPENPIT_PARAM_FILL_TYPE_LIQUIDATION,
+  AutoDeleverage = OPENPIT_PARAM_FILL_TYPE_AUTO_DELEVERAGE,
+  Settlement = OPENPIT_PARAM_FILL_TYPE_SETTLEMENT,
+  Funding = OPENPIT_PARAM_FILL_TYPE_FUNDING,
 };
 
 // Numeric domain value category carried by parameter errors.
 enum class Kind : std::uint8_t {
-  Quantity = OpenPitParamKind_Quantity,
-  Volume = OpenPitParamKind_Volume,
-  Notional = OpenPitParamKind_Notional,
-  Price = OpenPitParamKind_Price,
-  Pnl = OpenPitParamKind_Pnl,
-  CashFlow = OpenPitParamKind_CashFlow,
-  PositionSize = OpenPitParamKind_PositionSize,
-  Fee = OpenPitParamKind_Fee,
-  Leverage = OpenPitParamKind_Leverage,
+  Quantity = OPENPIT_PARAM_KIND_QUANTITY,
+  Volume = OPENPIT_PARAM_KIND_VOLUME,
+  Notional = OPENPIT_PARAM_KIND_NOTIONAL,
+  Price = OPENPIT_PARAM_KIND_PRICE,
+  Pnl = OPENPIT_PARAM_KIND_PNL,
+  CashFlow = OPENPIT_PARAM_KIND_CASH_FLOW,
+  PositionSize = OPENPIT_PARAM_KIND_POSITION_SIZE,
+  Fee = OPENPIT_PARAM_KIND_FEE,
+  Leverage = OPENPIT_PARAM_KIND_LEVERAGE,
 };
 
 using AccountGroupIdOptional = OpenPitParamAccountGroupIdOptional;
@@ -352,9 +353,9 @@ class MonetaryAmount {
 // as an empty `std::optional<AdjustmentAmount>`, not a value here.
 enum class AdjustmentAmountKind : std::uint8_t {
   // Change the current state by the carried signed amount.
-  Delta = OpenPitParamAdjustmentAmountKind_Delta,
+  Delta = OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA,
   // Set the current state to the carried signed amount.
-  Absolute = OpenPitParamAdjustmentAmountKind_Absolute,
+  Absolute = OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE,
 };
 
 // A signed account-adjustment amount tagged by kind: the carried
@@ -379,10 +380,10 @@ class AdjustmentAmount {
   [[nodiscard]] static std::optional<AdjustmentAmount> FromRaw(
       const OpenPitParamAdjustmentAmount& raw) {
     switch (raw.kind) {
-      case OpenPitParamAdjustmentAmountKind_Delta:
+      case OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA:
         return AdjustmentAmount(AdjustmentAmountKind::Delta,
                                 PositionSize::FromRaw(raw.value));
-      case OpenPitParamAdjustmentAmountKind_Absolute:
+      case OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE:
         return AdjustmentAmount(AdjustmentAmountKind::Absolute,
                                 PositionSize::FromRaw(raw.value));
       default:

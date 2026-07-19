@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package pretrade
 
@@ -59,13 +59,18 @@ type ClientPreTradePolicy[Order ClientOrder, Report ClientExecutionReport] inter
 	PolicyGroupID() model.PolicyGroupID
 	CheckPreTradeStart(Context, Order) []reject.Reject
 	PerformPreTradeCheck(Context, Order, tx.Mutations, Result) []reject.Reject
-	ApplyExecutionReport(PostTradeContext, Report, PostTradeAdjustments) []reject.AccountBlock
+	ApplyExecutionReport(
+		PostTradeContext,
+		Report,
+		PostTradeAdjustments,
+		PostTradePnls,
+	) []reject.AccountBlock
 	ApplyAccountAdjustment(
 		accountadjustment.Context,
 		param.AccountID,
 		model.AccountAdjustment,
 		tx.Mutations, AccountOutcomes,
-	) []reject.Reject
+	) (PolicyAccountAdjustmentResult, []reject.Reject)
 }
 
 // NewSafeClientPreTradePolicy adapts a client typed pre-trade policy to
@@ -143,12 +148,13 @@ func (p *safeClientPreTradePolicy[Order, Report]) ApplyExecutionReport(
 	ctx PostTradeContext,
 	engineReport model.ExecutionReport,
 	adjustments PostTradeAdjustments,
+	pnls PostTradePnls,
 ) []reject.AccountBlock {
 	report, ok := safeReportPayload[Report](engineReport)
 	if !ok {
 		return nil
 	}
-	return p.policy.ApplyExecutionReport(ctx, report, adjustments)
+	return p.policy.ApplyExecutionReport(ctx, report, adjustments, pnls)
 }
 
 func (p *safeClientPreTradePolicy[Order, Report]) ApplyAccountAdjustment(
@@ -157,7 +163,7 @@ func (p *safeClientPreTradePolicy[Order, Report]) ApplyAccountAdjustment(
 	adjustment model.AccountAdjustment,
 	mutations tx.Mutations,
 	outcomes AccountOutcomes,
-) []reject.Reject {
+) (PolicyAccountAdjustmentResult, []reject.Reject) {
 	return p.policy.ApplyAccountAdjustment(ctx, accountID, adjustment, mutations, outcomes)
 }
 
@@ -205,10 +211,13 @@ func (p *unsafeFastClientPreTradePolicy[Order, Report]) ApplyExecutionReport(
 	ctx PostTradeContext,
 	engineReport model.ExecutionReport,
 	adjustments PostTradeAdjustments,
+	pnls PostTradePnls,
 ) []reject.AccountBlock {
 	return p.policy.ApplyExecutionReport(
 		ctx,
-		unsafeFastReportPayload[Report](engineReport), adjustments,
+		unsafeFastReportPayload[Report](engineReport),
+		adjustments,
+		pnls,
 	)
 }
 
@@ -218,7 +227,7 @@ func (p *unsafeFastClientPreTradePolicy[Order, Report]) ApplyAccountAdjustment(
 	adjustment model.AccountAdjustment,
 	mutations tx.Mutations,
 	outcomes AccountOutcomes,
-) []reject.Reject {
+) (PolicyAccountAdjustmentResult, []reject.Reject) {
 	return p.policy.ApplyAccountAdjustment(ctx, accountID, adjustment, mutations, outcomes)
 }
 

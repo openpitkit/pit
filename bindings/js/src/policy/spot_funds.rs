@@ -28,24 +28,22 @@
 //! builder). The core `SpotFundsPolicy::new(market_orders, storage_builder)`
 //! takes the optional market-data bundle and the engine's storage builder.
 
-use openpit::param::{Asset, Pnl};
+use openpit::param::Pnl;
 use openpit::pretrade::policies::{
     SpotFundsLimitMode, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
-    SpotFundsPnlBoundsAccountBarrier, SpotFundsPnlBoundsAccountBarrierUpdate,
-    SpotFundsPnlBoundsAccountGroupBarrier, SpotFundsPnlBoundsBarrier, SpotFundsPolicy,
-    SpotFundsPricingSource, SpotFundsSettings,
+    SpotFundsPnlBoundsAccountBarrier, SpotFundsPnlBoundsAccountGroupBarrier,
+    SpotFundsPnlBoundsBarrier, SpotFundsPolicy, SpotFundsPricingSource, SpotFundsSettings,
 };
 use openpit::pretrade::PolicyGroupId;
 use openpit_interop::EngineLocking;
 use wasm_bindgen::prelude::*;
 
 use crate::domain::{
-    collect_cloned_wrappers, extract_cloned_wrapper, parse_asset, parse_bounded_number,
+    collect_cloned_wrappers, extract_cloned_wrapper, parse_bounded_number,
     resolve_account_group_id, resolve_account_id, resolve_instrument_id,
     resolve_optional_account_group_id, resolve_optional_account_id, resolve_optional_pnl,
-    resolve_pnl, AccountGroupIdLike, AccountIdLike, InstrumentIdLike, IntegerNumber,
-    OptionalAccountGroupIdLike, OptionalAccountIdLike, OptionalIntegerNumber, OptionalPnlLike,
-    PnlLike,
+    AccountGroupIdLike, AccountIdLike, InstrumentIdLike, IntegerNumber, OptionalAccountGroupIdLike,
+    OptionalAccountIdLike, OptionalIntegerNumber, OptionalPnlLike,
 };
 use crate::error::{engine_build_configuration_error, make_error, ErrorKind};
 use crate::marketdata::JsMarketDataService;
@@ -198,31 +196,31 @@ pub(crate) fn parse_limit_mode(value: &JsValue) -> Result<Option<SpotFundsLimitM
     }
 }
 
-/// Account-currency P&L-bounds barrier for spot funds.
+/// Reusable account-P&L bounds for spot funds.
+///
+/// Bounds are denominated in the account currency. At least one bound must be
+/// present when the barrier is registered with a builder or configurator.
 #[wasm_bindgen(js_name = SpotFundsPnlBoundsBarrier)]
 #[derive(Clone)]
 pub struct JsSpotFundsPnlBoundsBarrier {
-    account_currency: Asset,
     lower_bound: Option<Pnl>,
     upper_bound: Option<Pnl>,
 }
 
 #[wasm_bindgen(js_class = SpotFundsPnlBoundsBarrier)]
 impl JsSpotFundsPnlBoundsBarrier {
-    /// Constructs a global spot-funds P&L-bounds barrier.
+    /// Constructs reusable spot-funds P&L bounds.
     ///
     /// # Errors
     ///
-    /// Throws `AssetError` when `accountCurrency` is empty or `ParamError` on
-    /// an invalid bound.
+    /// Throws `TypeError`, `RangeError`, or `ParamError` when a present bound
+    /// is not a valid P&L value.
     #[wasm_bindgen(constructor)]
     pub fn new(
-        account_currency: &str,
         lower_bound: OptionalPnlLike,
         upper_bound: OptionalPnlLike,
     ) -> Result<JsSpotFundsPnlBoundsBarrier, JsValue> {
         Ok(Self {
-            account_currency: parse_asset(account_currency)?,
             lower_bound: resolve_optional_pnl(lower_bound.into())?,
             upper_bound: resolve_optional_pnl(upper_bound.into())?,
         })
@@ -237,14 +235,13 @@ impl JsSpotFundsPnlBoundsBarrier {
 impl JsSpotFundsPnlBoundsBarrier {
     pub(crate) fn to_core(&self) -> SpotFundsPnlBoundsBarrier {
         SpotFundsPnlBoundsBarrier {
-            account_currency: self.account_currency.clone(),
             lower_bound: self.lower_bound,
             upper_bound: self.upper_bound,
         }
     }
 }
 
-/// Account-group spot-funds P&L-bounds barrier.
+/// Account-group spot-funds P&L-bounds refinement.
 #[wasm_bindgen(js_name = SpotFundsPnlBoundsAccountGroupBarrier)]
 #[derive(Clone)]
 pub struct JsSpotFundsPnlBoundsAccountGroupBarrier {
@@ -254,20 +251,19 @@ pub struct JsSpotFundsPnlBoundsAccountGroupBarrier {
 
 #[wasm_bindgen(js_class = SpotFundsPnlBoundsAccountGroupBarrier)]
 impl JsSpotFundsPnlBoundsAccountGroupBarrier {
-    /// Constructs an account-group spot-funds P&L-bounds barrier.
+    /// Pairs `accountGroupId` with reusable spot-funds P&L bounds.
     ///
     /// # Errors
     ///
-    /// Throws `AssetError`/`ParamError` on invalid input.
+    /// Throws `ParamError` when `accountGroupId` is invalid or `TypeError` when
+    /// `barrier` is not a `SpotFundsPnlBoundsBarrier`.
     #[wasm_bindgen(constructor)]
     pub fn new(
         account_group_id: AccountGroupIdLike,
-        account_currency: &str,
-        lower_bound: OptionalPnlLike,
-        upper_bound: OptionalPnlLike,
+        barrier: &JsSpotFundsPnlBoundsBarrier,
     ) -> Result<JsSpotFundsPnlBoundsAccountGroupBarrier, JsValue> {
         Ok(Self {
-            barrier: JsSpotFundsPnlBoundsBarrier::new(account_currency, lower_bound, upper_bound)?,
+            barrier: barrier.clone(),
             account_group_id: JsAccountGroupId::from_inner(resolve_account_group_id(
                 account_group_id.into(),
             )?),
@@ -289,36 +285,30 @@ impl JsSpotFundsPnlBoundsAccountGroupBarrier {
     }
 }
 
-/// Build-time account spot-funds P&L-bounds barrier with an initial P&L seed.
+/// Account-specific spot-funds P&L-bounds refinement.
 #[wasm_bindgen(js_name = SpotFundsPnlBoundsAccountBarrier)]
 #[derive(Clone)]
 pub struct JsSpotFundsPnlBoundsAccountBarrier {
     barrier: JsSpotFundsPnlBoundsBarrier,
     account_id: JsAccountId,
-    initial_pnl: Pnl,
 }
 
 #[wasm_bindgen(js_class = SpotFundsPnlBoundsAccountBarrier)]
 impl JsSpotFundsPnlBoundsAccountBarrier {
-    /// Constructs a build-time account spot-funds P&L-bounds barrier.
-    ///
-    /// `initialPnl` seeds live accumulated P&L at policy construction time.
+    /// Pairs `accountId` with reusable spot-funds P&L bounds.
     ///
     /// # Errors
     ///
-    /// Throws `AssetError`/`ParamError` on invalid input.
+    /// Throws `AccountIdError` when `accountId` is invalid or `TypeError` when
+    /// `barrier` is not a `SpotFundsPnlBoundsBarrier`.
     #[wasm_bindgen(constructor)]
     pub fn new(
         account_id: AccountIdLike,
-        account_currency: &str,
-        initial_pnl: PnlLike,
-        lower_bound: OptionalPnlLike,
-        upper_bound: OptionalPnlLike,
+        barrier: &JsSpotFundsPnlBoundsBarrier,
     ) -> Result<JsSpotFundsPnlBoundsAccountBarrier, JsValue> {
         Ok(Self {
-            barrier: JsSpotFundsPnlBoundsBarrier::new(account_currency, lower_bound, upper_bound)?,
+            barrier: barrier.clone(),
             account_id: JsAccountId::from_inner(resolve_account_id(account_id.into())?),
-            initial_pnl: resolve_pnl(initial_pnl.into())?,
         })
     }
 
@@ -331,53 +321,6 @@ impl JsSpotFundsPnlBoundsAccountBarrier {
 impl JsSpotFundsPnlBoundsAccountBarrier {
     pub(crate) fn to_core(&self) -> SpotFundsPnlBoundsAccountBarrier {
         SpotFundsPnlBoundsAccountBarrier {
-            barrier: self.barrier.to_core(),
-            account_id: self.account_id.inner(),
-            initial_pnl: self.initial_pnl,
-        }
-    }
-}
-
-/// Runtime account spot-funds P&L-bounds barrier update.
-#[wasm_bindgen(js_name = SpotFundsPnlBoundsAccountBarrierUpdate)]
-#[derive(Clone)]
-pub struct JsSpotFundsPnlBoundsAccountBarrierUpdate {
-    barrier: JsSpotFundsPnlBoundsBarrier,
-    account_id: JsAccountId,
-}
-
-#[wasm_bindgen(js_class = SpotFundsPnlBoundsAccountBarrierUpdate)]
-impl JsSpotFundsPnlBoundsAccountBarrierUpdate {
-    /// Constructs a runtime account spot-funds P&L-bounds update.
-    ///
-    /// Unlike `SpotFundsPnlBoundsAccountBarrier`, this type has no
-    /// `initialPnl`: runtime updates preserve the live accumulated P&L.
-    ///
-    /// # Errors
-    ///
-    /// Throws `AssetError`/`ParamError` on invalid input.
-    #[wasm_bindgen(constructor)]
-    pub fn new(
-        account_id: AccountIdLike,
-        account_currency: &str,
-        lower_bound: OptionalPnlLike,
-        upper_bound: OptionalPnlLike,
-    ) -> Result<JsSpotFundsPnlBoundsAccountBarrierUpdate, JsValue> {
-        Ok(Self {
-            barrier: JsSpotFundsPnlBoundsBarrier::new(account_currency, lower_bound, upper_bound)?,
-            account_id: JsAccountId::from_inner(resolve_account_id(account_id.into())?),
-        })
-    }
-
-    #[wasm_bindgen(js_name = clone)]
-    pub fn js_clone(&self) -> JsSpotFundsPnlBoundsAccountBarrierUpdate {
-        self.clone()
-    }
-}
-
-impl JsSpotFundsPnlBoundsAccountBarrierUpdate {
-    pub(crate) fn to_core(&self) -> SpotFundsPnlBoundsAccountBarrierUpdate {
-        SpotFundsPnlBoundsAccountBarrierUpdate {
             barrier: self.barrier.to_core(),
             account_id: self.account_id.inner(),
         }
@@ -507,12 +450,19 @@ impl JsSpotFundsBuilder {
 }
 
 /// Configuring builder for the builtin spot-funds P&L-bounds axis.
+///
+/// This entry point seeds the funds-limit axis as `TrackOnly` (and market
+/// pricing as `Mark` / 0 bps / no overrides): reservations are still
+/// recorded, but the insufficient-funds reject is disabled from the start,
+/// even before `marketData` is ever called. Only the P&L-bounds axis
+/// configured through this builder is enforced. Retune the funds-limit axis
+/// afterward through `Configurator.spotFunds` if enforcement is needed.
 #[wasm_bindgen(js_name = SpotFundsPnlBoundsKillswitchBuilder)]
 #[derive(Clone, Default)]
 pub struct JsSpotFundsPnlBoundsKillswitchBuilder {
     policy_group_id: u16,
     market_data: Option<JsMarketDataService>,
-    global_barriers: Vec<JsSpotFundsPnlBoundsBarrier>,
+    global_barrier: Option<JsSpotFundsPnlBoundsBarrier>,
     account_group_barriers: Vec<JsSpotFundsPnlBoundsAccountGroupBarrier>,
     account_barriers: Vec<JsSpotFundsPnlBoundsAccountBarrier>,
 }
@@ -525,21 +475,18 @@ impl JsSpotFundsPnlBoundsKillswitchBuilder {
         SpotFundsPolicy::<EngineLocking, EngineLocking>::NAME.to_owned()
     }
 
-    /// Adds global P&L barriers and returns the builder for chaining.
+    /// Sets the global account-PnL barrier and returns the builder for chaining.
     #[wasm_bindgen(
-        js_name = globalBarriers,
+        js_name = globalBarrier,
         unchecked_return_type = "SpotFundsPnlBoundsKillswitchReadyBuilder"
     )]
-    pub fn global_barriers(
+    pub fn global_barrier(
         &self,
-        #[wasm_bindgen(unchecked_param_type = "Iterable<SpotFundsPnlBoundsBarrier>")]
-        barriers: JsValue,
-    ) -> Result<JsSpotFundsPnlBoundsKillswitchBuilder, JsValue> {
-        let barriers: Vec<JsSpotFundsPnlBoundsBarrier> =
-            collect_cloned_wrappers(&barriers, "globalBarriers")?;
+        barrier: &JsSpotFundsPnlBoundsBarrier,
+    ) -> JsSpotFundsPnlBoundsKillswitchBuilder {
         let mut next = self.clone();
-        next.global_barriers.extend(barriers);
-        Ok(next)
+        next.global_barrier = Some(barrier.clone());
+        next
     }
 
     /// Adds account-group P&L barriers and returns the builder for chaining.
@@ -559,7 +506,7 @@ impl JsSpotFundsPnlBoundsKillswitchBuilder {
         Ok(next)
     }
 
-    /// Adds build-time account P&L barriers and returns the builder.
+    /// Adds account-specific P&L barriers and returns the builder.
     #[wasm_bindgen(
         js_name = accountBarriers,
         unchecked_return_type = "SpotFundsPnlBoundsKillswitchReadyBuilder"
@@ -618,17 +565,10 @@ impl JsSpotFundsPnlBoundsKillswitchBuilder {
             .market_data
             .as_ref()
             .map(|service| SpotFundsMarketData::<EngineLocking>::new(service.handle()));
-        let mut settings = SpotFundsSettings::new(
-            0,
-            SpotFundsPricingSource::Mark,
-            std::iter::empty::<(SpotFundsOverrideTarget, SpotFundsOverride)>(),
-        )
-        .map_err(|error| engine_build_configuration_error(&error.to_string()))?;
-        settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-        let settings = settings
-            .with_pnl_barriers(
-                self.global_barriers
-                    .iter()
+        Ok(
+            SpotFundsPolicy::<EngineLocking, EngineLocking>::pnl_bounds_kill_switch(
+                self.global_barrier
+                    .as_ref()
                     .map(JsSpotFundsPnlBoundsBarrier::to_core),
                 self.account_group_barriers
                     .iter()
@@ -636,15 +576,12 @@ impl JsSpotFundsPnlBoundsKillswitchBuilder {
                 self.account_barriers
                     .iter()
                     .map(JsSpotFundsPnlBoundsAccountBarrier::to_core),
+                market_orders,
+                storage_builder,
             )
-            .map_err(|error| engine_build_configuration_error(&error.to_string()))?;
-
-        Ok(SpotFundsPolicy::<EngineLocking, EngineLocking>::new(
-            settings,
-            market_orders,
-            storage_builder,
+            .map_err(|error| engine_build_configuration_error(&error.to_string()))?
+            .with_policy_group_id(PolicyGroupId::new(self.policy_group_id)),
         )
-        .with_policy_group_id(PolicyGroupId::new(self.policy_group_id)))
     }
 }
 
@@ -693,6 +630,10 @@ pub fn build_spot_funds() -> JsSpotFundsBuilder {
 }
 
 /// Creates a fresh spot-funds P&L-bounds configuring builder.
+///
+/// The resulting policy seeds the funds-limit axis as `TrackOnly`, disabling
+/// the insufficient-funds reject; see
+/// [`JsSpotFundsPnlBoundsKillswitchBuilder`] for the full contract.
 #[wasm_bindgen(js_name = buildSpotFundsPnlBoundsKillswitch)]
 pub fn build_spot_funds_pnl_bounds_killswitch() -> JsSpotFundsPnlBoundsKillswitchBuilder {
     JsSpotFundsPnlBoundsKillswitchBuilder::default()

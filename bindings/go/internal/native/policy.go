@@ -119,7 +119,7 @@ func NewPretradePoliciesOrderSizeAccountAssetBarrier(
 }
 
 //------------------------------------------------------------------------------
-// BuiltinPnlBoundsKillswitchPolicy
+// BuiltinPnlBoundsKillSwitchPolicy
 
 func NewParamPnlOptional(value ParamPnl) ParamPnlOptional {
 	var out ParamPnlOptional
@@ -171,14 +171,12 @@ func NewPretradePoliciesPnlBoundsAccountBarrierUpdate(
 }
 
 func NewPretradePoliciesSpotFundsPnlBoundsBarrier(
-	accountCurrency string,
 	lowerBound ParamPnlOptional,
 	upperBound ParamPnlOptional,
 ) PretradePoliciesSpotFundsPnlBoundsBarrier {
 	return PretradePoliciesSpotFundsPnlBoundsBarrier{
-		account_currency: importString(accountCurrency),
-		lower_bound:      lowerBound,
-		upper_bound:      upperBound,
+		lower_bound: lowerBound,
+		upper_bound: upperBound,
 	}
 }
 
@@ -195,20 +193,8 @@ func NewPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier(
 func NewPretradePoliciesSpotFundsPnlBoundsAccountBarrier(
 	accountID ParamAccountID,
 	barrier PretradePoliciesSpotFundsPnlBoundsBarrier,
-	initialPnl ParamPnl,
 ) PretradePoliciesSpotFundsPnlBoundsAccountBarrier {
 	return PretradePoliciesSpotFundsPnlBoundsAccountBarrier{
-		account_id:  accountID,
-		barrier:     barrier,
-		initial_pnl: initialPnl,
-	}
-}
-
-func NewPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate(
-	accountID ParamAccountID,
-	barrier PretradePoliciesSpotFundsPnlBoundsBarrier,
-) PretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate {
-	return PretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate{
 		account_id: accountID,
 		barrier:    barrier,
 	}
@@ -239,9 +225,7 @@ func NewPretradePoliciesSpotFundsInstrumentOverride(
 	) = instrumentPayload
 	return newPretradePoliciesSpotFundsOverride(
 		C.OpenPitPretradePoliciesSpotFundsOverrideTarget{
-			tag: C.uint8_t(
-				C.OpenPitPretradePoliciesSpotFundsOverrideTargetTag_Instrument,
-			),
+			tag:     C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT,
 			payload: payload,
 		},
 		slippageBps,
@@ -263,9 +247,7 @@ func NewPretradePoliciesSpotFundsInstrumentAccountOverride(
 	) = accountPayload
 	return newPretradePoliciesSpotFundsOverride(
 		C.OpenPitPretradePoliciesSpotFundsOverrideTarget{
-			tag: C.uint8_t(
-				C.OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccount,
-			),
+			tag:     C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT_ACCOUNT,
 			payload: payload,
 		},
 		slippageBps,
@@ -287,9 +269,7 @@ func NewPretradePoliciesSpotFundsInstrumentAccountGroupOverride(
 	) = groupPayload
 	return newPretradePoliciesSpotFundsOverride(
 		C.OpenPitPretradePoliciesSpotFundsOverrideTarget{
-			tag: C.uint8_t(
-				C.OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccountGroup,
-			),
+			tag:     C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT_ACCOUNT_GROUP,
 			payload: payload,
 		},
 		slippageBps,

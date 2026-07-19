@@ -58,8 +58,8 @@
 // queue and resolve a future with its result". Here that is expressed once,
 // generically: `Call` for a single-value engine call, `Call2` for a two-value
 // tuple call (request-or-rejects, reservation-or-rejects,
-// batch-error-or-outcomes), and `Submit` for caller-owned work — each pinned to
-// an account id. A typed binding can layer the named operations on top by
+// batch-error-or-outcomes), and `Submit` for caller-owned work — each pinned
+// to an account id. A typed binding can layer the named operations on top by
 // forwarding to these (e.g.
 // `StartPreTrade(order)` -> `Call2<Request, Rejects>(accountId, [order](auto&
 // e) { return e.StartPreTrade(order); })`) once the synchronous pre-trade
@@ -72,9 +72,10 @@
 //
 // ERROR MODEL. Lifecycle/build failures throw `openpit::Error` (e.g. a
 // non-positive shard count). Expected async outcomes — engine stopped, queue
-// limit, submit deadline, a `Submit` closure that threw — are VALUES delivered
-// through the future as `openpit::asyncengine::Error` and read at the boundary;
-// they are never thrown across a worker thread in a way that loses them.
+// limit, submit deadline, a `Submit` closure that threw — are VALUES
+// delivered through the future as `openpit::asyncengine::Error` and read at
+// the boundary; they are never thrown across a worker thread in a way that
+// loses them.
 
 namespace openpit::asyncengine {
 

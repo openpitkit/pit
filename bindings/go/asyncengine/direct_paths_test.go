@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package asyncengine
 
@@ -29,7 +29,6 @@ import (
 	"go.openpit.dev/openpit/accounts"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
-	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/reject"
 )
@@ -79,7 +78,8 @@ func (d *acceptingDriver) StartPreTrade(
 	done := d.recordStart(accountID)
 	defer done()
 	atomic.AddInt64(&d.startCount, 1)
-	// Return a zero-valued Request (nil inner handle) with nil rejects — accept path.
+	// Return a zero-valued Request (nil inner handle) with nil rejects - accept
+	// path.
 	return pretrade.NewRequestFromHandle(nil), nil, nil
 }
 
@@ -91,7 +91,8 @@ func (d *acceptingDriver) ExecutePreTrade(
 	done := d.recordStart(accountID)
 	defer done()
 	atomic.AddInt64(&d.executeCount, 1)
-	// Return a zero-valued Reservation (nil inner handle) with nil rejects — accept path.
+	// Return a zero-valued Reservation (nil inner handle) with nil rejects -
+	// accept path.
 	return pretrade.NewReservationFromHandle(nil), nil, nil
 }
 
@@ -109,15 +110,11 @@ func (d *acceptingDriver) ApplyExecutionReport(
 func (d *acceptingDriver) ApplyAccountAdjustment(
 	accountID param.AccountID,
 	_ []model.AccountAdjustment,
-) (
-	optional.Option[reject.AccountAdjustmentBatchError],
-	[]accountadjustment.Outcome,
-	error,
-) {
+) (accountadjustment.BatchResult, error) {
 	done := d.recordStart(accountID)
 	defer done()
 	atomic.AddInt64(&d.adjustCount, 1)
-	return optional.None[reject.AccountAdjustmentBatchError](), nil, nil
+	return accountadjustment.BatchResult{}, nil
 }
 
 func (*acceptingDriver) Accounts() accounts.Accounts {
@@ -129,7 +126,7 @@ func (*acceptingDriver) Accounts() accounts.Accounts {
 // increments.
 func TestAsyncEngineExecutePreTradeHappyPath(t *testing.T) {
 	t.Parallel()
-	// Use acceptingDriver which returns nil rejects — the accept path.
+	// Use acceptingDriver which returns nil rejects - the accept path.
 	driver := newAcceptingDriver()
 	async, err := NewBuilder(driver).Dynamic().Build()
 	if err != nil {
@@ -162,8 +159,9 @@ func TestAsyncEngineExecutePreTradeHappyPath(t *testing.T) {
 }
 
 // TestAsyncEngineExecutePreTradeSerializesReserveCommit tests that a
-// reserve→commit sequence for the same account is serialized through one queue.
-// The driver tracks peak concurrency; we assert it never exceeds 1 for account 42.
+// reserve→commit sequence for the same account is serialized through one
+// queue. The driver tracks peak concurrency; we assert it never exceeds 1 for
+// account 42.
 func TestAsyncEngineExecutePreTradeSerializesReserveCommit(t *testing.T) {
 	t.Parallel()
 	driver := newAcceptingDriver()
@@ -188,7 +186,7 @@ func TestAsyncEngineExecutePreTradeSerializesReserveCommit(t *testing.T) {
 		// The fake driver returns nil inner; Close would panic on a real handle,
 		// but AsyncReservation.Close with a nil inner calls Close() on nil which
 		// is fine because pretrade.Reservation.Close guards on nil handle.
-		// So just drop the reservation — we only care about counting.
+		// So just drop the reservation - we only care about counting.
 		_ = res
 	}
 
@@ -204,8 +202,8 @@ func TestAsyncEngineExecutePreTradeSerializesReserveCommit(t *testing.T) {
 }
 
 // TestAsyncEngineApplyAccountAdjustmentHappyPath tests the happy path of
-// ApplyAccountAdjustment, asserting the Future2 shape and that adjustmentCount
-// is incremented.
+// ApplyAccountAdjustment, asserting the batch-result future and that
+// adjustmentCount is incremented.
 func TestAsyncEngineApplyAccountAdjustmentHappyPath(t *testing.T) {
 	t.Parallel()
 	driver := newFakeDriver()
@@ -221,16 +219,15 @@ func TestAsyncEngineApplyAccountAdjustmentHappyPath(t *testing.T) {
 
 	accountID := param.NewAccountIDFromUint64(7)
 	f := async.ApplyAccountAdjustment(context.Background(), accountID, nil)
-	batchReject, outcomes, err := f.Await(context.Background())
+	result, err := f.Await(context.Background())
 	if err != nil {
 		t.Fatalf("Await() err = %v", err)
 	}
-	// The fake driver returns optional.None (no batch reject).
-	if batchReject.IsSet() {
-		t.Errorf("batchReject.IsSet() = true, want false on accept")
+	if result.BatchError.IsSet() {
+		t.Errorf("BatchError.IsSet() = true, want false on accept")
 	}
-	if outcomes != nil {
-		t.Errorf("outcomes = %v, want nil (fake driver returns nil)", outcomes)
+	if result.Outcomes != nil {
+		t.Errorf("Outcomes = %v, want nil (fake driver returns nil)", result.Outcomes)
 	}
 	if got := atomic.LoadInt64(&driver.adjustmentCount); got != 1 {
 		t.Errorf("adjustmentCount = %d, want 1", got)
@@ -239,7 +236,8 @@ func TestAsyncEngineApplyAccountAdjustmentHappyPath(t *testing.T) {
 
 // TestAsyncEngineApplyAccountAdjustmentAbortPath tests that a hard-stopped
 // engine aborts a pending adjustment task with ErrStopped. This exercises the
-// abort/none path: the future should resolve with (None, nil, ErrStopped).
+// abort path: the future should resolve with an empty batch result and
+// ErrStopped.
 func TestAsyncEngineApplyAccountAdjustmentAbortPath(t *testing.T) {
 	t.Parallel()
 	driver := newFakeDriver()
@@ -289,16 +287,15 @@ func TestAsyncEngineApplyAccountAdjustmentAbortPath(t *testing.T) {
 		t.Fatalf("blockingOrder Await error = %v", err)
 	}
 
-	batchReject, outcomes, err := fAdj.Await(context.Background())
+	result, err := fAdj.Await(context.Background())
 	if !errors.Is(err, ErrStopped) {
 		t.Fatalf("fAdj Await err = %v, want ErrStopped", err)
 	}
-	// On abort the task resolves with (None, nil, ErrStopped).
-	if batchReject.IsSet() {
-		t.Errorf("batchReject.IsSet() = true, want false on abort")
+	if result.BatchError.IsSet() {
+		t.Errorf("BatchError.IsSet() = true, want false on abort")
 	}
-	if outcomes != nil {
-		t.Errorf("outcomes = %v, want nil on abort", outcomes)
+	if result.Outcomes != nil {
+		t.Errorf("Outcomes = %v, want nil on abort", result.Outcomes)
 	}
 
 	// adjustmentCount must be 0 because the task was aborted, not run.
@@ -376,7 +373,7 @@ func TestAsyncEngineInstrumentationCountersAllDriverMethods(t *testing.T) {
 
 	// Apply account adjustment (adjustmentCount).
 	fAdj := async.ApplyAccountAdjustment(context.Background(), accountID, nil)
-	if _, _, err := fAdj.Await(context.Background()); err != nil {
+	if _, err := fAdj.Await(context.Background()); err != nil {
 		t.Fatalf("ApplyAccountAdjustment Await error = %v", err)
 	}
 

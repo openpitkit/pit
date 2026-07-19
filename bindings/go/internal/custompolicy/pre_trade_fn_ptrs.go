@@ -37,6 +37,7 @@ extern OpenPitPretradeAccountBlockList* pitPretradePreTradePolicyApplyExecutionR
     const OpenPitPostTradeContext* ctx,
     const OpenPitExecutionReport* report,
     OpenPitPostTradeAdjustmentList* out_adjustments,
+    OpenPitPostTradeAccountPnlList* out_account_pnls,
     void* user_data);
 
 extern OpenPitPretradeRejectList* pitPretradePreTradePolicyApplyAccountAdjustment(
@@ -44,7 +45,7 @@ extern OpenPitPretradeRejectList* pitPretradePreTradePolicyApplyAccountAdjustmen
     OpenPitParamAccountId account_id,
     const OpenPitAccountAdjustment* adjustment,
     OpenPitMutations* mutations,
-    OpenPitAccountOutcomeEntryList* out_outcomes,
+    OpenPitPretradeAccountAdjustmentResult* out_result,
     void* user_data);
 
 extern void pitPretradePreTradePolicyClose(void* user_data);

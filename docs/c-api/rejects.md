@@ -6,254 +6,436 @@
 
 ## `OpenPitPretradeRejectScope`
 
-Broad area to which a reject applies.
+Raw reject-scope code accepted from C callers.
 
-Valid values: `Order` (1), `Account` (2). Zero is not a valid scope value; the
-caller must always set this field explicitly.
+Zero is not valid; callers must set this field explicitly.
 
 ```c
 typedef uint8_t OpenPitPretradeRejectScope;
-/**
- * The reject applies to one order or order-like request.
- */
-#define OpenPitPretradeRejectScope_Order ((OpenPitPretradeRejectScope) 1)
-/**
- * The reject applies to account state rather than to one order only.
- */
-#define OpenPitPretradeRejectScope_Account ((OpenPitPretradeRejectScope) 2)
+```
+
+## `OPENPIT_PRETRADE_REJECT_SCOPE_ORDER`
+
+The reject applies to one order or order-like request.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_SCOPE_ORDER ((OpenPitPretradeRejectScope) 1)
+```
+
+## `OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT`
+
+The reject applies to account state rather than to one order only.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT ((OpenPitPretradeRejectScope) 2)
 ```
 
 ## `OpenPitPretradeRejectCode`
 
-Stable classification code for a reject.
+Raw stable classification code for a reject.
 
 Read this first when you need machine-readable handling. The textual fields in
 [`OpenPitPretradeReject`] provide operator-facing explanation and extra context.
 
-Valid codes are `1..=42` and `255` (`Other`). Unknown incoming codes are mapped
-to `Other` (`255`).
+Valid codes are `1..=42`, `254` (`Custom`), and `255` (`Other`). Unknown
+incoming codes are mapped to `Other` (`255`).
 
 ```c
 typedef uint16_t OpenPitPretradeRejectCode;
-/**
- * A required field is absent.
- */
-#define OpenPitPretradeRejectCode_MissingRequiredField \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD`
+
+A required field is absent.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD \
     ((OpenPitPretradeRejectCode) 1)
-/**
- * A field cannot be parsed from the supplied wire value.
- */
-#define OpenPitPretradeRejectCode_InvalidFieldFormat \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_FORMAT`
+
+A field cannot be parsed from the supplied wire value.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_FORMAT \
     ((OpenPitPretradeRejectCode) 2)
-/**
- * A field is syntactically valid but semantically unacceptable.
- */
-#define OpenPitPretradeRejectCode_InvalidFieldValue \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_VALUE`
+
+A field is syntactically valid but semantically unacceptable.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_VALUE \
     ((OpenPitPretradeRejectCode) 3)
-/**
- * The requested order type is not supported.
- */
-#define OpenPitPretradeRejectCode_UnsupportedOrderType \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_TYPE`
+
+The requested order type is not supported.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_TYPE \
     ((OpenPitPretradeRejectCode) 4)
-/**
- * The requested time-in-force is not supported.
- */
-#define OpenPitPretradeRejectCode_UnsupportedTimeInForce \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_TIME_IN_FORCE`
+
+The requested time-in-force is not supported.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_TIME_IN_FORCE \
     ((OpenPitPretradeRejectCode) 5)
-/**
- * Another order attribute is unsupported.
- */
-#define OpenPitPretradeRejectCode_UnsupportedOrderAttribute \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_ATTRIBUTE`
+
+Another order attribute is unsupported.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_ATTRIBUTE \
     ((OpenPitPretradeRejectCode) 6)
-/**
- * The client order identifier duplicates an active order.
- */
-#define OpenPitPretradeRejectCode_DuplicateClientOrderId \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_DUPLICATE_CLIENT_ORDER_ID`
+
+The client order identifier duplicates an active order.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_DUPLICATE_CLIENT_ORDER_ID \
     ((OpenPitPretradeRejectCode) 7)
-/**
- * The order arrived after the allowed entry deadline.
- */
-#define OpenPitPretradeRejectCode_TooLateToEnter ((OpenPitPretradeRejectCode) 8)
-/**
- * Trading is closed for the relevant venue or session.
- */
-#define OpenPitPretradeRejectCode_ExchangeClosed ((OpenPitPretradeRejectCode) 9)
-/**
- * The instrument cannot be resolved.
- */
-#define OpenPitPretradeRejectCode_UnknownInstrument \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_TOO_LATE_TO_ENTER`
+
+The order arrived after the allowed entry deadline.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_TOO_LATE_TO_ENTER \
+    ((OpenPitPretradeRejectCode) 8)
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_EXCHANGE_CLOSED`
+
+Trading is closed for the relevant venue or session.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_EXCHANGE_CLOSED \
+    ((OpenPitPretradeRejectCode) 9)
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_INSTRUMENT`
+
+The instrument cannot be resolved.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_INSTRUMENT \
     ((OpenPitPretradeRejectCode) 10)
-/**
- * The account cannot be resolved.
- */
-#define OpenPitPretradeRejectCode_UnknownAccount \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_ACCOUNT`
+
+The account cannot be resolved.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_ACCOUNT \
     ((OpenPitPretradeRejectCode) 11)
-/**
- * The venue cannot be resolved.
- */
-#define OpenPitPretradeRejectCode_UnknownVenue ((OpenPitPretradeRejectCode) 12)
-/**
- * The clearing account cannot be resolved.
- */
-#define OpenPitPretradeRejectCode_UnknownClearingAccount \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_VENUE`
+
+The venue cannot be resolved.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_VENUE \
+    ((OpenPitPretradeRejectCode) 12)
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_CLEARING_ACCOUNT`
+
+The clearing account cannot be resolved.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_CLEARING_ACCOUNT \
     ((OpenPitPretradeRejectCode) 13)
-/**
- * The collateral asset cannot be resolved.
- */
-#define OpenPitPretradeRejectCode_UnknownCollateralAsset \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_COLLATERAL_ASSET`
+
+The collateral asset cannot be resolved.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_COLLATERAL_ASSET \
     ((OpenPitPretradeRejectCode) 14)
-/**
- * Available balance is insufficient.
- */
-#define OpenPitPretradeRejectCode_InsufficientFunds \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_FUNDS`
+
+Available balance is insufficient.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_FUNDS \
     ((OpenPitPretradeRejectCode) 15)
-/**
- * Available margin is insufficient.
- */
-#define OpenPitPretradeRejectCode_InsufficientMargin \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_MARGIN`
+
+Available margin is insufficient.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_MARGIN \
     ((OpenPitPretradeRejectCode) 16)
-/**
- * Available position is insufficient.
- */
-#define OpenPitPretradeRejectCode_InsufficientPosition \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_POSITION`
+
+Available position is insufficient.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_POSITION \
     ((OpenPitPretradeRejectCode) 17)
-/**
- * A credit limit was exceeded.
- */
-#define OpenPitPretradeRejectCode_CreditLimitExceeded \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_CREDIT_LIMIT_EXCEEDED`
+
+A credit limit was exceeded.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_CREDIT_LIMIT_EXCEEDED \
     ((OpenPitPretradeRejectCode) 18)
-/**
- * A risk limit was exceeded.
- */
-#define OpenPitPretradeRejectCode_RiskLimitExceeded \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED`
+
+A risk limit was exceeded.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED \
     ((OpenPitPretradeRejectCode) 19)
-/**
- * The order exceeds a generic configured limit.
- */
-#define OpenPitPretradeRejectCode_OrderExceedsLimit \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT`
+
+The order exceeds a generic configured limit.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT \
     ((OpenPitPretradeRejectCode) 20)
-/**
- * The order quantity exceeds a configured limit.
- */
-#define OpenPitPretradeRejectCode_OrderQtyExceedsLimit \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_ORDER_QTY_EXCEEDS_LIMIT`
+
+The order quantity exceeds a configured limit.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_ORDER_QTY_EXCEEDS_LIMIT \
     ((OpenPitPretradeRejectCode) 21)
-/**
- * The order notional exceeds a configured limit.
- */
-#define OpenPitPretradeRejectCode_OrderNotionalExceedsLimit \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_ORDER_NOTIONAL_EXCEEDS_LIMIT`
+
+The order notional exceeds a configured limit.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_ORDER_NOTIONAL_EXCEEDS_LIMIT \
     ((OpenPitPretradeRejectCode) 22)
-/**
- * The resulting position exceeds a configured limit.
- */
-#define OpenPitPretradeRejectCode_PositionLimitExceeded \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_POSITION_LIMIT_EXCEEDED`
+
+The resulting position exceeds a configured limit.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_POSITION_LIMIT_EXCEEDED \
     ((OpenPitPretradeRejectCode) 23)
-/**
- * Concentration constraints were violated.
- */
-#define OpenPitPretradeRejectCode_ConcentrationLimitExceeded \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_CONCENTRATION_LIMIT_EXCEEDED`
+
+Concentration constraints were violated.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_CONCENTRATION_LIMIT_EXCEEDED \
     ((OpenPitPretradeRejectCode) 24)
-/**
- * Leverage constraints were violated.
- */
-#define OpenPitPretradeRejectCode_LeverageLimitExceeded \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_LEVERAGE_LIMIT_EXCEEDED`
+
+Leverage constraints were violated.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_LEVERAGE_LIMIT_EXCEEDED \
     ((OpenPitPretradeRejectCode) 25)
-/**
- * The request rate exceeded a configured limit.
- */
-#define OpenPitPretradeRejectCode_RateLimitExceeded \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED`
+
+The request rate exceeded a configured limit.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED \
     ((OpenPitPretradeRejectCode) 26)
-/**
- * A loss barrier has blocked further risk-taking.
- */
-#define OpenPitPretradeRejectCode_PnlKillSwitchTriggered \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED`
+
+A loss barrier has blocked further risk-taking.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED \
     ((OpenPitPretradeRejectCode) 27)
-/**
- * The account is blocked.
- */
-#define OpenPitPretradeRejectCode_AccountBlocked \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED`
+
+The account is blocked.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED \
     ((OpenPitPretradeRejectCode) 28)
-/**
- * The account is not authorized for this action.
- */
-#define OpenPitPretradeRejectCode_AccountNotAuthorized \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_NOT_AUTHORIZED`
+
+The account is not authorized for this action.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_NOT_AUTHORIZED \
     ((OpenPitPretradeRejectCode) 29)
-/**
- * A compliance restriction blocked the action.
- */
-#define OpenPitPretradeRejectCode_ComplianceRestriction \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_COMPLIANCE_RESTRICTION`
+
+A compliance restriction blocked the action.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_COMPLIANCE_RESTRICTION \
     ((OpenPitPretradeRejectCode) 30)
-/**
- * The instrument is restricted.
- */
-#define OpenPitPretradeRejectCode_InstrumentRestricted \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_INSTRUMENT_RESTRICTED`
+
+The instrument is restricted.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_INSTRUMENT_RESTRICTED \
     ((OpenPitPretradeRejectCode) 31)
-/**
- * A jurisdiction restriction blocked the action.
- */
-#define OpenPitPretradeRejectCode_JurisdictionRestriction \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_JURISDICTION_RESTRICTION`
+
+A jurisdiction restriction blocked the action.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_JURISDICTION_RESTRICTION \
     ((OpenPitPretradeRejectCode) 32)
-/**
- * The action would violate wash-trade prevention.
- */
-#define OpenPitPretradeRejectCode_WashTradePrevention \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_WASH_TRADE_PREVENTION`
+
+The action would violate wash-trade prevention.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_WASH_TRADE_PREVENTION \
     ((OpenPitPretradeRejectCode) 33)
-/**
- * The action would violate self-match prevention.
- */
-#define OpenPitPretradeRejectCode_SelfMatchPrevention \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_SELF_MATCH_PREVENTION`
+
+The action would violate self-match prevention.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_SELF_MATCH_PREVENTION \
     ((OpenPitPretradeRejectCode) 34)
-/**
- * Short-sale restriction blocked the action.
- */
-#define OpenPitPretradeRejectCode_ShortSaleRestriction \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_SHORT_SALE_RESTRICTION`
+
+Short-sale restriction blocked the action.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_SHORT_SALE_RESTRICTION \
     ((OpenPitPretradeRejectCode) 35)
-/**
- * Required risk configuration is missing.
- */
-#define OpenPitPretradeRejectCode_RiskConfigurationMissing \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_RISK_CONFIGURATION_MISSING`
+
+Required risk configuration is missing.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_RISK_CONFIGURATION_MISSING \
     ((OpenPitPretradeRejectCode) 36)
-/**
- * Required reference data is unavailable.
- */
-#define OpenPitPretradeRejectCode_ReferenceDataUnavailable \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_REFERENCE_DATA_UNAVAILABLE`
+
+Required reference data is unavailable.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_REFERENCE_DATA_UNAVAILABLE \
     ((OpenPitPretradeRejectCode) 37)
-/**
- * The system could not compute an order value needed for validation.
- */
-#define OpenPitPretradeRejectCode_OrderValueCalculationFailed \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_ORDER_VALUE_CALCULATION_FAILED`
+
+The system could not compute an order value needed for validation.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_ORDER_VALUE_CALCULATION_FAILED \
     ((OpenPitPretradeRejectCode) 38)
-/**
- * A required service or subsystem is unavailable.
- */
-#define OpenPitPretradeRejectCode_SystemUnavailable \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE`
+
+A required service or subsystem is unavailable.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE \
     ((OpenPitPretradeRejectCode) 39)
-/**
- * Required mark price is unavailable.
- */
-#define OpenPitPretradeRejectCode_MarkPriceUnavailable \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_MARK_PRICE_UNAVAILABLE`
+
+Required mark price is unavailable.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_MARK_PRICE_UNAVAILABLE \
     ((OpenPitPretradeRejectCode) 40)
-/**
- * Account adjustment would violate configured bounds.
- */
-#define OpenPitPretradeRejectCode_AccountAdjustmentBoundsExceeded \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_ADJUSTMENT_BOUNDS_EXCEEDED`
+
+Account adjustment would violate configured bounds.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_ADJUSTMENT_BOUNDS_EXCEEDED \
     ((OpenPitPretradeRejectCode) 41)
-/**
- * Underlying decimal arithmetic overflowed during evaluation.
- */
-#define OpenPitPretradeRejectCode_ArithmeticOverflow \
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_ARITHMETIC_OVERFLOW`
+
+Underlying decimal arithmetic overflowed during evaluation.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_ARITHMETIC_OVERFLOW \
     ((OpenPitPretradeRejectCode) 42)
-/**
- * Reserved discriminant for caller-defined reject classes.
- *
- * Use together with `Reject::with_user_data` to attach a caller-defined
- * payload that the receiving code can decode. The SDK does not interpret this
- * code beyond mapping it to FFI value 254.
- */
-#define OpenPitPretradeRejectCode_Custom ((OpenPitPretradeRejectCode) 254)
-/**
- * A catch-all code for rejects that do not fit a more specific class.
- */
-#define OpenPitPretradeRejectCode_Other ((OpenPitPretradeRejectCode) 255)
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_CUSTOM`
+
+Reserved code for caller-defined reject classes.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_CUSTOM ((OpenPitPretradeRejectCode) 254)
+```
+
+## `OPENPIT_PRETRADE_REJECT_CODE_OTHER`
+
+A catch-all code for rejects that do not fit a more specific class.
+
+```c
+#define OPENPIT_PRETRADE_REJECT_CODE_OTHER ((OpenPitPretradeRejectCode) 255)
 ```
 
 ## `OpenPitPretradeReject`
@@ -320,11 +502,12 @@ Contract:
 
 - `list` must be a valid non-null pointer;
 - string views in `reject` are copied before this function returns;
-- this function never fails;
+- returns `true` after appending a reject with a valid scope;
+- returns `false` for an unknown scope and leaves the list unchanged;
 - violating the pointer contract aborts the call.
 
 ```c
-void openpit_pretrade_reject_list_push(
+bool openpit_pretrade_reject_list_push(
     OpenPitPretradeRejectList * list,
     OpenPitPretradeReject reject
 );

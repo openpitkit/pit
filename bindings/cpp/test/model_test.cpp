@@ -90,7 +90,7 @@ TEST(ModelTradeAmount, VolumeKindRoundTripsExactly) {
 
 TEST(ModelTradeAmount, NotSetKindReadsAsAbsent) {
   OpenPitParamTradeAmount raw{};
-  raw.kind = OpenPitParamTradeAmountKind_NotSet;
+  raw.kind = OPENPIT_PARAM_TRADE_AMOUNT_KIND_NOT_SET;
   EXPECT_FALSE(model::TradeAmount::FromRaw(raw).has_value());
 }
 

@@ -660,6 +660,7 @@ class ExecutionReport(_ExecutionReport):
 def __getattr__(name: str) -> typing.Any:
     account_adjustment_names = {
         "AccountAdjustment": "Adjustment",
+        "AccountAdjustmentAccountPnlOperation": "AccountPnlOperation",
         "AccountAdjustmentAmount": "Amount",
         "AccountAdjustmentBalanceOperation": "BalanceOperation",
         "AccountAdjustmentBounds": "Bounds",
@@ -673,6 +674,9 @@ def __getattr__(name: str) -> typing.Any:
 
 
 if typing.TYPE_CHECKING:
+    from .account_adjustment import (
+        AccountPnlOperation as AccountAdjustmentAccountPnlOperation,
+    )
     from .account_adjustment import (
         Adjustment as AccountAdjustment,
     )
@@ -688,9 +692,9 @@ if typing.TYPE_CHECKING:
     from .account_adjustment import (
         PositionOperation as AccountAdjustmentPositionOperation,
     )
-
 __all__ = [
     "AccountAdjustment",
+    "AccountAdjustmentAccountPnlOperation",
     "AccountAdjustmentAmount",
     "AccountAdjustmentBalanceOperation",
     "AccountAdjustmentBounds",

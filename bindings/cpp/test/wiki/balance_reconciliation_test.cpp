@@ -17,7 +17,7 @@
 
 // Source: Balance-Reconciliation.md
 
-#include "openpit/account_adjustment.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/param.hpp"
 #include "openpit/pretrade/pretrade.hpp"
@@ -25,7 +25,6 @@
 #include <gtest/gtest.h>
 
 #include <cassert>
-#include <optional>
 #include <vector>
 
 namespace {
@@ -34,68 +33,57 @@ namespace aa = openpit::accountadjustment;
 namespace param = openpit::param;
 namespace policies = openpit::pretrade::policies;
 
-// Builds a spot-funds engine with no-sync storage, mirroring the Python
-// no_sync() harness used in the sibling snippet.
-[[nodiscard]] openpit::Engine SpotFundsEngine() {
+TEST(BalanceReconciliation, DeltaVersusAbsolute) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
   builder.Add(policies::SpotFundsPolicy{});
-  return builder.Build();
-}
+  openpit::Engine engine = builder.Build();
 
-// Builds an absolute-balance adjustment for `asset` targeting `amount`.
-[[nodiscard]] aa::AccountAdjustment Seed(const char* amount,
-                                         const char* asset = "USD") {
-  aa::AccountAdjustment adj;
-  aa::BalanceOperation op;
-  op.asset = asset;
-  adj.operation = aa::Operation::OfBalance(op);
-  aa::Amount amountGroup;
-  amountGroup.balance = param::AdjustmentAmount::OfAbsolute(
-      param::PositionSize::FromString(amount));
-  adj.amount = amountGroup;
-  return adj;
-}
-
-// ----------------------------------------------------------------------------
-// Delta vs Absolute — mirrors the "Delta Versus Absolute" example block in
-// Balance-Reconciliation.md.
-//
-// The engine is seeded twice for account 99224416 / USD.  The first seed sets
-// available USD to 10000; both delta and absolute read 10000.  The second seed
-// raises the target to 15000: delta is 5000 (the change) while absolute is
-// 15000 (the new level).
-
-TEST(BalanceReconciliation, DeltaVersusAbsolute) {
-  openpit::Engine engine = SpotFundsEngine();
   const param::AccountId accountId = param::AccountId::FromUint64(99224416);
+
+  auto seed = [](const char* amount) {
+    aa::AccountAdjustment adj;
+    aa::BalanceOperation op;
+    op.asset = "USD";
+    adj.operation = aa::Operation::OfBalance(op);
+    aa::Amount amountGroup;
+    amountGroup.balance = param::AdjustmentAmount::OfAbsolute(
+        param::PositionSize::FromString(amount));
+    adj.amount = amountGroup;
+    return adj;
+  };
 
   // First seed: available USD goes from 0 to 10000.
   const openpit::AdjustmentResult firstResult = engine.ApplyAccountAdjustment(
-      accountId, std::vector<aa::AccountAdjustment>{Seed("10000")});
+      accountId, std::vector<aa::AccountAdjustment>{seed("10000")});
   assert(firstResult.Passed());
-  const std::vector<aa::Outcome>& firstOutcomes =
-      firstResult.accountAdjustmentOutcomes;
-  ASSERT_EQ(firstOutcomes.size(), 1u);
-  ASSERT_TRUE(firstOutcomes[0].entry.balance.has_value());
-  // delta is the change to add to your own ledger; absolute is just a snapshot.
-  EXPECT_EQ(firstOutcomes[0].entry.balance->delta,
-            param::PositionSize::FromString("10000"));
-  EXPECT_EQ(firstOutcomes[0].entry.balance->absolute,
-            param::PositionSize::FromString("10000"));
+  ASSERT_TRUE(firstResult.Passed());
+  assert(firstResult.accountAdjustmentOutcomes.size() == 1);
+  ASSERT_EQ(firstResult.accountAdjustmentOutcomes.size(), 1u);
+  assert(firstResult.accountAdjustmentOutcomes[0].entry.balance);
+  ASSERT_TRUE(firstResult.accountAdjustmentOutcomes[0].entry.balance);
+  const aa::OutcomeAmount& firstUSD =
+      *firstResult.accountAdjustmentOutcomes[0].entry.balance;
+  assert(firstUSD.delta == param::PositionSize::FromString("10000"));
+  EXPECT_EQ(firstUSD.delta, param::PositionSize::FromString("10000"));
+  assert(firstUSD.absolute == param::PositionSize::FromString("10000"));
+  EXPECT_EQ(firstUSD.absolute, param::PositionSize::FromString("10000"));
 
   // Second seed: available USD goes from 10000 to 15000.
   const openpit::AdjustmentResult secondResult = engine.ApplyAccountAdjustment(
-      accountId, std::vector<aa::AccountAdjustment>{Seed("15000")});
+      accountId, std::vector<aa::AccountAdjustment>{seed("15000")});
   assert(secondResult.Passed());
-  const std::vector<aa::Outcome>& secondOutcomes =
-      secondResult.accountAdjustmentOutcomes;
-  ASSERT_EQ(secondOutcomes.size(), 1u);
-  ASSERT_TRUE(secondOutcomes[0].entry.balance.has_value());
+  ASSERT_TRUE(secondResult.Passed());
+  assert(secondResult.accountAdjustmentOutcomes.size() == 1);
+  ASSERT_EQ(secondResult.accountAdjustmentOutcomes.size(), 1u);
+  assert(secondResult.accountAdjustmentOutcomes[0].entry.balance);
+  ASSERT_TRUE(secondResult.accountAdjustmentOutcomes[0].entry.balance);
+  const aa::OutcomeAmount& secondUSD =
+      *secondResult.accountAdjustmentOutcomes[0].entry.balance;
   // delta is the change to add to your own ledger; absolute is just a snapshot.
-  EXPECT_EQ(secondOutcomes[0].entry.balance->delta,
-            param::PositionSize::FromString("5000"));
-  EXPECT_EQ(secondOutcomes[0].entry.balance->absolute,
-            param::PositionSize::FromString("15000"));
+  assert(secondUSD.delta == param::PositionSize::FromString("5000"));
+  EXPECT_EQ(secondUSD.delta, param::PositionSize::FromString("5000"));
+  assert(secondUSD.absolute == param::PositionSize::FromString("15000"));
+  EXPECT_EQ(secondUSD.absolute, param::PositionSize::FromString("15000"));
 }
 
 }  // namespace

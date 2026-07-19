@@ -36,6 +36,7 @@ import {
 } from "@openpit/engine/param";
 import {
   AccountAdjustment,
+  AccountAdjustmentAccountPnlOperation,
   type ExecutionReport,
   type Order,
 } from "@openpit/engine/model";
@@ -43,9 +44,12 @@ import {
   type Context,
   AccountAdjustmentBatchResult,
   type Policy,
-  type PolicyDecision,
+  type PolicyAccountAdjustmentResult,
   type PolicyPreTradeResult,
   type PolicyReject,
+  AccountPnlOutcome,
+  PnlHaltReason,
+  PnlOutcome,
   PostTradeResult,
 } from "@openpit/engine/pretrade";
 import {
@@ -446,17 +450,126 @@ describe("runtime custom policy", () => {
       7,
       new AccountOutcomeEntry("USD"),
     );
+    const pnl = new AccountPnlOutcome(
+      7,
+      ACCOUNT,
+      new PnlOutcomeAmount("1.25", "7.5"),
+      undefined,
+    );
 
-    const result = new PostTradeResult([block], [outcome]);
+    const result = new PostTradeResult([block], [pnl], [outcome]);
 
     expect(block.clone().reason).toBe("blocked");
     expect(outcome.clone().entry.asset).toBe("USD");
     expect(result.accountBlocks[0]?.policy).toBe("constructor-inputs");
     expect(result.accountAdjustments[0]?.policyGroupId).toBe(7);
+    expect(result.accountPnls[0]?.pnl?.delta.toString()).toBe("1.25");
   });
 
-  it("surfaces realized-pnl outcomes and passes realizedPnl through account-adjustment input", () => {
-    const seenRealizedPnl: string[] = [];
+  it("round-trips account PnLs from custom post-trade policies", () => {
+    const computed = new AccountPnlOutcome(
+      7,
+      ACCOUNT,
+      new PnlOutcomeAmount("1.25", "7.5"),
+      undefined,
+    );
+    const missingAccountCurrency = new AccountPnlOutcome(
+      7,
+      ACCOUNT,
+      undefined,
+      PnlHaltReason.fromMissingAccountCurrency(),
+    );
+    const policy: Policy = {
+      name: "account-pnl-post-trade",
+      checkPreTradeStart: () => [],
+      performPreTradeCheck: () => ({}),
+      applyExecutionReport: () =>
+        new PostTradeResult(
+          undefined,
+          [computed, missingAccountCurrency],
+          undefined,
+        ),
+    };
+
+    const result = Engine.builder()
+      .preTrade(policy)
+      .build()
+      .applyExecutionReport({});
+
+    expect(result.accountPnls).toHaveLength(2);
+    expect(result.accountPnls[0]?.accountId.value).toBe(BigInt(ACCOUNT));
+    expect(result.accountPnls[0]?.policyGroupId).toBe(7);
+    expect(result.accountPnls[0]?.ok).toBe(true);
+    expect(result.accountPnls[0]?.isHalted).toBe(false);
+    expect(result.accountPnls[0]?.haltReason).toBeUndefined();
+    expect(result.accountPnls[0]?.pnl?.absolute.toString()).toBe("7.5");
+    expect(result.accountPnls[1]?.policyGroupId).toBe(7);
+    expect(result.accountPnls[1]?.ok).toBe(false);
+    expect(result.accountPnls[1]?.isHalted).toBe(true);
+    expect(result.accountPnls[1]?.haltReason?.isMissingAccountCurrency).toBe(
+      true,
+    );
+    expect(result.accountPnls[1]?.pnl).toBeUndefined();
+  });
+
+  it("validates PnL outcome state and exposes every halt reason", () => {
+    const amount = new PnlOutcomeAmount("1", "2");
+    expect(() => new PnlOutcome(undefined, undefined)).toThrow(TypeError);
+    expect(() => new PnlOutcome(amount, PnlHaltReason.fromMissingFx())).toThrow(
+      TypeError,
+    );
+    expect(
+      () => new AccountPnlOutcome(7, ACCOUNT, undefined, undefined),
+    ).toThrow(TypeError);
+    expect(
+      () =>
+        new AccountPnlOutcome(
+          7,
+          ACCOUNT,
+          amount,
+          PnlHaltReason.fromMissingFx(),
+        ),
+    ).toThrow(TypeError);
+    expect(
+      () => new AccountAdjustmentAccountPnlOperation(null as never),
+    ).toThrow(TypeError);
+
+    const computed = new PnlOutcome(amount, undefined);
+    expect(computed.ok).toBe(true);
+    expect(computed.isHalted).toBe(false);
+
+    const reasons = [
+      PnlHaltReason.fromMissingFx(),
+      PnlHaltReason.fromMissingAccountCurrency(),
+      PnlHaltReason.fromMissingInitialPnl(),
+      PnlHaltReason.fromMissingCostBasis(),
+      PnlHaltReason.fromArithmeticOverflow(),
+    ];
+    expect(reasons.map((reason) => reason.kind)).toEqual([
+      "missing-fx",
+      "missing-account-currency",
+      "missing-initial-pnl",
+      "missing-cost-basis",
+      "arithmetic-overflow",
+    ]);
+    expect([
+      reasons[0]?.isMissingFx,
+      reasons[1]?.isMissingAccountCurrency,
+      reasons[2]?.isMissingInitialPnl,
+      reasons[3]?.isMissingCostBasis,
+      reasons[4]?.isArithmeticOverflow,
+    ]).toEqual([true, true, true, true, true]);
+
+    const halted = new PnlOutcome(
+      undefined,
+      PnlHaltReason.fromArithmeticOverflow(),
+    );
+    expect(halted.ok).toBe(false);
+    expect(halted.isHalted).toBe(true);
+  });
+
+  it("surfaces position PnL outcomes and passes account PnL adjustments", () => {
+    const seenPnl: string[] = [];
     const parity: Policy = {
       name: "parity",
       checkPreTradeStart(): Iterable<PolicyReject> {
@@ -470,7 +583,7 @@ describe("runtime custom policy", () => {
               undefined,
               undefined,
               undefined,
-              new PnlOutcomeAmount("1.25", "7.5"),
+              new PnlOutcome(new PnlOutcomeAmount("1.25", "7.5"), undefined),
               Price.fromString("11"),
             ),
           ],
@@ -479,13 +592,13 @@ describe("runtime custom policy", () => {
       },
       applyAccountAdjustment(_ctx, _accountId, adjustment) {
         const operation = adjustment.operation;
-        if (operation !== undefined && "realizedPnl" in operation) {
-          const realizedPnl = operation.realizedPnl;
-          if (realizedPnl !== undefined) {
-            seenRealizedPnl.push(realizedPnl.toString());
+        if (operation !== undefined && "state" in operation) {
+          const state = operation.state;
+          if (state instanceof Pnl) {
+            seenPnl.push(state.toString());
           }
         }
-        return [];
+        return { accountBlocks: [] };
       },
     };
 
@@ -494,9 +607,9 @@ describe("runtime custom policy", () => {
     const execute = engine.executePreTrade(order("BUY"));
     expect(execute.ok).toBe(true);
     const outcome = execute.reservation!.accountAdjustments()[0]!;
-    expect(outcome.entry.realizedPnl!.delta.toString()).toBe("1.25");
+    expect(outcome.entry.realizedPnl!.pnl?.delta.toString()).toBe("1.25");
     expect(
-      outcome.entry.realizedPnl!.absolute.equals(Pnl.fromString("7.5")),
+      outcome.entry.realizedPnl!.pnl?.absolute.equals(Pnl.fromString("7.5")),
     ).toBe(true);
     expect(
       outcome.entry.averageEntryPrice!.equals(Price.fromString("11")),
@@ -504,25 +617,41 @@ describe("runtime custom policy", () => {
 
     const batch = engine.applyAccountAdjustment(ACCOUNT, [
       {
-        operation: { asset: "USD", realizedPnl: "42.5" },
-        amount: { balance: AdjustmentAmount.absolute("0") },
+        operation: { state: "42.5" },
       },
     ]);
     expect(batch.ok).toBe(true);
-    expect(seenRealizedPnl).toEqual(["42.5"]);
+    expect(seenPnl).toEqual(["42.5"]);
+
+    expect(() =>
+      engine.applyAccountAdjustment(ACCOUNT, [
+        {
+          // @ts-expect-error - runtime rejects the removed `pnl` field.
+          operation: { pnl: "42.5" },
+        },
+      ]),
+    ).toThrow("account PnL operation uses state");
+
+    expect(() =>
+      engine.applyAccountAdjustment(ACCOUNT, [
+        {
+          operation: { state: "42.5", asset: "USD" },
+        },
+      ]),
+    ).toThrow("cannot combine state with balance or position fields");
   });
 
-  it("accepts every optional PolicyDecision shape from applyAccountAdjustment", () => {
+  it("accepts PolicyAccountAdjustmentResult from applyAccountAdjustment", () => {
     const adjustment = {
       operation: { asset: "USD" },
       amount: { balance: AdjustmentAmount.absolute("1") },
     };
-    const run = (decision: PolicyDecision) => {
+    const run = (result: PolicyAccountAdjustmentResult) => {
       const policy: Policy = {
         name: "adjustment-decision",
         checkPreTradeStart: () => [],
         performPreTradeCheck: () => ({}),
-        applyAccountAdjustment: () => decision,
+        applyAccountAdjustment: () => result,
       };
       return Engine.builder()
         .preTrade(policy)
@@ -530,9 +659,25 @@ describe("runtime custom policy", () => {
         .applyAccountAdjustment(ACCOUNT, [adjustment]);
     };
 
-    expect(run({}).ok).toBe(true);
+    expect(run({ accountBlocks: [] }).ok).toBe(true);
+
+    const blocked = run({
+      accountBlocks: [
+        new AccountBlock(
+          "adjustment-decision",
+          "AccountBlocked",
+          "accepted adjustment blocked account",
+          "block is returned with the accepted batch",
+          undefined,
+        ),
+      ],
+    });
+    expect(blocked.ok).toBe(true);
+    expect(blocked.accountBlocks).toHaveLength(1);
+    expect(blocked.accountBlocks[0]?.code).toBe("AccountBlocked");
 
     const rejected = run({
+      accountBlocks: [],
       rejects: [
         {
           code: REJECT_CODE,
@@ -546,6 +691,7 @@ describe("runtime custom policy", () => {
 
     let commits = 0;
     const mutated = run({
+      accountBlocks: [],
       mutations: [
         {
           commit: () => {
@@ -559,6 +705,40 @@ describe("runtime custom policy", () => {
     });
     expect(mutated.ok).toBe(true);
     expect(commits).toBe(1);
+  });
+
+  it("fails closed on unrecognized account-adjustment result fields", () => {
+    const adjustment = {
+      operation: { asset: "USD" },
+      amount: { balance: AdjustmentAmount.absolute("1") },
+    };
+    const run = (result: unknown) => {
+      const policy: Policy = {
+        name: "adjustment-result-shape",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => ({}),
+        applyAccountAdjustment: () => result as PolicyAccountAdjustmentResult,
+      };
+      return Engine.builder()
+        .preTrade(policy)
+        .build()
+        .applyAccountAdjustment(ACCOUNT, [adjustment]);
+    };
+
+    expect(run({}).ok).toBe(true);
+    expect(run({ accountBlocks: [], accountOutcomes: [] }).ok).toBe(true);
+
+    let caught: unknown;
+    try {
+      run({ accountOutcomes: [] });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(PolicyCallbackError);
+    expect((caught as PolicyCallbackError).cause).toBeInstanceOf(TypeError);
+    expect(((caught as PolicyCallbackError).cause as Error).message).toContain(
+      "no recognized result fields",
+    );
   });
 
   it("normalizes callback models while preserving isolated custom metadata", () => {
@@ -789,7 +969,7 @@ describe("runtime custom policy", () => {
     ).toThrow(LifecycleError);
   });
 
-  it("passes a typed adjustment and accepts a plain outcome entry", () => {
+  it("passes a typed adjustment and accepts an outcome in its result", () => {
     let sawTypedAdjustment = false;
     const policy: Policy = {
       name: "plain-outcome",
@@ -798,8 +978,10 @@ describe("runtime custom policy", () => {
       applyAccountAdjustment(_ctx, _accountId, adjustment) {
         sawTypedAdjustment = adjustment instanceof AccountAdjustment;
         return {
-          asset: "USD",
-          balance: { delta: "1", absolute: "1" },
+          accountAdjustments: [
+            { asset: "USD", balance: { delta: "1", absolute: "1" } },
+          ],
+          accountBlocks: [],
         };
       },
     };

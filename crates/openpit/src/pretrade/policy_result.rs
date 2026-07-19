@@ -18,7 +18,9 @@
 use smallvec::SmallVec;
 
 use crate::core::account_outcome::AccountOutcomeEntry;
-use crate::param::Price;
+use crate::param::{AccountGroupId, AccountId, Price};
+use crate::pretrade::AccountBlock;
+use crate::PnlState;
 
 /// Per-policy result of [`crate::pretrade::PreTradePolicy::perform_pre_trade_check`].
 ///
@@ -51,4 +53,43 @@ impl PolicyPreTradeResult {
             lock_prices: SmallVec::with_capacity(prices),
         }
     }
+}
+
+/// Per-policy result of [`crate::pretrade::PreTradePolicy::apply_account_adjustment`].
+///
+/// The engine attaches the producing policy's group tag to
+/// `account_adjustments`, commits the accepted batch, then records every
+/// `account_blocks` entry for the adjusted account before returning the batch
+/// result.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PolicyAccountAdjustmentResult {
+    /// Per-asset account outcomes produced by the policy.
+    pub account_adjustments: Vec<AccountOutcomeEntry>,
+    /// Account blocks reported after the policy accepted the adjustment.
+    pub account_blocks: Vec<AccountBlock>,
+}
+
+/// Per-policy result of a runtime configuration operation.
+///
+/// The engine records every reported account block before returning the
+/// configuration result to the caller.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PolicyConfigurationResult {
+    /// Account blocks reported by the accepted configuration operation.
+    pub account_blocks: Vec<AccountBlock>,
+}
+
+/// Runtime configuration operation dispatched to a built-in policy.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PolicyRuntimeConfiguration {
+    /// Sets the account-scoped SpotFunds realized-PnL state.
+    SetSpotFundsAccountPnl {
+        /// Account whose state is being corrected.
+        account_id: AccountId,
+        /// Account-group membership observed for this operation.
+        account_group_id: Option<AccountGroupId>,
+        /// Replacement account PnL state.
+        state: PnlState,
+    },
 }

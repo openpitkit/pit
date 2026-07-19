@@ -21,13 +21,13 @@ use std::rc::Rc;
 use openpit::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume};
 use openpit::pretrade::policies::OrderValidationPolicy;
 use openpit::pretrade::{
-    AccountBlock, PolicyPreTradeResult, PostTradeContext, PreTradeContext, PreTradePolicy, Reject,
-    RejectCode, RejectScope, Rejects,
+    AccountBlock, PolicyAccountAdjustmentResult, PolicyPreTradeResult, PostTradeContext,
+    PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects,
 };
 use openpit::{
-    AccountAdjustmentContext, AccountOutcomeEntry, Engine, ExecutionReportOperation,
-    FinancialImpact, HasOrderPrice, HasTradeAmount, Instrument, Mutation, Mutations,
-    OrderOperation, WithExecutionReportOperation, WithFinancialImpact,
+    AccountAdjustmentContext, Engine, ExecutionReportOperation, FinancialImpact, HasOrderPrice,
+    HasTradeAmount, Instrument, Mutation, Mutations, OrderOperation, WithExecutionReportOperation,
+    WithFinancialImpact,
 };
 
 // Mirrors public Rust examples from:
@@ -35,7 +35,6 @@ use openpit::{
 // - ../pit.wiki/Account-Blocking.md
 // - ../pit.wiki/Account-Groups.md
 // - ../pit.wiki/Balance-Reconciliation.md
-// - ../pit.wiki/Custom-Rust-Types.md
 // - ../pit.wiki/Domain-Types.md
 // - ../pit.wiki/Dynamic-Policy-Reconfiguration.md
 // - ../pit.wiki/Getting-Started.md
@@ -267,18 +266,20 @@ where
 
     fn apply_account_adjustment(
         &self,
-        ctx: &AccountAdjustmentContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
+        _ctx: &AccountAdjustmentContext<<Sync as openpit::SyncMode>::StorageLockingPolicyFactory>,
         _account_id: AccountId,
         _adjustment: &AccountAdjustment,
         _mutations: &mut Mutations,
-    ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
-        ctx.account_control.block(AccountBlock::new(
-            "BlockOnAdjustmentPolicy",
-            RejectCode::AccountBlocked,
-            "blocked via account control",
-            "custom policy blocked the account from a callback",
-        ));
-        Ok(Vec::new())
+    ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
+        Ok(PolicyAccountAdjustmentResult {
+            account_adjustments: Vec::new(),
+            account_blocks: vec![AccountBlock::new(
+                "BlockOnAdjustmentPolicy",
+                RejectCode::AccountBlocked,
+                "blocked by account-adjustment policy",
+                "custom policy reported an account block from a callback",
+            )],
+        })
     }
 }
 
@@ -330,6 +331,170 @@ fn example_wiki_domain_types_leverage() -> Result<(), Box<dyn std::error::Error>
     // Both constructors end up with the same strongly typed leverage wrapper.
     assert_eq!(from_multiplier.value(), 100.0);
     assert_eq!(from_float.value(), 100.5);
+    Ok(())
+}
+
+#[test]
+fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error::Error>> {
+    // Wiki example: pit.wiki/Getting-Started.md - Build an Engine
+    // Keep this example in sync with the matching wiki example.
+    use std::time::Duration;
+
+    use openpit::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side, TradeAmount, Volume};
+    use openpit::pretrade::policies::{
+        OrderSizeAssetBarrier, OrderSizeBrokerBarrier, OrderSizeLimit, OrderSizeLimitPolicy,
+        OrderSizeLimitSettings, OrderValidationPolicy, PnlBoundsBrokerBarrier,
+        PnlBoundsKillSwitchPolicy, PnlBoundsKillSwitchSettings, RateLimit, RateLimitBrokerBarrier,
+        RateLimitPolicy, RateLimitSettings,
+    };
+    use openpit::storage::NoLocking;
+    use openpit::{
+        Engine, ExecutionReportOperation, FinancialImpact, Instrument, OrderOperation,
+        WithExecutionReportOperation, WithFinancialImpact,
+    };
+
+    let usd = Asset::new("USD")?;
+
+    // 1. Build the engine builder.
+    type Report = WithExecutionReportOperation<WithFinancialImpact<()>>;
+    let builder = Engine::builder::<OrderOperation, Report, ()>().no_sync();
+
+    // 2. Configure policies.
+    let pnl_policy = PnlBoundsKillSwitchPolicy::new(
+        PnlBoundsKillSwitchSettings::new(
+            [PnlBoundsBrokerBarrier {
+                settlement_asset: usd.clone(),
+                lower_bound: Some(Pnl::from_str("-1000")?),
+                upper_bound: None,
+            }],
+            [],
+        )?,
+        builder.storage_builder(),
+    );
+
+    let rate_limit_policy = RateLimitPolicy::new(
+        RateLimitSettings::new(
+            Some(RateLimitBrokerBarrier {
+                limit: RateLimit {
+                    max_orders: 100,
+                    window: Duration::from_secs(1),
+                },
+            }),
+            [],
+            [],
+            [],
+        )?,
+        builder.storage_builder(),
+    );
+
+    // 3. Build the engine (one time at the platform initialization).
+    let engine = builder
+        .pre_trade(OrderValidationPolicy::new())
+        .pre_trade(pnl_policy)
+        .pre_trade(rate_limit_policy)
+        .pre_trade(OrderSizeLimitPolicy::<NoLocking>::new(
+            OrderSizeLimitSettings::new(
+                Some(OrderSizeBrokerBarrier {
+                    limit: OrderSizeLimit {
+                        max_quantity: Quantity::from_str("500")?,
+                        max_notional: Volume::from_str("100000")?,
+                    },
+                }),
+                [OrderSizeAssetBarrier {
+                    limit: OrderSizeLimit {
+                        max_quantity: Quantity::from_str("500")?,
+                        max_notional: Volume::from_str("100000")?,
+                    },
+                    settlement_asset: usd.clone(),
+                }],
+                [],
+            )?,
+        ))
+        .build()?;
+
+    // 4. Check an order.
+    let order = OrderOperation {
+        instrument: Instrument::new(Asset::new("AAPL")?, usd.clone()),
+        account_id: AccountId::from_u64(99224416),
+        side: Side::Buy,
+        trade_amount: TradeAmount::Quantity(Quantity::from_f64(100.0)?),
+        price: Some(Price::from_str("185")?),
+    };
+
+    let request = engine.start_pre_trade(order).map_err(|rejects| {
+        let message = rejects
+            .iter()
+            .map(|r| {
+                format!(
+                    "rejected by {} [{}]: {} ({})",
+                    r.policy, r.code, r.reason, r.details,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        std::io::Error::other(message)
+    })?;
+
+    // 5. Quick, lightweight checks, such as fat-finger scope or enabled killswitch,
+    // were performed during pre-trade request creation. The system state has not
+    // yet changed, except in cases where each request, even rejected ones, must be
+    // considered (for example, to prevent frequent transfers). Before the
+    // heavy-duty checks, other work on the request can be performed simply by
+    // holding the request object.
+
+    // 6. Real pre-trade and risk control.
+    let mut reservation = request.execute().map_err(|rejects| {
+        let message = rejects
+            .iter()
+            .map(|r| {
+                format!(
+                    "rejected by {} [{}]: {} ({})",
+                    r.policy, r.code, r.reason, r.details,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        std::io::Error::other(message)
+    })?;
+
+    // Optional shortcut for the same two-stage flow:
+    // let reservation = engine.execute_pre_trade(order)?;
+
+    // 7. If the request is successfully sent to the venue, it must be committed.
+    // The rollback must be called otherwise to revert all performed reservations.
+    reservation.commit();
+
+    // 8. The order goes to the venue and returns with an execution report.
+    let report = WithExecutionReportOperation {
+        inner: WithFinancialImpact {
+            inner: (),
+            financial_impact: FinancialImpact {
+                pnl: Pnl::from_str("-50")?,
+                fee: Fee::from_str("3.4")?,
+            },
+        },
+        operation: ExecutionReportOperation {
+            instrument: Instrument::new(Asset::new("AAPL")?, usd),
+            account_id: AccountId::from_u64(99224416),
+            side: Side::Buy,
+        },
+    };
+
+    let result = engine.apply_execution_report(&report);
+    for outcome in &result.account_pnls {
+        eprintln!("account P&L outcome for {}", outcome.account_id);
+    }
+    for outcome in &result.account_adjustments {
+        eprintln!(
+            "account adjustment from group {}",
+            outcome.policy_group_id.value()
+        );
+    }
+
+    // 9. After each execution report is applied, the system may report that it has
+    // been determined in advance that all subsequent requests will be rejected if
+    // the account status does not change.
+    assert!(result.account_blocks.is_empty());
     Ok(())
 }
 
@@ -394,6 +559,47 @@ fn example_wiki_pipeline_main_stage_finalize() -> Result<(), Box<dyn std::error:
 }
 
 #[test]
+fn example_wiki_getting_started_run_order() {
+    // Wiki example: pit.wiki/Getting-Started.md
+    // - Run an Order Through the Engine
+    // Keep this example in sync with the matching wiki example.
+    let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
+        .no_sync()
+        .pre_trade(OrderValidationPolicy::new())
+        .build()
+        .expect("engine must build");
+    let order = aapl_usd_order("100", "185");
+
+    let request = match engine.start_pre_trade(order) {
+        Ok(request) => request,
+        Err(rejects) => {
+            for reject in rejects.iter() {
+                eprintln!(
+                    "rejected by {} [{}]: {} ({})",
+                    reject.policy, reject.code, reject.reason, reject.details
+                );
+            }
+            return;
+        }
+    };
+
+    let mut reservation = match request.execute() {
+        Ok(reservation) => reservation,
+        Err(rejects) => {
+            for reject in rejects.iter() {
+                eprintln!(
+                    "rejected by {} [{}]: {} ({})",
+                    reject.policy, reject.code, reject.reason, reject.details
+                );
+            }
+            return;
+        }
+    };
+
+    reservation.commit();
+}
+
+#[test]
 fn example_wiki_pipeline_shortcut_start_and_main() -> Result<(), Box<dyn std::error::Error>> {
     // Wiki example: pit.wiki/Pre-trade-Pipeline.md - Shortcut for Start + Main Stages
     // Wiki example: pit.wiki/Getting-Started.md - Shortcut for Start + Main Stages
@@ -435,6 +641,15 @@ fn example_wiki_pipeline_apply_post_trade_feedback() -> Result<(), Box<dyn std::
 
     // Execution reports feed realized outcomes back into cumulative policy state.
     let result = engine.apply_execution_report(&report);
+    for outcome in &result.account_pnls {
+        eprintln!("account P&L outcome for {}", outcome.account_id);
+    }
+    for outcome in &result.account_adjustments {
+        eprintln!(
+            "account adjustment from group {}",
+            outcome.policy_group_id.value()
+        );
+    }
     if !result.account_blocks.is_empty() {
         eprintln!("halt new orders until the blocked state is cleared");
     }
@@ -475,7 +690,6 @@ fn example_wiki_account_adjustments() -> Result<(), Box<dyn std::error::Error>> 
             operation: AccountAdjustmentOperation::Balance(AccountAdjustmentBalanceOperation {
                 asset: Asset::new("USD")?,
                 average_entry_price: None,
-                realized_pnl: None,
             }),
             amount: AccountAdjustmentAmount {
                 balance: Some(AdjustmentAmount::Absolute(PositionSize::from_f64(10000.0)?)),
@@ -518,18 +732,22 @@ fn example_wiki_account_adjustments() -> Result<(), Box<dyn std::error::Error>> 
             _account_id: openpit::param::AccountId,
             _adjustment: &AccountAdjustment,
             _mutations: &mut openpit::Mutations,
-        ) -> Result<Vec<openpit::AccountOutcomeEntry>, openpit::pretrade::Rejects> {
-            Ok(Vec::new())
+        ) -> Result<openpit::pretrade::PolicyAccountAdjustmentResult, openpit::pretrade::Rejects>
+        {
+            Ok(openpit::pretrade::PolicyAccountAdjustmentResult {
+                account_adjustments: Vec::new(),
+                account_blocks: Vec::new(),
+            })
         }
     }
 
     // The engine validates the whole batch atomically.
-    let engine = Engine::builder()
+    let engine = Engine::builder::<(), (), AccountAdjustment>()
         .no_sync()
         .pre_trade(AcceptAllAdjustments)
         .build()?;
-    let result = engine.apply_account_adjustment(account_id, &adjustments);
-    assert!(result.is_ok());
+    let result = engine.apply_account_adjustment(account_id, &adjustments)?;
+    assert!(result.account_blocks.is_empty());
     Ok(())
 }
 
@@ -592,7 +810,7 @@ fn example_wiki_account_adjustments_balance_limit_policy() -> Result<(), Box<dyn
             _account_id: AccountId,
             adjustment: &A,
             mutations: &mut Mutations,
-        ) -> Result<Vec<openpit::AccountOutcomeEntry>, Rejects> {
+        ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
             let asset_id = adjustment.asset_id().to_owned();
             let delta = adjustment.delta();
 
@@ -651,7 +869,10 @@ fn example_wiki_account_adjustments_balance_limit_policy() -> Result<(), Box<dyn
                 },
             ));
 
-            Ok(Vec::new())
+            Ok(PolicyAccountAdjustmentResult {
+                account_adjustments: Vec::new(),
+                account_blocks: Vec::new(),
+            })
         }
     }
 
@@ -679,8 +900,8 @@ fn example_wiki_account_adjustments_balance_limit_policy() -> Result<(), Box<dyn
             asset: "USD".to_string(),
             delta: Volume::from_str("100")?,
         }],
-    );
-    assert!(result.is_ok());
+    )?;
+    assert!(result.account_blocks.is_empty());
     Ok(())
 }
 
@@ -743,37 +964,13 @@ fn example_wiki_policy_blocks_account_from_adjustment() -> Result<(), Box<dyn st
         .build()?;
     let account = AccountId::from_u64(99224416);
 
-    engine.apply_account_adjustment(account, &[()])?;
+    let adjustment_result = engine.apply_account_adjustment(account, &[()])?;
+    assert_eq!(adjustment_result.account_blocks.len(), 1);
     let rejects = match engine.start_pre_trade(aapl_usd_order("10", "25")) {
         Ok(_) => panic!("blocked account must fail the start stage"),
         Err(rejects) => rejects,
     };
     assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
-    Ok(())
-}
-
-#[test]
-fn example_wiki_custom_types_manual() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Custom-Rust-Types.md - Manual Field Implementations
-    // Keep this example in sync with the matching wiki example.
-    use openpit::{HasInstrument, RequestFieldAccessError};
-
-    struct MyOrder {
-        instrument: Instrument,
-    }
-
-    impl HasInstrument for MyOrder {
-        fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
-            // Expose the project field through the capability trait expected by policies.
-            Ok(&self.instrument)
-        }
-    }
-
-    let order = MyOrder {
-        instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
-    };
-    let instrument = order.instrument()?;
-    assert_eq!(instrument.settlement_asset(), &Asset::new("USD")?);
     Ok(())
 }
 
@@ -831,81 +1028,6 @@ fn example_wiki_policy_api_custom_rust_models() -> Result<(), Box<dyn std::error
     Ok(())
 }
 
-#[cfg(feature = "derive")]
-#[test]
-fn example_wiki_custom_types_derive() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Custom-Rust-Types.md - Derive-Based Wrapper Composition
-    // Keep this example in sync with the matching wiki example.
-    use openpit::{
-        HasAccountId, HasInstrument, HasOrderPrice, HasTradeAmount, RequestFieldAccessError,
-        RequestFields,
-    };
-
-    #[derive(RequestFields)]
-    #[allow(dead_code)]
-    struct WithMyOperation<T> {
-        // Preserve capabilities already provided by outer wrappers.
-        inner: T,
-        // Map SDK capability traits onto the embedded standard operation record.
-        #[openpit(
-            HasInstrument(instrument -> Result<&Instrument, RequestFieldAccessError>),
-            HasAccountId(account_id -> Result<AccountId, RequestFieldAccessError>),
-            HasTradeAmount(trade_amount -> Result<TradeAmount, RequestFieldAccessError>),
-            HasOrderPrice(price -> Result<Option<Price>, RequestFieldAccessError>)
-        )]
-        operation: openpit::OrderOperation,
-    }
-
-    let order = WithMyOperation {
-        inner: (),
-        operation: aapl_usd_order("10", "25"),
-    };
-    let instrument = order.instrument()?;
-    assert_eq!(instrument.underlying_asset(), &Asset::new("AAPL")?);
-    assert_eq!(order.account_id()?, AccountId::from_u64(99224416));
-    assert_eq!(
-        order.trade_amount()?,
-        TradeAmount::Quantity(Quantity::from_str("10")?)
-    );
-    assert_eq!(order.price()?, Some(Price::from_str("25")?));
-    Ok(())
-}
-
-#[cfg(feature = "derive")]
-#[test]
-fn example_wiki_custom_types_inner_field() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Custom-Rust-Types.md - Selecting the Inner Field
-    // Keep this example in sync with the matching wiki example.
-    use openpit::{HasInstrument, RequestFieldAccessError, RequestFields};
-
-    struct Base {
-        instrument: Instrument,
-    }
-
-    impl HasInstrument for Base {
-        fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
-            Ok(&self.instrument)
-        }
-    }
-
-    #[derive(RequestFields)]
-    #[allow(dead_code)]
-    struct WithMyOperation<T> {
-        // Explicitly declare which traits should passthrough to the non-standard inner field.
-        #[openpit(inner, HasInstrument(instrument -> Result<&Instrument, RequestFieldAccessError>))]
-        base: T,
-    }
-
-    let order = WithMyOperation {
-        base: Base {
-            instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
-        },
-    };
-    let instrument = order.instrument()?;
-    assert_eq!(instrument.underlying_asset(), &Asset::new("AAPL")?);
-    Ok(())
-}
-
 #[test]
 fn example_wiki_policies_order_validation() -> Result<(), Box<dyn std::error::Error>> {
     // Wiki example: pit.wiki/Policies.md - OrderValidationPolicy
@@ -960,7 +1082,8 @@ fn example_wiki_policies_order_size_limit() -> Result<(), Box<dyn std::error::Er
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{Asset, Quantity, Volume};
     use openpit::pretrade::policies::{
-        OrderSizeAssetBarrier, OrderSizeLimit, OrderSizeLimitPolicy, OrderSizeLimitSettings,
+        OrderSizeAssetBarrier, OrderSizeBrokerBarrier, OrderSizeLimit, OrderSizeLimitPolicy,
+        OrderSizeLimitSettings,
     };
     use openpit::storage::NoLocking;
 
@@ -968,7 +1091,12 @@ fn example_wiki_policies_order_size_limit() -> Result<(), Box<dyn std::error::Er
         .no_sync()
         .pre_trade(OrderSizeLimitPolicy::<NoLocking>::new(
             OrderSizeLimitSettings::new(
-                None,
+                Some(OrderSizeBrokerBarrier {
+                    limit: OrderSizeLimit {
+                        max_quantity: Quantity::from_str("100")?,
+                        max_notional: Volume::from_str("50000")?,
+                    },
+                }),
                 [OrderSizeAssetBarrier {
                     limit: OrderSizeLimit {
                         max_quantity: Quantity::from_str("100")?,
@@ -1091,70 +1219,6 @@ fn example_wiki_storage_engine_builder() -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-#[cfg(feature = "derive")]
-#[test]
-fn example_wiki_custom_types_account_adjustment_wrapper() -> Result<(), Box<dyn std::error::Error>>
-{
-    // Wiki example: pit.wiki/Custom-Rust-Types.md - Derive-Based Wrapper Composition / account adjustments
-    // Keep this example in sync with the matching wiki example.
-    use openpit::param::{AdjustmentAmount, PositionSize};
-    use openpit::{
-        HasAccountAdjustmentBalance, HasAccountAdjustmentHeld, HasAccountAdjustmentIncoming,
-        HasBalanceAsset, RequestFieldAccessError, RequestFields,
-    };
-
-    struct BalanceContext {
-        asset: Asset,
-    }
-
-    impl HasBalanceAsset for BalanceContext {
-        fn balance_asset(&self) -> Result<&Asset, RequestFieldAccessError> {
-            Ok(&self.asset)
-        }
-    }
-
-    #[derive(RequestFields)]
-    #[allow(dead_code)]
-    struct WithAccountAdjustmentAmount<T> {
-        // Keep balance-level capabilities from the outer context available.
-        #[openpit(inner, HasBalanceAsset(balance_asset -> Result<&Asset, RequestFieldAccessError>))]
-        inner: T,
-        // Expose the standard account-adjustment amount fields through capability traits.
-        #[openpit(
-            HasAccountAdjustmentBalance(balance -> Result<Option<AdjustmentAmount>, RequestFieldAccessError>),
-            HasAccountAdjustmentHeld(held -> Result<Option<AdjustmentAmount>, RequestFieldAccessError>),
-            HasAccountAdjustmentIncoming(incoming -> Result<Option<AdjustmentAmount>, RequestFieldAccessError>)
-        )]
-        amount: openpit::AccountAdjustmentAmount,
-    }
-
-    let wrapper = WithAccountAdjustmentAmount {
-        inner: BalanceContext {
-            asset: Asset::new("USD")?,
-        },
-        amount: openpit::AccountAdjustmentAmount {
-            balance: Some(AdjustmentAmount::Absolute(PositionSize::from_str("100")?)),
-            held: Some(AdjustmentAmount::Delta(PositionSize::from_str("-20")?)),
-            incoming: Some(AdjustmentAmount::Delta(PositionSize::from_str("5")?)),
-        },
-    };
-
-    assert_eq!(wrapper.balance_asset()?, &Asset::new("USD")?);
-    assert_eq!(
-        wrapper.balance()?,
-        Some(AdjustmentAmount::Absolute(PositionSize::from_str("100")?))
-    );
-    assert_eq!(
-        wrapper.held()?,
-        Some(AdjustmentAmount::Delta(PositionSize::from_str("-20")?))
-    );
-    assert_eq!(
-        wrapper.incoming()?,
-        Some(AdjustmentAmount::Delta(PositionSize::from_str("5")?))
-    );
-    Ok(())
-}
-
 #[test]
 fn example_wiki_policies_spot_funds() -> Result<(), Box<dyn std::error::Error>> {
     // Wiki example: pit.wiki/Policies.md - SpotFundsPolicy
@@ -1169,7 +1233,9 @@ fn example_wiki_policies_spot_funds() -> Result<(), Box<dyn std::error::Error>> 
     // Report and account-adjustment shapes composed from public SDK wrappers.
     type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
     type SpotAdjustment = WithAccountAdjustmentAmount<
-        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+        WithAccountAdjustmentBounds<
+            WithAccountAdjustmentBalanceOperation<openpit::AccountAdjustmentAmount>,
+        >,
     >;
 
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
@@ -1201,7 +1267,9 @@ fn example_wiki_spot_funds_limit_only() -> Result<(), Box<dyn std::error::Error>
     // Report and account-adjustment shapes composed from public SDK wrappers.
     type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
     type SpotAdjustment = WithAccountAdjustmentAmount<
-        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+        WithAccountAdjustmentBounds<
+            WithAccountAdjustmentBalanceOperation<openpit::AccountAdjustmentAmount>,
+        >,
     >;
 
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
@@ -1219,11 +1287,10 @@ fn example_wiki_spot_funds_limit_only() -> Result<(), Box<dyn std::error::Error>
     let seed = WithAccountAdjustmentAmount {
         inner: WithAccountAdjustmentBounds {
             inner: WithAccountAdjustmentBalanceOperation {
-                inner: (),
+                inner: AccountAdjustmentAmount::default(),
                 operation: AccountAdjustmentBalanceOperation {
                     asset: Asset::new("USD")?,
                     average_entry_price: None,
-                    realized_pnl: None,
                 },
             },
             bounds: AccountAdjustmentBounds::default(),
@@ -1267,7 +1334,9 @@ fn example_wiki_spot_funds_market_orders() -> Result<(), Box<dyn std::error::Err
 
     type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
     type SpotAdjustment = WithAccountAdjustmentAmount<
-        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+        WithAccountAdjustmentBounds<
+            WithAccountAdjustmentBalanceOperation<openpit::AccountAdjustmentAmount>,
+        >,
     >;
 
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
@@ -1292,11 +1361,10 @@ fn example_wiki_spot_funds_market_orders() -> Result<(), Box<dyn std::error::Err
     let seed = WithAccountAdjustmentAmount {
         inner: WithAccountAdjustmentBounds {
             inner: WithAccountAdjustmentBalanceOperation {
-                inner: (),
+                inner: AccountAdjustmentAmount::default(),
                 operation: AccountAdjustmentBalanceOperation {
                     asset: Asset::new("USD")?,
                     average_entry_price: None,
-                    realized_pnl: None,
                 },
             },
             bounds: AccountAdjustmentBounds::default(),
@@ -1325,10 +1393,9 @@ fn example_wiki_spot_funds_market_orders() -> Result<(), Box<dyn std::error::Err
 fn example_wiki_spot_funds_pnl_kill_switch_builder() -> Result<(), Box<dyn std::error::Error>> {
     // Wiki example: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch / Configuring Barriers
     // Keep this example in sync with the matching wiki example.
-    use openpit::param::{AccountId, Asset, Pnl};
+    use openpit::param::{AccountId, Pnl};
     use openpit::pretrade::policies::{
         SpotFundsPnlBoundsAccountBarrier, SpotFundsPnlBoundsBarrier, SpotFundsPolicy,
-        SpotFundsPricingSource, SpotFundsSettings,
     };
     use openpit::{
         Engine, FullSync, OrderOperation, SpotFundsMarketData, WithAccountAdjustmentAmount,
@@ -1338,40 +1405,36 @@ fn example_wiki_spot_funds_pnl_kill_switch_builder() -> Result<(), Box<dyn std::
 
     type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
     type SpotAdjustment = WithAccountAdjustmentAmount<
-        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+        WithAccountAdjustmentBounds<
+            WithAccountAdjustmentBalanceOperation<openpit::AccountAdjustmentAmount>,
+        >,
     >;
 
     let account = AccountId::from_u64(99224416);
-    let usd = Asset::new("USD")?;
 
-    // The bounds cascade lives in SpotFundsSettings. A global loss barrier of
-    // -1000 USD, plus a tighter per-account barrier that seeds 0 accumulated PnL.
+    // A global loss barrier of -1000, plus a tighter per-account barrier.
     let global_barrier = SpotFundsPnlBoundsBarrier {
-        account_currency: usd.clone(),
         lower_bound: Some(Pnl::from_str("-1000")?),
         upper_bound: None,
     };
     let account_barrier = SpotFundsPnlBoundsAccountBarrier {
         barrier: SpotFundsPnlBoundsBarrier {
-            account_currency: usd,
             lower_bound: Some(Pnl::from_str("-250")?),
             upper_bound: None,
         },
         account_id: account,
-        initial_pnl: Pnl::from_str("0")?,
     };
-    let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])?.with_pnl_barriers(
-        [global_barrier],
+
+    // The PnL kill switch is a distinct spot-funds builder entry point; it
+    // produces the same SpotFundsPolicy, registered under the same name.
+    let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::pnl_bounds_kill_switch(
+        Some(global_barrier),
         [],
         [account_barrier],
-    )?;
-
-    let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
-    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
-        settings,
         None::<SpotFundsMarketData<FullSync>>,
         builder.storage_builder(),
-    );
+    )?;
     let engine = builder.pre_trade(policy).build()?;
 
     // Harness only: silence the unused-engine warning; the wiki snippet stops
@@ -1385,7 +1448,7 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
     // Wiki example: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch / Runtime Reconfiguration
     // Keep this example in sync with the matching wiki example. The engine and
     // account below are harness scaffolding built to match the snippet's world.
-    use openpit::param::{AccountId, Asset, Pnl};
+    use openpit::param::{AccountId, Pnl};
     use openpit::pretrade::policies::{
         SpotFundsConfigError, SpotFundsPnlBoundsBarrier, SpotFundsPolicy, SpotFundsPricingSource,
         SpotFundsSettings,
@@ -1398,7 +1461,9 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
 
     type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
     type SpotAdjustment = WithAccountAdjustmentAmount<
-        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+        WithAccountAdjustmentBounds<
+            WithAccountAdjustmentBalanceOperation<openpit::AccountAdjustmentAmount>,
+        >,
     >;
 
     let account = AccountId::from_u64(99224416);
@@ -1411,27 +1476,25 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
     let engine = builder.pre_trade(policy).build()?;
 
     let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
-    let usd = Asset::new("USD")?;
     let new_lower = Pnl::from_str("-500")?;
 
-    // Retune the account-currency PnL barriers; live accumulated PnL is untouched.
+    // Retune the account PnL barrier; live accumulated PnL is untouched.
     engine
         .configure()
         .spot_funds::<SpotFundsConfigError>(name, |settings| {
-            settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-                account_currency: usd.clone(),
+            settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
                 lower_bound: Some(new_lower),
                 upper_bound: None,
-            }])
+            }))
         })?;
 
-    // Force-set the live accumulated PnL for one (account, account currency).
-    engine.configure().set_spot_funds_account_pnl(
+    // Force-set the live accumulated PnL for one account.
+    let result = engine.configure().set_spot_funds_account_pnl(
         name,
         account,
-        Asset::new("USD")?,
-        Pnl::from_str("-120")?,
+        openpit::PnlState::Value(Pnl::from_str("-600")?),
     )?;
+    assert_eq!(result.account_blocks.len(), 1);
     Ok(())
 }
 
@@ -1451,7 +1514,9 @@ fn example_wiki_balance_reconciliation_delta_absolute() -> Result<(), Box<dyn st
     // Report and account-adjustment shapes composed from public SDK wrappers.
     type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
     type SpotAdjustment = WithAccountAdjustmentAmount<
-        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+        WithAccountAdjustmentBounds<
+            WithAccountAdjustmentBalanceOperation<openpit::AccountAdjustmentAmount>,
+        >,
     >;
 
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
@@ -1468,11 +1533,10 @@ fn example_wiki_balance_reconciliation_delta_absolute() -> Result<(), Box<dyn st
         Ok(WithAccountAdjustmentAmount {
             inner: WithAccountAdjustmentBounds {
                 inner: WithAccountAdjustmentBalanceOperation {
-                    inner: (),
+                    inner: AccountAdjustmentAmount::default(),
                     operation: AccountAdjustmentBalanceOperation {
                         asset: Asset::new("USD")?,
                         average_entry_price: None,
-                        realized_pnl: None,
                     },
                 },
                 bounds: AccountAdjustmentBounds::default(),
@@ -1519,7 +1583,9 @@ fn example_wiki_pre_trade_lock_persistence() -> Result<(), Box<dyn std::error::E
 
     type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
     type SpotAdjustment = WithAccountAdjustmentAmount<
-        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+        WithAccountAdjustmentBounds<
+            WithAccountAdjustmentBalanceOperation<openpit::AccountAdjustmentAmount>,
+        >,
     >;
 
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
@@ -1537,11 +1603,10 @@ fn example_wiki_pre_trade_lock_persistence() -> Result<(), Box<dyn std::error::E
     let seed = WithAccountAdjustmentAmount {
         inner: WithAccountAdjustmentBounds {
             inner: WithAccountAdjustmentBalanceOperation {
-                inner: (),
+                inner: AccountAdjustmentAmount::default(),
                 operation: AccountAdjustmentBalanceOperation {
                     asset: Asset::new("USD")?,
                     average_entry_price: None,
-                    realized_pnl: None,
                 },
             },
             bounds: AccountAdjustmentBounds::default(),
@@ -1695,7 +1760,9 @@ fn example_wiki_spot_funds_global_limit_mode() -> Result<(), Box<dyn std::error:
 
     type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
     type SpotAdjustment = WithAccountAdjustmentAmount<
-        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+        WithAccountAdjustmentBounds<
+            WithAccountAdjustmentBalanceOperation<openpit::AccountAdjustmentAmount>,
+        >,
     >;
 
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
@@ -1711,11 +1778,10 @@ fn example_wiki_spot_funds_global_limit_mode() -> Result<(), Box<dyn std::error:
     let seed = WithAccountAdjustmentAmount {
         inner: WithAccountAdjustmentBounds {
             inner: WithAccountAdjustmentBalanceOperation {
-                inner: (),
+                inner: AccountAdjustmentAmount::default(),
                 operation: AccountAdjustmentBalanceOperation {
                     asset: Asset::new("USD")?,
                     average_entry_price: None,
-                    realized_pnl: None,
                 },
             },
             bounds: AccountAdjustmentBounds::default(),
@@ -1788,7 +1854,9 @@ fn example_wiki_spot_funds_per_account_limit_mode() -> Result<(), Box<dyn std::e
 
     type SpotReport = WithExecutionReportOperation<WithExecutionReportFillDetails<()>>;
     type SpotAdjustment = WithAccountAdjustmentAmount<
-        WithAccountAdjustmentBounds<WithAccountAdjustmentBalanceOperation<()>>,
+        WithAccountAdjustmentBounds<
+            WithAccountAdjustmentBalanceOperation<openpit::AccountAdjustmentAmount>,
+        >,
     >;
 
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
@@ -1804,11 +1872,10 @@ fn example_wiki_spot_funds_per_account_limit_mode() -> Result<(), Box<dyn std::e
     let seed = WithAccountAdjustmentAmount {
         inner: WithAccountAdjustmentBounds {
             inner: WithAccountAdjustmentBalanceOperation {
-                inner: (),
+                inner: AccountAdjustmentAmount::default(),
                 operation: AccountAdjustmentBalanceOperation {
                     asset: Asset::new("USD")?,
                     average_entry_price: None,
-                    realized_pnl: None,
                 },
             },
             bounds: AccountAdjustmentBounds::default(),

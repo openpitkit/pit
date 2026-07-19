@@ -23,18 +23,19 @@ use openpit::param::{AdjustmentAmount, PositionSize};
 use openpit::{AccountAdjustmentAmount, AccountAdjustmentBounds};
 use openpit_interop::{
     AccountAdjustmentAmountAccess, AccountAdjustmentBoundsAccess, AccountAdjustmentOperationAccess,
-    PopulatedAccountAdjustmentOperation, PopulatedBalanceOperation, PopulatedPositionOperation,
-    RequestWithPayload,
+    PopulatedAccountAdjustmentOperation, PopulatedAccountPnlOperation, PopulatedBalanceOperation,
+    PopulatedPositionOperation, RequestWithPayload,
 };
 
+use crate::account_outcome::{export_pnl_state, import_pnl_state, OpenPitPnlState};
 use crate::define_optional;
 use crate::instrument::{import_instrument, parse_asset_view, OpenPitInstrument};
 use crate::last_error::{write_param_error_unspecified, OpenPitOutParamError};
 use crate::param::{
     export_leverage, export_position_mode, import_leverage, import_position_mode,
-    OpenPitParamAdjustmentAmountKind, OpenPitParamLeverage, OpenPitParamPnl,
-    OpenPitParamPnlOptional, OpenPitParamPositionMode, OpenPitParamPositionSize,
-    OpenPitParamPositionSizeOptional, OpenPitParamPrice, OpenPitParamPriceOptional,
+    OpenPitParamAdjustmentAmountKind, OpenPitParamLeverage, OpenPitParamPositionMode,
+    OpenPitParamPositionSize, OpenPitParamPositionSizeOptional, OpenPitParamPrice,
+    OpenPitParamPriceOptional,
 };
 use crate::string::OpenPitSharedString;
 use crate::OpenPitStringView;
@@ -62,16 +63,9 @@ pub struct OpenPitAccountAdjustmentBalanceOperation {
     /// Optional force-set of the average entry price in account currency. No
     /// FX is applied by this adjustment.
     pub average_entry_price: OpenPitParamPriceOptional,
-    /// Optional force-set of the slot's absolute realized PnL in account
-    /// currency. No FX is applied by this adjustment.
-    ///
-    /// When set, the adjustment overwrites the slot's cumulative realized PnL
-    /// with this caller-supplied account-currency value, the same way
-    /// `average_entry_price` force-sets the average. The change is surfaced on
-    /// the outcome's `realized_pnl` field as a delta/absolute pair, where
-    /// `delta` is `new - prior` and `absolute` is this value; leaving it unset
-    /// keeps the slot's realized PnL untouched and emits no outcome.
-    pub realized_pnl: OpenPitParamPnlOptional,
+    /// Optional force-set of this asset slot's realized PnL state in account
+    /// currency.
+    pub realized_pnl: OpenPitPnlStateOptional,
 }
 
 #[repr(C)]
@@ -91,23 +85,32 @@ pub struct OpenPitAccountAdjustmentPositionOperation {
     pub mode: OpenPitParamPositionMode,
 }
 
-#[repr(u8)]
+/// Account-wide PnL adjustment payload.
+#[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-/// Selects which account-adjustment operation payload is present.
-///
-/// At most one operation payload can be selected at a time:
-/// - `Absent` means no operation is supplied;
-/// - `Balance` selects the balance-operation payload;
-/// - `Position` selects the position-operation payload.
-pub enum OpenPitAccountAdjustmentOperationKind {
-    /// No operation is supplied.
-    #[default]
-    Absent = 0,
-    /// The balance-operation payload is selected.
-    Balance = 1,
-    /// The position-operation payload is selected.
-    Position = 2,
+pub struct OpenPitAccountAdjustmentAccountPnlOperation {
+    /// Replacement account-PnL state.
+    pub state: OpenPitPnlState,
 }
+
+/// Raw selector for the meaningful account-adjustment operation payload.
+///
+/// Use the `OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_*` constants. Unknown
+/// values are rejected before any operation payload is imported.
+pub type OpenPitAccountAdjustmentOperationKind = u8;
+
+/// No operation is supplied.
+pub const OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ABSENT: OpenPitAccountAdjustmentOperationKind =
+    0;
+/// The balance-operation payload is selected.
+pub const OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_BALANCE: OpenPitAccountAdjustmentOperationKind =
+    1;
+/// The position-operation payload is selected.
+pub const OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_POSITION:
+    OpenPitAccountAdjustmentOperationKind = 2;
+/// The account-wide PnL payload is selected.
+pub const OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ACCOUNT_PNL:
+    OpenPitAccountAdjustmentOperationKind = 3;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -118,12 +121,15 @@ pub enum OpenPitAccountAdjustmentOperationKind {
 /// supplying both a balance and a position operation at once is not
 /// representable.
 pub struct OpenPitAccountAdjustmentOperation {
-    /// Selects which payload below is meaningful.
+    /// Raw selector for the meaningful payload below. Unknown values are
+    /// rejected during import.
     pub kind: OpenPitAccountAdjustmentOperationKind,
     /// Balance-operation payload, meaningful only when `kind` is `Balance`.
     pub balance: OpenPitAccountAdjustmentBalanceOperation,
     /// Position-operation payload, meaningful only when `kind` is `Position`.
     pub position: OpenPitAccountAdjustmentPositionOperation,
+    /// Account-PnL payload, meaningful only when `kind` is `AccountPnl`.
+    pub account_pnl: OpenPitAccountAdjustmentAccountPnlOperation,
 }
 
 #[repr(C)]
@@ -174,8 +180,8 @@ pub struct OpenPitAccountAdjustment {
     ///
     /// The SDK never inspects, dereferences, or frees this value. Its meaning,
     /// lifetime, and thread-safety are the caller's responsibility. `0` / null
-    /// means "not set". See the project Threading Contract for the full lifetime
-    /// model.
+    /// means "not set". See the project Threading Contract for the full
+    /// lifetime model.
     ///
     /// The token is preserved unchanged across every engine callback that
     /// receives the carrying value, including policy callbacks and adjustment
@@ -204,18 +210,20 @@ define_optional!(
     optional = OpenPitAccountAdjustmentBoundsOptional,
     value = OpenPitAccountAdjustmentBounds
 );
+define_optional!(optional = OpenPitPnlStateOptional, value = OpenPitPnlState);
 
 fn import_adjustment_amount(
     value: OpenPitParamAdjustmentAmount,
 ) -> Result<Option<AdjustmentAmount>, String> {
     match value.kind {
-        OpenPitParamAdjustmentAmountKind::NotSet => Ok(None),
-        OpenPitParamAdjustmentAmountKind::Delta => {
+        crate::param::OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_NOT_SET => Ok(None),
+        crate::param::OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA => {
             Ok(Some(AdjustmentAmount::Delta(value.value.to_param()?)))
         }
-        OpenPitParamAdjustmentAmountKind::Absolute => {
+        crate::param::OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE => {
             Ok(Some(AdjustmentAmount::Absolute(value.value.to_param()?)))
         }
+        raw => Err(format!("invalid adjustment amount kind {raw}")),
     }
 }
 
@@ -244,11 +252,11 @@ pub unsafe extern "C" fn openpit_param_adjustment_amount_to_string(
 fn export_adjustment_amount(value: Option<AdjustmentAmount>) -> OpenPitParamAdjustmentAmount {
     match value {
         Some(AdjustmentAmount::Delta(v)) => OpenPitParamAdjustmentAmount {
-            kind: OpenPitParamAdjustmentAmountKind::Delta,
+            kind: crate::param::OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA,
             value: OpenPitParamPositionSize(v.to_decimal().into()),
         },
         Some(AdjustmentAmount::Absolute(v)) => OpenPitParamAdjustmentAmount {
-            kind: OpenPitParamAdjustmentAmountKind::Absolute,
+            kind: crate::param::OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE,
             value: OpenPitParamPositionSize(v.to_decimal().into()),
         },
         _ => OpenPitParamAdjustmentAmount::default(),
@@ -265,9 +273,8 @@ fn import_balance_operation(
     } else {
         None
     };
-
     let realized_pnl = if value.realized_pnl.is_set {
-        Some(value.realized_pnl.value.to_param()?)
+        Some(import_pnl_state(value.realized_pnl.value)?)
     } else {
         None
     };
@@ -292,8 +299,7 @@ fn import_position_operation(
     } else {
         None
     };
-    let mode = import_position_mode(value.mode);
-
+    let mode = import_position_mode(value.mode)?;
     Ok(PopulatedPositionOperation {
         instrument,
         collateral_asset,
@@ -303,27 +309,43 @@ fn import_position_operation(
     })
 }
 
+fn import_account_pnl_operation(
+    value: OpenPitAccountAdjustmentAccountPnlOperation,
+) -> Result<PopulatedAccountPnlOperation, String> {
+    Ok(PopulatedAccountPnlOperation {
+        state: import_pnl_state(value.state)?,
+    })
+}
+
 fn import_operation(
     value: OpenPitAccountAdjustmentOperation,
 ) -> Result<AccountAdjustmentOperationAccess, String> {
     match value.kind {
-        OpenPitAccountAdjustmentOperationKind::Absent => {
+        OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ABSENT => {
             Ok(AccountAdjustmentOperationAccess::Absent)
         }
-        OpenPitAccountAdjustmentOperationKind::Balance => {
+        OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_BALANCE => {
             Ok(AccountAdjustmentOperationAccess::Populated(
                 PopulatedAccountAdjustmentOperation::Balance(import_balance_operation(
                     value.balance,
                 )?),
             ))
         }
-        OpenPitAccountAdjustmentOperationKind::Position => {
+        OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_POSITION => {
             Ok(AccountAdjustmentOperationAccess::Populated(
                 PopulatedAccountAdjustmentOperation::Position(import_position_operation(
                     value.position,
                 )?),
             ))
         }
+        OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ACCOUNT_PNL => {
+            Ok(AccountAdjustmentOperationAccess::Populated(
+                PopulatedAccountAdjustmentOperation::AccountPnl(import_account_pnl_operation(
+                    value.account_pnl,
+                )?),
+            ))
+        }
+        raw => Err(format!("invalid account adjustment operation kind {raw}")),
     }
 }
 
@@ -378,18 +400,18 @@ fn export_balance_operation(
             None => OpenPitStringView::default(),
         },
         average_entry_price: match value.average_entry_price {
-            Some(v) => OpenPitParamPriceOptional {
+            Some(value) => OpenPitParamPriceOptional {
                 is_set: true,
-                value: OpenPitParamPrice(v.to_decimal().into()),
+                value: OpenPitParamPrice(value.to_decimal().into()),
             },
             None => OpenPitParamPriceOptional::default(),
         },
         realized_pnl: match value.realized_pnl {
-            Some(v) => OpenPitParamPnlOptional {
+            Some(value) => OpenPitPnlStateOptional {
                 is_set: true,
-                value: OpenPitParamPnl(v.to_decimal().into()),
+                value: export_pnl_state(value),
             },
-            None => OpenPitParamPnlOptional::default(),
+            None => OpenPitPnlStateOptional::default(),
         },
     }
 }
@@ -423,8 +445,16 @@ fn export_position_operation(
         leverage: export_leverage(value.leverage),
         mode: match value.mode {
             Some(mode) => export_position_mode(mode),
-            None => OpenPitParamPositionMode::default(),
+            None => crate::param::OPENPIT_PARAM_POSITION_MODE_NOT_SET,
         },
+    }
+}
+
+fn export_account_pnl_operation(
+    value: &PopulatedAccountPnlOperation,
+) -> OpenPitAccountAdjustmentAccountPnlOperation {
+    OpenPitAccountAdjustmentAccountPnlOperation {
+        state: export_pnl_state(value.state),
     }
 }
 
@@ -433,16 +463,26 @@ fn export_operation(value: &AccountAdjustmentOperationAccess) -> OpenPitAccountA
         AccountAdjustmentOperationAccess::Populated(
             PopulatedAccountAdjustmentOperation::Balance(v),
         ) => OpenPitAccountAdjustmentOperation {
-            kind: OpenPitAccountAdjustmentOperationKind::Balance,
+            kind: OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_BALANCE,
             balance: export_balance_operation(v),
             position: OpenPitAccountAdjustmentPositionOperation::default(),
+            account_pnl: OpenPitAccountAdjustmentAccountPnlOperation::default(),
         },
         AccountAdjustmentOperationAccess::Populated(
             PopulatedAccountAdjustmentOperation::Position(v),
         ) => OpenPitAccountAdjustmentOperation {
-            kind: OpenPitAccountAdjustmentOperationKind::Position,
+            kind: OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_POSITION,
             balance: OpenPitAccountAdjustmentBalanceOperation::default(),
             position: export_position_operation(v),
+            account_pnl: OpenPitAccountAdjustmentAccountPnlOperation::default(),
+        },
+        AccountAdjustmentOperationAccess::Populated(
+            PopulatedAccountAdjustmentOperation::AccountPnl(v),
+        ) => OpenPitAccountAdjustmentOperation {
+            kind: OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ACCOUNT_PNL,
+            balance: OpenPitAccountAdjustmentBalanceOperation::default(),
+            position: OpenPitAccountAdjustmentPositionOperation::default(),
+            account_pnl: export_account_pnl_operation(v),
         },
         AccountAdjustmentOperationAccess::Absent => OpenPitAccountAdjustmentOperation::default(),
     }
@@ -533,36 +573,39 @@ pub type AccountAdjustment = RequestWithPayload<openpit_interop::AccountAdjustme
 
 #[cfg(test)]
 mod tests {
+    use crate::account_outcome::export_pnl_state;
     use crate::OpenPitStringView;
 
     use super::{
         export_account_adjustment, import_account_adjustment, OpenPitAccountAdjustment,
-        OpenPitAccountAdjustmentAmount, OpenPitAccountAdjustmentAmountOptional,
-        OpenPitAccountAdjustmentBalanceOperation, OpenPitAccountAdjustmentBounds,
-        OpenPitAccountAdjustmentBoundsOptional, OpenPitAccountAdjustmentOperation,
-        OpenPitAccountAdjustmentOperationKind, OpenPitAccountAdjustmentPositionOperation,
-        OpenPitParamAdjustmentAmount,
+        OpenPitAccountAdjustmentAccountPnlOperation, OpenPitAccountAdjustmentAmount,
+        OpenPitAccountAdjustmentAmountOptional, OpenPitAccountAdjustmentBalanceOperation,
+        OpenPitAccountAdjustmentBounds, OpenPitAccountAdjustmentBoundsOptional,
+        OpenPitAccountAdjustmentOperation, OpenPitAccountAdjustmentPositionOperation,
+        OpenPitParamAdjustmentAmount, OpenPitPnlStateOptional,
+        OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ACCOUNT_PNL,
+        OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_BALANCE,
+        OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_POSITION,
     };
     use crate::instrument::OpenPitInstrument;
     use crate::param::{
-        OpenPitParamAdjustmentAmountKind, OpenPitParamPnl, OpenPitParamPnlOptional,
-        OpenPitParamPositionMode, OpenPitParamPositionSize, OpenPitParamPositionSizeOptional,
-        OpenPitParamPrice,
+        OpenPitParamPositionSize, OpenPitParamPositionSizeOptional, OpenPitParamPrice,
     };
-    use openpit::param::{
-        AdjustmentAmount, Asset, Leverage, Pnl, PositionMode, PositionSize, Price,
+    use openpit::param::{AdjustmentAmount, Asset, Leverage, PositionMode, PositionSize, Price};
+    use openpit::{
+        AccountAdjustmentAmount, AccountAdjustmentBounds, Instrument, PnlHaltReason, PnlState,
     };
-    use openpit::{AccountAdjustmentAmount, AccountAdjustmentBounds, Instrument};
     use openpit_interop::{
         AccountAdjustmentAmountAccess, AccountAdjustmentBoundsAccess,
         AccountAdjustmentOperationAccess, PopulatedAccountAdjustmentOperation,
-        PopulatedBalanceOperation, PopulatedPositionOperation, RequestWithPayload,
+        PopulatedAccountPnlOperation, PopulatedBalanceOperation, PopulatedPositionOperation,
+        RequestWithPayload,
     };
 
     fn sample_balance_adjustment() -> OpenPitAccountAdjustment {
         OpenPitAccountAdjustment {
             operation: OpenPitAccountAdjustmentOperation {
-                kind: OpenPitAccountAdjustmentOperationKind::Balance,
+                kind: OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_BALANCE,
                 balance: OpenPitAccountAdjustmentBalanceOperation {
                     asset: OpenPitStringView {
                         ptr: b"USD".as_ptr(),
@@ -574,14 +617,13 @@ mod tests {
                         ),
                         is_set: true,
                     },
-                    realized_pnl: OpenPitParamPnlOptional {
-                        value: OpenPitParamPnl(
-                            Pnl::from_str("7").expect("pnl").to_decimal().into(),
-                        ),
+                    realized_pnl: OpenPitPnlStateOptional {
                         is_set: true,
+                        value: export_pnl_state(PnlState::Halted(PnlHaltReason::MissingFx)),
                     },
                 },
                 position: OpenPitAccountAdjustmentPositionOperation::default(),
+                account_pnl: OpenPitAccountAdjustmentAccountPnlOperation::default(),
             },
             amount: OpenPitAccountAdjustmentAmountOptional {
                 is_set: true,
@@ -593,7 +635,7 @@ mod tests {
                                 .to_decimal()
                                 .into(),
                         ),
-                        kind: OpenPitParamAdjustmentAmountKind::Delta,
+                        kind: crate::param::OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA,
                     },
                     held: OpenPitParamAdjustmentAmount {
                         value: OpenPitParamPositionSize(
@@ -602,7 +644,7 @@ mod tests {
                                 .to_decimal()
                                 .into(),
                         ),
-                        kind: OpenPitParamAdjustmentAmountKind::Absolute,
+                        kind: crate::param::OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE,
                     },
                     incoming: OpenPitParamAdjustmentAmount::default(),
                 },
@@ -645,7 +687,7 @@ mod tests {
             PopulatedAccountAdjustmentOperation::Balance(PopulatedBalanceOperation {
                 asset: Some(Asset::new("USD").expect("asset")),
                 average_entry_price: Some(Price::from_str("10").expect("price")),
-                realized_pnl: Some(Pnl::from_str("7").expect("pnl")),
+                realized_pnl: Some(PnlState::Halted(PnlHaltReason::MissingFx)),
             })
         );
 
@@ -691,7 +733,7 @@ mod tests {
         // the position-selected struct is structurally ignored, so "both set"
         // can never be observed by the importer.
         let mut input = sample_balance_adjustment();
-        input.operation.kind = OpenPitAccountAdjustmentOperationKind::Position;
+        input.operation.kind = OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_POSITION;
         input.operation.position = OpenPitAccountAdjustmentPositionOperation {
             instrument: OpenPitInstrument {
                 underlying_asset: OpenPitStringView {
@@ -712,7 +754,7 @@ mod tests {
                 value: OpenPitParamPrice(Price::from_str("1").expect("price").to_decimal().into()),
             },
             leverage: 10,
-            mode: OpenPitParamPositionMode::Netting,
+            mode: crate::param::OPENPIT_PARAM_POSITION_MODE_NETTING,
         };
 
         let imported = import_account_adjustment(&input).expect("import");
@@ -744,23 +786,24 @@ mod tests {
     fn import_account_adjustment_passes_absent_position_fields_through() {
         let input = OpenPitAccountAdjustment {
             operation: OpenPitAccountAdjustmentOperation {
-                kind: OpenPitAccountAdjustmentOperationKind::Position,
+                kind: OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_POSITION,
                 balance: OpenPitAccountAdjustmentBalanceOperation::default(),
                 position: OpenPitAccountAdjustmentPositionOperation {
                     instrument: OpenPitInstrument::default(),
                     collateral_asset: OpenPitStringView::not_set(),
                     average_entry_price: crate::param::OpenPitParamPriceOptional::default(),
                     leverage: 10,
-                    mode: OpenPitParamPositionMode::Hedged,
+                    mode: crate::param::OPENPIT_PARAM_POSITION_MODE_HEDGED,
                 },
+                account_pnl: OpenPitAccountAdjustmentAccountPnlOperation::default(),
             },
             amount: OpenPitAccountAdjustmentAmountOptional::default(),
             bounds: OpenPitAccountAdjustmentBoundsOptional::default(),
             user_data: std::ptr::null_mut(),
         };
 
-        // The FFI layer is a pure proxy: absent required fields are forwarded as
-        // `None`, and required-on-demand validation happens in the interop layer.
+        // The FFI layer is a pure proxy: absent required fields are forwarded
+        // as `None`, and required-on-demand validation happens in interop.
         let imported = import_account_adjustment(&input).expect("import");
         assert_eq!(
             imported.request.operation,
@@ -801,7 +844,7 @@ mod tests {
         let exported = export_account_adjustment(&domain);
         assert_eq!(
             exported.operation.kind,
-            OpenPitAccountAdjustmentOperationKind::Position
+            OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_POSITION
         );
         assert_eq!(
             exported.operation.balance,
@@ -819,7 +862,52 @@ mod tests {
         assert!(exported.operation.position.average_entry_price.is_set);
         assert_eq!(
             exported.operation.position.mode,
-            OpenPitParamPositionMode::Hedged
+            crate::param::OPENPIT_PARAM_POSITION_MODE_HEDGED
+        );
+    }
+
+    #[test]
+    fn export_account_adjustment_produces_account_pnl_group() {
+        let state = PnlState::Halted(PnlHaltReason::MissingCostBasis);
+        let domain = RequestWithPayload::new(
+            openpit_interop::AccountAdjustment {
+                operation: AccountAdjustmentOperationAccess::Populated(
+                    PopulatedAccountAdjustmentOperation::AccountPnl(PopulatedAccountPnlOperation {
+                        state,
+                    }),
+                ),
+                amount: AccountAdjustmentAmountAccess::Absent,
+                bounds: AccountAdjustmentBoundsAccess::Absent,
+            },
+            std::ptr::null_mut(),
+        );
+
+        let exported = export_account_adjustment(&domain);
+        assert_eq!(
+            exported.operation.kind,
+            OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ACCOUNT_PNL
+        );
+        assert_eq!(
+            exported.operation.balance,
+            OpenPitAccountAdjustmentBalanceOperation::default()
+        );
+        assert_eq!(
+            exported.operation.position,
+            OpenPitAccountAdjustmentPositionOperation::default()
+        );
+        assert_eq!(
+            exported.operation.account_pnl.state,
+            export_pnl_state(state)
+        );
+
+        let imported = import_account_adjustment(&exported).expect("import");
+        assert_eq!(
+            imported.request.operation,
+            AccountAdjustmentOperationAccess::Populated(
+                PopulatedAccountAdjustmentOperation::AccountPnl(PopulatedAccountPnlOperation {
+                    state
+                })
+            )
         );
     }
 
@@ -852,5 +940,57 @@ mod tests {
         let exported = export_account_adjustment(&domain);
         let imported = import_account_adjustment(&exported).expect("import");
         assert_eq!(imported, domain);
+    }
+
+    #[test]
+    fn import_account_adjustment_rejects_unknown_operation_kind() {
+        let input = OpenPitAccountAdjustment {
+            operation: OpenPitAccountAdjustmentOperation {
+                kind: u8::MAX,
+                ..OpenPitAccountAdjustmentOperation::default()
+            },
+            ..OpenPitAccountAdjustment::default()
+        };
+
+        assert_eq!(
+            import_account_adjustment(&input),
+            Err("invalid account adjustment operation kind 255".to_owned())
+        );
+    }
+
+    #[test]
+    fn import_account_adjustment_rejects_unknown_amount_kind() {
+        let mut input = sample_balance_adjustment();
+        input.amount.value.balance.kind = u8::MAX;
+
+        assert_eq!(
+            import_account_adjustment(&input),
+            Err("invalid adjustment amount kind 255".to_owned())
+        );
+    }
+
+    #[test]
+    fn import_account_adjustment_accepts_account_pnl_kind() {
+        let state = PnlState::Halted(PnlHaltReason::MissingInitialPnl);
+        let input = OpenPitAccountAdjustment {
+            operation: OpenPitAccountAdjustmentOperation {
+                kind: OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ACCOUNT_PNL,
+                account_pnl: OpenPitAccountAdjustmentAccountPnlOperation {
+                    state: export_pnl_state(state),
+                },
+                ..OpenPitAccountAdjustmentOperation::default()
+            },
+            ..OpenPitAccountAdjustment::default()
+        };
+
+        let imported = import_account_adjustment(&input).expect("import");
+        assert_eq!(
+            imported.request.operation,
+            AccountAdjustmentOperationAccess::Populated(
+                PopulatedAccountAdjustmentOperation::AccountPnl(PopulatedAccountPnlOperation {
+                    state
+                })
+            )
+        );
     }
 }

@@ -42,6 +42,9 @@ var (
 	// ErrQuoteExpired reports that the selected quote aged past its effective
 	// TTL. Service.Get returns the stale quote together with this error.
 	ErrQuoteExpired = errors.New("quote expired")
+	// ErrInvalidQuoteResolution reports that a quote-resolution value is not
+	// one of the documented selectors.
+	ErrInvalidQuoteResolution = errors.New("invalid quote resolution")
 )
 
 // ErrNoTarget is returned by PushFor and PushForPatch when both the account and
@@ -508,6 +511,8 @@ func (s *Service) Get(
 		return Quote{}, ErrUnknownInstrument
 	case native.MarketDataGetStatusQuoteExpired:
 		return newQuoteFromHandle(quote), ErrQuoteExpired
+	case native.MarketDataGetStatusError:
+		return Quote{}, ErrInvalidQuoteResolution
 	default:
 		return Quote{}, ErrQuoteUnavailable
 	}

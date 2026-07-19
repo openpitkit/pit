@@ -33,5 +33,9 @@ export {
   AccountAdjustmentOutcome,
   AccountOutcomeEntry,
   OutcomeAmount,
+  PnlHaltReason,
+  PnlOutcome,
   PnlOutcomeAmount,
 } from "../wasm/openpit_js.js";
+
+export type { PnlHaltReasonKind } from "../wasm/openpit_js.js";

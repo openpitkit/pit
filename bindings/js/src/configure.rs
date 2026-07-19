@@ -17,7 +17,6 @@
 
 //! Runtime built-in policy configuration for the JS binding.
 
-use js_sys::Reflect;
 use openpit::pretrade::policies::{
     OrderSizeLimitPolicyError, PnlBoundsKillSwitchPolicyError, RateLimitPolicyError,
     SpotFundsConfigError,
@@ -26,11 +25,12 @@ use wasm_bindgen::convert::TryFromJsValue;
 use wasm_bindgen::prelude::*;
 
 use crate::domain::{
-    clone_wrapper_value, is_plain_object, parse_asset, parse_bounded_number, read_field,
-    resolve_account_group_id, resolve_account_id, resolve_pnl,
+    clone_wrapper_value, has_own_field, is_plain_object, parse_asset, parse_bounded_number,
+    read_field, resolve_account_group_id, resolve_account_id, resolve_pnl,
 };
-use crate::engine::EngineLocking;
+use crate::engine::EngineTrait;
 use crate::error::{configure_error_to_js, make_error, ErrorKind};
+use crate::outcome::resolve_pnl_state;
 use crate::policy::order_size_limit::{
     JsOrderSizeAccountAssetBarrier, JsOrderSizeAssetBarrier, JsOrderSizeBrokerBarrier,
 };
@@ -43,9 +43,10 @@ use crate::policy::rate_limit::{
 };
 use crate::policy::spot_funds::{
     parse_limit_mode, parse_pricing_source, JsSpotFundsOverride,
-    JsSpotFundsPnlBoundsAccountBarrierUpdate, JsSpotFundsPnlBoundsAccountGroupBarrier,
+    JsSpotFundsPnlBoundsAccountBarrier, JsSpotFundsPnlBoundsAccountGroupBarrier,
     JsSpotFundsPnlBoundsBarrier,
 };
+use crate::result::JsPolicyConfigurationResult;
 
 #[wasm_bindgen(typescript_custom_section)]
 const CONFIGURE_TS: &'static str = r#"
@@ -103,20 +104,20 @@ export interface SpotFundsConfigureOptions {
 
 /**
  * Runtime spot-funds P&L-bounds axis configuration options.
- * Omitted axes stay unchanged; a supplied iterable replaces its axis, and an
- * empty iterable clears it.
+ * Omitted axes stay unchanged. `globalBarrier: null` clears the singular
+ * barrier, while a barrier value replaces it. Supplied group/account iterables
+ * replace their axes.
  */
 export interface SpotFundsPnlBoundsKillswitchConfigureOptions {
-  globalBarriers?: Iterable<SpotFundsPnlBoundsBarrier> | null;
+  globalBarrier?: SpotFundsPnlBoundsBarrier | null;
   accountGroupBarriers?: Iterable<SpotFundsPnlBoundsAccountGroupBarrier> | null;
-  accountBarriers?: Iterable<SpotFundsPnlBoundsAccountBarrierUpdate> | null;
+  accountBarriers?: Iterable<SpotFundsPnlBoundsAccountBarrier> | null;
 }
 
 /** Runtime spot-funds P&L accumulator assignment options. */
 export interface SetSpotFundsAccountPnlOptions {
   account: AccountId | number | bigint | string;
-  accountCurrency: string;
-  pnl: Pnl | string | number | bigint;
+  state: Pnl | string | number | bigint | PnlHaltReason;
 }
 "#;
 
@@ -148,7 +149,7 @@ extern "C" {
 #[wasm_bindgen(js_name = Configurator)]
 #[derive(Clone)]
 pub struct JsConfigurator {
-    inner: openpit::Configurator<EngineLocking>,
+    inner: openpit::Configurator<EngineTrait>,
 }
 
 type SpotFundsLimitModeEntry<Id> = (Id, Option<openpit::pretrade::SpotFundsLimitMode>);
@@ -378,7 +379,7 @@ impl JsConfigurator {
             .map_err(configure_error_to_js)
     }
 
-    /// Retunes the spot-funds account-currency P&L-bounds axis.
+    /// Retunes the spot-funds account-wide P&L-bounds axis.
     #[wasm_bindgen(js_name = spotFundsPnlBoundsKillswitch)]
     pub fn spot_funds_pnl_bounds_killswitch(
         &self,
@@ -387,22 +388,24 @@ impl JsConfigurator {
     ) -> Result<(), JsValue> {
         let options = options.into();
         require_object(&options, "spotFundsPnlBoundsKillswitch options")?;
-        let global =
-            optional_wrapper_iter_field::<JsSpotFundsPnlBoundsBarrier>(&options, "globalBarriers")?;
+        let global = optional_nullable_wrapper_field::<JsSpotFundsPnlBoundsBarrier>(
+            &options,
+            "globalBarrier",
+        )?;
         let account_group = optional_wrapper_iter_field::<JsSpotFundsPnlBoundsAccountGroupBarrier>(
             &options,
             "accountGroupBarriers",
         )?;
-        let account = optional_wrapper_iter_field::<JsSpotFundsPnlBoundsAccountBarrierUpdate>(
+        let account = optional_wrapper_iter_field::<JsSpotFundsPnlBoundsAccountBarrier>(
             &options,
             "accountBarriers",
         )?;
 
         self.inner
             .spot_funds(name, |settings| {
-                if let Some(barriers) = global {
-                    settings.set_pnl_global_barriers(
-                        barriers.iter().map(JsSpotFundsPnlBoundsBarrier::to_core),
+                if let Some(barrier) = global {
+                    settings.set_pnl_global_barrier(
+                        barrier.as_ref().map(JsSpotFundsPnlBoundsBarrier::to_core),
                     )?;
                 }
                 if let Some(barriers) = account_group {
@@ -416,7 +419,7 @@ impl JsConfigurator {
                     settings.set_pnl_account_barriers(
                         barriers
                             .iter()
-                            .map(JsSpotFundsPnlBoundsAccountBarrierUpdate::to_core),
+                            .map(JsSpotFundsPnlBoundsAccountBarrier::to_core),
                     )?;
                 }
                 Ok::<(), SpotFundsConfigError>(())
@@ -424,26 +427,36 @@ impl JsConfigurator {
             .map_err(configure_error_to_js)
     }
 
-    /// Force-sets live accumulated spot-funds account-currency P&L.
+    /// Force-sets live accumulated spot-funds account-wide P&L state.
+    ///
+    /// The new state is checked against the effective account P&L barrier in
+    /// the same call. The result contains any account block recorded while the
+    /// state was applied, including an immediate numeric barrier breach.
+    ///
+    /// # Errors
+    ///
+    /// Throws `TypeError`, `RangeError`, or `ParamError` for an invalid state,
+    /// `AccountIdError` for an invalid account, or `PolicyConfigureError` when
+    /// the target policy cannot apply the configuration.
     #[wasm_bindgen(js_name = setSpotFundsAccountPnl)]
     pub fn set_spot_funds_account_pnl(
         &self,
         name: &str,
         options: SetSpotFundsAccountPnlOptionsLike,
-    ) -> Result<(), JsValue> {
+    ) -> Result<JsPolicyConfigurationResult, JsValue> {
         let options = options.into();
         require_object(&options, "setSpotFundsAccountPnl options")?;
         let account = resolve_account_id(required_field(&options, "account")?)?;
-        let account_currency = parse_asset(&required_string_field(&options, "accountCurrency")?)?;
-        let pnl = resolve_pnl(required_field(&options, "pnl")?)?;
+        let state = resolve_pnl_state(required_field(&options, "state")?)?;
         self.inner
-            .set_spot_funds_account_pnl(name, account, account_currency, pnl)
+            .set_spot_funds_account_pnl(name, account, state)
+            .map(|result| JsPolicyConfigurationResult::from_core(&result))
             .map_err(configure_error_to_js)
     }
 }
 
 impl JsConfigurator {
-    pub(crate) fn from_inner(inner: openpit::Configurator<EngineLocking>) -> Self {
+    pub(crate) fn from_inner(inner: openpit::Configurator<EngineTrait>) -> Self {
         Self { inner }
     }
 }
@@ -510,6 +523,23 @@ where
     extract_wrapper(field_value, field).map(Some)
 }
 
+fn optional_nullable_wrapper_field<T>(
+    value: &JsValue,
+    field: &str,
+) -> Result<Option<Option<T>>, JsValue>
+where
+    T: TryFromJsValue,
+{
+    let field_value = read_field(value, field)?;
+    if field_value.is_undefined() {
+        return Ok(None);
+    }
+    if field_value.is_null() {
+        return Ok(Some(None));
+    }
+    extract_wrapper(field_value, field).map(|value| Some(Some(value)))
+}
+
 fn optional_wrapper_iter_field<T>(value: &JsValue, field: &str) -> Result<Option<Vec<T>>, JsValue>
 where
     T: TryFromJsValue,
@@ -566,7 +596,7 @@ fn optional_limit_mode_entries<Id>(
     for item in iterator {
         let item = item?;
         require_object(&item, field)?;
-        if !has_own_property(&item, "mode")? {
+        if !has_own_field(&item, "mode")? {
             continue;
         }
         let id = parse_id(required_field(&item, id_field)?)?;
@@ -574,10 +604,4 @@ fn optional_limit_mode_entries<Id>(
         entries.push((id, mode));
     }
     Ok(Some(entries))
-}
-
-fn has_own_property(value: &JsValue, field: &str) -> Result<bool, JsValue> {
-    Ok(Reflect::own_keys(value)?
-        .iter()
-        .any(|key| key.as_string().is_some_and(|key| key == field)))
 }

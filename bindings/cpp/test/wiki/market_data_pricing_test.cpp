@@ -23,7 +23,7 @@
 // asserts) the snippet elides for readability.  The published snippet body and
 // the test body must stay in lock-step.
 
-#include "openpit/account_adjustment.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/marketdata.hpp"
 #include "openpit/model.hpp"

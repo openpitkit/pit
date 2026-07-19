@@ -9,7 +9,8 @@ so its reservation settles. The point is the reservation mechanic - a committed
 order reduces available funds until it fills - and how a fill is tied back to
 its reservation by carrying the pre-trade lock on the execution report. The
 last two steps then switch SpotFunds to track-only at runtime and configure its
-account-currency P&L axis without rebuilding the engine.
+single account-wide P&L barrier, then correct its live account P&L state,
+without rebuilding the engine.
 
 ## Running
 

@@ -83,208 +83,350 @@ typedef uint64_t OpenPitParamAccountId;
 
 ## `OpenPitParamSide`
 
-Order side.
+Raw order-side code accepted from C callers.
 
 ```c
 typedef uint8_t OpenPitParamSide;
-/**
- * Value is absent.
- */
-#define OpenPitParamSide_NotSet ((OpenPitParamSide) 0)
-/**
- * Buy side.
- */
-#define OpenPitParamSide_Buy ((OpenPitParamSide) 1)
-/**
- * Sell side.
- */
-#define OpenPitParamSide_Sell ((OpenPitParamSide) 2)
+```
+
+## `OPENPIT_PARAM_SIDE_NOT_SET`
+
+The order side is absent.
+
+```c
+#define OPENPIT_PARAM_SIDE_NOT_SET ((OpenPitParamSide) 0)
+```
+
+## `OPENPIT_PARAM_SIDE_BUY`
+
+Buy side.
+
+```c
+#define OPENPIT_PARAM_SIDE_BUY ((OpenPitParamSide) 1)
+```
+
+## `OPENPIT_PARAM_SIDE_SELL`
+
+Sell side.
+
+```c
+#define OPENPIT_PARAM_SIDE_SELL ((OpenPitParamSide) 2)
 ```
 
 ## `OpenPitParamPositionSide`
 
-Position direction.
+Raw position-side code accepted from C callers.
 
 ```c
 typedef uint8_t OpenPitParamPositionSide;
-/**
- * Value is absent.
- */
-#define OpenPitParamPositionSide_NotSet ((OpenPitParamPositionSide) 0)
-/**
- * Long exposure.
- */
-#define OpenPitParamPositionSide_Long ((OpenPitParamPositionSide) 1)
-/**
- * Short exposure.
- */
-#define OpenPitParamPositionSide_Short ((OpenPitParamPositionSide) 2)
+```
+
+## `OPENPIT_PARAM_POSITION_SIDE_NOT_SET`
+
+The position side is absent.
+
+```c
+#define OPENPIT_PARAM_POSITION_SIDE_NOT_SET ((OpenPitParamPositionSide) 0)
+```
+
+## `OPENPIT_PARAM_POSITION_SIDE_LONG`
+
+Long exposure.
+
+```c
+#define OPENPIT_PARAM_POSITION_SIDE_LONG ((OpenPitParamPositionSide) 1)
+```
+
+## `OPENPIT_PARAM_POSITION_SIDE_SHORT`
+
+Short exposure.
+
+```c
+#define OPENPIT_PARAM_POSITION_SIDE_SHORT ((OpenPitParamPositionSide) 2)
 ```
 
 ## `OpenPitParamPositionMode`
 
-Position accounting mode.
+Raw position-accounting-mode code accepted from C callers.
 
 ```c
 typedef uint8_t OpenPitParamPositionMode;
-/**
- * Value is absent.
- */
-#define OpenPitParamPositionMode_NotSet ((OpenPitParamPositionMode) 0)
-/**
- * Opposite trades net into one position.
- */
-#define OpenPitParamPositionMode_Netting ((OpenPitParamPositionMode) 1)
-/**
- * Long and short positions are tracked separately.
- */
-#define OpenPitParamPositionMode_Hedged ((OpenPitParamPositionMode) 2)
+```
+
+## `OPENPIT_PARAM_POSITION_MODE_NOT_SET`
+
+The position mode is absent.
+
+```c
+#define OPENPIT_PARAM_POSITION_MODE_NOT_SET ((OpenPitParamPositionMode) 0)
+```
+
+## `OPENPIT_PARAM_POSITION_MODE_NETTING`
+
+Opposite trades net into one position.
+
+```c
+#define OPENPIT_PARAM_POSITION_MODE_NETTING ((OpenPitParamPositionMode) 1)
+```
+
+## `OPENPIT_PARAM_POSITION_MODE_HEDGED`
+
+Long and short positions are tracked separately.
+
+```c
+#define OPENPIT_PARAM_POSITION_MODE_HEDGED ((OpenPitParamPositionMode) 2)
 ```
 
 ## `OpenPitParamPositionEffect`
 
-Whether a trade opens or closes exposure.
+Raw position-effect code accepted from C callers.
 
 ```c
 typedef uint8_t OpenPitParamPositionEffect;
-/**
- * Value is absent.
- */
-#define OpenPitParamPositionEffect_NotSet ((OpenPitParamPositionEffect) 0)
-/**
- * The trade opens or increases exposure.
- */
-#define OpenPitParamPositionEffect_Open ((OpenPitParamPositionEffect) 1)
-/**
- * The trade closes or reduces exposure.
- */
-#define OpenPitParamPositionEffect_Close ((OpenPitParamPositionEffect) 2)
+```
+
+## `OPENPIT_PARAM_POSITION_EFFECT_NOT_SET`
+
+The position effect is absent.
+
+```c
+#define OPENPIT_PARAM_POSITION_EFFECT_NOT_SET ((OpenPitParamPositionEffect) 0)
+```
+
+## `OPENPIT_PARAM_POSITION_EFFECT_OPEN`
+
+The trade opens or increases exposure.
+
+```c
+#define OPENPIT_PARAM_POSITION_EFFECT_OPEN ((OpenPitParamPositionEffect) 1)
+```
+
+## `OPENPIT_PARAM_POSITION_EFFECT_CLOSE`
+
+The trade closes or reduces exposure.
+
+```c
+#define OPENPIT_PARAM_POSITION_EFFECT_CLOSE ((OpenPitParamPositionEffect) 2)
 ```
 
 ## `OpenPitParamFillType`
 
-Type of fill event reported by a venue.
+Raw fill-event vocabulary code exposed to C callers.
 
 ```c
 typedef uint8_t OpenPitParamFillType;
-/**
- * Value is absent.
- */
-#define OpenPitParamFillType_NotSet ((OpenPitParamFillType) 0)
-/**
- * Normal trade execution.
- */
-#define OpenPitParamFillType_Trade ((OpenPitParamFillType) 1)
-/**
- * Forced liquidation by the venue.
- */
-#define OpenPitParamFillType_Liquidation ((OpenPitParamFillType) 2)
-/**
- * Auto-deleveraging event.
- */
-#define OpenPitParamFillType_AutoDeleverage ((OpenPitParamFillType) 3)
-/**
- * Settlement at expiry or delivery.
- */
-#define OpenPitParamFillType_Settlement ((OpenPitParamFillType) 4)
-/**
- * Funding payment.
- */
-#define OpenPitParamFillType_Funding ((OpenPitParamFillType) 5)
+```
+
+## `OPENPIT_PARAM_FILL_TYPE_NOT_SET`
+
+No fill-event type is supplied.
+
+```c
+#define OPENPIT_PARAM_FILL_TYPE_NOT_SET ((OpenPitParamFillType) 0)
+```
+
+## `OPENPIT_PARAM_FILL_TYPE_TRADE`
+
+Normal trade execution.
+
+```c
+#define OPENPIT_PARAM_FILL_TYPE_TRADE ((OpenPitParamFillType) 1)
+```
+
+## `OPENPIT_PARAM_FILL_TYPE_LIQUIDATION`
+
+Forced liquidation by the venue.
+
+```c
+#define OPENPIT_PARAM_FILL_TYPE_LIQUIDATION ((OpenPitParamFillType) 2)
+```
+
+## `OPENPIT_PARAM_FILL_TYPE_AUTO_DELEVERAGE`
+
+Auto-deleveraging event.
+
+```c
+#define OPENPIT_PARAM_FILL_TYPE_AUTO_DELEVERAGE ((OpenPitParamFillType) 3)
+```
+
+## `OPENPIT_PARAM_FILL_TYPE_SETTLEMENT`
+
+Settlement at expiry or delivery.
+
+```c
+#define OPENPIT_PARAM_FILL_TYPE_SETTLEMENT ((OpenPitParamFillType) 4)
+```
+
+## `OPENPIT_PARAM_FILL_TYPE_FUNDING`
+
+Funding payment.
+
+```c
+#define OPENPIT_PARAM_FILL_TYPE_FUNDING ((OpenPitParamFillType) 5)
 ```
 
 ## `OpenPitParamKind`
 
-Parameter category carried by validation and arithmetic errors.
+Raw parameter-category vocabulary code exposed to C callers.
 
 ```c
 typedef uint8_t OpenPitParamKind;
-/**
- * No parameter category is available.
- */
-#define OpenPitParamKind_Unspecified ((OpenPitParamKind) 0)
-/**
- * Quantity.
- */
-#define OpenPitParamKind_Quantity ((OpenPitParamKind) 1)
-/**
- * Volume.
- */
-#define OpenPitParamKind_Volume ((OpenPitParamKind) 2)
-/**
- * Notional value.
- */
-#define OpenPitParamKind_Notional ((OpenPitParamKind) 3)
-/**
- * Price.
- */
-#define OpenPitParamKind_Price ((OpenPitParamKind) 4)
-/**
- * Profit and loss.
- */
-#define OpenPitParamKind_Pnl ((OpenPitParamKind) 5)
-/**
- * Cash flow.
- */
-#define OpenPitParamKind_CashFlow ((OpenPitParamKind) 6)
-/**
- * Signed position size.
- */
-#define OpenPitParamKind_PositionSize ((OpenPitParamKind) 7)
-/**
- * Fee.
- */
-#define OpenPitParamKind_Fee ((OpenPitParamKind) 8)
-/**
- * Leverage.
- */
-#define OpenPitParamKind_Leverage ((OpenPitParamKind) 9)
+```
+
+## `OPENPIT_PARAM_KIND_UNSPECIFIED`
+
+No parameter category is available.
+
+```c
+#define OPENPIT_PARAM_KIND_UNSPECIFIED ((OpenPitParamKind) 0)
+```
+
+## `OPENPIT_PARAM_KIND_QUANTITY`
+
+Quantity.
+
+```c
+#define OPENPIT_PARAM_KIND_QUANTITY ((OpenPitParamKind) 1)
+```
+
+## `OPENPIT_PARAM_KIND_VOLUME`
+
+Volume.
+
+```c
+#define OPENPIT_PARAM_KIND_VOLUME ((OpenPitParamKind) 2)
+```
+
+## `OPENPIT_PARAM_KIND_NOTIONAL`
+
+Notional value.
+
+```c
+#define OPENPIT_PARAM_KIND_NOTIONAL ((OpenPitParamKind) 3)
+```
+
+## `OPENPIT_PARAM_KIND_PRICE`
+
+Price.
+
+```c
+#define OPENPIT_PARAM_KIND_PRICE ((OpenPitParamKind) 4)
+```
+
+## `OPENPIT_PARAM_KIND_PNL`
+
+Profit and loss.
+
+```c
+#define OPENPIT_PARAM_KIND_PNL ((OpenPitParamKind) 5)
+```
+
+## `OPENPIT_PARAM_KIND_CASH_FLOW`
+
+Cash flow.
+
+```c
+#define OPENPIT_PARAM_KIND_CASH_FLOW ((OpenPitParamKind) 6)
+```
+
+## `OPENPIT_PARAM_KIND_POSITION_SIZE`
+
+Signed position size.
+
+```c
+#define OPENPIT_PARAM_KIND_POSITION_SIZE ((OpenPitParamKind) 7)
+```
+
+## `OPENPIT_PARAM_KIND_FEE`
+
+Fee.
+
+```c
+#define OPENPIT_PARAM_KIND_FEE ((OpenPitParamKind) 8)
+```
+
+## `OPENPIT_PARAM_KIND_LEVERAGE`
+
+Leverage.
+
+```c
+#define OPENPIT_PARAM_KIND_LEVERAGE ((OpenPitParamKind) 9)
 ```
 
 ## `OpenPitParamTradeAmountKind`
 
-Selects how one trade-amount numeric value should be interpreted.
+Raw trade-amount selector accepted from C callers.
 
 ```c
 typedef uint8_t OpenPitParamTradeAmountKind;
-/**
- * No amount field is selected.
- */
-#define OpenPitParamTradeAmountKind_NotSet ((OpenPitParamTradeAmountKind) 0)
-/**
- * The value is instrument quantity.
- */
-#define OpenPitParamTradeAmountKind_Quantity ((OpenPitParamTradeAmountKind) 1)
-/**
- * The value is settlement volume.
- */
-#define OpenPitParamTradeAmountKind_Volume ((OpenPitParamTradeAmountKind) 2)
+```
+
+## `OPENPIT_PARAM_TRADE_AMOUNT_KIND_NOT_SET`
+
+No trade-amount field is selected.
+
+```c
+#define OPENPIT_PARAM_TRADE_AMOUNT_KIND_NOT_SET \
+    ((OpenPitParamTradeAmountKind) 0)
+```
+
+## `OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY`
+
+The trade amount is an instrument quantity.
+
+```c
+#define OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY \
+    ((OpenPitParamTradeAmountKind) 1)
+```
+
+## `OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME`
+
+The trade amount is a settlement volume.
+
+```c
+#define OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME ((OpenPitParamTradeAmountKind) 2)
 ```
 
 ## `OpenPitParamRoundingStrategy`
 
-Decimal rounding strategy for typed parameter constructors.
+Raw rounding-strategy code accepted from C callers.
 
 ```c
 typedef uint8_t OpenPitParamRoundingStrategy;
-/**
- * Round half to nearest even number.
- */
-#define OpenPitParamRoundingStrategy_MidpointNearestEven \
+```
+
+## `OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN`
+
+Round half to the nearest even number.
+
+```c
+#define OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN \
     ((OpenPitParamRoundingStrategy) 0)
-/**
- * Round half away from zero.
- */
-#define OpenPitParamRoundingStrategy_MidpointAwayFromZero \
+```
+
+## `OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_AWAY_FROM_ZERO`
+
+Round half away from zero.
+
+```c
+#define OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_AWAY_FROM_ZERO \
     ((OpenPitParamRoundingStrategy) 1)
-/**
- * Round towards positive infinity.
- */
-#define OpenPitParamRoundingStrategy_Up ((OpenPitParamRoundingStrategy) 2)
-/**
- * Round towards negative infinity.
- */
-#define OpenPitParamRoundingStrategy_Down ((OpenPitParamRoundingStrategy) 3)
+```
+
+## `OPENPIT_PARAM_ROUNDING_STRATEGY_UP`
+
+Round towards positive infinity.
+
+```c
+#define OPENPIT_PARAM_ROUNDING_STRATEGY_UP ((OpenPitParamRoundingStrategy) 2)
+```
+
+## `OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN`
+
+Round towards negative infinity.
+
+```c
+#define OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN ((OpenPitParamRoundingStrategy) 3)
 ```
 
 ## `OPENPIT_PARAM_ROUNDING_STRATEGY_DEFAULT`
@@ -293,7 +435,7 @@ Default rounding strategy alias.
 
 ```c
 #define OPENPIT_PARAM_ROUNDING_STRATEGY_DEFAULT \
-    ((OpenPitParamRoundingStrategy) OpenPitParamRoundingStrategy_MidpointNearestEven)
+    ((OpenPitParamRoundingStrategy) OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN)
 ```
 
 ## `OPENPIT_PARAM_ROUNDING_STRATEGY_BANKER`
@@ -302,7 +444,7 @@ Banker's rounding alias.
 
 ```c
 #define OPENPIT_PARAM_ROUNDING_STRATEGY_BANKER \
-    ((OpenPitParamRoundingStrategy) OpenPitParamRoundingStrategy_MidpointNearestEven)
+    ((OpenPitParamRoundingStrategy) OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN)
 ```
 
 ## `OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT`
@@ -311,7 +453,7 @@ Conservative profit rounding alias.
 
 ```c
 #define OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_PROFIT \
-    ((OpenPitParamRoundingStrategy) OpenPitParamRoundingStrategy_Down)
+    ((OpenPitParamRoundingStrategy) OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN)
 ```
 
 ## `OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS`
@@ -320,7 +462,7 @@ Conservative loss rounding alias.
 
 ```c
 #define OPENPIT_PARAM_ROUNDING_STRATEGY_CONSERVATIVE_LOSS \
-    ((OpenPitParamRoundingStrategy) OpenPitParamRoundingStrategy_Down)
+    ((OpenPitParamRoundingStrategy) OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN)
 ```
 
 ## `OpenPitParamTradeAmount`
@@ -352,44 +494,68 @@ typedef struct OpenPitParamMonetaryAmount {
 
 ## `OpenPitTriBool`
 
-Tri-state boolean value.
+Raw tri-state boolean code accepted from C callers.
 
 ```c
 typedef uint8_t OpenPitTriBool;
-/**
- * Value is absent.
- */
-#define OpenPitTriBool_NotSet ((OpenPitTriBool) 0)
-/**
- * Boolean false.
- */
-#define OpenPitTriBool_False ((OpenPitTriBool) 1)
-/**
- * Boolean true.
- */
-#define OpenPitTriBool_True ((OpenPitTriBool) 2)
+```
+
+## `OPENPIT_TRI_BOOL_NOT_SET`
+
+The boolean value is absent.
+
+```c
+#define OPENPIT_TRI_BOOL_NOT_SET ((OpenPitTriBool) 0)
+```
+
+## `OPENPIT_TRI_BOOL_FALSE`
+
+Boolean false.
+
+```c
+#define OPENPIT_TRI_BOOL_FALSE ((OpenPitTriBool) 1)
+```
+
+## `OPENPIT_TRI_BOOL_TRUE`
+
+Boolean true.
+
+```c
+#define OPENPIT_TRI_BOOL_TRUE ((OpenPitTriBool) 2)
 ```
 
 ## `OpenPitParamAdjustmentAmountKind`
 
-Selects how an account-adjustment amount should be interpreted.
+Raw account-adjustment amount selector accepted from C callers.
 
 ```c
 typedef uint8_t OpenPitParamAdjustmentAmountKind;
-/**
- * No amount is specified.
- */
-#define OpenPitParamAdjustmentAmountKind_NotSet \
+```
+
+## `OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_NOT_SET`
+
+No adjustment amount is specified.
+
+```c
+#define OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_NOT_SET \
     ((OpenPitParamAdjustmentAmountKind) 0)
-/**
- * Change current state by the supplied signed amount.
- */
-#define OpenPitParamAdjustmentAmountKind_Delta \
+```
+
+## `OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA`
+
+Change current state by the supplied signed amount.
+
+```c
+#define OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA \
     ((OpenPitParamAdjustmentAmountKind) 1)
-/**
- * Set current state to the supplied signed amount.
- */
-#define OpenPitParamAdjustmentAmountKind_Absolute \
+```
+
+## `OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE`
+
+Set current state to the supplied signed amount.
+
+```c
+#define OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE \
     ((OpenPitParamAdjustmentAmountKind) 2)
 ```
 

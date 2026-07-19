@@ -38,9 +38,10 @@ pub(crate) mod sync_mode;
 mod macros;
 
 pub use account_adjustment::{
-    AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
-    AccountAdjustmentPositionOperation, WithAccountAdjustmentAmount,
-    WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
+    AccountAdjustmentAccountPnlOperation, AccountAdjustmentAmount,
+    AccountAdjustmentBalanceOperation, AccountAdjustmentBounds, AccountAdjustmentPositionOperation,
+    WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
+    WithAccountAdjustmentBalanceRealizedPnl, WithAccountAdjustmentBounds,
     WithAccountAdjustmentPositionOperation,
 };
 pub use account_adjustment_context::AccountAdjustmentContext;
@@ -50,8 +51,8 @@ pub use account_groups::AccountGroupError;
 pub(crate) use account_groups::{AccountGroups, AccountGroupsHandle, GroupLookup};
 pub use account_key::{AccountKey, AccountKeyConstraint};
 pub use account_outcome::{
-    AccountAdjustmentBatchResult, AccountAdjustmentOutcome, AccountOutcomeEntry, OutcomeAmount,
-    PnlOutcomeAmount,
+    AccountAdjustmentBatchResult, AccountAdjustmentOutcome, AccountOutcomeEntry, AccountPnlOutcome,
+    OutcomeAmount, PnlHaltReason, PnlOutcome, PnlOutcomeAmount, PnlState,
 };
 pub(crate) use accounts::AccountCurrencies;
 pub use accounts::Accounts;
@@ -76,11 +77,11 @@ pub use reference_book::{
 };
 pub use request_trait::{
     HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
-    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceRealizedPnl,
-    HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
-    HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
-    HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
-    HasAccountAdjustmentIncomingUpperBound, HasAccountAdjustmentPositionLeverage, HasAccountId,
+    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
+    HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
+    HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
+    HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
+    HasAccountAdjustmentPnlOperation, HasAccountAdjustmentPositionLeverage, HasAccountId,
     HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition, HasCollateralAsset,
     HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
     HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,

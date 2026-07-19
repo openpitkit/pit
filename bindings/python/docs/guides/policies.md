@@ -119,3 +119,10 @@ outcome is known.
   outside configured bounds.
 - `build_order_size_limit()`: enforces per-settlement-asset quantity and
   notional limits.
+- `build_spot_funds()`: enforces available-funds checks by default and tracks
+  reservations and settlement state.
+- `build_spot_funds_pnl_bounds_killswitch()`: enables account P&L bounds with
+  Spot Funds in `TRACK_ONLY` mode. This preset records reservations but disables
+  the insufficient-funds gate, so available funds may go negative instead of
+  producing an `InsufficientFunds` reject. Arithmetic overflow is still
+  surfaced.

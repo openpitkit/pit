@@ -52,3 +52,5 @@ state such as P&L accumulators and may report that a kill switch is active.
 `engine.apply_account_adjustment(...)` validates non-trading account state
 changes, such as balance corrections or direct position updates. The input is a
 batch and the result reports either success or the first failing adjustment.
+An accepted batch can also report account blocks that were recorded by the
+engine before the call returned.

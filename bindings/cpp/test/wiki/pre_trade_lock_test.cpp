@@ -23,18 +23,17 @@
 // the snippet elides for readability. The published snippet body and the test
 // body must stay in lock-step.
 
-#include "openpit/account_adjustment.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/model.hpp"
 #include "openpit/param.hpp"
 #include "openpit/pretrade/pretrade.hpp"
 
 #include <gtest/gtest.h>
-#include <openpit.h>
 
 #include <cassert>
-#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -70,6 +69,7 @@ TEST(PreTradeLockWiki, PersistAndRestoreLockRoundTrip) {
       accountId,
       std::vector<openpit::accountadjustment::AccountAdjustment>{seed});
   assert(seedResult.Passed());
+  ASSERT_TRUE(seedResult.Passed());
 
   // Buy 10 AAPL @ 200 holds 2000 USD and records the lock price (200).
   openpit::model::Order order = openpit::model::Order::Limit(
@@ -81,60 +81,42 @@ TEST(PreTradeLockWiki, PersistAndRestoreLockRoundTrip) {
 
   openpit::pretrade::ExecuteResult result = engine.ExecutePreTrade(order);
   assert(result.Passed());
+  ASSERT_TRUE(result.Passed());
 
   // Persist the lock with its built-in JSON serialization before committing.
-  openpit::pretrade::PreTradeLock lock(
-      openpit_pretrade_pre_trade_reservation_get_lock(
-          result.reservation->Get()));
+  const openpit::pretrade::PreTradeLock lock = result.reservation->Lock();
   const std::string payload = lock.ToJson();
+  assert(!payload.empty());
+  ASSERT_FALSE(payload.empty());
   result.reservation->Commit();
 
   // --- After a process restart, rebuild the lock from your store. ---
   openpit::pretrade::PreTradeLock restored =
       openpit::pretrade::PreTradeLock::FromJson(payload);
+  assert(!restored.IsEmpty());
+  ASSERT_FALSE(restored.IsEmpty());
 
   // The final fill must carry the restored lock so the policy reconciles the
   // 2000 USD it held against the real fill instead of blocking the account.
-  // Keep the instrument alive so its string views remain valid for the call.
-  const openpit::model::Instrument fillInstrument("AAPL", "USD");
-  OpenPitExecutionReport raw{};
-  raw.operation.is_set = true;
-  raw.operation.value.instrument = fillInstrument.Raw();
-  raw.operation.value.account_id.value = accountId.Raw();
-  raw.operation.value.account_id.is_set = true;
-  raw.operation.value.side = OpenPitParamSide_Buy;
-  raw.fill.is_set = true;
-  raw.fill.value.last_trade.is_set = true;
-  raw.fill.value.last_trade.value.price =
-      openpit::param::Price::FromString("200").Raw();
-  raw.fill.value.last_trade.value.quantity =
-      openpit::param::Quantity::FromString("10").Raw();
-  raw.fill.value.leaves_quantity.is_set = true;
-  raw.fill.value.leaves_quantity.value =
-      openpit::param::Quantity::FromString("0").Raw();
-  raw.fill.value.lock = restored.Get();
-  raw.fill.value.is_final.is_set = true;
-  raw.fill.value.is_final.value = true;
+  openpit::model::ExecutionReportOperation operation;
+  operation.instrument = openpit::model::Instrument("AAPL", "USD");
+  operation.accountId = accountId;
+  operation.side = openpit::model::Side::Buy;
 
-  OpenPitPretradeAccountBlockList* blocks = nullptr;
-  OpenPitAccountAdjustmentOutcomeList* fillOutcomes = nullptr;
-  OpenPitSharedString* error = nullptr;
-  openpit_engine_apply_execution_report(engine.Get(), &raw, &blocks,
-                                        &fillOutcomes, &error);
+  openpit::model::Fill fill;
+  fill.lastTrade =
+      openpit::model::Trade(openpit::param::Price::FromString("200"),
+                            openpit::param::Quantity::FromString("10"));
+  fill.leavesQuantity = openpit::param::Quantity::FromString("0");
+  fill.isFinal = true;
 
-  // Harness assertions: the buy reserved successfully, the lock serialized and
-  // restored cleanly, and the final fill produced no account blocks.
-  EXPECT_TRUE(result.Passed());
-  EXPECT_FALSE(payload.empty());
-  EXPECT_FALSE(restored.IsEmpty());
-  EXPECT_EQ(blocks, nullptr);
-
-  if (blocks != nullptr) {
-    openpit_pretrade_destroy_account_block_list(blocks);
-  }
-  if (fillOutcomes != nullptr) {
-    openpit_destroy_account_adjustment_outcome_list(fillOutcomes);
-  }
+  openpit::model::ExecutionReport report;
+  report.operation = std::move(operation);
+  report.fill = std::move(fill);
+  const openpit::PostTradeResult postTradeResult =
+      engine.ApplyExecutionReport(report, restored);
+  assert(postTradeResult.accountBlocks.empty());
+  EXPECT_TRUE(postTradeResult.accountBlocks.empty());
 }
 
 }  // namespace

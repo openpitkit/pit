@@ -6,6 +6,7 @@ var engine_8hpp =
     [ "openpit::EngineBuilder", "classopenpit_1_1EngineBuilder.html", "classopenpit_1_1EngineBuilder" ],
     [ "openpit::EngineBuildError", "classopenpit_1_1EngineBuildError.html", "classopenpit_1_1EngineBuildError" ],
     [ "openpit::pretrade::ExecuteResult", "structopenpit_1_1pretrade_1_1ExecuteResult.html", "structopenpit_1_1pretrade_1_1ExecuteResult" ],
+    [ "openpit::PolicyConfigurationResult", "structopenpit_1_1PolicyConfigurationResult.html", "structopenpit_1_1PolicyConfigurationResult" ],
     [ "openpit::PostTradeResult", "structopenpit_1_1PostTradeResult.html", "structopenpit_1_1PostTradeResult" ],
     [ "openpit::pretrade::Request", "classopenpit_1_1pretrade_1_1Request.html", "classopenpit_1_1pretrade_1_1Request" ],
     [ "openpit::pretrade::Reservation", "classopenpit_1_1pretrade_1_1Reservation.html", "classopenpit_1_1pretrade_1_1Reservation" ],

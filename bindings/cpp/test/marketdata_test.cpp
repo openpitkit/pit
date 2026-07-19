@@ -149,8 +149,7 @@ TEST(ReferenceBook, ReportsDuplicateAndUnknownInputs) {
   EXPECT_EQ(duplicateInstrument.status,
             openpit::ReferenceBookRegisterStatus::DuplicateInstrument);
   ASSERT_TRUE(duplicateInstrument.conflictingInstrument.has_value());
-  EXPECT_EQ(duplicateInstrument.conflictingInstrument->underlyingAsset,
-            "AAPL");
+  EXPECT_EQ(duplicateInstrument.conflictingInstrument->underlyingAsset, "AAPL");
   EXPECT_EQ(book.SetSettlementScheme(openpit::InstrumentId::FromUint64(99),
                                      openpit::SettlementScheme::Uniform(1)),
             openpit::ReferenceBookStatus::UnknownInstrument);

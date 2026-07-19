@@ -1,5 +1,7 @@
 # OpenPit (Pre-trade Integrity Toolkit) for Python
 
+<!-- markdownlint-disable MD033 -->
+
 <!-- markdownlint-disable MD013 -->
 [![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![Python versions](https://img.shields.io/pypi/pyversions/openpit)](https://pypi.org/project/openpit/) [![PyPI](https://img.shields.io/pypi/v/openpit)](https://pypi.org/project/openpit/) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 <!-- markdownlint-enable MD013 -->
@@ -160,6 +162,7 @@ engine is genuinely shared across OS threads.
 
 ## Usage
 
+<!-- markdownlint-disable-next-line MD013 -->
 <!-- Test mirror: pit/bindings/python/tests/integration/test_examples_readme.py -->
 ```python
 import datetime
@@ -290,6 +293,10 @@ report = openpit.ExecutionReport(
 )
 
 result = engine.apply_execution_report(report=report)
+for outcome in result.account_pnls:
+    print(f"account P&L outcome for {outcome.account_id}")
+for outcome in result.account_adjustments:
+    print(f"account adjustment from group {outcome.policy_group_id}")
 
 # 8. After each execution report is applied, the system may report that it has
 # been determined in advance that all subsequent requests will be rejected if

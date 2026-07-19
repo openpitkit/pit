@@ -174,81 +174,82 @@ func (e *Engine) ExecutePreTradeDryRun(order model.Order) (*pretrade.DryRunRepor
 // type lives in the pretrade package and is aliased here; asyncengine aliases
 // the same type, so *Engine satisfies the asyncengine.Builder driver contract.
 //
-// On success ApplyExecutionReport returns a PostTradeResult carrying both the
-// account blocks and the account-adjustment outcomes that policies produced.
+// On success ApplyExecutionReport returns the account blocks,
+// account-adjustment outcomes, and account-level PnL outcomes that policies
+// produced.
 type PostTradeResult = pretrade.PostTradeResult
 
 // ApplyExecutionReport updates engine state from a completed execution report.
 //
-// On success it returns a PostTradeResult carrying both the account blocks and
-// the account-adjustment outcomes that policies produced.
+// On success it returns all three post-trade channels. Account-level PnL and
+// account-adjustment outcomes describe already-applied changes and must be
+// consumed even when account blocks are present.
 func (e *Engine) ApplyExecutionReport(report model.ExecutionReport) (PostTradeResult, error) {
 	result, err := native.EngineApplyExecutionReport(e.handle, report.Handle())
 	runtime.KeepAlive(report)
 	if err != nil {
 		return PostTradeResult{}, err
 	}
+	defer native.DestroyPostTradeResult(result)
 
+	accountBlocksHandle := native.PostTradeResultGetAccountBlocks(result)
 	var accountBlocks []reject.AccountBlock
-	if result.AccountBlocks != nil {
-		n := native.PretradeAccountBlockListLen(result.AccountBlocks)
+	if n := native.PretradeAccountBlockListLen(accountBlocksHandle); n > 0 {
 		accountBlocks = make([]reject.AccountBlock, n)
 		for i := range accountBlocks {
 			accountBlocks[i] = reject.NewAccountBlockFromHandle(
-				native.PretradeAccountBlockListGet(result.AccountBlocks, i))
+				native.PretradeAccountBlockListGet(accountBlocksHandle, i),
+			)
 		}
-		native.DestroyPretradeAccountBlockList(result.AccountBlocks)
 	}
 
-	var outcomes []accountadjustment.Outcome
-	if result.Outcomes != nil {
-		outcomes = accountadjustment.NewListFromHandle(result.Outcomes)
-		native.DestroyAccountAdjustmentOutcomeList(result.Outcomes)
-	}
+	outcomesHandle := native.PostTradeResultGetAccountAdjustments(result)
+	outcomes := accountadjustment.NewListFromHandle(outcomesHandle)
+
+	accountPnlsHandle := native.PostTradeResultGetAccountPnls(result)
+	accountPnls := accountadjustment.NewAccountPnlListFromHandle(accountPnlsHandle)
 
 	return PostTradeResult{
-		AccountBlocks:             accountBlocks,
-		AccountAdjustmentOutcomes: outcomes,
+		AccountBlocks:      accountBlocks,
+		AccountAdjustments: outcomes,
+		AccountPnls:        accountPnls,
 	}, nil
 }
 
 // ApplyAccountAdjustment applies balance/position adjustments for an account.
 //
-// On accept it returns None for the batch error and the slice of
-// account-adjustment outcomes policies produced. On reject it returns the batch
-// error and a nil outcome slice.
+// On acceptance the result contains policy outcomes and blocks recorded after
+// the batch commits. On rejection BatchError is set and the other collections
+// are empty.
 func (e *Engine) ApplyAccountAdjustment(
 	accountID param.AccountID,
 	adjustments []model.AccountAdjustment,
-) (
-	optional.Option[reject.AccountAdjustmentBatchError],
-	[]accountadjustment.Outcome,
-	error,
-) {
+) (accountadjustment.BatchResult, error) {
 	nativeAdjustments := make([]native.AccountAdjustment, len(adjustments))
 	for i, adjustment := range adjustments {
 		nativeAdjustments[i] = adjustment.Handle()
 	}
 
-	adjustmentReject, outcomeList, err := native.EngineApplyAccountAdjustment(
+	adjustmentReject, outcomeList, blockList, err := native.EngineApplyAccountAdjustment(
 		e.handle,
 		accountID.Handle(),
 		nativeAdjustments,
 	)
 	runtime.KeepAlive(adjustments)
 	if err != nil {
-		return optional.None[reject.AccountAdjustmentBatchError](), nil, err
+		return accountadjustment.BatchResult{}, err
 	}
 
 	if adjustmentReject != nil {
 		rejectResult, err := reject.NewAccountAdjustmentBatchErrorFromHandle(adjustmentReject)
 		native.DestroyAccountAdjustmentBatchError(adjustmentReject)
 		if err != nil {
-			return optional.None[reject.AccountAdjustmentBatchError](),
-				nil,
+			return accountadjustment.BatchResult{},
 				fmt.Errorf("failed to create reject list for rejected account adjustment: %w", err)
 		}
-		return optional.Some(rejectResult), nil, nil
+		return accountadjustment.BatchResult{
+			BatchError: optional.Some(rejectResult),
+		}, nil
 	}
 
 	var outcomes []accountadjustment.Outcome
@@ -256,8 +257,22 @@ func (e *Engine) ApplyAccountAdjustment(
 		outcomes = accountadjustment.NewListFromHandle(outcomeList)
 		native.DestroyAccountAdjustmentOutcomeList(outcomeList)
 	}
+	var accountBlocks []reject.AccountBlock
+	if blockList != nil {
+		accountBlocks = make([]reject.AccountBlock, native.PretradeAccountBlockListLen(blockList))
+		for index := range accountBlocks {
+			accountBlocks[index] = reject.NewAccountBlockFromHandle(
+				native.PretradeAccountBlockListGet(blockList, index),
+			)
+		}
+		native.DestroyPretradeAccountBlockList(blockList)
+	}
 
-	return optional.None[reject.AccountAdjustmentBatchError](), outcomes, nil
+	return accountadjustment.BatchResult{
+		BatchError:    optional.None[reject.AccountAdjustmentBatchError](),
+		Outcomes:      outcomes,
+		AccountBlocks: accountBlocks,
+	}, nil
 }
 
 // Accounts returns an accessor for account-group management bound to this

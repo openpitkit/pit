@@ -33,7 +33,6 @@ use openpit::{
 
 // Mirrors public examples from:
 // - crates/openpit/README.md
-// - ../pit.wiki/Getting-Started.md
 // If this test changes, update every linked documentation snippet.
 
 #[test]
@@ -74,8 +73,7 @@ fn example_readme_configure_builtin_policy() -> Result<(), Box<dyn std::error::E
 #[test]
 fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
     // Source: crates/openpit/README.md - Usage
-    // Shared with: pit.wiki/Getting-Started.md
-    // Keep README and wiki versions of this example in sync.
+    // Keep this example in sync with the README.
     let usd = Asset::new("USD")?;
 
     // 1. Build the engine builder.
@@ -180,6 +178,15 @@ fn example_readme_quickstart() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let result = engine.apply_execution_report(&report);
+    for outcome in &result.account_pnls {
+        eprintln!("account P&L outcome for {}", outcome.account_id);
+    }
+    for outcome in &result.account_adjustments {
+        eprintln!(
+            "account adjustment from group {}",
+            outcome.policy_group_id.value()
+        );
+    }
 
     // 8. After each execution report is applied, the system may report that it has
     // been determined in advance that all subsequent requests will be rejected if

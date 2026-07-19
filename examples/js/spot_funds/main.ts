@@ -54,13 +54,18 @@ import {
   type ExecutionReportInit,
   type OrderInit,
 } from "@openpit/engine/model";
-import { type Lock, type PostTradeResult } from "@openpit/engine/pretrade";
+import {
+  type Lock,
+  type PolicyConfigurationResult,
+  type PostTradeResult,
+} from "@openpit/engine/pretrade";
 import {
   buildOrderValidation,
   buildSpotFunds,
   SpotFundsBuilder,
   SpotFundsLimitMode,
-  SpotFundsPnlBoundsAccountBarrierUpdate,
+  SpotFundsPnlBoundsAccountBarrier,
+  SpotFundsPnlBoundsBarrier,
 } from "@openpit/engine/pretrade/policies";
 import { type Reject } from "@openpit/engine/reject";
 
@@ -166,14 +171,25 @@ function main(): number {
       " reserved, available may go negative",
   );
 
-  // Step 7 - arm the spot-funds account-currency P&L axis and force-set the
-  // live accumulator. This is how an application can retune bounds and then
-  // synchronize its own realized-P&L snapshot into the running policy without
-  // rebuilding the engine.
+  // Step 7 - arm the spot-funds account-wide P&L barrier and force-set the
+  // single live account P&L state. This is how an application can retune bounds
+  // and then apply an explicit correction without rebuilding the engine.
+  // setSpotFundsAccountPnl returns a PolicyConfigurationResult: -120 is inside
+  // the [-250, 250] barrier just configured, so accountBlocks stays empty. A
+  // forced value outside the barrier would come back with a block for this
+  // account instead - a caller MUST check accountBlocks, not just that the
+  // call did not throw.
   configureSpotFundsPnlAxis(engine);
-  forceSpotFundsPnl(engine, "-120");
+  const pnlResult = forceSpotFundsPnl(engine, "-120");
+  if (pnlResult.accountBlocks.length > 0) {
+    const blocked = pnlResult.accountBlocks
+      .map((block) => `${block.reason} (${block.details})`)
+      .join("; ");
+    throw new Error(`forcing account P&L unexpectedly blocked the account: ${blocked}`);
+  }
   console.log(
-    `spot-funds pnl axis configured for ${SCENARIO_ASSET_SETTLE}; live pnl forced to -120`,
+    "spot-funds account P&L barrier configured; live account P&L forced to" +
+      " -120 (within bounds, no account block)",
   );
 
   return 0;
@@ -325,26 +341,32 @@ export function enableTrackOnly(engine: Engine): void {
   });
 }
 
-/** Retune the SpotFunds account-currency P&L axis for the example account. */
+/** Retune the SpotFunds account-wide P&L barrier for the example account. */
 export function configureSpotFundsPnlAxis(engine: Engine): void {
   engine.configure().spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
     accountBarriers: [
-      new SpotFundsPnlBoundsAccountBarrierUpdate(
+      new SpotFundsPnlBoundsAccountBarrier(
         SCENARIO_ACCOUNT,
-        SCENARIO_ASSET_SETTLE,
-        "-250",
-        "250",
+        new SpotFundsPnlBoundsBarrier("-250", "250"),
       ),
     ],
   });
 }
 
-/** Force-set the SpotFunds live accumulated P&L for the example account. */
-export function forceSpotFundsPnl(engine: Engine, pnl: string): void {
-  engine.configure().setSpotFundsAccountPnl(SpotFundsBuilder.NAME, {
+/**
+ * Force-set the SpotFunds live accumulated P&L for the example account.
+ *
+ * Returns the PolicyConfigurationResult so the caller can check
+ * `accountBlocks`: forcing a value outside the configured P&L barrier blocks
+ * the account immediately, before any order ever triggers the kill switch.
+ */
+export function forceSpotFundsPnl(
+  engine: Engine,
+  state: string,
+): PolicyConfigurationResult {
+  return engine.configure().setSpotFundsAccountPnl(SpotFundsBuilder.NAME, {
     account: SCENARIO_ACCOUNT,
-    accountCurrency: SCENARIO_ASSET_SETTLE,
-    pnl,
+    state,
   });
 }
 

@@ -27,14 +27,14 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
 use super::{
-    SpotFundsLimitMode, SpotFundsPnlBoundsAccountBarrier, SpotFundsPnlBoundsAccountBarrierUpdate,
-    SpotFundsPnlBoundsAccountGroupBarrier, SpotFundsPnlBoundsBarrier,
+    SpotFundsLimitMode, SpotFundsPnlBoundsAccountBarrier, SpotFundsPnlBoundsAccountGroupBarrier,
+    SpotFundsPnlBoundsBarrier,
 };
 use crate::core::instrument::Instrument;
 use crate::marketdata::{
     AccountInfo, InstrumentId, MarketDataService, MarketDataSync, Quote, QuoteResolution,
 };
-use crate::param::{AccountGroupId, AccountId, Asset, Pnl, Price};
+use crate::param::{AccountGroupId, AccountId, Price};
 
 use super::super::pnl_bounds;
 use super::market_order_pricer::WithSlippage;
@@ -54,10 +54,7 @@ pub enum SpotFundsConfigError {
         bps: u16,
     },
     /// A P&L bounds barrier has neither lower nor upper bound.
-    NoPnlBoundsConfigured {
-        /// Account currency whose barrier is empty.
-        account_currency: Asset,
-    },
+    NoPnlBoundsConfigured,
     /// A P&L-bounds policy was built without any barriers.
     NoPnlBarriersConfigured,
 }
@@ -71,12 +68,8 @@ impl Display for SpotFundsConfigError {
                     "slippage {bps} bps is out of range (must be <= 10 000 bps)"
                 )
             }
-            Self::NoPnlBoundsConfigured { account_currency } => {
-                write!(
-                    f,
-                    "spot-funds P&L bounds for account currency {account_currency} \
-                     must configure at least one bound"
-                )
+            Self::NoPnlBoundsConfigured => {
+                write!(f, "spot-funds P&L bounds must configure at least one bound")
             }
             Self::NoPnlBarriersConfigured => {
                 write!(f, "spot funds P&L bounds require at least one barrier")
@@ -191,12 +184,9 @@ pub struct SpotFundsSettings {
     instrument_overrides: HashMap<InstrumentId, WithSlippage>,
     account_limit_modes: HashMap<AccountId, SpotFundsLimitMode>,
     account_group_limit_modes: HashMap<AccountGroupId, SpotFundsLimitMode>,
-    pnl_global_barriers: HashMap<Asset, SpotFundsPnlBoundsBarrier>,
-    pnl_account_group_barriers:
-        HashMap<AccountGroupId, HashMap<Asset, SpotFundsPnlBoundsAccountGroupBarrier>>,
-    pnl_account_barriers:
-        HashMap<AccountId, HashMap<Asset, SpotFundsPnlBoundsAccountBarrierUpdate>>,
-    initial_pnl: HashMap<(AccountId, Asset), Pnl>,
+    pnl_global_barrier: Option<SpotFundsPnlBoundsBarrier>,
+    pnl_account_group_barriers: HashMap<AccountGroupId, SpotFundsPnlBoundsAccountGroupBarrier>,
+    pnl_account_barriers: HashMap<AccountId, SpotFundsPnlBoundsAccountBarrier>,
     global_pricer: WithSlippage,
     pricing_source: SpotFundsPricingSource,
     global_limit_mode: SpotFundsLimitMode,
@@ -268,10 +258,9 @@ impl SpotFundsSettings {
             instrument_overrides,
             account_limit_modes: HashMap::new(),
             account_group_limit_modes: HashMap::new(),
-            pnl_global_barriers: HashMap::new(),
+            pnl_global_barrier: None,
             pnl_account_group_barriers: HashMap::new(),
             pnl_account_barriers: HashMap::new(),
-            initial_pnl: HashMap::new(),
             global_pricer,
             pricing_source,
             global_limit_mode: SpotFundsLimitMode::Enforce,
@@ -332,20 +321,19 @@ impl SpotFundsSettings {
         pnl_bounds::set_or_clear(&mut self.account_group_limit_modes, account_group_id, mode);
     }
 
-    /// Replaces the global account-currency P&L bounds.
-    ///
-    /// Global P&L bounds apply to every account whose account currency matches
-    /// and that has no more specific account-group or account override.
-    pub fn set_pnl_global_barriers(
+    /// Replaces or clears the global account P&L bounds.
+    pub fn set_pnl_global_barrier(
         &mut self,
-        barriers: impl IntoIterator<Item = SpotFundsPnlBoundsBarrier>,
+        barrier: Option<SpotFundsPnlBoundsBarrier>,
     ) -> Result<(), SpotFundsConfigError> {
-        let barriers = collect_pnl_global_barriers(barriers)?;
-        self.pnl_global_barriers = barriers;
+        if let Some(barrier) = barrier.as_ref() {
+            validate_pnl_bounds(barrier)?;
+        }
+        self.pnl_global_barrier = barrier;
         Ok(())
     }
 
-    /// Replaces account-group account-currency P&L bounds.
+    /// Replaces account-group account P&L bounds.
     pub fn set_pnl_account_group_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountGroupBarrier>,
@@ -355,52 +343,24 @@ impl SpotFundsSettings {
         Ok(())
     }
 
-    /// Replaces account-specific account-currency P&L bounds without changing
+    /// Replaces account-specific account P&L bounds without changing
     /// accumulated P&L.
     pub fn set_pnl_account_barriers(
         &mut self,
-        barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountBarrierUpdate>,
+        barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountBarrier>,
     ) -> Result<(), SpotFundsConfigError> {
-        let barriers = collect_pnl_account_barrier_updates(barriers)?;
+        let barriers = collect_pnl_account_barriers(barriers)?;
         self.pnl_account_barriers = barriers;
         Ok(())
     }
 
-    /// Sets account-specific account-currency P&L bounds and records
-    /// construction-time P&L seeds, consuming and returning the settings.
-    ///
-    /// This is a build-time-only builder step: it takes `self` by value so it
-    /// cannot be called from the runtime configuration closure, which only ever
-    /// hands out a `&mut SpotFundsSettings` (moving out of that borrow does not
-    /// compile). Seeds must therefore be supplied before the settings are handed
-    /// to [`SpotFundsPolicy::new`](super::SpotFundsPolicy::new), which is the only
-    /// place they are consumed. Runtime configuration uses
-    /// [`Self::set_pnl_account_barriers`], which carries no seed and cannot reset
-    /// accumulated P&L.
-    pub fn with_initial_pnl_account_barriers(
+    /// Installs account-specific account P&L bounds, consuming and returning
+    /// the settings for construction-time chaining.
+    pub fn with_pnl_account_barriers(
         mut self,
         barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountBarrier>,
     ) -> Result<Self, SpotFundsConfigError> {
-        let mut account = HashMap::new();
-        let mut initial_pnl = HashMap::new();
-        for barrier in barriers {
-            validate_pnl_bounds(&barrier.barrier)?;
-            let account_id = barrier.account_id;
-            let account_currency = barrier.barrier.account_currency.clone();
-            initial_pnl.insert((account_id, account_currency.clone()), barrier.initial_pnl);
-            account
-                .entry(account_id)
-                .or_insert_with(HashMap::new)
-                .insert(
-                    account_currency,
-                    SpotFundsPnlBoundsAccountBarrierUpdate {
-                        barrier: barrier.barrier,
-                        account_id,
-                    },
-                );
-        }
-        self.pnl_account_barriers = account;
-        self.initial_pnl = initial_pnl;
+        self.set_pnl_account_barriers(barriers)?;
         Ok(self)
     }
 
@@ -413,14 +373,14 @@ impl SpotFundsSettings {
     /// validation performed by the corresponding settings operations.
     pub fn with_pnl_barriers(
         mut self,
-        global_barriers: impl IntoIterator<Item = SpotFundsPnlBoundsBarrier>,
+        global_barrier: Option<SpotFundsPnlBoundsBarrier>,
         account_group_barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountGroupBarrier>,
         account_barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountBarrier>,
     ) -> Result<Self, SpotFundsConfigError> {
-        self.set_pnl_global_barriers(global_barriers)?;
+        self.set_pnl_global_barrier(global_barrier)?;
         self.set_pnl_account_group_barriers(account_group_barriers)?;
-        self = self.with_initial_pnl_account_barriers(account_barriers)?;
-        if self.pnl_global_barriers.is_empty()
+        self.set_pnl_account_barriers(account_barriers)?;
+        if self.pnl_global_barrier.is_none()
             && self.pnl_account_group_barriers.is_empty()
             && self.pnl_account_barriers.is_empty()
         {
@@ -429,33 +389,20 @@ impl SpotFundsSettings {
         Ok(self)
     }
 
-    pub(super) fn take_initial_pnl(&mut self) -> HashMap<(AccountId, Asset), Pnl> {
-        std::mem::take(&mut self.initial_pnl)
-    }
-
     pub(super) fn pnl_barrier_for(
         &self,
         account_id: AccountId,
         account_group_id: Option<AccountGroupId>,
-        account_currency: &Asset,
     ) -> Option<&SpotFundsPnlBoundsBarrier> {
-        if let Some(barrier) = self
-            .pnl_account_barriers
-            .get(&account_id)
-            .and_then(|m| m.get(account_currency))
-        {
+        if let Some(barrier) = self.pnl_account_barriers.get(&account_id) {
             return Some(&barrier.barrier);
         }
         if let Some(account_group_id) = account_group_id {
-            if let Some(barrier) = self
-                .pnl_account_group_barriers
-                .get(&account_group_id)
-                .and_then(|m| m.get(account_currency))
-            {
+            if let Some(barrier) = self.pnl_account_group_barriers.get(&account_group_id) {
                 return Some(&barrier.barrier);
             }
         }
-        self.pnl_global_barriers.get(account_currency)
+        self.pnl_global_barrier.as_ref()
     }
 
     /// Reads the global funds limit mode applied when no override matches.
@@ -597,52 +544,29 @@ impl SpotFundsSettings {
 
 fn validate_pnl_bounds(barrier: &SpotFundsPnlBoundsBarrier) -> Result<(), SpotFundsConfigError> {
     if !pnl_bounds::has_configured_bound(&barrier.lower_bound, &barrier.upper_bound) {
-        return Err(SpotFundsConfigError::NoPnlBoundsConfigured {
-            account_currency: barrier.account_currency.clone(),
-        });
+        return Err(SpotFundsConfigError::NoPnlBoundsConfigured);
     }
     Ok(())
 }
 
-fn collect_pnl_global_barriers(
-    barriers: impl IntoIterator<Item = SpotFundsPnlBoundsBarrier>,
-) -> Result<HashMap<Asset, SpotFundsPnlBoundsBarrier>, SpotFundsConfigError> {
-    let mut out = HashMap::new();
-    for barrier in barriers {
-        validate_pnl_bounds(&barrier)?;
-        out.insert(barrier.account_currency.clone(), barrier);
-    }
-    Ok(out)
-}
-
 fn collect_pnl_account_group_barriers(
     barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountGroupBarrier>,
-) -> Result<
-    HashMap<AccountGroupId, HashMap<Asset, SpotFundsPnlBoundsAccountGroupBarrier>>,
-    SpotFundsConfigError,
-> {
+) -> Result<HashMap<AccountGroupId, SpotFundsPnlBoundsAccountGroupBarrier>, SpotFundsConfigError> {
     let mut out = HashMap::new();
     for barrier in barriers {
         validate_pnl_bounds(&barrier.barrier)?;
-        out.entry(barrier.account_group_id)
-            .or_insert_with(HashMap::new)
-            .insert(barrier.barrier.account_currency.clone(), barrier);
+        out.insert(barrier.account_group_id, barrier);
     }
     Ok(out)
 }
 
-fn collect_pnl_account_barrier_updates(
-    barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountBarrierUpdate>,
-) -> Result<
-    HashMap<AccountId, HashMap<Asset, SpotFundsPnlBoundsAccountBarrierUpdate>>,
-    SpotFundsConfigError,
-> {
+fn collect_pnl_account_barriers(
+    barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountBarrier>,
+) -> Result<HashMap<AccountId, SpotFundsPnlBoundsAccountBarrier>, SpotFundsConfigError> {
     let mut out = HashMap::new();
     for barrier in barriers {
         validate_pnl_bounds(&barrier.barrier)?;
-        out.entry(barrier.account_id)
-            .or_insert_with(HashMap::new)
-            .insert(barrier.barrier.account_currency.clone(), barrier);
+        out.insert(barrier.account_id, barrier);
     }
     Ok(out)
 }
@@ -698,7 +622,7 @@ mod tests {
 
     use super::*;
     use crate::marketdata::{MarketDataBuilder, Quote, QuoteTtl};
-    use crate::param::{Asset, Price};
+    use crate::param::{Asset, Pnl, Price};
     use crate::FullSync;
 
     fn px(s: &str) -> Price {
@@ -721,7 +645,7 @@ mod tests {
     fn pnl_barrier_builder_rejects_an_empty_configuration() {
         let error = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])
             .expect("base settings must build")
-            .with_pnl_barriers([], [], [])
+            .with_pnl_barriers(None, [], [])
             .expect_err("empty P&L barriers must fail");
 
         assert_eq!(error, SpotFundsConfigError::NoPnlBarriersConfigured);
@@ -736,11 +660,10 @@ mod tests {
         let result = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])
             .expect("base settings must build")
             .with_pnl_barriers(
-                [SpotFundsPnlBoundsBarrier {
-                    account_currency: asset("USD"),
+                Some(SpotFundsPnlBoundsBarrier {
                     lower_bound: Some(Pnl::from_str("-100").expect("valid pnl")),
                     upper_bound: None,
-                }],
+                }),
                 [],
                 [],
             );

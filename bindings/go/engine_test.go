@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package openpit
 
@@ -128,12 +128,44 @@ func TestEngineApplyAccountAdjustmentEmptyBatchIsNoop(t *testing.T) {
 	engine := newEngineForTests(t)
 	defer engine.Stop()
 
-	rejects, _, err := engine.ApplyAccountAdjustment(param.NewAccountIDFromUint64(1), nil)
+	result, err := engine.ApplyAccountAdjustment(param.NewAccountIDFromUint64(1), nil)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v, want nil", err)
 	}
-	if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", rejects)
+	if result.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", result.BatchError)
+	}
+}
+
+// TestEngineNoAccountBlocksReturnsNilSlice pins the zero-value contract
+// shared by ApplyExecutionReport and ApplyAccountAdjustment: when no account
+// is blocked, AccountBlocks is a nil slice, not a non-nil empty one.
+func TestEngineNoAccountBlocksReturnsNilSlice(t *testing.T) {
+	engine := newEngineForTests(t)
+	defer engine.Stop()
+
+	adjustmentResult, err := engine.ApplyAccountAdjustment(
+		param.NewAccountIDFromUint64(1), nil,
+	)
+	if err != nil {
+		t.Fatalf("ApplyAccountAdjustment() error = %v, want nil", err)
+	}
+	if adjustmentResult.AccountBlocks != nil {
+		t.Fatalf(
+			"ApplyAccountAdjustment() AccountBlocks = %#v, want nil",
+			adjustmentResult.AccountBlocks,
+		)
+	}
+
+	reportResult, err := engine.ApplyExecutionReport(model.NewExecutionReport())
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport() error = %v, want nil", err)
+	}
+	if reportResult.AccountBlocks != nil {
+		t.Fatalf(
+			"ApplyExecutionReport() AccountBlocks = %#v, want nil",
+			reportResult.AccountBlocks,
+		)
 	}
 }
 
@@ -147,17 +179,17 @@ func TestEngineApplyAccountAdjustmentReturnsBatchReject(t *testing.T) {
 	}
 	defer engine.Stop()
 
-	rejects, _, err := engine.ApplyAccountAdjustment(
+	result, err := engine.ApplyAccountAdjustment(
 		param.NewAccountIDFromUint64(1),
 		[]model.AccountAdjustment{model.NewAccountAdjustment()},
 	)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if !rejects.IsSet() {
+	if !result.BatchError.IsSet() {
 		t.Fatal("ApplyAccountAdjustment() rejects.IsSet() = false, want true")
 	}
-	batchReject, ok := rejects.Get()
+	batchReject, ok := result.BatchError.Get()
 	if !ok {
 		t.Fatal("ApplyAccountAdjustment() rejects.Get() ok = false, want true")
 	}
@@ -210,15 +242,20 @@ func (engineTestStartPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (engineTestStartPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ model.ExecutionReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
+func (engineTestStartPolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	model.ExecutionReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
+) []reject.AccountBlock {
 	return nil
 }
 
 func (engineTestStartPolicy) ApplyAccountAdjustment(
 	accountadjustment.Context, param.AccountID, model.AccountAdjustment, tx.Mutations,
 	pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 type engineTestNoopStartPolicy struct{}
@@ -241,15 +278,20 @@ func (engineTestNoopStartPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (engineTestNoopStartPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ model.ExecutionReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
+func (engineTestNoopStartPolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	model.ExecutionReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
+) []reject.AccountBlock {
 	return nil
 }
 
 func (engineTestNoopStartPolicy) ApplyAccountAdjustment(
 	accountadjustment.Context, param.AccountID, model.AccountAdjustment, tx.Mutations,
 	pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 type engineTestRejectingAdjustmentPolicy struct {
@@ -278,7 +320,12 @@ func (engineTestRejectingAdjustmentPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (engineTestRejectingAdjustmentPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ model.ExecutionReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
+func (engineTestRejectingAdjustmentPolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	model.ExecutionReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
+) []reject.AccountBlock {
 	return nil
 }
 
@@ -288,8 +335,8 @@ func (p *engineTestRejectingAdjustmentPolicy) ApplyAccountAdjustment(
 	model.AccountAdjustment,
 	tx.Mutations,
 	pretrade.AccountOutcomes,
-) []reject.Reject {
-	return reject.NewSingleItemList(
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, reject.NewSingleItemList(
 		reject.CodeOther,
 		p.name,
 		"adjustment rejected",

@@ -29,10 +29,14 @@ from .._openpit import (
     AccountBlock,
     AccountControl,
     AccountOutcomeEntry,
+    AccountPnlOutcome,
     DryRunReport,
     ExecuteResult,
     OutcomeAmount,
+    PnlHaltReason,
+    PnlOutcome,
     PnlOutcomeAmount,
+    PolicyConfigurationResult,
     PostTradeContext,
     PostTradeResult,
     Reject,
@@ -49,6 +53,7 @@ from ._enum import RejectCode, RejectScope
 from .policy import (
     Context,
     Policy,
+    PolicyAccountAdjustmentResult,
     PolicyDecision,
     PolicyPreTradeResult,
     PolicyReject,
@@ -93,15 +98,44 @@ reservation. Failed results never contain a reservation.
 PostTradeResult.__doc__ = """
 Result of ``openpit.Engine.apply_execution_report``.
 
-Post-trade processing is not atomic: ``account_adjustments`` reflect storage
-mutations that have already been applied, so callers must propagate them
-downstream even when ``account_blocks`` is non-empty.
+Post-trade processing is not atomic: ``account_pnls`` and
+``account_adjustments`` reflect storage mutations that have already been
+applied, so callers must propagate both downstream even when
+``account_blocks`` is non-empty.
 
 Attributes:
     account_blocks: List of account blocks reported by policies. Non-empty
         when at least one policy entered a blocked state after the report.
+    account_pnls: List of policy-tagged account-level PnL outcomes. Each
+        outcome has either ``pnl`` or ``halt_reason``.
     account_adjustments: List of per-asset position outcomes reported by
         policies, in policy registration order.
+"""
+
+PnlHaltReason.__doc__ = """
+Reason why a realized-PnL value could not be calculated.
+
+The reason identifies the missing input or arithmetic failure that halted the
+specific position or account accumulator. A halt remains sticky until that
+exact accumulator is explicitly force-set.
+"""
+
+AccountPnlOutcome.__doc__ = """
+Policy-tagged account-level realized-PnL outcome.
+
+Exactly one of ``pnl`` and ``halt_reason`` is present. SpotFunds emits a halted
+outcome only for the report that transitions the account accumulator to halted;
+later reports omit the unchanged halt. A position PnL force-set does not re-arm
+this account accumulator.
+"""
+
+PnlOutcome.__doc__ = """
+Realized-PnL result for one position.
+
+Exactly one of ``pnl`` and ``halt_reason`` is present. The halt reason is
+reported only by the operation that first fails; later operations omit the
+position PnL until an adjustment force-sets that position's PnL. Re-arming it
+does not re-arm account PnL or another position.
 """
 
 Reject.__doc__ = """
@@ -152,6 +186,17 @@ Attributes:
     failed_index: Zero-based index of the first rejected adjustment, or
         ``None`` on success.
     rejects: Reject list returned for the failed adjustment.
+    outcomes: Per-adjustment outcomes on success; empty on rejection.
+    account_blocks: Committed blocks on success; empty on rejection.
+"""
+
+PolicyConfigurationResult.__doc__ = """
+Result of an accepted runtime policy configuration operation.
+
+Attributes:
+    account_blocks: Blocks recorded by the engine before the configuration
+        call returns. The list is empty when the accepted change did not block
+        an account.
 """
 
 DryRunReport.__doc__ = """
@@ -204,12 +249,17 @@ __all__ = [
     "AccountBlock",
     "AccountControl",
     "AccountOutcomeEntry",
+    "AccountPnlOutcome",
     "DEFAULT_POLICY_GROUP_ID",
     "DryRunReport",
     "ExecuteResult",
     "PolicyGroupId",
     "OutcomeAmount",
+    "PnlHaltReason",
+    "PnlOutcome",
     "PnlOutcomeAmount",
+    "PolicyConfigurationResult",
+    "PolicyAccountAdjustmentResult",
     "Policy",
     "Context",
     "PolicyDecision",

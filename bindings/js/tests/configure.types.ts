@@ -17,6 +17,7 @@
 
 import { type Configurator, Engine } from "@openpit/engine";
 import { AccountGroupId } from "@openpit/engine/param";
+import { PnlHaltReason } from "@openpit/engine/pretrade";
 import {
   buildRateLimit,
   buildSpotFunds,
@@ -28,7 +29,6 @@ import {
   SpotFundsBuilder,
   SpotFundsLimitMode,
   SpotFundsPnlBoundsAccountBarrier,
-  SpotFundsPnlBoundsAccountBarrierUpdate,
   SpotFundsPnlBoundsBarrier,
   SpotFundsPnlBoundsKillswitchBuilder,
 } from "@openpit/engine/pretrade/policies";
@@ -63,21 +63,38 @@ configurator.spotFunds(SpotFundsBuilder.NAME, {
 configurator.spotFundsPnlBoundsKillswitch(
   SpotFundsPnlBoundsKillswitchBuilder.NAME,
   {
-    globalBarriers: [new SpotFundsPnlBoundsBarrier("USD", "-500", undefined)],
+    globalBarrier: new SpotFundsPnlBoundsBarrier("-500", undefined),
     accountBarriers: [
-      new SpotFundsPnlBoundsAccountBarrierUpdate(
+      new SpotFundsPnlBoundsAccountBarrier(
         99_224_416n,
-        "USD",
-        "-250",
-        "250",
+        new SpotFundsPnlBoundsBarrier("-250", "250"),
       ),
     ],
   },
 );
 
+const numericPnlConfiguration = configurator.setSpotFundsAccountPnl(
+  SpotFundsPnlBoundsKillswitchBuilder.NAME,
+  {
+    account: 99_224_416n,
+    state: "-120",
+  },
+);
+void numericPnlConfiguration.accountBlocks;
+
+const haltedPnlConfiguration = configurator.setSpotFundsAccountPnl(
+  SpotFundsPnlBoundsKillswitchBuilder.NAME,
+  {
+    account: 99_224_416n,
+    state: PnlHaltReason.fromMissingFx(),
+  },
+);
+void haltedPnlConfiguration.accountBlocks;
+
 configurator.setSpotFundsAccountPnl(SpotFundsPnlBoundsKillswitchBuilder.NAME, {
   account: 99_224_416n,
-  accountCurrency: "USD",
+  state: "-120",
+  // @ts-expect-error - spot-funds PnL assignments require `state`, not `pnl`.
   pnl: "-120",
 });
 
@@ -87,10 +104,7 @@ Engine.builder()
     buildSpotFundsPnlBoundsKillswitch().accountBarriers([
       new SpotFundsPnlBoundsAccountBarrier(
         99_224_416n,
-        "USD",
-        "0",
-        "-250",
-        "250",
+        new SpotFundsPnlBoundsBarrier("-250", "250"),
       ),
     ]),
   )
@@ -106,11 +120,5 @@ accounts.clearGroupCurrency(AccountGroupId.DEFAULT());
 
 new PnlBoundsBrokerBarrier("USD", "-100", undefined);
 
-new SpotFundsPnlBoundsAccountBarrierUpdate(
-  99_224_416n,
-  "USD",
-  "0",
-  "-250",
-  // @ts-expect-error - runtime spot-funds account-barrier updates do not take initialPnl.
-  "250",
-);
+// @ts-expect-error - account barriers compose a reusable bounds object.
+new SpotFundsPnlBoundsAccountBarrier(99_224_416n, "-250", "250");

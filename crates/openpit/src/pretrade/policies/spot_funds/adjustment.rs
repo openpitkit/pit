@@ -22,35 +22,32 @@ use crate::core::sync_mode::SyncMode;
 use crate::core::{
     AccountControl, AccountOutcomeEntry, HasAccountAdjustmentBalance,
     HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentBalanceLowerBound,
-    HasAccountAdjustmentBalanceRealizedPnl, HasAccountAdjustmentBalanceUpperBound,
-    HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
-    HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
-    HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
-    HasBalanceAsset,
+    HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
+    HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
+    HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
+    HasAccountAdjustmentIncomingUpperBound, HasAccountAdjustmentPnlOperation, HasBalanceAsset,
 };
 use crate::marketdata::MarketDataSync;
-use crate::param::AccountId;
-use crate::pretrade::holdings::{AdjustmentTarget, Holdings};
+use crate::param::{AccountGroupId, AccountId};
+use crate::pretrade::holdings::{AdjustmentTarget, Holdings, PositionPnlState};
 use crate::pretrade::policy::missing_required_field_account_adjustment_reject;
-use crate::pretrade::{RejectScope, Rejects};
-use crate::Mutations;
+use crate::pretrade::{PolicyAccountAdjustmentResult, RejectScope, Rejects};
+use crate::{Mutations, PnlState};
 
 use super::rejects::{
-    account_adjustment_bounds_exceeded_reject, adj_field, arithmetic_overflow_reject,
+    account_adjustment_bounds_exceeded_reject, account_pnl_block_for_state, adj_field,
+    arithmetic_overflow_reject,
 };
-use super::rollback::{AdjustmentRollback, AvgRestore, PnlRestore};
+use super::rollback::{AccountPnlAssertionRollback, AdjustmentRollback, AvgRestore, PnlRestore};
 use super::views::AdjustmentRequestView;
 use super::SpotFundsPolicy;
 
 /// Payload computed while mutating a holdings slot during an account
 /// adjustment: the new holdings plus the named rollback payload.
 ///
-/// Quantity deltas feed the concurrency-safe inverse-delta rollback. The prior
-/// average and prior realized PnL are carried as absolute snapshots so rollback
-/// can restore them when the adjustment force-set those fields, since neither
-/// the weighted-average cost nor a forced realized value (which may overwrite an
-/// untracked `None`) is delta-reversible. The realized-PnL delta is still
-/// computed, but only to surface the delta/absolute outcome pair to the caller.
+/// Quantity deltas feed the concurrency-safe inverse-delta rollback. Absolute
+/// fields carry both their prior and asserted values so rollback can avoid
+/// overwriting a parallel change.
 struct AdjustmentSlotUpdate {
     new: Holdings,
     rollback: AdjustmentRollback,
@@ -70,7 +67,6 @@ where
         AccountAdjustment: HasBalanceAsset
             + HasAccountAdjustmentBalance
             + HasAccountAdjustmentBalanceAverageEntryPrice
-            + HasAccountAdjustmentBalanceRealizedPnl
             + HasAccountAdjustmentBalanceLowerBound
             + HasAccountAdjustmentBalanceUpperBound
             + HasAccountAdjustmentHeld
@@ -78,7 +74,8 @@ where
             + HasAccountAdjustmentHeldUpperBound
             + HasAccountAdjustmentIncoming
             + HasAccountAdjustmentIncomingLowerBound
-            + HasAccountAdjustmentIncomingUpperBound,
+            + HasAccountAdjustmentIncomingUpperBound
+            + HasAccountAdjustmentPnlOperation,
     {
         let asset = adjustment
             .balance_asset()
@@ -128,15 +125,15 @@ where
     pub(super) fn apply_account_adjustment_impl<AccountAdjustment>(
         &self,
         account_control: Option<AccountControl<<Sync as SyncMode>::StorageLockingPolicyFactory>>,
+        account_group_id: Option<AccountGroupId>,
         account_id: AccountId,
         adjustment: &AccountAdjustment,
         mutations: &mut Mutations,
-    ) -> Result<Vec<AccountOutcomeEntry>, Rejects>
+    ) -> Result<PolicyAccountAdjustmentResult, Rejects>
     where
         AccountAdjustment: HasBalanceAsset
             + HasAccountAdjustmentBalance
             + HasAccountAdjustmentBalanceAverageEntryPrice
-            + HasAccountAdjustmentBalanceRealizedPnl
             + HasAccountAdjustmentBalanceLowerBound
             + HasAccountAdjustmentBalanceUpperBound
             + HasAccountAdjustmentHeld
@@ -144,9 +141,25 @@ where
             + HasAccountAdjustmentHeldUpperBound
             + HasAccountAdjustmentIncoming
             + HasAccountAdjustmentIncomingLowerBound
-            + HasAccountAdjustmentIncomingUpperBound,
+            + HasAccountAdjustmentIncomingUpperBound
+            + HasAccountAdjustmentPnlOperation,
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
+        let account_pnl = adj_field(
+            self,
+            "account pnl operation",
+            adjustment.account_adjustment_pnl_operation(),
+        )?;
+        if let Some(state) = account_pnl {
+            return self.apply_account_pnl_adjustment(
+                account_control,
+                account_group_id,
+                account_id,
+                state,
+                mutations,
+            );
+        }
+
         let request = self.read_adjustment_request(adjustment)?;
         if request.balance.is_none()
             && request.balance_average_entry_price.is_none()
@@ -154,7 +167,7 @@ where
             && request.held.is_none()
             && request.incoming.is_none()
         {
-            return Ok(Vec::new());
+            return Ok(PolicyAccountAdjustmentResult::default());
         }
 
         let key = (account_id, request.asset.clone());
@@ -164,13 +177,8 @@ where
             Holdings::zero,
             |slot, _is_new| -> Result<AdjustmentSlotUpdate, Rejects> {
                 let current = *slot;
-                // Snapshot the prior average entry price and realized PnL so
-                // rollback can restore each absolutely when this adjustment
-                // force-sets it. Neither is delta-reversible: the weighted-
-                // average cost is path-dependent, and a forced realized value can
-                // overwrite a prior untracked `None` that no delta could restore.
                 let prior_avg = current.avg_entry_price();
-                let prior_realized = current.realized_pnl();
+                let prior_realized = current.realized_pnl_outcome();
                 let mut new = current;
 
                 if let Some(amount) = request.balance {
@@ -257,15 +265,15 @@ where
                     }
                 }
 
-                // A balance operation may carry the position's average entry
-                // price and/or force-set realized PnL even without a quantity
-                // change. Set each absolutely when present and leave the prior
-                // value otherwise.
-                if let Some(avg) = request.balance_average_entry_price {
-                    new = new.with_avg_entry_price(Some(avg));
+                if let Some(average_entry_price) = request.balance_average_entry_price {
+                    new = new.with_avg_entry_price(Some(average_entry_price));
                 }
-                if let Some(realized) = request.balance_realized_pnl {
-                    new = new.with_realized_pnl(realized);
+
+                if let Some(state) = request.balance_realized_pnl {
+                    new = match state {
+                        PnlState::Value(value) => new.with_realized_pnl(value),
+                        PnlState::Halted(reason) => new.halt_realized_pnl(reason).holdings(),
+                    };
                 }
 
                 let avg_may_change = request.balance_average_entry_price.is_some()
@@ -290,9 +298,8 @@ where
                 if clear_avg_on_flat {
                     new = new.with_avg_entry_price(None);
                 }
-                let restore_avg_on_rollback =
-                    request.balance_average_entry_price.is_some()
-                        || (clear_avg_on_flat && current.avg_entry_price().is_some());
+                let restore_avg_on_rollback = request.balance_average_entry_price.is_some()
+                    || (clear_avg_on_flat && current.avg_entry_price().is_some());
 
                 // Compute per-field deltas with checked arithmetic before writing
                 // the slot. This serves two purposes:
@@ -345,34 +352,6 @@ where
                             ),
                         ))
                     })?;
-                // Realized-PnL delta is computed only to surface the
-                // delta/absolute outcome pair (rollback restores realized PnL
-                // from `prior_realized`, not from this delta). It exists only
-                // when this adjustment force-set a tracked value; if the prior
-                // value was untracked, the forced absolute value is reported as
-                // the delta from the untracked state.
-                let realized_pnl_delta = match (
-                    request.balance_realized_pnl,
-                    new.realized_pnl(),
-                    current.realized_pnl(),
-                ) {
-                    (Some(_), Some(new_realized), Some(current_realized)) => {
-                        Some(new_realized.checked_sub(current_realized).map_err(|_| {
-                            Rejects::from(arithmetic_overflow_reject(
-                                Self::NAME,
-                                RejectScope::Account,
-                                format!(
-                                    "account adjustment delta overflow: account {account_id}, \
-                                     asset {asset}, field realized pnl",
-                                    asset = request.asset,
-                                ),
-                            ))
-                        })?)
-                    }
-                    (Some(_), Some(new_realized), None) => Some(new_realized),
-                    _ => None,
-                };
-
                 *slot = new; // synchronous write, see register_*_rollback comments
                 Ok(AdjustmentSlotUpdate {
                     new,
@@ -380,12 +359,13 @@ where
                         available_delta,
                         held_delta,
                         incoming_delta,
-                        realized_pnl_delta,
-                        prior_avg: restore_avg_on_rollback.then_some(AvgRestore(prior_avg)),
-                        prior_realized: request
-                            .balance_realized_pnl
-                            .is_some()
-                            .then_some(PnlRestore(prior_realized)),
+                        asserted: new,
+                        prior_avg: restore_avg_on_rollback.then_some(AvgRestore {
+                            previous: prior_avg,
+                        }),
+                        prior_realized: request.balance_realized_pnl.map(|_| PnlRestore {
+                            previous: prior_realized,
+                        }),
                     },
                 })
             },
@@ -409,27 +389,91 @@ where
             delta: rollback.incoming_delta,
             absolute: new.incoming(),
         });
-        // Surface the current average alongside balance changes and explicit
-        // average force-sets. Realized PnL is surfaced only when the adjustment
-        // force-set it, as a delta/absolute pair.
+        let realized_pnl = match request.balance_realized_pnl {
+            Some(PnlState::Value(absolute)) => {
+                let delta = match rollback
+                    .prior_realized
+                    .as_ref()
+                    .and_then(|restore| restore.previous.as_ref())
+                    .and_then(|outcome| match outcome {
+                        PositionPnlState::Pnl(value) => Some(*value),
+                        PositionPnlState::Halted(_) => None,
+                    }) {
+                    Some(previous) => absolute.checked_sub(previous).map_err(|_| {
+                        Rejects::from(arithmetic_overflow_reject(
+                            Self::NAME,
+                            RejectScope::Account,
+                            format!(
+                                "account adjustment delta overflow: account {account_id}, \
+                                 asset {}, field realized pnl",
+                                request.asset
+                            ),
+                        ))
+                    })?,
+                    None => absolute,
+                };
+                Some(Ok(PnlOutcomeAmount { delta, absolute }))
+            }
+            Some(PnlState::Halted(reason)) => Some(Err(reason)),
+            None => None,
+        };
         let average_entry_price = (request.balance.is_some()
-            || request.balance_average_entry_price.is_some())
+            || request.balance_average_entry_price.is_some()
+            || request.balance_realized_pnl.is_some())
         .then_some(new.avg_entry_price())
         .flatten();
-        let realized_pnl = match (request.balance_realized_pnl, rollback.realized_pnl_delta) {
-            (Some(_), Some(delta)) => new
-                .realized_pnl()
-                .map(|absolute| PnlOutcomeAmount { delta, absolute }),
-            _ => None,
-        };
+        Ok(PolicyAccountAdjustmentResult {
+            account_adjustments: vec![AccountOutcomeEntry {
+                asset: request.asset,
+                balance: balance_outcome,
+                held: held_outcome,
+                incoming: incoming_outcome,
+                realized_pnl,
+                average_entry_price,
+            }],
+            account_blocks: Vec::new(),
+        })
+    }
 
-        Ok(vec![AccountOutcomeEntry {
-            asset: request.asset,
-            balance: balance_outcome,
-            held: held_outcome,
-            incoming: incoming_outcome,
-            realized_pnl,
-            average_entry_price,
-        }])
+    fn apply_account_pnl_adjustment(
+        &self,
+        account_control: Option<AccountControl<<Sync as SyncMode>::StorageLockingPolicyFactory>>,
+        account_group_id: Option<AccountGroupId>,
+        account_id: AccountId,
+        state: PnlState,
+        mutations: &mut Mutations,
+    ) -> Result<PolicyAccountAdjustmentResult, Rejects>
+    where
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
+    {
+        let owner_id = mutations.owner_id();
+        let barrier = self.pnl_barrier_for(account_id, account_group_id);
+        let (previous, token, lease) =
+            self.acquire_account_pnl_assertion(account_id, owner_id, state);
+        self.register_account_pnl_adjustment_rollback(
+            mutations,
+            AccountPnlAssertionRollback {
+                account_control,
+                account_id,
+                previous,
+                asserted: state,
+                token,
+                barrier: barrier.clone(),
+                lease,
+            },
+        );
+        // Untagged by construction: the engine discards these blocks when the
+        // batch rejects and only records them once every mutation is committed,
+        // so by the time the cause exists its assertion is over and no rollback
+        // is left that could invalidate a provenance tag.
+        let account_blocks = barrier
+            .as_ref()
+            .and_then(|barrier| account_pnl_block_for_state(account_id, state, barrier, None))
+            .into_iter()
+            .collect();
+        Ok(PolicyAccountAdjustmentResult {
+            account_adjustments: Vec::new(),
+            account_blocks,
+        })
     }
 }

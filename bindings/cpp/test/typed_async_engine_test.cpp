@@ -23,8 +23,8 @@
 // concurrency assumptions); the real engine validates the end-to-end pipeline
 // and the reject-vs-throw error model.
 
-#include "openpit/account_adjustment.hpp"
 #include "openpit/account_id.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/accounts.hpp"
 #include "openpit/async_engine.hpp"
 #include "openpit/engine.hpp"

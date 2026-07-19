@@ -189,9 +189,7 @@ FillReport BuildFillReport(const Row &row, param::AccountId acc,
   const param::Quantity leaves = param::Quantity::FromString("0");
 
   // The fill carries the pre-trade lock that ties it back to the reservation
-  // the matching ORDER committed: one entry under the spot funds policy's
-  // `pretrade.NewLockFromEntries([]pretrade.Entry{{DefaultPolicyGroupID,
-  // price}})`.
+  // the matching ORDER committed: one entry under the default policy group.
   openpit::pretrade::PreTradeLock lock;
   try {
     lock.Push(openpit::param::DefaultPolicyGroupId, price);

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package policies
 
@@ -66,63 +66,63 @@ type PnlBoundsAccountAssetBarrierUpdate struct {
 }
 
 //------------------------------------------------------------------------------
-// PnlBoundsKillswitchBuilder
+// PnlBoundsKillSwitchBuilder
 
-// PnlBoundsKillswitchBuilder is the entry point for the P&L bounds
+// PnlBoundsKillSwitchBuilder is the entry point for the P&L bounds
 // kill-switch policy. Each axis method returns a
-// PnlBoundsKillswitchReadyBuilder on which additional axes and Build are
+// PnlBoundsKillSwitchReadyBuilder on which additional axes and Build are
 // available.
-type PnlBoundsKillswitchBuilder struct {
-	builder *PnlBoundsKillswitchReadyBuilder
+type PnlBoundsKillSwitchBuilder struct {
+	builder *PnlBoundsKillSwitchReadyBuilder
 }
 
-// PnlBoundsKillswitchReadyBuilder holds a fully-configured P&L bounds
+// PnlBoundsKillSwitchReadyBuilder holds a fully-configured P&L bounds
 // kill-switch policy.
-type PnlBoundsKillswitchReadyBuilder struct {
+type PnlBoundsKillSwitchReadyBuilder struct {
 	brokerBarriers  []native.PretradePoliciesPnlBoundsBarrier
 	accountBarriers []native.PretradePoliciesPnlBoundsAccountBarrier
 	policyGroupID   model.PolicyGroupID
 }
 
-// BuildPnlBoundsKillswitch returns a new P&L bounds kill-switch policy
+// BuildPnlBoundsKillSwitch returns a new P&L bounds kill-switch policy
 // builder.
-func BuildPnlBoundsKillswitch() *PnlBoundsKillswitchBuilder {
-	return &PnlBoundsKillswitchBuilder{
-		builder: &PnlBoundsKillswitchReadyBuilder{policyGroupID: model.DefaultPolicyGroupID},
+func BuildPnlBoundsKillSwitch() *PnlBoundsKillSwitchBuilder {
+	return &PnlBoundsKillSwitchBuilder{
+		builder: &PnlBoundsKillSwitchReadyBuilder{policyGroupID: model.DefaultPolicyGroupID},
 	}
 }
 
 // PolicyGroupID assigns the policy to a pricing group and returns a ready
 // builder. When not set the policy uses model.DefaultPolicyGroupID.
-func (b *PnlBoundsKillswitchBuilder) PolicyGroupID(
+func (b *PnlBoundsKillSwitchBuilder) PolicyGroupID(
 	groupID model.PolicyGroupID,
-) *PnlBoundsKillswitchReadyBuilder {
+) *PnlBoundsKillSwitchReadyBuilder {
 	b.builder.PolicyGroupID(groupID)
 	return b.builder
 }
 
 // PolicyGroupID assigns the policy to a pricing group. When not set the policy
 // uses model.DefaultPolicyGroupID.
-func (b *PnlBoundsKillswitchReadyBuilder) PolicyGroupID(
+func (b *PnlBoundsKillSwitchReadyBuilder) PolicyGroupID(
 	groupID model.PolicyGroupID,
-) *PnlBoundsKillswitchReadyBuilder {
+) *PnlBoundsKillSwitchReadyBuilder {
 	b.policyGroupID = groupID
 	return b
 }
 
 // BrokerBarriers adds broker-level P&L bounds barriers and returns a
 // ready builder.
-func (b *PnlBoundsKillswitchBuilder) BrokerBarriers(
+func (b *PnlBoundsKillSwitchBuilder) BrokerBarriers(
 	barriers ...PnlBoundsBrokerBarrier,
-) *PnlBoundsKillswitchReadyBuilder {
+) *PnlBoundsKillSwitchReadyBuilder {
 	b.builder.BrokerBarriers(barriers...)
 	return b.builder
 }
 
 // BrokerBarriers appends broker-level P&L bounds barriers.
-func (b *PnlBoundsKillswitchReadyBuilder) BrokerBarriers(
+func (b *PnlBoundsKillSwitchReadyBuilder) BrokerBarriers(
 	barriers ...PnlBoundsBrokerBarrier,
-) *PnlBoundsKillswitchReadyBuilder {
+) *PnlBoundsKillSwitchReadyBuilder {
 	for _, barrier := range barriers {
 		b.brokerBarriers = append(
 			b.brokerBarriers,
@@ -138,18 +138,18 @@ func (b *PnlBoundsKillswitchReadyBuilder) BrokerBarriers(
 
 // AccountBarriers adds per-(account, settlement-asset) P&L bounds
 // barriers and returns a ready builder.
-func (b *PnlBoundsKillswitchBuilder) AccountBarriers(
+func (b *PnlBoundsKillSwitchBuilder) AccountBarriers(
 	barriers ...PnlBoundsAccountAssetBarrier,
-) *PnlBoundsKillswitchReadyBuilder {
+) *PnlBoundsKillSwitchReadyBuilder {
 	b.builder.AccountBarriers(barriers...)
 	return b.builder
 }
 
 // AccountBarriers appends per-(account, settlement-asset) P&L bounds
 // barriers.
-func (b *PnlBoundsKillswitchReadyBuilder) AccountBarriers(
+func (b *PnlBoundsKillSwitchReadyBuilder) AccountBarriers(
 	barriers ...PnlBoundsAccountAssetBarrier,
-) *PnlBoundsKillswitchReadyBuilder {
+) *PnlBoundsKillSwitchReadyBuilder {
 	for _, barrier := range barriers {
 		b.accountBarriers = append(
 			b.accountBarriers,
@@ -167,8 +167,8 @@ func (b *PnlBoundsKillswitchReadyBuilder) AccountBarriers(
 
 // Build registers the built-in P&L bounds kill-switch policy on the
 // given engine builder.
-func (b *PnlBoundsKillswitchReadyBuilder) Build(builder native.EngineBuilder) error {
-	err := native.EngineBuilderAddBuiltinPnlBoundsKillswitch(
+func (b *PnlBoundsKillSwitchReadyBuilder) Build(builder native.EngineBuilder) error {
+	err := native.EngineBuilderAddBuiltinPnlBoundsKillSwitch(
 		builder,
 		native.PolicyGroupID(b.policyGroupID),
 		b.brokerBarriers,

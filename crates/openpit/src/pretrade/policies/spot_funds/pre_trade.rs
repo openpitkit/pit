@@ -36,7 +36,8 @@ use crate::storage::ConfigCell;
 use crate::Mutations;
 
 use super::rejects::{
-    arithmetic_overflow_reject, insufficient_funds_reject, order_value_calculation_failed_reject,
+    account_pnl_halted_reject, arithmetic_overflow_reject, insufficient_funds_reject,
+    order_value_calculation_failed_reject,
 };
 use super::views::OrderRequestView;
 use super::SpotFundsPolicy;
@@ -47,6 +48,38 @@ where
     Sync::StorageLockingPolicyFactory: crate::storage::LockingPolicyFactory,
     MarketDataSyncMode: MarketDataSync,
 {
+    pub(super) fn reject_halted_account_pnl(
+        &self,
+        account_id: AccountId,
+        account_info: &impl AccountInfo,
+    ) -> Result<(), Rejects> {
+        let barrier = self.settings.with(|settings| {
+            settings
+                .pnl_barrier_for(account_id, account_info.group())
+                .cloned()
+        });
+        let Some(barrier) = barrier else {
+            return Ok(());
+        };
+        let state = self.account_pnl_state(account_id);
+        match state {
+            crate::PnlState::Halted(reason) => Err(Rejects::from(account_pnl_halted_reject(
+                Self::NAME,
+                account_id,
+                reason,
+            ))),
+            crate::PnlState::Value(_) => {
+                if let Some(block) =
+                    super::rejects::account_pnl_block_for_state(account_id, state, &barrier, None)
+                {
+                    Err(Rejects::from(Reject::from(block)))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
     /// Returns a [`Reject`] appropriate for the given [`SpotFundsPriceError`].
     pub(super) fn reject_from_price_err(err: SpotFundsPriceError) -> Reject {
         match err {
@@ -313,6 +346,7 @@ where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         let request = self.read_order_request(order)?;
+        self.reject_halted_account_pnl(request.account_id, account_info)?;
 
         let legs = self
             .compute_reservation_legs(
@@ -383,6 +417,7 @@ where
         Order: HasInstrument + HasAccountId + HasSide + HasTradeAmount + HasOrderPrice,
     {
         let request = self.read_order_request(order)?;
+        self.reject_halted_account_pnl(request.account_id, account_info)?;
 
         let legs = self
             .compute_reservation_legs(

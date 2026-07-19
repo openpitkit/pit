@@ -41,7 +41,11 @@ export {
   ExecuteResult,
   DryRunReport,
   AccountAdjustmentBatchResult,
+  PolicyConfigurationResult,
   PostTradeResult,
+  AccountPnlOutcome,
+  PnlHaltReason,
+  PnlOutcome,
   // Policy callback contexts.
   Context,
   PostTradeContext,
@@ -61,9 +65,11 @@ export type {
   PolicyReject,
   PolicyDecision,
   PolicyPreTradeResult,
+  PolicyPostTradeResult,
   PolicyMutation,
   PolicyAccountAdjustmentResult,
   PolicyOutcomeAmount,
+  PolicyPnlOutcome,
   PolicyPnlOutcomeAmount,
   PolicyAccountOutcomeEntry,
   LockEntry,
@@ -76,6 +82,7 @@ export type {
   SpotFundsLimitModeAccountGroupEntry,
   SpotFundsPnlBoundsKillswitchConfigureOptions,
   SetSpotFundsAccountPnlOptions,
+  PnlHaltReasonKind,
 } from "../wasm/openpit_js.js";
 
 import type { Lock, LockEntry } from "../wasm/openpit_js.js";

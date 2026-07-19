@@ -15,11 +15,11 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-use crate::core::account_outcome::AccountOutcomeEntry;
 pub use crate::core::{PolicyGroupId, DEFAULT_POLICY_GROUP_ID};
 
 use super::{
-    AccountBlock, PolicyPreTradeResult, PostTradeContext, PostTradeResult, PreTradeContext, Reject,
+    AccountBlock, PolicyAccountAdjustmentResult, PolicyConfigurationResult, PolicyPreTradeResult,
+    PolicyRuntimeConfiguration, PostTradeContext, PostTradeResult, PreTradeContext, Reject,
     RejectCode, RejectScope, Rejects,
 };
 use crate::core::SyncMode;
@@ -119,6 +119,14 @@ where
         None
     }
 
+    #[doc(hidden)]
+    fn apply_runtime_configuration(
+        &self,
+        _configuration: PolicyRuntimeConfiguration,
+    ) -> PolicyConfigurationResult {
+        PolicyConfigurationResult::default()
+    }
+
     /// Performs start-stage checks against an order.
     ///
     /// Returning `Ok(())` allows the engine to continue building the deferred
@@ -207,8 +215,9 @@ where
     /// through [`PostTradeContext::account_group`].
     ///
     /// Returns `Some(`[`PostTradeResult`]`)` when this policy produced account
-    /// blocks or account adjustments, or `None` when the report caused no
-    /// state change. The engine only merges results that are `Some`.
+    /// blocks, account-level PnL outcomes, or account adjustments, or `None`
+    /// when the report caused no state change. The engine only merges results
+    /// that are `Some`.
     fn apply_execution_report(
         &self,
         _ctx: &PostTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
@@ -237,8 +246,8 @@ where
         _account_id: AccountId,
         _adjustment: &AccountAdjustment,
         _mutations: &mut Mutations,
-    ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
-        Ok(vec![])
+    ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
+        Ok(PolicyAccountAdjustmentResult::default())
     }
 }
 
@@ -311,7 +320,7 @@ mod tests {
     };
     use crate::param::{AccountId, Asset, Fee, Pnl, Quantity, Side, TradeAmount};
     use crate::pretrade::{PolicyPreTradeResult, RejectCode, RejectScope, Rejects};
-    use crate::{AccountOutcomeEntry, Mutations, RequestFieldAccessError};
+    use crate::{Mutations, PolicyAccountAdjustmentResult, RequestFieldAccessError};
 
     use crate::core::{LocalSync, SyncMode};
     use crate::storage::NoLocking;
@@ -370,8 +379,8 @@ mod tests {
             _account_id: AccountId,
             _adjustment: &(),
             _mutations: &mut Mutations,
-        ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
-            Ok(vec![])
+        ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
+            Ok(PolicyAccountAdjustmentResult::default())
         }
     }
 

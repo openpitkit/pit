@@ -13,15 +13,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package pretrade
 
 import (
+	"runtime"
+
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/reject"
 )
 
 // Result is the callback-scoped collector passed to PerformPreTradeCheck.
@@ -45,7 +48,9 @@ func (r Result) PushLockPrice(price param.Price) error {
 func (r Result) PushAccountAdjustment(
 	entry accountadjustment.AccountOutcomeEntry,
 ) error {
-	return native.PretradePreTradeResultPushAccountAdjustment(r.handle, entry.NewHandle())
+	err := native.PretradePreTradeResultPushAccountAdjustment(r.handle, entry.NewHandle())
+	runtime.KeepAlive(entry)
+	return err
 }
 
 // PostTradeAdjustments is the callback-scoped collector passed to
@@ -65,25 +70,53 @@ func (a PostTradeAdjustments) Push(
 	groupID model.PolicyGroupID,
 	entry accountadjustment.AccountOutcomeEntry,
 ) error {
-	return native.PostTradeAdjustmentListPush(
+	err := native.PostTradeAdjustmentListPush(
 		a.handle,
 		native.PolicyGroupID(groupID), entry.NewHandle(),
 	)
+	runtime.KeepAlive(entry)
+	return err
+}
+
+// PostTradePnls is the callback-scoped collector passed to
+// ApplyExecutionReport. It carries group-tagged account-level PnL outcomes.
+type PostTradePnls struct {
+	handle native.PostTradeAccountPnlList
+}
+
+// NewPostTradePnlsFromHandle wraps a native handle into a PostTradePnls.
+func NewPostTradePnlsFromHandle(handle native.PostTradeAccountPnlList) PostTradePnls {
+	return PostTradePnls{handle: handle}
+}
+
+// Push appends one group-tagged account-level PnL outcome to the list.
+func (p PostTradePnls) Push(outcome accountadjustment.AccountPnlOutcome) error {
+	err := native.PostTradeAccountPnlListPush(p.handle, outcome.NewHandle())
+	runtime.KeepAlive(outcome)
+	return err
 }
 
 // AccountOutcomes is the callback-scoped collector passed to
 // ApplyAccountAdjustment. It carries account-outcome entries; the engine
 // assigns the policy group to every pushed entry.
 type AccountOutcomes struct {
-	handle native.AccountOutcomeEntryList
+	handle native.PretradeAccountAdjustmentResult
+}
+
+// PolicyAccountAdjustmentResult is the accepted contribution of one custom
+// policy to an account-adjustment batch.
+type PolicyAccountAdjustmentResult struct {
+	AccountBlocks []reject.AccountBlock
 }
 
 // NewAccountOutcomesFromHandle wraps a native handle into an AccountOutcomes.
-func NewAccountOutcomesFromHandle(handle native.AccountOutcomeEntryList) AccountOutcomes {
+func NewAccountOutcomesFromHandle(handle native.PretradeAccountAdjustmentResult) AccountOutcomes {
 	return AccountOutcomes{handle: handle}
 }
 
 // Push appends one account-outcome entry to the list.
 func (o AccountOutcomes) Push(entry accountadjustment.AccountOutcomeEntry) error {
-	return native.AccountOutcomeEntryListPush(o.handle, entry.NewHandle())
+	err := native.PretradeAccountAdjustmentResultPushAccountOutcome(o.handle, entry.NewHandle())
+	runtime.KeepAlive(entry)
+	return err
 }

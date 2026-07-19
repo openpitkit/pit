@@ -108,9 +108,10 @@
 // The engine does, however, *volunteer* post-op balances as a side effect of
 // some operations, and the driver uses them where available:
 //
-//   - ApplyAccountAdjustment (funding) returns []accountadjustment.Outcome, and
-//     ApplyExecutionReport (settlement) returns those outcomes inside its
-//     PostTradeResult. For the SpotFundsPolicy each outcome's
+//   - ApplyAccountAdjustment (funding) returns an accountadjustment.BatchResult
+//     whose Outcomes hold the adjustment outcomes, and ApplyExecutionReport
+//     (settlement) returns those outcomes inside its PostTradeResult. For the
+//     SpotFundsPolicy each outcome's
 //     OutcomeAmount.Absolute is the true post-op available/held of the affected
 //     (account, asset) leg (verified against the core: spot_funds/adjustment.rs
 //     and spot_funds/execution.rs set absolute = new.available()/new.held()).

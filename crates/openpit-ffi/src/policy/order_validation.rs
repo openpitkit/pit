@@ -109,7 +109,7 @@ mod tests {
         use crate::order::{OpenPitOrderOperation, OpenPitOrderOperationOptional};
         use crate::param::{
             OpenPitParamAccountIdOptional, OpenPitParamPrice, OpenPitParamPriceOptional,
-            OpenPitParamSide, OpenPitParamTradeAmount, OpenPitParamTradeAmountKind,
+            OpenPitParamTradeAmount,
         };
         OpenPitOrder {
             operation: OpenPitOrderOperationOptional {
@@ -121,13 +121,13 @@ mod tests {
                     },
                     trade_amount: OpenPitParamTradeAmount {
                         value: quantity_param(1, 0).0,
-                        kind: OpenPitParamTradeAmountKind::Quantity,
+                        kind: crate::param::OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY,
                     },
                     account_id: OpenPitParamAccountIdOptional {
                         value: 7,
                         is_set: true,
                     },
-                    side: OpenPitParamSide::Buy,
+                    side: crate::param::OPENPIT_PARAM_SIDE_BUY,
                     price: OpenPitParamPriceOptional {
                         is_set: true,
                         value: OpenPitParamPrice(OpenPitParamDecimal {

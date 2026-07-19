@@ -95,6 +95,8 @@ enum class GetStatus : std::uint8_t {
   UnknownInstrument = OpenPitMarketDataGetStatus_UnknownInstrument,
   // The selected quote exists but aged past its effective TTL.
   QuoteExpired = OpenPitMarketDataGetStatus_QuoteExpired,
+  // The supplied quote-resolution selector is invalid.
+  Error = OpenPitMarketDataGetStatus_Error,
 };
 
 /// \brief Value result returned by account-aware quote reads.

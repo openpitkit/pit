@@ -1,5 +1,7 @@
 # OpenPit (Pre-trade Integrity Toolkit) for C++
 
+<!-- markdownlint-disable MD033 -->
+
 <!-- markdownlint-disable MD013 -->
 [![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C)](../../docs/cpp-api/index.html) [![CMake](https://img.shields.io/badge/CMake-3.21%2B-064F8C)](https://cmake.org/) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 <!-- markdownlint-enable MD013 -->
@@ -102,6 +104,7 @@ just test-cpp-release
 
 Manual:
 
+<!-- markdownlint-disable MD013 -->
 ```powershell
 rustup target add x86_64-pc-windows-msvc
 cargo build -p openpit-ffi --release --locked --target x86_64-pc-windows-msvc
@@ -111,6 +114,7 @@ cmake -S bindings/cpp -B bindings/cpp/build `
 cmake --build bindings/cpp/build
 cmake --install bindings/cpp/build --prefix "$PWD\.openpit"
 ```
+<!-- markdownlint-enable MD013 -->
 
 </details>
 
@@ -134,6 +138,11 @@ The engine evaluates an order through a deterministic pre-trade pipeline:
 - `reservation.Rollback()` reverts reserved state.
 - `engine.ExecutePreTrade(order)` is a shortcut that composes both stages.
 - `engine.ApplyExecutionReport(report)` updates post-trade policy state.
+
+`ApplyExecutionReport` returns account blocks, account-PnL outcomes, and
+account-adjustment outcomes. Post-trade policies commit independently, so
+always consume both outcome vectors even when the account-block vector is
+non-empty.
 
 Start-stage policies aggregate rejects from all registered policies.
 Main-stage policies aggregate rejects and roll back registered mutations

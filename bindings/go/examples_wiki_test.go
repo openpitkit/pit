@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"testing"
 	"time"
@@ -43,7 +44,6 @@ import (
 // - ../pit.wiki/Account-Groups.md
 // - ../pit.wiki/Async-Engine.md
 // - ../pit.wiki/Balance-Reconciliation.md
-// - ../pit.wiki/Custom-Go-Types.md
 // - ../pit.wiki/Domain-Types.md
 // - ../pit.wiki/Dynamic-Policy-Reconfiguration.md
 // - ../pit.wiki/Getting-Started.md
@@ -57,27 +57,29 @@ import (
 
 // --- Policy-API: Custom Order and Execution Report Models ---
 
-type wikiStrategyOrder struct {
+type StrategyOrder struct {
 	model.Order
 	StrategyTag string
 }
 
-type wikiStrategyReport struct {
+type StrategyReport struct {
 	model.ExecutionReport
 	VenueExecID string
 }
 
-type wikiStrategyTagPolicy struct{}
+type StrategyTagPolicy struct{}
 
-func (wikiStrategyTagPolicy) Close() {}
+func (*StrategyTagPolicy) Close() {}
 
-func (wikiStrategyTagPolicy) Name() string { return "StrategyTagPolicy" }
+func (*StrategyTagPolicy) Name() string { return "StrategyTagPolicy" }
 
-func (wikiStrategyTagPolicy) PolicyGroupID() model.PolicyGroupID { return model.DefaultPolicyGroupID }
+func (*StrategyTagPolicy) PolicyGroupID() model.PolicyGroupID {
+	return model.DefaultPolicyGroupID
+}
 
-func (p *wikiStrategyTagPolicy) CheckPreTradeStart(
+func (p *StrategyTagPolicy) CheckPreTradeStart(
 	_ pretrade.Context,
-	order wikiStrategyOrder,
+	order StrategyOrder,
 ) []reject.Reject {
 	if order.StrategyTag == "blocked" {
 		return reject.NewSingleItemList(
@@ -91,27 +93,32 @@ func (p *wikiStrategyTagPolicy) CheckPreTradeStart(
 	return nil
 }
 
-func (wikiStrategyTagPolicy) PerformPreTradeCheck(
+func (*StrategyTagPolicy) PerformPreTradeCheck(
 	pretrade.Context,
-	wikiStrategyOrder,
+	StrategyOrder,
 	tx.Mutations,
 	pretrade.Result,
 ) []reject.Reject {
 	return nil
 }
 
-func (wikiStrategyTagPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ wikiStrategyReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
+func (*StrategyTagPolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	StrategyReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
+) []reject.AccountBlock {
 	return nil
 }
 
-func (wikiStrategyTagPolicy) ApplyAccountAdjustment(
+func (*StrategyTagPolicy) ApplyAccountAdjustment(
 	accountadjustment.Context,
 	param.AccountID,
 	model.AccountAdjustment,
 	tx.Mutations,
 	pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 // Used in: pit.wiki/Policy-API.md - Block an Account from an Adjustment Callback.
@@ -147,24 +154,26 @@ func (*BlockOnAdjustmentPolicy) ApplyExecutionReport(
 	pretrade.PostTradeContext,
 	model.ExecutionReport,
 	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
 ) []reject.AccountBlock {
 	return nil
 }
 
 func (p *BlockOnAdjustmentPolicy) ApplyAccountAdjustment(
-	ctx accountadjustment.Context,
+	_ accountadjustment.Context,
 	_ param.AccountID,
 	_ model.AccountAdjustment,
 	_ tx.Mutations,
 	_ pretrade.AccountOutcomes,
-) []reject.Reject {
-	ctx.AccountControl().Block(reject.NewAccountBlock(
-		reject.CodeAccountBlocked,
-		p.Name(),
-		"blocked via account control",
-		"custom policy blocked the account from a callback",
-	))
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{
+		AccountBlocks: []reject.AccountBlock{reject.NewAccountBlock(
+			reject.CodeAccountBlocked,
+			p.Name(),
+			"blocked by account-adjustment policy",
+			"custom policy reported an account block from a callback",
+		)},
+	}, nil
 }
 
 // --- Shared helpers ---
@@ -306,21 +315,21 @@ func wikiExampleEngine(t *testing.T) *Engine {
 
 // --- Policy-API: Custom Main-Stage Policy ---
 
-type wikiNotionalCapPolicy struct {
+type NotionalCapPolicy struct {
 	MaxAbsNotional param.Volume
 }
 
-func (wikiNotionalCapPolicy) Close() {}
+func (*NotionalCapPolicy) Close() {}
 
-func (wikiNotionalCapPolicy) Name() string { return "NotionalCapPolicy" }
+func (*NotionalCapPolicy) Name() string { return "NotionalCapPolicy" }
 
-func (wikiNotionalCapPolicy) PolicyGroupID() model.PolicyGroupID { return model.DefaultPolicyGroupID }
+func (*NotionalCapPolicy) PolicyGroupID() model.PolicyGroupID { return model.DefaultPolicyGroupID }
 
-func (wikiNotionalCapPolicy) CheckPreTradeStart(pretrade.Context, model.Order) []reject.Reject {
+func (*NotionalCapPolicy) CheckPreTradeStart(pretrade.Context, model.Order) []reject.Reject {
 	return nil
 }
 
-func (p *wikiNotionalCapPolicy) PerformPreTradeCheck(
+func (p *NotionalCapPolicy) PerformPreTradeCheck(
 	_ pretrade.Context,
 	order model.Order,
 	_ tx.Mutations,
@@ -391,40 +400,45 @@ func (p *wikiNotionalCapPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (wikiNotionalCapPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ model.ExecutionReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
+func (*NotionalCapPolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	model.ExecutionReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
+) []reject.AccountBlock {
 	return nil
 }
 
-func (wikiNotionalCapPolicy) ApplyAccountAdjustment(
+func (*NotionalCapPolicy) ApplyAccountAdjustment(
 	accountadjustment.Context,
 	param.AccountID,
 	model.AccountAdjustment,
 	tx.Mutations,
 	pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 // --- Policy-API: Rollback Safety Pattern ---
 
-type wikiReserveThenValidatePolicy struct {
+type ReserveThenValidatePolicy struct {
 	reserved param.Volume
 	limit    param.Volume
 }
 
-func (wikiReserveThenValidatePolicy) Close() {}
+func (*ReserveThenValidatePolicy) Close() {}
 
-func (wikiReserveThenValidatePolicy) Name() string { return "ReserveThenValidatePolicy" }
+func (*ReserveThenValidatePolicy) Name() string { return "ReserveThenValidatePolicy" }
 
-func (wikiReserveThenValidatePolicy) PolicyGroupID() model.PolicyGroupID {
+func (*ReserveThenValidatePolicy) PolicyGroupID() model.PolicyGroupID {
 	return model.DefaultPolicyGroupID
 }
 
-func (wikiReserveThenValidatePolicy) CheckPreTradeStart(pretrade.Context, model.Order) []reject.Reject {
+func (*ReserveThenValidatePolicy) CheckPreTradeStart(pretrade.Context, model.Order) []reject.Reject {
 	return nil
 }
 
-func (p *wikiReserveThenValidatePolicy) PerformPreTradeCheck(
+func (p *ReserveThenValidatePolicy) PerformPreTradeCheck(
 	_ pretrade.Context,
 	_ model.Order,
 	mutations tx.Mutations,
@@ -456,18 +470,23 @@ func (p *wikiReserveThenValidatePolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (wikiReserveThenValidatePolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ model.ExecutionReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
+func (*ReserveThenValidatePolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	model.ExecutionReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
+) []reject.AccountBlock {
 	return nil
 }
 
-func (wikiReserveThenValidatePolicy) ApplyAccountAdjustment(
+func (*ReserveThenValidatePolicy) ApplyAccountAdjustment(
 	accountadjustment.Context,
 	param.AccountID,
 	model.AccountAdjustment,
 	tx.Mutations,
 	pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 // --- Tests ---
@@ -557,6 +576,12 @@ func TestExampleWikiPipelineApplyPostTrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport() error = %v", err)
 	}
+	for _, outcome := range result.AccountPnls {
+		fmt.Printf("account P&L outcome for %v\n", outcome.AccountID)
+	}
+	for _, outcome := range result.AccountAdjustments {
+		fmt.Printf("account adjustment from group %d\n", outcome.PolicyGroupID)
+	}
 	if len(result.AccountBlocks) > 0 {
 		t.Fatalf("AccountBlocks = %v, want none", result.AccountBlocks)
 	}
@@ -569,7 +594,7 @@ func TestExampleWikiPolicyNotionalCap(t *testing.T) {
 		t.Fatalf("NewVolumeFromString() error = %v", err)
 	}
 
-	policy := &wikiNotionalCapPolicy{MaxAbsNotional: maxNotional}
+	policy := &NotionalCapPolicy{MaxAbsNotional: maxNotional}
 
 	engine, err := NewEngineBuilder().FullSync().PreTrade(policy).Build()
 	if err != nil {
@@ -630,7 +655,7 @@ func TestExampleWikiPolicyRollbackSafety(t *testing.T) {
 		t.Fatalf("NewVolumeFromString() error = %v", err)
 	}
 
-	policy := &wikiReserveThenValidatePolicy{
+	policy := &ReserveThenValidatePolicy{
 		reserved: param.NewVolumeZero(),
 		limit:    limit,
 	}
@@ -695,7 +720,7 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 		FullSync().
 		Builtin(policies.BuildOrderValidation()).
 		Builtin(
-			policies.BuildPnlBoundsKillswitch().BrokerBarriers(
+			policies.BuildPnlBoundsKillSwitch().BrokerBarriers(
 				policies.PnlBoundsBrokerBarrier{
 					SettlementAsset: usd,
 					LowerBound:      optional.Some(lowerBound),
@@ -787,6 +812,12 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport() error = %v", err)
 	}
+	for _, outcome := range result.AccountPnls {
+		fmt.Printf("account P&L outcome for %v\n", outcome.AccountID)
+	}
+	for _, outcome := range result.AccountAdjustments {
+		fmt.Printf("account adjustment from group %d\n", outcome.PolicyGroupID)
+	}
 	if len(result.AccountBlocks) > 0 {
 		t.Fatalf("AccountBlocks = %v, want none", result.AccountBlocks)
 	}
@@ -860,16 +891,22 @@ func TestExampleWikiGettingStartedApplyPostTrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport() error = %v", err)
 	}
+	for _, outcome := range result.AccountPnls {
+		log.Printf("account P&L outcome for %v", outcome.AccountID)
+	}
+	for _, outcome := range result.AccountAdjustments {
+		log.Printf("account adjustment from group %d", outcome.PolicyGroupID)
+	}
 	if len(result.AccountBlocks) > 0 {
 		t.Fatalf("AccountBlocks = %v, want none", result.AccountBlocks)
 	}
 }
 
-// Used in: pit.wiki/Policy-API.md - Example: Go Custom Models
+// Used in: pit.wiki/Policy-API.md - Go Custom Models
 func TestExampleWikiCustomGoModels(t *testing.T) {
-	engine, err := NewClientPreTradeEngineBuilder[wikiStrategyOrder, wikiStrategyReport]().
+	engine, err := NewClientPreTradeEngineBuilder[StrategyOrder, StrategyReport]().
 		FullSync().
-		PreTrade(&wikiStrategyTagPolicy{}).
+		PreTrade(&StrategyTagPolicy{}).
 		Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -877,7 +914,7 @@ func TestExampleWikiCustomGoModels(t *testing.T) {
 	defer engine.Stop()
 
 	// Allowed order must pass.
-	allowed := wikiStrategyOrder{Order: model.NewOrder(), StrategyTag: "alpha"}
+	allowed := StrategyOrder{Order: model.NewOrder(), StrategyTag: "alpha"}
 	request, rejects, err := engine.StartPreTrade(allowed)
 	if err != nil {
 		t.Fatalf("StartPreTrade(allowed) error = %v", err)
@@ -896,7 +933,7 @@ func TestExampleWikiCustomGoModels(t *testing.T) {
 	reservation.CommitAndClose()
 
 	// Blocked order must be rejected by the start stage.
-	blocked := wikiStrategyOrder{Order: model.NewOrder(), StrategyTag: "blocked"}
+	blocked := StrategyOrder{Order: model.NewOrder(), StrategyTag: "blocked"}
 	blockedRequest, blockedRejects, err := engine.StartPreTrade(blocked)
 	if err != nil {
 		t.Fatalf("StartPreTrade(blocked) error = %v", err)
@@ -926,15 +963,18 @@ func TestExampleWikiPolicyBlocksAccountFromAdjustment(t *testing.T) {
 	defer engine.Stop()
 
 	accountID := param.NewAccountIDFromUint64(99224416)
-	rejects, _, err := engine.ApplyAccountAdjustment(
+	adjustmentResult, err := engine.ApplyAccountAdjustment(
 		accountID,
 		[]model.AccountAdjustment{model.NewAccountAdjustment()},
 	)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() unexpected rejects: %v", rejects)
+	if adjustmentResult.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() unexpected rejects: %v", adjustmentResult.BatchError)
+	}
+	if len(adjustmentResult.AccountBlocks) != 1 {
+		t.Fatalf("ApplyAccountAdjustment() blocks = %v, want one", adjustmentResult.AccountBlocks)
 	}
 
 	request, blocked, err := engine.StartPreTrade(wikiExampleOrder(t, "10", "25"))
@@ -1094,7 +1134,7 @@ func TestExampleWikiPoliciesOrderSizeLimit(t *testing.T) {
 }
 
 // Used in: pit.wiki/Policies.md - PnlBoundsKillSwitchPolicy
-func TestExampleWikiPoliciesPnlBoundsKillswitch(t *testing.T) {
+func TestExampleWikiPoliciesPnlBoundsKillSwitch(t *testing.T) {
 	usd, err := param.NewAsset("USD")
 	if err != nil {
 		t.Fatalf("NewAsset() error = %v", err)
@@ -1111,7 +1151,7 @@ func TestExampleWikiPoliciesPnlBoundsKillswitch(t *testing.T) {
 	engine, err := NewEngineBuilder().
 		NoSync().
 		Builtin(
-			policies.BuildPnlBoundsKillswitch().
+			policies.BuildPnlBoundsKillSwitch().
 				BrokerBarriers(
 					policies.PnlBoundsBrokerBarrier{
 						SettlementAsset: usd,
@@ -1270,62 +1310,12 @@ func wikiAccountSyncOrder(t *testing.T, accountID uint64) model.Order {
 	return order
 }
 
-// Used in: pit.wiki/Custom-Go-Types.md - Example
-// Keep this example synced with the wiki snippet when the ClientEngine API changes.
-func TestExampleWikiCustomGoTypes(t *testing.T) {
-	engine, err := NewClientPreTradeEngineBuilder[wikiStrategyOrder, wikiStrategyReport]().
-		FullSync().
-		PreTrade(&wikiStrategyTagPolicy{}).
-		Build()
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-	defer engine.Stop()
-
-	// Allowed order must pass both stages.
-	allowed := wikiStrategyOrder{Order: model.NewOrder(), StrategyTag: "alpha"}
-	request, rejects, err := engine.StartPreTrade(allowed)
-	if err != nil {
-		t.Fatalf("StartPreTrade(allowed) error = %v", err)
-	}
-	if rejects != nil {
-		t.Fatalf("StartPreTrade(allowed) unexpected rejects: %v", rejects)
-	}
-	defer request.Close()
-
-	reservation, rejects, err := request.Execute()
-	if err != nil {
-		t.Fatalf("Execute(allowed) error = %v", err)
-	}
-	if rejects != nil {
-		t.Fatalf("Execute(allowed) unexpected rejects: %v", rejects)
-	}
-	reservation.CommitAndClose()
-
-	// Blocked order must be rejected by the start stage.
-	blocked := wikiStrategyOrder{Order: model.NewOrder(), StrategyTag: "blocked"}
-	blockedRequest, blockedRejects, err := engine.StartPreTrade(blocked)
-	if err != nil {
-		t.Fatalf("StartPreTrade(blocked) error = %v", err)
-	}
-	if blockedRequest != nil {
-		blockedRequest.Close()
-	}
-	if blockedRejects == nil {
-		t.Fatal("StartPreTrade(blocked) rejects = nil, want non-nil")
-	}
-	if blockedRejects[0].Code != reject.CodeComplianceRestriction {
-		t.Fatalf(
-			"reject code = %v, want %v",
-			blockedRejects[0].Code, reject.CodeComplianceRestriction,
-		)
-	}
-}
-
 // Used in: pit.wiki/Domain-Types.md - Work With Directional Types
 func TestExampleWikiDomainTypesDirectionalTypes(t *testing.T) {
-	side := param.SideBuy
-	positionSide := param.PositionSideLong
+	//nolint:staticcheck // explicit types mirror the published snippet verbatim
+	var side param.Side = param.SideBuy
+	//nolint:staticcheck // explicit types mirror the published snippet verbatim
+	var positionSide param.PositionSide = param.PositionSideLong
 
 	if side != param.SideBuy {
 		t.Fatalf("side = %v, want %v", side, param.SideBuy)
@@ -1350,7 +1340,14 @@ func TestExampleWikiDomainTypesLeverage(t *testing.T) {
 
 // Used in: pit.wiki/Account-Adjustments.md - Examples → Go
 func TestExampleWikiAccountAdjustments(t *testing.T) {
-	acceptAll := &wikiCumulativeLimitPolicy{name: "accept-all", totals: make(map[string]param.Volume)}
+	maxCumulative, err := param.NewPositionSizeFromString("1000000")
+	if err != nil {
+		t.Fatalf("NewPositionSizeFromString() error = %v", err)
+	}
+	acceptAll := &CumulativeLimitPolicy{
+		maxCumulative: maxCumulative,
+		totals:        make(map[string]param.PositionSize),
+	}
 	engine, err := NewEngineBuilder().FullSync().PreTrade(acceptAll).Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -1419,23 +1416,30 @@ func TestExampleWikiAccountAdjustments(t *testing.T) {
 		t.Fatalf("NewAccountAdjustmentFromValues(position) error = %v", err)
 	}
 
-	rejects, _, err := engine.ApplyAccountAdjustment(
+	result, err := engine.ApplyAccountAdjustment(
 		accountID,
 		[]model.AccountAdjustment{cashAdj, posAdj},
 	)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", rejects)
+	if result.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", result.BatchError)
+	}
+	if len(result.AccountBlocks) != 0 {
+		t.Fatalf("ApplyAccountAdjustment() account blocks = %v, want none", result.AccountBlocks)
 	}
 }
 
 // Used in: pit.wiki/Account-Adjustments.md - Example: Balance Limit Policy → Go
 func TestExampleWikiAccountAdjustmentsBalanceLimitPolicy(t *testing.T) {
-	policy := &wikiCumulativeLimitPolicy{
-		name:   "CumulativeLimitPolicy",
-		totals: make(map[string]param.Volume),
+	maxCumulative, err := param.NewPositionSizeFromString("100")
+	if err != nil {
+		t.Fatalf("NewPositionSizeFromString() error = %v", err)
+	}
+	policy := &CumulativeLimitPolicy{
+		maxCumulative: maxCumulative,
+		totals:        make(map[string]param.PositionSize),
 	}
 
 	engine, err := NewEngineBuilder().FullSync().PreTrade(policy).Build()
@@ -1452,8 +1456,7 @@ func TestExampleWikiAccountAdjustmentsBalanceLimitPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPositionSizeFromString() error = %v", err)
 	}
-
-	adj, err := model.NewAccountAdjustmentFromValues(model.AccountAdjustmentValues{
+	adjustment, err := model.NewAccountAdjustmentFromValues(model.AccountAdjustmentValues{
 		BalanceOperation: optional.Some(
 			model.NewAccountAdjustmentBalanceOperationFromValues(
 				model.AccountAdjustmentBalanceOperationValues{
@@ -1471,39 +1474,42 @@ func TestExampleWikiAccountAdjustmentsBalanceLimitPolicy(t *testing.T) {
 		t.Fatalf("NewAccountAdjustmentFromValues() error = %v", err)
 	}
 
-	rejects, _, err := engine.ApplyAccountAdjustment(
+	result, err := engine.ApplyAccountAdjustment(
 		param.NewAccountIDFromUint64(99224416),
-		[]model.AccountAdjustment{adj},
+		[]model.AccountAdjustment{adjustment},
 	)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", rejects)
+	if result.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", result.BatchError)
+	}
+	if len(result.AccountBlocks) != 0 {
+		t.Fatalf("ApplyAccountAdjustment() account blocks = %v, want none", result.AccountBlocks)
 	}
 }
 
-type wikiCumulativeLimitPolicy struct {
-	name   string
-	totals map[string]param.Volume
+type CumulativeLimitPolicy struct {
+	maxCumulative param.PositionSize
+	totals        map[string]param.PositionSize
 }
 
-func (wikiCumulativeLimitPolicy) Close() {}
+func (*CumulativeLimitPolicy) Close() {}
 
-func (p *wikiCumulativeLimitPolicy) Name() string { return p.name }
+func (*CumulativeLimitPolicy) Name() string { return "CumulativeLimitPolicy" }
 
-func (*wikiCumulativeLimitPolicy) PolicyGroupID() model.PolicyGroupID {
+func (*CumulativeLimitPolicy) PolicyGroupID() model.PolicyGroupID {
 	return model.DefaultPolicyGroupID
 }
 
-func (*wikiCumulativeLimitPolicy) CheckPreTradeStart(
+func (*CumulativeLimitPolicy) CheckPreTradeStart(
 	pretrade.Context,
 	model.Order,
 ) []reject.Reject {
 	return nil
 }
 
-func (*wikiCumulativeLimitPolicy) PerformPreTradeCheck(
+func (*CumulativeLimitPolicy) PerformPreTradeCheck(
 	pretrade.Context,
 	model.Order,
 	tx.Mutations,
@@ -1512,22 +1518,96 @@ func (*wikiCumulativeLimitPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (*wikiCumulativeLimitPolicy) ApplyExecutionReport(
-	_ pretrade.PostTradeContext,
-	_ model.ExecutionReport,
-	_ pretrade.PostTradeAdjustments,
+func (*CumulativeLimitPolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	model.ExecutionReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
 ) []reject.AccountBlock {
 	return nil
 }
 
-func (*wikiCumulativeLimitPolicy) ApplyAccountAdjustment(
+func (v *CumulativeLimitPolicy) ApplyAccountAdjustment(
 	_ accountadjustment.Context,
 	_ param.AccountID,
-	_ model.AccountAdjustment,
-	_ tx.Mutations,
+	adjustment model.AccountAdjustment,
+	mutations tx.Mutations,
 	_ pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	operation, ok := adjustment.BalanceOperation().Get()
+	if !ok {
+		return pretrade.PolicyAccountAdjustmentResult{}, nil
+	}
+	asset, ok := operation.Asset().Get()
+	if !ok {
+		return pretrade.PolicyAccountAdjustmentResult{}, nil
+	}
+	amounts, ok := adjustment.Amount().Get()
+	if !ok {
+		return pretrade.PolicyAccountAdjustmentResult{}, nil
+	}
+	balance, ok := amounts.Balance().Get()
+	if !ok {
+		return pretrade.PolicyAccountAdjustmentResult{}, nil
+	}
+
+	if v.totals == nil {
+		v.totals = make(map[string]param.PositionSize)
+	}
+
+	assetID := asset.String()
+	previous, existed := v.totals[assetID]
+	current := previous
+	if !existed {
+		current = param.NewPositionSizeZero()
+	}
+
+	var next param.PositionSize
+	if balance.IsAbsolute() {
+		next = balance.MustAbsolute()
+	} else {
+		var err error
+		next, err = current.CheckedAdd(balance.MustDelta())
+		if err != nil {
+			return pretrade.PolicyAccountAdjustmentResult{}, reject.NewSingleItemList(
+				reject.CodeArithmeticOverflow,
+				v.Name(),
+				"invalid adjustment total",
+				err.Error(),
+				reject.ScopeAccount,
+			)
+		}
+	}
+
+	if next.Compare(v.maxCumulative) > 0 {
+		return pretrade.PolicyAccountAdjustmentResult{}, reject.NewSingleItemList(
+			reject.CodeRiskLimitExceeded,
+			v.Name(),
+			"cumulative limit exceeded",
+			fmt.Sprintf("%s: %s > %s", assetID, next, v.maxCumulative),
+			reject.ScopeAccount,
+		)
+	}
+
+	v.totals[assetID] = next
+	rollback := func() {
+		if existed {
+			v.totals[assetID] = previous
+		} else {
+			delete(v.totals, assetID)
+		}
+	}
+	if err := mutations.Push(func() {}, rollback); err != nil {
+		rollback()
+		return pretrade.PolicyAccountAdjustmentResult{}, reject.NewSingleItemList(
+			reject.CodeSystemUnavailable,
+			v.Name(),
+			"failed to register adjustment rollback",
+			err.Error(),
+			reject.ScopeAccount,
+		)
+	}
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 // wikiSeedBalanceAdjustment builds an absolute USD balance adjustment used to
@@ -1580,15 +1660,15 @@ func TestExampleWikiSpotFundsLimitOnly(t *testing.T) {
 
 	// Seed 10000 USD of available funds through the account-adjustment pipeline.
 	seed := wikiSeedBalanceAdjustment(t, "10000")
-	rejects, _, err := engine.ApplyAccountAdjustment(
+	seedResult, err := engine.ApplyAccountAdjustment(
 		accountID,
 		[]model.AccountAdjustment{seed},
 	)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", rejects)
+	if seedResult.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", seedResult.BatchError)
 	}
 
 	// Buy 10 AAPL @ 200 holds 2000 USD; available drops to 8000.
@@ -1650,15 +1730,15 @@ func TestExampleWikiSpotFundsMarketOrders(t *testing.T) {
 
 	accountID := param.NewAccountIDFromUint64(99224416)
 	seed := wikiSeedBalanceAdjustment(t, "10000")
-	rejects, _, err := engine.ApplyAccountAdjustment(
+	seedResult, err := engine.ApplyAccountAdjustment(
 		accountID,
 		[]model.AccountAdjustment{seed},
 	)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", rejects)
+	if seedResult.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", seedResult.BatchError)
 	}
 
 	// Market buy (no price): priced at mark 200 + 15% = 230 per unit worst case.
@@ -1685,29 +1765,24 @@ func TestExampleWikiSpotFundsMarketOrders(t *testing.T) {
 
 // Used in: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch / Configuring Barriers
 func TestExampleWikiSpotFundsPnlKillSwitchBuilder(t *testing.T) {
-	usd, _ := param.NewAsset("USD")
 	account := param.NewAccountIDFromUint64(99224416)
 	lower, _ := param.NewPnlFromString("-1000")
 	accountLower, _ := param.NewPnlFromString("-250")
-	seed, _ := param.NewPnlFromString("0")
 
 	// The PnL kill switch is a distinct spot-funds builder entry point; it
 	// produces the same SpotFundsPolicy, registered under the same name.
 	engine, err := NewEngineBuilder().
 		NoSync().
 		Builtin(
-			policies.BuildSpotFundsPnlBoundsKillswitch().
-				GlobalBarriers(policies.SpotFundsPnlBoundsBarrier{
-					AccountCurrency: usd,
-					LowerBound:      optional.Some(lower),
+			policies.BuildSpotFundsPnlBoundsKillSwitch().
+				GlobalBarrier(policies.SpotFundsPnlBoundsBarrier{
+					LowerBound: optional.Some(lower),
 				}).
 				AccountBarriers(policies.SpotFundsPnlBoundsAccountBarrier{
 					AccountID: account,
 					Barrier: policies.SpotFundsPnlBoundsBarrier{
-						AccountCurrency: usd,
-						LowerBound:      optional.Some(accountLower),
+						LowerBound: optional.Some(accountLower),
 					},
-					InitialPnl: seed,
 				}),
 		).
 		Build()
@@ -1721,21 +1796,17 @@ func TestExampleWikiSpotFundsPnlKillSwitchBuilder(t *testing.T) {
 func TestExampleWikiSpotFundsPnlKillSwitchReconfigure(t *testing.T) {
 	// Harness scaffolding: a spot-funds engine with a per-account barrier the
 	// snippet then retunes and force-sets.
-	usdSeed, _ := param.NewAsset("USD")
 	seedAccount := param.NewAccountIDFromUint64(99224416)
 	seedLower, _ := param.NewPnlFromString("-250")
-	seedZero, _ := param.NewPnlFromString("0")
 	engine, err := NewEngineBuilder().
 		NoSync().
 		Builtin(
-			policies.BuildSpotFundsPnlBoundsKillswitch().
+			policies.BuildSpotFundsPnlBoundsKillSwitch().
 				AccountBarriers(policies.SpotFundsPnlBoundsAccountBarrier{
 					AccountID: seedAccount,
 					Barrier: policies.SpotFundsPnlBoundsBarrier{
-						AccountCurrency: usdSeed,
-						LowerBound:      optional.Some(seedLower),
+						LowerBound: optional.Some(seedLower),
 					},
-					InitialPnl: seedZero,
 				}),
 		).
 		Build()
@@ -1744,31 +1815,34 @@ func TestExampleWikiSpotFundsPnlKillSwitchReconfigure(t *testing.T) {
 	}
 	defer engine.Stop()
 
-	usd, _ := param.NewAsset("USD")
 	account := param.NewAccountIDFromUint64(99224416)
 	newLower, _ := param.NewPnlFromString("-500")
-	forced, _ := param.NewPnlFromString("-120")
+	forced, _ := param.NewPnlFromString("-600")
+	globalBarrier := policies.SpotFundsPnlBoundsBarrier{
+		LowerBound: optional.Some(newLower),
+	}
 
-	// Retune the account-currency PnL barriers; live accumulated PnL is untouched.
+	// Retune the account PnL barrier; live accumulated PnL is untouched.
 	if err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
-		[]policies.SpotFundsPnlBoundsBarrier{
-			{AccountCurrency: usd, LowerBound: optional.Some(newLower)},
-		},
+		optional.Some(&globalBarrier),
 		nil,
 		nil,
 	); err != nil {
 		t.Fatalf("SpotFundsPnlBoundsKillSwitch() error = %v", err)
 	}
 
-	// Force-set the live accumulated PnL for one (account, account currency).
-	if err := engine.Configure().SetSpotFundsAccountPnl(
+	// Force-set the live accumulated PnL for one account.
+	result, err := engine.Configure().SetSpotFundsAccountPnl(
 		policies.SpotFundsPolicyName,
 		account,
-		usd,
-		forced,
-	); err != nil {
+		model.NewPnlState(forced),
+	)
+	if err != nil {
 		t.Fatalf("SetSpotFundsAccountPnl() error = %v", err)
+	}
+	if len(result.AccountBlocks) != 1 {
+		t.Fatalf("AccountBlocks = %v, want one PnL block", result.AccountBlocks)
 	}
 }
 
@@ -1784,17 +1858,41 @@ func TestExampleWikiPreTradeLockPersistence(t *testing.T) {
 	defer engine.Stop()
 
 	accountID := param.NewAccountIDFromUint64(99224416)
+	usd, _ := param.NewAsset("USD")
+	aapl, _ := param.NewAsset("AAPL")
 
 	// Seed 10000 USD so the buy can be reserved.
-	if _, _, err := engine.ApplyAccountAdjustment(
+	total, _ := param.NewPositionSizeFromString("10000")
+	seed, _ := model.NewAccountAdjustmentFromValues(model.AccountAdjustmentValues{
+		BalanceOperation: optional.Some(
+			model.NewAccountAdjustmentBalanceOperationFromValues(
+				model.AccountAdjustmentBalanceOperationValues{Asset: optional.Some(usd)},
+			),
+		),
+		Amount: optional.Some(
+			model.NewAccountAdjustmentAmountFromValues(model.AccountAdjustmentAmountValues{
+				Balance: optional.Some(param.NewAbsoluteAdjustmentAmount(total)),
+			}),
+		),
+	})
+	if _, err := engine.ApplyAccountAdjustment(
 		accountID,
-		[]model.AccountAdjustment{wikiSeedBalanceAdjustment(t, "10000")},
+		[]model.AccountAdjustment{seed},
 	); err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
 
 	// Buy 10 AAPL @ 200 holds 2000 USD and records the lock price (200).
-	order := wikiExampleOrder(t, "10", "200")
+	order := model.NewOrder()
+	op := order.EnsureOperationView()
+	op.SetInstrument(param.NewInstrument(aapl, usd))
+	op.SetAccountID(accountID)
+	op.SetSide(param.SideBuy)
+	qty, _ := param.NewQuantityFromString("10")
+	price, _ := param.NewPriceFromString("200")
+	op.SetTradeAmount(param.NewQuantityTradeAmount(qty))
+	op.SetPrice(price)
+
 	reservation, execRejects, err := engine.ExecutePreTrade(order)
 	if err != nil {
 		t.Fatalf("ExecutePreTrade() error = %v", err)
@@ -1819,8 +1917,6 @@ func TestExampleWikiPreTradeLockPersistence(t *testing.T) {
 
 	// The final fill must carry the restored lock so the policy reconciles the
 	// 2000 USD it held against the real fill instead of blocking the account.
-	aapl, _ := param.NewAsset("AAPL")
-	usd, _ := param.NewAsset("USD")
 	report := model.NewExecutionReport()
 	reportOp := model.NewExecutionReportOperation()
 	reportOp.SetInstrument(param.NewInstrument(aapl, usd))
@@ -1828,7 +1924,6 @@ func TestExampleWikiPreTradeLockPersistence(t *testing.T) {
 	reportOp.SetSide(param.SideBuy)
 	report.SetOperation(reportOp)
 
-	price, _ := param.NewPriceFromString("200")
 	filledQty, _ := param.NewQuantityFromString("10")
 	leaves, _ := param.NewQuantityFromString("0")
 	fill := report.EnsureFillView()
@@ -1858,19 +1953,37 @@ func TestExampleWikiBalanceReconciliationDeltaVersusAbsolute(t *testing.T) {
 	defer engine.Stop()
 
 	accountID := param.NewAccountIDFromUint64(99224416)
+	usd, _ := param.NewAsset("USD")
+
+	seed := func(amount string) model.AccountAdjustment {
+		total, _ := param.NewPositionSizeFromString(amount)
+		adj, _ := model.NewAccountAdjustmentFromValues(model.AccountAdjustmentValues{
+			BalanceOperation: optional.Some(
+				model.NewAccountAdjustmentBalanceOperationFromValues(
+					model.AccountAdjustmentBalanceOperationValues{Asset: optional.Some(usd)},
+				),
+			),
+			Amount: optional.Some(
+				model.NewAccountAdjustmentAmountFromValues(model.AccountAdjustmentAmountValues{
+					Balance: optional.Some(param.NewAbsoluteAdjustmentAmount(total)),
+				}),
+			),
+		})
+		return adj
+	}
 
 	// First seed: available USD goes from 0 to 10000.
-	firstRejects, firstOutcomes, err := engine.ApplyAccountAdjustment(
+	firstResult, err := engine.ApplyAccountAdjustment(
 		accountID,
-		[]model.AccountAdjustment{wikiSeedBalanceAdjustment(t, "10000")},
+		[]model.AccountAdjustment{seed("10000")},
 	)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment(first) error = %v", err)
 	}
-	if firstRejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment(first) rejects = %v, want none", firstRejects)
+	if firstResult.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment(first) rejects = %v, want none", firstResult.BatchError)
 	}
-	firstUSD, ok := firstOutcomes[0].Entry.Balance.Get()
+	firstUSD, ok := firstResult.Outcomes[0].Entry.Balance.Get()
 	if !ok {
 		t.Fatal("first balance outcome unset, want set")
 	}
@@ -1883,17 +1996,17 @@ func TestExampleWikiBalanceReconciliationDeltaVersusAbsolute(t *testing.T) {
 	}
 
 	// Second seed: available USD goes from 10000 to 15000.
-	secondRejects, secondOutcomes, err := engine.ApplyAccountAdjustment(
+	secondResult, err := engine.ApplyAccountAdjustment(
 		accountID,
-		[]model.AccountAdjustment{wikiSeedBalanceAdjustment(t, "15000")},
+		[]model.AccountAdjustment{seed("15000")},
 	)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment(second) error = %v", err)
 	}
-	if secondRejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment(second) rejects = %v, want none", secondRejects)
+	if secondResult.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment(second) rejects = %v, want none", secondResult.BatchError)
 	}
-	secondUSD, ok := secondOutcomes[0].Entry.Balance.Get()
+	secondUSD, ok := secondResult.Outcomes[0].Entry.Balance.Get()
 	if !ok {
 		t.Fatal("second balance outcome unset, want set")
 	}
@@ -2081,42 +2194,6 @@ func TestExampleWikiAccountGroupsRegisterAndRead(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Custom-Go-Types.md - UnsafeFastClientPayloadCallbacks
-//
-// UnsafeFastClientPayloadCallbacks selects callback adapters that trust every
-// payload to carry the builder's declared type, skipping the per-callback type
-// check. When the submission path is fully controlled by the caller - as in a
-// single-payload-type engine - the correctly typed payload flows straight
-// through the fast adapter and is accepted. (A missing or mismatched payload
-// panics instead of producing a reject; that branch needs an internally forged
-// payload and is covered by TestClientEngineUnsafeFastPanicsOnMismatchedPayload
-// in client_engine_test.go, so it is not duplicated here.)
-func TestExampleWikiCustomGoTypesUnsafeFastCallbacks(t *testing.T) {
-	builder := NewClientPreTradeEngineBuilder[wikiStrategyOrder, wikiStrategyReport](
-		UnsafeFastClientPayloadCallbacks(),
-	)
-
-	engine, err := builder.
-		FullSync().
-		PreTrade(&wikiStrategyTagPolicy{}).
-		Build()
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-	defer engine.Stop()
-
-	// A correctly typed order is trusted by the fast adapter and accepted.
-	order := wikiStrategyOrder{Order: model.NewOrder(), StrategyTag: "alpha"}
-	reservation, rejects, err := engine.ExecutePreTrade(order)
-	if err != nil {
-		t.Fatalf("ExecutePreTrade() error = %v", err)
-	}
-	if rejects != nil {
-		t.Fatalf("ExecutePreTrade() unexpected rejects: %v", rejects)
-	}
-	reservation.CommitAndClose()
-}
-
 // Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Retune a Built-in Policy
 // This mirror is intentionally wider than the wiki snippet: it adds the test
 // harness (t.Fatalf assertions, wikiExampleOrder) so the example runs. The
@@ -2220,6 +2297,7 @@ func (*MyCountingPolicy) ApplyExecutionReport(
 	_ pretrade.PostTradeContext,
 	_ model.ExecutionReport,
 	_ pretrade.PostTradeAdjustments,
+	_ pretrade.PostTradePnls,
 ) []reject.AccountBlock {
 	return nil
 }
@@ -2230,8 +2308,8 @@ func (*MyCountingPolicy) ApplyAccountAdjustment(
 	_ model.AccountAdjustment,
 	_ tx.Mutations,
 	_ pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 // CheckPreTradeStartDryRun is the read-only variant: no counter increment.
@@ -2396,12 +2474,12 @@ func TestExampleWikiSpotFundsGlobalLimitMode(t *testing.T) {
 	accountID := param.NewAccountIDFromUint64(99224416)
 	// Seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000 notional).
 	seed := wikiSeedBalanceAdjustment(t, "1000")
-	if rejects, _, err := engine.ApplyAccountAdjustment(
+	if result, err := engine.ApplyAccountAdjustment(
 		accountID, []model.AccountAdjustment{seed},
 	); err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
-	} else if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() unexpected rejects: %v", rejects)
+	} else if result.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() unexpected rejects: %v", result.BatchError)
 	}
 
 	order := wikiExampleOrder(t, "10", "200")
@@ -2470,12 +2548,12 @@ func TestExampleWikiSpotFundsPerAccountLimitMode(t *testing.T) {
 	accountID := param.NewAccountIDFromUint64(99224416)
 	// Seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000 notional).
 	seed := wikiSeedBalanceAdjustment(t, "1000")
-	if rejects, _, err := engine.ApplyAccountAdjustment(
+	if result, err := engine.ApplyAccountAdjustment(
 		accountID, []model.AccountAdjustment{seed},
 	); err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
-	} else if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() unexpected rejects: %v", rejects)
+	} else if result.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() unexpected rejects: %v", result.BatchError)
 	}
 
 	order := wikiExampleOrder(t, "10", "200")
@@ -2553,7 +2631,7 @@ func TestExampleWikiDynamicPolicyReconfigurationSetAccountPnl(t *testing.T) {
 	engine, err := NewEngineBuilder().
 		NoSync().
 		Builtin(
-			policies.BuildPnlBoundsKillswitch().BrokerBarriers(
+			policies.BuildPnlBoundsKillSwitch().BrokerBarriers(
 				policies.PnlBoundsBrokerBarrier{
 					SettlementAsset: usd,
 					LowerBound:      optional.Some(lowerBound),

@@ -177,13 +177,14 @@ class NotionalCapPolicy {
   }
 
   [[nodiscard]] std::vector<openpit::accounts::AccountBlock>
-  ApplyExecutionReport(
-      const openpit::pretrade::PostTradeContext& context,
-      const openpit::ExecutionReport& report,
-      openpit::pretrade::PostTradeAdjustments& adjustments) const {
+  ApplyExecutionReport(const openpit::pretrade::PostTradeContext& context,
+                       const openpit::ExecutionReport& report,
+                       openpit::pretrade::PostTradeAdjustments& adjustments,
+                       openpit::pretrade::PostTradePnls& pnls) const {
     static_cast<void>(context);
     static_cast<void>(report);
     static_cast<void>(adjustments);
+    static_cast<void>(pnls);
     return {};
   }
 
@@ -365,13 +366,14 @@ class ReserveThenValidatePolicy {
   }
 
   [[nodiscard]] std::vector<openpit::accounts::AccountBlock>
-  ApplyExecutionReport(
-      const openpit::pretrade::PostTradeContext& context,
-      const openpit::ExecutionReport& report,
-      openpit::pretrade::PostTradeAdjustments& adjustments) const {
+  ApplyExecutionReport(const openpit::pretrade::PostTradeContext& context,
+                       const openpit::ExecutionReport& report,
+                       openpit::pretrade::PostTradeAdjustments& adjustments,
+                       openpit::pretrade::PostTradePnls& pnls) const {
     static_cast<void>(context);
     static_cast<void>(report);
     static_cast<void>(adjustments);
+    static_cast<void>(pnls);
     return {};
   }
 
@@ -440,12 +442,13 @@ class StrategyTagPolicy {
   }
 
   [[nodiscard]] std::vector<openpit::accounts::AccountBlock>
-  ApplyExecutionReport(
-      const openpit::pretrade::PostTradeContext& context,
-      const StrategyReport& report,
-      openpit::pretrade::PostTradeAdjustments& adjustments) const {
+  ApplyExecutionReport(const openpit::pretrade::PostTradeContext& context,
+                       const StrategyReport& report,
+                       openpit::pretrade::PostTradeAdjustments& adjustments,
+                       openpit::pretrade::PostTradePnls& pnls) const {
     static_cast<void>(context);
     static_cast<void>(adjustments);
+    static_cast<void>(pnls);
     *m_appliedVenueExecId = report.venueExecId;
     return {};
   }
@@ -531,19 +534,20 @@ TEST(PolicyApiCustomModels, BlockedStrategyTagRejectsAtStart) {
 //------------------------------------------------------------------------------
 // Example: Block an Account from an Adjustment Callback
 //
-// The adjustment context always carries account control. A policy can record
-// the kill switch while accepting the adjustment; every later start stage for
+// The callback reports a block while accepting the adjustment. The engine
+// records it before returning the batch result; every later start stage for
 // that account is then rejected with ACCOUNT_BLOCKED.
 
 // >>> WIKI SNIPPET BEGIN: Block an Account from an Adjustment Callback
-// BlockOnAdjustmentPolicy blocks the adjusted account from its callback.
+// BlockOnAdjustmentPolicy accepts the adjustment and reports an account block.
 class BlockOnAdjustmentPolicy {
  public:
   [[nodiscard]] std::string_view Name() const noexcept {
     return "BlockOnAdjustmentPolicy";
   }
 
-  [[nodiscard]] openpit::pretrade::PolicyDecision ApplyAccountAdjustment(
+  [[nodiscard]] openpit::pretrade::PolicyAccountAdjustmentResult
+  ApplyAccountAdjustment(
       const openpit::accountadjustment::Context& context,
       openpit::param::AccountId accountId,
       const openpit::accountadjustment::AccountAdjustment& adjustment,
@@ -553,12 +557,13 @@ class BlockOnAdjustmentPolicy {
     static_cast<void>(adjustment);
     static_cast<void>(mutations);
     static_cast<void>(outcomes);
-    // The adjustment context always exposes the account-block facility.
-    context.AccountControl().Block(openpit::accounts::AccountBlock(
+    static_cast<void>(context);
+    openpit::pretrade::PolicyAccountAdjustmentResult result;
+    result.accountBlocks.emplace_back(
         openpit::pretrade::RejectCode::AccountBlocked, std::string(Name()),
-        "blocked via account control",
-        "custom policy blocked the account from a callback"));
-    return {};  // Accept the adjustment; the block is the side effect.
+        "blocked by account-adjustment policy",
+        "custom policy reported an account block from a callback");
+    return result;
   }
 };
 
@@ -586,7 +591,8 @@ TEST(PolicyApiBlockAccount, BlockedAccountIsRejectedWithAccountBlocked) {
   const openpit::param::AccountId accountId =
       openpit::param::AccountId::FromUint64(99224416);
 
-  // Driving an adjustment triggers the block.
+  // The accepted adjustment reports a block that the engine has already
+  // recorded.
   openpit::accountadjustment::BalanceOperation balanceOp;
   balanceOp.asset = "USD";
   openpit::accountadjustment::AccountAdjustment adjustment;
@@ -601,6 +607,7 @@ TEST(PolicyApiBlockAccount, BlockedAccountIsRejectedWithAccountBlocked) {
           accountId, std::vector<openpit::accountadjustment::AccountAdjustment>{
                          adjustment});
   assert(adjustmentResult.Passed());
+  assert(adjustmentResult.accountBlocks.size() == 1);
 
   // A later order on the same account is rejected with ACCOUNT_BLOCKED, without
   // any start-check involvement.

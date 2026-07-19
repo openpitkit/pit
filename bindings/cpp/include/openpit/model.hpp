@@ -161,35 +161,35 @@ namespace openpit::model {
 
 // Buy/sell direction. Mirrors the set values of `OpenPitParamSide`.
 enum class Side : std::uint8_t {
-  Buy = OpenPitParamSide_Buy,
-  Sell = OpenPitParamSide_Sell,
+  Buy = OPENPIT_PARAM_SIDE_BUY,
+  Sell = OPENPIT_PARAM_SIDE_SELL,
 };
 
 // Long/short exposure. Mirrors the set values of `OpenPitParamPositionSide`.
 enum class PositionSide : std::uint8_t {
-  Long = OpenPitParamPositionSide_Long,
-  Short = OpenPitParamPositionSide_Short,
+  Long = OPENPIT_PARAM_POSITION_SIDE_LONG,
+  Short = OPENPIT_PARAM_POSITION_SIDE_SHORT,
 };
 
 // Whether a trade opens or closes exposure. Mirrors the set values of
 // `OpenPitParamPositionEffect`.
 enum class PositionEffect : std::uint8_t {
-  Open = OpenPitParamPositionEffect_Open,
-  Close = OpenPitParamPositionEffect_Close,
+  Open = OPENPIT_PARAM_POSITION_EFFECT_OPEN,
+  Close = OPENPIT_PARAM_POSITION_EFFECT_CLOSE,
 };
 
 // Position accounting mode. Mirrors the set values of
 // `OpenPitParamPositionMode`.
 enum class PositionMode : std::uint8_t {
-  Netting = OpenPitParamPositionMode_Netting,
-  Hedged = OpenPitParamPositionMode_Hedged,
+  Netting = OPENPIT_PARAM_POSITION_MODE_NETTING,
+  Hedged = OPENPIT_PARAM_POSITION_MODE_HEDGED,
 };
 
 // Selects how a trade-amount value is interpreted. Mirrors the set values of
 // `OpenPitParamTradeAmountKind`.
 enum class TradeAmountKind : std::uint8_t {
-  Quantity = OpenPitParamTradeAmountKind_Quantity,
-  Volume = OpenPitParamTradeAmountKind_Volume,
+  Quantity = OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY,
+  Volume = OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME,
 };
 
 namespace detail {
@@ -213,9 +213,9 @@ template <typename Enum>
 // Tri-state boolean: `NotSet` -> nullopt, `False`/`True` -> the bool.
 [[nodiscard]] inline std::optional<bool> FromTriBool(OpenPitTriBool raw) {
   switch (raw) {
-    case OpenPitTriBool_False:
+    case OPENPIT_TRI_BOOL_FALSE:
       return false;
-    case OpenPitTriBool_True:
+    case OPENPIT_TRI_BOOL_TRUE:
       return true;
     default:
       return std::nullopt;
@@ -225,9 +225,9 @@ template <typename Enum>
 [[nodiscard]] inline OpenPitTriBool ToTriBool(
     const std::optional<bool>& value) {
   if (!value) {
-    return OpenPitTriBool_NotSet;
+    return OPENPIT_TRI_BOOL_NOT_SET;
   }
-  return *value ? OpenPitTriBool_True : OpenPitTriBool_False;
+  return *value ? OPENPIT_TRI_BOOL_TRUE : OPENPIT_TRI_BOOL_FALSE;
 }
 
 }  // namespace detail
@@ -288,10 +288,10 @@ class TradeAmount {
   [[nodiscard]] static std::optional<TradeAmount> FromRaw(
       const OpenPitParamTradeAmount& raw) {
     switch (raw.kind) {
-      case OpenPitParamTradeAmountKind_Quantity:
+      case OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY:
         return TradeAmount(
             param::Quantity::FromRaw(OpenPitParamQuantity{raw.value}));
-      case OpenPitParamTradeAmountKind_Volume:
+      case OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME:
         return TradeAmount(
             param::Volume::FromRaw(OpenPitParamVolume{raw.value}));
       default:
@@ -303,11 +303,11 @@ class TradeAmount {
     OpenPitParamTradeAmount raw{};
     if (const auto* quantity = std::get_if<param::Quantity>(&m_value)) {
       raw.value = quantity->Decimal();
-      raw.kind = OpenPitParamTradeAmountKind_Quantity;
+      raw.kind = OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY;
     } else {
       const auto& volume = std::get<param::Volume>(m_value);
       raw.value = volume.Decimal();
-      raw.kind = OpenPitParamTradeAmountKind_Volume;
+      raw.kind = OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME;
     }
     return raw;
   }
@@ -364,7 +364,7 @@ struct OrderOperation {
     if (raw.account_id.is_set) {
       out.accountId = param::AccountId::FromRaw(raw.account_id.value);
     }
-    out.side = detail::FromRawEnum<Side>(raw.side, OpenPitParamSide_NotSet);
+    out.side = detail::FromRawEnum<Side>(raw.side, OPENPIT_PARAM_SIDE_NOT_SET);
     return out;
   }
 
@@ -384,7 +384,7 @@ struct OrderOperation {
       raw.account_id.value = accountId->Raw();
       raw.account_id.is_set = true;
     }
-    raw.side = detail::ToRawEnum(side, OpenPitParamSide_NotSet);
+    raw.side = detail::ToRawEnum(side, OPENPIT_PARAM_SIDE_NOT_SET);
     return raw;
   }
 };
@@ -398,7 +398,7 @@ struct OrderPosition {
   [[nodiscard]] static OrderPosition FromRaw(const OpenPitOrderPosition& raw) {
     OrderPosition out;
     out.positionSide = detail::FromRawEnum<PositionSide>(
-        raw.position_side, OpenPitParamPositionSide_NotSet);
+        raw.position_side, OPENPIT_PARAM_POSITION_SIDE_NOT_SET);
     out.reduceOnly = detail::FromTriBool(raw.reduce_only);
     out.closePosition = detail::FromTriBool(raw.close_position);
     return out;
@@ -407,7 +407,7 @@ struct OrderPosition {
   [[nodiscard]] OpenPitOrderPosition Raw() const noexcept {
     OpenPitOrderPosition raw{};
     raw.position_side =
-        detail::ToRawEnum(positionSide, OpenPitParamPositionSide_NotSet);
+        detail::ToRawEnum(positionSide, OPENPIT_PARAM_POSITION_SIDE_NOT_SET);
     raw.reduce_only = detail::ToTriBool(reduceOnly);
     raw.close_position = detail::ToTriBool(closePosition);
     return raw;
@@ -537,7 +537,7 @@ struct ExecutionReportOperation {
     if (raw.account_id.is_set) {
       out.accountId = param::AccountId::FromRaw(raw.account_id.value);
     }
-    out.side = detail::FromRawEnum<Side>(raw.side, OpenPitParamSide_NotSet);
+    out.side = detail::FromRawEnum<Side>(raw.side, OPENPIT_PARAM_SIDE_NOT_SET);
     return out;
   }
 
@@ -550,7 +550,7 @@ struct ExecutionReportOperation {
       raw.account_id.value = accountId->Raw();
       raw.account_id.is_set = true;
     }
-    raw.side = detail::ToRawEnum(side, OpenPitParamSide_NotSet);
+    raw.side = detail::ToRawEnum(side, OPENPIT_PARAM_SIDE_NOT_SET);
     return raw;
   }
 };
@@ -663,18 +663,18 @@ struct PositionImpact {
       const OpenPitExecutionReportPositionImpact& raw) {
     PositionImpact out;
     out.positionEffect = detail::FromRawEnum<PositionEffect>(
-        raw.position_effect, OpenPitParamPositionEffect_NotSet);
+        raw.position_effect, OPENPIT_PARAM_POSITION_EFFECT_NOT_SET);
     out.positionSide = detail::FromRawEnum<PositionSide>(
-        raw.position_side, OpenPitParamPositionSide_NotSet);
+        raw.position_side, OPENPIT_PARAM_POSITION_SIDE_NOT_SET);
     return out;
   }
 
   [[nodiscard]] OpenPitExecutionReportPositionImpact Raw() const noexcept {
     OpenPitExecutionReportPositionImpact raw{};
-    raw.position_effect =
-        detail::ToRawEnum(positionEffect, OpenPitParamPositionEffect_NotSet);
+    raw.position_effect = detail::ToRawEnum(
+        positionEffect, OPENPIT_PARAM_POSITION_EFFECT_NOT_SET);
     raw.position_side =
-        detail::ToRawEnum(positionSide, OpenPitParamPositionSide_NotSet);
+        detail::ToRawEnum(positionSide, OPENPIT_PARAM_POSITION_SIDE_NOT_SET);
     return raw;
   }
 };

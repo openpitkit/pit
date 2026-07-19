@@ -93,22 +93,34 @@ bucket permitted by this value.
 
 ```c
 typedef uint8_t OpenPitMarketDataQuoteResolution;
-/**
- * Consult only the per-account bucket for the reading account.
- */
-#define OpenPitMarketDataQuoteResolution_AccountOnly \
+```
+
+## `OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_ONLY`
+
+Consult only the per-account bucket for the reading account.
+
+```c
+#define OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_ONLY \
     ((OpenPitMarketDataQuoteResolution) 0)
-/**
- * Consult the per-account bucket, then fall back to the account's group bucket
- * when the account bucket has no quote.
- */
-#define OpenPitMarketDataQuoteResolution_AccountThenGroup \
+```
+
+## `OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP`
+
+Consult the per-account bucket, then fall back to the account's group bucket
+when the account bucket has no quote.
+
+```c
+#define OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP \
     ((OpenPitMarketDataQuoteResolution) 1)
-/**
- * Consult the per-account bucket, then the account's group bucket, then the
- * default-group ("everyone-else") bucket, in that order.
- */
-#define OpenPitMarketDataQuoteResolution_AccountThenGroupThenDefault \
+```
+
+## `OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT`
+
+Consult the per-account bucket, then the account's group bucket, then the
+default-group ("everyone-else") bucket, in that order.
+
+```c
+#define OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT \
     ((OpenPitMarketDataQuoteResolution) 2)
 ```
 
@@ -137,6 +149,10 @@ typedef uint8_t OpenPitMarketDataGetStatus;
  * was written to `out_quote`.
  */
 #define OpenPitMarketDataGetStatus_QuoteExpired ((OpenPitMarketDataGetStatus) 3)
+/**
+ * The supplied quote-resolution selector is invalid.
+ */
+#define OpenPitMarketDataGetStatus_Error ((OpenPitMarketDataGetStatus) 255)
 ```
 
 ## `OpenPitMarketDataRegisterStatus`
@@ -768,7 +784,8 @@ Status:
 - `Unavailable`: registered but no usable quote (never pushed or cleared);
 - `UnknownInstrument`: `instrument_id` is not registered;
 - `QuoteExpired`: selected quote aged past TTL; the stale quote was written to
-  `out_quote`.
+  `out_quote`;
+- `Error`: `resolution` is not one of the documented selector constants.
 
 Contract:
 

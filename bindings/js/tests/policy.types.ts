@@ -42,6 +42,7 @@ import {
   buildRateLimit,
   buildSpotFunds,
   buildSpotFundsPnlBoundsKillswitch,
+  SpotFundsPnlBoundsBarrier,
 } from "@openpit/engine/pretrade/policies";
 import { type AccountAdjustmentContext } from "@openpit/engine/accountadjustment";
 import { type MarketDataService } from "@openpit/engine/marketdata";
@@ -81,7 +82,10 @@ const complete: Policy = {
     void ctx.accountControl;
     void accountId.value;
     void adjustment.amount;
-    return [{ code: "Custom", reason: "no", details: "" }];
+    return {
+      rejects: [{ code: "Custom", reason: "no", details: "" }],
+      accountBlocks: [],
+    };
   },
 };
 
@@ -143,8 +147,8 @@ ready.builtin(buildSpotFunds().withPolicyGroupId(3));
 const orderSizeReady = buildOrderSizeLimit().assetBarriers([]);
 const rateLimitReady = buildRateLimit().assetBarriers([]);
 const pnlReady = buildPnlBoundsKillswitch().brokerBarriers([]);
-const spotFundsPnlReady = buildSpotFundsPnlBoundsKillswitch().globalBarriers(
-  [],
+const spotFundsPnlReady = buildSpotFundsPnlBoundsKillswitch().globalBarrier(
+  new SpotFundsPnlBoundsBarrier("-100", undefined),
 );
 ready.builtin(orderSizeReady);
 ready.builtin(rateLimitReady);

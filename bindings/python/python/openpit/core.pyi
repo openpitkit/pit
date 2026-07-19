@@ -30,6 +30,9 @@ from ._openpit import (
     UnknownReferenceBookInstrumentId,
 )
 from .account_adjustment import (
+    AccountPnlOperation as AccountAdjustmentAccountPnlOperation,
+)
+from .account_adjustment import (
     Adjustment as AccountAdjustment,
 )
 from .account_adjustment import (
@@ -305,6 +308,7 @@ class ExecutionReport:
 
 __all__ = [
     "AccountAdjustment",
+    "AccountAdjustmentAccountPnlOperation",
     "AccountAdjustmentAmount",
     "AccountAdjustmentBalanceOperation",
     "AccountAdjustmentBounds",

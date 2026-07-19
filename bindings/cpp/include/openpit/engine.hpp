@@ -17,8 +17,8 @@
 
 #pragma once
 
-#include "openpit/account_adjustment.hpp"
 #include "openpit/account_id.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/accounts.hpp"
 #include "openpit/detail/callback_error.hpp"
 #include "openpit/detail/handle.hpp"
@@ -93,6 +93,23 @@ struct HasGet<T, std::void_t<decltype(std::declval<const T&>().Get())>>
   return rejects;
 }
 
+// Drains a caller-owned account-block list into owned `AccountBlock` values,
+// then releases the list. The list pointer must be non-null.
+[[nodiscard]] inline std::vector<::openpit::accounts::AccountBlock>
+DrainAccountBlockList(OpenPitPretradeAccountBlockList* list) {
+  std::vector<::openpit::accounts::AccountBlock> blocks;
+  const std::size_t count = openpit_pretrade_account_block_list_len(list);
+  blocks.reserve(count);
+  for (std::size_t index = 0; index < count; ++index) {
+    OpenPitPretradeAccountBlock raw{};
+    if (openpit_pretrade_account_block_list_get(list, index, &raw)) {
+      blocks.push_back(::openpit::accounts::AccountBlock::FromRaw(raw));
+    }
+  }
+  openpit_pretrade_destroy_account_block_list(list);
+  return blocks;
+}
+
 }  // namespace detail
 
 // Storage synchronization policy selected at builder time. Mirrors
@@ -157,6 +174,12 @@ struct EngineDeleter {
 struct EngineBuilderDeleter {
   void operator()(OpenPitEngineBuilder* handle) const noexcept {
     openpit_destroy_engine_builder(handle);
+  }
+};
+
+struct PostTradeResultDeleter {
+  void operator()(OpenPitPostTradeResult* handle) const noexcept {
+    openpit_destroy_post_trade_result(handle);
   }
 };
 
@@ -227,6 +250,12 @@ class Reservation {
     openpit_pretrade_pre_trade_reservation_rollback(m_handle.Get());
     ::openpit::detail::ThrowIfPendingCallbackException(
         "pre-trade mutation rollback callback failed");
+  }
+
+  // Returns an owned lock snapshot detached from the reservation state.
+  [[nodiscard]] PreTradeLock Lock() const {
+    return PreTradeLock(
+        openpit_pretrade_pre_trade_reservation_get_lock(m_handle.Get()));
   }
 
   [[nodiscard]] OpenPitPretradePreTradeReservation* Get() const noexcept {
@@ -395,12 +424,28 @@ struct StartResult {
 
 }  // namespace pretrade
 
-// Outcome of `ApplyExecutionReport`: the account blocks and the
-// account-adjustment outcomes that policies produced while applying the report.
-// Outcomes use the canonical `accountadjustment::Outcome` value type.
+// Outcome of `ApplyExecutionReport`. Post-trade processing is non-atomic:
+// account blocks do not invalidate successful account-level PnL or adjustment
+// outcomes produced by other policies, so callers must consume every vector.
 struct PostTradeResult {
   std::vector<::openpit::accounts::AccountBlock> accountBlocks;
-  std::vector<::openpit::accountadjustment::Outcome> accountAdjustmentOutcomes;
+  /// Account-level PnL outcomes. Each outcome identifies its account and policy
+  /// group; `Get()` returns an account-currency amount or a halt reason. A
+  /// newly halted calculation emits its reason once. Later checks can reject or
+  /// block on the stored halt without emitting another account outcome, until a
+  /// manager re-arms it with `Configurator::SetSpotFundsAccountPnl`. Re-arming
+  /// an account accumulator does not affect any independently halted position
+  /// accumulator.
+  std::vector<::openpit::accountadjustment::AccountPnlOutcome> accountPnls;
+  /// Policy-tagged adjustment outcomes. These remain meaningful even when
+  /// `accountBlocks` is non-empty and must still be consumed by the caller.
+  std::vector<::openpit::accountadjustment::Outcome> accountAdjustments;
+};
+
+// Accepted runtime policy configuration result. `accountBlocks` is non-empty
+// when the accepted change immediately caused the engine to block an account.
+struct PolicyConfigurationResult {
+  std::vector<::openpit::accounts::AccountBlock> accountBlocks;
 };
 
 // Outcome of `ApplyAccountAdjustment`: either a rejected atomic batch or the
@@ -409,6 +454,7 @@ struct PostTradeResult {
 struct AdjustmentResult {
   std::optional<::openpit::accountadjustment::BatchError> batchError;
   std::vector<::openpit::accountadjustment::Outcome> accountAdjustmentOutcomes;
+  std::vector<::openpit::accounts::AccountBlock> accountBlocks;
 
   [[nodiscard]] bool Passed() const noexcept { return !batchError.has_value(); }
 };
@@ -568,60 +614,38 @@ class Engine {
     return ::openpit::pretrade::DryRunReport(report);
   }
 
-  // Updates engine state from a completed execution report. Returns the account
-  // blocks and account-adjustment outcomes policies produced. Throws
-  // `openpit::Error` on a boundary failure (invalid pointers, undecodable
-  // report payload).
+  // Updates engine state from a completed execution report. Returns one
+  // aggregate containing the account blocks, account-level PnL outcomes, and
+  // account-adjustment outcomes policies produced. Throws `openpit::Error` on
+  // a boundary failure (invalid pointers, undecodable report payload).
   [[nodiscard]] PostTradeResult ApplyExecutionReport(
       const ::openpit::ExecutionReport& report) const {
-    const OpenPitExecutionReport raw = report.EngineRaw();
-    OpenPitPretradeAccountBlockList* blocks = nullptr;
-    OpenPitAccountAdjustmentOutcomeList* outcomes = nullptr;
-    OpenPitSharedString* error = nullptr;
-    const ::openpit::detail::CurrentReportGuard reportGuard(report);
-    detail::ClearPendingCallbackException();
-    const bool ok = openpit_engine_apply_execution_report(
-        m_handle.Get(), &raw, &blocks, &outcomes, &error);
-    if (detail::HasPendingCallbackException()) {
-      openpit_pretrade_destroy_account_block_list(blocks);
-      openpit_destroy_account_adjustment_outcome_list(outcomes);
-      openpit_destroy_shared_string(error);
+    return ApplyExecutionReportRaw(report, report.EngineRaw());
+  }
+
+  // Updates engine state from a completed fill while attaching the matching
+  // pre-trade lock. Throws `openpit::Error` when `report` has no fill.
+  [[nodiscard]] PostTradeResult ApplyExecutionReport(
+      const ::openpit::ExecutionReport& report,
+      const ::openpit::pretrade::PreTradeLock& lock) const {
+    OpenPitExecutionReport raw = report.EngineRaw();
+    if (!raw.fill.is_set) {
+      throw ::openpit::Error(
+          "ApplyExecutionReport with a pre-trade lock requires a fill");
     }
-    detail::ThrowIfPendingCallbackException(
-        "openpit_engine_apply_execution_report callback failed");
-    if (!ok) {
-      detail::ThrowFromSharedString(
-          error, "openpit_engine_apply_execution_report failed");
-    }
-    PostTradeResult out;
-    if (blocks != nullptr) {
-      const std::size_t count = openpit_pretrade_account_block_list_len(blocks);
-      out.accountBlocks.reserve(count);
-      for (std::size_t i = 0; i < count; ++i) {
-        OpenPitPretradeAccountBlock block{};
-        if (openpit_pretrade_account_block_list_get(blocks, i, &block)) {
-          out.accountBlocks.push_back(
-              ::openpit::accounts::AccountBlock::FromRaw(block));
-        }
-      }
-      openpit_pretrade_destroy_account_block_list(blocks);
-    }
-    // Adopt the caller-owned outcome list into the canonical RAII wrapper,
-    // which copies it out and releases it on scope exit. A null list yields
-    // empty.
-    const ::openpit::accountadjustment::OutcomeList outcomeList(outcomes);
-    out.accountAdjustmentOutcomes = outcomeList.ToVector();
-    return out;
+    raw.fill.value.lock = lock.Get();
+    return ApplyExecutionReportRaw(report, raw);
   }
 
   // Applies a batch of balance/position adjustments to one account. On accept
-  // the result is `Passed()` and carries the outcomes policies produced; on
-  // reject `batchError` carries the failing index and policy rejects. Throws
-  // `openpit::Error` on a boundary failure (invalid pointers, undecodable
-  // adjustment payload).
+  // the result is `Passed()` and carries the outcomes and account blocks
+  // policies produced; on reject `batchError` carries the failing index and
+  // policy rejects. Throws `openpit::Error` on a boundary failure (invalid
+  // pointers, undecodable adjustment payload).
   //
   // `Adjustment` is the adjustment value type authored in
-  // `openpit/account_adjustment.hpp` (`accountadjustment::AccountAdjustment`);
+  // `openpit/accountadjustment/account_adjustment.hpp`
+  // (`accountadjustment::AccountAdjustment`);
   // any type exposing `Raw()` returning a borrowed `OpenPitAccountAdjustment`
   // works. Each `Raw()` view must stay valid until this call returns.
   template <typename Adjustment>
@@ -635,15 +659,17 @@ class Engine {
     }
     OpenPitAccountAdjustmentBatchError* reject = nullptr;
     OpenPitAccountAdjustmentOutcomeList* outcomes = nullptr;
+    OpenPitPretradeAccountBlockList* blocks = nullptr;
     OpenPitSharedString* error = nullptr;
     detail::ClearPendingCallbackException();
     const OpenPitAccountAdjustmentApplyStatus status =
         openpit_engine_apply_account_adjustment(
             m_handle.Get(), accountId.Raw(), raw.empty() ? nullptr : raw.data(),
-            raw.size(), &reject, &outcomes, &error);
+            raw.size(), &reject, &outcomes, &blocks, &error);
     if (detail::HasPendingCallbackException()) {
       openpit_destroy_account_adjustment_batch_error(reject);
       openpit_destroy_account_adjustment_outcome_list(outcomes);
+      openpit_pretrade_destroy_account_block_list(blocks);
       openpit_destroy_shared_string(error);
     }
     detail::ThrowIfPendingCallbackException(
@@ -663,6 +689,9 @@ class Engine {
     const ::openpit::accountadjustment::OutcomeList outcomeList(outcomes);
     AdjustmentResult out;
     out.accountAdjustmentOutcomes = outcomeList.ToVector();
+    if (blocks != nullptr) {
+      out.accountBlocks = ::openpit::detail::DrainAccountBlockList(blocks);
+    }
     return out;
   }
 
@@ -727,6 +756,70 @@ class Engine {
   [[nodiscard]] OpenPitEngine* Get() const noexcept { return m_handle.Get(); }
 
  private:
+  [[nodiscard]] PostTradeResult ApplyExecutionReportRaw(
+      const ::openpit::ExecutionReport& report,
+      const OpenPitExecutionReport& raw) const {
+    OpenPitPostTradeResult* result = nullptr;
+    OpenPitSharedString* error = nullptr;
+    const ::openpit::detail::CurrentReportGuard reportGuard(report);
+    detail::ClearPendingCallbackException();
+    const bool ok = openpit_engine_apply_execution_report(m_handle.Get(), &raw,
+                                                          &result, &error);
+    detail::Handle<OpenPitPostTradeResult, detail::PostTradeResultDeleter>
+        resultHandle(result);
+    if (detail::HasPendingCallbackException()) {
+      openpit_destroy_shared_string(error);
+    }
+    detail::ThrowIfPendingCallbackException(
+        "openpit_engine_apply_execution_report callback failed");
+    if (!ok) {
+      detail::ThrowFromSharedString(
+          error, "openpit_engine_apply_execution_report failed");
+    }
+
+    PostTradeResult out;
+    const auto* blocks =
+        openpit_post_trade_result_get_account_blocks(resultHandle.Get());
+    const std::size_t blockCount =
+        openpit_pretrade_account_block_list_len(blocks);
+    out.accountBlocks.reserve(blockCount);
+    for (std::size_t i = 0; i < blockCount; ++i) {
+      OpenPitPretradeAccountBlock block{};
+      if (openpit_pretrade_account_block_list_get(blocks, i, &block)) {
+        out.accountBlocks.push_back(
+            ::openpit::accounts::AccountBlock::FromRaw(block));
+      }
+    }
+
+    const auto* accountPnls =
+        openpit_post_trade_result_get_account_pnls(resultHandle.Get());
+    const std::size_t accountPnlCount =
+        openpit_account_pnl_outcome_list_len(accountPnls);
+    out.accountPnls.reserve(accountPnlCount);
+    for (std::size_t i = 0; i < accountPnlCount; ++i) {
+      OpenPitAccountPnlOutcome outcome{};
+      if (openpit_account_pnl_outcome_list_get(accountPnls, i, &outcome)) {
+        out.accountPnls.push_back(
+            ::openpit::accountadjustment::AccountPnlOutcome::FromRaw(outcome));
+      }
+    }
+
+    const auto* adjustments =
+        openpit_post_trade_result_get_account_adjustments(resultHandle.Get());
+    const std::size_t adjustmentCount =
+        openpit_account_adjustment_outcome_list_len(adjustments);
+    out.accountAdjustments.reserve(adjustmentCount);
+    for (std::size_t i = 0; i < adjustmentCount; ++i) {
+      OpenPitAccountAdjustmentOutcome adjustment{};
+      if (openpit_account_adjustment_outcome_list_get(adjustments, i,
+                                                      &adjustment)) {
+        out.accountAdjustments.push_back(
+            ::openpit::accountadjustment::Outcome::FromRaw(adjustment));
+      }
+    }
+    return out;
+  }
+
   detail::Handle<OpenPitEngine, detail::EngineDeleter> m_handle;
 };
 

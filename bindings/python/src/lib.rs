@@ -38,7 +38,6 @@ use openpit::pretrade::policies::PnlBoundsBrokerBarrier;
 use openpit::pretrade::policies::PnlBoundsKillSwitchPolicy;
 use openpit::pretrade::policies::PnlBoundsKillSwitchSettings;
 use openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrier;
-use openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrierUpdate;
 use openpit::pretrade::policies::SpotFundsPnlBoundsAccountGroupBarrier;
 use openpit::pretrade::policies::SpotFundsPnlBoundsBarrier;
 use openpit::pretrade::policies::SpotFundsPolicy;
@@ -53,14 +52,16 @@ use openpit::pretrade::policies::{
 };
 use openpit::pretrade::PostTradeContext;
 use openpit::pretrade::{
-    PolicyPreTradeResult, PreTradeContext, PreTradeDryRunReport, PreTradeLock, PreTradePolicy,
-    PreTradeRequest, PreTradeReservation, Reject, RejectCode, RejectScope, Rejects,
+    PolicyAccountAdjustmentResult, PolicyPreTradeResult, PreTradeContext, PreTradeDryRunReport,
+    PreTradeLock, PreTradePolicy, PreTradeRequest, PreTradeReservation, Reject, RejectCode,
+    RejectScope, Rejects,
 };
 use openpit::storage::StorageBuilder;
 use openpit::AccountAdjustmentContext;
 use openpit::{
-    AccountAdjustmentOutcome, AccountOutcomeEntry, Engine, EngineBuildError, EngineBuilder,
-    Instrument, Mutation, Mutations, OutcomeAmount, PnlOutcomeAmount, PostTradeResult,
+    AccountAdjustmentOutcome, AccountOutcomeEntry, AccountPnlOutcome, Engine, EngineBuildError,
+    EngineBuilder, Instrument, Mutation, Mutations, OutcomeAmount, PnlHaltReason, PnlOutcome,
+    PnlOutcomeAmount, PnlState, PostTradeResult,
 };
 use openpit::{AccountGroupError, Accounts, Configurator, PolicyGroupId, DEFAULT_POLICY_GROUP_ID};
 use openpit::{
@@ -75,9 +76,10 @@ use openpit_interop::{
     EngineHandle, EngineLocking, ExecutionReportFillAccess, ExecutionReportOperationAccess,
     ExecutionReportPositionImpactAccess, FinancialImpactAccess, OrderMarginAccess,
     OrderOperationAccess, OrderPositionAccess, PopulatedAccountAdjustmentOperation,
-    PopulatedBalanceOperation, PopulatedExecutionReportFill, PopulatedExecutionReportOperation,
-    PopulatedExecutionReportPositionImpact, PopulatedFinancialImpact, PopulatedOrderMargin,
-    PopulatedOrderOperation, PopulatedOrderPosition, PopulatedPositionOperation, SyncMode,
+    PopulatedAccountPnlOperation, PopulatedBalanceOperation, PopulatedExecutionReportFill,
+    PopulatedExecutionReportOperation, PopulatedExecutionReportPositionImpact,
+    PopulatedFinancialImpact, PopulatedOrderMargin, PopulatedOrderOperation,
+    PopulatedOrderPosition, PopulatedPositionOperation, SyncMode,
 };
 use pyo3::basic::CompareOp;
 use pyo3::create_exception;
@@ -1295,6 +1297,12 @@ impl PyEngine {
     }
 
     #[pyo3(signature = (account_id, adjustments))]
+    /// Applies an atomic account-adjustment batch.
+    ///
+    /// Business rejects are returned as an ``AccountAdjustmentBatchResult``
+    /// with ``ok == False``, the rejected item index, and its reject list.
+    /// Invalid Python input raises ``TypeError``; exceptions raised by custom
+    /// policy callbacks are propagated.
     fn apply_account_adjustment(
         &self,
         py: Python<'_>,
@@ -1322,6 +1330,11 @@ impl PyEngine {
                         .iter()
                         .map(convert_adjustment_outcome)
                         .collect(),
+                    account_blocks: result
+                        .account_blocks
+                        .iter()
+                        .map(convert_account_block)
+                        .collect(),
                 })
             }
             Err(error) => {
@@ -1334,6 +1347,7 @@ impl PyEngine {
                     failed_index: Some(error.failed_adjustment_index),
                     rejects,
                     outcomes: Vec::new(),
+                    account_blocks: Vec::new(),
                 })
             }
         }
@@ -1359,7 +1373,7 @@ impl PyEngine {
 /// policies immediately. It inherits the engine's synchronization mode.
 #[pyclass(name = "Configurator", module = "openpit")]
 struct PyConfigurator {
-    inner: Configurator<PyEngineSync>,
+    inner: Configurator<PyEngineTrait>,
 }
 
 #[pymethods]
@@ -1652,33 +1666,31 @@ impl PyConfigurator {
         .map_err(convert_configure_error)
     }
 
-    /// Retune the account-currency P&L bounds axis of a spot-funds policy.
+    /// Retune the account P&L bounds axis of a spot-funds policy.
     ///
     /// ``name`` must match the name given to the policy at registration time.
-    /// ``account_barriers`` accepts only
-    /// ``SpotFundsPnlBoundsAccountBarrierUpdate`` entities. Runtime updates
-    /// preserve live accumulated P&L and cannot provide construction-only
-    /// ``initial_pnl``.
-    ///
-    /// An axis passed as ``None`` is left unchanged; a supplied list replaces
-    /// the axis wholesale, and an empty list clears it. Each barrier must
-    /// still configure at least one bound.
-    #[pyo3(signature = (name, *, global_barriers = None, account_group_barriers = None, account_barriers = None))]
+    /// Omitted axes stay unchanged. Passing ``None`` as ``global_barrier``
+    /// clears the singular global barrier; a barrier value replaces it. A
+    /// supplied group/account list replaces that axis wholesale, and an empty
+    /// list clears it. Each barrier must still configure at least one bound.
+    #[pyo3(signature = (name, *, global_barrier = Python::attach(|py| py.Ellipsis()), account_group_barriers = None, account_barriers = None))]
     fn spot_funds_pnl_bounds_killswitch(
         &self,
         py: Python<'_>,
         name: &str,
-        global_barriers: Option<Vec<Bound<'_, PyAny>>>,
+        global_barrier: Py<PyAny>,
         account_group_barriers: Option<Vec<Bound<'_, PyAny>>>,
         account_barriers: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<()> {
-        let global: Option<Vec<SpotFundsPnlBoundsBarrier>> = global_barriers
-            .map(|v| {
-                v.iter()
-                    .map(parse_spot_funds_pnl_bounds_barrier)
-                    .collect::<PyResult<_>>()
-            })
-            .transpose()?;
+        let global_barrier = global_barrier.bind(py);
+        let ellipsis = py.Ellipsis();
+        let global = if global_barrier.is(ellipsis.bind(py)) {
+            None
+        } else if global_barrier.is_none() {
+            Some(None)
+        } else {
+            Some(Some(parse_spot_funds_pnl_bounds_barrier(global_barrier)?))
+        };
         let account_group: Option<Vec<SpotFundsPnlBoundsAccountGroupBarrier>> =
             account_group_barriers
                 .map(|v| {
@@ -1687,10 +1699,10 @@ impl PyConfigurator {
                         .collect::<PyResult<_>>()
                 })
                 .transpose()?;
-        let account: Option<Vec<SpotFundsPnlBoundsAccountBarrierUpdate>> = account_barriers
+        let account: Option<Vec<SpotFundsPnlBoundsAccountBarrier>> = account_barriers
             .map(|v| {
                 v.iter()
-                    .map(parse_spot_funds_pnl_account_barrier_update)
+                    .map(parse_spot_funds_pnl_account_barrier)
                     .collect::<PyResult<_>>()
             })
             .transpose()?;
@@ -1698,7 +1710,7 @@ impl PyConfigurator {
         py.detach(|| {
             self.inner.spot_funds(name, |s| {
                 if let Some(v) = &global {
-                    s.set_pnl_global_barriers(v.iter().cloned())?;
+                    s.set_pnl_global_barrier(v.clone())?;
                 }
                 if let Some(v) = &account_group {
                     s.set_pnl_account_group_barriers(v.iter().cloned())?;
@@ -1712,34 +1724,29 @@ impl PyConfigurator {
         .map_err(convert_configure_error)
     }
 
-    /// Force-set the live accumulated account-currency P&L for a spot-funds
+    /// Force-set the live accumulated account P&L state for a spot-funds
     /// policy.
     ///
     /// ``name`` must match the name given to the policy at registration time.
     /// Unlike :meth:`spot_funds_pnl_bounds_killswitch`, which retunes bounds
     /// and never touches accumulated P&L, this is an absolute assignment
-    /// (upsert) of the live accumulator for ``(account, account_currency)``;
-    /// the new value is evaluated against the live bounds when the next P&L
-    /// delta is applied by an execution report. A breach trips the kill
-    /// switch, which latches an engine-level account block that this call
-    /// does not clear.
-    #[pyo3(signature = (name, *, account, account_currency, pnl))]
+    /// (upsert) of the live accumulator for ``account``. A numeric value
+    /// outside an effective account P&L barrier and any halted value with such
+    /// a barrier return the block that the engine has already recorded.
+    #[pyo3(signature = (name, *, account, state))]
     fn set_spot_funds_account_pnl(
         &self,
         py: Python<'_>,
         name: &str,
         account: &Bound<'_, PyAny>,
-        account_currency: &Bound<'_, PyAny>,
-        pnl: &Bound<'_, PyAny>,
-    ) -> PyResult<()> {
+        state: &Bound<'_, PyAny>,
+    ) -> PyResult<PyPolicyConfigurationResult> {
         let account = parse_account_id_input(account)?;
-        let account_currency = parse_asset_input(account_currency)?;
-        let pnl = parse_pnl_input(pnl)?;
-        py.detach(|| {
-            self.inner
-                .set_spot_funds_account_pnl(name, account, account_currency, pnl)
-        })
-        .map_err(convert_configure_error)
+        let state = parse_pnl_state_input(state)?;
+        let inner = py
+            .detach(|| self.inner.set_spot_funds_account_pnl(name, account, state))
+            .map_err(convert_configure_error)?;
+        Ok(PyPolicyConfigurationResult { inner })
     }
 }
 
@@ -2056,6 +2063,7 @@ struct PyAccountAdjustmentBatchResult {
     failed_index: Option<usize>,
     rejects: Vec<PyReject>,
     outcomes: Vec<PyAccountAdjustmentOutcome>,
+    account_blocks: Vec<PyAccountBlock>,
 }
 
 #[pymethods]
@@ -2080,6 +2088,11 @@ impl PyAccountAdjustmentBatchResult {
         self.outcomes.clone()
     }
 
+    #[getter]
+    fn account_blocks(&self) -> Vec<PyAccountBlock> {
+        self.account_blocks.clone()
+    }
+
     fn __bool__(&self) -> bool {
         self.ok()
     }
@@ -2095,7 +2108,12 @@ impl PyAccountAdjustmentBatchResult {
     }
 }
 
-#[pyclass(name = "OutcomeAmount", module = "openpit.pretrade", from_py_object)]
+#[pyclass(
+    name = "OutcomeAmount",
+    module = "openpit.pretrade",
+    from_py_object,
+    frozen
+)]
 #[derive(Clone)]
 struct PyOutcomeAmount {
     delta: PositionSize,
@@ -2133,7 +2151,12 @@ impl PyOutcomeAmount {
     }
 }
 
-#[pyclass(name = "PnlOutcomeAmount", module = "openpit.pretrade", from_py_object)]
+#[pyclass(
+    name = "PnlOutcomeAmount",
+    module = "openpit.pretrade",
+    from_py_object,
+    frozen
+)]
 #[derive(Clone)]
 struct PyPnlOutcomeAmount {
     delta: Pnl,
@@ -2171,10 +2194,192 @@ impl PyPnlOutcomeAmount {
     }
 }
 
+/// Reason why a realized-PnL value could not be calculated.
+#[pyclass(
+    name = "PnlHaltReason",
+    module = "openpit.pretrade",
+    frozen,
+    eq,
+    eq_int,
+    from_py_object
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PyPnlHaltReason {
+    /// A required FX quote was unavailable.
+    #[pyo3(name = "MISSING_FX")]
+    MissingFx = 1,
+    /// The account currency required for the PnL ledger was unavailable.
+    #[pyo3(name = "MISSING_ACCOUNT_CURRENCY")]
+    MissingAccountCurrency = 2,
+    /// No authoritative initial PnL was available for this accumulator.
+    #[pyo3(name = "MISSING_INITIAL_PNL")]
+    MissingInitialPnl = 3,
+    /// The position cost basis required for realized PnL was unavailable.
+    #[pyo3(name = "MISSING_COST_BASIS")]
+    MissingCostBasis = 4,
+    /// PnL arithmetic exceeded the supported numeric range.
+    #[pyo3(name = "ARITHMETIC_OVERFLOW")]
+    ArithmeticOverflow = 5,
+}
+
+impl PyPnlHaltReason {
+    fn python_name(self) -> &'static str {
+        match self {
+            Self::MissingFx => "PnlHaltReason.MISSING_FX",
+            Self::MissingAccountCurrency => "PnlHaltReason.MISSING_ACCOUNT_CURRENCY",
+            Self::MissingInitialPnl => "PnlHaltReason.MISSING_INITIAL_PNL",
+            Self::MissingCostBasis => "PnlHaltReason.MISSING_COST_BASIS",
+            Self::ArithmeticOverflow => "PnlHaltReason.ARITHMETIC_OVERFLOW",
+        }
+    }
+}
+
+/// Realized-PnL result: either the amount or a halt reason.
+#[pyclass(
+    name = "PnlOutcome",
+    module = "openpit.pretrade",
+    from_py_object,
+    frozen
+)]
+#[derive(Clone)]
+struct PyPnlOutcome {
+    pnl: Option<PyPnlOutcomeAmount>,
+    halt_reason: Option<PyPnlHaltReason>,
+}
+
+#[pymethods]
+impl PyPnlOutcome {
+    /// Constructs a realized-PnL outcome.
+    #[new]
+    #[pyo3(signature = (*, pnl = None, halt_reason = None))]
+    fn new(
+        pnl: Option<PyPnlOutcomeAmount>,
+        halt_reason: Option<PyPnlHaltReason>,
+    ) -> PyResult<Self> {
+        if pnl.is_some() == halt_reason.is_some() {
+            return Err(PyValueError::new_err(
+                "PnL outcome requires exactly one of pnl or halt_reason",
+            ));
+        }
+        Ok(Self { pnl, halt_reason })
+    }
+
+    /// Computed PnL, or `None` when a halt reason is present.
+    #[getter]
+    fn pnl(&self) -> Option<PyPnlOutcomeAmount> {
+        self.pnl.clone()
+    }
+
+    /// Reason why PnL could not be calculated, or `None` when it is available.
+    #[getter]
+    fn halt_reason(&self) -> Option<PyPnlHaltReason> {
+        self.halt_reason
+    }
+
+    fn __repr__(&self) -> String {
+        let pnl = self
+            .pnl
+            .as_ref()
+            .map_or_else(|| "None".to_owned(), PyPnlOutcomeAmount::__repr__);
+        let halt_reason = self
+            .halt_reason
+            .map_or("None", |reason| reason.python_name());
+        format!("PnlOutcome(pnl={pnl}, halt_reason={halt_reason})")
+    }
+}
+
+/// Account-level realized-PnL outcome.
+///
+/// Exactly one of `pnl` and `halt_reason` is present. SpotFunds emits a halted
+/// outcome only for the report that transitions the account accumulator to
+/// halted; later reports omit the unchanged halt.
+#[pyclass(
+    name = "AccountPnlOutcome",
+    module = "openpit.pretrade",
+    from_py_object,
+    frozen
+)]
+#[derive(Clone)]
+struct PyAccountPnlOutcome {
+    policy_group_id: PolicyGroupId,
+    account_id: AccountId,
+    pnl: Option<PyPnlOutcomeAmount>,
+    halt_reason: Option<PyPnlHaltReason>,
+}
+
+#[pymethods]
+impl PyAccountPnlOutcome {
+    /// Constructs an account-level PnL outcome.
+    #[new]
+    #[pyo3(signature = (*, policy_group_id, account_id, pnl = None, halt_reason = None))]
+    fn new(
+        policy_group_id: &Bound<'_, PyAny>,
+        account_id: &Bound<'_, PyAny>,
+        pnl: Option<PyPnlOutcomeAmount>,
+        halt_reason: Option<PyPnlHaltReason>,
+    ) -> PyResult<Self> {
+        if pnl.is_some() == halt_reason.is_some() {
+            return Err(PyValueError::new_err(
+                "account PnL outcome requires exactly one of pnl or halt_reason",
+            ));
+        }
+        Ok(Self {
+            policy_group_id: parse_policy_group_id_input(policy_group_id)?,
+            account_id: parse_account_id_input(account_id)?,
+            pnl,
+            halt_reason,
+        })
+    }
+
+    /// Policy-group tag of the policy that produced this outcome.
+    #[getter]
+    fn policy_group_id(&self) -> u16 {
+        self.policy_group_id.value()
+    }
+
+    /// Account that owns the realized-PnL ledger.
+    #[getter]
+    fn account_id(&self) -> PyAccountId {
+        PyAccountId {
+            inner: self.account_id,
+        }
+    }
+
+    /// Computed PnL, or `None` when a halt reason is present.
+    #[getter]
+    fn pnl(&self) -> Option<PyPnlOutcomeAmount> {
+        self.pnl.clone()
+    }
+
+    /// Reason why PnL could not be calculated, or `None` when it is available.
+    #[getter]
+    fn halt_reason(&self) -> Option<PyPnlHaltReason> {
+        self.halt_reason
+    }
+
+    fn __repr__(&self) -> String {
+        let pnl = self
+            .pnl
+            .as_ref()
+            .map_or_else(|| "None".to_owned(), PyPnlOutcomeAmount::__repr__);
+        let halt_reason = self
+            .halt_reason
+            .map_or("None", |reason| reason.python_name());
+        format!(
+            "AccountPnlOutcome(policy_group_id={}, account_id={}, pnl={}, halt_reason={})",
+            self.policy_group_id.value(),
+            self.account_id,
+            pnl,
+            halt_reason,
+        )
+    }
+}
+
 #[pyclass(
     name = "AccountOutcomeEntry",
     module = "openpit.pretrade",
-    from_py_object
+    from_py_object,
+    frozen
 )]
 #[derive(Clone)]
 struct PyAccountOutcomeEntry {
@@ -2182,7 +2387,7 @@ struct PyAccountOutcomeEntry {
     balance: Option<PyOutcomeAmount>,
     held: Option<PyOutcomeAmount>,
     incoming: Option<PyOutcomeAmount>,
-    realized_pnl: Option<PyPnlOutcomeAmount>,
+    realized_pnl: Option<PyPnlOutcome>,
     average_entry_price: Option<Price>,
 }
 
@@ -2195,7 +2400,7 @@ impl PyAccountOutcomeEntry {
         balance: Option<PyRef<'_, PyOutcomeAmount>>,
         held: Option<PyRef<'_, PyOutcomeAmount>>,
         incoming: Option<PyRef<'_, PyOutcomeAmount>>,
-        realized_pnl: Option<PyRef<'_, PyPnlOutcomeAmount>>,
+        realized_pnl: Option<PyRef<'_, PyPnlOutcome>>,
         average_entry_price: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         Ok(Self {
@@ -2229,7 +2434,7 @@ impl PyAccountOutcomeEntry {
     }
 
     #[getter]
-    fn realized_pnl(&self) -> Option<PyPnlOutcomeAmount> {
+    fn realized_pnl(&self) -> Option<PyPnlOutcome> {
         self.realized_pnl.clone()
     }
 
@@ -2254,7 +2459,8 @@ impl PyAccountOutcomeEntry {
 #[pyclass(
     name = "AccountAdjustmentOutcome",
     module = "openpit.pretrade",
-    from_py_object
+    from_py_object,
+    frozen
 )]
 #[derive(Clone)]
 struct PyAccountAdjustmentOutcome {
@@ -2492,7 +2698,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, PyEngineSync>
         account_id: AccountId,
         adjustment: &AccountAdjustment,
         mutations: &mut Mutations,
-    ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
+    ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
         self.inner
             .apply_account_adjustment(ctx, account_id, adjustment, mutations)
     }
@@ -2755,7 +2961,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, PyEngineSync>
         account_id: AccountId,
         adjustment: &AccountAdjustment,
         mutations: &mut Mutations,
-    ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
+    ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
         Python::attach(|py| {
             let adjustment_ctx =
                 Py::new(py, PyAccountAdjustmentContext::from(ctx)).map_err(|error| {
@@ -2783,99 +2989,40 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, PyEngineSync>
                     python_callback_rejects(&self.name)
                 })?;
 
-            // None -> pass without mutations.
-            if result.is_none() {
-                return Ok(vec![]);
-            }
-
-            if result.hasattr("rejects").map_err(|error| {
-                set_python_callback_error(error);
-                python_callback_rejects(&self.name)
-            })? && result.hasattr("mutations").map_err(|error| {
-                set_python_callback_error(error);
-                python_callback_rejects(&self.name)
-            })? {
-                let mut rejects = Vec::new();
-                if let Err(error) =
-                    apply_policy_decision(&self.name, result, mutations, &mut rejects)
-                {
-                    set_python_callback_error(error);
-                    return Err(python_callback_rejects(&self.name));
-                }
-                return if rejects.is_empty() {
-                    Ok(vec![])
-                } else {
-                    Err(Rejects::from(rejects))
-                };
-            }
-
-            // Backward-compat mode: accept either a single reject, an iterable
-            // of rejects, or an iterable of mutations.
-            if result.hasattr("code").map_err(|error| {
-                set_python_callback_error(error);
-                python_callback_rejects(&self.name)
-            })? {
-                let reject = parse_policy_reject(&result, &self.name).map_err(|error| {
-                    set_python_callback_error(error);
-                    python_callback_rejects(&self.name)
-                })?;
-                return Err(Rejects::from(reject));
-            }
-            if result.hasattr("asset").map_err(|error| {
-                set_python_callback_error(error);
-                python_callback_rejects(&self.name)
-            })? {
-                let entry = parse_account_outcome_entry(&result).map_err(|error| {
-                    set_python_callback_error(error);
-                    python_callback_rejects(&self.name)
-                })?;
-                return Ok(vec![entry]);
-            }
-
             let mut rejects = Vec::new();
-            let mut outcomes = Vec::new();
-            let iter = result.try_iter().map_err(|error| {
+            if let Err(error) =
+                apply_policy_decision(&self.name, result.clone(), mutations, &mut rejects)
+            {
                 set_python_callback_error(error);
-                python_callback_rejects(&self.name)
-            })?;
-            for item in iter {
-                let item = item.map_err(|error| {
+                return Err(python_callback_rejects(&self.name));
+            }
+            if !rejects.is_empty() {
+                return Err(Rejects::from(rejects));
+            }
+
+            let account_adjustments = result
+                .getattr("account_adjustments")
+                .and_then(|items| {
+                    items
+                        .try_iter()?
+                        .map(|item| parse_account_outcome_entry(&item?))
+                        .collect()
+                })
+                .map_err(|error| {
                     set_python_callback_error(error);
                     python_callback_rejects(&self.name)
                 })?;
-                if item.hasattr("code").map_err(|error| {
-                    set_python_callback_error(error);
-                    python_callback_rejects(&self.name)
-                })? {
-                    let reject = parse_policy_reject(&item, &self.name).map_err(|error| {
-                        set_python_callback_error(error);
-                        python_callback_rejects(&self.name)
-                    })?;
-                    rejects.push(reject);
-                    continue;
-                }
-                if item.hasattr("asset").map_err(|error| {
-                    set_python_callback_error(error);
-                    python_callback_rejects(&self.name)
-                })? {
-                    let entry = parse_account_outcome_entry(&item).map_err(|error| {
-                        set_python_callback_error(error);
-                        python_callback_rejects(&self.name)
-                    })?;
-                    outcomes.push(entry);
-                    continue;
-                }
-                let mutation = parse_policy_mutation(&item).map_err(|error| {
+            let account_blocks = result
+                .getattr("account_blocks")
+                .and_then(|items| parse_account_block_list(&items))
+                .map_err(|error| {
                     set_python_callback_error(error);
                     python_callback_rejects(&self.name)
                 })?;
-                mutations.push(mutation);
-            }
-            if rejects.is_empty() {
-                Ok(outcomes)
-            } else {
-                Err(Rejects::from(rejects))
-            }
+            Ok(PolicyAccountAdjustmentResult {
+                account_adjustments,
+                account_blocks,
+            })
         })
     }
 }
@@ -3081,6 +3228,12 @@ fn extract_python_account_adjustment(obj: &Bound<'_, PyAny>) -> PyResult<Account
                         average_entry_price: operation.average_entry_price,
                         mode: operation.mode,
                         leverage: operation.leverage,
+                    })
+                }
+                PyAccountAdjustmentOperation::AccountPnl(py_operation) => {
+                    let operation = py_operation.bind(py).borrow();
+                    PopulatedAccountAdjustmentOperation::AccountPnl(PopulatedAccountPnlOperation {
+                        state: operation.state,
                     })
                 }
             };
@@ -3291,15 +3444,6 @@ fn parse_pnl_outcome_amount(value: &Bound<'_, PyAny>) -> PyResult<PnlOutcomeAmou
     })
 }
 
-fn parse_optional_pnl_outcome_amount(
-    value: &Bound<'_, PyAny>,
-) -> PyResult<Option<PnlOutcomeAmount>> {
-    if value.is_none() {
-        return Ok(None);
-    }
-    Ok(Some(parse_pnl_outcome_amount(value)?))
-}
-
 fn parse_account_outcome_entry(value: &Bound<'_, PyAny>) -> PyResult<AccountOutcomeEntry> {
     if let Ok(value) = value.extract::<PyRef<'_, PyAccountOutcomeEntry>>() {
         return Ok(AccountOutcomeEntry {
@@ -3316,10 +3460,19 @@ fn parse_account_outcome_entry(value: &Bound<'_, PyAny>) -> PyResult<AccountOutc
                 delta: amount.delta,
                 absolute: amount.absolute,
             }),
-            realized_pnl: value.realized_pnl.as_ref().map(|amount| PnlOutcomeAmount {
-                delta: amount.delta,
-                absolute: amount.absolute,
-            }),
+            realized_pnl: value
+                .realized_pnl
+                .as_ref()
+                .map(|outcome| {
+                    build_pnl_result(
+                        outcome.pnl.as_ref().map(|amount| PnlOutcomeAmount {
+                            delta: amount.delta,
+                            absolute: amount.absolute,
+                        }),
+                        outcome.halt_reason,
+                    )
+                })
+                .transpose()?,
             average_entry_price: value.average_entry_price,
         });
     }
@@ -3330,7 +3483,7 @@ fn parse_account_outcome_entry(value: &Bound<'_, PyAny>) -> PyResult<AccountOutc
         balance: parse_optional_outcome_amount(&value.getattr("balance")?)?,
         held: parse_optional_outcome_amount(&value.getattr("held")?)?,
         incoming: parse_optional_outcome_amount(&value.getattr("incoming")?)?,
-        realized_pnl: parse_optional_pnl_outcome_amount(&value.getattr("realized_pnl")?)?,
+        realized_pnl: parse_optional_pnl_outcome(&value.getattr("realized_pnl")?)?,
         average_entry_price: if avg.is_none() {
             None
         } else {
@@ -3403,10 +3556,16 @@ fn parse_account_adjustment_outcome(
                     .entry
                     .realized_pnl
                     .as_ref()
-                    .map(|amount| PnlOutcomeAmount {
-                        delta: amount.delta,
-                        absolute: amount.absolute,
-                    }),
+                    .map(|outcome| {
+                        build_pnl_result(
+                            outcome.pnl.as_ref().map(|amount| PnlOutcomeAmount {
+                                delta: amount.delta,
+                                absolute: amount.absolute,
+                            }),
+                            outcome.halt_reason,
+                        )
+                    })
+                    .transpose()?,
                 average_entry_price: value.entry.average_entry_price,
             },
         });
@@ -3415,6 +3574,132 @@ fn parse_account_adjustment_outcome(
     Ok(AccountAdjustmentOutcome {
         policy_group_id: parse_policy_group_id_input(&value.getattr("policy_group_id")?)?,
         entry: parse_account_outcome_entry(&value.getattr("entry")?)?,
+    })
+}
+
+/// Reads a halt reason; `field` names the attribute path in the caller's
+/// object so the error points at the value the user actually supplied.
+fn parse_pnl_halt_reason(value: &Bound<'_, PyAny>, field: &str) -> PyResult<PyPnlHaltReason> {
+    value
+        .extract::<PyRef<'_, PyPnlHaltReason>>()
+        .map(|value| *value)
+        .map_err(|_| {
+            PyTypeError::new_err(format!("{field} must be openpit.pretrade.PnlHaltReason"))
+        })
+}
+
+fn pnl_halt_reason_to_core(value: PyPnlHaltReason) -> PnlHaltReason {
+    match value {
+        PyPnlHaltReason::MissingFx => PnlHaltReason::MissingFx,
+        PyPnlHaltReason::MissingAccountCurrency => PnlHaltReason::MissingAccountCurrency,
+        PyPnlHaltReason::MissingInitialPnl => PnlHaltReason::MissingInitialPnl,
+        PyPnlHaltReason::MissingCostBasis => PnlHaltReason::MissingCostBasis,
+        PyPnlHaltReason::ArithmeticOverflow => PnlHaltReason::ArithmeticOverflow,
+    }
+}
+
+fn parse_pnl_state_input(value: &Bound<'_, PyAny>) -> PyResult<PnlState> {
+    if let Ok(reason) = value.extract::<PyRef<'_, PyPnlHaltReason>>() {
+        return Ok(PnlState::Halted(pnl_halt_reason_to_core(*reason)));
+    }
+    parse_pnl_input(value).map(PnlState::Value)
+}
+
+fn pnl_state_to_python(py: Python<'_>, value: PnlState) -> PyResult<Py<PyAny>> {
+    match value {
+        PnlState::Value(value) => Ok(Py::new(py, PyPnl { inner: value })?.into_any()),
+        PnlState::Halted(reason) => Ok(Py::new(py, convert_pnl_halt_reason(reason))?.into_any()),
+    }
+}
+
+fn pnl_state_python_repr(value: PnlState) -> String {
+    match value {
+        PnlState::Value(value) => format!("Pnl(Decimal('{value}'))"),
+        PnlState::Halted(reason) => convert_pnl_halt_reason(reason).python_name().to_owned(),
+    }
+}
+
+fn build_pnl_result(
+    pnl: Option<PnlOutcomeAmount>,
+    halt_reason: Option<PyPnlHaltReason>,
+) -> PyResult<PnlOutcome> {
+    match (pnl, halt_reason) {
+        (Some(amount), None) => Ok(Ok(amount)),
+        (None, Some(reason)) => Ok(Err(pnl_halt_reason_to_core(reason))),
+        _ => Err(PyValueError::new_err(
+            "PnL outcome requires exactly one of pnl or halt_reason",
+        )),
+    }
+}
+
+fn parse_pnl_outcome(value: &Bound<'_, PyAny>) -> PyResult<PnlOutcome> {
+    if let Ok(value) = value.extract::<PyRef<'_, PyPnlOutcome>>() {
+        return build_pnl_result(
+            value.pnl.as_ref().map(|amount| PnlOutcomeAmount {
+                delta: amount.delta,
+                absolute: amount.absolute,
+            }),
+            value.halt_reason,
+        );
+    }
+
+    let pnl_value = value.getattr("pnl")?;
+    let pnl = if pnl_value.is_none() {
+        None
+    } else {
+        Some(parse_pnl_outcome_amount(&pnl_value)?)
+    };
+    let halt_reason_value = value.getattr("halt_reason")?;
+    let halt_reason = if halt_reason_value.is_none() {
+        None
+    } else {
+        Some(parse_pnl_halt_reason(
+            &halt_reason_value,
+            "PnlOutcome.halt_reason",
+        )?)
+    };
+    build_pnl_result(pnl, halt_reason)
+}
+
+fn parse_optional_pnl_outcome(value: &Bound<'_, PyAny>) -> PyResult<Option<PnlOutcome>> {
+    if value.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(parse_pnl_outcome(value)?))
+}
+
+fn parse_account_pnl_outcome(value: &Bound<'_, PyAny>) -> PyResult<AccountPnlOutcome> {
+    if let Ok(value) = value.extract::<PyRef<'_, PyAccountPnlOutcome>>() {
+        let pnl = value.pnl.as_ref().map(|amount| PnlOutcomeAmount {
+            delta: amount.delta,
+            absolute: amount.absolute,
+        });
+        return Ok(AccountPnlOutcome {
+            result: build_pnl_result(pnl, value.halt_reason)?,
+            account_id: value.account_id,
+            policy_group_id: value.policy_group_id,
+        });
+    }
+
+    let pnl_value = value.getattr("pnl")?;
+    let pnl = if pnl_value.is_none() {
+        None
+    } else {
+        Some(parse_pnl_outcome_amount(&pnl_value)?)
+    };
+    let halt_reason_value = value.getattr("halt_reason")?;
+    let halt_reason = if halt_reason_value.is_none() {
+        None
+    } else {
+        Some(parse_pnl_halt_reason(
+            &halt_reason_value,
+            "AccountPnlOutcome.halt_reason",
+        )?)
+    };
+    Ok(AccountPnlOutcome {
+        result: build_pnl_result(pnl, halt_reason)?,
+        account_id: parse_account_id_input(&value.getattr("account_id")?)?,
+        policy_group_id: parse_policy_group_id_input(&value.getattr("policy_group_id")?)?,
     })
 }
 
@@ -3438,6 +3723,14 @@ fn parse_account_adjustment_outcome_list(
     Ok(outcomes)
 }
 
+fn parse_account_pnl_outcome_list(value: &Bound<'_, PyAny>) -> PyResult<Vec<AccountPnlOutcome>> {
+    let mut outcomes = Vec::new();
+    for item in value.try_iter()? {
+        outcomes.push(parse_account_pnl_outcome(&item?)?);
+    }
+    Ok(outcomes)
+}
+
 fn parse_post_trade_result(value: &Bound<'_, PyAny>) -> PyResult<PostTradeResult> {
     if let Ok(value) = value.extract::<PyRef<'_, PyPostTradeResult>>() {
         return Ok(value.inner.clone());
@@ -3445,6 +3738,7 @@ fn parse_post_trade_result(value: &Bound<'_, PyAny>) -> PyResult<PostTradeResult
 
     Ok(PostTradeResult {
         account_blocks: parse_account_block_list(&value.getattr("account_blocks")?)?,
+        account_pnls: parse_account_pnl_outcome_list(&value.getattr("account_pnls")?)?,
         account_adjustments: parse_account_adjustment_outcome_list(
             &value.getattr("account_adjustments")?,
         )?,
@@ -3933,12 +4227,12 @@ impl PyReadyEngineBuilder {
         Ok(slf)
     }
 
-    #[pyo3(name = "_add_builtin_spot_funds_pnl_bounds_killswitch", signature = (*, policy_group_id = 0, market_data = None, global_barriers = vec![], account_group_barriers = vec![], account_barriers = vec![]))]
+    #[pyo3(name = "_add_builtin_spot_funds_pnl_bounds_killswitch", signature = (*, policy_group_id = 0, market_data = None, global_barrier = None, account_group_barriers = vec![], account_barriers = vec![]))]
     fn add_builtin_spot_funds_pnl_bounds_killswitch<'py>(
         slf: PyRef<'py, Self>,
         policy_group_id: u16,
         market_data: Option<PyRef<'_, PyMarketDataService>>,
-        global_barriers: Vec<Bound<'_, PyAny>>,
+        global_barrier: Option<Bound<'_, PyAny>>,
         account_group_barriers: Vec<Bound<'_, PyAny>>,
         account_barriers: Vec<Bound<'_, PyAny>>,
     ) -> PyResult<PyRef<'py, Self>> {
@@ -3955,7 +4249,7 @@ impl PyReadyEngineBuilder {
                 PolicyGroupId::new(policy_group_id),
                 engine_sync,
                 md_handle,
-                global_barriers,
+                global_barrier,
                 account_group_barriers,
                 account_barriers,
             )?
@@ -4348,7 +4642,6 @@ fn parse_spot_funds_pnl_bounds_barrier(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<SpotFundsPnlBoundsBarrier> {
     ensure_policy_entity(obj, "SpotFundsPnlBoundsBarrier")?;
-    let account_currency = obj.getattr("account_currency")?;
     let lower_bound_value = obj.getattr("lower_bound")?;
     let lower_bound = if lower_bound_value.is_none() {
         None
@@ -4362,7 +4655,6 @@ fn parse_spot_funds_pnl_bounds_barrier(
         Some(parse_pnl_input(&upper_bound_value)?)
     };
     Ok(SpotFundsPnlBoundsBarrier {
-        account_currency: parse_asset_input(&account_currency)?,
         lower_bound,
         upper_bound,
     })
@@ -4386,21 +4678,7 @@ fn parse_spot_funds_pnl_account_barrier(
     ensure_policy_entity(obj, "SpotFundsPnlBoundsAccountBarrier")?;
     let barrier_obj = obj.getattr("barrier")?;
     let account_id_obj = obj.getattr("account_id")?;
-    let initial_pnl_obj = obj.getattr("initial_pnl")?;
     Ok(SpotFundsPnlBoundsAccountBarrier {
-        barrier: parse_spot_funds_pnl_bounds_barrier(&barrier_obj)?,
-        account_id: parse_account_id_input(&account_id_obj)?,
-        initial_pnl: parse_pnl_input(&initial_pnl_obj)?,
-    })
-}
-
-fn parse_spot_funds_pnl_account_barrier_update(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<SpotFundsPnlBoundsAccountBarrierUpdate> {
-    ensure_policy_entity(obj, "SpotFundsPnlBoundsAccountBarrierUpdate")?;
-    let barrier_obj = obj.getattr("barrier")?;
-    let account_id_obj = obj.getattr("account_id")?;
-    Ok(SpotFundsPnlBoundsAccountBarrierUpdate {
         barrier: parse_spot_funds_pnl_bounds_barrier(&barrier_obj)?,
         account_id: parse_account_id_input(&account_id_obj)?,
     })
@@ -4629,14 +4907,14 @@ fn make_spot_funds_pnl_bounds_killswitch_policy(
     policy_group_id: PolicyGroupId,
     engine_sync: SyncMode,
     market_data: Option<(EngineHandle<MarketDataService<EngineLocking>>, SyncMode)>,
-    global_barriers: Vec<Bound<'_, PyAny>>,
+    global_barrier: Option<Bound<'_, PyAny>>,
     account_group_barriers: Vec<Bound<'_, PyAny>>,
     account_barriers: Vec<Bound<'_, PyAny>>,
 ) -> PyResult<SpotFundsPolicy<EngineLocking, EngineLocking>> {
-    let global = global_barriers
-        .iter()
+    let global = global_barrier
+        .as_ref()
         .map(parse_spot_funds_pnl_bounds_barrier)
-        .collect::<PyResult<Vec<_>>>()?;
+        .transpose()?;
     let account_group = account_group_barriers
         .iter()
         .map(parse_spot_funds_pnl_account_group_barrier)
@@ -4661,23 +4939,17 @@ fn make_spot_funds_pnl_bounds_killswitch_policy(
         None => None,
     };
 
-    let mut settings = SpotFundsSettings::new(
-        0,
-        SpotFundsPricingSource::Mark,
-        std::iter::empty::<(SpotFundsOverrideTarget, SpotFundsOverride)>(),
+    Ok(
+        SpotFundsPolicy::<EngineLocking, EngineLocking>::pnl_bounds_kill_switch(
+            global,
+            account_group,
+            account,
+            market_orders,
+            storage_builder,
+        )
+        .map_err(|e| PyValueError::new_err(e.to_string()))?
+        .with_policy_group_id(policy_group_id),
     )
-    .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    let settings = settings
-        .with_pnl_barriers(global, account_group, account)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-
-    Ok(SpotFundsPolicy::<EngineLocking, EngineLocking>::new(
-        settings,
-        market_orders,
-        storage_builder,
-    )
-    .with_policy_group_id(policy_group_id))
 }
 
 #[pyclass(
@@ -5076,7 +5348,18 @@ struct PyAccountAdjustmentAmount {
 struct PyAccountAdjustmentBalanceOperation {
     asset: Option<Asset>,
     average_entry_price: Option<Price>,
-    realized_pnl: Option<Pnl>,
+    realized_pnl: Option<PnlState>,
+}
+
+#[pyclass(
+    name = "AccountAdjustmentAccountPnlOperation",
+    module = "openpit.core",
+    subclass,
+    from_py_object
+)]
+#[derive(Clone)]
+struct PyAccountAdjustmentAccountPnlOperation {
+    state: PnlState,
 }
 
 #[pyclass(
@@ -5114,6 +5397,7 @@ struct PyAccountAdjustmentBounds {
 enum PyAccountAdjustmentOperation {
     Balance(Py<PyAccountAdjustmentBalanceOperation>),
     Position(Py<PyAccountAdjustmentPositionOperation>),
+    AccountPnl(Py<PyAccountAdjustmentAccountPnlOperation>),
 }
 
 #[pyclass(name = "AccountAdjustment", module = "openpit.core", subclass)]
@@ -6499,7 +6783,7 @@ impl PyAccountAdjustmentBalanceOperation {
         Ok(Self {
             asset: asset.map(parse_asset_input).transpose()?,
             average_entry_price: average_entry_price.map(parse_price_input).transpose()?,
-            realized_pnl: realized_pnl.map(parse_pnl_input).transpose()?,
+            realized_pnl: realized_pnl.map(parse_pnl_state_input).transpose()?,
         })
     }
 
@@ -6526,13 +6810,15 @@ impl PyAccountAdjustmentBalanceOperation {
     }
 
     #[getter]
-    fn realized_pnl(&self) -> Option<PyPnl> {
-        self.realized_pnl.map(|inner| PyPnl { inner })
+    fn realized_pnl(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.realized_pnl
+            .map(|value| pnl_state_to_python(py, value))
+            .transpose()
     }
 
     #[setter]
     fn set_realized_pnl(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        self.realized_pnl = value.map(parse_pnl_input).transpose()?;
+        self.realized_pnl = value.map(parse_pnl_state_input).transpose()?;
         Ok(())
     }
 
@@ -6541,7 +6827,36 @@ impl PyAccountAdjustmentBalanceOperation {
             "AccountAdjustmentBalanceOperation(asset={:?}, average_entry_price={:?}, realized_pnl={:?})",
             self.asset(),
             self.average_entry_price().map(|v| v.inner.to_string()),
-            self.realized_pnl().map(|v| v.inner.to_string()),
+            self.realized_pnl.map(pnl_state_python_repr),
+        )
+    }
+}
+
+#[pymethods]
+impl PyAccountAdjustmentAccountPnlOperation {
+    #[new]
+    #[pyo3(signature = (*, state))]
+    fn new(state: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            state: parse_pnl_state_input(state)?,
+        })
+    }
+
+    #[getter]
+    fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        pnl_state_to_python(py, self.state)
+    }
+
+    #[setter]
+    fn set_state(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.state = parse_pnl_state_input(value)?;
+        Ok(())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AccountAdjustmentAccountPnlOperation(state={})",
+            pnl_state_python_repr(self.state),
         )
     }
 }
@@ -6790,6 +7105,7 @@ impl PyAccountAdjustment {
         self.operation.as_ref().map(|op| match op {
             PyAccountAdjustmentOperation::Balance(value) => value.clone_ref(py).into_any(),
             PyAccountAdjustmentOperation::Position(value) => value.clone_ref(py).into_any(),
+            PyAccountAdjustmentOperation::AccountPnl(value) => value.clone_ref(py).into_any(),
         })
     }
 
@@ -6845,6 +7161,7 @@ impl PyAccountAdjustment {
         let operation = self.operation.as_ref().map(|op| match op {
             PyAccountAdjustmentOperation::Balance(value) => value.bind(py).borrow().__repr__(),
             PyAccountAdjustmentOperation::Position(value) => value.bind(py).borrow().__repr__(py),
+            PyAccountAdjustmentOperation::AccountPnl(value) => value.bind(py).borrow().__repr__(),
         });
         let amount = self
             .amount
@@ -7463,7 +7780,8 @@ impl PyExecutionReportFillDetails {
             "ExecutionReportFillDetails(last_trade={:?}, fee={:?}, leaves_quantity={:?}, lock={:?}, is_final={:?})",
             self.last_trade().map(|trade| trade.__repr__()),
             self.fee,
-            self.leaves_quantity().map(|quantity| quantity.inner.to_string()),
+            self.leaves_quantity()
+                .map(|quantity| quantity.inner.to_string()),
             self.lock().__repr__(),
             self.is_final(),
         )
@@ -7805,6 +8123,35 @@ fn convert_account_block(block: &openpit::pretrade::AccountBlock) -> PyAccountBl
     }
 }
 
+#[pyclass(
+    name = "PolicyConfigurationResult",
+    module = "openpit.pretrade",
+    from_py_object
+)]
+#[derive(Clone)]
+struct PyPolicyConfigurationResult {
+    inner: openpit::PolicyConfigurationResult,
+}
+
+#[pymethods]
+impl PyPolicyConfigurationResult {
+    #[getter]
+    fn account_blocks(&self) -> Vec<PyAccountBlock> {
+        self.inner
+            .account_blocks
+            .iter()
+            .map(convert_account_block)
+            .collect()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "PolicyConfigurationResult(account_blocks={})",
+            self.inner.account_blocks.len()
+        )
+    }
+}
+
 #[pyclass(name = "PostTradeResult", module = "openpit.pretrade", from_py_object)]
 #[derive(Clone)]
 struct PyPostTradeResult {
@@ -7814,9 +8161,10 @@ struct PyPostTradeResult {
 #[pymethods]
 impl PyPostTradeResult {
     #[new]
-    #[pyo3(signature = (*, account_blocks = None, account_adjustments = None))]
+    #[pyo3(signature = (*, account_blocks = None, account_pnls = None, account_adjustments = None))]
     fn new(
         account_blocks: Option<&Bound<'_, PyAny>>,
+        account_pnls: Option<&Bound<'_, PyAny>>,
         account_adjustments: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let blocks = match account_blocks {
@@ -7827,9 +8175,14 @@ impl PyPostTradeResult {
             Some(value) => parse_account_adjustment_outcome_list(value)?,
             None => Vec::new(),
         };
+        let pnls = match account_pnls {
+            Some(value) => parse_account_pnl_outcome_list(value)?,
+            None => Vec::new(),
+        };
         Ok(Self {
             inner: PostTradeResult {
                 account_blocks: blocks,
+                account_pnls: pnls,
                 account_adjustments: adjustments,
             },
         })
@@ -7837,8 +8190,9 @@ impl PyPostTradeResult {
 
     fn __repr__(&self) -> String {
         format!(
-            "PostTradeResult(account_blocks={}, account_adjustments={})",
+            "PostTradeResult(account_blocks={}, account_pnls={}, account_adjustments={})",
             self.inner.account_blocks.len(),
+            self.inner.account_pnls.len(),
             self.inner.account_adjustments.len()
         )
     }
@@ -7849,6 +8203,22 @@ impl PyPostTradeResult {
             .account_blocks
             .iter()
             .map(convert_account_block)
+            .collect()
+    }
+
+    /// Account-level PnL outcomes reported by policies.
+    ///
+    /// A computed outcome with a nonzero delta changed the ledger; a zero delta
+    /// recomputed it without changing it. A halt reason means no authoritative
+    /// PnL value is available and it must not be interpreted as zero. SpotFunds
+    /// emits a halt reason only when the current report transitions the account
+    /// accumulator to halted; later reports omit the unchanged halt.
+    #[getter]
+    fn account_pnls(&self) -> Vec<PyAccountPnlOutcome> {
+        self.inner
+            .account_pnls
+            .iter()
+            .map(convert_account_pnl_outcome)
             .collect()
     }
 
@@ -8031,9 +8401,14 @@ fn parse_account_adjustment_operation(
     if let Ok(op) = value.extract::<PyAccountAdjustmentPositionOperation>() {
         return Ok(PyAccountAdjustmentOperation::Position(Py::new(py, op)?));
     }
-    Err(PyTypeError::new_err(
-        "operation must be openpit.core.AccountAdjustmentBalanceOperation or openpit.core.AccountAdjustmentPositionOperation",
-    ))
+    if let Ok(op) = value.extract::<PyAccountAdjustmentAccountPnlOperation>() {
+        return Ok(PyAccountAdjustmentOperation::AccountPnl(Py::new(py, op)?));
+    }
+    Err(PyTypeError::new_err(concat!(
+        "operation must be openpit.core.AccountAdjustmentBalanceOperation, ",
+        "openpit.core.AccountAdjustmentPositionOperation, or ",
+        "openpit.core.AccountAdjustmentAccountPnlOperation",
+    )))
 }
 
 fn parse_quantity(value: &str) -> PyResult<Quantity> {
@@ -8338,13 +8713,50 @@ fn convert_pnl_outcome_amount(value: &PnlOutcomeAmount) -> PyPnlOutcomeAmount {
     }
 }
 
+fn convert_pnl_halt_reason(value: PnlHaltReason) -> PyPnlHaltReason {
+    match value {
+        PnlHaltReason::MissingFx => PyPnlHaltReason::MissingFx,
+        PnlHaltReason::MissingAccountCurrency => PyPnlHaltReason::MissingAccountCurrency,
+        PnlHaltReason::MissingInitialPnl => PyPnlHaltReason::MissingInitialPnl,
+        PnlHaltReason::MissingCostBasis => PyPnlHaltReason::MissingCostBasis,
+        PnlHaltReason::ArithmeticOverflow => PyPnlHaltReason::ArithmeticOverflow,
+    }
+}
+
+fn convert_pnl_outcome(value: &PnlOutcome) -> PyPnlOutcome {
+    let (pnl, halt_reason) = match value {
+        Ok(amount) => (Some(convert_pnl_outcome_amount(amount)), None),
+        Err(reason) => (None, Some(convert_pnl_halt_reason(*reason))),
+    };
+    PyPnlOutcome { pnl, halt_reason }
+}
+
+fn convert_account_pnl_outcome(value: &AccountPnlOutcome) -> PyAccountPnlOutcome {
+    let (pnl, halt_reason) = match &value.result {
+        Ok(amount) => (
+            Some(PyPnlOutcomeAmount {
+                delta: amount.delta,
+                absolute: amount.absolute,
+            }),
+            None,
+        ),
+        Err(reason) => (None, Some(convert_pnl_halt_reason(*reason))),
+    };
+    PyAccountPnlOutcome {
+        policy_group_id: value.policy_group_id,
+        account_id: value.account_id,
+        pnl,
+        halt_reason,
+    }
+}
+
 fn convert_outcome_entry(value: &AccountOutcomeEntry) -> PyAccountOutcomeEntry {
     PyAccountOutcomeEntry {
         asset: value.asset.clone(),
         balance: value.balance.as_ref().map(convert_outcome_amount),
         held: value.held.as_ref().map(convert_outcome_amount),
         incoming: value.incoming.as_ref().map(convert_outcome_amount),
-        realized_pnl: value.realized_pnl.as_ref().map(convert_pnl_outcome_amount),
+        realized_pnl: value.realized_pnl.as_ref().map(convert_pnl_outcome),
         average_entry_price: value.average_entry_price,
     }
 }
@@ -8460,11 +8872,15 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyConfigurator>()?;
     module.add_class::<PyReject>()?;
     module.add_class::<PyAccountBlock>()?;
+    module.add_class::<PyPolicyConfigurationResult>()?;
     module.add_class::<PyStartPreTradeResult>()?;
     module.add_class::<PyExecuteResult>()?;
     module.add_class::<PyAccountAdjustmentBatchResult>()?;
     module.add_class::<PyOutcomeAmount>()?;
     module.add_class::<PyPnlOutcomeAmount>()?;
+    module.add_class::<PyPnlHaltReason>()?;
+    module.add_class::<PyPnlOutcome>()?;
+    module.add_class::<PyAccountPnlOutcome>()?;
     module.add_class::<PyAccountOutcomeEntry>()?;
     module.add_class::<PyAccountAdjustmentOutcome>()?;
     module.add_class::<PyEngineBuilder>()?;
@@ -8486,6 +8902,7 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyAccountAdjustmentAmount>()?;
     module.add_class::<PyAccountAdjustmentBalanceOperation>()?;
     module.add_class::<PyAccountAdjustmentPositionOperation>()?;
+    module.add_class::<PyAccountAdjustmentAccountPnlOperation>()?;
     module.add_class::<PyAccountAdjustmentBounds>()?;
     module.add_class::<PyAccountAdjustment>()?;
     module.add_class::<PyPostTradeResult>()?;
@@ -8677,7 +9094,7 @@ class StartCheck:
         return False
 
     def apply_account_adjustment(self, ctx, account_id, adjustment):
-        return None
+        return SimpleNamespace(rejects=[], mutations=[], account_adjustments=[], account_blocks=[])
 
 class ExecutionCheck:
     def __init__(self):
@@ -8694,7 +9111,7 @@ class ExecutionCheck:
         return False
 
     def apply_account_adjustment(self, ctx, account_id, adjustment):
-        return None
+        return SimpleNamespace(rejects=[], mutations=[], account_adjustments=[], account_blocks=[])
 
 class AdjustmentCheck:
     def __init__(self):
@@ -8710,7 +9127,7 @@ class AdjustmentCheck:
         return False
 
     def apply_account_adjustment(self, ctx, account_id, adjustment):
-        return None
+        return SimpleNamespace(rejects=[], mutations=[], account_adjustments=[], account_blocks=[])
 "#,
                 c"test_python_policies.py",
                 c"test_python_policies",

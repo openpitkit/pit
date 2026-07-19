@@ -547,7 +547,7 @@ void RunState::CollectSettlement(InFlight &item) {
     m_sampleCount.fetch_add(1, std::memory_order_relaxed);
     detail::SettleObservation obs;
     obs.blocked = blocked;
-    obs.outcomes = result.accountAdjustmentOutcomes;
+    obs.outcomes = result.accountAdjustments;
     m_oracle.CheckSettlement(*item.event, obs);
   } catch (const ae::Error &err) {
     const Clock::time_point resolve = Clock::now();

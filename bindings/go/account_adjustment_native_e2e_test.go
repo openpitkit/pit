@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 // Package openpit provides the Go binding for the OpenPit pre-trade risk engine.
 package openpit
@@ -102,23 +102,23 @@ func TestAccountAdjustmentNativeE2E_BatchAppliesAndInvokesPolicyPerItem(t *testi
 		t.Fatalf("NewAccountAdjustmentFromValues(second) error = %v", err)
 	}
 
-	rejects, _, err := engine.ApplyAccountAdjustment(
+	result, err := engine.ApplyAccountAdjustment(
 		param.NewAccountIDFromUint64(77),
 		[]model.AccountAdjustment{first, second},
 	)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", rejects)
+	if result.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", result.BatchError)
 	}
 	if policy.calls != 2 {
 		t.Fatalf("policy calls = %d, want 2", policy.calls)
 	}
 }
 
-func TestAccountAdjustmentNativeE2E_BalanceRealizedPnlReachesPolicyAndSurfacesInOutcome(t *testing.T) {
-	policy := &accountAdjustmentRealizedPnlEchoPolicy{name: "echo-realized-pnl"}
+func TestAccountAdjustmentNativeE2E_AccountPnlStateReachesPolicy(t *testing.T) {
+	policy := &accountAdjustmentPnlStatePolicy{name: "observe-account-pnl"}
 
 	engine, err := NewEngineBuilder().FullSync().PreTrade(policy).Build()
 	if err != nil {
@@ -129,13 +129,8 @@ func TestAccountAdjustmentNativeE2E_BalanceRealizedPnlReachesPolicyAndSurfacesIn
 	want := mustAdjustmentNativePnl(t, "42.5")
 	adjustment, err := model.NewAccountAdjustmentFromValues(
 		model.AccountAdjustmentValues{
-			BalanceOperation: optional.Some(
-				model.NewAccountAdjustmentBalanceOperationFromValues(
-					model.AccountAdjustmentBalanceOperationValues{
-						Asset:       optional.Some(mustAdjustmentNativeAsset(t, "USD")),
-						RealizedPnl: optional.Some(want),
-					},
-				),
+			AccountPnlOperation: optional.Some(
+				model.NewAccountAdjustmentAccountPnlOperation(model.NewPnlState(want)),
 			),
 		},
 	)
@@ -143,61 +138,59 @@ func TestAccountAdjustmentNativeE2E_BalanceRealizedPnlReachesPolicyAndSurfacesIn
 		t.Fatalf("NewAccountAdjustmentFromValues() error = %v", err)
 	}
 
-	rejects, outcomes, err := engine.ApplyAccountAdjustment(
+	result, err := engine.ApplyAccountAdjustment(
 		param.NewAccountIDFromUint64(91),
 		[]model.AccountAdjustment{adjustment},
 	)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", rejects)
+	if result.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", result.BatchError)
 	}
-	if !policy.sawRealizedPnl {
-		t.Fatal("policy did not observe the balance-operation realized PnL input")
+	if !policy.sawPnlState {
+		t.Fatal("policy did not observe the account-PnL state input")
 	}
-	if policy.pushErr != nil {
-		t.Fatalf("outcomes.Push() error = %v", policy.pushErr)
+	if len(result.Outcomes) != 0 {
+		t.Fatalf("outcomes len = %d, want 0", len(result.Outcomes))
 	}
-	if len(outcomes) != 1 {
-		t.Fatalf("outcomes len = %d, want 1", len(outcomes))
+	if len(result.AccountBlocks) != 1 {
+		t.Fatalf("AccountBlocks len = %d, want 1", len(result.AccountBlocks))
 	}
-
-	got, ok := outcomes[0].Entry.RealizedPnl.Get()
-	if !ok {
-		t.Fatal("outcome RealizedPnl is unset, want force-set value")
+	if result.AccountBlocks[0].Code != reject.CodePnlKillSwitchTriggered {
+		t.Fatalf(
+			"AccountBlocks[0].Code = %v, want %v",
+			result.AccountBlocks[0].Code,
+			reject.CodePnlKillSwitchTriggered,
+		)
 	}
-	assertNativePnlEqual(t, got.Absolute, want)
-	assertNativePnlEqual(t, got.Delta, want)
 }
 
-// accountAdjustmentRealizedPnlEchoPolicy reads the balance-operation realized
-// PnL force-set from the incoming adjustment and re-emits it as an outcome,
-// proving the input reaches the engine and surfaces on the outcome side.
-type accountAdjustmentRealizedPnlEchoPolicy struct {
-	name           string
-	sawRealizedPnl bool
-	pushErr        error
+// accountAdjustmentPnlStatePolicy observes an account-wide PnL state from the
+// incoming adjustment, proving the typed input reaches custom policies.
+type accountAdjustmentPnlStatePolicy struct {
+	name        string
+	sawPnlState bool
 }
 
-func (accountAdjustmentRealizedPnlEchoPolicy) Close() {}
+func (accountAdjustmentPnlStatePolicy) Close() {}
 
-func (p accountAdjustmentRealizedPnlEchoPolicy) Name() string {
+func (p accountAdjustmentPnlStatePolicy) Name() string {
 	return p.name
 }
 
-func (accountAdjustmentRealizedPnlEchoPolicy) PolicyGroupID() model.PolicyGroupID {
+func (accountAdjustmentPnlStatePolicy) PolicyGroupID() model.PolicyGroupID {
 	return model.DefaultPolicyGroupID
 }
 
-func (accountAdjustmentRealizedPnlEchoPolicy) CheckPreTradeStart(
+func (accountAdjustmentPnlStatePolicy) CheckPreTradeStart(
 	pretrade.Context,
 	model.Order,
 ) []reject.Reject {
 	return nil
 }
 
-func (accountAdjustmentRealizedPnlEchoPolicy) PerformPreTradeCheck(
+func (accountAdjustmentPnlStatePolicy) PerformPreTradeCheck(
 	pretrade.Context,
 	model.Order,
 	tx.Mutations,
@@ -206,42 +199,40 @@ func (accountAdjustmentRealizedPnlEchoPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (accountAdjustmentRealizedPnlEchoPolicy) ApplyExecutionReport(
+func (accountAdjustmentPnlStatePolicy) ApplyExecutionReport(
 	_ pretrade.PostTradeContext,
 	_ model.ExecutionReport,
 	_ pretrade.PostTradeAdjustments,
+	_ pretrade.PostTradePnls,
 ) []reject.AccountBlock {
 	return nil
 }
 
-func (p *accountAdjustmentRealizedPnlEchoPolicy) ApplyAccountAdjustment(
+func (p *accountAdjustmentPnlStatePolicy) ApplyAccountAdjustment(
 	_ accountadjustment.Context,
 	_ param.AccountID,
 	adjustment model.AccountAdjustment,
 	_ tx.Mutations,
-	outcomes pretrade.AccountOutcomes,
-) []reject.Reject {
-	operation, ok := adjustment.BalanceOperation().Get()
+	_ pretrade.AccountOutcomes,
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	operation, ok := adjustment.AccountPnlOperation().Get()
 	if !ok {
-		return nil
+		return pretrade.PolicyAccountAdjustmentResult{}, nil
 	}
-	realizedPnl, ok := operation.RealizedPnl().Get()
-	if !ok {
-		return nil
+	if _, ok := operation.State().Value(); !ok {
+		return pretrade.PolicyAccountAdjustmentResult{}, nil
 	}
-	asset, ok := operation.Asset().Get()
-	if !ok {
-		return nil
-	}
-	p.sawRealizedPnl = true
-	p.pushErr = outcomes.Push(accountadjustment.AccountOutcomeEntry{
-		Asset: asset,
-		RealizedPnl: optional.Some(accountadjustment.PnlOutcomeAmount{
-			Delta:    realizedPnl,
-			Absolute: realizedPnl,
-		}),
-	})
-	return nil
+	p.sawPnlState = true
+	return pretrade.PolicyAccountAdjustmentResult{
+		AccountBlocks: []reject.AccountBlock{
+			reject.NewAccountBlock(
+				reject.CodePnlKillSwitchTriggered,
+				p.name,
+				"account PnL halted",
+				"custom policy accepted the adjustment and blocked the account",
+			),
+		},
+	}, nil
 }
 
 func mustAdjustmentNativePnl(t *testing.T, source string) param.Pnl {
@@ -251,13 +242,6 @@ func mustAdjustmentNativePnl(t *testing.T, source string) param.Pnl {
 		t.Fatalf("NewPnlFromString(%q) error = %v", source, err)
 	}
 	return value
-}
-
-func assertNativePnlEqual(t *testing.T, got, want param.Pnl) {
-	t.Helper()
-	if !got.Equal(want) {
-		t.Fatalf("Pnl = %s, want %s", got.String(), want.String())
-	}
 }
 
 type accountAdjustmentCountingPolicy struct {
@@ -295,6 +279,7 @@ func (accountAdjustmentCountingPolicy) ApplyExecutionReport(
 	_ pretrade.PostTradeContext,
 	_ model.ExecutionReport,
 	_ pretrade.PostTradeAdjustments,
+	_ pretrade.PostTradePnls,
 ) []reject.AccountBlock {
 	return nil
 }
@@ -305,9 +290,9 @@ func (p *accountAdjustmentCountingPolicy) ApplyAccountAdjustment(
 	model.AccountAdjustment,
 	tx.Mutations,
 	pretrade.AccountOutcomes,
-) []reject.Reject {
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
 	p.calls++
-	return nil
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 func mustAdjustmentNativePrice(t *testing.T, value string) param.Price {

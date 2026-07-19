@@ -182,7 +182,7 @@ fn import_operation(
             } else {
                 None
             },
-            side: import_side(value.value.side),
+            side: import_side(value.value.side)?,
         },
     ))
 }
@@ -259,15 +259,17 @@ fn import_fill(
 
 fn import_position_impact(
     value: OpenPitExecutionReportPositionImpactOptional,
-) -> ExecutionReportPositionImpactAccess {
+) -> Result<ExecutionReportPositionImpactAccess, String> {
     if !value.is_set {
-        return ExecutionReportPositionImpactAccess::Absent;
+        return Ok(ExecutionReportPositionImpactAccess::Absent);
     }
 
-    ExecutionReportPositionImpactAccess::Populated(PopulatedExecutionReportPositionImpact {
-        position_effect: import_position_effect(value.value.position_effect),
-        position_side: import_position_side(value.value.position_side),
-    })
+    Ok(ExecutionReportPositionImpactAccess::Populated(
+        PopulatedExecutionReportPositionImpact {
+            position_effect: import_position_effect(value.value.position_effect)?,
+            position_side: import_position_side(value.value.position_side)?,
+        },
+    ))
 }
 
 fn export_operation(
@@ -421,7 +423,7 @@ pub(crate) fn import_execution_report(
             operation: import_operation(value.operation)?,
             financial_impact: import_financial_impact(value.financial_impact)?,
             fill: import_fill(value.fill)?,
-            position_impact: import_position_impact(value.position_impact),
+            position_impact: import_position_impact(value.position_impact)?,
         },
         value.user_data,
     ))
@@ -464,8 +466,8 @@ mod tests {
     use crate::param::{
         OpenPitParamAccountIdOptional, OpenPitParamFee, OpenPitParamFeeOptional,
         OpenPitParamMonetaryAmount, OpenPitParamMonetaryAmountOptional, OpenPitParamPnl,
-        OpenPitParamPnlOptional, OpenPitParamPositionEffect, OpenPitParamPositionSide,
-        OpenPitParamPrice, OpenPitParamQuantity, OpenPitParamQuantityOptional, OpenPitParamSide,
+        OpenPitParamPnlOptional, OpenPitParamPrice, OpenPitParamQuantity,
+        OpenPitParamQuantityOptional,
     };
     use crate::OpenPitStringView;
     use openpit::param::{
@@ -748,7 +750,7 @@ mod tests {
                         value: 42,
                         is_set: true,
                     },
-                    side: OpenPitParamSide::Buy,
+                    side: crate::param::OPENPIT_PARAM_SIDE_BUY,
                 },
             },
             financial_impact: OpenPitFinancialImpactOptional {
@@ -821,8 +823,8 @@ mod tests {
             position_impact: OpenPitExecutionReportPositionImpactOptional {
                 is_set: true,
                 value: OpenPitExecutionReportPositionImpact {
-                    position_effect: OpenPitParamPositionEffect::Open,
-                    position_side: OpenPitParamPositionSide::Long,
+                    position_effect: crate::param::OPENPIT_PARAM_POSITION_EFFECT_OPEN,
+                    position_side: crate::param::OPENPIT_PARAM_POSITION_SIDE_LONG,
                 },
             },
             user_data: std::ptr::null_mut(),

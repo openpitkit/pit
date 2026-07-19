@@ -41,15 +41,16 @@
 // `openpit::asyncengine::Error` (status-coded) instead. Expected async
 // outcomes (engine stopped, queue limit, submit cancelled, a `Submit` closure
 // that threw) are encoded here and read at the boundary, never thrown across
-// threads — losing them on a worker thread is not acceptable. `Await` rethrows
-// the carried error on the *caller's* thread so the synchronous-looking call
-// site can use ordinary try/catch.
+// threads — losing them on a worker thread is not acceptable. `Await`
+// rethrows the carried error on the *caller's* thread so the
+// synchronous-looking call site can use ordinary try/catch.
 //
 // The future is intentionally a thin adapter over `std::shared_future`: a
 // promise resolves the underlying state, and consumer accessors read it.
-// `std::shared_future` is used deliberately — the producer (worker thread) and
-// one or more consumers share ownership of the resolution state with no defined
-// outlives-the-other ordering, which is exactly std::shared_future's contract.
+// `std::shared_future` is used deliberately — the producer (worker thread)
+// and one or more consumers share ownership of the resolution state with no
+// defined outlives-the-other ordering, which is exactly
+// std::shared_future's contract.
 // Copyable `T` may be observed by multiple consumers. Move-only `T` is
 // supported for a single consuming `Await()`.
 //

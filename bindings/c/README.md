@@ -1,5 +1,7 @@
 # OpenPit (Pre-trade Integrity Toolkit) for C
 
+<!-- markdownlint-disable MD033 -->
+
 <!-- markdownlint-disable MD013 -->
 [![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![C API](https://img.shields.io/badge/C%20API-blue)](../../docs/c-api/index.md) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 <!-- markdownlint-enable MD013 -->
@@ -326,7 +328,10 @@ int main(void) {
     OpenPitPretradePreTradeReservation *reservation = NULL;
     OpenPitPretradeRejectList *start_rejects = NULL;
     OpenPitPretradeRejectList *execute_rejects = NULL;
-    OpenPitPretradeAccountBlockList *account_blocks = NULL;
+    OpenPitPostTradeResult *post_trade_result = NULL;
+    const OpenPitPretradeAccountBlockList *account_blocks = NULL;
+    const OpenPitAccountPnlOutcomeList *account_pnls = NULL;
+    const OpenPitAccountAdjustmentOutcomeList *account_adjustments = NULL;
     OpenPitOrder order = {0};
     OpenPitExecutionReport report = {0};
 
@@ -412,8 +417,8 @@ int main(void) {
     order.operation.is_set = true;
     order.operation.value.instrument.underlying_asset = make_string_view("AAPL");
     order.operation.value.instrument.settlement_asset = make_string_view("USD");
-    order.operation.value.side = OpenPitParamSide_Buy;
-    order.operation.value.trade_amount.kind = OpenPitParamTradeAmountKind_Quantity;
+    order.operation.value.side = OPENPIT_PARAM_SIDE_BUY;
+    order.operation.value.trade_amount.kind = OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY;
     order.operation.value.trade_amount.value = qty._0;
     order.operation.value.price.value = px;
     order.operation.value.price.is_set = true;
@@ -465,7 +470,7 @@ int main(void) {
     report.operation.is_set = true;
     report.operation.value.instrument.underlying_asset = make_string_view("AAPL");
     report.operation.value.instrument.settlement_asset = make_string_view("USD");
-    report.operation.value.side = OpenPitParamSide_Buy;
+    report.operation.value.side = OPENPIT_PARAM_SIDE_BUY;
 
     OpenPitParamPnl pnl = {0};
     OpenPitParamFee fee = {0};
@@ -479,17 +484,47 @@ int main(void) {
     report.financial_impact.value.fee.value = fee;
 
     if (!openpit_engine_apply_execution_report(
-            engine, &report, &account_blocks, NULL, &error)) {
+            engine, &report, &post_trade_result, &error)) {
         report_out_error("openpit_engine_apply_execution_report", error);
         error = NULL;
         goto cleanup;
     }
+    account_blocks =
+        openpit_post_trade_result_get_account_blocks(post_trade_result);
+    account_pnls =
+        openpit_post_trade_result_get_account_pnls(post_trade_result);
+    account_adjustments =
+        openpit_post_trade_result_get_account_adjustments(post_trade_result);
+
+    /*
+     * Consume every committed outcome before reacting to account blocks.
+     * Replace these diagnostics with durable downstream propagation.
+     */
+    size_t i = 0;
+    size_t account_pnl_count =
+        openpit_account_pnl_outcome_list_len(account_pnls);
+    for (i = 0; i < account_pnl_count; ++i) {
+        OpenPitAccountPnlOutcome outcome = {0};
+        if (openpit_account_pnl_outcome_list_get(
+                account_pnls, i, &outcome)) {
+            fprintf(stderr, "account P&L outcome for account %llu\n",
+                    (unsigned long long)outcome.account_id);
+        }
+    }
+    size_t adjustment_count =
+        openpit_account_adjustment_outcome_list_len(account_adjustments);
+    for (i = 0; i < adjustment_count; ++i) {
+        OpenPitAccountAdjustmentOutcome outcome = {0};
+        if (openpit_account_adjustment_outcome_list_get(
+                account_adjustments, i, &outcome)) {
+            fprintf(stderr, "account adjustment from policy group %u\n",
+                    (unsigned int)outcome.policy_group_id);
+        }
+    }
 
     /* 8. After each execution report, kill-switch state may change. */
-    if (account_blocks != NULL) {
+    if (openpit_pretrade_account_block_list_len(account_blocks) != 0) {
         fprintf(stderr, "kill switch triggered\n");
-        openpit_pretrade_destroy_account_block_list(account_blocks);
-        account_blocks = NULL;
     }
 
     rc = 0;
@@ -510,6 +545,9 @@ cleanup:
     if (start_rejects != NULL) {
         openpit_pretrade_destroy_reject_list(start_rejects);
     }
+    if (post_trade_result != NULL) {
+        openpit_destroy_post_trade_result(post_trade_result);
+    }
     openpit_destroy_engine(engine);
     openpit_destroy_engine_builder(builder);
     return rc;
@@ -525,7 +563,11 @@ Example flow:
 5. run main-stage checks
 6. commit the reservation after the venue accepts the order
 7. apply one execution report built as a POD payload
-8. inspect whether post-trade state triggered a kill switch
+8. consume committed P&L/adjustment outcomes, then inspect the kill switch
+
+Post-trade processing is not atomic across policies. Always consume every
+account-P&L and account-adjustment outcome before reacting to account blocks:
+those outcomes describe state changes that have already been committed.
 
 For the full type and ownership reference, use the C manual:
 [docs/c-api/index.md](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package accountadjustment
 
@@ -24,7 +24,7 @@ import (
 	"go.openpit.dev/openpit/pkg/optional"
 )
 
-// OutcomeAmount is a delta/absolute pair for one position field.
+// OutcomeAmount describes the delta/absolute result for one position field.
 type OutcomeAmount struct {
 	// Delta is the signed change applied by this operation relative to the field
 	// value at operation start. Authoritative for position bookkeeping.
@@ -92,27 +92,23 @@ func (a PnlOutcomeAmount) NewHandle() native.PnlOutcomeAmount {
 	return native.NewPnlOutcomeAmount(a.Delta.Handle(), a.Absolute.Handle())
 }
 
-// NewPnlOutcomeAmountOptionFromHandle creates an optional PnlOutcomeAmount from
-// a native optional handle.
-func NewPnlOutcomeAmountOptionFromHandle(
-	handle native.PnlOutcomeAmountOptional,
-) optional.Option[PnlOutcomeAmount] {
-	if !native.PnlOutcomeAmountOptionalIsSet(handle) {
-		return optional.None[PnlOutcomeAmount]()
+// NewPnlOutcomeOptionFromHandle creates an optional PnlOutcome from a native
+// optional handle.
+func NewPnlOutcomeOptionFromHandle(
+	handle native.PnlOutcomeOptional,
+) optional.Option[PnlOutcome] {
+	if !native.PnlOutcomeOptionalIsSet(handle) {
+		return optional.None[PnlOutcome]()
 	}
-	return optional.Some(
-		NewPnlOutcomeAmountFromHandle(native.PnlOutcomeAmountOptionalGet(handle)),
-	)
+	return optional.Some(NewPnlOutcomeFromHandle(native.PnlOutcomeOptionalGet(handle)))
 }
 
-func newNativePnlOutcomeAmountOptional(
-	value optional.Option[PnlOutcomeAmount],
-) native.PnlOutcomeAmountOptional {
-	amount, ok := value.Get()
+func newNativePnlOutcomeOptional(value optional.Option[PnlOutcome]) native.PnlOutcomeOptional {
+	outcome, ok := value.Get()
 	if !ok {
-		return native.NewPnlOutcomeAmountOptionalUnset()
+		return native.NewPnlOutcomeOptionalUnset()
 	}
-	return native.NewPnlOutcomeAmountOptionalSet(amount.NewHandle())
+	return native.NewPnlOutcomeOptionalSet(outcome.newNativeHandle())
 }
 
 func newNativeParamPriceOptional(
@@ -135,14 +131,15 @@ type AccountOutcomeEntry struct {
 	Held optional.Option[OutcomeAmount]
 	// Incoming is the incoming (pending inflow) amount outcome.
 	Incoming optional.Option[OutcomeAmount]
-	// RealizedPnl is the account-currency realized PnL. Delta is the change
-	// applied by this operation; absolute is the cumulative value after the
-	// operation. None means realized PnL was not tracked or not emitted; missing
-	// account currency or FX stops tracking without reject/block.
-	RealizedPnl optional.Option[PnlOutcomeAmount]
+	// RealizedPnl is the optional account-currency realized-PnL result. It is
+	// either PnlOutcomeAmount or the halt reason from the operation that first
+	// failed. Later operations omit it until an adjustment force-sets this
+	// position's PnL. Re-arming account PnL or another position does not re-arm
+	// it.
+	RealizedPnl optional.Option[PnlOutcome]
 	// AverageEntryPrice is the absolute current account-currency average entry
 	// price after the operation. None means it was not tracked or not emitted;
-	// missing account currency or FX stops tracking without reject/block.
+	// missing inputs may also prevent the operation from emitting an average.
 	AverageEntryPrice optional.Option[param.Price]
 }
 
@@ -162,7 +159,7 @@ func NewAccountOutcomeEntryFromHandle(handle native.AccountOutcomeEntry) Account
 		Incoming: NewOutcomeAmountOptionFromHandle(
 			native.AccountOutcomeEntryGetIncoming(handle),
 		),
-		RealizedPnl: NewPnlOutcomeAmountOptionFromHandle(
+		RealizedPnl: NewPnlOutcomeOptionFromHandle(
 			native.AccountOutcomeEntryGetRealizedPnl(handle),
 		),
 		AverageEntryPrice: param.NewPriceOptionFromHandle(
@@ -181,7 +178,7 @@ func (e AccountOutcomeEntry) NewHandle() native.AccountOutcomeEntry {
 		newNativeOutcomeAmountOptional(e.Balance),
 		newNativeOutcomeAmountOptional(e.Held),
 		newNativeOutcomeAmountOptional(e.Incoming),
-		newNativePnlOutcomeAmountOptional(e.RealizedPnl),
+		newNativePnlOutcomeOptional(e.RealizedPnl),
 		newNativeParamPriceOptional(e.AverageEntryPrice),
 	)
 }
@@ -206,8 +203,19 @@ func NewAccountAdjustmentOutcomeFromHandle(
 	}
 }
 
+// NewHandle returns a callback-scoped native view of this outcome.
+// The outcome and its entry asset must stay alive through the native call.
+func (o Outcome) NewHandle() native.AccountAdjustmentOutcome {
+	return native.NewAccountAdjustmentOutcome(
+		native.PolicyGroupID(o.PolicyGroupID),
+		o.Entry.NewHandle(),
+	)
+}
+
 // NewListFromHandle copies a native account-adjustment outcome list into a Go
-// slice. The native list ownership stays with the caller, which must destroy it.
+// slice without taking ownership. The producer defines whether the list is
+// caller-owned or borrowed; lists obtained from a PostTradeResult must not be
+// destroyed separately.
 func NewListFromHandle(handle native.AccountAdjustmentOutcomeList) []Outcome {
 	count := native.AccountAdjustmentOutcomeListLen(handle)
 	if count == 0 {

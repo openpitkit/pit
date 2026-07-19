@@ -153,6 +153,7 @@ func pitPretradePreTradePolicyApplyExecutionReport(
 	ctx *C.OpenPitPostTradeContext,
 	report *C.OpenPitExecutionReport,
 	outAdjustments *C.OpenPitPostTradeAdjustmentList,
+	outAccountPnls *C.OpenPitPostTradeAccountPnlList,
 	userData unsafe.Pointer,
 ) *C.OpenPitPretradeAccountBlockList {
 	// Panics from the user implementation are deliberately allowed to
@@ -171,6 +172,9 @@ func pitPretradePreTradePolicyApplyExecutionReport(
 			pretrade.NewPostTradeAdjustmentsFromHandle(
 				native.PostTradeAdjustmentList(outAdjustments),
 			),
+			pretrade.NewPostTradePnlsFromHandle(
+				native.PostTradeAccountPnlList(outAccountPnls),
+			),
 		),
 	)
 }
@@ -181,7 +185,7 @@ func pitPretradePreTradePolicyApplyAccountAdjustment(
 	accountID C.OpenPitParamAccountId,
 	adjustment *C.OpenPitAccountAdjustment,
 	mutations *C.OpenPitMutations,
-	outOutcomes *C.OpenPitAccountOutcomeEntryList,
+	outResult *C.OpenPitPretradeAccountAdjustmentResult,
 	userData unsafe.Pointer,
 ) *C.OpenPitPretradeRejectList {
 	// Panics from the user implementation are deliberately allowed to propagate.
@@ -189,25 +193,23 @@ func pitPretradePreTradePolicyApplyAccountAdjustment(
 	// containing it is the implementer's responsibility, as stated on the Policy
 	// interface.
 
-	return newNativeRejectListOrNil(
-		getPreTrade(userData).impl.ApplyAccountAdjustment(
-			accountadjustment.NewContextFromHandle(
-				native.AccountAdjustmentContext(ctx),
-			),
-			param.NewAccountIDFromHandle(
-				native.ParamAccountID(accountID),
-			),
-			model.NewAccountAdjustmentFromHandle(
-				*(*native.AccountAdjustment)(unsafe.Pointer(adjustment)),
-			),
-			tx.NewMutationsFromHandle(
-				native.Mutations(mutations),
-			),
-			pretrade.NewAccountOutcomesFromHandle(
-				native.AccountOutcomeEntryList(outOutcomes),
-			),
+	result, rejects := getPreTrade(userData).impl.ApplyAccountAdjustment(
+		accountadjustment.NewContextFromHandle(native.AccountAdjustmentContext(ctx)),
+		param.NewAccountIDFromHandle(native.ParamAccountID(accountID)),
+		model.NewAccountAdjustmentFromHandle(
+			*(*native.AccountAdjustment)(unsafe.Pointer(adjustment)),
+		),
+		tx.NewMutationsFromHandle(native.Mutations(mutations)),
+		pretrade.NewAccountOutcomesFromHandle(
+			native.PretradeAccountAdjustmentResult(outResult),
 		),
 	)
+	for _, block := range result.AccountBlocks {
+		native.PretradeAccountAdjustmentResultPushAccountBlock(
+			native.PretradeAccountAdjustmentResult(outResult), block.NewHandle(),
+		)
+	}
+	return newNativeRejectListOrNil(rejects)
 }
 
 //export pitPretradePreTradePolicyClose

@@ -99,7 +99,7 @@ if typing.TYPE_CHECKING:
         ExecutionReport,
         Order,
     )
-    from .._openpit import AccountOutcomeEntry, PostTradeResult
+    from .._openpit import AccountBlock, AccountOutcomeEntry, PostTradeResult
     from ..param import AccountId, Price
 from .._openpit import Context, PostTradeContext
 from ..core import Mutation
@@ -239,6 +239,28 @@ class PolicyPreTradeResult:
         )
 
 
+@dataclasses.dataclass(frozen=True)
+class PolicyAccountAdjustmentResult:
+    """
+    Result of :meth:`Policy.apply_account_adjustment`.
+
+    Carries both outcomes: an empty ``rejects`` collection accepts the
+    adjustment, a non-empty one business-rejects the whole batch.
+
+    Attributes:
+        rejects: Business rejects produced by the policy. Non-empty rejects
+            the batch and discards the other fields.
+        mutations: Mutations registered by the policy.
+        account_adjustments: Per-asset outcomes produced by the policy.
+        account_blocks: Account blocks recorded after the accepted batch commits.
+    """
+
+    rejects: tuple[PolicyReject, ...] = ()
+    mutations: tuple[Mutation, ...] = ()
+    account_adjustments: tuple[AccountOutcomeEntry, ...] = ()
+    account_blocks: tuple[AccountBlock, ...] = ()
+
+
 class Policy(abc.ABC):
     """
     Unified Python pre-trade policy interface.
@@ -253,7 +275,8 @@ class Policy(abc.ABC):
     - override the methods needed by the registration path used by the policy
     - return :class:`PolicyPreTradeResult` for main-stage outcomes
     - return :class:`openpit.pretrade.PostTradeResult` for post-trade outcomes
-    - return account outcome entries for account-adjustment outcomes
+    - return :class:`PolicyAccountAdjustmentResult` from account adjustments;
+      its ``account_adjustments`` field carries per-asset outcomes
     - raise exceptions only for programming/runtime failures
     """
 
@@ -348,8 +371,9 @@ class Policy(abc.ABC):
 
         Returns:
             PostTradeResult | None:
-                Result with account blocks and account adjustments, or ``None``
-                if the report caused no visible post-trade outcome.
+                Result with account blocks, account-level PnL outcomes, and
+                account adjustments, or ``None`` if the report caused no
+                visible post-trade outcome.
         """
         return None
 
@@ -358,34 +382,25 @@ class Policy(abc.ABC):
         ctx: AccountAdjustmentContext,
         account_id: AccountId,
         adjustment: AccountAdjustment,
-    ) -> (
-        collections.abc.Iterable[AccountOutcomeEntry]
-        | PolicyDecision
-        | collections.abc.Iterable[PolicyReject]
-        | tuple[Mutation, ...]
-        | None
-    ):
+    ) -> PolicyAccountAdjustmentResult:
         """
         Evaluate one account adjustment from an atomic batch.
 
         Args:
             ctx: Read-only engine context for the current batch operation.
-                ``ctx.account_control`` is always an
-                :class:`openpit.pretrade.AccountControl` handle to the engine's
-                account-block facility. A policy may block the account directly
-                or capture the handle into a :class:`openpit.Mutation`
-                rollback/commit closure to block on a deferred failure. The
-                handle is valid only within this batch operation's processing
-                (through its commit or rollback); using it afterwards is
-                unspecified.
             account_id: Account affected by the batch.
             adjustment: Current adjustment item.
 
         Returns:
-            Iterable of account outcome entries for success with outcomes,
-            ``None`` or ``PolicyDecision.accept()`` for success without
-            outcomes, an iterable of ``PolicyReject`` objects for business
-            rejection, or a tuple of ``Mutation`` objects to register rollback
-            work.
+            Result containing business rejects, rollback mutations, per-asset
+            ``account_adjustments``, and account blocks.
+
+            Populating ``rejects`` is the only way to business-reject an
+            adjustment: a non-empty collection rejects the whole batch, so no
+            item of it is applied. Leaving ``rejects`` empty accepts the
+            adjustment; the default result accepts it and changes nothing.
+
+            A non-empty ``account_blocks`` collection is recorded only after
+            the complete adjustment batch commits.
         """
-        return None
+        return PolicyAccountAdjustmentResult()

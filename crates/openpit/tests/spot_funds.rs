@@ -21,8 +21,8 @@ use openpit::param::{
 };
 use openpit::pretrade::policies::{
     RateLimit, RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings, SpotFundsConfigError,
-    SpotFundsPnlBoundsAccountGroupBarrier, SpotFundsPnlBoundsBarrier, SpotFundsPolicy,
-    SpotFundsPricingSource, SpotFundsSettings,
+    SpotFundsPnlBoundsAccountBarrier, SpotFundsPnlBoundsAccountGroupBarrier,
+    SpotFundsPnlBoundsBarrier, SpotFundsPolicy, SpotFundsPricingSource, SpotFundsSettings,
 };
 use openpit::pretrade::SpotFundsLimitMode;
 use openpit::pretrade::{
@@ -31,13 +31,13 @@ use openpit::pretrade::{
 use openpit::{
     Engine, FullSync, FullSyncEngine, HasAccountAdjustmentBalance,
     HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentBalanceLowerBound,
-    HasAccountAdjustmentBalanceRealizedPnl, HasAccountAdjustmentBalanceUpperBound,
-    HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
-    HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
-    HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound, HasAccountId,
-    HasBalanceAsset, HasExecutionReportFillFee, HasExecutionReportIsFinal,
-    HasExecutionReportLastTrade, HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide,
-    Instrument, OrderOperation, RequestFieldAccessError, SpotFundsMarketData,
+    HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
+    HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
+    HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
+    HasAccountAdjustmentIncomingUpperBound, HasAccountId, HasBalanceAsset,
+    HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
+    HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide, Instrument, OrderOperation,
+    RequestFieldAccessError, SpotFundsMarketData,
 };
 
 type TestOrder = OrderOperation;
@@ -112,7 +112,9 @@ struct TestAdjustment {
     asset: Asset,
     balance: Option<AdjustmentAmount>,
     balance_average_entry_price: Option<Price>,
-    balance_realized_pnl: Option<Pnl>,
+    pnl_operation: Option<openpit::PnlState>,
+    /// Account-level P&L force-set; `pnl_operation` is the per-position one.
+    account_pnl_operation: Option<openpit::PnlState>,
     balance_lower: Option<PositionSize>,
     balance_upper: Option<PositionSize>,
     held: Option<AdjustmentAmount>,
@@ -124,21 +126,27 @@ impl HasBalanceAsset for TestAdjustment {
     }
 }
 
+impl openpit::HasAccountAdjustmentPnlOperation for TestAdjustment {
+    fn account_adjustment_pnl_operation(
+        &self,
+    ) -> Result<Option<openpit::PnlState>, RequestFieldAccessError> {
+        Ok(self.account_pnl_operation)
+    }
+}
+
 impl HasAccountAdjustmentBalance for TestAdjustment {
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         Ok(self.balance)
+    }
+
+    fn balance_realized_pnl(&self) -> Result<Option<openpit::PnlState>, RequestFieldAccessError> {
+        Ok(self.pnl_operation)
     }
 }
 
 impl HasAccountAdjustmentBalanceAverageEntryPrice for TestAdjustment {
     fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
         Ok(self.balance_average_entry_price)
-    }
-}
-
-impl HasAccountAdjustmentBalanceRealizedPnl for TestAdjustment {
-    fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
-        Ok(self.balance_realized_pnl)
     }
 }
 
@@ -265,7 +273,8 @@ fn balance_adjustment(asset_code: &str, amount: AdjustmentAmount) -> TestAdjustm
         asset: asset(asset_code),
         balance: Some(amount),
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
+        account_pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -277,26 +286,54 @@ fn held_adj(asset_code: &str, amount: AdjustmentAmount) -> TestAdjustment {
         asset: asset(asset_code),
         balance: None,
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
+        account_pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: Some(amount),
     }
 }
 
-/// Builds a balance adjustment carrying an average entry price and/or a
-/// realized-PnL force-set.
-fn adj_with_avg_pnl(
+/// Builds a balance adjustment carrying an average entry price.
+fn adj_with_avg(
     asset_code: &str,
     balance: Option<AdjustmentAmount>,
     average_entry_price: Option<Price>,
-    realized_pnl: Option<Pnl>,
 ) -> TestAdjustment {
     TestAdjustment {
         asset: asset(asset_code),
         balance,
         balance_average_entry_price: average_entry_price,
-        balance_realized_pnl: realized_pnl,
+        pnl_operation: None,
+        account_pnl_operation: None,
+        balance_lower: None,
+        balance_upper: None,
+        held: None,
+    }
+}
+
+fn position_pnl_adjustment(asset_code: &str, value: Pnl) -> TestAdjustment {
+    TestAdjustment {
+        asset: asset(asset_code),
+        balance: None,
+        balance_average_entry_price: None,
+        pnl_operation: Some(openpit::PnlState::Value(value)),
+        account_pnl_operation: None,
+        balance_lower: None,
+        balance_upper: None,
+        held: None,
+    }
+}
+
+/// Force-sets the account-level P&L, the operation guarded by the P&L barrier.
+fn account_pnl_adjustment(value: Pnl) -> TestAdjustment {
+    TestAdjustment {
+        // Account P&L is not asset-scoped; the field is unread on this path.
+        asset: asset("USD"),
+        balance: None,
+        balance_average_entry_price: None,
+        pnl_operation: None,
+        account_pnl_operation: Some(openpit::PnlState::Value(value)),
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -313,7 +350,8 @@ fn bounded_balance_adjustment(
         asset: asset(asset_code),
         balance: Some(amount),
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
+        account_pnl_operation: None,
         balance_lower: None,
         balance_upper: Some(upper),
         held: None,
@@ -1132,22 +1170,23 @@ fn spot_funds_dry_run_same_asset_negative_sell_rejects_like_real_and_leaves_stat
 
 // ── realized PnL / average entry price outcomes (public API) ───────────────────
 
-// Happy path: an adjustment that force-sets both the average entry price and
-// realized PnL surfaces them in the batch outcome as absolute (and delta for
-// PnL) values.
+// Happy path: separate average-entry-price and position-PnL operations surface
+// their values in the same batch outcome.
 #[test]
 fn adjustment_outcome_surfaces_average_and_realized_pnl() {
     let engine = build_engine();
-    // Seed a non-flat slot with an average and an initial realized PnL of 30.
+    // Seed a non-flat slot with an average and then set realized PnL to 30.
     engine
         .apply_account_adjustment(
             account(),
-            &[adj_with_avg_pnl(
-                "AAPL",
-                Some(AdjustmentAmount::Absolute(ps("10"))),
-                Some(px("100")),
-                Some(pnl("30")),
-            )],
+            &[
+                adj_with_avg(
+                    "AAPL",
+                    Some(AdjustmentAmount::Absolute(ps("10"))),
+                    Some(px("100")),
+                ),
+                position_pnl_adjustment("AAPL", pnl("30")),
+            ],
         )
         .expect("seed must succeed");
 
@@ -1155,25 +1194,25 @@ fn adjustment_outcome_surfaces_average_and_realized_pnl() {
     let result = engine
         .apply_account_adjustment(
             account(),
-            &[adj_with_avg_pnl(
-                "AAPL",
-                Some(AdjustmentAmount::Delta(ps("0"))),
-                Some(px("150")),
-                Some(pnl("50")),
-            )],
+            &[
+                adj_with_avg("AAPL", None, Some(px("150"))),
+                position_pnl_adjustment("AAPL", pnl("50")),
+            ],
         )
         .expect("force-set must succeed");
 
     let entry = &result
         .outcomes
-        .first()
-        .expect("one outcome entry expected")
+        .iter()
+        .find(|outcome| outcome.entry.realized_pnl.is_some())
+        .expect("position PnL outcome entry expected")
         .entry;
     assert_eq!(entry.asset, asset("AAPL"));
     assert_eq!(entry.average_entry_price, Some(px("150")));
     let pnl_outcome = entry
         .realized_pnl
-        .expect("realized PnL must be surfaced on a force-set");
+        .expect("realized PnL must be surfaced on a force-set")
+        .expect("force-set realized PnL must be computed");
     assert_eq!(pnl_outcome.delta, pnl("20"));
     assert_eq!(pnl_outcome.absolute, pnl("50"));
 }
@@ -1187,23 +1226,23 @@ fn adjustment_outcome_realized_pnl_zero_boundary_is_tracked() {
     let result = engine
         .apply_account_adjustment(
             account(),
-            &[adj_with_avg_pnl(
-                "AAPL",
-                Some(AdjustmentAmount::Absolute(ps("10"))),
-                None,
-                Some(pnl("0")),
-            )],
+            &[
+                balance_adjustment("AAPL", AdjustmentAmount::Absolute(ps("10"))),
+                position_pnl_adjustment("AAPL", pnl("0")),
+            ],
         )
         .expect("force-set must succeed");
 
     let entry = &result
         .outcomes
-        .first()
-        .expect("one outcome entry expected")
+        .iter()
+        .find(|outcome| outcome.entry.realized_pnl.is_some())
+        .expect("position PnL outcome entry expected")
         .entry;
     let pnl_outcome = entry
         .realized_pnl
-        .expect("a zero force-set still surfaces a tracked realized PnL");
+        .expect("a zero force-set still surfaces a tracked realized PnL")
+        .expect("force-set realized PnL must be computed");
     assert_eq!(pnl_outcome.delta, pnl("0"));
     assert_eq!(pnl_outcome.absolute, pnl("0"));
 }
@@ -1216,17 +1255,17 @@ fn adjustment_outcome_realized_pnl_zero_boundary_is_tracked() {
 #[test]
 fn rejected_batch_rolls_untracked_realized_pnl_back_to_none() {
     let engine = build_engine();
+    engine.accounts().set_currency(account(), asset("USD"));
     // Seed a long with an average but no realized-PnL tracking, plus an
     // unrelated asset whose bound the second batch element will breach.
     engine
         .apply_account_adjustment(
             account(),
             &[
-                adj_with_avg_pnl(
+                adj_with_avg(
                     "AAPL",
                     Some(AdjustmentAmount::Absolute(ps("10"))),
                     Some(px("100")),
-                    None,
                 ),
                 balance_adjustment("USD", AdjustmentAmount::Absolute(ps("1000"))),
             ],
@@ -1239,12 +1278,7 @@ fn rejected_batch_rolls_untracked_realized_pnl_back_to_none() {
         .apply_account_adjustment(
             account(),
             &[
-                adj_with_avg_pnl(
-                    "AAPL",
-                    Some(AdjustmentAmount::Delta(ps("0"))),
-                    None,
-                    Some(pnl("25")),
-                ),
+                position_pnl_adjustment("AAPL", pnl("25")),
                 bounded_balance_adjustment("USD", AdjustmentAmount::Delta(ps("5000")), ps("2000")),
             ],
         )
@@ -1252,9 +1286,10 @@ fn rejected_batch_rolls_untracked_realized_pnl_back_to_none() {
     assert_eq!(err.failed_adjustment_index, 1);
 
     // The AAPL slot must be back to untracked realized PnL. We assert this
-    // through a subsequent fill: selling into the long realizes nothing and
-    // reports no realized PnL, proving tracking did not auto-resume (it would
-    // have if rollback had left Some(0)).
+    // through a subsequent fill: selling into the long reports the missing
+    // initial-PnL halt rather than a successful realized-PnL outcome, proving
+    // tracking did not auto-resume (it would have if rollback had left
+    // Some(0)).
     let aapl_usd = instr("AAPL", "USD");
     let mut reservation = engine
         .execute_pre_trade(make_order(
@@ -1281,9 +1316,10 @@ fn rejected_batch_rolls_untracked_realized_pnl_back_to_none() {
         .iter()
         .find(|o| o.entry.asset == asset("AAPL"))
         .expect("AAPL post-trade entry must exist");
-    assert!(
-        aapl_entry.entry.realized_pnl.is_none(),
-        "untracked slot must not auto-resume realized-PnL tracking after rollback"
+    assert_eq!(
+        aapl_entry.entry.realized_pnl,
+        Some(Err(openpit::PnlHaltReason::MissingInitialPnl)),
+        "untracked slot must not auto-resume realized-PnL tracking after rollback",
     );
 }
 
@@ -1327,31 +1363,23 @@ fn fill_with_fee(
 /// global tier.
 fn build_pnl_killswitch_engine(grp: AccountGroupId) -> TestEngine {
     let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
-    let mut settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())
-        .expect("settings must build");
-    settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    settings
-        .set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-            account_currency: asset("USD"),
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::pnl_bounds_kill_switch(
+        Some(SpotFundsPnlBoundsBarrier {
             lower_bound: Some(pnl_value("-1000")),
             upper_bound: None,
-        }])
-        .expect("global pnl barrier must set");
-    settings
-        .set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
+        }),
+        [SpotFundsPnlBoundsAccountGroupBarrier {
             account_group_id: grp,
             barrier: SpotFundsPnlBoundsBarrier {
-                account_currency: asset("USD"),
                 lower_bound: Some(pnl_value("-10")),
                 upper_bound: None,
             },
-        }])
-        .expect("group pnl barrier must set");
-    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
-        settings,
+        }],
+        std::iter::empty::<SpotFundsPnlBoundsAccountBarrier>(),
         None::<SpotFundsMarketData<FullSync>>,
         builder.storage_builder(),
-    );
+    )
+    .expect("P&L kill-switch preset must build");
     builder
         .pre_trade(policy)
         .build()
@@ -1409,4 +1437,101 @@ fn pnl_killswitch_account_group_barrier_blocks_on_cumulative_fee_loss() {
         .err()
         .expect("blocked account must reject");
     assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+}
+
+// Public surface of the operator's overwrite: an account holds one cause, so
+// replacing the reason of an engine-raised block makes that block the
+// operator's, and the engine reports their reason from then on.
+#[test]
+fn replacing_an_engine_block_reason_makes_it_the_reported_one() {
+    let acc = AccountId::from_u64(40000002);
+    let grp = AccountGroupId::from_u32(12).expect("valid group id");
+    let engine = build_pnl_killswitch_engine(grp);
+    engine
+        .accounts()
+        .register_group(&[acc], grp)
+        .expect("registration must succeed");
+
+    // Force-set account P&L to -50, breaching the -10 group barrier.
+    let result = engine
+        .apply_account_adjustment(acc, &[account_pnl_adjustment(pnl("-50"))])
+        .expect("force-set must commit");
+    assert_eq!(result.account_blocks.len(), 1);
+    assert_eq!(
+        result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+
+    engine
+        .accounts()
+        .replace_block_reason(acc, "under manual review".to_owned())
+        .expect("a blocked account must accept a replaced reason");
+
+    let rejects = engine
+        .execute_pre_trade(make_order_for(
+            acc,
+            Side::Buy,
+            instr("AAPL", "USD"),
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .err()
+        .expect("blocked account must reject");
+    assert_eq!(
+        rejects[0].reason, "under manual review",
+        "the operator's replaced reason must be the one the engine reports"
+    );
+}
+
+// An account holds one cause and the first wins, so the block a still-breaching
+// account re-emits on every execution report is a no-op and cannot displace the
+// operator's reason.
+#[test]
+fn repeated_engine_blocks_do_not_displace_the_operators_reason() {
+    let acc = AccountId::from_u64(40000003);
+    let grp = AccountGroupId::from_u32(13).expect("valid group id");
+    let aapl_usd = instr("AAPL", "USD");
+    let engine = build_pnl_killswitch_engine(grp);
+    engine
+        .accounts()
+        .register_group(&[acc], grp)
+        .expect("registration must succeed");
+    engine.accounts().set_currency(acc, asset("USD"));
+
+    // Force-set account P&L to -50, breaching the -10 group barrier.
+    let result = engine
+        .apply_account_adjustment(acc, &[account_pnl_adjustment(pnl("-50"))])
+        .expect("force-set must commit");
+    assert_eq!(result.account_blocks.len(), 1);
+
+    engine
+        .accounts()
+        .replace_block_reason(acc, "under manual review".to_owned())
+        .expect("a blocked account must accept a replaced reason");
+
+    // Every further report on a still-breaching account re-emits a block.
+    for _ in 0..4 {
+        let fill = fill_with_fee(acc, aapl_usd.clone(), "100", "1", money_fee("6", "USD"));
+        let post = engine.apply_execution_report(&fill);
+        assert_eq!(
+            post.account_blocks.len(),
+            1,
+            "a breaching account keeps re-emitting its block"
+        );
+    }
+
+    let rejects = engine
+        .execute_pre_trade(make_order_for(
+            acc,
+            Side::Buy,
+            aapl_usd,
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .err()
+        .expect("blocked account must reject");
+    assert_eq!(
+        rejects[0].reason, "under manual review",
+        "repeated blocks must not displace the first cause"
+    );
 }

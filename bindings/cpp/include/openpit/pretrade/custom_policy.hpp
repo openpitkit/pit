@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "openpit/account_adjustment.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/accounts.hpp"
 #include "openpit/detail/callback_error.hpp"
 #include "openpit/detail/handle.hpp"
@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -67,8 +68,8 @@
 //                                    PolicyDecision&) const
 //   - std::vector<accounts::AccountBlock> ApplyExecutionReport(
 //         const PostTradeContext&, const openpit::ExecutionReport&,
-//         PostTradeAdjustments&) const
-//   - PolicyDecision ApplyAccountAdjustment(
+//         PostTradeAdjustments&, PostTradePnls&) const
+//   - PolicyAccountAdjustmentResult ApplyAccountAdjustment(
 //         const accountadjustment::Context&, param::AccountId,
 //         const accountadjustment::AccountAdjustment&, tx::Mutations&,
 //         AccountOutcomes&) const
@@ -109,7 +110,10 @@ struct PreTradePolicyDeleter {
 [[nodiscard]] inline OpenPitPretradeRejectList* RejectToList(
     const Reject& reject) {
   OpenPitPretradeRejectList* list = openpit_pretrade_create_reject_list(1);
-  openpit_pretrade_reject_list_push(list, reject.Raw());
+  if (!openpit_pretrade_reject_list_push(list, reject.Raw())) {
+    openpit_pretrade_destroy_reject_list(list);
+    throw std::invalid_argument("reject scope is invalid");
+  }
   return list;
 }
 
@@ -123,7 +127,10 @@ struct PreTradePolicyDeleter {
   OpenPitPretradeRejectList* list =
       openpit_pretrade_create_reject_list(decision.rejects.size());
   for (const Reject& reject : decision.rejects) {
-    openpit_pretrade_reject_list_push(list, reject.Raw());
+    if (!openpit_pretrade_reject_list_push(list, reject.Raw())) {
+      openpit_pretrade_destroy_reject_list(list);
+      throw std::invalid_argument("reject scope is invalid");
+    }
   }
   return list;
 }
@@ -240,6 +247,17 @@ struct HasApplyExecutionReportFull<
     std::void_t<decltype(std::declval<const Handler&>().ApplyExecutionReport(
         std::declval<const PostTradeContext&>(),
         std::declval<const ::openpit::ExecutionReport&>(),
+        std::declval<PostTradeAdjustments&>(),
+        std::declval<PostTradePnls&>()))>> : std::true_type {};
+
+template <typename Handler, typename = void>
+struct HasLegacyApplyExecutionReportFull : std::false_type {};
+template <typename Handler>
+struct HasLegacyApplyExecutionReportFull<
+    Handler,
+    std::void_t<decltype(std::declval<const Handler&>().ApplyExecutionReport(
+        std::declval<const PostTradeContext&>(),
+        std::declval<const ::openpit::ExecutionReport&>(),
         std::declval<PostTradeAdjustments&>()))>> : std::true_type {};
 
 template <typename Handler, typename = void>
@@ -272,6 +290,10 @@ struct HasName<Handler,
 // the last reference (caller or engine) is released.
 template <typename Handler>
 class CustomPolicy {
+  static_assert(
+      !detail::HasLegacyApplyExecutionReportFull<Handler>::value,
+      "Handler::ApplyExecutionReport(context, report, adjustments) was "
+      "removed; add PostTradePnls& as the fourth argument");
   static_assert(detail::HasCheckPreTradeStart<Handler>::value ||
                     detail::HasCheckPreTradeStartDryRun<Handler>::value ||
                     detail::HasPerformPreTradeCheck<Handler>::value ||
@@ -280,8 +302,9 @@ class CustomPolicy {
                     detail::HasPerformPreTradeCheckDryRunFull<Handler>::value ||
                     detail::HasApplyExecutionReport<Handler>::value ||
                     detail::HasApplyExecutionReportFull<Handler>::value ||
+                    detail::HasLegacyApplyExecutionReportFull<Handler>::value ||
                     detail::HasApplyAccountAdjustment<Handler>::value,
-                "Handler must expose at least one pre-trade hook");
+                "Handler must expose at least one policy hook");
 
  public:
   // Creates a policy named `name`, tagged with `policyGroupId`, dispatching to
@@ -515,7 +538,8 @@ class CustomPolicy {
 
   static OpenPitPretradeAccountBlockList* ApplyReportTrampoline(
       const OpenPitPostTradeContext* ctx, const OpenPitExecutionReport* report,
-      OpenPitPostTradeAdjustmentList* outAdjustments, void* userData) noexcept {
+      OpenPitPostTradeAdjustmentList* outAdjustments,
+      OpenPitPostTradeAccountPnlList* outAccountPnls, void* userData) noexcept {
     try {
       const auto* handler = static_cast<const Handler*>(userData);
       const ::openpit::ExecutionReport* original =
@@ -528,8 +552,9 @@ class CustomPolicy {
       if constexpr (detail::HasApplyExecutionReportFull<Handler>::value) {
         const PostTradeContext context(ctx);
         PostTradeAdjustments adjustments(outAdjustments);
-        return detail::AccountBlocksToList(
-            handler->ApplyExecutionReport(context, *original, adjustments));
+        PostTradePnls pnls(outAccountPnls);
+        return detail::AccountBlocksToList(handler->ApplyExecutionReport(
+            context, *original, adjustments, pnls));
       } else {
         // Legacy report hooks were boolean notifications and could not return
         // a structured block. Preserve their notification behavior.
@@ -546,18 +571,24 @@ class CustomPolicy {
       const OpenPitAccountAdjustmentContext* ctx,
       OpenPitParamAccountId accountId,
       const OpenPitAccountAdjustment* adjustment, OpenPitMutations* mutations,
-      OpenPitAccountOutcomeEntryList* outOutcomes, void* userData) noexcept {
+      OpenPitPretradeAccountAdjustmentResult* outResult,
+      void* userData) noexcept {
     try {
       const auto* handler = static_cast<const Handler*>(userData);
       const ::openpit::accountadjustment::Context context(ctx);
       const ::openpit::accountadjustment::AccountAdjustment parsed =
           ::openpit::accountadjustment::AccountAdjustment::FromRaw(*adjustment);
       ::openpit::tx::Mutations mutationCollector(mutations);
-      AccountOutcomes outcomes(outOutcomes);
-      const PolicyDecision decision = handler->ApplyAccountAdjustment(
-          context, ::openpit::param::AccountId::FromRaw(accountId), parsed,
-          mutationCollector, outcomes);
-      return detail::DecisionToList(decision);
+      AccountOutcomes outcomes(outResult);
+      const PolicyAccountAdjustmentResult result =
+          handler->ApplyAccountAdjustment(
+              context, ::openpit::param::AccountId::FromRaw(accountId), parsed,
+              mutationCollector, outcomes);
+      for (const auto& block : result.accountBlocks) {
+        openpit_pretrade_account_adjustment_result_push_account_block(
+            outResult, block.Raw());
+      }
+      return detail::DecisionToList(result.decision);
     } catch (...) {
       ::openpit::detail::CaptureCurrentCallbackException();
       return detail::CallbackErrorRejectList();

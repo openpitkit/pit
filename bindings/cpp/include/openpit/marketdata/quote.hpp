@@ -103,13 +103,13 @@ class Quote {
 // Mirrors `OpenPitMarketDataQuoteResolution`.
 enum class QuoteResolution : std::uint8_t {
   // Consults only the per-account bucket; no fallback.
-  AccountOnly = OpenPitMarketDataQuoteResolution_AccountOnly,
+  AccountOnly = OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_ONLY,
   // Consults the per-account bucket, then the account's group bucket.
-  AccountThenGroup = OpenPitMarketDataQuoteResolution_AccountThenGroup,
+  AccountThenGroup = OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP,
   // Consults the per-account bucket, then the account's group bucket, then the
   // default account-group ("everyone-else") bucket, in that order.
   AccountThenGroupThenDefault =
-      OpenPitMarketDataQuoteResolution_AccountThenGroupThenDefault,
+      OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT,
 };
 
 [[nodiscard]] inline OpenPitMarketDataQuoteResolution ToRaw(

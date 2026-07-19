@@ -179,6 +179,13 @@ TEST(PreTradePipeline, ApplyPostTradeFeedback) {
   // --- begin wiki snippet ---
   // Execution reports feed realized outcomes back into cumulative policy state.
   const openpit::PostTradeResult result = engine.ApplyExecutionReport(report);
+  for (const auto& outcome : result.accountPnls) {
+    std::cout << "account P&L outcome for " << outcome.accountId.Raw() << '\n';
+  }
+  for (const auto& outcome : result.accountAdjustments) {
+    std::cout << "account adjustment from group " << outcome.policyGroupId.Raw()
+              << '\n';
+  }
   if (!result.accountBlocks.empty()) {
     std::cout << "halt new orders until the blocked state is cleared" << '\n';
   }

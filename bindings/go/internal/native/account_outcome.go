@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package native
 
@@ -61,10 +61,6 @@ func PretradePreTradeResultPushAccountAdjustment(
 	return nil
 }
 
-func DestroyPretradePreTradeResult(result PretradePreTradeResult) {
-	C.openpit_destroy_pretrade_pre_trade_result(result)
-}
-
 //------------------------------------------------------------------------------
 // PostTradeAdjustmentList
 
@@ -88,33 +84,53 @@ func PostTradeAdjustmentListPush(
 	return nil
 }
 
-func DestroyPostTradeAdjustmentList(list PostTradeAdjustmentList) {
-	C.openpit_destroy_post_trade_adjustment_list(list)
-}
-
 //------------------------------------------------------------------------------
-// AccountOutcomeEntryList
+// PostTradeAccountPnlList
 
-func AccountOutcomeEntryListPush(
-	list AccountOutcomeEntryList,
-	entry AccountOutcomeEntry,
+func PostTradeAccountPnlListPush(
+	list PostTradeAccountPnlList,
+	outcome AccountPnlOutcome,
 ) error {
 	var outError SharedString
-	if !C.openpit_account_outcome_entry_list_push(
+	if !C.openpit_pretrade_post_trade_account_pnl_list_push(
 		list,
-		entry,
+		outcome,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
 	) {
 		return consumeSharedStringAsError(
 			outError,
-			"openpit_account_outcome_entry_list_push failed",
+			"openpit_pretrade_post_trade_account_pnl_list_push failed",
 		)
 	}
 	return nil
 }
 
-func DestroyAccountOutcomeEntryList(list AccountOutcomeEntryList) {
-	C.openpit_destroy_account_outcome_entry_list(list)
+//------------------------------------------------------------------------------
+// PretradeAccountAdjustmentResult
+
+func PretradeAccountAdjustmentResultPushAccountOutcome(
+	result PretradeAccountAdjustmentResult,
+	entry AccountOutcomeEntry,
+) error {
+	var outError SharedString
+	if !C.openpit_pretrade_account_adjustment_result_push_account_outcome(
+		result,
+		entry,
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return consumeSharedStringAsError(
+			outError,
+			"openpit_pretrade_account_adjustment_result_push_account_outcome failed",
+		)
+	}
+	return nil
+}
+
+func PretradeAccountAdjustmentResultPushAccountBlock(
+	result PretradeAccountAdjustmentResult,
+	block PretradeAccountBlock,
+) {
+	C.openpit_pretrade_account_adjustment_result_push_account_block(result, block)
 }
 
 //------------------------------------------------------------------------------
@@ -135,8 +151,69 @@ func AccountAdjustmentOutcomeListGet(
 	return out
 }
 
+func NewAccountAdjustmentOutcome(
+	policyGroupID PolicyGroupID,
+	entry AccountOutcomeEntry,
+) AccountAdjustmentOutcome {
+	return AccountAdjustmentOutcome{
+		policy_group_id: policyGroupID,
+		entry:           entry,
+	}
+}
+
 func DestroyAccountAdjustmentOutcomeList(list AccountAdjustmentOutcomeList) {
 	C.openpit_destroy_account_adjustment_outcome_list(list)
+}
+
+//------------------------------------------------------------------------------
+// AccountPnlOutcomeList
+
+func AccountPnlOutcomeListLen(list AccountPnlOutcomeList) int {
+	return int(C.openpit_account_pnl_outcome_list_len(list))
+}
+
+func AccountPnlOutcomeListGet(list AccountPnlOutcomeList, index int) AccountPnlOutcome {
+	var out AccountPnlOutcome
+	if !C.openpit_account_pnl_outcome_list_get(list, C.size_t(index), &out) {
+		return AccountPnlOutcome{}
+	}
+	return out
+}
+
+func AccountPnlOutcomeGetAccountID(outcome AccountPnlOutcome) ParamAccountID {
+	return outcome.account_id
+}
+
+func AccountPnlOutcomeGetPolicyGroupID(outcome AccountPnlOutcome) PolicyGroupID {
+	return outcome.policy_group_id
+}
+
+func AccountPnlOutcomeGetHaltReason(outcome AccountPnlOutcome) PnlHaltReason {
+	return outcome.halt_reason
+}
+
+func AccountPnlOutcomeGetAmount(outcome AccountPnlOutcome) PnlOutcomeAmount {
+	return outcome.amount.value
+}
+
+func AccountPnlOutcomeGetPnlOutcome(outcome AccountPnlOutcome) PnlOutcome {
+	return PnlOutcome{
+		halt_reason: outcome.halt_reason,
+		amount:      outcome.amount,
+	}
+}
+
+func NewAccountPnlOutcome(
+	accountID ParamAccountID,
+	policyGroupID PolicyGroupID,
+	pnl PnlOutcome,
+) AccountPnlOutcome {
+	return AccountPnlOutcome{
+		account_id:      accountID,
+		policy_group_id: policyGroupID,
+		halt_reason:     pnl.halt_reason,
+		amount:          pnl.amount,
+	}
 }
 
 //------------------------------------------------------------------------------
@@ -198,10 +275,41 @@ func PnlOutcomeAmountOptionalGet(optional PnlOutcomeAmountOptional) PnlOutcomeAm
 	return optional.value
 }
 
+func NewPnlOutcome(
+	haltReason PnlHaltReason,
+	amount PnlOutcomeAmountOptional,
+) PnlOutcome {
+	return PnlOutcome{halt_reason: haltReason, amount: amount}
+}
+
+func PnlOutcomeGetHaltReason(outcome PnlOutcome) PnlHaltReason {
+	return outcome.halt_reason
+}
+
+func PnlOutcomeGetAmount(outcome PnlOutcome) PnlOutcomeAmount {
+	return outcome.amount.value
+}
+
+func NewPnlOutcomeOptionalSet(value PnlOutcome) PnlOutcomeOptional {
+	return PnlOutcomeOptional{value: value, is_set: true}
+}
+
+func NewPnlOutcomeOptionalUnset() PnlOutcomeOptional {
+	return PnlOutcomeOptional{}
+}
+
+func PnlOutcomeOptionalIsSet(optional PnlOutcomeOptional) bool {
+	return bool(optional.is_set)
+}
+
+func PnlOutcomeOptionalGet(optional PnlOutcomeOptional) PnlOutcome {
+	return optional.value
+}
+
 func NewAccountOutcomeEntry(
 	asset StringView,
 	balance, held, incoming OutcomeAmountOptional,
-	realizedPnl PnlOutcomeAmountOptional,
+	realizedPnl PnlOutcomeOptional,
 	averageEntryPrice ParamPriceOptional,
 ) AccountOutcomeEntry {
 	return AccountOutcomeEntry{
@@ -230,7 +338,7 @@ func AccountOutcomeEntryGetIncoming(entry AccountOutcomeEntry) OutcomeAmountOpti
 	return entry.incoming
 }
 
-func AccountOutcomeEntryGetRealizedPnl(entry AccountOutcomeEntry) PnlOutcomeAmountOptional {
+func AccountOutcomeEntryGetRealizedPnl(entry AccountOutcomeEntry) PnlOutcomeOptional {
 	return entry.realized_pnl
 }
 

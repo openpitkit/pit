@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 // Example spot_funds is the smallest end-to-end integration of OpenPit's
 // built-in SpotFunds pre-trade policy: it shows how a buy order reserves
@@ -245,13 +245,13 @@ func seedFunds(engine *openpit.Engine, account param.AccountID, funds string) er
 	if err != nil {
 		return fmt.Errorf("build seed adjustment: %w", err)
 	}
-	batchErr, _, err := engine.ApplyAccountAdjustment(
+	result, err := engine.ApplyAccountAdjustment(
 		account, []model.AccountAdjustment{adj},
 	)
 	if err != nil {
 		return fmt.Errorf("apply seed adjustment: %w", err)
 	}
-	if batchErr.IsSet() {
+	if result.BatchError.IsSet() {
 		return fmt.Errorf("seed adjustment rejected")
 	}
 	return nil

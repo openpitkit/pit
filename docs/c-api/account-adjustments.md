@@ -28,7 +28,7 @@ Balance-operation payload for account adjustment.
 typedef struct OpenPitAccountAdjustmentBalanceOperation {
     OpenPitStringView asset;
     OpenPitParamPriceOptional average_entry_price;
-    OpenPitParamPnlOptional realized_pnl;
+    OpenPitPnlStateOptional realized_pnl;
 } OpenPitAccountAdjustmentBalanceOperation;
 ```
 
@@ -46,33 +46,61 @@ typedef struct OpenPitAccountAdjustmentPositionOperation {
 } OpenPitAccountAdjustmentPositionOperation;
 ```
 
+## `OpenPitAccountAdjustmentAccountPnlOperation`
+
+Account-wide PnL adjustment payload.
+
+```c
+typedef struct OpenPitAccountAdjustmentAccountPnlOperation {
+    OpenPitPnlState state;
+} OpenPitAccountAdjustmentAccountPnlOperation;
+```
+
 ## `OpenPitAccountAdjustmentOperationKind`
 
-Selects which account-adjustment operation payload is present.
+Raw selector for the meaningful account-adjustment operation payload.
 
-At most one operation payload can be selected at a time:
-
-- `Absent` means no operation is supplied;
-- `Balance` selects the balance-operation payload;
-- `Position` selects the position-operation payload.
+Use the `OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_*` constants. Unknown values
+are rejected before any operation payload is imported.
 
 ```c
 typedef uint8_t OpenPitAccountAdjustmentOperationKind;
-/**
- * No operation is supplied.
- */
-#define OpenPitAccountAdjustmentOperationKind_Absent \
+```
+
+## `OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ABSENT`
+
+No operation is supplied.
+
+```c
+#define OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ABSENT \
     ((OpenPitAccountAdjustmentOperationKind) 0)
-/**
- * The balance-operation payload is selected.
- */
-#define OpenPitAccountAdjustmentOperationKind_Balance \
+```
+
+## `OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_BALANCE`
+
+The balance-operation payload is selected.
+
+```c
+#define OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_BALANCE \
     ((OpenPitAccountAdjustmentOperationKind) 1)
-/**
- * The position-operation payload is selected.
- */
-#define OpenPitAccountAdjustmentOperationKind_Position \
+```
+
+## `OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_POSITION`
+
+The position-operation payload is selected.
+
+```c
+#define OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_POSITION \
     ((OpenPitAccountAdjustmentOperationKind) 2)
+```
+
+## `OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ACCOUNT_PNL`
+
+The account-wide PnL payload is selected.
+
+```c
+#define OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ACCOUNT_PNL \
+    ((OpenPitAccountAdjustmentOperationKind) 3)
 ```
 
 ## `OpenPitAccountAdjustmentOperation`
@@ -88,6 +116,7 @@ typedef struct OpenPitAccountAdjustmentOperation {
     OpenPitAccountAdjustmentOperationKind kind;
     OpenPitAccountAdjustmentBalanceOperation balance;
     OpenPitAccountAdjustmentPositionOperation position;
+    OpenPitAccountAdjustmentAccountPnlOperation account_pnl;
 } OpenPitAccountAdjustmentOperation;
 ```
 
@@ -174,6 +203,15 @@ typedef struct OpenPitAccountAdjustmentBoundsOptional {
     OpenPitAccountAdjustmentBounds value;
     bool is_set;
 } OpenPitAccountAdjustmentBoundsOptional;
+```
+
+## `OpenPitPnlStateOptional`
+
+```c
+typedef struct OpenPitPnlStateOptional {
+    OpenPitPnlState value;
+    bool is_set;
+} OpenPitPnlStateOptional;
 ```
 
 ## `openpit_param_adjustment_amount_to_string`

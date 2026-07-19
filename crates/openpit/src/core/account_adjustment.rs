@@ -15,19 +15,134 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use crate::param::{AdjustmentAmount, Asset, Leverage, Pnl, PositionMode, PositionSize, Price};
-use crate::{impl_request_has_field, impl_request_has_field_passthrough};
+use crate::param::{AdjustmentAmount, Asset, Leverage, PositionMode, PositionSize, Price};
+use crate::{impl_request_has_field, impl_request_has_field_passthrough, PnlState};
 
 use super::{
     HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
-    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceRealizedPnl,
-    HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
-    HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
-    HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
-    HasAccountAdjustmentIncomingUpperBound, HasAccountAdjustmentPositionLeverage,
-    HasAverageEntryPrice, HasBalanceAsset, HasCollateralAsset, HasPositionInstrument,
-    HasPositionMode, Instrument,
+    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
+    HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
+    HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
+    HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
+    HasAccountAdjustmentPnlOperation, HasAccountAdjustmentPositionLeverage, HasAverageEntryPrice,
+    HasBalanceAsset, HasCollateralAsset, HasPositionInstrument, HasPositionMode, Instrument,
+    RequestFieldAccessError,
 };
+
+/// Direct adjustment of the account-wide PnL state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountAdjustmentAccountPnlOperation {
+    /// Replacement account-PnL state.
+    pub state: PnlState,
+}
+
+impl HasAccountAdjustmentPnlOperation for AccountAdjustmentAccountPnlOperation {
+    fn account_adjustment_pnl_operation(
+        &self,
+    ) -> Result<Option<PnlState>, crate::RequestFieldAccessError> {
+        Ok(Some(self.state))
+    }
+}
+
+impl HasAccountAdjustmentBalanceAverageEntryPrice for AccountAdjustmentAccountPnlOperation {
+    fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+
+impl HasBalanceAsset for AccountAdjustmentAccountPnlOperation {
+    fn balance_asset(&self) -> Result<&Asset, RequestFieldAccessError> {
+        Err(RequestFieldAccessError::new("account_pnl.balance_asset"))
+    }
+}
+
+impl HasAccountAdjustmentBalance for AccountAdjustmentAccountPnlOperation {
+    fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+
+impl HasAccountAdjustmentHeld for AccountAdjustmentAccountPnlOperation {
+    fn held(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+
+impl HasAccountAdjustmentIncoming for AccountAdjustmentAccountPnlOperation {
+    fn incoming(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+
+impl HasAccountAdjustmentBalanceUpperBound for AccountAdjustmentAccountPnlOperation {
+    fn balance_upper(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+
+impl HasAccountAdjustmentBalanceLowerBound for AccountAdjustmentAccountPnlOperation {
+    fn balance_lower(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+
+impl HasAccountAdjustmentHeldUpperBound for AccountAdjustmentAccountPnlOperation {
+    fn held_upper(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+
+impl HasAccountAdjustmentHeldLowerBound for AccountAdjustmentAccountPnlOperation {
+    fn held_lower(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+
+impl HasAccountAdjustmentIncomingUpperBound for AccountAdjustmentAccountPnlOperation {
+    fn incoming_upper(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+
+impl HasAccountAdjustmentIncomingLowerBound for AccountAdjustmentAccountPnlOperation {
+    fn incoming_lower(&self) -> Result<Option<PositionSize>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+
+impl HasPositionInstrument for AccountAdjustmentAccountPnlOperation {
+    fn position_instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+        Err(RequestFieldAccessError::new(
+            "account_pnl.position_instrument",
+        ))
+    }
+}
+
+impl HasCollateralAsset for AccountAdjustmentAccountPnlOperation {
+    fn collateral_asset(&self) -> Result<&Asset, RequestFieldAccessError> {
+        Err(RequestFieldAccessError::new("account_pnl.collateral_asset"))
+    }
+}
+
+impl HasAverageEntryPrice for AccountAdjustmentAccountPnlOperation {
+    fn average_entry_price(&self) -> Result<Price, RequestFieldAccessError> {
+        Err(RequestFieldAccessError::new(
+            "account_pnl.average_entry_price",
+        ))
+    }
+}
+
+impl HasPositionMode for AccountAdjustmentAccountPnlOperation {
+    fn position_mode(&self) -> Result<PositionMode, RequestFieldAccessError> {
+        Err(RequestFieldAccessError::new("account_pnl.position_mode"))
+    }
+}
+
+impl HasAccountAdjustmentPositionLeverage for AccountAdjustmentAccountPnlOperation {
+    fn position_leverage(&self) -> Result<Option<Leverage>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
 
 /// Grouped balance/held/incoming adjustment payload.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -66,16 +181,32 @@ impl_request_has_field!(
     AccountAdjustmentAmount,
     WithAccountAdjustmentAmount,
     amount,
-    HasAccountAdjustmentBalance, balance, Option<AdjustmentAmount>, balance;
     HasAccountAdjustmentHeld, held, Option<AdjustmentAmount>, held;
     HasAccountAdjustmentIncoming, incoming, Option<AdjustmentAmount>, incoming;
 );
+impl HasAccountAdjustmentBalance for AccountAdjustmentAmount {
+    fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
+        Ok(self.balance)
+    }
+}
+impl<T> HasAccountAdjustmentBalance for WithAccountAdjustmentAmount<T>
+where
+    T: HasAccountAdjustmentBalance,
+{
+    fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
+        Ok(self.amount.balance)
+    }
+
+    fn balance_realized_pnl(&self) -> Result<Option<PnlState>, RequestFieldAccessError> {
+        self.inner.balance_realized_pnl()
+    }
+}
 impl_request_has_field_passthrough!(
     WithAccountAdjustmentAmount,
     inner,
+    HasAccountAdjustmentPnlOperation, account_adjustment_pnl_operation, Option<PnlState>;
     HasBalanceAsset, balance_asset, &Asset;
     HasAccountAdjustmentBalanceAverageEntryPrice, balance_average_entry_price, Option<Price>;
-    HasAccountAdjustmentBalanceRealizedPnl, balance_realized_pnl, Option<Pnl>;
     HasPositionInstrument, position_instrument, &Instrument;
     HasCollateralAsset, collateral_asset, &Asset;
     HasAverageEntryPrice, average_entry_price, Price;
@@ -99,14 +230,6 @@ pub struct AccountAdjustmentBalanceOperation {
     /// caller-supplied account-currency value. `None` leaves the average entry
     /// price untouched; an untracked average remains absent until force-set.
     pub average_entry_price: Option<Price>,
-    /// Optional force-set of the slot's absolute realized PnL.
-    ///
-    /// When present, the adjustment overwrites the slot's cumulative realized
-    /// PnL with this caller-supplied account-currency value, mirroring how
-    /// `average_entry_price` force-sets the absolute account-currency average.
-    /// `None` leaves realized PnL untouched; an untracked realized PnL remains
-    /// absent until force-set.
-    pub realized_pnl: Option<Pnl>,
 }
 
 /// Adds physical-balance adjustment operation payload.
@@ -122,18 +245,42 @@ impl_request_has_field!(
     operation,
     HasBalanceAsset, balance_asset, &Asset, asset;
 );
+impl HasAccountAdjustmentPnlOperation for AccountAdjustmentBalanceOperation {
+    fn account_adjustment_pnl_operation(
+        &self,
+    ) -> Result<Option<PnlState>, crate::RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+impl<T> HasAccountAdjustmentPnlOperation for WithAccountAdjustmentBalanceOperation<T> {
+    fn account_adjustment_pnl_operation(
+        &self,
+    ) -> Result<Option<PnlState>, crate::RequestFieldAccessError> {
+        self.operation.account_adjustment_pnl_operation()
+    }
+}
 impl_request_has_field!(
     AccountAdjustmentBalanceOperation,
     WithAccountAdjustmentBalanceOperation,
     operation,
     HasAccountAdjustmentBalanceAverageEntryPrice, balance_average_entry_price, Option<Price>, average_entry_price;
-    HasAccountAdjustmentBalanceRealizedPnl, balance_realized_pnl, Option<Pnl>, realized_pnl;
 );
+impl<T> HasAccountAdjustmentBalance for WithAccountAdjustmentBalanceOperation<T>
+where
+    T: HasAccountAdjustmentBalance,
+{
+    fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
+        self.inner.balance()
+    }
+
+    fn balance_realized_pnl(&self) -> Result<Option<PnlState>, RequestFieldAccessError> {
+        self.inner.balance_realized_pnl()
+    }
+}
 impl_request_has_field_passthrough!(
     WithAccountAdjustmentBalanceOperation,
     inner,
     HasAverageEntryPrice, average_entry_price, Price;
-    HasAccountAdjustmentBalance, balance, Option<AdjustmentAmount>;
     HasAccountAdjustmentHeld, held, Option<AdjustmentAmount>;
     HasAccountAdjustmentIncoming, incoming, Option<AdjustmentAmount>;
     HasAccountAdjustmentBalanceUpperBound, balance_upper, Option<PositionSize>;
@@ -144,6 +291,50 @@ impl_request_has_field_passthrough!(
     HasAccountAdjustmentIncomingLowerBound, incoming_lower, Option<PositionSize>;
     HasPositionInstrument, position_instrument, &Instrument;
     HasCollateralAsset, collateral_asset, &Asset;
+    HasPositionMode, position_mode, PositionMode;
+    HasAccountAdjustmentPositionLeverage, position_leverage, Option<Leverage>;
+);
+
+/// Adds an optional realized-PnL correction to a balance adjustment.
+///
+/// This wrapper preserves the wrapped balance fields and adds only the
+/// realized-PnL correction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WithAccountAdjustmentBalanceRealizedPnl<T> {
+    pub inner: T,
+    pub realized_pnl: PnlState,
+}
+
+impl<T> HasAccountAdjustmentBalance for WithAccountAdjustmentBalanceRealizedPnl<T>
+where
+    T: HasAccountAdjustmentBalance,
+{
+    fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
+        self.inner.balance()
+    }
+
+    fn balance_realized_pnl(&self) -> Result<Option<PnlState>, RequestFieldAccessError> {
+        Ok(Some(self.realized_pnl))
+    }
+}
+
+impl_request_has_field_passthrough!(
+    WithAccountAdjustmentBalanceRealizedPnl,
+    inner,
+    HasAccountAdjustmentPnlOperation, account_adjustment_pnl_operation, Option<PnlState>;
+    HasBalanceAsset, balance_asset, &Asset;
+    HasAccountAdjustmentBalanceAverageEntryPrice, balance_average_entry_price, Option<Price>;
+    HasAccountAdjustmentHeld, held, Option<AdjustmentAmount>;
+    HasAccountAdjustmentIncoming, incoming, Option<AdjustmentAmount>;
+    HasAccountAdjustmentBalanceUpperBound, balance_upper, Option<PositionSize>;
+    HasAccountAdjustmentBalanceLowerBound, balance_lower, Option<PositionSize>;
+    HasAccountAdjustmentHeldUpperBound, held_upper, Option<PositionSize>;
+    HasAccountAdjustmentHeldLowerBound, held_lower, Option<PositionSize>;
+    HasAccountAdjustmentIncomingUpperBound, incoming_upper, Option<PositionSize>;
+    HasAccountAdjustmentIncomingLowerBound, incoming_lower, Option<PositionSize>;
+    HasPositionInstrument, position_instrument, &Instrument;
+    HasCollateralAsset, collateral_asset, &Asset;
+    HasAverageEntryPrice, average_entry_price, Price;
     HasPositionMode, position_mode, PositionMode;
     HasAccountAdjustmentPositionLeverage, position_leverage, Option<Leverage>;
 );
@@ -179,6 +370,20 @@ impl_request_has_field!(
     HasPositionInstrument, position_instrument, &Instrument, instrument;
     HasCollateralAsset, collateral_asset, &Asset, collateral_asset;
 );
+impl HasAccountAdjustmentPnlOperation for AccountAdjustmentPositionOperation {
+    fn account_adjustment_pnl_operation(
+        &self,
+    ) -> Result<Option<PnlState>, crate::RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+impl<T> HasAccountAdjustmentPnlOperation for WithAccountAdjustmentPositionOperation<T> {
+    fn account_adjustment_pnl_operation(
+        &self,
+    ) -> Result<Option<PnlState>, crate::RequestFieldAccessError> {
+        self.operation.account_adjustment_pnl_operation()
+    }
+}
 impl_request_has_field!(
     AccountAdjustmentPositionOperation,
     WithAccountAdjustmentPositionOperation,
@@ -187,13 +392,23 @@ impl_request_has_field!(
     HasPositionMode, position_mode, PositionMode, mode;
     HasAccountAdjustmentPositionLeverage, position_leverage, Option<Leverage>, leverage;
 );
+impl<T> HasAccountAdjustmentBalance for WithAccountAdjustmentPositionOperation<T>
+where
+    T: HasAccountAdjustmentBalance,
+{
+    fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
+        self.inner.balance()
+    }
+
+    fn balance_realized_pnl(&self) -> Result<Option<PnlState>, RequestFieldAccessError> {
+        self.inner.balance_realized_pnl()
+    }
+}
 impl_request_has_field_passthrough!(
     WithAccountAdjustmentPositionOperation,
     inner,
     HasBalanceAsset, balance_asset, &Asset;
     HasAccountAdjustmentBalanceAverageEntryPrice, balance_average_entry_price, Option<Price>;
-    HasAccountAdjustmentBalanceRealizedPnl, balance_realized_pnl, Option<Pnl>;
-    HasAccountAdjustmentBalance, balance, Option<AdjustmentAmount>;
     HasAccountAdjustmentHeld, held, Option<AdjustmentAmount>;
     HasAccountAdjustmentIncoming, incoming, Option<AdjustmentAmount>;
     HasAccountAdjustmentBalanceUpperBound, balance_upper, Option<PositionSize>;
@@ -242,53 +457,70 @@ impl_request_has_field!(
 impl_request_has_field_passthrough!(
     WithAccountAdjustmentBounds,
     inner,
+    HasAccountAdjustmentPnlOperation, account_adjustment_pnl_operation, Option<PnlState>;
     HasBalanceAsset, balance_asset, &Asset;
     HasAccountAdjustmentBalanceAverageEntryPrice, balance_average_entry_price, Option<Price>;
-    HasAccountAdjustmentBalanceRealizedPnl, balance_realized_pnl, Option<Pnl>;
     HasPositionInstrument, position_instrument, &Instrument;
     HasCollateralAsset, collateral_asset, &Asset;
     HasAverageEntryPrice, average_entry_price, Price;
     HasPositionMode, position_mode, PositionMode;
     HasAccountAdjustmentPositionLeverage, position_leverage, Option<Leverage>;
-    HasAccountAdjustmentBalance, balance, Option<AdjustmentAmount>;
     HasAccountAdjustmentHeld, held, Option<AdjustmentAmount>;
     HasAccountAdjustmentIncoming, incoming, Option<AdjustmentAmount>;
 );
+impl<T> HasAccountAdjustmentBalance for WithAccountAdjustmentBounds<T>
+where
+    T: HasAccountAdjustmentBalance,
+{
+    fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
+        self.inner.balance()
+    }
+
+    fn balance_realized_pnl(&self) -> Result<Option<PnlState>, RequestFieldAccessError> {
+        self.inner.balance_realized_pnl()
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
+        AccountAdjustmentAccountPnlOperation, AccountAdjustmentAmount,
+        AccountAdjustmentBalanceOperation, AccountAdjustmentBounds,
         AccountAdjustmentPositionOperation, WithAccountAdjustmentAmount,
-        WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
-        WithAccountAdjustmentPositionOperation,
+        WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBalanceRealizedPnl,
+        WithAccountAdjustmentBounds, WithAccountAdjustmentPositionOperation,
     };
     use crate::param::{AdjustmentAmount, Asset, Leverage, Pnl, PositionMode, PositionSize, Price};
     use crate::{
         HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
-        HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceRealizedPnl,
-        HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
-        HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
-        HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
-        HasAccountAdjustmentIncomingUpperBound, HasAccountAdjustmentPositionLeverage,
-        HasAverageEntryPrice, HasBalanceAsset, HasCollateralAsset, HasPositionInstrument,
-        HasPositionMode, Instrument,
+        HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
+        HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
+        HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
+        HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
+        HasAccountAdjustmentPositionLeverage, HasAverageEntryPrice, HasBalanceAsset,
+        HasCollateralAsset, HasPositionInstrument, HasPositionMode, Instrument, PnlState,
     };
 
     #[test]
     fn direct_trait_access_for_balance_operation() {
         let asset = Asset::new("USD").expect("must be valid");
         let average = Price::from_str("1.25").expect("must be valid");
-        let realized = Pnl::from_str("42").expect("must be valid");
         let operation = AccountAdjustmentBalanceOperation {
             asset: asset.clone(),
             average_entry_price: Some(average),
-            realized_pnl: Some(realized),
         };
 
         assert_eq!(operation.balance_asset(), Ok(&asset));
         assert_eq!(operation.balance_average_entry_price(), Ok(Some(average)));
-        assert_eq!(operation.balance_realized_pnl(), Ok(Some(realized)));
+    }
+
+    #[test]
+    fn direct_trait_access_for_account_pnl_operation() {
+        let operation = AccountAdjustmentAccountPnlOperation {
+            state: PnlState::Value(Pnl::ZERO),
+        };
+
+        assert_eq!(operation.position_leverage(), Ok(None));
     }
 
     #[test]
@@ -366,9 +598,61 @@ mod tests {
     }
 
     #[test]
+    fn nested_realized_pnl_survives_outer_amount_and_bounds_wrappers() {
+        let balance =
+            AdjustmentAmount::Absolute(PositionSize::from_str("4").expect("must be valid"));
+        let request = WithAccountAdjustmentBounds {
+            inner: WithAccountAdjustmentAmount {
+                inner: WithAccountAdjustmentBalanceRealizedPnl {
+                    inner: AccountAdjustmentAmount::default(),
+                    realized_pnl: PnlState::Value(Pnl::ZERO),
+                },
+                amount: AccountAdjustmentAmount {
+                    balance: Some(balance),
+                    held: None,
+                    incoming: None,
+                },
+            },
+            bounds: AccountAdjustmentBounds::default(),
+        };
+
+        assert_eq!(request.balance(), Ok(Some(balance)));
+        assert_eq!(
+            request.balance_realized_pnl(),
+            Ok(Some(PnlState::Value(Pnl::ZERO)))
+        );
+    }
+
+    #[test]
+    fn outer_realized_pnl_wrapper_preserves_nested_amount_and_bounds() {
+        let balance =
+            AdjustmentAmount::Absolute(PositionSize::from_str("4").expect("must be valid"));
+        let request = WithAccountAdjustmentBalanceRealizedPnl {
+            inner: WithAccountAdjustmentBounds {
+                inner: WithAccountAdjustmentAmount {
+                    inner: AccountAdjustmentAmount::default(),
+                    amount: AccountAdjustmentAmount {
+                        balance: Some(balance),
+                        held: None,
+                        incoming: None,
+                    },
+                },
+                bounds: AccountAdjustmentBounds::default(),
+            },
+            realized_pnl: PnlState::Value(Pnl::ZERO),
+        };
+
+        assert_eq!(request.balance(), Ok(Some(balance)));
+        assert_eq!(
+            request.balance_realized_pnl(),
+            Ok(Some(PnlState::Value(Pnl::ZERO)))
+        );
+    }
+
+    #[test]
     fn with_wrappers_preserve_access_chain() {
         let base = WithAccountAdjustmentAmount {
-            inner: (),
+            inner: AccountAdjustmentAmount::default(),
             amount: AccountAdjustmentAmount {
                 balance: Some(AdjustmentAmount::Absolute(
                     PositionSize::from_str("7").expect("must be valid"),
@@ -395,7 +679,6 @@ mod tests {
             operation: AccountAdjustmentBalanceOperation {
                 asset: Asset::new("USD").expect("must be valid"),
                 average_entry_price: None,
-                realized_pnl: None,
             },
         };
 
@@ -404,7 +687,6 @@ mod tests {
             .balance_upper()
             .expect("must be available")
             .is_some());
-        assert_eq!(with_balance.balance_average_entry_price(), Ok(None));
 
         let wrapped_position = WithAccountAdjustmentPositionOperation {
             inner: with_balance,
@@ -425,7 +707,6 @@ mod tests {
             wrapped_position.average_entry_price(),
             Ok(Price::from_str("1").expect("must be valid"))
         );
-        assert_eq!(wrapped_position.balance_average_entry_price(), Ok(None));
         assert_eq!(wrapped_position.position_leverage(), Ok(None));
     }
 
@@ -450,7 +731,6 @@ mod tests {
         let balance = AccountAdjustmentBalanceOperation {
             asset: collateral.clone(),
             average_entry_price: None,
-            realized_pnl: None,
         };
 
         assert_eq!(balance.balance_asset(), Ok(&collateral));
@@ -475,7 +755,7 @@ mod tests {
         let request = WithAccountAdjustmentAmount {
             inner: WithAccountAdjustmentBounds {
                 inner: WithAccountAdjustmentPositionOperation {
-                    inner: (),
+                    inner: AccountAdjustmentAmount::default(),
                     operation: AccountAdjustmentPositionOperation {
                         instrument: instrument.clone(),
                         collateral_asset: collateral.clone(),
@@ -516,7 +796,6 @@ mod tests {
     fn outer_amount_wrapper_passthroughs_balance_branch_traits() {
         let asset = Asset::new("EUR").expect("must be valid");
         let average = Price::from_str("1.12").expect("must be valid");
-        let realized = Pnl::from_str("-15").expect("must be valid");
         let held = AdjustmentAmount::Delta(PositionSize::from_str("-3").expect("must be valid"));
         let incoming =
             AdjustmentAmount::Absolute(PositionSize::from_str("4").expect("must be valid"));
@@ -527,11 +806,10 @@ mod tests {
         let request = WithAccountAdjustmentAmount {
             inner: WithAccountAdjustmentBounds {
                 inner: WithAccountAdjustmentBalanceOperation {
-                    inner: (),
+                    inner: AccountAdjustmentAmount::default(),
                     operation: AccountAdjustmentBalanceOperation {
                         asset: asset.clone(),
                         average_entry_price: Some(average),
-                        realized_pnl: Some(realized),
                     },
                 },
                 bounds: AccountAdjustmentBounds {
@@ -553,8 +831,6 @@ mod tests {
         assert_eq!(request.held(), Ok(Some(held)));
         assert_eq!(request.incoming(), Ok(Some(incoming)));
         assert_eq!(request.balance_asset(), Ok(&asset));
-        assert_eq!(request.balance_average_entry_price(), Ok(Some(average)));
-        assert_eq!(request.balance_realized_pnl(), Ok(Some(realized)));
         assert_eq!(request.balance_lower(), Ok(Some(balance_lower)));
         assert_eq!(request.held_upper(), Ok(Some(held_upper)));
         assert_eq!(request.held_lower(), Ok(Some(held_lower)));

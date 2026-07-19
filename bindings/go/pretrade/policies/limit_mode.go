@@ -48,16 +48,6 @@ func (v SpotFundsLimitMode) Handle() native.PretradePoliciesSpotFundsLimitMode {
 	return native.PretradePoliciesSpotFundsLimitMode(v)
 }
 
-// Valid reports whether the value maps to a known spot-funds limit mode.
-func (v SpotFundsLimitMode) Valid() bool {
-	switch v {
-	case SpotFundsLimitModeEnforce, SpotFundsLimitModeTrackOnly:
-		return true
-	default:
-		return false
-	}
-}
-
 // String returns a human-readable representation of the limit mode.
 func (v SpotFundsLimitMode) String() string {
 	switch v {

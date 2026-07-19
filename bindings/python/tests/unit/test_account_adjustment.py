@@ -7,23 +7,40 @@ def test_balance_operation_construction() -> None:
     operation = openpit.AccountAdjustmentBalanceOperation(
         asset="USD",
         average_entry_price=openpit.param.Price(1),
+        realized_pnl=openpit.param.Pnl("12.5"),
+    )
+    halted = openpit.AccountAdjustmentBalanceOperation(
+        asset="AAPL",
+        realized_pnl=openpit.pretrade.PnlHaltReason.MISSING_COST_BASIS,
     )
 
     assert operation.asset == "USD"
     assert str(operation.average_entry_price) == "1"
-    assert operation.realized_pnl is None
+    assert str(operation.realized_pnl) == "12.5"
+    assert halted.realized_pnl == openpit.pretrade.PnlHaltReason.MISSING_COST_BASIS
 
 
 @pytest.mark.unit
-def test_balance_operation_realized_pnl_round_trips() -> None:
-    operation = openpit.AccountAdjustmentBalanceOperation(
-        asset="USD",
-        realized_pnl=openpit.param.Pnl("12.5"),
+def test_account_pnl_operation_round_trips_value_and_halt() -> None:
+    value = openpit.AccountAdjustmentAccountPnlOperation(
+        state=openpit.param.Pnl("12.5"),
+    )
+    halted = openpit.AccountAdjustmentAccountPnlOperation(
+        state=openpit.pretrade.PnlHaltReason.MISSING_FX,
     )
 
-    assert operation.realized_pnl is not None
-    assert str(operation.realized_pnl) == "12.5"
-    assert "realized_pnl=" in repr(operation)
+    assert str(value.state) == "12.5"
+    assert halted.state == openpit.pretrade.PnlHaltReason.MISSING_FX
+    assert "state=" in repr(value)
+    assert not hasattr(value, "pnl")
+
+
+@pytest.mark.unit
+def test_account_pnl_operation_rejects_obsolete_pnl_keyword() -> None:
+    with pytest.raises(TypeError):
+        openpit.AccountAdjustmentAccountPnlOperation(
+            pnl=openpit.param.Pnl("12.5"),  # type: ignore[call-arg]
+        )
 
 
 @pytest.mark.unit

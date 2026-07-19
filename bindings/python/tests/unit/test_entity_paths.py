@@ -47,7 +47,10 @@ def test_pretrade_entities_have_rust_like_module_paths() -> None:
     assert openpit.pretrade.PostTradeResult is openpit.PostTradeResult
     assert openpit.pretrade.AccountBlock.__module__ == "openpit.pretrade"
     assert openpit.pretrade.OutcomeAmount.__module__ == "openpit.pretrade"
+    assert openpit.pretrade.PnlHaltReason.__module__ == "openpit.pretrade"
+    assert openpit.pretrade.PnlOutcome.__module__ == "openpit.pretrade"
     assert openpit.pretrade.PnlOutcomeAmount.__module__ == "openpit.pretrade"
+    assert openpit.pretrade.AccountPnlOutcome.__module__ == "openpit.pretrade"
     assert openpit.pretrade.AccountOutcomeEntry.__module__ == "openpit.pretrade"
     assert openpit.pretrade.AccountAdjustmentOutcome.__module__ == "openpit.pretrade"
 
@@ -55,6 +58,9 @@ def test_pretrade_entities_have_rust_like_module_paths() -> None:
         "openpit.account_adjustment"
     )
     assert openpit.account_adjustment.Amount.__module__ == "openpit.account_adjustment"
+    assert openpit.account_adjustment.AccountPnlOperation.__module__ == (
+        "openpit.account_adjustment"
+    )
     assert not hasattr(openpit.account_adjustment, "AccountAdjustment")
     assert not hasattr(openpit.account_adjustment, "AccountAdjustmentAmount")
 

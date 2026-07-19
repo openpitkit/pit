@@ -92,9 +92,11 @@ class FullParityPolicy(openpit.pretrade.Policy):
                         delta=openpit.param.PositionSize("2"),
                         absolute=openpit.param.PositionSize("5"),
                     ),
-                    realized_pnl=openpit.pretrade.PnlOutcomeAmount(
-                        delta=openpit.param.Pnl("1.25"),
-                        absolute=openpit.param.Pnl("7.5"),
+                    realized_pnl=openpit.pretrade.PnlOutcome(
+                        pnl=openpit.pretrade.PnlOutcomeAmount(
+                            delta=openpit.param.Pnl("1.25"),
+                            absolute=openpit.param.Pnl("7.5"),
+                        ),
                     ),
                 )
             ],
@@ -117,6 +119,23 @@ class FullParityPolicy(openpit.pretrade.Policy):
                     user_data=42,
                 )
             ],
+            account_pnls=[
+                openpit.pretrade.AccountPnlOutcome(
+                    policy_group_id=self.policy_group_id,
+                    account_id=openpit.param.AccountId.from_int(99224416),
+                    pnl=openpit.pretrade.PnlOutcomeAmount(
+                        delta=openpit.param.Pnl("1.25"),
+                        absolute=openpit.param.Pnl("7.5"),
+                    ),
+                ),
+                openpit.pretrade.AccountPnlOutcome(
+                    policy_group_id=self.policy_group_id,
+                    account_id=openpit.param.AccountId.from_int(99224416),
+                    halt_reason=(
+                        openpit.pretrade.PnlHaltReason.MISSING_ACCOUNT_CURRENCY
+                    ),
+                ),
+            ],
             account_adjustments=[
                 openpit.pretrade.AccountAdjustmentOutcome(
                     policy_group_id=self.policy_group_id,
@@ -136,17 +155,19 @@ class FullParityPolicy(openpit.pretrade.Policy):
         ctx: openpit.AccountAdjustmentContext,
         account_id: openpit.param.AccountId,
         adjustment: openpit.AccountAdjustment,
-    ) -> list[openpit.pretrade.AccountOutcomeEntry]:
+    ) -> openpit.pretrade.PolicyAccountAdjustmentResult:
         _ = ctx, account_id, adjustment
-        return [
-            openpit.pretrade.AccountOutcomeEntry(
-                asset="USD",
-                incoming=openpit.pretrade.OutcomeAmount(
-                    delta=openpit.param.PositionSize("3"),
-                    absolute=openpit.param.PositionSize("8"),
+        return openpit.pretrade.PolicyAccountAdjustmentResult(
+            account_adjustments=(
+                openpit.pretrade.AccountOutcomeEntry(
+                    asset="USD",
+                    incoming=openpit.pretrade.OutcomeAmount(
+                        delta=openpit.param.PositionSize("3"),
+                        absolute=openpit.param.PositionSize("8"),
+                    ),
                 ),
-            )
-        ]
+            ),
+        )
 
 
 @pytest.mark.unit
@@ -244,12 +265,111 @@ def test_custom_policy_returns_full_post_trade_result() -> None:
     assert result.account_blocks[0].code == openpit.pretrade.RejectCode.CUSTOM
     assert result.account_blocks[0].reason == "custom block"
     assert result.account_blocks[0].user_data == 42
+    assert len(result.account_pnls) == 2
+    assert result.account_pnls[0].account_id == openpit.param.AccountId.from_int(
+        99224416
+    )
+    assert result.account_pnls[0].pnl is not None
+    assert result.account_pnls[0].pnl.delta == openpit.param.Pnl("1.25")
+    assert result.account_pnls[0].policy_group_id == 7
+    assert (
+        result.account_pnls[1].halt_reason
+        == openpit.pretrade.PnlHaltReason.MISSING_ACCOUNT_CURRENCY
+    )
+    assert result.account_pnls[1].policy_group_id == 7
+    assert result.account_pnls[1].pnl is None
     assert len(result.account_adjustments) == 1
     assert result.account_adjustments[0].policy_group_id == 7
     assert result.account_adjustments[0].entry.balance is not None
     assert result.account_adjustments[
         0
     ].entry.balance.absolute == openpit.param.PositionSize("6")
+
+
+@pytest.mark.unit
+def test_pnl_outcome_requires_exactly_one_value() -> None:
+    amount = openpit.pretrade.PnlOutcomeAmount(
+        delta=openpit.param.Pnl("1"),
+        absolute=openpit.param.Pnl("2"),
+    )
+
+    with pytest.raises(ValueError, match="exactly one"):
+        openpit.pretrade.PnlOutcome()
+    with pytest.raises(ValueError, match="exactly one"):
+        openpit.pretrade.PnlOutcome(
+            pnl=amount,
+            halt_reason=openpit.pretrade.PnlHaltReason.MISSING_FX,
+        )
+    with pytest.raises(ValueError, match="exactly one"):
+        openpit.pretrade.AccountPnlOutcome(
+            policy_group_id=7,
+            account_id=openpit.param.AccountId.from_int(99224416),
+        )
+    with pytest.raises(ValueError, match="exactly one"):
+        openpit.pretrade.AccountPnlOutcome(
+            policy_group_id=7,
+            account_id=openpit.param.AccountId.from_int(99224416),
+            pnl=amount,
+            halt_reason=openpit.pretrade.PnlHaltReason.MISSING_FX,
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("reason", "public_name"),
+    [
+        (openpit.pretrade.PnlHaltReason.MISSING_FX, "MISSING_FX"),
+        (
+            openpit.pretrade.PnlHaltReason.MISSING_ACCOUNT_CURRENCY,
+            "MISSING_ACCOUNT_CURRENCY",
+        ),
+        (
+            openpit.pretrade.PnlHaltReason.MISSING_INITIAL_PNL,
+            "MISSING_INITIAL_PNL",
+        ),
+        (
+            openpit.pretrade.PnlHaltReason.MISSING_COST_BASIS,
+            "MISSING_COST_BASIS",
+        ),
+        (
+            openpit.pretrade.PnlHaltReason.ARITHMETIC_OVERFLOW,
+            "ARITHMETIC_OVERFLOW",
+        ),
+    ],
+)
+def test_pnl_outcome_repr_uses_public_reason_name(
+    reason: openpit.pretrade.PnlHaltReason,
+    public_name: str,
+) -> None:
+    outcome = openpit.pretrade.PnlOutcome(halt_reason=reason)
+    account_outcome = openpit.pretrade.AccountPnlOutcome(
+        policy_group_id=7,
+        account_id=openpit.param.AccountId.from_int(99224416),
+        halt_reason=reason,
+    )
+
+    assert f"PnlHaltReason.{public_name}" in repr(outcome)
+    assert f"PnlHaltReason.{public_name}" in repr(account_outcome)
+
+
+@pytest.mark.unit
+def test_account_pnl_outcome_repr_contains_state() -> None:
+    computed = openpit.pretrade.AccountPnlOutcome(
+        policy_group_id=7,
+        account_id=openpit.param.AccountId.from_int(99224416),
+        pnl=openpit.pretrade.PnlOutcomeAmount(
+            delta=openpit.param.Pnl("1"),
+            absolute=openpit.param.Pnl("2"),
+        ),
+    )
+    halted = openpit.pretrade.AccountPnlOutcome(
+        policy_group_id=7,
+        account_id=openpit.param.AccountId.from_int(99224416),
+        halt_reason=openpit.pretrade.PnlHaltReason.MISSING_ACCOUNT_CURRENCY,
+    )
+
+    assert "pnl=PnlOutcomeAmount" in repr(computed)
+    assert "halt_reason=PnlHaltReason.MISSING_ACCOUNT_CURRENCY" in repr(halted)
 
 
 @pytest.mark.unit
@@ -281,38 +401,41 @@ def test_custom_policy_bool_true_report_hook_is_not_synthetic_block() -> None:
 
 
 @pytest.mark.unit
-def test_custom_policy_blocks_account_via_account_control() -> None:
-    class BlockViaControlPolicy(openpit.pretrade.Policy):
+def test_custom_policy_blocks_account_from_account_adjustment_result() -> None:
+    class BlockingAdjustmentPolicy(openpit.pretrade.Policy):
         def __init__(self) -> None:
             self.blocked: list[str] = []
 
         @property
         def name(self) -> str:
-            return "BlockViaControlPolicy"
+            return "BlockingAdjustmentPolicy"
 
         def apply_account_adjustment(
             self,
             ctx: openpit.AccountAdjustmentContext,
             account_id: openpit.param.AccountId,
             adjustment: openpit.AccountAdjustment,
-        ) -> None:
-            _ = account_id, adjustment
-            control: openpit.AccountControl = ctx.account_control
-            control.block(
-                openpit.pretrade.AccountBlock(
-                    policy=self.name,
-                    code=openpit.pretrade.RejectCode.ACCOUNT_BLOCKED,
-                    reason="blocked via account_control",
-                    details="custom policy blocked the account from a callback",
-                )
-            )
+        ) -> openpit.pretrade.PolicyAccountAdjustmentResult:
+            _ = ctx, account_id, adjustment
             self.blocked.append("USD")
-            return None
+            return openpit.pretrade.PolicyAccountAdjustmentResult(
+                account_blocks=(
+                    openpit.pretrade.AccountBlock(
+                        policy=self.name,
+                        code=openpit.pretrade.RejectCode.ACCOUNT_BLOCKED,
+                        reason="blocked from accepted adjustment",
+                        details=(
+                            "custom policy accepted the adjustment "
+                            "and blocked the account"
+                        ),
+                    ),
+                ),
+            )
 
-    policy = BlockViaControlPolicy()
+    policy = BlockingAdjustmentPolicy()
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
 
-    engine.apply_account_adjustment(
+    result = engine.apply_account_adjustment(
         account_id=openpit.param.AccountId.from_int(99224416),
         adjustments=[
             openpit.AccountAdjustment(
@@ -322,6 +445,9 @@ def test_custom_policy_blocks_account_via_account_control() -> None:
     )
 
     assert policy.blocked == ["USD"]
+    assert result.ok
+    assert len(result.account_blocks) == 1
+    assert result.account_blocks[0].code == openpit.pretrade.RejectCode.ACCOUNT_BLOCKED
 
     # The block takes effect in the engine: a later order on the same account
     # is rejected without any policy start-check involvement.

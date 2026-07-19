@@ -295,14 +295,17 @@ assert engine.apply_account_adjustment(
 
 Use this pattern when administrative account changes must obey custom limits.
 
+<!-- Test mirror: pit/bindings/python/tests/integration/test_examples_wiki.py -->
 ```python
 import openpit
 
 
 class CumulativeLimitPolicy(openpit.pretrade.Policy):
-    def __init__(self, max_cumulative: openpit.param.Volume) -> None:
+    """Tracks cumulative totals per asset, rejects batch on limit breach."""
+
+    def __init__(self, max_cumulative: openpit.param.PositionSize) -> None:
         self._max = max_cumulative
-        self._totals: dict[str, openpit.param.Volume] = {}
+        self._totals: dict[str, openpit.param.PositionSize] = {}
 
     @property
     def name(self) -> str:
@@ -313,40 +316,109 @@ class CumulativeLimitPolicy(openpit.pretrade.Policy):
         ctx: openpit.AccountAdjustmentContext,
         account_id: openpit.param.AccountId,
         adjustment: openpit.AccountAdjustment,
-    ) -> tuple[openpit.Mutation, ...] | list[openpit.pretrade.PolicyReject]:
+    ) -> openpit.pretrade.PolicyAccountAdjustmentResult:
         del ctx, account_id
-        assert adjustment.operation is not None
-        asset_id = adjustment.operation.asset
-        previous = self._totals.get(asset_id, openpit.param.Volume("0"))
-        next_total = previous
-        if next_total > self._max:
-            return [
-                openpit.pretrade.PolicyReject(
-                    code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
-                    reason="cumulative limit exceeded",
-                    details=f"{asset_id}: {next_total} > {self._max}",
-                    scope=openpit.pretrade.RejectScope.ACCOUNT,
-                )
-            ]
-        self._totals[asset_id] = next_total
-        return (
-            openpit.Mutation(
-                commit=lambda: None,
-                rollback=lambda: self._totals.__setitem__(asset_id, previous),
+        operation = adjustment.operation
+        if not isinstance(operation, openpit.AccountAdjustmentBalanceOperation):
+            return openpit.pretrade.PolicyAccountAdjustmentResult()
+
+        asset_id = operation.asset
+        amount = adjustment.amount
+        balance = amount.balance if amount is not None else None
+        if asset_id is None or balance is None:
+            return openpit.pretrade.PolicyAccountAdjustmentResult()
+
+        previous = self._totals.get(asset_id)
+        current = previous if previous is not None else openpit.param.PositionSize("0")
+        absolute = balance.as_absolute
+        if absolute is not None:
+            new_total = absolute
+        else:
+            delta = balance.as_delta
+            if delta is None:
+                return openpit.pretrade.PolicyAccountAdjustmentResult()
+            new_total = current + delta
+
+        # Reject if the limit is breached.
+        if new_total > self._max:
+            return openpit.pretrade.PolicyAccountAdjustmentResult(
+                rejects=(
+                    openpit.pretrade.PolicyReject(
+                        code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
+                        reason="cumulative limit exceeded",
+                        details=f"{asset_id}: {new_total} > {self._max}",
+                        scope=openpit.pretrade.RejectScope.ACCOUNT,
+                    ),
+                ),
+            )
+
+        # Apply immediately so later adjustments in the same batch see it.
+        self._totals[asset_id] = new_total
+
+        def rollback() -> None:
+            if previous is None:
+                self._totals.pop(asset_id, None)
+            else:
+                self._totals[asset_id] = previous
+
+        return openpit.pretrade.PolicyAccountAdjustmentResult(
+            mutations=(
+                openpit.Mutation(
+                    commit=lambda: None,
+                    rollback=rollback,
+                ),
             ),
         )
 
 
-policy = CumulativeLimitPolicy(max_cumulative=openpit.param.Volume("1000000"))
-engine = openpit.Engine.builder().pre_trade(policy=policy).build()
-adjustment = openpit.AccountAdjustment(
-    operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+def balance_adjustment(
+    amount: openpit.param.AdjustmentAmount,
+) -> openpit.AccountAdjustment:
+    return openpit.AccountAdjustment(
+        operation=openpit.AccountAdjustmentBalanceOperation(asset="USD"),
+        amount=openpit.AccountAdjustmentAmount(balance=amount),
+    )
+
+
+policy = CumulativeLimitPolicy(openpit.param.PositionSize("100"))
+engine = openpit.Engine.builder().no_sync().pre_trade(policy=policy).build()
+account_id = openpit.param.AccountId.from_int(99224416)
+
+seed = engine.apply_account_adjustment(
+    account_id=account_id,
+    adjustments=[
+        balance_adjustment(
+            openpit.param.AdjustmentAmount.absolute(
+                openpit.param.PositionSize("40")
+            )
+        )
+    ],
 )
-result = engine.apply_account_adjustment(
-    account_id=openpit.param.AccountId.from_int(99224416),
-    adjustments=[adjustment],
+rejected = engine.apply_account_adjustment(
+    account_id=account_id,
+    adjustments=[
+        balance_adjustment(
+            openpit.param.AdjustmentAmount.delta(openpit.param.PositionSize("30"))
+        ),
+        balance_adjustment(
+            openpit.param.AdjustmentAmount.delta(openpit.param.PositionSize("40"))
+        ),
+    ],
 )
-assert result.ok
+after_rollback = engine.apply_account_adjustment(
+    account_id=account_id,
+    adjustments=[
+        balance_adjustment(
+            openpit.param.AdjustmentAmount.delta(openpit.param.PositionSize("60"))
+        )
+    ],
+)
+
+assert seed.ok
+assert not rejected.ok
+assert rejected.failed_index == 1
+assert rejected.rejects[0].code == openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED
+assert after_rollback.ok
 ```
 
 ## Rollback-safe main policy

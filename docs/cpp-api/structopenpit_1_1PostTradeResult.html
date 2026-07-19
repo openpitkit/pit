@@ -124,21 +124,27 @@ document.addEventListener('DOMContentLoaded',() => { initNavTree('structopenpit_
 <table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-pub-attribs" class="groupheader"><a id="pub-attribs" name="pub-attribs"></a>
 Public Attributes</h2></td></tr>
-<tr class="memitem:a5451a1ce07c6751677e86e4dabd6ca21" id="r_a5451a1ce07c6751677e86e4dabd6ca21"><td class="memItemLeft">std::vector&lt;<a class="el" href="structopenpit_1_1accountadjustment_1_1Outcome.html">::openpit::accountadjustment::Outcome</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a5451a1ce07c6751677e86e4dabd6ca21">accountAdjustmentOutcomes</a></td></tr>
+<tr class="memitem:ae33d45a17f7fb5b6daa1745eecde00d4" id="r_ae33d45a17f7fb5b6daa1745eecde00d4"><td class="memItemLeft">std::vector&lt;<a class="el" href="structopenpit_1_1accountadjustment_1_1Outcome.html">::openpit::accountadjustment::Outcome</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#ae33d45a17f7fb5b6daa1745eecde00d4">accountAdjustments</a></td></tr>
+<tr class="memdesc:ae33d45a17f7fb5b6daa1745eecde00d4"><td class="mdescLeft">&#160;</td><td class="mdescRight">Policy-tagged adjustment outcomes.  <br /></td></tr>
 <tr class="memitem:a8930c203eadb53118992e148ef11aae5" id="r_a8930c203eadb53118992e148ef11aae5"><td class="memItemLeft">std::vector&lt;<a class="el" href="structopenpit_1_1accounts_1_1AccountBlock.html">::openpit::accounts::AccountBlock</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a8930c203eadb53118992e148ef11aae5">accountBlocks</a></td></tr>
+<tr class="memitem:aa97a391f15e47afae06b6e544ffd2ee9" id="r_aa97a391f15e47afae06b6e544ffd2ee9"><td class="memItemLeft">std::vector&lt;<a class="el" href="structopenpit_1_1accountadjustment_1_1AccountPnlOutcome.html">::openpit::accountadjustment::AccountPnlOutcome</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#aa97a391f15e47afae06b6e544ffd2ee9">accountPnls</a></td></tr>
+<tr class="memdesc:aa97a391f15e47afae06b6e544ffd2ee9"><td class="mdescLeft">&#160;</td><td class="mdescRight">Account-level PnL outcomes.  <br /></td></tr>
 </table>
 <a name="doc-variable-members" id="doc-variable-members"></a><h2 id="header-doc-variable-members" class="groupheader">Member Data Documentation</h2>
-<a id="a5451a1ce07c6751677e86e4dabd6ca21" name="a5451a1ce07c6751677e86e4dabd6ca21"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a5451a1ce07c6751677e86e4dabd6ca21">&#9670;&#160;</a></span>accountAdjustmentOutcomes</h2>
+<a id="ae33d45a17f7fb5b6daa1745eecde00d4" name="ae33d45a17f7fb5b6daa1745eecde00d4"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ae33d45a17f7fb5b6daa1745eecde00d4">&#9670;&#160;</a></span>accountAdjustments</h2>
 
 <div class="memitem">
 <div class="memproto">
       <table class="memname">
         <tr>
-          <td class="memname">std::vector&lt;<a class="el" href="structopenpit_1_1accountadjustment_1_1Outcome.html">::openpit::accountadjustment::Outcome</a>&gt; openpit::PostTradeResult::accountAdjustmentOutcomes</td>
+          <td class="memname">std::vector&lt;<a class="el" href="structopenpit_1_1accountadjustment_1_1Outcome.html">::openpit::accountadjustment::Outcome</a>&gt; openpit::PostTradeResult::accountAdjustments</td>
         </tr>
       </table>
 </div><div class="memdoc">
+
+<p>Policy-tagged adjustment outcomes. </p>
+<p>These remain meaningful even when <span class="tt"><a class="el" href="#a8930c203eadb53118992e148ef11aae5">accountBlocks</a></span> is non-empty and must still be consumed by the caller. </p>
 
 </div>
 </div>
@@ -153,6 +159,23 @@ Public Attributes</h2></td></tr>
         </tr>
       </table>
 </div><div class="memdoc">
+
+</div>
+</div>
+<a id="aa97a391f15e47afae06b6e544ffd2ee9" name="aa97a391f15e47afae06b6e544ffd2ee9"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#aa97a391f15e47afae06b6e544ffd2ee9">&#9670;&#160;</a></span>accountPnls</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">std::vector&lt;<a class="el" href="structopenpit_1_1accountadjustment_1_1AccountPnlOutcome.html">::openpit::accountadjustment::AccountPnlOutcome</a>&gt; openpit::PostTradeResult::accountPnls</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>Account-level PnL outcomes. </p>
+<p>Each outcome identifies its account and policy group; <span class="tt">Get()</span> returns an account-currency amount or a halt reason. A newly halted calculation emits its reason once. Later checks can reject or block on the stored halt without emitting another account outcome, until a manager re-arms it with <span class="tt"><a class="el" href="classopenpit_1_1Configurator.html#aed16654a6552c8bdf20812ef56b1b001" title="Replaces one SpotFunds live account P&amp;L accumulator with a numeric value.">Configurator::SetSpotFundsAccountPnl</a></span>. Re-arming an account accumulator does not affect any independently halted position accumulator. </p>
 
 </div>
 </div>

@@ -10,6 +10,7 @@ from .param import (
     PositionSize,
     Price,
 )
+from .pretrade import PnlHaltReason
 
 class Amount:
     """Grouped balance/held/incoming adjustment payload."""
@@ -44,7 +45,7 @@ class BalanceOperation:
         *,
         asset: Asset,
         average_entry_price: Price | None = None,
-        realized_pnl: Pnl | None = None,
+        realized_pnl: Pnl | PnlHaltReason | None = None,
     ) -> None: ...
     @property
     def asset(self) -> Asset: ...
@@ -56,11 +57,8 @@ class BalanceOperation:
         """
 
     @property
-    def realized_pnl(self) -> Pnl | None:
-        """Optional force-set of absolute realized PnL in account currency.
-
-        The value is caller supplied; no FX is applied.
-        """
+    def realized_pnl(self) -> Pnl | PnlHaltReason | None:
+        """Optional account-currency realized PnL replacement or explicit halt."""
 
 class PositionOperation:
     """Direct derivatives-like position adjustment."""
@@ -92,6 +90,14 @@ class PositionOperation:
     @property
     def leverage(self) -> Leverage | None:
         """Optional leverage snapshot/setting carried with the position adjustment."""
+
+class AccountPnlOperation:
+    """Direct account-wide PnL state adjustment."""
+
+    def __init__(self, *, state: Pnl | PnlHaltReason) -> None: ...
+    @property
+    def state(self) -> Pnl | PnlHaltReason:
+        """Replacement account PnL value or explicit halt reason."""
 
 class Bounds:
     """Optional post-adjustment inclusive limits."""
@@ -136,20 +142,23 @@ class Adjustment:
     def __init__(
         self,
         *,
-        operation: BalanceOperation | PositionOperation | None = None,
+        operation: (
+            BalanceOperation | PositionOperation | AccountPnlOperation | None
+        ) = None,
         amount: Amount | None = None,
         bounds: Bounds | None = None,
     ) -> None: ...
     @property
     def operation(
         self,
-    ) -> BalanceOperation | PositionOperation | None: ...
+    ) -> BalanceOperation | PositionOperation | AccountPnlOperation | None: ...
     @property
     def amount(self) -> Amount | None: ...
     @property
     def bounds(self) -> Bounds | None: ...
 
 __all__ = [
+    "AccountPnlOperation",
     "Adjustment",
     "Amount",
     "BalanceOperation",

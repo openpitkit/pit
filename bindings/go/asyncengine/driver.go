@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package asyncengine
 
@@ -22,7 +22,6 @@ import (
 	"go.openpit.dev/openpit/accounts"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
-	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/reject"
 )
@@ -34,7 +33,7 @@ import (
 //
 // The asynchronous surface deliberately carries no result structs of its own:
 // every method returns a future over the same values the synchronous engine
-// returns (see pkg/future.Future and pkg/future.Future2), and the post-trade
+// returns (see pkg/future.Future and pkg/future.Future2); the post-trade
 // result is the canonical pretrade.PostTradeResult.
 type Driver interface {
 	StartPreTrade(model.Order) (*pretrade.Request, []reject.Reject, error)
@@ -43,6 +42,6 @@ type Driver interface {
 	ApplyAccountAdjustment(
 		param.AccountID,
 		[]model.AccountAdjustment,
-	) (optional.Option[reject.AccountAdjustmentBatchError], []accountadjustment.Outcome, error)
+	) (accountadjustment.BatchResult, error)
 	Accounts() accounts.Accounts
 }

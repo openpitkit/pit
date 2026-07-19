@@ -21,11 +21,11 @@ use openpit::param::{
 };
 use openpit::{
     HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
-    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceRealizedPnl,
-    HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
-    HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
-    HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
-    HasAccountAdjustmentIncomingUpperBound, HasAccountAdjustmentPositionLeverage, HasAccountId,
+    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
+    HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
+    HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
+    HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
+    HasAccountAdjustmentPnlOperation, HasAccountAdjustmentPositionLeverage, HasAccountId,
     HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition, HasCollateralAsset,
     HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
     HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,
@@ -252,9 +252,11 @@ impl HasAccountAdjustmentBalanceAverageEntryPrice for AccountAdjustment {
     }
 }
 
-impl HasAccountAdjustmentBalanceRealizedPnl for AccountAdjustment {
-    fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
-        self.operation.balance_realized_pnl()
+impl openpit::HasAccountAdjustmentPnlOperation for AccountAdjustment {
+    fn account_adjustment_pnl_operation(
+        &self,
+    ) -> Result<Option<openpit::PnlState>, RequestFieldAccessError> {
+        self.operation.account_adjustment_pnl_operation()
     }
 }
 
@@ -291,6 +293,10 @@ impl HasAccountAdjustmentPositionLeverage for AccountAdjustment {
 impl HasAccountAdjustmentBalance for AccountAdjustment {
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         self.amount.balance()
+    }
+
+    fn balance_realized_pnl(&self) -> Result<Option<openpit::PnlState>, RequestFieldAccessError> {
+        self.operation.balance_realized_pnl()
     }
 }
 
@@ -522,11 +528,13 @@ impl<Request: HasAccountAdjustmentBalanceAverageEntryPrice, Payload>
     }
 }
 
-impl<Request: HasAccountAdjustmentBalanceRealizedPnl, Payload>
-    HasAccountAdjustmentBalanceRealizedPnl for RequestWithPayload<Request, Payload>
+impl<Request: HasAccountAdjustmentPnlOperation, Payload> HasAccountAdjustmentPnlOperation
+    for RequestWithPayload<Request, Payload>
 {
-    fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
-        self.request.balance_realized_pnl()
+    fn account_adjustment_pnl_operation(
+        &self,
+    ) -> Result<Option<openpit::PnlState>, RequestFieldAccessError> {
+        self.request.account_adjustment_pnl_operation()
     }
 }
 
@@ -573,6 +581,10 @@ impl<Request: HasAccountAdjustmentBalance, Payload> HasAccountAdjustmentBalance
 {
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         self.request.balance()
+    }
+
+    fn balance_realized_pnl(&self) -> Result<Option<openpit::PnlState>, RequestFieldAccessError> {
+        self.request.balance_realized_pnl()
     }
 }
 

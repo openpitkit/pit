@@ -33,6 +33,7 @@ class ExecutionReport;
 
 struct AdjustmentResult;
 struct PostTradeResult;
+struct PolicyConfigurationResult;
 struct SettlementLag;
 struct SettlementScheme;
 
@@ -98,6 +99,7 @@ class Context;
 class DryRunReport;
 class PostTradeAdjustments;
 class PostTradeContext;
+class PostTradePnls;
 class PreTradeLock;
 class Request;
 class Result;
@@ -108,6 +110,7 @@ class CustomPolicy;
 
 struct ExecuteResult;
 struct LockEntry;
+struct PolicyAccountAdjustmentResult;
 struct PolicyDecision;
 struct Reject;
 struct StartResult;
@@ -123,18 +126,13 @@ class Mutations;
 
 }  // namespace openpit::tx
 
-namespace openpit::accountadjustment {
-
-class Context;
-
-}  // namespace openpit::accountadjustment
-
 namespace openpit::pretrade::policies {
 
 class OrderSizeLimitPolicy;
 class OrderValidationPolicy;
 class PnlBoundsKillSwitchPolicy;
 class RateLimitPolicy;
+class SpotFundsPnlBoundsGlobalBarrierUpdate;
 class SpotFundsPnlBoundsKillSwitchPolicy;
 class SpotFundsPolicy;
 
@@ -152,7 +150,6 @@ struct RateLimitAssetBarrier;
 struct RateLimitBrokerBarrier;
 struct SpotFundsOverride;
 struct SpotFundsPnlBoundsAccountBarrier;
-struct SpotFundsPnlBoundsAccountBarrierUpdate;
 struct SpotFundsPnlBoundsAccountGroupBarrier;
 struct SpotFundsPnlBoundsBarrier;
 
@@ -182,19 +179,25 @@ enum class AccountBlockErrorKind : std::uint32_t;
 
 namespace openpit::accountadjustment {
 
+class AccountPnlOperation;
 class BatchError;
+class Context;
 class Operation;
 class OutcomeList;
 
 struct AccountAdjustment;
 struct AccountOutcomeEntry;
+struct AccountPnlOutcome;
 struct Amount;
 struct BalanceOperation;
 struct Bounds;
 struct Outcome;
 struct OutcomeAmount;
+struct PnlOutcome;
 struct PnlOutcomeAmount;
 struct PositionOperation;
+
+enum class PnlHaltReason : std::uint8_t;
 
 }  // namespace openpit::accountadjustment
 

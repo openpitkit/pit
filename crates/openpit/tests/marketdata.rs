@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use openpit::param::{
-    AccountGroupId, AccountId, AdjustmentAmount, Asset, MonetaryAmount, Pnl, PositionSize, Price,
+    AccountGroupId, AccountId, AdjustmentAmount, Asset, MonetaryAmount, PositionSize, Price,
     Quantity, Side, Trade, TradeAmount, DEFAULT_ACCOUNT_GROUP,
 };
 use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
@@ -27,16 +27,15 @@ use openpit::pretrade::{PreTradeLock, RejectCode};
 use openpit::{
     AccountInfo, AlreadyRegistered, Engine, FullSync, FullSyncEngine, HasAccountAdjustmentBalance,
     HasAccountAdjustmentBalanceAverageEntryPrice, HasAccountAdjustmentBalanceLowerBound,
-    HasAccountAdjustmentBalanceRealizedPnl, HasAccountAdjustmentBalanceUpperBound,
-    HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
-    HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
-    HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound, HasAccountId,
-    HasBalanceAsset, HasExecutionReportFillFee, HasExecutionReportIsFinal,
-    HasExecutionReportLastTrade, HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide,
-    Instrument, LocalSync, MarketDataBuilder, MarketDataError, MarketDataService, OrderOperation,
-    PushForError, Quote, QuoteResolution, QuoteTtl, RegistrationError, RequestFieldAccessError,
-    SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPricingSource,
-    UnknownInstrumentId,
+    HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
+    HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
+    HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
+    HasAccountAdjustmentIncomingUpperBound, HasAccountId, HasBalanceAsset,
+    HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
+    HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide, Instrument, LocalSync,
+    MarketDataBuilder, MarketDataError, MarketDataService, OrderOperation, PushForError, Quote,
+    QuoteResolution, QuoteTtl, RegistrationError, RequestFieldAccessError, SpotFundsMarketData,
+    SpotFundsOverride, SpotFundsOverrideTarget, SpotFundsPricingSource, UnknownInstrumentId,
 };
 
 // ── Value helpers ─────────────────────────────────────────────────────────────
@@ -673,12 +672,18 @@ struct SfTestAdjustment {
     asset: Asset,
     balance: Option<AdjustmentAmount>,
     balance_average_entry_price: Option<Price>,
-    balance_realized_pnl: Option<Pnl>,
 }
 
 impl HasBalanceAsset for SfTestAdjustment {
     fn balance_asset(&self) -> Result<&Asset, RequestFieldAccessError> {
         Ok(&self.asset)
+    }
+}
+impl openpit::HasAccountAdjustmentPnlOperation for SfTestAdjustment {
+    fn account_adjustment_pnl_operation(
+        &self,
+    ) -> Result<Option<openpit::PnlState>, RequestFieldAccessError> {
+        Ok(None)
     }
 }
 impl HasAccountAdjustmentBalance for SfTestAdjustment {
@@ -689,11 +694,6 @@ impl HasAccountAdjustmentBalance for SfTestAdjustment {
 impl HasAccountAdjustmentBalanceAverageEntryPrice for SfTestAdjustment {
     fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
         Ok(self.balance_average_entry_price)
-    }
-}
-impl HasAccountAdjustmentBalanceRealizedPnl for SfTestAdjustment {
-    fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
-        Ok(self.balance_realized_pnl)
     }
 }
 impl HasAccountAdjustmentBalanceLowerBound for SfTestAdjustment {
@@ -789,7 +789,6 @@ fn sf_seed_balance(engine: &SfEngine, asset_code: &str, amount: &str) {
         asset: asset(asset_code),
         balance: Some(AdjustmentAmount::Absolute(ps(amount))),
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
     };
     let acc = AccountId::from_u64(12345);
     engine

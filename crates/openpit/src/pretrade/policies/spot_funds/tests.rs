@@ -17,6 +17,7 @@
 
 //! Unit tests for [`SpotFundsPolicy`].
 
+use super::rollback::AccountPnlAssertionRollback;
 use super::*;
 use crate::core::AccountAdjustmentContext;
 use crate::marketdata::{MarketDataBuilder, Quote, QuoteTtl};
@@ -30,14 +31,13 @@ use crate::pretrade::{
 };
 use crate::{
     FullSync, HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
-    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceRealizedPnl,
-    HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
-    HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
-    HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
-    HasAccountAdjustmentIncomingUpperBound, HasAccountId, HasBalanceAsset,
-    HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
-    HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide, Instrument, Mutations,
-    OrderOperation, RequestFieldAccessError,
+    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
+    HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
+    HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
+    HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound, HasAccountId,
+    HasBalanceAsset, HasExecutionReportFillFee, HasExecutionReportIsFinal,
+    HasExecutionReportLastTrade, HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide,
+    Instrument, Mutations, OrderOperation, RequestFieldAccessError,
 };
 use std::sync::Arc;
 
@@ -45,6 +45,8 @@ use std::sync::Arc;
 
 type TestPolicy = SpotFundsPolicy<FullSync, FullSync>;
 type TestOrder = OrderOperation;
+type AccountPnlAdjustment = crate::AccountAdjustmentAccountPnlOperation;
+type AccountPnlTestEngine = crate::FullSyncEngine<TestOrder, TestReport, AccountPnlAdjustment>;
 
 // ── TestReport ────────────────────────────────────────────────────────────
 
@@ -113,7 +115,7 @@ struct TestAdjustment {
     asset: Asset,
     balance: Option<AdjustmentAmount>,
     balance_average_entry_price: Option<Price>,
-    balance_realized_pnl: Option<Pnl>,
+    pnl_operation: Option<crate::PnlState>,
     balance_lower: Option<PositionSize>,
     balance_upper: Option<PositionSize>,
     held: Option<AdjustmentAmount>,
@@ -130,21 +132,27 @@ impl HasBalanceAsset for TestAdjustment {
     }
 }
 
+impl crate::HasAccountAdjustmentPnlOperation for TestAdjustment {
+    fn account_adjustment_pnl_operation(
+        &self,
+    ) -> Result<Option<crate::PnlState>, RequestFieldAccessError> {
+        Ok(None)
+    }
+}
+
 impl HasAccountAdjustmentBalance for TestAdjustment {
     fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
         Ok(self.balance)
+    }
+
+    fn balance_realized_pnl(&self) -> Result<Option<crate::PnlState>, RequestFieldAccessError> {
+        Ok(self.pnl_operation)
     }
 }
 
 impl HasAccountAdjustmentBalanceAverageEntryPrice for TestAdjustment {
     fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
         Ok(self.balance_average_entry_price)
-    }
-}
-
-impl HasAccountAdjustmentBalanceRealizedPnl for TestAdjustment {
-    fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
-        Ok(self.balance_realized_pnl)
     }
 }
 
@@ -246,6 +254,19 @@ fn dummy_control(
     crate::core::AccountControl::new(handle, account_id)
 }
 
+/// Builds a kill-switch block tagged with the in-flight assertion it was
+/// computed against, exactly as a barrier breach raised by an execution report
+/// that interleaves an unfinished force-set does.
+fn provisional_block(details: &str, provenance: u64) -> crate::pretrade::AccountBlock {
+    crate::pretrade::AccountBlock::new(
+        TestPolicy::NAME,
+        RejectCode::PnlKillSwitchTriggered,
+        "account PnL barrier breached",
+        details.to_owned(),
+    )
+    .with_provenance(Some(provenance))
+}
+
 fn instr(under: &str, sett: &str) -> Instrument {
     Instrument::new(asset(under), asset(sett))
 }
@@ -274,6 +295,31 @@ fn build_policy_from_settings(
 ) -> TestPolicy {
     let b = engine_builder();
     SpotFundsPolicy::new(settings, market_data, b.storage_builder())
+}
+
+fn build_account_pnl_test_engine(settings: SpotFundsSettings) -> AccountPnlTestEngine {
+    let builder =
+        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
+    let policy =
+        SpotFundsPolicy::<FullSync, FullSync>::new(settings, None, builder.storage_builder());
+    builder
+        .pre_trade(policy)
+        .build()
+        .expect("account PnL test engine must build")
+}
+
+fn account_pnl_adjustment(state: crate::PnlState) -> AccountPnlAdjustment {
+    crate::AccountAdjustmentAccountPnlOperation { state }
+}
+
+fn account_pnl_probe_order(account_id: AccountId) -> TestOrder {
+    make_order(
+        account_id,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        TradeAmount::Quantity(qty("1")),
+        Some(px("1")),
+    )
 }
 
 /// Builds a policy whose market-data service has `instrument` registered
@@ -404,7 +450,7 @@ fn adj(asset: Asset, balance: Option<AdjustmentAmount>) -> TestAdjustment {
         asset,
         balance,
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -426,7 +472,7 @@ fn adj_with_avg(
         asset,
         balance,
         balance_average_entry_price: average_entry_price,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -438,17 +484,14 @@ fn adj_with_avg(
     }
 }
 
-/// Builds a balance adjustment that force-sets the slot's realized PnL.
-fn adj_with_realized_pnl(
-    asset: Asset,
-    balance: Option<AdjustmentAmount>,
-    realized_pnl: Option<Pnl>,
-) -> TestAdjustment {
+/// Builds a balance operation that corrects the selected position's realized
+/// PnL.
+fn adj_with_realized_pnl(asset: Asset, realized_pnl: Pnl) -> TestAdjustment {
     TestAdjustment {
         asset,
-        balance,
+        balance: None,
         balance_average_entry_price: None,
-        balance_realized_pnl: realized_pnl,
+        pnl_operation: Some(crate::PnlState::Value(realized_pnl)),
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -470,7 +513,7 @@ fn bounded_adj(
         asset,
         balance,
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: lower,
         balance_upper: upper,
         held: None,
@@ -492,7 +535,7 @@ fn held_adj(
         asset,
         balance: None,
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held,
@@ -514,7 +557,7 @@ fn incoming_adj(
         asset,
         balance: None,
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -536,7 +579,7 @@ fn all_fields_adj(
         asset,
         balance,
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held,
@@ -568,10 +611,15 @@ fn holdings_of(policy: &TestPolicy, account_id: AccountId, asset: &Asset) -> Opt
     policy.holdings.get(&(account_id, asset.clone()))
 }
 
-fn account_pnl_of(policy: &TestPolicy, account_id: AccountId, currency: &Asset) -> Option<Pnl> {
-    policy
-        .pnl
-        .with(&(account_id, currency.clone()), |value| *value)
+fn account_pnl_of(policy: &TestPolicy, account_id: AccountId) -> Option<Pnl> {
+    policy.pnl.with(&account_id, |entry| match entry.state {
+        crate::PnlState::Value(value) => Some(value),
+        crate::PnlState::Halted(_) => None,
+    })?
+}
+
+fn account_pnl_state_of(policy: &TestPolicy, account_id: AccountId) -> Option<crate::PnlState> {
+    policy.pnl.with(&account_id, |entry| entry.state)
 }
 
 fn post_trade_ctx_with_currency_and_group(
@@ -845,6 +893,18 @@ fn with_policy_group_id_records_tag_observed_by_policy() {
         >>::policy_group_id(&tagged),
         tag
     );
+
+    let report = fee_only_report(
+        account(99224416),
+        instr("AAPL", "USD"),
+        Side::Buy,
+        "0",
+        false,
+        money_fee("1", "USD"),
+    );
+    let result = run_report_with_currency(&tagged, &report, asset("USD"));
+    assert_eq!(result.account_pnls.len(), 1);
+    assert_eq!(result.account_pnls[0].policy_group_id, tag);
 }
 
 #[test]
@@ -2502,6 +2562,14 @@ fn adjustment_without_balance_asset_rejects_missing_required_field() {
             Err(RequestFieldAccessError::new("balance_asset"))
         }
     }
+
+    impl crate::HasAccountAdjustmentPnlOperation for NoBalanceAsset {
+        fn account_adjustment_pnl_operation(
+            &self,
+        ) -> Result<Option<crate::PnlState>, RequestFieldAccessError> {
+            Ok(None)
+        }
+    }
     impl HasAccountAdjustmentBalance for NoBalanceAsset {
         fn balance(&self) -> Result<Option<AdjustmentAmount>, RequestFieldAccessError> {
             Ok(None)
@@ -2509,11 +2577,6 @@ fn adjustment_without_balance_asset_rejects_missing_required_field() {
     }
     impl HasAccountAdjustmentBalanceAverageEntryPrice for NoBalanceAsset {
         fn balance_average_entry_price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
-            Ok(None)
-        }
-    }
-    impl HasAccountAdjustmentBalanceRealizedPnl for NoBalanceAsset {
-        fn balance_realized_pnl(&self) -> Result<Option<Pnl>, RequestFieldAccessError> {
             Ok(None)
         }
     }
@@ -2949,6 +3012,7 @@ fn run_adjustment(
         mutations,
     )
     .expect("adjustment must succeed")
+    .account_adjustments
 }
 
 fn run_adjustment_result(
@@ -2956,7 +3020,7 @@ fn run_adjustment_result(
     account_id: AccountId,
     adjustment: &TestAdjustment,
     mutations: &mut Mutations,
-) -> Result<Vec<crate::AccountOutcomeEntry>, crate::pretrade::Rejects> {
+) -> Result<crate::pretrade::PolicyAccountAdjustmentResult, crate::pretrade::Rejects> {
     <TestPolicy as PreTradePolicy<TestOrder, TestReport, TestAdjustment, crate::core::FullSync>>::apply_account_adjustment(
         policy,
         &AccountAdjustmentContext::new_test(dummy_control(account_id)),
@@ -4084,7 +4148,7 @@ fn seed_balance_via_engine(
         asset: seeded_asset,
         balance: Some(AdjustmentAmount::Absolute(amount)),
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -4162,7 +4226,7 @@ fn hold_rollback_overflow_blocks_account_via_engine() {
         asset: aapl.clone(),
         balance: Some(AdjustmentAmount::Absolute(PositionSize::new(Decimal::MAX))),
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -4234,7 +4298,7 @@ fn adjustment_rollback_overflow_blocks_account_via_engine() {
         asset: usd.clone(),
         balance: Some(AdjustmentAmount::Delta(ps("10"))),
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -4248,7 +4312,7 @@ fn adjustment_rollback_overflow_blocks_account_via_engine() {
         asset: usd.clone(),
         balance: Some(AdjustmentAmount::Delta(ps("1"))),
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: Some(PositionSize::new(Decimal::from(5))),
         held: None,
@@ -4324,7 +4388,7 @@ fn hold_rollback_overflow_blocks_account_via_local_engine() {
         asset: aapl.clone(),
         balance: Some(AdjustmentAmount::Absolute(max_minus_fifty)),
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -4357,7 +4421,7 @@ fn hold_rollback_overflow_blocks_account_via_local_engine() {
         asset: aapl.clone(),
         balance: Some(AdjustmentAmount::Absolute(PositionSize::new(Decimal::MAX))),
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -4451,7 +4515,7 @@ fn hold_rollback_overflow_blocks_account_with_account_sync_storage() {
         asset: aapl.clone(),
         balance: Some(AdjustmentAmount::Absolute(max_minus_fifty)),
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -4496,7 +4560,7 @@ fn hold_rollback_overflow_blocks_account_with_account_sync_storage() {
         asset: aapl.clone(),
         balance: Some(AdjustmentAmount::Absolute(PositionSize::new(Decimal::MAX))),
         balance_average_entry_price: None,
-        balance_realized_pnl: None,
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -6187,11 +6251,12 @@ fn seed_with_avg(
     amount: &str,
     avg: Price,
 ) {
+    seed(policy, account_id, asset.clone(), amount);
     let adjustment = TestAdjustment {
-        asset,
+        asset: asset.clone(),
         balance: Some(AdjustmentAmount::Absolute(ps(amount))),
         balance_average_entry_price: Some(avg),
-        balance_realized_pnl: Some(Pnl::ZERO),
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -6210,6 +6275,18 @@ fn seed_with_avg(
         &mut mutations,
     )
     .expect("seed must succeed");
+    mutations.commit_all();
+
+    let pnl_adjustment = adj_with_realized_pnl(asset, Pnl::ZERO);
+    let mut mutations = Mutations::with_capacity(1);
+    <TestPolicy as PreTradePolicy<TestOrder, TestReport, TestAdjustment, crate::core::FullSync>>::apply_account_adjustment(
+        policy,
+        &AccountAdjustmentContext::new_test(dummy_control(account_id)),
+        account_id,
+        &pnl_adjustment,
+        &mut mutations,
+    )
+    .expect("PnL seed must succeed");
     mutations.commit_all();
 }
 
@@ -6238,18 +6315,20 @@ fn balance_adjustment_with_avg_sets_slot_average_and_emits_it() {
 }
 
 #[test]
-fn metadata_only_average_adjustment_sets_slot_average_and_emits_it() {
+fn position_adjustment_sets_quantity_average_and_emits_both() {
     let acc = account(99224416);
     let policy = build_policy(None, None);
-    seed(&policy, acc, asset("AAPL"), "10");
-
-    let adjustment = adj_with_avg(asset("AAPL"), None, Some(px("150")));
+    let adjustment = adj_with_avg(
+        asset("AAPL"),
+        Some(AdjustmentAmount::Absolute(ps("10"))),
+        Some(px("150")),
+    );
     let mut mutations = Mutations::with_capacity(1);
     let outcome = run_adjustment(&policy, acc, &adjustment, &mut mutations);
     mutations.commit_all();
 
     assert_eq!(outcome.len(), 1);
-    assert!(outcome[0].balance.is_none());
+    assert!(outcome[0].balance.is_some());
     assert_eq!(outcome[0].average_entry_price, Some(px("150")));
     assert!(outcome[0].realized_pnl.is_none());
 
@@ -6401,7 +6480,7 @@ fn buy_fill_emits_average_entry_price_and_no_pnl() {
 }
 
 #[test]
-fn fill_without_account_currency_does_not_track_pnl_or_average() {
+fn fill_without_account_currency_halts_position_pnl() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
     let policy = build_policy(None, None);
@@ -6433,8 +6512,26 @@ fn fill_without_account_currency_does_not_track_pnl_or_average() {
             px("100"),
         )])),
     );
+    // The opening fill contributes a computable zero to the account line, so
+    // the missing account currency does not halt it. The position ledger still
+    // halts: it has no currency to denominate the cost basis in.
     let result = run_report_without_account_currency(&policy, &fill);
     assert!(result.account_blocks.is_empty());
+    assert_eq!(
+        result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Ok(crate::PnlOutcomeAmount {
+                delta: Pnl::ZERO,
+                absolute: Pnl::ZERO,
+            }),
+        }]
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Value(Pnl::ZERO))
+    );
 
     let aapl_entry = result
         .account_adjustments
@@ -6442,12 +6539,142 @@ fn fill_without_account_currency_does_not_track_pnl_or_average() {
         .find(|o| o.entry.asset == asset("AAPL"))
         .expect("AAPL entry must exist");
     assert!(aapl_entry.entry.average_entry_price.is_none());
-    assert!(aapl_entry.entry.realized_pnl.is_none());
+    assert_eq!(
+        aapl_entry.entry.realized_pnl,
+        Some(Err(crate::PnlHaltReason::MissingAccountCurrency))
+    );
 
     let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
     assert_eq!(aapl.available(), ps("2"));
     assert!(aapl.avg_entry_price().is_none());
     assert!(aapl.realized_pnl().is_none());
+    assert_eq!(
+        aapl.realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::MissingAccountCurrency)
+    );
+
+    let following = run_report_without_account_currency(&policy, &fill);
+    let following_aapl_entry = following
+        .account_adjustments
+        .iter()
+        .find(|o| o.entry.asset == asset("AAPL"))
+        .expect("AAPL entry must exist");
+    assert!(following_aapl_entry.entry.realized_pnl.is_none());
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("AAPL"))
+            .expect("must exist")
+            .realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::MissingAccountCurrency)
+    );
+
+    // A reducing fill has to realize against the cost basis, so the account
+    // currency becomes a required input and the account line halts.
+    let close_order = make_order(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Sell,
+        TradeAmount::Quantity(qty("1")),
+        Some(px("120")),
+    );
+    let mut mutations = Mutations::with_capacity(1);
+    pre_trade_check(&policy, &close_order, &mut mutations).expect("close must reserve");
+    mutations.commit_all();
+    let close = make_report(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Sell,
+        Some(Trade {
+            price: px("120"),
+            quantity: qty("1"),
+        }),
+        qty("0"),
+        true,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("120"),
+        )])),
+    );
+    let close_result = run_report_without_account_currency(&policy, &close);
+    assert!(close_result.account_blocks.is_empty());
+    assert_eq!(
+        close_result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Err(crate::PnlHaltReason::MissingAccountCurrency),
+        }]
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(
+            crate::PnlHaltReason::MissingAccountCurrency
+        ))
+    );
+}
+
+#[test]
+fn opening_fill_zero_fee_without_account_currency_does_not_halt_account_pnl() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut settings = settings(0);
+    settings.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    settings
+        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+            lower_bound: Some(pnl_value("-10")),
+            upper_bound: None,
+        }))
+        .expect("global account PnL barrier must set");
+    let policy = build_policy_from_settings(settings, None);
+    seed(&policy, acc, asset("USD"), "10000");
+
+    let order = make_order(
+        acc,
+        aapl_usd.clone(),
+        Side::Buy,
+        TradeAmount::Quantity(qty("2")),
+        Some(px("100")),
+    );
+    let mut mutations = Mutations::with_capacity(1);
+    pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
+    mutations.commit_all();
+
+    // An explicit zero fee is an economic no-op: the opening fill still halts
+    // the position ledger because its cost basis needs an account currency,
+    // but the independently live account line publishes its zero contribution.
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "2", money_fee("0", "USD"));
+    let result = run_report_without_account_currency(&policy, &fill);
+    assert!(result.account_blocks.is_empty());
+    assert_eq!(
+        result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Ok(crate::PnlOutcomeAmount {
+                delta: Pnl::ZERO,
+                absolute: Pnl::ZERO,
+            }),
+        }]
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Value(Pnl::ZERO))
+    );
+
+    let aapl_entry = result
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .expect("AAPL entry must exist");
+    assert_eq!(
+        aapl_entry.entry.realized_pnl,
+        Some(Err(crate::PnlHaltReason::MissingAccountCurrency))
+    );
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("AAPL"))
+            .expect("AAPL slot must exist")
+            .realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::MissingAccountCurrency)
+    );
 }
 
 #[test]
@@ -6455,20 +6682,8 @@ fn non_position_touching_fill_without_account_currency_preserves_tracking() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
     let policy = build_policy(None, None);
-    let seed = TestAdjustment {
-        asset: asset("AAPL"),
-        balance: Some(AdjustmentAmount::Absolute(ps("10"))),
-        balance_average_entry_price: Some(px("100")),
-        balance_realized_pnl: Some(pnl_value("7")),
-        balance_lower: None,
-        balance_upper: None,
-        held: None,
-        held_lower: None,
-        held_upper: None,
-        incoming: None,
-        incoming_lower: None,
-        incoming_upper: None,
-    };
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
+    let seed = adj_with_realized_pnl(asset("AAPL"), pnl_value("7"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed, &mut mutations);
     mutations.commit_all();
@@ -6589,6 +6804,17 @@ fn fresh_fx_tracks_average_and_realized_pnl_in_account_currency() {
     );
     let buy_result = run_report_with_currency(&policy, &buy_fill, asset("EUR"));
     assert!(buy_result.account_blocks.is_empty());
+    assert_eq!(
+        buy_result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Ok(crate::PnlOutcomeAmount {
+                delta: Pnl::ZERO,
+                absolute: Pnl::ZERO,
+            }),
+        }]
+    );
     let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
     assert_eq!(aapl.avg_entry_price(), Some(px("90")));
     assert_eq!(aapl.realized_pnl(), Some(Pnl::ZERO));
@@ -6625,9 +6851,107 @@ fn fresh_fx_tracks_average_and_realized_pnl_in_account_currency() {
         .iter()
         .find(|o| o.entry.asset == asset("AAPL"))
         .and_then(|o| o.entry.realized_pnl.as_ref())
+        .and_then(|outcome| outcome.as_ref().ok())
         .expect("realized pnl must be tracked");
     assert_eq!(pnl.delta, pnl_value("72"));
     assert_eq!(pnl.absolute, pnl_value("72"));
+    assert_eq!(
+        sell_result.account_pnls[0].result,
+        Ok(crate::PnlOutcomeAmount {
+            delta: pnl_value("72"),
+            absolute: pnl_value("72"),
+        }),
+    );
+}
+
+#[test]
+fn shared_asset_holding_tracks_two_quote_currencies_in_account_currency() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let aapl_gbp = instr("AAPL", "GBP");
+    let b = engine_builder();
+    let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let usd_eur = svc
+        .register(instr("USD", "EUR"))
+        .expect("USD/EUR must register");
+    let gbp_eur = svc
+        .register(instr("GBP", "EUR"))
+        .expect("GBP/EUR must register");
+    svc.push(usd_eur, Quote::new().with_mark(px("0.9")))
+        .expect("USD/EUR quote must push");
+    svc.push(gbp_eur, Quote::new().with_mark(px("1.2")))
+        .expect("GBP/EUR quote must push");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+    let policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
+    seed(&policy, acc, asset("USD"), "10000");
+    seed(&policy, acc, asset("GBP"), "10000");
+
+    let report = |instrument: Instrument, side, price: &str, quantity: &str| {
+        make_report(
+            acc,
+            instrument,
+            side,
+            Some(Trade {
+                price: px(price),
+                quantity: qty(quantity),
+            }),
+            qty("0"),
+            true,
+            Some(PreTradeLock::from_entries([(
+                DEFAULT_POLICY_GROUP_ID,
+                px(price),
+            )])),
+        )
+    };
+
+    let first_buy = report(aapl_usd.clone(), Side::Buy, "100", "10");
+    run_report_with_currency(&policy, &first_buy, asset("EUR"));
+    let second_buy = report(aapl_gbp.clone(), Side::Buy, "100", "10");
+    run_report_with_currency(&policy, &second_buy, asset("EUR"));
+
+    let shared = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(shared.available(), ps("20"));
+    assert_eq!(shared.avg_entry_price(), Some(px("105")));
+    assert_eq!(shared.realized_pnl(), Some(Pnl::ZERO));
+
+    let usd_sell_order = make_order(
+        acc,
+        aapl_usd.clone(),
+        Side::Sell,
+        TradeAmount::Quantity(qty("4")),
+        Some(px("120")),
+    );
+    let mut mutations = Mutations::with_capacity(1);
+    pre_trade_check(&policy, &usd_sell_order, &mut mutations).expect("USD sell must reserve");
+    mutations.commit_all();
+    let usd_sell = report(aapl_usd, Side::Sell, "120", "4");
+    run_report_with_currency(&policy, &usd_sell, asset("EUR"));
+
+    let gbp_sell_order = make_order(
+        acc,
+        aapl_gbp.clone(),
+        Side::Sell,
+        TradeAmount::Quantity(qty("6")),
+        Some(px("90")),
+    );
+    let mut mutations = Mutations::with_capacity(1);
+    pre_trade_check(&policy, &gbp_sell_order, &mut mutations).expect("GBP sell must reserve");
+    mutations.commit_all();
+    let gbp_sell = report(aapl_gbp, Side::Sell, "90", "6");
+    let result = run_report_with_currency(&policy, &gbp_sell, asset("EUR"));
+
+    let shared = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(shared.available(), ps("10"));
+    assert_eq!(shared.avg_entry_price(), Some(px("105")));
+    assert_eq!(shared.realized_pnl(), Some(pnl_value("30")));
+    assert_eq!(account_pnl_of(&policy, acc), Some(pnl_value("30")));
+    assert_eq!(
+        result.account_pnls[0].result,
+        Ok(crate::PnlOutcomeAmount {
+            delta: pnl_value("18"),
+            absolute: pnl_value("30"),
+        })
+    );
 }
 
 #[test]
@@ -6682,10 +7006,13 @@ fn stale_fx_quote_is_used_for_accounting() {
 }
 
 #[test]
-fn missing_fx_resets_tracking_without_block_or_reject() {
+fn missing_fx_on_opening_fill_keeps_pnl_active_until_basis_is_needed() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
-    let policy = build_policy(None, None);
+    let b = engine_builder();
+    let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+    let policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
     seed(&policy, acc, asset("USD"), "10000");
 
     let order = make_order(
@@ -6716,6 +7043,21 @@ fn missing_fx_resets_tracking_without_block_or_reject() {
     );
     let result = run_report_with_currency(&policy, &fill, asset("EUR"));
     assert!(result.account_blocks.is_empty());
+    assert_eq!(
+        result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Ok(crate::PnlOutcomeAmount {
+                delta: Pnl::ZERO,
+                absolute: Pnl::ZERO,
+            }),
+        }]
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Value(Pnl::ZERO))
+    );
 
     let aapl_entry = result
         .account_adjustments
@@ -6729,6 +7071,172 @@ fn missing_fx_resets_tracking_without_block_or_reject() {
     assert_eq!(aapl.available(), ps("2"));
     assert!(aapl.avg_entry_price().is_none());
     assert!(aapl.realized_pnl().is_none());
+    assert!(!aapl.realized_pnl_is_halted());
+
+    let fx_id = svc
+        .register(instr("USD", "EUR"))
+        .expect("FX instrument must register");
+    svc.push(fx_id, Quote::new().with_mark(px("0.8")))
+        .expect("FX quote must publish");
+
+    let close_order = make_order(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Sell,
+        TradeAmount::Quantity(qty("1")),
+        Some(px("120")),
+    );
+    let mut mutations = Mutations::with_capacity(1);
+    pre_trade_check(&policy, &close_order, &mut mutations).expect("close must reserve");
+    mutations.commit_all();
+    let close = make_report(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Sell,
+        Some(Trade {
+            price: px("120"),
+            quantity: qty("1"),
+        }),
+        qty("0"),
+        true,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("120"),
+        )])),
+    );
+    let close_result = run_report_with_currency(&policy, &close, asset("EUR"));
+    assert!(close_result.account_blocks.is_empty());
+    assert_eq!(
+        close_result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Err(crate::PnlHaltReason::MissingCostBasis),
+        }]
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(
+            crate::PnlHaltReason::MissingCostBasis
+        ))
+    );
+    let close_aapl = close_result
+        .account_adjustments
+        .iter()
+        .find(|o| o.entry.asset == asset("AAPL"))
+        .expect("AAPL entry must exist");
+    assert_eq!(
+        close_aapl.entry.realized_pnl,
+        Some(Err(crate::PnlHaltReason::MissingCostBasis))
+    );
+}
+
+#[test]
+fn arithmetic_overflow_halts_both_pnl_lines_before_currency_or_fx() {
+    let acc = account(99224416);
+    let aapl = asset("AAPL");
+    let policy = build_policy(None, None);
+    policy
+        .holdings
+        .with_mut((acc, aapl), Holdings::zero, |slot, _| {
+            *slot = Holdings::new(position_size_max(), ps("1"));
+        });
+
+    let report = make_report(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Sell,
+        Some(Trade {
+            price: px("100"),
+            quantity: qty("1"),
+        }),
+        qty("0"),
+        true,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("100"),
+        )])),
+    );
+    let result = run_report_without_account_currency(&policy, &report);
+
+    assert!(result.account_blocks.is_empty());
+    assert_eq!(
+        result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Err(crate::PnlHaltReason::ArithmeticOverflow),
+        }]
+    );
+    let position_pnl = result
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .and_then(|outcome| outcome.entry.realized_pnl);
+    assert_eq!(
+        position_pnl,
+        Some(Err(crate::PnlHaltReason::ArithmeticOverflow))
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(
+            crate::PnlHaltReason::ArithmeticOverflow
+        ))
+    );
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("AAPL"))
+            .expect("AAPL slot must exist")
+            .realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::ArithmeticOverflow)
+    );
+
+    let cascade_acc = account(99224417);
+    let b = engine_builder();
+    let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let fx_id = svc
+        .register(instr("USD", "EUR"))
+        .expect("FX instrument must register");
+    svc.push(fx_id, Quote::new().with_mark(px("2")))
+        .expect("FX quote must publish");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+    let cascade_policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
+    seed_with_avg(&cascade_policy, cascade_acc, asset("AAPL"), "1", px("100"));
+
+    let max_price = Price::new(rust_decimal::Decimal::MAX);
+    let cascade_report = make_report(
+        cascade_acc,
+        instr("AAPL", "USD"),
+        Side::Sell,
+        Some(Trade {
+            price: max_price,
+            quantity: qty("1"),
+        }),
+        qty("0"),
+        true,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            max_price,
+        )])),
+    );
+    let cascade = run_report_with_currency(&cascade_policy, &cascade_report, asset("EUR"));
+
+    assert_eq!(
+        cascade.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: cascade_acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Err(crate::PnlHaltReason::ArithmeticOverflow),
+        }]
+    );
+    let cascade_position_pnl = cascade
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .and_then(|outcome| outcome.entry.realized_pnl);
+    assert_eq!(
+        cascade_position_pnl,
+        Some(Err(crate::PnlHaltReason::ArithmeticOverflow))
+    );
 }
 
 #[test]
@@ -6741,30 +7249,26 @@ fn pnl_bounds_cascade_uses_account_group_then_global() {
 
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("USD"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-5")),
         upper_bound: None,
-    }])
+    }))
     .expect("global pnl barrier must set");
     s.set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
         account_group_id: grp,
         barrier: SpotFundsPnlBoundsBarrier {
-            account_currency: asset("USD"),
             lower_bound: Some(pnl_value("-50")),
             upper_bound: None,
         },
     }])
     .expect("group pnl barrier must set");
     let s = s
-        .with_initial_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+        .with_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
             account_id: account_specific,
             barrier: SpotFundsPnlBoundsBarrier {
-                account_currency: asset("USD"),
                 lower_bound: Some(pnl_value("-10")),
                 upper_bound: None,
             },
-            initial_pnl: Pnl::ZERO,
         }])
         .expect("account pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
@@ -6804,10 +7308,7 @@ fn pnl_bounds_cascade_uses_account_group_then_global() {
     )
     .expect("grouped report must produce a result");
     assert!(grouped_result.account_blocks.is_empty());
-    assert_eq!(
-        account_pnl_of(&policy, grouped, &asset("USD")),
-        Some(pnl_value("-20"))
-    );
+    assert_eq!(account_pnl_of(&policy, grouped), Some(pnl_value("-20")));
 
     let global_report = fill_with_fee(
         global_only,
@@ -6826,23 +7327,38 @@ fn pnl_bounds_cascade_uses_account_group_then_global() {
 }
 
 #[test]
-fn account_not_under_pnl_control_does_not_require_fx_or_track_account_pnl() {
+fn global_barrier_blocks_account_when_account_pnl_fx_is_missing() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("USD"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-10")),
         upper_bound: None,
-    }])
+    }))
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
 
     let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("1", "USD"));
     let result = run_report_with_currency(&policy, &fill, asset("EUR"));
-    assert!(result.account_blocks.is_empty());
-    assert_eq!(account_pnl_of(&policy, acc, &asset("EUR")), None);
+
+    assert_eq!(result.account_blocks.len(), 1);
+    assert_eq!(
+        result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    assert_eq!(
+        result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Err(crate::PnlHaltReason::MissingFx),
+        }]
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(crate::PnlHaltReason::MissingFx))
+    );
 }
 
 #[test]
@@ -6859,21 +7375,17 @@ fn fee_in_foreign_currency_debits_fee_asset_and_contributes_to_account_pnl() {
 
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("USD"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-10")),
         upper_bound: None,
-    }])
+    }))
     .expect("global pnl barrier must set");
     let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
 
     let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("2", "EUR"));
     let result = run_report_with_currency(&policy, &fill, asset("USD"));
     assert!(result.account_blocks.is_empty());
-    assert_eq!(
-        account_pnl_of(&policy, acc, &asset("USD")),
-        Some(pnl_value("-2.4"))
-    );
+    assert_eq!(account_pnl_of(&policy, acc), Some(pnl_value("-2.4")));
     let eur = holdings_of(&policy, acc, &asset("EUR")).expect("EUR fee leg must exist");
     assert_eq!(
         eur.available(),
@@ -6896,11 +7408,10 @@ fn fee_only_execution_report_debits_fee_asset_and_contributes_to_account_pnl() {
 
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("USD"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-10")),
         upper_bound: None,
-    }])
+    }))
     .expect("global pnl barrier must set");
     let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
     seed(&policy, acc, asset("EUR"), "10");
@@ -6912,10 +7423,7 @@ fn fee_only_execution_report_debits_fee_asset_and_contributes_to_account_pnl() {
     let result = run_report_with_currency(&policy, &report, asset("USD"));
 
     assert!(result.account_blocks.is_empty());
-    assert_eq!(
-        account_pnl_of(&policy, acc, &asset("USD")),
-        Some(pnl_value("-2.4"))
-    );
+    assert_eq!(account_pnl_of(&policy, acc), Some(pnl_value("-2.4")));
     let eur = holdings_of(&policy, acc, &asset("EUR")).expect("EUR fee leg must exist");
     assert_eq!(eur.available(), ps("8"));
     let outcome = result
@@ -6937,6 +7445,7 @@ fn fee_only_execution_report_debits_fee_asset_and_contributes_to_account_pnl() {
         .iter()
         .find(|outcome| outcome.entry.asset == asset("AAPL"))
         .and_then(|outcome| outcome.entry.realized_pnl.as_ref())
+        .and_then(|outcome| outcome.as_ref().ok())
         .expect("AAPL realized pnl outcome must exist");
     assert_eq!(aapl_realized.delta, pnl_value("-2.4"));
     assert_eq!(aapl_realized.absolute, pnl_value("-2.4"));
@@ -6945,7 +7454,51 @@ fn fee_only_execution_report_debits_fee_asset_and_contributes_to_account_pnl() {
 }
 
 #[test]
-fn fee_only_execution_report_without_pnl_control_does_not_require_fx() {
+fn fee_only_execution_report_without_account_currency_halts_both_pnl_ledgers() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    seed(&policy, acc, asset("USD"), "10");
+
+    let report = fee_only_report(acc, aapl_usd, Side::Buy, "1", false, money_fee("2", "USD"));
+    let result = run_report_without_account_currency(&policy, &report);
+
+    assert!(result.account_blocks.is_empty());
+    assert_eq!(
+        result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Err(crate::PnlHaltReason::MissingAccountCurrency),
+        }]
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(
+            crate::PnlHaltReason::MissingAccountCurrency
+        ))
+    );
+
+    let aapl_entry = result
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .expect("AAPL entry must exist");
+    assert_eq!(
+        aapl_entry.entry.realized_pnl,
+        Some(Err(crate::PnlHaltReason::MissingAccountCurrency))
+    );
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(
+        aapl.realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::MissingAccountCurrency)
+    );
+    let usd = holdings_of(&policy, acc, &asset("USD")).expect("USD fee leg must exist");
+    assert_eq!(usd.available(), ps("8"));
+}
+
+#[test]
+fn fee_only_execution_report_missing_fx_halts_account_without_barrier_or_block() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
@@ -6957,76 +7510,109 @@ fn fee_only_execution_report_without_pnl_control_does_not_require_fx() {
     let result = run_report_with_currency(&policy, &report, asset("USD"));
 
     assert!(result.account_blocks.is_empty());
+    assert_eq!(
+        result.account_pnls[0].result,
+        Err(crate::PnlHaltReason::MissingFx)
+    );
     let eur = holdings_of(&policy, acc, &asset("EUR")).expect("EUR fee leg must exist");
     assert_eq!(eur.available(), ps("8"));
-    assert_eq!(account_pnl_of(&policy, acc, &asset("USD")), None);
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(crate::PnlHaltReason::MissingFx))
+    );
 }
 
 #[test]
-fn fee_only_execution_report_missing_fx_blocks_before_balance_mutation() {
+fn fee_only_execution_report_missing_fx_applies_report_then_blocks_account() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("USD"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }])
+    }))
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
     let report = fee_only_report(acc, aapl_usd, Side::Buy, "1", false, money_fee("2", "EUR"));
     let result = run_report_with_currency(&policy, &report, asset("USD"));
 
     assert_eq!(result.account_blocks.len(), 1);
-    let block = &result.account_blocks[0];
-    assert_eq!(block.code, RejectCode::OrderValueCalculationFailed);
-    assert!(block.details.contains("PnL could not be computed"));
-    assert!(block.details.contains("source asset EUR"));
-    assert!(result.account_adjustments.is_empty());
-    assert_eq!(holdings_of(&policy, acc, &asset("EUR")), None);
-    assert_eq!(account_pnl_of(&policy, acc, &asset("USD")), None);
+    assert_eq!(
+        result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    assert_eq!(
+        result.account_pnls[0].result,
+        Err(crate::PnlHaltReason::MissingFx)
+    );
+    assert!(result
+        .account_adjustments
+        .iter()
+        .any(|outcome| { outcome.entry.asset == asset("EUR") && outcome.entry.balance.is_some() }));
+    assert!(holdings_of(&policy, acc, &asset("EUR")).is_some());
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(crate::PnlHaltReason::MissingFx))
+    );
 }
 
 #[test]
-fn missing_fx_blocks_account_under_pnl_control() {
+fn missing_account_fx_halts_account_then_blocks_under_pnl_control() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("EUR"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }])
+    }))
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
 
     let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("1", "USD"));
     let result = run_report_with_currency(&policy, &fill, asset("EUR"));
     assert_eq!(result.account_blocks.len(), 1);
-    let block = &result.account_blocks[0];
-    assert_eq!(block.code, RejectCode::OrderValueCalculationFailed);
-    assert!(block.details.contains("PnL could not be computed"));
-    assert!(block.details.contains("missing FX"));
-    assert_eq!(account_pnl_of(&policy, acc, &asset("EUR")), None);
+    assert_eq!(
+        result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    assert_eq!(
+        result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Err(crate::PnlHaltReason::MissingFx),
+        }]
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(crate::PnlHaltReason::MissingFx))
+    );
+    assert!(result
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .is_some_and(|outcome| {
+            outcome.entry.realized_pnl == Some(Err(crate::PnlHaltReason::MissingFx))
+        }));
 }
 
 // The settlement leg needs no FX because settlement asset == account currency
 // (USD), so the settlement-FX guard passes; the fee is in a foreign currency
-// (EUR) with no FX rate, so the fee-conversion branch is the one that blocks the
-// account. This isolates the fee-FX fail-safe from the settlement-FX path.
+// (EUR) with no FX rate, so the fee-conversion branch halts the position and
+// account PnL independently. This isolates the fee-FX halt from the
+// settlement-FX path while both accumulators fail closed.
 #[test]
-fn missing_fee_fx_blocks_account_when_settlement_needs_no_fx() {
+fn missing_fee_fx_halts_account_and_blocks_after_applying_report() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("USD"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }])
+    }))
     .expect("global pnl barrier must set");
     // No market-data service at all: the EUR->USD fee FX is missing, but the
     // USD settlement leg needs no FX because it is already in account currency.
@@ -7035,14 +7621,24 @@ fn missing_fee_fx_blocks_account_when_settlement_needs_no_fx() {
     let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("2", "EUR"));
     let result = run_report_with_currency(&policy, &fill, asset("USD"));
     assert_eq!(result.account_blocks.len(), 1);
-    let block = &result.account_blocks[0];
-    assert_eq!(block.code, RejectCode::OrderValueCalculationFailed);
-    assert!(block.details.contains("PnL could not be computed"));
-    assert!(block.details.contains("missing FX"));
-    assert!(block.details.contains("source asset EUR"));
-    assert!(result.account_adjustments.is_empty());
-    assert_eq!(holdings_of(&policy, acc, &asset("EUR")), None);
-    assert_eq!(account_pnl_of(&policy, acc, &asset("USD")), None);
+    assert_eq!(
+        result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    assert_eq!(
+        result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Err(crate::PnlHaltReason::MissingFx),
+        }]
+    );
+    assert!(!result.account_adjustments.is_empty());
+    assert!(holdings_of(&policy, acc, &asset("EUR")).is_some());
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(crate::PnlHaltReason::MissingFx))
+    );
 }
 
 // Positive twin of the fee-FX fail-safe: when the fee currency equals the
@@ -7053,11 +7649,10 @@ fn fee_in_account_currency_needs_no_fx_and_does_not_block() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("USD"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }])
+    }))
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
 
@@ -7065,10 +7660,7 @@ fn fee_in_account_currency_needs_no_fx_and_does_not_block() {
     let result = run_report_with_currency(&policy, &fill, asset("USD"));
     assert!(result.account_blocks.is_empty());
     // Fee 2 USD is a cost, so realized P&L is -2 with no FX conversion.
-    assert_eq!(
-        account_pnl_of(&policy, acc, &asset("USD")),
-        Some(pnl_value("-2"))
-    );
+    assert_eq!(account_pnl_of(&policy, acc), Some(pnl_value("-2")));
     // The reported realized P&L and the AAPL slot are net of the fee, and the
     // barrier reads the same figure.
     let aapl_realized = result
@@ -7076,6 +7668,7 @@ fn fee_in_account_currency_needs_no_fx_and_does_not_block() {
         .iter()
         .find(|o| o.entry.asset == asset("AAPL"))
         .and_then(|o| o.entry.realized_pnl.as_ref())
+        .and_then(|outcome| outcome.as_ref().ok())
         .expect("AAPL realized pnl outcome must exist");
     assert_eq!(aapl_realized.delta, pnl_value("-2"));
     assert_eq!(aapl_realized.absolute, pnl_value("-2"));
@@ -7084,7 +7677,7 @@ fn fee_in_account_currency_needs_no_fx_and_does_not_block() {
 }
 
 // A fee'd fill with no barrier configured still folds the fee into the reported
-// realized P&L. Previously the fee was ignored entirely without a barrier.
+// realized P&L and the account-level PnL result.
 #[test]
 fn fill_with_fee_folds_into_reported_realized_pnl_without_barrier() {
     let acc = account(99224416);
@@ -7098,18 +7691,69 @@ fn fill_with_fee_folds_into_reported_realized_pnl_without_barrier() {
     let result = run_report_with_currency(&policy, &fill, asset("USD"));
     assert!(result.account_blocks.is_empty());
 
+    assert_eq!(
+        result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Ok(crate::PnlOutcomeAmount {
+                delta: pnl_value("-3"),
+                absolute: pnl_value("-3"),
+            }),
+        }]
+    );
     let realized = result
         .account_adjustments
         .iter()
         .find(|o| o.entry.asset == asset("AAPL"))
         .and_then(|o| o.entry.realized_pnl.as_ref())
+        .and_then(|outcome| outcome.as_ref().ok())
         .expect("realized pnl must be reported net of the fee");
     assert_eq!(realized.delta, pnl_value("-3"));
     assert_eq!(realized.absolute, pnl_value("-3"));
     let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
     assert_eq!(aapl.realized_pnl(), Some(pnl_value("-3")));
-    // No barrier configured, so the kill-switch accumulator is never created.
-    assert_eq!(account_pnl_of(&policy, acc, &asset("USD")), None);
+    assert_eq!(account_pnl_of(&policy, acc), Some(pnl_value("-3")));
+}
+
+#[test]
+fn no_barrier_fill_reports_fx_converted_fee_inclusive_account_pnl() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let usd_eur = instr("USD", "EUR");
+    let b = engine_builder();
+    let svc = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let fx_id = svc.register(usd_eur).expect("register must succeed");
+    svc.push(fx_id, Quote::new().with_mark(px("0.9")))
+        .expect("push must succeed");
+    let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
+    let policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("90"));
+
+    let fill = fill_with_fee(acc, aapl_usd, Side::Sell, "120", "4", money_fee("5", "USD"));
+    let result = run_report_with_currency(&policy, &fill, asset("EUR"));
+
+    assert!(result.account_blocks.is_empty());
+    assert_eq!(
+        result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Ok(crate::PnlOutcomeAmount {
+                delta: pnl_value("67.5"),
+                absolute: pnl_value("67.5"),
+            }),
+        }]
+    );
+    let realized = result
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .and_then(|outcome| outcome.entry.realized_pnl.as_ref())
+        .and_then(|outcome| outcome.as_ref().ok())
+        .expect("AAPL realized pnl outcome must exist");
+    assert_eq!(realized.delta, pnl_value("67.5"));
+    assert_eq!(realized.absolute, pnl_value("67.5"));
 }
 
 // With a barrier configured, the reported realized P&L and the kill-switch
@@ -7121,11 +7765,10 @@ fn fill_with_fee_reported_realized_pnl_agrees_with_barrier_no_double_count() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("USD"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-1000")),
         upper_bound: Some(pnl_value("1000")),
-    }])
+    }))
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
     seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
@@ -7140,13 +7783,11 @@ fn fill_with_fee_reported_realized_pnl_agrees_with_barrier_no_double_count() {
         .iter()
         .find(|o| o.entry.asset == asset("AAPL"))
         .and_then(|o| o.entry.realized_pnl.as_ref())
+        .and_then(|outcome| outcome.as_ref().ok())
         .expect("realized pnl must be reported");
     assert_eq!(realized.delta, pnl_value("115"));
     assert_eq!(realized.absolute, pnl_value("115"));
-    assert_eq!(
-        account_pnl_of(&policy, acc, &asset("USD")),
-        Some(pnl_value("115"))
-    );
+    assert_eq!(account_pnl_of(&policy, acc), Some(pnl_value("115")));
     let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
     assert_eq!(aapl.realized_pnl(), Some(pnl_value("115")));
 }
@@ -7169,6 +7810,7 @@ fn rebate_fee_increases_reported_realized_pnl() {
         .iter()
         .find(|o| o.entry.asset == asset("AAPL"))
         .and_then(|o| o.entry.realized_pnl.as_ref())
+        .and_then(|outcome| outcome.as_ref().ok())
         .expect("realized pnl must be reported");
     assert_eq!(realized.delta, pnl_value("4"));
     assert_eq!(realized.absolute, pnl_value("4"));
@@ -7177,10 +7819,11 @@ fn rebate_fee_increases_reported_realized_pnl() {
 }
 
 // A fee'd fill whose realized P&L is untracked (no account currency in context)
-// still debits the fee from the settlement balance, leaves realized P&L
-// untracked, and blocks nothing.
+// still reports why P&L was unavailable, debits the fee from the settlement
+// balance, and blocks nothing without a barrier. The asset-slot and account
+// accumulators both halt because both are denominated in account currency.
 #[test]
-fn fill_with_fee_untracked_realized_pnl_debits_balance_without_folding() {
+fn fill_with_fee_without_account_currency_reports_missing_currency_reason() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
     let policy = build_policy(None, None);
@@ -7189,13 +7832,30 @@ fn fill_with_fee_untracked_realized_pnl_debits_balance_without_folding() {
     let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("3", "USD"));
     let result = run_report_without_account_currency(&policy, &fill);
     assert!(result.account_blocks.is_empty());
+    assert_eq!(
+        result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Err(crate::PnlHaltReason::MissingAccountCurrency),
+        }]
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(
+            crate::PnlHaltReason::MissingAccountCurrency
+        ))
+    );
 
     let aapl_entry = result
         .account_adjustments
         .iter()
         .find(|o| o.entry.asset == asset("AAPL"))
         .expect("AAPL entry must exist");
-    assert!(aapl_entry.entry.realized_pnl.is_none());
+    assert_eq!(
+        aapl_entry.entry.realized_pnl,
+        Some(Err(crate::PnlHaltReason::MissingAccountCurrency))
+    );
     let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
     assert!(aapl.realized_pnl().is_none());
 
@@ -7222,11 +7882,10 @@ fn fee_only_execution_report_untracked_slot_still_contributes_to_barrier() {
 
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("USD"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-2")),
         upper_bound: None,
-    }])
+    }))
     .expect("global pnl barrier must set");
     let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
     seed(&policy, acc, asset("EUR"), "10");
@@ -7241,15 +7900,11 @@ fn fee_only_execution_report_untracked_slot_still_contributes_to_barrier() {
         .contains("lower bound breached"));
     let eur = holdings_of(&policy, acc, &asset("EUR")).expect("EUR fee leg must exist");
     assert_eq!(eur.available(), ps("8"));
-    assert_eq!(
-        account_pnl_of(&policy, acc, &asset("USD")),
-        Some(pnl_value("-2.4"))
-    );
+    assert_eq!(account_pnl_of(&policy, acc), Some(pnl_value("-2.4")));
     assert_eq!(holdings_of(&policy, acc, &asset("AAPL")), None);
 }
-
 #[test]
-fn fee_only_untracked_slot_skips_unneeded_fx_conversion_without_barrier() {
+fn fee_only_untracked_slot_pnl_conversion_overflow_halts_accumulators() {
     use rust_decimal::Decimal;
 
     let acc = account(99224416);
@@ -7271,14 +7926,26 @@ fn fee_only_untracked_slot_skips_unneeded_fx_conversion_without_barrier() {
     let result = run_report_with_currency(&policy, &report, asset("USD"));
 
     assert!(result.account_blocks.is_empty());
-    let eur = holdings_of(&policy, acc, &asset("EUR")).expect("EUR fee leg must exist");
-    assert_eq!(eur.available(), PositionSize::new(Decimal::MIN));
-    assert_eq!(holdings_of(&policy, acc, &asset("AAPL")), None);
-    assert_eq!(account_pnl_of(&policy, acc, &asset("USD")), None);
+    assert_eq!(result.account_pnls.len(), 1);
+    assert_eq!(
+        result.account_pnls[0].result,
+        Err(crate::PnlHaltReason::ArithmeticOverflow)
+    );
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(
+        aapl.realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::ArithmeticOverflow)
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(
+            crate::PnlHaltReason::ArithmeticOverflow
+        ))
+    );
 }
 
 #[test]
-fn zero_fee_only_report_is_a_no_op_for_tracked_position() {
+fn zero_fee_only_report_is_an_economic_noop() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
     let policy = build_policy(None, None);
@@ -7291,10 +7958,11 @@ fn zero_fee_only_report_is_a_no_op_for_tracked_position() {
 
     assert!(result.is_none());
     assert_eq!(holdings_of(&policy, acc, &asset("AAPL")), before);
+    assert_eq!(account_pnl_of(&policy, acc), None);
 }
 
 #[test]
-fn fee_report_delta_overflow_does_not_mutate_position_pnl() {
+fn fee_report_delta_overflow_halts_position_and_account_pnl() {
     use rust_decimal::Decimal;
 
     let acc = account(99224416);
@@ -7308,7 +7976,7 @@ fn fee_report_delta_overflow_does_not_mutate_position_pnl() {
     let bundle = SpotFundsMarketData::new(Arc::clone(&svc));
     let policy = SpotFundsPolicy::new(settings(0), Some(bundle), b.storage_builder());
     seed_with_avg(&policy, acc, asset("AAPL"), "1", px("0"));
-    let adjustment = adj_with_realized_pnl(asset("AAPL"), None, Some(Pnl::new(Decimal::MIN)));
+    let adjustment = adj_with_realized_pnl(asset("AAPL"), Pnl::new(Decimal::MIN));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("seed must succeed");
     mutations.commit_all();
@@ -7323,20 +7991,23 @@ fn fee_report_delta_overflow_does_not_mutate_position_pnl() {
     );
     let result = run_report_with_currency(&policy, &fill, asset("USD"));
 
-    assert_eq!(result.account_blocks.len(), 1);
-    assert!(result.account_blocks[0]
-        .details
-        .contains("fee realized pnl overflow"));
+    assert!(result.account_blocks.is_empty());
+    assert_eq!(
+        result.account_pnls[0].result,
+        Err(crate::PnlHaltReason::ArithmeticOverflow)
+    );
     let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
-    assert_eq!(aapl.realized_pnl(), Some(Pnl::ZERO));
+    assert_eq!(
+        aapl.realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::ArithmeticOverflow)
+    );
     let outcome = result
         .account_adjustments
         .iter()
         .find(|entry| entry.entry.asset == asset("AAPL"))
         .and_then(|entry| entry.entry.realized_pnl.as_ref())
         .expect("AAPL realized pnl outcome must exist");
-    assert_eq!(outcome.delta, Pnl::new(Decimal::MAX));
-    assert_eq!(outcome.absolute, Pnl::ZERO);
+    assert_eq!(*outcome, Err(crate::PnlHaltReason::ArithmeticOverflow));
 }
 
 #[test]
@@ -7347,16 +8018,15 @@ fn fee_only_position_pnl_overflow_still_updates_account_pnl() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("USD"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }])
+    }))
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
     seed(&policy, acc, asset("USD"), "1000");
     seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
-    let adjustment = adj_with_realized_pnl(asset("AAPL"), None, Some(Pnl::new(Decimal::MIN)));
+    let adjustment = adj_with_realized_pnl(asset("AAPL"), Pnl::new(Decimal::MIN));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("seed must succeed");
     mutations.commit_all();
@@ -7364,16 +8034,13 @@ fn fee_only_position_pnl_overflow_still_updates_account_pnl() {
     let report = fee_only_report(acc, aapl_usd, Side::Buy, "0", false, money_fee("1", "USD"));
     let result = run_report_with_currency(&policy, &report, asset("USD"));
 
-    assert_eq!(result.account_blocks.len(), 1);
-    assert!(result.account_blocks[0]
-        .details
-        .contains("fee realized pnl overflow"));
-    assert_eq!(
-        account_pnl_of(&policy, acc, &asset("USD")),
-        Some(pnl_value("-1"))
-    );
+    assert!(result.account_blocks.is_empty());
+    assert_eq!(account_pnl_of(&policy, acc), Some(pnl_value("-1")));
     let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
-    assert_eq!(aapl.realized_pnl(), Some(Pnl::new(Decimal::MIN)));
+    assert_eq!(
+        aapl.realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::ArithmeticOverflow)
+    );
     let usd = holdings_of(&policy, acc, &asset("USD")).expect("USD slot must exist");
     assert_eq!(usd.available(), ps("999"));
 }
@@ -7386,16 +8053,15 @@ fn fill_position_pnl_overflow_still_updates_account_pnl() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("USD"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }])
+    }))
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
     seed(&policy, acc, asset("USD"), "1000");
     seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
-    let adjustment = adj_with_realized_pnl(asset("AAPL"), None, Some(Pnl::new(Decimal::MIN)));
+    let adjustment = adj_with_realized_pnl(asset("AAPL"), Pnl::new(Decimal::MIN));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("seed must succeed");
     mutations.commit_all();
@@ -7403,26 +8069,23 @@ fn fill_position_pnl_overflow_still_updates_account_pnl() {
     let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("1", "USD"));
     let result = run_report_with_currency(&policy, &fill, asset("USD"));
 
-    assert_eq!(result.account_blocks.len(), 1);
-    assert!(result.account_blocks[0]
-        .details
-        .contains("fee realized pnl overflow"));
-    assert_eq!(
-        account_pnl_of(&policy, acc, &asset("USD")),
-        Some(pnl_value("-1"))
-    );
+    assert!(result.account_blocks.is_empty());
+    assert_eq!(account_pnl_of(&policy, acc), Some(pnl_value("-1")));
     let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
-    assert_eq!(aapl.realized_pnl(), Some(Pnl::new(Decimal::MIN)));
+    assert_eq!(
+        aapl.realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::ArithmeticOverflow)
+    );
     let usd = holdings_of(&policy, acc, &asset("USD")).expect("USD slot must exist");
     assert_eq!(usd.available(), ps("999"));
 }
 
 // The realized-P&L accumulator itself overflows: seed it at Decimal::MAX (still
 // inside the bounds), then apply a fill whose fee rebate contributes a positive
-// P&L delta. MAX + positive overflows in apply_account_pnl_delta and surfaces as
-// OrderValueCalculationFailed, which the engine latches into an account block.
+// P&L delta. MAX + positive overflows in apply_account_pnl_delta and halts only
+// the account-PnL accumulator.
 #[test]
-fn account_pnl_accumulator_overflow_blocks_account() {
+fn account_pnl_accumulator_overflow_halts_account_pnl() {
     use rust_decimal::Decimal;
 
     let acc = account(99224416);
@@ -7430,33 +8093,80 @@ fn account_pnl_accumulator_overflow_blocks_account() {
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
     let s = s
-        .with_initial_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+        .with_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
             account_id: acc,
             barrier: SpotFundsPnlBoundsBarrier {
-                account_currency: asset("USD"),
                 lower_bound: Some(pnl_value("-100")),
                 upper_bound: None,
             },
-            initial_pnl: Pnl::new(Decimal::MAX),
         }])
         .expect("account pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
+    policy.set_account_pnl_state(acc, crate::PnlState::Value(Pnl::new(Decimal::MAX)));
 
     // A negative fee is a rebate -> positive P&L delta of +1; MAX + 1 overflows.
     let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("-1", "USD"));
     let result = run_report_with_currency(&policy, &fill, asset("USD"));
     assert_eq!(result.account_blocks.len(), 1);
-    let block = &result.account_blocks[0];
-    assert_eq!(block.code, RejectCode::OrderValueCalculationFailed);
-    assert_eq!(block.reason, "pnl calculation failed");
-    assert!(block.details.contains("spot-funds account pnl overflow"));
+    assert_eq!(
+        result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    assert_eq!(result.account_pnls.len(), 1);
+    assert_eq!(
+        result.account_pnls[0].result,
+        Err(crate::PnlHaltReason::ArithmeticOverflow)
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(
+            crate::PnlHaltReason::ArithmeticOverflow
+        ))
+    );
+
+    let repeated = run_report_with_currency(&policy, &fill, asset("USD"));
+    assert_eq!(repeated.account_blocks.len(), 1);
+    assert!(repeated.account_pnls.is_empty());
+}
+
+// A PnL barrier is not required for accumulator overflow to fail safe. The
+// accumulator has a prior account-level value, then a fee rebate contributes
+// a positive PnL delta that overflows the ledger.
+#[test]
+fn account_pnl_accumulator_overflow_halts_without_barrier() {
+    use rust_decimal::Decimal;
+
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    policy
+        .pnl
+        .with_mut(acc, super::AccountPnlEntry::zero, |entry, _is_new| {
+            entry.state = crate::PnlState::Value(Pnl::new(Decimal::MAX))
+        });
+
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("-1", "USD"));
+    let result = run_report_with_currency(&policy, &fill, asset("USD"));
+
+    assert!(result.account_blocks.is_empty());
+    assert_eq!(result.account_pnls.len(), 1);
+    assert_eq!(
+        result.account_pnls[0].result,
+        Err(crate::PnlHaltReason::ArithmeticOverflow)
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(
+            crate::PnlHaltReason::ArithmeticOverflow
+        ))
+    );
 }
 
 // Negative twin of the accumulator overflow: seed at Decimal::MIN, apply a fill
 // whose positive fee is a cost (negative P&L delta). MIN + negative underflows in
-// apply_account_pnl_delta and surfaces as OrderValueCalculationFailed.
+// apply_account_pnl_delta and halts the account-PnL accumulator.
 #[test]
-fn account_pnl_accumulator_negative_overflow_blocks_account() {
+fn account_pnl_accumulator_negative_overflow_halts_account_pnl() {
     use rust_decimal::Decimal;
 
     let acc = account(99224416);
@@ -7464,25 +8174,29 @@ fn account_pnl_accumulator_negative_overflow_blocks_account() {
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
     let s = s
-        .with_initial_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+        .with_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
             account_id: acc,
             barrier: SpotFundsPnlBoundsBarrier {
-                account_currency: asset("USD"),
                 lower_bound: None,
                 upper_bound: Some(pnl_value("100")),
             },
-            initial_pnl: Pnl::new(Decimal::MIN),
         }])
         .expect("account pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
+    policy.set_account_pnl_state(acc, crate::PnlState::Value(Pnl::new(Decimal::MIN)));
 
     let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("1", "USD"));
     let result = run_report_with_currency(&policy, &fill, asset("USD"));
     assert_eq!(result.account_blocks.len(), 1);
-    let block = &result.account_blocks[0];
-    assert_eq!(block.code, RejectCode::OrderValueCalculationFailed);
-    assert_eq!(block.reason, "pnl calculation failed");
-    assert!(block.details.contains("spot-funds account pnl overflow"));
+    assert_eq!(
+        result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    assert_eq!(result.account_pnls.len(), 1);
+    assert_eq!(
+        result.account_pnls[0].result,
+        Err(crate::PnlHaltReason::ArithmeticOverflow)
+    );
 }
 
 // The fee->account-currency conversion itself overflows before the accumulator
@@ -7490,7 +8204,7 @@ fn account_pnl_accumulator_negative_overflow_blocks_account() {
 // makes `fee_amount * factor` overflow inside fee_pnl_delta. This is a distinct
 // branch from the accumulator overflow above.
 #[test]
-fn fee_pnl_conversion_overflow_blocks_account() {
+fn fee_pnl_conversion_overflow_halts_position_and_account_pnl() {
     use rust_decimal::Decimal;
 
     let acc = account(99224416);
@@ -7506,11 +8220,10 @@ fn fee_pnl_conversion_overflow_blocks_account() {
 
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("USD"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-100")),
         upper_bound: None,
-    }])
+    }))
     .expect("global pnl barrier must set");
     let policy = SpotFundsPolicy::new(s, Some(bundle), b.storage_builder());
 
@@ -7521,79 +8234,18 @@ fn fee_pnl_conversion_overflow_blocks_account() {
     let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", huge_fee);
     let result = run_report_with_currency(&policy, &fill, asset("USD"));
     assert_eq!(result.account_blocks.len(), 1);
-    let block = &result.account_blocks[0];
-    assert_eq!(block.code, RejectCode::OrderValueCalculationFailed);
-    assert_eq!(block.reason, "pnl calculation failed");
-    assert!(block.details.contains("fee pnl conversion overflow"));
-    assert!(
-        result.account_adjustments.is_empty(),
-        "fee conversion overflow must not emit already-applied holdings mutations"
-    );
-    assert_eq!(holdings_of(&policy, acc, &asset("EUR")), None);
-}
-
-// The runtime configuration path cannot inject an initial-P&L seed. The seed
-// setter (with_initial_pnl_account_barriers) consumes `self` and so cannot be
-// called through the runtime `spot_funds` closure, which only hands out
-// `&mut SpotFundsSettings`; the runtime setter it does expose
-// (set_pnl_account_barriers) carries no seed. This test proves that a runtime
-// barrier update leaves the live accumulator untouched.
-#[test]
-fn runtime_barrier_update_cannot_seed_initial_pnl() {
-    use crate::pretrade::ConfigurablePolicy;
-    use crate::storage::ConfigCell;
-
-    let acc = account(99224416);
-    let aapl_usd = instr("AAPL", "USD");
-    let mut s = settings(0);
-    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    let s = s
-        .with_initial_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
-            account_id: acc,
-            barrier: SpotFundsPnlBoundsBarrier {
-                account_currency: asset("USD"),
-                lower_bound: Some(pnl_value("-100")),
-                upper_bound: None,
-            },
-            initial_pnl: pnl_value("-40"),
-        }])
-        .expect("account pnl barrier must set");
-    let policy = build_policy_from_settings(s, None);
-    assert_eq!(
-        account_pnl_of(&policy, acc, &asset("USD")),
-        Some(pnl_value("-40"))
-    );
-
-    // A runtime update replaces the barrier bounds through the only runtime-
-    // reachable setter; it has no initial_pnl notion and must not reset the
-    // accumulator back to any seed.
-    policy
-        .settings_cell()
-        .update::<SpotFundsConfigError>(|settings| {
-            settings.set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrierUpdate {
-                account_id: acc,
-                barrier: SpotFundsPnlBoundsBarrier {
-                    account_currency: asset("USD"),
-                    lower_bound: Some(pnl_value("-30")),
-                    upper_bound: None,
-                },
-            }])
-        })
-        .expect("runtime barrier update must publish");
-
-    // The accumulator still holds -40 from the build-time seed, unchanged by the
-    // runtime update; a zero-delta fill re-evaluates it against the tighter -30
-    // bound and blocks.
-    let recheck = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("0", "USD"));
-    let result = run_report_with_currency(&policy, &recheck, asset("USD"));
-    assert_eq!(result.account_blocks.len(), 1);
     assert_eq!(
         result.account_blocks[0].code,
         RejectCode::PnlKillSwitchTriggered
     );
     assert_eq!(
-        account_pnl_of(&policy, acc, &asset("USD")),
-        Some(pnl_value("-40"))
+        result.account_pnls[0].result,
+        Err(crate::PnlHaltReason::ArithmeticOverflow)
+    );
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(
+        aapl.realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::ArithmeticOverflow)
     );
 }
 
@@ -7602,11 +8254,10 @@ fn pnl_bounds_block_lower_and_upper_boundary_breaches() {
     let aapl_usd = instr("AAPL", "USD");
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
-    s.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-        account_currency: asset("USD"),
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
         lower_bound: Some(pnl_value("-10")),
         upper_bound: Some(pnl_value("10")),
-    }])
+    }))
     .expect("global pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
 
@@ -7627,6 +8278,17 @@ fn pnl_bounds_block_lower_and_upper_boundary_breaches() {
     assert!(lower_result.account_blocks[0]
         .details
         .contains("lower bound breached"));
+    assert_eq!(
+        lower_result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: account(99224416),
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Ok(crate::PnlOutcomeAmount {
+                delta: pnl_value("-11"),
+                absolute: pnl_value("-11"),
+            }),
+        }]
+    );
 
     let upper = fill_with_fee(
         account(99224417),
@@ -7645,10 +8307,21 @@ fn pnl_bounds_block_lower_and_upper_boundary_breaches() {
     assert!(upper_result.account_blocks[0]
         .details
         .contains("upper bound breached"));
+    assert_eq!(
+        upper_result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: account(99224417),
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Ok(crate::PnlOutcomeAmount {
+                delta: pnl_value("11"),
+                absolute: pnl_value("11"),
+            }),
+        }]
+    );
 }
 
 #[test]
-fn account_initial_pnl_seed_and_config_correction_are_account_scoped() {
+fn account_pnl_config_correction_is_account_scoped() {
     let acc_blocked = account(99224416);
     let acc_corrected = account(99224417);
     let aapl_usd = instr("AAPL", "USD");
@@ -7657,24 +8330,20 @@ fn account_initial_pnl_seed_and_config_correction_are_account_scoped() {
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
     let s = s
-        .with_initial_pnl_account_barriers([
+        .with_pnl_account_barriers([
             SpotFundsPnlBoundsAccountBarrier {
                 account_id: acc_blocked,
                 barrier: SpotFundsPnlBoundsBarrier {
-                    account_currency: asset("USD"),
                     lower_bound: Some(pnl_value("-10")),
                     upper_bound: None,
                 },
-                initial_pnl: pnl_value("-9"),
             },
             SpotFundsPnlBoundsAccountBarrier {
                 account_id: acc_corrected,
                 barrier: SpotFundsPnlBoundsBarrier {
-                    account_currency: asset("USD"),
                     lower_bound: Some(pnl_value("-10")),
                     upper_bound: None,
                 },
-                initial_pnl: pnl_value("-9"),
             },
         ])
         .expect("account pnl barriers must set");
@@ -7686,6 +8355,14 @@ fn account_initial_pnl_seed_and_config_correction_are_account_scoped() {
         .expect("engine must build");
     engine.accounts().set_currency(acc_blocked, asset("USD"));
     engine.accounts().set_currency(acc_corrected, asset("USD"));
+    engine
+        .configure()
+        .set_spot_funds_account_pnl(
+            SpotFundsPolicy::<FullSync, FullSync>::NAME,
+            acc_blocked,
+            crate::PnlState::Value(pnl_value("-20")),
+        )
+        .expect("account pnl correction must publish");
 
     let blocked = fill_with_fee(
         acc_blocked,
@@ -7707,8 +8384,7 @@ fn account_initial_pnl_seed_and_config_correction_are_account_scoped() {
         .set_spot_funds_account_pnl(
             SpotFundsPolicy::<FullSync, FullSync>::NAME,
             acc_corrected,
-            asset("USD"),
-            Pnl::ZERO,
+            crate::PnlState::Value(Pnl::ZERO),
         )
         .expect("account pnl correction must publish");
     let corrected = fill_with_fee(
@@ -7724,6 +8400,640 @@ fn account_initial_pnl_seed_and_config_correction_are_account_scoped() {
 }
 
 #[test]
+fn halted_account_pnl_adjustment_with_effective_barrier_blocks_account() {
+    let acc = account(99224416);
+    let mut settings = settings(0);
+    settings
+        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+            lower_bound: Some(pnl_value("-10")),
+            upper_bound: None,
+        }))
+        .expect("global account PnL barrier must set");
+    let engine = build_account_pnl_test_engine(settings);
+
+    let result = engine
+        .apply_account_adjustment(
+            acc,
+            &[account_pnl_adjustment(crate::PnlState::Halted(
+                crate::PnlHaltReason::MissingFx,
+            ))],
+        )
+        .expect("halted account PnL correction must succeed");
+
+    assert!(result.outcomes.is_empty());
+    assert_eq!(result.account_blocks.len(), 1);
+    assert_eq!(
+        result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    let rejects = match engine.start_pre_trade(account_pnl_probe_order(acc)) {
+        Ok(_) => panic!("halted account PnL with an effective barrier must be blocked"),
+        Err(rejects) => rejects,
+    };
+    assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+}
+
+#[test]
+fn halted_account_pnl_adjustment_without_barrier_does_not_block_account() {
+    let acc = account(99224416);
+    let engine = build_account_pnl_test_engine(settings(0));
+
+    let result = engine
+        .apply_account_adjustment(
+            acc,
+            &[account_pnl_adjustment(crate::PnlState::Halted(
+                crate::PnlHaltReason::MissingFx,
+            ))],
+        )
+        .expect("halted account PnL correction must succeed");
+
+    assert!(result.account_blocks.is_empty());
+    assert!(engine.start_pre_trade(account_pnl_probe_order(acc)).is_ok());
+}
+
+#[test]
+fn numeric_account_pnl_adjustment_blocks_on_out_of_bounds_value() {
+    let acc = account(99224416);
+    let mut settings = settings(0);
+    settings
+        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+            lower_bound: Some(pnl_value("-10")),
+            upper_bound: None,
+        }))
+        .expect("global account PnL barrier must set");
+    let engine = build_account_pnl_test_engine(settings);
+
+    let result = engine
+        .apply_account_adjustment(
+            acc,
+            &[account_pnl_adjustment(crate::PnlState::Value(pnl_value(
+                "-20",
+            )))],
+        )
+        .expect("numeric account PnL correction must succeed");
+
+    assert_eq!(result.account_blocks.len(), 1);
+    assert!(engine
+        .start_pre_trade(account_pnl_probe_order(acc))
+        .is_err());
+}
+
+/// Regression, through the engine's own adjustment path: the engine discards a
+/// batch's blocks when it rejects and records them only after `commit_all`, so
+/// a committed force-set's own breach block is untagged and keeps the account
+/// blocked, with no rollback left that could retire it.
+#[test]
+fn committed_out_of_bounds_account_pnl_adjustment_keeps_the_account_blocked() {
+    let acc = account(99224416);
+    let mut settings = settings(0);
+    settings
+        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+            lower_bound: Some(pnl_value("-10")),
+            upper_bound: None,
+        }))
+        .expect("global account PnL barrier must set");
+    let engine = build_account_pnl_test_engine(settings);
+
+    let result = engine
+        .apply_account_adjustment(
+            acc,
+            &[account_pnl_adjustment(crate::PnlState::Value(pnl_value(
+                "-20",
+            )))],
+        )
+        .expect("numeric account PnL correction must succeed");
+    assert_eq!(result.account_blocks.len(), 1);
+
+    assert!(
+        engine
+            .start_pre_trade(account_pnl_probe_order(acc))
+            .is_err(),
+        "the committed breach must keep blocking the account"
+    );
+}
+
+#[test]
+fn account_pnl_rollback_preserves_fill_delta_and_rechecks_barrier() {
+    let acc = account(99224416);
+    let barrier = SpotFundsPnlBoundsBarrier {
+        lower_bound: Some(pnl_value("-120")),
+        upper_bound: None,
+    };
+    let policy = build_policy(None, None);
+    policy.set_account_pnl_state(acc, crate::PnlState::Value(pnl_value("-100")));
+
+    let mut mutations = Mutations::with_capacity(1);
+    let owner_id = mutations.owner_id();
+    let asserted = crate::PnlState::Value(pnl_value("-50"));
+    let (previous, token, lease) = policy.acquire_account_pnl_assertion(acc, owner_id, asserted);
+    policy.register_account_pnl_adjustment_rollback(
+        &mut mutations,
+        AccountPnlAssertionRollback {
+            account_control: Some(dummy_control(acc)),
+            account_id: acc,
+            previous,
+            asserted,
+            token,
+            barrier: Some(barrier),
+            lease,
+        },
+    );
+
+    let (fill, provenance) = policy.update_account_pnl(acc, pnl_value("-30"));
+    assert!(fill.is_ok());
+    assert_eq!(provenance, Some(token));
+
+    let report = mutations.rollback_all().report;
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Value(pnl_value("-130")))
+    );
+    assert_eq!(report.account_blocks.len(), 1);
+    assert_eq!(
+        report.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+}
+
+fn lease_of(policy: &TestPolicy, account_id: AccountId) -> Option<(u64, usize)> {
+    policy
+        .pnl_leases
+        .with(&account_id, |lease| {
+            lease.as_ref().map(|lease| (lease.owner_id, lease.depth))
+        })
+        .flatten()
+}
+
+/// The production acquirer is re-entrant per owner: nested acquisitions stack
+/// depth instead of self-blocking, and only the outermost release frees the
+/// account for the next owner.
+#[test]
+fn account_pnl_lease_is_reentrant_for_one_owner_and_releases_outermost_last() {
+    let acc = account(99224416);
+    let policy = build_policy(None, None);
+    let owner_id = 7;
+
+    let outer = policy.acquire_account_pnl_lease(acc, owner_id);
+    assert_eq!(lease_of(&policy, acc), Some((owner_id, 1)));
+
+    let inner = policy.acquire_account_pnl_lease(acc, owner_id);
+    assert_eq!(
+        lease_of(&policy, acc),
+        Some((owner_id, 2)),
+        "a re-entrant acquisition must stack depth, not take a second lease"
+    );
+
+    drop(inner);
+    assert_eq!(
+        lease_of(&policy, acc),
+        Some((owner_id, 1)),
+        "releasing the inner acquisition must leave the outer one holding"
+    );
+
+    drop(outer);
+    assert_eq!(lease_of(&policy, acc), None);
+
+    let next = policy.acquire_account_pnl_lease(acc, owner_id + 1);
+    assert_eq!(
+        lease_of(&policy, acc),
+        Some((owner_id + 1, 1)),
+        "the released account must be available to the next owner"
+    );
+    drop(next);
+    assert_eq!(lease_of(&policy, acc), None);
+}
+
+/// Leases are per account, so an owner holding one account never delays
+/// another.
+#[test]
+fn account_pnl_leases_of_distinct_accounts_are_independent() {
+    let first = account(99224416);
+    let second = account(99224417);
+    let policy = build_policy(None, None);
+
+    let first_lease = policy.acquire_account_pnl_lease(first, 7);
+    let second_lease = policy.acquire_account_pnl_lease(second, 8);
+
+    assert_eq!(lease_of(&policy, first), Some((7, 1)));
+    assert_eq!(lease_of(&policy, second), Some((8, 1)));
+
+    drop(first_lease);
+    assert_eq!(lease_of(&policy, first), None);
+    assert_eq!(lease_of(&policy, second), Some((8, 1)));
+    drop(second_lease);
+}
+
+/// The unbounded wait ends as soon as the holder releases: a contending owner
+/// on another thread backs off, then takes the lease.
+#[test]
+fn account_pnl_lease_wait_ends_when_the_holder_releases() {
+    let acc = account(99224416);
+    let policy = Arc::new(build_policy(None, None));
+    let held = policy.acquire_account_pnl_lease(acc, 7);
+
+    let contender = {
+        let policy = Arc::clone(&policy);
+        std::thread::spawn(move || {
+            let _lease = policy.acquire_account_pnl_lease(acc, 8);
+            assert_eq!(lease_of(&policy, acc), Some((8, 1)));
+        })
+    };
+
+    // Let the contender reach the wait before the holder releases.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(
+        lease_of(&policy, acc),
+        Some((7, 1)),
+        "a contending owner must not take a held lease"
+    );
+    drop(held);
+
+    contender
+        .join()
+        .expect("contending owner must acquire the released lease");
+    assert_eq!(lease_of(&policy, acc), None);
+}
+
+/// A committed assertion is never rolled back, so the block an interleaving
+/// execution report computed against its asserted value stays: nothing retires
+/// the cause, and its token is inert once the only holder has committed.
+#[test]
+fn committed_account_pnl_assertion_keeps_its_block() {
+    let acc = account(99224416);
+    let policy = build_policy(None, None);
+    let control = dummy_control(acc);
+
+    let mut mutations = Mutations::with_capacity(1);
+    let owner_id = mutations.owner_id();
+    let asserted = crate::PnlState::Value(pnl_value("-50"));
+    let (previous, token, lease) = policy.acquire_account_pnl_assertion(acc, owner_id, asserted);
+    // An interleaving execution report breached the barrier against the
+    // asserted, not-yet-final value, so its block answers to the assertion.
+    control.block(provisional_block("interleaved fill breach", token));
+    policy.register_account_pnl_adjustment_rollback(
+        &mut mutations,
+        AccountPnlAssertionRollback {
+            account_control: Some(control.clone()),
+            account_id: acc,
+            previous,
+            asserted,
+            token,
+            barrier: None,
+            lease,
+        },
+    );
+
+    mutations.commit_all();
+
+    let blocked = control
+        .invalidate_provenance(token)
+        .expect("nothing retired the cause, so its token still matches it");
+    assert_eq!(blocked.details, "interleaved fill breach");
+}
+
+/// An operator who overwrites the reason of a block raised against an in-flight
+/// assertion takes ownership of it: the stored cause is no longer the
+/// assertion's own, so its rollback leaves the account blocked.
+#[test]
+fn an_operator_overwrite_outlives_the_asserting_rollback() {
+    use crate::core::account_control::BlockedAccounts;
+    use crate::core::AccountBlockHandle;
+    use crate::storage::{FullLocking, LockingPolicyFactory, StorageBuilder};
+
+    let acc = account(99224416);
+    let policy = build_policy(None, None);
+    let sb = StorageBuilder::new(FullLocking);
+    let blocked = FullLocking::new_shared(BlockedAccounts::new(&sb));
+    let control =
+        crate::core::AccountControl::new(AccountBlockHandle::from_inner(blocked.clone()), acc);
+
+    let mut mutations = Mutations::with_capacity(1);
+    let owner_id = mutations.owner_id();
+    let asserted = crate::PnlState::Value(pnl_value("-50"));
+    let (previous, token, lease) = policy.acquire_account_pnl_assertion(acc, owner_id, asserted);
+    // An interleaving execution report breached the barrier against the
+    // asserted, not-yet-final value, so its block answers to the assertion.
+    control.block(provisional_block("interleaved fill breach", token));
+    policy.register_account_pnl_adjustment_rollback(
+        &mut mutations,
+        AccountPnlAssertionRollback {
+            account_control: Some(control.clone()),
+            account_id: acc,
+            previous,
+            asserted,
+            token,
+            barrier: None,
+            lease,
+        },
+    );
+
+    // The operator overwrites the reason, which makes the block theirs.
+    blocked
+        .replace_reason(
+            acc,
+            crate::pretrade::AccountBlock::new(
+                TestPolicy::NAME,
+                RejectCode::AccountBlocked,
+                "under manual review",
+                String::new(),
+            ),
+        )
+        .expect("a blocked account must accept a replaced reason");
+
+    let report = mutations.rollback_all();
+
+    assert!(
+        report.report.invalidated_account_blocks.is_empty(),
+        "the rollback must not touch a cause that is no longer its own"
+    );
+    blocked
+        .replace_reason(
+            acc,
+            crate::pretrade::AccountBlock::new(
+                TestPolicy::NAME,
+                RejectCode::AccountBlocked,
+                "still blocked",
+                String::new(),
+            ),
+        )
+        .expect("the operator's block must have survived the rollback");
+}
+
+#[test]
+fn account_pnl_rearm_rollback_restores_halt_and_reports_discarded_delta() {
+    let acc = account(99224416);
+    let prior = crate::PnlState::Halted(crate::PnlHaltReason::MissingFx);
+    let policy = build_policy(None, None);
+    policy.set_account_pnl_state(acc, prior);
+
+    let mut mutations = Mutations::with_capacity(1);
+    let owner_id = mutations.owner_id();
+    let asserted = crate::PnlState::Value(pnl_value("-50"));
+    let (previous, token, lease) = policy.acquire_account_pnl_assertion(acc, owner_id, asserted);
+    policy.register_account_pnl_adjustment_rollback(
+        &mut mutations,
+        AccountPnlAssertionRollback {
+            account_control: None,
+            account_id: acc,
+            previous,
+            asserted,
+            token,
+            barrier: None,
+            lease,
+        },
+    );
+    assert!(policy.update_account_pnl(acc, pnl_value("-30")).0.is_ok());
+
+    let report = mutations.rollback_all().report;
+    assert_eq!(account_pnl_state_of(&policy, acc), Some(prior));
+    assert_eq!(
+        report.reconciliations,
+        vec![crate::core::mutation::AccountPnlReconciliation {
+            account_id: acc,
+            discarded_delta: Some(pnl_value("-30")),
+        }]
+    );
+}
+
+#[test]
+fn rejected_account_pnl_halt_assertion_restores_prior_value() {
+    let acc = account(99224416);
+    let policy = build_policy(None, None);
+    let prior = crate::PnlState::Value(pnl_value("25"));
+    policy.set_account_pnl_state(acc, prior);
+
+    let mut mutations = Mutations::with_capacity(1);
+    let owner_id = mutations.owner_id();
+    let asserted = crate::PnlState::Halted(crate::PnlHaltReason::MissingFx);
+    let (previous, token, lease) = policy.acquire_account_pnl_assertion(acc, owner_id, asserted);
+    policy.register_account_pnl_adjustment_rollback(
+        &mut mutations,
+        AccountPnlAssertionRollback {
+            account_control: None,
+            account_id: acc,
+            previous,
+            asserted,
+            token,
+            barrier: None,
+            lease,
+        },
+    );
+
+    let report = mutations.rollback_all().report;
+    assert_eq!(account_pnl_state_of(&policy, acc), Some(prior));
+    assert!(report.reconciliations.is_empty());
+}
+
+#[test]
+fn account_pnl_inverse_rollback_overflow_halts_and_blocks() {
+    use rust_decimal::Decimal;
+
+    let acc = account(99224416);
+    let barrier = SpotFundsPnlBoundsBarrier {
+        lower_bound: Some(pnl_value("-1")),
+        upper_bound: None,
+    };
+    let policy = build_policy(None, None);
+    policy.set_account_pnl_state(acc, crate::PnlState::Value(Pnl::new(Decimal::MAX)));
+
+    let mut mutations = Mutations::with_capacity(1);
+    let owner_id = mutations.owner_id();
+    let asserted = crate::PnlState::Value(Pnl::new(Decimal::MIN));
+    let (previous, token, lease) = policy.acquire_account_pnl_assertion(acc, owner_id, asserted);
+    policy.register_account_pnl_adjustment_rollback(
+        &mut mutations,
+        AccountPnlAssertionRollback {
+            account_control: Some(dummy_control(acc)),
+            account_id: acc,
+            previous,
+            asserted,
+            token,
+            barrier: Some(barrier),
+            lease,
+        },
+    );
+    assert!(policy.update_account_pnl(acc, pnl_value("1")).0.is_ok());
+
+    let report = mutations.rollback_all().report;
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(
+            crate::PnlHaltReason::ArithmeticOverflow
+        ))
+    );
+    assert_eq!(report.account_blocks.len(), 1);
+    assert_eq!(
+        report.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+}
+
+#[test]
+fn nested_account_pnl_assertions_unwind_lifo_for_same_batch() {
+    let acc = account(99224416);
+    let policy = build_policy(None, None);
+    policy.set_account_pnl_state(acc, crate::PnlState::Value(pnl_value("-100")));
+
+    let mut mutations = Mutations::with_capacity(2);
+    let owner_id = mutations.owner_id();
+    let first = crate::PnlState::Value(pnl_value("-50"));
+    let (previous, token, lease) = policy.acquire_account_pnl_assertion(acc, owner_id, first);
+    policy.register_account_pnl_adjustment_rollback(
+        &mut mutations,
+        AccountPnlAssertionRollback {
+            account_control: None,
+            account_id: acc,
+            previous,
+            asserted: first,
+            token,
+            barrier: None,
+            lease,
+        },
+    );
+
+    let second = crate::PnlState::Value(pnl_value("20"));
+    let (previous, token, lease) = policy.acquire_account_pnl_assertion(acc, owner_id, second);
+    policy.register_account_pnl_adjustment_rollback(
+        &mut mutations,
+        AccountPnlAssertionRollback {
+            account_control: None,
+            account_id: acc,
+            previous,
+            asserted: second,
+            token,
+            barrier: None,
+            lease,
+        },
+    );
+    assert!(policy.update_account_pnl(acc, pnl_value("5")).0.is_ok());
+
+    let report = mutations.rollback_all().report;
+    assert!(report.reconciliations.is_empty());
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Value(pnl_value("-95")))
+    );
+}
+
+#[test]
+fn concurrent_calculation_halt_waits_for_rejected_assertion_then_survives() {
+    let acc = account(99224416);
+    let policy = Arc::new(build_policy(None, None));
+    policy.set_account_pnl_state(acc, crate::PnlState::Value(pnl_value("-100")));
+
+    let mut mutations = Mutations::with_capacity(1);
+    let owner_id = mutations.owner_id();
+    let asserted = crate::PnlState::Value(pnl_value("-50"));
+    let (previous, token, lease) = policy.acquire_account_pnl_assertion(acc, owner_id, asserted);
+    policy.register_account_pnl_adjustment_rollback(
+        &mut mutations,
+        AccountPnlAssertionRollback {
+            account_control: None,
+            account_id: acc,
+            previous,
+            asserted,
+            token,
+            barrier: None,
+            lease,
+        },
+    );
+
+    let concurrent = Arc::clone(&policy);
+    let halt = std::thread::spawn(move || {
+        concurrent.halt_account_pnl(acc, crate::PnlHaltReason::MissingFx)
+    });
+    std::thread::yield_now();
+    let _ = mutations.rollback_all();
+
+    assert_eq!(
+        halt.join().expect("calculation halt thread must finish"),
+        crate::PnlHaltReason::MissingFx
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(crate::PnlHaltReason::MissingFx))
+    );
+}
+
+#[test]
+fn halted_account_pnl_configuration_with_effective_barrier_blocks_account() {
+    let acc = account(99224416);
+    let mut settings = settings(0);
+    settings
+        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+            lower_bound: Some(pnl_value("-10")),
+            upper_bound: None,
+        }))
+        .expect("global account PnL barrier must set");
+    let engine = build_account_pnl_test_engine(settings);
+
+    let result = engine
+        .configure()
+        .set_spot_funds_account_pnl(
+            SpotFundsPolicy::<FullSync, FullSync>::NAME,
+            acc,
+            crate::PnlState::Halted(crate::PnlHaltReason::MissingFx),
+        )
+        .expect("halted account PnL configuration must succeed");
+
+    assert_eq!(result.account_blocks.len(), 1);
+    assert_eq!(
+        result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    let rejects = match engine.start_pre_trade(account_pnl_probe_order(acc)) {
+        Ok(_) => panic!("halted account PnL with an effective barrier must be blocked"),
+        Err(rejects) => rejects,
+    };
+    assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+}
+
+#[test]
+fn halted_account_pnl_configuration_without_barrier_does_not_block_account() {
+    let acc = account(99224416);
+    let engine = build_account_pnl_test_engine(settings(0));
+
+    let result = engine
+        .configure()
+        .set_spot_funds_account_pnl(
+            SpotFundsPolicy::<FullSync, FullSync>::NAME,
+            acc,
+            crate::PnlState::Halted(crate::PnlHaltReason::MissingFx),
+        )
+        .expect("halted account PnL configuration must succeed");
+
+    assert!(result.account_blocks.is_empty());
+    assert!(engine.start_pre_trade(account_pnl_probe_order(acc)).is_ok());
+}
+
+#[test]
+fn numeric_account_pnl_configuration_blocks_on_out_of_bounds_value() {
+    let acc = account(99224416);
+    let mut settings = settings(0);
+    settings
+        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+            lower_bound: Some(pnl_value("-10")),
+            upper_bound: None,
+        }))
+        .expect("global account PnL barrier must set");
+    let engine = build_account_pnl_test_engine(settings);
+
+    let result = engine
+        .configure()
+        .set_spot_funds_account_pnl(
+            SpotFundsPolicy::<FullSync, FullSync>::NAME,
+            acc,
+            crate::PnlState::Value(pnl_value("-20")),
+        )
+        .expect("numeric account PnL configuration must succeed");
+
+    assert_eq!(result.account_blocks.len(), 1);
+    assert!(engine
+        .start_pre_trade(account_pnl_probe_order(acc))
+        .is_err());
+}
+
+#[test]
 fn runtime_pnl_barrier_update_does_not_reset_accumulator() {
     use crate::pretrade::ConfigurablePolicy;
     use crate::storage::ConfigCell;
@@ -7733,14 +9043,12 @@ fn runtime_pnl_barrier_update_does_not_reset_accumulator() {
     let mut s = settings(0);
     s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
     let s = s
-        .with_initial_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+        .with_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
             account_id: acc,
             barrier: SpotFundsPnlBoundsBarrier {
-                account_currency: asset("USD"),
                 lower_bound: Some(pnl_value("-50")),
                 upper_bound: None,
             },
-            initial_pnl: Pnl::ZERO,
         }])
         .expect("account pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
@@ -7755,18 +9063,14 @@ fn runtime_pnl_barrier_update_does_not_reset_accumulator() {
     );
     let first_result = run_report_with_currency(&policy, &first, asset("USD"));
     assert!(first_result.account_blocks.is_empty());
-    assert_eq!(
-        account_pnl_of(&policy, acc, &asset("USD")),
-        Some(pnl_value("-40"))
-    );
+    assert_eq!(account_pnl_of(&policy, acc), Some(pnl_value("-40")));
 
     policy
         .settings_cell()
         .update::<SpotFundsConfigError>(|settings| {
-            settings.set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrierUpdate {
+            settings.set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
                 account_id: acc,
                 barrier: SpotFundsPnlBoundsBarrier {
-                    account_currency: asset("USD"),
                     lower_bound: Some(pnl_value("-30")),
                     upper_bound: None,
                 },
@@ -7781,10 +9085,7 @@ fn runtime_pnl_barrier_update_does_not_reset_accumulator() {
         result.account_blocks[0].code,
         RejectCode::PnlKillSwitchTriggered
     );
-    assert_eq!(
-        account_pnl_of(&policy, acc, &asset("USD")),
-        Some(pnl_value("-40"))
-    );
+    assert_eq!(account_pnl_of(&policy, acc), Some(pnl_value("-40")));
 }
 
 #[test]
@@ -7807,7 +9108,8 @@ fn runtime_pnl_axes_can_be_enabled_replaced_and_cleared() {
     }
     seed_balance_via_engine(&engine, cleared, asset("USD"), ps("1000"));
 
-    // A plain spot-funds policy has no P&L control, but normal orders still run.
+    // A plain spot-funds policy has no P&L control, but normal orders still
+    // run.
     let mut reservation = engine
         .execute_pre_trade(make_order(
             cleared,
@@ -7822,11 +9124,10 @@ fn runtime_pnl_axes_can_be_enabled_replaced_and_cleared() {
     engine
         .configure()
         .spot_funds::<SpotFundsConfigError>(name, |settings| {
-            settings.set_pnl_global_barriers([SpotFundsPnlBoundsBarrier {
-                account_currency: asset("USD"),
+            settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
                 lower_bound: Some(pnl_value("-10")),
                 upper_bound: None,
-            }])
+            }))
         })
         .expect("runtime configuration must add a P&L axis to ordinary spot funds");
 
@@ -7843,14 +9144,14 @@ fn runtime_pnl_axes_can_be_enabled_replaced_and_cleared() {
         .account_blocks
         .is_empty());
 
-    // Adding an account override leaves the global axis and its live P&L intact.
+    // Adding an account override leaves the global axis and its live P&L
+    // intact.
     engine
         .configure()
         .spot_funds::<SpotFundsConfigError>(name, |settings| {
-            settings.set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrierUpdate {
+            settings.set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
                 account_id: account_override,
                 barrier: SpotFundsPnlBoundsBarrier {
-                    account_currency: asset("USD"),
                     lower_bound: Some(pnl_value("-20")),
                     upper_bound: None,
                 },
@@ -7887,7 +9188,8 @@ fn runtime_pnl_axes_can_be_enabled_replaced_and_cleared() {
         .account_blocks
         .is_empty());
 
-    // Clearing only the account axis exposes its still-live P&L to the global bound.
+    // Clearing only the account axis exposes its still-live P&L to the global
+    // bound.
     engine
         .configure()
         .spot_funds::<SpotFundsConfigError>(name, |settings| settings.set_pnl_account_barriers([]))
@@ -7898,7 +9200,7 @@ fn runtime_pnl_axes_can_be_enabled_replaced_and_cleared() {
         Side::Buy,
         "100",
         "1",
-        money_fee("0", "USD"),
+        money_fee("1", "USD"),
     );
     assert_eq!(
         engine
@@ -7911,7 +9213,7 @@ fn runtime_pnl_axes_can_be_enabled_replaced_and_cleared() {
     engine
         .configure()
         .spot_funds::<SpotFundsConfigError>(name, |settings| {
-            settings.set_pnl_global_barriers([])?;
+            settings.set_pnl_global_barrier(None)?;
             settings.set_pnl_account_group_barriers([])?;
             settings.set_pnl_account_barriers([])
         })
@@ -7942,47 +9244,77 @@ fn runtime_pnl_axes_can_be_enabled_replaced_and_cleared() {
 }
 
 #[test]
-fn force_set_revives_reset_slot_then_missing_fx_resets_again() {
+fn halted_position_with_basis_still_contributes_to_active_account_pnl() {
     let acc = account(99224416);
     let aapl_usd = instr("AAPL", "USD");
     let policy = build_policy(None, None);
-    seed(&policy, acc, asset("USD"), "10000");
-
-    let order = make_order(
-        acc,
-        aapl_usd.clone(),
-        Side::Buy,
-        TradeAmount::Quantity(qty("2")),
-        Some(px("100")),
-    );
+    let seed = TestAdjustment {
+        asset: asset("AAPL"),
+        balance: Some(AdjustmentAmount::Absolute(ps("10"))),
+        balance_average_entry_price: Some(px("100")),
+        pnl_operation: None,
+        balance_lower: None,
+        balance_upper: None,
+        held: None,
+        held_lower: None,
+        held_upper: None,
+        incoming: None,
+        incoming_lower: None,
+        incoming_upper: None,
+    };
     let mut mutations = Mutations::with_capacity(1);
-    pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
+    let _ = run_adjustment(&policy, acc, &seed, &mut mutations);
     mutations.commit_all();
-    let fill = make_report(
+    let sell = make_report(
         acc,
-        aapl_usd.clone(),
-        Side::Buy,
+        aapl_usd,
+        Side::Sell,
         Some(Trade {
-            price: px("100"),
-            quantity: qty("2"),
+            price: px("130"),
+            quantity: qty("1"),
         }),
         qty("0"),
         true,
         Some(PreTradeLock::from_entries([(
             DEFAULT_POLICY_GROUP_ID,
-            px("100"),
+            px("130"),
         )])),
     );
-    let _ = run_report_with_currency(&policy, &fill, asset("EUR"));
-    let reset = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
-    assert!(reset.avg_entry_price().is_none());
-    assert!(reset.realized_pnl().is_none());
+
+    let first = run_report_with_currency(&policy, &sell, asset("USD"));
+    assert!(first
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .and_then(|outcome| outcome.entry.realized_pnl)
+        .is_some_and(|outcome| outcome == Err(crate::PnlHaltReason::MissingInitialPnl)));
+    assert_eq!(
+        first.account_pnls[0].result,
+        Ok(crate::PnlOutcomeAmount {
+            delta: pnl_value("30"),
+            absolute: pnl_value("30"),
+        })
+    );
+
+    let repeated = run_report_with_currency(&policy, &sell, asset("USD"));
+    assert!(repeated
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .is_some_and(|outcome| outcome.entry.realized_pnl.is_none()));
+    assert_eq!(
+        repeated.account_pnls[0].result,
+        Ok(crate::PnlOutcomeAmount {
+            delta: pnl_value("30"),
+            absolute: pnl_value("60"),
+        })
+    );
 
     let force = TestAdjustment {
         asset: asset("AAPL"),
         balance: None,
         balance_average_entry_price: Some(px("100")),
-        balance_realized_pnl: Some(Pnl::ZERO),
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -7995,49 +9327,646 @@ fn force_set_revives_reset_slot_then_missing_fx_resets_again() {
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &force, &mut mutations);
     mutations.commit_all();
-    let revived = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
-    assert_eq!(revived.avg_entry_price(), Some(px("100")));
-    assert_eq!(revived.realized_pnl(), Some(Pnl::ZERO));
+    let force_pnl = adj_with_realized_pnl(asset("AAPL"), Pnl::ZERO);
+    let mut mutations = Mutations::with_capacity(1);
+    let _ = run_adjustment(&policy, acc, &force_pnl, &mut mutations);
+    mutations.commit_all();
+    let resumed = run_report_with_currency(&policy, &sell, asset("USD"));
+    assert!(resumed
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .and_then(|outcome| outcome.entry.realized_pnl)
+        .is_some_and(|outcome| outcome.is_ok()));
+}
 
-    let sell = make_order(
+#[test]
+fn missing_cost_basis_is_sticky_until_position_force_set() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    let seed = TestAdjustment {
+        asset: asset("AAPL"),
+        balance: Some(AdjustmentAmount::Absolute(ps("10"))),
+        balance_average_entry_price: None,
+        pnl_operation: None,
+        balance_lower: None,
+        balance_upper: None,
+        held: None,
+        held_lower: None,
+        held_upper: None,
+        incoming: None,
+        incoming_lower: None,
+        incoming_upper: None,
+    };
+    let mut mutations = Mutations::with_capacity(1);
+    let _ = run_adjustment(&policy, acc, &seed, &mut mutations);
+    mutations.commit_all();
+    let seed_pnl = adj_with_realized_pnl(asset("AAPL"), Pnl::ZERO);
+    let mut mutations = Mutations::with_capacity(1);
+    let _ = run_adjustment(&policy, acc, &seed_pnl, &mut mutations);
+    mutations.commit_all();
+
+    let sell = make_report(
         acc,
         aapl_usd.clone(),
         Side::Sell,
-        TradeAmount::Quantity(qty("1")),
-        Some(px("120")),
-    );
-    let mut mutations = Mutations::with_capacity(1);
-    pre_trade_check(&policy, &sell, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
-    let sell_fill = make_report(
-        acc,
-        aapl_usd,
-        Side::Sell,
         Some(Trade {
-            price: px("120"),
+            price: px("130"),
             quantity: qty("1"),
         }),
         qty("0"),
         true,
         Some(PreTradeLock::from_entries([(
             DEFAULT_POLICY_GROUP_ID,
-            px("120"),
+            px("130"),
         )])),
     );
-    let result = run_report_with_currency(&policy, &sell_fill, asset("EUR"));
-    assert!(result.account_blocks.is_empty());
-    let aapl_entry = result
+    let first = run_report_with_currency(&policy, &sell, asset("USD"));
+    let first_position_pnl = first
         .account_adjustments
         .iter()
-        .find(|o| o.entry.asset == asset("AAPL"))
-        .expect("AAPL entry must exist");
-    assert!(aapl_entry.entry.average_entry_price.is_none());
-    assert!(aapl_entry.entry.realized_pnl.is_none());
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .and_then(|outcome| outcome.entry.realized_pnl);
+    assert_eq!(
+        first_position_pnl,
+        Some(Err(crate::PnlHaltReason::MissingCostBasis))
+    );
+    assert_eq!(
+        first.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Err(crate::PnlHaltReason::MissingCostBasis),
+        }]
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(
+            crate::PnlHaltReason::MissingCostBasis
+        ))
+    );
 
-    let reset_again = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
-    assert_eq!(reset_again.available(), ps("1"));
-    assert!(reset_again.avg_entry_price().is_none());
-    assert!(reset_again.realized_pnl().is_none());
+    let repeated = run_report_with_currency(&policy, &sell, asset("USD"));
+    assert!(repeated
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .is_some_and(|outcome| outcome.entry.realized_pnl.is_none()));
+
+    let force = TestAdjustment {
+        asset: asset("AAPL"),
+        balance: None,
+        balance_average_entry_price: Some(px("100")),
+        pnl_operation: None,
+        balance_lower: None,
+        balance_upper: None,
+        held: None,
+        held_lower: None,
+        held_upper: None,
+        incoming: None,
+        incoming_lower: None,
+        incoming_upper: None,
+    };
+    let mut mutations = Mutations::with_capacity(1);
+    let _ = run_adjustment(&policy, acc, &force, &mut mutations);
+    mutations.commit_all();
+    let force_pnl = adj_with_realized_pnl(asset("AAPL"), Pnl::ZERO);
+    let mut mutations = Mutations::with_capacity(1);
+    let _ = run_adjustment(&policy, acc, &force_pnl, &mut mutations);
+    mutations.commit_all();
+    let resumed = run_report_with_currency(&policy, &sell, asset("USD"));
+    assert!(resumed
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .and_then(|outcome| outcome.entry.realized_pnl)
+        .is_some_and(|outcome| outcome.is_ok()));
+
+    let flatten = TestAdjustment {
+        asset: asset("AAPL"),
+        balance: Some(AdjustmentAmount::Absolute(PositionSize::ZERO)),
+        balance_average_entry_price: None,
+        pnl_operation: None,
+        balance_lower: None,
+        balance_upper: None,
+        held: Some(AdjustmentAmount::Absolute(PositionSize::ZERO)),
+        held_lower: None,
+        held_upper: None,
+        incoming: None,
+        incoming_lower: None,
+        incoming_upper: None,
+    };
+    let mut mutations = Mutations::with_capacity(1);
+    let _ = run_adjustment(&policy, acc, &flatten, &mut mutations);
+    mutations.commit_all();
+    let reopen = adj(asset("AAPL"), Some(AdjustmentAmount::Absolute(ps("10"))));
+    let mut mutations = Mutations::with_capacity(1);
+    let _ = run_adjustment(&policy, acc, &reopen, &mut mutations);
+    mutations.commit_all();
+
+    let flatten_position = adj_with_avg(
+        asset("AAPL"),
+        Some(AdjustmentAmount::Absolute(PositionSize::ZERO)),
+        None,
+    );
+    let mut mutations = Mutations::with_capacity(1);
+    let _ = run_adjustment(&policy, acc, &flatten_position, &mut mutations);
+    mutations.commit_all();
+    let reopen_position = adj_with_avg(
+        asset("AAPL"),
+        Some(AdjustmentAmount::Absolute(ps("10"))),
+        None,
+    );
+    let mut mutations = Mutations::with_capacity(1);
+    let _ = run_adjustment(&policy, acc, &reopen_position, &mut mutations);
+    mutations.commit_all();
+
+    let rehalted = run_report_with_currency(&policy, &sell, asset("USD"));
+    assert!(rehalted
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .and_then(|outcome| outcome.entry.realized_pnl)
+        .is_some_and(|outcome| outcome == Err(crate::PnlHaltReason::MissingCostBasis)));
+}
+
+#[test]
+fn account_halt_rearms_only_through_account_force_set() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    let policy: SpotFundsPolicy<FullSync, FullSync> =
+        SpotFundsPolicy::new(settings(0), None, builder.storage_builder());
+    let account_pnl = policy.pnl.clone();
+    let engine = builder
+        .pre_trade(policy)
+        .build()
+        .expect("engine must build");
+    // The fee is what makes the account currency a required input here: a
+    // fee-less opening fill contributes a computable zero instead.
+    let report = fill_with_fee(
+        acc,
+        aapl_usd.clone(),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("1", "USD"),
+    );
+
+    let first = engine.apply_execution_report(&report);
+    assert_eq!(
+        first.account_pnls[0].result,
+        Err(crate::PnlHaltReason::MissingAccountCurrency)
+    );
+    assert!(engine
+        .apply_execution_report(&report)
+        .account_pnls
+        .is_empty());
+
+    let force_position = TestAdjustment {
+        asset: asset("AAPL"),
+        balance: None,
+        balance_average_entry_price: Some(px("100")),
+        pnl_operation: None,
+        balance_lower: None,
+        balance_upper: None,
+        held: None,
+        held_lower: None,
+        held_upper: None,
+        incoming: None,
+        incoming_lower: None,
+        incoming_upper: None,
+    };
+    engine
+        .apply_account_adjustment(acc, &[force_position])
+        .expect("position average force-set must succeed");
+    engine
+        .apply_account_adjustment(acc, &[adj_with_realized_pnl(asset("AAPL"), Pnl::ZERO)])
+        .expect("position PnL force-set must succeed");
+    engine.accounts().set_currency(acc, asset("USD"));
+    assert!(engine
+        .apply_execution_report(&report)
+        .account_pnls
+        .is_empty());
+
+    engine
+        .configure()
+        .set_spot_funds_account_pnl(
+            SpotFundsPolicy::<FullSync, FullSync>::NAME,
+            acc,
+            crate::PnlState::Value(pnl_value("7")),
+        )
+        .expect("account force-set must succeed");
+    assert_eq!(
+        account_pnl.with(&acc, |entry| entry.state),
+        Some(crate::PnlState::Value(pnl_value("7")))
+    );
+    let resumed = engine.apply_execution_report(&report);
+    assert_eq!(resumed.account_pnls.len(), 1);
+    assert_eq!(
+        resumed.account_pnls[0].result,
+        Ok(crate::PnlOutcomeAmount {
+            delta: pnl_value("-1"),
+            absolute: pnl_value("6"),
+        })
+    );
+
+    let fresh = account(99224417);
+    engine
+        .configure()
+        .set_spot_funds_account_pnl(
+            SpotFundsPolicy::<FullSync, FullSync>::NAME,
+            fresh,
+            crate::PnlState::Value(Pnl::ZERO),
+        )
+        .expect("fresh account force-set must succeed");
+    assert_eq!(
+        account_pnl.with(&fresh, |entry| entry.state),
+        Some(crate::PnlState::Value(Pnl::ZERO))
+    );
+}
+
+#[test]
+fn position_halt_rearms_only_through_position_force_set() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let usd_eur = instr("USD", "EUR");
+    let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    let market_data = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let fx_id = market_data
+        .register(usd_eur)
+        .expect("FX instrument must register");
+    let policy: SpotFundsPolicy<FullSync, FullSync> = SpotFundsPolicy::new(
+        settings(0),
+        Some(SpotFundsMarketData::new(Arc::clone(&market_data))),
+        builder.storage_builder(),
+    );
+    let engine = builder
+        .pre_trade(policy)
+        .build()
+        .expect("engine must build");
+    engine.accounts().set_currency(acc, asset("EUR"));
+    let mut seed_position = adj_with_avg(
+        asset("AAPL"),
+        Some(AdjustmentAmount::Absolute(ps("3"))),
+        Some(px("100")),
+    );
+    seed_position.pnl_operation = Some(crate::PnlState::Value(Pnl::ZERO));
+    engine
+        .apply_account_adjustment(acc, &[seed_position])
+        .expect("position seed must succeed");
+    let report = fill_with_fee(
+        acc,
+        aapl_usd.clone(),
+        Side::Sell,
+        "100",
+        "1",
+        money_fee("0", "USD"),
+    );
+
+    let first = engine.apply_execution_report(&report);
+    assert!(first
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .and_then(|outcome| outcome.entry.realized_pnl)
+        .is_some_and(|outcome| outcome == Err(crate::PnlHaltReason::MissingFx)));
+    engine
+        .configure()
+        .set_spot_funds_account_pnl(
+            SpotFundsPolicy::<FullSync, FullSync>::NAME,
+            acc,
+            crate::PnlState::Value(pnl_value("9")),
+        )
+        .expect("account force-set must succeed");
+    market_data
+        .push(fx_id, Quote::new().with_mark(px("0.9")))
+        .expect("FX quote must publish");
+
+    let still_halted = engine.apply_execution_report(&report);
+    assert!(still_halted
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .is_some_and(|outcome| outcome.entry.realized_pnl.is_none()));
+    assert_eq!(still_halted.account_pnls.len(), 1);
+
+    let force_position = TestAdjustment {
+        asset: asset("AAPL"),
+        balance: None,
+        balance_average_entry_price: Some(px("100")),
+        pnl_operation: None,
+        balance_lower: None,
+        balance_upper: None,
+        held: None,
+        held_lower: None,
+        held_upper: None,
+        incoming: None,
+        incoming_lower: None,
+        incoming_upper: None,
+    };
+    engine
+        .apply_account_adjustment(acc, &[force_position])
+        .expect("position average force-set must succeed");
+    engine
+        .apply_account_adjustment(acc, &[adj_with_realized_pnl(asset("AAPL"), Pnl::ZERO)])
+        .expect("position PnL force-set must succeed");
+    let sell = fill_with_fee(acc, aapl_usd, Side::Sell, "120", "1", money_fee("0", "USD"));
+    let resumed = engine.apply_execution_report(&sell);
+    assert!(resumed
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .and_then(|outcome| outcome.entry.realized_pnl)
+        .is_some_and(|outcome| outcome.is_ok()));
+}
+
+#[test]
+fn sticky_position_halt_does_not_zero_account_or_other_position_pnl() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let msft_usd = instr("MSFT", "USD");
+    let usd_eur = instr("USD", "EUR");
+    let builder = engine_builder();
+    let market_data = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let fx_id = market_data
+        .register(usd_eur)
+        .expect("FX instrument must register");
+    let policy = SpotFundsPolicy::new(
+        settings(0),
+        Some(SpotFundsMarketData::new(Arc::clone(&market_data))),
+        builder.storage_builder(),
+    );
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
+    seed_with_avg(&policy, acc, asset("MSFT"), "10", px("50"));
+
+    let unavailable_underlying_fx = fill_with_fee(
+        acc,
+        aapl_usd.clone(),
+        Side::Sell,
+        "120",
+        "1",
+        money_fee("0", "USD"),
+    );
+    let first = run_report_with_currency(&policy, &unavailable_underlying_fx, asset("EUR"));
+    assert_eq!(
+        first.account_pnls[0].result,
+        Err(crate::PnlHaltReason::MissingFx)
+    );
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("AAPL"))
+            .expect("AAPL slot must exist")
+            .realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::MissingFx)
+    );
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("AAPL"))
+            .expect("AAPL slot must exist")
+            .avg_entry_price(),
+        Some(px("100"))
+    );
+
+    let _previous = policy.set_account_pnl_state(acc, crate::PnlState::Value(Pnl::ZERO));
+    market_data
+        .push(fx_id, Quote::new().with_mark(px("1")))
+        .expect("FX quote must publish");
+
+    let halted_position_fill =
+        fill_with_fee(acc, aapl_usd, Side::Sell, "130", "1", money_fee("0", "USD"));
+    let halted_position_result =
+        run_report_with_currency(&policy, &halted_position_fill, asset("EUR"));
+    assert_eq!(
+        halted_position_result.account_pnls[0].result,
+        Ok(crate::PnlOutcomeAmount {
+            delta: pnl_value("30"),
+            absolute: pnl_value("30"),
+        })
+    );
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("AAPL"))
+            .expect("AAPL slot must exist")
+            .realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::MissingFx)
+    );
+
+    let healthy_position_fill =
+        fill_with_fee(acc, msft_usd, Side::Sell, "70", "1", money_fee("0", "USD"));
+    let healthy_position_result =
+        run_report_with_currency(&policy, &healthy_position_fill, asset("EUR"));
+    assert_eq!(
+        healthy_position_result.account_pnls[0].result,
+        Ok(crate::PnlOutcomeAmount {
+            delta: pnl_value("20"),
+            absolute: pnl_value("50"),
+        })
+    );
+    assert_eq!(account_pnl_of(&policy, acc), Some(pnl_value("50")));
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("MSFT"))
+            .expect("MSFT slot must exist")
+            .realized_pnl(),
+        Some(pnl_value("20"))
+    );
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("AAPL"))
+            .expect("AAPL slot must exist")
+            .realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::MissingFx)
+    );
+}
+
+/// An unpriced fill that flips an already sticky-halted position leaves no
+/// basis for the new side, exactly like the same flip on a freshly halted one.
+/// The stale average must not survive to feed a later account contribution.
+#[test]
+fn unpriced_flip_on_sticky_halted_position_clears_the_stale_average() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let usd_eur = instr("USD", "EUR");
+    let builder = engine_builder();
+    let market_data = MarketDataBuilder::<FullSync>::new(QuoteTtl::Infinite).build();
+    let fx_id = market_data
+        .register(usd_eur)
+        .expect("FX instrument must register");
+    let policy = SpotFundsPolicy::new(
+        settings(0),
+        Some(SpotFundsMarketData::new(Arc::clone(&market_data))),
+        builder.storage_builder(),
+    );
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
+
+    // Without the FX quote the position halts fresh, but a partial reduction
+    // keeps the basis of the untouched remainder.
+    let partial_close = fill_with_fee(
+        acc,
+        aapl_usd.clone(),
+        Side::Sell,
+        "120",
+        "1",
+        money_fee("0", "USD"),
+    );
+    let fresh_halt = run_report_with_currency(&policy, &partial_close, asset("EUR"));
+    assert_eq!(
+        fresh_halt.account_pnls[0].result,
+        Err(crate::PnlHaltReason::MissingFx)
+    );
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("AAPL"))
+            .expect("AAPL slot must exist")
+            .avg_entry_price(),
+        Some(px("100"))
+    );
+
+    // Still no FX: this fill flips 9 long into 11 short while the position is
+    // already halted. The old long basis cannot describe the new short.
+    let flip = fill_with_fee(
+        acc,
+        aapl_usd.clone(),
+        Side::Sell,
+        "120",
+        "20",
+        money_fee("0", "USD"),
+    );
+    let sticky_halt = run_report_with_currency(&policy, &flip, asset("EUR"));
+    assert!(
+        sticky_halt.account_pnls.is_empty(),
+        "an already halted account line publishes nothing further"
+    );
+    let flipped = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(
+        flipped
+            .available()
+            .checked_add(flipped.held())
+            .expect("owned quantity must be representable"),
+        ps("-11"),
+        "the fill flips the position short even though its PnL is unpriced"
+    );
+    assert_eq!(
+        flipped.avg_entry_price(),
+        None,
+        "an unpriced flip must clear the average whether the halt is fresh or sticky"
+    );
+    assert_eq!(
+        flipped.realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::MissingFx),
+        "the sticky halt reason must survive the unpriced fill"
+    );
+
+    // Officer restores the account line and the FX quote returns.
+    let _previous = policy.set_account_pnl_state(acc, crate::PnlState::Value(Pnl::ZERO));
+    market_data
+        .push(fx_id, Quote::new().with_mark(px("1")))
+        .expect("FX quote must publish");
+
+    // The next priced fill reduces the short. With no basis for it, the account
+    // line must halt rather than publish a number derived from the stale 100.
+    let reduce_short = fill_with_fee(acc, aapl_usd, Side::Buy, "130", "5", money_fee("0", "USD"));
+    let resumed = run_report_with_currency(&policy, &reduce_short, asset("EUR"));
+    assert_eq!(
+        resumed.account_pnls[0].result,
+        Err(crate::PnlHaltReason::MissingCostBasis),
+        "account PnL must not be derived from a cleared cost basis"
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(
+            crate::PnlHaltReason::MissingCostBasis
+        ))
+    );
+}
+
+#[test]
+fn profitable_close_with_missing_foreign_fee_fx_has_no_partial_pnl() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
+
+    let order = make_order(
+        acc,
+        aapl_usd.clone(),
+        Side::Sell,
+        TradeAmount::Quantity(qty("10")),
+        Some(px("200")),
+    );
+    let mut mutations = Mutations::with_capacity(1);
+    pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
+    mutations.commit_all();
+
+    let fill = fill_with_fee(
+        acc,
+        aapl_usd,
+        Side::Sell,
+        "200",
+        "10",
+        money_fee("2", "EUR"),
+    );
+    let result = run_report_with_currency(&policy, &fill, asset("USD"));
+
+    assert_eq!(
+        result.account_pnls,
+        vec![crate::AccountPnlOutcome {
+            account_id: acc,
+            policy_group_id: DEFAULT_POLICY_GROUP_ID,
+            result: Err(crate::PnlHaltReason::MissingFx),
+        }]
+    );
+    let aapl_outcome = result
+        .account_adjustments
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .expect("AAPL outcome must exist");
+    assert_eq!(
+        aapl_outcome.entry.realized_pnl,
+        Some(Err(crate::PnlHaltReason::MissingFx))
+    );
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Halted(crate::PnlHaltReason::MissingFx))
+    );
+    let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(aapl.available(), PositionSize::ZERO);
+    assert_eq!(aapl.held(), PositionSize::ZERO);
+    assert_eq!(aapl.avg_entry_price(), None);
+    assert_eq!(
+        aapl.realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::MissingFx)
+    );
+}
+
+#[test]
+fn rolling_back_position_force_set_restores_prior_halt() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    seed_with_avg(&policy, acc, asset("AAPL"), "2", px("100"));
+    let fill = fill_with_fee(acc, aapl_usd, Side::Sell, "100", "1", money_fee("0", "USD"));
+    let _ = run_report_with_currency(&policy, &fill, asset("EUR"));
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("AAPL"))
+            .expect("AAPL slot must exist")
+            .realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::MissingFx)
+    );
+
+    let force = adj_with_realized_pnl(asset("AAPL"), Pnl::ZERO);
+    let mut mutations = Mutations::with_capacity(1);
+    let _ = run_adjustment(&policy, acc, &force, &mut mutations);
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("AAPL"))
+            .expect("AAPL slot must exist")
+            .realized_pnl(),
+        Some(Pnl::ZERO)
+    );
+
+    mutations.rollback_all();
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("AAPL"))
+            .expect("AAPL slot must exist")
+            .realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::MissingFx)
+    );
 }
 
 #[test]
@@ -8086,7 +10015,9 @@ fn sell_fill_against_seeded_long_realizes_pnl() {
         .entry
         .realized_pnl
         .as_ref()
-        .expect("AAPL pnl must be present");
+        .expect("AAPL pnl must be present")
+        .as_ref()
+        .expect("AAPL pnl must be calculated");
     // Sell 4 of a long at 200 vs avg 100: realized = (200 - 100) * 4 = 400.
     assert_eq!(pnl.delta, pnl_value("400"));
     assert_eq!(pnl.absolute, pnl_value("400"));
@@ -8215,7 +10146,9 @@ fn short_open_then_buy_to_close_realizes_pnl() {
         .entry
         .realized_pnl
         .as_ref()
-        .expect("AAPL pnl must be present");
+        .expect("AAPL pnl must be present")
+        .as_ref()
+        .expect("AAPL pnl must be calculated");
     // Buy 4 to cover a short at 70 vs avg 100: realized = (70 - 100) * -(4) = 120.
     assert_eq!(pnl.delta, pnl_value("120"));
     // No prior realized PnL on the slot, so the cumulative equals this fill.
@@ -8268,7 +10201,9 @@ fn exact_close_fill_resets_average_to_none_and_keeps_realized_pnl() {
         .entry
         .realized_pnl
         .as_ref()
-        .expect("AAPL pnl must be present");
+        .expect("AAPL pnl must be present")
+        .as_ref()
+        .expect("AAPL pnl must be calculated");
     // Close the whole long at 130 vs avg 100: realized = (130 - 100) * 10 = 300.
     assert_eq!(pnl.delta, pnl_value("300"));
     // No prior realized PnL on the slot, so the cumulative equals this fill.
@@ -8359,21 +10294,14 @@ fn balance_adjustment_force_sets_realized_pnl_and_emits_delta_and_absolute() {
     let policy = build_policy(None, None);
     // Seed a slot that already carries a non-zero realized PnL via a force-set,
     // so the second force-set produces a meaningful, non-trivial delta.
-    let seed_pnl = adj_with_realized_pnl(
-        asset("AAPL"),
-        Some(AdjustmentAmount::Absolute(ps("10"))),
-        Some(pnl_value("30")),
-    );
+    seed(&policy, acc, asset("AAPL"), "10");
+    let seed_pnl = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed_pnl, &mut mutations);
     mutations.commit_all();
 
     // Force-set realized PnL to 50: delta = 50 - 30 = 20, absolute = 50.
-    let adjustment = adj_with_realized_pnl(
-        asset("AAPL"),
-        Some(AdjustmentAmount::Delta(ps("0"))),
-        Some(pnl_value("50")),
-    );
+    let adjustment = adj_with_realized_pnl(asset("AAPL"), pnl_value("50"));
     let mut mutations = Mutations::with_capacity(1);
     let outcome = run_adjustment(&policy, acc, &adjustment, &mut mutations);
     mutations.commit_all();
@@ -8382,7 +10310,9 @@ fn balance_adjustment_force_sets_realized_pnl_and_emits_delta_and_absolute() {
     let pnl = outcome[0]
         .realized_pnl
         .as_ref()
-        .expect("realized PnL outcome must be emitted on a force-set");
+        .expect("realized PnL outcome must be emitted on a force-set")
+        .as_ref()
+        .expect("realized PnL outcome must be calculated");
     assert_eq!(pnl.delta, pnl_value("20"));
     assert_eq!(pnl.absolute, pnl_value("50"));
 
@@ -8394,16 +10324,13 @@ fn balance_adjustment_force_sets_realized_pnl_and_emits_delta_and_absolute() {
 fn metadata_only_realized_pnl_adjustment_sets_and_emits_delta() {
     let acc = account(99224416);
     let policy = build_policy(None, None);
-    let seed_pnl = adj_with_realized_pnl(
-        asset("AAPL"),
-        Some(AdjustmentAmount::Absolute(ps("10"))),
-        Some(pnl_value("30")),
-    );
+    seed(&policy, acc, asset("AAPL"), "10");
+    let seed_pnl = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed_pnl, &mut mutations);
     mutations.commit_all();
 
-    let adjustment = adj_with_realized_pnl(asset("AAPL"), None, Some(pnl_value("50")));
+    let adjustment = adj_with_realized_pnl(asset("AAPL"), pnl_value("50"));
     let mut mutations = Mutations::with_capacity(1);
     let outcome = run_adjustment(&policy, acc, &adjustment, &mut mutations);
     mutations.commit_all();
@@ -8413,7 +10340,9 @@ fn metadata_only_realized_pnl_adjustment_sets_and_emits_delta() {
     let pnl = outcome[0]
         .realized_pnl
         .as_ref()
-        .expect("realized PnL outcome must be emitted on a force-set");
+        .expect("realized PnL outcome must be emitted on a force-set")
+        .as_ref()
+        .expect("realized PnL outcome must be calculated");
     assert_eq!(pnl.delta, pnl_value("20"));
     assert_eq!(pnl.absolute, pnl_value("50"));
 
@@ -8425,11 +10354,8 @@ fn metadata_only_realized_pnl_adjustment_sets_and_emits_delta() {
 fn balance_adjustment_without_realized_pnl_emits_no_pnl_and_leaves_it() {
     let acc = account(99224416);
     let policy = build_policy(None, None);
-    let seed_pnl = adj_with_realized_pnl(
-        asset("AAPL"),
-        Some(AdjustmentAmount::Absolute(ps("10"))),
-        Some(pnl_value("30")),
-    );
+    seed(&policy, acc, asset("AAPL"), "10");
+    let seed_pnl = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed_pnl, &mut mutations);
     mutations.commit_all();
@@ -8450,21 +10376,14 @@ fn balance_adjustment_without_realized_pnl_emits_no_pnl_and_leaves_it() {
 fn adjustment_rollback_restores_realized_pnl_to_prior() {
     let acc = account(99224416);
     let policy = build_policy(None, None);
-    let seed_pnl = adj_with_realized_pnl(
-        asset("AAPL"),
-        Some(AdjustmentAmount::Absolute(ps("10"))),
-        Some(pnl_value("30")),
-    );
+    seed(&policy, acc, asset("AAPL"), "10");
+    let seed_pnl = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed_pnl, &mut mutations);
     mutations.commit_all();
 
     // Force-set realized PnL to 50, then roll back without committing.
-    let adjustment = adj_with_realized_pnl(
-        asset("AAPL"),
-        Some(AdjustmentAmount::Delta(ps("0"))),
-        Some(pnl_value("50")),
-    );
+    let adjustment = adj_with_realized_pnl(asset("AAPL"), pnl_value("50"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &adjustment, &mut mutations);
     let after_forward = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
@@ -8496,11 +10415,7 @@ fn adjustment_rollback_restores_untracked_realized_pnl_to_none() {
     );
 
     // Force-set realized PnL to 25, then roll back without committing.
-    let force = adj_with_realized_pnl(
-        asset("AAPL"),
-        Some(AdjustmentAmount::Delta(ps("0"))),
-        Some(pnl_value("25")),
-    );
+    let force = adj_with_realized_pnl(asset("AAPL"), pnl_value("25"));
     let mut adj_mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &force, &mut adj_mutations);
     assert_eq!(
@@ -8520,18 +10435,19 @@ fn adjustment_rollback_restores_untracked_realized_pnl_to_none() {
 }
 
 #[test]
-fn realized_pnl_stays_untracked_after_rollback_to_none() {
+fn realized_pnl_halts_after_rollback_restores_missing_initial_value() {
     let acc = account(99224416);
     let policy = build_policy(None, None);
     // Seed a long with an average but NO realized-PnL tracking. The average lets
     // a later fill have a basis; realized_pnl is `None`.
-    let seed = adj_with_avg(
+    seed(&policy, acc, asset("AAPL"), "10");
+    let seed_position = adj_with_avg(
         asset("AAPL"),
         Some(AdjustmentAmount::Absolute(ps("10"))),
         Some(px("100")),
     );
     let mut mutations = Mutations::with_capacity(1);
-    let _ = run_adjustment(&policy, acc, &seed, &mut mutations);
+    let _ = run_adjustment(&policy, acc, &seed_position, &mut mutations);
     mutations.commit_all();
     assert_eq!(
         holdings_of(&policy, acc, &asset("AAPL"))
@@ -8541,11 +10457,7 @@ fn realized_pnl_stays_untracked_after_rollback_to_none() {
     );
 
     // Force-set realized PnL, then roll back: the slot returns to untracked.
-    let force = adj_with_realized_pnl(
-        asset("AAPL"),
-        Some(AdjustmentAmount::Delta(ps("0"))),
-        Some(pnl_value("25")),
-    );
+    let force = adj_with_realized_pnl(asset("AAPL"), pnl_value("25"));
     let mut adj_mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &force, &mut adj_mutations);
     adj_mutations.rollback_all();
@@ -8556,9 +10468,8 @@ fn realized_pnl_stays_untracked_after_rollback_to_none() {
         None,
     );
 
-    // A subsequent non-flat fill must NOT auto-resume realized-PnL tracking:
-    // sell 4 of the long at 130. Tracking stays absent (mirrors the
-    // `realize_position_fill` short-circuit for an untracked slot).
+    // A subsequent non-flat fill cannot produce an authoritative absolute PnL
+    // and therefore halts until a manager force-sets the missing value.
     let aapl_usd = instr("AAPL", "USD");
     let order = make_order(
         acc,
@@ -8591,29 +10502,24 @@ fn realized_pnl_stays_untracked_after_rollback_to_none() {
         .iter()
         .find(|o| o.entry.asset == asset("AAPL"))
         .expect("AAPL entry must exist");
-    assert!(aapl_entry.entry.realized_pnl.is_none());
+    assert_eq!(
+        aapl_entry.entry.realized_pnl,
+        Some(Err(crate::PnlHaltReason::MissingInitialPnl))
+    );
     let after = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
     assert_eq!(after.realized_pnl(), None);
+    assert_eq!(
+        after.realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::MissingInitialPnl)
+    );
 }
 
 #[test]
 fn metadata_only_average_and_pnl_roll_back_to_prior_values() {
     let acc = account(99224416);
     let policy = build_policy(None, None);
-    let seed = TestAdjustment {
-        asset: asset("AAPL"),
-        balance: Some(AdjustmentAmount::Absolute(ps("10"))),
-        balance_average_entry_price: Some(px("100")),
-        balance_realized_pnl: Some(pnl_value("30")),
-        balance_lower: None,
-        balance_upper: None,
-        held: None,
-        held_lower: None,
-        held_upper: None,
-        incoming: None,
-        incoming_lower: None,
-        incoming_upper: None,
-    };
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
+    let seed = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed, &mut mutations);
     mutations.commit_all();
@@ -8622,7 +10528,7 @@ fn metadata_only_average_and_pnl_roll_back_to_prior_values() {
         asset: asset("AAPL"),
         balance: None,
         balance_average_entry_price: Some(px("150")),
-        balance_realized_pnl: Some(pnl_value("50")),
+        pnl_operation: None,
         balance_lower: None,
         balance_upper: None,
         held: None,
@@ -8634,6 +10540,8 @@ fn metadata_only_average_and_pnl_roll_back_to_prior_values() {
     };
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &adjustment, &mut mutations);
+    let pnl_adjustment = adj_with_realized_pnl(asset("AAPL"), pnl_value("50"));
+    let _ = run_adjustment(&policy, acc, &pnl_adjustment, &mut mutations);
     let after_forward = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
     assert_eq!(after_forward.avg_entry_price(), Some(px("150")));
     assert_eq!(after_forward.realized_pnl(), Some(pnl_value("50")));
@@ -8646,36 +10554,20 @@ fn metadata_only_average_and_pnl_roll_back_to_prior_values() {
 }
 
 #[test]
-fn adjustment_rollback_restores_realized_pnl_snapshot_last_writer_wins() {
+fn adjustment_rollback_preserves_newer_realized_pnl() {
     let acc = account(99224416);
     let policy = build_policy(None, None);
     // Seed a long with an average so a later fill realizes PnL, and an initial
     // booked realized PnL of 30.
-    let seed = TestAdjustment {
-        asset: asset("AAPL"),
-        balance: Some(AdjustmentAmount::Absolute(ps("10"))),
-        balance_average_entry_price: Some(px("100")),
-        balance_realized_pnl: Some(pnl_value("30")),
-        balance_lower: None,
-        balance_upper: None,
-        held: None,
-        held_lower: None,
-        held_upper: None,
-        incoming: None,
-        incoming_lower: None,
-        incoming_upper: None,
-    };
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
+    let seed = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed, &mut mutations);
     mutations.commit_all();
 
     // Force-set realized PnL to 50 but hold the rollback. The snapshot captured
     // for rollback is the prior value, 30.
-    let adjustment = adj_with_realized_pnl(
-        asset("AAPL"),
-        Some(AdjustmentAmount::Delta(ps("0"))),
-        Some(pnl_value("50")),
-    );
+    let adjustment = adj_with_realized_pnl(asset("AAPL"), pnl_value("50"));
     let mut adj_mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &adjustment, &mut adj_mutations);
     assert_eq!(
@@ -8722,18 +10614,77 @@ fn adjustment_rollback_restores_realized_pnl_snapshot_last_writer_wins() {
         Some(pnl_value("170")),
     );
 
-    // Realized PnL rolls back by absolute snapshot, not inverse delta (a forced
-    // value can overwrite an untracked `None` that no delta can restore). When a
-    // force-set races a concurrent fill the snapshot restore is last-writer-wins
-    // for realized PnL, exactly like the average entry price: the prior 30 is
-    // restored, dropping the fill's concurrent 120. Quantities still roll back by
-    // their (here zero) inverse delta, so the fill's position change survives.
+    // The rollback may restore its snapshots only while the complete slot still
+    // equals the adjustment-asserted slot. The fill changed both quantity and
+    // realized PnL, so the newer slot must survive intact.
     adj_mutations.rollback_all();
     let after = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
-    assert_eq!(after.realized_pnl(), Some(pnl_value("30")));
-    // The fill reduced the long from 10 to 6; the adjustment's zero quantity
-    // delta leaves that untouched on rollback.
+    assert_eq!(after.realized_pnl(), Some(pnl_value("170")));
     assert_eq!(after.available(), ps("6"));
+}
+
+#[test]
+fn adjustment_rollback_preserves_newer_average_entry_price() {
+    let acc = account(99224416);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
+    seed(&policy, acc, asset("USD"), "10000");
+
+    let adjustment = TestAdjustment {
+        asset: asset("AAPL"),
+        balance: None,
+        balance_average_entry_price: Some(px("150")),
+        pnl_operation: None,
+        balance_lower: None,
+        balance_upper: None,
+        held: None,
+        held_lower: None,
+        held_upper: None,
+        incoming: None,
+        incoming_lower: None,
+        incoming_upper: None,
+    };
+    let mut adjustment_mutations = Mutations::with_capacity(1);
+    let _ = run_adjustment(&policy, acc, &adjustment, &mut adjustment_mutations);
+
+    let order = make_order(
+        acc,
+        aapl_usd.clone(),
+        Side::Buy,
+        TradeAmount::Quantity(qty("10")),
+        Some(px("200")),
+    );
+    let mut pretrade_mutations = Mutations::with_capacity(1);
+    pre_trade_check(&policy, &order, &mut pretrade_mutations).expect("pretrade must succeed");
+    pretrade_mutations.commit_all();
+    let fill = make_report(
+        acc,
+        aapl_usd,
+        Side::Buy,
+        Some(Trade {
+            price: px("200"),
+            quantity: qty("10"),
+        }),
+        qty("0"),
+        true,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("200"),
+        )])),
+    );
+    let _ = run_report(&policy, &fill);
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("AAPL"))
+            .expect("AAPL slot must exist")
+            .avg_entry_price(),
+        Some(px("175"))
+    );
+
+    adjustment_mutations.rollback_all();
+    let after = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
+    assert_eq!(after.avg_entry_price(), Some(px("175")));
+    assert_eq!(after.available(), ps("20"));
 }
 
 #[test]
@@ -8834,7 +10785,9 @@ fn sell_fill_flipping_long_to_short_realizes_and_reopens_at_price() {
         .entry
         .realized_pnl
         .as_ref()
-        .expect("AAPL pnl must be present");
+        .expect("AAPL pnl must be present")
+        .as_ref()
+        .expect("AAPL pnl must be calculated");
     // Flip closes the whole long (realized = (130 - 100) * 10 = 300) and opens
     // the -5 remainder at the fill price 130.
     assert_eq!(pnl.delta, pnl_value("300"));
@@ -8853,22 +10806,15 @@ fn batch_force_setting_realized_pnl_then_rejected_rolls_back_to_prior() {
     // its prior value via the inverse delta.
     let acc = account(99224416);
     let policy = build_policy(None, None);
-    let seed_pnl = adj_with_realized_pnl(
-        asset("AAPL"),
-        Some(AdjustmentAmount::Absolute(ps("10"))),
-        Some(pnl_value("30")),
-    );
+    seed(&policy, acc, asset("AAPL"), "10");
+    let seed_pnl = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed_pnl, &mut mutations);
     mutations.commit_all();
 
     // Force-set realized PnL to 50, then drive the same closure to reject via an
     // out-of-range balance bound so the whole adjustment is rolled back.
-    let force = adj_with_realized_pnl(
-        asset("AAPL"),
-        Some(AdjustmentAmount::Delta(ps("0"))),
-        Some(pnl_value("50")),
-    );
+    let force = adj_with_realized_pnl(asset("AAPL"), pnl_value("50"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &force, &mut mutations);
 

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package main
 
@@ -46,11 +46,11 @@ func (r *recordingReactor) OnReport(_ model.ExecutionReport, res openpit.PostTra
 	}
 }
 
-// TestScenarioTripsBothKillswitches is the assertion-driven counterpart of
+// TestScenarioTripsBothKillSwitches is the assertion-driven counterpart of
 // main(). The scripted feed first trips the rate limit on the tail of the
 // burst (a handful of "too frequent" rejects), then the final execution
 // report pushes cumulative P&L below the floor and trips the kill switch.
-func TestScenarioTripsBothKillswitches(t *testing.T) {
+func TestScenarioTripsBothKillSwitches(t *testing.T) {
 	engine, err := buildEngine(Limits{
 		SettlementAsset: scenarioAssetSettle,
 		PnlLowerBound:   scenarioLowerBound,

@@ -45,11 +45,15 @@ adjustment = openpit.AccountAdjustment(
 
 ## Policy result contract
 
-A `Policy` registered through `pre_trade` can return:
+A `Policy.apply_account_adjustment` callback returns a
+`PolicyAccountAdjustmentResult` with:
 
-- `None` for success without mutations.
-- An iterable of `PolicyReject` objects to reject the batch.
-- A tuple of `Mutation` objects to register rollback work.
+- `rejects`: business rejects for the current adjustment.
+- `mutations`: rollback and commit work for accepted state changes.
+- `account_adjustments`: per-asset outcomes produced by the policy.
+- `account_blocks`: blocks recorded only after the full batch commits.
 
 The engine stops on the first rejected adjustment and exposes that index through
-`AccountAdjustmentBatchResult.failed_index`.
+`AccountAdjustmentBatchResult.failed_index`. Business rejection is returned as
+an `AccountAdjustmentBatchResult` with `ok == False` and a populated `rejects`
+list; it is not raised as an exception.

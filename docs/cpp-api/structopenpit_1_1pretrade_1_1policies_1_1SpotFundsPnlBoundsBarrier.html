@@ -120,7 +120,7 @@ document.addEventListener('DOMContentLoaded',() => { initNavTree('structopenpit_
 </div><!--header-->
 <div class="contents">
 
-<p>Account-currency P&amp;L bounds computed by the spot-funds ledger.  
+<p>Account-wide P&amp;L bounds computed by the spot-funds ledger.  
  <a href="#details">More...</a></p>
 
 <p><code>#include &lt;policies.hpp&gt;</code></p>
@@ -129,47 +129,16 @@ document.addEventListener('DOMContentLoaded',() => { initNavTree('structopenpit_
 Public Member Functions</h2></td></tr>
 <tr class="memitem:a6bf7e3a3bae909b23c8af60ecdfd2c5a" id="r_a6bf7e3a3bae909b23c8af60ecdfd2c5a"><td class="memItemLeft">OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier&#160;</td><td class="memItemRight"><a class="el" href="#a6bf7e3a3bae909b23c8af60ecdfd2c5a">Raw</a> () const noexcept</td></tr>
 <tr class="memdesc:a6bf7e3a3bae909b23c8af60ecdfd2c5a"><td class="mdescLeft">&#160;</td><td class="mdescRight">Lowers the barrier to the native C payload.  <br /></td></tr>
-<tr class="memitem:a578d996123fb357ba1b8f8434b26ad9d" id="r_a578d996123fb357ba1b8f8434b26ad9d"><td class="memItemLeft">&#160;</td><td class="memItemRight"><a class="el" href="#a578d996123fb357ba1b8f8434b26ad9d">SpotFundsPnlBoundsBarrier</a> (std::string currency)</td></tr>
-<tr class="memdesc:a578d996123fb357ba1b8f8434b26ad9d"><td class="mdescLeft">&#160;</td><td class="mdescRight">Creates a barrier for one account currency.  <br /></td></tr>
 </table><table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-pub-attribs" class="groupheader"><a id="pub-attribs" name="pub-attribs"></a>
 Public Attributes</h2></td></tr>
-<tr class="memitem:a59dcc86ccf52e3fba7d6bfa4816770f1" id="r_a59dcc86ccf52e3fba7d6bfa4816770f1"><td class="memItemLeft">std::string&#160;</td><td class="memItemRight"><a class="el" href="#a59dcc86ccf52e3fba7d6bfa4816770f1">accountCurrency</a></td></tr>
 <tr class="memitem:a5069c057cb8bc1785d7585067ba452d7" id="r_a5069c057cb8bc1785d7585067ba452d7"><td class="memItemLeft">std::optional&lt;<a class="el" href="namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa73a90c39f7f1402dd9f42119cc15aecc">::openpit::param::Pnl</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a5069c057cb8bc1785d7585067ba452d7">lowerBound</a></td></tr>
 <tr class="memitem:aaa216aae79d630b307170a593e966a2b" id="r_aaa216aae79d630b307170a593e966a2b"><td class="memItemLeft">std::optional&lt;<a class="el" href="namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa73a90c39f7f1402dd9f42119cc15aecc">::openpit::param::Pnl</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#aaa216aae79d630b307170a593e966a2b">upperBound</a></td></tr>
 </table>
 <a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
-<div class="textblock"><p>Account-currency P&amp;L bounds computed by the spot-funds ledger. </p>
-<p>Lower and upper bounds are optional; lower is typically a negative loss limit and upper is typically a positive profit-taking limit. </p>
-</div><a name="doc-constructors" id="doc-constructors"></a><h2 id="header-doc-constructors" class="groupheader">Constructor &amp; Destructor Documentation</h2>
-<a id="a578d996123fb357ba1b8f8434b26ad9d" name="a578d996123fb357ba1b8f8434b26ad9d"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a578d996123fb357ba1b8f8434b26ad9d">&#9670;&#160;</a></span>SpotFundsPnlBoundsBarrier()</h2>
-
-<div class="memitem">
-<div class="memproto">
-<table class="mlabels">
-  <tr>
-  <td class="mlabels-left">
-      <table class="memname">
-        <tr>
-          <td class="memname">openpit::pretrade::policies::SpotFundsPnlBoundsBarrier::SpotFundsPnlBoundsBarrier </td>
-          <td>(</td>
-          <td class="paramtype">std::string</td>          <td class="paramname"><span class="paramname"><em>currency</em></span></td><td>)</td>
-          <td></td>
-        </tr>
-      </table>
-  </td>
-  <td class="mlabels-right">
-<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel explicit">explicit</span></span>  </td>
-  </tr>
-</table>
-</div><div class="memdoc">
-
-<p>Creates a barrier for one account currency. </p>
-
-</div>
-</div>
-<a name="doc-func-members" id="doc-func-members"></a><h2 id="header-doc-func-members" class="groupheader">Member Function Documentation</h2>
+<div class="textblock"><p>Account-wide P&amp;L bounds computed by the spot-funds ledger. </p>
+<p>Lower and upper bounds are optional; lower is typically a negative loss limit and upper is typically a positive profit-taking limit. At least one bound must be set whenever a barrier is installed. </p>
+</div><a name="doc-func-members" id="doc-func-members"></a><h2 id="header-doc-func-members" class="groupheader">Member Function Documentation</h2>
 <a id="a6bf7e3a3bae909b23c8af60ecdfd2c5a" name="a6bf7e3a3bae909b23c8af60ecdfd2c5a"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#a6bf7e3a3bae909b23c8af60ecdfd2c5a">&#9670;&#160;</a></span>Raw()</h2>
 
@@ -198,20 +167,6 @@ Public Attributes</h2></td></tr>
 </div>
 </div>
 <a name="doc-variable-members" id="doc-variable-members"></a><h2 id="header-doc-variable-members" class="groupheader">Member Data Documentation</h2>
-<a id="a59dcc86ccf52e3fba7d6bfa4816770f1" name="a59dcc86ccf52e3fba7d6bfa4816770f1"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a59dcc86ccf52e3fba7d6bfa4816770f1">&#9670;&#160;</a></span>accountCurrency</h2>
-
-<div class="memitem">
-<div class="memproto">
-      <table class="memname">
-        <tr>
-          <td class="memname">std::string openpit::pretrade::policies::SpotFundsPnlBoundsBarrier::accountCurrency</td>
-        </tr>
-      </table>
-</div><div class="memdoc">
-
-</div>
-</div>
 <a id="a5069c057cb8bc1785d7585067ba452d7" name="a5069c057cb8bc1785d7585067ba452d7"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#a5069c057cb8bc1785d7585067ba452d7">&#9670;&#160;</a></span>lowerBound</h2>
 

@@ -27,6 +27,7 @@ type AccountAdjustmentAmount = C.OpenPitAccountAdjustmentAmount
 type AccountAdjustmentAmountOptional = C.OpenPitAccountAdjustmentAmountOptional
 type AccountAdjustmentApplyStatus = C.OpenPitAccountAdjustmentApplyStatus
 type AccountAdjustmentBalanceOperation = C.OpenPitAccountAdjustmentBalanceOperation
+type AccountAdjustmentAccountPnlOperation = C.OpenPitAccountAdjustmentAccountPnlOperation
 type AccountAdjustmentBatchError = *C.OpenPitAccountAdjustmentBatchError
 type AccountAdjustmentBounds = C.OpenPitAccountAdjustmentBounds
 type AccountAdjustmentBoundsOptional = C.OpenPitAccountAdjustmentBoundsOptional
@@ -77,6 +78,9 @@ type ParamNotional = C.OpenPitParamNotional
 type ParamNotionalOptional = C.OpenPitParamNotionalOptional
 type ParamPnl = C.OpenPitParamPnl
 type ParamPnlOptional = C.OpenPitParamPnlOptional
+type PnlState = C.OpenPitPnlState
+type PnlStateOptional = C.OpenPitPnlStateOptional
+type PnlStateKind = C.OpenPitPnlStateKind
 type ParamPositionEffect = C.OpenPitParamPositionEffect
 type ParamPositionMode = C.OpenPitParamPositionMode
 type ParamPositionSide = C.OpenPitParamPositionSide
@@ -107,7 +111,6 @@ type PretradePoliciesPnlBoundsAccountBarrier = C.OpenPitPretradePoliciesPnlBound
 type PretradePoliciesPnlBoundsAccountBarrierUpdate = C.OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate
 type PretradePoliciesPnlBoundsBarrier = C.OpenPitPretradePoliciesPnlBoundsBarrier
 type PretradePoliciesSpotFundsPnlBoundsAccountBarrier = C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier
-type PretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate = C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate
 type PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier = C.OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
 type PretradePoliciesSpotFundsPnlBoundsBarrier = C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier
 type PretradePoliciesSpotFundsOverride = C.OpenPitPretradePoliciesSpotFundsOverride
@@ -159,14 +162,21 @@ type SettlementScheme = C.OpenPitSettlementScheme
 
 type PretradePreTradeResult = *C.OpenPitPretradePreTradeResult
 type PostTradeAdjustmentList = *C.OpenPitPostTradeAdjustmentList
-type AccountOutcomeEntryList = *C.OpenPitAccountOutcomeEntryList
+type PostTradeAccountPnlList = *C.OpenPitPostTradeAccountPnlList
+type PostTradeResult = *C.OpenPitPostTradeResult
+type PretradeAccountAdjustmentResult = *C.OpenPitPretradeAccountAdjustmentResult
 type AccountOutcomeEntry = C.OpenPitAccountOutcomeEntry
 type OutcomeAmount = C.OpenPitOutcomeAmount
 type OutcomeAmountOptional = C.OpenPitOutcomeAmountOptional
 type PnlOutcomeAmount = C.OpenPitPnlOutcomeAmount
 type PnlOutcomeAmountOptional = C.OpenPitPnlOutcomeAmountOptional
+type PnlOutcome = C.OpenPitPnlOutcome
+type PnlOutcomeOptional = C.OpenPitPnlOutcomeOptional
 type AccountAdjustmentOutcome = C.OpenPitAccountAdjustmentOutcome
 type AccountAdjustmentOutcomeList = *C.OpenPitAccountAdjustmentOutcomeList
+type AccountPnlOutcome = C.OpenPitAccountPnlOutcome
+type AccountPnlOutcomeList = *C.OpenPitAccountPnlOutcomeList
+type PnlHaltReason = C.OpenPitPnlHaltReason
 
 type PretradePreTradeLockEntry = C.OpenPitPretradePreTradeLockEntry
 type PretradePreTradeLockEntries = *C.OpenPitPretradePreTradeLockEntries
@@ -179,6 +189,20 @@ const ParamLeverageNotSet = C.OPENPIT_PARAM_LEVERAGE_NOT_SET
 const DefaultPolicyGroupID PolicyGroupID = C.OPENPIT_DEFAULT_POLICY_GROUP_ID
 
 const DefaultAccountGroup ParamAccountGroupID = C.OPENPIT_DEFAULT_ACCOUNT_GROUP
+
+const (
+	PnlHaltReasonNone                   PnlHaltReason = C.OPENPIT_PNL_HALT_REASON_NONE
+	PnlHaltReasonMissingFx              PnlHaltReason = C.OPENPIT_PNL_HALT_REASON_MISSING_FX
+	PnlHaltReasonMissingAccountCurrency PnlHaltReason = C.OPENPIT_PNL_HALT_REASON_MISSING_ACCOUNT_CURRENCY
+	PnlHaltReasonMissingInitialPnl      PnlHaltReason = C.OPENPIT_PNL_HALT_REASON_MISSING_INITIAL_PNL
+	PnlHaltReasonMissingCostBasis       PnlHaltReason = C.OPENPIT_PNL_HALT_REASON_MISSING_COST_BASIS
+	PnlHaltReasonArithmeticOverflow     PnlHaltReason = C.OPENPIT_PNL_HALT_REASON_ARITHMETIC_OVERFLOW
+)
+
+const (
+	PnlStateKindValue  PnlStateKind = C.OPENPIT_PNL_STATE_VALUE
+	PnlStateKindHalted PnlStateKind = C.OPENPIT_PNL_STATE_HALTED
+)
 
 const (
 	AccountBlockErrorKindReservedGroup     = C.OpenPitAccountBlockErrorKind_ReservedGroup
@@ -223,12 +247,14 @@ const (
 	MarketDataGetStatusUnavailable       MarketDataGetStatus = C.OpenPitMarketDataGetStatus_Unavailable
 	MarketDataGetStatusUnknownInstrument MarketDataGetStatus = C.OpenPitMarketDataGetStatus_UnknownInstrument
 	MarketDataGetStatusQuoteExpired      MarketDataGetStatus = C.OpenPitMarketDataGetStatus_QuoteExpired
+	MarketDataGetStatusError             MarketDataGetStatus = C.OpenPitMarketDataGetStatus_Error
 )
 
 const (
-	AccountAdjustmentOperationKindAbsent   AccountAdjustmentOperationKind = C.OpenPitAccountAdjustmentOperationKind_Absent
-	AccountAdjustmentOperationKindBalance  AccountAdjustmentOperationKind = C.OpenPitAccountAdjustmentOperationKind_Balance
-	AccountAdjustmentOperationKindPosition AccountAdjustmentOperationKind = C.OpenPitAccountAdjustmentOperationKind_Position
+	AccountAdjustmentOperationKindAbsent     AccountAdjustmentOperationKind = C.OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ABSENT
+	AccountAdjustmentOperationKindBalance    AccountAdjustmentOperationKind = C.OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_BALANCE
+	AccountAdjustmentOperationKindPosition   AccountAdjustmentOperationKind = C.OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_POSITION
+	AccountAdjustmentOperationKindAccountPnl AccountAdjustmentOperationKind = C.OPENPIT_ACCOUNT_ADJUSTMENT_OPERATION_KIND_ACCOUNT_PNL
 )
 
 const (
@@ -248,9 +274,9 @@ const (
 )
 
 const (
-	MarketDataQuoteResolutionAccountOnly                 MarketDataQuoteResolution = C.OpenPitMarketDataQuoteResolution_AccountOnly
-	MarketDataQuoteResolutionAccountThenGroup            MarketDataQuoteResolution = C.OpenPitMarketDataQuoteResolution_AccountThenGroup
-	MarketDataQuoteResolutionAccountThenGroupThenDefault MarketDataQuoteResolution = C.OpenPitMarketDataQuoteResolution_AccountThenGroupThenDefault
+	MarketDataQuoteResolutionAccountOnly                 MarketDataQuoteResolution = C.OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_ONLY
+	MarketDataQuoteResolutionAccountThenGroup            MarketDataQuoteResolution = C.OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP
+	MarketDataQuoteResolutionAccountThenGroupThenDefault MarketDataQuoteResolution = C.OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT
 )
 
 const (
@@ -261,67 +287,67 @@ const (
 )
 
 const (
-	ParamSideNotSet = C.OpenPitParamSide_NotSet
-	ParamSideBuy    = C.OpenPitParamSide_Buy
-	ParamSideSell   = C.OpenPitParamSide_Sell
+	ParamSideNotSet = C.OPENPIT_PARAM_SIDE_NOT_SET
+	ParamSideBuy    = C.OPENPIT_PARAM_SIDE_BUY
+	ParamSideSell   = C.OPENPIT_PARAM_SIDE_SELL
 )
 
 const (
-	ParamPositionSideNotSet = C.OpenPitParamPositionSide_NotSet
-	ParamPositionSideLong   = C.OpenPitParamPositionSide_Long
-	ParamPositionSideShort  = C.OpenPitParamPositionSide_Short
+	ParamPositionSideNotSet = C.OPENPIT_PARAM_POSITION_SIDE_NOT_SET
+	ParamPositionSideLong   = C.OPENPIT_PARAM_POSITION_SIDE_LONG
+	ParamPositionSideShort  = C.OPENPIT_PARAM_POSITION_SIDE_SHORT
 )
 
 const (
-	ParamPositionModeNotSet  = C.OpenPitParamPositionMode_NotSet
-	ParamPositionModeNetting = C.OpenPitParamPositionMode_Netting
-	ParamPositionModeHedged  = C.OpenPitParamPositionMode_Hedged
+	ParamPositionModeNotSet  = C.OPENPIT_PARAM_POSITION_MODE_NOT_SET
+	ParamPositionModeNetting = C.OPENPIT_PARAM_POSITION_MODE_NETTING
+	ParamPositionModeHedged  = C.OPENPIT_PARAM_POSITION_MODE_HEDGED
 )
 
 const (
-	ParamPositionEffectNotSet = C.OpenPitParamPositionEffect_NotSet
-	ParamPositionEffectOpen   = C.OpenPitParamPositionEffect_Open
-	ParamPositionEffectClose  = C.OpenPitParamPositionEffect_Close
+	ParamPositionEffectNotSet = C.OPENPIT_PARAM_POSITION_EFFECT_NOT_SET
+	ParamPositionEffectOpen   = C.OPENPIT_PARAM_POSITION_EFFECT_OPEN
+	ParamPositionEffectClose  = C.OPENPIT_PARAM_POSITION_EFFECT_CLOSE
 )
 
 const (
-	ParamTradeAmountKindNotSet   = C.OpenPitParamTradeAmountKind_NotSet
-	ParamTradeAmountKindQuantity = C.OpenPitParamTradeAmountKind_Quantity
-	ParamTradeAmountKindVolume   = C.OpenPitParamTradeAmountKind_Volume
+	ParamTradeAmountKindNotSet   = C.OPENPIT_PARAM_TRADE_AMOUNT_KIND_NOT_SET
+	ParamTradeAmountKindQuantity = C.OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY
+	ParamTradeAmountKindVolume   = C.OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME
 )
 
 const (
-	ParamRoundingStrategyMidpointNearestEven  = C.OpenPitParamRoundingStrategy_MidpointNearestEven
-	ParamRoundingStrategyMidpointAwayFromZero = C.OpenPitParamRoundingStrategy_MidpointAwayFromZero
-	ParamRoundingStrategyUp                   = C.OpenPitParamRoundingStrategy_Up
-	ParamRoundingStrategyDown                 = C.OpenPitParamRoundingStrategy_Down
+	ParamRoundingStrategyMidpointNearestEven  = C.OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_NEAREST_EVEN
+	ParamRoundingStrategyMidpointAwayFromZero = C.OPENPIT_PARAM_ROUNDING_STRATEGY_MIDPOINT_AWAY_FROM_ZERO
+	ParamRoundingStrategyUp                   = C.OPENPIT_PARAM_ROUNDING_STRATEGY_UP
+	ParamRoundingStrategyDown                 = C.OPENPIT_PARAM_ROUNDING_STRATEGY_DOWN
 )
 
 const (
-	ParamFillTypeNotSet         = C.OpenPitParamFillType_NotSet
-	ParamFillTypeTrade          = C.OpenPitParamFillType_Trade
-	ParamFillTypeLiquidation    = C.OpenPitParamFillType_Liquidation
-	ParamFillTypeAutoDeleverage = C.OpenPitParamFillType_AutoDeleverage
-	ParamFillTypeSettlement     = C.OpenPitParamFillType_Settlement
-	ParamFillTypeFunding        = C.OpenPitParamFillType_Funding
+	ParamFillTypeNotSet         = C.OPENPIT_PARAM_FILL_TYPE_NOT_SET
+	ParamFillTypeTrade          = C.OPENPIT_PARAM_FILL_TYPE_TRADE
+	ParamFillTypeLiquidation    = C.OPENPIT_PARAM_FILL_TYPE_LIQUIDATION
+	ParamFillTypeAutoDeleverage = C.OPENPIT_PARAM_FILL_TYPE_AUTO_DELEVERAGE
+	ParamFillTypeSettlement     = C.OPENPIT_PARAM_FILL_TYPE_SETTLEMENT
+	ParamFillTypeFunding        = C.OPENPIT_PARAM_FILL_TYPE_FUNDING
 )
 
 const (
-	ParamKindUnspecified  = C.OpenPitParamKind_Unspecified
-	ParamKindQuantity     = C.OpenPitParamKind_Quantity
-	ParamKindVolume       = C.OpenPitParamKind_Volume
-	ParamKindNotional     = C.OpenPitParamKind_Notional
-	ParamKindPrice        = C.OpenPitParamKind_Price
-	ParamKindPnl          = C.OpenPitParamKind_Pnl
-	ParamKindCashFlow     = C.OpenPitParamKind_CashFlow
-	ParamKindPositionSize = C.OpenPitParamKind_PositionSize
-	ParamKindFee          = C.OpenPitParamKind_Fee
-	ParamKindLeverage     = C.OpenPitParamKind_Leverage
+	ParamKindUnspecified  = C.OPENPIT_PARAM_KIND_UNSPECIFIED
+	ParamKindQuantity     = C.OPENPIT_PARAM_KIND_QUANTITY
+	ParamKindVolume       = C.OPENPIT_PARAM_KIND_VOLUME
+	ParamKindNotional     = C.OPENPIT_PARAM_KIND_NOTIONAL
+	ParamKindPrice        = C.OPENPIT_PARAM_KIND_PRICE
+	ParamKindPnl          = C.OPENPIT_PARAM_KIND_PNL
+	ParamKindCashFlow     = C.OPENPIT_PARAM_KIND_CASH_FLOW
+	ParamKindPositionSize = C.OPENPIT_PARAM_KIND_POSITION_SIZE
+	ParamKindFee          = C.OPENPIT_PARAM_KIND_FEE
+	ParamKindLeverage     = C.OPENPIT_PARAM_KIND_LEVERAGE
 )
 
 const (
-	PretradePoliciesSpotFundsLimitModeEnforce   = C.OpenPitPretradePoliciesSpotFundsLimitMode_Enforce
-	PretradePoliciesSpotFundsLimitModeTrackOnly = C.OpenPitPretradePoliciesSpotFundsLimitMode_TrackOnly
+	PretradePoliciesSpotFundsLimitModeEnforce   = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE
+	PretradePoliciesSpotFundsLimitModeTrackOnly = C.OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY
 )
 
 const (
@@ -347,65 +373,65 @@ const (
 )
 
 const (
-	TriBoolNotSet = C.OpenPitTriBool_NotSet
-	TriBoolFalse  = C.OpenPitTriBool_False
-	TriBoolTrue   = C.OpenPitTriBool_True
+	TriBoolNotSet = C.OPENPIT_TRI_BOOL_NOT_SET
+	TriBoolFalse  = C.OPENPIT_TRI_BOOL_FALSE
+	TriBoolTrue   = C.OPENPIT_TRI_BOOL_TRUE
 )
 
 const (
-	ParamAdjustmentAmountKindNotSet   = C.OpenPitParamAdjustmentAmountKind_NotSet
-	ParamAdjustmentAmountKindDelta    = C.OpenPitParamAdjustmentAmountKind_Delta
-	ParamAdjustmentAmountKindAbsolute = C.OpenPitParamAdjustmentAmountKind_Absolute
+	ParamAdjustmentAmountKindNotSet   = C.OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_NOT_SET
+	ParamAdjustmentAmountKindDelta    = C.OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_DELTA
+	ParamAdjustmentAmountKindAbsolute = C.OPENPIT_PARAM_ADJUSTMENT_AMOUNT_KIND_ABSOLUTE
 )
 
 const (
-	RejectScopeOrder   = C.OpenPitPretradeRejectScope_Order
-	RejectScopeAccount = C.OpenPitPretradeRejectScope_Account
+	RejectScopeOrder   = C.OPENPIT_PRETRADE_REJECT_SCOPE_ORDER
+	RejectScopeAccount = C.OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT
 )
 
 const (
-	RejectCodeMissingRequiredField            = C.OpenPitPretradeRejectCode_MissingRequiredField
-	RejectCodeInvalidFieldFormat              = C.OpenPitPretradeRejectCode_InvalidFieldFormat
-	RejectCodeInvalidFieldValue               = C.OpenPitPretradeRejectCode_InvalidFieldValue
-	RejectCodeUnsupportedOrderType            = C.OpenPitPretradeRejectCode_UnsupportedOrderType
-	RejectCodeUnsupportedTimeInForce          = C.OpenPitPretradeRejectCode_UnsupportedTimeInForce
-	RejectCodeUnsupportedOrderAttribute       = C.OpenPitPretradeRejectCode_UnsupportedOrderAttribute
-	RejectCodeDuplicateClientOrderID          = C.OpenPitPretradeRejectCode_DuplicateClientOrderId
-	RejectCodeTooLateToEnter                  = C.OpenPitPretradeRejectCode_TooLateToEnter
-	RejectCodeExchangeClosed                  = C.OpenPitPretradeRejectCode_ExchangeClosed
-	RejectCodeUnknownInstrument               = C.OpenPitPretradeRejectCode_UnknownInstrument
-	RejectCodeUnknownAccount                  = C.OpenPitPretradeRejectCode_UnknownAccount
-	RejectCodeUnknownVenue                    = C.OpenPitPretradeRejectCode_UnknownVenue
-	RejectCodeUnknownClearingAccount          = C.OpenPitPretradeRejectCode_UnknownClearingAccount
-	RejectCodeUnknownCollateralAsset          = C.OpenPitPretradeRejectCode_UnknownCollateralAsset
-	RejectCodeInsufficientFunds               = C.OpenPitPretradeRejectCode_InsufficientFunds
-	RejectCodeInsufficientMargin              = C.OpenPitPretradeRejectCode_InsufficientMargin
-	RejectCodeInsufficientPosition            = C.OpenPitPretradeRejectCode_InsufficientPosition
-	RejectCodeCreditLimitExceeded             = C.OpenPitPretradeRejectCode_CreditLimitExceeded
-	RejectCodeRiskLimitExceeded               = C.OpenPitPretradeRejectCode_RiskLimitExceeded
-	RejectCodeOrderExceedsLimit               = C.OpenPitPretradeRejectCode_OrderExceedsLimit
-	RejectCodeOrderQtyExceedsLimit            = C.OpenPitPretradeRejectCode_OrderQtyExceedsLimit
-	RejectCodeOrderNotionalExceedsLimit       = C.OpenPitPretradeRejectCode_OrderNotionalExceedsLimit
-	RejectCodePositionLimitExceeded           = C.OpenPitPretradeRejectCode_PositionLimitExceeded
-	RejectCodeConcentrationLimitExceeded      = C.OpenPitPretradeRejectCode_ConcentrationLimitExceeded
-	RejectCodeLeverageLimitExceeded           = C.OpenPitPretradeRejectCode_LeverageLimitExceeded
-	RejectCodeRateLimitExceeded               = C.OpenPitPretradeRejectCode_RateLimitExceeded
-	RejectCodePnlKillSwitchTriggered          = C.OpenPitPretradeRejectCode_PnlKillSwitchTriggered
-	RejectCodeAccountBlocked                  = C.OpenPitPretradeRejectCode_AccountBlocked
-	RejectCodeAccountNotAuthorized            = C.OpenPitPretradeRejectCode_AccountNotAuthorized
-	RejectCodeComplianceRestriction           = C.OpenPitPretradeRejectCode_ComplianceRestriction
-	RejectCodeInstrumentRestricted            = C.OpenPitPretradeRejectCode_InstrumentRestricted
-	RejectCodeJurisdictionRestriction         = C.OpenPitPretradeRejectCode_JurisdictionRestriction
-	RejectCodeWashTradePrevention             = C.OpenPitPretradeRejectCode_WashTradePrevention
-	RejectCodeSelfMatchPrevention             = C.OpenPitPretradeRejectCode_SelfMatchPrevention
-	RejectCodeShortSaleRestriction            = C.OpenPitPretradeRejectCode_ShortSaleRestriction
-	RejectCodeRiskConfigurationMissing        = C.OpenPitPretradeRejectCode_RiskConfigurationMissing
-	RejectCodeReferenceDataUnavailable        = C.OpenPitPretradeRejectCode_ReferenceDataUnavailable
-	RejectCodeOrderValueCalculationFailed     = C.OpenPitPretradeRejectCode_OrderValueCalculationFailed
-	RejectCodeSystemUnavailable               = C.OpenPitPretradeRejectCode_SystemUnavailable
-	RejectCodeMarkPriceUnavailable            = C.OpenPitPretradeRejectCode_MarkPriceUnavailable
-	RejectCodeAccountAdjustmentBoundsExceeded = C.OpenPitPretradeRejectCode_AccountAdjustmentBoundsExceeded
-	RejectCodeArithmeticOverflow              = C.OpenPitPretradeRejectCode_ArithmeticOverflow
-	RejectCodeCustom                          = C.OpenPitPretradeRejectCode_Custom
-	RejectCodeOther                           = C.OpenPitPretradeRejectCode_Other
+	RejectCodeMissingRequiredField            = C.OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD
+	RejectCodeInvalidFieldFormat              = C.OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_FORMAT
+	RejectCodeInvalidFieldValue               = C.OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_VALUE
+	RejectCodeUnsupportedOrderType            = C.OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_TYPE
+	RejectCodeUnsupportedTimeInForce          = C.OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_TIME_IN_FORCE
+	RejectCodeUnsupportedOrderAttribute       = C.OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_ATTRIBUTE
+	RejectCodeDuplicateClientOrderID          = C.OPENPIT_PRETRADE_REJECT_CODE_DUPLICATE_CLIENT_ORDER_ID
+	RejectCodeTooLateToEnter                  = C.OPENPIT_PRETRADE_REJECT_CODE_TOO_LATE_TO_ENTER
+	RejectCodeExchangeClosed                  = C.OPENPIT_PRETRADE_REJECT_CODE_EXCHANGE_CLOSED
+	RejectCodeUnknownInstrument               = C.OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_INSTRUMENT
+	RejectCodeUnknownAccount                  = C.OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_ACCOUNT
+	RejectCodeUnknownVenue                    = C.OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_VENUE
+	RejectCodeUnknownClearingAccount          = C.OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_CLEARING_ACCOUNT
+	RejectCodeUnknownCollateralAsset          = C.OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_COLLATERAL_ASSET
+	RejectCodeInsufficientFunds               = C.OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_FUNDS
+	RejectCodeInsufficientMargin              = C.OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_MARGIN
+	RejectCodeInsufficientPosition            = C.OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_POSITION
+	RejectCodeCreditLimitExceeded             = C.OPENPIT_PRETRADE_REJECT_CODE_CREDIT_LIMIT_EXCEEDED
+	RejectCodeRiskLimitExceeded               = C.OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED
+	RejectCodeOrderExceedsLimit               = C.OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT
+	RejectCodeOrderQtyExceedsLimit            = C.OPENPIT_PRETRADE_REJECT_CODE_ORDER_QTY_EXCEEDS_LIMIT
+	RejectCodeOrderNotionalExceedsLimit       = C.OPENPIT_PRETRADE_REJECT_CODE_ORDER_NOTIONAL_EXCEEDS_LIMIT
+	RejectCodePositionLimitExceeded           = C.OPENPIT_PRETRADE_REJECT_CODE_POSITION_LIMIT_EXCEEDED
+	RejectCodeConcentrationLimitExceeded      = C.OPENPIT_PRETRADE_REJECT_CODE_CONCENTRATION_LIMIT_EXCEEDED
+	RejectCodeLeverageLimitExceeded           = C.OPENPIT_PRETRADE_REJECT_CODE_LEVERAGE_LIMIT_EXCEEDED
+	RejectCodeRateLimitExceeded               = C.OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED
+	RejectCodePnlKillSwitchTriggered          = C.OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED
+	RejectCodeAccountBlocked                  = C.OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED
+	RejectCodeAccountNotAuthorized            = C.OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_NOT_AUTHORIZED
+	RejectCodeComplianceRestriction           = C.OPENPIT_PRETRADE_REJECT_CODE_COMPLIANCE_RESTRICTION
+	RejectCodeInstrumentRestricted            = C.OPENPIT_PRETRADE_REJECT_CODE_INSTRUMENT_RESTRICTED
+	RejectCodeJurisdictionRestriction         = C.OPENPIT_PRETRADE_REJECT_CODE_JURISDICTION_RESTRICTION
+	RejectCodeWashTradePrevention             = C.OPENPIT_PRETRADE_REJECT_CODE_WASH_TRADE_PREVENTION
+	RejectCodeSelfMatchPrevention             = C.OPENPIT_PRETRADE_REJECT_CODE_SELF_MATCH_PREVENTION
+	RejectCodeShortSaleRestriction            = C.OPENPIT_PRETRADE_REJECT_CODE_SHORT_SALE_RESTRICTION
+	RejectCodeRiskConfigurationMissing        = C.OPENPIT_PRETRADE_REJECT_CODE_RISK_CONFIGURATION_MISSING
+	RejectCodeReferenceDataUnavailable        = C.OPENPIT_PRETRADE_REJECT_CODE_REFERENCE_DATA_UNAVAILABLE
+	RejectCodeOrderValueCalculationFailed     = C.OPENPIT_PRETRADE_REJECT_CODE_ORDER_VALUE_CALCULATION_FAILED
+	RejectCodeSystemUnavailable               = C.OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE
+	RejectCodeMarkPriceUnavailable            = C.OPENPIT_PRETRADE_REJECT_CODE_MARK_PRICE_UNAVAILABLE
+	RejectCodeAccountAdjustmentBoundsExceeded = C.OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_ADJUSTMENT_BOUNDS_EXCEEDED
+	RejectCodeArithmeticOverflow              = C.OPENPIT_PRETRADE_REJECT_CODE_ARITHMETIC_OVERFLOW
+	RejectCodeCustom                          = C.OPENPIT_PRETRADE_REJECT_CODE_CUSTOM
+	RejectCodeOther                           = C.OPENPIT_PRETRADE_REJECT_CODE_OTHER
 )

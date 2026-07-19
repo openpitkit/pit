@@ -123,7 +123,7 @@ document.addEventListener('DOMContentLoaded',() => { initNavTree('structopenpit_
 <p>Balance-operation payload of an account adjustment.  
  <a href="#details">More...</a></p>
 
-<p><code>#include &lt;account_adjustment.hpp&gt;</code></p>
+<p><code>#include &lt;operation.hpp&gt;</code></p>
 <table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-pub-methods" class="groupheader"><a id="pub-methods" name="pub-methods"></a>
 Public Member Functions</h2></td></tr>
@@ -138,12 +138,11 @@ Static Public Member Functions</h2></td></tr>
 Public Attributes</h2></td></tr>
 <tr class="memitem:ab770b417fea4aaf0d6fc981e9b9f633f" id="r_ab770b417fea4aaf0d6fc981e9b9f633f"><td class="memItemLeft">std::optional&lt; std::string &gt;&#160;</td><td class="memItemRight"><a class="el" href="#ab770b417fea4aaf0d6fc981e9b9f633f">asset</a></td></tr>
 <tr class="memitem:a5ff577be2dcfa3fd29301cb15e4aa127" id="r_a5ff577be2dcfa3fd29301cb15e4aa127"><td class="memItemLeft">std::optional&lt; <a class="el" href="namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa3601146c4e948c32b6424d2c0a7f0118">param::Price</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a5ff577be2dcfa3fd29301cb15e4aa127">averageEntryPrice</a></td></tr>
-<tr class="memitem:ac88b580d5098c73844530cdd54cebe13" id="r_ac88b580d5098c73844530cdd54cebe13"><td class="memItemLeft">std::optional&lt; <a class="el" href="namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa73a90c39f7f1402dd9f42119cc15aecc">param::Pnl</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#ac88b580d5098c73844530cdd54cebe13">realizedPnl</a></td></tr>
-<tr class="memdesc:ac88b580d5098c73844530cdd54cebe13"><td class="mdescLeft">&#160;</td><td class="mdescRight">Optional absolute realized-PnL force-set.  <br /></td></tr>
+<tr class="memitem:a5125d6924f64574c2fd1f196f70f88ff" id="r_a5125d6924f64574c2fd1f196f70f88ff"><td class="memItemLeft">std::optional&lt; std::variant&lt; <a class="el" href="namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa73a90c39f7f1402dd9f42119cc15aecc">param::Pnl</a>, <a class="el" href="namespaceopenpit_1_1accountadjustment.html#af4b87a71496cd37769b8c74a1319f502">PnlHaltReason</a> &gt; &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a5125d6924f64574c2fd1f196f70f88ff">realizedPnl</a></td></tr>
 </table>
 <a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
 <div class="textblock"><p>Balance-operation payload of an account adjustment. </p>
-<p><span class="tt"><a class="el" href="#ac88b580d5098c73844530cdd54cebe13" title="Optional absolute realized-PnL force-set.">realizedPnl</a></span> force-sets the absolute account-currency realized PnL. It is not a delta and does not perform FX conversion. When absent, the current value is left unchanged and no realized-PnL outcome is emitted. A force-set outcome reports <span class="tt">delta = new - prior</span> and <span class="tt">absolute = new</span>. </p>
+<p>Its asset identifies the holdings slot whose balance, average entry price, and realized PnL are adjusted. Average entry price and realized PnL are denominated in the account currency. </p>
 </div><a name="doc-constructors" id="doc-constructors"></a><h2 id="header-doc-constructors" class="groupheader">Constructor &amp; Destructor Documentation</h2>
 <a id="ad5fba43cd77520fa51e032420bf78d8f" name="ad5fba43cd77520fa51e032420bf78d8f"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#ad5fba43cd77520fa51e032420bf78d8f">&#9670;&#160;</a></span>BalanceOperation()</h2>
@@ -250,19 +249,17 @@ Public Attributes</h2></td></tr>
 
 </div>
 </div>
-<a id="ac88b580d5098c73844530cdd54cebe13" name="ac88b580d5098c73844530cdd54cebe13"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#ac88b580d5098c73844530cdd54cebe13">&#9670;&#160;</a></span>realizedPnl</h2>
+<a id="a5125d6924f64574c2fd1f196f70f88ff" name="a5125d6924f64574c2fd1f196f70f88ff"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a5125d6924f64574c2fd1f196f70f88ff">&#9670;&#160;</a></span>realizedPnl</h2>
 
 <div class="memitem">
 <div class="memproto">
       <table class="memname">
         <tr>
-          <td class="memname">std::optional&lt;<a class="el" href="namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa73a90c39f7f1402dd9f42119cc15aecc">param::Pnl</a>&gt; openpit::accountadjustment::BalanceOperation::realizedPnl</td>
+          <td class="memname">std::optional&lt;std::variant&lt;<a class="el" href="namespaceopenpit_1_1param.html#a41bdb60811ad4d8c3a7f2d7b86bed19fa73a90c39f7f1402dd9f42119cc15aecc">param::Pnl</a>, <a class="el" href="namespaceopenpit_1_1accountadjustment.html#af4b87a71496cd37769b8c74a1319f502">PnlHaltReason</a>&gt; &gt; openpit::accountadjustment::BalanceOperation::realizedPnl</td>
         </tr>
       </table>
 </div><div class="memdoc">
-
-<p>Optional absolute realized-PnL force-set. </p>
 
 </div>
 </div>

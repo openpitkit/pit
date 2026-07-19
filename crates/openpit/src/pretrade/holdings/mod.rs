@@ -26,4 +26,5 @@ mod store;
 
 pub use error::{AdjustmentOverflowError, HoldError};
 pub use holdings::{AdjustmentTarget, Holdings};
+pub(crate) use holdings::{PositionPnlOperation, PositionPnlState};
 pub use store::HoldingsStore;

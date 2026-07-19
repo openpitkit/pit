@@ -28,6 +28,7 @@ from .. import (
     Order,
 )
 from .._openpit import (
+    AccountBlock,
     AccountOutcomeEntry,
     Context,
     PostTradeContext,
@@ -85,6 +86,13 @@ class PolicyPreTradeResult:
         lock_prices: collections.abc.Iterable[Price] = (),
     ) -> PolicyPreTradeResult: ...
 
+@dataclasses.dataclass(frozen=True)
+class PolicyAccountAdjustmentResult:
+    rejects: tuple[PolicyReject, ...] = ()
+    mutations: tuple[Mutation, ...] = ()
+    account_adjustments: tuple[AccountOutcomeEntry, ...] = ()
+    account_blocks: tuple[AccountBlock, ...] = ()
+
 class Policy(abc.ABC):
     @property
     @abc.abstractmethod
@@ -111,10 +119,4 @@ class Policy(abc.ABC):
         ctx: AccountAdjustmentContext,
         account_id: AccountId,
         adjustment: AccountAdjustment,
-    ) -> (
-        collections.abc.Iterable[AccountOutcomeEntry]
-        | PolicyDecision
-        | collections.abc.Iterable[PolicyReject]
-        | tuple[Mutation, ...]
-        | None
-    ): ...
+    ) -> PolicyAccountAdjustmentResult: ...

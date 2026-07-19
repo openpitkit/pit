@@ -45,6 +45,7 @@ export {
   // Account adjustment model.
   AccountAdjustment,
   AccountAdjustmentAmount,
+  AccountAdjustmentAccountPnlOperation,
   AccountAdjustmentBalanceOperation,
   AccountAdjustmentPositionOperation,
   AccountAdjustmentBounds,
@@ -67,6 +68,7 @@ export type {
   FinancialImpactInit,
   AccountAdjustmentInit,
   AccountAdjustmentAmountInit,
+  AccountAdjustmentAccountPnlOperationInit,
   AccountAdjustmentBalanceOperationInit,
   AccountAdjustmentPositionOperationInit,
   AccountAdjustmentBoundsInit,

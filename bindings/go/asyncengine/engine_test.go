@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package asyncengine
 
@@ -31,7 +31,6 @@ import (
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/future"
-	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/reject"
 )
@@ -115,15 +114,11 @@ func (d *fakeDriver) ApplyExecutionReport(
 func (d *fakeDriver) ApplyAccountAdjustment(
 	accountID param.AccountID,
 	_ []model.AccountAdjustment,
-) (
-	optional.Option[reject.AccountAdjustmentBatchError],
-	[]accountadjustment.Outcome,
-	error,
-) {
+) (accountadjustment.BatchResult, error) {
 	done := d.recordStart(accountID)
 	defer done()
 	atomic.AddInt64(&d.adjustmentCount, 1)
-	return optional.None[reject.AccountAdjustmentBatchError](), nil, nil
+	return accountadjustment.BatchResult{}, nil
 }
 
 func (*fakeDriver) Accounts() accounts.Accounts {

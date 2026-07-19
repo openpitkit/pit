@@ -20,7 +20,7 @@
 #include "spot_loadtest/decimal.hpp"
 #include "spot_loadtest/generator/event.hpp"
 
-#include "openpit/account_adjustment.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/reject.hpp"
 
 #include <cstdint>

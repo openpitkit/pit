@@ -134,10 +134,12 @@ Classes</h2></td></tr>
 <tr class="memitem:DryRunReport" id="r_DryRunReport"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1DryRunReport.html">DryRunReport</a></td></tr>
 <tr class="memitem:ExecuteResult" id="r_ExecuteResult"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1pretrade_1_1ExecuteResult.html">ExecuteResult</a></td></tr>
 <tr class="memitem:LockEntry" id="r_LockEntry"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1pretrade_1_1LockEntry.html">LockEntry</a></td></tr>
+<tr class="memitem:PolicyAccountAdjustmentResult" id="r_PolicyAccountAdjustmentResult"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1pretrade_1_1PolicyAccountAdjustmentResult.html">PolicyAccountAdjustmentResult</a></td></tr>
 <tr class="memitem:PolicyAdapter" id="r_PolicyAdapter"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">PolicyAdapter</a></td></tr>
 <tr class="memitem:PolicyDecision" id="r_PolicyDecision"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1pretrade_1_1PolicyDecision.html">PolicyDecision</a></td></tr>
 <tr class="memitem:PostTradeAdjustments" id="r_PostTradeAdjustments"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1PostTradeAdjustments.html">PostTradeAdjustments</a></td></tr>
 <tr class="memitem:PostTradeContext" id="r_PostTradeContext"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1PostTradeContext.html">PostTradeContext</a></td></tr>
+<tr class="memitem:PostTradePnls" id="r_PostTradePnls"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1PostTradePnls.html">PostTradePnls</a></td></tr>
 <tr class="memitem:PreTradeLock" id="r_PreTradeLock"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1PreTradeLock.html">PreTradeLock</a></td></tr>
 <tr class="memitem:Reject" id="r_Reject"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="structopenpit_1_1pretrade_1_1Reject.html">Reject</a></td></tr>
 <tr class="memitem:Request" id="r_Request"><td class="memItemLeft">class &#160;</td><td class="memItemRight"><a class="el" href="classopenpit_1_1pretrade_1_1Request.html">Request</a></td></tr>
@@ -164,64 +166,64 @@ Enumerations</h2></td></tr>
 , <a class="el" href="#ad88d6888d2b6d5d1db4507842cf81472a2e64ec41b0609f6d954d228fc7913a66">UnsafeFast</a>
  }</td></tr>
 <tr class="memitem:a9fe9e76687a28aa5a58164c44ddfefed" id="r_a9fe9e76687a28aa5a58164c44ddfefed"><td class="memItemLeft">enum class &#160;</td><td class="memItemRight"><a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefed">RejectCode</a> : std::uint16_t { <br />
-&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedaa4917c3db352ae9cc19d5141ee11316f">MissingRequiredField</a> = OpenPitPretradeRejectCode_MissingRequiredField
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda60059996b236de0fe92cfc965b7cd802">InvalidFieldFormat</a> = OpenPitPretradeRejectCode_InvalidFieldFormat
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedad7e877ae1a8c09a88f9ee9b0ea84913e">InvalidFieldValue</a> = OpenPitPretradeRejectCode_InvalidFieldValue
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda5598b39ef2c6d226efd6b005a33fc0ed">UnsupportedOrderType</a> = OpenPitPretradeRejectCode_UnsupportedOrderType
+&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedaa4917c3db352ae9cc19d5141ee11316f">MissingRequiredField</a> = OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda60059996b236de0fe92cfc965b7cd802">InvalidFieldFormat</a> = OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_FORMAT
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedad7e877ae1a8c09a88f9ee9b0ea84913e">InvalidFieldValue</a> = OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_VALUE
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda5598b39ef2c6d226efd6b005a33fc0ed">UnsupportedOrderType</a> = OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_TYPE
 , <br />
-&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda43bd335659feb914a49c191ec66604bc">UnsupportedTimeInForce</a> = OpenPitPretradeRejectCode_UnsupportedTimeInForce
+&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda43bd335659feb914a49c191ec66604bc">UnsupportedTimeInForce</a>
 , <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda404f22775ea2246fa0c922d815a72962">UnsupportedOrderAttribute</a>
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedafb821de31920e90b7ae7d7eb383d09ff">DuplicateClientOrderId</a> = OpenPitPretradeRejectCode_DuplicateClientOrderId
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda6e6de49c883081ea44501d0b56606bf3">TooLateToEnter</a> = OpenPitPretradeRejectCode_TooLateToEnter
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedafb821de31920e90b7ae7d7eb383d09ff">DuplicateClientOrderId</a>
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda6e6de49c883081ea44501d0b56606bf3">TooLateToEnter</a> = OPENPIT_PRETRADE_REJECT_CODE_TOO_LATE_TO_ENTER
 , <br />
-&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda5fba3911337fa9aef707b53af69ea85f">ExchangeClosed</a> = OpenPitPretradeRejectCode_ExchangeClosed
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedab9e51a69f4dd89fc832c1ab9735ab49a">UnknownInstrument</a> = OpenPitPretradeRejectCode_UnknownInstrument
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedaee8dec47611d16eac73d1172e87c4001">UnknownAccount</a> = OpenPitPretradeRejectCode_UnknownAccount
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda0bc10b09dcad4f5786d37a185362a982">UnknownVenue</a> = OpenPitPretradeRejectCode_UnknownVenue
+&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda5fba3911337fa9aef707b53af69ea85f">ExchangeClosed</a> = OPENPIT_PRETRADE_REJECT_CODE_EXCHANGE_CLOSED
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedab9e51a69f4dd89fc832c1ab9735ab49a">UnknownInstrument</a> = OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_INSTRUMENT
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedaee8dec47611d16eac73d1172e87c4001">UnknownAccount</a> = OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_ACCOUNT
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda0bc10b09dcad4f5786d37a185362a982">UnknownVenue</a> = OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_VENUE
 , <br />
-&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda638afb019faa2e4416a4b13d9853460a">UnknownClearingAccount</a> = OpenPitPretradeRejectCode_UnknownClearingAccount
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedafdeda29b5ecdafa07342caddef113ad0">UnknownCollateralAsset</a> = OpenPitPretradeRejectCode_UnknownCollateralAsset
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda09d9ff5c9cf461998dc29f4c90f2c60c">InsufficientFunds</a> = OpenPitPretradeRejectCode_InsufficientFunds
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda645fb462467da2b0454bcafa7ae805c7">InsufficientMargin</a> = OpenPitPretradeRejectCode_InsufficientMargin
+&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda638afb019faa2e4416a4b13d9853460a">UnknownClearingAccount</a>
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedafdeda29b5ecdafa07342caddef113ad0">UnknownCollateralAsset</a>
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda09d9ff5c9cf461998dc29f4c90f2c60c">InsufficientFunds</a> = OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_FUNDS
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda645fb462467da2b0454bcafa7ae805c7">InsufficientMargin</a> = OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_MARGIN
 , <br />
-&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda171404f66dcc021845c032543f952479">InsufficientPosition</a> = OpenPitPretradeRejectCode_InsufficientPosition
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda1a3d58354094a9a2303e72d3ba0fcb32">CreditLimitExceeded</a> = OpenPitPretradeRejectCode_CreditLimitExceeded
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda7d94081551698f8e49674257e65998e5">RiskLimitExceeded</a> = OpenPitPretradeRejectCode_RiskLimitExceeded
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda0dbfea62625f01f4d1aa760a61f95aba">OrderExceedsLimit</a> = OpenPitPretradeRejectCode_OrderExceedsLimit
+&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda171404f66dcc021845c032543f952479">InsufficientPosition</a> = OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_POSITION
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda1a3d58354094a9a2303e72d3ba0fcb32">CreditLimitExceeded</a> = OPENPIT_PRETRADE_REJECT_CODE_CREDIT_LIMIT_EXCEEDED
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda7d94081551698f8e49674257e65998e5">RiskLimitExceeded</a> = OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda0dbfea62625f01f4d1aa760a61f95aba">OrderExceedsLimit</a> = OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT
 , <br />
-&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedaff680967906e147cabb57c90f06ed49c">OrderQtyExceedsLimit</a> = OpenPitPretradeRejectCode_OrderQtyExceedsLimit
+&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedaff680967906e147cabb57c90f06ed49c">OrderQtyExceedsLimit</a> = OPENPIT_PRETRADE_REJECT_CODE_ORDER_QTY_EXCEEDS_LIMIT
 , <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda0684a03b093e2208676b8061f6e5c18b">OrderNotionalExceedsLimit</a>
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda0fdff4ff66980f1df8599979706d50bc">PositionLimitExceeded</a> = OpenPitPretradeRejectCode_PositionLimitExceeded
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda0fdff4ff66980f1df8599979706d50bc">PositionLimitExceeded</a> = OPENPIT_PRETRADE_REJECT_CODE_POSITION_LIMIT_EXCEEDED
 , <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedafea22bd21239734703c49ea5050f825f">ConcentrationLimitExceeded</a>
 , <br />
-&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda6152a085715e6d3efed4651fb24419fc">LeverageLimitExceeded</a> = OpenPitPretradeRejectCode_LeverageLimitExceeded
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedac7433990fc11e0ae16d6974bbf8b2f44">RateLimitExceeded</a> = OpenPitPretradeRejectCode_RateLimitExceeded
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda17d7d5c0d43f0ef043c3419d91c169ec">PnlKillSwitchTriggered</a> = OpenPitPretradeRejectCode_PnlKillSwitchTriggered
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda09bc2ca84b22ae0e22acb1840a08dfb1">AccountBlocked</a> = OpenPitPretradeRejectCode_AccountBlocked
+&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda6152a085715e6d3efed4651fb24419fc">LeverageLimitExceeded</a> = OPENPIT_PRETRADE_REJECT_CODE_LEVERAGE_LIMIT_EXCEEDED
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedac7433990fc11e0ae16d6974bbf8b2f44">RateLimitExceeded</a> = OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda17d7d5c0d43f0ef043c3419d91c169ec">PnlKillSwitchTriggered</a>
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda09bc2ca84b22ae0e22acb1840a08dfb1">AccountBlocked</a> = OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED
 , <br />
-&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedaaf9317f8eb0cf6cb3a57a08b1d428ff2">AccountNotAuthorized</a> = OpenPitPretradeRejectCode_AccountNotAuthorized
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda3813f0a4bad65797f5e409f6e1898d40">ComplianceRestriction</a> = OpenPitPretradeRejectCode_ComplianceRestriction
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda1361c15ad888d0b2b776225121e2337e">InstrumentRestricted</a> = OpenPitPretradeRejectCode_InstrumentRestricted
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda09b21808ad83a79b74b73726d2d26fa3">JurisdictionRestriction</a> = OpenPitPretradeRejectCode_JurisdictionRestriction
+&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedaaf9317f8eb0cf6cb3a57a08b1d428ff2">AccountNotAuthorized</a> = OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_NOT_AUTHORIZED
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda3813f0a4bad65797f5e409f6e1898d40">ComplianceRestriction</a> = OPENPIT_PRETRADE_REJECT_CODE_COMPLIANCE_RESTRICTION
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda1361c15ad888d0b2b776225121e2337e">InstrumentRestricted</a> = OPENPIT_PRETRADE_REJECT_CODE_INSTRUMENT_RESTRICTED
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda09b21808ad83a79b74b73726d2d26fa3">JurisdictionRestriction</a>
 , <br />
-&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda541233b32f38a012d8f159fe1285f28a">WashTradePrevention</a> = OpenPitPretradeRejectCode_WashTradePrevention
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedaab1dd46dab7aa284299a94e344205d60">SelfMatchPrevention</a> = OpenPitPretradeRejectCode_SelfMatchPrevention
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda65aa80fb9938cb91ef4475d8bb128e26">ShortSaleRestriction</a> = OpenPitPretradeRejectCode_ShortSaleRestriction
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedaa0b0df5e6fde220e1f24bdddcc45d5aa">RiskConfigurationMissing</a> = OpenPitPretradeRejectCode_RiskConfigurationMissing
+&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda541233b32f38a012d8f159fe1285f28a">WashTradePrevention</a> = OPENPIT_PRETRADE_REJECT_CODE_WASH_TRADE_PREVENTION
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedaab1dd46dab7aa284299a94e344205d60">SelfMatchPrevention</a> = OPENPIT_PRETRADE_REJECT_CODE_SELF_MATCH_PREVENTION
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda65aa80fb9938cb91ef4475d8bb128e26">ShortSaleRestriction</a> = OPENPIT_PRETRADE_REJECT_CODE_SHORT_SALE_RESTRICTION
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedaa0b0df5e6fde220e1f24bdddcc45d5aa">RiskConfigurationMissing</a>
 , <br />
-&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedad6babda70573837710ca879d5160ca2a">ReferenceDataUnavailable</a> = OpenPitPretradeRejectCode_ReferenceDataUnavailable
+&#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedad6babda70573837710ca879d5160ca2a">ReferenceDataUnavailable</a>
 , <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedae147ff84662138efdca00908a3bd5a90">OrderValueCalculationFailed</a>
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedae398d5c1b9f5d8632569363546fcca99">SystemUnavailable</a> = OpenPitPretradeRejectCode_SystemUnavailable
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda284278dd268eceba6b94335d6c1a3303">MarkPriceUnavailable</a> = OpenPitPretradeRejectCode_MarkPriceUnavailable
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedae398d5c1b9f5d8632569363546fcca99">SystemUnavailable</a> = OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda284278dd268eceba6b94335d6c1a3303">MarkPriceUnavailable</a> = OPENPIT_PRETRADE_REJECT_CODE_MARK_PRICE_UNAVAILABLE
 , <br />
 &#160;&#160;<a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefedabf1ab248a6420f370d489ee10421f661">AccountAdjustmentBoundsExceeded</a>
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda74948d2cbeaf62316c4fda9166a1ff72">ArithmeticOverflow</a> = OpenPitPretradeRejectCode_ArithmeticOverflow
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda90589c47f06eb971d548591f23c285af">Custom</a> = OpenPitPretradeRejectCode_Custom
-, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda6311ae17c1ee52b36e68aaf4ad066387">Other</a> = OpenPitPretradeRejectCode_Other
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda74948d2cbeaf62316c4fda9166a1ff72">ArithmeticOverflow</a> = OPENPIT_PRETRADE_REJECT_CODE_ARITHMETIC_OVERFLOW
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda90589c47f06eb971d548591f23c285af">Custom</a> = OPENPIT_PRETRADE_REJECT_CODE_CUSTOM
+, <a class="el" href="#a9fe9e76687a28aa5a58164c44ddfefeda6311ae17c1ee52b36e68aaf4ad066387">Other</a> = OPENPIT_PRETRADE_REJECT_CODE_OTHER
 <br />
  }</td></tr>
-<tr class="memitem:ae14370c7d5b37cac5889ff475bc1a46e" id="r_ae14370c7d5b37cac5889ff475bc1a46e"><td class="memItemLeft">enum class &#160;</td><td class="memItemRight"><a class="el" href="#ae14370c7d5b37cac5889ff475bc1a46e">RejectScope</a> : std::uint8_t { <a class="el" href="#ae14370c7d5b37cac5889ff475bc1a46eaa240fa27925a635b08dc28c9e4f9216d">Order</a> = OpenPitPretradeRejectScope_Order
-, <a class="el" href="#ae14370c7d5b37cac5889ff475bc1a46ea08bd40c7543007ad06e4fce31618f6ec">Account</a> = OpenPitPretradeRejectScope_Account
+<tr class="memitem:ae14370c7d5b37cac5889ff475bc1a46e" id="r_ae14370c7d5b37cac5889ff475bc1a46e"><td class="memItemLeft">enum class &#160;</td><td class="memItemRight"><a class="el" href="#ae14370c7d5b37cac5889ff475bc1a46e">RejectScope</a> : std::uint8_t { <a class="el" href="#ae14370c7d5b37cac5889ff475bc1a46eaa240fa27925a635b08dc28c9e4f9216d">Order</a> = OPENPIT_PRETRADE_REJECT_SCOPE_ORDER
+, <a class="el" href="#ae14370c7d5b37cac5889ff475bc1a46ea08bd40c7543007ad06e4fce31618f6ec">Account</a> = OPENPIT_PRETRADE_REJECT_SCOPE_ACCOUNT
  }</td></tr>
 </table><table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-func-members" class="groupheader"><a id="func-members" name="func-members"></a>
@@ -246,7 +248,7 @@ template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport&g
 </div><div class="memdoc">
 <b>Initial value:</b><div class="fragment"><div class="line"> </div>
 <div class="line"><a class="code hl_class" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">PolicyAdapter&lt;ClientPolicy, ClientOrder, ClientReport, CastMode::SafeSlow&gt;</a></div>
-<div class="ttc" id="aclassopenpit_1_1pretrade_1_1PolicyAdapter_html"><div class="ttname"><a href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">openpit::pretrade::PolicyAdapter</a></div><div class="ttdef"><b>Definition</b> adapters.hpp:319</div></div>
+<div class="ttc" id="aclassopenpit_1_1pretrade_1_1PolicyAdapter_html"><div class="ttname"><a href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">openpit::pretrade::PolicyAdapter</a></div><div class="ttdef"><b>Definition</b> adapters.hpp:338</div></div>
 </div><!-- fragment -->
 </div>
 </div>
@@ -266,7 +268,7 @@ template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport&g
 <b>Initial value:</b><div class="fragment"><div class="line"> </div>
 <div class="line"><a class="code hl_class" href="classopenpit_1_1pretrade_1_1PolicyAdapter.html">PolicyAdapter</a>&lt;ClientPolicy, ClientOrder, ClientReport,</div>
 <div class="line">              <a class="code hl_enumvalue" href="#ad88d6888d2b6d5d1db4507842cf81472a2e64ec41b0609f6d954d228fc7913a66">CastMode::UnsafeFast</a>&gt;</div>
-<div class="ttc" id="anamespaceopenpit_1_1pretrade_html_ad88d6888d2b6d5d1db4507842cf81472a2e64ec41b0609f6d954d228fc7913a66"><div class="ttname"><a href="#ad88d6888d2b6d5d1db4507842cf81472a2e64ec41b0609f6d954d228fc7913a66">openpit::pretrade::CastMode::UnsafeFast</a></div><div class="ttdeci">@ UnsafeFast</div><div class="ttdef"><b>Definition</b> adapters.hpp:163</div></div>
+<div class="ttc" id="anamespaceopenpit_1_1pretrade_html_ad88d6888d2b6d5d1db4507842cf81472a2e64ec41b0609f6d954d228fc7913a66"><div class="ttname"><a href="#ad88d6888d2b6d5d1db4507842cf81472a2e64ec41b0609f6d954d228fc7913a66">openpit::pretrade::CastMode::UnsafeFast</a></div><div class="ttdeci">@ UnsafeFast</div><div class="ttdef"><b>Definition</b> adapters.hpp:176</div></div>
 </div><!-- fragment -->
 </div>
 </div>
@@ -286,8 +288,8 @@ template&lt;typename ClientPolicy, typename ClientOrder, typename ClientReport&g
 <b>Initial value:</b><div class="fragment"><div class="line"> </div>
 <div class="line"><a class="code hl_class" href="classopenpit_1_1pretrade_1_1StartPolicyAdapter.html">StartPolicyAdapter</a>&lt;ClientPolicy, ClientOrder, ClientReport,</div>
 <div class="line">                   <a class="code hl_enumvalue" href="#ad88d6888d2b6d5d1db4507842cf81472a54329890e63ec48a9e6cc3bf3b0155c7">CastMode::SafeSlow</a>&gt;</div>
-<div class="ttc" id="aclassopenpit_1_1pretrade_1_1StartPolicyAdapter_html"><div class="ttname"><a href="classopenpit_1_1pretrade_1_1StartPolicyAdapter.html">openpit::pretrade::StartPolicyAdapter</a></div><div class="ttdoc">Adapts a client start-stage policy to the engine callback seam.</div><div class="ttdef"><b>Definition</b> adapters.hpp:179</div></div>
-<div class="ttc" id="anamespaceopenpit_1_1pretrade_html_ad88d6888d2b6d5d1db4507842cf81472a54329890e63ec48a9e6cc3bf3b0155c7"><div class="ttname"><a href="#ad88d6888d2b6d5d1db4507842cf81472a54329890e63ec48a9e6cc3bf3b0155c7">openpit::pretrade::CastMode::SafeSlow</a></div><div class="ttdeci">@ SafeSlow</div><div class="ttdef"><b>Definition</b> adapters.hpp:162</div></div>
+<div class="ttc" id="aclassopenpit_1_1pretrade_1_1StartPolicyAdapter_html"><div class="ttname"><a href="classopenpit_1_1pretrade_1_1StartPolicyAdapter.html">openpit::pretrade::StartPolicyAdapter</a></div><div class="ttdoc">Adapts a client start-stage policy to the engine callback seam.</div><div class="ttdef"><b>Definition</b> adapters.hpp:192</div></div>
+<div class="ttc" id="anamespaceopenpit_1_1pretrade_html_ad88d6888d2b6d5d1db4507842cf81472a54329890e63ec48a9e6cc3bf3b0155c7"><div class="ttname"><a href="#ad88d6888d2b6d5d1db4507842cf81472a54329890e63ec48a9e6cc3bf3b0155c7">openpit::pretrade::CastMode::SafeSlow</a></div><div class="ttdeci">@ SafeSlow</div><div class="ttdef"><b>Definition</b> adapters.hpp:175</div></div>
 </div><!-- fragment -->
 </div>
 </div>

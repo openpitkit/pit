@@ -84,6 +84,12 @@ target_link_libraries(openpit_account_adjustment_tests
 
 openpit_add_test_target(openpit_account_adjustment_tests)
 
+add_executable(openpit_account_pnl_tests account_pnl_test.cpp)
+target_link_libraries(openpit_account_pnl_tests
+  PRIVATE OpenPit::openpit GTest::gmock_main)
+
+openpit_add_test_target(openpit_account_pnl_tests)
+
 add_executable(openpit_async_engine_tests async_engine_test.cpp)
 target_link_libraries(openpit_async_engine_tests
   PRIVATE OpenPit::openpit GTest::gmock_main)

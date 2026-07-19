@@ -1334,7 +1334,7 @@ class AccountAdjustmentBalanceOperation:
         *,
         asset: param.Asset | None = None,
         average_entry_price: param.Price | None = None,
-        realized_pnl: param.Pnl | None = None,
+        realized_pnl: param.Pnl | PnlHaltReason | None = None,
     ) -> None:
         _ = (asset, average_entry_price, realized_pnl)
 
@@ -1352,14 +1352,11 @@ class AccountAdjustmentBalanceOperation:
     @average_entry_price.setter
     def average_entry_price(self, value: param.Price | None) -> None: ...
     @property
-    def realized_pnl(self) -> param.Pnl | None:
-        """Absolute realized PnL force-set in account currency.
-
-        The value is caller supplied; no FX is applied.
-        """
+    def realized_pnl(self) -> param.Pnl | PnlHaltReason | None:
+        """Optional account-currency realized PnL replacement or explicit halt."""
 
     @realized_pnl.setter
-    def realized_pnl(self, value: param.Pnl | None) -> None: ...
+    def realized_pnl(self, value: param.Pnl | PnlHaltReason | None) -> None: ...
 
 class AccountAdjustmentPositionOperation:
     """Derivatives-like position account-adjustment operation group."""
@@ -1412,6 +1409,15 @@ class AccountAdjustmentPositionOperation:
     def leverage(self) -> param.Leverage | None: ...
     @leverage.setter
     def leverage(self, value: param.Leverage | int | float | None) -> None: ...
+
+class AccountAdjustmentAccountPnlOperation:
+    """Account-wide PnL account-adjustment operation group."""
+
+    def __init__(self, *, state: param.Pnl | PnlHaltReason) -> None: ...
+    @property
+    def state(self) -> param.Pnl | PnlHaltReason: ...
+    @state.setter
+    def state(self, value: param.Pnl | PnlHaltReason) -> None: ...
 
 class AccountAdjustmentBounds:
     """Optional post-adjustment bounds group."""
@@ -1469,6 +1475,7 @@ class AccountAdjustment:
         operation: (
             AccountAdjustmentBalanceOperation
             | AccountAdjustmentPositionOperation
+            | AccountAdjustmentAccountPnlOperation
             | None
         ) = None,
         amount: AccountAdjustmentAmount | None = None,
@@ -1480,7 +1487,10 @@ class AccountAdjustment:
     def operation(
         self,
     ) -> (
-        AccountAdjustmentBalanceOperation | AccountAdjustmentPositionOperation | None
+        AccountAdjustmentBalanceOperation
+        | AccountAdjustmentPositionOperation
+        | AccountAdjustmentAccountPnlOperation
+        | None
     ): ...
     @operation.setter
     def operation(
@@ -1488,6 +1498,7 @@ class AccountAdjustment:
         value: (
             AccountAdjustmentBalanceOperation
             | AccountAdjustmentPositionOperation
+            | AccountAdjustmentAccountPnlOperation
             | None
         ),
     ) -> None: ...
@@ -1703,6 +1714,70 @@ class PnlOutcomeAmount:
     def absolute(self) -> param.Pnl:
         """Cumulative account-currency realized PnL after this operation."""
 
+class PnlHaltReason:
+    """Reason why a realized-PnL value could not be calculated."""
+
+    MISSING_FX: typing.ClassVar[PnlHaltReason]
+    """A required FX quote was unavailable."""
+    MISSING_ACCOUNT_CURRENCY: typing.ClassVar[PnlHaltReason]
+    """The account currency required for the PnL ledger was unavailable."""
+    MISSING_INITIAL_PNL: typing.ClassVar[PnlHaltReason]
+    """No authoritative initial PnL was available for a position."""
+    MISSING_COST_BASIS: typing.ClassVar[PnlHaltReason]
+    """The position cost basis required for realized PnL was unavailable."""
+    ARITHMETIC_OVERFLOW: typing.ClassVar[PnlHaltReason]
+    """PnL arithmetic exceeded the affected accumulator's numeric range."""
+
+class PnlOutcome:
+    """Realized-PnL result: either the amount or a halt reason."""
+
+    def __init__(
+        self,
+        *,
+        pnl: PnlOutcomeAmount | None = None,
+        halt_reason: PnlHaltReason | None = None,
+    ) -> None: ...
+    @property
+    def pnl(self) -> PnlOutcomeAmount | None:
+        """Computed PnL, absent when a halt reason is present."""
+
+    @property
+    def halt_reason(self) -> PnlHaltReason | None:
+        """Reason why PnL could not be calculated, or ``None`` when available."""
+
+class AccountPnlOutcome:
+    """Account-level realized-PnL outcome reported by one policy.
+
+    SpotFunds emits a halted outcome only for the report that transitions the
+    account accumulator to halted. Later reports omit the unchanged halt until
+    it is explicitly force-set. Re-arming a position PnL does not re-arm account
+    PnL, and re-arming account PnL does not re-arm any position.
+    """
+
+    def __init__(
+        self,
+        *,
+        policy_group_id: PolicyGroupId,
+        account_id: AccountId,
+        pnl: PnlOutcomeAmount | None = None,
+        halt_reason: PnlHaltReason | None = None,
+    ) -> None: ...
+    @property
+    def policy_group_id(self) -> PolicyGroupId:
+        """Policy-group tag of the policy that produced this outcome."""
+
+    @property
+    def account_id(self) -> AccountId:
+        """Account that owns the realized-PnL ledger."""
+
+    @property
+    def pnl(self) -> PnlOutcomeAmount | None:
+        """Computed PnL, absent when a halt reason is present."""
+
+    @property
+    def halt_reason(self) -> PnlHaltReason | None:
+        """Reason why PnL could not be calculated, or ``None`` when available."""
+
 class AccountOutcomeEntry:
     """Account position outcome for one asset."""
 
@@ -1713,7 +1788,7 @@ class AccountOutcomeEntry:
         balance: OutcomeAmount | None = None,
         held: OutcomeAmount | None = None,
         incoming: OutcomeAmount | None = None,
-        realized_pnl: PnlOutcomeAmount | None = None,
+        realized_pnl: PnlOutcome | None = None,
         average_entry_price: param.Price | None = None,
     ) -> None: ...
     @property
@@ -1733,11 +1808,14 @@ class AccountOutcomeEntry:
         """Incoming amount outcome."""
 
     @property
-    def realized_pnl(self) -> PnlOutcomeAmount | None:
+    def realized_pnl(self) -> PnlOutcome | None:
         """Account-currency realized PnL outcome.
 
-        ``None`` means realized PnL was not tracked or not emitted. Missing
-        account currency or FX stops tracking without reject/block.
+        The first failed calculation contains a halt reason. ``None`` means
+        PnL was not tracked or was omitted after a sticky halt. Missing FX,
+        cost basis, initial PnL, or arithmetic failure stops only
+        this position accumulator until an adjustment force-sets a new realized
+        PnL, without re-arming account PnL or another position.
         """
 
     @property
@@ -1745,7 +1823,7 @@ class AccountOutcomeEntry:
         """Account-currency average entry price outcome.
 
         ``None`` means average entry price was not tracked or not emitted.
-        Missing account currency or FX stops tracking without reject/block.
+        Missing inputs may prevent the operation from emitting an average.
         """
 
 class AccountAdjustmentOutcome:
@@ -1784,6 +1862,10 @@ class AccountAdjustmentBatchResult:
     def outcomes(self) -> list[AccountAdjustmentOutcome]:
         """Account position outcomes returned on success."""
 
+    @property
+    def account_blocks(self) -> list[AccountBlock]:
+        """Committed blocks on success; empty when the batch is rejected."""
+
     def __bool__(self) -> bool:
         """Boolean convenience alias for ``ok``."""
 
@@ -1819,6 +1901,13 @@ class AccountBlock:
     def user_data(self) -> int:
         """Opaque caller-defined integer token."""
 
+class PolicyConfigurationResult:
+    """Accepted runtime policy configuration result."""
+
+    @property
+    def account_blocks(self) -> list[AccountBlock]:
+        """Account blocks recorded by the accepted configuration operation."""
+
 class PostTradeResult:
     """
     Result of ``Engine.apply_execution_report``.
@@ -1826,20 +1915,34 @@ class PostTradeResult:
     A non-empty ``account_blocks`` list means at least one policy entered a
     blocked state after the report was applied.
 
-    Post-trade processing is **not** atomic: ``account_adjustments`` reflect
-    storage mutations that have already been applied, so callers must propagate
-    them downstream even when ``account_blocks`` is non-empty.
+    Post-trade processing is **not** atomic: ``account_pnls`` and
+    ``account_adjustments`` reflect storage mutations that have already been
+    applied, so callers must propagate both downstream even when
+    ``account_blocks`` is non-empty.
     """
 
     def __init__(
         self,
         *,
         account_blocks: typing.Iterable[AccountBlock] | None = None,
+        account_pnls: typing.Iterable[AccountPnlOutcome] | None = None,
         account_adjustments: typing.Iterable[AccountAdjustmentOutcome] | None = None,
     ) -> None: ...
     @property
     def account_blocks(self) -> list[AccountBlock]:
         """Account blocks reported by policies. Non-empty when a kill switch fired."""
+
+    @property
+    def account_pnls(self) -> list[AccountPnlOutcome]:
+        """Account-level PnL outcomes reported by policies.
+
+        A computed outcome with a nonzero delta changed its ledger; a zero delta
+        recomputed it unchanged. A halt-reason outcome has no authoritative PnL
+        value and must not be interpreted as zero. SpotFunds emits a halt reason
+        only when the current report transitions the account accumulator to
+        halted; later reports omit the unchanged halt. Position force-sets do
+        not re-arm it.
+        """
 
     @property
     def account_adjustments(self) -> list[AccountAdjustmentOutcome]:
@@ -1944,9 +2047,24 @@ class Engine:
     def apply_execution_report(self, report: object) -> PostTradeResult: ...
     def apply_account_adjustment(
         self,
-        account_id: object,
-        adjustments: object,
-    ) -> AccountAdjustmentBatchResult: ...
+        account_id: param.AccountId,
+        adjustments: typing.Iterable[AccountAdjustment],
+    ) -> AccountAdjustmentBatchResult:
+        """Apply an atomic account-adjustment batch.
+
+        Returns:
+            AccountAdjustmentBatchResult: The committed outcomes and blocks on
+                success. A business reject is returned with ``ok`` false,
+                ``failed_index`` set to the rejected item, and ``rejects``
+                populated; it is not raised as an exception.
+
+        Raises:
+            TypeError: If the account ID, batch, or an adjustment has an
+                incompatible Python type.
+            Exception: A programming or runtime exception raised by a custom
+                policy callback is propagated unchanged.
+        """
+
     def accounts(self) -> Accounts:
         """Return a handle to the engine's account controls."""
 
@@ -2175,31 +2293,23 @@ class Configurator:
         self,
         name: str,
         *,
-        global_barriers: (
-            list[pretrade.policies.SpotFundsPnlBoundsBarrier] | None
-        ) = None,
+        global_barrier: pretrade.policies.SpotFundsPnlBoundsBarrier | None = ...,
         account_group_barriers: (
             list[pretrade.policies.SpotFundsPnlBoundsAccountGroupBarrier] | None
         ) = None,
         account_barriers: (
-            list[pretrade.policies.SpotFundsPnlBoundsAccountBarrierUpdate] | None
+            list[pretrade.policies.SpotFundsPnlBoundsAccountBarrier] | None
         ) = None,
     ) -> None:
-        """Retune the account-currency P&L bounds axis of a spot-funds policy.
+        """Retune the account P&L bounds axis of a spot-funds policy.
 
         *name* must match the name given to the spot-funds policy at
         registration time.
 
-        The barrier arguments mirror those of
-        ``ReadyEngineBuilder._add_builtin_spot_funds_pnl_bounds_killswitch``,
-        except that the account axis takes
-        :class:`~openpit.pretrade.policies.SpotFundsPnlBoundsAccountBarrierUpdate`
-        entries: runtime account updates preserve the live accumulated P&L and
-        cannot seed or reset it (no ``initial_pnl``).
-
-        An axis passed as ``None`` is left unchanged.  A supplied list REPLACES
-        that axis wholesale: an empty list clears it.  Each barrier must still
-        configure at least one bound.
+        Omitted axes stay unchanged. Passing ``None`` as *global_barrier*
+        clears the singular global barrier; a barrier value replaces it. A
+        supplied group/account list REPLACES that axis wholesale, and an empty
+        list clears it. Each barrier must still configure at least one bound.
 
         Raises:
             PolicyConfigureError: If the policy is not found, has the wrong
@@ -2211,21 +2321,19 @@ class Configurator:
         name: str,
         *,
         account: param.AccountId,
-        account_currency: param.Asset,
-        pnl: param.Pnl,
-    ) -> None:
-        """Force-set live spot-funds account-currency P&L for one account.
+        state: param.Pnl | PnlHaltReason,
+    ) -> PolicyConfigurationResult:
+        """Force-set live spot-funds account P&L state for one account.
 
         *name* must match the name given to the spot-funds policy at
         registration time.
 
         Unlike :meth:`spot_funds_pnl_bounds_killswitch`, which retunes bounds
         and never touches accumulated P&L, this is an absolute assignment
-        (upsert) of the live accumulator for ``(account, account_currency)``;
-        the new value is evaluated against the live bounds when the next P&L
-        delta is applied by an execution report. A breach trips the kill
-        switch, which latches an engine-level account block that this call
-        does not clear.
+        (upsert) of the live accumulator for ``account``. A numeric assignment
+        outside an effective account P&L barrier and any halted assignment with
+        such a barrier return the block that the engine records before this
+        method returns.
 
         Raises:
             PolicyConfigureError: If the policy is not found or has a different

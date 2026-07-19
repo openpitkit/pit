@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package pretrade
 
@@ -98,7 +98,12 @@ func TestSafeClientPreTradePolicyCastsOrderPayload(t *testing.T) {
 func TestSafeClientPreTradePolicyApplyExecutionReportIgnoresMissingPayload(t *testing.T) {
 	wrapped := NewSafeClientPreTradePolicy(&clientPayloadTestPolicy{killSwitch: true})
 
-	if len(wrapped.ApplyExecutionReport(PostTradeContext{}, model.NewExecutionReport(), PostTradeAdjustments{})) != 0 {
+	if len(wrapped.ApplyExecutionReport(
+		PostTradeContext{},
+		model.NewExecutionReport(),
+		PostTradeAdjustments{},
+		PostTradePnls{},
+	)) != 0 {
 		t.Fatal("ApplyExecutionReport() returned blocks, want empty")
 	}
 }
@@ -107,7 +112,7 @@ func TestSafeClientPreTradePolicyApplyAccountAdjustmentIsForwarded(t *testing.T)
 	policy := &clientPayloadTestPolicy{}
 	wrapped := NewSafeClientPreTradePolicy(policy)
 
-	rejects := wrapped.ApplyAccountAdjustment(
+	_, rejects := wrapped.ApplyAccountAdjustment(
 		accountadjustment.Context{},
 		param.NewAccountIDFromUint64(1),
 		model.NewAccountAdjustment(),
@@ -158,7 +163,12 @@ func TestUnsafeFastClientPreTradePolicyApplyExecutionReportCastsReport(t *testin
 		VenueExecID:     "unsafe-main-report",
 	}
 
-	if len(wrapped.ApplyExecutionReport(PostTradeContext{}, reportWithPayload(t, report), PostTradeAdjustments{})) == 0 {
+	if len(wrapped.ApplyExecutionReport(
+		PostTradeContext{},
+		reportWithPayload(t, report),
+		PostTradeAdjustments{},
+		PostTradePnls{},
+	)) == 0 {
 		t.Fatal("ApplyExecutionReport() returned empty, want non-empty blocks")
 	}
 	if policy.report.VenueExecID != report.VenueExecID {
@@ -170,7 +180,7 @@ func TestUnsafeFastClientPreTradePolicyApplyAccountAdjustmentIsForwarded(t *test
 	policy := &clientPayloadTestPolicy{}
 	wrapped := NewUnsafeFastClientPreTradePolicy(policy)
 
-	rejects := wrapped.ApplyAccountAdjustment(
+	_, rejects := wrapped.ApplyAccountAdjustment(
 		accountadjustment.Context{},
 		param.NewAccountIDFromUint64(1),
 		model.NewAccountAdjustment(),
@@ -228,7 +238,12 @@ func TestSafePayloadReturnsFalseForInvalidHandlePointer(t *testing.T) {
 func TestSafeClientPreTradePolicyApplyExecutionReportReturnsFalseOnMismatchedPayload(t *testing.T) {
 	wrapped := NewSafeClientPreTradePolicy(&clientPayloadTestPolicy{killSwitch: true})
 
-	if len(wrapped.ApplyExecutionReport(PostTradeContext{}, reportWithAnyPayload(t, 42), PostTradeAdjustments{})) != 0 {
+	if len(wrapped.ApplyExecutionReport(
+		PostTradeContext{},
+		reportWithAnyPayload(t, 42),
+		PostTradeAdjustments{},
+		PostTradePnls{},
+	)) != 0 {
 		t.Fatal("ApplyExecutionReport() returned blocks, want empty")
 	}
 }
@@ -271,6 +286,7 @@ func (p *clientPayloadTestPolicy) ApplyExecutionReport(
 	_ PostTradeContext,
 	report clientPayloadTestReport,
 	_ PostTradeAdjustments,
+	_ PostTradePnls,
 ) []reject.AccountBlock {
 	p.report = report
 	if p.killSwitch {
@@ -285,9 +301,9 @@ func (p *clientPayloadTestPolicy) ApplyAccountAdjustment(
 	_ model.AccountAdjustment,
 	_ tx.Mutations,
 	_ AccountOutcomes,
-) []reject.Reject {
+) (PolicyAccountAdjustmentResult, []reject.Reject) {
 	p.accountAdjustmentCalled = true
-	return nil
+	return PolicyAccountAdjustmentResult{}, nil
 }
 
 func orderWithPayload(t *testing.T, order clientPayloadTestOrder) model.Order {

@@ -16,7 +16,8 @@
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
 use crate::core::PolicyGroupId;
-use crate::param::{Asset, Pnl, PositionSize, Price};
+use crate::param::{AccountId, Asset, Pnl, PositionSize, Price};
+use crate::pretrade::AccountBlock;
 
 /// A delta/absolute pair for one position field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +47,52 @@ pub struct PnlOutcomeAmount {
     pub absolute: Pnl,
 }
 
+/// Result of one realized-PnL calculation.
+///
+/// The value is authoritative only when the result is `Ok`. An `Err` explains
+/// why the calculation halted for the current operation.
+pub type PnlOutcome = Result<PnlOutcomeAmount, PnlHaltReason>;
+
+/// Current state of a realized-PnL accumulator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PnlState {
+    /// Authoritative accumulated PnL value.
+    Value(Pnl),
+    /// Calculation is stopped until an explicit numeric correction re-arms it.
+    /// A halted correction keeps it halted and replaces the stored reason.
+    Halted(PnlHaltReason),
+}
+
+/// Account-level realized PnL outcome for one account ledger.
+///
+/// SpotFunds emits a halted outcome only for the operation that transitions
+/// the ledger to halted. Later operations omit the unchanged halt until an
+/// explicit account-PnL correction re-arms the ledger.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountPnlOutcome {
+    /// Account PnL, or the reason why it is unavailable.
+    pub result: PnlOutcome,
+    /// Account that owns the realized-PnL ledger.
+    pub account_id: AccountId,
+    /// Policy-group tag of the policy that produced this outcome.
+    pub policy_group_id: PolicyGroupId,
+}
+
+/// Reason why a realized-PnL calculation halted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PnlHaltReason {
+    /// A required FX quote was unavailable.
+    MissingFx,
+    /// The current account currency was unavailable.
+    MissingAccountCurrency,
+    /// A non-flat position had no initial realized-PnL value.
+    MissingInitialPnl,
+    /// A position realization required an unavailable average cost basis.
+    MissingCostBasis,
+    /// Exact PnL arithmetic exceeded the supported decimal range.
+    ArithmeticOverflow,
+}
+
 /// Raw outcome data produced by a policy for one asset.
 ///
 /// Policies return `Vec<AccountOutcomeEntry>` without group information;
@@ -66,23 +113,29 @@ pub struct AccountOutcomeEntry {
     ///
     /// Covers both working-order expected fills and incoming T+N settlements.
     pub incoming: Option<OutcomeAmount>,
-    /// Realized PnL outcome, denominated in the account currency.
+    /// Position realized-PnL result, denominated in the account currency.
     ///
     /// `delta` is the PnL change booked by this operation; `absolute` is the
     /// cumulative account-currency realized PnL for the `(account, asset)`
-    /// slot. Underlying-leg fills book `delta` as the realized PnL they
-    /// produce; an account adjustment that force-sets realized PnL books the
-    /// forced account-currency value. It is `None` when realized PnL is not
-    /// tracked, including missing account currency or missing FX, and for
-    /// reservations, cancels, settlement legs, zero-realized fills, and
-    /// adjustments that do not force-set realized PnL.
-    pub realized_pnl: Option<PnlOutcomeAmount>,
+    /// holdings slot. Underlying-leg fills book `delta` as the realized PnL
+    /// they produce; an asset-scoped balance adjustment can force-set the
+    /// supplied account-currency value. `Err` reports
+    /// the halt reason for the operation that first failed; later operations
+    /// omit the value entirely while the position remains halted. It is `None`
+    /// for reservations, cancels, settlement legs, zero-realized fills, and
+    /// non-PnL adjustments. An asset-scoped balance adjustment is required to
+    /// re-arm a halted slot.
+    pub realized_pnl: Option<PnlOutcome>,
     /// Absolute account-currency average entry price of the current net
-    /// position for this `(account, asset)` slot, or `None` when the position
-    /// is flat, average tracking is absent, account currency or FX is missing,
-    /// or the operation does not carry an average (e.g. settlement legs,
-    /// reservations, cancels, or adjustments without a balance change or an
-    /// explicit average force-set).
+    /// position for this `(account, asset)` holdings slot, or `None` when the
+    /// position is flat, average tracking is absent, or the
+    /// operation does not carry an average (e.g. settlement legs, reservations,
+    /// cancels, or adjustments without a balance change or an explicit average
+    /// force-set). The underlying asset identifies one holdings slot even when
+    /// it is traded against multiple quote currencies. A missing input that
+    /// prevents only position-PnL calculation is reported through
+    /// [`Self::realized_pnl`] and does not halt account PnL; later operations
+    /// omit the unchanged position halt until an explicit force-set re-arms it.
     pub average_entry_price: Option<Price>,
 }
 
@@ -109,6 +162,12 @@ pub struct AccountAdjustmentBatchResult {
     /// A single asset may appear more than once. Policies that report nothing
     /// contribute no entries.
     pub outcomes: Vec<AccountAdjustmentOutcome>,
+    /// Account blocks reported by policies after the batch was accepted.
+    ///
+    /// The engine records each entry for the adjusted account before returning
+    /// this result. The first recorded cause remains the account's stored
+    /// blocking reason.
+    pub account_blocks: Vec<AccountBlock>,
 }
 
 impl IntoIterator for AccountAdjustmentBatchResult {

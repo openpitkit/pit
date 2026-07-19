@@ -37,12 +37,12 @@ use openpit::pretrade::policies::{
     SpotFundsPolicy,
 };
 use openpit::pretrade::{
-    PolicyGroupId, PolicyPreTradeResult, PostTradeContext, PostTradeResult, PreTradeContext,
-    PreTradePolicy, Rejects,
+    PolicyAccountAdjustmentResult, PolicyGroupId, PolicyPreTradeResult, PostTradeContext,
+    PostTradeResult, PreTradeContext, PreTradePolicy, Rejects,
 };
 use openpit::{
-    AccountAdjustmentContext, AccountOutcomeEntry, EngineBuilder, EngineTraitOf, Mutations,
-    ReadyEngineBuilder, StorageBuilder, SyncedEngineBuilder,
+    AccountAdjustmentContext, EngineBuilder, EngineTraitOf, Mutations, ReadyEngineBuilder,
+    StorageBuilder, SyncedEngineBuilder,
 };
 pub(crate) use openpit_interop::EngineLocking;
 use openpit_interop::{RequestWithPayload, SyncMode};
@@ -431,7 +431,7 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
         account_id: AccountId,
         adjustment: &AccountAdjustment,
         mutations: &mut Mutations,
-    ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
+    ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
         self.inner
             .apply_account_adjustment(ctx, account_id, adjustment, mutations)
     }

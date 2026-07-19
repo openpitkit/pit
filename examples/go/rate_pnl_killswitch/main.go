@@ -13,10 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 // Example rate_pnl_killswitch demonstrates how an algorithmic trading desk can
-// wrap OpenPit's RateLimit and PnlBoundsKillswitch policies around a Go
+// wrap OpenPit's RateLimit and PnlBoundsKillSwitch policies around a Go
 // strategy so that a runaway strategy is halted before it floods the venue
 // with orders or burns through the loss budget.
 //
@@ -164,7 +164,7 @@ func buildEngine(l Limits) (*openpit.Engine, error) {
 		// either edge of the corridor. Both bounds are optional - this
 		// example configures both for completeness.
 		Builtin(
-			policies.BuildPnlBoundsKillswitch().BrokerBarriers(
+			policies.BuildPnlBoundsKillSwitch().BrokerBarriers(
 				policies.PnlBoundsBrokerBarrier{
 					SettlementAsset: asset,
 					LowerBound:      optional.Some(lower),

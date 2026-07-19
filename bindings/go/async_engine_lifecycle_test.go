@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package openpit
 
@@ -263,6 +263,7 @@ func (*concurrencyProbePolicy) ApplyExecutionReport(
 	_ pretrade.PostTradeContext,
 	_ model.ExecutionReport,
 	_ pretrade.PostTradeAdjustments,
+	_ pretrade.PostTradePnls,
 ) []reject.AccountBlock {
 	return nil
 }
@@ -273,8 +274,8 @@ func (*concurrencyProbePolicy) ApplyAccountAdjustment(
 	_ model.AccountAdjustment,
 	_ tx.Mutations,
 	_ pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 // peakFor returns the observed peak concurrent call count for the given

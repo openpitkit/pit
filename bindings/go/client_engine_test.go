@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package openpit
 
@@ -167,15 +167,15 @@ func TestClientEnginePassesAccountAdjustmentThroughPreTradePolicy(t *testing.T) 
 	}
 	defer engine.Stop()
 
-	rejects, _, err := engine.ApplyAccountAdjustment(
+	result, err := engine.ApplyAccountAdjustment(
 		param.NewAccountIDFromUint64(1),
 		[]clientEngineTestAdjustment{{AccountAdjustment: model.NewAccountAdjustment(), Source: "ops-feed"}},
 	)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", rejects)
+	if result.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", result.BatchError)
 	}
 	if policy.adjustmentCallCount != 1 {
 		t.Fatalf("adjustmentCallCount = %d, want 1", policy.adjustmentCallCount)
@@ -268,12 +268,12 @@ func TestClientEngineApplyAccountAdjustmentBatchHandlesMultipleAdjustments(t *te
 		{AccountAdjustment: model.NewAccountAdjustment(), Source: "ops-feed-1"},
 		{AccountAdjustment: model.NewAccountAdjustment(), Source: "ops-feed-2"},
 	}
-	rejects, _, err := engine.ApplyAccountAdjustment(param.NewAccountIDFromUint64(1), adjustments)
+	result, err := engine.ApplyAccountAdjustment(param.NewAccountIDFromUint64(1), adjustments)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", rejects)
+	if result.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", result.BatchError)
 	}
 	if policy.adjustmentCallCount != len(adjustments) {
 		t.Fatalf(
@@ -345,10 +345,22 @@ func (clientEngineTestStartPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (p *clientEngineTestStartPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, report clientEngineTestReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
+func (p *clientEngineTestStartPolicy) ApplyExecutionReport(
+	_ pretrade.PostTradeContext,
+	report clientEngineTestReport,
+	_ pretrade.PostTradeAdjustments,
+	_ pretrade.PostTradePnls,
+) []reject.AccountBlock {
 	p.report = report
 	if p.killSwitch {
-		return []reject.AccountBlock{reject.NewAccountBlock(reject.CodePnlKillSwitchTriggered, "test", "kill switch", "")}
+		return []reject.AccountBlock{
+			reject.NewAccountBlock(
+				reject.CodePnlKillSwitchTriggered,
+				"test",
+				"kill switch",
+				"",
+			),
+		}
 	}
 	return nil
 }
@@ -359,8 +371,8 @@ func (clientEngineTestStartPolicy) ApplyAccountAdjustment(
 	_ model.AccountAdjustment,
 	_ tx.Mutations,
 	_ pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 type clientEngineTestMainPolicy struct {
@@ -394,7 +406,12 @@ func (p *clientEngineTestMainPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (clientEngineTestMainPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ clientEngineTestReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
+func (clientEngineTestMainPolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	clientEngineTestReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
+) []reject.AccountBlock {
 	return nil
 }
 
@@ -404,8 +421,8 @@ func (clientEngineTestMainPolicy) ApplyAccountAdjustment(
 	_ model.AccountAdjustment,
 	_ tx.Mutations,
 	_ pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 type clientEngineTestAdjustmentPreTradePolicy struct {
@@ -438,7 +455,12 @@ func (clientEngineTestAdjustmentPreTradePolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (clientEngineTestAdjustmentPreTradePolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ clientEngineTestReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
+func (clientEngineTestAdjustmentPreTradePolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	clientEngineTestReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
+) []reject.AccountBlock {
 	return nil
 }
 
@@ -448,9 +470,9 @@ func (p *clientEngineTestAdjustmentPreTradePolicy) ApplyAccountAdjustment(
 	_ model.AccountAdjustment,
 	_ tx.Mutations,
 	_ pretrade.AccountOutcomes,
-) []reject.Reject {
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
 	p.adjustmentCallCount++
-	return nil
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 type clientEngineTestRejectingStartPolicy struct{}
@@ -487,7 +509,12 @@ func (clientEngineTestRejectingStartPolicy) PerformPreTradeCheck(
 	return nil
 }
 
-func (clientEngineTestRejectingStartPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ clientEngineTestReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
+func (clientEngineTestRejectingStartPolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	clientEngineTestReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
+) []reject.AccountBlock {
 	return nil
 }
 
@@ -497,8 +524,8 @@ func (clientEngineTestRejectingStartPolicy) ApplyAccountAdjustment(
 	_ model.AccountAdjustment,
 	_ tx.Mutations,
 	_ pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 type clientEngineTestRejectingMainPolicy struct{}
@@ -535,7 +562,12 @@ func (p *clientEngineTestRejectingMainPolicy) PerformPreTradeCheck(
 	)
 }
 
-func (clientEngineTestRejectingMainPolicy) ApplyExecutionReport(_ pretrade.PostTradeContext, _ clientEngineTestReport, _ pretrade.PostTradeAdjustments) []reject.AccountBlock {
+func (clientEngineTestRejectingMainPolicy) ApplyExecutionReport(
+	pretrade.PostTradeContext,
+	clientEngineTestReport,
+	pretrade.PostTradeAdjustments,
+	pretrade.PostTradePnls,
+) []reject.AccountBlock {
 	return nil
 }
 
@@ -545,8 +577,8 @@ func (clientEngineTestRejectingMainPolicy) ApplyAccountAdjustment(
 	_ model.AccountAdjustment,
 	_ tx.Mutations,
 	_ pretrade.AccountOutcomes,
-) []reject.Reject {
-	return nil
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
 func orderWithMismatchedPayload(t *testing.T, payload any) model.Order {
@@ -661,15 +693,15 @@ func TestClientEngineUnsafeFastPreTradePolicyAppliesAccountAdjustment(t *testing
 	}
 	defer engine.Stop()
 
-	rejects, _, err := engine.ApplyAccountAdjustment(
+	result, err := engine.ApplyAccountAdjustment(
 		param.NewAccountIDFromUint64(1),
 		[]clientEngineTestAdjustment{{AccountAdjustment: model.NewAccountAdjustment(), Source: "unsafe-fast-adjustment"}},
 	)
 	if err != nil {
 		t.Fatalf("ApplyAccountAdjustment() error = %v", err)
 	}
-	if rejects.IsSet() {
-		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", rejects)
+	if result.BatchError.IsSet() {
+		t.Fatalf("ApplyAccountAdjustment() rejects = %v, want none", result.BatchError)
 	}
 	if policy.adjustmentCallCount != 1 {
 		t.Fatalf("adjustmentCallCount = %d, want 1", policy.adjustmentCallCount)

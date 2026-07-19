@@ -30,12 +30,16 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
+use super::account_groups::AccountGroupsHandle;
+use super::engine::EngineInner;
+use super::engine_trait::EngineTrait;
 use super::sync_mode::SyncMode;
 use crate::param::{AccountId, Asset, Pnl};
 use crate::pretrade::policies::{
     OrderSizeLimitSettings, PnlBoundsKillSwitchSettings, RateLimitSettings, RealizedPnlStorage,
     SpotFundsSettings,
 };
+use crate::pretrade::{PolicyConfigurationResult, PolicyRuntimeConfiguration, PreTradePolicy};
 use crate::storage::{ConfigCell, LockingPolicyFactory};
 
 // ─── ConfigEntry ────────────────────────────────────────────────────────────
@@ -55,12 +59,10 @@ pub(crate) enum ConfigEntry<Factory: LockingPolicyFactory> {
         /// Live accumulated P&L ledger shared with the running policy.
         realized: RealizedPnlStorage<Factory>,
     },
-    /// Spot-funds policy handles.
+    /// Spot-funds policy settings.
     SpotFunds {
         /// Settings cell shared with the running policy.
         settings: Factory::Config<SpotFundsSettings>,
-        /// Live accumulated self-computed account-currency P&L ledger.
-        pnl: RealizedPnlStorage<Factory>,
     },
     /// Order-size-limit policy settings.
     OrderSizeLimit(Factory::Config<OrderSizeLimitSettings>),
@@ -241,8 +243,9 @@ impl Drop for ConfiguringGuard {
 
 // ─── Configurator ────────────────────────────────────────────────────────────
 
-/// Storage locking factory backing a [`Configurator`] of a given [`SyncMode`].
-type RegistryFactory<Sync> = <Sync as SyncMode>::StorageLockingPolicyFactory;
+/// Storage locking factory backing a [`Configurator`] of a given engine type.
+type RegistryFactory<Trait> =
+    <<Trait as EngineTrait>::Sync as SyncMode>::StorageLockingPolicyFactory;
 
 /// Engine handle for retuning built-in policies at runtime.
 ///
@@ -260,32 +263,30 @@ type RegistryFactory<Sync> = <Sync as SyncMode>::StorageLockingPolicyFactory;
 /// - [`FullSync`](crate::FullSync): `Send + Sync`.
 /// - [`AccountSync`](crate::AccountSync): `Send + !Sync`.
 /// - [`LocalSync`](crate::LocalSync): `!Send + !Sync`.
-pub struct Configurator<Sync: SyncMode> {
-    registry: <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
-        ConfigRegistry<RegistryFactory<Sync>>,
-    >,
+pub struct Configurator<Trait: EngineTrait> {
+    inner: <Trait::Sync as SyncMode>::Strong<EngineInner<Trait>>,
 }
 
-impl<Sync: SyncMode> Clone for Configurator<Sync> {
+impl<Trait: EngineTrait> Clone for Configurator<Trait> {
     fn clone(&self) -> Self {
         Self {
-            registry: self.registry.clone(),
+            inner: self.inner.clone(),
         }
     }
 }
 
-impl<Sync: SyncMode> Configurator<Sync> {
-    /// Wraps the engine's shared registry in a configurator handle.
-    pub(crate) fn from_inner(
-        registry: <<Sync as SyncMode>::StorageLockingPolicyFactory as LockingPolicyFactory>::Shared<
-            ConfigRegistry<RegistryFactory<Sync>>,
-        >,
-    ) -> Self {
-        Self { registry }
+impl<Trait: EngineTrait> Configurator<Trait> {
+    /// Wraps the engine's shared state in a configurator handle.
+    pub(crate) fn from_inner(inner: <Trait::Sync as SyncMode>::Strong<EngineInner<Trait>>) -> Self {
+        Self { inner }
+    }
+
+    fn registry(&self) -> &ConfigRegistry<RegistryFactory<Trait>> {
+        &self.inner.config_registry
     }
 
     fn enter_configuration(&self) -> Result<ConfiguringGuard, ConfigureError> {
-        ConfiguringGuard::enter(std::ptr::from_ref(&*self.registry) as usize)
+        ConfiguringGuard::enter(std::ptr::from_ref(self.registry()) as usize)
     }
 
     /// Retunes the [`RateLimitPolicy`](crate::pretrade::policies::RateLimitPolicy)
@@ -303,11 +304,11 @@ impl<Sync: SyncMode> Configurator<Sync> {
         name: &str,
         f: impl FnOnce(&mut RateLimitSettings) -> Result<(), Error>,
     ) -> Result<(), ConfigureError> {
-        match self.registry.entry(name)? {
+        match self.registry().entry(name)? {
             ConfigEntry::RateLimit(cell) => {
                 let _guard = self.enter_configuration()?;
                 cell.update(f).map_err(|error| {
-                    ConfigRegistry::<RegistryFactory<Sync>>::validation(name, error)
+                    ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
                 })
             }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<RateLimitSettings>(
@@ -328,11 +329,11 @@ impl<Sync: SyncMode> Configurator<Sync> {
         name: &str,
         f: impl FnOnce(&mut PnlBoundsKillSwitchSettings) -> Result<(), Error>,
     ) -> Result<(), ConfigureError> {
-        match self.registry.entry(name)? {
+        match self.registry().entry(name)? {
             ConfigEntry::PnlBoundsKillSwitch { settings, .. } => {
                 let _guard = self.enter_configuration()?;
                 settings.update(f).map_err(|error| {
-                    ConfigRegistry::<RegistryFactory<Sync>>::validation(name, error)
+                    ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
                 })
             }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<
@@ -370,7 +371,7 @@ impl<Sync: SyncMode> Configurator<Sync> {
         settlement_asset: Asset,
         pnl: Pnl,
     ) -> Result<(), ConfigureError> {
-        match self.registry.entry(name)? {
+        match self.registry().entry(name)? {
             ConfigEntry::PnlBoundsKillSwitch { realized, .. } => {
                 realized.with_mut(
                     (account, settlement_asset),
@@ -396,11 +397,11 @@ impl<Sync: SyncMode> Configurator<Sync> {
         name: &str,
         f: impl FnOnce(&mut SpotFundsSettings) -> Result<(), Error>,
     ) -> Result<(), ConfigureError> {
-        match self.registry.entry(name)? {
-            ConfigEntry::SpotFunds { settings, .. } => {
+        match self.registry().entry(name)? {
+            ConfigEntry::SpotFunds { settings } => {
                 let _guard = self.enter_configuration()?;
                 settings.update(f).map_err(|error| {
-                    ConfigRegistry::<RegistryFactory<Sync>>::validation(name, error)
+                    ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
                 })
             }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<SpotFundsSettings>(
@@ -409,34 +410,53 @@ impl<Sync: SyncMode> Configurator<Sync> {
         }
     }
 
-    /// Force-sets the live accumulated account-currency P&L for a spot-funds
-    /// policy.
+    /// Force-sets the live accumulated account P&L state for a spot-funds policy.
     ///
     /// This updates only the account-scoped current P&L ledger. It does not
-    /// retune bounds and does not reset any other accumulator.
+    /// retune bounds and does not reset any other accumulator. The policy
+    /// reports an account block when a halted state has an effective P&L
+    /// barrier; the engine records that block before returning it.
     ///
     /// # Errors
     ///
     /// Returns [`ConfigureError::UnknownPolicy`] for an unknown name or
     /// [`ConfigureError::PolicyTypeMismatch`] when the name belongs to another
-    /// built-in policy type.
+    /// built-in policy type. On success returns the policy-reported account
+    /// blocks, including an empty list when the accepted correction does not
+    /// block the account.
     pub fn set_spot_funds_account_pnl(
         &self,
         name: &str,
         account: AccountId,
-        account_currency: Asset,
-        pnl: Pnl,
-    ) -> Result<(), ConfigureError> {
-        match self.registry.entry(name)? {
-            ConfigEntry::SpotFunds {
-                pnl: account_pnl, ..
-            } => {
-                account_pnl.with_mut(
-                    (account, account_currency),
-                    || Pnl::ZERO,
-                    |entry, _is_new| *entry = pnl,
+        state: crate::PnlState,
+    ) -> Result<PolicyConfigurationResult, ConfigureError> {
+        match self.registry().entry(name)? {
+            ConfigEntry::SpotFunds { .. } => {
+                let account_groups = AccountGroupsHandle::<
+                    <Trait::Sync as SyncMode>::StorageLockingPolicyFactory,
+                >::from_inner(
+                    self.inner.account_groups.clone()
                 );
-                Ok(())
+                let configuration = PolicyRuntimeConfiguration::SetSpotFundsAccountPnl {
+                    account_id: account,
+                    account_group_id: account_groups.group_of(account),
+                    state,
+                };
+                let result = self
+                    .inner
+                    .pre_trade_policies
+                    .iter()
+                    .find(|policy| policy.name() == name)
+                    .map(|policy| policy.apply_runtime_configuration(configuration))
+                    .ok_or_else(|| ConfigureError::UnknownPolicy {
+                        name: name.to_owned(),
+                    })?;
+                for block in &result.account_blocks {
+                    self.inner
+                        .blocked_accounts
+                        .block_account(account, block.clone());
+                }
+                Ok(result)
             }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<SpotFundsSettings>(
                 name, entry,
@@ -456,11 +476,11 @@ impl<Sync: SyncMode> Configurator<Sync> {
         name: &str,
         f: impl FnOnce(&mut OrderSizeLimitSettings) -> Result<(), Error>,
     ) -> Result<(), ConfigureError> {
-        match self.registry.entry(name)? {
+        match self.registry().entry(name)? {
             ConfigEntry::OrderSizeLimit(cell) => {
                 let _guard = self.enter_configuration()?;
                 cell.update(f).map_err(|error| {
-                    ConfigRegistry::<RegistryFactory<Sync>>::validation(name, error)
+                    ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
                 })
             }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<OrderSizeLimitSettings>(name, entry)),

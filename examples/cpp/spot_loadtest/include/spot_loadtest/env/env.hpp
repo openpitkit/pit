@@ -47,7 +47,8 @@ struct Toolchain {
 };
 
 // Summarizes the pit monorepo revision. The working-tree status is TRI-STATE:
-// clean | dirty | unknown — an unauditable build is never reported as "clean".
+// clean | dirty | unknown — an unauditable build is never reported as
+// "clean".
 struct PitRepo {
   std::string commit = "unknown";
   bool dirty = false;

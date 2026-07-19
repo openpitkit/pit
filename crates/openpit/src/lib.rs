@@ -56,26 +56,28 @@ pub use core::engine_builder::{
     EngineBuildError, EngineBuilder, IntoPolicyObject, ReadyEngineBuilder, SyncedEngineBuilder,
 };
 pub use core::{
-    AccountAdjustmentAmount, AccountAdjustmentBalanceOperation, AccountAdjustmentBatchResult,
-    AccountAdjustmentBounds, AccountAdjustmentContext, AccountAdjustmentOutcome,
-    AccountAdjustmentPositionOperation, AccountKey, AccountKeyConstraint, AccountOutcomeEntry,
+    AccountAdjustmentAccountPnlOperation, AccountAdjustmentAmount,
+    AccountAdjustmentBalanceOperation, AccountAdjustmentBatchResult, AccountAdjustmentBounds,
+    AccountAdjustmentContext, AccountAdjustmentOutcome, AccountAdjustmentPositionOperation,
+    AccountKey, AccountKeyConstraint, AccountOutcomeEntry, AccountPnlOutcome,
     ExecutionReportFillDetails, ExecutionReportOperation, ExecutionReportPositionImpact,
     FinancialImpact, HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
-    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceRealizedPnl,
-    HasAccountAdjustmentBalanceUpperBound, HasAccountAdjustmentHeld,
-    HasAccountAdjustmentHeldLowerBound, HasAccountAdjustmentHeldUpperBound,
-    HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
-    HasAccountAdjustmentIncomingUpperBound, HasAccountAdjustmentPositionLeverage, HasAccountId,
+    HasAccountAdjustmentBalanceLowerBound, HasAccountAdjustmentBalanceUpperBound,
+    HasAccountAdjustmentHeld, HasAccountAdjustmentHeldLowerBound,
+    HasAccountAdjustmentHeldUpperBound, HasAccountAdjustmentIncoming,
+    HasAccountAdjustmentIncomingLowerBound, HasAccountAdjustmentIncomingUpperBound,
+    HasAccountAdjustmentPnlOperation, HasAccountAdjustmentPositionLeverage, HasAccountId,
     HasAutoBorrow, HasAverageEntryPrice, HasBalanceAsset, HasClosePosition, HasCollateralAsset,
     HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
     HasExecutionReportPositionEffect, HasExecutionReportPositionSide, HasFee, HasInstrument,
     HasLeavesQuantity, HasOrderCollateralAsset, HasOrderLeverage, HasOrderPositionSide,
     HasOrderPrice, HasPnl, HasPositionInstrument, HasPositionMode, HasPreTradeLock, HasReduceOnly,
     HasSide, HasTradeAmount, Instrument, InstrumentId, Mutation, Mutations, OrderMargin,
-    OrderOperation, OrderPosition, OutcomeAmount, PnlOutcomeAmount, ReferenceBook,
-    ReferenceBookRegistrationError, RequestFieldAccessError, SettlementLag, SettlementScheme,
-    SettlementUnit, UnknownReferenceBookInstrumentId, WithAccountAdjustmentAmount,
-    WithAccountAdjustmentBalanceOperation, WithAccountAdjustmentBounds,
+    OrderOperation, OrderPosition, OutcomeAmount, PnlHaltReason, PnlOutcome, PnlOutcomeAmount,
+    PnlState, ReferenceBook, ReferenceBookRegistrationError, RequestFieldAccessError,
+    SettlementLag, SettlementScheme, SettlementUnit, UnknownReferenceBookInstrumentId,
+    WithAccountAdjustmentAmount, WithAccountAdjustmentBalanceOperation,
+    WithAccountAdjustmentBalanceRealizedPnl, WithAccountAdjustmentBounds,
     WithAccountAdjustmentPositionOperation, WithExecutionReportFillDetails,
     WithExecutionReportOperation, WithExecutionReportPositionImpact, WithFinancialImpact,
     WithOrderMargin, WithOrderOperation, WithOrderPosition,
@@ -96,8 +98,9 @@ pub use openpit_derive::RequestFields;
 pub use param::{AdjustmentAmount, PositionMode};
 pub use pretrade::PostTradeResult;
 pub use pretrade::{
-    SpotFundsConfigError, SpotFundsLimitMode, SpotFundsMarketData, SpotFundsOverride,
-    SpotFundsOverrideTarget, SpotFundsPricingSource,
+    PolicyAccountAdjustmentResult, PolicyConfigurationResult, SpotFundsConfigError,
+    SpotFundsLimitMode, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
+    SpotFundsPricingSource,
 };
 pub use storage::IndexFlag;
 pub use storage::StorageBuilder;

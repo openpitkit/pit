@@ -177,22 +177,32 @@ describe("spot-funds validation", () => {
     );
   });
 
+  it("requires at least one bound in each spot-funds P&L barrier", () => {
+    expect(() =>
+      Engine.builder()
+        .builtin(
+          buildSpotFundsPnlBoundsKillswitch().globalBarrier(
+            new SpotFundsPnlBoundsBarrier(undefined, undefined),
+          ),
+        )
+        .build(),
+    ).toThrow("spot-funds P&L bounds must configure at least one bound");
+  });
+
   it("accepts a non-empty P&L barrier set", () => {
     expect(() =>
       Engine.builder()
         .builtin(
-          buildSpotFundsPnlBoundsKillswitch().globalBarriers([
-            new SpotFundsPnlBoundsBarrier("USD", "-100", undefined),
-          ]),
+          buildSpotFundsPnlBoundsKillswitch().globalBarrier(
+            new SpotFundsPnlBoundsBarrier("-100", undefined),
+          ),
         )
         .build(),
     ).not.toThrow();
   });
 
   it("wires market data into the P&L-bounds builder", () => {
-    const barrier = () => [
-      new SpotFundsPnlBoundsBarrier("USD", "-100", undefined),
-    ];
+    const barrier = () => new SpotFundsPnlBoundsBarrier("-100", undefined);
     const marketOrder = {
       operation: {
         underlyingAsset: "AAPL",
@@ -204,7 +214,7 @@ describe("spot-funds validation", () => {
     };
 
     const withoutMarketData = Engine.builder()
-      .builtin(buildSpotFundsPnlBoundsKillswitch().globalBarriers(barrier()))
+      .builtin(buildSpotFundsPnlBoundsKillswitch().globalBarrier(barrier()))
       .build();
     expect(
       withoutMarketData.executePreTrade(marketOrder).rejects[0]?.code,
@@ -218,7 +228,7 @@ describe("spot-funds validation", () => {
     const withMarketData = Engine.builder()
       .builtin(
         buildSpotFundsPnlBoundsKillswitch()
-          .globalBarriers(barrier())
+          .globalBarrier(barrier())
           .marketData(marketData),
       )
       .build();

@@ -25,12 +25,12 @@
 // Exact fixed-point money for the shadow ledger.
 //
 // The Go harness uses shopspring/decimal; here the value space is deliberately
-// restricted exactly as the Go `money.go` is — quantity is an integer lot count
-// (scale 0) and price has at most `priceScale = 2` fractional digits (classic
-// equity ticks) — so every monetary value is exact at scale 2 and fits in a
-// signed 128-bit fixed-point coefficient. This mirrors `q*p` being exact with
-// no rounding, which is what keeps the shadow ledger bit-for-bit against the
-// engine.
+// restricted exactly as the Go `money.go` is — quantity is an integer lot
+// count (scale 0) and price has at most `priceScale = 2` fractional digits
+// (classic equity ticks) — so every monetary value is exact at scale 2 and
+// fits in a signed 128-bit fixed-point coefficient. This mirrors `q*p` being
+// exact with no rounding, which is what keeps the shadow ledger bit-for-bit
+// against the engine.
 //
 // `Decimal` carries a scale-2 integer coefficient (units of 0.01). The engine
 // value types (`openpit::param`) are constructed from `ToString()`, so the

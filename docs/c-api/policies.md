@@ -131,22 +131,24 @@ Contract:
   before returning.
 - `out_adjustments` is a callback-scoped non-owning collector the callback may
   fill with group-tagged account-adjustment outcomes via
-  `openpit_pretrade_post_trade_adjustment_list_push`. This channel IS
-  group-tagged. The callback must not store or use `out_adjustments` after
-  return.
-- The account-block return and the `out_adjustments` channel are independent:
-  a callback may report blocks, adjustments, both, or neither.
+  `openpit_pretrade_post_trade_adjustment_list_push`.
+- `out_account_pnls` is a callback-scoped non-owning collector the callback
+  may fill with group-tagged account-level PnL outcomes via
+  `openpit_pretrade_post_trade_account_pnl_list_push`.
+- The callback must not retain or use either collector after return.
+- The account-block return and both collector channels are independent: a
+  callback may populate any combination of them.
 - Return a non-null account-block list when this policy reports a kill-switch
   trigger. The returned list ownership is transferred to the engine; create it
   with `openpit_pretrade_create_account_block_list`.
 - Return null to indicate no kill-switch condition.
-- A null `apply_execution_report_fn` means that hook returns no blocks and no
-  adjustments.
+- A null `apply_execution_report_fn` means that hook returns no blocks,
+  adjustments, or account-level PnL outcomes.
 - `user_data` is passed through unchanged from policy creation.
 
 Parameter ordering convention: read-only context first (`ctx`), then read-only
-input (`report`), then the callback-scoped collector (`out_adjustments`), then
-the trailing opaque `user_data`.
+input (`report`), then callback-scoped collectors (`out_adjustments`,
+`out_account_pnls`), then the trailing opaque `user_data`.
 
 ```c
 typedef OpenPitPretradeAccountBlockList *
@@ -154,6 +156,7 @@ typedef OpenPitPretradeAccountBlockList *
     const OpenPitPostTradeContext * ctx,
     const OpenPitExecutionReport * report,
     OpenPitPostTradeAdjustmentList * out_adjustments,
+    OpenPitPostTradeAccountPnlList * out_account_pnls,
     void * user_data
 );
 ```
@@ -176,14 +179,16 @@ Contract:
 - `mutations` is a callback-scoped non-owning pointer that allows the callback
   to register commit/rollback mutations.
 - The callback must not store or use `mutations` after return.
-- `out_outcomes` is a callback-scoped non-owning collector the callback may
-  fill with account-outcome entries via
-  `openpit_account_outcome_entry_list_push`. No `policy_group_id` is carried;
-  the engine assigns the policy group. The callback must not store or use
-  `out_outcomes` after return.
-- The reject channel and the `out_outcomes` channel are independent: the
-  engine only keeps `out_outcomes` when the callback accepts (returns null or
-  an empty list).
+- `out_result` is a callback-scoped non-owning collector the callback may fill
+  with account-outcome entries via
+  `openpit_pretrade_account_adjustment_result_push_account_outcome` and
+  account blocks via
+  `openpit_pretrade_account_adjustment_result_push_account_block`. No
+  `policy_group_id` is carried for outcome entries; the engine assigns the
+  policy group. The callback must not store or use `out_result` after return.
+- The reject and `out_result` channels are independent: the engine keeps the
+  collector payload only when the callback accepts (returns null or an empty
+  list).
 - Return null to accept the adjustment.
 - Return a non-empty reject list to reject the adjustment.
 - Returned reject list ownership is transferred to the callee.
@@ -191,7 +196,7 @@ Contract:
 
 Parameter ordering convention: read-only inputs first (`ctx`, `account_id`,
 `adjustment`), then callback-scoped collectors in the order (`mutations`,
-`out_outcomes`), then the trailing opaque `user_data`.
+`out_result`), then the trailing opaque `user_data`.
 
 ```c
 typedef OpenPitPretradeRejectList *
@@ -200,7 +205,7 @@ typedef OpenPitPretradeRejectList *
     OpenPitParamAccountId account_id,
     const OpenPitAccountAdjustment * adjustment,
     OpenPitMutations * mutations,
-    OpenPitAccountOutcomeEntryList * out_outcomes,
+    OpenPitPretradeAccountAdjustmentResult * out_result,
     void * user_data
 );
 ```
@@ -238,8 +243,8 @@ Contract:
   `apply_execution_report_fn`, and `apply_account_adjustment_fn` may be null.
 - A null `check_pre_trade_start_fn`, `perform_pre_trade_check_fn`, or
   `apply_account_adjustment_fn` means that hook accepts by default.
-- A null `apply_execution_report_fn` means that hook returns an empty list (no
-  kill switch).
+- A null `apply_execution_report_fn` means that hook returns no post-trade
+  result.
 - Non-null callbacks and `free_user_data_fn` must remain callable for as long
   as the policy may still be used by either the caller pointer or the engine.
 - Custom main-stage and account-adjustment callbacks can register
@@ -1070,23 +1075,29 @@ bool openpit_engine_configure_rate_limit(
 
 ## `OpenPitPretradePoliciesSpotFundsLimitMode`
 
-Selects how the spot-funds control reacts to insufficient available funds.
-
-The default is `Enforce`, matching the core [`SpotFundsLimitMode`] default.
+Raw selector for the spot-funds insufficient-funds behavior.
 
 ```c
 typedef uint8_t OpenPitPretradePoliciesSpotFundsLimitMode;
-/**
- * Reject a reservation when available funds are insufficient; the reservation
- * is not recorded.
- */
-#define OpenPitPretradePoliciesSpotFundsLimitMode_Enforce \
+```
+
+## `OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE`
+
+Reject a reservation when available funds are insufficient; the reservation is
+not recorded. This is the default mode.
+
+```c
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE \
     ((OpenPitPretradePoliciesSpotFundsLimitMode) 0)
-/**
- * Always record the reservation; `available` may go negative and a shortfall
- * never rejects. Arithmetic overflow is still surfaced.
- */
-#define OpenPitPretradePoliciesSpotFundsLimitMode_TrackOnly \
+```
+
+## `OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY`
+
+Always record the reservation; `available` may go negative and a shortfall never
+rejects. Arithmetic overflow is still surfaced.
+
+```c
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY \
     ((OpenPitPretradePoliciesSpotFundsLimitMode) 1)
 ```
 
@@ -1100,20 +1111,32 @@ Spot funds overrides use an explicit tagged hierarchy matching the Rust
 
 ```c
 typedef uint8_t OpenPitPretradePoliciesSpotFundsOverrideTargetTag;
-/**
- * Instrument-level override.
- */
-#define OpenPitPretradePoliciesSpotFundsOverrideTargetTag_Instrument \
+```
+
+## `OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT`
+
+Instrument-level override.
+
+```c
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT \
     ((OpenPitPretradePoliciesSpotFundsOverrideTargetTag) 0)
-/**
- * Override for one instrument and account.
- */
-#define OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccount \
+```
+
+## `OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT_ACCOUNT`
+
+Override for one instrument and account.
+
+```c
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT_ACCOUNT \
     ((OpenPitPretradePoliciesSpotFundsOverrideTargetTag) 1)
-/**
- * Override for one instrument and account group.
- */
-#define OpenPitPretradePoliciesSpotFundsOverrideTargetTag_InstrumentAccountGroup \
+```
+
+## `OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT_ACCOUNT_GROUP`
+
+Override for one instrument and account group.
+
+```c
+#define OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT_ACCOUNT_GROUP \
     ((OpenPitPretradePoliciesSpotFundsOverrideTargetTag) 2)
 ```
 
@@ -1173,7 +1196,7 @@ the function's existing error channel before the payload is read.
 
 ```c
 typedef struct OpenPitPretradePoliciesSpotFundsOverrideTarget {
-    uint8_t tag;
+    OpenPitPretradePoliciesSpotFundsOverrideTargetTag tag;
     OpenPitPretradePoliciesSpotFundsOverrideTargetPayload payload;
 } OpenPitPretradePoliciesSpotFundsOverrideTarget;
 ```
@@ -1199,11 +1222,10 @@ typedef struct OpenPitPretradePoliciesSpotFundsOverride {
 
 ## `OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier`
 
-Spot-funds account-currency P&L bounds.
+Spot-funds account P&L bounds.
 
 ```c
 typedef struct OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
-    OpenPitStringView account_currency;
     OpenPitParamPnlOptional lower_bound;
     OpenPitParamPnlOptional upper_bound;
 } OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier;
@@ -1222,25 +1244,13 @@ typedef struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier {
 
 ## `OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier`
 
-Account spot-funds P&L bounds refinement with construction-time seed.
+Account spot-funds P&L bounds refinement.
 
 ```c
 typedef struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier {
     OpenPitParamAccountId account_id;
     OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier barrier;
-    OpenPitParamPnl initial_pnl;
 } OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier;
-```
-
-## `OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate`
-
-Runtime account spot-funds P&L bounds replacement.
-
-```c
-typedef struct OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate {
-    OpenPitParamAccountId account_id;
-    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier barrier;
-} OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate;
 ```
 
 ## `openpit_engine_builder_add_builtin_spot_funds_policy`
@@ -1293,7 +1303,7 @@ bool openpit_engine_builder_add_builtin_spot_funds_policy(
 
 ## `openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy`
 
-Adds the built-in spot-funds policy with account-currency P&L bounds.
+Adds the built-in spot-funds policy with account P&L bounds.
 
 This entry point builds the regular `SpotFundsPolicy` and configures only its
 P&L-bounds axis. The policy keeps its stable built-in name `"SpotFundsPolicy"`;
@@ -1309,9 +1319,7 @@ Contract:
   compute P&L will be blocked by the core policy fail-safe.
 - At least one barrier must be provided across `global`, `account_group`, or
   `account`.
-- Account barriers include construction-time `initial_pnl`. Runtime
-  configuration uses the update DTO without `initial_pnl` and preserves the
-  live accumulator.
+- Barrier configuration never seeds or resets live account P&L.
 
 Success / error: mirrors `openpit_engine_builder_add_builtin_spot_funds_policy`.
 
@@ -1321,7 +1329,6 @@ bool openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
     const OpenPitMarketDataService * market_data,
     uint16_t policy_group_id,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global,
-    size_t global_len,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier * account_group,
     size_t account_group_len,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier * account,
@@ -1388,21 +1395,52 @@ bool openpit_engine_configure_spot_funds(
 Retunes the P&L-bounds axis of the built-in spot-funds policy registered under
 `name`.
 
-This is a partial update (PATCH): each supplied axis is replaced only when its
-`has_*` flag is true. Account barriers use the runtime update DTO with no
-`initial_pnl`; live accumulated P&L is preserved.
+Contract:
+
+- `engine` must be a valid non-null engine pointer.
+- `name` selects the policy; it is interpreted as UTF-8. A built-in policy
+  added via
+  openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy
+  registers under its fixed name `"SpotFundsPolicy"`, so pass that string
+  here.
+- This is a partial update (PATCH): each of the three axes (global,
+  `account_group`, `account`) is replaced only when its `has_*` flag is
+  `true`; a `has_*` flag set to `false` leaves that axis unchanged.
+- When `has_global` is `true`, a null `global` clears the global barrier; a
+  non-null `global` sets it.
+- When `has_account_group` is `true`, the `account_group_len` entries at
+  `account_group` replace the whole per-account-group axis; an engaged empty
+  list (`has_account_group == true`, `account_group_len == 0`) clears it.
+- When `has_account` is `true`, the `account_len` entries at `account` replace
+  the whole per-account axis; an engaged empty list (`has_account == true`,
+  `account_len == 0`) clears it.
+- Barrier retuning never resets a live accumulated P&L value.
+
+Success:
+
+- returns `true`; subsequent P&L-bound evaluations use the new bounds,
+  including pre-trade checks, execution reports, account-P&L adjustments and
+  account-P&L force-sets. Retuning alone does not re-evaluate the stored
+  accumulator or record an account block.
+
+Error:
+
+- returns `false`; if `out_error` is non-null, writes a caller-owned
+  `OpenPitConfigureError` (release with `openpit_destroy_configure_error`).
+- a null `engine` returns `false` and, when `out_error` is non-null, writes a
+  caller-owned `OpenPitConfigureError` (`Validation`) that must be released
+  with `openpit_destroy_configure_error`.
 
 ```c
 bool openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
     OpenPitEngine * engine,
     OpenPitStringView name,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global,
-    size_t global_len,
     bool has_global,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier * account_group,
     size_t account_group_len,
     bool has_account_group,
-    const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate * account,
+    const OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier * account,
     size_t account_len,
     bool has_account,
     OpenPitConfigureError ** out_error
@@ -1411,19 +1449,31 @@ bool openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
 
 ## `openpit_engine_configure_spot_funds_set_account_pnl`
 
-Force-sets the live accumulated account-currency P&L for the spot-funds policy
+Force-sets the live accumulated account P&L state for the spot-funds policy
 registered under `name`.
 
 This is an absolute assignment and is separate from barrier retuning, which
-never resets the accumulator.
+never resets the accumulator. A numeric state re-arms this account accumulator
+after a calculation halt. A halted state sets or keeps it halted and replaces
+the stored halt reason. Neither form affects a position-level accumulator. When
+the policy accepts a halted state while an effective account P&L barrier is
+configured, the returned list contains the block already recorded by the engine.
+
+Contract:
+
+- on success, returns a caller-owned account-block list, possibly empty;
+  release it with `openpit_pretrade_destroy_account_block_list`;
+- on failure, returns null and, when `out_error` is non-null, writes a
+  caller-owned `OpenPitConfigureError` that must be released with
+  `openpit_destroy_configure_error`.
 
 ```c
-bool openpit_engine_configure_spot_funds_set_account_pnl(
+OpenPitPretradeAccountBlockList *
+openpit_engine_configure_spot_funds_set_account_pnl(
     OpenPitEngine * engine,
     OpenPitStringView name,
     OpenPitParamAccountId account_id,
-    OpenPitStringView account_currency,
-    OpenPitParamPnl pnl,
+    OpenPitPnlState state,
     OpenPitConfigureError ** out_error
 );
 ```
@@ -1461,7 +1511,7 @@ Error:
 bool openpit_engine_configure_spot_funds_global_limit_mode(
     OpenPitEngine * engine,
     OpenPitStringView name,
-    uint8_t mode,
+    OpenPitPretradePoliciesSpotFundsLimitMode mode,
     OpenPitConfigureError ** out_error
 );
 ```
@@ -1491,7 +1541,7 @@ bool openpit_engine_configure_spot_funds_account_limit_mode(
     OpenPitEngine * engine,
     OpenPitStringView name,
     OpenPitParamAccountId account_id,
-    uint8_t mode,
+    OpenPitPretradePoliciesSpotFundsLimitMode mode,
     bool has_mode,
     OpenPitConfigureError ** out_error
 );
@@ -1524,7 +1574,7 @@ bool openpit_engine_configure_spot_funds_account_group_limit_mode(
     OpenPitEngine * engine,
     OpenPitStringView name,
     OpenPitParamAccountGroupId account_group_id,
-    uint8_t mode,
+    OpenPitPretradePoliciesSpotFundsLimitMode mode,
     bool has_mode,
     OpenPitConfigureError ** out_error
 );

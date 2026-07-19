@@ -30,8 +30,8 @@
 // layout) drives every draw, consumed in a fixed order, so the emitted stream
 // and every prediction are reproducible for a given (seed, config). The exact
 // numeric stream is not byte-identical to Go's — that is impossible across
-// languages — but the determinism and convergence invariants the harness relies
-// on hold within this binding.
+// languages — but the determinism and convergence invariants the harness
+// relies on hold within this binding.
 
 namespace spot_loadtest::generator {
 

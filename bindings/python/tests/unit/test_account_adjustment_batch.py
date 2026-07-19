@@ -28,9 +28,9 @@ class PassAdjustmentCheck(openpit.pretrade.Policy):
         ctx: openpit.AccountAdjustmentContext,
         account_id: openpit.param.AccountId,
         adjustment: openpit.AccountAdjustment,
-    ) -> list[openpit.pretrade.PolicyReject] | None:
+    ) -> openpit.pretrade.PolicyAccountAdjustmentResult:
         _ = account_id, adjustment
-        return None
+        return openpit.pretrade.PolicyAccountAdjustmentResult()
 
 
 class RejectOnPendingPolicy(openpit.pretrade.Policy):
@@ -46,7 +46,7 @@ class RejectOnPendingPolicy(openpit.pretrade.Policy):
         ctx: openpit.AccountAdjustmentContext,
         account_id: openpit.param.AccountId,
         adjustment: openpit.AccountAdjustment,
-    ) -> list[openpit.pretrade.PolicyReject] | None:
+    ) -> openpit.pretrade.PolicyAccountAdjustmentResult:
         _ = account_id
         pending = (
             None
@@ -60,15 +60,17 @@ class RejectOnPendingPolicy(openpit.pretrade.Policy):
         )
         self.seen_pending.append(pending)
         if pending == "2":
-            return [
-                openpit.pretrade.PolicyReject(
-                    code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
-                    reason="blocked",
-                    details="pending value 2 is forbidden",
-                    scope=openpit.pretrade.RejectScope.ACCOUNT,
-                )
-            ]
-        return None
+            return openpit.pretrade.PolicyAccountAdjustmentResult(
+                rejects=(
+                    openpit.pretrade.PolicyReject(
+                        code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
+                        reason="blocked",
+                        details="pending value 2 is forbidden",
+                        scope=openpit.pretrade.RejectScope.ACCOUNT,
+                    ),
+                ),
+            )
+        return openpit.pretrade.PolicyAccountAdjustmentResult()
 
 
 class MutatingAdjustmentCheck(openpit.pretrade.Policy):
@@ -83,18 +85,20 @@ class MutatingAdjustmentCheck(openpit.pretrade.Policy):
         ctx: openpit.AccountAdjustmentContext,
         account_id: openpit.param.AccountId,
         adjustment: openpit.AccountAdjustment,
-    ) -> openpit.pretrade.PolicyReject | tuple[openpit.Mutation, ...] | None:
+    ) -> openpit.pretrade.PolicyAccountAdjustmentResult:
         _ = account_id, adjustment
-        return (
-            openpit.Mutation(
-                commit=lambda: None,
-                rollback=lambda: None,
+        return openpit.pretrade.PolicyAccountAdjustmentResult(
+            mutations=(
+                openpit.Mutation(
+                    commit=lambda: None,
+                    rollback=lambda: None,
+                ),
             ),
         )
 
 
 @pytest.mark.unit
-def test_pre_trade_passes_when_none_returned() -> None:
+def test_pre_trade_passes_with_empty_adjustment_result() -> None:
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -173,7 +177,7 @@ def test_pre_trade_passes_with_mutations() -> None:
 
 @pytest.mark.unit
 def test_pre_trade_none_and_mutations_interleaved() -> None:
-    """First policy returns None, second returns mutations. Batch passes."""
+    """First policy returns an empty result, second returns mutations. Batch passes."""
     engine = (
         openpit.Engine.builder()
         .no_sync()

@@ -15,6 +15,74 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
+use std::any::Any;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(test)]
+use crate::param::{AccountId, Pnl};
+#[cfg(test)]
+use crate::pretrade::AccountBlock;
+
+static NEXT_MUTATION_OWNER_ID: AtomicU64 = AtomicU64::new(1);
+
+/// One accepted fill contribution that was deliberately discarded while a
+/// rejected account-PnL re-arm was rolled back to its prior halted state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
+pub(crate) struct AccountPnlReconciliation {
+    /// Account whose PnL assertion was rolled back.
+    pub(crate) account_id: AccountId,
+    /// Numeric contribution accepted while the provisional value was active.
+    pub(crate) discarded_delta: Option<Pnl>,
+}
+
+/// Observable effects produced while compensating a rejected adjustment
+/// batch.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg(test)]
+pub(crate) struct AccountAdjustmentRollbackReport {
+    /// Blocks that are required by the final, rolled-back account-PnL state.
+    pub(crate) account_blocks: Vec<AccountBlock>,
+    /// Provisional blocks removed because their originating assertion was
+    /// rejected.
+    pub(crate) invalidated_account_blocks: Vec<AccountBlock>,
+    /// Accepted contributions discarded when rollback restored a prior halt.
+    pub(crate) reconciliations: Vec<AccountPnlReconciliation>,
+}
+
+#[derive(Default)]
+pub(crate) struct MutationRollbackResult {
+    #[cfg(test)]
+    pub(crate) report: AccountAdjustmentRollbackReport,
+}
+
+impl MutationRollbackResult {
+    #[cfg(test)]
+    fn append(&mut self, mut other: Self) {
+        self.report
+            .account_blocks
+            .append(&mut other.report.account_blocks);
+        self.report
+            .invalidated_account_blocks
+            .append(&mut other.report.invalidated_account_blocks);
+        self.report
+            .reconciliations
+            .append(&mut other.report.reconciliations);
+    }
+
+    #[cfg(not(test))]
+    fn append(&mut self, _other: Self) {}
+}
+
+pub(crate) fn next_mutation_owner_id() -> u64 {
+    loop {
+        let id = NEXT_MUTATION_OWNER_ID.fetch_add(1, Ordering::Relaxed);
+        if id != 0 {
+            return id;
+        }
+    }
+}
+
 /// Commit/rollback pair produced by a policy.
 ///
 /// Commit/rollback action pair registered by a policy during checks.
@@ -24,10 +92,10 @@
 ///
 /// # Rollback safety by pipeline
 ///
-/// Account adjustment pipeline: rollback by absolute value is safe.
-/// The entire batch runs within a single engine borrow. No external
-/// system observes intermediate state, so restoring a previous absolute
-/// value is always consistent.
+/// Account adjustment pipeline: operations may interleave under
+/// [`FullSync`](crate::FullSync). Rollbacks must therefore compensate deltas
+/// or use an operation-owned assertion/lease when restoring absolute state;
+/// blindly restoring a snapshot can overwrite a concurrent accepted update.
 ///
 /// Pre-trade pipeline: rollback by absolute value can break
 /// consistency. Between reservation creation and finalization, external
@@ -53,7 +121,8 @@
 /// ```
 pub struct Mutation {
     commit: Box<dyn FnOnce()>,
-    rollback: Box<dyn FnOnce()>,
+    rollback: Box<dyn FnOnce() -> MutationRollbackResult>,
+    lifetime_guard: Option<Box<dyn Any>>,
 }
 
 impl Mutation {
@@ -65,10 +134,57 @@ impl Mutation {
     /// `rollback` runs when the pipeline fails (policy reject, reservation
     /// rollback, or reservation drop without explicit finalization).
     pub fn new(commit: impl FnOnce() + 'static, rollback: impl FnOnce() + 'static) -> Self {
+        Self::new_reporting(commit, move || {
+            rollback();
+            MutationRollbackResult::default()
+        })
+    }
+
+    pub(crate) fn new_reporting(
+        commit: impl FnOnce() + 'static,
+        rollback: impl FnOnce() -> MutationRollbackResult + 'static,
+    ) -> Self {
         Self {
             commit: Box::new(commit),
             rollback: Box::new(rollback),
+            lifetime_guard: None,
         }
+    }
+
+    pub(crate) fn new_reporting_with_guard<Guard>(
+        commit: impl FnOnce() + 'static,
+        rollback: impl FnOnce() -> MutationRollbackResult + 'static,
+        guard: Guard,
+    ) -> Self
+    where
+        Guard: 'static,
+    {
+        let mut mutation = Self::new_reporting(commit, rollback);
+        mutation.lifetime_guard = Some(Box::new(guard));
+        mutation
+    }
+
+    fn commit(self) {
+        let Self {
+            commit,
+            rollback,
+            lifetime_guard,
+        } = self;
+        drop(rollback);
+        commit();
+        drop(lifetime_guard);
+    }
+
+    fn rollback(self) -> MutationRollbackResult {
+        let Self {
+            commit,
+            rollback,
+            lifetime_guard,
+        } = self;
+        drop(commit);
+        let result = rollback();
+        drop(lifetime_guard);
+        result
     }
 }
 
@@ -91,9 +207,15 @@ impl Mutation {
 ///     move || { *r.borrow_mut() = false; },
 /// ));
 /// ```
-#[derive(Default)]
 pub struct Mutations {
     mutations: Vec<Mutation>,
+    owner_id: u64,
+}
+
+impl Default for Mutations {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Mutations {
@@ -101,6 +223,7 @@ impl Mutations {
     pub fn new() -> Self {
         Self {
             mutations: Vec::new(),
+            owner_id: next_mutation_owner_id(),
         }
     }
 
@@ -108,6 +231,7 @@ impl Mutations {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             mutations: Vec::with_capacity(capacity),
+            owner_id: next_mutation_owner_id(),
         }
     }
 
@@ -116,18 +240,24 @@ impl Mutations {
         self.mutations.push(mutation);
     }
 
+    pub(crate) fn owner_id(&self) -> u64 {
+        self.owner_id
+    }
+
     /// Applies all commit actions in registration order.
     pub(crate) fn commit_all(self) {
         for mutation in self.mutations {
-            (mutation.commit)();
+            mutation.commit();
         }
     }
 
     /// Applies all rollback actions in reverse registration order.
-    pub(crate) fn rollback_all(self) {
+    pub(crate) fn rollback_all(self) -> MutationRollbackResult {
+        let mut result = MutationRollbackResult::default();
         for mutation in self.mutations.into_iter().rev() {
-            (mutation.rollback)();
+            result.append(mutation.rollback());
         }
+        result
     }
 
     #[cfg(test)]
@@ -174,7 +304,7 @@ mod tests {
             }));
         }
 
-        mutations.rollback_all();
+        let _ = mutations.rollback_all();
         assert_eq!(&*calls.borrow(), &["c", "b", "a"]);
     }
 
@@ -198,6 +328,6 @@ mod tests {
 
     #[test]
     fn rollback_all_on_empty_is_noop() {
-        Mutations::new().rollback_all();
+        let _ = Mutations::new().rollback_all();
     }
 }

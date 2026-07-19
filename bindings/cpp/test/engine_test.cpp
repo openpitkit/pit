@@ -17,7 +17,7 @@
 
 #include "openpit/engine.hpp"
 
-#include "openpit/account_adjustment.hpp"
+#include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/model.hpp"
 #include "openpit/pretrade/pretrade.hpp"
 #include "openpit/reject.hpp"
@@ -436,13 +436,25 @@ TEST(EngineApplyExecutionReport, OrderValidationProducesNoBlocks) {
   const openpit::PostTradeResult result =
       engine.ApplyExecutionReport(TestReport(1));
   EXPECT_TRUE(result.accountBlocks.empty());
-  EXPECT_TRUE(result.accountAdjustmentOutcomes.empty());
+  EXPECT_TRUE(result.accountPnls.empty());
+  EXPECT_TRUE(result.accountAdjustments.empty());
 }
 
 TEST(EngineApplyExecutionReport, AbiFailureThrows) {
   const Engine engine;
   EXPECT_THROW(
       { auto result = engine.ApplyExecutionReport(TestReport(1)); },
+      openpit::Error);
+}
+
+TEST(EngineApplyExecutionReport, LockOverloadRequiresFill) {
+  EngineBuilder builder(SyncPolicy::Full);
+  builder.Add(policies::OrderValidationPolicy{});
+  const Engine engine = builder.Build();
+  const openpit::pretrade::PreTradeLock lock;
+
+  EXPECT_THROW(
+      { static_cast<void>(engine.ApplyExecutionReport(TestReport(1), lock)); },
       openpit::Error);
 }
 
@@ -457,11 +469,12 @@ TEST(EngineApplyExecutionReport, CallbackExceptionRethrowsOriginalType) {
 //------------------------------------------------------------------------------
 // ApplyAccountAdjustment.
 //
-// The adjustment value type is authored by a parallel module
-// (openpit/account_adjustment.hpp). The empty-batch path exercises the engine
-// method end-to-end without depending on that type: a zero-length batch is
-// accepted and applies cleanly. A minimal local stub satisfies the template's
-// `Raw()` requirement; it is never invoked for an empty batch.
+// The adjustment value type is authored in
+// `openpit/accountadjustment/account_adjustment.hpp`. The empty-batch path
+// exercises the engine method end-to-end without depending on that type: a
+// zero-length batch is accepted and applies cleanly. A minimal local stub
+// satisfies the template's `Raw()` requirement; it is never invoked for an
+// empty batch.
 
 struct StubAdjustment {
   [[nodiscard]] OpenPitAccountAdjustment Raw() const noexcept {

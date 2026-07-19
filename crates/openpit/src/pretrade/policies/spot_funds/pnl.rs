@@ -15,13 +15,11 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-use crate::param::{AccountGroupId, AccountId, Asset, Pnl};
+use crate::param::{AccountGroupId, AccountId, Pnl};
 
-/// Account-currency P&L bounds used by the spot-funds policy.
+/// Account P&L bounds used by the spot-funds policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpotFundsPnlBoundsBarrier {
-    /// Account currency whose accumulated P&L is monitored.
-    pub account_currency: Asset,
     /// Optional lower bound, typically a negative loss limit.
     pub lower_bound: Option<Pnl>,
     /// Optional upper bound, typically a positive profit-taking limit.
@@ -31,28 +29,17 @@ pub struct SpotFundsPnlBoundsBarrier {
 /// Account-group P&L bounds refinement for spot funds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpotFundsPnlBoundsAccountGroupBarrier {
-    /// Account currency and bounds for the group.
+    /// Bounds for the group.
     pub barrier: SpotFundsPnlBoundsBarrier,
     /// Account group this barrier applies to.
     pub account_group_id: AccountGroupId,
 }
 
-/// Account P&L bounds refinement and construction-time P&L seed.
+/// Account P&L bounds refinement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpotFundsPnlBoundsAccountBarrier {
-    /// Account currency and bounds for the account.
+    /// Bounds for the account.
     pub barrier: SpotFundsPnlBoundsBarrier,
     /// Account this barrier applies to.
-    pub account_id: AccountId,
-    /// Starting accumulated P&L for the account, consumed at construction only.
-    pub initial_pnl: Pnl,
-}
-
-/// Runtime account P&L bounds replacement for spot funds.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SpotFundsPnlBoundsAccountBarrierUpdate {
-    /// Account currency and replacement bounds for the account.
-    pub barrier: SpotFundsPnlBoundsBarrier,
-    /// Account this replacement applies to.
     pub account_id: AccountId,
 }

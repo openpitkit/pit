@@ -615,11 +615,11 @@ func TestBuiltinOrderSizeLimitAssetOnlyBuildsAndRejects(t *testing.T) {
 	}
 }
 
-func TestBuiltinPnlBoundsKillswitchBrokerOnlyTriggersAndBlocksAccount(t *testing.T) {
+func TestBuiltinPnlBoundsKillSwitchBrokerOnlyTriggersAndBlocksAccount(t *testing.T) {
 	usd := builtinTestAsset(t, "USD")
 
 	engine, err := NewEngineBuilder().NoSync().
-		Builtin(policies.BuildPnlBoundsKillswitch().
+		Builtin(policies.BuildPnlBoundsKillSwitch().
 			BrokerBarriers(policies.PnlBoundsBrokerBarrier{
 				SettlementAsset: usd,
 				LowerBound:      optional.Some(pnlTestPnl(t, "-500")),
@@ -676,13 +676,13 @@ func TestBuiltinPnlBoundsKillswitchBrokerOnlyTriggersAndBlocksAccount(t *testing
 	}
 }
 
-func TestBuiltinPnlBoundsKillswitchAccountBarrierIndependentOfOtherAccounts(
+func TestBuiltinPnlBoundsKillSwitchAccountBarrierIndependentOfOtherAccounts(
 	t *testing.T,
 ) {
 	usd := builtinTestAsset(t, "USD")
 
 	engine, err := NewEngineBuilder().NoSync().
-		Builtin(policies.BuildPnlBoundsKillswitch().
+		Builtin(policies.BuildPnlBoundsKillSwitch().
 			AccountBarriers(policies.PnlBoundsAccountAssetBarrier{
 				Barrier: policies.PnlBoundsBrokerBarrier{
 					SettlementAsset: usd,
@@ -733,14 +733,14 @@ func TestBuiltinPnlBoundsKillswitchAccountBarrierIndependentOfOtherAccounts(
 	request.Close()
 }
 
-func TestBuiltinPnlBoundsKillswitchRuntimeAccountBarrierPreservesPnl(
+func TestBuiltinPnlBoundsKillSwitchRuntimeAccountBarrierPreservesPnl(
 	t *testing.T,
 ) {
 	usd := builtinTestAsset(t, "USD")
 	accountID := param.NewAccountIDFromUint64(1001)
 
 	engine, err := NewEngineBuilder().NoSync().
-		Builtin(policies.BuildPnlBoundsKillswitch().
+		Builtin(policies.BuildPnlBoundsKillSwitch().
 			AccountBarriers(policies.PnlBoundsAccountAssetBarrier{
 				Barrier: policies.PnlBoundsBrokerBarrier{
 					SettlementAsset: usd,
@@ -792,7 +792,7 @@ func TestBuiltinSetAccountPnlForcesBreachAndRejectsNextOrder(t *testing.T) {
 	account := param.NewAccountIDFromUint64(1001)
 
 	engine, err := NewEngineBuilder().NoSync().
-		Builtin(policies.BuildPnlBoundsKillswitch().
+		Builtin(policies.BuildPnlBoundsKillSwitch().
 			BrokerBarriers(policies.PnlBoundsBrokerBarrier{
 				SettlementAsset: usd,
 				LowerBound:      optional.Some(pnlTestPnl(t, "-100")),
@@ -843,7 +843,7 @@ func TestBuiltinSetAccountPnlUnknownPolicyReturnsUnknown(t *testing.T) {
 	usd := builtinTestAsset(t, "USD")
 
 	engine, err := NewEngineBuilder().NoSync().
-		Builtin(policies.BuildPnlBoundsKillswitch().
+		Builtin(policies.BuildPnlBoundsKillSwitch().
 			BrokerBarriers(policies.PnlBoundsBrokerBarrier{
 				SettlementAsset: usd,
 				LowerBound:      optional.Some(pnlTestPnl(t, "-100")),
@@ -900,13 +900,13 @@ func TestBuiltinSetAccountPnlWrongPolicyTypeReturnsTypeMismatch(t *testing.T) {
 	}
 }
 
-func TestBuiltinPnlBoundsKillswitchBrokerBarrierRejectViaCheckPreTradeStart(
+func TestBuiltinPnlBoundsKillSwitchBrokerBarrierRejectViaCheckPreTradeStart(
 	t *testing.T,
 ) {
 	usd := builtinTestAsset(t, "USD")
 	// Lower bound > 0 means zero P&L is already below the lower bound.
 	engine, err := NewEngineBuilder().NoSync().
-		Builtin(policies.BuildPnlBoundsKillswitch().
+		Builtin(policies.BuildPnlBoundsKillSwitch().
 			BrokerBarriers(policies.PnlBoundsBrokerBarrier{
 				SettlementAsset: usd,
 				LowerBound:      optional.Some(pnlTestPnl(t, "100")),

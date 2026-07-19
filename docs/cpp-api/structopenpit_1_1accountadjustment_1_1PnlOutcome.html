@@ -5,7 +5,7 @@
 <meta http-equiv="X-UA-Compatible" content="IE=11"/>
 <meta name="generator" content="Doxygen 1.17.0"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>OpenPit C++ SDK: openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrierUpdate Struct Reference</title>
+<title>OpenPit C++ SDK: openpit::accountadjustment::PnlOutcome Struct Reference</title>
 <link href="tabs.css" rel="stylesheet" type="text/css"/>
 <script type="text/javascript" src="codefolding.js"></script>
 <script type="text/javascript" src="clipboard.js"></script>
@@ -90,7 +90,7 @@ document.addEventListener('DOMContentLoaded', () => {
   </div>
 </div>
 <script type="text/javascript">
-document.addEventListener('DOMContentLoaded',() => { initNavTree('structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrierUpdate.html','','structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrierUpdate-members'); });
+document.addEventListener('DOMContentLoaded',() => { initNavTree('structopenpit_1_1accountadjustment_1_1PnlOutcome.html','','structopenpit_1_1accountadjustment_1_1PnlOutcome-members'); });
 </script>
 <div id="container">
 <div id="doc-content">
@@ -116,33 +116,29 @@ document.addEventListener('DOMContentLoaded',() => { initNavTree('structopenpit_
 </div>
 
 <div class="header">
-  <div class="headertitle"><div class="title">openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrierUpdate Struct Reference</div></div>
+  <div class="headertitle"><div class="title">openpit::accountadjustment::PnlOutcome Struct Reference</div></div>
 </div><!--header-->
 <div class="contents">
 
-<p>Runtime replacement for per-account spot-funds P&amp;L bounds.  
- <a href="#details">More...</a></p>
-
-<p><code>#include &lt;policies.hpp&gt;</code></p>
+<p><code>#include &lt;pnl.hpp&gt;</code></p>
 <table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-pub-methods" class="groupheader"><a id="pub-methods" name="pub-methods"></a>
 Public Member Functions</h2></td></tr>
-<tr class="memitem:a40550d6587df92781d747dbfafcc7704" id="r_a40550d6587df92781d747dbfafcc7704"><td class="memItemLeft">OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate&#160;</td><td class="memItemRight"><a class="el" href="#a40550d6587df92781d747dbfafcc7704">Raw</a> () const noexcept</td></tr>
-<tr class="memdesc:a40550d6587df92781d747dbfafcc7704"><td class="mdescLeft">&#160;</td><td class="mdescRight">Lowers the account update to the native C payload.  <br /></td></tr>
-<tr class="memitem:a1df21e9af26b52e5be6cf4c0db1074e6" id="r_a1df21e9af26b52e5be6cf4c0db1074e6"><td class="memItemLeft">&#160;</td><td class="memItemRight"><a class="el" href="#a1df21e9af26b52e5be6cf4c0db1074e6">SpotFundsPnlBoundsAccountBarrierUpdate</a> (<a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> account, <a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier.html">SpotFundsPnlBoundsBarrier</a> accountBarrier)</td></tr>
-<tr class="memdesc:a1df21e9af26b52e5be6cf4c0db1074e6"><td class="mdescLeft">&#160;</td><td class="mdescRight">Creates an account P&amp;L barrier update.  <br /></td></tr>
+<tr class="memitem:a02c7a89415c6cdc70bcd0f0c7a8f9fb8" id="r_a02c7a89415c6cdc70bcd0f0c7a8f9fb8"><td class="memItemLeft">const <a class="el" href="namespaceopenpit_1_1accountadjustment.html#a8bc2134d8f2cfd46039e2c8316b5ef83">PnlOutcomeResult</a> &amp;&#160;</td><td class="memItemRight"><a class="el" href="#a02c7a89415c6cdc70bcd0f0c7a8f9fb8">Get</a> () const noexcept</td></tr>
+<tr class="memdesc:a02c7a89415c6cdc70bcd0f0c7a8f9fb8"><td class="mdescLeft">&#160;</td><td class="mdescRight">Returns the PnL amount or the reason why it is unavailable.  <br /></td></tr>
+<tr class="memitem:a0a11af72ba5eb32c3e9470defbefd8bc" id="r_a0a11af72ba5eb32c3e9470defbefd8bc"><td class="memItemLeft">OpenPitPnlOutcome&#160;</td><td class="memItemRight"><a class="el" href="#a0a11af72ba5eb32c3e9470defbefd8bc">Raw</a> () const noexcept</td></tr>
+</table><table class="memberdecls">
+<tr class="heading"><td colspan="2"><h2 id="header-pub-static-methods" class="groupheader"><a id="pub-static-methods" name="pub-static-methods"></a>
+Static Public Member Functions</h2></td></tr>
+<tr class="memitem:a1b9413441a92815c58769273e261d2d6" id="r_a1b9413441a92815c58769273e261d2d6"><td class="memItemLeft">static <a class="el" href="structopenpit_1_1accountadjustment_1_1PnlOutcome.html">PnlOutcome</a>&#160;</td><td class="memItemRight"><a class="el" href="#a1b9413441a92815c58769273e261d2d6">FromRaw</a> (const OpenPitPnlOutcome &amp;raw)</td></tr>
 </table><table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-pub-attribs" class="groupheader"><a id="pub-attribs" name="pub-attribs"></a>
 Public Attributes</h2></td></tr>
-<tr class="memitem:a0093845661c70bdb1d8dcd85848f4d89" id="r_a0093845661c70bdb1d8dcd85848f4d89"><td class="memItemLeft"><a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a>&#160;</td><td class="memItemRight"><a class="el" href="#a0093845661c70bdb1d8dcd85848f4d89">accountId</a></td></tr>
-<tr class="memitem:ae7655b76b2ad8137911ab58643d0356d" id="r_ae7655b76b2ad8137911ab58643d0356d"><td class="memItemLeft"><a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier.html">SpotFundsPnlBoundsBarrier</a>&#160;</td><td class="memItemRight"><a class="el" href="#ae7655b76b2ad8137911ab58643d0356d">barrier</a></td></tr>
+<tr class="memitem:a2055474179f7b59948dee6fcb2d5a8c2" id="r_a2055474179f7b59948dee6fcb2d5a8c2"><td class="memItemLeft"><a class="el" href="namespaceopenpit_1_1accountadjustment.html#a8bc2134d8f2cfd46039e2c8316b5ef83">PnlOutcomeResult</a>&#160;</td><td class="memItemRight"><a class="el" href="#a2055474179f7b59948dee6fcb2d5a8c2">result</a></td></tr>
 </table>
-<a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
-<div class="textblock"><p>Runtime replacement for per-account spot-funds P&amp;L bounds. </p>
-<p>This update intentionally carries no <span class="tt">initialPnl</span>; runtime reconfiguration preserves the live accumulator. </p>
-</div><a name="doc-constructors" id="doc-constructors"></a><h2 id="header-doc-constructors" class="groupheader">Constructor &amp; Destructor Documentation</h2>
-<a id="a1df21e9af26b52e5be6cf4c0db1074e6" name="a1df21e9af26b52e5be6cf4c0db1074e6"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a1df21e9af26b52e5be6cf4c0db1074e6">&#9670;&#160;</a></span>SpotFundsPnlBoundsAccountBarrierUpdate()</h2>
+<a name="doc-func-members" id="doc-func-members"></a><h2 id="header-doc-func-members" class="groupheader">Member Function Documentation</h2>
+<a id="a1b9413441a92815c58769273e261d2d6" name="a1b9413441a92815c58769273e261d2d6"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a1b9413441a92815c58769273e261d2d6">&#9670;&#160;</a></span>FromRaw()</h2>
 
 <div class="memitem">
 <div class="memproto">
@@ -151,30 +147,23 @@ Public Attributes</h2></td></tr>
   <td class="mlabels-left">
       <table class="memname">
         <tr>
-          <td class="memname">openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrierUpdate::SpotFundsPnlBoundsAccountBarrierUpdate </td>
+          <td class="memname"><a class="el" href="structopenpit_1_1accountadjustment_1_1PnlOutcome.html">PnlOutcome</a> openpit::accountadjustment::PnlOutcome::FromRaw </td>
           <td>(</td>
-          <td class="paramtype"><a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a></td>          <td class="paramname"><span class="paramname"><em>account</em></span>, </td>
-        </tr>
-        <tr>
-          <td class="paramkey"></td>
+          <td class="paramtype">const OpenPitPnlOutcome &amp;</td>          <td class="paramname"><span class="paramname"><em>raw</em></span></td><td>)</td>
           <td></td>
-          <td class="paramtype"><a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier.html">SpotFundsPnlBoundsBarrier</a></td>          <td class="paramname"><span class="paramname"><em>accountBarrier</em></span>&#160;)</td>
         </tr>
       </table>
   </td>
   <td class="mlabels-right">
-<span class="mlabels"><span class="mlabel inline">inline</span></span>  </td>
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel static">static</span><span class="mlabel nodiscard">nodiscard</span></span>  </td>
   </tr>
 </table>
 </div><div class="memdoc">
 
-<p>Creates an account P&amp;L barrier update. </p>
-
 </div>
 </div>
-<a name="doc-func-members" id="doc-func-members"></a><h2 id="header-doc-func-members" class="groupheader">Member Function Documentation</h2>
-<a id="a40550d6587df92781d747dbfafcc7704" name="a40550d6587df92781d747dbfafcc7704"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a40550d6587df92781d747dbfafcc7704">&#9670;&#160;</a></span>Raw()</h2>
+<a id="a02c7a89415c6cdc70bcd0f0c7a8f9fb8" name="a02c7a89415c6cdc70bcd0f0c7a8f9fb8"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a02c7a89415c6cdc70bcd0f0c7a8f9fb8">&#9670;&#160;</a></span>Get()</h2>
 
 <div class="memitem">
 <div class="memproto">
@@ -183,7 +172,7 @@ Public Attributes</h2></td></tr>
   <td class="mlabels-left">
       <table class="memname">
         <tr>
-          <td class="memname">OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrierUpdate openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrierUpdate::Raw </td>
+          <td class="memname">const <a class="el" href="namespaceopenpit_1_1accountadjustment.html#a8bc2134d8f2cfd46039e2c8316b5ef83">PnlOutcomeResult</a> &amp; openpit::accountadjustment::PnlOutcome::Get </td>
           <td>(</td>
           <td class="paramname"><span class="paramname"><em></em></span></td><td>)</td>
           <td> const</td>
@@ -196,33 +185,44 @@ Public Attributes</h2></td></tr>
 </table>
 </div><div class="memdoc">
 
-<p>Lowers the account update to the native C payload. </p>
+<p>Returns the PnL amount or the reason why it is unavailable. </p>
 
 </div>
 </div>
-<a name="doc-variable-members" id="doc-variable-members"></a><h2 id="header-doc-variable-members" class="groupheader">Member Data Documentation</h2>
-<a id="a0093845661c70bdb1d8dcd85848f4d89" name="a0093845661c70bdb1d8dcd85848f4d89"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a0093845661c70bdb1d8dcd85848f4d89">&#9670;&#160;</a></span>accountId</h2>
+<a id="a0a11af72ba5eb32c3e9470defbefd8bc" name="a0a11af72ba5eb32c3e9470defbefd8bc"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a0a11af72ba5eb32c3e9470defbefd8bc">&#9670;&#160;</a></span>Raw()</h2>
 
 <div class="memitem">
 <div class="memproto">
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
       <table class="memname">
         <tr>
-          <td class="memname"><a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrierUpdate::accountId</td>
+          <td class="memname">OpenPitPnlOutcome openpit::accountadjustment::PnlOutcome::Raw </td>
+          <td>(</td>
+          <td class="paramname"><span class="paramname"><em></em></span></td><td>)</td>
+          <td> const</td>
         </tr>
       </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel nodiscard">nodiscard</span><span class="mlabel noexcept">noexcept</span></span>  </td>
+  </tr>
+</table>
 </div><div class="memdoc">
 
 </div>
 </div>
-<a id="ae7655b76b2ad8137911ab58643d0356d" name="ae7655b76b2ad8137911ab58643d0356d"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#ae7655b76b2ad8137911ab58643d0356d">&#9670;&#160;</a></span>barrier</h2>
+<a name="doc-variable-members" id="doc-variable-members"></a><h2 id="header-doc-variable-members" class="groupheader">Member Data Documentation</h2>
+<a id="a2055474179f7b59948dee6fcb2d5a8c2" name="a2055474179f7b59948dee6fcb2d5a8c2"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a2055474179f7b59948dee6fcb2d5a8c2">&#9670;&#160;</a></span>result</h2>
 
 <div class="memitem">
 <div class="memproto">
       <table class="memname">
         <tr>
-          <td class="memname"><a class="el" href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsBarrier.html">SpotFundsPnlBoundsBarrier</a> openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrierUpdate::barrier</td>
+          <td class="memname"><a class="el" href="namespaceopenpit_1_1accountadjustment.html#a8bc2134d8f2cfd46039e2c8316b5ef83">PnlOutcomeResult</a> openpit::accountadjustment::PnlOutcome::result</td>
         </tr>
       </table>
 </div><div class="memdoc">
@@ -242,7 +242,7 @@ Public Attributes</h2></td></tr>
 <!-- start footer part -->
 <div id="nav-path" class="navpath"><!-- id is needed for treeview function! -->
   <ul>
-    <li class="navelem"><a href="namespaceopenpit.html">openpit</a></li><li class="navelem"><a href="namespaceopenpit_1_1pretrade.html">pretrade</a></li><li class="navelem"><a href="namespaceopenpit_1_1pretrade_1_1policies.html">policies</a></li><li class="navelem"><a href="structopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsAccountBarrierUpdate.html">SpotFundsPnlBoundsAccountBarrierUpdate</a></li>
+    <li class="navelem"><a href="namespaceopenpit.html">openpit</a></li><li class="navelem"><a href="namespaceopenpit_1_1accountadjustment.html">accountadjustment</a></li><li class="navelem"><a href="structopenpit_1_1accountadjustment_1_1PnlOutcome.html">PnlOutcome</a></li>
     <li class="footer">Generated by <a href="https://www.doxygen.org/index.html"><img class="footer" src="doxygen.svg" width="104" height="31" alt="doxygen"/></a> 1.17.0 </li>
   </ul>
 </div>

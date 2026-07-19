@@ -26,7 +26,6 @@ import (
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/pkg/future"
-	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/reject"
 )
@@ -46,10 +45,7 @@ type settleFuture struct {
 
 // fundingFuture wraps the ApplyAccountAdjustment future.
 type fundingFuture struct {
-	fut *future.Future2[
-		optional.Option[reject.AccountAdjustmentBatchError],
-		[]accountadjustment.Outcome,
-	]
+	fut *future.Future[accountadjustment.BatchResult]
 }
 
 // collectOrder awaits an order-check future, records its open-loop latency
@@ -126,7 +122,7 @@ func (r *run) collectSettlement(item inflight) {
 	r.sink.recordResolve(opSettlement, latency, !blocked)
 	r.oracle.checkSettlement(item.event, settleObservation{
 		blocked:  blocked,
-		outcomes: result.AccountAdjustmentOutcomes,
+		outcomes: result.AccountAdjustments,
 	})
 }
 
@@ -142,7 +138,7 @@ func (r *run) collectSettlement(item inflight) {
 // resolve instant is still captured so a backpressure latency can be recorded
 // for the checksum on the ErrQueueLimit path.
 func (r *run) collectFunding(item inflight) {
-	batchErr, outcomes, err := item.fundingFut.fut.Await(r.ctx)
+	result, err := item.fundingFut.fut.Await(r.ctx)
 	resolve := time.Now()
 	if err != nil {
 		// Dispatch-capacity backpressure is a measured outcome, not an oracle
@@ -158,9 +154,9 @@ func (r *run) collectFunding(item inflight) {
 			item.event.Account, item.event.FundingAsset, err))
 		return
 	}
-	rejected := batchErr.IsSet()
+	rejected := result.BatchError.IsSet()
 	r.sink.recordFunding(!rejected)
-	r.oracle.checkFunding(item.event, fundingObservation{rejected: rejected, outcomes: outcomes})
+	r.oracle.checkFunding(item.event, fundingObservation{rejected: rejected, outcomes: result.Outcomes})
 }
 
 // handOffFinalize hands an accepted reservation to the finalizer pool WITHOUT

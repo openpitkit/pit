@@ -39,11 +39,12 @@ use std::cell::RefCell;
 use js_sys::{Function, Reflect};
 use openpit::param::{AccountId, Price};
 use openpit::pretrade::{
-    AccountBlock, PolicyGroupId, PolicyPreTradeResult, PostTradeContext, PostTradeResult,
-    PreTradeContext, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects,
+    AccountBlock, PolicyAccountAdjustmentResult, PolicyGroupId, PolicyPreTradeResult,
+    PostTradeContext, PostTradeResult, PreTradeContext, PreTradePolicy, Reject, RejectCode,
+    RejectScope, Rejects,
 };
 use openpit::{
-    AccountAdjustmentContext, AccountOutcomeEntry, Mutation, Mutations, OutcomeAmount,
+    AccountAdjustmentContext, AccountOutcomeEntry, Mutation, Mutations, OutcomeAmount, PnlOutcome,
     PnlOutcomeAmount,
 };
 use wasm_bindgen::prelude::*;
@@ -55,7 +56,10 @@ use crate::domain::{
 };
 use crate::engine::{AccountAdjustment, EngineLocking, ExecutionReport, Order};
 use crate::error::{make_error, ErrorKind};
-use crate::outcome::{JsAccountOutcomeEntry, JsOutcomeAmount, JsPnlOutcomeAmount};
+use crate::outcome::{
+    JsAccountOutcomeEntry, JsAccountPnlOutcome, JsOutcomeAmount, JsPnlHaltReason, JsPnlOutcome,
+    JsPnlOutcomeAmount,
+};
 use crate::param::ids::JsAccountId;
 use crate::reject::{parse_reject_code, JsAccountBlock};
 use crate::result::JsPostTradeResult;
@@ -90,8 +94,12 @@ extern "C" {
 // than exported classes. Only the names that exist as exported wasm classes
 // (`Context`, `Order`, `PostTradeContext`, `ExecutionReport`,
 // `PostTradeResult`, `AccountAdjustmentContext`, `AccountId`,
-// `AccountAdjustment`, `AccountOutcomeEntry`, `Price`, `Mutation`) are
-// referenced directly; the rest are defined here.
+// `AccountAdjustment`, `AccountBlock`, `AccountOutcomeEntry`,
+// `AccountPnlOutcome`, `AccountAdjustmentOutcome`, `PnlOutcome`,
+// `PnlOutcomeAmount`, `PnlHaltReason`, `Price`) are referenced directly.
+// `Mutation` is a JS-only class imported from `../tx/index.js`; the remaining
+// result-bearing shapes are defined here. This inventory drifts easily as the
+// SDK grows - keep it complete when adding a new referenced class.
 #[wasm_bindgen(typescript_custom_section)]
 const POLICY_TS: &'static str = r#"
 /**
@@ -134,13 +142,24 @@ export interface PolicyPnlOutcomeAmount {
   absolute: Pnl | string | number | bigint;
 }
 
+/** Plain-object form of a realized-P&L outcome. */
+export type PolicyPnlOutcome =
+  | {
+      pnl: PnlOutcomeAmount | PolicyPnlOutcomeAmount;
+      haltReason?: never;
+    }
+  | {
+      pnl?: never;
+      haltReason: PnlHaltReason;
+    };
+
 /** Plain-object form accepted wherever a policy returns an account outcome. */
 export interface PolicyAccountOutcomeEntry {
   asset: string;
   balance?: OutcomeAmount | PolicyOutcomeAmount;
   held?: OutcomeAmount | PolicyOutcomeAmount;
   incoming?: OutcomeAmount | PolicyOutcomeAmount;
-  realizedPnl?: PnlOutcomeAmount | PolicyPnlOutcomeAmount;
+  realizedPnl?: PnlOutcome | PolicyPnlOutcome;
   averageEntryPrice?: Price | string | number | bigint;
 }
 
@@ -167,20 +186,24 @@ export interface PolicyPreTradeResult {
 }
 
 /**
- * The value returned by {@link Policy.applyAccountAdjustment}. Accepts any of:
- * a {@link PolicyDecision} (`{ rejects, mutations }`), a single
- * {@link PolicyReject} (`{ code, ... }`), a single {@link AccountOutcomeEntry}
- * (`{ asset, ... }`), an iterable mixing outcome entries, rejects, and
- * mutations, or `null`/`undefined` to pass with no contribution.
+ * Accepted result returned by {@link Policy.applyAccountAdjustment}.
+ * Every field is optional; an empty object contributes no result. A nonempty
+ * runtime object must contain at least one recognized field. Additional fields
+ * are allowed when a recognized field is present.
  */
-export type PolicyAccountAdjustmentResult =
-  | PolicyDecision
-  | PolicyReject
-  | AccountOutcomeEntry
-  | PolicyAccountOutcomeEntry
-  | Iterable<AccountOutcomeEntry | PolicyAccountOutcomeEntry | PolicyReject | PolicyMutation>
-  | null
-  | undefined;
+export interface PolicyAccountAdjustmentResult {
+  rejects?: Iterable<PolicyReject>;
+  mutations?: Iterable<PolicyMutation>;
+  accountAdjustments?: Iterable<AccountOutcomeEntry | PolicyAccountOutcomeEntry>;
+  accountBlocks?: Iterable<AccountBlock>;
+}
+
+/** Structural post-trade result accepted from a custom policy. */
+export interface PolicyPostTradeResult {
+  accountBlocks?: Iterable<AccountBlock>;
+  accountPnls?: Iterable<AccountPnlOutcome>;
+  accountAdjustments?: Iterable<AccountAdjustmentOutcome>;
+}
 
 /**
  * A custom pre-trade policy implemented in JavaScript. Pass an object
@@ -234,21 +257,23 @@ export interface Policy<
   ): PolicyPreTradeResult | null | undefined;
   /**
    * Post-trade hook applied to an execution report. Returns a
-   * {@link PostTradeResult}, or `null`/`undefined` for no contribution.
+   * {@link PostTradeResult}, its structural equivalent, or `null`/`undefined`
+   * for no contribution.
    */
   applyExecutionReport?(
     ctx: PostTradeContext,
     report: ExecutionReportModel,
-  ): PostTradeResult | null | undefined;
+  ): PostTradeResult | PolicyPostTradeResult | null | undefined;
   /**
    * Account-adjustment hook. Returns a
-   * {@link PolicyAccountAdjustmentResult}.
+   * {@link PolicyAccountAdjustmentResult}, or `null`/`undefined` for no
+   * contribution.
    */
   applyAccountAdjustment?(
     ctx: AccountAdjustmentContext,
     accountId: AccountId,
     adjustment: AccountAdjustment,
-  ): PolicyAccountAdjustmentResult;
+  ): PolicyAccountAdjustmentResult | null | undefined;
 }
 
 /** @internal Nominal marker carried by tokens accepted by `builtin()`. */
@@ -334,8 +359,8 @@ export interface SpotFundsReadyBuilder extends SpotFundsBuilder {
 export interface SpotFundsPnlBoundsKillswitchReadyBuilder
   extends SpotFundsPnlBoundsKillswitchBuilder {
   readonly [builtinReadyBuilderBrand]: true;
-  globalBarriers(
-    ...args: Parameters<SpotFundsPnlBoundsKillswitchBuilder["globalBarriers"]>
+  globalBarrier(
+    ...args: Parameters<SpotFundsPnlBoundsKillswitchBuilder["globalBarrier"]>
   ): SpotFundsPnlBoundsKillswitchReadyBuilder;
   accountGroupBarriers(
     ...args: Parameters<
@@ -730,9 +755,9 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
         account_id: AccountId,
         adjustment: &AccountAdjustment,
         mutations: &mut Mutations,
-    ) -> Result<Vec<AccountOutcomeEntry>, Rejects> {
+    ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
         let Some(hook) = self.apply_account_adjustment.as_ref() else {
-            return Ok(Vec::new());
+            return Ok(PolicyAccountAdjustmentResult::default());
         };
         let context = JsValue::from(JsAccountAdjustmentContext::from_parts(
             ctx.account_control.clone(),
@@ -747,8 +772,12 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
                 callback_failure_rejects(&self.name)
             })?;
 
+        if result.is_null() || result.is_undefined() {
+            return Ok(PolicyAccountAdjustmentResult::default());
+        }
+
         match parse_account_adjustment_return(&self.name, &result, mutations) {
-            Ok(AccountAdjustmentReturn::Outcomes(outcomes)) => Ok(outcomes),
+            Ok(AccountAdjustmentReturn::Result(result)) => Ok(result),
             Ok(AccountAdjustmentReturn::Rejects(rejects)) => Err(Rejects::from(rejects)),
             Err(error) => {
                 set_callback_error(error);
@@ -1157,7 +1186,7 @@ fn parse_policy_mutation(value: &JsValue) -> Result<Mutation, JsValue> {
 /// numeric values, or `AssetError` for an invalid asset.
 fn parse_account_outcome_entry(value: &JsValue) -> Result<AccountOutcomeEntry, JsValue> {
     if let Some(entry) = extract_cloned_wrapper::<JsAccountOutcomeEntry>(value)? {
-        return Ok(entry.to_core());
+        return entry.to_core();
     }
     if !value.is_object() {
         return Err(policy_type_error(
@@ -1173,7 +1202,7 @@ fn parse_account_outcome_entry(value: &JsValue) -> Result<AccountOutcomeEntry, J
         balance: parse_optional_outcome_amount(value, "balance")?,
         held: parse_optional_outcome_amount(value, "held")?,
         incoming: parse_optional_outcome_amount(value, "incoming")?,
-        realized_pnl: parse_optional_pnl_outcome_amount(value, "realizedPnl")?,
+        realized_pnl: parse_optional_pnl_outcome(value, "realizedPnl")?,
         average_entry_price: match optional_field(value, "averageEntryPrice")? {
             Some(price) => Some(resolve_price(price)?),
             None => None,
@@ -1213,26 +1242,49 @@ fn parse_optional_outcome_amount(
     }))
 }
 
-/// Parses a P&L outcome amount from a wrapper or plain object.
-fn parse_optional_pnl_outcome_amount(
-    value: &JsValue,
-    field: &str,
-) -> Result<Option<PnlOutcomeAmount>, JsValue> {
-    let Some(amount) = optional_field(value, field)? else {
+/// Parses a realized-P&L outcome from a wrapper or plain object.
+fn parse_optional_pnl_outcome(value: &JsValue, field: &str) -> Result<Option<PnlOutcome>, JsValue> {
+    let Some(outcome) = optional_field(value, field)? else {
         return Ok(None);
     };
-    if let Some(wrapped) = extract_cloned_wrapper::<JsPnlOutcomeAmount>(&amount)? {
-        return Ok(Some(wrapped.to_core()));
+    if let Some(wrapped) = extract_cloned_wrapper::<JsPnlOutcome>(&outcome)? {
+        return wrapped.to_core().map(Some);
     }
-    if !amount.is_object() {
+    if !outcome.is_object() {
         return Err(policy_type_error(&format!(
-            "account outcome {field} must be a PnlOutcomeAmount or object"
+            "account outcome {field} must be a PnlOutcome or object"
         )));
     }
-    Ok(Some(PnlOutcomeAmount {
-        delta: resolve_pnl(get_field(&amount, "delta")?)?,
-        absolute: resolve_pnl(get_field(&amount, "absolute")?)?,
-    }))
+    let pnl = optional_field(&outcome, "pnl")?
+        .map(|amount| {
+            if let Some(wrapped) = extract_cloned_wrapper::<JsPnlOutcomeAmount>(&amount)? {
+                return Ok(wrapped.to_core());
+            }
+            if !amount.is_object() {
+                return Err(policy_type_error(
+                    "account outcome pnl must be a PnlOutcomeAmount or object",
+                ));
+            }
+            Ok(PnlOutcomeAmount {
+                delta: resolve_pnl(get_field(&amount, "delta")?)?,
+                absolute: resolve_pnl(get_field(&amount, "absolute")?)?,
+            })
+        })
+        .transpose()?;
+    let halt_reason = optional_field(&outcome, "haltReason")?
+        .map(|reason| {
+            extract_cloned_wrapper::<JsPnlHaltReason>(&reason)?.ok_or_else(|| {
+                policy_type_error("account outcome haltReason must be a PnlHaltReason")
+            })
+        })
+        .transpose()?;
+    match (pnl, halt_reason) {
+        (Some(amount), None) => Ok(Some(Ok(amount))),
+        (None, Some(reason)) => Ok(Some(Err(reason.to_core()))),
+        _ => Err(policy_type_error(
+            "account outcome realizedPnl requires exactly one of pnl or haltReason",
+        )),
+    }
 }
 
 /// Parses a `Price` shape (binding `Price` object or `DecimalInput`).
@@ -1248,7 +1300,7 @@ fn parse_price(value: &JsValue) -> Result<Price, JsValue> {
 /// Parses a `PostTradeResult` shape into the core type.
 ///
 /// Accepts the binding `PostTradeResult` object or a plain object with
-/// `accountBlocks`/`accountAdjustments` arrays.
+/// `accountBlocks`/`accountPnls`/`accountAdjustments` arrays.
 ///
 /// # Errors
 ///
@@ -1260,8 +1312,9 @@ fn parse_post_trade_result(value: &JsValue) -> Result<PostTradeResult, JsValue> 
     }
 
     let has_account_blocks = has_field(value, "accountBlocks")?;
+    let has_account_pnls = has_field(value, "accountPnls")?;
     let has_account_adjustments = has_field(value, "accountAdjustments")?;
-    if !has_account_blocks && !has_account_adjustments {
+    if !has_account_blocks && !has_account_pnls && !has_account_adjustments {
         if is_empty_record(value)? {
             return Ok(PostTradeResult::default());
         }
@@ -1279,6 +1332,15 @@ fn parse_post_trade_result(value: &JsValue) -> Result<PostTradeResult, JsValue> 
             }
         }
     }
+    let mut account_pnls = Vec::new();
+    if has_account_pnls {
+        let pnls = get_field(value, "accountPnls")?;
+        if !pnls.is_null() && !pnls.is_undefined() {
+            for item in iterate(&pnls, "accountPnls must be iterable")? {
+                account_pnls.push(parse_account_pnl_outcome(&item?)?);
+            }
+        }
+    }
     let mut account_adjustments = Vec::new();
     if has_account_adjustments {
         let adjustments = get_field(value, "accountAdjustments")?;
@@ -1290,6 +1352,7 @@ fn parse_post_trade_result(value: &JsValue) -> Result<PostTradeResult, JsValue> 
     }
     Ok(PostTradeResult {
         account_blocks,
+        account_pnls,
         account_adjustments,
     })
 }
@@ -1306,6 +1369,17 @@ fn parse_account_block(value: &JsValue) -> Result<AccountBlock, JsValue> {
     block.to_core()
 }
 
+/// Parses an `AccountPnlOutcome` shape into the core type.
+///
+/// # Errors
+///
+/// Throws `TypeError` when the value is not an `AccountPnlOutcome`.
+fn parse_account_pnl_outcome(value: &JsValue) -> Result<openpit::AccountPnlOutcome, JsValue> {
+    let outcome = extract_cloned_wrapper::<JsAccountPnlOutcome>(value)?
+        .ok_or_else(|| policy_type_error("account PnL outcome must be an AccountPnlOutcome"))?;
+    outcome.to_core()
+}
+
 /// Parses an `AccountAdjustmentOutcome` shape into the core type.
 ///
 /// # Errors
@@ -1318,23 +1392,18 @@ fn parse_account_adjustment_outcome(
         .ok_or_else(|| {
             policy_type_error("account adjustment outcome must be an AccountAdjustmentOutcome")
         })?;
-    Ok(outcome.to_core())
+    outcome.to_core()
 }
 
 /// Result of parsing the polymorphic `applyAccountAdjustment` return value.
 enum AccountAdjustmentReturn {
-    /// Validated outcomes to surface to the engine.
-    Outcomes(Vec<AccountOutcomeEntry>),
+    /// Accepted account-adjustment result to surface to the engine.
+    Result(PolicyAccountAdjustmentResult),
     /// Account-level rejects raised by the policy.
     Rejects(Vec<Reject>),
 }
 
-/// Parses the polymorphic `applyAccountAdjustment` return value.
-///
-/// Accepts `null`/`undefined` (pass, no outcomes), a `PolicyDecision`
-/// (`{ rejects, mutations }`), a single reject (`{ code, ... }`), a single
-/// outcome entry (`{ asset, ... }`), or an iterable mixing rejects, outcome
-/// entries, and mutations. Mutations are appended to `mutations`.
+/// Parses a `PolicyAccountAdjustmentResult` returned by a custom policy.
 ///
 /// # Errors
 ///
@@ -1346,58 +1415,61 @@ fn parse_account_adjustment_return(
     value: &JsValue,
     mutations: &mut Mutations,
 ) -> Result<AccountAdjustmentReturn, JsValue> {
-    if value.is_null() || value.is_undefined() {
-        return Ok(AccountAdjustmentReturn::Outcomes(Vec::new()));
+    if !value.is_object() {
+        return Err(policy_type_error(
+            "applyAccountAdjustment must return a PolicyAccountAdjustmentResult",
+        ));
     }
 
-    // PolicyDecision shape: carries one or both optional decision fields.
-    if has_field(value, "rejects")? || has_field(value, "mutations")? {
-        let mut rejects = Vec::new();
-        apply_policy_decision(policy_name, value, mutations, &mut rejects)?;
-        return Ok(if rejects.is_empty() {
-            AccountAdjustmentReturn::Outcomes(Vec::new())
-        } else {
-            AccountAdjustmentReturn::Rejects(rejects)
-        });
+    let has_rejects = has_field(value, "rejects")?;
+    let has_mutations = has_field(value, "mutations")?;
+    let has_account_adjustments = has_field(value, "accountAdjustments")?;
+    let has_account_blocks = has_field(value, "accountBlocks")?;
+    if !has_rejects && !has_mutations && !has_account_adjustments && !has_account_blocks {
+        if is_empty_record(value)? {
+            return Ok(AccountAdjustmentReturn::Result(
+                PolicyAccountAdjustmentResult::default(),
+            ));
+        }
+        return Err(policy_type_error(
+            "applyAccountAdjustment returned an object with no recognized result fields",
+        ));
     }
 
-    // Single reject shape.
-    if has_field(value, "code")? {
-        let reject = parse_policy_reject(value, policy_name)?;
-        return Ok(AccountAdjustmentReturn::Rejects(vec![reject]));
-    }
-
-    // Single outcome-entry shape.
-    if has_field(value, "asset")? {
-        let entry = parse_account_outcome_entry(value)?;
-        return Ok(AccountAdjustmentReturn::Outcomes(vec![entry]));
-    }
-
-    // An empty object is the fully optional `PolicyDecision` pass form.
-    if is_empty_record(value)? {
-        return Ok(AccountAdjustmentReturn::Outcomes(Vec::new()));
-    }
-
-    // Iterable mixing rejects, outcome entries, and mutations.
     let mut rejects = Vec::new();
-    let mut outcomes = Vec::new();
-    for item in iterate(value, "applyAccountAdjustment must return an iterable")? {
-        let item = item?;
-        if has_field(&item, "code")? {
-            rejects.push(parse_policy_reject(&item, policy_name)?);
-            continue;
-        }
-        if has_field(&item, "asset")? {
-            outcomes.push(parse_account_outcome_entry(&item)?);
-            continue;
-        }
-        mutations.push(parse_policy_mutation(&item)?);
+    if has_rejects || has_mutations {
+        apply_policy_decision(policy_name, value, mutations, &mut rejects)?;
     }
-    Ok(if rejects.is_empty() {
-        AccountAdjustmentReturn::Outcomes(outcomes)
-    } else {
-        AccountAdjustmentReturn::Rejects(rejects)
-    })
+    if !rejects.is_empty() {
+        return Ok(AccountAdjustmentReturn::Rejects(rejects));
+    }
+
+    let mut parsed_adjustments = Vec::new();
+    if has_account_adjustments {
+        let account_adjustments = get_field(value, "accountAdjustments")?;
+        if !account_adjustments.is_null() && !account_adjustments.is_undefined() {
+            for entry in iterate(&account_adjustments, "accountAdjustments must be iterable")? {
+                parsed_adjustments.push(parse_account_outcome_entry(&entry?)?);
+            }
+        }
+    }
+
+    let mut parsed_blocks = Vec::new();
+    if has_account_blocks {
+        let account_blocks = get_field(value, "accountBlocks")?;
+        if !account_blocks.is_null() && !account_blocks.is_undefined() {
+            for block in iterate(&account_blocks, "accountBlocks must be iterable")? {
+                parsed_blocks.push(parse_account_block(&block?)?);
+            }
+        }
+    }
+
+    Ok(AccountAdjustmentReturn::Result(
+        PolicyAccountAdjustmentResult {
+            account_adjustments: parsed_adjustments,
+            account_blocks: parsed_blocks,
+        },
+    ))
 }
 
 /// Builds a JS iterator over an iterable value, mapping a non-iterable to a

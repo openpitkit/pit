@@ -15,7 +15,8 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Package model provides engine model types such as Order, ExecutionReport, and AccountAdjustment.
+// Package model provides engine model types such as Order, ExecutionReport,
+// and AccountAdjustment.
 package model
 
 import (
@@ -52,29 +53,31 @@ func NewAccountAdjustment() AccountAdjustment {
 
 // AccountAdjustmentValues holds the optional fields of an AccountAdjustment.
 //
-// The operation is a faithful sum: BalanceOperation and PositionOperation are
-// mutually exclusive — at most one is ever set, the other being Absent. The
-// native discriminated operation enforces this structurally, so supplying both
-// is not representable and the last one applied wins.
+// The operation is a discriminated sum. When more than one operation option is
+// supplied, values are applied in BalanceOperation, PositionOperation, then
+// AccountPnlOperation order, so the last populated option wins
+// deterministically.
 type AccountAdjustmentValues struct {
-	BalanceOperation  optional.Option[AccountAdjustmentBalanceOperation]
-	PositionOperation optional.Option[AccountAdjustmentPositionOperation]
-	Amount            optional.Option[AccountAdjustmentAmount]
-	Bounds            optional.Option[AccountAdjustmentBounds]
+	BalanceOperation    optional.Option[AccountAdjustmentBalanceOperation]
+	PositionOperation   optional.Option[AccountAdjustmentPositionOperation]
+	AccountPnlOperation optional.Option[AccountAdjustmentAccountPnlOperation]
+	Amount              optional.Option[AccountAdjustmentAmount]
+	Bounds              optional.Option[AccountAdjustmentBounds]
 }
 
-// NewAccountAdjustmentFromValues creates an AccountAdjustment from the given values.
+// NewAccountAdjustmentFromValues creates an AccountAdjustment from the given
+// values.
 //
-// The error result is retained for API stability; it is always nil because the
-// discriminated operation makes a conflicting balance/position pair structurally
-// impossible.
+// The constructor applies operation options in the deterministic precedence
+// documented on AccountAdjustmentValues. Its current inputs cannot fail.
 func NewAccountAdjustmentFromValues(values AccountAdjustmentValues) (AccountAdjustment, error) {
 	a := NewAccountAdjustment()
 	a.setValues(values)
 	return a, nil
 }
 
-// NewAccountAdjustmentFromHandle creates an AccountAdjustment from a native handle.
+// NewAccountAdjustmentFromHandle creates an AccountAdjustment from a native
+// handle.
 func NewAccountAdjustmentFromHandle(handle native.AccountAdjustment) AccountAdjustment {
 	return AccountAdjustment{value: handle}
 }
@@ -88,18 +91,18 @@ func (a *AccountAdjustment) Reset() {
 // Values returns a copy of the current adjustment fields.
 func (a AccountAdjustment) Values() AccountAdjustmentValues {
 	return AccountAdjustmentValues{
-		BalanceOperation:  a.BalanceOperation(),
-		PositionOperation: a.PositionOperation(),
-		Amount:            a.Amount(),
-		Bounds:            a.Bounds(),
+		BalanceOperation:    a.BalanceOperation(),
+		PositionOperation:   a.PositionOperation(),
+		AccountPnlOperation: a.AccountPnlOperation(),
+		Amount:              a.Amount(),
+		Bounds:              a.Bounds(),
 	}
 }
 
 // SetValues resets the adjustment and applies the provided values.
 //
-// The error result is retained for API stability; it is always nil because the
-// discriminated operation makes a conflicting balance/position pair structurally
-// impossible.
+// Operation options use the deterministic precedence documented on
+// AccountAdjustmentValues. The current inputs cannot fail.
 func (a *AccountAdjustment) SetValues(values AccountAdjustmentValues) error {
 	a.Reset()
 	a.setValues(values)
@@ -108,10 +111,13 @@ func (a *AccountAdjustment) SetValues(values AccountAdjustmentValues) error {
 
 func (a *AccountAdjustment) setValues(values AccountAdjustmentValues) {
 	if value, ok := values.BalanceOperation.Get(); ok {
-		a.SetBalanceOperationAndUnsetPositionOperation(value)
+		a.SetBalanceOperationAndUnsetOtherOperations(value)
 	}
 	if value, ok := values.PositionOperation.Get(); ok {
-		a.SetPositionOperationAndUnsetBalanceOperation(value)
+		a.SetPositionOperationAndUnsetOtherOperations(value)
+	}
+	if value, ok := values.AccountPnlOperation.Get(); ok {
+		a.SetAccountPnlOperationAndUnsetOtherOperations(value)
 	}
 	if value, ok := values.Amount.Get(); ok {
 		a.SetAmount(value)
@@ -134,10 +140,10 @@ func (a AccountAdjustment) BalanceOperation() optional.Option[AccountAdjustmentB
 	)
 }
 
-// EnsureBalanceOperationView ensures the balance operation exists, unsets the
-// position operation, and returns a mutable balance operation view.
+// EnsureBalanceOperationView ensures the balance operation exists, clears the
+// other operation payloads, and returns a mutable balance operation view.
 func (a *AccountAdjustment) EnsureBalanceOperationView() AccountAdjustmentBalanceOperationView {
-	native.AccountAdjustmentSelectBalanceOperationAndUnsetPositionOperation(&a.value)
+	native.AccountAdjustmentSelectBalanceOperationAndUnsetOtherOperations(&a.value)
 	result := newAccountAdjustmentBalanceOperationView(
 		native.AccountAdjustmentGetBalanceOperationView(&a.value),
 		&a.retain.BalanceOperationAsset,
@@ -147,11 +153,12 @@ func (a *AccountAdjustment) EnsureBalanceOperationView() AccountAdjustmentBalanc
 	return result
 }
 
-// SetBalanceOperationAndUnsetPositionOperation sets the balance operation and clears any position operation.
-func (a *AccountAdjustment) SetBalanceOperationAndUnsetPositionOperation(
+// SetBalanceOperationAndUnsetOtherOperations sets the balance operation and
+// clears every other operation payload.
+func (a *AccountAdjustment) SetBalanceOperationAndUnsetOtherOperations(
 	operation AccountAdjustmentBalanceOperation,
 ) {
-	native.AccountAdjustmentSetBalanceOperationAndUnsetPositionOperation(&a.value, operation.value)
+	native.AccountAdjustmentSetBalanceOperationAndUnsetOtherOperations(&a.value, operation.value)
 	// Propagate asset retention from the inner value struct so the C buffer
 	// stays alive even after the caller's local `operation` is collected.
 	a.retain.BalanceOperationAsset = operation.retainAsset
@@ -165,8 +172,8 @@ func (a *AccountAdjustment) UnsetBalanceOperation() {
 	a.retain.BalanceOperationAsset = param.Asset{}
 }
 
-// PositionOperation returns the optional position operation. It is set only when
-// the discriminated operation selects the position kind.
+// PositionOperation returns the optional position operation. It is set only
+// when the discriminated operation selects the position kind.
 func (a AccountAdjustment) PositionOperation() optional.Option[AccountAdjustmentPositionOperation] {
 	if native.AccountAdjustmentGetOperationKind(a.value) != native.AccountAdjustmentOperationKindPosition {
 		return optional.None[AccountAdjustmentPositionOperation]()
@@ -178,10 +185,10 @@ func (a AccountAdjustment) PositionOperation() optional.Option[AccountAdjustment
 	)
 }
 
-// EnsurePositionOperationView ensures the position operation exists, unsets the
-// balance operation, and returns a mutable position operation view.
+// EnsurePositionOperationView ensures the position operation exists, clears the
+// other operation payloads, and returns a mutable position operation view.
 func (a *AccountAdjustment) EnsurePositionOperationView() AccountAdjustmentPositionOperationView {
-	native.AccountAdjustmentSelectPositionOperationAndUnsetBalanceOperation(&a.value)
+	native.AccountAdjustmentSelectPositionOperationAndUnsetOtherOperations(&a.value)
 	result := newAccountAdjustmentPositionOperationView(
 		native.AccountAdjustmentGetPositionOperationView(&a.value),
 		&a.retain.PositionOperationInstrument,
@@ -191,11 +198,12 @@ func (a *AccountAdjustment) EnsurePositionOperationView() AccountAdjustmentPosit
 	return result
 }
 
-// SetPositionOperationAndUnsetBalanceOperation sets the position operation and clears any balance operation.
-func (a *AccountAdjustment) SetPositionOperationAndUnsetBalanceOperation(
+// SetPositionOperationAndUnsetOtherOperations sets the position operation and
+// clears every other operation payload.
+func (a *AccountAdjustment) SetPositionOperationAndUnsetOtherOperations(
 	operation AccountAdjustmentPositionOperation,
 ) {
-	native.AccountAdjustmentSetPositionOperationAndUnsetBalanceOperation(&a.value, operation.value)
+	native.AccountAdjustmentSetPositionOperationAndUnsetOtherOperations(&a.value, operation.value)
 	// Propagate asset retention from the inner value struct so C buffers
 	// stay alive even after the caller's local `operation` is collected.
 	a.retain.PositionOperationInstrument = operation.retainInstrument
@@ -208,6 +216,30 @@ func (a *AccountAdjustment) UnsetPositionOperation() {
 	native.AccountAdjustmentUnsetPositionOperation(&a.value)
 	a.retain.PositionOperationInstrument = param.Instrument{}
 	a.retain.PositionOperationCollateralAsset = param.Asset{}
+}
+
+// AccountPnlOperation returns the optional account-wide PnL operation.
+func (a AccountAdjustment) AccountPnlOperation() optional.Option[AccountAdjustmentAccountPnlOperation] {
+	if native.AccountAdjustmentGetOperationKind(a.value) != native.AccountAdjustmentOperationKindAccountPnl {
+		return optional.None[AccountAdjustmentAccountPnlOperation]()
+	}
+	return optional.Some(newAccountAdjustmentAccountPnlOperation(
+		native.AccountAdjustmentGetAccountPnlOperation(a.value),
+	))
+}
+
+// SetAccountPnlOperationAndUnsetOtherOperations selects the account-wide PnL
+// operation and clears every other operation payload.
+func (a *AccountAdjustment) SetAccountPnlOperationAndUnsetOtherOperations(
+	operation AccountAdjustmentAccountPnlOperation,
+) {
+	native.AccountAdjustmentSetAccountPnlOperationAndUnsetOtherOperations(&a.value, operation.value)
+	a.retain = retainAccountAdjustment{}
+}
+
+// UnsetAccountPnlOperation clears the account-wide PnL operation.
+func (a *AccountAdjustment) UnsetAccountPnlOperation() {
+	native.AccountAdjustmentUnsetAccountPnlOperation(&a.value)
 }
 
 // Amount returns the optional adjustment amount.
@@ -284,7 +316,8 @@ func (a AccountAdjustment) Handle() native.AccountAdjustment {
 //------------------------------------------------------------------------------
 // AccountAdjustmentBalanceOperation
 
-// AccountAdjustmentBalanceOperation holds the balance-operation fields of an adjustment.
+// AccountAdjustmentBalanceOperation holds the balance-operation fields of an
+// adjustment.
 type AccountAdjustmentBalanceOperation struct {
 	value native.AccountAdjustmentBalanceOperation
 
@@ -294,11 +327,12 @@ type AccountAdjustmentBalanceOperation struct {
 	retainAsset param.Asset
 }
 
-// AccountAdjustmentBalanceOperationValues holds the optional fields of a balance operation.
+// AccountAdjustmentBalanceOperationValues holds the optional fields of a
+// balance operation.
 type AccountAdjustmentBalanceOperationValues struct {
 	Asset             optional.Option[param.Asset]
 	AverageEntryPrice optional.Option[param.Price]
-	RealizedPnl       optional.Option[param.Pnl]
+	RealizedPnl       optional.Option[PnlState]
 }
 
 // NewAccountAdjustmentBalanceOperation creates a new zeroed balance operation.
@@ -306,7 +340,8 @@ func NewAccountAdjustmentBalanceOperation() AccountAdjustmentBalanceOperation {
 	return newAccountAdjustmentBalanceOperation(native.NewAccountAdjustmentBalanceOperation())
 }
 
-// NewAccountAdjustmentBalanceOperationFromValues creates a balance operation from the given values.
+// NewAccountAdjustmentBalanceOperationFromValues creates a balance operation
+// from the given values.
 func NewAccountAdjustmentBalanceOperationFromValues(
 	values AccountAdjustmentBalanceOperationValues,
 ) AccountAdjustmentBalanceOperation {
@@ -394,32 +429,35 @@ func (o *AccountAdjustmentBalanceOperation) UnsetAverageEntryPrice() {
 	native.AccountAdjustmentBalanceOperationUnsetAverageEntryPrice(&o.value)
 }
 
-// RealizedPnl returns the optional force-set of the slot's absolute realized
-// PnL in account currency.
-func (o AccountAdjustmentBalanceOperation) RealizedPnl() optional.Option[param.Pnl] {
-	return param.NewPnlOptionFromHandle(
-		native.AccountAdjustmentBalanceOperationGetRealizedPnl(o.value),
-	)
+// RealizedPnl returns the optional account-currency realized PnL state for this
+// asset slot.
+func (o AccountAdjustmentBalanceOperation) RealizedPnl() optional.Option[PnlState] {
+	value := native.AccountAdjustmentBalanceOperationGetRealizedPnl(o.value)
+	if !native.PnlStateOptionalIsSet(value) {
+		return optional.None[PnlState]()
+	}
+	return optional.Some(NewPnlStateFromHandle(native.PnlStateOptionalGet(value)))
 }
 
-// SetRealizedPnl force-sets the slot's absolute realized PnL in account
-// currency. The value is caller supplied; no FX is applied.
-func (o *AccountAdjustmentBalanceOperation) SetRealizedPnl(value param.Pnl) {
+// SetRealizedPnl force-sets this asset slot's realized PnL state in account
+// currency.
+func (o *AccountAdjustmentBalanceOperation) SetRealizedPnl(value PnlState) {
 	native.AccountAdjustmentBalanceOperationSetRealizedPnl(&o.value, value.Handle())
 }
 
-// UnsetRealizedPnl clears the realized PnL force-set.
+// UnsetRealizedPnl clears the realized-PnL correction.
 func (o *AccountAdjustmentBalanceOperation) UnsetRealizedPnl() {
 	native.AccountAdjustmentBalanceOperationUnsetRealizedPnl(&o.value)
 }
 
-// AccountAdjustmentBalanceOperationView is a mutable view into a balance operation owned by an AccountAdjustment.
+// AccountAdjustmentBalanceOperationView is a mutable view into a balance
+// operation owned by an AccountAdjustment.
 type AccountAdjustmentBalanceOperationView struct {
 	ref *native.AccountAdjustmentBalanceOperation
-	// retainAsset points to the owning AccountAdjustment's
-	// retainBalanceOperationAsset field so that SetAsset/UnsetAsset on the
-	// view propagate retention to the parent without requiring the caller to
-	// hold the Asset separately.
+	// retainAsset points to the owning AccountAdjustment's balance-operation
+	// retention field so that SetAsset/UnsetAsset on the view propagate
+	// retention to the parent without requiring the caller to hold the Asset
+	// separately.
 	retainAsset *param.Asset
 }
 
@@ -472,21 +510,23 @@ func (o *AccountAdjustmentBalanceOperationView) UnsetAverageEntryPrice() {
 	native.AccountAdjustmentBalanceOperationUnsetAverageEntryPrice(o.ref)
 }
 
-// RealizedPnl returns the optional account-currency realized PnL force-set from
-// the view.
-func (o AccountAdjustmentBalanceOperationView) RealizedPnl() optional.Option[param.Pnl] {
-	return param.NewPnlOptionFromHandle(
-		native.AccountAdjustmentBalanceOperationGetRealizedPnl(*o.ref),
-	)
+// RealizedPnl returns the optional account-currency realized PnL state from the
+// view.
+func (o AccountAdjustmentBalanceOperationView) RealizedPnl() optional.Option[PnlState] {
+	value := native.AccountAdjustmentBalanceOperationGetRealizedPnl(*o.ref)
+	if !native.PnlStateOptionalIsSet(value) {
+		return optional.None[PnlState]()
+	}
+	return optional.Some(NewPnlStateFromHandle(native.PnlStateOptionalGet(value)))
 }
 
-// SetRealizedPnl force-sets the slot's absolute realized PnL in account
-// currency on the view. The value is caller supplied; no FX is applied.
-func (o *AccountAdjustmentBalanceOperationView) SetRealizedPnl(value param.Pnl) {
+// SetRealizedPnl force-sets this asset slot's realized PnL state in account
+// currency on the view.
+func (o *AccountAdjustmentBalanceOperationView) SetRealizedPnl(value PnlState) {
 	native.AccountAdjustmentBalanceOperationSetRealizedPnl(o.ref, value.Handle())
 }
 
-// UnsetRealizedPnl clears the realized PnL force-set on the view.
+// UnsetRealizedPnl clears the realized-PnL correction from the view.
 func (o *AccountAdjustmentBalanceOperationView) UnsetRealizedPnl() {
 	native.AccountAdjustmentBalanceOperationUnsetRealizedPnl(o.ref)
 }
@@ -494,7 +534,8 @@ func (o *AccountAdjustmentBalanceOperationView) UnsetRealizedPnl() {
 //------------------------------------------------------------------------------
 // AccountAdjustmentPositionOperation
 
-// AccountAdjustmentPositionOperation holds the position-operation fields of an adjustment.
+// AccountAdjustmentPositionOperation holds the position-operation fields of
+// an adjustment.
 type AccountAdjustmentPositionOperation struct {
 	value native.AccountAdjustmentPositionOperation
 
@@ -505,7 +546,8 @@ type AccountAdjustmentPositionOperation struct {
 	retainCollateralAsset param.Asset
 }
 
-// AccountAdjustmentPositionOperationValues holds the optional fields of a position operation.
+// AccountAdjustmentPositionOperationValues holds the optional fields of a
+// position operation.
 type AccountAdjustmentPositionOperationValues struct {
 	Instrument        optional.Option[param.Instrument]
 	CollateralAsset   optional.Option[param.Asset]
@@ -514,12 +556,14 @@ type AccountAdjustmentPositionOperationValues struct {
 	Mode              optional.Option[param.PositionMode]
 }
 
-// NewAccountAdjustmentPositionOperation creates a new zeroed position operation.
+// NewAccountAdjustmentPositionOperation creates a new zeroed position
+// operation.
 func NewAccountAdjustmentPositionOperation() AccountAdjustmentPositionOperation {
 	return newAccountAdjustmentPositionOperation(native.NewAccountAdjustmentPositionOperation())
 }
 
-// NewAccountAdjustmentPositionOperationFromValues creates a position operation from the given values.
+// NewAccountAdjustmentPositionOperationFromValues creates a position
+// operation from the given values.
 func NewAccountAdjustmentPositionOperationFromValues(
 	values AccountAdjustmentPositionOperationValues,
 ) AccountAdjustmentPositionOperation {
@@ -634,7 +678,8 @@ func (o *AccountAdjustmentPositionOperation) SetAverageEntryPrice(price param.Pr
 	native.AccountAdjustmentPositionOperationSetAverageEntryPrice(&o.value, price.Handle())
 }
 
-// UnsetAverageEntryPrice clears the average entry price for the position operation.
+// UnsetAverageEntryPrice clears the average entry price for the position
+// operation.
 func (o *AccountAdjustmentPositionOperation) UnsetAverageEntryPrice() {
 	native.AccountAdjustmentPositionOperationUnsetAverageEntryPrice(&o.value)
 }
@@ -671,7 +716,8 @@ func (o *AccountAdjustmentPositionOperation) UnsetMode() {
 	native.AccountAdjustmentPositionOperationUnsetMode(&o.value)
 }
 
-// AccountAdjustmentPositionOperationView is a mutable view into a position operation owned by an AccountAdjustment.
+// AccountAdjustmentPositionOperationView is a mutable view into a position
+// operation owned by an AccountAdjustment.
 type AccountAdjustmentPositionOperationView struct {
 	ref *native.AccountAdjustmentPositionOperation
 	// retainInstrument and retainCollateralAsset point to the owning
@@ -802,14 +848,16 @@ func NewAccountAdjustmentAmount() AccountAdjustmentAmount {
 	return newAccountAdjustmentAmount(native.NewAccountAdjustmentAmount())
 }
 
-// AccountAdjustmentAmountValues holds the optional amount fields of an adjustment.
+// AccountAdjustmentAmountValues holds the optional amount fields of an
+// adjustment.
 type AccountAdjustmentAmountValues struct {
 	Balance  optional.Option[param.AdjustmentAmount]
 	Held     optional.Option[param.AdjustmentAmount]
 	Incoming optional.Option[param.AdjustmentAmount]
 }
 
-// NewAccountAdjustmentAmountFromValues creates an AccountAdjustmentAmount from the given values.
+// NewAccountAdjustmentAmountFromValues creates an AccountAdjustmentAmount
+// from the given values.
 func NewAccountAdjustmentAmountFromValues(
 	values AccountAdjustmentAmountValues,
 ) AccountAdjustmentAmount {
@@ -899,7 +947,8 @@ func (a *AccountAdjustmentAmount) UnsetIncoming() {
 	native.AccountAdjustmentAmountUnsetIncoming(&a.value)
 }
 
-// AccountAdjustmentAmountView is a mutable view into an amount owned by an AccountAdjustment.
+// AccountAdjustmentAmountView is a mutable view into an amount owned by an
+// AccountAdjustment.
 type AccountAdjustmentAmountView struct {
 	ref *native.AccountAdjustmentAmount
 }
@@ -963,7 +1012,8 @@ func (a *AccountAdjustmentAmountView) UnsetIncoming() {
 //------------------------------------------------------------------------------
 // AccountAdjustmentBounds
 
-// AccountAdjustmentBounds holds the upper and lower bounds for balance/held/incoming adjustments.
+// AccountAdjustmentBounds holds the upper and lower bounds for
+// balance/held/incoming adjustments.
 type AccountAdjustmentBounds struct {
 	value native.AccountAdjustmentBounds
 }
@@ -973,7 +1023,8 @@ func NewAccountAdjustmentBounds() AccountAdjustmentBounds {
 	return newAccountAdjustmentBounds(native.NewAccountAdjustmentBounds())
 }
 
-// AccountAdjustmentBoundsValues holds the optional bound fields for an adjustment.
+// AccountAdjustmentBoundsValues holds the optional bound fields for an
+// adjustment.
 type AccountAdjustmentBoundsValues struct {
 	BalanceUpper  optional.Option[param.PositionSize]
 	BalanceLower  optional.Option[param.PositionSize]
@@ -983,7 +1034,8 @@ type AccountAdjustmentBoundsValues struct {
 	IncomingLower optional.Option[param.PositionSize]
 }
 
-// NewAccountAdjustmentBoundsFromValues creates AccountAdjustmentBounds from the given values.
+// NewAccountAdjustmentBoundsFromValues creates AccountAdjustmentBounds from
+// the given values.
 func NewAccountAdjustmentBoundsFromValues(
 	values AccountAdjustmentBoundsValues,
 ) AccountAdjustmentBounds {
@@ -1142,7 +1194,8 @@ func (b *AccountAdjustmentBounds) UnsetIncomingLower() {
 	native.AccountAdjustmentBoundsUnsetIncomingLower(&b.value)
 }
 
-// AccountAdjustmentBoundsView is a mutable view into bounds owned by an AccountAdjustment.
+// AccountAdjustmentBoundsView is a mutable view into bounds owned by an
+// AccountAdjustment.
 type AccountAdjustmentBoundsView struct {
 	ref *native.AccountAdjustmentBounds
 }

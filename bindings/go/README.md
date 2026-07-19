@@ -57,6 +57,8 @@ Install [Go](https://go.dev/dl/) and
 [golangci-lint](https://golangci-lint.run/welcome/install/) before running
 local checks.
 
+<!-- markdownlint-disable MD033 -->
+
 <details>
 <summary>POSIX (Linux, macOS, etc)</summary>
 
@@ -112,6 +114,8 @@ Pop-Location
 ```
 
 </details>
+
+<!-- markdownlint-enable MD033 -->
 
 ## Engine
 
@@ -210,7 +214,7 @@ func main() {
   FullSync().
   Builtin(policies.BuildOrderValidation()).
   Builtin(
-   policies.BuildPnlBoundsKillswitch().
+   policies.BuildPnlBoundsKillSwitch().
     BrokerBarriers(
      policies.PnlBoundsBrokerBarrier{
       SettlementAsset: usd,
@@ -348,7 +352,7 @@ Infrastructure failures and API misuse are returned as the third return value
 - `error` from `engine.StartPreTrade()`, `request.Execute()`, or
   `engine.ApplyExecutionReport()` indicates a transport-level or lifecycle
   failure, not a business reject
-- `error` from policy builders such as `policies.BuildPnlBoundsKillswitch()`
+- `error` from policy builders such as `policies.BuildPnlBoundsKillSwitch()`
   indicates an invalid configuration
 
 Business rejects use stable codes, for example

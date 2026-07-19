@@ -54,7 +54,6 @@ export {
   SpotFundsPnlBoundsBarrier,
   SpotFundsPnlBoundsAccountGroupBarrier,
   SpotFundsPnlBoundsAccountBarrier,
-  SpotFundsPnlBoundsAccountBarrierUpdate,
   SpotFundsPnlBoundsKillswitchBuilder,
   // Factory functions.
   buildOrderValidation,

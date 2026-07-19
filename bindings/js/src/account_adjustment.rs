@@ -17,26 +17,29 @@
 
 //! Account-adjustment payload bindings: `AccountAdjustment` and its groups.
 //!
-//! An adjustment carries an optional operation (a balance- or position-scoped
-//! variant), an optional amount group, and optional bounds. Per the interop
-//! "absent = Ok(None)" invariant, the binding performs no validation: every
-//! field is stored as-is and the engine validates the assembled request.
+//! An adjustment carries an optional operation (balance-scoped,
+//! position-scoped, or account-wide PnL), an optional amount group, and
+//! optional bounds. Position PnL is not a separate operation; it is the
+//! balance operation's `realizedPnl` field. Per the interop
+//! "absent = Ok(None)" invariant, omitted optional fields remain absent. The
+//! binding validates JS wrapper/literal shapes and field values; the engine
+//! validates the assembled request's domain semantics.
 //!
 //! `AdjustmentAmount` is a tagged value that is either a signed `delta` or an
 //! `absolute` target, each over a `PositionSize`.
 
-use openpit::param::{AdjustmentAmount, Asset, Leverage, Pnl, PositionMode, PositionSize, Price};
+use openpit::param::{AdjustmentAmount, Asset, Leverage, PositionMode, PositionSize, Price};
 use wasm_bindgen::convert::TryFromJsValue;
 use wasm_bindgen::prelude::*;
 
 use crate::domain::{
-    clone_wrapper_value, extract_cloned_wrapper, is_plain_object, parse_asset, read_field,
-    read_optional_string, resolve_optional_leverage, resolve_optional_pnl,
-    resolve_optional_position_size, resolve_optional_price, resolve_position_size, LeverageLike,
-    OptionalPnlLike, OptionalPositionModeLike, OptionalPositionSizeLike, OptionalPriceLike,
-    PositionSizeLike,
+    clone_wrapper_value, extract_cloned_wrapper, has_own_field, is_plain_object, parse_asset,
+    read_field, read_optional_string, resolve_optional_leverage, resolve_optional_position_size,
+    resolve_optional_price, resolve_position_size, LeverageLike, OptionalPositionModeLike,
+    OptionalPositionSizeLike, OptionalPriceLike, PositionSizeLike,
 };
 use crate::error::{make_error, ErrorKind};
+use crate::outcome::{pnl_state_to_js, resolve_pnl_state};
 use crate::param::enums::resolve_optional_position_mode;
 use crate::param::leverage::JsLeverage;
 use crate::param::value_types::{JsPositionSize, JsPrice};
@@ -72,7 +75,14 @@ export interface AccountAdjustmentAmountInit {
 export interface AccountAdjustmentBalanceOperationInit {
   asset?: string;
   averageEntryPrice?: Price | string | number | bigint;
-  realizedPnl?: Pnl | string | number | bigint;
+  realizedPnl?: Pnl | string | number | bigint | PnlHaltReason;
+}
+
+/**
+ * Plain-object form of {@link AccountAdjustmentAccountPnlOperation}.
+ */
+export interface AccountAdjustmentAccountPnlOperationInit {
+  state: Pnl | string | number | bigint | PnlHaltReason;
 }
 
 /**
@@ -102,14 +112,16 @@ export interface AccountAdjustmentBoundsInit {
 /**
  * Plain-object form of {@link AccountAdjustment}. Each group accepts either the
  * typed wrapper or its own plain-object form. The `operation` accepts either
- * operation variant (balance- or position-scoped).
+ * balance, position, or account-PnL operation variant.
  */
 export interface AccountAdjustmentInit {
   operation?:
     | AccountAdjustmentBalanceOperation
     | AccountAdjustmentBalanceOperationInit
     | AccountAdjustmentPositionOperation
-    | AccountAdjustmentPositionOperationInit;
+    | AccountAdjustmentPositionOperationInit
+    | AccountAdjustmentAccountPnlOperation
+    | AccountAdjustmentAccountPnlOperationInit;
   amount?: AccountAdjustmentAmount | AccountAdjustmentAmountInit;
   bounds?: AccountAdjustmentBounds | AccountAdjustmentBoundsInit;
 }
@@ -125,11 +137,21 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "AccountAdjustmentAmount | AccountAdjustmentAmountInit")]
     pub type AccountAdjustmentAmountLike;
 
-    /// Either adjustment-operation wrapper or its plain-object form.
+    /// Any adjustment-operation wrapper or its plain-object form.
     #[wasm_bindgen(
-        typescript_type = "AccountAdjustmentBalanceOperation | AccountAdjustmentBalanceOperationInit | AccountAdjustmentPositionOperation | AccountAdjustmentPositionOperationInit"
+        typescript_type = "AccountAdjustmentBalanceOperation | AccountAdjustmentBalanceOperationInit | AccountAdjustmentPositionOperation | AccountAdjustmentPositionOperationInit | AccountAdjustmentAccountPnlOperation | AccountAdjustmentAccountPnlOperationInit"
     )]
     pub type AccountAdjustmentOperationLike;
+
+    /// A normalized PnL value/primitive or an explicit halt reason.
+    #[wasm_bindgen(typescript_type = "Pnl | string | number | bigint | PnlHaltReason")]
+    pub type PnlStateLike;
+
+    /// An optional normalized PnL value/primitive or an explicit halt reason.
+    #[wasm_bindgen(
+        typescript_type = "Pnl | string | number | bigint | PnlHaltReason | null | undefined"
+    )]
+    pub type OptionalPnlStateLike;
 
     /// An `AccountAdjustmentBounds` wrapper or its plain-object form.
     #[wasm_bindgen(typescript_type = "AccountAdjustmentBounds | AccountAdjustmentBoundsInit")]
@@ -137,7 +159,7 @@ extern "C" {
 
     /// The resolved operation variant returned by the `operation` getter.
     #[wasm_bindgen(
-        typescript_type = "AccountAdjustmentBalanceOperation | AccountAdjustmentPositionOperation | undefined"
+        typescript_type = "AccountAdjustmentBalanceOperation | AccountAdjustmentPositionOperation | AccountAdjustmentAccountPnlOperation | undefined"
     )]
     pub type AccountAdjustmentOperationValue;
 }
@@ -326,13 +348,14 @@ fn resolve_optional_adjustment_amount(value: JsValue) -> Result<Option<Adjustmen
     resolve_adjustment_amount(value).map(Some)
 }
 
-/// Balance-scoped adjustment operation: asset and average entry price.
+/// Balance-scoped adjustment operation for one physical asset. Average entry
+/// price and realized PnL are denominated in the account currency.
 #[wasm_bindgen(js_name = AccountAdjustmentBalanceOperation)]
 #[derive(Clone, Default)]
 pub struct JsAccountAdjustmentBalanceOperation {
     asset: Option<Asset>,
     average_entry_price: Option<Price>,
-    realized_pnl: Option<Pnl>,
+    realized_pnl: Option<openpit::PnlState>,
 }
 
 #[wasm_bindgen(js_class = AccountAdjustmentBalanceOperation)]
@@ -359,13 +382,14 @@ impl JsAccountAdjustmentBalanceOperation {
         set_optional_asset(&mut self.asset, value)
     }
 
-    /// The average entry price, or `undefined`.
+    /// The account-currency average entry price, or `undefined`.
     #[wasm_bindgen(getter, js_name = averageEntryPrice)]
     pub fn average_entry_price(&self) -> Option<JsPrice> {
         self.average_entry_price.map(JsPrice::from_inner)
     }
 
-    /// Sets the average entry price (accepts a value object or `DecimalInput`).
+    /// Sets the account-currency average entry price (accepts a value object or
+    /// `DecimalInput`). No FX is applied.
     ///
     /// # Errors
     ///
@@ -376,21 +400,31 @@ impl JsAccountAdjustmentBalanceOperation {
         Ok(())
     }
 
-    /// The absolute realized P&L, or `undefined`.
-    #[wasm_bindgen(getter, js_name = realizedPnl)]
-    pub fn realized_pnl(&self) -> Option<crate::param::value_types::JsPnl> {
-        self.realized_pnl
-            .map(crate::param::value_types::JsPnl::from_inner)
+    /// The account-currency position PnL state, or `undefined` when this
+    /// adjustment does not correct it.
+    #[wasm_bindgen(
+        getter,
+        js_name = realizedPnl,
+        unchecked_return_type = "Pnl | PnlHaltReason | undefined"
+    )]
+    pub fn realized_pnl(&self) -> Option<JsValue> {
+        self.realized_pnl.map(pnl_state_to_js)
     }
 
-    /// Sets the absolute realized P&L (accepts a value object or DecimalInput).
+    /// Sets or clears the account-currency position PnL state.
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on an invalid value.
+    /// Throws `TypeError`, `RangeError`, or `ParamError` on an invalid PnL
+    /// state.
     #[wasm_bindgen(setter, js_name = realizedPnl)]
-    pub fn set_realized_pnl(&mut self, value: OptionalPnlLike) -> Result<(), JsValue> {
-        self.realized_pnl = resolve_optional_pnl(value.into())?;
+    pub fn set_realized_pnl(&mut self, value: OptionalPnlStateLike) -> Result<(), JsValue> {
+        let value: JsValue = value.into();
+        self.realized_pnl = if value.is_undefined() || value.is_null() {
+            None
+        } else {
+            Some(resolve_pnl_state(value)?)
+        };
         Ok(())
     }
 
@@ -410,6 +444,65 @@ impl JsAccountAdjustmentBalanceOperation {
             .set_average_entry_price(read_field(value, "averageEntryPrice")?.unchecked_into())?;
         operation.set_realized_pnl(read_field(value, "realizedPnl")?.unchecked_into())?;
         Ok(operation)
+    }
+}
+
+/// Account-wide PnL adjustment: authoritative value or explicit halt.
+#[wasm_bindgen(js_name = AccountAdjustmentAccountPnlOperation)]
+#[derive(Clone, Copy)]
+pub struct JsAccountAdjustmentAccountPnlOperation {
+    state: openpit::PnlState,
+}
+
+#[wasm_bindgen(js_class = AccountAdjustmentAccountPnlOperation)]
+impl JsAccountAdjustmentAccountPnlOperation {
+    /// Constructs an account-wide PnL adjustment.
+    ///
+    /// `state` accepts a `Pnl`, a `DecimalInput`, or a `PnlHaltReason`.
+    ///
+    /// # Errors
+    ///
+    /// Throws `TypeError`, `RangeError`, or `ParamError` on an invalid state.
+    #[wasm_bindgen(constructor)]
+    pub fn new(state: PnlStateLike) -> Result<JsAccountAdjustmentAccountPnlOperation, JsValue> {
+        Ok(Self {
+            state: resolve_pnl_state(state.into())?,
+        })
+    }
+
+    /// The replacement PnL value or explicit halt reason.
+    #[wasm_bindgen(
+        getter,
+        js_name = state,
+        unchecked_return_type = "Pnl | PnlHaltReason"
+    )]
+    pub fn state(&self) -> JsValue {
+        pnl_state_to_js(self.state)
+    }
+
+    /// Sets the replacement PnL value or explicit halt reason.
+    ///
+    /// # Errors
+    ///
+    /// Throws `TypeError`, `RangeError`, or `ParamError` on an invalid state.
+    #[wasm_bindgen(setter, js_name = state)]
+    pub fn set_state(&mut self, value: PnlStateLike) -> Result<(), JsValue> {
+        self.state = resolve_pnl_state(value.into())?;
+        Ok(())
+    }
+
+    /// Returns an independent copy of this operation.
+    #[wasm_bindgen(js_name = clone)]
+    pub fn js_clone(&self) -> JsAccountAdjustmentAccountPnlOperation {
+        *self
+    }
+}
+
+impl JsAccountAdjustmentAccountPnlOperation {
+    fn from_object(value: &JsValue) -> Result<Self, JsValue> {
+        Ok(Self {
+            state: resolve_pnl_state(read_field(value, "state")?)?,
+        })
     }
 }
 
@@ -488,13 +581,14 @@ impl JsAccountAdjustmentPositionOperation {
         set_optional_asset(&mut self.collateral_asset, value)
     }
 
-    /// The average entry price, or `undefined`.
+    /// The account-currency average entry price, or `undefined`.
     #[wasm_bindgen(getter, js_name = averageEntryPrice)]
     pub fn average_entry_price(&self) -> Option<JsPrice> {
         self.average_entry_price.map(JsPrice::from_inner)
     }
 
-    /// Sets the average entry price (accepts a value object or `DecimalInput`).
+    /// Sets the account-currency average entry price (accepts a value object or
+    /// `DecimalInput`). No FX is applied.
     ///
     /// # Errors
     ///
@@ -706,13 +800,16 @@ impl JsAccountAdjustmentBounds {
     }
 }
 
-/// The adjustment operation variant: balance-scoped or position-scoped.
+/// The adjustment operation variant: balance-scoped, position-scoped, or
+/// account-wide PnL.
 #[derive(Clone)]
 enum AdjustmentOperation {
     /// A balance-scoped operation.
     Balance(JsAccountAdjustmentBalanceOperation),
     /// A position-scoped operation.
     Position(JsAccountAdjustmentPositionOperation),
+    /// An account-wide PnL operation.
+    AccountPnl(JsAccountAdjustmentAccountPnlOperation),
 }
 
 /// Top-level account adjustment: operation, amount, and bounds.
@@ -732,12 +829,13 @@ impl JsAccountAdjustment {
         Self::default()
     }
 
-    /// The operation group (a balance or position operation), or `undefined`.
+    /// The selected adjustment operation, or `undefined`.
     #[wasm_bindgen(getter, js_name = operation)]
     pub fn operation(&self) -> AccountAdjustmentOperationValue {
         let value = match &self.operation {
             Some(AdjustmentOperation::Balance(op)) => JsValue::from(op.clone()),
             Some(AdjustmentOperation::Position(op)) => JsValue::from(op.clone()),
+            Some(AdjustmentOperation::AccountPnl(op)) => JsValue::from(*op),
             None => JsValue::UNDEFINED,
         };
         value.unchecked_into()
@@ -745,16 +843,22 @@ impl JsAccountAdjustment {
 
     /// Sets the operation group.
     ///
-    /// Accepts an `AccountAdjustmentBalanceOperation` or an
-    /// `AccountAdjustmentPositionOperation` object, or a plain object literal
-    /// of either shape (a
-    /// `mode`/`leverage`/`underlyingAsset`/`settlementAsset`/`collateralAsset`
-    /// field selects the position form; otherwise the balance form).
+    /// Accepts any exported adjustment-operation wrapper or its plain-object
+    /// form. A `state` field selects an account-wide PnL operation; the
+    /// removed `pnl` field is rejected outright, even alone. Position PnL
+    /// belongs to a balance operation as `realizedPnl`; a position operation
+    /// is selected by any position-specific field (`underlyingAsset`,
+    /// `settlementAsset`, `collateralAsset`, `mode`, `leverage`), otherwise the
+    /// literal is read as a balance operation. Combining `state` with any
+    /// balance/position field is rejected as ambiguous.
     ///
     /// # Errors
     ///
-    /// Throws `ParamError`/`AssetError` when `value` is neither operation type
-    /// nor a valid literal.
+    /// Throws `TypeError` when `value` is neither an operation wrapper nor a
+    /// plain object, when it declares the removed `pnl` field, or when it
+    /// combines `state` with a balance/position field; `AssetError` when a
+    /// literal asset string is empty; `TypeError`/`RangeError`/`ParamError`
+    /// when a literal field is otherwise invalid.
     #[wasm_bindgen(setter, js_name = operation)]
     pub fn set_operation(&mut self, value: AccountAdjustmentOperationLike) -> Result<(), JsValue> {
         let value: JsValue = value.into();
@@ -815,14 +919,21 @@ impl JsAccountAdjustment {
 
 /// Resolves an adjustment-operation argument to its variant.
 ///
-/// A typed wrapper of either variant is taken as-is. A plain object literal is
-/// dispatched by shape: a position-specific field selects the position form;
-/// otherwise the balance form.
+/// A typed wrapper is taken as-is. A plain object literal is dispatched by
+/// shape: a `pnl` field is rejected outright (the account-PnL operation was
+/// renamed to `state`); a `state` field selects the account-PnL operation
+/// unless it is combined with any balance/position field, which is rejected
+/// as ambiguous; otherwise a position-specific field selects the
+/// position-scoped form and anything else falls back to the balance-scoped
+/// form.
 ///
 /// # Errors
 ///
-/// Throws `ParamError`/`AssetError` when the value is neither a wrapper nor a
-/// plain object, or on an invalid literal field.
+/// Throws `TypeError` when the value is neither a wrapper nor a plain object,
+/// when the literal declares the removed `pnl` field, or when it combines
+/// `state` with a balance/position field; `AssetError` when a literal asset
+/// string is empty; `TypeError`/`RangeError`/`ParamError` when another literal
+/// field is invalid.
 fn resolve_operation(value: JsValue) -> Result<AdjustmentOperation, JsValue> {
     if let Some(balance) = extract_cloned_wrapper::<JsAccountAdjustmentBalanceOperation>(&value)? {
         return Ok(AdjustmentOperation::Balance(balance));
@@ -831,7 +942,30 @@ fn resolve_operation(value: JsValue) -> Result<AdjustmentOperation, JsValue> {
     {
         return Ok(AdjustmentOperation::Position(position));
     }
+    if let Some(account_pnl) =
+        extract_cloned_wrapper::<JsAccountAdjustmentAccountPnlOperation>(&value)?
+    {
+        return Ok(AdjustmentOperation::AccountPnl(account_pnl));
+    }
     if is_plain_object(&value) {
+        if has_own_field(&value, "pnl")? {
+            return Err(invalid_field(
+                "account PnL operation uses state; pnl is not a valid field",
+            ));
+        }
+        if has_own_field(&value, "state")? {
+            if has_own_field(&value, "asset")?
+                || has_own_field(&value, "averageEntryPrice")?
+                || has_own_field(&value, "realizedPnl")?
+                || has_own_position_field(&value)?
+            {
+                return Err(invalid_field(
+                    "an account PnL operation cannot combine state with balance or position fields",
+                ));
+            }
+            return JsAccountAdjustmentAccountPnlOperation::from_object(&value)
+                .map(AdjustmentOperation::AccountPnl);
+        }
         return if has_position_field(&value)? {
             JsAccountAdjustmentPositionOperation::from_object(&value)
                 .map(AdjustmentOperation::Position)
@@ -842,27 +976,40 @@ fn resolve_operation(value: JsValue) -> Result<AdjustmentOperation, JsValue> {
     }
     Err(invalid_field(
         "operation must be an AccountAdjustmentBalanceOperation, an \
-         AccountAdjustmentPositionOperation, or a plain object",
+         AccountAdjustmentPositionOperation, an AccountAdjustmentAccountPnlOperation, \
+         or a plain object",
     ))
 }
 
 /// Returns `true` when a plain operation literal carries a position-specific
 /// field, selecting the position-scoped form over the balance-scoped form.
 fn has_position_field(value: &JsValue) -> Result<bool, JsValue> {
-    const POSITION_FIELDS: [&str; 5] = [
-        "underlyingAsset",
-        "settlementAsset",
-        "collateralAsset",
-        "mode",
-        "leverage",
-    ];
-    for field in POSITION_FIELDS {
+    for field in POSITION_OPERATION_FIELDS {
         if !read_field(value, field)?.is_undefined() {
             return Ok(true);
         }
     }
     Ok(false)
 }
+
+/// Returns whether a PnL literal also declares any position-operation field,
+/// even when that field's value is `undefined`.
+fn has_own_position_field(value: &JsValue) -> Result<bool, JsValue> {
+    for field in POSITION_OPERATION_FIELDS {
+        if has_own_field(value, field)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+const POSITION_OPERATION_FIELDS: [&str; 5] = [
+    "underlyingAsset",
+    "settlementAsset",
+    "collateralAsset",
+    "mode",
+    "leverage",
+];
 
 /// Resolves an optional
 /// `AccountAdjustmentAmount | AccountAdjustmentAmountInit`.
@@ -912,14 +1059,20 @@ impl JsAccountAdjustmentBalanceOperation {
         self.asset.clone()
     }
 
-    /// Returns the wrapped average entry price.
+    /// Returns the wrapped account-currency average entry price.
     pub(crate) fn average_entry_price_inner(&self) -> Option<Price> {
         self.average_entry_price
     }
 
-    /// Returns the wrapped absolute realized P&L.
-    pub(crate) fn realized_pnl_inner(&self) -> Option<Pnl> {
+    /// Returns the wrapped account-currency position PnL state.
+    pub(crate) fn realized_pnl_inner(&self) -> Option<openpit::PnlState> {
         self.realized_pnl
+    }
+}
+
+impl JsAccountAdjustmentAccountPnlOperation {
+    pub(crate) fn state_inner(&self) -> openpit::PnlState {
+        self.state
     }
 }
 
@@ -1032,13 +1185,12 @@ impl JsAccountAdjustment {
     /// Converts this adjustment into the engine-facing interop request.
     ///
     /// Absent groups become the interop `Absent` access variant, and the
-    /// operation variant is dispatched to the matching populated
-    /// balance/position form.
+    /// operation variant is dispatched to the matching populated form.
     pub(crate) fn to_interop(&self) -> openpit_interop::AccountAdjustment {
         use openpit_interop::{
             AccountAdjustmentAmountAccess, AccountAdjustmentBoundsAccess,
             AccountAdjustmentOperationAccess, PopulatedAccountAdjustmentOperation,
-            PopulatedBalanceOperation, PopulatedPositionOperation,
+            PopulatedAccountPnlOperation, PopulatedBalanceOperation, PopulatedPositionOperation,
         };
 
         let operation = match &self.operation {
@@ -1060,6 +1212,13 @@ impl JsAccountAdjustment {
                         average_entry_price: position.average_entry_price_inner(),
                         mode: position.mode_inner(),
                         leverage: position.leverage_inner(),
+                    }),
+                )
+            }
+            Some(AdjustmentOperation::AccountPnl(account_pnl)) => {
+                AccountAdjustmentOperationAccess::Populated(
+                    PopulatedAccountAdjustmentOperation::AccountPnl(PopulatedAccountPnlOperation {
+                        state: account_pnl.state_inner(),
                     }),
                 )
             }
