@@ -392,15 +392,14 @@ class Policy(abc.ABC):
             adjustment: Current adjustment item.
 
         Returns:
-            Result containing business rejects, rollback mutations, per-asset
-            ``account_adjustments``, and account blocks.
-
-            Populating ``rejects`` is the only way to business-reject an
-            adjustment: a non-empty collection rejects the whole batch, so no
-            item of it is applied. Leaving ``rejects`` empty accepts the
-            adjustment; the default result accepts it and changes nothing.
-
-            A non-empty ``account_blocks`` collection is recorded only after
-            the complete adjustment batch commits.
+            PolicyAccountAdjustmentResult: Result containing business rejects,
+                rollback mutations, per-asset ``account_adjustments``, and
+                account blocks. Populating ``rejects`` is the only way to
+                business-reject an adjustment: a non-empty collection rejects
+                the whole batch, so no item of it is applied. Leaving
+                ``rejects`` empty accepts the adjustment; the default result
+                accepts it and changes nothing. A non-empty
+                ``account_blocks`` collection is recorded only after the
+                complete adjustment batch commits.
         """
         return PolicyAccountAdjustmentResult()
