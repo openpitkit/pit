@@ -32,7 +32,8 @@ int main() {
   openpit::Engine engine = builder.Build();
 
   model::Order order = model::Order::Limit(
-      model::Instrument("AAPL", "USD"),
+      model::Instrument(::openpit::param::Asset("AAPL"),
+                        ::openpit::param::Asset("USD")),
       openpit::param::AccountId::FromUint64(99224416), model::Side::Buy,
       model::TradeAmount::OfQuantity(
           openpit::param::Quantity::FromString("100")),

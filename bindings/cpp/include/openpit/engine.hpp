@@ -717,11 +717,10 @@ class Engine {
   // policies. These calls do not recompute existing holdings; callers own any
   // live-state migration.
   void SetAccountCurrency(::openpit::param::AccountId accountId,
-                          std::string_view asset) const {
+                          const ::openpit::param::Asset& asset) const {
     OpenPitSharedString* error = nullptr;
     if (!openpit_engine_set_account_currency(m_handle.Get(), accountId.Raw(),
-                                             ::openpit::MakeStringView(asset),
-                                             &error)) {
+                                             asset.Raw(), &error)) {
       detail::ThrowFromSharedString(
           error, "openpit_engine_set_account_currency failed");
     }
@@ -733,11 +732,10 @@ class Engine {
   }
 
   void SetAccountGroupCurrency(::openpit::param::AccountGroupId groupId,
-                               std::string_view asset) const {
+                               const ::openpit::param::Asset& asset) const {
     OpenPitSharedString* error = nullptr;
     if (!openpit_engine_set_account_group_currency(
-            m_handle.Get(), groupId.Raw(), ::openpit::MakeStringView(asset),
-            &error)) {
+            m_handle.Get(), groupId.Raw(), asset.Raw(), &error)) {
       detail::ThrowFromSharedString(
           error, "openpit_engine_set_account_group_currency failed");
     }

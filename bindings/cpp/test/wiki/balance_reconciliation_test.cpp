@@ -43,7 +43,7 @@ TEST(BalanceReconciliation, DeltaVersusAbsolute) {
   auto seed = [](const char* amount) {
     aa::AccountAdjustment adj;
     aa::BalanceOperation op;
-    op.asset = "USD";
+    op.asset = ::openpit::param::Asset("USD");
     adj.operation = aa::Operation::OfBalance(op);
     aa::Amount amountGroup;
     amountGroup.balance = param::AdjustmentAmount::OfAbsolute(

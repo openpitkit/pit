@@ -68,7 +68,8 @@ model::Instrument ParseInstrument(const std::string &s) {
     throw BuildError(err.what());
   }
   // The engine validates the asset codes; the binding takes them as-is.
-  return model::Instrument(std::move(parts.first), std::move(parts.second));
+  return model::Instrument(param::Asset(parts.first),
+                           param::Asset(parts.second));
 }
 
 model::Side ParseSide(const std::string &s) {
@@ -90,7 +91,7 @@ adj::AccountAdjustment BuildSeedAdjustment(const Row &row) {
   }
 
   adj::BalanceOperation balanceOp;
-  balanceOp.asset = row.asset; // The engine validates the asset code.
+  balanceOp.asset = param::Asset(row.asset);
 
   adj::Amount amountGroup;
   amountGroup.balance = param::AdjustmentAmount::OfAbsolute(amount);

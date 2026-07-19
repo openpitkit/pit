@@ -161,7 +161,7 @@ struct Stats {
 // Limits gathers the killswitch parameters in one place so the call site reads
 // like a risk-policy declaration.
 struct Limits {
-  std::string settlementAsset;    // settlement asset, e.g. "USD"
+  openpit::param::Asset settlementAsset; // settlement asset, e.g. "USD"
   std::string pnlLowerBound;      // loss floor as a signed decimal, e.g. "-500"
   std::string pnlUpperBound;      // profit-taking ceiling, e.g. "500"
   std::size_t maxOrdersBurst = 0; // orders allowed inside the rate window
@@ -316,7 +316,8 @@ inline constexpr const char *kScenarioAssetSettle = "USD";
   openpit::model::Order order;
   openpit::model::OrderOperation op;
   op.instrument =
-      openpit::model::Instrument(kScenarioAssetTraded, kScenarioAssetSettle);
+      openpit::model::Instrument(openpit::param::Asset(kScenarioAssetTraded),
+                                 openpit::param::Asset(kScenarioAssetSettle));
   op.accountId = ::openpit::param::AccountId::FromUint64(kScenarioAccount);
   op.side = openpit::model::Side::Buy;
   op.tradeAmount = openpit::model::TradeAmount::OfQuantity(
@@ -334,7 +335,8 @@ BuildReport(const std::string &pnl) {
   openpit::model::ExecutionReport report;
   openpit::model::ExecutionReportOperation op;
   op.instrument =
-      openpit::model::Instrument(kScenarioAssetTraded, kScenarioAssetSettle);
+      openpit::model::Instrument(openpit::param::Asset(kScenarioAssetTraded),
+                                 openpit::param::Asset(kScenarioAssetSettle));
   op.accountId = ::openpit::param::AccountId::FromUint64(kScenarioAccount);
   op.side = openpit::model::Side::Buy;
   report.operation = std::move(op);

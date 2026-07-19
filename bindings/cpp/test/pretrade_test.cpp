@@ -454,8 +454,8 @@ class SplitPostTradePolicy {
         openpit::param::AccountId::FromUint64(42),
         openpit::param::GroupId(kGroupSeven),
     });
-    openpit::accountadjustment::AccountOutcomeEntry adjustment;
-    adjustment.asset = "USD";
+    openpit::accountadjustment::AccountOutcomeEntry adjustment(
+        openpit::param::Asset("USD"));
     adjustment.balance = openpit::accountadjustment::OutcomeAmount(
         openpit::param::PositionSize::FromString("-5"),
         openpit::param::PositionSize::FromString("95"));
@@ -501,7 +501,7 @@ TEST(CustomPolicy, ProducesSplitPostTradeOutputs) {
   ASSERT_EQ(result.accountAdjustments.size(), 1u);
   const auto& adjustment = result.accountAdjustments.front();
   EXPECT_EQ(adjustment.policyGroupId, openpit::param::GroupId(kGroupSeven));
-  EXPECT_EQ(adjustment.entry.asset, "USD");
+  EXPECT_EQ(adjustment.entry.asset.View(), "USD");
   ASSERT_TRUE(adjustment.entry.balance.has_value());
   EXPECT_EQ(adjustment.entry.balance->delta,
             openpit::param::PositionSize::FromString("-5"));
@@ -559,7 +559,8 @@ class DryRunHookPolicy {
 [[nodiscard]] openpit::model::Order MakeDryRunHookOrder() {
   openpit::model::Order order;
   openpit::model::OrderOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = ::openpit::param::AccountId::FromUint64(42);
   op.side = openpit::model::Side::Buy;
   op.tradeAmount =
@@ -601,19 +602,20 @@ TEST(CustomPolicy, UsesExplicitDryRunHooksForDryRunPipeline) {
 [[nodiscard]] openpit::model::Order SpotFundsLifecycleOrder(
     const openpit::param::AccountId accountId) {
   return openpit::model::Order::Limit(
-      openpit::model::Instrument("AAPL", "USD"), accountId,
-      openpit::model::Side::Buy,
+      openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                 ::openpit::param::Asset("USD")),
+      accountId, openpit::model::Side::Buy,
       openpit::model::TradeAmount::OfQuantity(Quantity::FromString("1")),
       Price::FromString("100"));
 }
 
 void SeedSpotFundsLifecycleAccount(const openpit::Engine& engine,
                                    const openpit::param::AccountId accountId) {
-  engine.SetAccountCurrency(accountId, "USD");
+  engine.SetAccountCurrency(accountId, openpit::param::Asset("USD"));
 
   openpit::accountadjustment::AccountAdjustment seed;
   openpit::accountadjustment::BalanceOperation balance;
-  balance.asset = "USD";
+  balance.asset = ::openpit::param::Asset("USD");
   seed.operation =
       openpit::accountadjustment::Operation::OfBalance(std::move(balance));
   openpit::accountadjustment::Amount amount;
@@ -643,7 +645,8 @@ ApplySpotFundsLifecycleFill(const openpit::Engine& engine,
   execution.reservation->Commit();
 
   openpit::model::ExecutionReportOperation operation;
-  operation.instrument = openpit::model::Instrument("AAPL", "USD");
+  operation.instrument = openpit::model::Instrument(
+      ::openpit::param::Asset("AAPL"), ::openpit::param::Asset("USD"));
   operation.accountId = accountId;
   operation.side = openpit::model::Side::Buy;
 
@@ -704,7 +707,7 @@ TEST(BuiltinPolicy, RateLimitAccountBarrierBuilds) {
 
 TEST(BuiltinPolicy, PnlBoundsKillSwitchBrokerBarrierBuilds) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
-  policies::PnlBoundsBrokerBarrier barrier("USD");
+  policies::PnlBoundsBrokerBarrier barrier(openpit::param::Asset("USD"));
   barrier.lowerBound = openpit::param::Pnl::FromString("-1000");
   policies::PnlBoundsKillSwitchPolicy config;
   config.BrokerBarrier(std::move(barrier));
@@ -825,7 +828,8 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
   execution.reservation->Commit();
 
   openpit::model::ExecutionReportOperation operation;
-  operation.instrument = openpit::model::Instrument("AAPL", "USD");
+  operation.instrument = openpit::model::Instrument(
+      ::openpit::param::Asset("AAPL"), ::openpit::param::Asset("USD"));
   operation.accountId = account;
   operation.side = openpit::model::Side::Buy;
   openpit::model::Fill fill;
@@ -835,7 +839,7 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
   // makes this fill's account line uncomputable without one. A fee-less
   // opening fill would contribute a computable zero instead.
   fill.fee = openpit::param::MonetaryAmount(
-      openpit::param::Fee::FromString("0.25"), "USD");
+      openpit::param::Fee::FromString("0.25"), openpit::param::Asset("USD"));
   fill.leavesQuantity = Quantity::FromString("0");
   fill.isFinal = true;
   openpit::model::ExecutionReport report;
@@ -853,7 +857,7 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
   ASSERT_EQ(halted.accountBlocks.size(), 1u);
   ExpectSpotFundsPnlPreTradeReject(engine, account);
 
-  engine.SetAccountCurrency(account, "USD");
+  engine.SetAccountCurrency(account, openpit::param::Asset("USD"));
   const openpit::PolicyConfigurationResult rearmed =
       engine.Configure().SetSpotFundsAccountPnl(
           policies::SpotFundsPolicyName, account,
@@ -885,7 +889,8 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
   execution.reservation->Commit();
 
   openpit::model::ExecutionReportOperation operation;
-  operation.instrument = openpit::model::Instrument("AAPL", "USD");
+  operation.instrument = openpit::model::Instrument(
+      ::openpit::param::Asset("AAPL"), ::openpit::param::Asset("USD"));
   operation.accountId = accountId;
   operation.side = openpit::model::Side::Buy;
   openpit::model::Fill fill;
@@ -915,7 +920,7 @@ FindAssetEntry(const openpit::PostTradeResult& result,
   const auto outcome = std::find_if(
       result.accountAdjustments.begin(), result.accountAdjustments.end(),
       [asset](const openpit::accountadjustment::Outcome& candidate) {
-        return candidate.entry.asset == asset;
+        return candidate.entry.asset.View() == asset;
       });
   if (outcome == result.accountAdjustments.end()) {
     return nullptr;

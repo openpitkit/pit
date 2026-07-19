@@ -139,8 +139,8 @@ Public Member Functions</h2></td></tr>
 <tr class="memitem:a8863017b17b6076550e01107ac3c97ad" id="r_a8863017b17b6076550e01107ac3c97ad"><td class="memItemLeft"><a class="el" href="classopenpit_1_1pretrade_1_1DryRunReport.html">::openpit::pretrade::DryRunReport</a>&#160;</td><td class="memItemRight"><a class="el" href="#a8863017b17b6076550e01107ac3c97ad">ExecutePreTradeDryRun</a> (const <a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a> &amp;order) const</td></tr>
 <tr class="memitem:ae64820572971cad3e4d0d00088d12b50" id="r_ae64820572971cad3e4d0d00088d12b50"><td class="memItemLeft">OpenPitEngine *&#160;</td><td class="memItemRight"><a class="el" href="#ae64820572971cad3e4d0d00088d12b50">Get</a> () const noexcept</td></tr>
 <tr class="memitem:a684faeec84a674fda743177aa03c89c4" id="r_a684faeec84a674fda743177aa03c89c4"><td class="memItemLeft">&#160;</td><td class="memItemRight"><a class="el" href="#a684faeec84a674fda743177aa03c89c4">operator bool</a> () const noexcept</td></tr>
-<tr class="memitem:a97fe8c78d9a46d24cdc0dc6c265d963a" id="r_a97fe8c78d9a46d24cdc0dc6c265d963a"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a97fe8c78d9a46d24cdc0dc6c265d963a">SetAccountCurrency</a> (<a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> accountId, std::string_view asset) const</td></tr>
-<tr class="memitem:ad31f43ac5765e80300b71e4f8029d616" id="r_ad31f43ac5765e80300b71e4f8029d616"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#ad31f43ac5765e80300b71e4f8029d616">SetAccountGroupCurrency</a> (<a class="el" href="classopenpit_1_1param_1_1AccountGroupId.html">::openpit::param::AccountGroupId</a> groupId, std::string_view asset) const</td></tr>
+<tr class="memitem:adeae37fbcfa6b985b420fdd5e0128d94" id="r_adeae37fbcfa6b985b420fdd5e0128d94"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#adeae37fbcfa6b985b420fdd5e0128d94">SetAccountCurrency</a> (<a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> accountId, const <a class="el" href="classopenpit_1_1param_1_1Asset.html">::openpit::param::Asset</a> &amp;asset) const</td></tr>
+<tr class="memitem:a177c649d0f21d4f4a3b4968bc587df93" id="r_a177c649d0f21d4f4a3b4968bc587df93"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#a177c649d0f21d4f4a3b4968bc587df93">SetAccountGroupCurrency</a> (<a class="el" href="classopenpit_1_1param_1_1AccountGroupId.html">::openpit::param::AccountGroupId</a> groupId, const <a class="el" href="classopenpit_1_1param_1_1Asset.html">::openpit::param::Asset</a> &amp;asset) const</td></tr>
 <tr class="memitem:a6f6a97122495f5bc66b81c9f07a60fe1" id="r_a6f6a97122495f5bc66b81c9f07a60fe1"><td class="memTemplParams" colspan="2">template&lt;typename OrderT, std::enable_if_t&lt; std::is_base_of_v&lt;<a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a>, std::decay_t&lt; OrderT &gt; &gt; &amp;&amp;!std::is_same_v&lt;<a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a>, std::decay_t&lt; OrderT &gt; &gt;, int &gt; = 0&gt; </td></tr>
 <tr class="memitem:a6f6a97122495f5bc66b81c9f07a60fe1 template"><td class="memItemLeft"><a class="el" href="structopenpit_1_1pretrade_1_1StartResult.html">::openpit::pretrade::StartResult</a>&#160;</td><td class="memItemRight"><a class="el" href="#a6f6a97122495f5bc66b81c9f07a60fe1">StartPreTrade</a> (OrderT &amp;&amp;order) const</td></tr>
 <tr class="memitem:ab193751b7ba7eefb43ab1a128118fb02" id="r_ab193751b7ba7eefb43ab1a128118fb02"><td class="memItemLeft"><a class="el" href="structopenpit_1_1pretrade_1_1StartResult.html">::openpit::pretrade::StartResult</a>&#160;</td><td class="memItemRight"><a class="el" href="#ab193751b7ba7eefb43ab1a128118fb02">StartPreTrade</a> (std::shared_ptr&lt; const <a class="el" href="classopenpit_1_1Order.html">::openpit::Order</a> &gt; order) const</td></tr>
@@ -508,8 +508,8 @@ template&lt;typename Adjustment&gt; </div>
 
 </div>
 </div>
-<a id="a97fe8c78d9a46d24cdc0dc6c265d963a" name="a97fe8c78d9a46d24cdc0dc6c265d963a"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a97fe8c78d9a46d24cdc0dc6c265d963a">&#9670;&#160;</a></span>SetAccountCurrency()</h2>
+<a id="adeae37fbcfa6b985b420fdd5e0128d94" name="adeae37fbcfa6b985b420fdd5e0128d94"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#adeae37fbcfa6b985b420fdd5e0128d94">&#9670;&#160;</a></span>SetAccountCurrency()</h2>
 
 <div class="memitem">
 <div class="memproto">
@@ -525,7 +525,7 @@ template&lt;typename Adjustment&gt; </div>
         <tr>
           <td class="paramkey"></td>
           <td></td>
-          <td class="paramtype">std::string_view</td>          <td class="paramname"><span class="paramname"><em>asset</em></span>&#160;) const</td>
+          <td class="paramtype">const <a class="el" href="classopenpit_1_1param_1_1Asset.html">::openpit::param::Asset</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>asset</em></span>&#160;) const</td>
         </tr>
       </table>
   </td>
@@ -537,8 +537,8 @@ template&lt;typename Adjustment&gt; </div>
 
 </div>
 </div>
-<a id="ad31f43ac5765e80300b71e4f8029d616" name="ad31f43ac5765e80300b71e4f8029d616"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#ad31f43ac5765e80300b71e4f8029d616">&#9670;&#160;</a></span>SetAccountGroupCurrency()</h2>
+<a id="a177c649d0f21d4f4a3b4968bc587df93" name="a177c649d0f21d4f4a3b4968bc587df93"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a177c649d0f21d4f4a3b4968bc587df93">&#9670;&#160;</a></span>SetAccountGroupCurrency()</h2>
 
 <div class="memitem">
 <div class="memproto">
@@ -554,7 +554,7 @@ template&lt;typename Adjustment&gt; </div>
         <tr>
           <td class="paramkey"></td>
           <td></td>
-          <td class="paramtype">std::string_view</td>          <td class="paramname"><span class="paramname"><em>asset</em></span>&#160;) const</td>
+          <td class="paramtype">const <a class="el" href="classopenpit_1_1param_1_1Asset.html">::openpit::param::Asset</a> &amp;</td>          <td class="paramname"><span class="paramname"><em>asset</em></span>&#160;) const</td>
         </tr>
       </table>
   </td>

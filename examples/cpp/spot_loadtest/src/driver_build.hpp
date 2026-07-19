@@ -64,7 +64,8 @@ namespace ae = ::openpit::asyncengine;
 // Builds the (underlying, settlement) instrument identity.
 [[nodiscard]] inline ::openpit::model::Instrument
 InstrumentOf(const std::string &underlying, const std::string &settlement) {
-  return ::openpit::model::Instrument(underlying, settlement);
+  return ::openpit::model::Instrument(::openpit::param::Asset(underlying),
+                                      ::openpit::param::Asset(settlement));
 }
 
 // Maps an OrderCheck event to a limit, quantity-denominated model::Order.
@@ -171,7 +172,7 @@ BuildAdjustment(const generator::Event &ev,
           : ::openpit::param::AdjustmentAmount::OfAbsolute(amount);
 
   ::openpit::accountadjustment::BalanceOperation balanceOp;
-  balanceOp.asset = ev.fundingAsset;
+  balanceOp.asset = ::openpit::param::Asset(ev.fundingAsset);
 
   ::openpit::accountadjustment::Amount amountGroup;
   amountGroup.balance = balance;
@@ -189,7 +190,7 @@ BuildProbeAdjustment() {
   const ::openpit::param::PositionSize zero =
       ::openpit::param::PositionSize::FromString("0");
   ::openpit::accountadjustment::BalanceOperation balanceOp;
-  balanceOp.asset = "USD";
+  balanceOp.asset = ::openpit::param::Asset("USD");
   ::openpit::accountadjustment::Amount amountGroup;
   amountGroup.balance = ::openpit::param::AdjustmentAmount::OfDelta(zero);
   ::openpit::accountadjustment::AccountAdjustment adj;

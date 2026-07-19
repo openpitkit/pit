@@ -63,7 +63,8 @@ TEST(MarketDataWiki, PushReadAndResolve) {
                             md::QuoteTtl::Infinite(), openpit::SyncPolicy::None)
                             .Build();
 
-  const openpit::model::Instrument aapl("AAPL", "USD");
+  const openpit::model::Instrument aapl(::openpit::param::Asset("AAPL"),
+                                        ::openpit::param::Asset("USD"));
   const md::RegisterResult registration = service.Register(aapl);
   ASSERT_EQ(registration.status, md::RegisterStatus::Ok);
   ASSERT_TRUE(registration.instrumentId.has_value());
@@ -100,7 +101,8 @@ TEST(MarketDataWiki, PushForFansOutToAccountsAndGroup) {
                             md::QuoteTtl::Infinite(), openpit::SyncPolicy::None)
                             .Build();
   const md::RegisterResult registration =
-      service.Register(openpit::model::Instrument("AAPL", "USD"));
+      service.Register(openpit::model::Instrument(
+          ::openpit::param::Asset("AAPL"), ::openpit::param::Asset("USD")));
   ASSERT_EQ(registration.status, md::RegisterStatus::Ok);
   ASSERT_TRUE(registration.instrumentId.has_value());
   const md::InstrumentId aaplId = registration.instrumentId.value();
@@ -131,7 +133,8 @@ TEST(MarketDataWiki, PushPatchPreservesUnsetFields) {
                             md::QuoteTtl::Infinite(), openpit::SyncPolicy::None)
                             .Build();
   const md::RegisterResult registration =
-      service.Register(openpit::model::Instrument("AAPL", "USD"));
+      service.Register(openpit::model::Instrument(
+          ::openpit::param::Asset("AAPL"), ::openpit::param::Asset("USD")));
   ASSERT_EQ(registration.status, md::RegisterStatus::Ok);
   ASSERT_TRUE(registration.instrumentId.has_value());
   const md::InstrumentId aaplId = registration.instrumentId.value();
@@ -167,7 +170,8 @@ TEST(MarketDataWiki, ClearHidesQuoteThenPushRestores) {
                             md::QuoteTtl::Infinite(), openpit::SyncPolicy::None)
                             .Build();
   const md::RegisterResult registration =
-      service.Register(openpit::model::Instrument("AAPL", "USD"));
+      service.Register(openpit::model::Instrument(
+          ::openpit::param::Asset("AAPL"), ::openpit::param::Asset("USD")));
   ASSERT_EQ(registration.status, md::RegisterStatus::Ok);
   ASSERT_TRUE(registration.instrumentId.has_value());
   const md::InstrumentId aaplId = registration.instrumentId.value();

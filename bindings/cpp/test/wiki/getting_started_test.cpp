@@ -50,7 +50,7 @@ using openpit::param::Volume;
 
   builder.Add(policies::OrderValidationPolicy{});
 
-  policies::PnlBoundsBrokerBarrier pnlBarrier{"USD"};
+  policies::PnlBoundsBrokerBarrier pnlBarrier{openpit::param::Asset("USD")};
   pnlBarrier.lowerBound = Pnl::FromString("-1000");
   builder.Add(policies::PnlBoundsKillSwitchPolicy{}.BrokerBarrier(pnlBarrier));
 
@@ -63,7 +63,8 @@ using openpit::param::Volume;
                   .BrokerBarrier(policies::OrderSizeBrokerBarrier(
                       policies::OrderSizeLimit(maxQty, maxNotional)))
                   .AssetBarrier(policies::OrderSizeAssetBarrier(
-                      policies::OrderSizeLimit(maxQty, maxNotional), "USD")));
+                      policies::OrderSizeLimit(maxQty, maxNotional),
+                      openpit::param::Asset("USD"))));
 
   return builder.Build();
 }
@@ -71,7 +72,8 @@ using openpit::param::Volume;
 // Harness: the canonical AAPL buy order used across the wiki snippets.
 [[nodiscard]] openpit::model::Order WikiOrder() {
   return openpit::model::Order::Limit(
-      openpit::model::Instrument("AAPL", "USD"),
+      openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                 ::openpit::param::Asset("USD")),
       ::openpit::param::AccountId::FromUint64(99224416),
       openpit::model::Side::Buy,
       openpit::model::TradeAmount::OfQuantity(Quantity::FromString("100")),
@@ -82,7 +84,8 @@ using openpit::param::Volume;
 [[nodiscard]] openpit::model::ExecutionReport WikiReport() {
   openpit::model::ExecutionReport report;
   openpit::model::ExecutionReportOperation reportOp;
-  reportOp.instrument = openpit::model::Instrument("AAPL", "USD");
+  reportOp.instrument = openpit::model::Instrument(
+      ::openpit::param::Asset("AAPL"), ::openpit::param::Asset("USD"));
   reportOp.accountId = ::openpit::param::AccountId::FromUint64(99224416);
   reportOp.side = openpit::model::Side::Buy;
   report.operation = std::move(reportOp);
@@ -106,7 +109,7 @@ TEST(GettingStartedWiki, BuildAnEngine) {
 
   builder.Add(policies::OrderValidationPolicy{});
 
-  policies::PnlBoundsBrokerBarrier pnlBarrier{"USD"};
+  policies::PnlBoundsBrokerBarrier pnlBarrier{openpit::param::Asset("USD")};
   pnlBarrier.lowerBound = Pnl::FromString("-1000");
   builder.Add(policies::PnlBoundsKillSwitchPolicy{}.BrokerBarrier(pnlBarrier));
 
@@ -119,13 +122,15 @@ TEST(GettingStartedWiki, BuildAnEngine) {
                   .BrokerBarrier(policies::OrderSizeBrokerBarrier(
                       policies::OrderSizeLimit(maxQty, maxNotional)))
                   .AssetBarrier(policies::OrderSizeAssetBarrier(
-                      policies::OrderSizeLimit(maxQty, maxNotional), "USD")));
+                      policies::OrderSizeLimit(maxQty, maxNotional),
+                      openpit::param::Asset("USD"))));
 
   const openpit::Engine engine = builder.Build();
 
   // 2. Check an order.
   openpit::model::Order order = openpit::model::Order::Limit(
-      openpit::model::Instrument("AAPL", "USD"),
+      openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                 ::openpit::param::Asset("USD")),
       ::openpit::param::AccountId::FromUint64(99224416),
       openpit::model::Side::Buy,
       openpit::model::TradeAmount::OfQuantity(Quantity::FromString("100")),
@@ -170,7 +175,8 @@ TEST(GettingStartedWiki, BuildAnEngine) {
   // 6. The order goes to the venue and returns with an execution report.
   openpit::model::ExecutionReport report;
   openpit::model::ExecutionReportOperation reportOp;
-  reportOp.instrument = openpit::model::Instrument("AAPL", "USD");
+  reportOp.instrument = openpit::model::Instrument(
+      ::openpit::param::Asset("AAPL"), ::openpit::param::Asset("USD"));
   reportOp.accountId = ::openpit::param::AccountId::FromUint64(99224416);
   reportOp.side = openpit::model::Side::Buy;
   report.operation = std::move(reportOp);

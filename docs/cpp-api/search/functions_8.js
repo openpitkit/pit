@@ -2,7 +2,7 @@ var searchData=
 [
   ['idlecleanupafter_0',['IdleCleanupAfter',['../classopenpit_1_1asyncengine_1_1DynamicBuilder.html#a7ef76d797ea5ada00b5bb485cc4e0c7d',1,'openpit::asyncengine::DynamicBuilder::IdleCleanupAfter()'],['../classopenpit_1_1asyncengine_1_1TypedDynamicBuilder.html#a77e64741e146385d7e12429a686b6c44',1,'openpit::asyncengine::TypedDynamicBuilder::IdleCleanupAfter()']]],
   ['infinite_1',['Infinite',['../classopenpit_1_1marketdata_1_1QuoteTtl.html#a63838d0c470b09e761b2800ee7ac4f58',1,'openpit::marketdata::QuoteTtl']]],
-  ['instrument_2',['Instrument',['../structopenpit_1_1model_1_1Instrument.html#a82dc6359a63097a6d10a3bd5d9880aef',1,'openpit::model::Instrument::Instrument()=default'],['../structopenpit_1_1model_1_1Instrument.html#ac83bf7e4f7e5ab5c5e37b45d389cfcff',1,'openpit::model::Instrument::Instrument(std::string underlying, std::string settlement)']]],
+  ['instrument_2',['Instrument',['../structopenpit_1_1model_1_1Instrument.html#a0d1a64ff537d05422b34bf32149d4a67',1,'openpit::model::Instrument']]],
   ['instrumentid_3',['InstrumentId',['../classopenpit_1_1InstrumentId.html#af293a82171208f2c1d77f2c100118ef3',1,'openpit::InstrumentId::InstrumentId() noexcept=default'],['../classopenpit_1_1InstrumentId.html#a18292b63919410a6c18b3885f7d490ae',1,'openpit::InstrumentId::InstrumentId(OpenPitInstrumentId value) noexcept']]],
   ['isabsolute_4',['IsAbsolute',['../classopenpit_1_1param_1_1AdjustmentAmount.html#a98ac72564247c678850fec029b0425c1',1,'openpit::param::AdjustmentAmount']]],
   ['isaccountpnl_5',['IsAccountPnl',['../classopenpit_1_1accountadjustment_1_1Operation.html#ab458b22177eb52a8ab349153a3e38b72',1,'openpit::accountadjustment::Operation']]],

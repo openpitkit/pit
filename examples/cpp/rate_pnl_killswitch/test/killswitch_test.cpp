@@ -71,7 +71,8 @@ public:
 
 TEST(Scenario, TripsBothKillswitches) {
   const openpit::Engine engine = killswitch::BuildEngine(killswitch::Limits{
-      /*settlementAsset=*/killswitch::kScenarioAssetSettle,
+      /*settlementAsset=*/openpit::param::Asset(
+          killswitch::kScenarioAssetSettle),
       /*pnlLowerBound=*/killswitch::kScenarioLowerBound,
       /*pnlUpperBound=*/killswitch::kScenarioUpperBound,
       /*maxOrdersBurst=*/killswitch::kScenarioMaxOrdersBurst,

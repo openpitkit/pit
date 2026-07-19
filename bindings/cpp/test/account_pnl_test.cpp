@@ -63,7 +63,9 @@ TEST(AccountPnlOutcome, MissingAccountCurrencyDoesNotExposeThePnlAmount) {
 }
 
 TEST(AccountOutcomeEntry, FirstPositionPnlHaltExposesTheReason) {
+  const openpit::param::Asset asset("USD");
   OpenPitAccountOutcomeEntry raw{};
+  raw.asset = asset.Raw();
   raw.realized_pnl.is_set = true;
   raw.realized_pnl.value.halt_reason = OPENPIT_PNL_HALT_REASON_MISSING_FX;
 

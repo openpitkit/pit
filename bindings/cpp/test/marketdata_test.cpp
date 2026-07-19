@@ -100,7 +100,8 @@ TEST(CoreInstrumentId, MarketDataAliasIsTheRootType) {
 
 TEST(ReferenceBook, ResolvesInstrumentAndStoresSettlementScheme) {
   openpit::ReferenceBook book;
-  const openpit::model::Instrument instrument("AAPL", "USD");
+  const openpit::model::Instrument instrument(::openpit::param::Asset("AAPL"),
+                                              ::openpit::param::Asset("USD"));
   const openpit::InstrumentId id = openpit::InstrumentId::FromUint64(42);
 
   const openpit::ReferenceBookRegisterResult registration =
@@ -133,8 +134,10 @@ TEST(ReferenceBook, ResolvesInstrumentAndStoresSettlementScheme) {
 
 TEST(ReferenceBook, ReportsDuplicateAndUnknownInputs) {
   openpit::ReferenceBook book;
-  const openpit::model::Instrument aapl("AAPL", "USD");
-  const openpit::model::Instrument msft("MSFT", "USD");
+  const openpit::model::Instrument aapl(::openpit::param::Asset("AAPL"),
+                                        ::openpit::param::Asset("USD"));
+  const openpit::model::Instrument msft(::openpit::param::Asset("MSFT"),
+                                        ::openpit::param::Asset("USD"));
   const openpit::InstrumentId id = openpit::InstrumentId::FromUint64(42);
 
   EXPECT_TRUE(book.Register(aapl, id).Ok());
@@ -149,7 +152,8 @@ TEST(ReferenceBook, ReportsDuplicateAndUnknownInputs) {
   EXPECT_EQ(duplicateInstrument.status,
             openpit::ReferenceBookRegisterStatus::DuplicateInstrument);
   ASSERT_TRUE(duplicateInstrument.conflictingInstrument.has_value());
-  EXPECT_EQ(duplicateInstrument.conflictingInstrument->underlyingAsset, "AAPL");
+  EXPECT_EQ(duplicateInstrument.conflictingInstrument->underlyingAsset.View(),
+            "AAPL");
   EXPECT_EQ(book.SetSettlementScheme(openpit::InstrumentId::FromUint64(99),
                                      openpit::SettlementScheme::Uniform(1)),
             openpit::ReferenceBookStatus::UnknownInstrument);
@@ -258,8 +262,9 @@ TEST(MarketDataBuilder, FullSyncUpgradeBuildsConcurrentSafeService) {
           .Build();
   EXPECT_TRUE(static_cast<bool>(service));
 
-  const md::InstrumentId id =
-      Register(service, openpit::model::Instrument("AAPL", "USD"));
+  const md::InstrumentId id = Register(
+      service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                          ::openpit::param::Asset("USD")));
   EXPECT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("10"))),
             md::RegisterStatus::Ok);
 }
@@ -295,8 +300,9 @@ TEST(MarketDataBuilder, FromEngineSyncPolicyDerivesMode) {
 TEST(MarketDataBuilder, NoSyncServicePushAndReadOnSameThread) {
   // A no-sync service (free no-op locks) supports push and read on one thread.
   md::Service service = BuildService(md::SyncPolicy::None);
-  const md::InstrumentId id =
-      Register(service, openpit::model::Instrument("BTC", "USD"));
+  const md::InstrumentId id = Register(
+      service, openpit::model::Instrument(::openpit::param::Asset("BTC"),
+                                          ::openpit::param::Asset("USD")));
 
   ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("42000"))),
             md::RegisterStatus::Ok);
@@ -313,7 +319,8 @@ TEST(MarketDataBuilder, NoSyncServicePushAndReadOnSameThread) {
 
 TEST(MarketDataService, RegisterTwiceReportsAlreadyRegistered) {
   md::Service service = BuildService(md::SyncPolicy::None);
-  const openpit::model::Instrument instrument("AAPL", "USD");
+  const openpit::model::Instrument instrument(::openpit::param::Asset("AAPL"),
+                                              ::openpit::param::Asset("USD"));
 
   const md::RegisterResult first = service.Register(instrument);
   ASSERT_EQ(first.status, md::RegisterStatus::Ok);
@@ -323,22 +330,26 @@ TEST(MarketDataService, RegisterTwiceReportsAlreadyRegistered) {
   EXPECT_EQ(second.status, md::RegisterStatus::AlreadyRegistered);
   EXPECT_FALSE(second.instrumentId.has_value());
   ASSERT_TRUE(second.conflictingInstrument.has_value());
-  EXPECT_EQ(second.conflictingInstrument->underlyingAsset, "AAPL");
-  EXPECT_EQ(second.conflictingInstrument->settlementAsset, "USD");
+  EXPECT_EQ(second.conflictingInstrument->underlyingAsset.View(), "AAPL");
+  EXPECT_EQ(second.conflictingInstrument->settlementAsset.View(), "USD");
 }
 
 TEST(MarketDataService, RegisterWithExplicitIdRejectsDuplicateId) {
   md::Service service = BuildService(md::SyncPolicy::None);
   const md::InstrumentId id = md::InstrumentId::FromUint64(7);
 
-  const md::RegisterResult out =
-      service.Register(openpit::model::Instrument("AAPL", "USD"), id);
+  const md::RegisterResult out = service.Register(
+      openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                 ::openpit::param::Asset("USD")),
+      id);
   ASSERT_EQ(out.status, md::RegisterStatus::Ok);
   ASSERT_TRUE(out.instrumentId.has_value());
   EXPECT_EQ(out.instrumentId.value(), id);
 
-  const md::RegisterResult dup =
-      service.Register(openpit::model::Instrument("MSFT", "USD"), id);
+  const md::RegisterResult dup = service.Register(
+      openpit::model::Instrument(::openpit::param::Asset("MSFT"),
+                                 ::openpit::param::Asset("USD")),
+      id);
   EXPECT_EQ(dup.status, md::RegisterStatus::DuplicateId);
   EXPECT_FALSE(dup.instrumentId.has_value());
   ASSERT_TRUE(dup.conflictingInstrumentId.has_value());
@@ -347,7 +358,8 @@ TEST(MarketDataService, RegisterWithExplicitIdRejectsDuplicateId) {
 
 TEST(MarketDataService, RegisterExplicitIdRejectsDuplicateInstrument) {
   md::Service service = BuildService(md::SyncPolicy::None);
-  const openpit::model::Instrument instrument("AAPL", "USD");
+  const openpit::model::Instrument instrument(::openpit::param::Asset("AAPL"),
+                                              ::openpit::param::Asset("USD"));
 
   const md::RegisterResult out =
       service.Register(instrument, md::InstrumentId::FromUint64(1));
@@ -359,13 +371,14 @@ TEST(MarketDataService, RegisterExplicitIdRejectsDuplicateInstrument) {
   EXPECT_EQ(dup.status, md::RegisterStatus::DuplicateInstrument);
   EXPECT_FALSE(dup.instrumentId.has_value());
   ASSERT_TRUE(dup.conflictingInstrument.has_value());
-  EXPECT_EQ(dup.conflictingInstrument->underlyingAsset, "AAPL");
-  EXPECT_EQ(dup.conflictingInstrument->settlementAsset, "USD");
+  EXPECT_EQ(dup.conflictingInstrument->underlyingAsset.View(), "AAPL");
+  EXPECT_EQ(dup.conflictingInstrument->settlementAsset.View(), "USD");
 }
 
 TEST(MarketDataService, ResolveRecoversIdFromName) {
   md::Service service = BuildService(md::SyncPolicy::None);
-  const openpit::model::Instrument instrument("AAPL", "USD");
+  const openpit::model::Instrument instrument(::openpit::param::Asset("AAPL"),
+                                              ::openpit::param::Asset("USD"));
   const md::InstrumentId id = Register(service, instrument);
 
   const std::optional<md::InstrumentId> resolved = service.Resolve(instrument);
@@ -376,12 +389,16 @@ TEST(MarketDataService, ResolveRecoversIdFromName) {
 TEST(MarketDataService, ResolveUnknownInstrumentIsNullopt) {
   md::Service service = BuildService(md::SyncPolicy::None);
   EXPECT_FALSE(
-      service.Resolve(openpit::model::Instrument("NOPE", "USD")).has_value());
+      service
+          .Resolve(openpit::model::Instrument(::openpit::param::Asset("NOPE"),
+                                              ::openpit::param::Asset("USD")))
+          .has_value());
 }
 
 TEST(MarketDataService, PushByInstrumentCreatesSlotAndReturnsId) {
   md::Service service = BuildService(md::SyncPolicy::None);
-  const openpit::model::Instrument instrument("ETH", "USD");
+  const openpit::model::Instrument instrument(::openpit::param::Asset("ETH"),
+                                              ::openpit::param::Asset("USD"));
 
   const md::InstrumentId id = service.PushByInstrument(
       instrument, md::Quote().WithMark(Price::FromString("2000")));
@@ -396,8 +413,9 @@ TEST(MarketDataService, PushByInstrumentCreatesSlotAndReturnsId) {
 
 TEST(MarketDataService, PushReplaceRoundTripsExactPrices) {
   md::Service service = BuildService(md::SyncPolicy::None);
-  const md::InstrumentId id =
-      Register(service, openpit::model::Instrument("AAPL", "USD"));
+  const md::InstrumentId id = Register(
+      service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                          ::openpit::param::Asset("USD")));
 
   ASSERT_EQ(service.Push(id, md::Quote()
                                  .WithMark(Price::FromString("150"))
@@ -416,8 +434,9 @@ TEST(MarketDataService, PushReplaceRoundTripsExactPrices) {
 
 TEST(MarketDataService, PushPatchPreservesUnsetFields) {
   md::Service service = BuildService(md::SyncPolicy::None);
-  const md::InstrumentId id =
-      Register(service, openpit::model::Instrument("AAPL", "USD"));
+  const md::InstrumentId id = Register(
+      service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                          ::openpit::param::Asset("USD")));
 
   ASSERT_EQ(service.Push(id, md::Quote()
                                  .WithMark(Price::FromString("100"))
@@ -470,8 +489,9 @@ TEST(MarketDataService, GetStatusDistinguishesUnknownFromUnavailable) {
       md::GetStatus::UnknownInstrument);
 
   // Unavailable: registered, but no quote was ever pushed.
-  const md::InstrumentId id =
-      Register(service, openpit::model::Instrument("AAPL", "USD"));
+  const md::InstrumentId id = Register(
+      service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                          ::openpit::param::Asset("USD")));
   EXPECT_EQ(service
                 .Get(id, AccountId::FromUint64(1), NoGroupInfo{},
                      md::QuoteResolution::AccountThenGroupThenDefault)
@@ -481,8 +501,9 @@ TEST(MarketDataService, GetStatusDistinguishesUnknownFromUnavailable) {
 
 TEST(MarketDataService, ClearHidesQuoteButKeepsRegistration) {
   md::Service service = BuildService(md::SyncPolicy::None);
-  const md::InstrumentId id =
-      Register(service, openpit::model::Instrument("AAPL", "USD"));
+  const md::InstrumentId id = Register(
+      service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                          ::openpit::param::Asset("USD")));
   const AccountId account = AccountId::FromUint64(1);
 
   ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("200"))),
@@ -513,8 +534,9 @@ TEST(MarketDataService, ClearHidesQuoteButKeepsRegistration) {
 
 TEST(MarketDataService, PushForEmptyTargetsReportsNoTarget) {
   md::Service service = BuildService(md::SyncPolicy::None);
-  const md::InstrumentId id =
-      Register(service, openpit::model::Instrument("AAPL", "USD"));
+  const md::InstrumentId id = Register(
+      service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                          ::openpit::param::Asset("USD")));
 
   EXPECT_EQ(
       service.PushFor(id, md::Quote().WithMark(Price::FromString("1")), {}, {}),
@@ -523,8 +545,9 @@ TEST(MarketDataService, PushForEmptyTargetsReportsNoTarget) {
 
 TEST(MarketDataService, PushForReachesPerAccountBucketUnderAccountOnly) {
   md::Service service = BuildService(md::SyncPolicy::None);
-  const md::InstrumentId id =
-      Register(service, openpit::model::Instrument("AAPL", "USD"));
+  const md::InstrumentId id = Register(
+      service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                          ::openpit::param::Asset("USD")));
 
   const std::vector<AccountId> accounts{AccountId::FromUint64(10),
                                         AccountId::FromUint64(11)};
@@ -548,8 +571,9 @@ TEST(MarketDataService, PushForReachesPerAccountBucketUnderAccountOnly) {
 
 TEST(MarketDataService, ResolutionFallsThroughToGroupBucket) {
   md::Service service = BuildService(md::SyncPolicy::None);
-  const md::InstrumentId id =
-      Register(service, openpit::model::Instrument("AAPL", "USD"));
+  const md::InstrumentId id = Register(
+      service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                          ::openpit::param::Asset("USD")));
 
   const AccountGroupId group = AccountGroupId::FromUint32(7);
   const std::vector<AccountGroupId> groups{group};
@@ -575,8 +599,9 @@ TEST(MarketDataService, ResolutionFallsThroughToGroupBucket) {
 
 TEST(MarketDataService, DefaultGroupBucketServesEveryoneElse) {
   md::Service service = BuildService(md::SyncPolicy::None);
-  const md::InstrumentId id =
-      Register(service, openpit::model::Instrument("AAPL", "USD"));
+  const md::InstrumentId id = Register(
+      service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                          ::openpit::param::Asset("USD")));
 
   // Targeting the default account group writes the "everyone-else" bucket.
   const std::vector<AccountGroupId> groups{DefaultAccountGroup};
@@ -598,8 +623,9 @@ TEST(MarketDataService, FiniteTtlExpiresQuote) {
   // A 1 ns lifetime: the quote ages out effectively immediately.
   md::Service service =
       md::Builder(md::QuoteTtl::Within(0, 1), md::SyncPolicy::None).Build();
-  const md::InstrumentId id =
-      Register(service, openpit::model::Instrument("AAPL", "USD"));
+  const md::InstrumentId id = Register(
+      service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                          ::openpit::param::Asset("USD")));
   const AccountId account = AccountId::FromUint64(1);
 
   ASSERT_EQ(service.Push(id, md::Quote().WithMark(Price::FromString("200"))),
@@ -646,8 +672,9 @@ TEST(MarketDataService, SetInstrumentTtlOnUnknownReportsUnknown) {
 
 TEST(MarketDataService, CloneSharesUnderlyingState) {
   md::Service feed = BuildService(md::SyncPolicy::Full);
-  const md::InstrumentId id =
-      Register(feed, openpit::model::Instrument("AAPL", "USD"));
+  const md::InstrumentId id = Register(
+      feed, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                       ::openpit::param::Asset("USD")));
 
   md::Service reader = feed.Clone();
   ASSERT_EQ(feed.Push(id, md::Quote().WithMark(Price::FromString("314.15"))),

@@ -25,7 +25,8 @@ namespace policies = openpit::pretrade::policies;
 openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
 builder.Add(policies::OrderValidationPolicy{});
 
-openpit::pretrade::policies::PnlBoundsBrokerBarrier pnlBarrier("USD");
+openpit::pretrade::policies::PnlBoundsBrokerBarrier pnlBarrier(
+    openpit::param::Asset("USD"));
 pnlBarrier.lowerBound = openpit::param::Pnl::FromString("-500");
 pnlBarrier.upperBound = openpit::param::Pnl::FromString("500");
 builder.Add(policies::PnlBoundsKillSwitchPolicy{}.BrokerBarrier(std::move(pnlBarrier)));
@@ -67,7 +68,8 @@ cargo build -p openpit-ffi --release
 # Resolve the freshly built runtime by absolute path.
 lib="$PWD/target/release/libopenpit_ffi.dylib"   # .so on Linux
 
-cmake -S examples/cpp/rate_pnl_killswitch -B examples/cpp/rate_pnl_killswitch/build \
+cmake -S examples/cpp/rate_pnl_killswitch \
+  -B examples/cpp/rate_pnl_killswitch/build \
   -DOPENPIT_RUNTIME_LIBRARY="$lib"
 cmake --build examples/cpp/rate_pnl_killswitch/build
 ```
@@ -76,7 +78,8 @@ Then run the scenario and the smoke test:
 
 ```sh
 ./examples/cpp/rate_pnl_killswitch/build/rate_pnl_killswitch   # run the scenario
-ctest --test-dir examples/cpp/rate_pnl_killswitch/build --output-on-failure  # smoke test
+ctest --test-dir examples/cpp/rate_pnl_killswitch/build \
+  --output-on-failure # smoke test
 ```
 
 The build embeds the resolved runtime directory into the binary's RPATH, so no
@@ -103,8 +106,10 @@ runtime resolver, so the example exercises exactly what an SDK consumer sees.
 ## See also
 
 - [RateLimitPolicy](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
-  and [PnlBoundsKillSwitchPolicy](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy) -
+  and [PnlBoundsKillSwitchPolicy][pnl-bounds-policy] -
   the policy references for the two kill switches combined here.
 - [`../../python/rate_pnl_killswitch`](../../python/rate_pnl_killswitch) and
   [`../../go/rate_pnl_killswitch`](../../go/rate_pnl_killswitch) - the same
   supervisor in Python and Go.
+
+[pnl-bounds-policy]: https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy

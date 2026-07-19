@@ -61,7 +61,7 @@ TEST(SpotFundsWiki, LimitOnlyReservesSettlementOnBuy) {
   // Seed 10000 USD of available funds through the account-adjustment pipeline.
   aa::AccountAdjustment seed;
   aa::BalanceOperation balanceOp;
-  balanceOp.asset = "USD";
+  balanceOp.asset = ::openpit::param::Asset("USD");
   seed.operation = aa::Operation::OfBalance(std::move(balanceOp));
   aa::Amount seedAmount;
   seedAmount.balance =
@@ -74,8 +74,9 @@ TEST(SpotFundsWiki, LimitOnlyReservesSettlementOnBuy) {
 
   // Buy 10 AAPL @ 200 holds 2000 USD; available drops to 8000.
   openpit::model::Order order = openpit::model::Order::Limit(
-      openpit::model::Instrument("AAPL", "USD"), accountId,
-      openpit::model::Side::Buy,
+      openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                 ::openpit::param::Asset("USD")),
+      accountId, openpit::model::Side::Buy,
       openpit::model::TradeAmount::OfQuantity(Quantity::FromString("10")),
       Price::FromString("200"));
 
@@ -114,7 +115,8 @@ TEST(SpotFundsWiki, MarketBuyPricedFromMarkWithSlippage) {
       md::Builder::FromEngineSyncPolicy(md::QuoteTtl::Infinite(),
                                         openpit::SyncPolicy::None)
           .Build();
-  const openpit::model::Instrument aapl("AAPL", "USD");
+  const openpit::model::Instrument aapl(::openpit::param::Asset("AAPL"),
+                                        ::openpit::param::Asset("USD"));
   const md::RegisterResult registration = marketData.Register(aapl);
   ASSERT_EQ(registration.status, md::RegisterStatus::Ok);
   ASSERT_TRUE(registration.instrumentId.has_value());
@@ -134,7 +136,7 @@ TEST(SpotFundsWiki, MarketBuyPricedFromMarkWithSlippage) {
   const AccountId accountId = AccountId::FromUint64(99224416);
   aa::AccountAdjustment seed;
   aa::BalanceOperation balanceOp;
-  balanceOp.asset = "USD";
+  balanceOp.asset = ::openpit::param::Asset("USD");
   seed.operation = aa::Operation::OfBalance(std::move(balanceOp));
   aa::Amount seedAmount;
   seedAmount.balance =

@@ -32,6 +32,7 @@ namespace {
 
 namespace model = openpit::model;
 
+using openpit::param::Asset;
 using openpit::param::Leverage;
 using openpit::param::Pnl;
 using openpit::param::Price;
@@ -41,15 +42,15 @@ using openpit::param::Quantity;
 // Example: Create Validated Values
 
 TEST(WikiDomainTypes, CreateValidatedValues) {
-  // Build validated value objects at the integration boundary. Asset codes are
-  // plain strings in C++; the monetary fields are exact-decimal value types.
-  const std::string asset = "AAPL";
+  // Build validated value objects at the integration boundary. Asset codes and
+  // the monetary fields are all exact, validated value types.
+  const auto asset = Asset("AAPL");
   const auto quantity = Quantity::FromString("10.5");
   const auto price = Price::FromString("185");
   const auto pnl = Pnl::FromString("-12.5");
 
   // The wrappers normalize formatting while preserving domain meaning.
-  EXPECT_EQ(asset, "AAPL");
+  EXPECT_EQ(asset.View(), "AAPL");
   EXPECT_EQ(quantity.ToString(), "10.5");
   EXPECT_EQ(price.ToString(), "185");
   EXPECT_EQ(pnl.ToString(), "-12.5");

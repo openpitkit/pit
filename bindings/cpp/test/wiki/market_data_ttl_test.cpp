@@ -62,7 +62,8 @@ TEST(MarketDataTtlWiki, QuoteFreshnessFiniteTtlExpiresAndFreshPushRestores) {
           .Build();
 
   const md::RegisterResult registration =
-      service.Register(openpit::model::Instrument("AAPL", "USD"));
+      service.Register(openpit::model::Instrument(
+          ::openpit::param::Asset("AAPL"), ::openpit::param::Asset("USD")));
   ASSERT_EQ(registration.status, md::RegisterStatus::Ok);
   ASSERT_TRUE(registration.instrumentId.has_value());
   const md::InstrumentId aaplId = registration.instrumentId.value();

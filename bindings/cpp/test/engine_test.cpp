@@ -51,7 +51,8 @@ namespace policies = openpit::pretrade::policies;
 [[nodiscard]] openpit::model::Order TestOrder(std::uint64_t accountId) {
   openpit::model::Order order;
   openpit::model::OrderOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = ::openpit::param::AccountId::FromUint64(accountId);
   op.side = openpit::model::Side::Buy;
   op.tradeAmount =
@@ -439,7 +440,8 @@ TEST(EngineRequest, OwnsConcreteOrderUntilDeferredExecution) {
     std::uint64_t accountId) {
   openpit::model::ExecutionReport report;
   openpit::model::ExecutionReportOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = ::openpit::param::AccountId::FromUint64(accountId);
   op.side = openpit::model::Side::Buy;
   report.operation = std::move(op);
@@ -537,11 +539,13 @@ TEST(EngineAccountCurrency, SetAndClearAccountAndGroupCurrency) {
   const openpit::param::AccountGroupId group =
       openpit::param::AccountGroupId::FromUint32(7);
 
-  EXPECT_NO_THROW(engine.SetAccountCurrency(account, "USD"));
+  EXPECT_NO_THROW(
+      engine.SetAccountCurrency(account, openpit::param::Asset("USD")));
   EXPECT_NO_THROW(engine.ClearAccountCurrency(account));
 
   ASSERT_FALSE(engine.Accounts().RegisterGroup({account}, group).has_value());
-  EXPECT_NO_THROW(engine.SetAccountGroupCurrency(group, "USD"));
+  EXPECT_NO_THROW(
+      engine.SetAccountGroupCurrency(group, openpit::param::Asset("USD")));
   EXPECT_NO_THROW(engine.ClearAccountGroupCurrency(group));
 }
 

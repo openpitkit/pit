@@ -8,6 +8,6 @@ var searchData=
   ['maxqueues_5',['MaxQueues',['../classopenpit_1_1asyncengine_1_1DynamicBuilder.html#a97ae2e07bb669bfa8b4c4463465e4993',1,'openpit::asyncengine::DynamicBuilder::MaxQueues()'],['../classopenpit_1_1asyncengine_1_1TypedDynamicBuilder.html#acecd1c3cfa58ca797a7667d52322391d',1,'openpit::asyncengine::TypedDynamicBuilder::MaxQueues()']]],
   ['merge_6',['Merge',['../classopenpit_1_1pretrade_1_1PreTradeLock.html#a97429591bc96b87fe00c05725ebf884b',1,'openpit::pretrade::PreTradeLock']]],
   ['message_7',['Message',['../classopenpit_1_1asyncengine_1_1Error.html#ae1da04f2e7384ae6d1d0a5b80774e52d',1,'openpit::asyncengine::Error::Message()'],['../classopenpit_1_1Error.html#a2fa81c36d764a4f81dd94855d898bf0a',1,'openpit::Error::Message()']]],
-  ['monetaryamount_8',['MonetaryAmount',['../classopenpit_1_1param_1_1MonetaryAmount.html#a3968b09e61530200c6b5490f015d5446',1,'openpit::param::MonetaryAmount']]],
+  ['monetaryamount_8',['MonetaryAmount',['../classopenpit_1_1param_1_1MonetaryAmount.html#ae717bb41a54564319708c67aa0dfea0f',1,'openpit::param::MonetaryAmount']]],
   ['mutations_9',['Mutations',['../classopenpit_1_1tx_1_1Mutations.html#a2e4dcc50f2e0be2bbb32b5eeae8e8306',1,'openpit::tx::Mutations::Mutations(OpenPitMutations *native) noexcept'],['../classopenpit_1_1tx_1_1Mutations.html#a4167b569ef568b5cd940b563e2090ee7',1,'openpit::tx::Mutations::Mutations(const Mutations &amp;)=delete'],['../classopenpit_1_1tx_1_1Mutations.html#a00dfe9c0cade7ad1798ebbdd61047e1e',1,'openpit::tx::Mutations::Mutations(Mutations &amp;&amp;)=delete']]]
 ];

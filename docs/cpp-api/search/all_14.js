@@ -4,7 +4,7 @@ var searchData=
   ['unblock_1',['Unblock',['../classopenpit_1_1accounts_1_1Accounts.html#a96206aea5e2ae6cf34854e82a0c67602',1,'openpit::accounts::Accounts::Unblock()'],['../classopenpit_1_1asyncengine_1_1AsyncAccounts.html#a3e1abee1d81e7c0fccc91763a6552bbf',1,'openpit::asyncengine::AsyncAccounts::Unblock()']]],
   ['unblockgroup_2',['UnblockGroup',['../classopenpit_1_1accounts_1_1Accounts.html#a023942b102bf0225417ddf3050284066',1,'openpit::accounts::Accounts::UnblockGroup()'],['../classopenpit_1_1asyncengine_1_1AsyncAccounts.html#a91464dc4243c59465bb219a54b020ef2',1,'openpit::asyncengine::AsyncAccounts::UnblockGroup()']]],
   ['unchanged_3',['Unchanged',['../classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsGlobalBarrierUpdate.html#a0a53f4c3d10e2ae094d9ed3367ed45d7',1,'openpit::pretrade::policies::SpotFundsPnlBoundsGlobalBarrierUpdate']]],
-  ['underlyingasset_4',['underlyingAsset',['../structopenpit_1_1model_1_1Instrument.html#a742ffb85fbc8d8c5a12a04af45cf78ee',1,'openpit::model::Instrument']]],
+  ['underlyingasset_4',['underlyingAsset',['../structopenpit_1_1model_1_1Instrument.html#ab4c99d9af4283df5193184009dff22d4',1,'openpit::model::Instrument']]],
   ['uniform_5',['Uniform',['../structopenpit_1_1SettlementScheme.html#ae24295a31ab94fe4f9c1123fd4beeb77',1,'openpit::SettlementScheme']]],
   ['unit_6',['unit',['../structopenpit_1_1SettlementLag.html#a88f84bdff06e1d1d4bcc7c7f05280b0a',1,'openpit::SettlementLag']]],
   ['unknown_7',['Unknown',['../namespaceopenpit.html#ac070e2d72dfd9d568d40c50f9514bda1a88183b946cc5f0e8c96b2e66e1c74a7e',1,'openpit']]],

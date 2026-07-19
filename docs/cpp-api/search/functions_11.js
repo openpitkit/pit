@@ -2,10 +2,10 @@ var searchData=
 [
   ['service_0',['Service',['../classopenpit_1_1marketdata_1_1Service.html#a55a717d3f93545f007df2b2cda18d6a3',1,'openpit::marketdata::Service::Service()=default'],['../classopenpit_1_1marketdata_1_1Service.html#af9975c62e87d11d6e3fcf130206ddb9e',1,'openpit::marketdata::Service::Service(OpenPitMarketDataService *handle) noexcept']]],
   ['set_1',['Set',['../classopenpit_1_1pretrade_1_1policies_1_1SpotFundsPnlBoundsGlobalBarrierUpdate.html#a516fa1cf44ed7ad5de34604821ccba87',1,'openpit::pretrade::policies::SpotFundsPnlBoundsGlobalBarrierUpdate']]],
-  ['setaccountcurrency_2',['SetAccountCurrency',['../classopenpit_1_1Engine.html#a97fe8c78d9a46d24cdc0dc6c265d963a',1,'openpit::Engine']]],
-  ['setaccountgroupcurrency_3',['SetAccountGroupCurrency',['../classopenpit_1_1Engine.html#ad31f43ac5765e80300b71e4f8029d616',1,'openpit::Engine']]],
+  ['setaccountcurrency_2',['SetAccountCurrency',['../classopenpit_1_1Engine.html#adeae37fbcfa6b985b420fdd5e0128d94',1,'openpit::Engine']]],
+  ['setaccountgroupcurrency_3',['SetAccountGroupCurrency',['../classopenpit_1_1Engine.html#a177c649d0f21d4f4a3b4968bc587df93',1,'openpit::Engine']]],
   ['setaccountgroupttl_4',['SetAccountGroupTtl',['../classopenpit_1_1marketdata_1_1Service.html#a402f9621b52b773351e7840b159983b0',1,'openpit::marketdata::Service']]],
-  ['setaccountpnl_5',['SetAccountPnl',['../classopenpit_1_1Configurator.html#ad0edd6b0d9c1dc09c4be43d91163e756',1,'openpit::Configurator']]],
+  ['setaccountpnl_5',['SetAccountPnl',['../classopenpit_1_1Configurator.html#a4f0dc8ae8dcc10a676ca944168ac9d8e',1,'openpit::Configurator']]],
   ['setaccountttl_6',['SetAccountTtl',['../classopenpit_1_1marketdata_1_1Service.html#a7b032e012cf4f4207124e0e430cb17ae',1,'openpit::marketdata::Service']]],
   ['setinstrumentaccountgroupttl_7',['SetInstrumentAccountGroupTtl',['../classopenpit_1_1marketdata_1_1Service.html#a279d10075ad2f243d1baaab3c7516466',1,'openpit::marketdata::Service']]],
   ['setinstrumentaccountttl_8',['SetInstrumentAccountTtl',['../classopenpit_1_1marketdata_1_1Service.html#a26445ce766ad95fee0d5cd0849a6909a',1,'openpit::marketdata::Service']]],

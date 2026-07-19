@@ -16,6 +16,7 @@ var hierarchy =
     [ "openpit::asyncengine::AdjustmentOutcome", "structopenpit_1_1asyncengine_1_1AdjustmentOutcome.html", null ],
     [ "openpit::AdjustmentResult", "structopenpit_1_1AdjustmentResult.html", null ],
     [ "openpit::accountadjustment::Amount", "structopenpit_1_1accountadjustment_1_1Amount.html", null ],
+    [ "openpit::param::Asset", "classopenpit_1_1param_1_1Asset.html", null ],
     [ "openpit::asyncengine::AsyncAccounts&lt; Driver &gt;", "classopenpit_1_1asyncengine_1_1AsyncAccounts.html", null ],
     [ "openpit::asyncengine::AsyncEngine&lt; Driver &gt;", "classopenpit_1_1asyncengine_1_1AsyncEngine.html", null ],
     [ "openpit::accountadjustment::BalanceOperation", "structopenpit_1_1accountadjustment_1_1BalanceOperation.html", null ],

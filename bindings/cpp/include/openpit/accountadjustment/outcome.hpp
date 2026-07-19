@@ -69,7 +69,7 @@ struct OutcomeAmount {
 // amounts. Each amount is absent (empty optional) when its C `is_set` flag is
 // false.
 struct AccountOutcomeEntry {
-  std::string asset;
+  param::Asset asset;
   std::optional<OutcomeAmount> balance;
   std::optional<OutcomeAmount> held;
   std::optional<OutcomeAmount> incoming;
@@ -80,12 +80,12 @@ struct AccountOutcomeEntry {
   /// Account-currency average entry price after the adjustment.
   std::optional<param::Price> averageEntryPrice;
 
-  AccountOutcomeEntry() = default;
+  explicit AccountOutcomeEntry(param::Asset entryAsset)
+      : asset(std::move(entryAsset)) {}
 
   [[nodiscard]] static AccountOutcomeEntry FromRaw(
       const OpenPitAccountOutcomeEntry& raw) {
-    AccountOutcomeEntry out;
-    out.asset = ::openpit::StringView(raw.asset).ToString();
+    AccountOutcomeEntry out(param::Asset::FromRaw(raw.asset));
     out.balance = ReadAmount(raw.balance);
     out.held = ReadAmount(raw.held);
     out.incoming = ReadAmount(raw.incoming);
@@ -100,7 +100,7 @@ struct AccountOutcomeEntry {
   // Borrows this object's asset bytes; valid only while it stays alive.
   [[nodiscard]] OpenPitAccountOutcomeEntry Raw() const noexcept {
     OpenPitAccountOutcomeEntry raw{};
-    raw.asset = ::openpit::MakeStringView(asset);
+    raw.asset = asset.Raw();
     WriteAmount(raw.balance, balance);
     WriteAmount(raw.held, held);
     WriteAmount(raw.incoming, incoming);
@@ -154,14 +154,13 @@ struct Outcome {
   param::GroupId policyGroupId;
   AccountOutcomeEntry entry;
 
-  Outcome() = default;
+  Outcome(param::GroupId groupId, AccountOutcomeEntry outcomeEntry)
+      : policyGroupId(groupId), entry(std::move(outcomeEntry)) {}
 
   [[nodiscard]] static Outcome FromRaw(
       const OpenPitAccountAdjustmentOutcome& raw) {
-    Outcome out;
-    out.policyGroupId = param::GroupId(raw.policy_group_id);
-    out.entry = AccountOutcomeEntry::FromRaw(raw.entry);
-    return out;
+    return Outcome(param::GroupId(raw.policy_group_id),
+                   AccountOutcomeEntry::FromRaw(raw.entry));
   }
 
   // Borrows this object's entry storage; valid only while it stays alive.

@@ -46,7 +46,8 @@ using openpit::param::Quantity;
                                               std::string price) {
   openpit::model::Order order;
   openpit::model::OrderOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = AccountId::FromUint64(99224416);
   op.side = openpit::model::Side::Buy;
   op.tradeAmount =
@@ -103,7 +104,7 @@ TEST(DynamicPolicyReconfigurationWiki, SetAccountPnl) {
   // Register the kill-switch policy through the builder so the engine keeps a
   // handle to its accumulator; built-in policies are configurable by name.
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
-  policies::PnlBoundsBrokerBarrier barrier{"USD"};
+  policies::PnlBoundsBrokerBarrier barrier{openpit::param::Asset("USD")};
   barrier.lowerBound = Pnl::FromString("-100");
   builder.Add(policies::PnlBoundsKillSwitchPolicy{}.BrokerBarrier(barrier));
   openpit::Engine engine = builder.Build();
@@ -117,7 +118,8 @@ TEST(DynamicPolicyReconfigurationWiki, SetAccountPnl) {
   // Built-in policies register under their type name
   // (PnlBoundsKillSwitchPolicyName).
   engine.Configure().SetAccountPnl(policies::PnlBoundsKillSwitchPolicyName,
-                                   account, "USD", Pnl::FromString("-150"));
+                                   account, openpit::param::Asset("USD"),
+                                   Pnl::FromString("-150"));
 
   // The next order for that account breaches the lower bound and is rejected;
   // the breach also latches an engine-level block on the account.
@@ -141,7 +143,7 @@ TEST(DynamicPolicyReconfigurationWiki, SpotFundsGlobalLimitMode) {
   // Seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000 notional).
   aa::AccountAdjustment seed;
   aa::BalanceOperation balanceOp;
-  balanceOp.asset = "USD";
+  balanceOp.asset = ::openpit::param::Asset("USD");
   seed.operation = aa::Operation::OfBalance(std::move(balanceOp));
   aa::Amount seedAmount;
   seedAmount.balance =
@@ -154,7 +156,8 @@ TEST(DynamicPolicyReconfigurationWiki, SpotFundsGlobalLimitMode) {
 
   openpit::model::Order order;
   openpit::model::OrderOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = account;
   op.side = openpit::model::Side::Buy;
   op.tradeAmount =
@@ -198,7 +201,7 @@ TEST(DynamicPolicyReconfigurationWiki, SpotFundsPerAccountLimitMode) {
   // Seed 1 000 USD - not enough for 10 AAPL @ 200 (= 2 000 notional).
   aa::AccountAdjustment seed;
   aa::BalanceOperation balanceOp;
-  balanceOp.asset = "USD";
+  balanceOp.asset = ::openpit::param::Asset("USD");
   seed.operation = aa::Operation::OfBalance(std::move(balanceOp));
   aa::Amount seedAmount;
   seedAmount.balance =
@@ -211,7 +214,8 @@ TEST(DynamicPolicyReconfigurationWiki, SpotFundsPerAccountLimitMode) {
 
   openpit::model::Order order;
   openpit::model::OrderOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = account;
   op.side = openpit::model::Side::Buy;
   op.tradeAmount =

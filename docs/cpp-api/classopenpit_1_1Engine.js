@@ -14,8 +14,8 @@ var classopenpit_1_1Engine =
     [ "ExecutePreTradeDryRun", "classopenpit_1_1Engine.html#a8863017b17b6076550e01107ac3c97ad", null ],
     [ "Get", "classopenpit_1_1Engine.html#ae64820572971cad3e4d0d00088d12b50", null ],
     [ "operator bool", "classopenpit_1_1Engine.html#a684faeec84a674fda743177aa03c89c4", null ],
-    [ "SetAccountCurrency", "classopenpit_1_1Engine.html#a97fe8c78d9a46d24cdc0dc6c265d963a", null ],
-    [ "SetAccountGroupCurrency", "classopenpit_1_1Engine.html#ad31f43ac5765e80300b71e4f8029d616", null ],
+    [ "SetAccountCurrency", "classopenpit_1_1Engine.html#adeae37fbcfa6b985b420fdd5e0128d94", null ],
+    [ "SetAccountGroupCurrency", "classopenpit_1_1Engine.html#a177c649d0f21d4f4a3b4968bc587df93", null ],
     [ "StartPreTrade", "classopenpit_1_1Engine.html#a6f6a97122495f5bc66b81c9f07a60fe1", null ],
     [ "StartPreTrade", "classopenpit_1_1Engine.html#ab193751b7ba7eefb43ab1a128118fb02", null ],
     [ "StartPreTradeDryRun", "classopenpit_1_1Engine.html#ae67d571c2f32fa163a23c4a8cd5e0b34", null ]

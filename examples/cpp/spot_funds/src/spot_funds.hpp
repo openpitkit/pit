@@ -103,7 +103,7 @@ inline void SeedFunds(const ::openpit::Engine &engine,
   namespace adj = ::openpit::accountadjustment;
 
   adj::BalanceOperation balance;
-  balance.asset = kScenarioAssetSettle;
+  balance.asset = ::openpit::param::Asset(kScenarioAssetSettle);
 
   adj::Amount amount;
   amount.balance = ::openpit::param::AdjustmentAmount::OfAbsolute(
@@ -128,8 +128,9 @@ inline void SeedFunds(const ::openpit::Engine &engine,
 [[nodiscard]] inline ::openpit::model::Order
 BuildOrder(::openpit::param::AccountId account) {
   ::openpit::model::OrderOperation op;
-  op.instrument =
-      ::openpit::model::Instrument(kScenarioAssetTraded, kScenarioAssetSettle);
+  op.instrument = ::openpit::model::Instrument(
+      ::openpit::param::Asset(kScenarioAssetTraded),
+      ::openpit::param::Asset(kScenarioAssetSettle));
   op.accountId = account;
   op.side = ::openpit::model::Side::Buy;
   op.tradeAmount = ::openpit::model::TradeAmount::OfQuantity(
@@ -181,8 +182,9 @@ PlaceOrder(const ::openpit::Engine &engine,
 [[nodiscard]] inline ::openpit::model::ExecutionReport
 BuildFillReport(::openpit::param::AccountId account) {
   ::openpit::model::ExecutionReportOperation op;
-  op.instrument =
-      ::openpit::model::Instrument(kScenarioAssetTraded, kScenarioAssetSettle);
+  op.instrument = ::openpit::model::Instrument(
+      ::openpit::param::Asset(kScenarioAssetTraded),
+      ::openpit::param::Asset(kScenarioAssetSettle));
   op.accountId = account;
   op.side = ::openpit::model::Side::Buy;
 

@@ -34,11 +34,12 @@
 // Each payload mirrors the native runtime POD view (`OpenPitOrder`, ...).
 // Optional groups and fields read as an empty `std::optional` when absent,
 // matching the native runtime `is_set` / `NotSet` convention and the native
-// SDK; no validation beyond what the core performs is added here. `FromRaw`
-// copies a borrowed C view into owned values; `Raw()` rebuilds a C view whose
-// string fields borrow this object's storage and is therefore valid only while
-// the object is alive and unchanged. Financial fields are carried by the
-// `openpit::param` value types, never by `double`.
+// SDK. Asset construction still delegates validation to the native runtime;
+// `FromRaw` only enforces representation invariants that the C++ model cannot
+// store, then copies a borrowed C view into owned values. `Raw()` rebuilds a C
+// view whose string fields borrow this object's storage and is therefore valid
+// only while the object is alive and unchanged. Financial fields are carried by
+// the `openpit::param` value types, never by `double`.
 //
 // `openpit::Order` and `openpit::ExecutionReport` are the polymorphic bases the
 // policy adapters (`openpit/adapters.hpp`) downcast to. The concrete payloads
@@ -239,12 +240,10 @@ template <typename Enum>
 // (empty optional from `FromRaw`) when neither asset is set; a single set asset
 // is an invalid C payload and is reported by the core, not here.
 struct Instrument {
-  std::string underlyingAsset;
-  std::string settlementAsset;
+  param::Asset underlyingAsset;
+  param::Asset settlementAsset;
 
-  Instrument() = default;
-
-  Instrument(std::string underlying, std::string settlement)
+  Instrument(param::Asset underlying, param::Asset settlement)
       : underlyingAsset(std::move(underlying)),
         settlementAsset(std::move(settlement)) {}
 
@@ -253,17 +252,25 @@ struct Instrument {
       const OpenPitInstrument& raw) {
     const ::openpit::StringView underlying(raw.underlying_asset);
     const ::openpit::StringView settlement(raw.settlement_asset);
-    if (underlying.Empty() && settlement.Empty()) {
+    const bool hasUnderlying = !underlying.Empty();
+    const bool hasSettlement = !settlement.Empty();
+    if (!hasUnderlying && !hasSettlement) {
       return std::nullopt;
     }
-    return Instrument(underlying.ToString(), settlement.ToString());
+    if (hasUnderlying != hasSettlement) {
+      throw ::openpit::Error(
+          "instrument must provide both underlying_asset and settlement_asset "
+          "or neither");
+    }
+    return Instrument(param::Asset::FromRaw(raw.underlying_asset),
+                      param::Asset::FromRaw(raw.settlement_asset));
   }
 
   // Borrows this object's asset bytes; valid only while it stays alive.
   [[nodiscard]] OpenPitInstrument Raw() const noexcept {
     OpenPitInstrument raw{};
-    raw.underlying_asset = ::openpit::MakeStringView(underlyingAsset);
-    raw.settlement_asset = ::openpit::MakeStringView(settlementAsset);
+    raw.underlying_asset = underlyingAsset.Raw();
+    raw.settlement_asset = settlementAsset.Raw();
     return raw;
   }
 };
@@ -416,7 +423,7 @@ struct OrderPosition {
 
 // Optional margin group of an order.
 struct OrderMargin {
-  std::optional<std::string> collateralAsset;
+  std::optional<param::Asset> collateralAsset;
   std::optional<param::Leverage> leverage;
   std::optional<bool> autoBorrow;
 
@@ -424,7 +431,7 @@ struct OrderMargin {
     OrderMargin out;
     const ::openpit::StringView collateral(raw.collateral_asset);
     if (!collateral.Empty()) {
-      out.collateralAsset = collateral.ToString();
+      out.collateralAsset = param::Asset::FromRaw(raw.collateral_asset);
     }
     out.autoBorrow = detail::FromTriBool(raw.auto_borrow);
     out.leverage = param::Leverage::FromRawOption(raw.leverage);
@@ -434,7 +441,7 @@ struct OrderMargin {
   [[nodiscard]] OpenPitOrderMargin Raw() const noexcept {
     OpenPitOrderMargin raw{};
     if (collateralAsset) {
-      raw.collateral_asset = ::openpit::MakeStringView(*collateralAsset);
+      raw.collateral_asset = collateralAsset->Raw();
     }
     raw.auto_borrow = detail::ToTriBool(autoBorrow);
     raw.leverage = param::Leverage::RawOption(leverage);

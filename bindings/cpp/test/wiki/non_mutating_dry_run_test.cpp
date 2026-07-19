@@ -39,7 +39,8 @@ using openpit::param::Quantity;
 [[nodiscard]] openpit::model::Order WikiOrder() {
   openpit::model::Order order;
   openpit::model::OrderOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = openpit::param::AccountId::FromUint64(99224416);
   op.side = openpit::model::Side::Buy;
   op.tradeAmount =

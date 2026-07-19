@@ -80,7 +80,7 @@ OutcomesByAsset(
     const std::vector<::openpit::accountadjustment::Outcome> &outcomes) {
   std::map<std::string, ::openpit::accountadjustment::AccountOutcomeEntry> m;
   for (const auto &o : outcomes) {
-    m[o.entry.asset] = o.entry;
+    m.insert_or_assign(std::string(o.entry.asset.View()), o.entry);
   }
   return m;
 }

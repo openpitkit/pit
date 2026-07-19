@@ -42,12 +42,13 @@ void MarketFeed::RegisterInstruments(const std::vector<Row> &rows) {
     if (m_ids.count(row.instrument) != 0) {
       continue;
     }
-    openpit::model::Instrument instrument;
-    try {
-      instrument = ParseInstrument(row.instrument);
-    } catch (const std::exception &err) {
-      throw FeedError("line " + std::to_string(row.line) + ": " + err.what());
-    }
+    const openpit::model::Instrument instrument = [&row] {
+      try {
+        return ParseInstrument(row.instrument);
+      } catch (const std::exception &err) {
+        throw FeedError("line " + std::to_string(row.line) + ": " + err.what());
+      }
+    }();
     const md::RegisterResult registration = m_service->Register(instrument);
     if (registration.status != md::RegisterStatus::Ok ||
         !registration.instrumentId.has_value()) {

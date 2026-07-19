@@ -48,6 +48,7 @@ namespace openpit::param {
 
 class AccountId;
 class AccountGroupId;
+class Asset;
 class AdjustmentAmount;
 class CashFlow;
 class Fee;

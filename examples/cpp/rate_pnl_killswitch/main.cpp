@@ -110,7 +110,8 @@ private:
 void RunExample() {
   // Step 1 - declare the risk limits.
   const killswitch::Limits limits{
-      /*settlementAsset=*/killswitch::kScenarioAssetSettle,
+      /*settlementAsset=*/openpit::param::Asset(
+          killswitch::kScenarioAssetSettle),
       /*pnlLowerBound=*/killswitch::kScenarioLowerBound,
       /*pnlUpperBound=*/killswitch::kScenarioUpperBound,
       /*maxOrdersBurst=*/killswitch::kScenarioMaxOrdersBurst,
@@ -139,8 +140,9 @@ void RunExample() {
   // Step 5 - report the outcome. In production you would push these to your
   // metrics backend.
   std::printf("\n--- run summary ---\n");
+  const std::string settlementAsset(limits.settlementAsset.View());
   std::printf("pnl result   : %s %s\n", stats.pnl.ToString().c_str(),
-              limits.settlementAsset.c_str());
+              settlementAsset.c_str());
   std::printf("total trades : %d\n", stats.reports);
   std::printf("pre-trade avg: %s\n",
               FormatDuration(stats.AvgPreTrade()).c_str());

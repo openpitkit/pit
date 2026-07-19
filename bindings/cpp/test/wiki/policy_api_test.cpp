@@ -211,7 +211,8 @@ void RunMainCheck(const Adapter& adapter, const Context& context,
                                                   std::string_view volume) {
   openpit::model::Order order;
   openpit::model::OrderOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = ::openpit::param::AccountId::FromUint64(accountId);
   op.side = openpit::model::Side::Buy;
   op.tradeAmount =
@@ -227,7 +228,8 @@ void RunMainCheck(const Adapter& adapter, const Context& context,
     std::optional<std::string_view> price) {
   openpit::model::Order order;
   openpit::model::OrderOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = ::openpit::param::AccountId::FromUint64(accountId);
   op.side = openpit::model::Side::Buy;
   op.tradeAmount =
@@ -475,7 +477,8 @@ TEST(PolicyApiCustomModels, AllowedStrategyTagPassesPipeline) {
 
   StrategyOrder order;
   openpit::model::OrderOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = ::openpit::param::AccountId::FromUint64(99224416);
   op.side = openpit::model::Side::Buy;
   op.tradeAmount = openpit::model::TradeAmount::OfQuantity(
@@ -493,7 +496,8 @@ TEST(PolicyApiCustomModels, AllowedStrategyTagPassesPipeline) {
 
   StrategyReport report;
   openpit::model::ExecutionReportOperation reportOp;
-  reportOp.instrument = openpit::model::Instrument("AAPL", "USD");
+  reportOp.instrument = openpit::model::Instrument(
+      ::openpit::param::Asset("AAPL"), ::openpit::param::Asset("USD"));
   reportOp.accountId = ::openpit::param::AccountId::FromUint64(99224416);
   reportOp.side = openpit::model::Side::Buy;
   report.operation = std::move(reportOp);
@@ -516,7 +520,8 @@ TEST(PolicyApiCustomModels, BlockedStrategyTagRejectsAtStart) {
 
   StrategyOrder order;
   openpit::model::OrderOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = ::openpit::param::AccountId::FromUint64(99224416);
   op.side = openpit::model::Side::Buy;
   op.tradeAmount = openpit::model::TradeAmount::OfQuantity(
@@ -571,7 +576,8 @@ class BlockOnAdjustmentPolicy {
 [[nodiscard]] openpit::model::Order AccountOrder(std::uint64_t accountId) {
   openpit::model::Order order;
   openpit::model::OrderOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = ::openpit::param::AccountId::FromUint64(accountId);
   op.side = openpit::model::Side::Buy;
   op.tradeAmount =
@@ -594,7 +600,7 @@ TEST(PolicyApiBlockAccount, BlockedAccountIsRejectedWithAccountBlocked) {
   // The accepted adjustment reports a block that the engine has already
   // recorded.
   openpit::accountadjustment::BalanceOperation balanceOp;
-  balanceOp.asset = "USD";
+  balanceOp.asset = ::openpit::param::Asset("USD");
   openpit::accountadjustment::AccountAdjustment adjustment;
   adjustment.operation =
       openpit::accountadjustment::Operation::OfBalance(std::move(balanceOp));

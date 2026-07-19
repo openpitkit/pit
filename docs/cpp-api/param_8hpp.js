@@ -1,6 +1,7 @@
 var param_8hpp =
 [
     [ "openpit::param::AdjustmentAmount", "classopenpit_1_1param_1_1AdjustmentAmount.html", "classopenpit_1_1param_1_1AdjustmentAmount" ],
+    [ "openpit::param::Asset", "classopenpit_1_1param_1_1Asset.html", "classopenpit_1_1param_1_1Asset" ],
     [ "openpit::param::Leverage", "classopenpit_1_1param_1_1Leverage.html", "classopenpit_1_1param_1_1Leverage" ],
     [ "openpit::param::MonetaryAmount", "classopenpit_1_1param_1_1MonetaryAmount.html", "classopenpit_1_1param_1_1MonetaryAmount" ],
     [ "OPENPIT_PARAM_DEFINE_VALUE_TYPE", "param_8hpp.html#af70a024203a2cb99f90db4f35009a332", null ],

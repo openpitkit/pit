@@ -49,7 +49,8 @@ namespace policies = openpit::pretrade::policies;
 [[nodiscard]] openpit::model::Order TestOrder(std::uint64_t accountId) {
   openpit::model::Order order;
   openpit::model::OrderOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = ::openpit::param::AccountId::FromUint64(accountId);
   op.side = openpit::model::Side::Buy;
   op.tradeAmount =
@@ -64,7 +65,8 @@ namespace policies = openpit::pretrade::policies;
     std::uint64_t accountId) {
   openpit::model::ExecutionReport report;
   openpit::model::ExecutionReportOperation op;
-  op.instrument = openpit::model::Instrument("AAPL", "USD");
+  op.instrument = openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                             ::openpit::param::Asset("USD"));
   op.accountId = ::openpit::param::AccountId::FromUint64(accountId);
   op.side = openpit::model::Side::Buy;
   report.operation = std::move(op);

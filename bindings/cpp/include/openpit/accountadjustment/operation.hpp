@@ -40,7 +40,7 @@ namespace openpit::accountadjustment {
 /// and realized PnL are adjusted. Average entry price and realized PnL are
 /// denominated in the account currency.
 struct BalanceOperation {
-  std::optional<std::string> asset;
+  std::optional<param::Asset> asset;
   std::optional<std::variant<param::Pnl, PnlHaltReason>> realizedPnl;
   std::optional<param::Price> averageEntryPrice;
 
@@ -51,7 +51,7 @@ struct BalanceOperation {
     BalanceOperation out;
     const ::openpit::StringView asset(raw.asset);
     if (!asset.Empty()) {
-      out.asset = asset.ToString();
+      out.asset = param::Asset::FromRaw(raw.asset);
     }
     if (raw.average_entry_price.is_set) {
       out.averageEntryPrice =
@@ -67,7 +67,7 @@ struct BalanceOperation {
   [[nodiscard]] OpenPitAccountAdjustmentBalanceOperation Raw() const noexcept {
     OpenPitAccountAdjustmentBalanceOperation raw{};
     if (asset) {
-      raw.asset = ::openpit::MakeStringView(*asset);
+      raw.asset = asset->Raw();
     }
     if (averageEntryPrice) {
       raw.average_entry_price.value = averageEntryPrice->Raw();
@@ -90,7 +90,7 @@ struct BalanceOperation {
 // (empty optional) when its C view / sentinel is unset.
 struct PositionOperation {
   std::optional<model::Instrument> instrument;
-  std::optional<std::string> collateralAsset;
+  std::optional<param::Asset> collateralAsset;
   std::optional<param::Price> averageEntryPrice;
   std::optional<param::Leverage> leverage;
   std::optional<model::PositionMode> mode;
@@ -103,7 +103,7 @@ struct PositionOperation {
     out.instrument = model::Instrument::FromRaw(raw.instrument);
     const ::openpit::StringView collateral(raw.collateral_asset);
     if (!collateral.Empty()) {
-      out.collateralAsset = collateral.ToString();
+      out.collateralAsset = param::Asset::FromRaw(raw.collateral_asset);
     }
     if (raw.average_entry_price.is_set) {
       out.averageEntryPrice =
@@ -122,7 +122,7 @@ struct PositionOperation {
       raw.instrument = instrument->Raw();
     }
     if (collateralAsset) {
-      raw.collateral_asset = ::openpit::MakeStringView(*collateralAsset);
+      raw.collateral_asset = collateralAsset->Raw();
     }
     if (averageEntryPrice) {
       raw.average_entry_price.value = averageEntryPrice->Raw();

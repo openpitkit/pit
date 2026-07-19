@@ -57,7 +57,7 @@ TEST(PreTradeLockWiki, PersistAndRestoreLockRoundTrip) {
   // Seed 10000 USD so the buy can be reserved.
   openpit::accountadjustment::AccountAdjustment seed;
   openpit::accountadjustment::BalanceOperation balanceOp;
-  balanceOp.asset = "USD";
+  balanceOp.asset = ::openpit::param::Asset("USD");
   seed.operation =
       openpit::accountadjustment::Operation::OfBalance(std::move(balanceOp));
   openpit::accountadjustment::Amount seedAmount;
@@ -73,8 +73,9 @@ TEST(PreTradeLockWiki, PersistAndRestoreLockRoundTrip) {
 
   // Buy 10 AAPL @ 200 holds 2000 USD and records the lock price (200).
   openpit::model::Order order = openpit::model::Order::Limit(
-      openpit::model::Instrument("AAPL", "USD"), accountId,
-      openpit::model::Side::Buy,
+      openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                 ::openpit::param::Asset("USD")),
+      accountId, openpit::model::Side::Buy,
       openpit::model::TradeAmount::OfQuantity(
           openpit::param::Quantity::FromString("10")),
       openpit::param::Price::FromString("200"));
@@ -99,7 +100,8 @@ TEST(PreTradeLockWiki, PersistAndRestoreLockRoundTrip) {
   // The final fill must carry the restored lock so the policy reconciles the
   // 2000 USD it held against the real fill instead of blocking the account.
   openpit::model::ExecutionReportOperation operation;
-  operation.instrument = openpit::model::Instrument("AAPL", "USD");
+  operation.instrument = openpit::model::Instrument(
+      ::openpit::param::Asset("AAPL"), ::openpit::param::Asset("USD"));
   operation.accountId = accountId;
   operation.side = openpit::model::Side::Buy;
 

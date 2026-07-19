@@ -69,7 +69,8 @@ TEST(MarketDataPricingWiki, BookTopPricingAndMarkUnavailableReject) {
   md::Service marketData = md::Builder::FromEngineSyncPolicy(
                                md::QuoteTtl::Infinite(), SyncPolicy::None)
                                .Build();
-  const openpit::model::Instrument aapl("AAPL", "USD");
+  const openpit::model::Instrument aapl(::openpit::param::Asset("AAPL"),
+                                        ::openpit::param::Asset("USD"));
   const md::RegisterResult registration = marketData.Register(aapl);
   ASSERT_EQ(registration.status, md::RegisterStatus::Ok);
   ASSERT_TRUE(registration.instrumentId.has_value());
@@ -94,7 +95,7 @@ TEST(MarketDataPricingWiki, BookTopPricingAndMarkUnavailableReject) {
   const AccountId accountId = AccountId::FromUint64(99224416);
   AccountAdjustment seed;
   BalanceOperation balanceOp;
-  balanceOp.asset = "USD";
+  balanceOp.asset = ::openpit::param::Asset("USD");
   seed.operation = Operation::OfBalance(std::move(balanceOp));
   Amount seedAmount;
   seedAmount.balance =

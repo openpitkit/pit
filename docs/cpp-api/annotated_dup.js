@@ -78,6 +78,7 @@ var annotated_dup =
         [ "AccountGroupId", "classopenpit_1_1param_1_1AccountGroupId.html", "classopenpit_1_1param_1_1AccountGroupId" ],
         [ "AccountId", "classopenpit_1_1param_1_1AccountId.html", "classopenpit_1_1param_1_1AccountId" ],
         [ "AdjustmentAmount", "classopenpit_1_1param_1_1AdjustmentAmount.html", "classopenpit_1_1param_1_1AdjustmentAmount" ],
+        [ "Asset", "classopenpit_1_1param_1_1Asset.html", "classopenpit_1_1param_1_1Asset" ],
         [ "GroupId", "classopenpit_1_1param_1_1GroupId.html", "classopenpit_1_1param_1_1GroupId" ],
         [ "Leverage", "classopenpit_1_1param_1_1Leverage.html", "classopenpit_1_1param_1_1Leverage" ],
         [ "MonetaryAmount", "classopenpit_1_1param_1_1MonetaryAmount.html", "classopenpit_1_1param_1_1MonetaryAmount" ]

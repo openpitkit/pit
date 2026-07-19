@@ -1,8 +1,8 @@
 var classopenpit_1_1param_1_1MonetaryAmount =
 [
-    [ "MonetaryAmount", "classopenpit_1_1param_1_1MonetaryAmount.html#a3968b09e61530200c6b5490f015d5446", null ],
+    [ "MonetaryAmount", "classopenpit_1_1param_1_1MonetaryAmount.html#ae717bb41a54564319708c67aa0dfea0f", null ],
     [ "Amount", "classopenpit_1_1param_1_1MonetaryAmount.html#a6cc2bd3d95704b6f9545b5e87e1315bb", null ],
-    [ "Currency", "classopenpit_1_1param_1_1MonetaryAmount.html#a3c708cad41983fd0f3677ec805496972", null ],
+    [ "Currency", "classopenpit_1_1param_1_1MonetaryAmount.html#a0f43c9d1f4b735081efdf1390f4045ba", null ],
     [ "FromRaw", "classopenpit_1_1param_1_1MonetaryAmount.html#a14dc280c4f1cd33bea912b4dc356c6fd", null ],
     [ "FromRawOption", "classopenpit_1_1param_1_1MonetaryAmount.html#afae7281adf866b101499104b46d1566b", null ],
     [ "operator!=", "classopenpit_1_1param_1_1MonetaryAmount.html#aabe1395af1d7fba0b463d11ca2a0360d", null ],

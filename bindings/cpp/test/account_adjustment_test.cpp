@@ -55,7 +55,7 @@ namespace policies = openpit::pretrade::policies;
 
 TEST(AccountAdjustmentBalanceOperation, FullRawRoundTripPreservesFields) {
   aa::BalanceOperation operation;
-  operation.asset = "USD";
+  operation.asset = ::openpit::param::Asset("USD");
   operation.realizedPnl = param::Pnl::FromString("-12.75");
   operation.averageEntryPrice = param::Price::FromString("101.5");
 
@@ -63,7 +63,7 @@ TEST(AccountAdjustmentBalanceOperation, FullRawRoundTripPreservesFields) {
       aa::BalanceOperation::FromRaw(operation.Raw());
 
   ASSERT_TRUE(restored.asset.has_value());
-  EXPECT_EQ(*restored.asset, "USD");
+  EXPECT_EQ(restored.asset->View(), "USD");
   ASSERT_TRUE(restored.averageEntryPrice.has_value());
   EXPECT_EQ(restored.averageEntryPrice->ToString(), "101.5");
   ASSERT_TRUE(restored.realizedPnl.has_value());
@@ -82,7 +82,7 @@ TEST(AccountAdjustmentBalanceOperation, AbsentFieldsReadAsEmptyOptional) {
 
 TEST(AccountAdjustmentBalanceOperation, HaltedPnlRoundTrips) {
   aa::BalanceOperation operation;
-  operation.asset = "AAPL";
+  operation.asset = ::openpit::param::Asset("AAPL");
   operation.realizedPnl = aa::PnlHaltReason::MissingCostBasis;
 
   const aa::BalanceOperation restored =
@@ -99,8 +99,9 @@ TEST(AccountAdjustmentBalanceOperation, HaltedPnlRoundTrips) {
 
 TEST(AccountAdjustmentPositionOperation, FullRawRoundTripPreservesFields) {
   aa::PositionOperation operation;
-  operation.instrument = model::Instrument("AAPL", "USD");
-  operation.collateralAsset = "USD";
+  operation.instrument = model::Instrument(::openpit::param::Asset("AAPL"),
+                                           ::openpit::param::Asset("USD"));
+  operation.collateralAsset = ::openpit::param::Asset("USD");
   operation.averageEntryPrice = param::Price::FromString("102.25");
   operation.leverage = param::Leverage::FromUint16(4);  // raw 40 (4.0x)
   operation.mode = model::PositionMode::Hedged;
@@ -109,10 +110,10 @@ TEST(AccountAdjustmentPositionOperation, FullRawRoundTripPreservesFields) {
       aa::PositionOperation::FromRaw(operation.Raw());
 
   ASSERT_TRUE(restored.instrument.has_value());
-  EXPECT_EQ(restored.instrument->underlyingAsset, "AAPL");
-  EXPECT_EQ(restored.instrument->settlementAsset, "USD");
+  EXPECT_EQ(restored.instrument->underlyingAsset.View(), "AAPL");
+  EXPECT_EQ(restored.instrument->settlementAsset.View(), "USD");
   ASSERT_TRUE(restored.collateralAsset.has_value());
-  EXPECT_EQ(*restored.collateralAsset, "USD");
+  EXPECT_EQ(restored.collateralAsset->View(), "USD");
   ASSERT_TRUE(restored.averageEntryPrice.has_value());
   EXPECT_EQ(restored.averageEntryPrice->ToString(), "102.25");
   ASSERT_TRUE(restored.leverage.has_value());
@@ -151,7 +152,7 @@ TEST(AccountAdjustmentAccountPnlOperation, ValueRoundTrips) {
 
 TEST(AccountAdjustmentOperation, BalanceVariantRoundTrips) {
   aa::BalanceOperation balance;
-  balance.asset = "BTC";
+  balance.asset = ::openpit::param::Asset("BTC");
   const aa::Operation operation = aa::Operation::OfBalance(balance);
   EXPECT_TRUE(operation.IsBalance());
   EXPECT_FALSE(operation.IsPosition());
@@ -163,14 +164,14 @@ TEST(AccountAdjustmentOperation, BalanceVariantRoundTrips) {
   ASSERT_TRUE(restored->IsBalance());
   ASSERT_NE(restored->AsBalance(), nullptr);
   ASSERT_TRUE(restored->AsBalance()->asset.has_value());
-  EXPECT_EQ(*restored->AsBalance()->asset, "BTC");
+  EXPECT_EQ(restored->AsBalance()->asset->View(), "BTC");
   EXPECT_EQ(restored->AsPosition(), nullptr);
   EXPECT_EQ(restored->AsAccountPnl(), nullptr);
 }
 
 TEST(AccountAdjustmentOperation, PositionVariantRoundTrips) {
   aa::PositionOperation position;
-  position.collateralAsset = "USDT";
+  position.collateralAsset = ::openpit::param::Asset("USDT");
   const aa::Operation operation = aa::Operation::OfPosition(position);
   EXPECT_TRUE(operation.IsPosition());
 
@@ -180,7 +181,7 @@ TEST(AccountAdjustmentOperation, PositionVariantRoundTrips) {
   ASSERT_TRUE(restored->IsPosition());
   ASSERT_NE(restored->AsPosition(), nullptr);
   ASSERT_TRUE(restored->AsPosition()->collateralAsset.has_value());
-  EXPECT_EQ(*restored->AsPosition()->collateralAsset, "USDT");
+  EXPECT_EQ(restored->AsPosition()->collateralAsset->View(), "USDT");
   EXPECT_EQ(restored->AsBalance(), nullptr);
 }
 
@@ -296,7 +297,7 @@ TEST(AccountAdjustment, FullRawRoundTripPreservesEveryGroup) {
   aa::AccountAdjustment adjustment;
 
   aa::BalanceOperation balance;
-  balance.asset = "USD";
+  balance.asset = ::openpit::param::Asset("USD");
   balance.averageEntryPrice = param::Price::FromString("101.5");
   adjustment.operation = aa::Operation::OfBalance(balance);
 
@@ -317,7 +318,7 @@ TEST(AccountAdjustment, FullRawRoundTripPreservesEveryGroup) {
   ASSERT_TRUE(restored.operation.has_value());
   ASSERT_TRUE(restored.operation->IsBalance());
   ASSERT_TRUE(restored.operation->AsBalance()->asset.has_value());
-  EXPECT_EQ(*restored.operation->AsBalance()->asset, "USD");
+  EXPECT_EQ(restored.operation->AsBalance()->asset->View(), "USD");
   EXPECT_EQ(restored.operation->AsBalance()->averageEntryPrice->ToString(),
             "101.5");
 
@@ -363,8 +364,7 @@ TEST(AccountAdjustmentPnlOutcomeAmount, RawRoundTripPreservesDeltaAndAbsolute) {
 }
 
 TEST(AccountAdjustmentOutcomeEntry, PresentAndAbsentAmountsRoundTrip) {
-  aa::AccountOutcomeEntry entry;
-  entry.asset = "USD";
+  aa::AccountOutcomeEntry entry(param::Asset("USD"));
   entry.balance = aa::OutcomeAmount(param::PositionSize::FromString("5"),
                                     param::PositionSize::FromString("5"));
   entry.realizedPnl = aa::PnlOutcome{aa::PnlOutcomeAmount(
@@ -375,7 +375,7 @@ TEST(AccountAdjustmentOutcomeEntry, PresentAndAbsentAmountsRoundTrip) {
   const aa::AccountOutcomeEntry restored =
       aa::AccountOutcomeEntry::FromRaw(entry.Raw());
 
-  EXPECT_EQ(restored.asset, "USD");
+  EXPECT_EQ(restored.asset.View(), "USD");
   ASSERT_TRUE(restored.balance.has_value());
   EXPECT_EQ(restored.balance->delta.ToString(), "5");
   EXPECT_FALSE(restored.held.has_value());
@@ -389,16 +389,15 @@ TEST(AccountAdjustmentOutcomeEntry, PresentAndAbsentAmountsRoundTrip) {
 }
 
 TEST(AccountAdjustmentOutcome, RawRoundTripPreservesGroupAndEntry) {
-  aa::Outcome outcome;
-  outcome.policyGroupId = param::GroupId(7);
-  outcome.entry.asset = "ETH";
+  aa::Outcome outcome(param::GroupId(7),
+                      aa::AccountOutcomeEntry(param::Asset("ETH")));
   outcome.entry.incoming =
       aa::OutcomeAmount(param::PositionSize::FromString("1"),
                         param::PositionSize::FromString("9"));
 
   const aa::Outcome restored = aa::Outcome::FromRaw(outcome.Raw());
   EXPECT_EQ(restored.policyGroupId, param::GroupId(7));
-  EXPECT_EQ(restored.entry.asset, "ETH");
+  EXPECT_EQ(restored.entry.asset.View(), "ETH");
   ASSERT_TRUE(restored.entry.incoming.has_value());
   EXPECT_EQ(restored.entry.incoming->absolute.ToString(), "9");
   EXPECT_FALSE(restored.entry.realizedPnl.has_value());
@@ -414,7 +413,7 @@ TEST(AccountAdjustmentEngine, ForceSetPositionPnlSurfacesOutcome) {
 
   aa::AccountAdjustment seed;
   aa::BalanceOperation seedOperation;
-  seedOperation.asset = "AAPL";
+  seedOperation.asset = ::openpit::param::Asset("AAPL");
   seedOperation.realizedPnl = param::Pnl::FromString("30");
   seed.operation = aa::Operation::OfBalance(std::move(seedOperation));
 
@@ -424,7 +423,7 @@ TEST(AccountAdjustmentEngine, ForceSetPositionPnlSurfacesOutcome) {
 
   aa::AccountAdjustment forceSet;
   aa::BalanceOperation forceSetOperation;
-  forceSetOperation.asset = "AAPL";
+  forceSetOperation.asset = ::openpit::param::Asset("AAPL");
   forceSetOperation.realizedPnl = param::Pnl::FromString("50");
   forceSet.operation = aa::Operation::OfBalance(std::move(forceSetOperation));
 
@@ -435,7 +434,7 @@ TEST(AccountAdjustmentEngine, ForceSetPositionPnlSurfacesOutcome) {
 
   const aa::AccountOutcomeEntry& entry =
       result.accountAdjustmentOutcomes.front().entry;
-  EXPECT_EQ(entry.asset, "AAPL");
+  EXPECT_EQ(entry.asset.View(), "AAPL");
   ASSERT_TRUE(entry.realizedPnl.has_value());
   const auto& pnl = std::get<aa::PnlOutcomeAmount>(entry.realizedPnl->Get());
   EXPECT_EQ(pnl.delta.ToString(), "20");

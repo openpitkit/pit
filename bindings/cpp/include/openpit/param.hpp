@@ -24,6 +24,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -279,6 +280,68 @@ OPENPIT_PARAM_DEFINE_VALUE_TYPE(Notional, OpenPitParamNotional, notional);
 
 #undef OPENPIT_PARAM_DEFINE_VALUE_TYPE
 
+/// Validated asset or currency identifier.
+///
+/// Construction delegates validation to the native runtime. The returned
+/// native handle is shared by copies and released with the matching Asset
+/// destructor when the last C++ value goes away.
+class Asset {
+ public:
+  /// Validates and owns an asset identifier.
+  ///
+  /// Throws `openpit::Error` when `value` is empty or whitespace-only.
+  explicit Asset(std::string_view value) : m_handle(Create(value)) {}
+
+  /// Copies and validates a borrowed native asset view.
+  [[nodiscard]] static Asset FromRaw(OpenPitStringView raw) {
+    return Asset(::openpit::StringView(raw).View());
+  }
+
+  /// Returns the borrowed asset text.
+  [[nodiscard]] std::string_view View() const noexcept {
+    return ::openpit::SharedStringView(m_handle.get()).View();
+  }
+
+  /// Returns the borrowed native representation.
+  [[nodiscard]] OpenPitStringView Raw() const noexcept {
+    return openpit_shared_string_view(m_handle.get());
+  }
+
+  [[nodiscard]] bool operator==(const Asset& other) const noexcept {
+    return View() == other.View();
+  }
+
+  [[nodiscard]] bool operator!=(const Asset& other) const noexcept {
+    return !(*this == other);
+  }
+
+  [[nodiscard]] bool operator<(const Asset& other) const noexcept {
+    return View() < other.View();
+  }
+
+ private:
+  struct Deleter {
+    void operator()(OpenPitSharedString* handle) const noexcept {
+      openpit_destroy_param_asset(handle);
+    }
+  };
+
+  [[nodiscard]] static std::shared_ptr<OpenPitSharedString> Create(
+      std::string_view value) {
+    OpenPitParamError* error = nullptr;
+    OpenPitSharedString* handle = openpit_create_param_asset_from_string(
+        ::openpit::MakeStringView(value), &error);
+    if (handle == nullptr) {
+      ::openpit::detail::ThrowFromParamError(
+          error, "openpit_create_param_asset_from_string failed");
+    }
+    std::unique_ptr<OpenPitSharedString, Deleter> owned(handle);
+    return std::shared_ptr<OpenPitSharedString>(std::move(owned));
+  }
+
+  std::shared_ptr<OpenPitSharedString> m_handle;
+};
+
 /// Signed fee-style amount paired with the currency it is denominated in.
 ///
 /// The native runtime carries this as `OpenPitParamMonetaryAmount`: an exact
@@ -287,14 +350,14 @@ OPENPIT_PARAM_DEFINE_VALUE_TYPE(Notional, OpenPitParamNotional, notional);
 class MonetaryAmount {
  public:
   /// Builds a monetary amount from a signed amount and currency.
-  MonetaryAmount(Fee amount, std::string currency)
+  MonetaryAmount(Fee amount, Asset currency)
       : m_currency(std::move(currency)), m_amount(amount) {}
 
   /// Adopts a native monetary amount view into owned C++ storage.
   [[nodiscard]] static MonetaryAmount FromRaw(
       const OpenPitParamMonetaryAmount& raw) {
     return MonetaryAmount(Fee::FromRaw(raw.amount),
-                          ::openpit::StringView(raw.currency).ToString());
+                          Asset::FromRaw(raw.currency));
   }
 
   /// Maps a native optional monetary amount to `std::optional`.
@@ -321,7 +384,7 @@ class MonetaryAmount {
   [[nodiscard]] OpenPitParamMonetaryAmount Raw() const noexcept {
     OpenPitParamMonetaryAmount raw{};
     raw.amount = m_amount.Raw();
-    raw.currency = ::openpit::MakeStringView(m_currency);
+    raw.currency = m_currency.Raw();
     return raw;
   }
 
@@ -329,9 +392,7 @@ class MonetaryAmount {
   [[nodiscard]] Fee Amount() const noexcept { return m_amount; }
 
   /// Returns the owned currency code.
-  [[nodiscard]] const std::string& Currency() const noexcept {
-    return m_currency;
-  }
+  [[nodiscard]] const Asset& Currency() const noexcept { return m_currency; }
 
   /// Reports whether both amount and currency are equal.
   [[nodiscard]] bool operator==(const MonetaryAmount& other) const {
@@ -344,7 +405,7 @@ class MonetaryAmount {
   }
 
  private:
-  std::string m_currency;
+  Asset m_currency;
   Fee m_amount;
 };
 

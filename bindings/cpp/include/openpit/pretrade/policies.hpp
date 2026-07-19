@@ -124,9 +124,10 @@ struct OrderSizeBrokerBarrier {
 // Per-settlement-asset order-size barrier.
 struct OrderSizeAssetBarrier {
   OrderSizeLimit limit;
-  std::string settlementAsset;
+  ::openpit::param::Asset settlementAsset;
 
-  OrderSizeAssetBarrier(OrderSizeLimit barrierLimit, std::string asset)
+  OrderSizeAssetBarrier(OrderSizeLimit barrierLimit,
+                        ::openpit::param::Asset asset)
       : limit(barrierLimit), settlementAsset(std::move(asset)) {}
 };
 
@@ -134,11 +135,11 @@ struct OrderSizeAssetBarrier {
 struct OrderSizeAccountAssetBarrier {
   OrderSizeLimit limit;
   ::openpit::param::AccountId accountId;
-  std::string settlementAsset;
+  ::openpit::param::Asset settlementAsset;
 
   OrderSizeAccountAssetBarrier(OrderSizeLimit barrierLimit,
                                ::openpit::param::AccountId account,
-                               std::string asset)
+                               ::openpit::param::Asset asset)
       : limit(barrierLimit),
         accountId(account),
         settlementAsset(std::move(asset)) {}
@@ -184,7 +185,7 @@ class OrderSizeLimitPolicy {
     for (const OrderSizeAssetBarrier& barrier : m_assetBarriers) {
       OpenPitPretradePoliciesOrderSizeAssetBarrier raw{};
       raw.limit = barrier.limit.Raw();
-      raw.settlement_asset = ::openpit::MakeStringView(barrier.settlementAsset);
+      raw.settlement_asset = barrier.settlementAsset.Raw();
       assetRaw.push_back(raw);
     }
 
@@ -195,7 +196,7 @@ class OrderSizeLimitPolicy {
       OpenPitPretradePoliciesOrderSizeAccountAssetBarrier raw{};
       raw.limit = barrier.limit.Raw();
       raw.account_id = barrier.accountId.Raw();
-      raw.settlement_asset = ::openpit::MakeStringView(barrier.settlementAsset);
+      raw.settlement_asset = barrier.settlementAsset.Raw();
       accountAssetRaw.push_back(raw);
     }
 
@@ -250,11 +251,11 @@ class OrderValidationPolicy {
 // accounts. Lower bound is typically the negative loss limit; upper bound the
 // positive profit-take limit. Either may be absent.
 struct PnlBoundsBrokerBarrier {
-  std::string settlementAsset;
+  ::openpit::param::Asset settlementAsset;
   std::optional<::openpit::param::Pnl> lowerBound;
   std::optional<::openpit::param::Pnl> upperBound;
 
-  explicit PnlBoundsBrokerBarrier(std::string asset)
+  explicit PnlBoundsBrokerBarrier(::openpit::param::Asset asset)
       : settlementAsset(std::move(asset)) {}
 };
 
@@ -262,13 +263,14 @@ struct PnlBoundsBrokerBarrier {
 // seed.
 struct PnlBoundsAccountBarrier {
   ::openpit::param::AccountId accountId;
-  std::string settlementAsset;
+  ::openpit::param::Asset settlementAsset;
   std::optional<::openpit::param::Pnl> lowerBound;
   std::optional<::openpit::param::Pnl> upperBound;
   ::openpit::param::Pnl initialPnl;
 
   PnlBoundsAccountBarrier(::openpit::param::AccountId account,
-                          std::string asset, ::openpit::param::Pnl initial)
+                          ::openpit::param::Asset asset,
+                          ::openpit::param::Pnl initial)
       : accountId(account),
         settlementAsset(std::move(asset)),
         initialPnl(initial) {}
@@ -279,12 +281,12 @@ struct PnlBoundsAccountBarrier {
 // runtime replacement preserves the live accumulator.
 struct PnlBoundsAccountBarrierUpdate {
   ::openpit::param::AccountId accountId;
-  std::string settlementAsset;
+  ::openpit::param::Asset settlementAsset;
   std::optional<::openpit::param::Pnl> lowerBound;
   std::optional<::openpit::param::Pnl> upperBound;
 
   PnlBoundsAccountBarrierUpdate(::openpit::param::AccountId account,
-                                std::string asset)
+                                ::openpit::param::Asset asset)
       : accountId(account), settlementAsset(std::move(asset)) {}
 };
 
@@ -313,7 +315,7 @@ class PnlBoundsKillSwitchPolicy {
     brokerRaw.reserve(m_brokerBarriers.size());
     for (const PnlBoundsBrokerBarrier& barrier : m_brokerBarriers) {
       OpenPitPretradePoliciesPnlBoundsBarrier raw{};
-      raw.settlement_asset = ::openpit::MakeStringView(barrier.settlementAsset);
+      raw.settlement_asset = barrier.settlementAsset.Raw();
       raw.lower_bound = ::openpit::pretrade::policies::detail::PnlOptional(
           barrier.lowerBound);
       raw.upper_bound = ::openpit::pretrade::policies::detail::PnlOptional(
@@ -326,7 +328,7 @@ class PnlBoundsKillSwitchPolicy {
     for (const PnlBoundsAccountBarrier& barrier : m_accountBarriers) {
       OpenPitPretradePoliciesPnlBoundsAccountBarrier raw{};
       raw.account_id = barrier.accountId.Raw();
-      raw.settlement_asset = ::openpit::MakeStringView(barrier.settlementAsset);
+      raw.settlement_asset = barrier.settlementAsset.Raw();
       raw.lower_bound = ::openpit::pretrade::policies::detail::PnlOptional(
           barrier.lowerBound);
       raw.upper_bound = ::openpit::pretrade::policies::detail::PnlOptional(
@@ -376,9 +378,9 @@ struct RateLimitBrokerBarrier {
 // Per-settlement-asset rate-limit barrier.
 struct RateLimitAssetBarrier {
   RateLimit limit;
-  std::string settlementAsset;
+  ::openpit::param::Asset settlementAsset;
 
-  RateLimitAssetBarrier(RateLimit barrierLimit, std::string asset)
+  RateLimitAssetBarrier(RateLimit barrierLimit, ::openpit::param::Asset asset)
       : limit(barrierLimit), settlementAsset(std::move(asset)) {}
 };
 
@@ -396,11 +398,11 @@ struct RateLimitAccountBarrier {
 struct RateLimitAccountAssetBarrier {
   RateLimit limit;
   ::openpit::param::AccountId accountId;
-  std::string settlementAsset;
+  ::openpit::param::Asset settlementAsset;
 
   RateLimitAccountAssetBarrier(RateLimit barrierLimit,
                                ::openpit::param::AccountId account,
-                               std::string asset)
+                               ::openpit::param::Asset asset)
       : limit(barrierLimit),
         accountId(account),
         settlementAsset(std::move(asset)) {}
@@ -450,7 +452,7 @@ class RateLimitPolicy {
     assetRaw.reserve(m_assetBarriers.size());
     for (const RateLimitAssetBarrier& barrier : m_assetBarriers) {
       OpenPitPretradePoliciesRateLimitAssetBarrier raw{};
-      raw.settlement_asset = ::openpit::MakeStringView(barrier.settlementAsset);
+      raw.settlement_asset = barrier.settlementAsset.Raw();
       raw.max_orders = barrier.limit.maxOrders;
       raw.window_nanoseconds =
           ::openpit::pretrade::policies::detail::ToRateLimitWindowNanoseconds(
@@ -476,7 +478,7 @@ class RateLimitPolicy {
     for (const RateLimitAccountAssetBarrier& barrier : m_accountAssetBarriers) {
       OpenPitPretradePoliciesRateLimitAccountAssetBarrier raw{};
       raw.account_id = barrier.accountId.Raw();
-      raw.settlement_asset = ::openpit::MakeStringView(barrier.settlementAsset);
+      raw.settlement_asset = barrier.settlementAsset.Raw();
       raw.max_orders = barrier.limit.maxOrders;
       raw.window_nanoseconds =
           ::openpit::pretrade::policies::detail::ToRateLimitWindowNanoseconds(
@@ -887,8 +889,7 @@ class Configurator {
       assetRaw.reserve(assets->size());
       for (const auto& barrier : *assets) {
         OpenPitPretradePoliciesRateLimitAssetBarrier raw{};
-        raw.settlement_asset =
-            ::openpit::MakeStringView(barrier.settlementAsset);
+        raw.settlement_asset = barrier.settlementAsset.Raw();
         raw.max_orders = barrier.limit.maxOrders;
         raw.window_nanoseconds =
             ::openpit::pretrade::policies::detail::ToRateLimitWindowNanoseconds(
@@ -918,8 +919,7 @@ class Configurator {
       for (const auto& barrier : *accountAssets) {
         OpenPitPretradePoliciesRateLimitAccountAssetBarrier raw{};
         raw.account_id = barrier.accountId.Raw();
-        raw.settlement_asset =
-            ::openpit::MakeStringView(barrier.settlementAsset);
+        raw.settlement_asset = barrier.settlementAsset.Raw();
         raw.max_orders = barrier.limit.maxOrders;
         raw.window_nanoseconds =
             ::openpit::pretrade::policies::detail::ToRateLimitWindowNanoseconds(
@@ -963,8 +963,7 @@ class Configurator {
       for (const auto& barrier : *assets) {
         OpenPitPretradePoliciesOrderSizeAssetBarrier raw{};
         raw.limit = barrier.limit.Raw();
-        raw.settlement_asset =
-            ::openpit::MakeStringView(barrier.settlementAsset);
+        raw.settlement_asset = barrier.settlementAsset.Raw();
         assetRaw.push_back(raw);
       }
     }
@@ -977,8 +976,7 @@ class Configurator {
         OpenPitPretradePoliciesOrderSizeAccountAssetBarrier raw{};
         raw.limit = barrier.limit.Raw();
         raw.account_id = barrier.accountId.Raw();
-        raw.settlement_asset =
-            ::openpit::MakeStringView(barrier.settlementAsset);
+        raw.settlement_asset = barrier.settlementAsset.Raw();
         accountAssetRaw.push_back(raw);
       }
     }
@@ -1007,8 +1005,7 @@ class Configurator {
       brokerRaw.reserve(brokers->size());
       for (const auto& barrier : *brokers) {
         OpenPitPretradePoliciesPnlBoundsBarrier raw{};
-        raw.settlement_asset =
-            ::openpit::MakeStringView(barrier.settlementAsset);
+        raw.settlement_asset = barrier.settlementAsset.Raw();
         raw.lower_bound = ::openpit::pretrade::policies::detail::PnlOptional(
             barrier.lowerBound);
         raw.upper_bound = ::openpit::pretrade::policies::detail::PnlOptional(
@@ -1024,8 +1021,7 @@ class Configurator {
       for (const auto& barrier : *accounts) {
         OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate raw{};
         raw.account_id = barrier.accountId.Raw();
-        raw.settlement_asset =
-            ::openpit::MakeStringView(barrier.settlementAsset);
+        raw.settlement_asset = barrier.settlementAsset.Raw();
         raw.lower_bound = ::openpit::pretrade::policies::detail::PnlOptional(
             barrier.lowerBound);
         raw.upper_bound = ::openpit::pretrade::policies::detail::PnlOptional(
@@ -1046,12 +1042,12 @@ class Configurator {
 
   void SetAccountPnl(std::string_view name,
                      ::openpit::param::AccountId accountId,
-                     std::string_view settlementAsset,
+                     const ::openpit::param::Asset& settlementAsset,
                      ::openpit::param::Pnl pnl) const {
     OpenPitConfigureError* error = nullptr;
     if (!openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
             m_engine, ::openpit::MakeStringView(name), accountId.Raw(),
-            ::openpit::MakeStringView(settlementAsset), pnl.Raw(), &error)) {
+            settlementAsset.Raw(), pnl.Raw(), &error)) {
       ::openpit::detail::ThrowFromConfigureError(
           error,
           "openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl "

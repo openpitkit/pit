@@ -75,7 +75,8 @@ TEST(Policies, OrderSizeLimitAssetAndBroker) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
   builder.Add(policies::OrderSizeLimitPolicy{}
                   .AssetBarrier(policies::OrderSizeAssetBarrier(
-                      policies::OrderSizeLimit(maxQty, maxNotional), "USD"))
+                      policies::OrderSizeLimit(maxQty, maxNotional),
+                      openpit::param::Asset("USD")))
                   .BrokerBarrier(policies::OrderSizeBrokerBarrier(
                       policies::OrderSizeLimit(maxQty, maxNotional))));
   const openpit::Engine engine = builder.Build();
@@ -85,7 +86,7 @@ TEST(Policies, OrderSizeLimitAssetAndBroker) {
 
 // PnlBoundsKillSwitchPolicy: broker-level P&L bounds for one settlement asset.
 TEST(Policies, PnlBoundsKillSwitchBrokerBarrier) {
-  policies::PnlBoundsBrokerBarrier barrier("USD");
+  policies::PnlBoundsBrokerBarrier barrier(openpit::param::Asset("USD"));
   barrier.lowerBound = openpit::param::Pnl::FromString("-1000");
   barrier.upperBound = openpit::param::Pnl::FromString("500");
 
