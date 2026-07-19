@@ -189,8 +189,7 @@ where
                                 Self::NAME,
                                 RejectScope::Account,
                                 format!(
-                                    "account adjustment overflow: account {account_id}, \
-                                     asset {asset}, field balance, current {val}, applied {amount}",
+                                    "account adjustment overflow: asset {asset}, field balance, current {val}, applied {amount}",
                                     asset = request.asset,
                                     val = new.available(),
                                 ),
@@ -199,7 +198,6 @@ where
                     if !new.available_within_bounds(request.balance_lower, request.balance_upper) {
                         return Err(Rejects::from(account_adjustment_bounds_exceeded_reject(
                             Self::NAME,
-                            account_id,
                             &request.asset,
                             "balance",
                             new.available(),
@@ -217,8 +215,7 @@ where
                                 Self::NAME,
                                 RejectScope::Account,
                                 format!(
-                                    "account adjustment overflow: account {account_id}, \
-                                     asset {asset}, field held, current {val}, applied {amount}",
+                                    "account adjustment overflow: asset {asset}, field held, current {val}, applied {amount}",
                                     asset = request.asset,
                                     val = new.held(),
                                 ),
@@ -227,7 +224,6 @@ where
                     if !new.held_within_bounds(request.held_lower, request.held_upper) {
                         return Err(Rejects::from(account_adjustment_bounds_exceeded_reject(
                             Self::NAME,
-                            account_id,
                             &request.asset,
                             "held",
                             new.held(),
@@ -245,8 +241,7 @@ where
                                 Self::NAME,
                                 RejectScope::Account,
                                 format!(
-                                    "account adjustment overflow: account {account_id}, \
-                                     asset {asset}, field incoming, current {val}, applied {amount}",
+                                    "account adjustment overflow: asset {asset}, field incoming, current {val}, applied {amount}",
                                     asset = request.asset,
                                     val = new.incoming(),
                                 ),
@@ -255,7 +250,6 @@ where
                     if !new.incoming_within_bounds(request.incoming_lower, request.incoming_upper) {
                         return Err(Rejects::from(account_adjustment_bounds_exceeded_reject(
                             Self::NAME,
-                            account_id,
                             &request.asset,
                             "incoming",
                             new.incoming(),
@@ -285,8 +279,7 @@ where
                             Self::NAME,
                             RejectScope::Account,
                             format!(
-                                "account adjustment net-position overflow: account {account_id}, \
-                                 asset {asset}",
+                                "account adjustment net-position overflow: asset {asset}",
                                 asset = request.asset,
                             ),
                         ))
@@ -318,8 +311,7 @@ where
                             Self::NAME,
                             RejectScope::Account,
                             format!(
-                                "account adjustment delta overflow: account {account_id}, \
-                                 asset {asset}, field balance",
+                                "account adjustment delta overflow: asset {asset}, field balance",
                                 asset = request.asset,
                             ),
                         ))
@@ -332,8 +324,7 @@ where
                             Self::NAME,
                             RejectScope::Account,
                             format!(
-                                "account adjustment delta overflow: account {account_id}, \
-                                 asset {asset}, field held",
+                                "account adjustment delta overflow: asset {asset}, field held",
                                 asset = request.asset,
                             ),
                         ))
@@ -346,8 +337,7 @@ where
                             Self::NAME,
                             RejectScope::Account,
                             format!(
-                                "account adjustment delta overflow: account {account_id}, \
-                                 asset {asset}, field incoming",
+                                "account adjustment delta overflow: asset {asset}, field incoming",
                                 asset = request.asset,
                             ),
                         ))
@@ -404,8 +394,7 @@ where
                             Self::NAME,
                             RejectScope::Account,
                             format!(
-                                "account adjustment delta overflow: account {account_id}, \
-                                 asset {}, field realized pnl",
+                                "account adjustment delta overflow: asset {}, field realized pnl",
                                 request.asset
                             ),
                         ))

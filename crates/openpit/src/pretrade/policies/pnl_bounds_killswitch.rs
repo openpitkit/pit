@@ -475,7 +475,6 @@ where
                         current_pnl,
                         "settlement asset",
                         &b.settlement_asset,
-                        account_id,
                     ))
                 }
             });
@@ -498,7 +497,6 @@ where
                         current_pnl,
                         "settlement asset",
                         &a.barrier.settlement_asset,
-                        account_id,
                     ))
                 }
             });
@@ -585,7 +583,7 @@ where
                         "pnl accumulation overflow",
                         format!(
                             "pnl + fee overflow: pnl {pnl_delta}, fee {fee}, \
-                         settlement asset {settlement}, account {account_id}"
+                         settlement asset {settlement}"
                         ),
                     ),
                 ]));
@@ -606,7 +604,7 @@ where
                             format!(
                                 "realized pnl + pnl_with_fee overflow: \
                                  previous {previous}, increment {pnl_with_fee}, \
-                                 settlement asset {settlement}, account {account_id}"
+                                 settlement asset {settlement}"
                             ),
                         ));
                     }
@@ -628,10 +626,7 @@ where
                 if outside {
                     Some(pnl_bounds::pnl_breach_account_block(
                         Self::NAME,
-                        format!(
-                            "realized pnl {updated}, settlement asset {settlement}, \
-                             account {account_id}"
-                        ),
+                        format!("realized pnl {updated}, settlement asset {settlement}"),
                     ))
                 } else {
                     None
@@ -861,6 +856,45 @@ mod tests {
             "pnl kill switch triggered: broker barrier"
         );
         assert!(reject[0].details.contains("lower and upper bound breached"));
+    }
+
+    // ── account-id redaction ────────────────────────────────────────────────
+
+    // The account id must never surface in the reject/block free text: those
+    // strings flow into logs and to managers who could otherwise use the id to
+    // reach data they are not authorized to see.
+    #[test]
+    fn account_id_is_not_leaked_into_kill_switch_strings() {
+        const SENTINEL: u64 = 424242;
+        let policy = policy_usd(Some(pnl("-100")), Some(pnl("50")));
+
+        // Execution-report block path (accumulated realized-pnl breach).
+        let blocks = apply_report_blocks(&policy, &report("USD", account(SENTINEL), pnl("-101")));
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            !blocks[0].reason.contains("424242"),
+            "reason: {}",
+            blocks[0].reason
+        );
+        assert!(
+            !blocks[0].details.contains("424242"),
+            "details: {}",
+            blocks[0].details
+        );
+
+        // Pre-trade reject path (re-reports the stored breach).
+        let rejects = check_start(&policy, &order("USD", account(SENTINEL)))
+            .expect_err("breached account must be rejected");
+        assert!(
+            !rejects[0].reason.contains("424242"),
+            "reason: {}",
+            rejects[0].reason
+        );
+        assert!(
+            !rejects[0].details.contains("424242"),
+            "details: {}",
+            rejects[0].details
+        );
     }
 
     // ── account+asset barrier ───────────────────────────────────────────────

@@ -72,12 +72,8 @@ impl Display for AccountBlockError {
             Self::ReservedGroup => {
                 formatter.write_str("the reserved default account group is not a valid target")
             }
-            Self::AccountNotBlocked { account } => {
-                write!(formatter, "account {account} is not blocked")
-            }
-            Self::GroupNotBlocked { group } => {
-                write!(formatter, "account group {group} is not blocked")
-            }
+            Self::AccountNotBlocked { .. } => formatter.write_str("account is not blocked"),
+            Self::GroupNotBlocked { .. } => formatter.write_str("account group is not blocked"),
         }
     }
 }
@@ -1141,12 +1137,43 @@ mod tests {
                 account: account(1)
             }
             .to_string(),
-            "account 1 is not blocked"
+            "account is not blocked"
         );
         assert_eq!(
             AccountBlockError::GroupNotBlocked { group: group(2) }.to_string(),
-            "account group 2 is not blocked"
+            "account group is not blocked"
         );
+    }
+
+    // The Display text must not leak the account or account-group id, yet the
+    // structured variant fields must still carry them for programmatic access.
+    #[test]
+    fn account_block_error_display_hides_ids_but_keeps_structured_fields() {
+        let sentinel_account = account(424242);
+        let err = AccountBlockError::AccountNotBlocked {
+            account: sentinel_account,
+        };
+        assert!(
+            !err.to_string().contains("424242"),
+            "display leaked account id: {err}"
+        );
+        let AccountBlockError::AccountNotBlocked { account } = err else {
+            panic!("variant must be preserved");
+        };
+        assert_eq!(account, sentinel_account);
+
+        let sentinel_group = group(424242);
+        let err = AccountBlockError::GroupNotBlocked {
+            group: sentinel_group,
+        };
+        assert!(
+            !err.to_string().contains("424242"),
+            "display leaked group id: {err}"
+        );
+        let AccountBlockError::GroupNotBlocked { group } = err else {
+            panic!("variant must be preserved");
+        };
+        assert_eq!(group, sentinel_group);
     }
 
     // ─── Flag reset on unblock (active-blocking indicators) ───────────────

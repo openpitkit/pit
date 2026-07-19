@@ -668,6 +668,34 @@ def test_spot_funds_policy_group_id_tags_outcomes_and_lock_prices() -> None:
     } == {policy_group_id}
 
 
+@pytest.mark.unit
+def test_spot_funds_insufficient_funds_reject_does_not_leak_account_id() -> None:
+    # An insufficient-funds reject surfaced through the Python binding must not
+    # carry the account id in its reason or details. The digit run 424242 is the
+    # sentinel account id; the order operands never contain it.
+    policies = openpit.pretrade.policies
+    account_id = openpit.param.AccountId.from_int(424242)
+    engine = (
+        openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
+    )
+
+    # Buy 10 AAPL @ 200 = 2000 notional against an unfunded account: rejects with
+    # insufficient funds.
+    result = engine.execute_pre_trade(
+        order=conftest.make_order(
+            account_id=account_id,
+            trade_amount=openpit.param.TradeAmount.quantity("10"),
+            price=openpit.param.Price("200"),
+        )
+    )
+
+    assert not result.ok
+    assert len(result.rejects) == 1
+    assert result.rejects[0].code == openpit.pretrade.RejectCode.INSUFFICIENT_FUNDS
+    assert "424242" not in result.rejects[0].reason
+    assert "424242" not in result.rejects[0].details
+
+
 def _mock_market_data(*quotes: tuple[str, str]) -> openpit.marketdata.MarketDataService:
     service = (
         openpit.Engine.builder()

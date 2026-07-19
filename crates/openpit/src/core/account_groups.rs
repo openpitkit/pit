@@ -81,31 +81,21 @@ impl Display for AccountGroupError {
             Self::ReservedGroup => {
                 formatter.write_str("the reserved default account group is not a valid target")
             }
-            Self::AlreadyRegistered {
-                account,
-                current_group,
-            } => write!(
-                formatter,
-                "account {account} is already registered in group {current_group}"
+            Self::AlreadyRegistered { .. } => {
+                formatter.write_str("account is already registered in a different group")
+            }
+            Self::NotInGroup {
+                current_group: Some(_),
+                ..
+            } => formatter.write_str(
+                "account is not in the requested group; it belongs to a different group",
             ),
             Self::NotInGroup {
-                account,
-                requested_group,
-                current_group: Some(current),
-            } => write!(
-                formatter,
-                "account {account} is not in group {requested_group}; \
-                 it belongs to group {current}"
-            ),
-            Self::NotInGroup {
-                account,
-                requested_group,
                 current_group: None,
-            } => write!(
-                formatter,
-                "account {account} is not in group {requested_group}; \
-                 it belongs to no group"
-            ),
+                ..
+            } => {
+                formatter.write_str("account is not in the requested group; it belongs to no group")
+            }
         }
     }
 }
@@ -569,7 +559,7 @@ mod tests {
         };
         assert_eq!(
             already.to_string(),
-            "account 1 is already registered in group 2"
+            "account is already registered in a different group"
         );
 
         let mismatch = AccountGroupError::NotInGroup {
@@ -579,7 +569,7 @@ mod tests {
         };
         assert_eq!(
             mismatch.to_string(),
-            "account 1 is not in group 2; it belongs to group 3"
+            "account is not in the requested group; it belongs to a different group"
         );
 
         let ungrouped = AccountGroupError::NotInGroup {
@@ -589,8 +579,62 @@ mod tests {
         };
         assert_eq!(
             ungrouped.to_string(),
-            "account 1 is not in group 2; it belongs to no group"
+            "account is not in the requested group; it belongs to no group"
         );
+    }
+
+    // The Display text must not leak the account, requested-group, or
+    // current-group id, yet the structured variant fields must still carry them
+    // for programmatic access.
+    #[test]
+    fn account_group_error_display_hides_ids_but_keeps_structured_fields() {
+        let sentinel_account = account(424242);
+        let sentinel_requested = group(515151);
+        let sentinel_current = group(626262);
+
+        let already = AccountGroupError::AlreadyRegistered {
+            account: sentinel_account,
+            current_group: sentinel_requested,
+        };
+        let text = already.to_string();
+        assert!(
+            !text.contains("424242"),
+            "display leaked account id: {text}"
+        );
+        assert!(!text.contains("515151"), "display leaked group id: {text}");
+        let AccountGroupError::AlreadyRegistered {
+            account,
+            current_group,
+        } = already
+        else {
+            panic!("variant must be preserved");
+        };
+        assert_eq!(account, sentinel_account);
+        assert_eq!(current_group, sentinel_requested);
+
+        let mismatch = AccountGroupError::NotInGroup {
+            account: sentinel_account,
+            requested_group: sentinel_requested,
+            current_group: Some(sentinel_current),
+        };
+        let text = mismatch.to_string();
+        assert!(
+            !text.contains("424242"),
+            "display leaked account id: {text}"
+        );
+        assert!(!text.contains("515151"), "display leaked group id: {text}");
+        assert!(!text.contains("626262"), "display leaked group id: {text}");
+        let AccountGroupError::NotInGroup {
+            account,
+            requested_group,
+            current_group,
+        } = mismatch
+        else {
+            panic!("variant must be preserved");
+        };
+        assert_eq!(account, sentinel_account);
+        assert_eq!(requested_group, sentinel_requested);
+        assert_eq!(current_group, Some(sentinel_current));
     }
 
     fn new_handle() -> AccountGroupsHandle<NoLocking> {

@@ -853,4 +853,64 @@ mod tests {
         assert_eq!(imported.user_data, 99usize);
         assert_eq!(imported.code, RejectCode::PnlKillSwitchTriggered);
     }
+
+    // A real spot-funds insufficient-funds reject, produced by the core engine
+    // for a sentinel account and then exported across the C ABI, must not carry
+    // the account id in its reason/details views. The digit run 424242 is the
+    // sentinel account id; the order operands never contain it.
+    #[test]
+    fn exported_reject_does_not_leak_account_id() {
+        use openpit::param::{AccountId, Asset, Price, Quantity, Side, TradeAmount};
+        use openpit::pretrade::policies::{
+            SpotFundsPolicy, SpotFundsPricingSource, SpotFundsSettings,
+        };
+        use openpit::{Engine, FullSync, Instrument, OrderOperation, SpotFundsMarketData};
+
+        let builder = Engine::builder::<
+            OrderOperation,
+            crate::execution_report::ExecutionReport,
+            crate::account_adjustment::AccountAdjustment,
+        >()
+        .full_sync();
+        let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())
+            .expect("spot-funds settings must build");
+        let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
+            settings,
+            None::<SpotFundsMarketData<FullSync>>,
+            builder.storage_builder(),
+        );
+        let engine = builder
+            .pre_trade(policy)
+            .build()
+            .expect("engine must build");
+
+        // Buy 4 AAPL @ 200 = 800 notional against an unfunded account rejects
+        // with insufficient funds.
+        let order = OrderOperation {
+            instrument: Instrument::new(
+                Asset::new("AAPL").expect("valid asset"),
+                Asset::new("USD").expect("valid asset"),
+            ),
+            account_id: AccountId::from_u64(424242),
+            side: Side::Buy,
+            trade_amount: TradeAmount::Quantity(Quantity::from_str("4").expect("valid quantity")),
+            price: Some(Price::from_str("200").expect("valid price")),
+        };
+        let Err(rejects) = engine.execute_pre_trade(order) else {
+            panic!("under-funded buy must reject");
+        };
+        assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
+
+        let exported = OpenPitPretradeReject::from_reject(&rejects[0]);
+        let reason = string_view_to_string(exported.reason);
+        let details = string_view_to_string(exported.details);
+        assert!(
+            !reason.contains("424242"),
+            "reason leaked account id: {reason}"
+        );
+        assert!(
+            !details.contains("424242"),
+            "details leaked account id: {details}"
+        );
+    }
 }

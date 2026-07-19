@@ -18,6 +18,7 @@
 package openpit
 
 import (
+	"strings"
 	"testing"
 
 	"go.openpit.dev/openpit/model"
@@ -595,6 +596,54 @@ func TestSpotFundsReservationIncoming_SellCancelWithoutLockBlocksAccount(t *test
 			"AccountBlocks[0].Code = %v, want %v",
 			result.AccountBlocks[0].Code, reject.CodeMissingRequiredField,
 		)
+	}
+}
+
+// TestSpotFundsReservationIncoming_InsufficientFundsRejectDoesNotLeakAccountID
+// proves that an insufficient-funds reject surfaced through the Go binding
+// carries no account id in its Reason or Details. The digit run 424242 is the
+// sentinel account id; the order operands never contain it.
+func TestSpotFundsReservationIncoming_InsufficientFundsRejectDoesNotLeakAccountID(t *testing.T) {
+	accountID := param.NewAccountIDFromUint64(424242)
+
+	engine, err := NewEngineBuilder().
+		FullSync().
+		Builtin(policies.BuildSpotFunds()).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	// Buy 4 AAPL @ 200 = 800 notional against an unfunded account: rejects with
+	// insufficient funds.
+	order := model.NewOrder()
+	op := order.EnsureOperationView()
+	op.SetInstrument(param.NewInstrument(sfReservationAsset(t, "AAPL"), sfReservationAsset(t, "USD")))
+	op.SetAccountID(accountID)
+	op.SetSide(param.SideBuy)
+	op.SetTradeAmount(param.NewQuantityTradeAmount(sfReservationQuantity(t, "4")))
+	op.SetPrice(sfReservationPrice(t, "200"))
+
+	reservation, rejects, err := engine.ExecutePreTrade(order)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
+	}
+	if reservation != nil {
+		reservation.Close()
+		t.Fatal("ExecutePreTrade() reservation != nil, want nil for under-funded buy")
+	}
+	if len(rejects) != 1 {
+		t.Fatalf("ExecutePreTrade() rejects len = %d, want 1", len(rejects))
+	}
+	if rejects[0].Code != reject.CodeInsufficientFunds {
+		t.Fatalf("reject code = %v, want %v", rejects[0].Code, reject.CodeInsufficientFunds)
+	}
+	if strings.Contains(rejects[0].Reason, "424242") {
+		t.Fatalf("reject reason leaked account id: %q", rejects[0].Reason)
+	}
+	if strings.Contains(rejects[0].Details, "424242") {
+		t.Fatalf("reject details leaked account id: %q", rejects[0].Details)
 	}
 }
 

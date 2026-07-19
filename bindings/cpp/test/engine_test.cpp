@@ -292,6 +292,26 @@ TEST(EngineExecutePreTrade, HappyPathReturnsReservation) {
   EXPECT_NO_THROW(result.reservation->Commit());
 }
 
+// A spot-funds insufficient-funds reject surfaced through the C++ binding must
+// not carry the account id in its reason or details. 424242 is the sentinel
+// account id; the order operands never contain it.
+TEST(EngineExecutePreTrade,
+     SpotFundsInsufficientFundsRejectDoesNotLeakAccountId) {
+  EngineBuilder builder(SyncPolicy::None);
+  policies::SpotFundsPolicy{}.AddTo(builder);
+  Engine engine = builder.Build();
+
+  // Buy 1 AAPL @ 100 = 100 notional against an unfunded sentinel account.
+  const openpit::pretrade::ExecuteResult result =
+      engine.ExecutePreTrade(TestOrder(424242));
+
+  EXPECT_FALSE(result.Passed());
+  ASSERT_EQ(result.rejects.size(), 1u);
+  EXPECT_EQ(result.rejects.front().code, RejectCode::InsufficientFunds);
+  EXPECT_EQ(result.rejects.front().reason.find("424242"), std::string::npos);
+  EXPECT_EQ(result.rejects.front().details.find("424242"), std::string::npos);
+}
+
 TEST(EngineExecutePreTrade, RollbackDoesNotReleaseRateLimitBudget) {
   Engine engine = SingleOrderEngine();
 

@@ -515,9 +515,8 @@ where
         let new_holdings = if held_amount.is_zero() {
             current
         } else {
-            hold_with_mode(&current, held_amount, limit_mode).map_err(|err| {
-                reserve_hold_reject(Self::NAME, err, account_id, asset, held_amount)
-            })?
+            hold_with_mode(&current, held_amount, limit_mode)
+                .map_err(|err| reserve_hold_reject(Self::NAME, err, asset, held_amount))?
         };
         // `reserve_incoming` has no solvency gate; the only failure is overflow,
         // mapped to a pre-trade reject like the hold overflow.
@@ -528,8 +527,8 @@ where
                     Self::NAME,
                     RejectScope::Order,
                     format!(
-                        "pre-trade incoming overflow: account {account_id}, \
-                         asset {asset}, requested {incoming_amount}",
+                        "pre-trade incoming overflow: asset {asset}, \
+                         requested {incoming_amount}",
                     ),
                 ))
             })?;
@@ -583,9 +582,8 @@ where
                 let held = if held_amount.is_zero() {
                     Ok(*slot)
                 } else {
-                    hold_with_mode(slot, held_amount, limit_mode).map_err(|err| {
-                        reserve_hold_reject(Self::NAME, err, account_id, asset, held_amount)
-                    })
+                    hold_with_mode(slot, held_amount, limit_mode)
+                        .map_err(|err| reserve_hold_reject(Self::NAME, err, asset, held_amount))
                 }?;
 
                 held.reserve_incoming(incoming_amount)
@@ -594,8 +592,8 @@ where
                             Self::NAME,
                             RejectScope::Order,
                             format!(
-                                "pre-trade incoming overflow: account {account_id}, \
-                                 asset {asset}, requested {incoming_amount}",
+                                "pre-trade incoming overflow: asset {asset}, \
+                                 requested {incoming_amount}",
                             ),
                         ))
                     })
@@ -654,7 +652,6 @@ fn hold_with_mode(
 fn reserve_hold_reject(
     policy: &str,
     err: HoldError,
-    account_id: AccountId,
     asset: &Asset,
     amount: PositionSize,
 ) -> Rejects {
@@ -663,14 +660,14 @@ fn reserve_hold_reject(
             policy,
             RejectScope::Order,
             format!(
-                "pre-trade hold overflow: account {account_id}, \
-                 asset {asset}, requested {amount}",
+                "pre-trade hold overflow: asset {asset}, \
+                 requested {amount}",
             ),
         ),
         HoldError::InsufficientAvailable {
             available,
             requested,
-        } => insufficient_funds_reject(policy, asset, account_id, available, requested),
+        } => insufficient_funds_reject(policy, asset, available, requested),
     })
 }
 

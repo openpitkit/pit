@@ -40,8 +40,10 @@ Raised by the fallible admin account-blocking methods on `engine.accounts()`:
 `replace_group_block_reason`.
 
 `AccountBlockError` carries a human-readable error message indicating the
-failure reason (e.g., "account N is not blocked", "account group N is not
-blocked", "the reserved default account group is not a valid target").
+failure reason (e.g., "account is not blocked", "account group is not
+blocked", "the reserved default account group is not a valid target"). The
+offending account or group identifier is not embedded in the message; read it
+from the error's structured fields instead.
 
 ```python
 try:

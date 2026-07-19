@@ -24,7 +24,7 @@ use crate::pretrade::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
 use crate::PnlHaltReason;
 
 pub(super) fn account_pnl_block_for_state(
-    account_id: AccountId,
+    _account_id: AccountId,
     state: crate::PnlState,
     barrier: &super::SpotFundsPnlBoundsBarrier,
     provenance: Option<u64>,
@@ -51,7 +51,7 @@ pub(super) fn account_pnl_block_for_state(
         }
         crate::PnlState::Halted(reason) => Some(account_pnl_halted_block(
             super::SPOT_FUNDS_POLICY_NAME,
-            account_id,
+            _account_id,
             reason,
         )),
     };
@@ -61,7 +61,6 @@ pub(super) fn account_pnl_block_for_state(
 pub(super) fn insufficient_funds_reject(
     policy: &str,
     asset: &Asset,
-    account_id: AccountId,
     available: PositionSize,
     requested: PositionSize,
 ) -> Reject {
@@ -70,9 +69,7 @@ pub(super) fn insufficient_funds_reject(
         RejectScope::Order,
         RejectCode::InsufficientFunds,
         "spot funds insufficient",
-        format!(
-            "account {account_id}, asset {asset}: available {available}, requested {requested}"
-        ),
+        format!("asset {asset}: available {available}, requested {requested}"),
     )
 }
 
@@ -103,7 +100,7 @@ pub(super) fn order_value_calculation_failed_reject(
 
 pub(super) fn account_pnl_halted_reject(
     policy: &str,
-    account_id: AccountId,
+    _account_id: AccountId,
     reason: PnlHaltReason,
 ) -> Reject {
     Reject::new(
@@ -111,20 +108,20 @@ pub(super) fn account_pnl_halted_reject(
         RejectScope::Account,
         RejectCode::PnlKillSwitchTriggered,
         "account pnl calculation halted",
-        format!("account {account_id}, halt reason {reason:?}"),
+        format!("halt reason {reason:?}"),
     )
 }
 
 pub(super) fn account_pnl_halted_block(
     policy: &str,
-    account_id: AccountId,
+    _account_id: AccountId,
     reason: PnlHaltReason,
 ) -> AccountBlock {
     AccountBlock::new(
         policy,
         RejectCode::PnlKillSwitchTriggered,
         "account pnl calculation halted",
-        format!("account {account_id}, halt reason {reason:?}"),
+        format!("halt reason {reason:?}"),
     )
 }
 
@@ -156,7 +153,6 @@ pub(super) fn arithmetic_overflow_account_block(
 
 pub(super) fn account_adjustment_bounds_exceeded_reject(
     policy: &str,
-    account_id: AccountId,
     asset: &Asset,
     field: &str,
     actual: PositionSize,
@@ -169,7 +165,7 @@ pub(super) fn account_adjustment_bounds_exceeded_reject(
         RejectCode::AccountAdjustmentBoundsExceeded,
         "account adjustment bounds exceeded",
         format!(
-            "account {account_id}, asset {asset}: {field} {actual}, \
+            "asset {asset}: {field} {actual}, \
              lower {lower:?}, upper {upper:?}"
         ),
     )

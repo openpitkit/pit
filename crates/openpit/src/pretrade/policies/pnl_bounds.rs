@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use crate::param::{AccountId, Asset, Pnl};
+use crate::param::{Asset, Pnl};
 use crate::pretrade::policy::PolicyName;
 use crate::pretrade::{AccountBlock, Reject, RejectCode, RejectScope};
 
@@ -63,7 +63,6 @@ pub(super) fn barrier_breach_reject(
     realized: Pnl,
     asset_label: &'static str,
     asset: &Asset,
-    account_id: AccountId,
 ) -> Reject {
     let desc = breached_sides.join(" and ");
     Reject::new(
@@ -74,7 +73,7 @@ pub(super) fn barrier_breach_reject(
         format!(
             "{desc} bound breached: realized pnl {realized}, \
              lower_bound {lower_bound:?}, upper_bound {upper_bound:?}, \
-             {asset_label} {asset}, account {account_id}"
+             {asset_label} {asset}"
         ),
     )
 }
@@ -115,5 +114,44 @@ pub(super) fn set_or_clear<Key, Value>(
         map.insert(key, value);
     } else {
         map.remove(&key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The account id must never surface in the pnl-bounds reject free text:
+    // those strings flow into logs and to managers who could otherwise use the
+    // id to reach data they are not authorized to see. The reject constructor
+    // takes no account id; this guards the format string against a regression
+    // that re-introduces one.
+    #[test]
+    fn account_id_is_not_leaked_into_barrier_breach_reject() {
+        let asset = Asset::new("USD").expect("asset literal must be valid");
+        let reject = barrier_breach_reject(
+            "pnl-bounds",
+            "pnl kill switch triggered",
+            &["lower"],
+            Some(Pnl::from_str("-100").expect("pnl literal must be valid")),
+            Some(Pnl::from_str("50").expect("pnl literal must be valid")),
+            Pnl::from_str("-101").expect("pnl literal must be valid"),
+            "settlement asset",
+            &asset,
+        );
+
+        assert!(
+            !reject.reason.contains("account"),
+            "reason: {}",
+            reject.reason
+        );
+        assert!(
+            !reject.details.contains("account"),
+            "details: {}",
+            reject.details
+        );
+        // The financial operands stay in the details.
+        assert!(reject.details.contains("realized pnl -101"));
+        assert!(reject.details.contains("settlement asset USD"));
     }
 }

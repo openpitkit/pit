@@ -651,14 +651,14 @@ func TestBuiltinPnlBoundsKillSwitchBrokerOnlyTriggersAndBlocksAccount(t *testing
 	// Reason/details must survive list destruction: the block string views
 	// borrow the native list's memory, so they must be copied before the list is
 	// freed. A use-after-free here surfaces as garbage rather than these exact
-	// strings.
+	// strings. The account identifier must never leak into the block details.
 	block := result.AccountBlocks[0]
 	if block.Reason != "pnl kill switch triggered" {
 		t.Fatalf("block reason = %q, want %q", block.Reason, "pnl kill switch triggered")
 	}
 	if !strings.Contains(block.Details, "settlement asset USD") ||
-		!strings.Contains(block.Details, "account 1") {
-		t.Fatalf("block details = %q, want realized-pnl summary", block.Details)
+		strings.Contains(block.Details, "account 1") {
+		t.Fatalf("block details = %q, want redacted realized-pnl summary", block.Details)
 	}
 
 	_, rejects, err = engine.StartPreTrade(pnlTestOrder(t, 1))

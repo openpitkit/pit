@@ -1769,7 +1769,6 @@ fn push_leg_outcome(
         });
     }
 }
-
 fn nonzero_outcome(delta: PositionSize, absolute: PositionSize) -> Option<OutcomeAmount> {
     if delta.is_zero() {
         None

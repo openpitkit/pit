@@ -11423,3 +11423,205 @@ fn sell_volume_price_divergent_full_fill_nets_held_and_incoming_to_zero() {
     // Proceeds credited to available: 6*110 + 4*90 = 1020.
     assert_balance(&policy, acc, "USD", "1020", "0");
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Account-id redaction
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Distinctive account id fed into every reject/block surface below. The chosen
+// operands (funds, bounds, prices, quantities) never contain this digit run, so
+// any occurrence in a surfaced string is the leaked account id.
+const SENTINEL: u64 = 424242;
+
+// The account id must never surface in the reject/block free text: those strings
+// flow into logs and to managers who could otherwise use the id to reach data
+// they are not authorized to see.
+fn assert_account_id_redacted(reason: &str, details: &str) {
+    assert!(
+        !reason.contains("424242"),
+        "reason leaked account id: {reason}"
+    );
+    assert!(
+        !details.contains("424242"),
+        "details leaked account id: {details}"
+    );
+}
+
+#[test]
+fn account_id_is_not_leaked_into_insufficient_funds_reject() {
+    let acc = account(SENTINEL);
+    let policy = build_policy(None, None);
+    seed(&policy, acc, asset("USD"), "1000");
+
+    let order = make_order(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        TradeAmount::Quantity(qty("10")),
+        Some(px("200")),
+    );
+
+    // Pre-trade path.
+    let mut mutations = Mutations::new();
+    let rejects = pre_trade_check(&policy, &order, &mut mutations).expect_err("must reject");
+    assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
+    assert_account_id_redacted(&rejects[0].reason, &rejects[0].details);
+
+    // Dry-run path re-reports the same reject.
+    let rejects = dry_run_check(&policy, &order).expect_err("dry-run must reject");
+    assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
+    assert_account_id_redacted(&rejects[0].reason, &rejects[0].details);
+}
+
+#[test]
+fn account_id_is_not_leaked_into_adjustment_bounds_reject() {
+    let acc = account(SENTINEL);
+    let policy = build_policy(None, None);
+    // upper=0 blocks any positive balance; Delta(+10) on an unseen asset.
+    let adjustment = bounded_adj(
+        asset("EUR"),
+        Some(AdjustmentAmount::Delta(ps("10"))),
+        None,
+        Some(ps("0")),
+    );
+    let mut mutations = Mutations::new();
+    let rejects = apply_adj(&policy, acc, &adjustment, &mut mutations).expect_err("must reject");
+    assert_eq!(rejects[0].code, RejectCode::AccountAdjustmentBoundsExceeded);
+    assert_account_id_redacted(&rejects[0].reason, &rejects[0].details);
+}
+
+#[test]
+fn account_id_is_not_leaked_into_adjustment_overflow_reject() {
+    let acc = account(SENTINEL);
+    let policy = build_policy(None, None);
+    let usd = asset("USD");
+    // Pre-seed available to Decimal::MAX so any positive delta overflows.
+    policy
+        .holdings
+        .with_mut((acc, usd.clone()), Holdings::zero, |slot, _| {
+            *slot = Holdings::new(position_size_max(), PositionSize::ZERO);
+        });
+    let adjustment = adj(
+        asset("USD"),
+        Some(AdjustmentAmount::Delta(position_size_max())),
+    );
+    let mut mutations = Mutations::new();
+    let rejects = apply_adj(&policy, acc, &adjustment, &mut mutations).expect_err("must reject");
+    assert_eq!(rejects[0].code, RejectCode::ArithmeticOverflow);
+    assert_account_id_redacted(&rejects[0].reason, &rejects[0].details);
+}
+
+#[test]
+fn account_id_is_not_leaked_into_fill_overflow_block() {
+    let acc = account(SENTINEL);
+    let aapl_usd = instr("AAPL", "USD");
+    let policy = build_policy(None, None);
+    let aapl = asset("AAPL");
+
+    // Drive AAPL available to Decimal::MAX so the buy fill inflow overflows.
+    policy
+        .holdings
+        .with_mut((acc, aapl.clone()), Holdings::zero, |slot, _| {
+            *slot = Holdings::new(position_size_max(), PositionSize::ZERO);
+        });
+    seed(&policy, acc, asset("USD"), "10000");
+
+    let order = make_order(
+        acc,
+        aapl_usd.clone(),
+        Side::Buy,
+        TradeAmount::Quantity(qty("1")),
+        Some(px("1")),
+    );
+    let mut mutations = Mutations::with_capacity(1);
+    pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
+    mutations.commit_all();
+
+    let fill = make_report(
+        acc,
+        aapl_usd,
+        Side::Buy,
+        Some(Trade {
+            price: px("1"),
+            quantity: qty("1"),
+        }),
+        qty("0"),
+        true,
+        Some(PreTradeLock::from_entries([(
+            DEFAULT_POLICY_GROUP_ID,
+            px("1"),
+        )])),
+    );
+    let result = run_report(&policy, &fill);
+    assert_eq!(result.account_blocks.len(), 1);
+    assert_eq!(
+        result.account_blocks[0].code,
+        RejectCode::ArithmeticOverflow
+    );
+    assert_account_id_redacted(
+        &result.account_blocks[0].reason,
+        &result.account_blocks[0].details,
+    );
+}
+
+#[test]
+fn account_id_is_not_leaked_into_missing_fx_block() {
+    let acc = account(SENTINEL);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        lower_bound: Some(pnl_value("-100")),
+        upper_bound: None,
+    }))
+    .expect("global pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+
+    // Settlement asset USD differs from account currency EUR with no FX quote,
+    // so PnL cannot be computed and the account is blocked.
+    let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("1", "USD"));
+    let result = run_report_with_currency(&policy, &fill, asset("EUR"));
+    assert_eq!(result.account_blocks.len(), 1);
+    let block = &result.account_blocks[0];
+    assert_eq!(block.code, RejectCode::PnlKillSwitchTriggered);
+    assert!(block.details.contains("MissingFx"));
+    assert_account_id_redacted(&block.reason, &block.details);
+}
+
+#[test]
+fn account_id_is_not_leaked_into_fee_realized_pnl_overflow_block() {
+    use rust_decimal::Decimal;
+
+    let acc = account(SENTINEL);
+    let aapl_usd = instr("AAPL", "USD");
+    let mut s = settings(0);
+    s.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    s.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+        lower_bound: Some(pnl_value("-100")),
+        upper_bound: None,
+    }))
+    .expect("global pnl barrier must set");
+    let policy = build_policy_from_settings(s, None);
+    seed(&policy, acc, asset("USD"), "1000");
+    seed_with_avg(&policy, acc, asset("AAPL"), "10", px("100"));
+    // Pin realized pnl at the minimum so folding the fee's pnl overflows.
+    let adjustment = adj_with_realized_pnl(asset("AAPL"), Pnl::new(Decimal::MIN));
+    let mut mutations = Mutations::with_capacity(1);
+    apply_adj(&policy, acc, &adjustment, &mut mutations).expect("seed must succeed");
+    mutations.commit_all();
+
+    let report = fee_only_report(acc, aapl_usd, Side::Buy, "0", false, money_fee("1", "USD"));
+    let result = run_report_with_currency(&policy, &report, asset("USD"));
+
+    assert!(result.account_blocks.is_empty());
+    assert_eq!(account_pnl_of(&policy, acc), Some(pnl_value("-1")));
+    assert_eq!(
+        holdings_of(&policy, acc, &asset("AAPL"))
+            .expect("AAPL slot must exist")
+            .realized_pnl_halt_reason(),
+        Some(crate::PnlHaltReason::ArithmeticOverflow)
+    );
+
+    let block = policy.account_pnl_halted_block(acc, crate::PnlHaltReason::ArithmeticOverflow);
+    assert_account_id_redacted(&block.reason, &block.details);
+}
