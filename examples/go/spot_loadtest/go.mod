@@ -6,7 +6,7 @@ require (
 	github.com/HdrHistogram/hdrhistogram-go v1.2.0
 	github.com/shirou/gopsutil/v4 v4.25.4
 	github.com/shopspring/decimal v1.4.0
-	go.openpit.dev/openpit v0.6.0
+	go.openpit.dev/openpit v0.7.0
 	gopkg.in/ini.v1 v1.67.0
 )
 

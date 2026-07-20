@@ -35,7 +35,7 @@ import (
 
 // SDKVersion is the version baked into the Go SDK source tree. It is used both
 // for runtime cache namespacing and for the runtime/SDK compatibility check.
-const SDKVersion = "0.6.0"
+const SDKVersion = "0.7.0"
 
 const (
 	envRuntimePath  = "OPENPIT_RUNTIME_LIBRARY_PATH"

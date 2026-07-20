@@ -2,7 +2,7 @@ module openpit-example-rate-pnl-killswitch
 
 go 1.22
 
-require go.openpit.dev/openpit v0.6.0
+require go.openpit.dev/openpit v0.7.0
 
 require github.com/shopspring/decimal v1.4.0 // indirect
 
