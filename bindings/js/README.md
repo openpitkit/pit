@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![npm](https://img.shields.io/npm/v/@openpit/engine)](https://www.npmjs.com/package/@openpit/engine) [![node](https://img.shields.io/node/v/@openpit/engine)](https://www.npmjs.com/package/@openpit/engine) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
+[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://img.shields.io/github/v/release/openpitkit/pit)](https://github.com/openpitkit/pit/releases) [![npm](https://img.shields.io/npm/v/@openpit/engine)](https://www.npmjs.com/package/@openpit/engine) [![node](https://img.shields.io/node/v/@openpit/engine)](https://www.npmjs.com/package/@openpit/engine) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 <!-- markdownlint-enable MD013 -->
 

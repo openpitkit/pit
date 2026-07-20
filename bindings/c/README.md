@@ -3,7 +3,7 @@
 <!-- markdownlint-disable MD033 -->
 
 <!-- markdownlint-disable MD013 -->
-[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://github.com/openpitkit/pit/actions/workflows/release.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/release.yml) [![C API](https://img.shields.io/badge/C%20API-blue)](../../docs/c-api/index.md) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
+[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://img.shields.io/github/v/release/openpitkit/pit)](https://github.com/openpitkit/pit/releases) [![C API](https://img.shields.io/badge/C%20API-blue)](../../docs/c-api/index.md) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 <!-- markdownlint-enable MD013 -->
 
 `openpit.h` is an embeddable pre-trade risk SDK entrypoint for integrating
