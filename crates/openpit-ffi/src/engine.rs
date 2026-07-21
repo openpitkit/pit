@@ -685,6 +685,57 @@ pub extern "C" fn openpit_engine_execute_pre_trade(
 }
 
 #[no_mangle]
+/// Runs the complete pre-trade pipeline without enforcing policy rejects.
+///
+/// Returns `true` on success and `false` when input pointers are invalid or the
+/// order payload cannot be decoded. Existing account and account-group blocks
+/// are ignored. Every policy still runs and keeps its normal mutations, locks,
+/// account adjustments, and account blocks, while its rejects are discarded.
+///
+/// On success, if `out_reservation` is not null, writes one caller-owned
+/// reservation pointer. Release it with
+/// `openpit_pretrade_pre_trade_reservation_commit`,
+/// `openpit_pretrade_pre_trade_reservation_rollback`, or
+/// `openpit_destroy_pretrade_pre_trade_reservation`.
+///
+/// On error, `out_reservation` is left untouched. If `out_error` is not null,
+/// it receives a caller-owned error string that MUST be released with
+/// `openpit_destroy_shared_string`.
+pub extern "C" fn openpit_engine_execute_pre_trade_drop_copy(
+    engine: *mut OpenPitEngine,
+    order: *const OpenPitOrder,
+    out_reservation: *mut *mut OpenPitPretradePreTradeReservation,
+    out_error: OpenPitOutError,
+) -> bool {
+    if engine.is_null() {
+        write_error(out_error, "engine is null");
+        return false;
+    }
+    if order.is_null() {
+        write_error(out_error, "order is null");
+        return false;
+    }
+
+    let order = match import_order(unsafe { &*order }) {
+        Ok(value) => value,
+        Err(error) => {
+            write_error(out_error, &error);
+            return false;
+        }
+    };
+    let reservation = unsafe { &*engine }.inner.execute_pre_trade_drop_copy(order);
+
+    if !out_reservation.is_null() {
+        unsafe {
+            *out_reservation = Box::into_raw(Box::new(OpenPitPretradePreTradeReservation {
+                inner: reservation,
+            }));
+        }
+    }
+    true
+}
+
+#[no_mangle]
 /// Runs the start stage as a non-mutating pre-trade dry-run.
 ///
 /// A dry-run reports the verdict the start stage *would* return for `order` with
@@ -993,6 +1044,30 @@ pub extern "C" fn openpit_pretrade_pre_trade_reservation_get_account_adjustments
         .account_adjustments()
         .to_vec();
     Box::into_raw(Box::new(outcomes_to_list_owned(outcomes)))
+}
+
+#[no_mangle]
+/// Returns the winning account block produced by the reservation's pipeline.
+///
+/// Contract:
+/// - `reservation` must be a valid non-null pointer;
+/// - violating the pointer contract aborts the call;
+/// - this function never fails;
+/// - always returns a caller-owned `OpenPitPretradeAccountBlockList`
+///   (possibly empty); release it with
+///   `openpit_pretrade_destroy_account_block_list`.
+///
+/// Lifetime contract:
+/// - the returned list is detached from the reservation state.
+pub extern "C" fn openpit_pretrade_pre_trade_reservation_get_account_block(
+    reservation: *const OpenPitPretradePreTradeReservation,
+) -> *mut OpenPitPretradeAccountBlockList {
+    assert!(!reservation.is_null());
+    let blocks = match unsafe { &*reservation }.inner.account_block() {
+        Some(block) => vec![block.clone()],
+        None => Vec::new(),
+    };
+    Box::into_raw(Box::new(blocks_to_list_owned(blocks)))
 }
 
 #[no_mangle]

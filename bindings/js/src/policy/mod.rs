@@ -665,7 +665,17 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
                     return Err(callback_failure_rejects(&self.name));
                 }
             };
-        if rejects.is_empty() {
+        if ctx.is_drop_copy() {
+            if let (Some(control), Some(reject)) = (
+                ctx.account_control.as_ref(),
+                rejects
+                    .iter()
+                    .find(|reject| reject.scope == RejectScope::Account),
+            ) {
+                control.block(reject.account_block_with_code(RejectCode::AccountBlocked));
+            }
+            Ok(result)
+        } else if rejects.is_empty() {
             Ok(result)
         } else {
             Err(Rejects::from(rejects))

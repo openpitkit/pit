@@ -96,6 +96,13 @@ func (d *acceptingDriver) ExecutePreTrade(
 	return pretrade.NewReservationFromHandle(nil), nil, nil
 }
 
+func (d *acceptingDriver) ExecutePreTradeDropCopy(
+	order model.Order,
+) (*pretrade.Reservation, error) {
+	reservation, _, err := d.ExecutePreTrade(order)
+	return reservation, err
+}
+
 func (d *acceptingDriver) ApplyExecutionReport(
 	report model.ExecutionReport,
 ) (pretrade.PostTradeResult, error) {
@@ -155,6 +162,37 @@ func TestAsyncEngineExecutePreTradeHappyPath(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(&driver.executeCount); got != 1 {
 		t.Errorf("executeCount = %d, want 1", got)
+	}
+}
+
+func TestAsyncEngineExecutePreTradeDropCopyHappyPath(t *testing.T) {
+	t.Parallel()
+	driver := newAcceptingDriver()
+	async, err := NewBuilder(driver).Dynamic().Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer func() {
+		if err := async.StopGraceful(context.Background()); err != nil {
+			t.Fatalf("StopGraceful() error = %v", err)
+		}
+	}()
+
+	f := async.ExecutePreTradeDropCopy(
+		context.Background(), buildTestOrder(t, 42),
+	)
+	reservation, err := f.Await(context.Background())
+	if err != nil {
+		t.Fatalf("Await() err = %v", err)
+	}
+	if reservation == nil {
+		t.Fatal("reservation = nil, want non-nil")
+	}
+	if reservation.AccountID() != param.NewAccountIDFromUint64(42) {
+		t.Errorf(
+			"reservation.AccountID() = %v, want %v",
+			reservation.AccountID(), param.NewAccountIDFromUint64(42),
+		)
 	}
 }
 

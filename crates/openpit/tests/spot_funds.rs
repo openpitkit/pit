@@ -570,6 +570,62 @@ fn runtime_limit_mode_switch_toggles_insufficient_funds_gating() {
     assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
 }
 
+#[test]
+fn drop_copy_records_underfunded_spot_funds_reservation() {
+    let engine = build_engine();
+    seed(&engine, "USD", "1000");
+    let aapl_usd = instr("AAPL", "USD");
+
+    let mut reservation = engine.execute_pre_trade_drop_copy(make_order(
+        Side::Buy,
+        aapl_usd.clone(),
+        TradeAmount::Quantity(qty("10")),
+        Some(px("200")),
+    ));
+
+    let settlement = reservation
+        .account_adjustments()
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("USD"))
+        .expect("settlement outcome must be present");
+    let balance = settlement
+        .entry
+        .balance
+        .expect("settlement balance outcome must be present");
+    assert_eq!(balance.delta, ps("-2000"));
+    assert_eq!(balance.absolute, ps("-1000"));
+    let held = settlement
+        .entry
+        .held
+        .expect("settlement held outcome must be present");
+    assert_eq!(held.delta, ps("2000"));
+    assert_eq!(held.absolute, ps("2000"));
+
+    let underlying = reservation
+        .account_adjustments()
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("AAPL"))
+        .expect("underlying outcome must be present");
+    let incoming = underlying
+        .entry
+        .incoming
+        .expect("underlying incoming outcome must be present");
+    assert_eq!(incoming.delta, ps("10"));
+    assert_eq!(incoming.absolute, ps("10"));
+
+    reservation.commit();
+
+    let Err(rejects) = engine.execute_pre_trade(make_order(
+        Side::Buy,
+        aapl_usd,
+        TradeAmount::Quantity(qty("1")),
+        Some(px("1")),
+    )) else {
+        panic!("ordinary pre-trade must enforce the negative available balance")
+    };
+    assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
+}
+
 fn assert_insufficient_funds<R>(result: Result<R, Rejects>, ctx: &str) {
     let Err(rejects) = result else {
         panic!("{ctx}: expected InsufficientFunds rejection")
@@ -1086,6 +1142,39 @@ fn dry_run_does_not_spend_rate_limit_budget_or_reserve_spot_funds() {
 }
 
 #[test]
+fn drop_copy_spends_rate_limit_budget_and_ignores_its_reject() {
+    let engine = build_rate_limited_engine();
+    seed_rate_limited(&engine, "USD", "10000");
+    let aapl_usd = instr("AAPL", "USD");
+
+    let mut first = engine.execute_pre_trade_drop_copy(make_order(
+        Side::Buy,
+        aapl_usd.clone(),
+        TradeAmount::Quantity(qty("1")),
+        Some(px("100")),
+    ));
+    first.commit();
+
+    let mut over_limit = engine.execute_pre_trade_drop_copy(make_order(
+        Side::Buy,
+        aapl_usd.clone(),
+        TradeAmount::Quantity(qty("1")),
+        Some(px("100")),
+    ));
+    over_limit.commit();
+
+    let Err(rejects) = engine.execute_pre_trade(make_order(
+        Side::Buy,
+        aapl_usd,
+        TradeAmount::Quantity(qty("1")),
+        Some(px("100")),
+    )) else {
+        panic!("ordinary pre-trade must observe the drop-copy rate-limit charge")
+    };
+    assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+}
+
+#[test]
 fn dry_run_insufficient_funds_reports_reject_and_leaves_state_for_real_call() {
     let engine = build_rate_limited_engine();
     seed_rate_limited(&engine, "USD", "1000");
@@ -1437,6 +1526,52 @@ fn pnl_killswitch_account_group_barrier_blocks_on_cumulative_fee_loss() {
         .err()
         .expect("blocked account must reject");
     assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+}
+
+#[test]
+fn drop_copy_reinstates_spot_funds_pnl_block_and_accepts_current_order() {
+    let acc = AccountId::from_u64(40000004);
+    let grp = AccountGroupId::from_u32(14).expect("valid group id");
+    let instrument = instr("AAPL", "USD");
+    let engine = build_pnl_killswitch_engine(grp);
+    engine
+        .accounts()
+        .register_group(&[acc], grp)
+        .expect("registration must succeed");
+
+    let result = engine
+        .apply_account_adjustment(acc, &[account_pnl_adjustment(pnl("-50"))])
+        .expect("force-set must commit");
+    assert_eq!(result.account_blocks.len(), 1);
+    engine.accounts().unblock(acc);
+
+    let mut reservation = engine.execute_pre_trade_drop_copy(make_order_for(
+        acc,
+        Side::Buy,
+        instrument.clone(),
+        TradeAmount::Quantity(qty("1")),
+        Some(px("100")),
+    ));
+    let block = reservation
+        .account_block()
+        .expect("drop-copy must expose the restored account block");
+    assert_eq!(block.code, RejectCode::AccountBlocked);
+    assert_eq!(block.reason, "pnl kill switch triggered");
+    reservation.commit();
+
+    let rejects = match engine.execute_pre_trade(make_order_for(
+        acc,
+        Side::Buy,
+        instrument,
+        TradeAmount::Quantity(qty("1")),
+        Some(px("100")),
+    )) {
+        Ok(_) => panic!("drop-copy policy block must affect later orders"),
+        Err(rejects) => rejects,
+    };
+    assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
+    assert_eq!(rejects[0].reason, "pnl kill switch triggered");
+    assert!(rejects[0].details.contains("lower bound breached"));
 }
 
 // Public surface of the operator's overwrite: an account holds one cause, so

@@ -1,5 +1,15 @@
 var NAVTREEINDEX5 =
 {
+"classopenpit_1_1pretrade_1_1Result.html#abcbbcd4aa149584dec2282794ea32916":[0,0,0,6,17,3],
+"classopenpit_1_1pretrade_1_1Result.html#abcbbcd4aa149584dec2282794ea32916":[1,0,0,6,17,3],
+"classopenpit_1_1pretrade_1_1Result.html#ae66b45fb00a57158985d8d66ef8a9765":[0,0,0,6,17,5],
+"classopenpit_1_1pretrade_1_1Result.html#ae66b45fb00a57158985d8d66ef8a9765":[1,0,0,6,17,5],
+"classopenpit_1_1pretrade_1_1Result.html#ae8e18ed8a73968abe77041852a52ba14":[0,0,0,6,17,0],
+"classopenpit_1_1pretrade_1_1Result.html#ae8e18ed8a73968abe77041852a52ba14":[1,0,0,6,17,0],
+"classopenpit_1_1pretrade_1_1StartPolicyAdapter.html":[0,0,0,6,18],
+"classopenpit_1_1pretrade_1_1StartPolicyAdapter.html":[1,0,0,6,18],
+"classopenpit_1_1pretrade_1_1StartPolicyAdapter.html#a17039c992853ecf9507dad49878ca480":[0,0,0,6,18,4],
+"classopenpit_1_1pretrade_1_1StartPolicyAdapter.html#a17039c992853ecf9507dad49878ca480":[1,0,0,6,18,4],
 "classopenpit_1_1pretrade_1_1StartPolicyAdapter.html#a195983a3855da7f490ec9609022e3a96":[0,0,0,6,18,0],
 "classopenpit_1_1pretrade_1_1StartPolicyAdapter.html#a195983a3855da7f490ec9609022e3a96":[1,0,0,6,18,0],
 "classopenpit_1_1pretrade_1_1StartPolicyAdapter.html#a541f18b64bd9783b38537e8975fe47a6":[0,0,0,6,18,6],
@@ -239,15 +249,5 @@ var NAVTREEINDEX5 =
 "namespaceopenpit_1_1asyncengine.html#a3ed82bd1ab4cc73a47327fe69f275d66aa33abae4bf4803c0acdf46ddd22cbd86":[0,0,0,2,26,3],
 "namespaceopenpit_1_1asyncengine.html#a3ed82bd1ab4cc73a47327fe69f275d66ac23e2b09ebe6bf4cb5e2a9abe85c0be2":[0,0,0,2,26,0],
 "namespaceopenpit_1_1asyncengine.html#a3ed82bd1ab4cc73a47327fe69f275d66aca8e8bd079d6957bb5ace1e11489ea90":[0,0,0,2,26,2],
-"namespaceopenpit_1_1asyncengine.html#a8bec053d7d555380d83d4b46605bd323":[0,0,0,2,27],
-"namespaceopenpit_1_1asyncengine.html#ab4f34587cb0ebe71c516c7000824348d":[0,0,0,2,25],
-"namespaceopenpit_1_1asyncengine.html#ae0734480d259d87150e3e92362c97f41":[0,0,0,2,24],
-"namespaceopenpit_1_1marketdata.html":[0,0,0,3],
-"namespaceopenpit_1_1marketdata.html#a2a734d57b948fd572b59fba9d6c991c0":[0,0,0,3,10],
-"namespaceopenpit_1_1marketdata.html#a2a734d57b948fd572b59fba9d6c991c0a6adf97f83acf6453d4a6a4b1070f3754":[0,0,0,3,10,0],
-"namespaceopenpit_1_1marketdata.html#a2a734d57b948fd572b59fba9d6c991c0abbd47109890259c0127154db1af26c75":[0,0,0,3,10,1],
-"namespaceopenpit_1_1marketdata.html#a2dac77c54543feba4e5a508ae51611d9":[0,0,0,3,9],
-"namespaceopenpit_1_1marketdata.html#a2dac77c54543feba4e5a508ae51611d9a70c78fcf4f9b06e19a2852f61e1252ab":[0,0,0,3,9,3],
-"namespaceopenpit_1_1marketdata.html#a2dac77c54543feba4e5a508ae51611d9a835f31bbbcb0f81ff2756bd7fc89a0f5":[0,0,0,3,9,1],
-"namespaceopenpit_1_1marketdata.html#a2dac77c54543feba4e5a508ae51611d9aa60852f204ed8028c1c58808b746d115":[0,0,0,3,9,0]
+"namespaceopenpit_1_1asyncengine.html#a8bec053d7d555380d83d4b46605bd323":[0,0,0,2,27]
 };

@@ -1,5 +1,13 @@
 var NAVTREEINDEX3 =
 {
+"classopenpit_1_1marketdata_1_1Quote.html#ac27762900af38f108ef22f73b1bca156":[0,0,0,3,2,0],
+"classopenpit_1_1marketdata_1_1Quote.html#ac27762900af38f108ef22f73b1bca156":[1,0,0,3,2,0],
+"classopenpit_1_1marketdata_1_1Quote.html#addc78bf6e5e818e88885f8da8cdc569c":[0,0,0,3,2,8],
+"classopenpit_1_1marketdata_1_1Quote.html#addc78bf6e5e818e88885f8da8cdc569c":[1,0,0,3,2,8],
+"classopenpit_1_1marketdata_1_1QuoteTtl.html":[0,0,0,3,3],
+"classopenpit_1_1marketdata_1_1QuoteTtl.html":[1,0,0,3,3],
+"classopenpit_1_1marketdata_1_1QuoteTtl.html#a3a1f24ca583db33a2d2b8761728c612b":[0,0,0,3,3,1],
+"classopenpit_1_1marketdata_1_1QuoteTtl.html#a3a1f24ca583db33a2d2b8761728c612b":[1,0,0,3,3,1],
 "classopenpit_1_1marketdata_1_1QuoteTtl.html#a63838d0c470b09e761b2800ee7ac4f58":[0,0,0,3,3,0],
 "classopenpit_1_1marketdata_1_1QuoteTtl.html#a63838d0c470b09e761b2800ee7ac4f58":[1,0,0,3,3,0],
 "classopenpit_1_1marketdata_1_1QuoteTtl.html#a7d9c6f73e628129db52f3644d9824bc3":[0,0,0,3,3,2],
@@ -241,13 +249,5 @@ var NAVTREEINDEX3 =
 "classopenpit_1_1param_1_1Leverage.html#ad52a0075351aa591644888971807f9c0":[0,0,0,5,5,9],
 "classopenpit_1_1param_1_1Leverage.html#ad52a0075351aa591644888971807f9c0":[1,0,0,5,5,9],
 "classopenpit_1_1param_1_1Leverage.html#ae08cd52d03146c4f43c446345964d045":[0,0,0,5,5,0],
-"classopenpit_1_1param_1_1Leverage.html#ae08cd52d03146c4f43c446345964d045":[1,0,0,5,5,0],
-"classopenpit_1_1param_1_1Leverage.html#af26dd9f13f1383d8e00a539e54de04fb":[0,0,0,5,5,3],
-"classopenpit_1_1param_1_1Leverage.html#af26dd9f13f1383d8e00a539e54de04fb":[1,0,0,5,5,3],
-"classopenpit_1_1param_1_1MonetaryAmount.html":[0,0,0,5,6],
-"classopenpit_1_1param_1_1MonetaryAmount.html":[1,0,0,5,6],
-"classopenpit_1_1param_1_1MonetaryAmount.html#a0f43c9d1f4b735081efdf1390f4045ba":[0,0,0,5,6,2],
-"classopenpit_1_1param_1_1MonetaryAmount.html#a0f43c9d1f4b735081efdf1390f4045ba":[1,0,0,5,6,2],
-"classopenpit_1_1param_1_1MonetaryAmount.html#a14dc280c4f1cd33bea912b4dc356c6fd":[0,0,0,5,6,3],
-"classopenpit_1_1param_1_1MonetaryAmount.html#a14dc280c4f1cd33bea912b4dc356c6fd":[1,0,0,5,6,3]
+"classopenpit_1_1param_1_1Leverage.html#ae08cd52d03146c4f43c446345964d045":[1,0,0,5,5,0]
 };

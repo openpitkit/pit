@@ -7,6 +7,7 @@ var classopenpit_1_1asyncengine_1_1TypedAsyncEngine =
     [ "ApplyAccountAdjustment", "classopenpit_1_1asyncengine_1_1TypedAsyncEngine.html#a3ea78bd8c89bcc4e3c184b54d3d918a6", null ],
     [ "ApplyExecutionReport", "classopenpit_1_1asyncengine_1_1TypedAsyncEngine.html#a421181cc15b6b6fee126374aab1a8c04", null ],
     [ "ExecutePreTrade", "classopenpit_1_1asyncengine_1_1TypedAsyncEngine.html#ad9af6d2bb4b51815a07ad70682781475", null ],
+    [ "ExecutePreTradeDropCopy", "classopenpit_1_1asyncengine_1_1TypedAsyncEngine.html#a1d2b8be5d789669b9054b6ce096b11a2", null ],
     [ "Generic", "classopenpit_1_1asyncengine_1_1TypedAsyncEngine.html#a68dcb9cce39ec790f0fe081d0b832045", null ],
     [ "operator=", "classopenpit_1_1asyncengine_1_1TypedAsyncEngine.html#a4d72e9d769fe80dac14f5b1079c456bb", null ],
     [ "operator=", "classopenpit_1_1asyncengine_1_1TypedAsyncEngine.html#a5eff83ef52d36c829b45938f8b27ee64", null ],

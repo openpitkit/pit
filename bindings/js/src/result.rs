@@ -275,6 +275,21 @@ impl JsReservation {
         Ok(convert_outcomes(reservation.account_adjustments()))
     }
 
+    /// Returns the winning account block produced by this reservation's pipeline,
+    /// or `undefined` when no account-scoped reject was produced.
+    ///
+    /// # Errors
+    ///
+    /// Throws `LifecycleError` when the reservation has been finalized.
+    #[wasm_bindgen(js_name = accountBlock)]
+    pub fn account_block(&self) -> Result<Option<JsAccountBlock>, JsValue> {
+        let reservation = self.inner.borrow();
+        let (reservation, _) = reservation
+            .as_ref()
+            .ok_or_else(|| lifecycle_error("reservation has already been finalized"))?;
+        Ok(reservation.account_block().map(JsAccountBlock::from_core))
+    }
+
     /// Commits the reserved state.
     ///
     /// # Errors
@@ -312,7 +327,7 @@ impl JsReservation {
 
 impl JsReservation {
     /// Wraps a core reservation handle.
-    fn new(inner: PreTradeReservation, lifecycle: LifecycleToken) -> Self {
+    pub(crate) fn new(inner: PreTradeReservation, lifecycle: LifecycleToken) -> Self {
         Self {
             inner: Rc::new(RefCell::new(Some((inner, lifecycle)))),
         }

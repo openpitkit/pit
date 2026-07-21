@@ -111,6 +111,19 @@ func (e *ClientEngine[Order, Report, Adjustment]) ExecutePreTrade(
 	return reservation, rejects, err
 }
 
+// ExecutePreTradeDropCopy runs the full non-enforcing pre-trade pipeline with
+// a client order payload. The payload handle is released before the method
+// returns.
+func (e *ClientEngine[Order, Report, Adjustment]) ExecutePreTradeDropCopy(
+	order Order,
+) (*pretrade.Reservation, error) {
+	engineOrder, payload := newClientOrderPayload(order)
+	defer payload.release()
+	reservation, err := e.engine.ExecutePreTradeDropCopy(engineOrder)
+	runtime.KeepAlive(order)
+	return reservation, err
+}
+
 // ApplyExecutionReport applies a client execution report payload.
 //
 // The payload handle is released before ApplyExecutionReport returns because

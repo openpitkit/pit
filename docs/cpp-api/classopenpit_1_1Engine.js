@@ -11,6 +11,7 @@ var classopenpit_1_1Engine =
     [ "ClearAccountGroupCurrency", "classopenpit_1_1Engine.html#a05c394c843baa02ebb80529679338160", null ],
     [ "Configure", "classopenpit_1_1Engine.html#aa3b09a057d6f5572312610d922b21a8a", null ],
     [ "ExecutePreTrade", "classopenpit_1_1Engine.html#a09ced64d6c13b2487d40b2611f72599d", null ],
+    [ "ExecutePreTradeDropCopy", "classopenpit_1_1Engine.html#a067b3cca4e0ae6b9354f683710f595f7", null ],
     [ "ExecutePreTradeDryRun", "classopenpit_1_1Engine.html#a8863017b17b6076550e01107ac3c97ad", null ],
     [ "Get", "classopenpit_1_1Engine.html#ae64820572971cad3e4d0d00088d12b50", null ],
     [ "operator bool", "classopenpit_1_1Engine.html#a684faeec84a674fda743177aa03c89c4", null ],

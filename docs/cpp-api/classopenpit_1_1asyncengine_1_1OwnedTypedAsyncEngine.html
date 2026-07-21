@@ -136,6 +136,7 @@ Public Member Functions</h2></td></tr>
 <tr class="memitem:a15512f78943cc6e675f37642df13f30d template"><td class="memItemLeft"><a class="el" href="classopenpit_1_1asyncengine_1_1Future.html">Future</a>&lt; <a class="el" href="structopenpit_1_1asyncengine_1_1AdjustmentOutcome.html">AdjustmentOutcome</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a15512f78943cc6e675f37642df13f30d">ApplyAccountAdjustment</a> (<a class="el" href="classopenpit_1_1param_1_1AccountId.html">::openpit::param::AccountId</a> accountId, std::vector&lt; Adjustment &gt; adjustments, std::chrono::nanoseconds timeout=std::chrono::nanoseconds(0))</td></tr>
 <tr class="memitem:a70d9abb16bcdfd5097bb482f3bfb341c" id="r_a70d9abb16bcdfd5097bb482f3bfb341c"><td class="memItemLeft"><a class="el" href="classopenpit_1_1asyncengine_1_1Future.html">Future</a>&lt;<a class="el" href="structopenpit_1_1PostTradeResult.html">::openpit::PostTradeResult</a> &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a70d9abb16bcdfd5097bb482f3bfb341c">ApplyExecutionReport</a> (<a class="el" href="classopenpit_1_1model_1_1ExecutionReport.html">::openpit::model::ExecutionReport</a> report, std::chrono::nanoseconds timeout=std::chrono::nanoseconds(0))</td></tr>
 <tr class="memitem:ab82d2426160a5585993cf7a642bb6404" id="r_ab82d2426160a5585993cf7a642bb6404"><td class="memItemLeft"><a class="el" href="classopenpit_1_1asyncengine_1_1Future.html">Future</a>&lt; <a class="el" href="structopenpit_1_1asyncengine_1_1ExecuteOutcome.html">ExecuteOutcome</a>&lt; <a class="el" href="#afb08147642389dd461a32ef1bd0fe2d8">Driver</a> &gt; &gt;&#160;</td><td class="memItemRight"><a class="el" href="#ab82d2426160a5585993cf7a642bb6404">ExecutePreTrade</a> (<a class="el" href="classopenpit_1_1model_1_1Order.html">::openpit::model::Order</a> order, std::chrono::nanoseconds timeout=std::chrono::nanoseconds(0))</td></tr>
+<tr class="memitem:a1e1618bfe14a4045960af57e7e2bd927" id="r_a1e1618bfe14a4045960af57e7e2bd927"><td class="memItemLeft"><a class="el" href="classopenpit_1_1asyncengine_1_1Future.html">Future</a>&lt; <a class="el" href="structopenpit_1_1asyncengine_1_1ExecuteOutcome.html">ExecuteOutcome</a>&lt; <a class="el" href="#afb08147642389dd461a32ef1bd0fe2d8">Driver</a> &gt; &gt;&#160;</td><td class="memItemRight"><a class="el" href="#a1e1618bfe14a4045960af57e7e2bd927">ExecutePreTradeDropCopy</a> (<a class="el" href="classopenpit_1_1model_1_1Order.html">::openpit::model::Order</a> order, std::chrono::nanoseconds timeout=std::chrono::nanoseconds(0))</td></tr>
 <tr class="memitem:aba4495ce43a59234311e8f9476811d7a" id="r_aba4495ce43a59234311e8f9476811d7a"><td class="memItemLeft"><a class="el" href="#acf5ae9a0aaaed4b7d05f7f57a71e0c49">OwnedTypedAsyncEngine</a> &amp;&#160;</td><td class="memItemRight"><a class="el" href="#aba4495ce43a59234311e8f9476811d7a">operator=</a> (const <a class="el" href="#acf5ae9a0aaaed4b7d05f7f57a71e0c49">OwnedTypedAsyncEngine</a> &amp;)=delete</td></tr>
 <tr class="memitem:acb86ada1b3b75745d768fe3163123d90" id="r_acb86ada1b3b75745d768fe3163123d90"><td class="memItemLeft"><a class="el" href="#acf5ae9a0aaaed4b7d05f7f57a71e0c49">OwnedTypedAsyncEngine</a> &amp;&#160;</td><td class="memItemRight"><a class="el" href="#acb86ada1b3b75745d768fe3163123d90">operator=</a> (<a class="el" href="#acf5ae9a0aaaed4b7d05f7f57a71e0c49">OwnedTypedAsyncEngine</a> &amp;&amp;) noexcept=default</td></tr>
 <tr class="memitem:acf5ae9a0aaaed4b7d05f7f57a71e0c49" id="r_acf5ae9a0aaaed4b7d05f7f57a71e0c49"><td class="memItemLeft">&#160;</td><td class="memItemRight"><a class="el" href="#acf5ae9a0aaaed4b7d05f7f57a71e0c49">OwnedTypedAsyncEngine</a> (const OwnedTypedAsyncEngine &amp;)=delete</td></tr>
@@ -343,6 +344,35 @@ template&lt;typename Adjustment&gt; </div>
       <table class="memname">
         <tr>
           <td class="memname"><a class="el" href="classopenpit_1_1asyncengine_1_1Future.html">Future</a>&lt; <a class="el" href="structopenpit_1_1asyncengine_1_1ExecuteOutcome.html">ExecuteOutcome</a>&lt; <a class="el" href="#afb08147642389dd461a32ef1bd0fe2d8">Driver</a> &gt; &gt; openpit::asyncengine::OwnedTypedAsyncEngine::ExecutePreTrade </td>
+          <td>(</td>
+          <td class="paramtype"><a class="el" href="classopenpit_1_1model_1_1Order.html">::openpit::model::Order</a></td>          <td class="paramname"><span class="paramname"><em>order</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype">std::chrono::nanoseconds</td>          <td class="paramname"><span class="paramname"><em>timeout</em></span><span class="paramdefsep"> = </span><span class="paramdefval">std::chrono::nanoseconds(0)</span>&#160;)</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel nodiscard">nodiscard</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+</div>
+</div>
+<a id="a1e1618bfe14a4045960af57e7e2bd927" name="a1e1618bfe14a4045960af57e7e2bd927"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a1e1618bfe14a4045960af57e7e2bd927">&#9670;&#160;</a></span>ExecutePreTradeDropCopy()</h2>
+
+<div class="memitem">
+<div class="memproto">
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname"><a class="el" href="classopenpit_1_1asyncengine_1_1Future.html">Future</a>&lt; <a class="el" href="structopenpit_1_1asyncengine_1_1ExecuteOutcome.html">ExecuteOutcome</a>&lt; <a class="el" href="#afb08147642389dd461a32ef1bd0fe2d8">Driver</a> &gt; &gt; openpit::asyncengine::OwnedTypedAsyncEngine::ExecutePreTradeDropCopy </td>
           <td>(</td>
           <td class="paramtype"><a class="el" href="classopenpit_1_1model_1_1Order.html">::openpit::model::Order</a></td>          <td class="paramname"><span class="paramname"><em>order</em></span>, </td>
         </tr>

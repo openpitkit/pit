@@ -83,7 +83,7 @@ use crate::policy::spot_funds::{JsSpotFundsBuilder, JsSpotFundsPnlBoundsKillswit
 use crate::policy::{BuiltinReadyBuilder, CallbackErrorScope, JsPreTradePolicyAdapter, PolicyLike};
 use crate::result::{
     JsAccountAdjustmentBatchResult, JsDryRunReport, JsExecuteResult, JsPostTradeResult,
-    JsStartResult,
+    JsReservation, JsStartResult,
 };
 
 #[wasm_bindgen(inline_js = r#"
@@ -567,6 +567,23 @@ impl JsEngine {
         };
         finish_callback_scope(callback_scope, JsValue::UNDEFINED)?;
         Ok(result)
+    }
+
+    /// Runs the full pre-trade pipeline without enforcing policy rejects.
+    ///
+    /// Existing account and account-group blocks are ignored. Every policy
+    /// keeps its normal mutations, locks, account adjustments, and account
+    /// blocks. Re-throws the original error a custom policy callback threw, if
+    /// any.
+    #[wasm_bindgen(js_name = executePreTradeDropCopy)]
+    pub fn execute_pre_trade_drop_copy(&self, order: OrderLike) -> Result<JsReservation, JsValue> {
+        let original: JsValue = order.into();
+        let order = JsOrder::coerce(original.clone())?;
+        let (request, lifecycle) = build_order_request(&order, &original)?;
+        let callback_scope = CallbackErrorScope::capture();
+        let reservation = self.inner.execute_pre_trade_drop_copy(request);
+        finish_callback_scope(callback_scope, JsValue::UNDEFINED)?;
+        Ok(JsReservation::new(reservation, lifecycle))
     }
 
     /// Runs start-stage checks as a non-mutating dry-run.

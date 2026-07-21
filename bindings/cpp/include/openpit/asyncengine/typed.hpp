@@ -103,6 +103,11 @@ class EngineAdapter {
     return m_engine->ExecutePreTrade(order);
   }
 
+  [[nodiscard]] ::openpit::pretrade::Reservation ExecutePreTradeDropCopy(
+      const ::openpit::model::Order& order) const {
+    return m_engine->ExecutePreTradeDropCopy(order);
+  }
+
   [[nodiscard]] ::openpit::PostTradeResult ApplyExecutionReport(
       const ::openpit::model::ExecutionReport& report) const {
     return m_engine->ApplyExecutionReport(report);
@@ -532,6 +537,34 @@ class TypedAsyncEngine {
         timeout);
   }
 
+  // Enqueues a full drop-copy pre-trade call for `order`, pinned to its
+  // account. Policy rejects and current account blocks do not prevent the
+  // reservation from being returned; newly raised blocks are retained.
+  [[nodiscard]] Future<ExecuteOutcome<Driver>> ExecutePreTradeDropCopy(
+      ::openpit::model::Order order,
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    const std::optional<::openpit::param::AccountId> accountId =
+        detail::OrderAccountId(order);
+    if (!accountId.has_value()) {
+      Promise<ExecuteOutcome<Driver>> promise;
+      Future<ExecuteOutcome<Driver>> future = promise.GetFuture();
+      promise.Fail(detail::MissingAccountId());
+      return future;
+    }
+    const ::openpit::param::AccountId pinned = *accountId;
+    TypedAsyncEngine* self = this;
+    return m_engine.Call(
+        pinned,
+        [self, pinned, order = std::move(order)](Driver& driver) {
+          ::openpit::pretrade::Reservation reservation =
+              driver.ExecutePreTradeDropCopy(order);
+          auto asyncReservation = std::make_shared<AsyncReservation<Driver>>(
+              std::move(reservation), self, pinned);
+          return ExecuteOutcome<Driver>{std::move(asyncReservation), {}};
+        },
+        timeout);
+  }
+
   // Enqueues a post-trade call for `report`, pinned to its account. Resolves
   // with the `PostTradeResult`, or immediately with `MissingAccountId` when the
   // report carries no account id.
@@ -930,6 +963,12 @@ class OwnedTypedAsyncEngine {
       ::openpit::model::Order order,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
     return m_engine.ExecutePreTrade(std::move(order), timeout);
+  }
+
+  [[nodiscard]] Future<ExecuteOutcome<Driver>> ExecutePreTradeDropCopy(
+      ::openpit::model::Order order,
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return m_engine.ExecutePreTradeDropCopy(std::move(order), timeout);
   }
 
   [[nodiscard]] Future<::openpit::PostTradeResult> ApplyExecutionReport(

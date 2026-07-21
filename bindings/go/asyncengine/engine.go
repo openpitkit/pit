@@ -142,6 +142,46 @@ func (t *executePreTradeTask) run() {
 
 func (t *executePreTradeTask) abort(err error) { t.f.Resolve(nil, nil, err) }
 
+// ExecutePreTradeDropCopy enqueues a full pre-trade pipeline call that ignores
+// existing account blocks and policy rejects while preserving normal policy
+// state, including newly raised account blocks.
+func (e *AsyncEngine) ExecutePreTradeDropCopy(
+	ctx context.Context,
+	order model.Order,
+) *future.Future[*AsyncReservation] {
+	f := future.New[*AsyncReservation]()
+	accountID, err := extractOrderAccountID(order)
+	if err != nil {
+		f.Resolve(nil, err)
+		return f
+	}
+	task := &executePreTradeDropCopyTask{
+		f: f, engine: e, order: order, accountID: accountID,
+	}
+	if err := e.strategy.submit(ctx, accountID, task); err != nil {
+		f.Resolve(nil, err)
+	}
+	return f
+}
+
+type executePreTradeDropCopyTask struct {
+	f         *future.Future[*AsyncReservation]
+	engine    *AsyncEngine
+	order     model.Order
+	accountID param.AccountID
+}
+
+func (t *executePreTradeDropCopyTask) run() {
+	reservation, err := t.engine.driver.ExecutePreTradeDropCopy(t.order)
+	if err != nil {
+		t.f.Resolve(nil, err)
+		return
+	}
+	t.f.Resolve(newAsyncReservation(reservation, t.engine, t.accountID), nil)
+}
+
+func (t *executePreTradeDropCopyTask) abort(err error) { t.f.Resolve(nil, err) }
+
 // ApplyExecutionReport enqueues a post-trade call for the report's
 // account. The report must have an operation with an account ID set.
 func (e *AsyncEngine) ApplyExecutionReport(

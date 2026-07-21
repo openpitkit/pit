@@ -43,6 +43,9 @@ func TestMutationsNativeE2E_CommitAndRollbackCallbacks(t *testing.T) {
 	if reservation == nil {
 		t.Fatal("ExecutePreTrade() first reservation = nil, want non-nil")
 	}
+	if block := reservation.AccountBlock(); block != nil {
+		t.Fatalf("ExecutePreTrade() first AccountBlock = %+v, want nil", block)
+	}
 	reservation.CommitAndClose()
 
 	if policy.commitCalls != 1 {
@@ -101,6 +104,56 @@ func TestMutationsNativeE2E_RejectingPolicyReturnsRejectList(t *testing.T) {
 	}
 }
 
+func TestMutationsNativeE2E_DropCopyCommitsRejectingPolicyMutation(t *testing.T) {
+	policy := &mutationTrackingPolicy{
+		name:         "mutation-drop-copy",
+		shouldReject: true,
+	}
+	engine := newEngineWithPreTradePolicyForNativeE2E(t, policy)
+	defer engine.Stop()
+
+	reservation, err := engine.ExecutePreTradeDropCopy(newValidOrderForNativeE2E(t))
+	if err != nil {
+		t.Fatalf("ExecutePreTradeDropCopy() error = %v", err)
+	}
+	if reservation == nil {
+		t.Fatal("ExecutePreTradeDropCopy() reservation = nil, want non-nil")
+	}
+	block := reservation.AccountBlock()
+	if block == nil || block.Reason != "forced reject" {
+		t.Fatalf("ExecutePreTradeDropCopy() AccountBlock = %+v, want forced reject", block)
+	}
+	reservation.CommitAndClose()
+
+	if policy.commitCalls != 1 {
+		t.Fatalf("commitCalls = %d, want 1", policy.commitCalls)
+	}
+
+	blockedReservation, blockedRejects, err := engine.ExecutePreTrade(
+		newValidOrderForNativeE2E(t),
+	)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() after drop-copy block error = %v", err)
+	}
+	if blockedReservation != nil {
+		blockedReservation.Close()
+		t.Fatal("ExecutePreTrade() after drop-copy block reservation != nil, want nil")
+	}
+	if len(blockedRejects) != 1 {
+		t.Fatalf(
+			"ExecutePreTrade() after drop-copy block rejects len = %d, want 1",
+			len(blockedRejects),
+		)
+	}
+	if blockedRejects[0].Reason != "forced reject" {
+		t.Fatalf(
+			"ExecutePreTrade() after drop-copy block reason = %q, want %q",
+			blockedRejects[0].Reason,
+			"forced reject",
+		)
+	}
+}
+
 type mutationTrackingPolicy struct {
 	name          string
 	commitCalls   int
@@ -122,15 +175,6 @@ func (p *mutationTrackingPolicy) PerformPreTradeCheck(
 	mutations tx.Mutations,
 	_ pretrade.Result,
 ) []reject.Reject {
-	if p.shouldReject {
-		return reject.NewSingleItemList(
-			reject.CodeOther,
-			p.name,
-			"forced reject",
-			"forced in test",
-			reject.ScopeOrder,
-		)
-	}
 	if err := mutations.Push(
 		func() { p.commitCalls++ },
 		func() { p.rollbackCalls++ },
@@ -141,6 +185,15 @@ func (p *mutationTrackingPolicy) PerformPreTradeCheck(
 			"mutation registration failed",
 			err.Error(),
 			reject.ScopeOrder,
+		)
+	}
+	if p.shouldReject {
+		return reject.NewSingleItemList(
+			reject.CodeOther,
+			p.name,
+			"forced reject",
+			"forced in test",
+			reject.ScopeAccount,
 		)
 	}
 	return nil

@@ -59,6 +59,12 @@ func (d *rejectDriver) ExecutePreTrade(
 	return nil, d.executeRejects, nil
 }
 
+func (*rejectDriver) ExecutePreTradeDropCopy(
+	_ model.Order,
+) (*pretrade.Reservation, error) {
+	return pretrade.NewReservationFromHandle(nil), nil
+}
+
 func (*rejectDriver) ApplyExecutionReport(
 	_ model.ExecutionReport,
 ) (pretrade.PostTradeResult, error) {
@@ -100,6 +106,12 @@ func (d *transportErrorDriver) ExecutePreTrade(
 	_ model.Order,
 ) (*pretrade.Reservation, []reject.Reject, error) {
 	return nil, nil, d.executeErr
+}
+
+func (d *transportErrorDriver) ExecutePreTradeDropCopy(
+	_ model.Order,
+) (*pretrade.Reservation, error) {
+	return nil, d.executeErr
 }
 
 func (*transportErrorDriver) ApplyExecutionReport(

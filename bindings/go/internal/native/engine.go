@@ -443,6 +443,26 @@ func EngineExecutePreTrade(
 	}
 }
 
+func EngineExecutePreTradeDropCopy(
+	engine Engine,
+	order Order,
+) (PretradePreTradeReservation, error) {
+	var reservation PretradePreTradeReservation
+	var outError SharedString
+	if !C.openpit_engine_execute_pre_trade_drop_copy(
+		engine,
+		&order,
+		&reservation,
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return nil, consumeSharedStringAsError(
+			outError,
+			"openpit_engine_execute_pre_trade_drop_copy failed",
+		)
+	}
+	return reservation, nil
+}
+
 // EngineApplyExecutionReport returns one native aggregate. Its lists are
 // borrowed from the aggregate and must be copied before it is destroyed.
 
@@ -690,6 +710,15 @@ func PretradePreTradeReservationGetAccountAdjustments(
 	reservation PretradePreTradeReservation,
 ) AccountAdjustmentOutcomeList {
 	return C.openpit_pretrade_pre_trade_reservation_get_account_adjustments(reservation)
+}
+
+// PretradePreTradeReservationGetAccountBlock returns the winning account block
+// produced by the reservation's pipeline. The caller owns the returned list and
+// must release it with DestroyPretradeAccountBlockList.
+func PretradePreTradeReservationGetAccountBlock(
+	reservation PretradePreTradeReservation,
+) PretradeAccountBlockList {
+	return C.openpit_pretrade_pre_trade_reservation_get_account_block(reservation)
 }
 
 //------------------------------------------------------------------------------

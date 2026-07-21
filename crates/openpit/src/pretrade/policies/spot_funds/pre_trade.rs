@@ -31,7 +31,9 @@ use super::SpotFundsLimitMode;
 use crate::param::{AccountId, Asset, PositionSize, Price, Quantity, Side, TradeAmount};
 use crate::pretrade::holdings::{HoldError, Holdings};
 use crate::pretrade::policy::missing_required_field_reject;
-use crate::pretrade::{PolicyPreTradeResult, Reject, RejectCode, RejectScope, Rejects};
+use crate::pretrade::{
+    PolicyPreTradeResult, PreTradeContext, Reject, RejectCode, RejectScope, Rejects,
+};
 use crate::storage::ConfigCell;
 use crate::Mutations;
 
@@ -336,8 +338,7 @@ where
 
     pub(super) fn perform_pre_trade_check_impl<Order>(
         &self,
-        account_control: Option<AccountControl<<Sync as SyncMode>::StorageLockingPolicyFactory>>,
-        account_info: &impl AccountInfo,
+        ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         order: &Order,
         mutations: &mut Mutations,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects>
@@ -346,7 +347,21 @@ where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         let request = self.read_order_request(order)?;
-        self.reject_halted_account_pnl(request.account_id, account_info)?;
+        let pnl_rejects = self.reject_halted_account_pnl(request.account_id, ctx);
+        if ctx.is_drop_copy() {
+            if let Err(rejects) = &pnl_rejects {
+                if let Some(reject) = rejects
+                    .iter()
+                    .find(|reject| reject.scope == RejectScope::Account)
+                {
+                    ctx.record_drop_copy_account_block(
+                        reject.account_block_with_code(RejectCode::AccountBlocked),
+                    );
+                }
+            }
+        } else {
+            pnl_rejects?;
+        }
 
         let legs = self
             .compute_reservation_legs(
@@ -355,7 +370,7 @@ where
                 request.price,
                 request.instrument,
                 request.account_id,
-                account_info,
+                ctx,
             )
             .map_err(Rejects::from)?;
 
@@ -366,9 +381,12 @@ where
         // cascade (account -> account group -> global) and gates only the `held`
         // legs below; `incoming`, position, average-entry and realized-PnL
         // bookkeeping are mode-independent.
-        let limit_mode = self
-            .settings
-            .with(|s| s.limit_mode_for(request.account_id, account_info));
+        let limit_mode = if ctx.is_drop_copy() {
+            SpotFundsLimitMode::TrackOnly
+        } else {
+            self.settings
+                .with(|s| s.limit_mode_for(request.account_id, ctx))
+        };
 
         let mut outcome =
             PolicyPreTradeResult::with_capacity(2, legs.lock_price.is_some() as usize);
@@ -386,7 +404,7 @@ where
                 step.held,
                 step.incoming,
                 limit_mode,
-                account_control.clone(),
+                ctx.account_control.clone(),
                 mutations,
                 &mut outcome,
             )?;

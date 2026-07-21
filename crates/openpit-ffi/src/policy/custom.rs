@@ -27,7 +27,8 @@ use std::sync::Arc;
 
 use openpit::pretrade::PostTradeContext;
 use openpit::pretrade::{
-    PolicyPreTradeResult, PostTradeResult, PreTradeContext, PreTradePolicy, Rejects,
+    PolicyPreTradeResult, PostTradeResult, PreTradeContext, PreTradePolicy, RejectCode,
+    RejectScope, Rejects,
 };
 use openpit::{AccountAdjustmentContext, Mutations, PolicyAccountAdjustmentResult, PolicyGroupId};
 
@@ -332,14 +333,31 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
                 self.user_data,
             )
         };
-        import_reject_list_result(rejects)?;
-        if out_result.lock_prices.is_empty() && out_result.account_adjustments.is_empty() {
-            Ok(None)
+        let reject_result = import_reject_list_result(rejects);
+        let result =
+            if out_result.lock_prices.is_empty() && out_result.account_adjustments.is_empty() {
+                None
+            } else {
+                Some(PolicyPreTradeResult {
+                    account_adjustments: out_result.account_adjustments.into(),
+                    lock_prices: out_result.lock_prices.into(),
+                })
+            };
+        if ctx.is_drop_copy() {
+            if let Err(rejects) = &reject_result {
+                if let (Some(control), Some(reject)) = (
+                    ctx.account_control.as_ref(),
+                    rejects
+                        .iter()
+                        .find(|reject| reject.scope == RejectScope::Account),
+                ) {
+                    control.block(reject.account_block_with_code(RejectCode::AccountBlocked));
+                }
+            }
+            Ok(result)
         } else {
-            Ok(Some(PolicyPreTradeResult {
-                account_adjustments: out_result.account_adjustments.into(),
-                lock_prices: out_result.lock_prices.into(),
-            }))
+            reject_result?;
+            Ok(result)
         }
     }
 

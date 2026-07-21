@@ -136,6 +136,22 @@ func (e *Engine) ExecutePreTrade(
 	return pretrade.NewReservationFromHandle(reservation), nil, nil
 }
 
+// ExecutePreTradeDropCopy runs the full pre-trade pipeline without enforcing
+// policy rejects. Existing account and account-group blocks are ignored. Every
+// policy keeps its normal mutations, locks, account adjustments, and account
+// blocks. The returned reservation has the ordinary commit and rollback
+// lifecycle.
+func (e *Engine) ExecutePreTradeDropCopy(
+	order model.Order,
+) (*pretrade.Reservation, error) {
+	reservation, err := native.EngineExecutePreTradeDropCopy(e.handle, order.Handle())
+	runtime.KeepAlive(order)
+	if err != nil {
+		return nil, err
+	}
+	return pretrade.NewReservationFromHandle(reservation), nil
+}
+
 // StartPreTradeDryRun runs the start stage as a non-mutating dry-run.
 //
 // Return contract:

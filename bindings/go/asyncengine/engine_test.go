@@ -100,6 +100,17 @@ func (d *fakeDriver) ExecutePreTrade(
 	return nil, []reject.Reject{}, nil
 }
 
+func (d *fakeDriver) ExecutePreTradeDropCopy(
+	order model.Order,
+) (*pretrade.Reservation, error) {
+	op, _ := order.Operation().Get()
+	accountID, _ := op.AccountID().Get()
+	done := d.recordStart(accountID)
+	defer done()
+	atomic.AddInt64(&d.executeCount, 1)
+	return pretrade.NewReservationFromHandle(nil), nil
+}
+
 func (d *fakeDriver) ApplyExecutionReport(
 	report model.ExecutionReport,
 ) (pretrade.PostTradeResult, error) {

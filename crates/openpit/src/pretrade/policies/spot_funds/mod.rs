@@ -590,7 +590,7 @@ where
         order: &Order,
         mutations: &mut Mutations,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
-        self.perform_pre_trade_check_impl(ctx.account_control.clone(), ctx, order, mutations)
+        self.perform_pre_trade_check_impl(ctx, order, mutations)
     }
 
     /// Dry-run main-stage check.

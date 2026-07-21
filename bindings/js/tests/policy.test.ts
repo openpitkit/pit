@@ -115,6 +115,7 @@ describe("runtime custom policy", () => {
     const result = engine.executePreTrade(order("BUY"));
     expect(result.ok).toBe(true);
     expect(result.rejects).toHaveLength(0);
+    expect(result.reservation!.accountBlock()).toBeUndefined();
     // Finalize the reservation the accept produced.
     expect(() => result.reservation!.commit()).not.toThrow();
   });
@@ -132,6 +133,35 @@ describe("runtime custom policy", () => {
     expect(reject.scope).toBe("order");
     expect(reject.policy).toBe("sell-gate");
     expect(reject.reason).toBe("sells are disabled for this desk");
+  });
+
+  it("drop copy discards custom rejects and preserves accepted output", () => {
+    const policy: Policy = {
+      name: "drop-copy-result",
+      checkPreTradeStart: () => [],
+      performPreTradeCheck: () => ({
+        rejects: [
+          {
+            code: REJECT_CODE,
+            reason: "test boundary exceeded",
+            details: "drop copy must retain the accepted output",
+            scope: "account",
+          },
+        ],
+        lockPrices: [Price.fromString("13")],
+      }),
+    };
+    const engine = Engine.builder().preTrade(policy).build();
+
+    const reservation = engine.executePreTradeDropCopy(order("BUY"));
+
+    expect(reservation.lock().size()).toBe(1);
+    expect(reservation.accountBlock()?.reason).toBe("test boundary exceeded");
+    expect(() => reservation.commit()).not.toThrow();
+    expect(() => reservation.accountBlock()).toThrowError(LifecycleError);
+    const blocked = engine.startPreTrade(order("BUY"));
+    expect(blocked.ok).toBe(false);
+    expect(blocked.rejects[0]?.reason).toBe("test boundary exceeded");
   });
 
   it("validates policy reject userData before narrowing to wasm32", () => {

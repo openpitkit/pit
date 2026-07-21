@@ -170,6 +170,30 @@ class FullParityPolicy(openpit.pretrade.Policy):
         )
 
 
+class RejectingLockPolicy(openpit.pretrade.Policy):
+    @property
+    def name(self) -> str:
+        return "RejectingLockPolicy"
+
+    def perform_pre_trade_check(
+        self,
+        ctx: openpit.pretrade.Context,
+        order: openpit.Order,
+    ) -> openpit.pretrade.PolicyPreTradeResult:
+        _ = ctx, order
+        return openpit.pretrade.PolicyPreTradeResult.reject(
+            rejects=[
+                openpit.pretrade.PolicyReject(
+                    code=openpit.pretrade.RejectCode.RISK_LIMIT_EXCEEDED,
+                    reason="test boundary exceeded",
+                    details="drop copy must retain the accepted output",
+                    scope=openpit.pretrade.RejectScope.ACCOUNT,
+                )
+            ],
+            lock_prices=[openpit.param.Price("13")],
+        )
+
+
 @pytest.mark.unit
 def test_policy_reject_scope_validation() -> None:
     with pytest.raises(TypeError, match="scope must be openpit.pretrade.RejectScope"):
@@ -249,6 +273,30 @@ def test_custom_policy_preserves_pre_trade_result_group_and_lock_prices() -> Non
     assert adjustments[0].entry.asset == "USD"
     assert adjustments[0].entry.held is not None
     assert adjustments[0].entry.held.delta == openpit.param.PositionSize("2")
+    assert executed.reservation.account_block() is None
+
+
+@pytest.mark.unit
+def test_drop_copy_discards_custom_reject_and_preserves_lock() -> None:
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(policy=RejectingLockPolicy())
+        .build()
+    )
+
+    reservation = engine.execute_pre_trade_drop_copy(order=conftest.make_order())
+
+    assert reservation.lock().entries() == [(0, openpit.param.Price("13"))]
+    block = reservation.account_block()
+    assert block is not None
+    assert block.reason == "test boundary exceeded"
+    reservation.commit()
+    with pytest.raises(RuntimeError, match="already been finalized"):
+        reservation.account_block()
+    blocked = engine.start_pre_trade(order=conftest.make_order())
+    assert not blocked.ok
+    assert blocked.rejects[0].reason == "test boundary exceeded"
 
 
 @pytest.mark.unit

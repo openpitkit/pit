@@ -15,7 +15,7 @@
 //
 // Please see https://github.com/openpitkit and the OWNERS file for details.
 
-use super::PreTradeLock;
+use super::{AccountBlock, PreTradeLock};
 use crate::core::account_outcome::AccountAdjustmentOutcome;
 
 /// Opaque capability object representing reserved state.
@@ -92,9 +92,10 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 /// # }
 /// ```
 pub struct PreTradeReservation {
-    inner: Option<Box<dyn ReservationHandle>>,
-    lock: PreTradeLock,
+    account_block: Option<AccountBlock>,
     account_adjustments: Vec<AccountAdjustmentOutcome>,
+    lock: PreTradeLock,
+    inner: Option<Box<dyn ReservationHandle>>,
 }
 
 /// Internal capability interface used by [`PreTradeReservation`].
@@ -193,15 +194,40 @@ impl PreTradeReservation {
         &self.account_adjustments
     }
 
+    /// Returns the winning account block produced by this reservation's pipeline.
+    ///
+    /// Regular accepted reservations carry none because an account block is an
+    /// enforcing reject. A drop-copy reservation may carry the first block
+    /// derived from an account-scoped reject that was deliberately not enforced,
+    /// even when the account registry already contains an earlier block.
+    pub fn account_block(&self) -> Option<&AccountBlock> {
+        self.account_block.as_ref()
+    }
+
     pub(crate) fn from_handle(
         inner: Box<dyn ReservationHandle>,
         lock: PreTradeLock,
         account_adjustments: Vec<AccountAdjustmentOutcome>,
     ) -> Self {
         Self {
-            inner: Some(inner),
-            lock,
+            account_block: None,
             account_adjustments,
+            lock,
+            inner: Some(inner),
+        }
+    }
+
+    pub(crate) fn from_handle_with_account_block(
+        inner: Box<dyn ReservationHandle>,
+        lock: PreTradeLock,
+        account_adjustments: Vec<AccountAdjustmentOutcome>,
+        account_block: Option<AccountBlock>,
+    ) -> Self {
+        Self {
+            account_block,
+            account_adjustments,
+            lock,
+            inner: Some(inner),
         }
     }
 }
@@ -276,9 +302,10 @@ mod tests {
     #[should_panic(expected = "pre-trade reservation already consumed")]
     fn commit_panics_for_finalized_reservation() {
         let mut reservation = PreTradeReservation {
-            inner: None,
-            lock: PreTradeLock::default(),
+            account_block: None,
             account_adjustments: Vec::new(),
+            lock: PreTradeLock::default(),
+            inner: None,
         };
         reservation.commit();
     }
@@ -286,9 +313,10 @@ mod tests {
     #[test]
     fn rollback_is_noop_for_finalized_reservation() {
         let mut reservation = PreTradeReservation {
-            inner: None,
-            lock: PreTradeLock::default(),
+            account_block: None,
             account_adjustments: Vec::new(),
+            lock: PreTradeLock::default(),
+            inner: None,
         };
         reservation.rollback();
     }

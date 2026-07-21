@@ -309,6 +309,68 @@ impl<Trait: EngineTrait> Engine<Trait> {
             .and_then(PreTradeRequest::execute)
     }
 
+    /// Executes the full pre-trade pipeline without enforcing policy rejects.
+    ///
+    /// Every policy runs in registration order and keeps its normal side
+    /// effects, mutations, locks, account adjustments, and account blocks.
+    /// Policy rejects do not stop the pipeline or appear in the result.
+    /// Existing account and account-group blocks are ignored for this request.
+    /// The returned reservation has the same commit and rollback lifecycle as
+    /// an accepted regular pre-trade request.
+    pub fn execute_pre_trade_drop_copy(&self, order: Trait::Order) -> PreTradeReservation
+    where
+        Trait::Order: HasAccountId,
+    {
+        let now = Instant::now();
+        let account = order.account_id().ok();
+        let account_control = account.map(|id| {
+            let handle = AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone());
+            AccountControl::new(handle, id)
+        });
+        let account_groups = AccountGroupsHandle::from_inner(self.inner.account_groups.clone());
+        let ctx = PreTradeContext::with_groups_and_drop_copy(
+            account_control,
+            account_groups,
+            account,
+            true,
+        );
+
+        let (_start_rejects, start_account_block) = with_start_pre_trade_now(now, || {
+            run_pre_trade_start_stage::<Trait, _>(
+                &self.inner,
+                &ctx,
+                &order,
+                |policy, ctx, order| policy.check_pre_trade_start(ctx, order),
+            )
+        });
+        if let Some(block) = &start_account_block {
+            self.inner.blocked_accounts.record(&order, block.clone());
+        }
+
+        let (_rejects, main_account_block, mutations, lock, outcomes) = run_pre_trade_main_stage::<
+            Trait,
+            _,
+        >(
+            &self.inner,
+            &ctx,
+            &order,
+            |policy, ctx, order, mutations| policy.perform_pre_trade_check(ctx, order, mutations),
+        );
+        if let Some(block) = &main_account_block {
+            self.inner.blocked_accounts.record(&order, block.clone());
+        }
+
+        let account_block = start_account_block.or(main_account_block);
+
+        let reservation_handle = ReservationHandleImpl::new(mutations);
+        PreTradeReservation::from_handle_with_account_block(
+            Box::new(reservation_handle),
+            lock,
+            outcomes,
+            account_block,
+        )
+    }
+
     /// Runs start-stage checks as a non-mutating dry-run.
     ///
     /// Returns a [`PreTradeDryRunReport`] describing the verdict the start stage
@@ -635,9 +697,10 @@ where
 /// `hook` selects the per-policy entry point (the normal
 /// [`perform_pre_trade_check`](PreTradePolicy::perform_pre_trade_check) or its
 /// dry-run variant); the loop, reject merge, first-account-block selection, lock
-/// assembly, and outcome tagging are identical for both. The caller decides what
-/// to do with the returned [`Mutations`] (commit, roll back, or drop) and
-/// whether to record the returned [`AccountBlock`].
+/// assembly, and outcome tagging are identical for both. Drop-copy policies may
+/// also report a non-enforcing account block through the context. The caller
+/// decides what to do with the returned [`Mutations`] (commit, roll back, or
+/// drop) and whether to record the returned [`AccountBlock`].
 fn run_pre_trade_main_stage<Trait, Hook>(
     inner: &EngineInner<Trait>,
     ctx: &PreTradeContextOf<Trait>,
@@ -698,9 +761,15 @@ where
                 rejects_collection.push(rejects);
             }
         }
+        let context_account_block = ctx.take_drop_copy_account_block();
+        if first_account_block.is_none() {
+            first_account_block = context_account_block;
+        }
     }
 
-    debug_assert!(first_account_block.is_none() || total_rejects_len > 0);
+    // A block with no reject is legitimate only in drop-copy, where the P&L halt
+    // surfaces through the context rather than an enforced reject.
+    debug_assert!(first_account_block.is_none() || total_rejects_len > 0 || ctx.is_drop_copy());
     (
         merge_reject_lists(rejects_collection, total_rejects_len),
         first_account_block,
@@ -782,7 +851,8 @@ mod tests {
         WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation,
     };
     use crate::param::{
-        AccountId, Asset, Fee, Pnl, PositionSize, Price, Quantity, Side, TradeAmount, Volume,
+        AccountGroupId, AccountId, Asset, Fee, Pnl, PositionSize, Price, Quantity, Side,
+        TradeAmount, Volume,
     };
     use crate::pretrade::{
         PolicyAccountAdjustmentResult, PolicyPreTradeResult, PostTradeResult, PreTradeContext,
@@ -1209,6 +1279,7 @@ mod tests {
         let mut reservation = engine
             .execute_pre_trade(order_with_settlement("USD"))
             .expect("shortcut must pass");
+        assert!(reservation.account_block().is_none());
         reservation.rollback();
     }
 
@@ -1754,6 +1825,13 @@ mod tests {
             .accounts()
             .register_group(&[AccountId::from_u64(99224416)], group)
             .expect("registration must succeed");
+        engine
+            .accounts()
+            .block(AccountId::from_u64(99224416), "account halt".to_owned());
+        engine
+            .accounts()
+            .block_group(group, "group halt".to_owned())
+            .expect("group block must succeed");
 
         engine.apply_execution_report(&execution_report("USD"));
         assert_eq!(seen.get(), Some(group));
@@ -1967,6 +2045,189 @@ mod tests {
         };
         assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
         assert_eq!(rejects[0].policy, "toggle");
+    }
+
+    #[test]
+    fn drop_copy_runs_all_stages_and_commits_rejecting_mutations() {
+        let start_calls = Rc::new(Cell::new(0));
+        let mutation_state = Rc::new(RefCell::new(None));
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(StartPolicyMock::new(
+                "rejecting_start",
+                Rc::clone(&start_calls),
+                true,
+                false,
+                None,
+                None,
+            ))
+            .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                "rejecting_main",
+                shared_kill_switch_mutation(
+                    Rc::clone(&mutation_state),
+                    "drop_copy_mutation",
+                    true,
+                    false,
+                ),
+                true,
+                RejectScope::Order,
+            ))
+            .build()
+            .expect("engine must build");
+
+        let mut reservation = engine.execute_pre_trade_drop_copy(order_with_settlement("USD"));
+        assert_eq!(start_calls.get(), 1);
+        assert_eq!(*mutation_state.borrow(), None);
+
+        reservation.commit();
+        assert_eq!(*mutation_state.borrow(), Some(true));
+    }
+
+    #[test]
+    fn drop_copy_bypasses_existing_account_and_group_blocks() {
+        let account = AccountId::from_u64(99224416);
+        let group = AccountGroupId::from_u32(42).expect("account group id must be valid");
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(StartPolicyMock::pass("start"))
+            .pre_trade(MainPolicyMock::pass("main"))
+            .build()
+            .expect("engine must build");
+        let accounts = engine.accounts();
+        accounts
+            .register_group(&[account], group)
+            .expect("registration must succeed");
+        accounts.block(account, "account halt".to_owned());
+        accounts
+            .block_group(group, "group halt".to_owned())
+            .expect("group block must succeed");
+
+        let mut reservation = engine.execute_pre_trade_drop_copy(order_with_settlement("USD"));
+        reservation.commit();
+
+        let account_rejects = match engine.start_pre_trade(order_with_settlement("USD")) {
+            Ok(_) => panic!("account block must remain"),
+            Err(rejects) => rejects,
+        };
+        assert_eq!(account_rejects[0].reason, "account halt");
+        accounts.unblock(account);
+        let group_rejects = match engine.start_pre_trade(order_with_settlement("USD")) {
+            Ok(_) => panic!("group block must remain"),
+            Err(rejects) => rejects,
+        };
+        assert_eq!(group_rejects[0].reason, "group halt");
+        accounts
+            .unblock_group(group)
+            .expect("group unblock must succeed");
+        assert!(engine.start_pre_trade(order_with_settlement("USD")).is_ok());
+    }
+
+    #[test]
+    fn drop_copy_reports_its_account_block_when_account_is_already_blocked() {
+        let account = AccountId::from_u64(99224416);
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(MainPolicyMock::with_mutation_and_optional_reject(
+                "blocking_main",
+                "preblocked_drop_copy",
+                true,
+                RejectScope::Account,
+            ))
+            .build()
+            .expect("engine must build");
+        let accounts = engine.accounts();
+        accounts.block(account, "existing account halt".to_owned());
+
+        let mut reservation = engine.execute_pre_trade_drop_copy(order_with_settlement("USD"));
+        let block = reservation
+            .account_block()
+            .expect("drop-copy must expose its account block");
+        assert_eq!(block.policy, "blocking_main");
+        assert_eq!(block.reason, "main reject");
+        reservation.rollback();
+
+        let rejects = match engine.start_pre_trade(order_with_settlement("USD")) {
+            Ok(_) => panic!("existing account block must remain"),
+            Err(rejects) => rejects,
+        };
+        assert_eq!(rejects[0].reason, "existing account halt");
+    }
+
+    #[test]
+    fn drop_copy_records_policy_block_and_continues_into_main_stage() {
+        let start_calls = Rc::new(Cell::new(0));
+        let start_block = Rc::new(Cell::new(true));
+        let main_calls = Rc::new(Cell::new(0));
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(StartPolicyMock::new(
+                "blocking_start",
+                Rc::clone(&start_calls),
+                false,
+                false,
+                None,
+                Some(Rc::clone(&start_block)),
+            ))
+            .pre_trade(MainPolicyMock {
+                name: "blocking_main",
+                calls: Rc::clone(&main_calls),
+                reject: true,
+                reject_scope: RejectScope::Account,
+                on_apply: None,
+                post_trade_trigger: false,
+                seen_settlement: None,
+            })
+            .build()
+            .expect("engine must build");
+
+        let mut reservation = engine.execute_pre_trade_drop_copy(order_with_settlement("USD"));
+        let block = reservation
+            .account_block()
+            .expect("the first account block must win");
+        assert_eq!(block.policy, "blocking_start");
+        assert_eq!(block.reason, "pnl kill switch triggered");
+        reservation.commit();
+
+        assert_eq!(start_calls.get(), 1);
+        assert_eq!(main_calls.get(), 1);
+        start_block.set(false);
+        let rejects = match engine.start_pre_trade(order_with_settlement("USD")) {
+            Ok(_) => panic!("policy block must be recorded"),
+            Err(rejects) => rejects,
+        };
+        assert_eq!(rejects[0].policy, "blocking_start");
+        assert_eq!(rejects[0].reason, "pnl kill switch triggered");
+    }
+
+    #[test]
+    fn drop_copy_records_main_stage_policy_block_and_commits_mutation() {
+        let mutation_state = Rc::new(RefCell::new(None));
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                "blocking_main",
+                shared_kill_switch_mutation(
+                    Rc::clone(&mutation_state),
+                    "drop_copy_account_reject",
+                    true,
+                    false,
+                ),
+                true,
+                RejectScope::Account,
+            ))
+            .build()
+            .expect("engine must build");
+
+        let mut reservation = engine.execute_pre_trade_drop_copy(order_with_settlement("USD"));
+        reservation.commit();
+
+        assert_eq!(*mutation_state.borrow(), Some(true));
+        let rejects = match engine.start_pre_trade(order_with_settlement("USD")) {
+            Ok(_) => panic!("main-stage policy block must be recorded"),
+            Err(rejects) => rejects,
+        };
+        assert_eq!(rejects[0].policy, "blocking_main");
+        assert_eq!(rejects[0].reason, "main reject");
     }
 
     #[test]

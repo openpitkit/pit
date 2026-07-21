@@ -13,8 +13,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
+use parking_lot::Mutex;
+
+use super::reject::AccountBlock;
 use crate::core::{AccountControl, AccountGroups, AccountGroupsHandle, GroupLookup};
 use crate::param::{AccountGroupId, AccountId};
 use crate::storage::{self, StorageBuilder};
@@ -41,6 +44,8 @@ where
     /// account identifier could not be extracted from the order.
     pub account_control: Option<AccountControl<StorageFactory>>,
     group_lookup: GroupLookup<StorageFactory>,
+    drop_copy_account_block: Mutex<Option<AccountBlock>>,
+    drop_copy: bool,
 }
 
 impl<StorageFactory> PreTradeContext<StorageFactory>
@@ -52,9 +57,20 @@ where
         account_groups: AccountGroupsHandle<StorageFactory>,
         account: Option<AccountId>,
     ) -> Self {
+        Self::with_groups_and_drop_copy(account_control, account_groups, account, false)
+    }
+
+    pub(crate) fn with_groups_and_drop_copy(
+        account_control: Option<AccountControl<StorageFactory>>,
+        account_groups: AccountGroupsHandle<StorageFactory>,
+        account: Option<AccountId>,
+        drop_copy: bool,
+    ) -> Self {
         Self {
             account_control,
             group_lookup: GroupLookup::new(account_groups, account),
+            drop_copy_account_block: Mutex::new(None),
+            drop_copy,
         }
     }
 
@@ -85,6 +101,33 @@ where
     /// The lookup is performed once and cached for the lifetime of this context.
     pub fn account_group(&self) -> Option<AccountGroupId> {
         self.group_lookup.group()
+    }
+
+    /// Returns whether policy rejects are non-blocking for this operation.
+    ///
+    /// Policies normally run identically in both modes. A policy needs this
+    /// flag only when enforcing a boundary would prevent its regular
+    /// bookkeeping, such as recording a negative available balance.
+    pub fn is_drop_copy(&self) -> bool {
+        self.drop_copy
+    }
+
+    pub(crate) fn record_drop_copy_account_block(&self, block: AccountBlock) {
+        if !self.drop_copy {
+            return;
+        }
+        let mut account_block = self.drop_copy_account_block.lock();
+        if account_block.is_none() {
+            *account_block = Some(block);
+        }
+    }
+
+    pub(crate) fn take_drop_copy_account_block(&self) -> Option<AccountBlock> {
+        if self.drop_copy {
+            self.drop_copy_account_block.lock().take()
+        } else {
+            None
+        }
     }
 }
 

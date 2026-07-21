@@ -1249,6 +1249,28 @@ impl PyEngine {
         }
     }
 
+    /// Execute pre-trade without enforcing rejects while retaining account blocks.
+    #[pyo3(signature = (order))]
+    fn execute_pre_trade_drop_copy(
+        &self,
+        py: Python<'_>,
+        order: Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyReservation>> {
+        clear_python_callback_error();
+        let order = extract_python_order(&order)?;
+        let reservation =
+            allow_threads_detached(py, || self.inner.execute_pre_trade_drop_copy(order));
+        if let Some(error) = take_python_callback_error() {
+            return Err(error);
+        }
+        Py::new(
+            py,
+            PyReservation {
+                inner: RefCell::new(Some(reservation)),
+            },
+        )
+    }
+
     #[pyo3(signature = (order))]
     fn start_pre_trade_dry_run(
         &self,
@@ -2792,7 +2814,17 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, PyEngineSync>
                     return Err(python_callback_rejects(&self.name));
                 }
             };
-            if rejects.is_empty() {
+            if ctx.is_drop_copy() {
+                if let (Some(control), Some(reject)) = (
+                    ctx.account_control.as_ref(),
+                    rejects
+                        .iter()
+                        .find(|reject| reject.scope == RejectScope::Account),
+                ) {
+                    control.block(reject.account_block_with_code(RejectCode::AccountBlocked));
+                }
+                Ok(result)
+            } else if rejects.is_empty() {
                 Ok(result)
             } else {
                 Err(Rejects::from(rejects))
@@ -7254,6 +7286,18 @@ impl PyReservation {
             .iter()
             .map(convert_adjustment_outcome)
             .collect())
+    }
+
+    /// Returns the winning account block produced by this reservation's pipeline,
+    /// or `None` when no account-scoped reject was produced.
+    ///
+    /// Raises `RuntimeError` when the reservation has been finalized.
+    fn account_block(&self) -> PyResult<Option<PyAccountBlock>> {
+        let reservation_ref = self.inner.borrow();
+        let reservation = reservation_ref
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("reservation has already been finalized"))?;
+        Ok(reservation.account_block().map(convert_account_block))
     }
 
     fn commit(&self) -> PyResult<()> {

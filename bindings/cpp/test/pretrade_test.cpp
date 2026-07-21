@@ -556,6 +556,19 @@ class DryRunHookPolicy {
   DryRunHookCounters* m_counters;
 };
 
+class DropCopyBlockingPolicy {
+ public:
+  void PerformPreTradeCheck(const Context& context,
+                            PolicyDecision& decision) const {
+    static_cast<void>(context);
+    PushReject(decision,
+               MakeTypeMismatchReject(
+                   "DropCopyBlockingPolicy", RejectScope::Account,
+                   RejectCode::RiskLimitExceeded, "forced account block",
+                   "drop-copy must retain the block"));
+  }
+};
+
 [[nodiscard]] openpit::model::Order MakeDryRunHookOrder() {
   openpit::model::Order order;
   openpit::model::OrderOperation op;
@@ -594,6 +607,36 @@ TEST(CustomPolicy, UsesExplicitDryRunHooksForDryRunPipeline) {
   EXPECT_EQ(result.rejects.front().code, RejectCode::Custom);
   EXPECT_EQ(counters.start, 1u);
   EXPECT_EQ(counters.main, 1u);
+}
+
+TEST(CustomPolicy, DropCopyReservationSurfacesRecordedAccountBlock) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<DropCopyBlockingPolicy> policy("DropCopyBlockingPolicy",
+                                              DropCopyBlockingPolicy{});
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+
+  openpit::pretrade::Reservation reservation =
+      engine.ExecutePreTradeDropCopy(MakeDryRunHookOrder());
+  const std::optional<openpit::accounts::AccountBlock> block =
+      reservation.AccountBlock();
+
+  ASSERT_TRUE(block.has_value());
+  EXPECT_EQ(block->policy, "DropCopyBlockingPolicy");
+  EXPECT_EQ(block->code, RejectCode::RiskLimitExceeded);
+  EXPECT_EQ(block->reason, "forced account block");
+  reservation.Commit();
+}
+
+TEST(CustomPolicy, DropCopyReservationReturnsNoBlockWhenNoneWasProduced) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  openpit::Engine engine = builder.Build();
+
+  openpit::pretrade::Reservation reservation =
+      engine.ExecutePreTradeDropCopy(MakeDryRunHookOrder());
+
+  EXPECT_FALSE(reservation.AccountBlock().has_value());
+  reservation.Rollback();
 }
 
 //------------------------------------------------------------------------------

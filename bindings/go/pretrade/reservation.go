@@ -20,6 +20,7 @@ package pretrade
 import (
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/internal/native"
+	"go.openpit.dev/openpit/reject"
 )
 
 // Reservation holds a successfully validated pre-trade state reservation.
@@ -128,4 +129,25 @@ func (r Reservation) AccountAdjustments() []accountadjustment.Outcome {
 	result := accountadjustment.NewListFromHandle(handle)
 	native.DestroyAccountAdjustmentOutcomeList(handle)
 	return result
+}
+
+// AccountBlock returns the winning account block produced by the reservation's
+// pipeline. Regular accepted reservations return nil; a drop-copy reservation
+// may return the first account-scoped block whose reject was deliberately not
+// enforced, even when the account registry already contains an earlier block.
+//
+// Panics if the reservation is already closed.
+// The panic is deliberate fail-fast behavior: continuing with a closed
+// native handle would hide wrong behavior.
+func (r Reservation) AccountBlock() *reject.AccountBlock {
+	if r.handle == nil {
+		panic("pre-trade reservation already closed")
+	}
+	list := native.PretradePreTradeReservationGetAccountBlock(r.handle)
+	defer native.DestroyPretradeAccountBlockList(list)
+	if native.PretradeAccountBlockListLen(list) == 0 {
+		return nil
+	}
+	block := reject.NewAccountBlockFromHandle(native.PretradeAccountBlockListGet(list, 0))
+	return &block
 }

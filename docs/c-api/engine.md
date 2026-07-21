@@ -456,6 +456,34 @@ OpenPitPretradeStatus openpit_engine_execute_pre_trade(
 );
 ```
 
+## `openpit_engine_execute_pre_trade_drop_copy`
+
+Runs the complete pre-trade pipeline without enforcing policy rejects.
+
+Returns `true` on success and `false` when input pointers are invalid or the
+order payload cannot be decoded. Existing account and account-group blocks are
+ignored. Every policy still runs and keeps its normal mutations, locks, account
+adjustments, and account blocks, while its rejects are discarded.
+
+On success, if `out_reservation` is not null, writes one caller-owned
+reservation pointer. Release it with
+`openpit_pretrade_pre_trade_reservation_commit`,
+`openpit_pretrade_pre_trade_reservation_rollback`, or
+`openpit_destroy_pretrade_pre_trade_reservation`.
+
+On error, `out_reservation` is left untouched. If `out_error` is not null, it
+receives a caller-owned error string that MUST be released with
+`openpit_destroy_shared_string`.
+
+```c
+bool openpit_engine_execute_pre_trade_drop_copy(
+    OpenPitEngine * engine,
+    const OpenPitOrder * order,
+    OpenPitPretradePreTradeReservation ** out_reservation,
+    OpenPitOutError out_error
+);
+```
+
 ## `openpit_engine_start_pre_trade_dry_run`
 
 Runs the start stage as a non-mutating pre-trade dry-run.
@@ -702,6 +730,29 @@ Lifetime contract:
 ```c
 OpenPitAccountAdjustmentOutcomeList *
 openpit_pretrade_pre_trade_reservation_get_account_adjustments(
+    const OpenPitPretradePreTradeReservation * reservation
+);
+```
+
+## `openpit_pretrade_pre_trade_reservation_get_account_block`
+
+Returns the winning account block produced by the reservation's pipeline.
+
+Contract:
+
+- `reservation` must be a valid non-null pointer;
+- violating the pointer contract aborts the call;
+- this function never fails;
+- always returns a caller-owned `OpenPitPretradeAccountBlockList` (possibly
+  empty); release it with `openpit_pretrade_destroy_account_block_list`.
+
+Lifetime contract:
+
+- the returned list is detached from the reservation state.
+
+```c
+OpenPitPretradeAccountBlockList *
+openpit_pretrade_pre_trade_reservation_get_account_block(
     const OpenPitPretradePreTradeReservation * reservation
 );
 ```

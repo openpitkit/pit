@@ -258,6 +258,25 @@ class Reservation {
         openpit_pretrade_pre_trade_reservation_get_lock(m_handle.Get()));
   }
 
+  /// Returns the winning account block produced by this reservation's
+  /// pre-trade pipeline.
+  [[nodiscard]] std::optional<::openpit::accounts::AccountBlock> AccountBlock()
+      const {
+    OpenPitPretradeAccountBlockList* blocks =
+        openpit_pretrade_pre_trade_reservation_get_account_block(
+            m_handle.Get());
+    if (blocks == nullptr) {
+      return std::nullopt;
+    }
+    OpenPitPretradeAccountBlock raw{};
+    std::optional<::openpit::accounts::AccountBlock> out;
+    if (openpit_pretrade_account_block_list_get(blocks, 0, &raw)) {
+      out = ::openpit::accounts::AccountBlock::FromRaw(raw);
+    }
+    openpit_pretrade_destroy_account_block_list(blocks);
+    return out;
+  }
+
   [[nodiscard]] OpenPitPretradePreTradeReservation* Get() const noexcept {
     return m_handle.Get();
   }
@@ -563,6 +582,31 @@ class Engine {
     }
     out.reservation.emplace(reservation);
     return out;
+  }
+
+  /// Runs the complete pre-trade pipeline without enforcing policy rejects.
+  /// Existing account and account-group blocks are ignored. Every policy keeps
+  /// its normal mutations, locks, account adjustments, and account blocks.
+  [[nodiscard]] ::openpit::pretrade::Reservation ExecutePreTradeDropCopy(
+      const ::openpit::Order& order) const {
+    const OpenPitOrder raw = order.EngineRaw();
+    OpenPitPretradePreTradeReservation* reservation = nullptr;
+    OpenPitSharedString* error = nullptr;
+    const ::openpit::detail::CurrentOrderGuard orderGuard(order);
+    detail::ClearPendingCallbackException();
+    const bool ok = openpit_engine_execute_pre_trade_drop_copy(
+        m_handle.Get(), &raw, &reservation, &error);
+    if (detail::HasPendingCallbackException()) {
+      openpit_destroy_pretrade_pre_trade_reservation(reservation);
+      openpit_destroy_shared_string(error);
+    }
+    detail::ThrowIfPendingCallbackException(
+        "openpit_engine_execute_pre_trade_drop_copy callback failed");
+    if (!ok) {
+      detail::ThrowFromSharedString(
+          error, "openpit_engine_execute_pre_trade_drop_copy failed");
+    }
+    return ::openpit::pretrade::Reservation(reservation);
   }
 
   // Runs the start stage as a non-mutating dry-run. The returned report carries

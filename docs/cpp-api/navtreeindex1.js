@@ -1,5 +1,7 @@
 var NAVTREEINDEX1 =
 {
+"classopenpit_1_1StringView.html#acecbbea0747c6bf545d73e427746e841":[0,0,0,29,5],
+"classopenpit_1_1StringView.html#acecbbea0747c6bf545d73e427746e841":[1,0,0,28,5],
 "classopenpit_1_1accountadjustment_1_1AccountPnlOperation.html":[0,0,0,0,2],
 "classopenpit_1_1accountadjustment_1_1AccountPnlOperation.html":[1,0,0,0,2],
 "classopenpit_1_1accountadjustment_1_1AccountPnlOperation.html#a3ee3a676bafbff7235d13a928a3ce872":[0,0,0,0,2,2],
@@ -234,10 +236,12 @@ var NAVTREEINDEX1 =
 "classopenpit_1_1asyncengine_1_1EngineAdapter.html":[1,0,0,2,7],
 "classopenpit_1_1asyncengine_1_1EngineAdapter.html#a13ba8dbac7878520099d0327152eff60":[0,0,0,2,7,3],
 "classopenpit_1_1asyncengine_1_1EngineAdapter.html#a13ba8dbac7878520099d0327152eff60":[1,0,0,2,7,3],
+"classopenpit_1_1asyncengine_1_1EngineAdapter.html#a16d4e2db22d7c1f5eff22ef36398ea7a":[0,0,0,2,7,6],
+"classopenpit_1_1asyncengine_1_1EngineAdapter.html#a16d4e2db22d7c1f5eff22ef36398ea7a":[1,0,0,2,7,6],
 "classopenpit_1_1asyncengine_1_1EngineAdapter.html#a2050596105d18761aa00492f8f470ca0":[0,0,0,2,7,5],
 "classopenpit_1_1asyncengine_1_1EngineAdapter.html#a2050596105d18761aa00492f8f470ca0":[1,0,0,2,7,5],
-"classopenpit_1_1asyncengine_1_1EngineAdapter.html#a4327df02e4348bf3ada23650da37ac30":[0,0,0,2,7,6],
-"classopenpit_1_1asyncengine_1_1EngineAdapter.html#a4327df02e4348bf3ada23650da37ac30":[1,0,0,2,7,6],
+"classopenpit_1_1asyncengine_1_1EngineAdapter.html#a4327df02e4348bf3ada23650da37ac30":[0,0,0,2,7,7],
+"classopenpit_1_1asyncengine_1_1EngineAdapter.html#a4327df02e4348bf3ada23650da37ac30":[1,0,0,2,7,7],
 "classopenpit_1_1asyncengine_1_1EngineAdapter.html#a4a2e75370ca0905a5e24fdcc74eb2d6c":[0,0,0,2,7,0],
 "classopenpit_1_1asyncengine_1_1EngineAdapter.html#a4a2e75370ca0905a5e24fdcc74eb2d6c":[1,0,0,2,7,0],
 "classopenpit_1_1asyncengine_1_1EngineAdapter.html#a6bde433fe4c2492d766c3cd9ec4d8d87":[0,0,0,2,7,2],
@@ -245,9 +249,5 @@ var NAVTREEINDEX1 =
 "classopenpit_1_1asyncengine_1_1EngineAdapter.html#aba2ca97997fa603bed2a133dd4694238":[0,0,0,2,7,4],
 "classopenpit_1_1asyncengine_1_1EngineAdapter.html#aba2ca97997fa603bed2a133dd4694238":[1,0,0,2,7,4],
 "classopenpit_1_1asyncengine_1_1EngineAdapter.html#aec9fcfa707b26d1b53eb50ebb63cda8c":[0,0,0,2,7,1],
-"classopenpit_1_1asyncengine_1_1EngineAdapter.html#aec9fcfa707b26d1b53eb50ebb63cda8c":[1,0,0,2,7,1],
-"classopenpit_1_1asyncengine_1_1Error.html":[0,0,0,2,8],
-"classopenpit_1_1asyncengine_1_1Error.html":[1,0,0,2,8],
-"classopenpit_1_1asyncengine_1_1Error.html#a3fee18d9216ce19464bd1be81faf27d1":[0,0,0,2,8,0],
-"classopenpit_1_1asyncengine_1_1Error.html#a3fee18d9216ce19464bd1be81faf27d1":[1,0,0,2,8,0]
+"classopenpit_1_1asyncengine_1_1EngineAdapter.html#aec9fcfa707b26d1b53eb50ebb63cda8c":[1,0,0,2,7,1]
 };
