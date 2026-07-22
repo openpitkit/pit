@@ -17,6 +17,7 @@
   "excludeInternal": true,
   "readme": "README.md",
   "name": "@openpit/engine",
+  "hostedBaseUrl": "https://docs.openpit.dev/js-api/",
   "tsconfig": "tsconfig.json",
   "treatWarningsAsErrors": true,
   "gitRevision": "main"

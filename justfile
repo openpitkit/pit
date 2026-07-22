@@ -247,41 +247,41 @@ check-python-full: _ensure-python-env fmt-python gen-api-c check-python-dry-full
 # Lint and test Python in debug mode (non-mutating).
 [parallel]
 [unix]
-check-python-dry-debug: lint-python test-python-debug
+check-python-dry-debug: lint-python test-python-debug test-python-scripts
     cargo nextest run -p openpit-python --locked --status-level fail --final-status-level fail
 [parallel]
 [windows]
-check-python-dry-debug: lint-python test-python-debug
+check-python-dry-debug: lint-python test-python-debug test-python-scripts
     cargo nextest run -p openpit-python --target {{ windows_target }} --locked --status-level fail --final-status-level fail
 
 # Lint and test Python in release mode (non-mutating).
 [parallel]
 [unix]
-check-python-dry-release: lint-python test-python-release
+check-python-dry-release: lint-python test-python-release test-python-scripts
     cargo nextest run --release -p openpit-python --locked --status-level fail --final-status-level fail
 [parallel]
 [windows]
-check-python-dry-release: lint-python test-python-release
+check-python-dry-release: lint-python test-python-release test-python-scripts
     cargo nextest run --release -p openpit-python --target {{ windows_target }} --locked --status-level fail --final-status-level fail
 
 # Lint and test Python in debug and release modes (non-mutating).
 [unix]
-check-python-dry-full: lint-python test-python-full
+check-python-dry-full: lint-python test-python-full test-python-scripts
     cargo nextest run -p openpit-python --locked --status-level fail --final-status-level fail
     cargo nextest run --release -p openpit-python --locked --status-level fail --final-status-level fail
 [windows]
-check-python-dry-full: lint-python test-python-full
+check-python-dry-full: lint-python test-python-full test-python-scripts
     cargo nextest run -p openpit-python --target {{ windows_target }} --locked --status-level fail --final-status-level fail
     cargo nextest run --release -p openpit-python --target {{ windows_target }} --locked --status-level fail --final-status-level fail
 
-# Format, generate, lint, and test C++ in debug mode.
-check-cpp-debug: _ensure-python-env fmt-cpp gen-docs-cpp check-cpp-dry-debug
+# Format, lint, and test C++ in debug mode.
+check-cpp-debug: _ensure-python-env fmt-cpp check-cpp-dry-debug
 
-# Format, generate, lint, and test C++ in release mode.
-check-cpp-release: _ensure-python-env fmt-cpp gen-docs-cpp check-cpp-dry-release
+# Format, lint, and test C++ in release mode.
+check-cpp-release: _ensure-python-env fmt-cpp check-cpp-dry-release
 
-# Format, generate, lint, and test C++ in debug and release modes.
-check-cpp-full: _ensure-python-env fmt-cpp gen-docs-cpp check-cpp-dry-full
+# Format, lint, and test C++ in debug and release modes.
+check-cpp-full: _ensure-python-env fmt-cpp check-cpp-dry-full
 
 # Lint and test C++ in debug mode (non-mutating).
 check-cpp-dry-debug: lint-cpp test-cpp-debug test-examples-cpp-debug
@@ -348,15 +348,15 @@ lint-js: build-js
 
 # Run all tests in debug mode.
 [parallel]
-test-all-debug: test-rust-debug test-python-debug test-go-debug-suite test-c-examples test-cpp-debug test-examples-cpp-debug test-js-debug
+test-all-debug: test-rust-debug test-python-debug test-python-scripts test-go-debug-suite test-c-examples test-cpp-debug test-examples-cpp-debug test-js-debug
 
 # Run all tests in release mode.
 [parallel]
-test-all-release: test-rust-release test-python-release test-go-release test-c-examples test-cpp-release test-examples-cpp-release test-js
+test-all-release: test-rust-release test-python-release test-python-scripts test-go-release test-c-examples test-cpp-release test-examples-cpp-release test-js
 
 # Run all tests in debug and release modes.
 [parallel]
-test-all-full: test-rust-full test-python-full test-go-full test-c-examples test-cpp-full test-examples-cpp-full test-js
+test-all-full: test-rust-full test-python-full test-python-scripts test-go-full test-c-examples test-cpp-full test-examples-cpp-full test-js
 
 # Rust tests (debug).
 [unix]
@@ -493,6 +493,11 @@ test-python-integration-release: python-develop-release
 
 # Python integration test only (debug and release).
 test-python-integration-full: test-python-integration-debug test-python-integration-release
+
+# Host-side tests for the Python build scripts under scripts/. They exercise
+# the generators only, so they need no built binding and no build mode.
+test-python-scripts:
+    just _pytest scripts/tests
 
 # Run a workspace Python example from examples/python against local sources (debug).
 run-examples-python-debug: python-develop-debug
@@ -796,29 +801,6 @@ lint-cpp: build-cpp-debug build-examples-cpp-debug
 lint-cpp: build-cpp-debug build-examples-cpp-debug
     {{ python_path }} {{ just_helper }} lint-cpp
 
-# Generate the Doxygen-backed C++ API reference committed under docs/cpp-api.
-[unix]
-gen-docs-cpp:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    command -v doxygen >/dev/null || {
-      echo "doxygen is required to generate docs/cpp-api" >&2
-      exit 1
-    }
-    command -v dot >/dev/null || {
-      echo "graphviz dot is required to generate docs/cpp-api" >&2
-      exit 1
-    }
-    {{ python_path }} {{ just_helper }} gen-docs-cpp
-[windows]
-gen-docs-cpp: _ensure-python-env
-    {{ python_path }} {{ just_helper }} gen-docs-cpp
-
-# Generate the TypeDoc-backed JS API reference and refresh its sitemap URLs.
-gen-docs-js: _ensure-python-env build-js
-    cd bindings/js && npm run docs
-    {{ python_path }} scripts/_generate_api_c_sitemap.py
-
 # Format all.
 [parallel]
 fmt-all: fmt-rust fmt-python fmt-go fmt-cpp fmt-js
@@ -864,16 +846,17 @@ python-develop-release: _ensure-python-env
 python-develop-release: _ensure-python-env
     {{ python_path }} {{ just_helper }} python-develop release
 
-# Generate the C header and Markdown docs for the FFI crate.
+# Generate the FFI C header, its Go copy, and the dlsym stub for the FFI crate.
 [unix]
 gen-api-c: _ensure-python-env
-    {{ python_path }} scripts/generate_api_c.py > /dev/null
+    {{ python_path }} scripts/generate_api_c.py --headers-only > /dev/null
 [windows]
 gen-api-c: _ensure-python-env
-    {{ python_path }} scripts/generate_api_c.py > NUL
+    {{ python_path }} scripts/generate_api_c.py --headers-only > NUL
 
-# Generate derived API and reference artifacts.
-gen-all: gen-api-c gen-docs-cpp gen-docs-js
+# Generate the committed FFI artifacts. Documentation is generated only in the
+# CI pipeline (see pipeline.just), never by the local delivery gate.
+gen-all: gen-api-c
 
 # Link the locally built @openpit/engine into the examples/js workspace. The
 # examples depend on it via a `file:` reference, so this must run after

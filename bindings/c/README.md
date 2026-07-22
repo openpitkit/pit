@@ -3,7 +3,7 @@
 <!-- markdownlint-disable MD033 -->
 
 <!-- markdownlint-disable MD013 -->
-[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://img.shields.io/github/v/release/openpitkit/pit)](https://github.com/openpitkit/pit/releases) [![C API](https://img.shields.io/badge/C%20API-blue)](../../docs/c-api/index.md) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
+[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://img.shields.io/github/v/release/openpitkit/pit)](https://github.com/openpitkit/pit/releases) [![C API](https://img.shields.io/badge/C%20API-blue)](https://docs.openpit.dev/c-api/) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 <!-- markdownlint-enable MD013 -->
 
 `openpit.h` is an embeddable pre-trade risk SDK entrypoint for integrating
@@ -13,7 +13,7 @@ that consume a C ABI.
 For an overview and links to all resources, see the project website [openpit.dev](https://openpit.dev/).
 For full project documentation, see [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
 For conceptual and architectural pages, see [the project wiki](https://wiki.openpit.dev/).
-For the split C reference manual, see [the C API docs](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
+For the split C reference manual, see [the C API docs](https://docs.openpit.dev/c-api/).
 
 ## Versioning Policy (Pre‑1.0)
 
@@ -29,7 +29,7 @@ phase.
 
 ## Getting Started
 
-Visit the [C API documentation](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
+Visit the [C API documentation](https://docs.openpit.dev/c-api/).
 
 ## Install
 
@@ -148,7 +148,7 @@ Built-in policies:
 - plus your own via the [policy SDK](https://wiki.openpit.dev/Policy-API/).
 
 The primary integration model is to build project-specific policies against the
-public C API: [the C API docs](../../docs/c-api/index.md).
+public C API: [the C API docs](https://docs.openpit.dev/c-api/).
 
 Two types of rejections are supported: a full kill switch for the account and a
 rejection of only the current request. Kill switches are intended for
@@ -570,7 +570,7 @@ account-P&L and account-adjustment outcome before reacting to account blocks:
 those outcomes describe state changes that have already been committed.
 
 For the full type and ownership reference, use the C manual:
-[docs/c-api/index.md](https://github.com/openpitkit/pit/blob/main/docs/c-api/index.md).
+[the C API docs](https://docs.openpit.dev/c-api/).
 
 ## Errors
 

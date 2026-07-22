@@ -13,17 +13,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://github.com/openpitkit and the OWNERS file for details.
+# Please see https://openpit.dev and the OWNERS file for details.
 
 from __future__ import annotations
 
 import importlib.util
+import re
+import runpy
+import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+CLI_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "generate_api_c.py"
 C_API_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "_generate_api_c_h.py"
 DLSYM_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "_generate_api_c_dlsym.py"
-SITEMAP_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "_generate_api_c_sitemap.py"
 PARAM_RS_PATH = (
     Path(__file__).resolve().parents[2] / "crates" / "openpit-ffi" / "src" / "param.rs"
 )
@@ -54,9 +59,23 @@ def load_dlsym_module():
     return load_module(DLSYM_SCRIPT_PATH, "_generate_api_c_dlsym")
 
 
-def load_sitemap_module():
+def load_cli_module():
     load_c_api_module()
-    return load_module(SITEMAP_SCRIPT_PATH, "_generate_api_c_sitemap")
+    load_dlsym_module()
+    return load_module(CLI_SCRIPT_PATH, "generate_api_c")
+
+
+def record_generator_calls(module, monkeypatch) -> list[str]:
+    """Replace every generator entry point with a call recorder."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        module.header, "generate_headers", lambda: calls.append("headers")
+    )
+    monkeypatch.setattr(module.header, "generate_docs", lambda: calls.append("docs"))
+    monkeypatch.setattr(
+        module.dlsym, "generate", lambda *args, **kwargs: calls.append("dlsym")
+    )
+    return calls
 
 
 def collect_named_block(module, lines: list[str], prefix: str) -> str:
@@ -196,6 +215,303 @@ def test_parse_file_includes_pointer_alias_for_out_error() -> None:
     assert out_param_error_alias.alias == "*mut *mut OpenPitParamError"
 
 
+def test_generate_headers_writes_ffi_artifacts_without_docs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_c_api_module()
+    header_path = tmp_path / "openpit.h"
+    go_copy = tmp_path / "go" / "openpit.h"
+    docs_dir = tmp_path / "c-api"
+    monkeypatch.setattr(module, "HEADER_PATH", header_path)
+    monkeypatch.setattr(module, "HEADER_COPIES", [go_copy])
+    monkeypatch.setattr(module, "DOCS_DIR", docs_dir)
+
+    module.generate_headers()
+
+    assert header_path.read_text(encoding="utf-8").startswith("/*")
+    assert go_copy.read_text(encoding="utf-8") == header_path.read_text(
+        encoding="utf-8"
+    )
+    # The FFI-artifact path must never touch the documentation tree.
+    assert not docs_dir.exists()
+
+
+def test_generate_docs_writes_c_api_html_without_header(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_c_api_module()
+    header_path = tmp_path / "openpit.h"
+    docs_dir = tmp_path / "c-api"
+    monkeypatch.setattr(module, "HEADER_PATH", header_path)
+    monkeypatch.setattr(module, "DOCS_DIR", docs_dir)
+
+    module.generate_docs()
+
+    index = (docs_dir / "index.html").read_text(encoding="utf-8")
+    section_pages = [path for path in docs_dir.glob("*.html") if path.stem != "index"]
+    assert section_pages, "expected at least one C API section page"
+    assert not list(docs_dir.glob("*.md"))
+    assert index.startswith("<!doctype html>\n")
+    assert '<link rel="canonical" href="https://docs.openpit.dev/c-api/" />' in index
+    assert '<link rel="stylesheet" href="/assets/styles.css" />' in index
+    # The shared chrome is inlined from docs/partials, not linked.
+    assert "Pre-trade Integrity Toolkit" in index
+    for page in section_pages:
+        text = page.read_text(encoding="utf-8")
+        canonical = f"https://docs.openpit.dev/c-api/{page.stem}"
+        assert f'<link rel="canonical" href="{canonical}" />' in text
+        assert (
+            f'<a href="{module.C_API_SECTION.site_path}">'
+            "Back to the C API index</a>" in text
+        )
+        assert f'<li><a href="{page.stem}">' in index
+    # The documentation path must never write the FFI header.
+    assert not header_path.exists()
+
+
+def test_generate_docs_removes_stale_markdown_pages(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_c_api_module()
+    docs_dir = tmp_path / "c-api"
+    docs_dir.mkdir()
+    stale_markdown = docs_dir / "orders.md"
+    stale_markdown.write_text("# Orders\n", encoding="utf-8")
+    stale_html = docs_dir / "removed-section.html"
+    stale_html.write_text("<!doctype html>\n", encoding="utf-8")
+    monkeypatch.setattr(module, "HEADER_PATH", tmp_path / "openpit.h")
+    monkeypatch.setattr(module, "DOCS_DIR", docs_dir)
+
+    module.generate_docs()
+
+    assert not stale_markdown.exists()
+    assert not stale_html.exists()
+    assert (docs_dir / "orders.html").is_file()
+
+
+def test_render_doc_html_maps_markdown_subset_and_escapes_text() -> None:
+    module = load_c_api_module()
+    lines = [
+        "Compares <a> & <b> markers.",
+        "",
+        "# Safety",
+        "",
+        "The `ptr` field must be non-null.",
+        "",
+        "- first bullet with `code`;",
+        "- second <b> bullet.",
+        "",
+        "Trailing `unbalanced paragraph.",
+    ]
+
+    rendered = module.render_doc_html(lines)
+
+    assert rendered == [
+        "<p>Compares &lt;a&gt; &amp; &lt;b&gt; markers.</p>",
+        # A doc-comment heading is a subsection of the per-symbol heading.
+        "<h3>Safety</h3>",
+        "<p>The <code>ptr</code> field must be non-null.</p>",
+        "<ul>",
+        "<li>first bullet with <code>code</code>;</li>",
+        "<li>second &lt;b&gt; bullet.</li>",
+        "</ul>",
+        "<p>Trailing `unbalanced paragraph.</p>",
+    ]
+
+
+def test_render_doc_html_escapes_inline_code_content() -> None:
+    module = load_c_api_module()
+
+    assert module.render_doc_html(["Pass `a < b && c` here."]) == [
+        "<p>Pass <code>a &lt; b &amp;&amp; c</code> here.</p>"
+    ]
+    assert module.render_doc_html([]) == []
+
+
+def test_render_doc_html_renders_fenced_code_verbatim() -> None:
+    module = load_c_api_module()
+    lines = ["Example:", "", "```c", "if (a < b) {", "    call();", "}", "```"]
+
+    rendered = module.render_doc_html(lines)
+
+    assert rendered == [
+        "<p>Example:</p>",
+        '<pre><code class="language-c">if (a &lt; b) {',
+        "    call();",
+        "}",
+        "</code></pre>",
+    ]
+
+
+def test_render_doc_html_renders_tables_quotes_and_ordered_lists() -> None:
+    module = load_c_api_module()
+    lines = [
+        "| kind | meaning |",
+        "| ---- | ------- |",
+        "| `0`  | ok      |",
+        "",
+        "> Reserved for future use.",
+        "",
+        "1. first step;",
+        "2. second step.",
+        "",
+        "* starred bullet.",
+    ]
+
+    rendered = "\n".join(module.render_doc_html(lines))
+
+    assert "<table>" in rendered
+    assert "<th>kind</th>" in rendered
+    assert "<td><code>0</code></td>" in rendered
+    assert "<blockquote>" in rendered
+    assert "<ol>\n<li>first step;</li>" in rendered
+    assert "<ul>\n<li>starred bullet.</li>" in rendered
+    # Nothing may reach the page as literal Markdown source.
+    assert "| kind |" not in rendered
+    assert "1. first step" not in rendered
+
+
+def test_render_doc_html_resolves_intra_doc_links_to_published_pages() -> None:
+    module = load_c_api_module()
+    symbol_hrefs = {"OpenPitConfigureErrorKind": "runtime#OpenPitConfigureErrorKind"}
+    lines = [
+        "Reported with the [`Validation`](OpenPitConfigureErrorKind::Validation)"
+        " kind, see [the site](https://openpit.dev/).",
+    ]
+
+    rendered = "\n".join(module.render_doc_html(lines, symbol_hrefs))
+
+    assert (
+        '<a href="runtime#OpenPitConfigureErrorKind"><code>Validation</code></a>'
+        in rendered
+    )
+    assert '<a href="https://openpit.dev/">the site</a>' in rendered
+
+
+def test_render_doc_html_drops_unresolvable_intra_doc_links() -> None:
+    module = load_c_api_module()
+    lines = ["Mirrors [`SpotFundsOverrideTarget`](openpit::SpotFundsOverrideTarget)."]
+
+    rendered = "\n".join(module.render_doc_html(lines, {}))
+
+    # No page documents the Rust item, so the link text stays but the broken
+    # href never reaches the page.
+    assert rendered == "<p>Mirrors <code>SpotFundsOverrideTarget</code>.</p>"
+    assert "href" not in rendered
+    assert "openpit::" not in rendered
+
+
+def test_render_doc_html_rejects_markup_it_cannot_publish() -> None:
+    module = load_c_api_module()
+
+    with pytest.raises(module.UnsupportedDocMarkupError, match="image"):
+        module.render_doc_html(["See ![diagram](diagram.png)."])
+
+
+def test_generate_docs_anchors_every_symbol_heading(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_c_api_module()
+    docs_dir = tmp_path / "c-api"
+    monkeypatch.setattr(module, "HEADER_PATH", tmp_path / "openpit.h")
+    monkeypatch.setattr(module, "DOCS_DIR", docs_dir)
+
+    module.generate_docs()
+
+    orders = (docs_dir / "orders.html").read_text(encoding="utf-8")
+    assert (
+        '<a id="openpitorder" class="legacy-anchor" aria-hidden="true"></a>' in orders
+    )
+    assert (
+        '<h2 id="OpenPitOrder"><a class="api-anchor" href="#OpenPitOrder">'
+        "<code>OpenPitOrder</code></a></h2>" in orders
+    )
+    ids = re.findall(r'\bid="([^"]+)"', orders)
+    assert ids, "expected per-symbol headings"
+    assert len(ids) == len(set(ids))
+
+
+def test_symbol_anchor_is_unique_and_attribute_safe() -> None:
+    module = load_c_api_module()
+    used: set[str] = set()
+
+    assert module.symbol_anchor("OpenPitOrder", used) == "OpenPitOrder"
+    assert module.symbol_anchor("OpenPitOrder", used) == "OpenPitOrder-2"
+    assert module.symbol_anchor('bad" name', used) == "bad--name"
+
+
+def test_clean_html_url_handles_indexes_queries_and_fragments() -> None:
+    module = load_c_api_module()
+
+    assert module.clean_html_url("orders.html") == "orders"
+    assert module.clean_html_url("orders.html?q=1#OpenPitOrder") == (
+        "orders?q=1#OpenPitOrder"
+    )
+    assert module.clean_html_url("index.html") == "./"
+    assert module.clean_html_url("nested/index.html#top") == "nested/#top"
+    assert module.clean_html_url("../index.html?view=all") == "../?view=all"
+    assert module.clean_html_url("/index.html") == "/"
+
+
+def test_cli_docs_mode_generates_docs_only(monkeypatch) -> None:
+    module = load_cli_module()
+    calls = record_generator_calls(module, monkeypatch)
+
+    module.main(mode="docs")
+
+    # The dlsym stub is an FFI artifact and must stay out of the docs run.
+    assert calls == ["docs"]
+
+
+def test_cli_reports_missing_site_partial_without_traceback(monkeypatch) -> None:
+    header_module = load_c_api_module()
+    load_dlsym_module()
+
+    def fail_docs() -> None:
+        raise header_module.MissingSitePartialError("missing header.html")
+
+    monkeypatch.setattr(header_module, "generate_docs", fail_docs)
+    monkeypatch.setattr(sys, "argv", [str(CLI_SCRIPT_PATH), "--docs"])
+
+    with pytest.raises(SystemExit, match=r"^[^\n]+: missing header\.html$") as error:
+        runpy.run_path(str(CLI_SCRIPT_PATH), run_name="__main__")
+
+    assert "Traceback" not in str(error.value)
+
+
+def test_cli_default_and_headers_mode_generate_ffi_artifacts_only(monkeypatch) -> None:
+    module = load_cli_module()
+    calls = record_generator_calls(module, monkeypatch)
+
+    module.main()
+    module.main(mode="headers")
+
+    assert calls == ["headers", "dlsym", "headers", "dlsym"]
+
+
+def test_cli_dlsym_mode_generates_stub_only(monkeypatch) -> None:
+    module = load_cli_module()
+    calls = record_generator_calls(module, monkeypatch)
+
+    module.main(mode="dlsym")
+
+    assert calls == ["dlsym"]
+
+
+def test_cli_rejects_combined_mode_flags() -> None:
+    # argparse rejects the combination before any generator runs, so this
+    # never touches the repository tree.
+    result = subprocess.run(
+        [sys.executable, str(CLI_SCRIPT_PATH), "--docs", "--headers-only"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "not allowed with argument" in result.stderr
+
+
 def test_collect_declarations_handles_multiline_and_split_return_type() -> None:
     module = load_dlsym_module()
     header = """
@@ -302,226 +618,4 @@ def test_generate_dlsym_writes_output(tmp_path: Path) -> None:
         "OpenPitStringView openpit_get_runtime_version(void) {\n"
         "    return _fn_openpit_get_runtime_version();\n"
         "}\n"
-    )
-
-
-def test_sitemap_build_canonical_urls_includes_static_and_section_pages() -> None:
-    module = load_sitemap_module()
-
-    urls = module.build_canonical_urls()
-
-    assert urls[0] == f"{module.SITE_BASE}/"
-    assert urls[1] == f"{module.SITE_BASE}/c-api/"
-    assert urls[2] == f"{module.SITE_BASE}/cpp-api/"
-    assert urls[3] == f"{module.SITE_BASE}/js-api/"
-    section_urls = urls[4:]
-    expected_prefix = f"{module.SITE_BASE}/c-api/"
-    for url in [url for url in section_urls if "/c-api/" in url]:
-        assert url.startswith(expected_prefix)
-        assert url.endswith(module.PAGE_SUFFIX)
-    assert len(urls) == len(set(urls))
-
-
-def test_sitemap_includes_all_nested_js_api_pages(tmp_path: Path, monkeypatch) -> None:
-    module = load_sitemap_module()
-    js_api_dir = tmp_path / "js-api"
-    (js_api_dir / "classes").mkdir(parents=True)
-    (js_api_dir / "interfaces").mkdir()
-    (js_api_dir / "index.html").write_text("", encoding="utf-8")
-    (js_api_dir / "modules.html").write_text("", encoding="utf-8")
-    (js_api_dir / "classes" / "index.Engine.html").write_text("", encoding="utf-8")
-    (js_api_dir / "interfaces" / "model.OrderInit.html").write_text(
-        "", encoding="utf-8"
-    )
-    (js_api_dir / "assets").mkdir()
-    (js_api_dir / "assets" / "ignored.js").write_text("", encoding="utf-8")
-    monkeypatch.setattr(module, "JS_API_DIR", js_api_dir)
-
-    urls = module.build_canonical_urls()
-
-    assert urls.count(f"{module.SITE_BASE}/js-api/") == 1
-    assert f"{module.SITE_BASE}/js-api/modules.html" in urls
-    assert f"{module.SITE_BASE}/js-api/classes/index.Engine.html" in urls
-    assert f"{module.SITE_BASE}/js-api/interfaces/model.OrderInit.html" in urls
-    assert f"{module.SITE_BASE}/js-api/index.html" not in urls
-    assert not any(url.endswith("ignored.js") for url in urls)
-
-
-def _write_cpp_api_fixture(cpp_api_dir: Path) -> None:
-    """Populate a cpp-api tree mixing content and Doxygen navigation pages."""
-    (cpp_api_dir / "search").mkdir(parents=True)
-    names = [
-        # Content pages that MUST be included.
-        "classopenpit_1_1Engine.html",
-        "structopenpit_1_1Order.html",
-        "unionopenpit_1_1Value.html",
-        "namespaceopenpit.html",
-        "engine_8hpp.html",
-        "openpit_8h.html",
-        "DoxygenMainPage_8md.html",
-        # Per-class member roster and directory page: excluded.
-        "classopenpit_1_1Engine-members.html",
-        "dir_abc123.html",
-        # Navigation/index pages: excluded even though they share a prefix.
-        "annotated.html",
-        "classes.html",
-        "namespaces.html",
-        "namespacemembers.html",
-        "namespacemembers_func.html",
-        "functions.html",
-        "functions_func_a.html",
-        "globals.html",
-        "files.html",
-        "hierarchy.html",
-        "index.html",
-    ]
-    for name in names:
-        (cpp_api_dir / name).write_text("", encoding="utf-8")
-    # Subdirectory asset page: excluded (top-level discovery only).
-    (cpp_api_dir / "search" / "search.html").write_text("", encoding="utf-8")
-
-
-def test_sitemap_includes_only_curated_cpp_content_pages(
-    tmp_path: Path, monkeypatch
-) -> None:
-    module = load_sitemap_module()
-    cpp_api_dir = tmp_path / "cpp-api"
-    _write_cpp_api_fixture(cpp_api_dir)
-    monkeypatch.setattr(module, "CPP_API_DIR", cpp_api_dir)
-
-    urls = module.build_canonical_urls()
-
-    def url(name: str) -> str:
-        return f"{module.SITE_BASE}/cpp-api/{name}"
-
-    assert f"{module.SITE_BASE}/cpp-api/" in urls
-    # Content pages: class, struct, union, namespace, and file docs.
-    assert url("classopenpit_1_1Engine.html") in urls
-    assert url("structopenpit_1_1Order.html") in urls
-    assert url("unionopenpit_1_1Value.html") in urls
-    assert url("namespaceopenpit.html") in urls
-    assert url("engine_8hpp.html") in urls
-    assert url("openpit_8h.html") in urls
-    assert url("DoxygenMainPage_8md.html") in urls
-    # Member rosters and directory pages are dropped.
-    assert url("classopenpit_1_1Engine-members.html") not in urls
-    assert url("dir_abc123.html") not in urls
-    # Navigation/index pages are dropped, including prefix-colliding ones.
-    assert url("annotated.html") not in urls
-    assert url("classes.html") not in urls
-    assert url("namespaces.html") not in urls
-    assert url("namespacemembers.html") not in urls
-    assert url("namespacemembers_func.html") not in urls
-    assert url("functions.html") not in urls
-    assert url("functions_func_a.html") not in urls
-    assert url("globals.html") not in urls
-    assert url("files.html") not in urls
-    assert url("hierarchy.html") not in urls
-    assert url("index.html") not in urls
-    # Subdirectory pages are dropped.
-    assert url("search/search.html") not in urls
-
-
-def test_sitemap_cpp_curation_drops_and_adds_pages(tmp_path: Path, monkeypatch) -> None:
-    module = load_sitemap_module()
-    cpp_api_dir = tmp_path / "cpp-api"
-    cpp_api_dir.mkdir(parents=True)
-    (cpp_api_dir / "classopenpit_1_1Engine.html").write_text("", encoding="utf-8")
-    monkeypatch.setattr(module, "CPP_API_DIR", cpp_api_dir)
-
-    before = module.build_canonical_urls()
-    # Regeneration over the same tree is idempotent.
-    assert module.build_canonical_urls() == before
-    assert f"{module.SITE_BASE}/cpp-api/classopenpit_1_1Engine.html" in before
-
-    # A page that disappears is dropped; a new page is added.
-    (cpp_api_dir / "classopenpit_1_1Engine.html").unlink()
-    (cpp_api_dir / "structopenpit_1_1Order.html").write_text("", encoding="utf-8")
-
-    after = module.build_canonical_urls()
-
-    assert f"{module.SITE_BASE}/cpp-api/classopenpit_1_1Engine.html" not in after
-    assert f"{module.SITE_BASE}/cpp-api/structopenpit_1_1Order.html" in after
-
-
-def test_sitemap_parse_existing_urls_extracts_loc_values() -> None:
-    module = load_sitemap_module()
-    text = (
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
-        "  <url><loc>https://openpit.dev/</loc></url>\n"
-        "  <url>\n    <loc>https://openpit.dev/c-api/</loc>\n  </url>\n"
-        "</urlset>\n"
-    )
-
-    urls = module.parse_existing_urls(text)
-
-    assert urls == [
-        "https://openpit.dev/",
-        "https://openpit.dev/c-api/",
-    ]
-
-
-def test_sitemap_render_matches_parse_round_trip() -> None:
-    module = load_sitemap_module()
-    urls = [
-        "https://openpit.dev/",
-        "https://openpit.dev/c-api/",
-        "https://openpit.dev/c-api/orders.html",
-    ]
-
-    rendered = module.render_sitemap(urls)
-
-    assert rendered.startswith('<?xml version="1.0" encoding="UTF-8"?>\n')
-    assert rendered.endswith("</urlset>\n")
-    assert module.parse_existing_urls(rendered) == urls
-
-
-def test_sitemap_generate_writes_file_when_missing(tmp_path: Path, monkeypatch) -> None:
-    module = load_sitemap_module()
-    target = tmp_path / "sitemap.xml"
-    monkeypatch.setattr(module, "SITEMAP_PATH", target)
-    monkeypatch.setattr(module, "ROOT", tmp_path)
-
-    module.generate()
-
-    assert target.exists()
-    written = target.read_text(encoding="utf-8")
-    assert module.parse_existing_urls(written) == module.build_canonical_urls()
-
-
-def test_sitemap_generate_is_noop_when_urls_unchanged(
-    tmp_path: Path, monkeypatch
-) -> None:
-    module = load_sitemap_module()
-    target = tmp_path / "sitemap.xml"
-    monkeypatch.setattr(module, "SITEMAP_PATH", target)
-    monkeypatch.setattr(module, "ROOT", tmp_path)
-
-    module.generate()
-    first_mtime = target.stat().st_mtime_ns
-    first_content = target.read_text(encoding="utf-8")
-
-    module.generate()
-
-    assert target.stat().st_mtime_ns == first_mtime
-    assert target.read_text(encoding="utf-8") == first_content
-
-
-def test_sitemap_generate_rewrites_when_url_set_changes(
-    tmp_path: Path, monkeypatch
-) -> None:
-    module = load_sitemap_module()
-    target = tmp_path / "sitemap.xml"
-    monkeypatch.setattr(module, "SITEMAP_PATH", target)
-    monkeypatch.setattr(module, "ROOT", tmp_path)
-    target.write_text(
-        module.render_sitemap([f"{module.SITE_BASE}/"]),
-        encoding="utf-8",
-    )
-
-    module.generate()
-
-    assert module.parse_existing_urls(target.read_text(encoding="utf-8")) == (
-        module.build_canonical_urls()
     )

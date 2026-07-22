@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://github.com/openpitkit and the OWNERS file for details.
+# Please see https://openpit.dev and the OWNERS file for details.
 
 from __future__ import annotations
 
@@ -22,32 +22,57 @@ import traceback
 
 import _generate_api_c_dlsym as dlsym
 import _generate_api_c_h as header
-import _generate_api_c_sitemap as sitemap
 
 
-def main(*, dlsym_only: bool = False) -> None:
-    if dlsym_only:
+def main(*, mode: str = "headers") -> None:
+    if mode == "dlsym":
         dlsym.generate()
         return
+    if mode == "docs":
+        header.generate_docs()
+        return
 
-    header.main()
-    sitemap.generate()
+    # Default: the FFI headers/stubs the local delivery gate keeps committed.
+    header.generate_headers()
     dlsym.generate()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--headers-only",
+        dest="mode",
+        action="store_const",
+        const="headers",
+        help=(
+            "Generate only the FFI C header, its Go copy, and the dlsym stub "
+            "(the default)."
+        ),
+    )
+    mode.add_argument(
+        "--docs",
+        dest="mode",
+        action="store_const",
+        const="docs",
+        help="Generate only the C API HTML docs under docs/c-api.",
+    )
+    mode.add_argument(
         "--dlsym-only",
-        action="store_true",
+        dest="mode",
+        action="store_const",
+        const="dlsym",
         help="Generate only bindings/go/internal/native/openpit_dlsym.c.",
     )
+    parser.set_defaults(mode="headers")
     args = parser.parse_args()
     try:
-        main(dlsym_only=args.dlsym_only)
+        main(mode=args.mode)
     except (
         header.UnmappedRustTypeError,
         header.UnsupportedStructShapeError,
+        header.UnsupportedDocMarkupError,
+        header.MissingSitePartialError,
     ) as error:
         frame = traceback.extract_tb(error.__traceback__)[-1]
         raise SystemExit(f"{frame.filename}:{frame.lineno}: {error}") from None

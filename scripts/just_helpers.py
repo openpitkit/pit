@@ -1036,22 +1036,20 @@ def command_lint_cpp(_: argparse.Namespace) -> None:
 
 
 def command_gen_docs_cpp(_: argparse.Namespace) -> None:
+    # docs/cpp-api is generated output, not a committed tree, so there is
+    # nothing safe to fall back on: reusing whatever a previous local run left
+    # behind would publish a stale reference as the current one.
     missing_tools = [tool for tool in ("doxygen", "dot") if shutil.which(tool) is None]
     if missing_tools:
-        if not (ROOT / "docs" / "cpp-api" / "index.html").is_file():
-            tools = ", ".join(missing_tools)
-            raise SystemExit(f"{tools} required to generate docs/cpp-api")
         tools = ", ".join(missing_tools)
-        print(
-            f"skipping docs/cpp-api generation; missing {tools}",
-            file=sys.stderr,
+        raise SystemExit(
+            f"error: {tools} not found; docs/cpp-api cannot be generated."
+            " Install doxygen and graphviz, then rerun"
+            " 'just --justfile pipeline.just gen-docs-cpp'"
         )
-        run([sys.executable, "scripts/_generate_api_c_sitemap.py"])
-        return
     shutil.rmtree(ROOT / "docs" / "cpp-api", ignore_errors=True)
     run(["doxygen", "bindings/cpp/Doxyfile"])
     normalize_doxygen_mainpage_anchor()
-    run([sys.executable, "scripts/_generate_api_c_sitemap.py"])
 
 
 def normalize_doxygen_mainpage_anchor() -> None:

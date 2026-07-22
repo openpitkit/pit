@@ -234,9 +234,35 @@ pack-js:
     set -euo pipefail
     cd bindings/js/dist && npm pack --pack-destination .
 
-# Documentation-workflow entry point; generation itself is canonical in the
-# imported development justfile so `gen-all` and CI use the same command.
-build-js-docs: gen-docs-js
+# All API-documentation generation lives here: the published site is built and
+# deployed only from the CI pipeline, never by the local delivery gate. These
+# recipes are intentionally not resolvable from the development justfile.
+
+# Generate the C API HTML reference under docs/c-api.
+gen-docs-c: _ensure-python-env
+    {{ python_path }} scripts/generate_api_c.py --docs
+
+# Generate the Doxygen-backed C++ API reference under docs/cpp-api. The helper
+# checks for doxygen and dot itself and fails when either is missing, on every
+# platform alike.
+gen-docs-cpp: _ensure-python-env
+    {{ python_path }} {{ just_helper }} gen-docs-cpp
+
+# Generate the TypeDoc-backed JS API reference.
+gen-docs-js: _ensure-python-env build-js
+    cd bindings/js && npm run docs
+
+# Build the generated C, C++, and JS API references under docs/. The sitemap is
+# derived later from the final assembled tree, after page normalization.
+gen-docs-site: gen-docs-c gen-docs-cpp gen-docs-js
+
+# Collect the generated references, the README-rendered root index, the
+# robots.txt, sitemap, and the referenced assets into target/docs-site. The
+# sitemap and redirects are derived from the final normalized HTML tree. That
+# tree is what Cloudflare Pages publishes as docs.openpit.dev; the openpit.dev
+# landing page lives in its own repository and stays out of it.
+assemble-docs-site: _ensure-python-env gen-docs-site
+    {{ python_path }} scripts/_generate_docs_site.py
 
 # Build Python API docs; warnings are errors.
 build-python-docs: python-develop-debug

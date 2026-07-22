@@ -88,6 +88,10 @@ constraints that tolerate API evolution during the pre-stable phase.
 
 - [openpit.dev](https://openpit.dev/) - project website with an overview and
   links to all documentation.
+- [docs.openpit.dev](https://docs.openpit.dev/) - generated API references:
+  [C](https://docs.openpit.dev/c-api/),
+  [C++](https://docs.openpit.dev/cpp-api/), and
+  [JavaScript](https://docs.openpit.dev/js-api/).
 - [Go SDK README](bindings/go/README.md) - integrate OpenPit from Go.
 - [Python SDK README](bindings/python/README.md) - the `openpit` Python
   package.
@@ -130,11 +134,12 @@ constraints that tolerate API evolution during the pre-stable phase.
 - [golangci-lint](https://golangci-lint.run/welcome/install/) if you lint Go
 - [Node.js `>=18`](https://nodejs.org/) if you build or test the
   JavaScript/WASM binding
-- [CMake `>=3.21`](https://cmake.org/download/), a C++17 compiler,
-  [clang-format and clang-tidy](https://github.com/llvm/llvm-project/releases),
-  and [doxygen](https://www.doxygen.nl/download.html) if you build, test,
-  format, lint, or generate C++ bindings, examples, and reference docs
-- [Graphviz](https://graphviz.org/download/) if you generate docs with diagrams
+- [CMake `>=3.21`](https://cmake.org/download/), a C++17 compiler, and
+  [clang-format and clang-tidy](https://github.com/llvm/llvm-project/releases)
+  if you build, test, format, or lint C++ bindings and examples
+- [doxygen](https://www.doxygen.nl/download.html) and
+  [Graphviz](https://graphviz.org/download/) if you generate the C++ reference
+  docs
 - Optional: [Just](https://just.systems/) if you use recipe shortcuts
 
 ```bash
@@ -347,9 +352,9 @@ npm test
   with MSVC C++ tools if you build or test C++ bindings and examples
 - [LLVM](https://github.com/llvm/llvm-project/releases) if you build or test Go
   through CGo, format/lint C++, or use `clang`/`lld`
-- [Doxygen](https://www.doxygen.nl/download.html) if you generate C++ reference
+- [Doxygen](https://www.doxygen.nl/download.html) and
+  [Graphviz](https://graphviz.org/download/) if you generate the C++ reference
   docs
-- [Graphviz](https://graphviz.org/download/) if you generate docs with diagrams
 - Optional: [Just](https://just.systems/) if you use recipe shortcuts
 
 Set up the Rust target:

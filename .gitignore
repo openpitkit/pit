@@ -4,3 +4,9 @@
 __pycache__/
 /.tmp/
 /.wt/
+
+# Generated API documentation. Built and published from the CI pipeline only;
+# the authored files under docs/ (assets, favicon*, partials, ...) stay tracked.
+/docs/c-api/
+/docs/cpp-api/
+/docs/js-api/

@@ -183,12 +183,12 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-tidy doxygen graphviz
+          sudo apt-get install --yes clang-tidy
 
       - name: Install C++ tooling (macOS)
         if: startsWith(matrix.os, 'macos')
         run: |
-          brew install llvm doxygen graphviz
+          brew install llvm
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
       - name: Add LLVM to PATH (Windows)

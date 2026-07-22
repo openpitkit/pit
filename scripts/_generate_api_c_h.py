@@ -23,9 +23,14 @@ import re
 import shutil
 import sys
 import textwrap
-import traceback
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
+from html import escape
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
+
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT / "crates" / "openpit-ffi" / "src"
@@ -33,8 +38,87 @@ HEADER_PATH = ROOT / "bindings" / "c" / "openpit.h"
 HEADER_COPIES = [
     ROOT / "bindings" / "go" / "internal" / "native" / "openpit.h",
 ]
-DOCS_DIR = ROOT / "docs" / "c-api"
+SITE_DIR = ROOT / "docs"
+DOCS_DIR = SITE_DIR / "c-api"
+PARTIALS_DIR = SITE_DIR / "partials"
+# Base of the generated documentation site. It is a subdomain of its own: the
+# marketing landing page keeps openpit.dev, everything generated here is
+# published under docs.openpit.dev. Every generator that emits an absolute
+# self-reference (canonical links, sitemap, robots.txt) reads this constant so
+# the two can never drift.
+SITE_BASE_URL = "https://docs.openpit.dev"
+SOCIAL_PREVIEW_URL = "https://openpit.dev/assets/openpit-social-preview.png"
+SOCIAL_PREVIEW_ALT = "OpenPit - Pre-trade Integrity Toolkit"
+SOCIAL_PREVIEW_WIDTH = 1200
+SOCIAL_PREVIEW_HEIGHT = 201
 OPENPIT_LEVERAGE_RS = ROOT / "crates" / "openpit" / "src" / "param" / "leverage.rs"
+
+
+def clean_html_url(url: str) -> str:
+    """Return the public clean URL for an on-disk HTML target.
+
+    Queries and fragments survive link rewriting. Canonical builders pass only
+    paths, so those components never enter a canonical URL accidentally.
+    """
+    parts = urlsplit(url)
+    if not parts.path.endswith(".html"):
+        return url
+    path = parts.path.removesuffix(".html")
+    if path == "index":
+        path = "./"
+    elif path.endswith("/index"):
+        path = path.removesuffix("index")
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+
+
+@dataclass(frozen=True)
+class ApiSection:
+    """One generated reference published under its own site directory."""
+
+    slug: str
+    title: str
+    summary: str
+
+    @property
+    def url(self) -> str:
+        return f"{SITE_BASE_URL}/{self.slug}/"
+
+    @property
+    def site_path(self) -> str:
+        return f"/{self.slug}/"
+
+
+# The section this generator publishes. It is named on its own because every
+# self-reference the C API pages emit - the canonical URLs and the per-page
+# back link - reads its path from here instead of spelling "c-api" again.
+C_API_SECTION = ApiSection(
+    "c-api",
+    "C API",
+    "C header reference for the OpenPit C ABI, split per section.",
+)
+
+# The single source for what the documentation site publishes. Every consumer
+# reads it - the site-root navigation, the assembled tree, robots.txt, llms.txt
+# and the sitemap - so a section cannot reach one of them and miss the others.
+API_SECTIONS: tuple[ApiSection, ...] = (
+    C_API_SECTION,
+    ApiSection(
+        "cpp-api",
+        "C++ API",
+        "C++ SDK reference for the OpenPit::openpit CMake package.",
+    ),
+    ApiSection(
+        "js-api",
+        "JavaScript/TypeScript API",
+        "Package and subpath reference for @openpit/engine.",
+    ),
+)
+
+# Public addresses of the C API pages carry no ".html": Cloudflare Pages serves
+# every page at its extensionless path and redirects the suffixed form to it.
+# Only this generator may rely on that - the Doxygen and TypeDoc trees write
+# suffixed links into their own output, so those sections keep the suffix.
+C_API_BASE_URL = f"{SITE_BASE_URL}{C_API_SECTION.site_path}"
 
 RUST_TO_C = {
     "bool": "bool",
@@ -346,6 +430,14 @@ class UnsupportedStructShapeError(ValueError):
     pass
 
 
+class UnsupportedDocMarkupError(ValueError):
+    """A doc comment uses markup the reference pages cannot represent."""
+
+
+class MissingSitePartialError(Exception):
+    """A shared ``docs/partials`` fragment the page shell needs is missing."""
+
+
 def load_openpit_leverage_constants() -> dict[str, str]:
     if not OPENPIT_LEVERAGE_RS.exists():
         return {}
@@ -361,7 +453,16 @@ OPENPIT_LEVERAGE_CONSTS = load_openpit_leverage_constants()
 ENUM_DISCRIMINANT_CACHE: dict[tuple[str, str, str], int] = {}
 
 
-def main() -> None:
+def _display_path(path: Path) -> Path:
+    # Progress lines show repo-relative paths; fall back to the absolute path
+    # when generating into a tree outside the repo root (e.g. under test).
+    try:
+        return path.relative_to(ROOT)
+    except ValueError:
+        return path
+
+
+def build_items() -> tuple[list[Item], list[str]]:
     source_files = list_source_files()
     items = []
     for rel in source_files:
@@ -376,35 +477,57 @@ def main() -> None:
                 item.section = rel
             items.extend(parsed)
 
-    items = dedupe_items(items)
+    return dedupe_items(items), source_files
+
+
+def generate_headers() -> None:
+    """Write the FFI C header and its Go-native copy.
+
+    This is the FFI-artifact half of the generator. It never touches the docs
+    tree, so the local delivery gate stays free of generated documentation.
+    """
+    items, _source_files = build_items()
     header = render_header(items)
-    docs = render_docs(items, source_files)
 
     HEADER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    DOCS_DIR.mkdir(parents=True, exist_ok=True)
     HEADER_PATH.write_text(header, encoding="utf-8", newline="\n")
-    for path in DOCS_DIR.glob("*.md"):
-        path.unlink()
-    for rel_path, text in docs.items():
-        path = DOCS_DIR / rel_path
-        path.write_text(text, encoding="utf-8", newline="\n")
-        print(f"Generated {path.relative_to(ROOT)}")
-    print(f"Generated {HEADER_PATH.relative_to(ROOT)}")
+    print(f"Generated {_display_path(HEADER_PATH)}")
 
     for dest in HEADER_COPIES:
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(HEADER_PATH, dest)
-            print(f"Copied {HEADER_PATH.relative_to(ROOT)} -> {dest.relative_to(ROOT)}")
+            print(f"Copied {_display_path(HEADER_PATH)} -> {_display_path(dest)}")
         except Exception as e:
             print(
                 (
-                    f"error: failed to copy {HEADER_PATH.relative_to(ROOT)}"
-                    f" to {dest.relative_to(ROOT)}: {e}"
+                    f"error: failed to copy {_display_path(HEADER_PATH)}"
+                    f" to {_display_path(dest)}: {e}"
                 ),
                 file=sys.stderr,
             )
             sys.exit(1)
+
+
+def generate_docs() -> None:
+    """Write the C API HTML reference under ``docs/c-api``.
+
+    This is the documentation half of the generator. The site is built and
+    published only from the CI pipeline, never by the local gate.
+    """
+    items, source_files = build_items()
+    docs = render_docs(items, source_files)
+
+    DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    # Both extensions are cleared: the reference used to be Markdown, so a
+    # switched-over tree must not keep serving the stale pages.
+    for pattern in ("*.md", "*.html"):
+        for path in DOCS_DIR.glob(pattern):
+            path.unlink()
+    for rel_path, text in docs.items():
+        path = DOCS_DIR / rel_path
+        path.write_text(text, encoding="utf-8", newline="\n")
+        print(f"Generated {_display_path(path)}")
 
 
 def dedupe_items(items: list[Item]) -> list[Item]:
@@ -1590,61 +1713,6 @@ def format_doc_comment(lines: list[str]) -> str:
     return f"/**\n{body}\n */\n"
 
 
-def wrap_markdown_bullet(text: str) -> list[str]:
-    chunks = textwrap.wrap(
-        text,
-        width=78,
-        initial_indent="- ",
-        subsequent_indent="  ",
-        break_long_words=False,
-        break_on_hyphens=False,
-    )
-    wrapped: list[str] = []
-    for chunk in chunks:
-        if wrapped and wrapped[-1].count("`") % 2 == 1:
-            wrapped[-1] = f"{wrapped[-1]} {chunk.strip()}"
-            continue
-        wrapped.append(chunk)
-    return wrapped
-
-
-def format_markdown_lines(lines: list[str]) -> list[str]:
-    lines = normalize_doc_lines(lines)
-    wrapped: list[str] = []
-    for line in lines:
-        if not line:
-            wrapped.append("")
-            continue
-        if line.startswith("# "):
-            wrapped.append(f"### {line[2:]}")
-            continue
-        if line.startswith("- "):
-            wrapped.extend(wrap_markdown_bullet(line[2:]))
-            continue
-        wrapped.extend(
-            textwrap.wrap(
-                line,
-                width=80,
-                break_long_words=False,
-                break_on_hyphens=False,
-            )
-            or [""]
-        )
-    normalized: list[str] = []
-    in_list = False
-    for line in wrapped:
-        is_bullet = line.startswith("- ") or line.startswith("  ")
-        if is_bullet and not in_list and normalized and normalized[-1] != "":
-            normalized.append("")
-        if not is_bullet and in_list and normalized and normalized[-1] != "":
-            normalized.append("")
-        normalized.append(line)
-        in_list = is_bullet
-    if in_list and normalized and normalized[-1] != "":
-        normalized.append("")
-    return normalized
-
-
 def format_multiline_function(
     name: str, args: list[tuple[str, str]], ret: str | None
 ) -> str:
@@ -1705,20 +1773,6 @@ def format_define(name: str, ctype: str, value: str) -> str:
     if len(line) <= 80:
         return line
     return f"#define {name} \\\n    (({ctype}) {value})"
-
-
-def collapse_blank_lines(lines: list[str]) -> list[str]:
-    collapsed: list[str] = []
-    previous_blank = False
-    for line in lines:
-        is_blank = line == ""
-        if is_blank and previous_blank:
-            continue
-        collapsed.append(line)
-        previous_blank = is_blank
-    if collapsed and collapsed[-1] != "":
-        collapsed.append("")
-    return collapsed
 
 
 def render_header(items: list[Item]) -> str:
@@ -1857,7 +1911,686 @@ def render_header(items: list[Item]) -> str:
     return "\n".join(parts)
 
 
-def render_docs(items: list[Item], source_files: list[str]) -> str:
+# The site has no build step of its own: the shared look comes from
+# docs/assets/styles.css, and these rules cover only the content elements that
+# the landing page does not have. Every content page needs them, so they are
+# emitted from one template scoped to the page kind (".api" for the generated
+# reference, ".md" for the rendered README) instead of being kept twice.
+CONTENT_CSS_TEMPLATE = """\
+    {scope} {
+      flex: 1;
+    }
+
+    /* Every page kind opens with one page title, so the rule lives here rather
+       than with the per-kind chrome: without it the browser default applies. */
+    {scope} h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    {scope} p,
+    {scope} li {
+      font-size: 0.8125rem;
+      color: var(--muted-lt);
+      line-height: 1.65;
+    }
+
+    {scope} p {
+      margin-bottom: 10px;
+    }
+
+    {scope} ul,
+    {scope} ol {
+      margin: 0 0 10px 1.2rem;
+    }
+
+    {scope} code {
+      color: var(--accent);
+    }
+
+    {scope} a {
+      color: var(--accent);
+    }
+
+    {scope} a:hover {
+      text-decoration: underline;
+    }
+
+    {scope} pre {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 16px;
+      margin-bottom: 14px;
+      overflow-x: auto;
+      font-size: 0.75rem;
+      line-height: 1.55;
+    }
+
+    {scope} pre code {
+      color: var(--text);
+    }
+
+    {scope} blockquote {
+      border-left: 2px solid var(--border);
+      padding-left: 12px;
+      margin-bottom: 10px;
+    }
+
+    {scope} table {
+      border-collapse: collapse;
+      margin-bottom: 14px;
+    }
+
+    {scope} th,
+    {scope} td {
+      border: 1px solid var(--border);
+      padding: 6px 10px;
+      font-size: 0.8125rem;
+      line-height: 1.65;
+      text-align: left;
+    }
+
+    {scope} th {
+      color: var(--text);
+    }
+
+    {scope} td {
+      color: var(--muted-lt);
+    }"""
+
+# Reference-page chrome: the page title, the per-symbol headings, and the
+# declaration block. The content rules above cover everything else.
+API_PAGE_CSS = """\
+    .api h2 {
+      font-size: 0.9375rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      margin-bottom: 10px;
+    }
+
+    .api h3,
+    .api h4,
+    .api h5,
+    .api h6 {
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 14px 0 6px;
+    }
+
+    /* Doc-comment headings nest under the symbol heading, so the levels are
+       sized apart: shared styling alone would flatten the hierarchy. */
+    .api h3 {
+      font-size: 0.8125rem;
+    }
+
+    .api h4 {
+      font-size: 0.75rem;
+    }
+
+    .api h5 {
+      font-size: 0.6875rem;
+    }
+
+    .api h6 {
+      font-size: 0.625rem;
+    }
+
+    /* The symbol heading is its own permalink. The marker stays out of the way
+       until the heading is hovered or reached by keyboard, which would
+       otherwise repeat on every symbol of the page. */
+    .api .api-anchor::after {
+      content: " #";
+      color: var(--muted);
+      opacity: 0;
+    }
+
+    .api .api-anchor:hover::after,
+    .api .api-anchor:focus-visible::after {
+      opacity: 1;
+    }
+
+    .api .api-anchor:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+      border-radius: 3px;
+    }
+
+    .api-nav {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin: 8px 0 28px;
+    }
+
+    .api-sections {
+      list-style: none;
+    }
+
+    .api-item {
+      padding: 24px 0;
+      border-top: 1px solid var(--border);
+    }
+
+    /* The declaration closes its section, so it drops the shared bottom
+       margin; the selector must outweigh the shared ".api pre" rule. */
+    .api pre.api-decl {
+      margin-bottom: 0;
+    }"""
+
+
+def render_content_css(scope: str) -> str:
+    """Return the shared content rules scoped to one page kind."""
+    return CONTENT_CSS_TEMPLATE.replace("{scope}", scope)
+
+
+DOC_PAGE_CSS = f"{render_content_css('.api')}\n\n{API_PAGE_CSS}"
+
+PAGE_CONTAINER_STYLE = (
+    "max-width: 860px; margin: 0 auto; padding: 48px 24px 48px;"
+    " display: flex; flex-direction: column; flex: 1;"
+)
+
+FONTS_HREF = (
+    "https://fonts.googleapis.com/css2?family=JetBrains+Mono"
+    ":wght@400;500;700&amp;display=swap"
+)
+
+
+def escape_text(value: str) -> str:
+    """Escape a value for an HTML text node.
+
+    Quotes stay literal: no generated text is inlined into an attribute, and
+    escaped quotes only make the doc prose harder to read in the source.
+    """
+    return escape(value, quote=False)
+
+
+def walk_tokens(tokens: list[Token]) -> Iterator[Token]:
+    for token in tokens:
+        yield token
+        if token.children:
+            yield from walk_tokens(list(token.children))
+
+
+def build_doc_markdown() -> MarkdownIt:
+    """Return the parser the FFI doc comments are written against.
+
+    The comments are CommonMark plus tables. Raw HTML stays disabled: a doc
+    comment that mentions a tag means the text, so it is escaped rather than
+    injected into the page.
+    """
+    return MarkdownIt("commonmark", {"html": False}).enable("table")
+
+
+# A doc-comment heading is a subsection of the per-symbol "<h2>", so "# Safety"
+# has to land on "<h3>" rather than on a second page title.
+DOC_HEADING_OFFSET = 2
+
+# Everything the reference pages know how to present. Anything else would be
+# published without styling or, worse, as literal Markdown source, so it is
+# rejected instead. Strikethrough is deliberately absent: the parser enables
+# only tables on top of CommonMark, so "~~text~~" is prose, and listing tokens
+# the parser cannot emit would advertise support that does not exist.
+SUPPORTED_DOC_TOKENS: frozenset[str] = frozenset(
+    {
+        "blockquote_close",
+        "blockquote_open",
+        "bullet_list_close",
+        "bullet_list_open",
+        "code_inline",
+        "em_close",
+        "em_open",
+        "fence",
+        "heading_close",
+        "heading_open",
+        "hr",
+        "inline",
+        "link_close",
+        "link_open",
+        "list_item_close",
+        "list_item_open",
+        "ordered_list_close",
+        "ordered_list_open",
+        "paragraph_close",
+        "paragraph_open",
+        "softbreak",
+        "strong_close",
+        "strong_open",
+        "table_close",
+        "table_open",
+        "tbody_close",
+        "tbody_open",
+        "td_close",
+        "td_open",
+        "text",
+        "th_close",
+        "th_open",
+        "thead_close",
+        "thead_open",
+        "tr_close",
+        "tr_open",
+    }
+)
+
+# Link targets that are real URLs. Everything else in a doc comment is a Rust
+# intra-doc path such as "openpit::Foo" or "OpenPitErrorKind::Variant", which
+# no browser can follow.
+DOC_LINK_URL_PREFIXES = ("https://", "http://", "mailto:", "/", "#")
+
+# The shortcut intra-doc form rustdoc resolves without a target, "[`Foo`]" or
+# "[Foo]". CommonMark leaves it as literal text because no link reference
+# definition backs it, so the brackets are matched here instead.
+DOC_SHORTCUT_LINK_RE = re.compile(r"\[([A-Za-z_]\w*(?:::\w+)*)\]")
+
+
+def resolve_doc_link(href: str, symbol_hrefs: Mapping[str, str]) -> str | None:
+    """Return the published href for a doc-comment link target.
+
+    URLs pass through. A Rust intra-doc path resolves through the leftmost of
+    its segments that names a documented C API symbol, so a path to a member
+    lands on the page of the type that owns it. When nothing matches there is
+    no page to point at, and ``None`` tells the caller to keep the link text
+    alone rather than publish a broken href.
+    """
+    if href.startswith(DOC_LINK_URL_PREFIXES):
+        return href
+    for segment in href.split("::"):
+        target = symbol_hrefs.get(segment.strip())
+        if target is not None:
+            return target
+    return None
+
+
+def _drop_token_markup(token: Token) -> None:
+    """Turn a token into markup-free text, keeping the surrounding content."""
+    token.type = "text"
+    token.tag = ""
+    token.attrs = {}
+    token.content = ""
+
+
+def _apply_doc_links(children: list[Token], symbol_hrefs: Mapping[str, str]) -> None:
+    dropped: list[bool] = []
+    for token in children:
+        if token.type == "link_open":
+            target = resolve_doc_link(token.attrGet("href") or "", symbol_hrefs)
+            if target is None:
+                _drop_token_markup(token)
+                dropped.append(True)
+                continue
+            token.attrSet("href", target)
+            dropped.append(False)
+        elif token.type == "link_close" and dropped and dropped.pop():
+            _drop_token_markup(token)
+
+
+def _text_token(content: str) -> Token:
+    token = Token("text", "", 0)
+    token.content = content
+    return token
+
+
+def _shortcut_link_tokens(
+    label: list[Token], path: str, symbol_hrefs: Mapping[str, str]
+) -> list[Token]:
+    """Wrap a shortcut link label in an anchor, or return it unwrapped.
+
+    An unresolved shortcut keeps its label and loses the brackets, the same way
+    an unresolved inline link does: the reference has no page to point at, and
+    the brackets are Rust syntax rather than something the reader should see.
+    """
+    target = resolve_doc_link(path, symbol_hrefs)
+    if target is None:
+        return label
+    link_open = Token("link_open", "a", 1)
+    link_open.attrSet("href", target)
+    return [link_open, *label, Token("link_close", "a", -1)]
+
+
+def _expand_text_shortcut_links(
+    token: Token, symbol_hrefs: Mapping[str, str]
+) -> list[Token]:
+    """Resolve the bracket-only shortcut form inside one text token."""
+    out: list[Token] = []
+    position = 0
+    for match in DOC_SHORTCUT_LINK_RE.finditer(token.content):
+        if match.start() > position:
+            out.append(_text_token(token.content[position : match.start()]))
+        path = match.group(1)
+        out.extend(
+            _shortcut_link_tokens([_text_token(path)], path, symbol_hrefs),
+        )
+        position = match.end()
+    if not out:
+        return [token]
+    if position < len(token.content):
+        out.append(_text_token(token.content[position:]))
+    return out
+
+
+def _expand_doc_shortcut_links(
+    children: list[Token], symbol_hrefs: Mapping[str, str]
+) -> list[Token]:
+    """Resolve shortcut intra-doc links across one inline token stream.
+
+    It runs after the inline links are resolved, so the hrefs written here are
+    never fed back through the intra-doc resolver. Only text tokens are
+    rewritten: a bracketed name inside a code span is sample text, not a link.
+    """
+    out: list[Token] = []
+    pending = list(children)
+    while pending:
+        token = pending.pop(0)
+        if token.type != "text":
+            out.append(token)
+            continue
+        # "[`Foo`]" reaches the stream as a text token ending in "[", the code
+        # span, and a text token starting with "]".
+        if (
+            token.content.endswith("[")
+            and len(pending) >= 2
+            and pending[0].type == "code_inline"
+            and pending[1].type == "text"
+            and pending[1].content.startswith("]")
+        ):
+            code = pending.pop(0)
+            tail = pending.pop(0)
+            if len(token.content) > 1:
+                out.append(_text_token(token.content[:-1]))
+            out.extend(_shortcut_link_tokens([code], code.content, symbol_hrefs))
+            tail.content = tail.content[1:]
+            if tail.content:
+                pending.insert(0, tail)
+            continue
+        out.extend(_expand_text_shortcut_links(token, symbol_hrefs))
+    return out
+
+
+def _shift_doc_headings(tokens: list[Token]) -> None:
+    for token in tokens:
+        if token.type in {"heading_open", "heading_close"}:
+            level = min(int(token.tag[1:]) + DOC_HEADING_OFFSET, 6)
+            token.tag = f"h{level}"
+
+
+def _doc_owner(symbol: str | None, source_file: str | None) -> str:
+    """Name the doc comment a failure comes from.
+
+    The generator's own traceback says nothing about which comment has to be
+    rewritten, so the symbol and the Rust file that declares it are part of the
+    message whenever the caller knows them.
+    """
+    if symbol is None and source_file is None:
+        return "a doc comment"
+    if source_file is None:
+        return f"the doc comment on {symbol}"
+    if symbol is None:
+        return f"a doc comment in {source_file}"
+    return f"the doc comment on {symbol} ({source_file})"
+
+
+def _reject_unsupported_doc_markup(
+    tokens: list[Token],
+    source: str,
+    symbol: str | None,
+    source_file: str | None,
+) -> None:
+    for token in walk_tokens(tokens):
+        if token.type not in SUPPORTED_DOC_TOKENS:
+            raise UnsupportedDocMarkupError(
+                f"{_doc_owner(symbol, source_file)} uses {token.type!r}, which"
+                f" the reference pages cannot render; rewrite it:\n{source}"
+            )
+
+
+def render_doc_html(
+    lines: list[str],
+    symbol_hrefs: Mapping[str, str] | None = None,
+    *,
+    symbol: str | None = None,
+    source_file: str | None = None,
+) -> list[str]:
+    """Render doc-comment Markdown as the HTML lines of a reference page.
+
+    ``symbol_hrefs`` maps a documented C API symbol to its published location
+    and resolves the Rust intra-doc links the comments carry. ``symbol`` and
+    ``source_file`` name the comment being rendered so a rejected markup error
+    points at it. Markup is emitted unindented: whitespace added inside a
+    ``<pre>`` block would show up in the published code samples.
+    """
+    source = "\n".join(normalize_doc_lines(lines)).strip()
+    if not source:
+        return []
+    parser = build_doc_markdown()
+    env: dict[str, object] = {}
+    tokens = parser.parse(source, env)
+    _reject_unsupported_doc_markup(tokens, source, symbol, source_file)
+    _shift_doc_headings(tokens)
+    hrefs = symbol_hrefs or {}
+    for token in tokens:
+        if token.type == "inline" and token.children:
+            _apply_doc_links(token.children, hrefs)
+            token.children = _expand_doc_shortcut_links(token.children, hrefs)
+    return parser.renderer.render(tokens, parser.options, env).splitlines()
+
+
+def read_site_partial(name: str, indent: str) -> list[str]:
+    """Inline a shared ``docs/partials`` fragment.
+
+    The site is served as static files with no include mechanism, so the
+    fragments are copied in at generation time and remain the single source
+    for the shared chrome.
+    """
+    path = PARTIALS_DIR / name
+    if not path.is_file():
+        raise MissingSitePartialError(
+            f"{path} is missing; the generated pages inline it as shared chrome"
+        )
+    text = path.read_text(encoding="utf-8")
+    return [f"{indent}{line}" if line.strip() else "" for line in text.splitlines()]
+
+
+def render_doc_page(
+    title: str,
+    canonical_url: str | None,
+    body: list[str],
+    *,
+    description: str | None = None,
+    robots: str | None = None,
+    json_ld: str | None = None,
+    css: str = DOC_PAGE_CSS,
+) -> str:
+    """Wrap page body markup in the shared documentation-site page shell.
+
+    Every page of the site - the generated C API reference and the rendered
+    README index alike - goes through here, so the head, the inlined header and
+    footer partials, and the asset paths stay identical across the site. Only
+    the page-local stylesheet differs per page kind.
+
+    Each head metadatum is optional and carries no default: a page that has
+    nothing truthful to say about itself says nothing. ``canonical_url`` is left
+    out by a page that must not claim one, such as the 404 page; ``description``
+    also gates the social-card tags, which would otherwise advertise an invented
+    summary; ``robots`` is emitted only to restrict indexing; and ``json_ld`` is
+    the structured-data block the calling module attaches to its index pages.
+    """
+    escaped_title = escape(title, quote=True)
+    metadata: list[str] = []
+    if description is not None:
+        escaped_description = escape(description, quote=True)
+        metadata.extend(
+            [
+                f'  <meta name="description" content="{escaped_description}" />',
+                f'  <meta property="og:title" content="{escaped_title}" />',
+                f'  <meta property="og:description"'
+                f' content="{escaped_description}" />',
+                '  <meta property="og:type" content="website" />',
+                '  <meta property="og:site_name" content="OpenPit" />',
+                '  <meta property="og:locale" content="en_US" />',
+                f'  <meta property="og:image" content="{SOCIAL_PREVIEW_URL}" />',
+                f'  <meta property="og:image:width"'
+                f' content="{SOCIAL_PREVIEW_WIDTH}" />',
+                f'  <meta property="og:image:height"'
+                f' content="{SOCIAL_PREVIEW_HEIGHT}" />',
+                f'  <meta property="og:image:alt" content="{SOCIAL_PREVIEW_ALT}" />',
+                '  <meta name="twitter:card" content="summary_large_image" />',
+                f'  <meta name="twitter:title" content="{escaped_title}" />',
+                f'  <meta name="twitter:description"'
+                f' content="{escaped_description}" />',
+                f'  <meta name="twitter:image" content="{SOCIAL_PREVIEW_URL}" />',
+                f'  <meta name="twitter:image:alt" content="{SOCIAL_PREVIEW_ALT}" />',
+            ]
+        )
+    if canonical_url is not None:
+        escaped_canonical = escape(canonical_url, quote=True)
+        metadata.append(f'  <link rel="canonical" href="{escaped_canonical}" />')
+        if description is not None:
+            metadata.append(
+                f'  <meta property="og:url" content="{escaped_canonical}" />'
+            )
+    if robots is not None:
+        metadata.append(
+            f'  <meta name="robots" content="{escape(robots, quote=True)}" />'
+        )
+    structured_data: list[str] = []
+    if json_ld is not None:
+        structured_data = [
+            '  <script type="application/ld+json">',
+            json_ld,
+            "  </script>",
+        ]
+
+    lines = [
+        "<!doctype html>",
+        '<html lang="en">',
+        "",
+        "<head>",
+        '  <meta charset="utf-8" />',
+        '  <meta name="viewport" content="width=device-width, initial-scale=1.0" />',
+        f"  <title>{escape_text(title)}</title>",
+        *metadata,
+        '  <link rel="preconnect" href="https://fonts.googleapis.com" />',
+        '  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />',
+        f'  <link href="{FONTS_HREF}" rel="stylesheet" />',
+        '  <link rel="stylesheet" href="/assets/styles.css" />',
+        '  <link rel="icon" href="/favicon.ico" sizes="any" />',
+        '  <link rel="icon" type="image/svg+xml" href="/favicon-light.svg"'
+        ' media="(prefers-color-scheme: light)" />',
+        '  <link rel="icon" type="image/svg+xml" href="/favicon-dark.svg"'
+        ' media="(prefers-color-scheme: dark)" />',
+        '  <meta name="theme-color" content="#f6f3ec"'
+        ' media="(prefers-color-scheme: light)" />',
+        '  <meta name="theme-color" content="#0a0d12"'
+        ' media="(prefers-color-scheme: dark)" />',
+        *structured_data,
+        "  <style>",
+        css,
+        "  </style>",
+        "</head>",
+        "",
+        "<body>",
+        f'  <div class="container-tight" style="{PAGE_CONTAINER_STYLE}">',
+        "",
+        '    <header style="text-align: center; margin-bottom: 28px;">',
+        *read_site_partial("header.html", "      "),
+        "    </header>",
+        "",
+        *body,
+        "",
+        *read_site_partial("footer.html", "    "),
+        "",
+        "  </div>",
+        "</body>",
+        "",
+        "</html>",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def format_item_declaration(item: Item) -> str:
+    if item.kind == "opaque" or item.opaque:
+        return format_forward_decl(item.name)
+    if item.kind == "const":
+        return format_define(
+            item.name,
+            map_type(item.alias or ""),
+            map_const_value(item.value or "0"),
+        )
+    if item.kind == "alias":
+        return f"typedef {map_type(item.alias or '')} {item.name};"
+    if item.kind == "enum":
+        enum_lines = [f"typedef {map_type(item.repr_name or 'int32_t')} {item.name};"]
+        for variant, value, variant_docs in item.variants:
+            if variant_docs:
+                enum_lines.append(format_doc_comment(variant_docs).rstrip())
+            enum_lines.append(
+                format_define(f"{item.name}_{variant}", item.name, str(value))
+            )
+        return "\n".join(enum_lines)
+    if item.kind in {"struct", "union"}:
+        return format_aggregate_typedef(item)
+    if item.kind == "typedef_fn":
+        return format_multiline_typedef(item.name, item.args, item.ret)
+    return format_multiline_function(item.name, item.args, item.ret)
+
+
+def _section_page_items(
+    slug: str, sections_by_slug: dict[str, tuple[str, list[Item]]]
+) -> list[Item]:
+    """Return the items one section page documents.
+
+    The parameter page repeats the few runtime symbols its functions report
+    errors through, so a reader never has to leave the page to look them up.
+    """
+    _title, section_items = sections_by_slug[slug]
+    if slug != "params":
+        return list(section_items)
+    runtime_section = sections_by_slug.get("runtime")
+    if runtime_section is None:
+        return list(section_items)
+    _runtime_title, runtime_items = runtime_section
+    extra = [item for item in runtime_items if item.name in PARAMS_RUNTIME_DUPLICATES]
+    return [*section_items, *extra]
+
+
+def symbol_anchor(name: str, used: set[str]) -> str:
+    """Return the heading id a symbol is deep-linked by.
+
+    The symbol name is the anchor, which keeps the fragments the Markdown
+    reference used to publish. Characters an HTML id cannot carry are folded to
+    "-", and a collision after that folding gets a numeric suffix, so every
+    heading on a page stays addressable by exactly one fragment.
+    """
+    base = re.sub(r"[^A-Za-z0-9_.-]", "-", name) or "symbol"
+    anchor = base
+    suffix = 2
+    while anchor in used:
+        anchor = f"{base}-{suffix}"
+        suffix += 1
+    used.add(anchor)
+    return anchor
+
+
+def legacy_symbol_anchor(anchor: str, used: set[str]) -> str | None:
+    """Return the former Kramdown fragment when it does not collide.
+
+    The Markdown reference lowercased heading fragments. Exact symbol-case IDs
+    remain canonical, while this hidden alias keeps old incoming links alive.
+    A real symbol whose exact ID is already that lowercase value wins because
+    HTML cannot carry duplicate IDs.
+    """
+    legacy = anchor.lower()
+    if legacy == anchor or legacy in used:
+        return None
+    used.add(legacy)
+    return legacy
+
+
+def render_docs(items: list[Item], source_files: list[str]) -> dict[str, str]:
     grouped: dict[str, list[Item]] = {}
     for item in items:
         grouped.setdefault(item.section, []).append(item)
@@ -1873,89 +2606,94 @@ def render_docs(items: list[Item], source_files: list[str]) -> str:
             section_order.append(slug)
         sections_by_slug[slug][1].extend(section_items)
 
+    page_items = {
+        slug: _section_page_items(slug, sections_by_slug) for slug in section_order
+    }
+    # Anchors are assigned for the whole reference before any page is rendered:
+    # a doc comment on one page routinely links to a symbol documented on
+    # another.
+    anchors: dict[str, dict[str, str]] = {}
+    legacy_anchors: dict[str, dict[str, str]] = {}
+    symbol_hrefs: dict[str, str] = {}
+    for slug in section_order:
+        used: set[str] = set()
+        page_anchors = {
+            item.name: symbol_anchor(item.name, used) for item in page_items[slug]
+        }
+        page_legacy_anchors = {
+            name: legacy
+            for name, anchor in page_anchors.items()
+            if (legacy := legacy_symbol_anchor(anchor, used)) is not None
+        }
+        anchors[slug] = page_anchors
+        legacy_anchors[slug] = page_legacy_anchors
+        for name, anchor in page_anchors.items():
+            symbol_hrefs.setdefault(name, f"{slug}#{anchor}")
+
     outputs: dict[str, str] = {}
-    index_lines = [
-        "# OpenPit C API",
-        "",
-        f"- Header: `{HEADER_PATH.name}`",
-        "- Sections:",
+    index_body = [
+        '    <main class="api">',
+        "      <h1>OpenPit C API</h1>",
+        f'      <p class="api-nav"><a href="{SITE_BASE_URL}/">'
+        "Back to the documentation index</a></p>",
+        f"      <p>Header: <code>{escape_text(HEADER_PATH.name)}</code></p>",
+        "      <h2>Sections</h2>",
+        '      <ul class="api-sections">',
     ]
     for slug in section_order:
         title, _section_items = sections_by_slug[slug]
-        link = f"  - [{title}]({slug}.md)"
-        if link not in index_lines:
-            index_lines.append(link)
-    index_lines.append("")
-    outputs["index.md"] = "\n".join(collapse_blank_lines(index_lines))
+        index_body.append(f'        <li><a href="{slug}">{escape_text(title)}</a></li>')
+    index_body.extend(["      </ul>", "    </main>"])
+    outputs["index.html"] = render_doc_page(
+        "OpenPit C API",
+        C_API_BASE_URL,
+        index_body,
+        description="C header reference for the OpenPit C ABI, split by API section.",
+    )
 
     for slug in section_order:
-        title, section_items = sections_by_slug[slug]
+        title, _section_items = sections_by_slug[slug]
         lines = [
-            f"# {title}",
-            "",
-            "<!-- markdownlint-disable MD013 MD024 -->",
-            "",
-            "[Back to index](index.md)",
-            "",
+            '    <main class="api">',
+            f"      <h1>{escape_text(title)}</h1>",
+            f'      <p class="api-nav"><a href="{C_API_SECTION.site_path}">'
+            "Back to the C API index</a></p>",
         ]
-        if slug == "params":
-            runtime_section = sections_by_slug.get("runtime")
-            if runtime_section:
-                _runtime_title, runtime_items = runtime_section
-                extra = [
-                    item
-                    for item in runtime_items
-                    if item.name in PARAMS_RUNTIME_DUPLICATES
-                ]
-                if extra:
-                    section_items = [*section_items, *extra]
-        for item in section_items:
-            if item.kind == "opaque" or item.opaque:
-                declaration = format_forward_decl(item.name)
-            elif item.kind == "const":
-                declaration = format_define(
-                    item.name,
-                    map_type(item.alias or ""),
-                    map_const_value(item.value or "0"),
+        for item in page_items[slug]:
+            declaration = format_item_declaration(item)
+            anchor = anchors[slug][item.name]
+            lines.append('      <section class="api-item">')
+            legacy_anchor = legacy_anchors[slug].get(item.name)
+            if legacy_anchor is not None:
+                lines.append(
+                    f'        <a id="{escape(legacy_anchor)}"'
+                    ' class="legacy-anchor" aria-hidden="true"></a>'
                 )
-            elif item.kind == "alias":
-                declaration = f"typedef {map_type(item.alias or '')} {item.name};"
-            elif item.kind == "enum":
-                enum_lines = [
-                    f"typedef {map_type(item.repr_name or 'int32_t')} {item.name};"
-                ]
-                for variant, value, variant_docs in item.variants:
-                    if variant_docs:
-                        enum_lines.append(format_doc_comment(variant_docs).rstrip())
-                    enum_lines.append(
-                        format_define(f"{item.name}_{variant}", item.name, str(value))
-                    )
-                declaration = "\n".join(enum_lines)
-            elif item.kind in {"struct", "union"}:
-                declaration = format_aggregate_typedef(item)
-            elif item.kind == "typedef_fn":
-                declaration = format_multiline_typedef(item.name, item.args, item.ret)
-            else:
-                declaration = format_multiline_function(item.name, item.args, item.ret)
-            lines.append(f"## `{item.name}`")
-            lines.append("")
-            if item.docs:
-                lines.extend(format_markdown_lines(item.docs))
-                lines.append("")
-            lines.append("```c")
-            lines.append(declaration)
-            lines.append("```")
-            lines.append("")
-        outputs[f"{slug}.md"] = "\n".join(collapse_blank_lines(lines))
+            # The heading links to itself: a page carries hundreds of symbols,
+            # so every one of them has to be addressable on its own.
+            lines.append(
+                f'        <h2 id="{escape(anchor)}">'
+                f'<a class="api-anchor" href="#{escape(anchor)}">'
+                f"<code>{escape_text(item.name)}</code></a></h2>"
+            )
+            lines.extend(
+                render_doc_html(
+                    item.docs,
+                    symbol_hrefs,
+                    symbol=item.name,
+                    source_file=item.section or None,
+                )
+            )
+            lines.append(
+                f'        <pre class="api-decl"><code>{escape_text(declaration)}'
+                "</code></pre>"
+            )
+            lines.append("      </section>")
+        lines.append("    </main>")
+        outputs[f"{slug}.html"] = render_doc_page(
+            f"{title} - OpenPit C API",
+            f"{C_API_BASE_URL}{slug}",
+            lines,
+            description=f"{title} reference for the OpenPit C API.",
+        )
     return outputs
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except (
-        UnmappedRustTypeError,
-        UnsupportedStructShapeError,
-    ) as error:
-        frame = traceback.extract_tb(error.__traceback__)[-1]
-        raise SystemExit(f"{frame.filename}:{frame.lineno}: {error}") from None

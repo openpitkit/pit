@@ -15,7 +15,7 @@ import, with no native add-on to compile and no `await` in the common path.
 For an overview and links to all resources, see
 the project website [openpit.dev](https://openpit.dev/).
 For the generated API reference, see
-[the JS API docs](https://openpit.dev/js-api/).
+[the JS API docs](https://docs.openpit.dev/js-api/).
 For full project documentation, see
 [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
 For conceptual and architectural pages, see

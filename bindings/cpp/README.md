@@ -3,7 +3,7 @@
 <!-- markdownlint-disable MD033 -->
 
 <!-- markdownlint-disable MD013 -->
-[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://img.shields.io/github/v/release/openpitkit/pit)](https://github.com/openpitkit/pit/releases) [![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C)](https://openpit.dev/cpp-api/) [![CMake](https://img.shields.io/badge/CMake-3.21%2B-064F8C)](https://cmake.org/) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
+[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://img.shields.io/github/v/release/openpitkit/pit)](https://github.com/openpitkit/pit/releases) [![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C)](https://docs.openpit.dev/cpp-api/) [![CMake](https://img.shields.io/badge/CMake-3.21%2B-064F8C)](https://cmake.org/) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 <!-- markdownlint-enable MD013 -->
 
 `openpit` is an embeddable pre-trade risk SDK for integrating policy-driven
@@ -13,7 +13,7 @@ The C++ SDK is a header-only C++17 wrapper over the native OpenPit runtime. It
 is packaged as a CMake config package and exposes the `OpenPit::openpit` target.
 
 For an overview and links to all resources, see the project website [openpit.dev](https://openpit.dev/).
-For the C++ API reference, see [the C++ API docs](https://openpit.dev/cpp-api/).
+For the C++ API reference, see [the C++ API docs](https://docs.openpit.dev/cpp-api/).
 For full project documentation, see [the repository README](https://github.com/openpitkit/pit/blob/main/README.md).
 For conceptual and architectural pages, see [the project wiki](https://wiki.openpit.dev/).
 

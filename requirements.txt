@@ -1,4 +1,7 @@
 black
+# Pinned: it renders every published documentation page, so an unpinned
+# release could change the published HTML without a change in this repository.
+markdown-it-py==4.2.0
 maturin
 pytest
 ruff

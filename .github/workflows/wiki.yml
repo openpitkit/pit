@@ -42,6 +42,10 @@ jobs:
       - name: Checkout workflow repository
         uses: actions/checkout@v4
 
+      - name: Load CI versions
+        shell: bash
+        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+
       - name: Clone wiki repository
         run: |
           git clone \
@@ -90,6 +94,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          wranglerVersion: ${{ env.CI_WRANGLER }}
           command: >-
             pages deploy ${{ runner.temp }}/pit.wiki/.site/site
             --project-name=openpit-wiki
