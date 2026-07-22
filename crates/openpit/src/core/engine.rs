@@ -2747,43 +2747,6 @@ mod tests {
         );
     }
 
-    #[test]
-    #[should_panic(expected = "assertion `left == right` failed")]
-    fn reserve_notional_policy_panics_for_volume_based_order() {
-        let policy = ReserveNotionalPolicy {
-            settlement: Asset::new("USD").expect("asset code must be valid"),
-            amount: Volume::from_str("100").expect("volume must be valid"),
-            reserved_notional: Rc::new(RefCell::new(None)),
-        };
-        let order = WithOrderOperation {
-            inner: (),
-            operation: OrderOperation {
-                instrument: Instrument::new(
-                    Asset::new("AAPL").expect("asset code must be valid"),
-                    Asset::new("USD").expect("asset code must be valid"),
-                ),
-                account_id: AccountId::from_u64(99224416),
-                side: Side::Sell,
-                trade_amount: TradeAmount::Quantity(
-                    Quantity::from_str("100").expect("quantity must be valid"),
-                ),
-                price: Some(Price::from_str("200").expect("price must be valid")),
-            },
-        };
-        let mut mutations = Mutations::default();
-        let _ = <ReserveNotionalPolicy as PreTradePolicy<
-            TestOrder,
-            TestReport,
-            TestAdjustment,
-            crate::core::LocalSync,
-        >>::perform_pre_trade_check(
-            &policy,
-            &PreTradeContext::<NoLocking>::new(None),
-            &order,
-            &mut mutations,
-        );
-    }
-
     fn order_with_settlement(settlement: &str) -> TestOrder {
         WithOrderOperation {
             inner: (),

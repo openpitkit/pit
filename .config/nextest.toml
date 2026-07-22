@@ -1,0 +1,18 @@
+# Parallelism and hang-safety for `cargo nextest`.
+#
+# test-threads is capped below the machine core count so a run leaves headroom
+# for editors / language servers / other sessions and avoids peak-memory storms.
+#
+# slow-timeout is a per-test wall-clock budget: a test is flagged SLOW at each
+# `period` and force-terminated after `period * terminate-after`. It is the
+# safety net that turns an unbounded deadlock into a self-terminating failure
+# that names the offending test. Margins are deliberately generous so a
+# legitimately slow test under load is not killed.
+[profile.default]
+test-threads = 8
+slow-timeout = { period = "120s", terminate-after = 3 }
+
+# Thread-heavy multithread integration tests get a larger budget.
+[[profile.default.overrides]]
+filter = 'binary(/multithread_full_sync/)'
+slow-timeout = { period = "180s", terminate-after = 3 }

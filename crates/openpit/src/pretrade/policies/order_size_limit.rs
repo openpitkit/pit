@@ -771,8 +771,21 @@ mod tests {
 
     #[test]
     fn unknown_settlement_passes_when_no_broker_or_account_asset_match() {
-        let p = policy(None, [asset_barrier("EUR", "10", "1000")], []);
-        assert!(check(&p, &order("USD", "1", "1")).is_ok());
+        // Unknown settlement JPY: the asset barrier covers EUR and the
+        // account+asset barrier covers (account, USD), so neither asset-axis
+        // lookup matches. The broker barrier applies to every order but its
+        // high limit is not breached, so the order still passes.
+        let p = policy(
+            Some(broker_barrier("1000", "1000000")),
+            [asset_barrier("EUR", "10", "1000")],
+            [OrderSizeAccountAssetBarrier {
+                limit: limit("5", "500"),
+                account_id: AccountId::from_u64(99224416),
+                settlement_asset: Asset::new("USD").expect("asset code must be valid"),
+            }],
+        );
+
+        assert!(check(&p, &order("JPY", "1", "1")).is_ok());
     }
 
     #[test]

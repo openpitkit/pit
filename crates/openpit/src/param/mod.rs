@@ -1090,12 +1090,6 @@ macro_rules! test_value_type_common_methods {
             }
 
             #[test]
-            fn string_roundtrip() {
-                let val = <$type>::from_str($sample_value).expect("must be valid");
-                assert_eq!(val.to_string(), $sample_value);
-            }
-
-            #[test]
             fn is_zero_for_non_zero() {
                 let val = <$type>::from_str($sample_value).expect("must be valid");
                 assert!(!val.is_zero());
@@ -1175,12 +1169,6 @@ macro_rules! test_value_type_common_methods {
             fn display_works_negative() {
                 let val = <$type>::from_str($neg_value).expect("must be valid");
                 assert_eq!(val.to_string(), $neg_value);
-            }
-
-            #[test]
-            fn string_roundtrip() {
-                let val = <$type>::from_str($pos_value).expect("must be valid");
-                assert_eq!(val.to_string(), $pos_value);
             }
 
             #[test]

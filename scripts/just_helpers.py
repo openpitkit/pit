@@ -637,6 +637,36 @@ def command_mkdir(args: argparse.Namespace) -> None:
         (ROOT / path).mkdir(parents=True, exist_ok=True)
 
 
+def command_clean(_: argparse.Namespace) -> None:
+    target = ROOT / "target"
+    if not target.is_dir():
+        return
+    # Keep caches other just recipes place directly under target/ (see the
+    # justfile exports for GOCACHE, PIP_CACHE_DIR, GOLANGCI_LINT_CACHE, and
+    # node_dir) plus cargo-llvm-cov output and rust-analyzer's own build dir.
+    preserved = {
+        "go-cache",
+        "pip-cache",
+        "golangci-lint-cache",
+        "node",
+        "llvm-cov",
+        "rust-analyzer",
+    }
+    removed = 0
+    for entry in sorted(target.iterdir()):
+        if entry.name in preserved:
+            continue
+        relative = entry.relative_to(ROOT)
+        if entry.is_dir():
+            shutil.rmtree(entry, onerror=remove_readonly)
+        else:
+            entry.unlink(missing_ok=True)
+        print(f"removed {relative}")
+        removed += 1
+    noun = "entry" if removed == 1 else "entries"
+    print(f"clean: removed {removed} {noun} under target")
+
+
 def command_ensure_python_env(args: argparse.Namespace) -> None:
     venv_dir = Path(args.venv_dir)
     python_path = Path(args.python_path)
@@ -1204,6 +1234,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparser = subparsers.add_parser("mkdir")
     subparser.add_argument("paths", nargs="+")
     subparser.set_defaults(func=command_mkdir)
+
+    subparsers.add_parser("clean").set_defaults(func=command_clean)
 
     subparser = subparsers.add_parser("ensure-python-env")
     subparser.add_argument("venv_dir")

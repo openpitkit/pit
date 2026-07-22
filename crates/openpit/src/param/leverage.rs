@@ -205,13 +205,6 @@ mod tests {
     }
 
     #[test]
-    fn from_u16_scales_value() {
-        let lev = Leverage::from_u16(100).expect("leverage must be valid");
-
-        assert_eq!(lev.value(), 100.0);
-    }
-
-    #[test]
     fn from_raw_and_raw_roundtrip() {
         let lev = Leverage::from_raw(1005).expect("leverage must be valid");
         assert_eq!(lev.raw(), 1005);

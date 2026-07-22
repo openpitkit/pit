@@ -39,6 +39,9 @@ export PIP_CACHE_DIR := env_var_or_default("PIP_CACHE_DIR", repo_dir / "target/p
 export PIP_DISABLE_PIP_VERSION_CHECK := env_var_or_default("PIP_DISABLE_PIP_VERSION_CHECK", "1")
 export GOCACHE := env_var_or_default("GOCACHE", repo_dir / "target/go-cache")
 export GOLANGCI_LINT_CACHE := env_var_or_default("GOLANGCI_LINT_CACHE", repo_dir / "target/golangci-lint-cache")
+# Cap cargo build parallelism (default would use all 14 cores) to leave headroom
+# for language servers and concurrent sessions and avoid peak-memory link storms.
+export CARGO_BUILD_JOBS := env_var_or_default("CARGO_BUILD_JOBS", "8")
 
 # Create/update the local Python environment used by just recipes.
 [unix]
@@ -52,6 +55,12 @@ _ensure-python-env:
 # Install or update the project-local Node.js runtime pinned by CI_NODE.
 ensure-node:
     {{ bootstrap_python }} {{ just_helper }} ensure-node "{{ node_dir }}"
+
+# Remove Rust build artifacts under target/, keeping the Go, pip, node and
+# rust-analyzer caches that also live there. `cargo clean` would delete those
+# caches too and force needless rebuilds.
+clean:
+    {{ bootstrap_python }} {{ just_helper }} clean
 
 # Provision the full build toolchain (one-shot, idempotent).
 [unix]

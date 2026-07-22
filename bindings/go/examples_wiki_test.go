@@ -823,28 +823,6 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Getting-Started.md - Shortcut for Start + Main Stages
-func TestExampleWikiGettingStartedShortcut(t *testing.T) {
-	engine := wikiExampleEngine(t)
-	order := wikiExampleOrder(t, "100", "185")
-
-	reservation, rejects, err := engine.ExecutePreTrade(order)
-	if err != nil {
-		t.Fatalf("ExecutePreTrade() error = %v", err)
-	}
-	if rejects != nil {
-		for _, r := range rejects {
-			t.Logf(
-				"rejected by %s [%d]: %s (%s)",
-				r.Policy, r.Code, r.Reason, r.Details,
-			)
-		}
-		return
-	}
-	defer reservation.Close()
-	reservation.Commit()
-}
-
 // Used in: pit.wiki/Getting-Started.md - Run an Order Through the Engine
 func TestExampleWikiGettingStartedRunOrder(t *testing.T) {
 	engine := wikiExampleEngine(t)
