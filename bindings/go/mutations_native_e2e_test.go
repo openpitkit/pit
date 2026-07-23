@@ -123,6 +123,13 @@ func TestMutationsNativeE2E_DropCopyCommitsRejectingPolicyMutation(t *testing.T)
 	if block == nil || block.Reason != "forced reject" {
 		t.Fatalf("ExecutePreTradeDropCopy() AccountBlock = %+v, want forced reject", block)
 	}
+	if block.Code != reject.CodeAccountBlocked {
+		t.Fatalf(
+			"ExecutePreTradeDropCopy() AccountBlock code = %q, want %q",
+			block.Code,
+			reject.CodeAccountBlocked,
+		)
+	}
 	reservation.CommitAndClose()
 
 	if policy.commitCalls != 1 {

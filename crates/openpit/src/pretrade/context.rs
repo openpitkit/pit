@@ -112,7 +112,8 @@ where
         self.drop_copy
     }
 
-    pub(crate) fn record_drop_copy_account_block(&self, block: AccountBlock) {
+    #[doc(hidden)]
+    pub fn record_drop_copy_account_block(&self, block: AccountBlock) {
         if !self.drop_copy {
             return;
         }

@@ -26,7 +26,8 @@ use openpit::pretrade::policies::{
 };
 use openpit::pretrade::SpotFundsLimitMode;
 use openpit::pretrade::{
-    PreTradeDryRunReport, PreTradeLock, RejectCode, Rejects, DEFAULT_POLICY_GROUP_ID,
+    PolicyPreTradeResult, PreTradeContext, PreTradeDryRunReport, PreTradeLock, PreTradePolicy,
+    Reject, RejectCode, RejectScope, Rejects, DEFAULT_POLICY_GROUP_ID,
 };
 use openpit::{
     Engine, FullSync, FullSyncEngine, HasAccountAdjustmentBalance,
@@ -36,8 +37,8 @@ use openpit::{
     HasAccountAdjustmentIncoming, HasAccountAdjustmentIncomingLowerBound,
     HasAccountAdjustmentIncomingUpperBound, HasAccountId, HasBalanceAsset,
     HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
-    HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide, Instrument, OrderOperation,
-    RequestFieldAccessError, SpotFundsMarketData,
+    HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide, Instrument, Mutations,
+    OrderOperation, RequestFieldAccessError, SpotFundsMarketData, SyncMode,
 };
 
 type TestOrder = OrderOperation;
@@ -1257,6 +1258,147 @@ fn spot_funds_dry_run_same_asset_negative_sell_rejects_like_real_and_leaves_stat
     reservation.commit();
 }
 
+// ── drop-copy reject semantics ────────────────────────────────────────────────
+
+struct StartStageRejectPolicy;
+
+impl<Sync> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync> for StartStageRejectPolicy
+where
+    Sync: SyncMode,
+{
+    fn name(&self) -> &str {
+        "StartStageRejectPolicy"
+    }
+
+    fn check_pre_trade_start(
+        &self,
+        _ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        _order: &TestOrder,
+    ) -> Result<(), Rejects> {
+        Err(Rejects::from(Reject::new(
+            "StartStageRejectPolicy",
+            RejectScope::Order,
+            RejectCode::RiskLimitExceeded,
+            "start-stage test reject",
+            "start-stage test policy always rejects",
+        )))
+    }
+}
+
+struct MainStageRejectPolicy;
+
+impl<Sync> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync> for MainStageRejectPolicy
+where
+    Sync: SyncMode,
+{
+    fn name(&self) -> &str {
+        "MainStageRejectPolicy"
+    }
+
+    fn perform_pre_trade_check(
+        &self,
+        _ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        _order: &TestOrder,
+        _mutations: &mut Mutations,
+    ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+        Err(Rejects::from(Reject::new(
+            "MainStageRejectPolicy",
+            RejectScope::Order,
+            RejectCode::RiskLimitExceeded,
+            "main-stage test reject",
+            "main-stage test policy always rejects",
+        )))
+    }
+}
+
+fn build_start_stage_reject_engine() -> TestEngine {
+    Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+        .full_sync()
+        .pre_trade(StartStageRejectPolicy)
+        .build()
+        .expect("start-stage reject engine must build")
+}
+
+fn build_main_stage_reject_engine() -> TestEngine {
+    Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+        .full_sync()
+        .pre_trade(MainStageRejectPolicy)
+        .build()
+        .expect("main-stage reject engine must build")
+}
+
+// Only account-scoped rejects surface through a drop-copy reservation: a plain
+// policy reject latches no account block, in either pipeline stage.
+#[test]
+fn drop_copy_plain_policy_reject_latches_no_account_block() {
+    let aapl_usd = instr("AAPL", "USD");
+
+    let start_engine = build_start_stage_reject_engine();
+    let rejects = start_engine
+        .execute_pre_trade(make_order(
+            Side::Buy,
+            aapl_usd.clone(),
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .err()
+        .expect("the start-stage policy must reject an ordinary order");
+    assert_eq!(rejects[0].code, RejectCode::RiskLimitExceeded);
+
+    let mut start_reject = start_engine.execute_pre_trade_drop_copy(make_order(
+        Side::Buy,
+        aapl_usd.clone(),
+        TradeAmount::Quantity(qty("1")),
+        Some(px("100")),
+    ));
+    assert!(
+        start_reject.account_block().is_none(),
+        "an order-scoped start-stage reject must latch no account block"
+    );
+    start_reject.rollback();
+
+    let main_engine = build_main_stage_reject_engine();
+    let rejects = main_engine
+        .execute_pre_trade(make_order(
+            Side::Buy,
+            aapl_usd.clone(),
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .err()
+        .expect("the main-stage policy must reject an ordinary order");
+    assert_eq!(rejects[0].code, RejectCode::RiskLimitExceeded);
+
+    let mut main_reject = main_engine.execute_pre_trade_drop_copy(make_order(
+        Side::Buy,
+        aapl_usd,
+        TradeAmount::Quantity(qty("1")),
+        Some(px("100")),
+    ));
+    assert!(
+        main_reject.account_block().is_none(),
+        "an order-scoped main-stage reject must latch no account block"
+    );
+    main_reject.rollback();
+}
+
+// A drop-copy that breaches nothing carries no account block.
+#[test]
+fn drop_copy_clean_order_latches_no_account_block() {
+    let engine = build_engine();
+    seed(&engine, "USD", "10000");
+
+    let mut reservation = engine.execute_pre_trade_drop_copy(make_order(
+        Side::Buy,
+        instr("AAPL", "USD"),
+        TradeAmount::Quantity(qty("10")),
+        Some(px("200")),
+    ));
+    assert!(reservation.account_block().is_none());
+    assert_eq!(reservation.account_adjustments().len(), 2);
+    reservation.commit();
+}
+
 // ── realized PnL / average entry price outcomes (public API) ───────────────────
 
 // Happy path: separate average-entry-price and position-PnL operations surface
@@ -1572,6 +1714,104 @@ fn drop_copy_reinstates_spot_funds_pnl_block_and_accepts_current_order() {
     assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
     assert_eq!(rejects[0].reason, "pnl kill switch triggered");
     assert!(rejects[0].details.contains("lower bound breached"));
+}
+
+// A drop-copy ignores the pre-existing block on the account: the request is
+// still executed, and the reservation reports the block this pipeline derived
+// even though the registry already holds an earlier one.
+#[test]
+fn drop_copy_on_already_blocked_account_ignores_the_existing_block() {
+    let acc = AccountId::from_u64(40000005);
+    let grp = AccountGroupId::from_u32(15).expect("valid group id");
+    let instrument = instr("AAPL", "USD");
+    let engine = build_pnl_killswitch_engine(grp);
+    engine
+        .accounts()
+        .register_group(&[acc], grp)
+        .expect("registration must succeed");
+
+    let result = engine
+        .apply_account_adjustment(acc, &[account_pnl_adjustment(pnl("-50"))])
+        .expect("force-set must commit");
+    assert_eq!(result.account_blocks.len(), 1);
+
+    // The account stays blocked; a regular pre-trade would reject outright.
+    let rejects = engine
+        .execute_pre_trade(make_order_for(
+            acc,
+            Side::Buy,
+            instrument.clone(),
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .err()
+        .expect("blocked account must reject a regular pre-trade");
+    assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+
+    let mut reservation = engine.execute_pre_trade_drop_copy(make_order_for(
+        acc,
+        Side::Buy,
+        instrument,
+        TradeAmount::Quantity(qty("1")),
+        Some(px("100")),
+    ));
+    let block = reservation
+        .account_block()
+        .expect("the still-breaching account re-derives its block");
+    assert_eq!(block.code, RejectCode::AccountBlocked);
+    assert_eq!(block.reason, "pnl kill switch triggered");
+    assert_eq!(
+        reservation.account_adjustments().len(),
+        2,
+        "the pipeline still ran: settlement hold plus base incoming"
+    );
+    reservation.commit();
+}
+
+// Rolling back a drop-copy releases its reservation only: the account block the
+// pipeline latched belongs to the engine and outlives the reservation.
+#[test]
+fn drop_copy_rollback_keeps_the_latched_account_block() {
+    let acc = AccountId::from_u64(40000006);
+    let grp = AccountGroupId::from_u32(16).expect("valid group id");
+    let instrument = instr("AAPL", "USD");
+    let engine = build_pnl_killswitch_engine(grp);
+    engine
+        .accounts()
+        .register_group(&[acc], grp)
+        .expect("registration must succeed");
+
+    let result = engine
+        .apply_account_adjustment(acc, &[account_pnl_adjustment(pnl("-50"))])
+        .expect("force-set must commit");
+    assert_eq!(result.account_blocks.len(), 1);
+    engine.accounts().unblock(acc);
+
+    let mut reservation = engine.execute_pre_trade_drop_copy(make_order_for(
+        acc,
+        Side::Buy,
+        instrument.clone(),
+        TradeAmount::Quantity(qty("1")),
+        Some(px("100")),
+    ));
+    assert!(
+        reservation.account_block().is_some(),
+        "drop-copy must latch the restored account block"
+    );
+    reservation.rollback();
+
+    let rejects = engine
+        .execute_pre_trade(make_order_for(
+            acc,
+            Side::Buy,
+            instrument,
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .err()
+        .expect("the rolled-back drop-copy must leave the account blocked");
+    assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
+    assert_eq!(rejects[0].reason, "pnl kill switch triggered");
 }
 
 // Public surface of the operator's overwrite: an account holds one cause, so

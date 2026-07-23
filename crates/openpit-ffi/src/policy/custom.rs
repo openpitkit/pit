@@ -345,13 +345,13 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
             };
         if ctx.is_drop_copy() {
             if let Err(rejects) = &reject_result {
-                if let (Some(control), Some(reject)) = (
-                    ctx.account_control.as_ref(),
-                    rejects
-                        .iter()
-                        .find(|reject| reject.scope == RejectScope::Account),
-                ) {
-                    control.block(reject.account_block_with_code(RejectCode::AccountBlocked));
+                if let Some(reject) = rejects
+                    .iter()
+                    .find(|reject| reject.scope == RejectScope::Account)
+                {
+                    ctx.record_drop_copy_account_block(
+                        reject.account_block_with_code(RejectCode::AccountBlocked),
+                    );
                 }
             }
             Ok(result)

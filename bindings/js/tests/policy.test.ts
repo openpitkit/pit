@@ -156,6 +156,7 @@ describe("runtime custom policy", () => {
     const reservation = engine.executePreTradeDropCopy(order("BUY"));
 
     expect(reservation.lock().size()).toBe(1);
+    expect(reservation.accountBlock()?.code).toBe("AccountBlocked");
     expect(reservation.accountBlock()?.reason).toBe("test boundary exceeded");
     expect(() => reservation.commit()).not.toThrow();
     expect(() => reservation.accountBlock()).toThrowError(LifecycleError);

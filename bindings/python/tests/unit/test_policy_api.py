@@ -290,6 +290,7 @@ def test_drop_copy_discards_custom_reject_and_preserves_lock() -> None:
     assert reservation.lock().entries() == [(0, openpit.param.Price("13"))]
     block = reservation.account_block()
     assert block is not None
+    assert block.code == openpit.pretrade.RejectCode.ACCOUNT_BLOCKED
     assert block.reason == "test boundary exceeded"
     reservation.commit()
     with pytest.raises(RuntimeError, match="already been finalized"):

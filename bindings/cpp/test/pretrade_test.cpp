@@ -569,6 +569,16 @@ class DropCopyBlockingPolicy {
   }
 };
 
+// Accepts every order; an engine needs at least one registered policy.
+class AcceptingPolicy {
+ public:
+  void PerformPreTradeCheck(const Context& context,
+                            PolicyDecision& decision) const {
+    static_cast<void>(context);
+    static_cast<void>(decision);
+  }
+};
+
 [[nodiscard]] openpit::model::Order MakeDryRunHookOrder() {
   openpit::model::Order order;
   openpit::model::OrderOperation op;
@@ -623,13 +633,15 @@ TEST(CustomPolicy, DropCopyReservationSurfacesRecordedAccountBlock) {
 
   ASSERT_TRUE(block.has_value());
   EXPECT_EQ(block->policy, "DropCopyBlockingPolicy");
-  EXPECT_EQ(block->code, RejectCode::RiskLimitExceeded);
+  EXPECT_EQ(block->code, RejectCode::AccountBlocked);
   EXPECT_EQ(block->reason, "forced account block");
   reservation.Commit();
 }
 
 TEST(CustomPolicy, DropCopyReservationReturnsNoBlockWhenNoneWasProduced) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<AcceptingPolicy> policy("AcceptingPolicy", AcceptingPolicy{});
+  builder.Add(policy);
   openpit::Engine engine = builder.Build();
 
   openpit::pretrade::Reservation reservation =
@@ -637,6 +649,23 @@ TEST(CustomPolicy, DropCopyReservationReturnsNoBlockWhenNoneWasProduced) {
 
   EXPECT_FALSE(reservation.AccountBlock().has_value());
   reservation.Rollback();
+}
+
+// The block accessor is not drop-copy only: an ordinary accepted reservation
+// exposes it and reports no block.
+TEST(CustomPolicy, AcceptedReservationCarriesNoAccountBlock) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<AcceptingPolicy> policy("AcceptingPolicy", AcceptingPolicy{});
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+
+  openpit::pretrade::ExecuteResult result =
+      engine.ExecutePreTrade(MakeDryRunHookOrder());
+
+  ASSERT_TRUE(result.Passed());
+  EXPECT_TRUE(result.rejects.empty());
+  EXPECT_FALSE(result.reservation->AccountBlock().has_value());
+  result.reservation->Commit();
 }
 
 //------------------------------------------------------------------------------
