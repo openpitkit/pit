@@ -183,8 +183,10 @@ TEST(Measurement, InFlight) {
 // Concurrent RecordDequeue / RecordComplete are race-free and counted.
 TEST(Measurement, ObserverSinkRaceClean) {
   m::ObserverSink obs;
-  constexpr int kGoroutines = 10;
-  constexpr int kCallsEach = 500;
+  // `static` keeps the constants usable inside the lambdas below without an
+  // explicit capture: MSVC rejects the implicit use otherwise (C3493).
+  static constexpr int kGoroutines = 10;
+  static constexpr int kCallsEach = 500;
   std::vector<std::thread> ts;
   for (int i = 0; i < kGoroutines; ++i) {
     ts.emplace_back([&obs] {
@@ -210,8 +212,9 @@ TEST(Measurement, ObserverSinkRaceClean) {
 TEST(Measurement, SinkRaceClean) {
   m::Windows w(m::WindowUnit::Ops, 10000, nanoseconds(0));
   m::Sink s(&w);
-  constexpr int kGoroutines = 8;
-  constexpr int kOpsEach = 200;
+  // See `ObserverSinkRaceClean`: `static` avoids the MSVC C3493 capture rule.
+  static constexpr int kGoroutines = 8;
+  static constexpr int kOpsEach = 200;
   std::vector<std::thread> ts;
   for (int i = 0; i < kGoroutines; ++i) {
     ts.emplace_back([&s, i] {

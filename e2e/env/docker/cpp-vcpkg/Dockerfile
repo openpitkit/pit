@@ -15,22 +15,29 @@
 #
 # Please see https://openpit.dev and the OWNERS file for details.
 
-@PACKAGE_INIT@
+FROM debian:bookworm
 
-# `find_package(OpenPit CONFIG REQUIRED)` yields the imported target
-# `OpenPit::openpit`. The consumer still resolves the prebuilt runtime library
-# (download or local override) via the bundled OpenPitDownloadRuntime module.
+RUN apt-get update \
+  && apt-get install --yes --no-install-recommends \
+    ca-certificates \
+    cmake \
+    curl \
+    g++ \
+    git \
+    make \
+    python3 \
+    tar \
+    unzip \
+    zip \
+  && rm -rf /var/lib/apt/lists/*
 
-include(CMakeFindDependencyMacro)
+WORKDIR /opt/e2e
 
-set(OPENPIT_RUNTIME_VERSION "@OPENPIT_RUNTIME_VERSION@"
-  CACHE STRING "OpenPit prebuilt runtime version")
-set(OPENPIT_RUNTIME_REPO "@OPENPIT_RUNTIME_REPO@"
-  CACHE STRING "GitHub owner/repo hosting OpenPit runtime releases")
+COPY e2e/scripts/cpp-vcpkg.sh /usr/local/bin/run-release-e2e
+COPY e2e/clients/cpp /opt/e2e/cpp-consumer
+COPY examples/cpp /opt/e2e/examples
+COPY examples/tables /opt/e2e/tables
 
-include("${CMAKE_CURRENT_LIST_DIR}/OpenPitDownloadRuntime.cmake")
-openpit_resolve_runtime()
+RUN chmod +x /usr/local/bin/run-release-e2e
 
-include("${CMAKE_CURRENT_LIST_DIR}/OpenPitTargets.cmake")
-
-check_required_components(OpenPit)
+ENTRYPOINT ["/usr/local/bin/run-release-e2e"]

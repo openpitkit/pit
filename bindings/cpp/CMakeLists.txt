@@ -21,11 +21,12 @@ if(POLICY CMP0091)
   cmake_policy(SET CMP0091 NEW)
 endif()
 
-# Single-source the version from the workspace Cargo manifest unless the caller
-# pins it through the OPENPIT_RUNTIME_VERSION cache variable.
+# Single-source the package version from the workspace Cargo manifest unless the
+# caller pins it explicitly. Runtime release tags may include a prerelease suffix
+# that CMake's project(VERSION) grammar does not accept.
 set(OPENPIT_CARGO_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/../../crates/openpit/Cargo.toml")
-if(DEFINED OPENPIT_RUNTIME_VERSION AND NOT OPENPIT_RUNTIME_VERSION STREQUAL "")
-  set(OPENPIT_VERSION "${OPENPIT_RUNTIME_VERSION}")
+if(DEFINED OPENPIT_PACKAGE_VERSION AND NOT OPENPIT_PACKAGE_VERSION STREQUAL "")
+  set(OPENPIT_VERSION "${OPENPIT_PACKAGE_VERSION}")
 elseif(EXISTS "${OPENPIT_CARGO_MANIFEST}")
   file(READ "${OPENPIT_CARGO_MANIFEST}" _openpit_cargo_toml)
   string(REGEX MATCH "(^|\n)version[ \t]*=[ \t]*\"([0-9][^\"]*)\""
@@ -35,7 +36,7 @@ elseif(EXISTS "${OPENPIT_CARGO_MANIFEST}")
 endif()
 if(NOT OPENPIT_VERSION)
   message(FATAL_ERROR
-    "OpenPit: could not determine version; set OPENPIT_RUNTIME_VERSION")
+    "OpenPit: could not determine version; set OPENPIT_PACKAGE_VERSION")
 endif()
 
 project(OpenPit
@@ -48,9 +49,11 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # GitHub repository hosting the prebuilt runtime release assets.
 set(OPENPIT_RUNTIME_REPO "openpitkit/pit"
   CACHE STRING "GitHub owner/repo hosting OpenPit runtime releases")
-# Make the version visible to the runtime resolver and the installed config.
-set(OPENPIT_RUNTIME_VERSION "${OPENPIT_VERSION}"
-  CACHE STRING "OpenPit prebuilt runtime version")
+# Make the release tag visible to the runtime resolver and the installed config.
+if(NOT DEFINED OPENPIT_RUNTIME_VERSION OR OPENPIT_RUNTIME_VERSION STREQUAL "")
+  set(OPENPIT_RUNTIME_VERSION "${OPENPIT_VERSION}"
+    CACHE STRING "OpenPit prebuilt runtime version")
+endif()
 
 # Detect standalone vs add_subdirectory/FetchContent embedding. Both lead to the
 # same OpenPit::openpit alias.

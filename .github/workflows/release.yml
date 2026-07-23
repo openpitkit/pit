@@ -1,3 +1,20 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
 name: Release
 
 on:
@@ -114,6 +131,9 @@ jobs:
       - publish-sdist
       - publish-npm
       - build-runtime-artifacts
+      # Keep publication serialized until the managed vcpkg deployment is
+      # proven in production; then make this dependency parallel again.
+      - publish-vcpkg-registry
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -164,11 +184,11 @@ jobs:
 
   publish-wheels:
     name: Publish wheels (${{ matrix.name }})
-    # Keep the first npm publication serialized before other registries. Restore
-    # parallel publishing after the npm release path has been proven in production.
     needs:
-      - publish-npm
       - verify-tag
+      # Keep publication serialized until the managed vcpkg deployment is
+      # proven in production; then make this dependency parallel again.
+      - publish-vcpkg-registry
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -346,6 +366,9 @@ jobs:
     needs:
       - publish-wheels
       - verify-tag
+      # Keep publication serialized until the managed vcpkg deployment is
+      # proven in production; then make this dependency parallel again.
+      - publish-vcpkg-registry
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -450,6 +473,9 @@ jobs:
     needs:
       - verify
       - verify-tag
+      # Keep publication serialized until the managed vcpkg deployment is
+      # proven in production; then make this dependency parallel again.
+      - publish-vcpkg-registry
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -738,6 +764,9 @@ jobs:
 
       - name: Build C++ binding
         shell: bash
+        env:
+          OPENPIT_PACKAGE_VERSION: ${{ needs.verify-tag.outputs.base_version }}
+          OPENPIT_RUNTIME_VERSION: ${{ needs.verify-tag.outputs.version }}
         run: just build-cpp-release
 
       - name: Install C++ binding into staging prefix
@@ -755,7 +784,7 @@ jobs:
       - name: Package C++ distributable
         shell: bash
         env:
-          VERSION: ${{ needs.verify-tag.outputs.version }}
+          OPENPIT_RELEASE_VERSION: ${{ needs.verify-tag.outputs.version }}
         run: just --justfile "$JUSTFILE" package-cpp /tmp/openpit-cpp-install
 
       - name: Upload C++ artifact
@@ -775,6 +804,261 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  publish-vcpkg-registry:
+    name: Publish OpenPit vcpkg registry port
+    needs:
+      - build-runtime-artifacts
+      - verify
+      - verify-tag
+    runs-on: ubuntu-22.04
+    outputs:
+      registry_baseline: ${{ steps.publish.outputs.registry_baseline }}
+    permissions:
+      contents: read
+    concurrency:
+      group: openpit-vcpkg-registry
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux runtime artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: runtime-linux-amd64
+          path: ${{ runner.temp }}/openpit-vcpkg-runtime
+
+      - name: Bootstrap vcpkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git \
+            "$RUNNER_TEMP/vcpkg"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Materialize, publish, and verify the registry port
+        id: publish
+        shell: bash
+        env:
+          BASE_VERSION: ${{ needs.verify-tag.outputs.base_version }}
+          RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+          VCPKG_REGISTRY_PUSH_TOKEN: ${{ secrets.VCPKG_REGISTRY_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          VCPKG_ROOT="$RUNNER_TEMP/vcpkg"
+          RUNTIME_LIBRARY="$RUNNER_TEMP/openpit-vcpkg-runtime/openpit-ffi--linux-amd64-libopenpit_ffi.so"
+          RENDERED_PORT="$RUNNER_TEMP/openpit-vcpkg-port"
+          REGISTRY_DIR="$RUNNER_TEMP/openpit-vcpkg-registry"
+          VERIFY_ROOT="$RUNNER_TEMP/openpit-vcpkg-verify"
+          SOURCE_REF="v${VERSION}"
+          if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
+            SOURCE_REF="${GITHUB_SHA}"
+          fi
+
+          if [[ ! -f "${RUNTIME_LIBRARY}" ]]; then
+            echo "::error::missing Linux runtime artifact: ${RUNTIME_LIBRARY}"
+            exit 1
+          fi
+
+          source_archive="$RUNNER_TEMP/openpit-source.tar.gz"
+          curl --proto '=https' --tlsv1.2 --retry 3 --fail --location \
+            --silent --show-error \
+            "https://github.com/openpitkit/pit/archive/${SOURCE_REF}.tar.gz" \
+            -o "${source_archive}"
+          source_sha512="$(sha512sum "${source_archive}" | awk '{print $1}')"
+          python3 scripts/materialize_vcpkg_port.py \
+            --destination "${RENDERED_PORT}" \
+            --package-version "${BASE_VERSION}" \
+            --runtime-version "${VERSION}" \
+            --source-ref "${SOURCE_REF}" \
+            --source-sha512 "${source_sha512}" \
+            --version "${VERSION}"
+
+          if [[ "${RELEASE_MODE}" == "production" ]]; then
+            if [[ -z "${VCPKG_REGISTRY_PUSH_TOKEN}" ]]; then
+              echo "::error::VCPKG_REGISTRY_PUSH_TOKEN is required for production releases"
+              exit 1
+            fi
+            git clone --depth 1 --branch main \
+              "https://x-access-token:${VCPKG_REGISTRY_PUSH_TOKEN}@github.com/openpitkit/vcpkg-registry.git" \
+              "${REGISTRY_DIR}"
+          else
+            mkdir -p "${REGISTRY_DIR}"
+            git -C "${REGISTRY_DIR}" init --initial-branch=main
+          fi
+          git -C "${REGISTRY_DIR}" config user.name "github-actions[bot]"
+          git -C "${REGISTRY_DIR}" config user.email "github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p "${REGISTRY_DIR}/ports"
+          if [[ -d "${REGISTRY_DIR}/ports/openpit" ]] \
+              && cmp -s "${RENDERED_PORT}/portfile.cmake" "${REGISTRY_DIR}/ports/openpit/portfile.cmake" \
+              && cmp -s "${RENDERED_PORT}/vcpkg.json" "${REGISTRY_DIR}/ports/openpit/vcpkg.json"; then
+            echo "OpenPit vcpkg port ${VERSION} is already materialized"
+          else
+            rm -rf "${REGISTRY_DIR}/ports/openpit"
+            cp -R "${RENDERED_PORT}" "${REGISTRY_DIR}/ports/openpit"
+            git -C "${REGISTRY_DIR}" add ports/openpit
+            git -C "${REGISTRY_DIR}" commit -m "Add OpenPit v${VERSION}"
+            "${VCPKG_ROOT}/vcpkg" x-add-version openpit \
+              --x-builtin-ports-root="${REGISTRY_DIR}/ports" \
+              --x-builtin-registry-versions-dir="${REGISTRY_DIR}/versions"
+            git -C "${REGISTRY_DIR}" add versions
+            git -C "${REGISTRY_DIR}" commit --amend --no-edit
+          fi
+
+          registry_baseline="$(git -C "${REGISTRY_DIR}" rev-parse HEAD)"
+          vcpkg_baseline="$(git -C "${VCPKG_ROOT}" rev-parse HEAD)"
+
+          mkdir -p "${VERIFY_ROOT}"
+          cp -R e2e/clients/cpp "${VERIFY_ROOT}/consumer"
+          cat > "${VERIFY_ROOT}/vcpkg.json" <<EOF
+          {
+            "name": "openpit-vcpkg-registry-verify",
+            "version-string": "0",
+            "builtin-baseline": "${vcpkg_baseline}",
+            "dependencies": ["openpit"]
+          }
+          EOF
+          cat > "${VERIFY_ROOT}/vcpkg-configuration.json" <<EOF
+          {
+            "registries": [{
+              "kind": "git",
+              "repository": "file://${REGISTRY_DIR}",
+              "baseline": "${registry_baseline}",
+              "packages": ["openpit"]
+            }]
+          }
+          EOF
+
+          echo "==> Installing OpenPit from the clean vcpkg registry"
+          (
+            cd "${VERIFY_ROOT}"
+            OPENPIT_VCPKG_RUNTIME_LIBRARY="${RUNTIME_LIBRARY}" \
+              "${VCPKG_ROOT}/vcpkg" install --triplet x64-linux
+          )
+          cmake -S "${VERIFY_ROOT}/consumer" -B "${VERIFY_ROOT}/consumer-build" \
+            -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_MANIFEST_DIR="${VERIFY_ROOT}" \
+            -DVCPKG_INSTALLED_DIR="${VERIFY_ROOT}/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DOPENPIT_RUNTIME_LIBRARY="${RUNTIME_LIBRARY}"
+          cmake --build "${VERIFY_ROOT}/consumer-build" --parallel
+          "${VERIFY_ROOT}/consumer-build/openpit_cpp_consumer"
+
+          if [[ "${RELEASE_MODE}" == "production" ]]; then
+            git -C "${REGISTRY_DIR}" push origin HEAD:main
+          fi
+          echo "registry_baseline=${registry_baseline}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
+            STAGING_REGISTRY="$RUNNER_TEMP/openpit-vcpkg-dry-run-registry"
+            mkdir -p "${STAGING_REGISTRY}/ports" "${STAGING_REGISTRY}/versions/o-"
+            cp -R "${RENDERED_PORT}" "${STAGING_REGISTRY}/ports/openpit"
+            cat > "${STAGING_REGISTRY}/versions/baseline.json" <<EOF
+          {"default":{"openpit":{"baseline":"${VERSION}","port-version":0}}}
+          EOF
+            cat > "${STAGING_REGISTRY}/versions/o-/openpit.json" <<EOF
+          {"versions":[{"path":"$/ports/openpit","version-semver":"${VERSION}","port-version":0}]}
+          EOF
+          fi
+
+      - name: Upload generated vcpkg port
+        uses: actions/upload-artifact@v4
+        with:
+          name: openpit-vcpkg-port
+          path: ${{ runner.temp }}/openpit-vcpkg-port
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload dry-run filesystem registry
+        if: ${{ needs.verify-tag.outputs.release_mode == 'dry-run' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: openpit-vcpkg-dry-run-registry
+          path: ${{ runner.temp }}/openpit-vcpkg-dry-run-registry
+          if-no-files-found: error
+          retention-days: 1
+
+  sync-vcpkg-upstream:
+    name: Propose microsoft/vcpkg port update
+    needs:
+      - publish-github-release
+      - publish-vcpkg-registry
+      - verify-tag
+    if: ${{ needs.verify-tag.outputs.release_mode == 'production' }}
+    continue-on-error: true
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Download generated vcpkg port
+        uses: actions/download-artifact@v4
+        with:
+          name: openpit-vcpkg-port
+          path: ${{ runner.temp }}/openpit-vcpkg-port
+
+      - name: Create or update upstream pull request
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+          VCPKG_UPSTREAM_FORK: ${{ vars.VCPKG_UPSTREAM_FORK }}
+          VCPKG_UPSTREAM_PUSH_TOKEN: ${{ secrets.VCPKG_UPSTREAM_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${VCPKG_UPSTREAM_FORK}" \
+              || -z "${VCPKG_UPSTREAM_PUSH_TOKEN}" ]]; then
+            echo "::warning::Skipping microsoft/vcpkg sync: configure VCPKG_UPSTREAM_FORK and VCPKG_UPSTREAM_PUSH_TOKEN"
+            exit 0
+          fi
+          if [[ "${VCPKG_UPSTREAM_FORK}" != */* ]]; then
+            echo "::error::VCPKG_UPSTREAM_FORK must be an owner/repository value"
+            exit 1
+          fi
+
+          fork_owner="${VCPKG_UPSTREAM_FORK%%/*}"
+          branch="openpit-${VERSION}"
+          worktree="$RUNNER_TEMP/microsoft-vcpkg"
+          git clone \
+            "https://x-access-token:${VCPKG_UPSTREAM_PUSH_TOKEN}@github.com/${VCPKG_UPSTREAM_FORK}.git" \
+            "${worktree}"
+          git -C "${worktree}" remote add upstream https://github.com/microsoft/vcpkg.git
+          git -C "${worktree}" fetch upstream master
+          git -C "${worktree}" checkout -B "${branch}" upstream/master
+          git -C "${worktree}" config user.name "github-actions[bot]"
+          git -C "${worktree}" config user.email "github-actions[bot]@users.noreply.github.com"
+          rm -rf "${worktree}/ports/openpit"
+          cp -R "$RUNNER_TEMP/openpit-vcpkg-port" "${worktree}/ports/openpit"
+          "${worktree}/bootstrap-vcpkg.sh" -disableMetrics
+          git -C "${worktree}" add ports/openpit
+          if git -C "${worktree}" diff --cached --quiet; then
+            echo "microsoft/vcpkg already contains OpenPit v${VERSION}"
+            exit 0
+          fi
+          git -C "${worktree}" commit -m "Add OpenPit v${VERSION}"
+          "${worktree}/vcpkg" x-add-version openpit
+          git -C "${worktree}" add versions
+          git -C "${worktree}" commit --amend --no-edit
+          git -C "${worktree}" push --force origin "HEAD:${branch}"
+
+          existing_pr="$(GH_TOKEN="${VCPKG_UPSTREAM_PUSH_TOKEN}" gh pr list \
+            --repo microsoft/vcpkg \
+            --head "${fork_owner}:${branch}" \
+            --state open --json url --jq '.[0].url // empty')"
+          if [[ -n "${existing_pr}" ]]; then
+            echo "Updated upstream vcpkg PR: ${existing_pr}"
+          else
+            GH_TOKEN="${VCPKG_UPSTREAM_PUSH_TOKEN}" gh pr create \
+              --repo microsoft/vcpkg \
+              --head "${fork_owner}:${branch}" \
+              --base master \
+              --title "[openpit] Update to ${VERSION}" \
+              --body "Updates the OpenPit C++ SDK port to ${VERSION}."
+          fi
+
   publish-go-sources:
     name: Publish pit-go sources
     needs:
@@ -783,6 +1067,9 @@ jobs:
       - build-runtime-artifacts
       - build-cpp-distributable
       - verify-tag
+      # Keep publication serialized until the managed vcpkg deployment is
+      # proven in production; then make this dependency parallel again.
+      - publish-vcpkg-registry
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -943,8 +1230,13 @@ jobs:
       - build-runtime-artifacts
       - build-cpp-distributable
       - verify-tag
-    if: ${{ needs.verify-tag.outputs.release_mode == 'production' }}
+      # Keep publication serialized until the managed vcpkg deployment is
+      # proven in production; then make this dependency parallel again.
+      - publish-vcpkg-registry
     runs-on: ubuntu-22.04
+    outputs:
+      release_id: ${{ steps.create-release.outputs.release_id }}
+      release_tag: ${{ steps.create-release.outputs.release_tag }}
     permissions:
       contents: write
     steps:
@@ -965,41 +1257,224 @@ jobs:
           path: release-assets
 
       - name: Create GitHub Release with runtime assets
+        id: create-release
         shell: bash
+        env:
+          RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
+          VERSION: ${{ needs.verify-tag.outputs.version }}
+          VCPKG_REGISTRY_BASELINE:
+            ${{ needs.publish-vcpkg-registry.outputs.registry_baseline }}
         run: |
           set -euo pipefail
 
           BODY_FILE="$(mktemp)"
-          cat <<EOF > "${BODY_FILE}"
+          if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
+            cat <<EOF > "${BODY_FILE}"
+          Draft release used only to validate authentic asset downloads.
+          It must not be published or treated as a package release.
+          EOF
+          else
+            cat <<EOF > "${BODY_FILE}"
           Install from package registries:
 
           - crates.io: https://crates.io/crates/openpit
-          - PyPI: https://pypi.org/project/openpit/${{ needs.verify-tag.outputs.version }}/
+          - PyPI: https://pypi.org/project/openpit/${VERSION}/
 
           Runtime artifacts for SDK delivery are attached to this release
           (\`.so\`, \`.dylib\`, \`.dll\`, Windows \`.dll.lib\`, and
           \`.sha256\` files per target).
 
-          The C++ distributable (\`openpit-cpp--${{ needs.verify-tag.outputs.version }}.tar.gz\`)
+          The C++ distributable (\`openpit-cpp--${VERSION}.tar.gz\`)
           contains the public headers and CMake config-file package.
+
+          vcpkg users can consume OpenPit from
+          https://github.com/openpitkit/vcpkg-registry.git at baseline
+          \`${VCPKG_REGISTRY_BASELINE}\`.
           EOF
+          fi
 
           mapfile -t ASSETS < <(find release-assets -type f | sort)
 
-          GH_TOKEN="${{ github.token }}" gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
-            --generate-notes \
-            --notes-file "${BODY_FILE}" \
-            --latest \
-            "${ASSETS[@]}"
+          release_tag="v${VERSION}"
+          if [[ "${RELEASE_MODE}" == "dry-run" ]]; then
+            release_tag="e2e-${VERSION}-${GITHUB_RUN_ID}"
+            release_id="$(
+              GH_TOKEN="${{ github.token }}" gh api --method POST \
+                "repos/${GITHUB_REPOSITORY}/releases" \
+                -f tag_name="${release_tag}" \
+                -f target_commitish="${GITHUB_SHA}" \
+                -f name="v${VERSION}" \
+                -f body="$(<"${BODY_FILE}")" \
+                -F draft=true \
+                --jq '.id'
+            )"
+            if [[ ! "${release_id}" =~ ^[0-9]+$ ]]; then
+              echo "could not create a draft release for ${release_tag}" >&2
+              exit 1
+            fi
 
-  release-e2e-advisory:
-    name: Release e2e advisory
+            for asset in "${ASSETS[@]}"; do
+              asset_name="$(basename "${asset}")"
+              curl --fail --silent --show-error --location \
+                --header "Authorization: Bearer ${{ github.token }}" \
+                --header "Accept: application/vnd.github+json" \
+                --header "Content-Type: application/octet-stream" \
+                --data-binary "@${asset}" \
+                "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${asset_name}"
+            done
+
+            echo "release_id=${release_id}" >> "${GITHUB_OUTPUT}"
+            echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          else
+            GH_TOKEN="${{ github.token }}" gh release create "${release_tag}" \
+              --title "${release_tag}" \
+              --generate-notes \
+              --notes-file "${BODY_FILE}" \
+              --latest \
+              "${ASSETS[@]}"
+          fi
+
+  release-e2e:
+    name: Release e2e
     needs:
       - publish-github-release
+      - publish-vcpkg-registry
       - verify-tag
-    if: ${{ always() && needs.publish-github-release.result == 'success' }}
+    if: ${{ needs.verify-tag.outputs.release_mode == 'dry-run' }}
     runs-on: ubuntu-22.04
+    permissions:
+      # The draft-release API hides drafts from tokens without push access.
+      # This job only reads the draft, but needs this access to do so.
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dry-run vcpkg registry
+        uses: actions/download-artifact@v4
+        with:
+          name: openpit-vcpkg-dry-run-registry
+          path: ${{ runner.temp }}/openpit-vcpkg-dry-run-registry
+
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Run release e2e against draft assets
+        shell: bash
+        env:
+          OPENPIT_RELEASE_DOWNLOAD_TOKEN: ${{ github.token }}
+          OPENPIT_RELEASE_ID: ${{ needs.publish-github-release.outputs.release_id }}
+          OPENPIT_RELEASE_E2E_TARGETS: cpp-amd64 cpp-vcpkg-amd64
+          OPENPIT_VCPKG_REGISTRY_PATH:
+            ${{ runner.temp }}/openpit-vcpkg-dry-run-registry
+        run: just --justfile "$JUSTFILE" test-release-e2e "${{ needs.verify-tag.outputs.version }}"
+
+  release-e2e-windows:
+    name: Release e2e (Windows)
+    needs:
+      - publish-github-release
+      - publish-vcpkg-registry
+      - verify-tag
+    if: ${{ needs.verify-tag.outputs.release_mode == 'dry-run' }}
+    runs-on: windows-2022
+    permissions:
+      # The draft-release API hides drafts from tokens without push access.
+      # This job only reads the draft, but needs this access to do so.
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dry-run vcpkg registry
+        uses: actions/download-artifact@v4
+        with:
+          name: openpit-vcpkg-dry-run-registry
+          path: ${{ runner.temp }}/openpit-vcpkg-dry-run-registry
+
+      - name: Setup just
+        uses: extractions/setup-just@v3
+
+      - name: Start Docker
+        shell: pwsh
+        run: |
+          $dockerService = Get-Service docker -ErrorAction Stop
+          if ($dockerService.Status -ne 'Running') {
+            Start-Service docker
+          }
+          $dockerService.WaitForStatus('Running', '00:00:30')
+          docker version
+
+      - name: Run Windows release e2e against draft assets
+        shell: pwsh
+        env:
+          OPENPIT_RELEASE_DOWNLOAD_TOKEN: ${{ github.token }}
+          OPENPIT_RELEASE_ID: ${{ needs.publish-github-release.outputs.release_id }}
+          OPENPIT_RELEASE_E2E_TARGETS: cpp-windows-amd64 cpp-vcpkg-windows-amd64
+          OPENPIT_VCPKG_REGISTRY_PATH:
+            ${{ runner.temp }}/openpit-vcpkg-dry-run-registry
+        run: just --justfile "$env:JUSTFILE" test-release-e2e "${{ needs.verify-tag.outputs.version }}"
+
+  cleanup-dry-run-release:
+    name: Delete dry-run draft release
+    needs:
+      - publish-github-release
+      - release-e2e
+      - release-e2e-windows
+      - verify-tag
+    if: ${{ always() && needs.verify-tag.outputs.release_mode == 'dry-run' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Delete dry-run draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.publish-github-release.outputs.release_id }}
+          RELEASE_TAG: ${{ needs.publish-github-release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${RELEASE_ID}" ]]; then
+            echo "no draft release was created"
+            exit 0
+          fi
+          if [[ ! "${RELEASE_ID}" =~ ^[0-9]+$ ]]; then
+            echo "invalid draft release ID: ${RELEASE_ID}" >&2
+            exit 1
+          fi
+
+          gh api --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
+          if [[ -n "${RELEASE_TAG}" ]] && gh api \
+              "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" \
+              >/dev/null 2>&1; then
+            gh api --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_TAG}"
+          fi
+
+  release-e2e-advisory:
+    name: Release e2e advisory (${{ matrix.name }})
+    needs:
+      - publish-github-release
+      - publish-vcpkg-registry
+      - publish-go-sources
+      - verify-tag
+    if: ${{ always() && needs.verify-tag.outputs.release_mode == 'production' && needs.publish-github-release.result == 'success' && needs.publish-go-sources.result == 'success' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-22.04
+            setup_qemu: true
+          - name: Windows
+            os: windows-2022
+            setup_qemu: false
     permissions:
       contents: read
       issues: write
@@ -1011,11 +1486,26 @@ jobs:
         uses: extractions/setup-just@v3
 
       - name: Setup QEMU
+        if: matrix.setup_qemu
         uses: docker/setup-qemu-action@v3
+
+      - name: Start Docker
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $dockerService = Get-Service docker -ErrorAction Stop
+          if ($dockerService.Status -ne 'Running') {
+            Start-Service docker
+          }
+          $dockerService.WaitForStatus('Running', '00:00:30')
+          docker version
 
       - name: Run release e2e
         id: release-e2e
         shell: bash
+        env:
+          OPENPIT_VCPKG_REGISTRY_BASELINE:
+            ${{ needs.publish-vcpkg-registry.outputs.registry_baseline }}
         run: just --justfile "$JUSTFILE" test-release-e2e "${{ needs.verify-tag.outputs.version }}"
 
       - name: Summarize release e2e success
@@ -1027,7 +1517,7 @@ jobs:
           cat <<EOF >> "$GITHUB_STEP_SUMMARY"
           ## Release e2e
 
-          Release e2e passed for \`openpit ${VERSION}\`.
+          Release e2e passed for \`openpit ${VERSION}\` on ${{ matrix.name }}.
           EOF
 
       - name: Open release e2e advisory issue
@@ -1042,7 +1532,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          title="Release e2e failed for openpit ${VERSION}"
+          title="Release ${{ matrix.name }} e2e failed for openpit ${VERSION}"
           existing="$(
             gh issue list \
               --state open \
@@ -1052,13 +1542,13 @@ jobs:
           )"
 
           if [[ -n "${existing}" ]]; then
-            gh issue comment "${existing}" --body "Release e2e failed again for \`openpit ${VERSION}\`: ${RUN_URL}"
+            gh issue comment "${existing}" --body "Release ${{ matrix.name }} e2e failed again for \`openpit ${VERSION}\`: ${RUN_URL}"
             exit 0
           fi
 
           body_file="$(mktemp)"
           printf '%s\n\n%s\n\n%s\n' \
-            "Release e2e failed for \`openpit ${VERSION}\`." \
+            "Release ${{ matrix.name }} e2e failed for \`openpit ${VERSION}\`." \
             "The release has already been published. This issue is advisory and exists so the failure is visible and notifies repository subscribers." \
             "Workflow run: ${RUN_URL}" \
             > "${body_file}"
@@ -1073,11 +1563,11 @@ jobs:
         env:
           VERSION: ${{ needs.verify-tag.outputs.version }}
         run: |
-          echo "::warning::Release e2e failed for openpit ${VERSION}. The release is already published; review the final advisory job logs."
+          echo "::warning::Release ${{ matrix.name }} e2e failed for openpit ${VERSION}. The release is already published; review the final advisory job logs."
           cat <<EOF >> "$GITHUB_STEP_SUMMARY"
           ## Release e2e advisory
 
-          Release e2e failed for \`openpit ${VERSION}\`.
+          Release ${{ matrix.name }} e2e failed for \`openpit ${VERSION}\`.
 
           The release has already been published. Review the final advisory job logs for details.
           EOF

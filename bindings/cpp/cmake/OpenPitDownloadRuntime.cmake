@@ -94,9 +94,11 @@ function(_openpit_runtime_define_target lib_path)
     message(FATAL_ERROR "OpenPit: runtime library not found at '${lib_path}'")
   endif()
   add_library(OpenPit::runtime SHARED IMPORTED GLOBAL)
+  # Keep the absolute path in link commands. `IMPORTED_NO_SONAME` makes CMake
+  # rewrite a path without a soname as `-l<filename>`, which cannot resolve
+  # release assets whose names do not follow the platform library convention.
   set_target_properties(OpenPit::runtime PROPERTIES
-    IMPORTED_LOCATION "${lib_path}"
-    IMPORTED_NO_SONAME TRUE)
+    IMPORTED_LOCATION "${lib_path}")
   if(WIN32)
     _openpit_runtime_resolve_windows_implib("${lib_path}" implib_path)
     set_target_properties(OpenPit::runtime PROPERTIES

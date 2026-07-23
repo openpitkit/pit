@@ -29,17 +29,6 @@ namespace openpit::detail {
 class NativeAccess final {
  private:
   template <typename Wrapper>
-  [[nodiscard]] static constexpr decltype(auto) Get(
-      const Wrapper& wrapper) noexcept(noexcept(GetImpl(wrapper, 0))) {
-    return GetImpl(wrapper, 0);
-  }
-
-  template <typename Wrapper, typename Native>
-  [[nodiscard]] static constexpr decltype(auto) Make(Native&& native) {
-    return MakeImpl<Wrapper>(std::forward<Native>(native), 0);
-  }
-
-  template <typename Wrapper>
   [[nodiscard]] static constexpr auto GetImpl(
       const Wrapper& wrapper, int) noexcept(noexcept(wrapper.Native()))
       -> decltype(wrapper.Native()) {
@@ -56,6 +45,18 @@ class NativeAccess final {
   [[nodiscard]] static constexpr auto MakeImpl(Native&& native, long)
       -> decltype(Wrapper::FromRaw(std::forward<Native>(native))) {
     return Wrapper::FromRaw(std::forward<Native>(native));
+  }
+
+  template <typename Wrapper>
+  [[nodiscard]] static constexpr decltype(auto) Get(
+      const Wrapper& wrapper) noexcept(noexcept(NativeAccess::GetImpl(wrapper,
+                                                                      0))) {
+    return NativeAccess::GetImpl(wrapper, 0);
+  }
+
+  template <typename Wrapper, typename Native>
+  [[nodiscard]] static constexpr decltype(auto) Make(Native&& native) {
+    return NativeAccess::MakeImpl<Wrapper>(std::forward<Native>(native), 0);
   }
 
   struct GetOperation {
