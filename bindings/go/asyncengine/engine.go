@@ -144,7 +144,8 @@ func (t *executePreTradeTask) abort(err error) { t.f.Resolve(nil, nil, err) }
 
 // ExecutePreTradeDropCopy enqueues a full pre-trade pipeline call that ignores
 // existing account blocks and policy rejects while preserving normal policy
-// state, including newly raised account blocks.
+// state, including newly raised account blocks. A market order resolves with
+// an error before any policy is invoked.
 func (e *AsyncEngine) ExecutePreTradeDropCopy(
 	ctx context.Context,
 	order model.Order,

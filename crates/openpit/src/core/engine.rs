@@ -26,6 +26,7 @@ use super::engine_trait::{EngineTrait, EngineTraitOf};
 use super::sync_mode::{AccountSync, FullSync, LocalSync, SyncMode};
 use super::{
     AccountCurrencies, AccountGroups, BlockedAccounts, ConfigRegistry, Configurator, HasAccountId,
+    HasOrderPrice, RequestFieldAccessError,
 };
 use crate::param::AccountId;
 use crate::pretrade::handle::{RequestHandleImpl, ReservationHandleImpl};
@@ -317,10 +318,22 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// Existing account and account-group blocks are ignored for this request.
     /// The returned reservation has the same commit and rollback lifecycle as
     /// an accepted regular pre-trade request.
-    pub fn execute_pre_trade_drop_copy(&self, order: Trait::Order) -> PreTradeReservation
+    ///
+    /// # Errors
+    ///
+    /// Returns a request-field error before evaluating any policy when the
+    /// order has no limit price or its price field cannot be read.
+    pub fn execute_pre_trade_drop_copy(
+        &self,
+        order: Trait::Order,
+    ) -> Result<PreTradeReservation, RequestFieldAccessError>
     where
-        Trait::Order: HasAccountId,
+        Trait::Order: HasAccountId + HasOrderPrice,
     {
+        if order.price()?.is_none() {
+            return Err(RequestFieldAccessError::new("limit price"));
+        }
+
         let now = Instant::now();
         let account = order.account_id().ok();
         let account_control = account.map(|id| {
@@ -363,12 +376,12 @@ impl<Trait: EngineTrait> Engine<Trait> {
         let account_block = start_account_block.or(main_account_block);
 
         let reservation_handle = ReservationHandleImpl::new(mutations);
-        PreTradeReservation::from_handle_with_account_block(
+        Ok(PreTradeReservation::from_handle_with_account_block(
             Box::new(reservation_handle),
             lock,
             outcomes,
             account_block,
-        )
+        ))
     }
 
     /// Runs start-stage checks as a non-mutating dry-run.
@@ -861,8 +874,8 @@ mod tests {
     };
     use crate::storage::NoLocking;
     use crate::{
-        AccountAdjustmentContext, AccountOutcomeEntry, HasAccountId, Mutation, Mutations,
-        OutcomeAmount, RequestFieldAccessError,
+        AccountAdjustmentContext, AccountOutcomeEntry, HasAccountId, HasOrderPrice, Mutation,
+        Mutations, OutcomeAmount, RequestFieldAccessError,
     };
 
     use super::{AccountAdjustmentBatchError, Engine, FullSyncEngine, LocalEngine};
@@ -885,6 +898,22 @@ mod tests {
         }
     }
 
+    /// Minimal order stub that fails before any account or policy access.
+    #[derive(Clone)]
+    struct PriceAccessErrorOrder;
+
+    impl HasAccountId for PriceAccessErrorOrder {
+        fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+            Ok(AccountId::from_u64(99224416))
+        }
+    }
+
+    impl HasOrderPrice for PriceAccessErrorOrder {
+        fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+            Err(RequestFieldAccessError::new("price"))
+        }
+    }
+
     /// Minimal execution-report stub for tests that don't require report fields.
     #[derive(Clone)]
     struct NoAccountReport;
@@ -897,6 +926,7 @@ mod tests {
 
     struct NoopPolicy {
         name: &'static str,
+        calls: Option<Rc<Cell<usize>>>,
         group_id: crate::core::PolicyGroupId,
     }
 
@@ -904,12 +934,18 @@ mod tests {
         fn new(name: &'static str) -> Self {
             Self {
                 name,
+                calls: None,
                 group_id: crate::core::DEFAULT_POLICY_GROUP_ID,
             }
         }
 
         fn with_policy_group_id(mut self, group_id: crate::core::PolicyGroupId) -> Self {
             self.group_id = group_id;
+            self
+        }
+
+        fn with_calls(mut self, calls: Rc<Cell<usize>>) -> Self {
+            self.calls = Some(calls);
             self
         }
     }
@@ -923,6 +959,17 @@ mod tests {
 
         fn policy_group_id(&self) -> crate::core::PolicyGroupId {
             self.group_id
+        }
+
+        fn check_pre_trade_start(
+            &self,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &Order,
+        ) -> Result<(), Rejects> {
+            if let Some(calls) = &self.calls {
+                calls.set(calls.get() + 1);
+            }
+            Ok(())
         }
     }
 
@@ -2075,12 +2122,59 @@ mod tests {
             .build()
             .expect("engine must build");
 
-        let mut reservation = engine.execute_pre_trade_drop_copy(order_with_settlement("USD"));
+        let mut reservation = engine
+            .execute_pre_trade_drop_copy(order_with_settlement("USD"))
+            .expect("limit drop-copy must be admitted");
         assert_eq!(start_calls.get(), 1);
         assert_eq!(*mutation_state.borrow(), None);
 
         reservation.commit();
         assert_eq!(*mutation_state.borrow(), Some(true));
+    }
+
+    #[test]
+    fn drop_copy_returns_market_order_input_error_before_policy_evaluation() {
+        let start_calls = Rc::new(Cell::new(0));
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(StartPolicyMock::new(
+                "must_not_run",
+                Rc::clone(&start_calls),
+                false,
+                false,
+                None,
+                None,
+            ))
+            .build()
+            .expect("engine must build");
+        let mut order = order_with_settlement("USD");
+        order.operation.price = None;
+
+        let error = match engine.execute_pre_trade_drop_copy(order) {
+            Ok(_) => panic!("market drop-copy must return an input error before policies run"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, RequestFieldAccessError::new("limit price"));
+        assert_eq!(start_calls.get(), 0);
+    }
+
+    #[test]
+    fn drop_copy_returns_price_access_error_before_policy_evaluation() {
+        let calls = Rc::new(Cell::new(0));
+        let engine = Engine::builder::<PriceAccessErrorOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(NoopPolicy::new("must_not_run").with_calls(Rc::clone(&calls)))
+            .build()
+            .expect("engine must build");
+
+        let error = match engine.execute_pre_trade_drop_copy(PriceAccessErrorOrder) {
+            Ok(_) => panic!("unreadable drop-copy price must fail before policies run"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, RequestFieldAccessError::new("price"));
+        assert_eq!(calls.get(), 0);
     }
 
     #[test]
@@ -2102,7 +2196,9 @@ mod tests {
             .block_group(group, "group halt".to_owned())
             .expect("group block must succeed");
 
-        let mut reservation = engine.execute_pre_trade_drop_copy(order_with_settlement("USD"));
+        let mut reservation = engine
+            .execute_pre_trade_drop_copy(order_with_settlement("USD"))
+            .expect("limit drop-copy must be admitted");
         reservation.commit();
 
         let account_rejects = match engine.start_pre_trade(order_with_settlement("USD")) {
@@ -2138,7 +2234,9 @@ mod tests {
         let accounts = engine.accounts();
         accounts.block(account, "existing account halt".to_owned());
 
-        let mut reservation = engine.execute_pre_trade_drop_copy(order_with_settlement("USD"));
+        let mut reservation = engine
+            .execute_pre_trade_drop_copy(order_with_settlement("USD"))
+            .expect("limit drop-copy must be admitted");
         let block = reservation
             .account_block()
             .expect("drop-copy must expose its account block");
@@ -2180,7 +2278,9 @@ mod tests {
             .build()
             .expect("engine must build");
 
-        let mut reservation = engine.execute_pre_trade_drop_copy(order_with_settlement("USD"));
+        let mut reservation = engine
+            .execute_pre_trade_drop_copy(order_with_settlement("USD"))
+            .expect("limit drop-copy must be admitted");
         let block = reservation
             .account_block()
             .expect("the first account block must win");
@@ -2218,7 +2318,9 @@ mod tests {
             .build()
             .expect("engine must build");
 
-        let mut reservation = engine.execute_pre_trade_drop_copy(order_with_settlement("USD"));
+        let mut reservation = engine
+            .execute_pre_trade_drop_copy(order_with_settlement("USD"))
+            .expect("limit drop-copy must be admitted");
         reservation.commit();
 
         assert_eq!(*mutation_state.borrow(), Some(true));

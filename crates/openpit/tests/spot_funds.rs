@@ -577,12 +577,14 @@ fn drop_copy_records_underfunded_spot_funds_reservation() {
     seed(&engine, "USD", "1000");
     let aapl_usd = instr("AAPL", "USD");
 
-    let mut reservation = engine.execute_pre_trade_drop_copy(make_order(
-        Side::Buy,
-        aapl_usd.clone(),
-        TradeAmount::Quantity(qty("10")),
-        Some(px("200")),
-    ));
+    let mut reservation = engine
+        .execute_pre_trade_drop_copy(make_order(
+            Side::Buy,
+            aapl_usd.clone(),
+            TradeAmount::Quantity(qty("10")),
+            Some(px("200")),
+        ))
+        .expect("limit drop-copy must be admitted");
 
     let settlement = reservation
         .account_adjustments()
@@ -1148,20 +1150,24 @@ fn drop_copy_spends_rate_limit_budget_and_ignores_its_reject() {
     seed_rate_limited(&engine, "USD", "10000");
     let aapl_usd = instr("AAPL", "USD");
 
-    let mut first = engine.execute_pre_trade_drop_copy(make_order(
-        Side::Buy,
-        aapl_usd.clone(),
-        TradeAmount::Quantity(qty("1")),
-        Some(px("100")),
-    ));
+    let mut first = engine
+        .execute_pre_trade_drop_copy(make_order(
+            Side::Buy,
+            aapl_usd.clone(),
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .expect("limit drop-copy must be admitted");
     first.commit();
 
-    let mut over_limit = engine.execute_pre_trade_drop_copy(make_order(
-        Side::Buy,
-        aapl_usd.clone(),
-        TradeAmount::Quantity(qty("1")),
-        Some(px("100")),
-    ));
+    let mut over_limit = engine
+        .execute_pre_trade_drop_copy(make_order(
+            Side::Buy,
+            aapl_usd.clone(),
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .expect("limit drop-copy must be admitted");
     over_limit.commit();
 
     let Err(rejects) = engine.execute_pre_trade(make_order(
@@ -1345,12 +1351,14 @@ fn drop_copy_plain_policy_reject_latches_no_account_block() {
         .expect("the start-stage policy must reject an ordinary order");
     assert_eq!(rejects[0].code, RejectCode::RiskLimitExceeded);
 
-    let mut start_reject = start_engine.execute_pre_trade_drop_copy(make_order(
-        Side::Buy,
-        aapl_usd.clone(),
-        TradeAmount::Quantity(qty("1")),
-        Some(px("100")),
-    ));
+    let mut start_reject = start_engine
+        .execute_pre_trade_drop_copy(make_order(
+            Side::Buy,
+            aapl_usd.clone(),
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .expect("limit drop-copy must be admitted");
     assert!(
         start_reject.account_block().is_none(),
         "an order-scoped start-stage reject must latch no account block"
@@ -1369,12 +1377,14 @@ fn drop_copy_plain_policy_reject_latches_no_account_block() {
         .expect("the main-stage policy must reject an ordinary order");
     assert_eq!(rejects[0].code, RejectCode::RiskLimitExceeded);
 
-    let mut main_reject = main_engine.execute_pre_trade_drop_copy(make_order(
-        Side::Buy,
-        aapl_usd,
-        TradeAmount::Quantity(qty("1")),
-        Some(px("100")),
-    ));
+    let mut main_reject = main_engine
+        .execute_pre_trade_drop_copy(make_order(
+            Side::Buy,
+            aapl_usd,
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .expect("limit drop-copy must be admitted");
     assert!(
         main_reject.account_block().is_none(),
         "an order-scoped main-stage reject must latch no account block"
@@ -1388,12 +1398,14 @@ fn drop_copy_clean_order_latches_no_account_block() {
     let engine = build_engine();
     seed(&engine, "USD", "10000");
 
-    let mut reservation = engine.execute_pre_trade_drop_copy(make_order(
-        Side::Buy,
-        instr("AAPL", "USD"),
-        TradeAmount::Quantity(qty("10")),
-        Some(px("200")),
-    ));
+    let mut reservation = engine
+        .execute_pre_trade_drop_copy(make_order(
+            Side::Buy,
+            instr("AAPL", "USD"),
+            TradeAmount::Quantity(qty("10")),
+            Some(px("200")),
+        ))
+        .expect("limit drop-copy must be admitted");
     assert!(reservation.account_block().is_none());
     assert_eq!(reservation.account_adjustments().len(), 2);
     reservation.commit();
@@ -1687,13 +1699,15 @@ fn drop_copy_reinstates_spot_funds_pnl_block_and_accepts_current_order() {
     assert_eq!(result.account_blocks.len(), 1);
     engine.accounts().unblock(acc);
 
-    let mut reservation = engine.execute_pre_trade_drop_copy(make_order_for(
-        acc,
-        Side::Buy,
-        instrument.clone(),
-        TradeAmount::Quantity(qty("1")),
-        Some(px("100")),
-    ));
+    let mut reservation = engine
+        .execute_pre_trade_drop_copy(make_order_for(
+            acc,
+            Side::Buy,
+            instrument.clone(),
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .expect("limit drop-copy must be admitted");
     let block = reservation
         .account_block()
         .expect("drop-copy must expose the restored account block");
@@ -1748,13 +1762,15 @@ fn drop_copy_on_already_blocked_account_ignores_the_existing_block() {
         .expect("blocked account must reject a regular pre-trade");
     assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
 
-    let mut reservation = engine.execute_pre_trade_drop_copy(make_order_for(
-        acc,
-        Side::Buy,
-        instrument,
-        TradeAmount::Quantity(qty("1")),
-        Some(px("100")),
-    ));
+    let mut reservation = engine
+        .execute_pre_trade_drop_copy(make_order_for(
+            acc,
+            Side::Buy,
+            instrument,
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .expect("limit drop-copy must be admitted");
     let block = reservation
         .account_block()
         .expect("the still-breaching account re-derives its block");
@@ -1787,13 +1803,15 @@ fn drop_copy_rollback_keeps_the_latched_account_block() {
     assert_eq!(result.account_blocks.len(), 1);
     engine.accounts().unblock(acc);
 
-    let mut reservation = engine.execute_pre_trade_drop_copy(make_order_for(
-        acc,
-        Side::Buy,
-        instrument.clone(),
-        TradeAmount::Quantity(qty("1")),
-        Some(px("100")),
-    ));
+    let mut reservation = engine
+        .execute_pre_trade_drop_copy(make_order_for(
+            acc,
+            Side::Buy,
+            instrument.clone(),
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .expect("limit drop-copy must be admitted");
     assert!(
         reservation.account_block().is_some(),
         "drop-copy must latch the restored account block"

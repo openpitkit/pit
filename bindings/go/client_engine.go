@@ -113,7 +113,7 @@ func (e *ClientEngine[Order, Report, Adjustment]) ExecutePreTrade(
 
 // ExecutePreTradeDropCopy runs the full non-enforcing pre-trade pipeline with
 // a client order payload. The payload handle is released before the method
-// returns.
+// returns. A market order returns an error before any policy is invoked.
 func (e *ClientEngine[Order, Report, Adjustment]) ExecutePreTradeDropCopy(
 	order Order,
 ) (*pretrade.Reservation, error) {

@@ -687,10 +687,13 @@ pub extern "C" fn openpit_engine_execute_pre_trade(
 #[no_mangle]
 /// Runs the complete pre-trade pipeline without enforcing policy rejects.
 ///
-/// Returns `true` on success and `false` when input pointers are invalid or the
-/// order payload cannot be decoded. Existing account and account-group blocks
-/// are ignored. Every policy still runs and keeps its normal mutations, locks,
-/// account adjustments, and account blocks, while its rejects are discarded.
+/// Returns `true` on success and `false` when input pointers are invalid, the
+/// order payload cannot be decoded, or the drop-copy cannot be admitted.
+/// Drop-copy requires a readable limit price; a market order or price-field
+/// access failure returns `false` before any policy is evaluated. Existing
+/// account and account-group blocks are ignored.
+/// Every policy still runs and keeps its normal mutations, locks, account
+/// adjustments, and account blocks, while its rejects are discarded.
 ///
 /// On success, if `out_reservation` is not null, writes one caller-owned
 /// reservation pointer. Release it with
@@ -723,7 +726,13 @@ pub extern "C" fn openpit_engine_execute_pre_trade_drop_copy(
             return false;
         }
     };
-    let reservation = unsafe { &*engine }.inner.execute_pre_trade_drop_copy(order);
+    let reservation = match unsafe { &*engine }.inner.execute_pre_trade_drop_copy(order) {
+        Ok(reservation) => reservation,
+        Err(error) => {
+            write_error(out_error, &error.to_string());
+            return false;
+        }
+    };
 
     if !out_reservation.is_null() {
         unsafe {

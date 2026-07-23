@@ -655,6 +655,18 @@ TEST(CustomPolicy, DropCopyReservationReturnsNoBlockWhenNoneWasProduced) {
   reservation.Rollback();
 }
 
+TEST(CustomPolicy, DropCopyMarketOrderThrowsInputError) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<AcceptingPolicy> policy("AcceptingPolicy", AcceptingPolicy{});
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+  openpit::model::Order market = MakeDryRunHookOrder();
+  market.operation->price.reset();
+
+  EXPECT_THROW(static_cast<void>(engine.ExecutePreTradeDropCopy(market)),
+               openpit::Error);
+}
+
 // The block accessor is not drop-copy only: an ordinary accepted reservation
 // exposes it and reports no block.
 TEST(CustomPolicy, AcceptedReservationCarriesNoAccountBlock) {

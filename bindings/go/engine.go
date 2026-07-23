@@ -140,7 +140,7 @@ func (e *Engine) ExecutePreTrade(
 // policy rejects. Existing account and account-group blocks are ignored. Every
 // policy keeps its normal mutations, locks, account adjustments, and account
 // blocks. The returned reservation has the ordinary commit and rollback
-// lifecycle.
+// lifecycle. A market order returns an error before any policy is invoked.
 func (e *Engine) ExecutePreTradeDropCopy(
 	order model.Order,
 ) (*pretrade.Reservation, error) {

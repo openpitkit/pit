@@ -165,6 +165,32 @@ describe("runtime custom policy", () => {
     expect(blocked.rejects[0]?.reason).toBe("test boundary exceeded");
   });
 
+  it("drop copy returns an input error for market orders before custom policies", () => {
+    let calls = 0;
+    const engine = Engine.builder()
+      .preTrade({
+        name: "must-not-run",
+        checkPreTradeStart: () => {
+          calls += 1;
+          return [];
+        },
+        performPreTradeCheck: () => ({}),
+      })
+      .build();
+    const market = order("BUY");
+    Reflect.deleteProperty(market.operation, "price");
+
+    let caught: unknown;
+    try {
+      engine.executePreTradeDropCopy(market);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(TypeError);
+    expect(calls).toBe(0);
+  });
+
   it("validates policy reject userData before narrowing to wasm32", () => {
     const withUserData = (userData: number | bigint): Engine =>
       Engine.builder()

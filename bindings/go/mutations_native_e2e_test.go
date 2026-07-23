@@ -161,6 +161,22 @@ func TestMutationsNativeE2E_DropCopyCommitsRejectingPolicyMutation(t *testing.T)
 	}
 }
 
+func TestMutationsNativeE2E_DropCopyMarketOrderReturnsInputError(t *testing.T) {
+	engine := newEngineWithPreTradePolicyForNativeE2E(
+		t,
+		&mutationTrackingPolicy{name: "must-not-run"},
+	)
+	defer engine.Stop()
+
+	order := newValidOrderForNativeE2E(t)
+	operation := order.EnsureOperationView()
+	operation.UnsetPrice()
+	_, err := engine.ExecutePreTradeDropCopy(order)
+	if err == nil {
+		t.Fatal("ExecutePreTradeDropCopy() error = nil, want drop-copy admission error")
+	}
+}
+
 type mutationTrackingPolicy struct {
 	name          string
 	commitCalls   int

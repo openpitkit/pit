@@ -1249,7 +1249,7 @@ impl PyEngine {
         }
     }
 
-    /// Execute pre-trade without enforcing rejects while retaining account blocks.
+    /// Execute a limit-price drop-copy without enforcing rejects while retaining blocks.
     #[pyo3(signature = (order))]
     fn execute_pre_trade_drop_copy(
         &self,
@@ -1259,7 +1259,8 @@ impl PyEngine {
         clear_python_callback_error();
         let order = extract_python_order(&order)?;
         let reservation =
-            allow_threads_detached(py, || self.inner.execute_pre_trade_drop_copy(order));
+            allow_threads_detached(py, || self.inner.execute_pre_trade_drop_copy(order))
+                .map_err(|error| PyValueError::new_err(error.to_string()))?;
         if let Some(error) = take_python_callback_error() {
             return Err(error);
         }

@@ -573,15 +573,19 @@ impl JsEngine {
     ///
     /// Existing account and account-group blocks are ignored. Every policy
     /// keeps its normal mutations, locks, account adjustments, and account
-    /// blocks. Re-throws the original error a custom policy callback threw, if
-    /// any.
+    /// blocks. A market order or unreadable price throws `TypeError` before any
+    /// policy is invoked. Re-throws the original error a custom policy callback
+    /// threw, if any.
     #[wasm_bindgen(js_name = executePreTradeDropCopy)]
     pub fn execute_pre_trade_drop_copy(&self, order: OrderLike) -> Result<JsReservation, JsValue> {
         let original: JsValue = order.into();
         let order = JsOrder::coerce(original.clone())?;
         let (request, lifecycle) = build_order_request(&order, &original)?;
         let callback_scope = CallbackErrorScope::capture();
-        let reservation = self.inner.execute_pre_trade_drop_copy(request);
+        let reservation = self
+            .inner
+            .execute_pre_trade_drop_copy(request)
+            .map_err(|error| make_error(ErrorKind::Type, &error.to_string(), None))?;
         finish_callback_scope(callback_scope, JsValue::UNDEFINED)?;
         Ok(JsReservation::new(reservation, lifecycle))
     }

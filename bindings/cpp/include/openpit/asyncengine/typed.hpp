@@ -536,7 +536,8 @@ class TypedAsyncEngine {
 
   // Enqueues a full drop-copy pre-trade call for `order`, pinned to its
   // account. Policy rejects and current account blocks do not prevent the
-  // reservation from being returned; newly raised blocks are retained.
+  // reservation from being returned; newly raised blocks are retained. A market
+  // order resolves the future with an error before any policy is invoked.
   [[nodiscard]] Future<ExecuteOutcome<Driver>> ExecutePreTradeDropCopy(
       ::openpit::model::Order order,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {

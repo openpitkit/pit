@@ -301,6 +301,27 @@ def test_drop_copy_discards_custom_reject_and_preserves_lock() -> None:
 
 
 @pytest.mark.unit
+def test_drop_copy_returns_market_order_input_error_before_policy_evaluation() -> None:
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .pre_trade(policy=RejectingLockPolicy())
+        .build()
+    )
+    market_order = openpit.Order(
+        operation=openpit.OrderOperation(
+            instrument=openpit.Instrument("AAPL", "USD"),
+            account_id=openpit.param.AccountId.from_int(99224416),
+            side=openpit.param.Side.BUY,
+            trade_amount=openpit.param.TradeAmount.quantity(1),
+        )
+    )
+
+    with pytest.raises(ValueError):
+        engine.execute_pre_trade_drop_copy(order=market_order)
+
+
+@pytest.mark.unit
 def test_custom_policy_returns_full_post_trade_result() -> None:
     engine = (
         openpit.Engine.builder().no_sync().pre_trade(policy=FullParityPolicy()).build()

@@ -290,6 +290,7 @@ class Engine {
   /// Runs the complete pre-trade pipeline without enforcing policy rejects.
   /// Existing account and account-group blocks are ignored. Every policy keeps
   /// its normal mutations, locks, account adjustments, and account blocks.
+  /// A market order throws before any policy is invoked.
   [[nodiscard]] ::openpit::pretrade::Reservation ExecutePreTradeDropCopy(
       const ::openpit::Order& order) const {
     const OpenPitOrder raw = ::openpit::detail::Native(order);
