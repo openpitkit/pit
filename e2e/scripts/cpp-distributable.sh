@@ -22,6 +22,7 @@ set -euo pipefail
 
 asset="openpit-cpp--${OPENPIT_VERSION}.tar.gz"
 base_url="https://github.com/openpitkit/pit/releases/download/v${OPENPIT_VERSION}"
+release_api="https://api.github.com/repos/${OPENPIT_RELEASE_REPOSITORY:-openpitkit/pit}"
 work_root="/tmp/openpit-cpp-release-e2e"
 install_dir="${work_root}/install"
 examples_root="/tmp/openpit-cpp-examples"
@@ -29,28 +30,88 @@ examples_root="/tmp/openpit-cpp-examples"
 rm -rf "${work_root}" "${examples_root}"
 mkdir -p "${work_root}" "${install_dir}"
 
-echo "==> Downloading ${asset}"
-curl -fsSL "${base_url}/${asset}" -o "${work_root}/${asset}"
-curl -fsSL "${base_url}/${asset}.sha256" -o "${work_root}/${asset}.sha256"
+download_release_asset() {
+  local name="$1"
+  local destination="$2"
 
-expected_sha="$(tr -d '[:space:]' < "${work_root}/${asset}.sha256")"
-if command -v sha256sum >/dev/null 2>&1; then
-  actual_sha="$(sha256sum "${work_root}/${asset}" | awk '{print $1}')"
-else
-  actual_sha="$(shasum -a 256 "${work_root}/${asset}" | awk '{print $1}')"
-fi
-if [[ "${actual_sha}" != "${expected_sha}" ]]; then
-  echo "sha256 mismatch for ${asset}" >&2
-  echo "expected: ${expected_sha}" >&2
-  echo "actual:   ${actual_sha}" >&2
-  exit 1
-fi
+  if [[ -z "${OPENPIT_RELEASE_DOWNLOAD_TOKEN:-}" ]]; then
+    curl -fsSL "${base_url}/${name}" -o "${destination}"
+    return
+  fi
+
+  local metadata="${work_root}/release.json"
+  curl -fsSL \
+    --header "Authorization: Bearer ${OPENPIT_RELEASE_DOWNLOAD_TOKEN}" \
+    --header "Accept: application/vnd.github+json" \
+    "${release_api}/releases/tags/v${OPENPIT_VERSION}" \
+    -o "${metadata}"
+  local asset_id
+  asset_id="$(python3 - "${metadata}" "${name}" <<'PY'
+import json
+import sys
+
+metadata_path, asset_name = sys.argv[1:]
+with open(metadata_path, encoding="utf-8") as metadata_file:
+    release = json.load(metadata_file)
+for release_asset in release["assets"]:
+    if release_asset["name"] == asset_name:
+        print(release_asset["id"])
+        break
+else:
+    raise SystemExit(f"release asset not found: {asset_name}")
+PY
+)"
+  curl -fsSL \
+    --header "Authorization: Bearer ${OPENPIT_RELEASE_DOWNLOAD_TOKEN}" \
+    --header "Accept: application/octet-stream" \
+    "${release_api}/releases/assets/${asset_id}" \
+    -o "${destination}"
+}
+
+verify_sha256() {
+  local artifact="$1"
+  local sidecar="$2"
+  local expected_sha
+  local actual_sha
+
+  expected_sha="$(tr -d '[:space:]' < "${sidecar}")"
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual_sha="$(sha256sum "${artifact}" | awk '{print $1}')"
+  else
+    actual_sha="$(shasum -a 256 "${artifact}" | awk '{print $1}')"
+  fi
+  if [[ "${actual_sha}" != "${expected_sha}" ]]; then
+    echo "sha256 mismatch for ${artifact}" >&2
+    echo "expected: ${expected_sha}" >&2
+    echo "actual:   ${actual_sha}" >&2
+    exit 1
+  fi
+}
+
+echo "==> Downloading ${asset}"
+download_release_asset "${asset}" "${work_root}/${asset}"
+download_release_asset "${asset}.sha256" "${work_root}/${asset}.sha256"
+
+verify_sha256 "${work_root}/${asset}" "${work_root}/${asset}.sha256"
 
 tar -xzf "${work_root}/${asset}" -C "${install_dir}"
 
+runtime_args=()
+if [[ -n "${OPENPIT_RELEASE_DOWNLOAD_TOKEN:-}" ]]; then
+  runtime_asset="openpit-ffi--linux-amd64-libopenpit_ffi.so"
+  runtime_path="${work_root}/libopenpit_ffi.so"
+  echo "==> Downloading ${runtime_asset} for the draft-release resolver"
+  download_release_asset "${runtime_asset}" "${runtime_path}"
+  download_release_asset "${runtime_asset}.sha256" "${runtime_path}.sha256"
+  verify_sha256 "${runtime_path}" "${runtime_path}.sha256"
+  runtime_args+=("-DOPENPIT_RUNTIME_LIBRARY=${runtime_path}")
+fi
+
+# Source: bindings/cpp/README.md - Getting Started / CMake find_package
 echo "==> Building minimal C++ consumer"
 cmake -S /opt/e2e/cpp-consumer -B "${work_root}/consumer-build" \
-  -DCMAKE_PREFIX_PATH="${install_dir}"
+  -DCMAKE_PREFIX_PATH="${install_dir}" \
+  "${runtime_args[@]}"
 cmake --build "${work_root}/consumer-build" --parallel
 "${work_root}/consumer-build/openpit_cpp_consumer"
 
@@ -67,6 +128,7 @@ run_example() {
   echo "==> Building C++ example ${name}"
   cmake -S "${src}" -B "${build}" \
     -DCMAKE_PREFIX_PATH="${install_dir}" \
+    "${runtime_args[@]}" \
     "$@"
   cmake --build "${build}" --parallel
 

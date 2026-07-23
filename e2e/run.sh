@@ -27,6 +27,40 @@ if [[ -z "${VERSION}" ]]; then
   exit 1
 fi
 
+known_targets=(
+  rust-amd64
+  rust-arm64
+  python-wheel-amd64
+  python-wheel-arm64
+  python-source-arm64
+  go-amd64
+  cpp-amd64
+  cpp-vcpkg-amd64
+  js-amd64
+)
+requested_targets=()
+if [[ -n "${OPENPIT_RELEASE_E2E_TARGETS:-}" ]]; then
+  read -r -a requested_targets <<< "${OPENPIT_RELEASE_E2E_TARGETS}"
+  if [[ ${#requested_targets[@]} -eq 0 ]]; then
+    echo "OPENPIT_RELEASE_E2E_TARGETS did not select any targets" >&2
+    exit 1
+  fi
+  for requested_target in "${requested_targets[@]}"; do
+    known=false
+    for target in "${known_targets[@]}"; do
+      if [[ "${requested_target}" == "${target}" ]]; then
+        known=true
+        break
+      fi
+    done
+    if [[ "${known}" != true ]]; then
+      echo "unknown release e2e target: ${requested_target}" >&2
+      printf 'known targets: %s\n' "${known_targets[*]}" >&2
+      exit 1
+    fi
+  done
+fi
+
 run_case() {
   local name="$1"
   local dockerfile="$2"
@@ -38,6 +72,24 @@ run_case() {
   if [[ -n "${platform}" ]]; then
     build_args+=(--platform "${platform}")
     run_args+=(--platform "${platform}")
+  fi
+
+  for env_name in \
+    OPENPIT_RELEASE_DOWNLOAD_TOKEN \
+    OPENPIT_RELEASE_REPOSITORY \
+    OPENPIT_VCPKG_REGISTRY_BASELINE \
+    OPENPIT_VCPKG_REGISTRY_REPOSITORY; do
+    if [[ -n "${!env_name:-}" ]]; then
+      run_args+=(--env "${env_name}")
+    fi
+  done
+
+  if [[ "${name}" == cpp-vcpkg-* \
+      && -n "${OPENPIT_VCPKG_REGISTRY_PATH:-}" ]]; then
+    run_args+=(
+      --env OPENPIT_VCPKG_REGISTRY_PATH=/opt/e2e/vcpkg-registry
+      --volume "${OPENPIT_VCPKG_REGISTRY_PATH}:/opt/e2e/vcpkg-registry:ro"
+    )
   fi
 
   echo
@@ -72,6 +124,21 @@ run_or_record() {
   local dockerfile="$2"
   local platform="${3:-}"
 
+  if [[ ${#requested_targets[@]} -ne 0 ]]; then
+    local selected=false
+    local target
+    for target in "${requested_targets[@]}"; do
+      if [[ "${target}" == "${name}" ]]; then
+        selected=true
+        break
+      fi
+    done
+    if [[ "${selected}" != true ]]; then
+      printf '==> %s checks skipped\n' "${name}"
+      return
+    fi
+  fi
+
   if run_case "${name}" "${dockerfile}" "${platform}"; then
     passes=$((passes + 1))
     passed_cases+=("${name}")
@@ -92,6 +159,7 @@ run_or_record "python-wheel-arm64" "${ROOT_DIR}/e2e/env/docker/python-wheel/Dock
 run_or_record "python-source-arm64" "${ROOT_DIR}/e2e/env/docker/python-sdist/Dockerfile" "linux/arm64"
 run_or_record "go-amd64" "${ROOT_DIR}/e2e/env/docker/go-module/Dockerfile" "linux/amd64"
 run_or_record "cpp-amd64" "${ROOT_DIR}/e2e/env/docker/cpp-distributable/Dockerfile" "linux/amd64"
+run_or_record "cpp-vcpkg-amd64" "${ROOT_DIR}/e2e/env/docker/cpp-vcpkg/Dockerfile" "linux/amd64"
 run_or_record "js-amd64" "${ROOT_DIR}/e2e/env/docker/js-package/Dockerfile" "linux/amd64"
 
 if [[ "${failures}" -ne 0 ]]; then

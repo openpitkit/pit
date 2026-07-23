@@ -482,7 +482,10 @@ package-runtime target goos goarch lib_name:
 package-cpp cpp_install_dir:
     #!/usr/bin/env bash
     set -euo pipefail
-    VERSION="$(grep -m1 '^version[[:space:]]*=' crates/openpit/Cargo.toml | sed 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/')"
+    VERSION="${OPENPIT_RELEASE_VERSION:-}"
+    if [[ -z "${VERSION}" ]]; then
+      VERSION="$(grep -m1 '^version[[:space:]]*=' crates/openpit/Cargo.toml | sed 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/')"
+    fi
     : "${VERSION:?could not read version from crates/openpit/Cargo.toml}"
 
     INSTALL_DIR="{{ cpp_install_dir }}"

@@ -1,0 +1,50 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+vcpkg_from_github(
+  OUT_SOURCE_PATH SOURCE_PATH
+  REPO openpitkit/pit
+  REF "@OPENPIT_SOURCE_REF@"
+  SHA512 @OPENPIT_SOURCE_SHA512@
+  HEAD_REF main)
+
+set(openpit_cmake_options
+  "-DOPENPIT_CPP_BUILD_TESTS=OFF"
+  "-DOPENPIT_PACKAGE_VERSION=@OPENPIT_PACKAGE_VERSION@"
+  "-DOPENPIT_RUNTIME_VERSION=@OPENPIT_RUNTIME_VERSION@")
+
+# The release pipeline supplies a local runtime only while its GitHub release
+# is not public yet. Normal registry consumers resolve the published runtime.
+if(DEFINED ENV{OPENPIT_VCPKG_RUNTIME_LIBRARY}
+    AND NOT "$ENV{OPENPIT_VCPKG_RUNTIME_LIBRARY}" STREQUAL "")
+  list(APPEND openpit_cmake_options
+    "-DOPENPIT_RUNTIME_LIBRARY=$ENV{OPENPIT_VCPKG_RUNTIME_LIBRARY}")
+endif()
+
+vcpkg_cmake_configure(
+  SOURCE_PATH "${SOURCE_PATH}/bindings/cpp"
+  OPTIONS ${openpit_cmake_options})
+
+vcpkg_cmake_install()
+vcpkg_cmake_config_fixup(CONFIG_PATH lib/cmake/OpenPit)
+
+file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug")
+file(INSTALL "${SOURCE_PATH}/LICENSE"
+  DESTINATION "${CURRENT_PACKAGES_DIR}/share/${PORT}")
+file(INSTALL "${SOURCE_PATH}/OWNERS"
+  DESTINATION "${CURRENT_PACKAGES_DIR}/share/${PORT}")
+vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE")

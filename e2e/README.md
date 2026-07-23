@@ -26,7 +26,8 @@ just test-release-e2e 0.4.0
 
 The suite builds and checks these scenarios, then prints a pass/fail summary:
 `rust-amd64`, `rust-arm64`, `python-wheel-amd64`, `python-wheel-arm64`,
-`python-source-arm64`, `go-amd64`, `cpp-amd64`, `js-amd64`.
+`python-source-arm64`, `go-amd64`, `cpp-amd64`, `cpp-vcpkg-amd64`,
+`js-amd64`.
 
 ## How to run the tests
 

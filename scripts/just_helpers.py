@@ -892,6 +892,10 @@ def command_build_cpp(args: argparse.Namespace) -> None:
         f"-DOPENPIT_RUNTIME_LIBRARY={lib}",
         f"-DCMAKE_BUILD_TYPE={cmake_build_type(mode)}",
     ]
+    if args.kind == "binding":
+        for variable in ("OPENPIT_PACKAGE_VERSION", "OPENPIT_RUNTIME_VERSION"):
+            if value := os.environ.get(variable):
+                cmake_args.append(f"-D{variable}={value}")
     if is_windows():
         import_library = ensure_windows_runtime_import_library(lib)
         cmake_args.append(f"-DOPENPIT_RUNTIME_IMPORT_LIBRARY={import_library}")

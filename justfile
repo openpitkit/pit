@@ -910,6 +910,12 @@ _build-cpp mode:
       *) echo "unsupported OS for pit-ffi runtime lookup" >&2; exit 1 ;;
     esac
     cmake_args=(-DOPENPIT_RUNTIME_LIBRARY="$lib" -DCMAKE_BUILD_TYPE="$config")
+    if [[ -n "${OPENPIT_PACKAGE_VERSION:-}" ]]; then
+      cmake_args+=(-DOPENPIT_PACKAGE_VERSION="$OPENPIT_PACKAGE_VERSION")
+    fi
+    if [[ -n "${OPENPIT_RUNTIME_VERSION:-}" ]]; then
+      cmake_args+=(-DOPENPIT_RUNTIME_VERSION="$OPENPIT_RUNTIME_VERSION")
+    fi
     if [[ -n "${implib:-}" ]]; then
       cmake_args+=(-DOPENPIT_RUNTIME_IMPORT_LIBRARY="$implib")
     fi
