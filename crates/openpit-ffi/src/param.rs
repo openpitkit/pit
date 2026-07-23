@@ -2663,16 +2663,6 @@ pub unsafe extern "C" fn openpit_param_position_mode_to_string(
     }
 }
 
-/// Renders an account identifier into a caller-owned shared string.
-///
-/// This conversion always succeeds.
-#[no_mangle]
-pub extern "C" fn openpit_param_account_id_to_string(
-    value: OpenPitParamAccountId,
-) -> *mut OpenPitSharedString {
-    OpenPitSharedString::new_handle(AccountId::from_u64(value).to_string().as_str())
-}
-
 /// Renders a trade amount into a caller-owned shared string.
 ///
 /// Returns null and writes `out_error` when the trade amount is not set or its

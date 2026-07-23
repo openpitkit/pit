@@ -18,12 +18,10 @@
 #pragma once
 
 // Umbrella header for the OpenPit C++ binding foundation. Includes the core
-// infrastructure and the minimal engine slice. Policy adapters live in the
-// separate `openpit/adapters.hpp` header.
+// infrastructure, engine slice, and the pre-trade module.
 
-#include "openpit/account_id.hpp"
 #include "openpit/accountadjustment/account_adjustment.hpp"
-#include "openpit/accounts.hpp"
+#include "openpit/accounts/accounts.hpp"
 #include "openpit/async_engine.hpp"
 #include "openpit/bytes.hpp"
 #include "openpit/engine.hpp"
@@ -31,11 +29,12 @@
 #include "openpit/fwd.hpp"
 #include "openpit/instrument_id.hpp"
 #include "openpit/marketdata.hpp"
-#include "openpit/model.hpp"
-#include "openpit/param.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/param/param.hpp"
+#include "openpit/pretrade/decision.hpp"
 #include "openpit/pretrade/pretrade.hpp"
 #include "openpit/reference_book.hpp"
-#include "openpit/reject.hpp"
 #include "openpit/runtime.hpp"
 #include "openpit/string.hpp"
-#include "openpit/tx.hpp"
+#include "openpit/tx/tx.hpp"

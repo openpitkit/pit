@@ -18,10 +18,10 @@
 #pragma once
 
 #include "openpit/accountadjustment/account_adjustment.hpp"
-#include "openpit/accounts.hpp"
+#include "openpit/accounts/accounts.hpp"
 #include "openpit/pretrade/callbacks.hpp"
-#include "openpit/reject.hpp"
-#include "openpit/tx.hpp"
+#include "openpit/pretrade/decision.hpp"
+#include "openpit/tx/tx.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -38,7 +38,7 @@ class ExecutionReport;
 
 namespace openpit::pretrade {
 
-// Adapter wrappers for client-defined policy types.
+// Adapter wrappers for client-defined pre-trade policy types.
 //
 // This header demonstrates how to bridge client order/report payload types to
 // openpit policy contracts with explicit cast strategy selection.
@@ -272,10 +272,8 @@ class StartPolicyAdapter {
       if constexpr (detail::HasReportFull<P, ClientReport>::value) {
         return m_policy.ApplyExecutionReport(context, *concrete_report,
                                              adjustments, pnls);
-      } else if constexpr (detail::HasReportLegacy<P, ClientReport>::value) {
-        static_cast<void>(m_policy.ApplyExecutionReport(*concrete_report));
-        return {};
       } else {
+        static_cast<void>(m_policy.ApplyExecutionReport(*concrete_report));
         return {};
       }
     } else {
@@ -283,10 +281,8 @@ class StartPolicyAdapter {
       if constexpr (detail::HasReportFull<P, ClientReport>::value) {
         return m_policy.ApplyExecutionReport(context, concrete_report,
                                              adjustments, pnls);
-      } else if constexpr (detail::HasReportLegacy<P, ClientReport>::value) {
-        static_cast<void>(m_policy.ApplyExecutionReport(concrete_report));
-        return {};
       } else {
+        static_cast<void>(m_policy.ApplyExecutionReport(concrete_report));
         return {};
       }
     }

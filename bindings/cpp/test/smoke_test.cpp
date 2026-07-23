@@ -19,9 +19,17 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <string>
+#include <type_traits>
 
 namespace {
+
+static_assert(!std::is_invocable_v<decltype(openpit::detail::Native),
+                                   const openpit::param::Price&>);
+static_assert(!std::is_invocable_v<
+              decltype(openpit::detail::FromNative<openpit::param::Price>),
+              OpenPitParamPrice>);
 
 TEST(Runtime, VersionIsNonEmpty) {
   const std::string version = openpit::GetVersion();
@@ -60,6 +68,144 @@ TEST(Param, InvalidDecimalStringThrowsError) {
       openpit::Error);
 }
 
+template <typename Value>
+void ExpectExactValueArithmeticSurface() {
+  using openpit::param::Decimal;
+  using openpit::param::RoundingStrategy;
+
+  const Value value = Value::FromString("12");
+  const Decimal decimal = value.Decimal();
+  EXPECT_EQ(Value::FromDecimal(decimal).ToString(), "12");
+  EXPECT_EQ(
+      Value::FromDoubleRounded(1.25, 1, RoundingStrategy::MidpointAwayFromZero)
+          .ToString(),
+      "1.3");
+  EXPECT_EQ(Value::FromDecimalRounded(Decimal{125, 0, 2}, 1,
+                                      RoundingStrategy::MidpointAwayFromZero)
+                .ToString(),
+            "1.3");
+  EXPECT_EQ(value.CheckedMulInt(-2).CheckedNeg().ToString(), "24");
+  EXPECT_EQ(value.CheckedMulUint(2).ToString(), "24");
+  EXPECT_EQ(value.CheckedMulFloat(2.0).ToString(), "24");
+  EXPECT_EQ(value.CheckedDivInt(2).ToString(), "6");
+  EXPECT_EQ(value.CheckedDivUint(2).ToString(), "6");
+  EXPECT_EQ(value.CheckedDivFloat(2.0).ToString(), "6");
+  EXPECT_EQ(value.CheckedRemInt(5).ToString(), "2");
+  EXPECT_EQ(value.CheckedRemUint(5).ToString(), "2");
+  EXPECT_EQ(value.CheckedRemFloat(5.0).ToString(), "2");
+  EXPECT_THROW(static_cast<void>(value.CheckedDivInt(0)), openpit::Error);
+}
+
+template <typename Value>
+void ExpectUnsignedExactValueArithmeticSurface() {
+  using openpit::param::Decimal;
+  using openpit::param::RoundingStrategy;
+
+  const Value value = Value::FromString("12");
+  EXPECT_EQ(Value::FromDecimal(value.Decimal()).ToString(), "12");
+  EXPECT_EQ(
+      Value::FromDoubleRounded(1.25, 1, RoundingStrategy::MidpointAwayFromZero)
+          .ToString(),
+      "1.3");
+  EXPECT_EQ(Value::FromDecimalRounded(Decimal{125, 0, 2}, 1,
+                                      RoundingStrategy::MidpointAwayFromZero)
+                .ToString(),
+            "1.3");
+  EXPECT_EQ(value.CheckedMulInt(2).ToString(), "24");
+  EXPECT_EQ(value.CheckedMulUint(2).ToString(), "24");
+  EXPECT_EQ(value.CheckedMulFloat(2.0).ToString(), "24");
+  EXPECT_EQ(value.CheckedDivInt(2).ToString(), "6");
+  EXPECT_EQ(value.CheckedDivUint(2).ToString(), "6");
+  EXPECT_EQ(value.CheckedDivFloat(2.0).ToString(), "6");
+  EXPECT_EQ(value.CheckedRemInt(5).ToString(), "2");
+  EXPECT_EQ(value.CheckedRemUint(5).ToString(), "2");
+  EXPECT_EQ(value.CheckedRemFloat(5.0).ToString(), "2");
+  EXPECT_THROW(static_cast<void>(value.CheckedDivInt(0)), openpit::Error);
+}
+
+TEST(Param, ExactValueTypesExposeCompleteArithmeticSurface) {
+  ExpectExactValueArithmeticSurface<openpit::param::Price>();
+  ExpectUnsignedExactValueArithmeticSurface<openpit::param::Quantity>();
+  ExpectUnsignedExactValueArithmeticSurface<openpit::param::Volume>();
+  ExpectExactValueArithmeticSurface<openpit::param::Pnl>();
+  ExpectExactValueArithmeticSurface<openpit::param::Fee>();
+  ExpectExactValueArithmeticSurface<openpit::param::PositionSize>();
+  ExpectExactValueArithmeticSurface<openpit::param::CashFlow>();
+  ExpectUnsignedExactValueArithmeticSurface<openpit::param::Notional>();
+}
+
+TEST(Param, DomainValueConversionsExposeCompleteOopSurface) {
+  using namespace openpit::param;
+
+  static_assert(std::is_same_v<openpit::model::Side, Side>);
+  const Price price = Price::FromString("2");
+  const Quantity quantity = Quantity::FromString("3");
+  const Volume volume = Volume::FromString("6");
+  const Fee fee = Fee::FromString("-1");
+  const Pnl pnl = Pnl::FromString("-2");
+
+  EXPECT_EQ(price.CalculateVolume(quantity).ToString(), "6");
+  EXPECT_EQ(price.CalculatePositionSize(quantity).ToString(), "6");
+  EXPECT_EQ(price.CalculateNotional(quantity).ToString(), "6");
+  EXPECT_EQ(quantity.CalculateVolume(price).ToString(), "6");
+  EXPECT_EQ(quantity.CalculateNotional(price).ToString(), "6");
+  EXPECT_EQ(quantity.ToPositionSize().ToString(), "3");
+  EXPECT_EQ(quantity.ToPositionSize(Side::Sell).ToString(), "-3");
+  EXPECT_EQ(volume.CalculateQuantity(price).ToString(), "3");
+  EXPECT_EQ(volume.ToCashFlowInflow().ToString(), "6");
+  EXPECT_EQ(volume.ToCashFlowOutflow().ToString(), "-6");
+  EXPECT_EQ(volume.ToPositionSize().ToString(), "6");
+  EXPECT_EQ(volume.ToNotional().ToString(), "6");
+  EXPECT_EQ(Volume::FromNotional(Notional::FromString("6")).ToString(), "6");
+  EXPECT_EQ(Pnl::FromFee(fee).ToString(), "1");
+  EXPECT_EQ(pnl.ToCashFlow().ToString(), "-2");
+  EXPECT_EQ(pnl.ToPositionSize().ToString(), "-2");
+  EXPECT_EQ(fee.ToPnl().ToString(), "1");
+  EXPECT_EQ(fee.ToPositionSize().ToString(), "1");
+  EXPECT_EQ(fee.ToCashFlow().ToString(), "1");
+  EXPECT_EQ(PositionSize::FromPnl(pnl).ToString(), "-2");
+  EXPECT_EQ(PositionSize::FromFee(fee).ToString(), "1");
+  EXPECT_EQ(PositionSize::FromQuantityAndSide(quantity, Side::Buy).ToString(),
+            "3");
+  EXPECT_EQ(CashFlow::FromPnl(pnl).ToString(), "-2");
+  EXPECT_EQ(CashFlow::FromFee(fee).ToString(), "1");
+  EXPECT_EQ(CashFlow::FromVolumeInflow(volume).ToString(), "6");
+  EXPECT_EQ(CashFlow::FromVolumeOutflow(volume).ToString(), "-6");
+  EXPECT_EQ(Notional::FromVolume(volume).ToVolume().ToString(), "6");
+  EXPECT_EQ(Notional::FromVolume(volume)
+                .CalculateMarginRequired(Leverage::FromUint16(2))
+                .ToString(),
+            "3");
+  EXPECT_EQ(ToString(Side::Buy), "BUY");
+  EXPECT_EQ(openpit::model::ToString(openpit::model::PositionSide::Long),
+            "LONG");
+  EXPECT_EQ(openpit::model::ToString(openpit::model::PositionEffect::Close),
+            "CLOSE");
+  EXPECT_EQ(openpit::model::ToString(openpit::model::PositionMode::Hedged),
+            "hedged");
+  EXPECT_FALSE(
+      openpit::model::TradeAmount::OfQuantity(quantity).ToString().empty());
+
+  const PositionSize shortPosition =
+      PositionSize::FromQuantityAndSide(quantity, Side::Sell);
+  const auto [openQuantity, openSide] = shortPosition.OpenQuantity();
+  EXPECT_EQ(openQuantity.ToString(), "3");
+  EXPECT_EQ(openSide, Side::Sell);
+  const auto [closeQuantity, closeSide] = shortPosition.CloseQuantity();
+  EXPECT_EQ(closeQuantity.ToString(), "3");
+  ASSERT_TRUE(closeSide.has_value());
+  EXPECT_EQ(*closeSide, Side::Buy);
+  EXPECT_EQ(
+      shortPosition.CheckedAddQuantity(Quantity::FromString("1"), Side::Buy)
+          .ToString(),
+      "-2");
+
+  const auto [zeroQuantity, zeroCloseSide] =
+      PositionSize::FromInt64(0).CloseQuantity();
+  EXPECT_TRUE(zeroQuantity.IsZero());
+  EXPECT_FALSE(zeroCloseSide.has_value());
+}
+
 TEST(Engine, BuilderConstructsForEverySyncPolicy) {
   EXPECT_NO_THROW(
       { openpit::EngineBuilder builder(openpit::SyncPolicy::None); });
@@ -84,25 +230,6 @@ TEST(Reject, CarriesScopeAndCode) {
   EXPECT_EQ(reject.scope, openpit::reject::RejectScope::Order);
   EXPECT_EQ(reject.code, openpit::reject::RejectCode::OrderQtyExceedsLimit);
   EXPECT_EQ(reject.policy, "order_size_limit");
-}
-
-TEST(Reject, RawRoundTripPreservesScopeAndCode) {
-  openpit::reject::Reject reject(
-      "pnl_kill_switch", openpit::reject::RejectScope::Account,
-      openpit::reject::RejectCode::PnlKillSwitchTriggered, "loss breached",
-      "threshold");
-  reject.userData = 42;
-
-  const OpenPitPretradeReject raw = reject.Raw();
-  const openpit::reject::Reject restored =
-      openpit::reject::Reject::FromRaw(raw);
-
-  EXPECT_EQ(restored.scope, openpit::reject::RejectScope::Account);
-  EXPECT_EQ(restored.code, openpit::reject::RejectCode::PnlKillSwitchTriggered);
-  EXPECT_EQ(restored.policy, "pnl_kill_switch");
-  EXPECT_EQ(restored.reason, "loss breached");
-  EXPECT_EQ(restored.details, "threshold");
-  EXPECT_EQ(restored.userData, 42u);
 }
 
 }  // namespace

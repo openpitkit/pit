@@ -19,10 +19,10 @@
 
 #include "spot_funds.hpp"
 
-#include "openpit/account_id.hpp"
 #include "openpit/engine.hpp"
-#include "openpit/model.hpp"
-#include "openpit/reject.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/pretrade/decision.hpp"
 
 #include <gtest/gtest.h>
 

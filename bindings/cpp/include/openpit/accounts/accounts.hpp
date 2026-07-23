@@ -17,10 +17,11 @@
 
 #pragma once
 
-#include "openpit/account_id.hpp"
 #include "openpit/detail/handle.hpp"
 #include "openpit/error.hpp"
-#include "openpit/reject.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/param/asset.hpp"
+#include "openpit/pretrade/decision.hpp"
 #include "openpit/string.hpp"
 
 #include <openpit.h>
@@ -43,8 +44,8 @@
 //
 // Block/unblock by id are infallible. Reason-replacement and every group-scoped
 // operation can fail with an expected, structured outcome - returned as a
-// `std::optional` value, never thrown. runtime boundary failures (a C call
-// writing its `out_error`) throw `openpit::Error`.
+// `std::optional` value, never thrown. SDK boundary failures throw
+// `openpit::Error`.
 //
 // `AccountControl` is the engine-provided handle a custom callback uses to
 // record a kill-switch block against the account bound to its context; it is
@@ -57,10 +58,6 @@ namespace openpit::accounts {
 // `Engine::ApplyExecutionReport`; also the payload recorded through
 // `AccountControl::Block`. `userData` is an opaque caller token the SDK never
 // inspects (zero means unset).
-//
-// Field order follows the native runtime `OpenPitPretradeAccountBlock` (string
-// views first, then the pointer and the code) so view conversion stays
-// mechanical.
 struct AccountBlock {
   std::string policy;
   std::string reason;
@@ -78,13 +75,21 @@ struct AccountBlock {
         details(std::move(blockDetails)),
         code(blockCode) {}
 
-  // Copies the borrowed string views out of a C account-block record.
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static AccountBlock FromRaw(
       const OpenPitPretradeAccountBlock& raw) {
     AccountBlock out;
-    out.policy = ::openpit::StringView(raw.policy).ToString();
-    out.reason = ::openpit::StringView(raw.reason).ToString();
-    out.details = ::openpit::StringView(raw.details).ToString();
+    out.policy =
+        ::openpit::detail::FromNative<::openpit::StringView>(raw.policy)
+            .ToString();
+    out.reason =
+        ::openpit::detail::FromNative<::openpit::StringView>(raw.reason)
+            .ToString();
+    out.details =
+        ::openpit::detail::FromNative<::openpit::StringView>(raw.details)
+            .ToString();
     out.userData = reinterpret_cast<std::uintptr_t>(raw.user_data);
     out.code = static_cast<::openpit::pretrade::RejectCode>(raw.code);
     return out;
@@ -92,11 +97,11 @@ struct AccountBlock {
 
   // Builds a C account-block record whose string views borrow this object's
   // strings; valid only while this `AccountBlock` is alive and unchanged.
-  [[nodiscard]] OpenPitPretradeAccountBlock Raw() const noexcept {
+  [[nodiscard]] OpenPitPretradeAccountBlock Native() const noexcept {
     OpenPitPretradeAccountBlock raw{};
-    raw.policy = ::openpit::MakeStringView(policy);
-    raw.reason = ::openpit::MakeStringView(reason);
-    raw.details = ::openpit::MakeStringView(details);
+    raw.policy = ::openpit::detail::MakeStringView(policy);
+    raw.reason = ::openpit::detail::MakeStringView(reason);
+    raw.details = ::openpit::detail::MakeStringView(details);
     raw.user_data = reinterpret_cast<void*>(userData);
     raw.code = static_cast<OpenPitPretradeRejectCode>(
         static_cast<std::uint16_t>(code));
@@ -106,9 +111,24 @@ struct AccountBlock {
 
 namespace detail {
 
+using RawAccountControl = ::OpenPitAccountControl;
+using RawEngine = ::OpenPitEngine;
+
 struct AccountControlDeleter {
   void operator()(OpenPitAccountControl* handle) const noexcept {
     openpit_destroy_account_control(handle);
+  }
+};
+
+struct AccountBlockErrorDeleter {
+  void operator()(OpenPitAccountBlockError* handle) const noexcept {
+    openpit_destroy_account_block_error(handle);
+  }
+};
+
+struct AccountGroupErrorDeleter {
+  void operator()(OpenPitAccountGroupError* handle) const noexcept {
+    openpit_destroy_account_group_error(handle);
   }
 };
 
@@ -126,10 +146,6 @@ class AccountControl {
  public:
   AccountControl() = default;
 
-  // Adopts a caller-owned handle returned by the native runtime.
-  explicit AccountControl(OpenPitAccountControl* handle) noexcept
-      : m_handle(handle) {}
-
   [[nodiscard]] explicit operator bool() const noexcept {
     return static_cast<bool>(m_handle);
   }
@@ -137,7 +153,8 @@ class AccountControl {
   // Records `block` against the bound account. The first cause recorded for an
   // account wins; later calls for the same account are no-ops.
   void Block(const AccountBlock& block) const noexcept {
-    openpit_account_control_block(m_handle.Get(), block.Raw());
+    openpit_account_control_block(m_handle.Get(),
+                                  ::openpit::detail::Native(block));
   }
 
   // Returns a new handle referring to the same account-control facility, for
@@ -148,28 +165,33 @@ class AccountControl {
     if (raw == nullptr) {
       throw ::openpit::Error("openpit_account_control_clone failed");
     }
-    return AccountControl(raw);
-  }
-
-  [[nodiscard]] OpenPitAccountControl* Get() const noexcept {
-    return m_handle.Get();
+    return ::openpit::detail::FromNative<AccountControl>(raw);
   }
 
  private:
-  ::openpit::detail::Handle<OpenPitAccountControl,
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit AccountControl(detail::RawAccountControl* handle) noexcept
+      : m_handle(handle) {}
+
+  [[nodiscard]] detail::RawAccountControl* Native() const noexcept {
+    return m_handle.Get();
+  }
+
+  ::openpit::detail::Handle<detail::RawAccountControl,
                             detail::AccountControlDeleter>
       m_handle;
 };
 
-// Classifies an `AccountBlockError`. Mirrors `OpenPitAccountBlockErrorKind`.
+// Classifies an `AccountBlockError`.
 enum class AccountBlockErrorKind : std::uint32_t {
   // The targeted group is the reserved `param::DefaultAccountGroup`, which
   // cannot be blocked, unblocked, or have its reason replaced.
-  ReservedGroup = OpenPitAccountBlockErrorKind_ReservedGroup,
+  ReservedGroup = 0,
   // A reason replacement targeted an account that is not blocked.
-  AccountNotBlocked = OpenPitAccountBlockErrorKind_AccountNotBlocked,
+  AccountNotBlocked = 1,
   // A group operation targeted a group that is not blocked.
-  GroupNotBlocked = OpenPitAccountBlockErrorKind_GroupNotBlocked,
+  GroupNotBlocked = 2,
 };
 
 // Expected outcome of a failed account- or group-block operation. A value type,
@@ -183,24 +205,31 @@ struct AccountBlockError {
   std::optional<::openpit::param::AccountGroupId> group;
   AccountBlockErrorKind kind = AccountBlockErrorKind::ReservedGroup;
 
-  // Copies fields out of a caller-owned C error and releases it.
-  [[nodiscard]] static AccountBlockError FromHandle(
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  [[nodiscard]] static AccountBlockError FromRaw(
       OpenPitAccountBlockError* handle) {
+    ::openpit::detail::Handle<OpenPitAccountBlockError,
+                              detail::AccountBlockErrorDeleter>
+        owner(handle);
     AccountBlockError out;
-    out.message =
-        ::openpit::StringView(openpit_account_block_error_get_message(handle))
-            .ToString();
+    out.message = ::openpit::detail::FromNative<::openpit::StringView>(
+                      openpit_account_block_error_get_message(owner.Get()))
+                      .ToString();
     out.kind = static_cast<AccountBlockErrorKind>(
-        openpit_account_block_error_get_kind(handle));
+        openpit_account_block_error_get_kind(owner.Get()));
     OpenPitParamAccountId accountId = 0;
-    if (openpit_account_block_error_get_account(handle, &accountId)) {
-      out.account = ::openpit::param::AccountId::FromRaw(accountId);
+    if (openpit_account_block_error_get_account(owner.Get(), &accountId)) {
+      out.account =
+          ::openpit::detail::FromNative<::openpit::param::AccountId>(accountId);
     }
     OpenPitParamAccountGroupId groupId = 0;
-    if (openpit_account_block_error_get_group(handle, &groupId)) {
-      out.group = ::openpit::param::AccountGroupId::FromRaw(groupId);
+    if (openpit_account_block_error_get_group(owner.Get(), &groupId)) {
+      out.group =
+          ::openpit::detail::FromNative<::openpit::param::AccountGroupId>(
+              groupId);
     }
-    openpit_destroy_account_block_error(handle);
     return out;
   }
 };
@@ -214,20 +243,26 @@ struct AccountGroupError {
   ::openpit::param::AccountId account;
   std::optional<::openpit::param::AccountGroupId> currentGroup;
 
-  // Copies fields out of a caller-owned C error and releases it.
-  [[nodiscard]] static AccountGroupError FromHandle(
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  [[nodiscard]] static AccountGroupError FromRaw(
       OpenPitAccountGroupError* handle) {
+    ::openpit::detail::Handle<OpenPitAccountGroupError,
+                              detail::AccountGroupErrorDeleter>
+        owner(handle);
     AccountGroupError out;
-    out.message =
-        ::openpit::StringView(openpit_account_group_error_get_message(handle))
-            .ToString();
-    out.account = ::openpit::param::AccountId::FromRaw(
-        openpit_account_group_error_get_account(handle));
+    out.message = ::openpit::detail::FromNative<::openpit::StringView>(
+                      openpit_account_group_error_get_message(owner.Get()))
+                      .ToString();
+    out.account = ::openpit::detail::FromNative<::openpit::param::AccountId>(
+        openpit_account_group_error_get_account(owner.Get()));
     OpenPitParamAccountGroupId groupId = 0;
-    if (openpit_account_group_error_get_current_group(handle, &groupId)) {
-      out.currentGroup = ::openpit::param::AccountGroupId::FromRaw(groupId);
+    if (openpit_account_group_error_get_current_group(owner.Get(), &groupId)) {
+      out.currentGroup =
+          ::openpit::detail::FromNative<::openpit::param::AccountGroupId>(
+              groupId);
     }
-    openpit_destroy_account_group_error(handle);
     return out;
   }
 };
@@ -241,9 +276,6 @@ struct AccountGroupError {
 class Accounts {
  public:
   Accounts() = default;
-
-  // Wraps a borrowed engine handle. The engine retains ownership.
-  explicit Accounts(OpenPitEngine* engine) noexcept : m_engine(engine) {}
 
   // Atomically registers every account into `group`; all-or-nothing. Returns an
   // `AccountGroupError` when any account is already in a group or when `group`
@@ -271,10 +303,50 @@ class Accounts {
   [[nodiscard]] std::optional<::openpit::param::AccountGroupId> GroupOf(
       ::openpit::param::AccountId account) const {
     OpenPitParamAccountGroupId group = 0;
-    if (openpit_engine_account_group(m_engine, account.Raw(), &group)) {
-      return ::openpit::param::AccountGroupId::FromRaw(group);
+    if (openpit_engine_account_group(
+            m_engine, ::openpit::detail::Native(account), &group)) {
+      return ::openpit::detail::FromNative<::openpit::param::AccountGroupId>(
+          group);
     }
     return std::nullopt;
+  }
+
+  // Sets the explicit currency used by account-aware policies. Existing
+  // holdings are not recomputed; callers own any live-state migration.
+  void SetCurrency(::openpit::param::AccountId account,
+                   const ::openpit::param::Asset& asset) const {
+    OpenPitSharedString* error = nullptr;
+    if (!openpit_engine_set_account_currency(
+            m_engine, ::openpit::detail::Native(account),
+            ::openpit::detail::Native(asset), &error)) {
+      ::openpit::detail::ThrowFromSharedString(
+          error, "openpit_engine_set_account_currency failed");
+    }
+  }
+
+  // Clears the explicit account currency.
+  void ClearCurrency(::openpit::param::AccountId account) const noexcept {
+    openpit_engine_clear_account_currency(m_engine,
+                                          ::openpit::detail::Native(account));
+  }
+
+  // Sets the explicit currency shared by a registered account group.
+  void SetGroupCurrency(::openpit::param::AccountGroupId group,
+                        const ::openpit::param::Asset& asset) const {
+    OpenPitSharedString* error = nullptr;
+    if (!openpit_engine_set_account_group_currency(
+            m_engine, ::openpit::detail::Native(group),
+            ::openpit::detail::Native(asset), &error)) {
+      ::openpit::detail::ThrowFromSharedString(
+          error, "openpit_engine_set_account_group_currency failed");
+    }
+  }
+
+  // Clears the explicit account-group currency.
+  void ClearGroupCurrency(
+      ::openpit::param::AccountGroupId group) const noexcept {
+    openpit_engine_clear_account_group_currency(
+        m_engine, ::openpit::detail::Native(group));
   }
 
   // Blocks `account` with `reason`, gating its pre-trade orders until
@@ -282,13 +354,14 @@ class Accounts {
   // empty.
   void Block(::openpit::param::AccountId account,
              std::string_view reason) const noexcept {
-    openpit_engine_block_account(m_engine, account.Raw(),
-                                 ::openpit::MakeStringView(reason));
+    openpit_engine_block_account(m_engine, ::openpit::detail::Native(account),
+                                 ::openpit::detail::MakeStringView(reason));
   }
 
   // Lifts the block on `account`. Unblocking an unblocked account is a no-op.
   void Unblock(::openpit::param::AccountId account) const noexcept {
-    openpit_engine_unblock_account(m_engine, account.Raw());
+    openpit_engine_unblock_account(m_engine,
+                                   ::openpit::detail::Native(account));
   }
 
   // Replaces the recorded reason of a blocked account. Returns an
@@ -298,9 +371,10 @@ class Accounts {
       ::openpit::param::AccountId account, std::string_view reason) const {
     OpenPitAccountBlockError* error = nullptr;
     openpit_engine_replace_account_block_reason(
-        m_engine, account.Raw(), ::openpit::MakeStringView(reason), &error);
+        m_engine, ::openpit::detail::Native(account),
+        ::openpit::detail::MakeStringView(reason), &error);
     if (error != nullptr) {
-      return AccountBlockError::FromHandle(error);
+      return ::openpit::detail::FromNative<AccountBlockError>(error);
     }
     return std::nullopt;
   }
@@ -313,9 +387,10 @@ class Accounts {
       ::openpit::param::AccountGroupId group, std::string_view reason) const {
     OpenPitAccountBlockError* error = nullptr;
     openpit_engine_block_account_group(
-        m_engine, group.Raw(), ::openpit::MakeStringView(reason), &error);
+        m_engine, ::openpit::detail::Native(group),
+        ::openpit::detail::MakeStringView(reason), &error);
     if (error != nullptr) {
-      return AccountBlockError::FromHandle(error);
+      return ::openpit::detail::FromNative<AccountBlockError>(error);
     }
     return std::nullopt;
   }
@@ -327,9 +402,10 @@ class Accounts {
   [[nodiscard]] std::optional<AccountBlockError> UnblockGroup(
       ::openpit::param::AccountGroupId group) const {
     OpenPitAccountBlockError* error = nullptr;
-    openpit_engine_unblock_account_group(m_engine, group.Raw(), &error);
+    openpit_engine_unblock_account_group(
+        m_engine, ::openpit::detail::Native(group), &error);
     if (error != nullptr) {
-      return AccountBlockError::FromHandle(error);
+      return ::openpit::detail::FromNative<AccountBlockError>(error);
     }
     return std::nullopt;
   }
@@ -342,14 +418,21 @@ class Accounts {
       ::openpit::param::AccountGroupId group, std::string_view reason) const {
     OpenPitAccountBlockError* error = nullptr;
     openpit_engine_replace_account_group_block_reason(
-        m_engine, group.Raw(), ::openpit::MakeStringView(reason), &error);
+        m_engine, ::openpit::detail::Native(group),
+        ::openpit::detail::MakeStringView(reason), &error);
     if (error != nullptr) {
-      return AccountBlockError::FromHandle(error);
+      return ::openpit::detail::FromNative<AccountBlockError>(error);
     }
     return std::nullopt;
   }
 
  private:
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit Accounts(detail::RawEngine* engine) noexcept : m_engine(engine) {}
+
+  [[nodiscard]] detail::RawEngine* Native() const noexcept { return m_engine; }
+
   // Shared register/unregister body. `fn` is the matching native runtime
   // symbol; both have an identical signature.
   template <typename Fn>
@@ -359,22 +442,22 @@ class Accounts {
     std::vector<OpenPitParamAccountId> raw;
     raw.reserve(accounts.size());
     for (const auto& account : accounts) {
-      raw.push_back(account.Raw());
+      raw.push_back(::openpit::detail::Native(account));
     }
     OpenPitAccountGroupError* groupError = nullptr;
     OpenPitSharedString* error = nullptr;
     const bool ok = fn(m_engine, raw.empty() ? nullptr : raw.data(), raw.size(),
-                       group.Raw(), &groupError, &error);
+                       ::openpit::detail::Native(group), &groupError, &error);
     if (ok) {
       return std::nullopt;
     }
     if (groupError != nullptr) {
-      return AccountGroupError::FromHandle(groupError);
+      return ::openpit::detail::FromNative<AccountGroupError>(groupError);
     }
     ::openpit::detail::ThrowFromSharedString(error, fallback);
   }
 
-  OpenPitEngine* m_engine = nullptr;
+  detail::RawEngine* m_engine = nullptr;
 };
 
 }  // namespace openpit::accounts

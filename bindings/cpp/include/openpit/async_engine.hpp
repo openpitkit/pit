@@ -19,10 +19,9 @@
 
 // Aggregate header for the async-engine module.
 //
-// The async engine is a C++ concurrency facade: the native runtime
-// exposes no async-engine handle and the SDK core never spawns OS threads (see
-// the project "Threading Contract"). This layer reproduces the observable
-// account-scoped serialization and bounded queues.
+// The async engine is a C++ concurrency facade implementing account-scoped
+// serialization and bounded queues. The SDK core never spawns OS threads (see
+// the project "Threading Contract").
 // It provides `Sharded`/`Dynamic` dispatch strategies, futures, graceful/hard
 // stop, and an optional observer on top of `std::thread` over a generic driver.
 // See

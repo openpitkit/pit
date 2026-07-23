@@ -23,9 +23,9 @@
 // blocks in sync.
 
 #include "openpit/engine.hpp"
-#include "openpit/model.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/pretrade/decision.hpp"
 #include "openpit/pretrade/pretrade.hpp"
-#include "openpit/reject.hpp"
 
 #include <gtest/gtest.h>
 
@@ -182,11 +182,12 @@ TEST(PreTradePipeline, ApplyPostTradeFeedback) {
   // Execution reports feed realized outcomes back into cumulative policy state.
   const openpit::PostTradeResult result = engine.ApplyExecutionReport(report);
   for (const auto& outcome : result.accountPnls) {
-    std::cout << "account P&L outcome for " << outcome.accountId.Raw() << '\n';
+    std::cout << "account P&L outcome for " << outcome.accountId.ToString()
+              << '\n';
   }
   for (const auto& outcome : result.accountAdjustments) {
-    std::cout << "account adjustment from group " << outcome.policyGroupId.Raw()
-              << '\n';
+    std::cout << "account adjustment from group "
+              << outcome.policyGroupId.Value() << '\n';
   }
   if (!result.accountBlocks.empty()) {
     std::cout << "halt new orders until the blocked state is cleared" << '\n';

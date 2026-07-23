@@ -19,7 +19,7 @@
 
 #include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/engine.hpp"
-#include "openpit/param.hpp"
+#include "openpit/param/param.hpp"
 #include "openpit/pretrade/pretrade.hpp"
 
 #include <gtest/gtest.h>
@@ -46,7 +46,7 @@ TEST(BalanceReconciliation, DeltaVersusAbsolute) {
     op.asset = ::openpit::param::Asset("USD");
     adj.operation = aa::Operation::OfBalance(op);
     aa::Amount amountGroup;
-    amountGroup.balance = param::AdjustmentAmount::OfAbsolute(
+    amountGroup.balance = param::AdjustmentAmount::Absolute(
         param::PositionSize::FromString(amount));
     adj.amount = amountGroup;
     return adj;

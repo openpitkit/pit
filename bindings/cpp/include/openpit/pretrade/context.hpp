@@ -17,10 +17,10 @@
 
 #pragma once
 
-#include "openpit/account_id.hpp"
-#include "openpit/accounts.hpp"
-#include "openpit/model.hpp"
-#include "openpit/reject.hpp"
+#include "openpit/accounts/accounts.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/pretrade/decision.hpp"
 
 #include <openpit.h>
 
@@ -34,22 +34,30 @@
 // `Context` is the main-stage pre-trade context handed to a policy callback. It
 // bundles two things a policy needs:
 //   - the order under check, as the polymorphic `openpit::Order` base, so the
-//     adapter templates in `openpit/adapters.hpp` can recover a client order
+//     adapter templates in `openpit/pretrade/adapters.hpp` can recover a client
+//     order
 //     type via `dynamic_cast` (see `ContextOrder`);
-//   - the borrowed callback-scoped native context pointer
-//     (`OpenPitPretradeContext*`), exposing the account-group / account-control
-//     queries the native runtime provides on it.
+//   - callback-scoped account-group and account-control access.
 //
 // A `Context` is non-owning and valid only for the duration of the callback
-// that produced it: the referenced order and the native context pointer both
-// outlive it only within that callback. It is neither copyable nor movable, to
+// that produced it: the referenced order and its context both outlive it only
+// within that callback. It is neither copyable nor movable, to
 // discourage retaining it past the callback.
 //
 // This header also defines the three free functions the existing adapter header
-// (`openpit/adapters.hpp`) forward-declares and calls:
+// (`openpit/pretrade/adapters.hpp`) forward-declares and calls:
 // `MakeTypeMismatchReject`, `PushReject`, and `ContextOrder`.
 
 namespace openpit::pretrade {
+
+namespace detail {
+
+struct ContextInit {
+  const ::openpit::Order& order;
+  const OpenPitPretradeContext* native;
+};
+
+}  // namespace detail
 
 /// \brief Main-stage pre-trade context passed to a custom policy check.
 //
@@ -60,12 +68,6 @@ namespace openpit::pretrade {
 // without a live engine; the account queries then report "absent".
 class Context {
  public:
-  // Wraps an order plus the borrowed callback-scoped native context pointer.
-  // Neither is copied; both must outlive this `Context`.
-  Context(const ::openpit::Order& order,
-          const OpenPitPretradeContext* native) noexcept
-      : m_order(&order), m_native(native) {}
-
   // Convenience overload for callers without a native context (e.g. tests).
   explicit Context(const ::openpit::Order& order) noexcept
       : m_order(&order), m_native(nullptr) {}
@@ -82,11 +84,6 @@ class Context {
     return *m_order;
   }
 
-  // The borrowed native context pointer; null when none was supplied.
-  [[nodiscard]] const OpenPitPretradeContext* Native() const noexcept {
-    return m_native;
-  }
-
   // Account-control handle for the account bound to this request, or
   // `std::nullopt` when the order carries no account id. The handle may be
   // cloned into a mutation callback, but must not outlive this pre-trade
@@ -101,7 +98,8 @@ class Context {
     if (control == nullptr) {
       return std::nullopt;
     }
-    return ::openpit::accounts::AccountControl(control);
+    return ::openpit::detail::FromNative<::openpit::accounts::AccountControl>(
+        control);
   }
 
   // The account-group id for the order's bound account, or `std::nullopt` when
@@ -114,19 +112,30 @@ class Context {
     }
     OpenPitParamAccountGroupId group = 0;
     if (openpit_pretrade_context_get_account_group(m_native, &group)) {
-      return ::openpit::param::AccountGroupId::FromRaw(group);
+      return ::openpit::detail::FromNative<::openpit::param::AccountGroupId>(
+          group);
     }
     return std::nullopt;
   }
 
  private:
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit Context(detail::ContextInit init) noexcept
+      : m_order(&init.order), m_native(init.native) {}
+
+  [[nodiscard]] const OpenPitPretradeContext* Native() const noexcept {
+    return m_native;
+  }
+
   const ::openpit::Order* m_order;
   const OpenPitPretradeContext* m_native;
 };
 
 // Builds an order-or-account scoped reject carrying an "expected type" detail.
 //
-// Defined here to satisfy the forward declaration in `openpit/adapters.hpp`;
+// Defined here to satisfy the forward declaration in
+// `openpit/pretrade/adapters.hpp`;
 // the adapter templates call it to report a payload type mismatch
 // deterministically. `expected_type_name` is stored in the reject `details`.
 [[nodiscard]] inline Reject MakeTypeMismatchReject(
@@ -137,13 +146,14 @@ class Context {
 }
 
 // Appends a reject to a policy decision. Satisfies the forward declaration in
-// `openpit/adapters.hpp`.
+// `openpit/pretrade/adapters.hpp`.
 inline void PushReject(PolicyDecision& decision, Reject reject) {
   decision.Push(std::move(reject));
 }
 
 // Recovers the polymorphic order base from a `Context`. Satisfies the forward
-// declaration in `openpit/adapters.hpp`; the adapter templates `dynamic_cast`
+// declaration in `openpit/pretrade/adapters.hpp`; the adapter templates
+// `dynamic_cast`
 // the result to a client order type.
 [[nodiscard]] inline const ::openpit::Order& ContextOrder(
     const Context& context) {

@@ -25,9 +25,9 @@
 #include "killswitch.hpp"
 
 #include "openpit/engine.hpp"
-#include "openpit/model.hpp"
-#include "openpit/param.hpp"
-#include "openpit/reject.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/param.hpp"
+#include "openpit/pretrade/decision.hpp"
 
 #include <gtest/gtest.h>
 

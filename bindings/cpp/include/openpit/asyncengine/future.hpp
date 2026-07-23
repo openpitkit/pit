@@ -29,6 +29,7 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 // Result delivery for the async engine.
 //
@@ -62,8 +63,8 @@
 namespace openpit::asyncengine {
 
 // Machine-readable category of an async-dispatch failure carried by a future
-// or thrown by a lifecycle call. Distinct from `OpenPitParamErrorCode`: these
-// are dispatcher conditions, not native runtime param failures.
+// or thrown by a lifecycle call. These are dispatcher conditions, not SDK
+// parameter failures.
 enum class ErrorCode : std::uint8_t {
   // A submit method was called after the engine was stopped, or the task was
   Stopped,
@@ -111,21 +112,26 @@ template <typename T>
 class Result {
  public:
   Result(T value) : m_value(std::move(value)) {}  // NOLINT: implicit by design.
-  Result(Error error) : m_error(std::move(error)) {}  // NOLINT: implicit.
+  Result(Error error) : m_value(std::move(error)) {}  // NOLINT: implicit.
 
-  [[nodiscard]] bool HasValue() const noexcept { return m_value.has_value(); }
-  [[nodiscard]] bool HasError() const noexcept { return m_error.has_value(); }
+  [[nodiscard]] bool HasValue() const noexcept {
+    return std::holds_alternative<T>(m_value);
+  }
+  [[nodiscard]] bool HasError() const noexcept {
+    return std::holds_alternative<Error>(m_value);
+  }
 
   // The value; defined only when `HasValue()`.
-  [[nodiscard]] const T& Value() const& { return *m_value; }
-  [[nodiscard]] T&& Value() && { return std::move(*m_value); }
+  [[nodiscard]] const T& Value() const& { return std::get<T>(m_value); }
+  [[nodiscard]] T&& Value() && { return std::get<T>(std::move(m_value)); }
 
   // The error; defined only when `HasError()`.
-  [[nodiscard]] const Error& GetError() const { return *m_error; }
+  [[nodiscard]] const Error& GetError() const {
+    return std::get<Error>(m_value);
+  }
 
  private:
-  std::optional<T> m_value;
-  std::optional<Error> m_error;
+  std::variant<T, Error> m_value;
 };
 
 // Shared-state payload carried by the future. A copyable `T` stores the

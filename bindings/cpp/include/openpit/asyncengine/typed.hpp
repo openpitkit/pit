@@ -17,14 +17,14 @@
 
 #pragma once
 
-#include "openpit/account_id.hpp"
 #include "openpit/accountadjustment/account_adjustment.hpp"
-#include "openpit/accounts.hpp"
+#include "openpit/accounts/accounts.hpp"
 #include "openpit/asyncengine/engine.hpp"
 #include "openpit/asyncengine/future.hpp"
 #include "openpit/engine.hpp"
-#include "openpit/model.hpp"
-#include "openpit/reject.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/pretrade/decision.hpp"
 
 #include <openpit.h>
 
@@ -111,12 +111,6 @@ class EngineAdapter {
   [[nodiscard]] ::openpit::PostTradeResult ApplyExecutionReport(
       const ::openpit::model::ExecutionReport& report) const {
     return m_engine->ApplyExecutionReport(report);
-  }
-
-  [[nodiscard]] ::openpit::PostTradeResult ApplyExecutionReport(
-      const ::openpit::model::ExecutionReport& report,
-      const ::openpit::pretrade::PreTradeLock& lock) const {
-    return m_engine->ApplyExecutionReport(report, lock);
   }
 
   // Applies a batch adjustment, returning the (batch-reject-or-none, outcomes)
@@ -245,7 +239,7 @@ class AsyncReservation
     : public std::enable_shared_from_this<AsyncReservation<Driver>> {
  public:
   AsyncReservation(::openpit::pretrade::Reservation reservation,
-                   TypedAsyncEngine<Driver>* engine,
+                   AsyncEngine<Driver>* engine,
                    ::openpit::param::AccountId accountId)
       : m_reservation(std::move(reservation)),
         m_engine(engine),
@@ -313,7 +307,7 @@ class AsyncReservation
                                            std::chrono::nanoseconds timeout);
 
   ::openpit::pretrade::Reservation m_reservation;
-  TypedAsyncEngine<Driver>* m_engine;
+  AsyncEngine<Driver>* m_engine;
   ::openpit::param::AccountId m_accountId;
 };
 
@@ -332,7 +326,7 @@ template <typename Driver>
 class AsyncRequest : public std::enable_shared_from_this<AsyncRequest<Driver>> {
  public:
   AsyncRequest(::openpit::pretrade::Request request,
-               TypedAsyncEngine<Driver>* engine,
+               AsyncEngine<Driver>* engine,
                ::openpit::param::AccountId accountId)
       : m_request(std::move(request)),
         m_engine(engine),
@@ -358,7 +352,7 @@ class AsyncRequest : public std::enable_shared_from_this<AsyncRequest<Driver>> {
 
  private:
   ::openpit::pretrade::Request m_request;
-  TypedAsyncEngine<Driver>* m_engine;
+  AsyncEngine<Driver>* m_engine;
   ::openpit::param::AccountId m_accountId;
 };
 
@@ -377,7 +371,7 @@ class AsyncRequest : public std::enable_shared_from_this<AsyncRequest<Driver>> {
 template <typename Driver>
 class AsyncAccounts {
  public:
-  explicit AsyncAccounts(TypedAsyncEngine<Driver>* engine) noexcept
+  explicit AsyncAccounts(AsyncEngine<Driver>* engine) noexcept
       : m_engine(engine) {}
 
   // Registers every account into `group`. Resolves with the optional
@@ -441,10 +435,11 @@ class AsyncAccounts {
   // space with account ids (uint64); benign for rare admin ops.
   [[nodiscard]] static ::openpit::param::AccountId GroupRoutingKey(
       ::openpit::param::AccountGroupId group) noexcept {
-    return ::openpit::param::AccountId::FromRaw(group.Raw());
+    return ::openpit::detail::FromNative<::openpit::param::AccountId>(
+        ::openpit::detail::Native(group));
   }
 
-  TypedAsyncEngine<Driver>* m_engine;
+  AsyncEngine<Driver>* m_engine;
 };
 
 //------------------------------------------------------------------------------
@@ -456,16 +451,18 @@ class AsyncAccounts {
 // and adds the typed methods; lifecycle (`StopGraceful`/`StopHard`) forwards
 // straight to it.
 //
-// Move-only (it uniquely owns the dispatcher). The follow-up wrappers
-// (`AsyncRequest`/`AsyncReservation`) hold a back-pointer to this engine, so it
-// must outlive any wrapper produced from it.
+// Non-copyable and move-constructible. The dispatch state has a stable address,
+// so moving this facade does not invalidate follow-up `AsyncRequest` or
+// `AsyncReservation` wrappers. Move assignment is disabled because replacing a
+// live target could invalidate wrappers produced by that target. The engine
+// must still outlive every wrapper it produced.
 template <typename Driver>
 class TypedAsyncEngine {
  public:
   TypedAsyncEngine(const TypedAsyncEngine&) = delete;
   TypedAsyncEngine& operator=(const TypedAsyncEngine&) = delete;
   TypedAsyncEngine(TypedAsyncEngine&&) noexcept = default;
-  TypedAsyncEngine& operator=(TypedAsyncEngine&&) noexcept = default;
+  TypedAsyncEngine& operator=(TypedAsyncEngine&&) = delete;
   ~TypedAsyncEngine() = default;
 
   //----------------------------------------------------------------------------
@@ -487,19 +484,19 @@ class TypedAsyncEngine {
       return future;
     }
     const ::openpit::param::AccountId pinned = *accountId;
-    TypedAsyncEngine* self = this;
+    AsyncEngine<Driver>* engine = m_engine.get();
     // Delegate to the generic `Call` seam: it owns abort (resolves with
     // `Stopped`) and synchronous submit-failure (resolves with the queue error)
     // so the returned future is always resolved exactly once.
-    return m_engine.Call(
+    return m_engine->Call(
         pinned,
-        [self, pinned, order = std::move(order)](Driver& driver) {
+        [engine, pinned, order = std::move(order)](Driver& driver) {
           ::openpit::pretrade::StartResult result = driver.StartPreTrade(order);
           if (!result.Passed()) {
             return StartOutcome<Driver>{nullptr, std::move(result.rejects)};
           }
           auto request = std::make_shared<AsyncRequest<Driver>>(
-              std::move(*result.request), self, pinned);
+              std::move(*result.request), engine, pinned);
           return StartOutcome<Driver>{std::move(request), {}};
         },
         timeout);
@@ -521,17 +518,17 @@ class TypedAsyncEngine {
       return future;
     }
     const ::openpit::param::AccountId pinned = *accountId;
-    TypedAsyncEngine* self = this;
-    return m_engine.Call(
+    AsyncEngine<Driver>* engine = m_engine.get();
+    return m_engine->Call(
         pinned,
-        [self, pinned, order = std::move(order)](Driver& driver) {
+        [engine, pinned, order = std::move(order)](Driver& driver) {
           ::openpit::pretrade::ExecuteResult result =
               driver.ExecutePreTrade(order);
           if (!result.Passed()) {
             return ExecuteOutcome<Driver>{nullptr, std::move(result.rejects)};
           }
           auto reservation = std::make_shared<AsyncReservation<Driver>>(
-              std::move(*result.reservation), self, pinned);
+              std::move(*result.reservation), engine, pinned);
           return ExecuteOutcome<Driver>{std::move(reservation), {}};
         },
         timeout);
@@ -552,14 +549,14 @@ class TypedAsyncEngine {
       return future;
     }
     const ::openpit::param::AccountId pinned = *accountId;
-    TypedAsyncEngine* self = this;
-    return m_engine.Call(
+    AsyncEngine<Driver>* engine = m_engine.get();
+    return m_engine->Call(
         pinned,
-        [self, pinned, order = std::move(order)](Driver& driver) {
+        [engine, pinned, order = std::move(order)](Driver& driver) {
           ::openpit::pretrade::Reservation reservation =
               driver.ExecutePreTradeDropCopy(order);
           auto asyncReservation = std::make_shared<AsyncReservation<Driver>>(
-              std::move(reservation), self, pinned);
+              std::move(reservation), engine, pinned);
           return ExecuteOutcome<Driver>{std::move(asyncReservation), {}};
         },
         timeout);
@@ -579,7 +576,7 @@ class TypedAsyncEngine {
       promise.Fail(detail::MissingAccountId());
       return future;
     }
-    return m_engine.Call(
+    return m_engine->Call(
         *accountId,
         [report = std::move(report)](Driver& driver) {
           return driver.ApplyExecutionReport(report);
@@ -595,7 +592,7 @@ class TypedAsyncEngine {
       ::openpit::param::AccountId accountId,
       std::vector<Adjustment> adjustments,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
-    return m_engine.Call(
+    return m_engine->Call(
         accountId,
         [accountId, adjustments = std::move(adjustments)](Driver& driver) {
           ::openpit::AdjustmentResult result =
@@ -616,7 +613,7 @@ class TypedAsyncEngine {
 
   // Returns the account-administration accessor bound to this engine.
   [[nodiscard]] AsyncAccounts<Driver> Accounts() noexcept {
-    return AsyncAccounts<Driver>(this);
+    return AsyncAccounts<Driver>(m_engine.get());
   }
 
   //----------------------------------------------------------------------------
@@ -627,7 +624,7 @@ class TypedAsyncEngine {
   [[nodiscard]] Future<std::monostate> Submit(
       ::openpit::param::AccountId accountId, std::function<void()> fn,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
-    return m_engine.Submit(accountId, std::move(fn), timeout);
+    return m_engine->Submit(accountId, std::move(fn), timeout);
   }
 
   //----------------------------------------------------------------------------
@@ -635,17 +632,17 @@ class TypedAsyncEngine {
 
   [[nodiscard]] bool StopGraceful(
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
-    return m_engine.StopGraceful(timeout);
+    return m_engine->StopGraceful(timeout);
   }
 
   [[nodiscard]] bool StopHard(
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
-    return m_engine.StopHard(timeout);
+    return m_engine->StopHard(timeout);
   }
 
   // The underlying generic engine, for the rare case a caller wants the generic
   // `Call`/`Call2` seam alongside the typed methods.
-  [[nodiscard]] AsyncEngine<Driver>& Generic() noexcept { return m_engine; }
+  [[nodiscard]] AsyncEngine<Driver>& Generic() noexcept { return *m_engine; }
 
  private:
   template <typename D>
@@ -660,9 +657,9 @@ class TypedAsyncEngine {
   friend class AsyncAccounts;
 
   explicit TypedAsyncEngine(AsyncEngine<Driver> engine)
-      : m_engine(std::move(engine)) {}
+      : m_engine(std::make_unique<AsyncEngine<Driver>>(std::move(engine))) {}
 
-  AsyncEngine<Driver> m_engine;
+  std::unique_ptr<AsyncEngine<Driver>> m_engine;
 };
 
 //------------------------------------------------------------------------------
@@ -673,7 +670,7 @@ template <typename Op>
 [[nodiscard]] Future<std::monostate> AsyncReservation<Driver>::Run(
     Op op, std::chrono::nanoseconds timeout) {
   auto self = this->shared_from_this();
-  return m_engine->m_engine.Submit(
+  return m_engine->Submit(
       m_accountId, [self, op = std::move(op)]() { op(self->m_reservation); },
       timeout);
 }
@@ -690,7 +687,7 @@ AsyncRequest<Driver>::Execute(std::chrono::nanoseconds timeout) {
   // task pins this wrapper alive via `shared_from_this`. On an abort the future
   // resolves with `Stopped` and this request is released by the wrapper's
   // destruction, so the native handle never leaks.
-  return m_engine->m_engine.template Call2<ReservationPtr, Rejects>(
+  return m_engine->template Call2<ReservationPtr, Rejects>(
       m_accountId,
       [self](Driver&) -> std::pair<ReservationPtr, Rejects> {
         ::openpit::pretrade::ExecuteResult result = self->m_request.Execute();
@@ -711,7 +708,7 @@ template <typename Driver>
 [[nodiscard]] Future<std::monostate> AsyncRequest<Driver>::Close(
     std::chrono::nanoseconds timeout) {
   auto self = this->shared_from_this();
-  return m_engine->m_engine.Submit(
+  return m_engine->Submit(
       m_accountId,
       [self]() { self->m_request = ::openpit::pretrade::Request(); }, timeout);
 }
@@ -729,7 +726,7 @@ AsyncAccounts<Driver>::RegisterGroup(
     return future;
   }
   const ::openpit::param::AccountId pinned = accounts.front();
-  return m_engine->m_engine.Call(
+  return m_engine->Call(
       pinned,
       [accounts = std::move(accounts), group](Driver& driver) {
         return driver.Accounts().RegisterGroup(accounts, group);
@@ -750,7 +747,7 @@ AsyncAccounts<Driver>::UnregisterGroup(
     return future;
   }
   const ::openpit::param::AccountId pinned = accounts.front();
-  return m_engine->m_engine.Call(
+  return m_engine->Call(
       pinned,
       [accounts = std::move(accounts), group](Driver& driver) {
         return driver.Accounts().UnregisterGroup(accounts, group);
@@ -762,8 +759,8 @@ template <typename Driver>
 [[nodiscard]] Future<std::optional<::openpit::param::AccountGroupId>>
 AsyncAccounts<Driver>::GroupOf(::openpit::param::AccountId account,
                                std::chrono::nanoseconds timeout) {
-  return m_engine->m_engine.Call(
-      account.Raw(),
+  return m_engine->Call(
+      account,
       [account](Driver& driver) { return driver.Accounts().GroupOf(account); },
       timeout);
 }
@@ -772,11 +769,11 @@ template <typename Driver>
 [[nodiscard]] Future<std::monostate> AsyncAccounts<Driver>::Block(
     ::openpit::param::AccountId account, std::string reason,
     std::chrono::nanoseconds timeout) {
-  TypedAsyncEngine<Driver>* engine = m_engine;
-  return engine->m_engine.Submit(
+  AsyncEngine<Driver>* engine = m_engine;
+  return engine->Submit(
       account,
       [engine, account, reason = std::move(reason)]() {
-        engine->m_engine.DriverRef().Accounts().Block(account, reason);
+        engine->DriverRef().Accounts().Block(account, reason);
       },
       timeout);
 }
@@ -784,12 +781,10 @@ template <typename Driver>
 template <typename Driver>
 [[nodiscard]] Future<std::monostate> AsyncAccounts<Driver>::Unblock(
     ::openpit::param::AccountId account, std::chrono::nanoseconds timeout) {
-  TypedAsyncEngine<Driver>* engine = m_engine;
-  return engine->m_engine.Submit(
+  AsyncEngine<Driver>* engine = m_engine;
+  return engine->Submit(
       account,
-      [engine, account]() {
-        engine->m_engine.DriverRef().Accounts().Unblock(account);
-      },
+      [engine, account]() { engine->DriverRef().Accounts().Unblock(account); },
       timeout);
 }
 
@@ -798,8 +793,8 @@ template <typename Driver>
 AsyncAccounts<Driver>::ReplaceBlockReason(::openpit::param::AccountId account,
                                           std::string reason,
                                           std::chrono::nanoseconds timeout) {
-  return m_engine->m_engine.Call(
-      account.Raw(),
+  return m_engine->Call(
+      account,
       [account, reason = std::move(reason)](Driver& driver) {
         return driver.Accounts().ReplaceBlockReason(account, reason);
       },
@@ -811,7 +806,7 @@ template <typename Driver>
 AsyncAccounts<Driver>::BlockGroup(::openpit::param::AccountGroupId group,
                                   std::string reason,
                                   std::chrono::nanoseconds timeout) {
-  return m_engine->m_engine.Call(
+  return m_engine->Call(
       GroupRoutingKey(group),
       [group, reason = std::move(reason)](Driver& driver) {
         return driver.Accounts().BlockGroup(group, reason);
@@ -823,7 +818,7 @@ template <typename Driver>
 [[nodiscard]] Future<std::optional<::openpit::accounts::AccountBlockError>>
 AsyncAccounts<Driver>::UnblockGroup(::openpit::param::AccountGroupId group,
                                     std::chrono::nanoseconds timeout) {
-  return m_engine->m_engine.Call(
+  return m_engine->Call(
       GroupRoutingKey(group),
       [group](Driver& driver) { return driver.Accounts().UnblockGroup(group); },
       timeout);
@@ -834,7 +829,7 @@ template <typename Driver>
 AsyncAccounts<Driver>::ReplaceGroupBlockReason(
     ::openpit::param::AccountGroupId group, std::string reason,
     std::chrono::nanoseconds timeout) {
-  return m_engine->m_engine.Call(
+  return m_engine->Call(
       GroupRoutingKey(group),
       [group, reason = std::move(reason)](Driver& driver) {
         return driver.Accounts().ReplaceGroupBlockReason(group, reason);
@@ -950,7 +945,7 @@ class OwnedTypedAsyncEngine {
   OwnedTypedAsyncEngine(const OwnedTypedAsyncEngine&) = delete;
   OwnedTypedAsyncEngine& operator=(const OwnedTypedAsyncEngine&) = delete;
   OwnedTypedAsyncEngine(OwnedTypedAsyncEngine&&) noexcept = default;
-  OwnedTypedAsyncEngine& operator=(OwnedTypedAsyncEngine&&) noexcept = default;
+  OwnedTypedAsyncEngine& operator=(OwnedTypedAsyncEngine&&) = delete;
   ~OwnedTypedAsyncEngine() = default;
 
   [[nodiscard]] Future<StartOutcome<Driver>> StartPreTrade(
@@ -1015,9 +1010,9 @@ class OwnedTypedAsyncEngine {
   friend OwnedTypedAsyncEngine MakeTypedAsyncEngine(
       const ::openpit::Engine& engine, std::size_t workers);
 
-  OwnedTypedAsyncEngine(std::unique_ptr<Driver> driver,
-                        TypedAsyncEngine<Driver> engine) noexcept
-      : m_driver(std::move(driver)), m_engine(std::move(engine)) {}
+  OwnedTypedAsyncEngine(std::unique_ptr<Driver> driver, std::size_t workers)
+      : m_driver(std::move(driver)),
+        m_engine(TypedBuilder<Driver>(*m_driver).Sharded(workers).Build()) {}
 
   std::unique_ptr<Driver> m_driver;
   TypedAsyncEngine<Driver> m_engine;
@@ -1030,9 +1025,7 @@ class OwnedTypedAsyncEngine {
 [[nodiscard]] inline OwnedTypedAsyncEngine MakeTypedAsyncEngine(
     const ::openpit::Engine& engine, std::size_t workers) {
   auto driver = std::make_unique<EngineAdapter>(engine);
-  TypedAsyncEngine<EngineAdapter> async =
-      TypedBuilder<EngineAdapter>(*driver).Sharded(workers).Build();
-  return OwnedTypedAsyncEngine(std::move(driver), std::move(async));
+  return OwnedTypedAsyncEngine(std::move(driver), workers);
 }
 
 }  // namespace openpit::asyncengine

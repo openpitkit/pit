@@ -19,19 +19,25 @@
 
 #include "openpit/accountadjustment/pnl.hpp"
 #include "openpit/detail/handle.hpp"
-#include "openpit/param.hpp"
+#include "openpit/detail/native_access.hpp"
+#include "openpit/param/param.hpp"
 #include "openpit/string.hpp"
 
 #include <openpit.h>
 
 #include <cstddef>
+#include <iterator>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace openpit::accountadjustment {
 
-using OutcomeAmountOptional = OpenPitOutcomeAmountOptional;
+namespace detail {
+using RawOutcomeAmountOptional = ::OpenPitOutcomeAmountOptional;
+using RawOutcomeList = ::OpenPitAccountAdjustmentOutcomeList;
+}  // namespace detail
 
 //------------------------------------------------------------------------------
 // OutcomeAmount
@@ -48,15 +54,19 @@ struct OutcomeAmount {
                 param::PositionSize outcomeAbsolute)
       : delta(outcomeDelta), absolute(outcomeAbsolute) {}
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static OutcomeAmount FromRaw(const OpenPitOutcomeAmount& raw) {
-    return OutcomeAmount(param::PositionSize::FromRaw(raw.delta),
-                         param::PositionSize::FromRaw(raw.absolute));
+    return OutcomeAmount(
+        ::openpit::detail::FromNative<param::PositionSize>(raw.delta),
+        ::openpit::detail::FromNative<param::PositionSize>(raw.absolute));
   }
 
-  [[nodiscard]] OpenPitOutcomeAmount Raw() const noexcept {
+  [[nodiscard]] OpenPitOutcomeAmount Native() const noexcept {
     OpenPitOutcomeAmount raw{};
-    raw.delta = delta.Raw();
-    raw.absolute = absolute.Raw();
+    raw.delta = ::openpit::detail::Native(delta);
+    raw.absolute = ::openpit::detail::Native(absolute);
     return raw;
   }
 };
@@ -83,64 +93,68 @@ struct AccountOutcomeEntry {
   explicit AccountOutcomeEntry(param::Asset entryAsset)
       : asset(std::move(entryAsset)) {}
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static AccountOutcomeEntry FromRaw(
       const OpenPitAccountOutcomeEntry& raw) {
-    AccountOutcomeEntry out(param::Asset::FromRaw(raw.asset));
+    AccountOutcomeEntry out(
+        ::openpit::detail::FromNative<param::Asset>(raw.asset));
     out.balance = ReadAmount(raw.balance);
     out.held = ReadAmount(raw.held);
     out.incoming = ReadAmount(raw.incoming);
     out.realizedPnl = ReadPnlOutcome(raw.realized_pnl);
     if (raw.average_entry_price.is_set) {
-      out.averageEntryPrice =
-          param::Price::FromRaw(raw.average_entry_price.value);
+      out.averageEntryPrice = ::openpit::detail::FromNative<param::Price>(
+          raw.average_entry_price.value);
     }
     return out;
   }
 
   // Borrows this object's asset bytes; valid only while it stays alive.
-  [[nodiscard]] OpenPitAccountOutcomeEntry Raw() const noexcept {
+  [[nodiscard]] OpenPitAccountOutcomeEntry Native() const {
     OpenPitAccountOutcomeEntry raw{};
-    raw.asset = asset.Raw();
+    raw.asset = ::openpit::detail::Native(asset);
     WriteAmount(raw.balance, balance);
     WriteAmount(raw.held, held);
     WriteAmount(raw.incoming, incoming);
     WritePnlOutcome(raw.realized_pnl, realizedPnl);
     if (averageEntryPrice) {
-      raw.average_entry_price.value = averageEntryPrice->Raw();
+      raw.average_entry_price.value =
+          ::openpit::detail::Native(*averageEntryPrice);
       raw.average_entry_price.is_set = true;
     }
     return raw;
   }
 
- private:
   [[nodiscard]] static std::optional<OutcomeAmount> ReadAmount(
-      const OutcomeAmountOptional& field) {
+      const detail::RawOutcomeAmountOptional& field) {
     if (!field.is_set) {
       return std::nullopt;
     }
-    return OutcomeAmount::FromRaw(field.value);
+    return ::openpit::detail::FromNative<OutcomeAmount>(field.value);
   }
 
-  static void WriteAmount(OutcomeAmountOptional& field,
+  static void WriteAmount(detail::RawOutcomeAmountOptional& field,
                           const std::optional<OutcomeAmount>& value) noexcept {
     if (value) {
-      field.value = value->Raw();
+      field.value = ::openpit::detail::Native(*value);
       field.is_set = true;
     }
   }
 
   [[nodiscard]] static std::optional<PnlOutcome> ReadPnlOutcome(
-      const PnlOutcomeOptional& field) {
+      const detail::RawPnlOutcomeOptional& field) {
     if (!field.is_set) {
       return std::nullopt;
     }
-    return PnlOutcome::FromRaw(field.value);
+    return ::openpit::detail::FromNative<PnlOutcome>(field.value);
   }
 
-  static void WritePnlOutcome(PnlOutcomeOptional& field,
-                              const std::optional<PnlOutcome>& value) noexcept {
+  static void WritePnlOutcome(detail::RawPnlOutcomeOptional& field,
+                              const std::optional<PnlOutcome>& value) {
     if (value) {
-      field.value = value->Raw();
+      field.value = ::openpit::detail::Native(*value);
       field.is_set = true;
     }
   }
@@ -157,17 +171,21 @@ struct Outcome {
   Outcome(param::GroupId groupId, AccountOutcomeEntry outcomeEntry)
       : policyGroupId(groupId), entry(std::move(outcomeEntry)) {}
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static Outcome FromRaw(
       const OpenPitAccountAdjustmentOutcome& raw) {
-    return Outcome(param::GroupId(raw.policy_group_id),
-                   AccountOutcomeEntry::FromRaw(raw.entry));
+    return Outcome(
+        param::GroupId(raw.policy_group_id),
+        ::openpit::detail::FromNative<AccountOutcomeEntry>(raw.entry));
   }
 
   // Borrows this object's entry storage; valid only while it stays alive.
-  [[nodiscard]] OpenPitAccountAdjustmentOutcome Raw() const noexcept {
+  [[nodiscard]] OpenPitAccountAdjustmentOutcome Native() const {
     OpenPitAccountAdjustmentOutcome raw{};
-    raw.policy_group_id = policyGroupId.Raw();
-    raw.entry = entry.Raw();
+    raw.policy_group_id = ::openpit::detail::Native(policyGroupId);
+    raw.entry = ::openpit::detail::Native(entry);
     return raw;
   }
 };
@@ -178,7 +196,7 @@ struct Outcome {
 namespace detail {
 
 struct OutcomeListDeleter {
-  void operator()(OpenPitAccountAdjustmentOutcomeList* handle) const noexcept {
+  void operator()(RawOutcomeList* handle) const noexcept {
     openpit_destroy_account_adjustment_outcome_list(handle);
   }
 };
@@ -186,61 +204,115 @@ struct OutcomeListDeleter {
 }  // namespace detail
 
 // Owning RAII wrapper over a caller-owned `OpenPitAccountAdjustmentOutcomeList`
-// returned by an apply call. Move-only. `Size()`/`Get()` read the borrowed C
+// returned by an apply call. Move-only. `size()`/`at()` read the borrowed C
 // views; `ToVector()` copies every outcome into owned `Outcome` values.
 class OutcomeList {
  public:
-  OutcomeList() noexcept = default;
+  class const_iterator {
+   public:
+    using iterator_category = std::input_iterator_tag;
+    using value_type = Outcome;
+    using difference_type = std::ptrdiff_t;
+    using pointer = void;
+    using reference = Outcome;
 
-  explicit OutcomeList(OpenPitAccountAdjustmentOutcomeList* handle) noexcept
-      : m_handle(handle) {}
+    const_iterator() noexcept = default;
+
+    [[nodiscard]] Outcome operator*() const { return m_list->at(m_index); }
+
+    const_iterator& operator++() noexcept {
+      ++m_index;
+      return *this;
+    }
+
+    const_iterator operator++(int) noexcept {
+      const_iterator previous = *this;
+      ++(*this);
+      return previous;
+    }
+
+    friend bool operator==(const const_iterator& lhs,
+                           const const_iterator& rhs) noexcept {
+      return lhs.m_list == rhs.m_list && lhs.m_index == rhs.m_index;
+    }
+
+    friend bool operator!=(const const_iterator& lhs,
+                           const const_iterator& rhs) noexcept {
+      return !(lhs == rhs);
+    }
+
+   private:
+    friend class OutcomeList;
+    const_iterator(const OutcomeList* list, std::size_t index) noexcept
+        : m_list(list), m_index(index) {}
+
+    const OutcomeList* m_list = nullptr;
+    std::size_t m_index = 0;
+  };
+
+  OutcomeList() noexcept = default;
 
   [[nodiscard]] explicit operator bool() const noexcept {
     return static_cast<bool>(m_handle);
   }
 
-  [[nodiscard]] OpenPitAccountAdjustmentOutcomeList* Get() const noexcept {
-    return m_handle.Get();
-  }
-
-  [[nodiscard]] std::size_t Size() const noexcept {
+  [[nodiscard]] std::size_t size() const noexcept {
     if (!m_handle) {
       return 0;
     }
     return openpit_account_adjustment_outcome_list_len(m_handle.Get());
   }
 
-  [[nodiscard]] bool Empty() const noexcept { return Size() == 0; }
+  [[nodiscard]] bool empty() const noexcept { return size() == 0; }
 
-  // Copies the outcome at `index`, or `std::nullopt` when out of bounds.
-  [[nodiscard]] std::optional<Outcome> Get(std::size_t index) const {
+  [[nodiscard]] Outcome at(std::size_t index) const {
     OpenPitAccountAdjustmentOutcome raw{};
     if (m_handle.Get() == nullptr ||
         !openpit_account_adjustment_outcome_list_get(m_handle.Get(), index,
                                                      &raw)) {
-      return std::nullopt;
+      throw std::out_of_range("account adjustment outcome index out of range");
     }
-    return Outcome::FromRaw(raw);
+    return ::openpit::detail::FromNative<Outcome>(raw);
+  }
+
+  [[nodiscard]] Outcome operator[](std::size_t index) const {
+    return at(index);
+  }
+
+  [[nodiscard]] const_iterator begin() const noexcept {
+    return const_iterator(this, 0);
+  }
+
+  [[nodiscard]] const_iterator end() const noexcept {
+    return const_iterator(this, size());
   }
 
   // Copies every outcome into owned values.
   [[nodiscard]] std::vector<Outcome> ToVector() const {
-    const std::size_t count = Size();
+    const std::size_t count = size();
     std::vector<Outcome> out;
     out.reserve(count);
     for (std::size_t i = 0; i < count; ++i) {
       OpenPitAccountAdjustmentOutcome raw{};
       if (openpit_account_adjustment_outcome_list_get(m_handle.Get(), i,
                                                       &raw)) {
-        out.push_back(Outcome::FromRaw(raw));
+        out.push_back(::openpit::detail::FromNative<Outcome>(raw));
       }
     }
     return out;
   }
 
  private:
-  ::openpit::detail::Handle<OpenPitAccountAdjustmentOutcomeList,
-                            detail::OutcomeListDeleter>
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit OutcomeList(detail::RawOutcomeList* handle) noexcept
+      : m_handle(handle) {}
+
+  [[nodiscard]] detail::RawOutcomeList* Native() const noexcept {
+    return m_handle.Get();
+  }
+
+  ::openpit::detail::Handle<detail::RawOutcomeList, detail::OutcomeListDeleter>
       m_handle;
 };
 

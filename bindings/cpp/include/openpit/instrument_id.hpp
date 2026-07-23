@@ -17,10 +17,19 @@
 
 #pragma once
 
+#include "openpit/detail/native_access.hpp"
+
 #include <openpit.h>
 
 #include <cstdint>
+#include <functional>
 #include <string>
+
+namespace openpit::detail {
+
+using RawInstrumentId = ::OpenPitInstrumentId;
+
+}  // namespace openpit::detail
 
 namespace openpit {
 
@@ -29,7 +38,7 @@ class InstrumentId {
  public:
   constexpr InstrumentId() noexcept = default;
 
-  explicit constexpr InstrumentId(OpenPitInstrumentId value) noexcept
+  explicit constexpr InstrumentId(std::uint64_t value) noexcept
       : m_value(value) {}
 
   // Constructs an instrument id from a raw uint64 value.
@@ -38,7 +47,7 @@ class InstrumentId {
     return InstrumentId(value);
   }
 
-  [[nodiscard]] constexpr OpenPitInstrumentId Raw() const noexcept {
+  [[nodiscard]] constexpr std::uint64_t Value() const noexcept {
     return m_value;
   }
 
@@ -55,8 +64,46 @@ class InstrumentId {
     return m_value != other.m_value;
   }
 
+  [[nodiscard]] constexpr bool operator<(
+      const InstrumentId& other) const noexcept {
+    return m_value < other.m_value;
+  }
+
+  [[nodiscard]] constexpr bool operator<=(
+      const InstrumentId& other) const noexcept {
+    return !(other < *this);
+  }
+
+  [[nodiscard]] constexpr bool operator>(
+      const InstrumentId& other) const noexcept {
+    return other < *this;
+  }
+
+  [[nodiscard]] constexpr bool operator>=(
+      const InstrumentId& other) const noexcept {
+    return !(*this < other);
+  }
+
  private:
-  OpenPitInstrumentId m_value = 0;
+  friend class detail::NativeAccess;
+
+  [[nodiscard]] constexpr detail::RawInstrumentId Native() const noexcept {
+    return m_value;
+  }
+
+  detail::RawInstrumentId m_value = 0;
 };
 
 }  // namespace openpit
+
+namespace std {
+
+template <>
+struct hash<::openpit::InstrumentId> {
+  [[nodiscard]] std::size_t operator()(
+      const ::openpit::InstrumentId& value) const noexcept {
+    return std::hash<std::uint64_t>{}(value.Value());
+  }
+};
+
+}  // namespace std

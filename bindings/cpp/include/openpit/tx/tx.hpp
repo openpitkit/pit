@@ -31,8 +31,6 @@ namespace openpit::tx {
 
 class Mutations {
  public:
-  explicit Mutations(OpenPitMutations* native) noexcept : m_native(native) {}
-
   Mutations(const Mutations&) = delete;
   Mutations& operator=(const Mutations&) = delete;
   Mutations(Mutations&&) = delete;
@@ -56,9 +54,13 @@ class Mutations {
     }
   }
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit Mutations(OpenPitMutations* native) noexcept : m_native(native) {}
+
   [[nodiscard]] OpenPitMutations* Native() const noexcept { return m_native; }
 
- private:
   struct Callbacks {
     Callbacks(std::function<void()> onCommit, std::function<void()> onRollback)
         : commit(std::move(onCommit)), rollback(std::move(onRollback)) {}

@@ -17,12 +17,6 @@
 
 #pragma once
 
-#include "openpit/account_id.hpp"
-
-#include <openpit.h>
-
-#include <optional>
-
 namespace openpit::marketdata {
 
 // `AccountInfo` supplies the reading account's group on demand.
@@ -32,26 +26,5 @@ namespace openpit::marketdata {
 // The core invokes it lazily, only when the fallback chain reaches the
 // per-group bucket; an empty optional means the account belongs to no group.
 // In policy code the pre-trade context already satisfies this shape.
-
-namespace detail {
-
-// The native runtime account-group resolver trampoline, instantiated per
-// concrete `AccountInfo` type. The matching `user_data` is a borrowed `const
-// Info*` that stays alive for the single `Service::Get` call; this never takes
-// ownership.
-template <typename Info>
-bool AccountGroupResolverTrampoline(
-    void* user_data,
-    OpenPitParamAccountGroupId* out_account_group_id) noexcept {
-  const auto* info = static_cast<const Info*>(user_data);
-  const std::optional<param::AccountGroupId> group = info->AccountGroup();
-  if (!group.has_value()) {
-    return false;
-  }
-  *out_account_group_id = group->Raw();
-  return true;
-}
-
-}  // namespace detail
 
 }  // namespace openpit::marketdata

@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "openpit/param.hpp"
+#include "openpit/param/param.hpp"
 
 #include <openpit.h>
 
@@ -33,39 +33,34 @@ namespace openpit::marketdata {
 // A market snapshot carrying an optional `mark`, `bid`, and `ask` price.
 //
 // Every field is optional: an unset field means the producer did not publish
-// it. The `With*` builders return a copy with the field set, mirroring the
-// value-type style. Wraps the native runtime POD
-// `OpenPitMarketDataQuote`.
+// it. The `With*` builders return a copy with the field set, preserving
+// value-type semantics.
 class Quote {
  public:
   // An empty quote with every field unset.
   Quote() noexcept : m_value(openpit_create_marketdata_quote()) {}
 
-  // Adopts a native runtime quote value (e.g. read from a `Service::Get`).
-  [[nodiscard]] static Quote FromRaw(OpenPitMarketDataQuote raw) noexcept {
-    Quote out;
-    out.m_value = raw;
-    return out;
-  }
-
   // Returns a copy with the mark price set.
   [[nodiscard]] Quote WithMark(const param::Price& mark) const noexcept {
     Quote out = *this;
-    out.m_value.mark = param::PriceOptional{mark.Raw(), true};
+    out.m_value.mark =
+        param::detail::RawPriceOptional{::openpit::detail::Native(mark), true};
     return out;
   }
 
   // Returns a copy with the best-bid price set.
   [[nodiscard]] Quote WithBid(const param::Price& bid) const noexcept {
     Quote out = *this;
-    out.m_value.bid = param::PriceOptional{bid.Raw(), true};
+    out.m_value.bid =
+        param::detail::RawPriceOptional{::openpit::detail::Native(bid), true};
     return out;
   }
 
   // Returns a copy with the best-ask price set.
   [[nodiscard]] Quote WithAsk(const param::Price& ask) const noexcept {
     Quote out = *this;
-    out.m_value.ask = param::PriceOptional{ask.Raw(), true};
+    out.m_value.ask =
+        param::detail::RawPriceOptional{::openpit::detail::Native(ask), true};
     return out;
   }
 
@@ -81,15 +76,21 @@ class Quote {
     return Read(m_value.ask);
   }
 
-  [[nodiscard]] OpenPitMarketDataQuote Raw() const noexcept { return m_value; }
-
  private:
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit Quote(OpenPitMarketDataQuote value) noexcept : m_value(value) {}
+
+  [[nodiscard]] OpenPitMarketDataQuote Native() const noexcept {
+    return m_value;
+  }
+
   [[nodiscard]] static std::optional<param::Price> Read(
-      const param::PriceOptional& field) noexcept {
+      const param::detail::RawPriceOptional& field) noexcept {
     if (!field.is_set) {
       return std::nullopt;
     }
-    return param::Price::FromRaw(field.value);
+    return ::openpit::detail::FromNative<param::Price>(field.value);
   }
 
   OpenPitMarketDataQuote m_value;
@@ -100,30 +101,33 @@ class Quote {
 
 // Controls how `Service::Get` resolves a quote for a specific account: which
 // buckets are consulted, in order, when the more-specific bucket has no quote.
-// Mirrors `OpenPitMarketDataQuoteResolution`.
 enum class QuoteResolution : std::uint8_t {
   // Consults only the per-account bucket; no fallback.
-  AccountOnly = OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_ONLY,
+  AccountOnly = 0,
   // Consults the per-account bucket, then the account's group bucket.
-  AccountThenGroup = OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP,
+  AccountThenGroup = 1,
   // Consults the per-account bucket, then the account's group bucket, then the
   // default account-group ("everyone-else") bucket, in that order.
-  AccountThenGroupThenDefault =
-      OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT,
+  AccountThenGroupThenDefault = 2,
 };
 
-[[nodiscard]] inline OpenPitMarketDataQuoteResolution ToRaw(
+namespace detail {
+
+using RawQuoteResolution = ::OpenPitMarketDataQuoteResolution;
+
+[[nodiscard]] inline RawQuoteResolution ToNative(
     QuoteResolution resolution) noexcept {
-  return static_cast<OpenPitMarketDataQuoteResolution>(resolution);
+  return static_cast<RawQuoteResolution>(resolution);
 }
+
+}  // namespace detail
 
 //------------------------------------------------------------------------------
 // QuoteTtl
 
 // A service-wide or per-instrument quote lifetime. An infinite TTL means quotes
 // never expire on their own; a finite TTL expires a quote after the configured
-// duration following the push that wrote it. Wraps the native runtime POD
-// `OpenPitMarketDataQuoteTtl`.
+// duration following the push that wrote it.
 class QuoteTtl {
  public:
   // A lifetime under which quotes never expire on their own.
@@ -151,13 +155,15 @@ class QuoteTtl {
                   static_cast<std::uint32_t>(nanos.count()));
   }
 
-  [[nodiscard]] OpenPitMarketDataQuoteTtl Raw() const noexcept {
-    return m_value;
-  }
-
  private:
+  friend class ::openpit::detail::NativeAccess;
+
   explicit QuoteTtl(OpenPitMarketDataQuoteTtl value) noexcept
       : m_value(value) {}
+
+  [[nodiscard]] OpenPitMarketDataQuoteTtl Native() const noexcept {
+    return m_value;
+  }
 
   OpenPitMarketDataQuoteTtl m_value;
 };

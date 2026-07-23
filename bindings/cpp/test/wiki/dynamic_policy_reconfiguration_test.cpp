@@ -82,8 +82,10 @@ TEST(DynamicPolicyReconfigurationWiki, RateLimit) {
   // Built-in policies register under their type name (RateLimitPolicyName).
   engine.Configure().RateLimit(
       policies::RateLimitPolicyName,
-      policies::RateLimitBrokerBarrier(policies::RateLimit(
-          /*maxOrders=*/2, /*windowNanoseconds=*/60'000'000'000)));
+      policies::RateLimitBrokerBarrierUpdate::Set(
+          policies::RateLimitBrokerBarrier(policies::RateLimit(
+              /*maxOrders=*/2,
+              /*windowNanoseconds=*/60'000'000'000))));
 
   // The next order would have passed under the old limit of 5; the new limit
   // of 2 rejects it, proving the live policy reads the retuned value.
@@ -147,7 +149,7 @@ TEST(DynamicPolicyReconfigurationWiki, SpotFundsGlobalLimitMode) {
   seed.operation = aa::Operation::OfBalance(std::move(balanceOp));
   aa::Amount seedAmount;
   seedAmount.balance =
-      AdjustmentAmount::OfAbsolute(PositionSize::FromString("1000"));
+      AdjustmentAmount::Absolute(PositionSize::FromString("1000"));
   seed.amount = std::move(seedAmount);
 
   const openpit::AdjustmentResult seedResult = engine.ApplyAccountAdjustment(
@@ -205,7 +207,7 @@ TEST(DynamicPolicyReconfigurationWiki, SpotFundsPerAccountLimitMode) {
   seed.operation = aa::Operation::OfBalance(std::move(balanceOp));
   aa::Amount seedAmount;
   seedAmount.balance =
-      AdjustmentAmount::OfAbsolute(PositionSize::FromString("1000"));
+      AdjustmentAmount::Absolute(PositionSize::FromString("1000"));
   seed.amount = std::move(seedAmount);
 
   const openpit::AdjustmentResult seedResult = engine.ApplyAccountAdjustment(

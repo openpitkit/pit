@@ -17,15 +17,16 @@
 
 #pragma once
 
-#include "openpit/account_id.hpp"
+#include "openpit/detail/callback_error.hpp"
 #include "openpit/detail/handle.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/error.hpp"
 #include "openpit/marketdata/account_info.hpp"
 #include "openpit/marketdata/instrument_id.hpp"
 #include "openpit/marketdata/quote.hpp"
-#include "openpit/model.hpp"
-#include "openpit/param.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/param/param.hpp"
 
 #include <openpit.h>
 
@@ -51,22 +52,21 @@
 
 namespace openpit::marketdata {
 
-// Outcome of a registration, push, or TTL-mutation call. Mirrors
-// `OpenPitMarketDataRegisterStatus` minus the `Error` boundary case, which is
+// Outcome of a registration, push, or TTL-mutation call. Boundary failures are
 // surfaced as a thrown `openpit::Error` instead.
 enum class RegisterStatus : std::uint8_t {
   // The operation succeeded.
-  Ok = OpenPitMarketDataRegisterStatus_Ok,
+  Ok = 0,
   // The instrument is already registered (auto-id registration).
-  AlreadyRegistered = OpenPitMarketDataRegisterStatus_AlreadyRegistered,
+  AlreadyRegistered = 1,
   // The caller-supplied instrument id is already registered.
-  DuplicateId = OpenPitMarketDataRegisterStatus_DuplicateId,
+  DuplicateId = 2,
   // The instrument is already registered under a different id.
-  DuplicateInstrument = OpenPitMarketDataRegisterStatus_DuplicateInstrument,
+  DuplicateInstrument = 3,
   // The instrument id is not registered.
-  UnknownInstrument = OpenPitMarketDataRegisterStatus_UnknownInstrument,
+  UnknownInstrument = 4,
   // A `PushFor` call specified neither an account nor a group target.
-  NoTarget = OpenPitMarketDataRegisterStatus_NoTarget,
+  NoTarget = 6,
 };
 
 /// \brief Value result returned by market-data registration calls.
@@ -84,19 +84,17 @@ struct RegisterResult {
   }
 };
 
-// Outcome of a quote read. Mirrors `OpenPitMarketDataGetStatus`.
+// Outcome of a quote read.
 enum class GetStatus : std::uint8_t {
   // A usable quote was found and written to the out-parameter.
-  Found = OpenPitMarketDataGetStatus_Found,
+  Found = 0,
   // The instrument is registered but holds no usable quote (never pushed,
   // cleared, or aged past its TTL).
-  Unavailable = OpenPitMarketDataGetStatus_Unavailable,
+  Unavailable = 1,
   // The instrument id is not registered.
-  UnknownInstrument = OpenPitMarketDataGetStatus_UnknownInstrument,
+  UnknownInstrument = 2,
   // The selected quote exists but aged past its effective TTL.
-  QuoteExpired = OpenPitMarketDataGetStatus_QuoteExpired,
-  // The supplied quote-resolution selector is invalid.
-  Error = OpenPitMarketDataGetStatus_Error,
+  QuoteExpired = 3,
 };
 
 /// \brief Value result returned by account-aware quote reads.
@@ -118,6 +116,8 @@ struct GetResult {
 
 namespace detail {
 
+using RawService = ::OpenPitMarketDataService;
+
 struct ServiceDeleter {
   void operator()(OpenPitMarketDataService* handle) const noexcept {
     openpit_destroy_marketdata_service(handle);
@@ -136,9 +136,6 @@ class Service {
  public:
   Service() = default;
 
-  explicit Service(OpenPitMarketDataService* handle) noexcept
-      : m_handle(handle) {}
-
   [[nodiscard]] explicit operator bool() const noexcept {
     return static_cast<bool>(m_handle);
   }
@@ -150,11 +147,7 @@ class Service {
     if (raw == nullptr) {
       throw Error("openpit_marketdata_service_clone failed");
     }
-    return Service(raw);
-  }
-
-  [[nodiscard]] OpenPitMarketDataService* Get() const noexcept {
-    return m_handle.Get();
+    return ::openpit::detail::FromNative<Service>(raw);
   }
 
   //----------------------------------------------------------------------------
@@ -162,7 +155,7 @@ class Service {
 
   // Registers `instrument` with the service-wide default TTL.
   [[nodiscard]] RegisterResult Register(const model::Instrument& instrument) {
-    const OpenPitInstrument raw = instrument.Raw();
+    const OpenPitInstrument raw = ::openpit::detail::Native(instrument);
     OpenPitMarketDataInstrumentId id = 0;
     OpenPitSharedString* error = nullptr;
     const OpenPitMarketDataRegisterStatus status =
@@ -174,12 +167,12 @@ class Service {
   // Registers `instrument` with a per-instrument TTL override.
   [[nodiscard]] RegisterResult Register(const model::Instrument& instrument,
                                         const QuoteTtl& ttl) {
-    const OpenPitInstrument raw = instrument.Raw();
+    const OpenPitInstrument raw = ::openpit::detail::Native(instrument);
     OpenPitMarketDataInstrumentId id = 0;
     OpenPitSharedString* error = nullptr;
     const OpenPitMarketDataRegisterStatus status =
-        openpit_marketdata_service_register_with_ttl(m_handle.Get(), &raw,
-                                                     ttl.Raw(), &id, &error);
+        openpit_marketdata_service_register_with_ttl(
+            m_handle.Get(), &raw, ::openpit::detail::Native(ttl), &id, &error);
     return MapRegister(status, error,
                        "openpit_marketdata_service_register_with_ttl", &id,
                        instrument, std::nullopt);
@@ -189,12 +182,13 @@ class Service {
   // default TTL.
   [[nodiscard]] RegisterResult Register(const model::Instrument& instrument,
                                         InstrumentId id) {
-    const OpenPitInstrument raw = instrument.Raw();
+    const OpenPitInstrument raw = ::openpit::detail::Native(instrument);
     OpenPitMarketDataInstrumentId resolved = 0;
     OpenPitSharedString* error = nullptr;
     const OpenPitMarketDataRegisterStatus status =
         openpit_marketdata_service_register_with_id(
-            m_handle.Get(), &raw, id.Raw(), &resolved, &error);
+            m_handle.Get(), &raw, ::openpit::detail::Native(id), &resolved,
+            &error);
     return MapRegister(status, error,
                        "openpit_marketdata_service_register_with_id", &resolved,
                        instrument, id);
@@ -204,12 +198,13 @@ class Service {
   // TTL override.
   [[nodiscard]] RegisterResult Register(const model::Instrument& instrument,
                                         InstrumentId id, const QuoteTtl& ttl) {
-    const OpenPitInstrument raw = instrument.Raw();
+    const OpenPitInstrument raw = ::openpit::detail::Native(instrument);
     OpenPitMarketDataInstrumentId resolved = 0;
     OpenPitSharedString* error = nullptr;
     const OpenPitMarketDataRegisterStatus status =
         openpit_marketdata_service_register_with_id_and_ttl(
-            m_handle.Get(), &raw, id.Raw(), ttl.Raw(), &resolved, &error);
+            m_handle.Get(), &raw, ::openpit::detail::Native(id),
+            ::openpit::detail::Native(ttl), &resolved, &error);
     return MapRegister(status, error,
                        "openpit_marketdata_service_register_with_id_and_ttl",
                        &resolved, instrument, id);
@@ -219,7 +214,7 @@ class Service {
   // it is not registered by name.
   [[nodiscard]] std::optional<InstrumentId> Resolve(
       const model::Instrument& instrument) const {
-    const OpenPitInstrument raw = instrument.Raw();
+    const OpenPitInstrument raw = ::openpit::detail::Native(instrument);
     OpenPitMarketDataInstrumentId id = 0;
     if (!openpit_marketdata_service_resolve(m_handle.Get(), &raw, &id)) {
       return std::nullopt;
@@ -236,8 +231,9 @@ class Service {
                                     const Quote& quote) {
     OpenPitSharedString* error = nullptr;
     const OpenPitMarketDataRegisterStatus status =
-        openpit_marketdata_service_push(m_handle.Get(), instrumentId.Raw(),
-                                        quote.Raw(), &error);
+        openpit_marketdata_service_push(
+            m_handle.Get(), ::openpit::detail::Native(instrumentId),
+            ::openpit::detail::Native(quote), &error);
     return MapPush(status, error, "openpit_marketdata_service_push");
   }
 
@@ -248,7 +244,8 @@ class Service {
     OpenPitSharedString* error = nullptr;
     const OpenPitMarketDataRegisterStatus status =
         openpit_marketdata_service_push_patch(
-            m_handle.Get(), instrumentId.Raw(), quote.Raw(), &error);
+            m_handle.Get(), ::openpit::detail::Native(instrumentId),
+            ::openpit::detail::Native(quote), &error);
     return MapPush(status, error, "openpit_marketdata_service_push_patch");
   }
 
@@ -267,10 +264,10 @@ class Service {
         RawGroups(accountGroupIds);
     OpenPitSharedString* error = nullptr;
     const OpenPitMarketDataRegisterStatus status =
-        openpit_marketdata_service_push_for(m_handle.Get(), instrumentId.Raw(),
-                                            quote.Raw(), DataOrNull(accounts),
-                                            accounts.size(), DataOrNull(groups),
-                                            groups.size(), &error);
+        openpit_marketdata_service_push_for(
+            m_handle.Get(), ::openpit::detail::Native(instrumentId),
+            ::openpit::detail::Native(quote), DataOrNull(accounts),
+            accounts.size(), DataOrNull(groups), groups.size(), &error);
     return MapPush(status, error, "openpit_marketdata_service_push_for");
   }
 
@@ -286,9 +283,9 @@ class Service {
     OpenPitSharedString* error = nullptr;
     const OpenPitMarketDataRegisterStatus status =
         openpit_marketdata_service_push_for_patch(
-            m_handle.Get(), instrumentId.Raw(), quote.Raw(),
-            DataOrNull(accounts), accounts.size(), DataOrNull(groups),
-            groups.size(), &error);
+            m_handle.Get(), ::openpit::detail::Native(instrumentId),
+            ::openpit::detail::Native(quote), DataOrNull(accounts),
+            accounts.size(), DataOrNull(groups), groups.size(), &error);
     return MapPush(status, error, "openpit_marketdata_service_push_for_patch");
   }
 
@@ -314,7 +311,8 @@ class Service {
   // Hides the current quote for `instrumentId` across all buckets without
   // unregistering it. A no-op if `instrumentId` is not registered.
   void Clear(InstrumentId instrumentId) {
-    openpit_marketdata_service_clear(m_handle.Get(), instrumentId.Raw());
+    openpit_marketdata_service_clear(m_handle.Get(),
+                                     ::openpit::detail::Native(instrumentId));
   }
 
   //----------------------------------------------------------------------------
@@ -328,18 +326,25 @@ class Service {
   [[nodiscard]] GetResult Get(InstrumentId instrumentId,
                               param::AccountId accountId,
                               const AccountInfo& accountInfo,
-                              QuoteResolution resolution) {
+                              QuoteResolution resolution) const {
     OpenPitMarketDataQuote raw{};
+    ::openpit::detail::ClearPendingCallbackException();
     const OpenPitMarketDataGetStatus status = openpit_marketdata_service_get(
-        m_handle.Get(), instrumentId.Raw(), accountId.Raw(),
-        &detail::AccountGroupResolverTrampoline<AccountInfo>,
+        m_handle.Get(), ::openpit::detail::Native(instrumentId),
+        ::openpit::detail::Native(accountId),
+        &AccountGroupResolverTrampoline<AccountInfo>,
         // The trampoline borrows `accountInfo` only for this call; the const
         // cast is required by the native runtime `void*` user-data parameter.
-        const_cast<AccountInfo*>(&accountInfo), ToRaw(resolution), &raw);
+        const_cast<AccountInfo*>(&accountInfo), detail::ToNative(resolution),
+        &raw);
+    ::openpit::detail::ThrowIfPendingCallbackException();
+    if (status == OpenPitMarketDataGetStatus_Error) {
+      throw ::openpit::Error("invalid market-data quote resolution");
+    }
     GetResult result;
     result.status = static_cast<GetStatus>(status);
     if (result.Found() || result.Expired()) {
-      result.quote = Quote::FromRaw(raw);
+      result.quote = ::openpit::detail::FromNative<Quote>(raw);
     }
     return result;
   }
@@ -352,7 +357,7 @@ class Service {
   [[nodiscard]] std::optional<Quote> Find(InstrumentId instrumentId,
                                           param::AccountId accountId,
                                           const AccountInfo& accountInfo,
-                                          QuoteResolution resolution) {
+                                          QuoteResolution resolution) const {
     GetResult result = Get(instrumentId, accountId, accountInfo, resolution);
     if (!result.Found()) {
       return std::nullopt;
@@ -368,26 +373,28 @@ class Service {
                                                 const QuoteTtl& ttl) {
     return static_cast<RegisterStatus>(
         openpit_marketdata_service_set_instrument_ttl(
-            m_handle.Get(), instrumentId.Raw(), ttl.Raw()));
+            m_handle.Get(), ::openpit::detail::Native(instrumentId),
+            ::openpit::detail::Native(ttl)));
   }
 
   // Reverts the instrument-level TTL for `instrumentId` back to "inherit".
   [[nodiscard]] RegisterStatus ClearInstrumentTtl(InstrumentId instrumentId) {
     return static_cast<RegisterStatus>(
-        openpit_marketdata_service_clear_instrument_ttl(m_handle.Get(),
-                                                        instrumentId.Raw()));
+        openpit_marketdata_service_clear_instrument_ttl(
+            m_handle.Get(), ::openpit::detail::Native(instrumentId)));
   }
 
   // Pins the service-level TTL for `accountId`.
   void SetAccountTtl(param::AccountId accountId, const QuoteTtl& ttl) {
-    openpit_marketdata_service_set_account_ttl(m_handle.Get(), accountId.Raw(),
-                                               ttl.Raw());
+    openpit_marketdata_service_set_account_ttl(
+        m_handle.Get(), ::openpit::detail::Native(accountId),
+        ::openpit::detail::Native(ttl));
   }
 
   // Reverts the service-level TTL for `accountId` back to "inherit".
   void ClearAccountTtl(param::AccountId accountId) {
-    openpit_marketdata_service_clear_account_ttl(m_handle.Get(),
-                                                 accountId.Raw());
+    openpit_marketdata_service_clear_account_ttl(
+        m_handle.Get(), ::openpit::detail::Native(accountId));
   }
 
   // Pins the service-level TTL for `accountGroupId`. Pass
@@ -395,13 +402,14 @@ class Service {
   void SetAccountGroupTtl(param::AccountGroupId accountGroupId,
                           const QuoteTtl& ttl) {
     openpit_marketdata_service_set_account_group_ttl(
-        m_handle.Get(), accountGroupId.Raw(), ttl.Raw());
+        m_handle.Get(), ::openpit::detail::Native(accountGroupId),
+        ::openpit::detail::Native(ttl));
   }
 
   // Reverts the service-level TTL for `accountGroupId` back to "inherit".
   void ClearAccountGroupTtl(param::AccountGroupId accountGroupId) {
-    openpit_marketdata_service_clear_account_group_ttl(m_handle.Get(),
-                                                       accountGroupId.Raw());
+    openpit_marketdata_service_clear_account_group_ttl(
+        m_handle.Get(), ::openpit::detail::Native(accountGroupId));
   }
 
   // Pins the highest-priority instrument x account TTL cell.
@@ -410,7 +418,9 @@ class Service {
       const QuoteTtl& ttl) {
     return static_cast<RegisterStatus>(
         openpit_marketdata_service_set_instrument_account_ttl(
-            m_handle.Get(), instrumentId.Raw(), accountId.Raw(), ttl.Raw()));
+            m_handle.Get(), ::openpit::detail::Native(instrumentId),
+            ::openpit::detail::Native(accountId),
+            ::openpit::detail::Native(ttl)));
   }
 
   // Reverts the instrument x account TTL cell back to "inherit".
@@ -418,7 +428,8 @@ class Service {
       InstrumentId instrumentId, param::AccountId accountId) {
     return static_cast<RegisterStatus>(
         openpit_marketdata_service_clear_instrument_account_ttl(
-            m_handle.Get(), instrumentId.Raw(), accountId.Raw()));
+            m_handle.Get(), ::openpit::detail::Native(instrumentId),
+            ::openpit::detail::Native(accountId)));
   }
 
   // Pins the instrument x group TTL cell. Pass `param::DefaultAccountGroup` for
@@ -428,8 +439,9 @@ class Service {
       const QuoteTtl& ttl) {
     return static_cast<RegisterStatus>(
         openpit_marketdata_service_set_instrument_account_group_ttl(
-            m_handle.Get(), instrumentId.Raw(), accountGroupId.Raw(),
-            ttl.Raw()));
+            m_handle.Get(), ::openpit::detail::Native(instrumentId),
+            ::openpit::detail::Native(accountGroupId),
+            ::openpit::detail::Native(ttl)));
   }
 
   // Reverts the instrument x group TTL cell back to "inherit". Pass
@@ -438,10 +450,30 @@ class Service {
       InstrumentId instrumentId, param::AccountGroupId accountGroupId) {
     return static_cast<RegisterStatus>(
         openpit_marketdata_service_clear_instrument_account_group_ttl(
-            m_handle.Get(), instrumentId.Raw(), accountGroupId.Raw()));
+            m_handle.Get(), ::openpit::detail::Native(instrumentId),
+            ::openpit::detail::Native(accountGroupId)));
   }
 
  private:
+  // The native runtime borrows `accountInfo` only for the enclosing `Get` call.
+  template <typename AccountInfo>
+  static bool AccountGroupResolverTrampoline(
+      void* userData, OpenPitParamAccountGroupId* outAccountGroupId) noexcept {
+    try {
+      const auto* accountInfo = static_cast<const AccountInfo*>(userData);
+      const std::optional<param::AccountGroupId> group =
+          accountInfo->AccountGroup();
+      if (!group.has_value()) {
+        return false;
+      }
+      *outAccountGroupId = ::openpit::detail::Native(*group);
+      return true;
+    } catch (...) {
+      ::openpit::detail::CaptureCurrentCallbackException();
+      return false;
+    }
+  }
+
   using PushByInstrumentFn = bool (*)(const OpenPitMarketDataService*,
                                       const OpenPitInstrument*,
                                       OpenPitMarketDataQuote,
@@ -451,10 +483,11 @@ class Service {
   [[nodiscard]] InstrumentId PushByInstrumentImpl(
       const model::Instrument& instrument, const Quote& quote,
       PushByInstrumentFn fn, const char* fallback) {
-    const OpenPitInstrument raw = instrument.Raw();
+    const OpenPitInstrument raw = ::openpit::detail::Native(instrument);
     OpenPitMarketDataInstrumentId id = 0;
     OpenPitSharedString* error = nullptr;
-    if (!fn(m_handle.Get(), &raw, quote.Raw(), &id, &error)) {
+    if (!fn(m_handle.Get(), &raw, ::openpit::detail::Native(quote), &id,
+            &error)) {
       ::openpit::detail::ThrowFromSharedString(error, fallback);
     }
     return InstrumentId(id);
@@ -498,7 +531,7 @@ class Service {
     std::vector<OpenPitParamAccountId> raw;
     raw.reserve(accounts.size());
     for (const param::AccountId& account : accounts) {
-      raw.push_back(account.Raw());
+      raw.push_back(::openpit::detail::Native(account));
     }
     return raw;
   }
@@ -508,7 +541,7 @@ class Service {
     std::vector<OpenPitParamAccountGroupId> raw;
     raw.reserve(groups.size());
     for (const param::AccountGroupId& group : groups) {
-      raw.push_back(group.Raw());
+      raw.push_back(::openpit::detail::Native(group));
     }
     return raw;
   }
@@ -519,7 +552,15 @@ class Service {
     return values.empty() ? nullptr : values.data();
   }
 
-  ::openpit::detail::Handle<OpenPitMarketDataService, detail::ServiceDeleter>
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit Service(detail::RawService* handle) noexcept : m_handle(handle) {}
+
+  [[nodiscard]] detail::RawService* Native() const noexcept {
+    return m_handle.Get();
+  }
+
+  ::openpit::detail::Handle<detail::RawService, detail::ServiceDeleter>
       m_handle;
 };
 
@@ -532,11 +573,10 @@ class Service {
 // mode from the engine's sync policy. A no-sync engine builds a `Builder`; call
 // `FullSync()` to upgrade it when a background producer must publish quotes
 // concurrently with the engine. A full-sync engine builds a `Builder` already
-// fixed to `Full`, which cannot be downgraded. Mirrors `OpenPitSyncPolicy`'s
-// `None` / `Full` (the only two values valid for a market-data service).
+// fixed to `Full`, which cannot be downgraded.
 enum class SyncPolicy : std::uint8_t {
-  None = OpenPitSyncPolicy_None,
-  Full = OpenPitSyncPolicy_Full,
+  None = 0,
+  Full = 1,
 };
 
 // Builds a market-data `Service` with a fixed default TTL and a chosen
@@ -565,18 +605,6 @@ class Builder {
     return Builder(defaultTtl, mode);
   }
 
-  // Advanced escape hatch: constructs a builder from a raw native runtime
-  // sync-policy byte. Prefer the typed
-  // `FromEngineSyncPolicy(::openpit::SyncPolicy)` overload; use this only when
-  // the raw byte is all that is available (e.g. when bridging from C callback
-  // context).
-  [[nodiscard]] static Builder FromEngineSyncPolicyRaw(
-      QuoteTtl defaultTtl, OpenPitSyncPolicy enginePolicy) noexcept {
-    return FromEngineSyncPolicy(defaultTtl,
-                                static_cast<::openpit::SyncPolicy>(
-                                    static_cast<std::uint8_t>(enginePolicy)));
-  }
-
   // Upgrades the builder to full synchronization, making the resulting service
   // safe for concurrent access. Always valid.
   Builder& FullSync() noexcept {
@@ -596,12 +624,13 @@ class Builder {
   [[nodiscard]] Service Build() const {
     OpenPitSharedString* error = nullptr;
     OpenPitMarketDataService* raw = openpit_create_marketdata_service(
-        static_cast<std::uint8_t>(m_syncPolicy), m_defaultTtl.Raw(), &error);
+        static_cast<std::uint8_t>(m_syncPolicy),
+        ::openpit::detail::Native(m_defaultTtl), &error);
     if (raw == nullptr) {
       ::openpit::detail::ThrowFromSharedString(
           error, "openpit_create_marketdata_service failed");
     }
-    return Service(raw);
+    return ::openpit::detail::FromNative<Service>(raw);
   }
 
  private:

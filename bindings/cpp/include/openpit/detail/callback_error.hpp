@@ -40,11 +40,10 @@ inline void CaptureCurrentCallbackException() noexcept {
   return g_pendingCallbackException != nullptr;
 }
 
-inline void ThrowIfPendingCallbackException(const char* fallback) {
+inline void ThrowIfPendingCallbackException() {
   // The C++ exception is captured only long enough to cross back over the C
   // callback frame. Preserve its exact dynamic type and payload when control
   // returns to the invoking C++ API.
-  static_cast<void>(fallback);
   if (g_pendingCallbackException == nullptr) {
     return;
   }

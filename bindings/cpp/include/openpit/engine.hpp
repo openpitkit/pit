@@ -17,15 +17,16 @@
 
 #pragma once
 
-#include "openpit/account_id.hpp"
 #include "openpit/accountadjustment/account_adjustment.hpp"
-#include "openpit/accounts.hpp"
+#include "openpit/accounts/accounts.hpp"
 #include "openpit/detail/callback_error.hpp"
 #include "openpit/detail/handle.hpp"
 #include "openpit/error.hpp"
-#include "openpit/model.hpp"
-#include "openpit/pretrade/pre_trade_lock.hpp"
-#include "openpit/reject.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/pretrade/detail/lists.hpp"
+#include "openpit/pretrade/dry_run_report.hpp"
+#include "openpit/pretrade/start_result.hpp"
 #include "openpit/string.hpp"
 
 #include <openpit.h>
@@ -69,66 +70,25 @@ template <typename T>
 struct HasAddTo<T, std::void_t<decltype(std::declval<const T&>().AddTo(
                        std::declval<EngineBuilder&>()))>> : std::true_type {};
 
-template <typename T, typename = void>
-struct HasGet : std::false_type {};
-
-template <typename T>
-struct HasGet<T, std::void_t<decltype(std::declval<const T&>().Get())>>
-    : std::true_type {};
-
-// Drains a caller-owned reject list into owned `Reject` value types, then
-// releases the list. The list pointer must be non-null.
-[[nodiscard]] inline std::vector<::openpit::pretrade::Reject> DrainRejectList(
-    OpenPitPretradeRejectList* list) {
-  std::vector<::openpit::pretrade::Reject> rejects;
-  const std::size_t count = openpit_pretrade_reject_list_len(list);
-  rejects.reserve(count);
-  for (std::size_t i = 0; i < count; ++i) {
-    OpenPitPretradeReject raw{};
-    if (openpit_pretrade_reject_list_get(list, i, &raw)) {
-      rejects.push_back(::openpit::pretrade::Reject::FromRaw(raw));
-    }
-  }
-  openpit_pretrade_destroy_reject_list(list);
-  return rejects;
-}
-
-// Drains a caller-owned account-block list into owned `AccountBlock` values,
-// then releases the list. The list pointer must be non-null.
-[[nodiscard]] inline std::vector<::openpit::accounts::AccountBlock>
-DrainAccountBlockList(OpenPitPretradeAccountBlockList* list) {
-  std::vector<::openpit::accounts::AccountBlock> blocks;
-  const std::size_t count = openpit_pretrade_account_block_list_len(list);
-  blocks.reserve(count);
-  for (std::size_t index = 0; index < count; ++index) {
-    OpenPitPretradeAccountBlock raw{};
-    if (openpit_pretrade_account_block_list_get(list, index, &raw)) {
-      blocks.push_back(::openpit::accounts::AccountBlock::FromRaw(raw));
-    }
-  }
-  openpit_pretrade_destroy_account_block_list(list);
-  return blocks;
-}
-
 }  // namespace detail
 
 // Storage synchronization policy selected at builder time. Mirrors
 // `OpenPitSyncPolicy`.
 enum class SyncPolicy : std::uint8_t {
   // Single-threaded: the engine must stay on its creating thread.
-  None = OpenPitSyncPolicy_None,
+  None = 0,
   // Fully synchronized: concurrent calls on one handle are safe.
-  Full = OpenPitSyncPolicy_Full,
+  Full = 1,
   // Account-sharded: sequential cross-thread access with per-account pinning.
-  Account = OpenPitSyncPolicy_Account,
+  Account = 2,
 };
 
 // Machine-readable category of a domain engine-build failure. Mirrors
 // `OpenPitEngineBuildErrorCode`.
 enum class EngineBuildErrorCode : std::uint8_t {
-  DuplicatePolicyName = OpenPitEngineBuildErrorCode_DuplicatePolicyName,
-  DuplicatePolicyGroupId = OpenPitEngineBuildErrorCode_DuplicatePolicyGroupId,
-  Other = OpenPitEngineBuildErrorCode_Other,
+  DuplicatePolicyName = 0,
+  DuplicatePolicyGroupId = 1,
+  Other = 2,
 };
 
 // Structured error thrown when engine construction fails its configuration
@@ -183,265 +143,13 @@ struct PostTradeResultDeleter {
   }
 };
 
-}  // namespace detail
-
-namespace pretrade {
-
-namespace detail {
-
-struct PreTradeRequestDeleter {
-  void operator()(OpenPitPretradePreTradeRequest* handle) const noexcept {
-    openpit_destroy_pretrade_pre_trade_request(handle);
-  }
-};
-
-struct PreTradeReservationDeleter {
-  void operator()(OpenPitPretradePreTradeReservation* handle) const noexcept {
-    // An unresolved reservation rolls back during destruction. Destructors
-    // cannot report user callback failures, so suppress only that rollback's
-    // captured exception; explicit Rollback() reports it to the caller.
-    ::openpit::detail::ClearPendingCallbackException();
-    openpit_destroy_pretrade_pre_trade_reservation(handle);
-    ::openpit::detail::ClearPendingCallbackException();
-  }
-};
-
-struct PreTradeDryRunReportDeleter {
-  void operator()(OpenPitPretradePreTradeDryRunReport* handle) const noexcept {
-    openpit_destroy_pretrade_pre_trade_dry_run_report(handle);
+struct EngineBuildErrorDeleter {
+  void operator()(OpenPitEngineBuildError* handle) const noexcept {
+    openpit_destroy_engine_build_error(handle);
   }
 };
 
 }  // namespace detail
-
-// Outcome of running the full pre-trade pipeline (`ExecutePreTrade` or
-// `Request::Execute`): exactly one channel is populated. A `reservation` means
-// the order passed and reserved state awaits resolution; a non-empty `rejects`
-// means it was rejected. runtime failures throw instead of producing this
-// value.
-struct ExecuteResult;
-
-// Reserved-but-not-finalized pre-trade state. Move-only RAII: resolve it
-// exactly once with `Commit()` or `Rollback()`; destruction rolls back any
-// still-pending mutations. Both resolutions are idempotent at the pointer
-// level.
-class Reservation {
- public:
-  Reservation() = default;
-
-  explicit Reservation(OpenPitPretradePreTradeReservation* handle) noexcept
-      : m_handle(handle) {}
-
-  [[nodiscard]] explicit operator bool() const noexcept {
-    return static_cast<bool>(m_handle);
-  }
-
-  // Finalizes the reservation, applying the reserved state permanently.
-  void Commit() {
-    ::openpit::detail::ClearPendingCallbackException();
-    openpit_pretrade_pre_trade_reservation_commit(m_handle.Get());
-    ::openpit::detail::ThrowIfPendingCallbackException(
-        "pre-trade mutation commit callback failed");
-  }
-
-  // Cancels the reservation, releasing the reserved state.
-  void Rollback() {
-    ::openpit::detail::ClearPendingCallbackException();
-    openpit_pretrade_pre_trade_reservation_rollback(m_handle.Get());
-    ::openpit::detail::ThrowIfPendingCallbackException(
-        "pre-trade mutation rollback callback failed");
-  }
-
-  // Returns an owned lock snapshot detached from the reservation state.
-  [[nodiscard]] PreTradeLock Lock() const {
-    return PreTradeLock(
-        openpit_pretrade_pre_trade_reservation_get_lock(m_handle.Get()));
-  }
-
-  /// Returns the winning account block produced by this reservation's
-  /// pre-trade pipeline.
-  [[nodiscard]] std::optional<::openpit::accounts::AccountBlock> AccountBlock()
-      const {
-    OpenPitPretradeAccountBlockList* blocks =
-        openpit_pretrade_pre_trade_reservation_get_account_block(
-            m_handle.Get());
-    if (blocks == nullptr) {
-      return std::nullopt;
-    }
-    OpenPitPretradeAccountBlock raw{};
-    std::optional<::openpit::accounts::AccountBlock> out;
-    if (openpit_pretrade_account_block_list_get(blocks, 0, &raw)) {
-      out = ::openpit::accounts::AccountBlock::FromRaw(raw);
-    }
-    openpit_pretrade_destroy_account_block_list(blocks);
-    return out;
-  }
-
-  [[nodiscard]] OpenPitPretradePreTradeReservation* Get() const noexcept {
-    return m_handle.Get();
-  }
-
- private:
-  ::openpit::detail::Handle<OpenPitPretradePreTradeReservation,
-                            detail::PreTradeReservationDeleter>
-      m_handle;
-};
-
-// Deferred pre-trade request returned by `StartPreTrade`. Move-only RAII:
-// `Execute()` runs the remaining stages once; destruction abandons an
-// unexecuted request without creating a reservation.
-class Request {
- public:
-  Request() = default;
-
-  explicit Request(
-      OpenPitPretradePreTradeRequest* handle,
-      std::shared_ptr<const ::openpit::Order> order = nullptr) noexcept
-      : m_handle(handle), m_order(std::move(order)) {}
-
-  [[nodiscard]] explicit operator bool() const noexcept {
-    return static_cast<bool>(m_handle);
-  }
-
-  // Defined out-of-line below `ExecuteResult`.
-  [[nodiscard]] ExecuteResult Execute();
-
-  [[nodiscard]] OpenPitPretradePreTradeRequest* Get() const noexcept {
-    return m_handle.Get();
-  }
-
- private:
-  ::openpit::detail::Handle<OpenPitPretradePreTradeRequest,
-                            detail::PreTradeRequestDeleter>
-      m_handle;
-  // Owned polymorphic order this request was started from, so the deferred main
-  // stage can recover the client order type without depending on caller
-  // lifetime. Empty only for a default-constructed request.
-  std::shared_ptr<const ::openpit::Order> m_order;
-};
-
-struct ExecuteResult {
-  std::optional<Reservation> reservation;
-  std::vector<::openpit::pretrade::Reject> rejects;
-
-  // Whether the order passed and a reservation is available.
-  [[nodiscard]] bool Passed() const noexcept { return reservation.has_value(); }
-};
-
-// Owning dry-run report. A dry-run never mutates engine state; the report is a
-// detached snapshot of the verdict and any would-be lock, account adjustments,
-// and account blocks.
-class DryRunReport {
- public:
-  DryRunReport() = default;
-
-  explicit DryRunReport(OpenPitPretradePreTradeDryRunReport* handle) noexcept
-      : m_handle(handle) {}
-
-  [[nodiscard]] explicit operator bool() const noexcept {
-    return static_cast<bool>(m_handle);
-  }
-
-  [[nodiscard]] bool Passed() const noexcept {
-    return openpit_pretrade_pre_trade_dry_run_report_is_pass(m_handle.Get());
-  }
-
-  [[nodiscard]] std::vector<::openpit::pretrade::Reject> Rejects() const {
-    return ::openpit::detail::DrainRejectList(
-        openpit_pretrade_pre_trade_dry_run_report_get_rejects(m_handle.Get()));
-  }
-
-  [[nodiscard]] ::openpit::pretrade::PreTradeLock Lock() const {
-    return ::openpit::pretrade::PreTradeLock(
-        openpit_pretrade_pre_trade_dry_run_report_get_lock(m_handle.Get()));
-  }
-
-  [[nodiscard]] std::vector<::openpit::accountadjustment::Outcome>
-  AccountAdjustments() const {
-    const ::openpit::accountadjustment::OutcomeList outcomes(
-        openpit_pretrade_pre_trade_dry_run_report_get_account_adjustments(
-            m_handle.Get()));
-    return outcomes.ToVector();
-  }
-
-  [[nodiscard]] std::vector<::openpit::accounts::AccountBlock> AccountBlocks()
-      const {
-    OpenPitPretradeAccountBlockList* blocks =
-        openpit_pretrade_pre_trade_dry_run_report_get_account_block(
-            m_handle.Get());
-    std::vector<::openpit::accounts::AccountBlock> out;
-    if (blocks == nullptr) {
-      return out;
-    }
-    const std::size_t count = openpit_pretrade_account_block_list_len(blocks);
-    out.reserve(count);
-    for (std::size_t index = 0; index < count; ++index) {
-      OpenPitPretradeAccountBlock block{};
-      if (openpit_pretrade_account_block_list_get(blocks, index, &block)) {
-        out.push_back(::openpit::accounts::AccountBlock::FromRaw(block));
-      }
-    }
-    openpit_pretrade_destroy_account_block_list(blocks);
-    return out;
-  }
-
-  [[nodiscard]] OpenPitPretradePreTradeDryRunReport* Get() const noexcept {
-    return m_handle.Get();
-  }
-
- private:
-  ::openpit::detail::Handle<OpenPitPretradePreTradeDryRunReport,
-                            detail::PreTradeDryRunReportDeleter>
-      m_handle;
-};
-
-// Outcome of `StartPreTrade`: a `request` means the order passed the start
-// stage and can proceed via `Request::Execute`; a non-empty `rejects` means it
-// was rejected at the start stage.
-struct StartResult {
-  std::optional<Request> request;
-  std::vector<::openpit::pretrade::Reject> rejects;
-
-  [[nodiscard]] bool Passed() const noexcept { return request.has_value(); }
-};
-
-[[nodiscard]] inline ExecuteResult Request::Execute() {
-  OpenPitPretradePreTradeReservation* reservation = nullptr;
-  OpenPitPretradeRejectList* rejects = nullptr;
-  OpenPitSharedString* error = nullptr;
-  // Re-establish the original order for the deferred main stage so a custom
-  // policy still recovers the client order type; harmless when null.
-  std::optional<::openpit::detail::CurrentOrderGuard> orderGuard;
-  if (m_order != nullptr) {
-    orderGuard.emplace(*m_order);
-  }
-  ::openpit::detail::ClearPendingCallbackException();
-  const OpenPitPretradeStatus status =
-      openpit_pretrade_pre_trade_request_execute(m_handle.Get(), &reservation,
-                                                 &rejects, &error);
-  if (::openpit::detail::HasPendingCallbackException()) {
-    openpit_destroy_pretrade_pre_trade_reservation(reservation);
-    openpit_pretrade_destroy_reject_list(rejects);
-    openpit_destroy_shared_string(error);
-  }
-  ::openpit::detail::ThrowIfPendingCallbackException(
-      "openpit_pretrade_pre_trade_request_execute callback failed");
-  if (status == OpenPitPretradeStatus_Error) {
-    ::openpit::detail::ThrowFromSharedString(
-        error, "openpit_pretrade_pre_trade_request_execute failed");
-  }
-  ExecuteResult out;
-  if (status == OpenPitPretradeStatus_Rejected) {
-    if (rejects != nullptr) {
-      out.rejects = ::openpit::detail::DrainRejectList(rejects);
-    }
-    return out;
-  }
-  out.reservation.emplace(reservation);
-  return out;
-}
-
-}  // namespace pretrade
 
 // Outcome of `ApplyExecutionReport`. Post-trade processing is non-atomic:
 // account blocks do not invalidate successful account-level PnL or adjustment
@@ -449,7 +157,7 @@ struct StartResult {
 struct PostTradeResult {
   std::vector<::openpit::accounts::AccountBlock> accountBlocks;
   /// Account-level PnL outcomes. Each outcome identifies its account and policy
-  /// group; `Get()` returns an account-currency amount or a halt reason. A
+  /// group; `Amount()` and `HaltReason()` identify the result. A
   /// newly halted calculation emits its reason once. Later checks can reject or
   /// block on the stored halt without emitting another account outcome, until a
   /// manager re-arms it with `Configurator::SetSpotFundsAccountPnl`. Re-arming
@@ -484,16 +192,10 @@ class Engine {
  public:
   Engine() = default;
 
-  explicit Engine(OpenPitEngine* handle) noexcept : m_handle(handle) {}
-
   [[nodiscard]] explicit operator bool() const noexcept {
     return static_cast<bool>(m_handle);
   }
 
-  // Runs the start stage of the pre-trade pipeline. On accept the result
-  // carries a `pretrade::Request` to drive the remaining stages; on reject it
-  // carries the rejects. Throws `openpit::Error` on a boundary failure (invalid
-  // pointers, undecodable order payload).
   // Starts a deferred pre-trade request from an explicitly owned polymorphic
   // order. This overload is the escape hatch for type-erased code: the shared
   // owner keeps the exact dynamic type alive through `Request::Execute()`.
@@ -502,7 +204,7 @@ class Engine {
     if (order == nullptr) {
       throw ::openpit::Error("StartPreTrade requires a non-null order");
     }
-    const OpenPitOrder raw = order->EngineRaw();
+    const OpenPitOrder raw = ::openpit::detail::Native(*order);
     OpenPitPretradePreTradeRequest* request = nullptr;
     OpenPitPretradeRejectList* rejects = nullptr;
     OpenPitSharedString* error = nullptr;
@@ -515,8 +217,7 @@ class Engine {
       openpit_pretrade_destroy_reject_list(rejects);
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException(
-        "openpit_engine_start_pre_trade callback failed");
+    detail::ThrowIfPendingCallbackException();
     if (status == OpenPitPretradeStatus_Error) {
       detail::ThrowFromSharedString(error,
                                     "openpit_engine_start_pre_trade failed");
@@ -524,11 +225,12 @@ class Engine {
     ::openpit::pretrade::StartResult out;
     if (status == OpenPitPretradeStatus_Rejected) {
       if (rejects != nullptr) {
-        out.rejects = detail::DrainRejectList(rejects);
+        out.rejects = pretrade::detail::ListAccess::DrainRejects(rejects);
       }
       return out;
     }
-    out.request.emplace(request, std::move(order));
+    out.request = ::openpit::detail::FromNative<::openpit::pretrade::Request>(
+        ::openpit::pretrade::detail::RequestInit{request, std::move(order)});
     return out;
   }
 
@@ -554,7 +256,7 @@ class Engine {
   // failure.
   [[nodiscard]] ::openpit::pretrade::ExecuteResult ExecutePreTrade(
       const ::openpit::Order& order) const {
-    const OpenPitOrder raw = order.EngineRaw();
+    const OpenPitOrder raw = ::openpit::detail::Native(order);
     OpenPitPretradePreTradeReservation* reservation = nullptr;
     OpenPitPretradeRejectList* rejects = nullptr;
     OpenPitSharedString* error = nullptr;
@@ -567,8 +269,7 @@ class Engine {
       openpit_pretrade_destroy_reject_list(rejects);
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException(
-        "openpit_engine_execute_pre_trade callback failed");
+    detail::ThrowIfPendingCallbackException();
     if (status == OpenPitPretradeStatus_Error) {
       detail::ThrowFromSharedString(error,
                                     "openpit_engine_execute_pre_trade failed");
@@ -576,11 +277,13 @@ class Engine {
     ::openpit::pretrade::ExecuteResult out;
     if (status == OpenPitPretradeStatus_Rejected) {
       if (rejects != nullptr) {
-        out.rejects = detail::DrainRejectList(rejects);
+        out.rejects = pretrade::detail::ListAccess::DrainRejects(rejects);
       }
       return out;
     }
-    out.reservation.emplace(reservation);
+    out.reservation =
+        ::openpit::detail::FromNative<::openpit::pretrade::Reservation>(
+            reservation);
     return out;
   }
 
@@ -589,7 +292,7 @@ class Engine {
   /// its normal mutations, locks, account adjustments, and account blocks.
   [[nodiscard]] ::openpit::pretrade::Reservation ExecutePreTradeDropCopy(
       const ::openpit::Order& order) const {
-    const OpenPitOrder raw = order.EngineRaw();
+    const OpenPitOrder raw = ::openpit::detail::Native(order);
     OpenPitPretradePreTradeReservation* reservation = nullptr;
     OpenPitSharedString* error = nullptr;
     const ::openpit::detail::CurrentOrderGuard orderGuard(order);
@@ -600,20 +303,20 @@ class Engine {
       openpit_destroy_pretrade_pre_trade_reservation(reservation);
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException(
-        "openpit_engine_execute_pre_trade_drop_copy callback failed");
+    detail::ThrowIfPendingCallbackException();
     if (!ok) {
       detail::ThrowFromSharedString(
           error, "openpit_engine_execute_pre_trade_drop_copy failed");
     }
-    return ::openpit::pretrade::Reservation(reservation);
+    return ::openpit::detail::FromNative<::openpit::pretrade::Reservation>(
+        reservation);
   }
 
   // Runs the start stage as a non-mutating dry-run. The returned report carries
   // the would-be pass/reject verdict without applying policy side effects.
   [[nodiscard]] ::openpit::pretrade::DryRunReport StartPreTradeDryRun(
       const ::openpit::Order& order) const {
-    const OpenPitOrder raw = order.EngineRaw();
+    const OpenPitOrder raw = ::openpit::detail::Native(order);
     OpenPitPretradePreTradeDryRunReport* report = nullptr;
     OpenPitSharedString* error = nullptr;
     const ::openpit::detail::CurrentOrderGuard orderGuard(order);
@@ -624,13 +327,13 @@ class Engine {
       openpit_destroy_pretrade_pre_trade_dry_run_report(report);
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException(
-        "openpit_engine_start_pre_trade_dry_run callback failed");
+    detail::ThrowIfPendingCallbackException();
     if (!ok) {
       detail::ThrowFromSharedString(
           error, "openpit_engine_start_pre_trade_dry_run failed");
     }
-    return ::openpit::pretrade::DryRunReport(report);
+    return ::openpit::detail::FromNative<::openpit::pretrade::DryRunReport>(
+        report);
   }
 
   // Runs the full pre-trade pipeline as a non-mutating dry-run. The report
@@ -638,7 +341,7 @@ class Engine {
   // blocks, but engine state is unchanged.
   [[nodiscard]] ::openpit::pretrade::DryRunReport ExecutePreTradeDryRun(
       const ::openpit::Order& order) const {
-    const OpenPitOrder raw = order.EngineRaw();
+    const OpenPitOrder raw = ::openpit::detail::Native(order);
     OpenPitPretradePreTradeDryRunReport* report = nullptr;
     OpenPitSharedString* error = nullptr;
     const ::openpit::detail::CurrentOrderGuard orderGuard(order);
@@ -649,13 +352,13 @@ class Engine {
       openpit_destroy_pretrade_pre_trade_dry_run_report(report);
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException(
-        "openpit_engine_execute_pre_trade_dry_run callback failed");
+    detail::ThrowIfPendingCallbackException();
     if (!ok) {
       detail::ThrowFromSharedString(
           error, "openpit_engine_execute_pre_trade_dry_run failed");
     }
-    return ::openpit::pretrade::DryRunReport(report);
+    return ::openpit::detail::FromNative<::openpit::pretrade::DryRunReport>(
+        report);
   }
 
   // Updates engine state from a completed execution report. Returns one
@@ -664,21 +367,7 @@ class Engine {
   // a boundary failure (invalid pointers, undecodable report payload).
   [[nodiscard]] PostTradeResult ApplyExecutionReport(
       const ::openpit::ExecutionReport& report) const {
-    return ApplyExecutionReportRaw(report, report.EngineRaw());
-  }
-
-  // Updates engine state from a completed fill while attaching the matching
-  // pre-trade lock. Throws `openpit::Error` when `report` has no fill.
-  [[nodiscard]] PostTradeResult ApplyExecutionReport(
-      const ::openpit::ExecutionReport& report,
-      const ::openpit::pretrade::PreTradeLock& lock) const {
-    OpenPitExecutionReport raw = report.EngineRaw();
-    if (!raw.fill.is_set) {
-      throw ::openpit::Error(
-          "ApplyExecutionReport with a pre-trade lock requires a fill");
-    }
-    raw.fill.value.lock = lock.Get();
-    return ApplyExecutionReportRaw(report, raw);
+    return ApplyExecutionReportRaw(report, ::openpit::detail::Native(report));
   }
 
   // Applies a batch of balance/position adjustments to one account. On accept
@@ -687,11 +376,10 @@ class Engine {
   // policy rejects. Throws `openpit::Error` on a boundary failure (invalid
   // pointers, undecodable adjustment payload).
   //
-  // `Adjustment` is the adjustment value type authored in
-  // `openpit/accountadjustment/account_adjustment.hpp`
-  // (`accountadjustment::AccountAdjustment`);
-  // any type exposing `Raw()` returning a borrowed `OpenPitAccountAdjustment`
-  // works. Each `Raw()` view must stay valid until this call returns.
+  // `Adjustment` is normally `accountadjustment::AccountAdjustment`. Custom
+  // adjustment types can opt into the same zero-overhead bridge by granting
+  // `detail::NativeAccess` access to a private `Native()` returning the
+  // module's `accountadjustment::detail::RawAccountAdjustment` alias.
   template <typename Adjustment>
   [[nodiscard]] AdjustmentResult ApplyAccountAdjustment(
       ::openpit::param::AccountId accountId,
@@ -699,7 +387,7 @@ class Engine {
     std::vector<OpenPitAccountAdjustment> raw;
     raw.reserve(adjustments.size());
     for (const auto& adjustment : adjustments) {
-      raw.push_back(adjustment.Raw());
+      raw.push_back(::openpit::detail::Native(adjustment));
     }
     OpenPitAccountAdjustmentBatchError* reject = nullptr;
     OpenPitAccountAdjustmentOutcomeList* outcomes = nullptr;
@@ -708,33 +396,39 @@ class Engine {
     detail::ClearPendingCallbackException();
     const OpenPitAccountAdjustmentApplyStatus status =
         openpit_engine_apply_account_adjustment(
-            m_handle.Get(), accountId.Raw(), raw.empty() ? nullptr : raw.data(),
-            raw.size(), &reject, &outcomes, &blocks, &error);
+            m_handle.Get(), ::openpit::detail::Native(accountId),
+            raw.empty() ? nullptr : raw.data(), raw.size(), &reject, &outcomes,
+            &blocks, &error);
+    detail::Handle<OpenPitPretradeAccountBlockList,
+                   ::openpit::pretrade::detail::AccountBlockListDeleter>
+        blocksOwner(blocks);
     if (detail::HasPendingCallbackException()) {
       openpit_destroy_account_adjustment_batch_error(reject);
       openpit_destroy_account_adjustment_outcome_list(outcomes);
-      openpit_pretrade_destroy_account_block_list(blocks);
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException(
-        "openpit_engine_apply_account_adjustment callback failed");
+    detail::ThrowIfPendingCallbackException();
     if (status == OpenPitAccountAdjustmentApplyStatus_Error) {
       detail::ThrowFromSharedString(
           error, "openpit_engine_apply_account_adjustment failed");
     }
     if (status == OpenPitAccountAdjustmentApplyStatus_Rejected) {
       AdjustmentResult out;
-      out.batchError = ::openpit::accountadjustment::BatchError(reject);
+      out.batchError = ::openpit::detail::FromNative<
+          ::openpit::accountadjustment::BatchError>(reject);
       return out;
     }
     // Adopt the caller-owned outcome list into the canonical RAII wrapper,
     // which copies it out and releases it on scope exit. A null list yields
     // empty.
-    const ::openpit::accountadjustment::OutcomeList outcomeList(outcomes);
+    const auto outcomeList = ::openpit::detail::FromNative<
+        ::openpit::accountadjustment::OutcomeList>(outcomes);
     AdjustmentResult out;
     out.accountAdjustmentOutcomes = outcomeList.ToVector();
-    if (blocks != nullptr) {
-      out.accountBlocks = ::openpit::detail::DrainAccountBlockList(blocks);
+    if (blocksOwner) {
+      out.accountBlocks =
+          ::openpit::pretrade::detail::ListAccess::DrainAccountBlocks(
+              blocksOwner.Release());
     }
     return out;
   }
@@ -743,51 +437,8 @@ class Engine {
   // pre-trade blocking) bound to this engine. The handle is non-owning and
   // valid for as long as this engine is.
   [[nodiscard]] ::openpit::accounts::Accounts Accounts() const noexcept {
-    return ::openpit::accounts::Accounts(m_handle.Get());
-  }
-
-  // Trivial read query: returns the account-group id for `accountId`, or
-  // `std::nullopt` when the account belongs to no group.
-  [[nodiscard]] std::optional<::openpit::param::AccountGroupId> AccountGroup(
-      ::openpit::param::AccountId accountId) const {
-    OpenPitParamAccountGroupId group = 0;
-    if (openpit_engine_account_group(m_handle.Get(), accountId.Raw(), &group)) {
-      return ::openpit::param::AccountGroupId::FromRaw(group);
-    }
-    return std::nullopt;
-  }
-
-  // Sets or clears the explicit account currency used by account-aware
-  // policies. These calls do not recompute existing holdings; callers own any
-  // live-state migration.
-  void SetAccountCurrency(::openpit::param::AccountId accountId,
-                          const ::openpit::param::Asset& asset) const {
-    OpenPitSharedString* error = nullptr;
-    if (!openpit_engine_set_account_currency(m_handle.Get(), accountId.Raw(),
-                                             asset.Raw(), &error)) {
-      detail::ThrowFromSharedString(
-          error, "openpit_engine_set_account_currency failed");
-    }
-  }
-
-  void ClearAccountCurrency(
-      ::openpit::param::AccountId accountId) const noexcept {
-    openpit_engine_clear_account_currency(m_handle.Get(), accountId.Raw());
-  }
-
-  void SetAccountGroupCurrency(::openpit::param::AccountGroupId groupId,
-                               const ::openpit::param::Asset& asset) const {
-    OpenPitSharedString* error = nullptr;
-    if (!openpit_engine_set_account_group_currency(
-            m_handle.Get(), groupId.Raw(), asset.Raw(), &error)) {
-      detail::ThrowFromSharedString(
-          error, "openpit_engine_set_account_group_currency failed");
-    }
-  }
-
-  void ClearAccountGroupCurrency(
-      ::openpit::param::AccountGroupId groupId) const noexcept {
-    openpit_engine_clear_account_group_currency(m_handle.Get(), groupId.Raw());
+    return ::openpit::detail::FromNative<::openpit::accounts::Accounts>(
+        m_handle.Get());
   }
 
   // Returns a runtime policy-settings updater bound to this engine. Include
@@ -795,9 +446,15 @@ class Engine {
   // get the inline definition and configurator methods.
   [[nodiscard]] ::openpit::Configurator Configure() const noexcept;
 
-  [[nodiscard]] OpenPitEngine* Get() const noexcept { return m_handle.Get(); }
-
  private:
+  friend class detail::NativeAccess;
+
+  explicit Engine(OpenPitEngine* handle) noexcept : m_handle(handle) {}
+
+  [[nodiscard]] OpenPitEngine* Native() const noexcept {
+    return m_handle.Get();
+  }
+
   [[nodiscard]] PostTradeResult ApplyExecutionReportRaw(
       const ::openpit::ExecutionReport& report,
       const OpenPitExecutionReport& raw) const {
@@ -812,8 +469,7 @@ class Engine {
     if (detail::HasPendingCallbackException()) {
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException(
-        "openpit_engine_apply_execution_report callback failed");
+    detail::ThrowIfPendingCallbackException();
     if (!ok) {
       detail::ThrowFromSharedString(
           error, "openpit_engine_apply_execution_report failed");
@@ -829,7 +485,8 @@ class Engine {
       OpenPitPretradeAccountBlock block{};
       if (openpit_pretrade_account_block_list_get(blocks, i, &block)) {
         out.accountBlocks.push_back(
-            ::openpit::accounts::AccountBlock::FromRaw(block));
+            ::openpit::detail::FromNative<::openpit::accounts::AccountBlock>(
+                block));
       }
     }
 
@@ -842,7 +499,8 @@ class Engine {
       OpenPitAccountPnlOutcome outcome{};
       if (openpit_account_pnl_outcome_list_get(accountPnls, i, &outcome)) {
         out.accountPnls.push_back(
-            ::openpit::accountadjustment::AccountPnlOutcome::FromRaw(outcome));
+            ::openpit::detail::FromNative<
+                ::openpit::accountadjustment::AccountPnlOutcome>(outcome));
       }
     }
 
@@ -856,7 +514,8 @@ class Engine {
       if (openpit_account_adjustment_outcome_list_get(adjustments, i,
                                                       &adjustment)) {
         out.accountAdjustments.push_back(
-            ::openpit::accountadjustment::Outcome::FromRaw(adjustment));
+            ::openpit::detail::FromNative<
+                ::openpit::accountadjustment::Outcome>(adjustment));
       }
     }
     return out;
@@ -885,34 +544,28 @@ class EngineBuilder {
     m_handle.Reset(raw);
   }
 
-  // Registers either a built-in policy configuration (types exposing
-  // `AddTo(EngineBuilder&)`) or a custom pre-trade policy wrapper (types
-  // exposing `Get()`). Registration throws `openpit::Error` on a
-  // boundary/configuration failure. Returns `*this` for chaining.
+  // Registers either a built-in policy configuration or a custom pre-trade
+  // policy wrapper. Registration throws `openpit::Error` on a boundary or
+  // configuration failure. Returns `*this` for chaining.
   template <typename Policy>
   EngineBuilder& Add(const Policy& policy) {
     if constexpr (detail::HasAddTo<Policy>::value) {
       policy.AddTo(*this);
-    } else if constexpr (detail::HasGet<Policy>::value) {
-      AddPreTradePolicy(policy);
     } else {
-      static_assert(detail::DependentFalse<Policy>::value,
-                    "openpit::EngineBuilder::Add expects a policy config with "
-                    "AddTo(EngineBuilder&) or a policy wrapper with Get()");
+      AddPreTradePolicy(policy);
     }
     return *this;
   }
 
-  // Registers a custom pre-trade policy on this builder. `Policy` is any type
-  // exposing `Get()` that returns the borrowed `OpenPitPretradePreTradePolicy*`
-  // (e.g. `openpit::pretrade::CustomPolicy<Handler>`). The builder retains its
-  // own reference; the caller keeps ownership of the policy object. Throws
-  // `openpit::Error` on a boundary failure. Returns `*this` for chaining.
+  // Registers a custom pre-trade policy on this builder. The builder retains
+  // its own reference; the caller keeps ownership of the policy object.
+  // Throws `openpit::Error` on a boundary failure. Returns `*this` for
+  // chaining.
   template <typename Policy>
   EngineBuilder& AddPreTradePolicy(const Policy& policy) {
     OpenPitSharedString* error = nullptr;
-    if (!openpit_engine_builder_add_pre_trade_policy(m_handle.Get(),
-                                                     policy.Get(), &error)) {
+    if (!openpit_engine_builder_add_pre_trade_policy(
+            m_handle.Get(), detail::Native(policy), &error)) {
       detail::ThrowFromSharedString(
           error, "openpit_engine_builder_add_pre_trade_policy failed");
     }
@@ -930,7 +583,7 @@ class EngineBuilder {
     OpenPitEngine* engine =
         openpit_engine_builder_build(m_handle.Get(), &buildError, &error);
     if (engine != nullptr) {
-      return Engine(engine);
+      return detail::FromNative<Engine>(engine);
     }
     if (buildError != nullptr) {
       ThrowBuildError(buildError);
@@ -938,21 +591,24 @@ class EngineBuilder {
     detail::ThrowFromSharedString(error, "openpit_engine_builder_build failed");
   }
 
-  [[nodiscard]] OpenPitEngineBuilder* Get() const noexcept {
+ private:
+  friend class detail::NativeAccess;
+
+  [[nodiscard]] OpenPitEngineBuilder* Native() const noexcept {
     return m_handle.Get();
   }
-
- private:
   [[noreturn]] static void ThrowBuildError(
       OpenPitEngineBuildError* buildError) {
+    detail::Handle<OpenPitEngineBuildError, detail::EngineBuildErrorDeleter>
+        owner(buildError);
     EngineBuildErrorCode code = static_cast<EngineBuildErrorCode>(
-        openpit_engine_build_error_get_code(buildError));
+        openpit_engine_build_error_get_code(owner.Get()));
     std::string policyName =
-        StringView(openpit_engine_build_error_get_policy_name(buildError))
+        detail::FromNative<StringView>(
+            openpit_engine_build_error_get_policy_name(owner.Get()))
             .ToString();
     std::uint16_t policyGroupId =
-        openpit_engine_build_error_get_policy_group_id(buildError);
-    openpit_destroy_engine_build_error(buildError);
+        openpit_engine_build_error_get_policy_group_id(owner.Get());
     throw EngineBuildError("engine build failed", code, std::move(policyName),
                            policyGroupId);
   }

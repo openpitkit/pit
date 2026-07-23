@@ -28,12 +28,17 @@
 
 namespace openpit::accountadjustment {
 
+namespace detail {
+
+using RawAccountAdjustment = ::OpenPitAccountAdjustment;
+
+}  // namespace detail
+
 //------------------------------------------------------------------------------
 // AccountAdjustment
 
-// Full adjustment request payload mirroring the native runtime
-// `OpenPitAccountAdjustment`. The `operation`, `amount`, and `bounds` groups
-// are each optional; `userData` is an opaque caller token the SDK never
+// Full adjustment request payload. The `operation`, `amount`, and `bounds`
+// groups are each optional; `userData` is an opaque caller token the SDK never
 // inspects (zero means unset). The account this applies to is not part of the
 // payload: it is passed separately to `Engine::ApplyAccountAdjustment`.
 struct AccountAdjustment {
@@ -44,32 +49,35 @@ struct AccountAdjustment {
 
   AccountAdjustment() = default;
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static AccountAdjustment FromRaw(
-      const OpenPitAccountAdjustment& raw) {
+      const detail::RawAccountAdjustment& raw) {
     AccountAdjustment out;
-    out.operation = Operation::FromRaw(raw.operation);
+    out.operation = ::openpit::detail::FromNative<Operation>(raw.operation);
     if (raw.amount.is_set) {
-      out.amount = Amount::FromRaw(raw.amount.value);
+      out.amount = ::openpit::detail::FromNative<Amount>(raw.amount.value);
     }
     if (raw.bounds.is_set) {
-      out.bounds = Bounds::FromRaw(raw.bounds.value);
+      out.bounds = ::openpit::detail::FromNative<Bounds>(raw.bounds.value);
     }
     out.userData = reinterpret_cast<std::uintptr_t>(raw.user_data);
     return out;
   }
 
   // Borrows this object's string storage; valid only while it stays alive.
-  [[nodiscard]] OpenPitAccountAdjustment Raw() const noexcept {
-    OpenPitAccountAdjustment raw{};
+  [[nodiscard]] detail::RawAccountAdjustment Native() const {
+    detail::RawAccountAdjustment raw{};
     if (operation) {
-      raw.operation = operation->Raw();
+      raw.operation = ::openpit::detail::Native(*operation);
     }
     if (amount) {
-      raw.amount.value = amount->Raw();
+      raw.amount.value = ::openpit::detail::Native(*amount);
       raw.amount.is_set = true;
     }
     if (bounds) {
-      raw.bounds.value = bounds->Raw();
+      raw.bounds.value = ::openpit::detail::Native(*bounds);
       raw.bounds.is_set = true;
     }
     raw.user_data = reinterpret_cast<void*>(userData);

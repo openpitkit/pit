@@ -24,14 +24,15 @@
 // change the other.
 
 // The pre-trade / reject headers define `RejectScope` / `RejectCode` with their
-// fixed underlying types; they must precede `openpit/adapters.hpp`, whose
+// fixed underlying types; they must precede `openpit/pretrade/adapters.hpp`,
+// whose
 // opaque forward declarations of those scoped enums are only a compatible
 // redeclaration when the full definition is already in scope.
-#include "openpit/adapters.hpp"
 #include "openpit/engine.hpp"
-#include "openpit/model.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/pretrade/adapters.hpp"
+#include "openpit/pretrade/decision.hpp"
 #include "openpit/pretrade/pretrade.hpp"
-#include "openpit/reject.hpp"
 
 #include <gtest/gtest.h>
 
@@ -49,9 +50,7 @@ namespace {
 using openpit::param::Price;
 using openpit::param::Quantity;
 using openpit::param::Volume;
-using openpit::pretrade::Context;
 using openpit::pretrade::CustomPolicy;
-using openpit::pretrade::PolicyDecision;
 using openpit::pretrade::PushReject;
 using openpit::pretrade::Reject;
 using openpit::pretrade::RejectCode;
@@ -64,28 +63,16 @@ using openpit::pretrade::RejectScope;
 // exceeds an absolute cap. The public C++ surface exposes the requested amount
 // as an `openpit::model::TradeAmount`: a volume amount is already the notional,
 // while a quantity amount is priced into one (notional = price * quantity).
-// Absent amounts or an unpriceable quantity become explicit rejects rather
-// than exceptions.
+// Absent amounts become explicit rejects. A failed price/quantity conversion is
+// an API error and propagates as `openpit::Error`.
 
 // >>> WIKI SNIPPET BEGIN: Custom Main-Stage Policy
-// Computes settlement notional from a per-unit price and an instrument
-// quantity (notional = price * quantity), crossing the exact-decimal C ABI so
-// the result is bit-for-bit identical across language bindings. Returns
-// nullopt when the engine reports the multiplication as a value error, which
-// the caller turns into an explicit reject rather than an exception.
-[[nodiscard]] std::optional<openpit::param::Volume> CalculateNotional(
+// Computes settlement notional with the exact domain value types. A boundary
+// failure is an API error and therefore propagates as `openpit::Error`.
+[[nodiscard]] openpit::param::Volume CalculateNotional(
     const openpit::param::Price& price,
     const openpit::param::Quantity& quantity) {
-  OpenPitParamVolume raw{};
-  OpenPitParamError* error = nullptr;
-  if (!openpit_param_price_calculate_volume(price.Raw(), quantity.Raw(), &raw,
-                                            &error)) {
-    if (error != nullptr) {
-      openpit_destroy_param_error(error);
-    }
-    return std::nullopt;
-  }
-  return openpit::param::Volume::FromRaw(raw);
+  return price.CalculateVolume(quantity);
 }
 
 class NotionalCapPolicy {
@@ -148,16 +135,6 @@ class NotionalCapPolicy {
         return;
       }
       requestedNotional = CalculateNotional(*operation.price, *quantity);
-      if (!requestedNotional.has_value()) {
-        openpit::pretrade::PushReject(
-            decision,
-            openpit::pretrade::Reject(
-                std::string(Name()), openpit::pretrade::RejectScope::Order,
-                openpit::pretrade::RejectCode::OrderValueCalculationFailed,
-                "order value calculation failed",
-                "price and quantity could not be used to evaluate notional"));
-        return;
-      }
     }
 
     if (*requestedNotional > m_maxAbsNotional) {
@@ -199,11 +176,14 @@ using NotionalCapAdapter = openpit::pretrade::PolicyAdapterWithSafeSlowArgType<
     NotionalCapPolicy, openpit::model::Order, openpit::ExecutionReport>;
 
 template <typename Adapter>
-void RunMainCheck(const Adapter& adapter, const Context& context,
-                  PolicyDecision& decision) {
-  openpit::tx::Mutations mutations(nullptr);
-  openpit::pretrade::Result result(nullptr);
-  adapter.PerformPreTradeCheck(context, mutations, result, decision);
+[[nodiscard]] openpit::pretrade::ExecuteResult RunMainCheck(
+    Adapter adapter, openpit::model::Order order) {
+  const std::string name(adapter.Name());
+  openpit::pretrade::CustomPolicy<Adapter> policy(name, std::move(adapter));
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  builder.Add(policy);
+  const openpit::Engine engine = builder.Build();
+  return engine.ExecutePreTrade(order);
 }
 
 // Builds a notional order carrying `volume` settlement notional on `accountId`.
@@ -244,75 +224,56 @@ void RunMainCheck(const Adapter& adapter, const Context& context,
 TEST(PolicyApiCustomMainStage, UnderCapAccepts) {
   const NotionalCapAdapter adapter{
       NotionalCapPolicy{Volume::FromString("1000000")}};
-  const openpit::model::Order order = NotionalOrder(99224416, "250000");
-  const Context context(order);
-
-  PolicyDecision decision;
-  RunMainCheck(adapter, context, decision);
-  EXPECT_FALSE(decision.IsRejected());
+  const openpit::pretrade::ExecuteResult result =
+      RunMainCheck(adapter, NotionalOrder(99224416, "250000"));
+  EXPECT_TRUE(result.Passed());
 }
 
 TEST(PolicyApiCustomMainStage, OverCapRejectsWithRiskLimit) {
   const NotionalCapAdapter adapter{
       NotionalCapPolicy{Volume::FromString("1000000")}};
-  const openpit::model::Order order = NotionalOrder(99224416, "2500000");
-  const Context context(order);
-
-  PolicyDecision decision;
-  RunMainCheck(adapter, context, decision);
-  ASSERT_TRUE(decision.IsRejected());
-  EXPECT_EQ(decision.rejects.front().code, RejectCode::RiskLimitExceeded);
-  EXPECT_EQ(decision.rejects.front().policy, "NotionalCapPolicy");
+  const openpit::pretrade::ExecuteResult result =
+      RunMainCheck(adapter, NotionalOrder(99224416, "2500000"));
+  ASSERT_FALSE(result.Passed());
+  EXPECT_EQ(result.rejects.front().code, RejectCode::RiskLimitExceeded);
+  EXPECT_EQ(result.rejects.front().policy, "NotionalCapPolicy");
 }
 
 TEST(PolicyApiCustomMainStage, MissingOperationRejects) {
   const NotionalCapAdapter adapter{
       NotionalCapPolicy{Volume::FromString("1000000")}};
-  const openpit::model::Order order;  // no operation group set.
-  const Context context(order);
-
-  PolicyDecision decision;
-  RunMainCheck(adapter, context, decision);
-  ASSERT_TRUE(decision.IsRejected());
-  EXPECT_EQ(decision.rejects.front().code, RejectCode::MissingRequiredField);
+  const openpit::pretrade::ExecuteResult result =
+      RunMainCheck(adapter, openpit::model::Order{});
+  ASSERT_FALSE(result.Passed());
+  EXPECT_EQ(result.rejects.front().code, RejectCode::MissingRequiredField);
 }
 
 TEST(PolicyApiCustomMainStage, QuantityUnderCapAccepts) {
   // 1000 * 25 = 25000 settlement notional, under the 1,000,000 cap.
   const NotionalCapAdapter adapter{
       NotionalCapPolicy{Volume::FromString("1000000")}};
-  const openpit::model::Order order = QuantityOrder(99224416, "1000", "25");
-  const Context context(order);
-
-  PolicyDecision decision;
-  RunMainCheck(adapter, context, decision);
-  EXPECT_FALSE(decision.IsRejected());
+  const openpit::pretrade::ExecuteResult result =
+      RunMainCheck(adapter, QuantityOrder(99224416, "1000", "25"));
+  EXPECT_TRUE(result.Passed());
 }
 
 TEST(PolicyApiCustomMainStage, QuantityOverCapRejectsWithRiskLimit) {
   // 100000 * 25 = 2,500,000 settlement notional, over the 1,000,000 cap.
   const NotionalCapAdapter adapter{
       NotionalCapPolicy{Volume::FromString("1000000")}};
-  const openpit::model::Order order = QuantityOrder(99224416, "100000", "25");
-  const Context context(order);
-
-  PolicyDecision decision;
-  RunMainCheck(adapter, context, decision);
-  ASSERT_TRUE(decision.IsRejected());
-  EXPECT_EQ(decision.rejects.front().code, RejectCode::RiskLimitExceeded);
+  const openpit::pretrade::ExecuteResult result =
+      RunMainCheck(adapter, QuantityOrder(99224416, "100000", "25"));
+  ASSERT_FALSE(result.Passed());
+  EXPECT_EQ(result.rejects.front().code, RejectCode::RiskLimitExceeded);
 }
 
 TEST(PolicyApiCustomMainStage, QuantityWithoutPriceRejectsWithValueCalc) {
   const NotionalCapAdapter adapter{
       NotionalCapPolicy{Volume::FromString("1000000")}};
-  const openpit::model::Order order =
-      QuantityOrder(99224416, "1000", std::nullopt);
-  const Context context(order);
-
-  PolicyDecision decision;
-  RunMainCheck(adapter, context, decision);
-  ASSERT_TRUE(decision.IsRejected());
-  EXPECT_EQ(decision.rejects.front().code,
+  const openpit::pretrade::ExecuteResult result =
+      RunMainCheck(adapter, QuantityOrder(99224416, "1000", std::nullopt));
+  ASSERT_FALSE(result.Passed());
+  EXPECT_EQ(result.rejects.front().code,
             RejectCode::OrderValueCalculationFailed);
 }
 
@@ -393,13 +354,10 @@ using ReserveThenValidateAdapter =
 
 TEST(PolicyApiRollbackSafety, OverLimitRejectsAndRestoresState) {
   const ReserveThenValidateAdapter adapter{ReserveThenValidatePolicy{}};
-  const openpit::model::Order order = NotionalOrder(99224416, "10");
-  const Context context(order);
-
-  PolicyDecision decision;
-  RunMainCheck(adapter, context, decision);
-  ASSERT_TRUE(decision.IsRejected());
-  EXPECT_EQ(decision.rejects.front().code, RejectCode::RiskLimitExceeded);
+  const openpit::pretrade::ExecuteResult result =
+      RunMainCheck(adapter, NotionalOrder(99224416, "10"));
+  ASSERT_FALSE(result.Passed());
+  EXPECT_EQ(result.rejects.front().code, RejectCode::RiskLimitExceeded);
 }
 
 //------------------------------------------------------------------------------
@@ -605,7 +563,7 @@ TEST(PolicyApiBlockAccount, BlockedAccountIsRejectedWithAccountBlocked) {
   adjustment.operation =
       openpit::accountadjustment::Operation::OfBalance(std::move(balanceOp));
   openpit::accountadjustment::Amount amount;
-  amount.balance = openpit::param::AdjustmentAmount::OfAbsolute(
+  amount.balance = openpit::param::AdjustmentAmount::Absolute(
       openpit::param::PositionSize::FromString("0"));
   adjustment.amount = std::move(amount);
   const openpit::AdjustmentResult adjustmentResult =

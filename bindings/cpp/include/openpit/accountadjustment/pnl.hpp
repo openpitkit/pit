@@ -17,15 +17,14 @@
 
 #pragma once
 
-#include "openpit/account_id.hpp"
 #include "openpit/error.hpp"
-#include "openpit/param.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/param/param.hpp"
 
 #include <openpit.h>
 
-#include <cassert>
 #include <cstdint>
-#include <exception>
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -36,123 +35,118 @@ enum class PnlHaltReason : std::uint8_t {
   /// No quote has been published for a required FX conversion.
   ///
   /// The last available quote remains valid even when it is stale.
-  MissingFx = OPENPIT_PNL_HALT_REASON_MISSING_FX,
+  MissingFx = 1,
   /// The account currency required for the ledger was unavailable.
-  MissingAccountCurrency = OPENPIT_PNL_HALT_REASON_MISSING_ACCOUNT_CURRENCY,
+  MissingAccountCurrency = 2,
   /// The initial realized PnL needed to continue the ledger was unavailable.
-  MissingInitialPnl = OPENPIT_PNL_HALT_REASON_MISSING_INITIAL_PNL,
+  MissingInitialPnl = 3,
   /// The position cost basis needed to calculate PnL was unavailable.
-  MissingCostBasis = OPENPIT_PNL_HALT_REASON_MISSING_COST_BASIS,
+  MissingCostBasis = 4,
   /// Exact realized-PnL arithmetic overflowed.
-  ArithmeticOverflow = OPENPIT_PNL_HALT_REASON_ARITHMETIC_OVERFLOW,
+  ArithmeticOverflow = 5,
+};
+
+namespace detail {
+class PnlStateAccess;
+}  // namespace detail
+
+/// Current state of a realized-PnL accumulator.
+class PnlState {
+ public:
+  explicit PnlState(param::Pnl value) : m_value(value) {}
+  explicit PnlState(PnlHaltReason reason) : m_value(reason) {}
+
+  [[nodiscard]] const param::Pnl* Value() const noexcept {
+    return std::get_if<param::Pnl>(&m_value);
+  }
+
+  [[nodiscard]] std::optional<PnlHaltReason> HaltReason() const noexcept {
+    if (const auto* reason = std::get_if<PnlHaltReason>(&m_value)) {
+      return *reason;
+    }
+    return std::nullopt;
+  }
+
+ private:
+  friend class detail::PnlStateAccess;
+
+  std::variant<param::Pnl, PnlHaltReason> m_value;
 };
 
 namespace detail {
 
-[[nodiscard]] inline std::variant<param::Pnl, PnlHaltReason> PnlValueFromRaw(
-    const OpenPitPnlState& raw) {
-  switch (raw.kind) {
-    case OPENPIT_PNL_STATE_VALUE:
-      if (raw.halt_reason != OPENPIT_PNL_HALT_REASON_NONE) {
-        throw ::openpit::Error(
-            "value PnL state must not contain a halt reason");
-      }
-      return param::Pnl::FromRaw(raw.value);
-    case OPENPIT_PNL_STATE_HALTED:
-      switch (raw.halt_reason) {
-        case OPENPIT_PNL_HALT_REASON_MISSING_FX:
-          return PnlHaltReason::MissingFx;
-        case OPENPIT_PNL_HALT_REASON_MISSING_ACCOUNT_CURRENCY:
-          return PnlHaltReason::MissingAccountCurrency;
-        case OPENPIT_PNL_HALT_REASON_MISSING_INITIAL_PNL:
-          return PnlHaltReason::MissingInitialPnl;
-        case OPENPIT_PNL_HALT_REASON_MISSING_COST_BASIS:
-          return PnlHaltReason::MissingCostBasis;
-        case OPENPIT_PNL_HALT_REASON_ARITHMETIC_OVERFLOW:
-          return PnlHaltReason::ArithmeticOverflow;
-        case OPENPIT_PNL_HALT_REASON_NONE:
-          throw ::openpit::Error("halted PnL state requires a halt reason");
-        default:
-          throw ::openpit::Error(
-              "invalid PnL halt reason code " +
-              std::to_string(static_cast<unsigned int>(raw.halt_reason)));
-      }
-    default:
-      throw ::openpit::Error(
-          "invalid PnL state kind " +
-          std::to_string(static_cast<unsigned int>(raw.kind)));
+class PnlStateAccess final {
+ private:
+  [[nodiscard]] static PnlState FromNative(const OpenPitPnlState& raw) {
+    switch (raw.kind) {
+      case OPENPIT_PNL_STATE_HALTED:
+        return PnlState(static_cast<PnlHaltReason>(raw.halt_reason));
+      case OPENPIT_PNL_STATE_VALUE:
+      default:
+        return PnlState(::openpit::detail::FromNative<param::Pnl>(raw.value));
+    }
   }
-}
 
-[[nodiscard]] inline OpenPitPnlState PnlValueRaw(param::Pnl pnl) noexcept {
-  OpenPitPnlState raw{};
-  raw.kind = OPENPIT_PNL_STATE_VALUE;
-  raw.value = pnl.Raw();
-  raw.halt_reason = OPENPIT_PNL_HALT_REASON_NONE;
-  return raw;
-}
-
-[[nodiscard]] inline OpenPitPnlState PnlValueRaw(
-    PnlHaltReason reason) noexcept {
-  OpenPitPnlState raw{};
-  raw.kind = OPENPIT_PNL_STATE_HALTED;
-  switch (reason) {
-    case PnlHaltReason::MissingFx:
-    case PnlHaltReason::MissingAccountCurrency:
-    case PnlHaltReason::MissingInitialPnl:
-    case PnlHaltReason::MissingCostBasis:
-    case PnlHaltReason::ArithmeticOverflow:
-      raw.halt_reason = static_cast<OpenPitPnlHaltReason>(reason);
-      return raw;
-    default:
-      // Invalid enum values violate the debug-only caller contract. Keep this
-      // conversion noexcept and terminating instead of adding runtime error
-      // handling to every valid conversion.
-      assert(false && "invalid PnL halt reason value");
-      std::terminate();
+  [[nodiscard]] static OpenPitPnlState Native(param::Pnl pnl) noexcept {
+    OpenPitPnlState raw{};
+    raw.kind = OPENPIT_PNL_STATE_VALUE;
+    raw.value = ::openpit::detail::Native(pnl);
+    raw.halt_reason = OPENPIT_PNL_HALT_REASON_NONE;
+    return raw;
   }
-}
 
-[[nodiscard]] inline OpenPitPnlState PnlValueRaw(
-    const std::variant<param::Pnl, PnlHaltReason>& value) noexcept {
-  if (const auto* pnl = std::get_if<param::Pnl>(&value)) {
-    return PnlValueRaw(*pnl);
+  [[nodiscard]] static OpenPitPnlState Native(PnlHaltReason reason) noexcept {
+    OpenPitPnlState raw{};
+    raw.kind = OPENPIT_PNL_STATE_HALTED;
+    raw.halt_reason = static_cast<OpenPitPnlHaltReason>(reason);
+    return raw;
   }
-  return PnlValueRaw(std::get<PnlHaltReason>(value));
-}
+
+  [[nodiscard]] static OpenPitPnlState Native(const PnlState& state) noexcept {
+    if (const auto* value = state.Value()) {
+      return Native(*value);
+    }
+    return Native(*state.HaltReason());
+  }
+
+  friend class ::openpit::accountadjustment::AccountPnlOperation;
+  friend class ::openpit::Configurator;
+  friend struct ::openpit::accountadjustment::BalanceOperation;
+};
 
 }  // namespace detail
 
 /// Replaces the account-wide realized-PnL accumulator.
 class AccountPnlOperation {
  public:
-  explicit AccountPnlOperation(param::Pnl pnl) : m_value(pnl) {}
-  explicit AccountPnlOperation(PnlHaltReason reason) : m_value(reason) {}
+  explicit AccountPnlOperation(PnlState state) : m_state(state) {}
+  explicit AccountPnlOperation(param::Pnl pnl) : m_state(pnl) {}
+  explicit AccountPnlOperation(PnlHaltReason reason) : m_state(reason) {}
 
-  /// Returns the replacement PnL or its explicit halt reason.
-  [[nodiscard]] const std::variant<param::Pnl, PnlHaltReason>& Get()
-      const noexcept {
-    return m_value;
+  [[nodiscard]] const param::Pnl* Value() const noexcept {
+    return m_state.Value();
   }
 
-  [[nodiscard]] static AccountPnlOperation FromRaw(
-      const OpenPitAccountAdjustmentAccountPnlOperation& raw) {
-    const auto value = detail::PnlValueFromRaw(raw.state);
-    if (const auto* pnl = std::get_if<param::Pnl>(&value)) {
-      return AccountPnlOperation(*pnl);
-    }
-    return AccountPnlOperation(std::get<PnlHaltReason>(value));
-  }
-
-  [[nodiscard]] OpenPitAccountAdjustmentAccountPnlOperation Raw()
-      const noexcept {
-    OpenPitAccountAdjustmentAccountPnlOperation raw{};
-    raw.state = detail::PnlValueRaw(m_value);
-    return raw;
+  [[nodiscard]] std::optional<PnlHaltReason> HaltReason() const noexcept {
+    return m_state.HaltReason();
   }
 
  private:
-  std::variant<param::Pnl, PnlHaltReason> m_value;
+  friend class ::openpit::detail::NativeAccess;
+
+  [[nodiscard]] static AccountPnlOperation FromRaw(
+      const OpenPitAccountAdjustmentAccountPnlOperation& raw) {
+    return AccountPnlOperation(detail::PnlStateAccess::FromNative(raw.state));
+  }
+
+  [[nodiscard]] OpenPitAccountAdjustmentAccountPnlOperation Native()
+      const noexcept {
+    OpenPitAccountAdjustmentAccountPnlOperation raw{};
+    raw.state = detail::PnlStateAccess::Native(m_state);
+    return raw;
+  }
+
+  PnlState m_state;
 };
 
 /// Realized-PnL change and resulting absolute value.
@@ -167,84 +161,70 @@ struct PnlOutcomeAmount {
   PnlOutcomeAmount(param::Pnl outcomeDelta, param::Pnl outcomeAbsolute)
       : delta(outcomeDelta), absolute(outcomeAbsolute) {}
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static PnlOutcomeAmount FromRaw(
       const OpenPitPnlOutcomeAmount& raw) {
-    return PnlOutcomeAmount(param::Pnl::FromRaw(raw.delta),
-                            param::Pnl::FromRaw(raw.absolute));
+    return PnlOutcomeAmount(
+        ::openpit::detail::FromNative<param::Pnl>(raw.delta),
+        ::openpit::detail::FromNative<param::Pnl>(raw.absolute));
   }
 
-  [[nodiscard]] OpenPitPnlOutcomeAmount Raw() const noexcept {
+  [[nodiscard]] OpenPitPnlOutcomeAmount Native() const noexcept {
     OpenPitPnlOutcomeAmount raw{};
-    raw.delta = delta.Raw();
-    raw.absolute = absolute.Raw();
+    raw.delta = ::openpit::detail::Native(delta);
+    raw.absolute = ::openpit::detail::Native(absolute);
     return raw;
   }
 };
 
-using PnlOutcomeOptional = OpenPitPnlOutcomeOptional;
+namespace detail {
+using RawPnlOutcomeOptional = ::OpenPitPnlOutcomeOptional;
+}  // namespace detail
 
-/// Realized-PnL result: either the amount or a halt reason.
-using PnlOutcomeResult = std::variant<PnlOutcomeAmount, PnlHaltReason>;
+class PnlOutcome {
+ public:
+  explicit PnlOutcome(PnlOutcomeAmount outcomeAmount)
+      : m_result(outcomeAmount) {}
+  explicit PnlOutcome(PnlHaltReason reason) : m_result(reason) {}
 
-struct PnlOutcome {
-  PnlOutcomeResult result;
-
-  /// Returns the PnL amount or the reason why it is unavailable.
-  [[nodiscard]] const PnlOutcomeResult& Get() const noexcept { return result; }
-
-  [[nodiscard]] static PnlOutcome FromRaw(const OpenPitPnlOutcome& raw) {
-    if (raw.halt_reason != OPENPIT_PNL_HALT_REASON_NONE && raw.amount.is_set) {
-      throw ::openpit::Error("halted PnL outcome must not contain an amount");
-    }
-    switch (raw.halt_reason) {
-      case OPENPIT_PNL_HALT_REASON_NONE:
-        if (raw.amount.is_set) {
-          return PnlOutcome{PnlOutcomeAmount::FromRaw(raw.amount.value)};
-        }
-        throw ::openpit::Error("available PnL outcome requires an amount");
-      case OPENPIT_PNL_HALT_REASON_MISSING_FX:
-        return PnlOutcome{PnlHaltReason::MissingFx};
-      case OPENPIT_PNL_HALT_REASON_MISSING_ACCOUNT_CURRENCY:
-        return PnlOutcome{PnlHaltReason::MissingAccountCurrency};
-      case OPENPIT_PNL_HALT_REASON_MISSING_INITIAL_PNL:
-        return PnlOutcome{PnlHaltReason::MissingInitialPnl};
-      case OPENPIT_PNL_HALT_REASON_MISSING_COST_BASIS:
-        return PnlOutcome{PnlHaltReason::MissingCostBasis};
-      case OPENPIT_PNL_HALT_REASON_ARITHMETIC_OVERFLOW:
-        return PnlOutcome{PnlHaltReason::ArithmeticOverflow};
-      default:
-        throw ::openpit::Error(
-            "invalid PnL halt reason code " +
-            std::to_string(static_cast<unsigned int>(raw.halt_reason)));
-    }
+  [[nodiscard]] const PnlOutcomeAmount* Amount() const noexcept {
+    return std::get_if<PnlOutcomeAmount>(&m_result);
   }
 
-  [[nodiscard]] OpenPitPnlOutcome Raw() const noexcept {
+  [[nodiscard]] std::optional<PnlHaltReason> HaltReason() const noexcept {
+    if (const auto* reason = std::get_if<PnlHaltReason>(&m_result)) {
+      return *reason;
+    }
+    return std::nullopt;
+  }
+
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  [[nodiscard]] static PnlOutcome FromRaw(const OpenPitPnlOutcome& raw) {
+    if (raw.halt_reason == OPENPIT_PNL_HALT_REASON_NONE) {
+      return PnlOutcome{
+          ::openpit::detail::FromNative<PnlOutcomeAmount>(raw.amount.value)};
+    }
+    return PnlOutcome{static_cast<PnlHaltReason>(raw.halt_reason)};
+  }
+
+  [[nodiscard]] OpenPitPnlOutcome Native() const {
     OpenPitPnlOutcome raw{};
-    if (const auto* amount = std::get_if<PnlOutcomeAmount>(&result)) {
+    if (const auto* amount = Amount()) {
       raw.halt_reason = OPENPIT_PNL_HALT_REASON_NONE;
-      raw.amount.value = amount->Raw();
+      raw.amount.value = ::openpit::detail::Native(*amount);
       raw.amount.is_set = true;
     } else {
-      const PnlHaltReason reason = std::get<PnlHaltReason>(result);
-      switch (reason) {
-        case PnlHaltReason::MissingFx:
-        case PnlHaltReason::MissingAccountCurrency:
-        case PnlHaltReason::MissingInitialPnl:
-        case PnlHaltReason::MissingCostBasis:
-        case PnlHaltReason::ArithmeticOverflow:
-          raw.halt_reason = static_cast<OpenPitPnlHaltReason>(reason);
-          break;
-        default:
-          // Invalid enum values violate the debug-only caller contract. Keep
-          // this conversion noexcept and terminating instead of adding runtime
-          // error handling to every valid conversion.
-          assert(false && "invalid PnL halt reason value");
-          std::terminate();
-      }
+      const PnlHaltReason haltReason = *HaltReason();
+      raw.halt_reason = static_cast<OpenPitPnlHaltReason>(haltReason);
     }
     return raw;
   }
+
+  std::variant<PnlOutcomeAmount, PnlHaltReason> m_result;
 };
 
 /// Account-level realized-PnL result: either the amount or a halt reason.
@@ -252,39 +232,61 @@ struct PnlOutcome {
 /// or block on the stored halt without emitting another account outcome. A
 /// manager explicitly force-sets the account PnL to re-arm it. Position
 /// accumulators are independent.
-using AccountPnlResult = PnlOutcomeResult;
-
 /// Account-level realized-PnL outcome.
-struct AccountPnlOutcome {
-  /// Account-currency PnL, or the reason why it is unavailable.
-  AccountPnlResult result;
+class AccountPnlOutcome {
+ private:
+  PnlOutcome m_result;
+
+ public:
   /// Account that owns the realized-PnL ledger.
   param::AccountId accountId;
   /// Policy group of the producer that owns the ledger.
   param::GroupId policyGroupId;
 
-  /// Returns the account PnL or the reason why it is unavailable.
-  [[nodiscard]] const AccountPnlResult& Get() const noexcept { return result; }
+  AccountPnlOutcome(PnlOutcomeAmount outcomeAmount,
+                    param::AccountId outcomeAccountId,
+                    param::GroupId outcomePolicyGroupId)
+      : m_result(outcomeAmount),
+        accountId(outcomeAccountId),
+        policyGroupId(outcomePolicyGroupId) {}
+
+  AccountPnlOutcome(PnlHaltReason reason, param::AccountId outcomeAccountId,
+                    param::GroupId outcomePolicyGroupId)
+      : m_result(reason),
+        accountId(outcomeAccountId),
+        policyGroupId(outcomePolicyGroupId) {}
+
+  [[nodiscard]] const PnlOutcomeAmount* Amount() const noexcept {
+    return m_result.Amount();
+  }
+
+  [[nodiscard]] std::optional<PnlHaltReason> HaltReason() const noexcept {
+    return m_result.HaltReason();
+  }
+
+ private:
+  friend class ::openpit::detail::NativeAccess;
 
   [[nodiscard]] static AccountPnlOutcome FromRaw(
       const OpenPitAccountPnlOutcome& raw) {
     OpenPitPnlOutcome rawResult{};
     rawResult.halt_reason = raw.halt_reason;
     rawResult.amount = raw.amount;
-    AccountPnlOutcome outcome{
-        PnlOutcome::FromRaw(rawResult).result,
-        param::AccountId::FromRaw(raw.account_id),
-        param::GroupId(raw.policy_group_id),
-    };
-    return outcome;
+    const PnlOutcome pnl = ::openpit::detail::FromNative<PnlOutcome>(rawResult);
+    const param::AccountId accountId =
+        ::openpit::detail::FromNative<param::AccountId>(raw.account_id);
+    const param::GroupId policyGroupId(raw.policy_group_id);
+    if (const auto* amount = pnl.Amount()) {
+      return AccountPnlOutcome(*amount, accountId, policyGroupId);
+    }
+    return AccountPnlOutcome(*pnl.HaltReason(), accountId, policyGroupId);
   }
 
-  [[nodiscard]] OpenPitAccountPnlOutcome Raw() const noexcept {
-    const PnlOutcome pnl{result};
-    const OpenPitPnlOutcome rawResult = pnl.Raw();
+  [[nodiscard]] OpenPitAccountPnlOutcome Native() const {
+    const OpenPitPnlOutcome rawResult = ::openpit::detail::Native(m_result);
     OpenPitAccountPnlOutcome raw{};
-    raw.account_id = accountId.Raw();
-    raw.policy_group_id = policyGroupId.Raw();
+    raw.account_id = ::openpit::detail::Native(accountId);
+    raw.policy_group_id = ::openpit::detail::Native(policyGroupId);
     raw.halt_reason = rawResult.halt_reason;
     raw.amount = rawResult.amount;
     return raw;

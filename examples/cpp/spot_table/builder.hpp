@@ -21,13 +21,14 @@
 // corresponding public `openpit` value type. `FillReport` keeps a final fill
 // together with the pre-trade lock for its matching reservation.
 
-#include "openpit/account_id.hpp"
 #include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/marketdata.hpp"
-#include "openpit/model.hpp"
-#include "openpit/param.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/param/param.hpp"
 #include "openpit/pretrade/pre_trade_lock.hpp"
 
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -64,14 +65,15 @@ BuildSeedAdjustment(const Row &row);
 [[nodiscard]] openpit::model::Order BuildOrder(const Row &row,
                                                openpit::param::AccountId acc);
 
-// A final execution report carrying its pre-trade lock. The owned
-// `model::ExecutionReport` holds every field except the lock; the owned
-// `PreTradeLock` carries the single default-group entry at the lock price.
+// A final execution report carrying its pre-trade lock.
 class FillReport {
 public:
   FillReport(openpit::model::ExecutionReport report,
              openpit::pretrade::PreTradeLock lock)
-      : m_report(std::move(report)), m_lock(std::move(lock)) {}
+      : m_report(std::move(report)) {
+    m_report.fill->lock =
+        std::make_shared<openpit::pretrade::PreTradeLock>(std::move(lock));
+  }
 
   // The account this report addresses, for async per-account routing.
   [[nodiscard]] openpit::param::AccountId AccountId() const noexcept {
@@ -82,13 +84,8 @@ public:
     return m_report;
   }
 
-  [[nodiscard]] const openpit::pretrade::PreTradeLock &Lock() const noexcept {
-    return m_lock;
-  }
-
 private:
   openpit::model::ExecutionReport m_report;
-  openpit::pretrade::PreTradeLock m_lock;
 };
 
 // Turns a FILL row into a final `FillReport`. The price column on a FILL is the

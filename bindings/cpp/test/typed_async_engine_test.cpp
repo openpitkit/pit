@@ -23,15 +23,15 @@
 // concurrency assumptions); the real engine validates the end-to-end pipeline
 // and the reject-vs-throw error model.
 
-#include "openpit/account_id.hpp"
 #include "openpit/accountadjustment/account_adjustment.hpp"
-#include "openpit/accounts.hpp"
+#include "openpit/accounts/accounts.hpp"
 #include "openpit/async_engine.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/error.hpp"
-#include "openpit/model.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/pretrade/decision.hpp"
 #include "openpit/pretrade/pretrade.hpp"
-#include "openpit/reject.hpp"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -50,6 +50,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -128,8 +129,12 @@ constexpr std::uint64_t kAccountA = 1001;
 }
 
 struct StubAdjustment {
-  [[nodiscard]] OpenPitAccountAdjustment Raw() const noexcept {
-    return OpenPitAccountAdjustment{};
+ private:
+  friend class openpit::detail::NativeAccess;
+
+  [[nodiscard]] openpit::accountadjustment::detail::RawAccountAdjustment
+  Native() const noexcept {
+    return {};
   }
 };
 
@@ -147,7 +152,7 @@ class ConcurrencyProbe {
  public:
   class Span {
    public:
-    Span(ConcurrencyProbe& probe, std::uint64_t account)
+    Span(ConcurrencyProbe& probe, AccountId account)
         : m_probe(&probe), m_account(account) {
       std::lock_guard<std::mutex> lock(m_probe->m_mutex);
       const std::int64_t now = ++m_probe->m_active[account];
@@ -165,18 +170,18 @@ class ConcurrencyProbe {
 
    private:
     ConcurrencyProbe* m_probe;
-    std::uint64_t m_account;
+    AccountId m_account;
   };
 
-  [[nodiscard]] std::int64_t PeakFor(std::uint64_t account) {
+  [[nodiscard]] std::int64_t PeakFor(AccountId account) {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_peak[account];
   }
 
  private:
   std::mutex m_mutex;
-  std::map<std::uint64_t, std::int64_t> m_active;
-  std::map<std::uint64_t, std::int64_t> m_peak;
+  std::map<AccountId, std::int64_t> m_active;
+  std::map<AccountId, std::int64_t> m_peak;
 };
 
 class Gate {
@@ -220,9 +225,9 @@ struct MockEngineAdapter {
 
   [[nodiscard]] openpit::pretrade::StartResult StartPreTrade(
       const openpit::model::Order& order) {
-    const std::uint64_t account = order.operation && order.operation->accountId
-                                      ? order.operation->accountId->Raw()
-                                      : 0;
+    const AccountId account = order.operation && order.operation->accountId
+                                  ? *order.operation->accountId
+                                  : AccountId{};
     std::optional<ConcurrencyProbe::Span> span;
     if (probe != nullptr) {
       span.emplace(*probe, account);
@@ -254,6 +259,13 @@ struct MockEngineAdapter {
   [[nodiscard]] MockAccounts Accounts() { return MockAccounts(&blocks); }
 };
 
+static_assert(
+    std::is_move_constructible_v<ae::TypedAsyncEngine<MockEngineAdapter>>);
+static_assert(
+    !std::is_move_assignable_v<ae::TypedAsyncEngine<MockEngineAdapter>>);
+static_assert(std::is_move_constructible_v<ae::OwnedTypedAsyncEngine>);
+static_assert(!std::is_move_assignable_v<ae::OwnedTypedAsyncEngine>);
+
 //------------------------------------------------------------------------------
 // Lifecycle (real engine): start -> execute -> commit, then clean stop.
 
@@ -274,6 +286,23 @@ TEST(TypedAsyncLifecycle, RealEngineStartExecuteCommit) {
   EXPECT_TRUE(executed.first->CommitAndClose().Await(kAwaitCap).has_value());
 
   EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncLifecycle, OutstandingWrappersSurviveEngineMove) {
+  Engine engine = SingleOrderEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::StartOutcome<ae::EngineAdapter> start =
+      async.StartPreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(start.Passed());
+
+  auto moved = std::move(async);
+  auto executed = start.request->Execute().Await(kAwaitCap).value();
+  ASSERT_TRUE(executed.first);
+
+  auto movedAgain = std::move(moved);
+  EXPECT_TRUE(executed.first->CommitAndClose().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(movedAgain.StopGraceful(seconds(10)));
 }
 
 TEST(TypedAsyncLifecycle, RealEngineExecutePreTradeThenCommit) {
@@ -421,7 +450,7 @@ TEST(TypedAsyncThreading, PerAccountSerializationHolds) {
   EXPECT_TRUE(async.StopGraceful(seconds(10)));
   EXPECT_EQ(failures.load(), 0);
   for (const std::uint64_t account : accounts) {
-    EXPECT_LE(probe.PeakFor(account), 1)
+    EXPECT_LE(probe.PeakFor(AccountId::FromUint64(account)), 1)
         << "account " << account << " saw overlapping driver calls";
   }
 }

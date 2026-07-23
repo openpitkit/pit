@@ -25,12 +25,12 @@
 
 #include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/engine.hpp"
-#include "openpit/model.hpp"
-#include "openpit/param.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/param.hpp"
 #include "openpit/pretrade/custom_policy.hpp"
+#include "openpit/pretrade/decision.hpp"
 #include "openpit/pretrade/policies.hpp"
-#include "openpit/reject.hpp"
-#include "openpit/tx.hpp"
+#include "openpit/tx/tx.hpp"
 
 #include <gtest/gtest.h>
 
@@ -78,15 +78,16 @@ class CumulativeLimitPolicy {
 
     const auto* balance =
         adjustment.operation ? adjustment.operation->AsBalance() : nullptr;
+    const auto absolute = adjustment.amount && adjustment.amount->balance
+                              ? adjustment.amount->balance->AsAbsolute()
+                              : std::nullopt;
     if (balance == nullptr || !balance->asset || !adjustment.amount ||
-        !adjustment.amount->balance ||
-        !adjustment.amount->balance->IsAbsolute()) {
+        !adjustment.amount->balance || !absolute) {
       return {};
     }
 
     const std::string asset(balance->asset->View());
-    const openpit::param::PositionSize next =
-        adjustment.amount->balance->Value();
+    const openpit::param::PositionSize next = *absolute;
     if (next > m_maxCumulative) {
       openpit::pretrade::PolicyAccountAdjustmentResult result;
       result.decision.Push(openpit::pretrade::Reject(
@@ -128,7 +129,7 @@ class CumulativeLimitPolicy {
   balance.asset = std::move(asset);
 
   openpit::accountadjustment::Amount amount;
-  amount.balance = openpit::param::AdjustmentAmount::OfAbsolute(
+  amount.balance = openpit::param::AdjustmentAmount::Absolute(
       openpit::param::PositionSize::FromString(value));
 
   openpit::accountadjustment::AccountAdjustment adjustment;
@@ -191,7 +192,7 @@ TEST(AccountAdjustmentsWiki, MixedBalanceAndPositionBatchApplies) {
     balance.asset = ::openpit::param::Asset("USD");
     cashAdj.operation = aa::Operation::OfBalance(std::move(balance));
     aa::Amount amount;
-    amount.balance = param::AdjustmentAmount::OfAbsolute(
+    amount.balance = param::AdjustmentAmount::Absolute(
         param::PositionSize::FromString("10000"));
     cashAdj.amount = std::move(amount);
   }
@@ -206,7 +207,7 @@ TEST(AccountAdjustmentsWiki, MixedBalanceAndPositionBatchApplies) {
     position.mode = openpit::model::PositionMode::Hedged;
     posAdj.operation = aa::Operation::OfPosition(std::move(position));
     aa::Amount amount;
-    amount.balance = param::AdjustmentAmount::OfAbsolute(
+    amount.balance = param::AdjustmentAmount::Absolute(
         param::PositionSize::FromString("-3"));
     posAdj.amount = std::move(amount);
   }

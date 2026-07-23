@@ -17,11 +17,11 @@
 
 #include "openpit/marketdata.hpp"
 
-#include "openpit/account_id.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/error.hpp"
-#include "openpit/model.hpp"
-#include "openpit/param.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/param/param.hpp"
 #include "openpit/reference_book.hpp"
 
 #include <gtest/gtest.h>
@@ -29,8 +29,10 @@
 
 #include <chrono>
 #include <optional>
+#include <stdexcept>
 #include <thread>
 #include <type_traits>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -61,6 +63,12 @@ struct FixedGroupInfo {
   }
 };
 
+struct ThrowingGroupInfo {
+  [[nodiscard]] std::optional<AccountGroupId> AccountGroup() const {
+    throw std::runtime_error("account group lookup failed");
+  }
+};
+
 //------------------------------------------------------------------------------
 // Helpers
 
@@ -81,10 +89,16 @@ struct FixedGroupInfo {
 
 TEST(MarketDataInstrumentId, FromUint64RoundTrips) {
   const md::InstrumentId id = md::InstrumentId::FromUint64(42);
-  EXPECT_EQ(id.Raw(), 42u);
   EXPECT_EQ(id.ToString(), "42");
   EXPECT_EQ(id, md::InstrumentId::FromUint64(42));
   EXPECT_NE(id, md::InstrumentId::FromUint64(43));
+  EXPECT_LT(id, md::InstrumentId::FromUint64(43));
+}
+
+TEST(MarketDataInstrumentId, SupportsStandardHashContainers) {
+  std::unordered_set<md::InstrumentId> ids;
+  ids.insert(md::InstrumentId::FromUint64(42));
+  EXPECT_EQ(ids.count(md::InstrumentId::FromUint64(42)), 1u);
 }
 
 TEST(CoreInstrumentId, MarketDataAliasIsTheRootType) {
@@ -92,7 +106,7 @@ TEST(CoreInstrumentId, MarketDataAliasIsTheRootType) {
 
   const openpit::InstrumentId root = openpit::InstrumentId::FromUint64(42);
   const md::InstrumentId marketData = root;
-  EXPECT_EQ(marketData.Raw(), 42u);
+  EXPECT_EQ(marketData.ToString(), "42");
 }
 
 //------------------------------------------------------------------------------
@@ -203,45 +217,6 @@ TEST(MarketDataQuote, WithSettersAreImmutableCopies) {
   ASSERT_TRUE(patched.Bid().has_value());
   EXPECT_EQ(patched.Bid()->ToString(), "99");
   EXPECT_EQ(patched.Mark()->ToString(), "100");
-}
-
-TEST(MarketDataQuote, RawRoundTripPreservesSetAndUnsetFields) {
-  const md::Quote quote = md::Quote().WithMark(Price::FromString("12.34"));
-  const md::Quote restored = md::Quote::FromRaw(quote.Raw());
-  ASSERT_TRUE(restored.Mark().has_value());
-  EXPECT_EQ(restored.Mark()->ToString(), "12.34");
-  EXPECT_FALSE(restored.Bid().has_value());
-}
-
-//------------------------------------------------------------------------------
-// QuoteTtl
-
-TEST(MarketDataQuoteTtl, InfiniteIsInfinite) {
-  const OpenPitMarketDataQuoteTtl raw = md::QuoteTtl::Infinite().Raw();
-  EXPECT_TRUE(raw.is_infinite);
-}
-
-TEST(MarketDataQuoteTtl, WithinCarriesSecondsAndNanos) {
-  const OpenPitMarketDataQuoteTtl raw = md::QuoteTtl::Within(3, 500).Raw();
-  EXPECT_FALSE(raw.is_infinite);
-  EXPECT_EQ(raw.secs, 3u);
-  EXPECT_EQ(raw.nanos, 500u);
-}
-
-TEST(MarketDataQuoteTtl, WithinFromChronoSplitsSecondsAndNanos) {
-  const OpenPitMarketDataQuoteTtl raw =
-      md::QuoteTtl::Within(std::chrono::milliseconds(1500)).Raw();
-  EXPECT_FALSE(raw.is_infinite);
-  EXPECT_EQ(raw.secs, 1u);
-  EXPECT_EQ(raw.nanos, 500'000'000u);
-}
-
-TEST(MarketDataQuoteTtl, WithinClampsNegativeToZero) {
-  const OpenPitMarketDataQuoteTtl raw =
-      md::QuoteTtl::Within(std::chrono::seconds(-5)).Raw();
-  EXPECT_FALSE(raw.is_infinite);
-  EXPECT_EQ(raw.secs, 0u);
-  EXPECT_EQ(raw.nanos, 0u);
 }
 
 //------------------------------------------------------------------------------
@@ -497,6 +472,30 @@ TEST(MarketDataService, GetStatusDistinguishesUnknownFromUnavailable) {
                      md::QuoteResolution::AccountThenGroupThenDefault)
                 .status,
             md::GetStatus::Unavailable);
+}
+
+TEST(MarketDataService, InvalidResolutionThrows) {
+  md::Service service = BuildService(md::SyncPolicy::None);
+
+  EXPECT_THROW(
+      {
+        static_cast<void>(service.Get(md::InstrumentId::FromUint64(5),
+                                      AccountId::FromUint64(1), NoGroupInfo{},
+                                      static_cast<md::QuoteResolution>(255)));
+      },
+      openpit::Error);
+}
+
+TEST(MarketDataService, AccountGroupResolverRethrowsOriginalException) {
+  md::Service service = BuildService(md::SyncPolicy::None);
+  const md::InstrumentId id = Register(
+      service, openpit::model::Instrument(::openpit::param::Asset("AAPL"),
+                                          ::openpit::param::Asset("USD")));
+
+  EXPECT_THROW(static_cast<void>(service.Get(
+                   id, AccountId::FromUint64(1), ThrowingGroupInfo{},
+                   md::QuoteResolution::AccountThenGroupThenDefault)),
+               std::runtime_error);
 }
 
 TEST(MarketDataService, ClearHidesQuoteButKeepsRegistration) {

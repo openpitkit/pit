@@ -48,10 +48,10 @@
 
 #include "spot_funds.hpp"
 
-#include "openpit/account_id.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/error.hpp"
-#include "openpit/reject.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/pretrade/decision.hpp"
 
 #include <cstdio>
 #include <exception>

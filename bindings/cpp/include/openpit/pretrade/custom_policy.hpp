@@ -18,16 +18,16 @@
 #pragma once
 
 #include "openpit/accountadjustment/account_adjustment.hpp"
-#include "openpit/accounts.hpp"
+#include "openpit/accounts/accounts.hpp"
 #include "openpit/detail/callback_error.hpp"
 #include "openpit/detail/handle.hpp"
 #include "openpit/error.hpp"
-#include "openpit/model.hpp"
+#include "openpit/model/model.hpp"
 #include "openpit/pretrade/callbacks.hpp"
 #include "openpit/pretrade/context.hpp"
-#include "openpit/reject.hpp"
+#include "openpit/pretrade/decision.hpp"
 #include "openpit/string.hpp"
-#include "openpit/tx.hpp"
+#include "openpit/tx/tx.hpp"
 
 #include <openpit.h>
 
@@ -40,23 +40,16 @@
 #include <utility>
 #include <vector>
 
-// Custom-policy authoring glue.
+// Custom-policy authoring support.
 //
-// `CustomPolicy<Handler>` lets a plain C++ object act as a pre-trade policy
-// through the native runtime custom-policy vtable
-// (`openpit_create_pretrade_custom_pre_trade_policy`). The C callbacks receive
-// borrowed C order/report POD views. During a normal C++ engine call the glue
-// recovers the exact submitted polymorphic object from a thread-local guard;
-// otherwise it copies the view into an owned `openpit::model::Order` /
-// `openpit::model::ExecutionReport`. It wraps the order in a `Context`,
-// dispatches to the handler, and translates the handler's
-// `std::optional<Reject>` / `PolicyDecision` outcome back into the C
-// reject-list the engine expects.
+// `CustomPolicy<Handler>` lets a plain C++ object act as a pre-trade policy.
+// It dispatches each supported stage to the handler and translates its
+// `std::optional<Reject>` or `PolicyDecision` result into the engine outcome.
 //
 // `Handler` is any object exposing one or more of the methods below. Each hook
-// is wired to the native runtime only when the corresponding method is present
-// (detected at compile time); an absent hook is registered as null, which the
-// engine treats as "accept by default". This lets a `StartPolicyAdapter`
+// is enabled only when the corresponding method is present (detected at compile
+// time); an absent hook means "accept by default". This lets a
+// `StartPolicyAdapter`
 // (start-only), a unified `PolicyAdapter` (main plus any optional stages), or a
 // direct handler be wrapped directly:
 //   - std::optional<Reject> CheckPreTradeStart(const openpit::Order&) const
@@ -76,21 +69,18 @@
 //
 // The policy name is supplied to `CustomPolicy` itself. A direct handler does
 // not need a `Name()` method. Adapter handlers do expose `Name()` through their
-// client policy; when present, it must match the constructor name so runtime
+// client policy; when present, it must match the constructor name so
 // registration and adapter-produced rejects use one stable identity.
 //
 // The legacy two-argument main-stage and one-argument report hooks remain
 // accepted for source compatibility. They cannot use the added collectors.
 //
-// When a dry-run hook is present, the C++ binding registers the policy through
-// `openpit_create_pretrade_custom_pre_trade_policy_with_dry_run`. Missing
-// dry-run hooks are left null so the native runtime delegates them to the
-// normal hook.
+// When a dry-run hook is absent, the engine delegates that stage to the normal
+// hook.
 //
-// Handler exceptions never cross the C boundary. The trampoline captures the
-// first exception and the owning Engine call rethrows that exact exception
-// after native cleanup. SafeSlow adapter payload mismatches remain value
-// rejects rather than exceptions.
+// Handler exceptions are deferred until the owning Engine call can rethrow the
+// exact exception after cleanup. SafeSlow adapter payload mismatches remain
+// value rejects rather than exceptions.
 //
 // The policy is a move-only owning RAII handle. Registration on the engine
 // builder keeps its own reference; the caller still owns this handle and must
@@ -106,70 +96,94 @@ struct PreTradePolicyDeleter {
   }
 };
 
-// Translates a value reject into a freshly allocated single-item C reject list.
-[[nodiscard]] inline OpenPitPretradeRejectList* RejectToList(
-    const Reject& reject) {
-  OpenPitPretradeRejectList* list = openpit_pretrade_create_reject_list(1);
-  if (!openpit_pretrade_reject_list_push(list, reject.Raw())) {
-    openpit_pretrade_destroy_reject_list(list);
-    throw std::invalid_argument("reject scope is invalid");
-  }
-  return list;
-}
-
-// Translates a decision into a C reject list, or null when the decision accepts
-// (no rejects). The push copies the reject strings into the list.
-[[nodiscard]] inline OpenPitPretradeRejectList* DecisionToList(
-    const PolicyDecision& decision) {
-  if (!decision.IsRejected()) {
-    return nullptr;
-  }
-  OpenPitPretradeRejectList* list =
-      openpit_pretrade_create_reject_list(decision.rejects.size());
-  for (const Reject& reject : decision.rejects) {
-    if (!openpit_pretrade_reject_list_push(list, reject.Raw())) {
+class CustomPolicyAccess final {
+ private:
+  [[nodiscard]] static OpenPitPretradeRejectList* RejectToList(
+      const Reject& reject) {
+    OpenPitPretradeRejectList* list = openpit_pretrade_create_reject_list(1);
+    if (!openpit_pretrade_reject_list_push(list,
+                                           ::openpit::detail::Native(reject))) {
       openpit_pretrade_destroy_reject_list(list);
       throw std::invalid_argument("reject scope is invalid");
     }
+    return list;
   }
-  return list;
-}
 
-[[nodiscard]] inline OpenPitPretradeAccountBlockList* AccountBlocksToList(
-    const std::vector<::openpit::accounts::AccountBlock>& blocks) {
-  if (blocks.empty()) {
-    return nullptr;
+  [[nodiscard]] static OpenPitPretradeRejectList* DecisionToList(
+      const PolicyDecision& decision) {
+    if (!decision.IsRejected()) {
+      return nullptr;
+    }
+    OpenPitPretradeRejectList* list =
+        openpit_pretrade_create_reject_list(decision.rejects.size());
+    for (const Reject& reject : decision.rejects) {
+      if (!openpit_pretrade_reject_list_push(
+              list, ::openpit::detail::Native(reject))) {
+        openpit_pretrade_destroy_reject_list(list);
+        throw std::invalid_argument("reject scope is invalid");
+      }
+    }
+    return list;
   }
-  OpenPitPretradeAccountBlockList* list =
-      openpit_pretrade_create_account_block_list(blocks.size());
-  for (const auto& block : blocks) {
-    openpit_pretrade_account_block_list_push(list, block.Raw());
+
+  [[nodiscard]] static OpenPitPretradeAccountBlockList* AccountBlocksToList(
+      const std::vector<::openpit::accounts::AccountBlock>& blocks) {
+    if (blocks.empty()) {
+      return nullptr;
+    }
+    OpenPitPretradeAccountBlockList* list =
+        openpit_pretrade_create_account_block_list(blocks.size());
+    for (const auto& block : blocks) {
+      openpit_pretrade_account_block_list_push(
+          list, ::openpit::detail::Native(block));
+    }
+    return list;
   }
-  return list;
-}
 
-[[nodiscard]] inline OpenPitPretradeRejectList* CallbackErrorRejectList() {
-  return RejectToList(Reject(
-      "openpit.callback", RejectScope::Order, RejectCode::SystemUnavailable,
-      "custom policy callback failed", "callback raised an exception"));
-}
+  [[nodiscard]] static OpenPitPretradeRejectList* CallbackErrorRejectList() {
+    return RejectToList(Reject(
+        "openpit.callback", RejectScope::Order, RejectCode::SystemUnavailable,
+        "custom policy callback failed", "callback raised an exception"));
+  }
 
-[[nodiscard]] inline OpenPitPretradeAccountBlockList*
-CallbackErrorAccountBlockList() {
-  std::string policy = "openpit.callback";
-  std::string reason = "custom policy callback failed";
-  std::string details = "callback raised an exception";
-  OpenPitPretradeAccountBlock block{};
-  block.policy = ::openpit::MakeStringView(policy);
-  block.reason = ::openpit::MakeStringView(reason);
-  block.details = ::openpit::MakeStringView(details);
-  block.code = static_cast<OpenPitPretradeRejectCode>(
-      static_cast<std::uint16_t>(RejectCode::SystemUnavailable));
-  OpenPitPretradeAccountBlockList* list =
-      openpit_pretrade_create_account_block_list(1);
-  openpit_pretrade_account_block_list_push(list, block);
-  return list;
-}
+  [[nodiscard]] static OpenPitPretradeRejectList*
+  NoThrowCallbackErrorRejectList() noexcept {
+    try {
+      return CallbackErrorRejectList();
+    } catch (...) {
+      return nullptr;
+    }
+  }
+
+  [[nodiscard]] static OpenPitPretradeAccountBlockList*
+  CallbackErrorAccountBlockList() {
+    std::string policy = "openpit.callback";
+    std::string reason = "custom policy callback failed";
+    std::string details = "callback raised an exception";
+    OpenPitPretradeAccountBlock block{};
+    block.policy = ::openpit::detail::MakeStringView(policy);
+    block.reason = ::openpit::detail::MakeStringView(reason);
+    block.details = ::openpit::detail::MakeStringView(details);
+    block.code = static_cast<OpenPitPretradeRejectCode>(
+        static_cast<std::uint16_t>(RejectCode::SystemUnavailable));
+    OpenPitPretradeAccountBlockList* list =
+        openpit_pretrade_create_account_block_list(1);
+    openpit_pretrade_account_block_list_push(list, block);
+    return list;
+  }
+
+  [[nodiscard]] static OpenPitPretradeAccountBlockList*
+  NoThrowCallbackErrorAccountBlockList() noexcept {
+    try {
+      return CallbackErrorAccountBlockList();
+    } catch (...) {
+      return nullptr;
+    }
+  }
+
+  template <typename Handler>
+  friend class ::openpit::pretrade::CustomPolicy;
+};
 
 // Compile-time detection of each optional handler hook.
 
@@ -281,13 +295,7 @@ struct HasName<Handler,
 
 }  // namespace detail
 
-/// \brief Owning custom pre-trade policy backed by a C++ `Handler`.
-//
 // Owning custom pre-trade policy backed by a C++ `Handler`.
-//
-// The handler is heap-allocated and its address is passed verbatim to the
-// native runtime as the opaque `user_data`; the free callback deletes it once
-// the last reference (caller or engine) is released.
 template <typename Handler>
 class CustomPolicy {
   static_assert(
@@ -308,10 +316,10 @@ class CustomPolicy {
 
  public:
   // Creates a policy named `name`, tagged with `policyGroupId`, dispatching to
-  // a moved-in `handler`. Throws `openpit::Error` when the native runtime
-  // rejects the name.
-  CustomPolicy(std::string_view name, Handler handler,
-               std::uint16_t policyGroupId = OPENPIT_DEFAULT_POLICY_GROUP_ID)
+  // a moved-in `handler`. Throws `openpit::Error` when registration fails.
+  CustomPolicy(
+      std::string_view name, Handler handler,
+      std::uint16_t policyGroupId = ::openpit::param::DefaultPolicyGroupId)
       : m_handler(std::make_unique<Handler>(std::move(handler))) {
     if constexpr (detail::HasName<Handler>::value) {
       const std::string handlerName(m_handler->Name());
@@ -325,22 +333,18 @@ class CustomPolicy {
     OpenPitPretradePreTradePolicy* raw = nullptr;
     if constexpr (UsesDryRunHooks()) {
       raw = openpit_create_pretrade_custom_pre_trade_policy_with_dry_run(
-          ::openpit::MakeStringView(name), policyGroupId, StartHook(),
+          ::openpit::detail::MakeStringView(name), policyGroupId, StartHook(),
           StartDryRunHook(), MainHook(), MainDryRunHook(), ReportHook(),
           AdjustmentHook(), &FreeTrampoline, m_handler.get(), &error);
     } else {
       raw = openpit_create_pretrade_custom_pre_trade_policy(
-          ::openpit::MakeStringView(name), policyGroupId, StartHook(),
+          ::openpit::detail::MakeStringView(name), policyGroupId, StartHook(),
           MainHook(), ReportHook(), AdjustmentHook(), &FreeTrampoline,
           m_handler.get(), &error);
     }
     if (raw == nullptr) {
-      ::openpit::detail::ThrowFromSharedString(
-          error,
-          UsesDryRunHooks()
-              ? "openpit_create_pretrade_custom_pre_trade_policy_with_dry_run "
-                "failed"
-              : "openpit_create_pretrade_custom_pre_trade_policy failed");
+      ::openpit::detail::ThrowFromSharedString(error,
+                                               "custom policy creation failed");
     }
     // The native runtime now owns the handler lifetime through the free
     // callback.
@@ -352,19 +356,20 @@ class CustomPolicy {
     return static_cast<bool>(m_policy);
   }
 
-  // The stable policy name as the native runtime reports it.
+  // The stable registered policy name.
   [[nodiscard]] std::string Name() const {
-    return ::openpit::StringView(
+    return ::openpit::detail::FromNative<::openpit::StringView>(
                openpit_pretrade_pre_trade_policy_get_name(m_policy.Get()))
         .ToString();
   }
 
-  // Borrows the native policy pointer for registration on the engine builder.
-  [[nodiscard]] OpenPitPretradePreTradePolicy* Get() const noexcept {
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  [[nodiscard]] OpenPitPretradePreTradePolicy* Native() const noexcept {
     return m_policy.Get();
   }
 
- private:
   static constexpr bool UsesDryRunHooks() noexcept {
     return detail::HasCheckPreTradeStartDryRun<Handler>::value ||
            detail::HasPerformPreTradeCheckDryRun<Handler>::value ||
@@ -437,7 +442,7 @@ class CustomPolicy {
           ::openpit::detail::CurrentSubmittedOrder();
       std::optional<::openpit::model::Order> parsed;
       if (original == nullptr) {
-        parsed = ::openpit::model::Order::FromRaw(*order);
+        parsed = ::openpit::detail::FromNative<::openpit::model::Order>(*order);
         original = &*parsed;
       }
       const std::optional<Reject> reject =
@@ -445,10 +450,10 @@ class CustomPolicy {
       if (!reject) {
         return nullptr;
       }
-      return detail::RejectToList(*reject);
+      return detail::CustomPolicyAccess::RejectToList(*reject);
     } catch (...) {
       ::openpit::detail::CaptureCurrentCallbackException();
-      return detail::CallbackErrorRejectList();
+      return detail::CustomPolicyAccess::NoThrowCallbackErrorRejectList();
     }
   }
 
@@ -461,7 +466,7 @@ class CustomPolicy {
           ::openpit::detail::CurrentSubmittedOrder();
       std::optional<::openpit::model::Order> parsed;
       if (original == nullptr) {
-        parsed = ::openpit::model::Order::FromRaw(*order);
+        parsed = ::openpit::detail::FromNative<::openpit::model::Order>(*order);
         original = &*parsed;
       }
       const std::optional<Reject> reject =
@@ -469,10 +474,10 @@ class CustomPolicy {
       if (!reject) {
         return nullptr;
       }
-      return detail::RejectToList(*reject);
+      return detail::CustomPolicyAccess::RejectToList(*reject);
     } catch (...) {
       ::openpit::detail::CaptureCurrentCallbackException();
-      return detail::CallbackErrorRejectList();
+      return detail::CustomPolicyAccess::NoThrowCallbackErrorRejectList();
     }
   }
 
@@ -486,12 +491,14 @@ class CustomPolicy {
           ::openpit::detail::CurrentSubmittedOrder();
       std::optional<::openpit::model::Order> parsed;
       if (original == nullptr) {
-        parsed = ::openpit::model::Order::FromRaw(*order);
+        parsed = ::openpit::detail::FromNative<::openpit::model::Order>(*order);
         original = &*parsed;
       }
-      const Context context(*original, ctx);
-      ::openpit::tx::Mutations mutationCollector(mutations);
-      Result result(outResult);
+      const Context context = ::openpit::detail::FromNative<Context>(
+          detail::ContextInit{*original, ctx});
+      ::openpit::tx::Mutations mutationCollector =
+          ::openpit::detail::FromNative<::openpit::tx::Mutations>(mutations);
+      Result result = ::openpit::detail::FromNative<Result>(outResult);
       PolicyDecision decision;
       if constexpr (detail::HasPerformPreTradeCheckFull<Handler>::value) {
         handler->PerformPreTradeCheck(context, mutationCollector, result,
@@ -499,10 +506,10 @@ class CustomPolicy {
       } else {
         handler->PerformPreTradeCheck(context, decision);
       }
-      return detail::DecisionToList(decision);
+      return detail::CustomPolicyAccess::DecisionToList(decision);
     } catch (...) {
       ::openpit::detail::CaptureCurrentCallbackException();
-      return detail::CallbackErrorRejectList();
+      return detail::CustomPolicyAccess::NoThrowCallbackErrorRejectList();
     }
   }
 
@@ -516,12 +523,14 @@ class CustomPolicy {
           ::openpit::detail::CurrentSubmittedOrder();
       std::optional<::openpit::model::Order> parsed;
       if (original == nullptr) {
-        parsed = ::openpit::model::Order::FromRaw(*order);
+        parsed = ::openpit::detail::FromNative<::openpit::model::Order>(*order);
         original = &*parsed;
       }
-      const Context context(*original, ctx);
-      ::openpit::tx::Mutations mutationCollector(mutations);
-      Result result(outResult);
+      const Context context = ::openpit::detail::FromNative<Context>(
+          detail::ContextInit{*original, ctx});
+      ::openpit::tx::Mutations mutationCollector =
+          ::openpit::detail::FromNative<::openpit::tx::Mutations>(mutations);
+      Result result = ::openpit::detail::FromNative<Result>(outResult);
       PolicyDecision decision;
       if constexpr (detail::HasPerformPreTradeCheckDryRunFull<Handler>::value) {
         handler->PerformPreTradeCheckDryRun(context, mutationCollector, result,
@@ -529,10 +538,10 @@ class CustomPolicy {
       } else {
         handler->PerformPreTradeCheckDryRun(context, decision);
       }
-      return detail::DecisionToList(decision);
+      return detail::CustomPolicyAccess::DecisionToList(decision);
     } catch (...) {
       ::openpit::detail::CaptureCurrentCallbackException();
-      return detail::CallbackErrorRejectList();
+      return detail::CustomPolicyAccess::NoThrowCallbackErrorRejectList();
     }
   }
 
@@ -546,15 +555,21 @@ class CustomPolicy {
           ::openpit::detail::CurrentSubmittedReport();
       std::optional<::openpit::model::ExecutionReport> parsed;
       if (original == nullptr) {
-        parsed = ::openpit::model::ExecutionReport::FromRaw(*report);
+        parsed =
+            ::openpit::detail::FromNative<::openpit::model::ExecutionReport>(
+                *report);
         original = &*parsed;
       }
       if constexpr (detail::HasApplyExecutionReportFull<Handler>::value) {
-        const PostTradeContext context(ctx);
-        PostTradeAdjustments adjustments(outAdjustments);
-        PostTradePnls pnls(outAccountPnls);
-        return detail::AccountBlocksToList(handler->ApplyExecutionReport(
-            context, *original, adjustments, pnls));
+        const PostTradeContext context =
+            ::openpit::detail::FromNative<PostTradeContext>(ctx);
+        PostTradeAdjustments adjustments =
+            ::openpit::detail::FromNative<PostTradeAdjustments>(outAdjustments);
+        PostTradePnls pnls =
+            ::openpit::detail::FromNative<PostTradePnls>(outAccountPnls);
+        return detail::CustomPolicyAccess::AccountBlocksToList(
+            handler->ApplyExecutionReport(context, *original, adjustments,
+                                          pnls));
       } else {
         // Legacy report hooks were boolean notifications and could not return
         // a structured block. Preserve their notification behavior.
@@ -563,7 +578,7 @@ class CustomPolicy {
       }
     } catch (...) {
       ::openpit::detail::CaptureCurrentCallbackException();
-      return detail::CallbackErrorAccountBlockList();
+      return detail::CustomPolicyAccess::NoThrowCallbackErrorAccountBlockList();
     }
   }
 
@@ -575,23 +590,30 @@ class CustomPolicy {
       void* userData) noexcept {
     try {
       const auto* handler = static_cast<const Handler*>(userData);
-      const ::openpit::accountadjustment::Context context(ctx);
+      const ::openpit::accountadjustment::Context context =
+          ::openpit::detail::FromNative<::openpit::accountadjustment::Context>(
+              ctx);
       const ::openpit::accountadjustment::AccountAdjustment parsed =
-          ::openpit::accountadjustment::AccountAdjustment::FromRaw(*adjustment);
-      ::openpit::tx::Mutations mutationCollector(mutations);
-      AccountOutcomes outcomes(outResult);
+          ::openpit::detail::FromNative<
+              ::openpit::accountadjustment::AccountAdjustment>(*adjustment);
+      ::openpit::tx::Mutations mutationCollector =
+          ::openpit::detail::FromNative<::openpit::tx::Mutations>(mutations);
+      AccountOutcomes outcomes =
+          ::openpit::detail::FromNative<AccountOutcomes>(outResult);
       const PolicyAccountAdjustmentResult result =
           handler->ApplyAccountAdjustment(
-              context, ::openpit::param::AccountId::FromRaw(accountId), parsed,
-              mutationCollector, outcomes);
+              context,
+              ::openpit::detail::FromNative<::openpit::param::AccountId>(
+                  accountId),
+              parsed, mutationCollector, outcomes);
       for (const auto& block : result.accountBlocks) {
         openpit_pretrade_account_adjustment_result_push_account_block(
-            outResult, block.Raw());
+            outResult, ::openpit::detail::Native(block));
       }
-      return detail::DecisionToList(result.decision);
+      return detail::CustomPolicyAccess::DecisionToList(result.decision);
     } catch (...) {
       ::openpit::detail::CaptureCurrentCallbackException();
-      return detail::CallbackErrorRejectList();
+      return detail::CustomPolicyAccess::NoThrowCallbackErrorRejectList();
     }
   }
 

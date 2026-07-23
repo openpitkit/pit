@@ -29,27 +29,35 @@
 // Error model.
 //
 // `openpit::Error` is thrown only for programmer mistakes, exceptional
-// conditions, and runtime boundary failures (construction failure, invalid use,
-// a C call writing its `out_error`). Expected business outcomes (pre-trade
-// rejects and similar) are return values, never exceptions, and never appear on
-// hot paths.
-//
-// The native runtime reports boundary failures two ways:
-//   - a generic `OpenPitSharedString*` written through an `OpenPitOutError`
-//     out-pointer (no machine code);
-//   - a typed `OpenPitParamError*` carrying an `OpenPitParamErrorCode` plus a
-//     message, used by the fallible param constructors/arithmetic.
-// `Error` carries the message and, when available, the param error code.
+// conditions, and SDK boundary failures such as construction failure or invalid
+// lifecycle use. Expected business outcomes (pre-trade rejects and similar)
+// are return values, never exceptions, and never appear on hot paths. `Error`
+// carries the message and, when available, the parameter error code.
 
 namespace openpit {
 
+// Machine-readable category of an exact-value boundary failure.
+enum class ParamErrorCode : std::uint32_t {
+  Unspecified = 0,
+  Negative = 1,
+  DivisionByZero = 2,
+  Overflow = 3,
+  Underflow = 4,
+  InvalidFloat = 5,
+  InvalidFormat = 6,
+  InvalidPrice = 7,
+  InvalidLeverage = 8,
+  AssetEmpty = 9,
+  AccountIdEmpty = 10,
+  Other = 0xffffffffU,
+};
+
 // Machine-readable category of a runtime policy reconfiguration failure.
-// Mirrors `OpenPitConfigureErrorKind`.
 enum class ConfigureErrorKind : std::uint32_t {
-  Unknown = OpenPitConfigureErrorKind_Unknown,
-  TypeMismatch = OpenPitConfigureErrorKind_TypeMismatch,
-  Validation = OpenPitConfigureErrorKind_Validation,
-  NestedConfiguration = OpenPitConfigureErrorKind_NestedConfiguration,
+  Unknown = 0,
+  TypeMismatch = 1,
+  Validation = 2,
+  NestedConfiguration = 3,
 };
 
 class Error : public std::exception {
@@ -57,7 +65,7 @@ class Error : public std::exception {
   explicit Error(std::string message)
       : m_message(std::move(message)), m_code(std::nullopt) {}
 
-  Error(std::string message, OpenPitParamErrorCode code)
+  Error(std::string message, ParamErrorCode code)
       : m_message(std::move(message)), m_code(code) {}
 
   [[nodiscard]] const char* what() const noexcept override {
@@ -68,15 +76,15 @@ class Error : public std::exception {
     return m_message;
   }
 
-  // The native runtime param error code, when this error originated from a
-  // typed param failure; absent for generic boundary failures.
-  [[nodiscard]] std::optional<OpenPitParamErrorCode> Code() const noexcept {
+  // The exact-value error code, when this error originated from a typed value
+  // failure; absent for generic boundary failures.
+  [[nodiscard]] std::optional<ParamErrorCode> Code() const noexcept {
     return m_code;
   }
 
  private:
   std::string m_message;
-  std::optional<OpenPitParamErrorCode> m_code;
+  std::optional<ParamErrorCode> m_code;
 };
 
 // Structured error thrown by runtime `Configure*` calls.
@@ -93,15 +101,36 @@ class ConfigureError : public Error {
 
 namespace detail {
 
+class ErrorAccess final {
+ public:
+  [[nodiscard]] static std::string TakeString(OpenPitSharedString* handle) {
+    return FromNative<SharedString>(handle).ToString();
+  }
+
+  [[nodiscard]] static std::string CopyString(OpenPitStringView view) {
+    return FromNative<StringView>(view).ToString();
+  }
+};
+
+struct ParamErrorDeleter {
+  void operator()(OpenPitParamError* error) const noexcept {
+    openpit_destroy_param_error(error);
+  }
+};
+
+struct ConfigureErrorDeleter {
+  void operator()(OpenPitConfigureError* error) const noexcept {
+    openpit_destroy_configure_error(error);
+  }
+};
+
 // Throws an `Error` built from a caller-owned `OpenPitSharedString` produced by
 // an `OpenPitOutError`, releasing the handle. `fallback` is used when no
 // message handle was written. This function does not return.
 [[noreturn]] inline void ThrowFromSharedString(OpenPitSharedString* error,
                                                const char* fallback) {
   if (error != nullptr) {
-    std::string message = SharedStringView(error).ToString();
-    openpit_destroy_shared_string(error);
-    throw Error(std::move(message));
+    throw Error(ErrorAccess::TakeString(error));
   }
   throw Error(std::string(fallback));
 }
@@ -112,13 +141,25 @@ namespace detail {
 [[noreturn]] inline void ThrowFromParamError(OpenPitParamError* error,
                                              const char* fallback) {
   if (error != nullptr) {
-    OpenPitParamErrorCode code = error->code;
-    std::string message =
-        StringView(openpit_shared_string_view(error->message)).ToString();
-    openpit_destroy_param_error(error);
+    detail::Handle<OpenPitParamError, ParamErrorDeleter> owned(error);
+    const ParamErrorCode code = static_cast<ParamErrorCode>(owned.Get()->code);
+    std::string message = ErrorAccess::CopyString(
+        openpit_shared_string_view(owned.Get()->message));
     throw Error(std::move(message), code);
   }
   throw Error(std::string(fallback));
+}
+
+template <typename Native, typename Function>
+[[nodiscard]] inline std::string StringifyNative(Native value,
+                                                 Function function,
+                                                 const char* fallback) {
+  OpenPitParamError* error = nullptr;
+  OpenPitSharedString* handle = function(value, &error);
+  if (handle == nullptr) {
+    ThrowFromParamError(error, fallback);
+  }
+  return ErrorAccess::TakeString(handle);
 }
 
 // Throws a `ConfigureError` built from a caller-owned
@@ -127,11 +168,11 @@ namespace detail {
 [[noreturn]] inline void ThrowFromConfigureError(OpenPitConfigureError* error,
                                                  const char* fallback) {
   if (error != nullptr) {
+    detail::Handle<OpenPitConfigureError, ConfigureErrorDeleter> owned(error);
     ConfigureErrorKind kind = static_cast<ConfigureErrorKind>(
-        openpit_configure_error_get_kind(error));
-    std::string message =
-        StringView(openpit_configure_error_get_message(error)).ToString();
-    openpit_destroy_configure_error(error);
+        openpit_configure_error_get_kind(owned.Get()));
+    std::string message = ErrorAccess::CopyString(
+        openpit_configure_error_get_message(owned.Get()));
     throw ConfigureError(std::move(message), kind);
   }
   throw ConfigureError(std::string(fallback), ConfigureErrorKind::Validation);

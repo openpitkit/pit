@@ -21,15 +21,18 @@
 
 namespace openpit {
 
-class Error;
 class ConfigureError;
+class BytesView;
 class EngineBuildError;
 class Engine;
 class EngineBuilder;
 class InstrumentId;
 class Order;
 class ReferenceBook;
+class SharedBytes;
 class ExecutionReport;
+class SharedString;
+class StringView;
 
 struct AdjustmentResult;
 struct PostTradeResult;
@@ -38,6 +41,7 @@ struct SettlementLag;
 struct SettlementScheme;
 
 enum class ConfigureErrorKind : std::uint32_t;
+enum class ParamErrorCode : std::uint32_t;
 enum class SettlementUnit : std::uint8_t;
 enum class SyncPolicy : std::uint8_t;
 enum class EngineBuildErrorCode : std::uint8_t;
@@ -62,12 +66,54 @@ class Price;
 class Quantity;
 class Volume;
 
-enum class AdjustmentAmountKind : std::uint8_t;
 enum class FillType : std::uint8_t;
 enum class Kind : std::uint8_t;
 enum class RoundingStrategy : std::uint8_t;
+enum class Side : std::uint8_t;
 
 }  // namespace openpit::param
+
+namespace openpit::param::detail {
+
+template <typename Derived, typename Traits>
+class ExactValue;
+class AdjustmentAmountAccess;
+class LeverageAccess;
+class MonetaryAmountAccess;
+class ValueOperations;
+
+}  // namespace openpit::param::detail
+
+namespace openpit::detail {
+
+class ErrorAccess;
+
+}  // namespace openpit::detail
+
+namespace openpit::accountadjustment::detail {
+
+class PnlStateAccess;
+
+}  // namespace openpit::accountadjustment::detail
+
+namespace openpit::asyncengine::detail {
+
+class Base;
+
+}  // namespace openpit::asyncengine::detail
+
+namespace openpit::pretrade::detail {
+
+class CustomPolicyAccess;
+class ListAccess;
+
+}  // namespace openpit::pretrade::detail
+
+namespace openpit::pretrade::policies::detail {
+
+class PnlOptionalAccess;
+
+}  // namespace openpit::pretrade::policies::detail
 
 namespace openpit::model {
 
@@ -88,7 +134,7 @@ struct Trade;
 enum class PositionEffect : std::uint8_t;
 enum class PositionMode : std::uint8_t;
 enum class PositionSide : std::uint8_t;
-enum class Side : std::uint8_t;
+using Side = ::openpit::param::Side;
 enum class TradeAmountKind : std::uint8_t;
 
 }  // namespace openpit::model
@@ -113,13 +159,18 @@ struct ExecuteResult;
 struct LockEntry;
 struct PolicyAccountAdjustmentResult;
 struct PolicyDecision;
-struct Reject;
 struct StartResult;
+
+}  // namespace openpit::pretrade
+
+namespace openpit::reject {
+
+struct Reject;
 
 enum class RejectCode : std::uint16_t;
 enum class RejectScope : std::uint8_t;
 
-}  // namespace openpit::pretrade
+}  // namespace openpit::reject
 
 namespace openpit::tx {
 
@@ -185,16 +236,17 @@ class BatchError;
 class Context;
 class Operation;
 class OutcomeList;
+class PnlState;
 
 struct AccountAdjustment;
 struct AccountOutcomeEntry;
-struct AccountPnlOutcome;
+class AccountPnlOutcome;
 struct Amount;
 struct BalanceOperation;
 struct Bounds;
 struct Outcome;
 struct OutcomeAmount;
-struct PnlOutcome;
+class PnlOutcome;
 struct PnlOutcomeAmount;
 struct PositionOperation;
 
@@ -223,7 +275,6 @@ using InstrumentId = ::openpit::InstrumentId;
 
 namespace openpit::asyncengine {
 
-class Error;
 class EngineAdapter;
 class OwnedTypedAsyncEngine;
 class NoopObserver;

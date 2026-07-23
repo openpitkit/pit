@@ -25,13 +25,14 @@
 
 #include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/engine.hpp"
-#include "openpit/model.hpp"
-#include "openpit/param.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/param.hpp"
 #include "openpit/pretrade/pretrade.hpp"
 
 #include <gtest/gtest.h>
 
 #include <cassert>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -61,7 +62,7 @@ TEST(PreTradeLockWiki, PersistAndRestoreLockRoundTrip) {
   seed.operation =
       openpit::accountadjustment::Operation::OfBalance(std::move(balanceOp));
   openpit::accountadjustment::Amount seedAmount;
-  seedAmount.balance = openpit::param::AdjustmentAmount::OfAbsolute(
+  seedAmount.balance = openpit::param::AdjustmentAmount::Absolute(
       openpit::param::PositionSize::FromString("10000"));
   seed.amount = std::move(seedAmount);
 
@@ -111,12 +112,14 @@ TEST(PreTradeLockWiki, PersistAndRestoreLockRoundTrip) {
                             openpit::param::Quantity::FromString("10"));
   fill.leavesQuantity = openpit::param::Quantity::FromString("0");
   fill.isFinal = true;
+  fill.lock =
+      std::make_shared<openpit::pretrade::PreTradeLock>(std::move(restored));
 
   openpit::model::ExecutionReport report;
   report.operation = std::move(operation);
   report.fill = std::move(fill);
   const openpit::PostTradeResult postTradeResult =
-      engine.ApplyExecutionReport(report, restored);
+      engine.ApplyExecutionReport(report);
   assert(postTradeResult.accountBlocks.empty());
   EXPECT_TRUE(postTradeResult.accountBlocks.empty());
 }

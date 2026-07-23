@@ -17,12 +17,15 @@
 
 #pragma once
 
-#include "openpit/account_id.hpp"
-#include "openpit/param.hpp"
+#include "openpit/detail/native_access.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/param/param.hpp"
+#include "openpit/pretrade/pre_trade_lock.hpp"
 
 #include <openpit.h>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -31,34 +34,29 @@
 // Domain data types: order and execution-report payloads plus the instrument
 // identity they reference.
 //
-// Each payload mirrors the native runtime POD view (`OpenPitOrder`, ...).
-// Optional groups and fields read as an empty `std::optional` when absent,
-// matching the native runtime `is_set` / `NotSet` convention and the native
-// SDK. Asset construction still delegates validation to the native runtime;
-// `FromRaw` only enforces representation invariants that the C++ model cannot
-// store, then copies a borrowed C view into owned values. `Raw()` rebuilds a C
-// view whose string fields borrow this object's storage and is therefore valid
-// only while the object is alive and unchanged. Financial fields are carried by
-// the `openpit::param` value types, never by `double`.
+// Optional groups and fields read as an empty `std::optional` when absent.
+// Asset construction delegates validation to the SDK core. Financial fields
+// are carried by the `openpit::param` value types, never by `double`.
 //
 // `openpit::Order` and `openpit::ExecutionReport` are the polymorphic bases the
-// policy adapters (`openpit/adapters.hpp`) downcast to. The concrete payloads
+// policy adapters (`openpit/pretrade/adapters.hpp`) downcast to. The concrete
+// payloads
 // `openpit::model::Order` / `openpit::model::ExecutionReport` derive from them.
+
+namespace openpit::detail {
+
+using RawOrder = ::OpenPitOrder;
+using RawExecutionReport = ::OpenPitExecutionReport;
+
+}  // namespace openpit::detail
 
 namespace openpit {
 
 // Polymorphic base for an order payload handed to a pre-trade policy. Client
-// order types derive from this so `openpit/adapters.hpp` can recover the
+// order types derive from this so `openpit/pretrade/adapters.hpp` can recover
+// the
 // concrete type via `dynamic_cast`.
 //
-// `EngineRaw()` yields the native runtime order view the engine consumes when
-// this order is submitted (`Engine::StartPreTrade` / `ExecutePreTrade`). The
-// `openpit::model::Order` override returns its own `Raw()`; a client type that
-// derives from `openpit::Order` directly and embeds an `openpit::model::Order`
-// overrides it to forward that member's `Raw()`. The returned view borrows
-// storage owned by this object and is valid only while this object stays alive.
-// The base default yields an empty order, so a type used only
-// to exercise an adapter in isolation (never submitted) need not override it.
 class Order {
  public:
   Order() = default;
@@ -68,15 +66,22 @@ class Order {
   Order& operator=(Order&&) = default;
   virtual ~Order() = default;
 
-  [[nodiscard]] virtual OpenPitOrder EngineRaw() const noexcept {
-    return OpenPitOrder{};
+ private:
+  friend class detail::NativeAccess;
+
+  [[nodiscard]] detail::RawOrder Native() const noexcept {
+    return NativeView();
+  }
+
+  [[nodiscard]] virtual detail::RawOrder NativeView() const noexcept {
+    return detail::RawOrder{};
   }
 };
 
 // Polymorphic base for an execution-report payload applied by a policy. Client
-// report types derive from this so `openpit/adapters.hpp` can recover the
-// concrete type via `dynamic_cast`. `EngineRaw()` follows the same borrowed-
-// view contract as `Order::EngineRaw()`.
+// report types derive from this so `openpit/pretrade/adapters.hpp` can recover
+// the
+// concrete type via `dynamic_cast`.
 class ExecutionReport {
  public:
   ExecutionReport() = default;
@@ -86,8 +91,15 @@ class ExecutionReport {
   ExecutionReport& operator=(ExecutionReport&&) = default;
   virtual ~ExecutionReport() = default;
 
-  [[nodiscard]] virtual OpenPitExecutionReport EngineRaw() const noexcept {
-    return OpenPitExecutionReport{};
+ private:
+  friend class detail::NativeAccess;
+
+  [[nodiscard]] detail::RawExecutionReport Native() const noexcept {
+    return NativeView();
+  }
+
+  [[nodiscard]] virtual detail::RawExecutionReport NativeView() const noexcept {
+    return detail::RawExecutionReport{};
   }
 };
 
@@ -157,48 +169,43 @@ class CurrentReportGuard {
 namespace openpit::model {
 
 //------------------------------------------------------------------------------
-// Enums (each maps 1:1 from the native runtime; the `NotSet` variant is modeled
-// as an empty std::optional, not a value).
+// Enums. An unset value is modeled as an empty `std::optional`.
 
-// Buy/sell direction. Mirrors the set values of `OpenPitParamSide`.
-enum class Side : std::uint8_t {
-  Buy = OPENPIT_PARAM_SIDE_BUY,
-  Sell = OPENPIT_PARAM_SIDE_SELL,
-};
+// Buy/sell direction shared with the exact-value parameter module.
+using Side = ::openpit::param::Side;
 
-// Long/short exposure. Mirrors the set values of `OpenPitParamPositionSide`.
+// Long/short exposure.
 enum class PositionSide : std::uint8_t {
-  Long = OPENPIT_PARAM_POSITION_SIDE_LONG,
-  Short = OPENPIT_PARAM_POSITION_SIDE_SHORT,
+  Long = 1,
+  Short = 2,
 };
 
-// Whether a trade opens or closes exposure. Mirrors the set values of
-// `OpenPitParamPositionEffect`.
+// Whether a trade opens or closes exposure.
 enum class PositionEffect : std::uint8_t {
-  Open = OPENPIT_PARAM_POSITION_EFFECT_OPEN,
-  Close = OPENPIT_PARAM_POSITION_EFFECT_CLOSE,
+  Open = 1,
+  Close = 2,
 };
 
-// Position accounting mode. Mirrors the set values of
-// `OpenPitParamPositionMode`.
+// Position accounting mode.
 enum class PositionMode : std::uint8_t {
-  Netting = OPENPIT_PARAM_POSITION_MODE_NETTING,
-  Hedged = OPENPIT_PARAM_POSITION_MODE_HEDGED,
+  Netting = 1,
+  Hedged = 2,
 };
 
-// Selects how a trade-amount value is interpreted. Mirrors the set values of
-// `OpenPitParamTradeAmountKind`.
+// Selects how a trade-amount value is interpreted.
 enum class TradeAmountKind : std::uint8_t {
-  Quantity = OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY,
-  Volume = OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME,
+  Quantity = 1,
+  Volume = 2,
 };
+
+using ::openpit::param::ToString;
 
 namespace detail {
 
 // Maps a `*_NotSet`-or-value C enum byte to an optional set value.
 template <typename Enum>
-[[nodiscard]] inline std::optional<Enum> FromRawEnum(std::uint8_t raw,
-                                                     std::uint8_t notSet) {
+[[nodiscard]] inline std::optional<Enum> FromRawEnum(
+    std::uint8_t raw, std::uint8_t notSet) noexcept {
   if (raw == notSet) {
     return std::nullopt;
   }
@@ -213,14 +220,10 @@ template <typename Enum>
 
 // Tri-state boolean: `NotSet` -> nullopt, `False`/`True` -> the bool.
 [[nodiscard]] inline std::optional<bool> FromTriBool(OpenPitTriBool raw) {
-  switch (raw) {
-    case OPENPIT_TRI_BOOL_FALSE:
-      return false;
-    case OPENPIT_TRI_BOOL_TRUE:
-      return true;
-    default:
-      return std::nullopt;
+  if (raw == OPENPIT_TRI_BOOL_NOT_SET) {
+    return std::nullopt;
   }
+  return raw == OPENPIT_TRI_BOOL_TRUE;
 }
 
 [[nodiscard]] inline OpenPitTriBool ToTriBool(
@@ -233,12 +236,35 @@ template <typename Enum>
 
 }  // namespace detail
 
+/// Formats a long/short exposure.
+[[nodiscard]] inline std::string ToString(PositionSide side) {
+  return ::openpit::detail::StringifyNative(
+      static_cast<::OpenPitParamPositionSide>(side),
+      ::openpit_param_position_side_to_string,
+      "position side string conversion failed");
+}
+
+/// Formats an open/close position effect.
+[[nodiscard]] inline std::string ToString(PositionEffect effect) {
+  return ::openpit::detail::StringifyNative(
+      static_cast<::OpenPitParamPositionEffect>(effect),
+      ::openpit_param_position_effect_to_string,
+      "position effect string conversion failed");
+}
+
+/// Formats a position accounting mode.
+[[nodiscard]] inline std::string ToString(PositionMode mode) {
+  return ::openpit::detail::StringifyNative(
+      static_cast<::OpenPitParamPositionMode>(mode),
+      ::openpit_param_position_mode_to_string,
+      "position mode string conversion failed");
+}
+
 //------------------------------------------------------------------------------
 // Instrument
 
 // Trading instrument identity: an `underlying`/`settlement` asset pair. Absent
-// (empty optional from `FromRaw`) when neither asset is set; a single set asset
-// is an invalid C payload and is reported by the core, not here.
+// when neither asset is set. A partial instrument is rejected by the core.
 struct Instrument {
   param::Asset underlyingAsset;
   param::Asset settlementAsset;
@@ -247,30 +273,30 @@ struct Instrument {
       : underlyingAsset(std::move(underlying)),
         settlementAsset(std::move(settlement)) {}
 
-  // Copies the borrowed asset views; nullopt when both views are unset.
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static std::optional<Instrument> FromRaw(
       const OpenPitInstrument& raw) {
-    const ::openpit::StringView underlying(raw.underlying_asset);
-    const ::openpit::StringView settlement(raw.settlement_asset);
-    const bool hasUnderlying = !underlying.Empty();
-    const bool hasSettlement = !settlement.Empty();
-    if (!hasUnderlying && !hasSettlement) {
+    const auto underlying =
+        ::openpit::detail::FromNative<::openpit::StringView>(
+            raw.underlying_asset);
+    const auto settlement =
+        ::openpit::detail::FromNative<::openpit::StringView>(
+            raw.settlement_asset);
+    if (underlying.Empty() && settlement.Empty()) {
       return std::nullopt;
     }
-    if (hasUnderlying != hasSettlement) {
-      throw ::openpit::Error(
-          "instrument must provide both underlying_asset and settlement_asset "
-          "or neither");
-    }
-    return Instrument(param::Asset::FromRaw(raw.underlying_asset),
-                      param::Asset::FromRaw(raw.settlement_asset));
+    return Instrument(
+        ::openpit::detail::FromNative<param::Asset>(raw.underlying_asset),
+        ::openpit::detail::FromNative<param::Asset>(raw.settlement_asset));
   }
 
   // Borrows this object's asset bytes; valid only while it stays alive.
-  [[nodiscard]] OpenPitInstrument Raw() const noexcept {
+  [[nodiscard]] OpenPitInstrument Native() const noexcept {
     OpenPitInstrument raw{};
-    raw.underlying_asset = underlyingAsset.Raw();
-    raw.settlement_asset = settlementAsset.Raw();
+    raw.underlying_asset = ::openpit::detail::Native(underlyingAsset);
+    raw.settlement_asset = ::openpit::detail::Native(settlementAsset);
     return raw;
   }
 };
@@ -279,8 +305,7 @@ struct Instrument {
 // TradeAmount
 
 // A trade amount tagged by kind: either an instrument `Quantity` or a
-// settlement `Volume`. The native runtime carries a raw decimal plus a kind
-// byte; the kind selects which value type the decimal denotes.
+// settlement `Volume`.
 class TradeAmount {
  public:
   [[nodiscard]] static TradeAmount OfQuantity(param::Quantity quantity) {
@@ -291,34 +316,44 @@ class TradeAmount {
     return TradeAmount(volume);
   }
 
-  // nullopt when the kind is `NotSet`.
+  /// Formats the selected exact amount.
+  [[nodiscard]] std::string ToString() const {
+    return ::openpit::detail::StringifyNative(
+        Native(), ::openpit_param_trade_amount_to_string,
+        "trade amount string conversion failed");
+  }
+
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static std::optional<TradeAmount> FromRaw(
       const OpenPitParamTradeAmount& raw) {
     switch (raw.kind) {
       case OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY:
-        return TradeAmount(
-            param::Quantity::FromRaw(OpenPitParamQuantity{raw.value}));
+        return TradeAmount(::openpit::detail::FromNative<param::Quantity>(
+            OpenPitParamQuantity{raw.value}));
       case OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME:
-        return TradeAmount(
-            param::Volume::FromRaw(OpenPitParamVolume{raw.value}));
+        return TradeAmount(::openpit::detail::FromNative<param::Volume>(
+            OpenPitParamVolume{raw.value}));
+      case OPENPIT_PARAM_TRADE_AMOUNT_KIND_NOT_SET:
       default:
         return std::nullopt;
     }
   }
 
-  [[nodiscard]] OpenPitParamTradeAmount Raw() const noexcept {
+  [[nodiscard]] OpenPitParamTradeAmount Native() const noexcept {
     OpenPitParamTradeAmount raw{};
     if (const auto* quantity = std::get_if<param::Quantity>(&m_value)) {
-      raw.value = quantity->Decimal();
+      raw.value = ::openpit::detail::Native(*quantity)._0;
       raw.kind = OPENPIT_PARAM_TRADE_AMOUNT_KIND_QUANTITY;
-    } else {
-      const auto& volume = std::get<param::Volume>(m_value);
-      raw.value = volume.Decimal();
+    } else if (const auto* volume = std::get_if<param::Volume>(&m_value)) {
+      raw.value = ::openpit::detail::Native(*volume)._0;
       raw.kind = OPENPIT_PARAM_TRADE_AMOUNT_KIND_VOLUME;
     }
     return raw;
   }
 
+ public:
   [[nodiscard]] TradeAmountKind Kind() const noexcept {
     return std::holds_alternative<param::Quantity>(m_value)
                ? TradeAmountKind::Quantity
@@ -360,35 +395,40 @@ struct OrderOperation {
   std::optional<param::AccountId> accountId;
   std::optional<Side> side;
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static OrderOperation FromRaw(
       const OpenPitOrderOperation& raw) {
     OrderOperation out;
-    out.instrument = Instrument::FromRaw(raw.instrument);
-    out.tradeAmount = TradeAmount::FromRaw(raw.trade_amount);
+    out.instrument = ::openpit::detail::FromNative<Instrument>(raw.instrument);
+    out.tradeAmount =
+        ::openpit::detail::FromNative<TradeAmount>(raw.trade_amount);
     if (raw.price.is_set) {
-      out.price = param::Price::FromRaw(raw.price.value);
+      out.price = ::openpit::detail::FromNative<param::Price>(raw.price.value);
     }
     if (raw.account_id.is_set) {
-      out.accountId = param::AccountId::FromRaw(raw.account_id.value);
+      out.accountId =
+          ::openpit::detail::FromNative<param::AccountId>(raw.account_id.value);
     }
     out.side = detail::FromRawEnum<Side>(raw.side, OPENPIT_PARAM_SIDE_NOT_SET);
     return out;
   }
 
-  [[nodiscard]] OpenPitOrderOperation Raw() const noexcept {
+  [[nodiscard]] OpenPitOrderOperation Native() const noexcept {
     OpenPitOrderOperation raw{};
     if (instrument) {
-      raw.instrument = instrument->Raw();
+      raw.instrument = ::openpit::detail::Native(*instrument);
     }
     if (tradeAmount) {
-      raw.trade_amount = tradeAmount->Raw();
+      raw.trade_amount = ::openpit::detail::Native(*tradeAmount);
     }
     if (price) {
-      raw.price.value = price->Raw();
+      raw.price.value = ::openpit::detail::Native(*price);
       raw.price.is_set = true;
     }
     if (accountId) {
-      raw.account_id.value = accountId->Raw();
+      raw.account_id.value = ::openpit::detail::Native(*accountId);
       raw.account_id.is_set = true;
     }
     raw.side = detail::ToRawEnum(side, OPENPIT_PARAM_SIDE_NOT_SET);
@@ -402,6 +442,9 @@ struct OrderPosition {
   std::optional<bool> reduceOnly;
   std::optional<bool> closePosition;
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static OrderPosition FromRaw(const OpenPitOrderPosition& raw) {
     OrderPosition out;
     out.positionSide = detail::FromRawEnum<PositionSide>(
@@ -411,7 +454,7 @@ struct OrderPosition {
     return out;
   }
 
-  [[nodiscard]] OpenPitOrderPosition Raw() const noexcept {
+  [[nodiscard]] OpenPitOrderPosition Native() const noexcept {
     OpenPitOrderPosition raw{};
     raw.position_side =
         detail::ToRawEnum(positionSide, OPENPIT_PARAM_POSITION_SIDE_NOT_SET);
@@ -427,24 +470,30 @@ struct OrderMargin {
   std::optional<param::Leverage> leverage;
   std::optional<bool> autoBorrow;
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static OrderMargin FromRaw(const OpenPitOrderMargin& raw) {
     OrderMargin out;
-    const ::openpit::StringView collateral(raw.collateral_asset);
+    const auto collateral =
+        ::openpit::detail::FromNative<::openpit::StringView>(
+            raw.collateral_asset);
     if (!collateral.Empty()) {
-      out.collateralAsset = param::Asset::FromRaw(raw.collateral_asset);
+      out.collateralAsset =
+          ::openpit::detail::FromNative<param::Asset>(raw.collateral_asset);
     }
     out.autoBorrow = detail::FromTriBool(raw.auto_borrow);
-    out.leverage = param::Leverage::FromRawOption(raw.leverage);
+    out.leverage = param::detail::LeverageAccess::FromNative(raw.leverage);
     return out;
   }
 
-  [[nodiscard]] OpenPitOrderMargin Raw() const noexcept {
+  [[nodiscard]] OpenPitOrderMargin Native() const noexcept {
     OpenPitOrderMargin raw{};
     if (collateralAsset) {
-      raw.collateral_asset = collateralAsset->Raw();
+      raw.collateral_asset = ::openpit::detail::Native(*collateralAsset);
     }
     raw.auto_borrow = detail::ToTriBool(autoBorrow);
-    raw.leverage = param::Leverage::RawOption(leverage);
+    raw.leverage = param::detail::LeverageAccess::Native(leverage);
     return raw;
   }
 };
@@ -452,10 +501,10 @@ struct OrderMargin {
 //------------------------------------------------------------------------------
 // Order
 
-// Full order payload mirroring the native runtime `OpenPitOrder`. Every group
-// is optional; `userData` is an opaque caller token the SDK never inspects
-// (zero means unset). Derives from `openpit::Order` so it is usable wherever
-// the policy adapters expect the polymorphic base.
+// Full order payload. Every group is optional; `userData` is an opaque caller
+// token the SDK never inspects (zero means unset). Derives from
+// `openpit::Order` so it is usable wherever the policy adapters expect the
+// polymorphic base.
 class Order : public ::openpit::Order {
  public:
   std::optional<OrderOperation> operation;
@@ -489,42 +538,43 @@ class Order : public ::openpit::Order {
     return order;
   }
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static Order FromRaw(const OpenPitOrder& raw) {
     Order out;
     if (raw.operation.is_set) {
-      out.operation = OrderOperation::FromRaw(raw.operation.value);
+      out.operation =
+          ::openpit::detail::FromNative<OrderOperation>(raw.operation.value);
     }
     if (raw.margin.is_set) {
-      out.margin = OrderMargin::FromRaw(raw.margin.value);
+      out.margin = ::openpit::detail::FromNative<OrderMargin>(raw.margin.value);
     }
     if (raw.position.is_set) {
-      out.position = OrderPosition::FromRaw(raw.position.value);
+      out.position =
+          ::openpit::detail::FromNative<OrderPosition>(raw.position.value);
     }
     out.userData = reinterpret_cast<std::uintptr_t>(raw.user_data);
     return out;
   }
 
   // Borrows this object's string storage; valid only while it stays alive.
-  [[nodiscard]] OpenPitOrder Raw() const noexcept {
+  [[nodiscard]] OpenPitOrder NativeView() const noexcept override {
     OpenPitOrder raw{};
     if (operation) {
-      raw.operation.value = operation->Raw();
+      raw.operation.value = ::openpit::detail::Native(*operation);
       raw.operation.is_set = true;
     }
     if (margin) {
-      raw.margin.value = margin->Raw();
+      raw.margin.value = ::openpit::detail::Native(*margin);
       raw.margin.is_set = true;
     }
     if (position) {
-      raw.position.value = position->Raw();
+      raw.position.value = ::openpit::detail::Native(*position);
       raw.position.is_set = true;
     }
     raw.user_data = reinterpret_cast<void*>(userData);
     return raw;
-  }
-
-  [[nodiscard]] OpenPitOrder EngineRaw() const noexcept override {
-    return Raw();
   }
 };
 
@@ -537,24 +587,28 @@ struct ExecutionReportOperation {
   std::optional<param::AccountId> accountId;
   std::optional<Side> side;
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static ExecutionReportOperation FromRaw(
       const OpenPitExecutionReportOperation& raw) {
     ExecutionReportOperation out;
-    out.instrument = Instrument::FromRaw(raw.instrument);
+    out.instrument = ::openpit::detail::FromNative<Instrument>(raw.instrument);
     if (raw.account_id.is_set) {
-      out.accountId = param::AccountId::FromRaw(raw.account_id.value);
+      out.accountId =
+          ::openpit::detail::FromNative<param::AccountId>(raw.account_id.value);
     }
     out.side = detail::FromRawEnum<Side>(raw.side, OPENPIT_PARAM_SIDE_NOT_SET);
     return out;
   }
 
-  [[nodiscard]] OpenPitExecutionReportOperation Raw() const noexcept {
+  [[nodiscard]] OpenPitExecutionReportOperation Native() const noexcept {
     OpenPitExecutionReportOperation raw{};
     if (instrument) {
-      raw.instrument = instrument->Raw();
+      raw.instrument = ::openpit::detail::Native(*instrument);
     }
     if (accountId) {
-      raw.account_id.value = accountId->Raw();
+      raw.account_id.value = ::openpit::detail::Native(*accountId);
       raw.account_id.is_set = true;
     }
     raw.side = detail::ToRawEnum(side, OPENPIT_PARAM_SIDE_NOT_SET);
@@ -567,26 +621,29 @@ struct FinancialImpact {
   std::optional<param::Pnl> pnl;
   std::optional<param::Fee> fee;
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static FinancialImpact FromRaw(
       const OpenPitFinancialImpact& raw) {
     FinancialImpact out;
     if (raw.pnl.is_set) {
-      out.pnl = param::Pnl::FromRaw(raw.pnl.value);
+      out.pnl = ::openpit::detail::FromNative<param::Pnl>(raw.pnl.value);
     }
     if (raw.fee.is_set) {
-      out.fee = param::Fee::FromRaw(raw.fee.value);
+      out.fee = ::openpit::detail::FromNative<param::Fee>(raw.fee.value);
     }
     return out;
   }
 
-  [[nodiscard]] OpenPitFinancialImpact Raw() const noexcept {
+  [[nodiscard]] OpenPitFinancialImpact Native() const noexcept {
     OpenPitFinancialImpact raw{};
     if (pnl) {
-      raw.pnl.value = pnl->Raw();
+      raw.pnl.value = ::openpit::detail::Native(*pnl);
       raw.pnl.is_set = true;
     }
     if (fee) {
-      raw.fee.value = fee->Raw();
+      raw.fee.value = ::openpit::detail::Native(*fee);
       raw.fee.is_set = true;
     }
     return raw;
@@ -601,39 +658,55 @@ struct Trade {
   Trade(param::Price tradePrice, param::Quantity tradeQuantity)
       : price(tradePrice), quantity(tradeQuantity) {}
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static Trade FromRaw(const OpenPitExecutionReportTrade& raw) {
-    return Trade(param::Price::FromRaw(raw.price),
-                 param::Quantity::FromRaw(raw.quantity));
+    return Trade(::openpit::detail::FromNative<param::Price>(raw.price),
+                 ::openpit::detail::FromNative<param::Quantity>(raw.quantity));
   }
 
-  [[nodiscard]] OpenPitExecutionReportTrade Raw() const noexcept {
+  [[nodiscard]] OpenPitExecutionReportTrade Native() const noexcept {
     OpenPitExecutionReportTrade raw{};
-    raw.price = price.Raw();
-    raw.quantity = quantity.Raw();
+    raw.price = ::openpit::detail::Native(price);
+    raw.quantity = ::openpit::detail::Native(quantity);
     return raw;
   }
 };
 
 // Fill-details group of an execution report.
 //
-// The native runtime `lock` field (a borrowed pre-trade-lock pointer) is
-// intentionally not surfaced here; pre-trade locks are a separate handle type
-// owned by their own binding slice. A `Raw()` view leaves it null (no lock).
 struct Fill {
+  std::shared_ptr<pretrade::PreTradeLock> lock;
   std::optional<Trade> lastTrade;
   // Structured fee amount and currency reported for this fill.
   std::optional<param::MonetaryAmount> fee;
   std::optional<param::Quantity> leavesQuantity;
   std::optional<bool> isFinal;
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static Fill FromRaw(const OpenPitExecutionReportFill& raw) {
     Fill out;
-    if (raw.last_trade.is_set) {
-      out.lastTrade = Trade::FromRaw(raw.last_trade.value);
+    if (raw.lock != nullptr) {
+      OpenPitPretradePreTradeLock* clonedRaw =
+          openpit_pretrade_pre_trade_lock_clone(raw.lock);
+      if (clonedRaw == nullptr) {
+        throw ::openpit::Error("pre-trade lock clone failed");
+      }
+      auto cloned =
+          ::openpit::detail::FromNative<pretrade::PreTradeLock>(clonedRaw);
+      out.lock = std::make_shared<pretrade::PreTradeLock>(std::move(cloned));
     }
-    out.fee = param::MonetaryAmount::FromRawOption(raw.fee);
+    if (raw.last_trade.is_set) {
+      out.lastTrade =
+          ::openpit::detail::FromNative<Trade>(raw.last_trade.value);
+    }
+    out.fee = param::detail::MonetaryAmountAccess::FromNative(raw.fee);
     if (raw.leaves_quantity.is_set) {
-      out.leavesQuantity = param::Quantity::FromRaw(raw.leaves_quantity.value);
+      out.leavesQuantity = ::openpit::detail::FromNative<param::Quantity>(
+          raw.leaves_quantity.value);
     }
     if (raw.is_final.is_set) {
       out.isFinal = raw.is_final.value;
@@ -641,18 +714,18 @@ struct Fill {
     return out;
   }
 
-  [[nodiscard]] OpenPitExecutionReportFill Raw() const noexcept {
+  [[nodiscard]] OpenPitExecutionReportFill Native() const noexcept {
     OpenPitExecutionReportFill raw{};
     if (lastTrade) {
-      raw.last_trade.value = lastTrade->Raw();
+      raw.last_trade.value = ::openpit::detail::Native(*lastTrade);
       raw.last_trade.is_set = true;
     }
-    raw.fee = param::MonetaryAmount::RawOption(fee);
+    raw.fee = param::detail::MonetaryAmountAccess::Native(fee);
     if (leavesQuantity) {
-      raw.leaves_quantity.value = leavesQuantity->Raw();
+      raw.leaves_quantity.value = ::openpit::detail::Native(*leavesQuantity);
       raw.leaves_quantity.is_set = true;
     }
-    raw.lock = nullptr;
+    raw.lock = lock ? ::openpit::detail::Native(*lock) : nullptr;
     if (isFinal) {
       raw.is_final.value = *isFinal;
       raw.is_final.is_set = true;
@@ -666,6 +739,9 @@ struct PositionImpact {
   std::optional<PositionEffect> positionEffect;
   std::optional<PositionSide> positionSide;
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static PositionImpact FromRaw(
       const OpenPitExecutionReportPositionImpact& raw) {
     PositionImpact out;
@@ -676,7 +752,7 @@ struct PositionImpact {
     return out;
   }
 
-  [[nodiscard]] OpenPitExecutionReportPositionImpact Raw() const noexcept {
+  [[nodiscard]] OpenPitExecutionReportPositionImpact Native() const noexcept {
     OpenPitExecutionReportPositionImpact raw{};
     raw.position_effect = detail::ToRawEnum(
         positionEffect, OPENPIT_PARAM_POSITION_EFFECT_NOT_SET);
@@ -689,9 +765,8 @@ struct PositionImpact {
 //------------------------------------------------------------------------------
 // ExecutionReport
 
-// Full execution-report payload mirroring the native runtime
-// `OpenPitExecutionReport`. Every group is optional; `userData` is an opaque
-// caller token the SDK never inspects (zero means unset). Derives from
+// Full execution-report payload. Every group is optional; `userData` is an
+// opaque caller token the SDK never inspects (zero means unset). Derives from
 // `openpit::ExecutionReport` so it is usable wherever the policy adapters
 // expect the polymorphic base.
 class ExecutionReport : public ::openpit::ExecutionReport {
@@ -704,52 +779,53 @@ class ExecutionReport : public ::openpit::ExecutionReport {
 
   ExecutionReport() = default;
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static ExecutionReport FromRaw(
       const OpenPitExecutionReport& raw) {
     ExecutionReport out;
     if (raw.operation.is_set) {
-      out.operation = ExecutionReportOperation::FromRaw(raw.operation.value);
+      out.operation = ::openpit::detail::FromNative<ExecutionReportOperation>(
+          raw.operation.value);
     }
     if (raw.financial_impact.is_set) {
-      out.financialImpact =
-          FinancialImpact::FromRaw(raw.financial_impact.value);
+      out.financialImpact = ::openpit::detail::FromNative<FinancialImpact>(
+          raw.financial_impact.value);
     }
     if (raw.fill.is_set) {
-      out.fill = Fill::FromRaw(raw.fill.value);
+      out.fill = ::openpit::detail::FromNative<Fill>(raw.fill.value);
     }
     if (raw.position_impact.is_set) {
-      out.positionImpact = PositionImpact::FromRaw(raw.position_impact.value);
+      out.positionImpact = ::openpit::detail::FromNative<PositionImpact>(
+          raw.position_impact.value);
     }
     out.userData = reinterpret_cast<std::uintptr_t>(raw.user_data);
     return out;
   }
 
-  // Borrows this object's string storage; valid only while it stays alive. The
-  // produced fill (if any) carries a null lock.
-  [[nodiscard]] OpenPitExecutionReport Raw() const noexcept {
+  // Borrows this object's string storage; valid only while it stays alive. A
+  // produced fill carries its own lock through to the native view.
+  [[nodiscard]] OpenPitExecutionReport NativeView() const noexcept override {
     OpenPitExecutionReport raw{};
     if (operation) {
-      raw.operation.value = operation->Raw();
+      raw.operation.value = ::openpit::detail::Native(*operation);
       raw.operation.is_set = true;
     }
     if (financialImpact) {
-      raw.financial_impact.value = financialImpact->Raw();
+      raw.financial_impact.value = ::openpit::detail::Native(*financialImpact);
       raw.financial_impact.is_set = true;
     }
     if (fill) {
-      raw.fill.value = fill->Raw();
+      raw.fill.value = ::openpit::detail::Native(*fill);
       raw.fill.is_set = true;
     }
     if (positionImpact) {
-      raw.position_impact.value = positionImpact->Raw();
+      raw.position_impact.value = ::openpit::detail::Native(*positionImpact);
       raw.position_impact.is_set = true;
     }
     raw.user_data = reinterpret_cast<void*>(userData);
     return raw;
-  }
-
-  [[nodiscard]] OpenPitExecutionReport EngineRaw() const noexcept override {
-    return Raw();
   }
 };
 

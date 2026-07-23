@@ -18,7 +18,7 @@
 #include "marketdata.hpp"
 
 #include "openpit/error.hpp"
-#include "openpit/param.hpp"
+#include "openpit/param/param.hpp"
 
 #include "builder.hpp"
 

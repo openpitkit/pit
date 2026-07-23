@@ -4735,15 +4735,6 @@ OpenPitSharedString * openpit_param_position_mode_to_string(
 );
 
 /**
- * Renders an account identifier into a caller-owned shared string.
- *
- * This conversion always succeeds.
- */
-OpenPitSharedString * openpit_param_account_id_to_string(
-    OpenPitParamAccountId value
-);
-
-/**
  * Renders a trade amount into a caller-owned shared string.
  *
  * Returns null and writes `out_error` when the trade amount is not set or its

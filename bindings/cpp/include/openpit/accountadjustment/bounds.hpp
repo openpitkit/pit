@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "openpit/param.hpp"
+#include "openpit/param/param.hpp"
 
 #include <openpit.h>
 
@@ -42,6 +42,9 @@ struct Bounds {
 
   Bounds() = default;
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static Bounds FromRaw(
       const OpenPitAccountAdjustmentBounds& raw) {
     Bounds out;
@@ -54,7 +57,7 @@ struct Bounds {
     return out;
   }
 
-  [[nodiscard]] OpenPitAccountAdjustmentBounds Raw() const noexcept {
+  [[nodiscard]] OpenPitAccountAdjustmentBounds Native() const noexcept {
     OpenPitAccountAdjustmentBounds raw{};
     WriteBound(raw.balance_upper, balanceUpper);
     WriteBound(raw.balance_lower, balanceLower);
@@ -65,20 +68,19 @@ struct Bounds {
     return raw;
   }
 
- private:
   [[nodiscard]] static std::optional<param::PositionSize> ReadBound(
-      const param::PositionSizeOptional& field) {
+      const param::detail::RawPositionSizeOptional& field) {
     if (!field.is_set) {
       return std::nullopt;
     }
-    return param::PositionSize::FromRaw(field.value);
+    return ::openpit::detail::FromNative<param::PositionSize>(field.value);
   }
 
   static void WriteBound(
-      param::PositionSizeOptional& field,
+      param::detail::RawPositionSizeOptional& field,
       const std::optional<param::PositionSize>& value) noexcept {
     if (value) {
-      field.value = value->Raw();
+      field.value = ::openpit::detail::Native(*value);
       field.is_set = true;
     }
   }

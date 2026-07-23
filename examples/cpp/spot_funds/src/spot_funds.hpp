@@ -17,17 +17,18 @@
 
 #pragma once
 
-#include "openpit/account_id.hpp"
 #include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/error.hpp"
-#include "openpit/model.hpp"
-#include "openpit/param.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/param/param.hpp"
+#include "openpit/pretrade/decision.hpp"
 #include "openpit/pretrade/pretrade.hpp"
-#include "openpit/reject.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -106,7 +107,7 @@ inline void SeedFunds(const ::openpit::Engine &engine,
   balance.asset = ::openpit::param::Asset(kScenarioAssetSettle);
 
   adj::Amount amount;
-  amount.balance = ::openpit::param::AdjustmentAmount::OfAbsolute(
+  amount.balance = ::openpit::param::AdjustmentAmount::Absolute(
       ::openpit::param::PositionSize::FromString(funds));
 
   adj::AccountAdjustment adjustment;
@@ -214,13 +215,15 @@ BuildFillReport(::openpit::param::AccountId account) {
 // pre-trade lock captured when the order's reservation was committed so
 // SpotFunds matches the fill to that reservation and settles the held amount.
 //
-// The engine overload attaches the separately owned lock to the report for the
-// duration of the call.
 [[nodiscard]] inline FillResult
 ApplyFill(const ::openpit::Engine &engine,
           const ::openpit::model::ExecutionReport &report,
           const ::openpit::pretrade::PreTradeLock &lock) {
-  ::openpit::PostTradeResult result = engine.ApplyExecutionReport(report, lock);
+  ::openpit::model::ExecutionReport reportWithLock = report;
+  reportWithLock.fill->lock =
+      std::make_shared<::openpit::pretrade::PreTradeLock>(lock.Clone());
+  ::openpit::PostTradeResult result =
+      engine.ApplyExecutionReport(reportWithLock);
   FillResult out;
   out.accountBlocks = std::move(result.accountBlocks);
   return out;

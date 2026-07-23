@@ -19,6 +19,7 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -31,7 +32,6 @@ using openpit::param::Fee;
 using openpit::param::GroupId;
 using openpit::param::Leverage;
 using openpit::param::MonetaryAmount;
-using openpit::param::MonetaryAmountOptional;
 using openpit::param::Pnl;
 using openpit::param::Price;
 using openpit::param::Quantity;
@@ -45,15 +45,13 @@ static_assert(std::is_copy_assignable_v<Asset>);
 //------------------------------------------------------------------------------
 // Asset
 
-TEST(ParamAsset, ValidatesOwnsAndRoundTripsNativeView) {
+TEST(ParamAsset, ValidatesOwnsAndCopiesValue) {
   const Asset asset("AAPL");
-  const Asset restored = Asset::FromRaw(asset.Raw());
   const Asset copied(asset);
   Asset assigned("MSFT");
   assigned = asset;
 
   EXPECT_EQ(asset.View(), "AAPL");
-  EXPECT_EQ(restored, asset);
   EXPECT_EQ(copied, asset);
   EXPECT_EQ(assigned, asset);
 }
@@ -66,81 +64,44 @@ TEST(ParamAsset, EmptyAndWhitespaceOnlyValuesThrowStructuredError) {
     FAIL() << "expected whitespace-only asset to fail";
   } catch (const openpit::Error& error) {
     ASSERT_TRUE(error.Code().has_value());
-    EXPECT_EQ(*error.Code(), OpenPitParamErrorCode_AssetEmpty);
+    EXPECT_EQ(*error.Code(), openpit::ParamErrorCode::AssetEmpty);
   }
 }
 
 //------------------------------------------------------------------------------
 // Instrument
 
-TEST(ModelInstrument, RawRoundTripPreservesAssets) {
+TEST(ModelInstrument, PreservesAssets) {
   const model::Instrument instrument(::openpit::param::Asset("SPX"),
                                      ::openpit::param::Asset("USD"));
-  const OpenPitInstrument raw = instrument.Raw();
-
-  const std::optional<model::Instrument> restored =
-      model::Instrument::FromRaw(raw);
-  ASSERT_TRUE(restored.has_value());
-  EXPECT_EQ(restored->underlyingAsset.View(), "SPX");
-  EXPECT_EQ(restored->settlementAsset.View(), "USD");
-}
-
-TEST(ModelInstrument, AbsentWhenBothViewsUnset) {
-  const OpenPitInstrument raw{};
-  EXPECT_FALSE(model::Instrument::FromRaw(raw).has_value());
-}
-
-TEST(ModelInstrument, PartialRawPayloadThrowsInstrumentError) {
-  OpenPitInstrument raw{};
-  raw.underlying_asset = openpit::MakeStringView("SPX");
-
-  try {
-    (void)model::Instrument::FromRaw(raw);
-    FAIL() << "expected partial instrument to fail";
-  } catch (const openpit::Error& error) {
-    EXPECT_EQ(error.Message(),
-              "instrument must provide both underlying_asset and "
-              "settlement_asset or neither");
-    EXPECT_FALSE(error.Code().has_value());
-  }
+  EXPECT_EQ(instrument.underlyingAsset.View(), "SPX");
+  EXPECT_EQ(instrument.settlementAsset.View(), "USD");
 }
 
 //------------------------------------------------------------------------------
 // TradeAmount
 
-TEST(ModelTradeAmount, QuantityKindRoundTripsExactly) {
+TEST(ModelTradeAmount, QuantityKindPreservesExactValue) {
   const model::TradeAmount amount =
       model::TradeAmount::OfQuantity(Quantity::FromString("2.5"));
   EXPECT_EQ(amount.Kind(), model::TradeAmountKind::Quantity);
 
-  const std::optional<model::TradeAmount> restored =
-      model::TradeAmount::FromRaw(amount.Raw());
-  ASSERT_TRUE(restored.has_value());
-  ASSERT_EQ(restored->Kind(), model::TradeAmountKind::Quantity);
-  const std::optional<Quantity> quantity = restored->AsQuantity();
+  ASSERT_EQ(amount.Kind(), model::TradeAmountKind::Quantity);
+  const std::optional<Quantity> quantity = amount.AsQuantity();
   ASSERT_TRUE(quantity.has_value());
   EXPECT_EQ(quantity->ToString(), "2.5");
-  EXPECT_FALSE(restored->AsVolume().has_value());
+  EXPECT_FALSE(amount.AsVolume().has_value());
 }
 
-TEST(ModelTradeAmount, VolumeKindRoundTripsExactly) {
+TEST(ModelTradeAmount, VolumeKindPreservesExactValue) {
   const model::TradeAmount amount =
       model::TradeAmount::OfVolume(Volume::FromString("1500"));
   EXPECT_EQ(amount.Kind(), model::TradeAmountKind::Volume);
 
-  const std::optional<model::TradeAmount> restored =
-      model::TradeAmount::FromRaw(amount.Raw());
-  ASSERT_TRUE(restored.has_value());
-  ASSERT_EQ(restored->Kind(), model::TradeAmountKind::Volume);
-  const std::optional<Volume> volume = restored->AsVolume();
+  ASSERT_EQ(amount.Kind(), model::TradeAmountKind::Volume);
+  const std::optional<Volume> volume = amount.AsVolume();
   ASSERT_TRUE(volume.has_value());
   EXPECT_EQ(volume->ToString(), "1500");
-}
-
-TEST(ModelTradeAmount, NotSetKindReadsAsAbsent) {
-  OpenPitParamTradeAmount raw{};
-  raw.kind = OPENPIT_PARAM_TRADE_AMOUNT_KIND_NOT_SET;
-  EXPECT_FALSE(model::TradeAmount::FromRaw(raw).has_value());
 }
 
 //------------------------------------------------------------------------------
@@ -159,7 +120,7 @@ TEST(ModelOrder, LimitFactorySetsRequiredOperationFields) {
   EXPECT_EQ(order.operation->instrument->underlyingAsset.View(), "AAPL");
   EXPECT_EQ(order.operation->instrument->settlementAsset.View(), "USD");
   ASSERT_TRUE(order.operation->accountId.has_value());
-  EXPECT_EQ(order.operation->accountId->Raw(), 7u);
+  EXPECT_EQ(order.operation->accountId->ToString(), "7");
   EXPECT_EQ(order.operation->side,
             std::optional<model::Side>(model::Side::Buy));
   ASSERT_TRUE(order.operation->tradeAmount.has_value());
@@ -168,7 +129,7 @@ TEST(ModelOrder, LimitFactorySetsRequiredOperationFields) {
   EXPECT_EQ(order.operation->price->ToString(), "185.25");
 }
 
-TEST(ModelOrder, FullRawRoundTripPreservesEveryGroup) {
+TEST(ModelOrder, FullModelPreservesEveryGroup) {
   model::Order order;
   model::OrderOperation operation;
   operation.instrument = model::Instrument(::openpit::param::Asset("AAPL"),
@@ -194,7 +155,7 @@ TEST(ModelOrder, FullRawRoundTripPreservesEveryGroup) {
 
   order.userData = 42;
 
-  const model::Order restored = model::Order::FromRaw(order.Raw());
+  const model::Order& restored = order;
 
   ASSERT_TRUE(restored.operation.has_value());
   ASSERT_TRUE(restored.operation->instrument.has_value());
@@ -206,7 +167,7 @@ TEST(ModelOrder, FullRawRoundTripPreservesEveryGroup) {
   ASSERT_TRUE(restored.operation->price.has_value());
   EXPECT_EQ(restored.operation->price->ToString(), "185.25");
   ASSERT_TRUE(restored.operation->accountId.has_value());
-  EXPECT_EQ(restored.operation->accountId->Raw(), 7u);
+  EXPECT_EQ(restored.operation->accountId->ToString(), "7");
   ASSERT_TRUE(restored.operation->side.has_value());
   EXPECT_EQ(*restored.operation->side, model::Side::Buy);
 
@@ -221,21 +182,20 @@ TEST(ModelOrder, FullRawRoundTripPreservesEveryGroup) {
   EXPECT_EQ(restored.margin->collateralAsset->View(), "USD");
   EXPECT_EQ(restored.margin->autoBorrow, std::optional<bool>(true));
   ASSERT_TRUE(restored.margin->leverage.has_value());
-  EXPECT_EQ(restored.margin->leverage->Raw(), 200u);
   EXPECT_EQ(restored.margin->leverage->Value(), 20.0F);
 
   EXPECT_EQ(restored.userData, 42u);
 }
 
 TEST(ModelOrder, EmptyOrderHasNoGroups) {
-  const model::Order restored = model::Order::FromRaw(model::Order().Raw());
+  const model::Order restored;
   EXPECT_FALSE(restored.operation.has_value());
   EXPECT_FALSE(restored.margin.has_value());
   EXPECT_FALSE(restored.position.has_value());
   EXPECT_EQ(restored.userData, 0u);
 }
 
-TEST(ModelOrder, PresentFalseBooleanGroupsSurviveRoundTrip) {
+TEST(ModelOrder, PresentFalseBooleanGroupsRemainPresent) {
   model::Order order;
   model::OrderMargin margin;
   margin.autoBorrow = false;  // present-but-false, not absent
@@ -245,7 +205,7 @@ TEST(ModelOrder, PresentFalseBooleanGroupsSurviveRoundTrip) {
   position.closePosition = false;
   order.position = position;
 
-  const model::Order restored = model::Order::FromRaw(order.Raw());
+  const model::Order& restored = order;
   ASSERT_TRUE(restored.margin.has_value());
   EXPECT_EQ(restored.margin->autoBorrow, std::optional<bool>(false));
   EXPECT_FALSE(restored.margin->collateralAsset.has_value());
@@ -267,7 +227,7 @@ TEST(ModelOrder, IsUsableAsPolymorphicBase) {
 //------------------------------------------------------------------------------
 // ExecutionReport
 
-TEST(ModelExecutionReport, FullRawRoundTripPreservesEveryGroup) {
+TEST(ModelExecutionReport, FullModelPreservesEveryGroup) {
   model::ExecutionReport report;
 
   model::ExecutionReportOperation operation;
@@ -298,13 +258,12 @@ TEST(ModelExecutionReport, FullRawRoundTripPreservesEveryGroup) {
 
   report.userData = 5;
 
-  const model::ExecutionReport restored =
-      model::ExecutionReport::FromRaw(report.Raw());
+  const model::ExecutionReport& restored = report;
 
   ASSERT_TRUE(restored.operation.has_value());
   ASSERT_TRUE(restored.operation->instrument.has_value());
   EXPECT_EQ(restored.operation->instrument->underlyingAsset.View(), "BTC");
-  EXPECT_EQ(restored.operation->accountId->Raw(), 3u);
+  EXPECT_EQ(restored.operation->accountId->ToString(), "3");
   EXPECT_EQ(*restored.operation->side, model::Side::Sell);
 
   ASSERT_TRUE(restored.financialImpact.has_value());
@@ -333,36 +292,21 @@ TEST(ModelExecutionReport, FullRawRoundTripPreservesEveryGroup) {
 }
 
 TEST(ModelExecutionReport, EmptyReportHasNoGroups) {
-  const model::ExecutionReport restored =
-      model::ExecutionReport::FromRaw(model::ExecutionReport().Raw());
+  const model::ExecutionReport restored;
   EXPECT_FALSE(restored.operation.has_value());
   EXPECT_FALSE(restored.financialImpact.has_value());
   EXPECT_FALSE(restored.fill.has_value());
   EXPECT_FALSE(restored.positionImpact.has_value());
 }
 
-TEST(ModelExecutionReport, FillRawCarriesNullLock) {
-  model::Fill fill;
-  fill.isFinal = false;
-  const OpenPitExecutionReportFill raw = fill.Raw();
-  EXPECT_EQ(raw.lock, nullptr);
-  EXPECT_TRUE(raw.is_final.is_set);
-  EXPECT_FALSE(raw.is_final.value);
-}
-
-TEST(ModelExecutionReport, StructuredFillFeeRoundTrips) {
+TEST(ModelExecutionReport, StructuredFillFeePreservesValue) {
   model::Fill fill;
   fill.fee =
       MonetaryAmount(Fee::FromString("1.25"), ::openpit::param::Asset("EUR"));
 
-  const OpenPitExecutionReportFill raw = fill.Raw();
-  ASSERT_TRUE(raw.fee.is_set);
-  EXPECT_EQ(openpit::StringView(raw.fee.value.currency).ToString(), "EUR");
-
-  const model::Fill restored = model::Fill::FromRaw(raw);
-  ASSERT_TRUE(restored.fee.has_value());
-  EXPECT_EQ(restored.fee->Amount().ToString(), "1.25");
-  EXPECT_EQ(restored.fee->Currency().View(), "EUR");
+  ASSERT_TRUE(fill.fee.has_value());
+  EXPECT_EQ(fill.fee->Amount().ToString(), "1.25");
+  EXPECT_EQ(fill.fee->Currency().View(), "EUR");
 }
 
 TEST(ModelExecutionReport, IsUsableAsPolymorphicBase) {
@@ -379,32 +323,31 @@ TEST(ModelExecutionReport, IsUsableAsPolymorphicBase) {
 
 TEST(ParamGroupId, DefaultsToReservedZero) {
   const GroupId group;
-  EXPECT_EQ(group.Raw(), openpit::param::DefaultPolicyGroupId);
-  EXPECT_EQ(group.Raw(), 0u);
+  EXPECT_EQ(group.Value(), openpit::param::DefaultPolicyGroupId);
+  EXPECT_EQ(group.Value(), 0u);
 }
 
 TEST(ParamGroupId, CarriesExplicitValue) {
   const GroupId group(7);
-  EXPECT_EQ(group.Raw(), 7u);
+  EXPECT_EQ(group.Value(), 7u);
   EXPECT_NE(group, GroupId(8));
   EXPECT_EQ(group, GroupId(7));
 }
 
-TEST(ParamMonetaryAmount, RawOptionRoundTripPreservesAmountAndCurrency) {
+TEST(ParamLeverage, FloatConversionUsesRepresentableFixedPointRange) {
+  EXPECT_EQ(Leverage::FromFloat(2999.9F).Value(), 2999.9F);
+  EXPECT_EQ(Leverage::FromFloat(1.26F).Value(), 1.3F);
+  EXPECT_THROW(
+      static_cast<void>(Leverage::FromFloat(std::numeric_limits<float>::max())),
+      openpit::Error);
+  EXPECT_THROW(static_cast<void>(Leverage::FromUint16(6554)), openpit::Error);
+}
+
+TEST(ParamMonetaryAmount, PreservesAmountAndCurrency) {
   const MonetaryAmount amount(Fee::FromString("-0.125"),
                               ::openpit::param::Asset("USD"));
-  const std::optional<MonetaryAmount> optionalAmount(amount);
-  const MonetaryAmountOptional raw = MonetaryAmount::RawOption(optionalAmount);
-
-  ASSERT_TRUE(raw.is_set);
-  EXPECT_EQ(Fee::FromRaw(raw.value.amount).ToString(), "-0.125");
-  EXPECT_EQ(openpit::StringView(raw.value.currency).ToString(), "USD");
-
-  const std::optional<MonetaryAmount> restored =
-      MonetaryAmount::FromRawOption(raw);
-  ASSERT_TRUE(restored.has_value());
-  EXPECT_EQ(restored->Amount().ToString(), "-0.125");
-  EXPECT_EQ(restored->Currency().View(), "USD");
+  EXPECT_EQ(amount.Amount().ToString(), "-0.125");
+  EXPECT_EQ(amount.Currency().View(), "USD");
 }
 
 //------------------------------------------------------------------------------
@@ -412,7 +355,6 @@ TEST(ParamMonetaryAmount, RawOptionRoundTripPreservesAmountAndCurrency) {
 
 TEST(ParamAccountGroupId, FromUint32IsStablePassthrough) {
   const AccountGroupId group = AccountGroupId::FromUint32(42);
-  EXPECT_EQ(group.Raw(), 42u);
   EXPECT_FALSE(group.IsDefault());
   EXPECT_EQ(group.ToString(), "42");
 }
@@ -425,7 +367,7 @@ TEST(ParamAccountGroupId, FromStringIsDeterministicAndNonZero) {
   const AccountGroupId first = AccountGroupId::FromString("desk-1");
   const AccountGroupId second = AccountGroupId::FromString("desk-1");
   EXPECT_EQ(first, second);
-  EXPECT_NE(first.Raw(), 0u);
+  EXPECT_FALSE(first.IsDefault());
   EXPECT_NE(first, AccountGroupId::FromString("desk-2"));
 }
 
@@ -435,7 +377,6 @@ TEST(ParamAccountGroupId, FromStringRejectsEmpty) {
 
 TEST(ParamAccountGroupId, DefaultAccountGroupIsReservedZero) {
   EXPECT_TRUE(openpit::param::DefaultAccountGroup.IsDefault());
-  EXPECT_EQ(openpit::param::DefaultAccountGroup.Raw(), 0u);
   EXPECT_EQ(openpit::param::DefaultAccountGroup.ToString(), "0");
 }
 

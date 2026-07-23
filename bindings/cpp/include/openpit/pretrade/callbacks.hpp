@@ -18,10 +18,10 @@
 #pragma once
 
 #include "openpit/accountadjustment/account_adjustment.hpp"
-#include "openpit/accounts.hpp"
+#include "openpit/accounts/accounts.hpp"
 #include "openpit/error.hpp"
-#include "openpit/param.hpp"
-#include "openpit/reject.hpp"
+#include "openpit/param/param.hpp"
+#include "openpit/pretrade/decision.hpp"
 
 #include <openpit.h>
 
@@ -35,9 +35,6 @@ namespace openpit::accountadjustment {
 
 class Context {
  public:
-  explicit Context(const OpenPitAccountAdjustmentContext* native) noexcept
-      : m_native(native) {}
-
   Context(const Context&) = delete;
   Context& operator=(const Context&) = delete;
   Context(Context&&) = delete;
@@ -50,7 +47,8 @@ class Context {
       throw ::openpit::Error(
           "openpit_account_adjustment_context_get_account_control failed");
     }
-    return ::openpit::accounts::AccountControl(control);
+    return ::openpit::detail::FromNative<::openpit::accounts::AccountControl>(
+        control);
   }
 
   [[nodiscard]] std::optional<::openpit::param::AccountGroupId> AccountGroup()
@@ -60,14 +58,20 @@ class Context {
                                                               &group)) {
       return std::nullopt;
     }
-    return ::openpit::param::AccountGroupId::FromRaw(group);
+    return ::openpit::detail::FromNative<::openpit::param::AccountGroupId>(
+        group);
   }
+
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit Context(const OpenPitAccountAdjustmentContext* native) noexcept
+      : m_native(native) {}
 
   [[nodiscard]] const OpenPitAccountAdjustmentContext* Native() const noexcept {
     return m_native;
   }
 
- private:
   const OpenPitAccountAdjustmentContext* m_native = nullptr;
 };
 
@@ -77,9 +81,6 @@ namespace openpit::pretrade {
 
 class Result {
  public:
-  explicit Result(OpenPitPretradePreTradeResult* native) noexcept
-      : m_native(native) {}
-
   Result(const Result&) = delete;
   Result& operator=(const Result&) = delete;
   Result(Result&&) = delete;
@@ -88,7 +89,7 @@ class Result {
   void PushLockPrice(const ::openpit::param::Price& price) {
     OpenPitSharedString* error = nullptr;
     if (!openpit_pretrade_pre_trade_result_push_lock_price(
-            m_native, price.Raw(), &error)) {
+            m_native, ::openpit::detail::Native(price), &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error, "openpit_pretrade_pre_trade_result_push_lock_price failed");
     }
@@ -98,26 +99,28 @@ class Result {
       const ::openpit::accountadjustment::AccountOutcomeEntry& entry) {
     OpenPitSharedString* error = nullptr;
     if (!openpit_pretrade_pre_trade_result_push_account_adjustment(
-            m_native, entry.Raw(), &error)) {
+            m_native, ::openpit::detail::Native(entry), &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error,
           "openpit_pretrade_pre_trade_result_push_account_adjustment failed");
     }
   }
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit Result(OpenPitPretradePreTradeResult* native) noexcept
+      : m_native(native) {}
+
   [[nodiscard]] OpenPitPretradePreTradeResult* Native() const noexcept {
     return m_native;
   }
 
- private:
   OpenPitPretradePreTradeResult* m_native = nullptr;
 };
 
 class PostTradeContext {
  public:
-  explicit PostTradeContext(const OpenPitPostTradeContext* native) noexcept
-      : m_native(native) {}
-
   PostTradeContext(const PostTradeContext&) = delete;
   PostTradeContext& operator=(const PostTradeContext&) = delete;
   PostTradeContext(PostTradeContext&&) = delete;
@@ -129,22 +132,25 @@ class PostTradeContext {
     if (!openpit_post_trade_context_get_account_group(m_native, &group)) {
       return std::nullopt;
     }
-    return ::openpit::param::AccountGroupId::FromRaw(group);
+    return ::openpit::detail::FromNative<::openpit::param::AccountGroupId>(
+        group);
   }
+
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit PostTradeContext(const OpenPitPostTradeContext* native) noexcept
+      : m_native(native) {}
 
   [[nodiscard]] const OpenPitPostTradeContext* Native() const noexcept {
     return m_native;
   }
 
- private:
   const OpenPitPostTradeContext* m_native = nullptr;
 };
 
 class PostTradeAdjustments {
  public:
-  explicit PostTradeAdjustments(OpenPitPostTradeAdjustmentList* native) noexcept
-      : m_native(native) {}
-
   PostTradeAdjustments(const PostTradeAdjustments&) = delete;
   PostTradeAdjustments& operator=(const PostTradeAdjustments&) = delete;
   PostTradeAdjustments(PostTradeAdjustments&&) = delete;
@@ -154,25 +160,28 @@ class PostTradeAdjustments {
             const ::openpit::accountadjustment::AccountOutcomeEntry& entry) {
     OpenPitSharedString* error = nullptr;
     if (!openpit_pretrade_post_trade_adjustment_list_push(
-            m_native, policyGroupId.Raw(), entry.Raw(), &error)) {
+            m_native, ::openpit::detail::Native(policyGroupId),
+            ::openpit::detail::Native(entry), &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error, "openpit_pretrade_post_trade_adjustment_list_push failed");
     }
   }
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit PostTradeAdjustments(OpenPitPostTradeAdjustmentList* native) noexcept
+      : m_native(native) {}
+
   [[nodiscard]] OpenPitPostTradeAdjustmentList* Native() const noexcept {
     return m_native;
   }
 
- private:
   OpenPitPostTradeAdjustmentList* m_native = nullptr;
 };
 
 class PostTradePnls {
  public:
-  explicit PostTradePnls(OpenPitPostTradeAccountPnlList* native) noexcept
-      : m_native(native) {}
-
   PostTradePnls(const PostTradePnls&) = delete;
   PostTradePnls& operator=(const PostTradePnls&) = delete;
   PostTradePnls(PostTradePnls&&) = delete;
@@ -181,26 +190,27 @@ class PostTradePnls {
   void Push(const ::openpit::accountadjustment::AccountPnlOutcome& outcome) {
     OpenPitSharedString* error = nullptr;
     if (!openpit_pretrade_post_trade_account_pnl_list_push(
-            m_native, outcome.Raw(), &error)) {
+            m_native, ::openpit::detail::Native(outcome), &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error, "openpit_pretrade_post_trade_account_pnl_list_push failed");
     }
   }
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit PostTradePnls(OpenPitPostTradeAccountPnlList* native) noexcept
+      : m_native(native) {}
+
   [[nodiscard]] OpenPitPostTradeAccountPnlList* Native() const noexcept {
     return m_native;
   }
 
- private:
   OpenPitPostTradeAccountPnlList* m_native = nullptr;
 };
 
 class AccountOutcomes {
  public:
-  explicit AccountOutcomes(
-      OpenPitPretradeAccountAdjustmentResult* native) noexcept
-      : m_native(native) {}
-
   AccountOutcomes(const AccountOutcomes&) = delete;
   AccountOutcomes& operator=(const AccountOutcomes&) = delete;
   AccountOutcomes(AccountOutcomes&&) = delete;
@@ -209,7 +219,7 @@ class AccountOutcomes {
   void Push(const ::openpit::accountadjustment::AccountOutcomeEntry& entry) {
     OpenPitSharedString* error = nullptr;
     if (!openpit_pretrade_account_adjustment_result_push_account_outcome(
-            m_native, entry.Raw(), &error)) {
+            m_native, ::openpit::detail::Native(entry), &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error,
           "openpit_pretrade_account_adjustment_result_push_account_outcome "
@@ -217,12 +227,18 @@ class AccountOutcomes {
     }
   }
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit AccountOutcomes(
+      OpenPitPretradeAccountAdjustmentResult* native) noexcept
+      : m_native(native) {}
+
   [[nodiscard]] OpenPitPretradeAccountAdjustmentResult* Native()
       const noexcept {
     return m_native;
   }
 
- private:
   OpenPitPretradeAccountAdjustmentResult* m_native = nullptr;
 };
 

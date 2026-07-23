@@ -18,7 +18,7 @@
 #include "openpit/async_engine.hpp"
 
 #include "openpit/error.hpp"
-#include "openpit/param.hpp"
+#include "openpit/param/param.hpp"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -170,6 +170,21 @@ class CountingObserver final : public ae::Observer {
   std::atomic<std::size_t> m_created{0};
 };
 
+class ThrowingObserver final : public ae::Observer {
+ public:
+  void OnEnqueue(AccountId, std::size_t) override {
+    throw std::runtime_error("observer failed");
+  }
+
+  void OnComplete(AccountId, std::chrono::nanoseconds) override {
+    throw std::runtime_error("observer failed");
+  }
+
+  void OnQueueCreated(AccountId, std::size_t) override {
+    throw std::runtime_error("observer failed");
+  }
+};
+
 //------------------------------------------------------------------------------
 // Lifecycle: start -> submit -> result -> shutdown (happy path)
 
@@ -179,7 +194,7 @@ TEST(AsyncEngineLifecycle, ShardedCallReturnsExactValueThenStops) {
 
   const Price input = Price::FromString("185.25");
   ae::Future<Price> future = engine.Call(kAccountA, [input](MockDriver& d) {
-    return d.Echo(kAccountA.Raw(), input);
+    return d.Echo(kAccountARaw, input);
   });
 
   const std::optional<Price> result = future.Await(kAwaitCap);
@@ -196,7 +211,7 @@ TEST(AsyncEngineLifecycle, DynamicCallReturnsExactValueThenStops) {
 
   const Price input = Price::FromString("0.10");
   ae::Future<Price> future = engine.Call(kAccountB, [input](MockDriver& d) {
-    return d.Echo(kAccountB.Raw(), input);
+    return d.Echo(kAccountBRaw, input);
   });
 
   const std::optional<Price> result = future.Await(kAwaitCap);
@@ -204,6 +219,38 @@ TEST(AsyncEngineLifecycle, DynamicCallReturnsExactValueThenStops) {
   EXPECT_EQ(result->ToString(), "0.10");
 
   EXPECT_TRUE(engine.StopGraceful());
+}
+
+TEST(AsyncEngineBuilder, ShardedStageKeepsStopCallbackAcrossBuilds) {
+  MockDriver driver;
+  std::atomic<std::size_t> stopCalls{0};
+  ae::Builder<MockDriver> builder(driver);
+  builder.WithStopUnderlying(
+      [&stopCalls] { stopCalls.fetch_add(1, std::memory_order_relaxed); });
+  auto stage = builder.Sharded(1);
+
+  auto first = stage.Build();
+  auto second = stage.Build();
+
+  EXPECT_TRUE(first.StopGraceful());
+  EXPECT_TRUE(second.StopGraceful());
+  EXPECT_EQ(stopCalls.load(std::memory_order_relaxed), 2u);
+}
+
+TEST(AsyncEngineBuilder, DynamicStageKeepsStopCallbackAcrossBuilds) {
+  MockDriver driver;
+  std::atomic<std::size_t> stopCalls{0};
+  ae::Builder<MockDriver> builder(driver);
+  builder.WithStopUnderlying(
+      [&stopCalls] { stopCalls.fetch_add(1, std::memory_order_relaxed); });
+  auto stage = builder.Dynamic();
+
+  auto first = stage.Build();
+  auto second = stage.Build();
+
+  EXPECT_TRUE(first.StopGraceful());
+  EXPECT_TRUE(second.StopGraceful());
+  EXPECT_EQ(stopCalls.load(std::memory_order_relaxed), 2u);
 }
 
 TEST(AsyncEngineLifecycle, PairFutureDeliversBothTupleValues) {
@@ -234,7 +281,7 @@ TEST(AsyncEngineLifecycle, RaiiDestructorStopsWithoutExplicitStop) {
     EXPECT_TRUE(engine
                     .Call(kAccountA,
                           [input](MockDriver& d) {
-                            return d.Echo(kAccountA.Raw(), input);
+                            return d.Echo(kAccountARaw, input);
                           })
                     .Await(kAwaitCap)
                     .has_value());
@@ -493,7 +540,7 @@ TEST(AsyncEngineObserver, DynamicFiresCreateEnqueueComplete) {
     ASSERT_TRUE(engine
                     .Call(kAccountA,
                           [input](MockDriver& d) {
-                            return d.Echo(kAccountA.Raw(), input);
+                            return d.Echo(kAccountARaw, input);
                           })
                     .Await(kAwaitCap)
                     .has_value());
@@ -506,6 +553,24 @@ TEST(AsyncEngineObserver, DynamicFiresCreateEnqueueComplete) {
   EXPECT_EQ(observer.Created(), 1u);
   EXPECT_EQ(observer.Enqueues(), 3u);
   EXPECT_EQ(observer.Completes(), 3u);
+}
+
+TEST(AsyncEngineObserver, ExceptionsDoNotAffectDispatch) {
+  MockDriver driver;
+  ThrowingObserver observer;
+  auto engine =
+      ae::Builder<MockDriver>(driver).WithObserver(observer).Dynamic().Build();
+
+  const auto result =
+      engine
+          .Call(kAccountA,
+                [](MockDriver& d) {
+                  return d.Echo(kAccountARaw, Price::FromString("7.5"));
+                })
+          .Await(kAwaitCap);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->ToString(), "7.5");
+  EXPECT_TRUE(engine.StopGraceful());
 }
 
 //------------------------------------------------------------------------------

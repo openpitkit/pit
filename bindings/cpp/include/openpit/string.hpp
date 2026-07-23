@@ -18,12 +18,20 @@
 #pragma once
 
 #include "openpit/detail/handle.hpp"
+#include "openpit/detail/native_access.hpp"
 
 #include <openpit.h>
 
 #include <cstddef>
 #include <string>
 #include <string_view>
+
+namespace openpit::detail {
+
+using RawStringView = ::OpenPitStringView;
+using RawSharedString = ::OpenPitSharedString;
+
+}  // namespace openpit::detail
 
 namespace openpit {
 
@@ -34,8 +42,6 @@ namespace openpit {
 class StringView {
  public:
   StringView() noexcept = default;
-
-  explicit StringView(OpenPitStringView view) noexcept : m_view(view) {}
 
   [[nodiscard]] const char* Data() const noexcept {
     return reinterpret_cast<const char*>(m_view.ptr);
@@ -58,21 +64,23 @@ class StringView {
   // Copies the bytes into an owning `std::string`.
   [[nodiscard]] std::string ToString() const { return std::string(View()); }
 
-  [[nodiscard]] OpenPitStringView Raw() const noexcept { return m_view; }
-
  private:
-  OpenPitStringView m_view{nullptr, 0};
+  friend class detail::NativeAccess;
+
+  explicit StringView(detail::RawStringView view) noexcept : m_view(view) {}
+
+  [[nodiscard]] detail::RawStringView Native() const noexcept { return m_view; }
+
+  detail::RawStringView m_view{nullptr, 0};
 };
 
-// Builds an `OpenPitStringView` borrowing `value`'s bytes for the duration of a
-// single C call. The caller must keep `value` alive across that call.
-[[nodiscard]] inline OpenPitStringView MakeStringView(
-    std::string_view value) noexcept {
-  return OpenPitStringView{reinterpret_cast<const std::uint8_t*>(value.data()),
-                           value.size()};
-}
-
 namespace detail {
+
+[[nodiscard]] inline RawStringView MakeStringView(
+    std::string_view value) noexcept {
+  return RawStringView{reinterpret_cast<const std::uint8_t*>(value.data()),
+                       value.size()};
+}
 
 struct SharedStringDeleter {
   void operator()(OpenPitSharedString* handle) const noexcept {
@@ -90,32 +98,29 @@ class SharedString {
  public:
   SharedString() noexcept = default;
 
-  explicit SharedString(OpenPitSharedString* handle) noexcept
-      : m_handle(handle) {}
-
   [[nodiscard]] explicit operator bool() const noexcept {
     return static_cast<bool>(m_handle);
   }
 
   // Borrows the handle's bytes; valid only while this object is alive.
   [[nodiscard]] StringView View() const noexcept {
-    return StringView(openpit_shared_string_view(m_handle.Get()));
+    return detail::FromNative<StringView>(
+        openpit_shared_string_view(m_handle.Get()));
   }
 
   [[nodiscard]] std::string ToString() const { return View().ToString(); }
 
-  [[nodiscard]] OpenPitSharedString* Get() const noexcept {
+ private:
+  friend class detail::NativeAccess;
+
+  explicit SharedString(detail::RawSharedString* handle) noexcept
+      : m_handle(handle) {}
+
+  [[nodiscard]] detail::RawSharedString* Native() const noexcept {
     return m_handle.Get();
   }
 
- private:
-  detail::Handle<OpenPitSharedString, detail::SharedStringDeleter> m_handle;
+  detail::Handle<detail::RawSharedString, detail::SharedStringDeleter> m_handle;
 };
-
-// Reads a caller-owned `OpenPitSharedString` view without taking ownership.
-[[nodiscard]] inline StringView SharedStringView(
-    const OpenPitSharedString* handle) noexcept {
-  return StringView(openpit_shared_string_view(handle));
-}
 
 }  // namespace openpit

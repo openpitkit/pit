@@ -17,9 +17,9 @@
 
 // Source: Account-Blocking.md
 
-#include "openpit/account_id.hpp"
-#include "openpit/accounts.hpp"
+#include "openpit/accounts/accounts.hpp"
 #include "openpit/engine.hpp"
+#include "openpit/param/account_id.hpp"
 #include "openpit/pretrade/policies.hpp"
 
 #include <gtest/gtest.h>

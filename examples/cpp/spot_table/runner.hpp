@@ -28,7 +28,7 @@
 // `std::chrono::steady_clock` time point (`Deadline`); `RunSync` / `RunAsync`
 // `ctx.Err()`.
 
-#include "openpit/reject.hpp"
+#include "openpit/pretrade/decision.hpp"
 
 #include <chrono>
 #include <cstddef>

@@ -270,7 +270,6 @@ static OpenPitSharedString * (*_fn_openpit_param_side_to_string)(OpenPitParamSid
 static OpenPitSharedString * (*_fn_openpit_param_position_side_to_string)(OpenPitParamPositionSide, OpenPitOutParamError) = NULL;
 static OpenPitSharedString * (*_fn_openpit_param_position_effect_to_string)(OpenPitParamPositionEffect, OpenPitOutParamError) = NULL;
 static OpenPitSharedString * (*_fn_openpit_param_position_mode_to_string)(OpenPitParamPositionMode, OpenPitOutParamError) = NULL;
-static OpenPitSharedString * (*_fn_openpit_param_account_id_to_string)(OpenPitParamAccountId) = NULL;
 static OpenPitSharedString * (*_fn_openpit_param_trade_amount_to_string)(OpenPitParamTradeAmount, OpenPitOutParamError) = NULL;
 static OpenPitSharedString * (*_fn_openpit_param_adjustment_amount_to_string)(OpenPitParamAdjustmentAmount, OpenPitOutParamError) = NULL;
 static OpenPitPretradeRejectList * (*_fn_openpit_pretrade_create_reject_list)(size_t) = NULL;
@@ -934,8 +933,6 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_param_position_effect_to_string == NULL) return "openpit_param_position_effect_to_string";
     _fn_openpit_param_position_mode_to_string = (OpenPitSharedString * (*)(OpenPitParamPositionMode, OpenPitOutParamError))openpit_dlsym(handle, "openpit_param_position_mode_to_string");
     if (_fn_openpit_param_position_mode_to_string == NULL) return "openpit_param_position_mode_to_string";
-    _fn_openpit_param_account_id_to_string = (OpenPitSharedString * (*)(OpenPitParamAccountId))openpit_dlsym(handle, "openpit_param_account_id_to_string");
-    if (_fn_openpit_param_account_id_to_string == NULL) return "openpit_param_account_id_to_string";
     _fn_openpit_param_trade_amount_to_string = (OpenPitSharedString * (*)(OpenPitParamTradeAmount, OpenPitOutParamError))openpit_dlsym(handle, "openpit_param_trade_amount_to_string");
     if (_fn_openpit_param_trade_amount_to_string == NULL) return "openpit_param_trade_amount_to_string";
     _fn_openpit_param_adjustment_amount_to_string = (OpenPitSharedString * (*)(OpenPitParamAdjustmentAmount, OpenPitOutParamError))openpit_dlsym(handle, "openpit_param_adjustment_amount_to_string");
@@ -2247,10 +2244,6 @@ OpenPitSharedString * openpit_param_position_effect_to_string(OpenPitParamPositi
 
 OpenPitSharedString * openpit_param_position_mode_to_string(OpenPitParamPositionMode value, OpenPitOutParamError out_error) {
     return _fn_openpit_param_position_mode_to_string(value, out_error);
-}
-
-OpenPitSharedString * openpit_param_account_id_to_string(OpenPitParamAccountId value) {
-    return _fn_openpit_param_account_id_to_string(value);
 }
 
 OpenPitSharedString * openpit_param_trade_amount_to_string(OpenPitParamTradeAmount value, OpenPitOutParamError out_error) {

@@ -17,8 +17,8 @@
 
 #include "builder.hpp"
 
-#include "openpit/account_id.hpp"
 #include "openpit/error.hpp"
+#include "openpit/param/account_id.hpp"
 
 #include <utility>
 
@@ -94,7 +94,7 @@ adj::AccountAdjustment BuildSeedAdjustment(const Row &row) {
   balanceOp.asset = param::Asset(row.asset);
 
   adj::Amount amountGroup;
-  amountGroup.balance = param::AdjustmentAmount::OfAbsolute(amount);
+  amountGroup.balance = param::AdjustmentAmount::Absolute(amount);
 
   adj::AccountAdjustment adjustment;
   adjustment.operation = adj::Operation::OfBalance(std::move(balanceOp));

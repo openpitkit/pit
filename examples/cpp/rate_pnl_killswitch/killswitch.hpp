@@ -44,10 +44,10 @@
 #pragma once
 
 #include "openpit/engine.hpp"
-#include "openpit/model.hpp"
-#include "openpit/param.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/param.hpp"
+#include "openpit/pretrade/decision.hpp"
 #include "openpit/pretrade/policies.hpp"
-#include "openpit/reject.hpp"
 
 #include <openpit.h>
 
@@ -204,19 +204,11 @@ struct Limits {
 
 namespace detail {
 
-// Exact P&L accumulation across the C boundary, matching the engine's decimal
-// semantics. Inputs are short constants produced by the strategy/example, not
-// untrusted external data.
+// Exact P&L accumulation using the same checked decimal semantics as the
+// engine.
 inline void AddPnl(openpit::param::Pnl &accumulator,
                    const openpit::param::Pnl &delta) {
-  OpenPitParamPnl out{};
-  OpenPitParamError *error = nullptr;
-  if (!openpit_param_pnl_checked_add(accumulator.Raw(), delta.Raw(), &out,
-                                     &error)) {
-    ::openpit::detail::ThrowFromParamError(
-        error, "openpit_param_pnl_checked_add failed");
-  }
-  accumulator = openpit::param::Pnl::FromRaw(out);
+  accumulator = accumulator.CheckedAdd(delta);
 }
 
 inline void RunPreTrade(const openpit::Engine &engine,

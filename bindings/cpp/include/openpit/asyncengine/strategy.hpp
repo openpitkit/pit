@@ -79,11 +79,6 @@ inline constexpr std::chrono::nanoseconds kDefaultIdleCleanupPeriod =
 
 namespace detail {
 
-[[nodiscard]] inline ::openpit::param::AccountId PublicAccountId(
-    OpenPitParamAccountId raw) noexcept {
-  return ::openpit::param::AccountId::FromRaw(raw);
-}
-
 // The unit of work a strategy dispatches. Exactly one of `Run`/`Abort` runs
 // over the task's lifetime: `Run` when the worker executes it normally, `Abort`
 // when a queued task is dropped (hard stop) or the submit itself failed on the
@@ -220,10 +215,23 @@ class Base {
   Base& operator=(const Base&) = delete;
 
  protected:
-  [[nodiscard]] Observer& observer() const { return *m_observer; }
+  [[nodiscard]] static ::openpit::param::AccountId PublicAccountId(
+      OpenPitParamAccountId raw) noexcept {
+    return ::openpit::detail::FromNative<::openpit::param::AccountId>(raw);
+  }
+
   [[nodiscard]] std::size_t queueCapacity() const { return m_queueCapacity; }
   [[nodiscard]] bool observerActive() const { return m_observerActive; }
   [[nodiscard]] bool tracksIdle() const { return m_tracksIdle; }
+
+  template <typename Callback>
+  void Notify(Callback&& callback) const noexcept {
+    try {
+      callback(*m_observer);
+    } catch (...) {
+      // Observability must never change dispatcher behavior.
+    }
+  }
 
   [[nodiscard]] bool IsStopped() const {
     return m_stopRequested.load(std::memory_order_acquire);
@@ -242,7 +250,9 @@ class Base {
       const KeyQueuePtr& q, OpenPitParamAccountId accountId, TaskPtr task,
       std::chrono::steady_clock::time_point deadline) {
     if (deadline <= std::chrono::steady_clock::now()) {
-      m_observer->OnSubmitCancelled(PublicAccountId(accountId));
+      Notify([&](Observer& observer) {
+        observer.OnSubmitCancelled(PublicAccountId(accountId));
+      });
       return {
           Error(ErrorCode::SubmitCancelled, "async submit deadline expired"),
           nullptr, false};
@@ -282,7 +292,9 @@ class Base {
         }
         lock.unlock();
         q->notEmpty.notify_one();
-        m_observer->OnEnqueue(PublicAccountId(accountId), depth);
+        Notify([&](Observer& observer) {
+          observer.OnEnqueue(PublicAccountId(accountId), depth);
+        });
         return {std::nullopt, nullptr, false};
       }
       // Queue full: wait. With an active observer, wake periodically to emit
@@ -299,7 +311,9 @@ class Base {
       if (now >= deadline) {
         UndoPending(q);
         lock.unlock();
-        m_observer->OnSubmitCancelled(PublicAccountId(accountId));
+        Notify([&](Observer& observer) {
+          observer.OnSubmitCancelled(PublicAccountId(accountId));
+        });
         return {
             Error(ErrorCode::SubmitCancelled, "async submit deadline expired"),
             nullptr, false};
@@ -311,8 +325,12 @@ class Base {
         nextSlow = now + m_slowSubmitThreshold;
         // Drop the lock so user callbacks never run under the queue mutex.
         lock.unlock();
-        m_observer->OnQueueFullBlocked(PublicAccountId(accountId), elapsed);
-        m_observer->OnSlowSubmit(PublicAccountId(accountId), elapsed, attempt);
+        Notify([&](Observer& observer) {
+          observer.OnQueueFullBlocked(PublicAccountId(accountId), elapsed);
+        });
+        Notify([&](Observer& observer) {
+          observer.OnSlowSubmit(PublicAccountId(accountId), elapsed, attempt);
+        });
         lock.lock();
       }
     }
@@ -353,8 +371,10 @@ class Base {
 
     if (HardStopped()) {
       qt.task->Abort(Error(ErrorCode::Stopped, "async engine is stopped"));
-      m_observer->OnComplete(PublicAccountId(qt.accountId),
-                             std::chrono::nanoseconds(0));
+      Notify([&](Observer& observer) {
+        observer.OnComplete(PublicAccountId(qt.accountId),
+                            std::chrono::nanoseconds(0));
+      });
       return;
     }
     if (!m_observerActive) {
@@ -364,12 +384,16 @@ class Base {
       }
       return;
     }
-    m_observer->OnDequeue(PublicAccountId(qt.accountId),
-                          std::chrono::steady_clock::now() - qt.enqueuedAt);
+    Notify([&](Observer& observer) {
+      observer.OnDequeue(PublicAccountId(qt.accountId),
+                         std::chrono::steady_clock::now() - qt.enqueuedAt);
+    });
     const auto started = std::chrono::steady_clock::now();
     qt.task->Run();
-    m_observer->OnComplete(PublicAccountId(qt.accountId),
-                           std::chrono::steady_clock::now() - started);
+    Notify([&](Observer& observer) {
+      observer.OnComplete(PublicAccountId(qt.accountId),
+                          std::chrono::steady_clock::now() - started);
+    });
     if (m_tracksIdle) {
       q->Touch();
     }
@@ -388,14 +412,24 @@ class Base {
   // `WaitWorkersDrained` without needing a timed `std::thread::join`.
   void StartWorker(const KeyQueuePtr& q) {
     m_liveWorkers.fetch_add(1, std::memory_order_relaxed);
-    q->worker = std::thread([this, q] {
-      Worker(q);
-      {
-        std::lock_guard<std::mutex> lock(m_doneMutex);
-        m_liveWorkers.fetch_sub(1, std::memory_order_relaxed);
-      }
-      m_doneCv.notify_all();
-    });
+    try {
+      q->worker = std::thread([this, q] {
+        try {
+          Worker(q);
+        } catch (...) {
+          SignalHardStop();
+          SignalStop();
+        }
+        {
+          std::lock_guard<std::mutex> lock(m_doneMutex);
+          m_liveWorkers.fetch_sub(1, std::memory_order_relaxed);
+        }
+        m_doneCv.notify_all();
+      });
+    } catch (...) {
+      m_liveWorkers.fetch_sub(1, std::memory_order_relaxed);
+      throw;
+    }
   }
 
   // Closes every queue so its worker drains and exits. Producers blocked on a
@@ -503,10 +537,19 @@ class ShardedStrategy final : public Strategy, private Base {
   ShardedStrategy(const BaseConfig& cfg, std::size_t shardCount)
       : Base(cfg, /*tracksIdle=*/false) {
     m_shards.reserve(shardCount);
-    for (std::size_t i = 0; i < shardCount; ++i) {
-      auto q = std::make_shared<KeyQueue>(queueCapacity());
-      m_shards.push_back(q);
-      StartWorker(q);
+    try {
+      for (std::size_t i = 0; i < shardCount; ++i) {
+        auto q = std::make_shared<KeyQueue>(queueCapacity());
+        m_shards.push_back(q);
+        StartWorker(q);
+      }
+    } catch (...) {
+      SignalHardStop();
+      SignalStop();
+      CloseQueues(m_shards);
+      (void)WaitWorkersDrained(std::chrono::steady_clock::time_point::max());
+      JoinAll(m_shards);
+      throw;
     }
   }
 
@@ -641,7 +684,9 @@ class DynamicStrategy final : public Strategy, private Base {
         return err;
       }
       if (created) {
-        observer().OnQueueCreated(PublicAccountId(accountId), total);
+        Notify([&](Observer& observer) {
+          observer.OnQueueCreated(PublicAccountId(accountId), total);
+        });
       }
       SendResult result = SendToQueue(q, accountId, std::move(task), deadline);
       if (result.retired) {
@@ -700,7 +745,12 @@ class DynamicStrategy final : public Strategy, private Base {
     }
     auto q = std::make_shared<KeyQueue>(queueCapacity());
     m_queues.emplace(accountId, q);
-    StartWorker(q);
+    try {
+      StartWorker(q);
+    } catch (...) {
+      m_queues.erase(accountId);
+      throw;
+    }
     created = true;
     total = m_queues.size();
     return q;
@@ -755,7 +805,9 @@ class DynamicStrategy final : public Strategy, private Base {
     for (const auto& candidate : candidates) {
       std::size_t remaining = 0;
       if (RetireIfIdle(candidate.first, candidate.second, cutoff, remaining)) {
-        observer().OnQueueRemoved(PublicAccountId(candidate.first), remaining);
+        Notify([&](Observer& observer) {
+          observer.OnQueueRemoved(PublicAccountId(candidate.first), remaining);
+        });
       }
     }
   }

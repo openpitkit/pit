@@ -189,11 +189,12 @@ TEST(GettingStartedWiki, BuildAnEngine) {
   const openpit::PostTradeResult result = engine.ApplyExecutionReport(report);
 
   for (const auto& outcome : result.accountPnls) {
-    std::cout << "account P&L outcome for " << outcome.accountId.Raw() << '\n';
+    std::cout << "account P&L outcome for " << outcome.accountId.ToString()
+              << '\n';
   }
   for (const auto& outcome : result.accountAdjustments) {
-    std::cout << "account adjustment from group " << outcome.policyGroupId.Raw()
-              << '\n';
+    std::cout << "account adjustment from group "
+              << outcome.policyGroupId.Value() << '\n';
   }
 
   // 7. After each execution report is applied, the system may report that it
@@ -271,11 +272,12 @@ TEST(GettingStartedWiki, ApplyPostTradeFeedback) {
   // Execution reports feed realized outcomes back into cumulative policy state.
   const openpit::PostTradeResult result = engine.ApplyExecutionReport(report);
   for (const auto& outcome : result.accountPnls) {
-    std::cerr << "account P&L outcome for " << outcome.accountId.Raw() << '\n';
+    std::cerr << "account P&L outcome for " << outcome.accountId.ToString()
+              << '\n';
   }
   for (const auto& outcome : result.accountAdjustments) {
-    std::cerr << "account adjustment from group " << outcome.policyGroupId.Raw()
-              << '\n';
+    std::cerr << "account adjustment from group "
+              << outcome.policyGroupId.Value() << '\n';
   }
   if (!result.accountBlocks.empty()) {
     std::cerr << "halt new orders until the blocked state is cleared\n";

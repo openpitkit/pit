@@ -20,7 +20,7 @@
 #include "openpit/detail/handle.hpp"
 #include "openpit/error.hpp"
 #include "openpit/instrument_id.hpp"
-#include "openpit/model.hpp"
+#include "openpit/model/model.hpp"
 
 #include <openpit.h>
 
@@ -33,9 +33,9 @@ namespace openpit {
 enum class SettlementUnit : std::uint8_t {
   // Business days in the caller-provided settlement calendar. This is the
   // zero/default value.
-  BusinessDays = OPENPIT_SETTLEMENT_UNIT_BUSINESS_DAYS,
+  BusinessDays = 0,
   // Consecutive calendar days.
-  CalendarDays = OPENPIT_SETTLEMENT_UNIT_CALENDAR_DAYS,
+  CalendarDays = 1,
 };
 
 // Settlement delay for one delivery or payment leg.
@@ -68,17 +68,17 @@ struct SettlementScheme {
 
 // Outcome of a reference-book registration. Boundary failures throw Error.
 enum class ReferenceBookRegisterStatus : std::uint8_t {
-  Ok = OpenPitReferenceBookRegisterStatus_Ok,
-  DuplicateId = OpenPitReferenceBookRegisterStatus_DuplicateId,
-  DuplicateInstrument = OpenPitReferenceBookRegisterStatus_DuplicateInstrument,
+  Ok = 0,
+  DuplicateId = 1,
+  DuplicateInstrument = 2,
 };
 
 // Value result from a reference-book registration.
 struct ReferenceBookRegisterResult {
-  ReferenceBookRegisterStatus status = ReferenceBookRegisterStatus::Ok;
   std::optional<InstrumentId> instrumentId;
   std::optional<InstrumentId> conflictingInstrumentId;
   std::optional<model::Instrument> conflictingInstrument;
+  ReferenceBookRegisterStatus status = ReferenceBookRegisterStatus::Ok;
 
   [[nodiscard]] bool Ok() const noexcept {
     return status == ReferenceBookRegisterStatus::Ok;
@@ -87,15 +87,15 @@ struct ReferenceBookRegisterResult {
 
 // Outcome of a reference-book settlement update. Boundary failures throw Error.
 enum class ReferenceBookStatus : std::uint8_t {
-  Ok = OpenPitReferenceBookStatus_Ok,
-  UnknownInstrument = OpenPitReferenceBookStatus_UnknownInstrument,
+  Ok = 0,
+  UnknownInstrument = 1,
 };
 
 // Value result from a reference-book settlement lookup. An Ok result without a
 // scheme means that the instrument is registered but has no configuration.
 struct ReferenceBookSettlementSchemeResult {
-  ReferenceBookStatus status = ReferenceBookStatus::Ok;
   std::optional<SettlementScheme> settlementScheme;
+  ReferenceBookStatus status = ReferenceBookStatus::Ok;
 
   [[nodiscard]] bool Ok() const noexcept {
     return status == ReferenceBookStatus::Ok;
@@ -147,7 +147,7 @@ class ReferenceBook {
 
   [[nodiscard]] ReferenceBookRegisterResult Register(
       const model::Instrument& instrument) {
-    const OpenPitInstrument raw = instrument.Raw();
+    const OpenPitInstrument raw = ::openpit::detail::Native(instrument);
     OpenPitInstrumentId id = 0;
     OpenPitSharedString* error = nullptr;
     const OpenPitReferenceBookRegisterStatus status =
@@ -158,11 +158,12 @@ class ReferenceBook {
 
   [[nodiscard]] ReferenceBookRegisterResult Register(
       const model::Instrument& instrument, InstrumentId id) {
-    const OpenPitInstrument raw = instrument.Raw();
+    const OpenPitInstrument raw = ::openpit::detail::Native(instrument);
     OpenPitInstrumentId resolved = 0;
     OpenPitSharedString* error = nullptr;
     const OpenPitReferenceBookRegisterStatus status =
-        openpit_reference_book_register_with_id(m_handle.Get(), &raw, id.Raw(),
+        openpit_reference_book_register_with_id(m_handle.Get(), &raw,
+                                                ::openpit::detail::Native(id),
                                                 &resolved, &error);
     return MapRegister(status, error, "openpit_reference_book_register_with_id",
                        resolved, instrument, id);
@@ -170,7 +171,7 @@ class ReferenceBook {
 
   [[nodiscard]] std::optional<InstrumentId> Resolve(
       const model::Instrument& instrument) const {
-    const OpenPitInstrument raw = instrument.Raw();
+    const OpenPitInstrument raw = ::openpit::detail::Native(instrument);
     OpenPitInstrumentId id = 0;
     if (!openpit_reference_book_resolve(m_handle.Get(), &raw, &id)) {
       return std::nullopt;
@@ -183,7 +184,8 @@ class ReferenceBook {
     OpenPitSharedString* error = nullptr;
     const OpenPitReferenceBookStatus status =
         openpit_reference_book_set_settlement_scheme(
-            m_handle.Get(), id.Raw(), detail::ToRaw(scheme), &error);
+            m_handle.Get(), ::openpit::detail::Native(id),
+            detail::ToRaw(scheme), &error);
     return MapStatus(status, error,
                      "openpit_reference_book_set_settlement_scheme");
   }
@@ -191,8 +193,8 @@ class ReferenceBook {
   [[nodiscard]] ReferenceBookStatus ClearSettlementScheme(InstrumentId id) {
     OpenPitSharedString* error = nullptr;
     const OpenPitReferenceBookStatus status =
-        openpit_reference_book_clear_settlement_scheme(m_handle.Get(), id.Raw(),
-                                                       &error);
+        openpit_reference_book_clear_settlement_scheme(
+            m_handle.Get(), ::openpit::detail::Native(id), &error);
     return MapStatus(status, error,
                      "openpit_reference_book_clear_settlement_scheme");
   }
@@ -203,8 +205,9 @@ class ReferenceBook {
     bool isSet = false;
     OpenPitSharedString* error = nullptr;
     const OpenPitReferenceBookStatus status =
-        openpit_reference_book_get_settlement_scheme(m_handle.Get(), id.Raw(),
-                                                     &raw, &isSet, &error);
+        openpit_reference_book_get_settlement_scheme(
+            m_handle.Get(), ::openpit::detail::Native(id), &raw, &isSet,
+            &error);
     return MapSettlementScheme(status, isSet, raw, error,
                                "openpit_reference_book_get_settlement_scheme");
   }

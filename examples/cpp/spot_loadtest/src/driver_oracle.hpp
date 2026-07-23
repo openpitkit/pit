@@ -21,7 +21,7 @@
 #include "spot_loadtest/generator/event.hpp"
 
 #include "openpit/accountadjustment/account_adjustment.hpp"
-#include "openpit/reject.hpp"
+#include "openpit/pretrade/decision.hpp"
 
 #include <cstdint>
 #include <map>

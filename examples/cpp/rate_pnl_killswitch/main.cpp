@@ -19,8 +19,8 @@
 
 #include "openpit/engine.hpp"
 #include "openpit/error.hpp"
-#include "openpit/model.hpp"
-#include "openpit/reject.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/pretrade/decision.hpp"
 
 #include <chrono>
 #include <cstdint>

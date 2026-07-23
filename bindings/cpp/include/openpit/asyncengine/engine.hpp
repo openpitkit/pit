@@ -17,11 +17,11 @@
 
 #pragma once
 
-#include "openpit/account_id.hpp"
 #include "openpit/asyncengine/future.hpp"
 #include "openpit/asyncengine/observer.hpp"
 #include "openpit/asyncengine/strategy.hpp"
 #include "openpit/error.hpp"
+#include "openpit/param/account_id.hpp"
 
 #include <openpit.h>
 
@@ -155,7 +155,7 @@ class AsyncEngine {
       }
     };
     auto abort = [promise](Error error) { promise.Fail(std::move(error)); };
-    SubmitTask(accountId.Raw(),
+    SubmitTask(accountId.Value(),
                detail::MakeTask(std::move(run), std::move(abort)), promise,
                timeout);
     return future;
@@ -183,7 +183,7 @@ class AsyncEngine {
       }
     };
     auto abort = [promise](Error error) { promise.Fail(std::move(error)); };
-    SubmitTask(accountId.Raw(),
+    SubmitTask(accountId.Value(),
                detail::MakeTask(std::move(run), std::move(abort)), promise,
                timeout);
     return future;
@@ -212,7 +212,7 @@ class AsyncEngine {
     };
     auto abort = [promise](Error error) { promise.Fail(std::move(error)); };
     std::optional<Error> err = m_strategy->Submit(
-        accountId.Raw(), detail::MakeTask(std::move(run), std::move(abort)),
+        accountId.Value(), detail::MakeTask(std::move(run), std::move(abort)),
         Deadline(timeout));
     if (err.has_value()) {
       // Submit failed before queueing: fail the future on the caller's thread,
@@ -345,7 +345,8 @@ class Builder {
   // per-account observability; a hot account saturates one shard. Choose it for
   // a broad, roughly balanced account set.
   [[nodiscard]] ShardedBuilder<Driver> Sharded(std::size_t workers) {
-    return ShardedBuilder<Driver>(*this, workers);
+    return ShardedBuilder<Driver>(*m_driver, m_stopUnderlying, MakeBaseConfig(),
+                                  workers);
   }
 
   // Selects the lazy per-account strategy with idle cleanup: full per-account
@@ -353,7 +354,8 @@ class Builder {
   // submit and a cleanup thread. Choose it for skewed activity or per-account
   // metrics.
   [[nodiscard]] DynamicBuilder<Driver> Dynamic() {
-    return DynamicBuilder<Driver>(*this);
+    return DynamicBuilder<Driver>(*m_driver, m_stopUnderlying,
+                                  MakeBaseConfig());
   }
 
  private:
@@ -390,19 +392,25 @@ class ShardedBuilder {
       throw ::openpit::Error(
           "openpit::asyncengine: sharded workers must be > 0");
     }
-    auto strategy = std::make_unique<detail::ShardedStrategy>(
-        m_parent->MakeBaseConfig(), m_workers);
-    return AsyncEngine<Driver>(*m_parent->m_driver, std::move(strategy),
-                               m_parent->m_stopUnderlying);
+    auto strategy =
+        std::make_unique<detail::ShardedStrategy>(m_config, m_workers);
+    return AsyncEngine<Driver>(*m_driver, std::move(strategy),
+                               m_stopUnderlying);
   }
 
  private:
   friend class Builder<Driver>;
 
-  ShardedBuilder(Builder<Driver>& parent, std::size_t workers)
-      : m_parent(&parent), m_workers(workers) {}
+  ShardedBuilder(Driver& driver, StopUnderlying stopUnderlying,
+                 detail::BaseConfig config, std::size_t workers)
+      : m_driver(&driver),
+        m_stopUnderlying(std::move(stopUnderlying)),
+        m_config(config),
+        m_workers(workers) {}
 
-  Builder<Driver>* m_parent;
+  Driver* m_driver;
+  StopUnderlying m_stopUnderlying;
+  detail::BaseConfig m_config;
   std::size_t m_workers;
 };
 
@@ -439,16 +447,20 @@ class DynamicBuilder {
     auto idle = m_idleCleanupAfter < std::chrono::nanoseconds(0)
                     ? std::chrono::nanoseconds(0)
                     : m_idleCleanupAfter;
-    auto strategy = std::make_unique<detail::DynamicStrategy>(
-        m_parent->MakeBaseConfig(), cap, idle, capEnabled);
-    return AsyncEngine<Driver>(*m_parent->m_driver, std::move(strategy),
-                               m_parent->m_stopUnderlying);
+    auto strategy = std::make_unique<detail::DynamicStrategy>(m_config, cap,
+                                                              idle, capEnabled);
+    return AsyncEngine<Driver>(*m_driver, std::move(strategy),
+                               m_stopUnderlying);
   }
 
  private:
   friend class Builder<Driver>;
 
-  explicit DynamicBuilder(Builder<Driver>& parent) : m_parent(&parent) {}
+  DynamicBuilder(Driver& driver, StopUnderlying stopUnderlying,
+                 detail::BaseConfig config)
+      : m_driver(&driver),
+        m_stopUnderlying(std::move(stopUnderlying)),
+        m_config(config) {}
 
   [[nodiscard]] static std::size_t DefaultMaxQueues() {
     const unsigned hw = std::thread::hardware_concurrency();
@@ -456,7 +468,9 @@ class DynamicBuilder {
     return cores * 32;
   }
 
-  Builder<Driver>* m_parent;
+  Driver* m_driver;
+  StopUnderlying m_stopUnderlying;
+  detail::BaseConfig m_config;
   std::size_t m_maxQueues = 0;
   bool m_maxQueuesSet = false;
   std::chrono::nanoseconds m_idleCleanupAfter = kDefaultIdleCleanupAfter;

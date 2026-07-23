@@ -18,7 +18,7 @@
 #pragma once
 
 #include "openpit/detail/handle.hpp"
-#include "openpit/reject.hpp"
+#include "openpit/pretrade/decision.hpp"
 
 #include <openpit.h>
 
@@ -31,6 +31,8 @@ namespace openpit::accountadjustment {
 // BatchError
 
 namespace detail {
+
+using RawBatchError = ::OpenPitAccountAdjustmentBatchError;
 
 struct BatchErrorDeleter {
   void operator()(OpenPitAccountAdjustmentBatchError* handle) const noexcept {
@@ -50,15 +52,8 @@ class BatchError {
  public:
   BatchError() noexcept = default;
 
-  explicit BatchError(OpenPitAccountAdjustmentBatchError* handle) noexcept
-      : m_handle(handle) {}
-
   [[nodiscard]] explicit operator bool() const noexcept {
     return static_cast<bool>(m_handle);
-  }
-
-  [[nodiscard]] OpenPitAccountAdjustmentBatchError* Get() const noexcept {
-    return m_handle.Get();
   }
 
   // Index of the failing adjustment within the applied batch.
@@ -88,15 +83,24 @@ class BatchError {
     for (std::size_t i = 0; i < count; ++i) {
       OpenPitPretradeReject raw{};
       if (openpit_pretrade_reject_list_get(list, i, &raw)) {
-        out.push_back(::openpit::reject::Reject::FromRaw(raw));
+        out.push_back(
+            ::openpit::detail::FromNative<::openpit::reject::Reject>(raw));
       }
     }
     return out;
   }
 
  private:
-  ::openpit::detail::Handle<OpenPitAccountAdjustmentBatchError,
-                            detail::BatchErrorDeleter>
+  friend class ::openpit::detail::NativeAccess;
+
+  explicit BatchError(detail::RawBatchError* handle) noexcept
+      : m_handle(handle) {}
+
+  [[nodiscard]] detail::RawBatchError* Native() const noexcept {
+    return m_handle.Get();
+  }
+
+  ::openpit::detail::Handle<detail::RawBatchError, detail::BatchErrorDeleter>
       m_handle;
 };
 

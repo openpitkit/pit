@@ -18,9 +18,9 @@
 #include "openpit/engine.hpp"
 
 #include "openpit/accountadjustment/account_adjustment.hpp"
-#include "openpit/model.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/pretrade/decision.hpp"
 #include "openpit/pretrade/pretrade.hpp"
-#include "openpit/reject.hpp"
 
 #include <gtest/gtest.h>
 
@@ -71,6 +71,41 @@ namespace policies = openpit::pretrade::policies;
       /*maxOrders=*/1, /*windowNanoseconds=*/60'000'000'000)));
   config.AddTo(builder);
   return builder.Build();
+}
+
+[[nodiscard]] Engine SingleQuantityEngine() {
+  EngineBuilder builder(SyncPolicy::None);
+  policies::OrderSizeLimitPolicy config;
+  config.BrokerBarrier(
+      policies::OrderSizeBrokerBarrier(policies::OrderSizeLimit(
+          Quantity::FromString("1"),
+          ::openpit::param::Volume::FromString("1000000"))));
+  config.AssetBarrier(policies::OrderSizeAssetBarrier(
+      policies::OrderSizeLimit(Quantity::FromString("3"),
+                               ::openpit::param::Volume::FromString("1000000")),
+      ::openpit::param::Asset("USD")));
+  config.AddTo(builder);
+  return builder.Build();
+}
+
+[[nodiscard]] Engine BrokerAndAssetRateLimitEngine() {
+  EngineBuilder builder(SyncPolicy::None);
+  policies::RateLimitPolicy config;
+  config.BrokerBarrier(policies::RateLimitBrokerBarrier(policies::RateLimit(
+      /*maxOrders=*/1, /*windowNanoseconds=*/60'000'000'000)));
+  config.AssetBarrier(policies::RateLimitAssetBarrier(
+      policies::RateLimit(/*maxOrders=*/3,
+                          /*windowNanoseconds=*/60'000'000'000),
+      ::openpit::param::Asset("USD")));
+  config.AddTo(builder);
+  return builder.Build();
+}
+
+[[nodiscard]] openpit::model::Order TwoQuantityOrder() {
+  openpit::model::Order order = TestOrder(1);
+  order.operation->tradeAmount =
+      openpit::model::TradeAmount::OfQuantity(Quantity::FromString("2"));
+  return order;
 }
 
 template <typename Handler>
@@ -236,7 +271,7 @@ TEST(EngineDryRun, StartDryRunDoesNotConsumeRateLimitBudget) {
   EXPECT_TRUE(probe.Rejects().empty());
   EXPECT_TRUE(probe.Lock().IsEmpty());
   EXPECT_TRUE(probe.AccountAdjustments().empty());
-  EXPECT_TRUE(probe.AccountBlocks().empty());
+  EXPECT_FALSE(probe.AccountBlock().has_value());
 
   EXPECT_TRUE(engine.StartPreTrade(TestOrder(1)).Passed());
   const openpit::pretrade::StartResult second =
@@ -469,17 +504,6 @@ TEST(EngineApplyExecutionReport, AbiFailureThrows) {
       openpit::Error);
 }
 
-TEST(EngineApplyExecutionReport, LockOverloadRequiresFill) {
-  EngineBuilder builder(SyncPolicy::Full);
-  builder.Add(policies::OrderValidationPolicy{});
-  const Engine engine = builder.Build();
-  const openpit::pretrade::PreTradeLock lock;
-
-  EXPECT_THROW(
-      { static_cast<void>(engine.ApplyExecutionReport(TestReport(1), lock)); },
-      openpit::Error);
-}
-
 TEST(EngineApplyExecutionReport, CallbackExceptionRethrowsOriginalType) {
   Engine engine = CustomPolicyEngine(ThrowingReportPolicy{});
 
@@ -494,13 +518,16 @@ TEST(EngineApplyExecutionReport, CallbackExceptionRethrowsOriginalType) {
 // The adjustment value type is authored in
 // `openpit/accountadjustment/account_adjustment.hpp`. The empty-batch path
 // exercises the engine method end-to-end without depending on that type: a
-// zero-length batch is accepted and applies cleanly. A minimal local stub
-// satisfies the template's `Raw()` requirement; it is never invoked for an
-// empty batch.
+// zero-length batch is accepted and applies cleanly. A minimal local stub opts
+// into the private native bridge; it is never invoked for an empty batch.
 
 struct StubAdjustment {
-  [[nodiscard]] OpenPitAccountAdjustment Raw() const noexcept {
-    return OpenPitAccountAdjustment{};
+ private:
+  friend class openpit::detail::NativeAccess;
+
+  [[nodiscard]] openpit::accountadjustment::detail::RawAccountAdjustment
+  Native() const noexcept {
+    return {};
   }
 };
 
@@ -540,13 +567,13 @@ TEST(EngineAccountCurrency, SetAndClearAccountAndGroupCurrency) {
       openpit::param::AccountGroupId::FromUint32(7);
 
   EXPECT_NO_THROW(
-      engine.SetAccountCurrency(account, openpit::param::Asset("USD")));
-  EXPECT_NO_THROW(engine.ClearAccountCurrency(account));
+      engine.Accounts().SetCurrency(account, openpit::param::Asset("USD")));
+  EXPECT_NO_THROW(engine.Accounts().ClearCurrency(account));
 
   ASSERT_FALSE(engine.Accounts().RegisterGroup({account}, group).has_value());
   EXPECT_NO_THROW(
-      engine.SetAccountGroupCurrency(group, openpit::param::Asset("USD")));
-  EXPECT_NO_THROW(engine.ClearAccountGroupCurrency(group));
+      engine.Accounts().SetGroupCurrency(group, openpit::param::Asset("USD")));
+  EXPECT_NO_THROW(engine.Accounts().ClearGroupCurrency(group));
 }
 
 TEST(EngineConfigure, RateLimitUpdateChangesRuntimeBudget) {
@@ -554,8 +581,10 @@ TEST(EngineConfigure, RateLimitUpdateChangesRuntimeBudget) {
 
   engine.Configure().RateLimit(
       policies::RateLimitPolicyName,
-      policies::RateLimitBrokerBarrier(policies::RateLimit(
-          /*maxOrders=*/2, /*windowNanoseconds=*/60'000'000'000)));
+      policies::RateLimitBrokerBarrierUpdate::Set(
+          policies::RateLimitBrokerBarrier(policies::RateLimit(
+              /*maxOrders=*/2,
+              /*windowNanoseconds=*/60'000'000'000))));
 
   EXPECT_TRUE(engine.StartPreTrade(TestOrder(1)).Passed());
   EXPECT_TRUE(engine.StartPreTrade(TestOrder(1)).Passed());
@@ -573,12 +602,40 @@ TEST(EngineConfigure, UnknownPolicyThrowsStructuredConfigureError) {
   try {
     engine.Configure().RateLimit(
         "MissingPolicy",
-        policies::RateLimitBrokerBarrier(policies::RateLimit(
-            /*maxOrders=*/2, /*windowNanoseconds=*/60'000'000'000)));
+        policies::RateLimitBrokerBarrierUpdate::Set(
+            policies::RateLimitBrokerBarrier(policies::RateLimit(
+                /*maxOrders=*/2,
+                /*windowNanoseconds=*/60'000'000'000))));
     FAIL() << "Configure().RateLimit should have thrown";
   } catch (const openpit::ConfigureError& error) {
     EXPECT_EQ(error.Kind(), openpit::ConfigureErrorKind::Unknown);
   }
+}
+
+TEST(EngineConfigure, RateLimitBrokerUpdateCanClearOrRemainUnchanged) {
+  Engine unchanged = BrokerAndAssetRateLimitEngine();
+  EXPECT_TRUE(unchanged.StartPreTrade(TestOrder(1)).Passed());
+  unchanged.Configure().RateLimit(policies::RateLimitPolicyName);
+  EXPECT_FALSE(unchanged.StartPreTrade(TestOrder(1)).Passed());
+
+  Engine cleared = BrokerAndAssetRateLimitEngine();
+  cleared.Configure().RateLimit(
+      policies::RateLimitPolicyName,
+      policies::RateLimitBrokerBarrierUpdate::Clear());
+  EXPECT_TRUE(cleared.StartPreTrade(TestOrder(1)).Passed());
+  EXPECT_TRUE(cleared.StartPreTrade(TestOrder(1)).Passed());
+}
+
+TEST(EngineConfigure, OrderSizeBrokerUpdateCanClearOrRemainUnchanged) {
+  Engine unchanged = SingleQuantityEngine();
+  unchanged.Configure().OrderSizeLimit(policies::OrderSizeLimitPolicyName);
+  EXPECT_FALSE(unchanged.StartPreTrade(TwoQuantityOrder()).Passed());
+
+  Engine cleared = SingleQuantityEngine();
+  cleared.Configure().OrderSizeLimit(
+      policies::OrderSizeLimitPolicyName,
+      policies::OrderSizeBrokerBarrierUpdate::Clear());
+  EXPECT_TRUE(cleared.StartPreTrade(TwoQuantityOrder()).Passed());
 }
 
 TEST(EngineConfigure, SpotFundsLimitModeUpdateBuildsThroughAccessor) {
@@ -591,14 +648,14 @@ TEST(EngineConfigure, SpotFundsLimitModeUpdateBuildsThroughAccessor) {
 }
 
 //------------------------------------------------------------------------------
-// Account-group lookup via the engine read query.
+// Account-group lookup via the Accounts view.
 
 TEST(EngineAccountGroup, AbsentForUngroupedAccount) {
   EngineBuilder builder(SyncPolicy::Full);
   builder.Add(policies::OrderValidationPolicy{});
   Engine engine = builder.Build();
 
-  EXPECT_FALSE(engine.AccountGroup(AccountId::FromUint64(1)).has_value());
+  EXPECT_FALSE(engine.Accounts().GroupOf(AccountId::FromUint64(1)).has_value());
 }
 
 }  // namespace

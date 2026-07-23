@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "openpit/account_id.hpp"
+#include "openpit/param/account_id.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -30,7 +30,8 @@
 //
 // All callbacks fire synchronously from worker or submitter threads;
 // implementations must be thread-safe and must not block for long. Accumulate
-// counters and hand heavy work to a separate thread.
+// counters and hand heavy work to a separate thread. Exceptions are ignored so
+// diagnostics cannot change dispatcher behavior.
 //
 //   - OnComplete fires for aborted tasks (ran == 0), but OnDequeue does NOT.
 //     Pairing dequeue/complete counts will see unmatched completes per abort.

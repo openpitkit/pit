@@ -17,16 +17,16 @@
 
 #include "runner.hpp"
 
-#include "openpit/account_id.hpp"
 #include "openpit/accountadjustment/account_adjustment.hpp"
-#include "openpit/accounts.hpp"
+#include "openpit/accounts/accounts.hpp"
 #include "openpit/async_engine.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/error.hpp"
 #include "openpit/marketdata.hpp"
-#include "openpit/model.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/pretrade/decision.hpp"
 #include "openpit/pretrade/policies.hpp"
-#include "openpit/reject.hpp"
 
 #include <openpit.h>
 
@@ -308,7 +308,7 @@ struct SyncEngineSet {
                             md::QuoteTtl::Infinite(), openpit::SyncPolicy::None)
                             .Build();
   policies::SpotFundsPolicy policy;
-  policy.WithMarketOrders(service.Get(), fm.slippageBps)
+  policy.WithMarketOrders(service, fm.slippageBps)
       .PricingSource(policies::SpotFundsPricingSource::Mark);
   builder.Add(policy);
   openpit::Engine engine = builder.Build();
@@ -408,7 +408,7 @@ RunSyncFill(openpit::Engine &engine, param::AccountId acc, const Row &row,
   const auto start = std::chrono::steady_clock::now();
   openpit::PostTradeResult result;
   try {
-    result = engine.ApplyExecutionReport(report->Report(), report->Lock());
+    result = engine.ApplyExecutionReport(report->Report());
   } catch (const openpit::Error &err) {
     const auto dur = std::chrono::steady_clock::now() - start;
     return {Failure{row, std::string("engine: ") + err.what()}, dur};
@@ -584,7 +584,7 @@ struct AsyncSubmission {
   std::vector<AsyncStep> steps;
   // Fill reports outlive the worker closures that borrow them.
   std::vector<std::shared_ptr<FillReport>> fillReports;
-  std::map<OpenPitParamAccountId, std::vector<std::function<void()>>> waiters;
+  std::map<param::AccountId, std::vector<std::function<void()>>> waiters;
   std::mutex statsMu;
   // report is read.
   std::vector<std::thread> timers;
@@ -754,8 +754,7 @@ void FinalizeReservation(
   const auto start = std::chrono::steady_clock::now();
   auto future = std::make_shared<ae::Future<openpit::PostTradeResult>>(
       engine.Generic().Call(acc, [fillReport](ae::EngineAdapter &driver) {
-        return driver.ApplyExecutionReport(fillReport->Report(),
-                                           fillReport->Lock());
+        return driver.ApplyExecutionReport(fillReport->Report());
       }));
   s.ObserveOnResolve(*future, start, &s.report->fill);
 
@@ -808,7 +807,7 @@ void ReplayTick(AsyncSubmission &s, const Row &row) {
     return;
   }
   for (const param::AccountId &acc : BarrierAccounts(s, row)) {
-    const auto it = s.waiters.find(acc.Raw());
+    const auto it = s.waiters.find(acc);
     if (it == s.waiters.end()) {
       continue;
     }
@@ -858,7 +857,7 @@ void SubmitAsyncSteps(Deadline deadline, AsyncEngine &engine,
     } else if (row.action == "FILL") {
       step = SubmitAsyncFill(s, engine, acc, row);
     }
-    s.waiters[acc.Raw()].push_back(step.wait);
+    s.waiters[acc].push_back(step.wait);
     s.steps.push_back(std::move(step));
   }
 }
@@ -877,7 +876,7 @@ Report RunAsync(Deadline deadline, const Frontmatter &fm,
   feed.RegisterInstruments(rows);
 
   policies::SpotFundsPolicy policy;
-  policy.WithMarketOrders(service.Get(), fm.slippageBps)
+  policy.WithMarketOrders(service, fm.slippageBps)
       .PricingSource(policies::SpotFundsPricingSource::Mark);
   builder.Add(policy);
   openpit::Engine engine = builder.Build();

@@ -16,22 +16,24 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // The pre-trade / reject headers define `RejectScope` / `RejectCode` with their
-// fixed underlying types; they must precede `openpit/adapters.hpp`, whose
+// fixed underlying types; they must precede `openpit/pretrade/adapters.hpp`,
+// whose
 // opaque forward declarations of those scoped enums are only a compatible
 // redeclaration when the full definition is already in scope.
 #include "openpit/pretrade/pretrade.hpp"
 
-#include "openpit/adapters.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/marketdata.hpp"
-#include "openpit/model.hpp"
-#include "openpit/reject.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/pretrade/adapters.hpp"
+#include "openpit/pretrade/decision.hpp"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -167,20 +169,25 @@ TEST(PreTradeLock, CloneIsIndependent) {
   EXPECT_EQ(copy.Len(), 2u);
 }
 
-TEST(PreTradeLock, RawRoundTripPreservesRecords) {
-  PreTradeLock lock;
-  lock.Push(kDefaultGroup, Price::FromString("99.99"));
-  lock.Push(kGroupSeven, Price::FromString("0.001"));
+TEST(Reservation, EmptyHandleOperationsThrow) {
+  openpit::pretrade::Reservation reservation;
 
-  const std::vector<std::uint8_t> raw = lock.ToRaw();
-  ASSERT_FALSE(raw.empty());
+  EXPECT_THROW(reservation.Commit(), openpit::Error);
+  EXPECT_THROW(reservation.Rollback(), openpit::Error);
+  EXPECT_THROW(static_cast<void>(reservation.Lock()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(reservation.AccountAdjustments()),
+               openpit::Error);
+  EXPECT_THROW(static_cast<void>(reservation.AccountBlock()), openpit::Error);
+}
 
-  const PreTradeLock restored = PreTradeLock::FromRaw(raw);
-  EXPECT_EQ(restored.Len(), 2u);
-  ASSERT_EQ(restored.PricesOf(kDefaultGroup).size(), 1u);
-  EXPECT_EQ(restored.PricesOf(kDefaultGroup).front().ToString(), "99.99");
-  ASSERT_EQ(restored.PricesOf(kGroupSeven).size(), 1u);
-  EXPECT_EQ(restored.PricesOf(kGroupSeven).front().ToString(), "0.001");
+TEST(DryRunReport, EmptyHandleObserversThrow) {
+  openpit::pretrade::DryRunReport report;
+
+  EXPECT_THROW(static_cast<void>(report.Passed()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(report.Rejects()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(report.Lock()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(report.AccountAdjustments()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(report.AccountBlock()), openpit::Error);
 }
 
 TEST(PreTradeLock, JsonRoundTripPreservesRecords) {
@@ -490,11 +497,8 @@ TEST(CustomPolicy, ProducesSplitPostTradeOutputs) {
   const auto& outcome = result.accountPnls.front();
   EXPECT_EQ(outcome.accountId, openpit::param::AccountId::FromUint64(42));
   EXPECT_EQ(outcome.policyGroupId, openpit::param::GroupId(kGroupSeven));
-  ASSERT_TRUE(
-      std::holds_alternative<openpit::accountadjustment::PnlOutcomeAmount>(
-          outcome.result));
-  const auto& amount =
-      std::get<openpit::accountadjustment::PnlOutcomeAmount>(outcome.result);
+  ASSERT_NE(outcome.Amount(), nullptr);
+  const auto& amount = *outcome.Amount();
   EXPECT_EQ(amount.delta, openpit::param::Pnl::FromString("-12.5"));
   EXPECT_EQ(amount.absolute, openpit::param::Pnl::FromString("87.5"));
 
@@ -683,7 +687,7 @@ TEST(CustomPolicy, AcceptedReservationCarriesNoAccountBlock) {
 
 void SeedSpotFundsLifecycleAccount(const openpit::Engine& engine,
                                    const openpit::param::AccountId accountId) {
-  engine.SetAccountCurrency(accountId, openpit::param::Asset("USD"));
+  engine.Accounts().SetCurrency(accountId, openpit::param::Asset("USD"));
 
   openpit::accountadjustment::AccountAdjustment seed;
   openpit::accountadjustment::BalanceOperation balance;
@@ -691,7 +695,7 @@ void SeedSpotFundsLifecycleAccount(const openpit::Engine& engine,
   seed.operation =
       openpit::accountadjustment::Operation::OfBalance(std::move(balance));
   openpit::accountadjustment::Amount amount;
-  amount.balance = openpit::param::AdjustmentAmount::OfAbsolute(
+  amount.balance = openpit::param::AdjustmentAmount::Absolute(
       openpit::param::PositionSize::FromString("1000"));
   seed.amount = std::move(amount);
 
@@ -712,7 +716,7 @@ ApplySpotFundsLifecycleFill(const openpit::Engine& engine,
     return {};
   }
 
-  // Adopt the reservation lock and attach it through the C++ engine overload.
+  // Adopt the reservation lock into the public fill model.
   openpit::pretrade::PreTradeLock lock = execution.reservation->Lock();
   execution.reservation->Commit();
 
@@ -723,6 +727,8 @@ ApplySpotFundsLifecycleFill(const openpit::Engine& engine,
   operation.side = openpit::model::Side::Buy;
 
   openpit::model::Fill fill;
+  fill.lock =
+      std::make_shared<openpit::pretrade::PreTradeLock>(std::move(lock));
   fill.lastTrade = openpit::model::Trade(Price::FromString("100"),
                                          Quantity::FromString("1"));
   fill.leavesQuantity = Quantity::FromString("0");
@@ -731,7 +737,7 @@ ApplySpotFundsLifecycleFill(const openpit::Engine& engine,
   openpit::model::ExecutionReport report;
   report.operation = std::move(operation);
   report.fill = std::move(fill);
-  return engine.ApplyExecutionReport(report, lock).accountBlocks;
+  return engine.ApplyExecutionReport(report).accountBlocks;
 }
 
 void ExpectSpotFundsPnlPreTradeReject(
@@ -837,18 +843,15 @@ TEST(BuiltinPolicy, SpotFundsMarketOrdersAcceptServiceWrapper) {
   EXPECT_NO_THROW({ openpit::Engine engine = builder.Build(); });
 }
 
-TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierRawPreservesBounds) {
+TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierPreservesBounds) {
   policies::SpotFundsPnlBoundsBarrier barrier;
   barrier.lowerBound = openpit::param::Pnl::FromString("-1000");
   barrier.upperBound = openpit::param::Pnl::FromString("250");
 
-  const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier raw = barrier.Raw();
-  ASSERT_TRUE(raw.lower_bound.is_set);
-  ASSERT_TRUE(raw.upper_bound.is_set);
-  EXPECT_EQ(openpit::param::Pnl::FromRaw(raw.lower_bound.value).ToString(),
-            "-1000");
-  EXPECT_EQ(openpit::param::Pnl::FromRaw(raw.upper_bound.value).ToString(),
-            "250");
+  ASSERT_TRUE(barrier.lowerBound.has_value());
+  ASSERT_TRUE(barrier.upperBound.has_value());
+  EXPECT_EQ(barrier.lowerBound->ToString(), "-1000");
+  EXPECT_EQ(barrier.upperBound->ToString(), "250");
 }
 
 TEST(BuiltinPolicy, SpotFundsPnlBoundsPolicyBuildsWithAllBarrierAxes) {
@@ -914,22 +917,21 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
       openpit::param::Fee::FromString("0.25"), openpit::param::Asset("USD"));
   fill.leavesQuantity = Quantity::FromString("0");
   fill.isFinal = true;
+  fill.lock =
+      std::make_shared<openpit::pretrade::PreTradeLock>(std::move(lock));
   openpit::model::ExecutionReport report;
   report.operation = std::move(operation);
   report.fill = std::move(fill);
 
-  const openpit::PostTradeResult halted =
-      engine.ApplyExecutionReport(report, lock);
+  const openpit::PostTradeResult halted = engine.ApplyExecutionReport(report);
   ASSERT_EQ(halted.accountPnls.size(), 1u);
-  ASSERT_TRUE(std::holds_alternative<openpit::accountadjustment::PnlHaltReason>(
-      halted.accountPnls.front().result));
-  EXPECT_EQ(std::get<openpit::accountadjustment::PnlHaltReason>(
-                halted.accountPnls.front().result),
+  ASSERT_TRUE(halted.accountPnls.front().HaltReason().has_value());
+  EXPECT_EQ(*halted.accountPnls.front().HaltReason(),
             openpit::accountadjustment::PnlHaltReason::MissingAccountCurrency);
   ASSERT_EQ(halted.accountBlocks.size(), 1u);
   ExpectSpotFundsPnlPreTradeReject(engine, account);
 
-  engine.SetAccountCurrency(account, openpit::param::Asset("USD"));
+  engine.Accounts().SetCurrency(account, openpit::param::Asset("USD"));
   const openpit::PolicyConfigurationResult rearmed =
       engine.Configure().SetSpotFundsAccountPnl(
           policies::SpotFundsPolicyName, account,
@@ -966,6 +968,8 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
   operation.accountId = accountId;
   operation.side = openpit::model::Side::Buy;
   openpit::model::Fill fill;
+  fill.lock =
+      std::make_shared<openpit::pretrade::PreTradeLock>(std::move(lock));
   fill.lastTrade = openpit::model::Trade(Price::FromString("100"),
                                          Quantity::FromString("1"));
   fill.fee = fee;
@@ -974,7 +978,7 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
   openpit::model::ExecutionReport report;
   report.operation = std::move(operation);
   report.fill = std::move(fill);
-  return engine.ApplyExecutionReport(report, lock);
+  return engine.ApplyExecutionReport(report);
 }
 
 [[nodiscard]] openpit::Engine SpotFundsPnlKillSwitchEngine() {
@@ -1013,11 +1017,8 @@ TEST(BuiltinPolicy, SpotFundsOpeningFillHaltsPositionLedgerOnly) {
   const openpit::PostTradeResult result =
       ApplySpotFundsBuyFill(engine, account, std::nullopt);
   ASSERT_EQ(result.accountPnls.size(), 1u);
-  ASSERT_TRUE(
-      std::holds_alternative<openpit::accountadjustment::PnlOutcomeAmount>(
-          result.accountPnls.front().result));
-  const auto& amount = std::get<openpit::accountadjustment::PnlOutcomeAmount>(
-      result.accountPnls.front().result);
+  ASSERT_NE(result.accountPnls.front().Amount(), nullptr);
+  const auto& amount = *result.accountPnls.front().Amount();
   EXPECT_EQ(amount.delta, openpit::param::Pnl::FromString("0"));
   EXPECT_EQ(amount.absolute, openpit::param::Pnl::FromString("0"));
   EXPECT_TRUE(result.accountBlocks.empty());
@@ -1026,10 +1027,8 @@ TEST(BuiltinPolicy, SpotFundsOpeningFillHaltsPositionLedgerOnly) {
       FindAssetEntry(result, "AAPL");
   ASSERT_NE(entry, nullptr);
   ASSERT_TRUE(entry->realizedPnl.has_value());
-  const auto& realized = entry->realizedPnl->Get();
-  ASSERT_TRUE(std::holds_alternative<openpit::accountadjustment::PnlHaltReason>(
-      realized));
-  EXPECT_EQ(std::get<openpit::accountadjustment::PnlHaltReason>(realized),
+  ASSERT_TRUE(entry->realizedPnl->HaltReason().has_value());
+  EXPECT_EQ(*entry->realizedPnl->HaltReason(),
             openpit::accountadjustment::PnlHaltReason::MissingAccountCurrency);
   // A position ledger halted before its account-currency cost basis can be
   // computed cannot retain an authoritative average price.
@@ -1040,12 +1039,8 @@ TEST(BuiltinPolicy, SpotFundsOpeningFillHaltsPositionLedgerOnly) {
   const openpit::PostTradeResult second =
       ApplySpotFundsBuyFill(engine, account, std::nullopt);
   ASSERT_EQ(second.accountPnls.size(), 1u);
-  ASSERT_TRUE(
-      std::holds_alternative<openpit::accountadjustment::PnlOutcomeAmount>(
-          second.accountPnls.front().result));
-  const auto& secondAmount =
-      std::get<openpit::accountadjustment::PnlOutcomeAmount>(
-          second.accountPnls.front().result);
+  ASSERT_NE(second.accountPnls.front().Amount(), nullptr);
+  const auto& secondAmount = *second.accountPnls.front().Amount();
   EXPECT_EQ(secondAmount.delta, openpit::param::Pnl::FromString("0"));
   EXPECT_EQ(secondAmount.absolute, openpit::param::Pnl::FromString("0"));
   EXPECT_TRUE(second.accountBlocks.empty());

@@ -26,8 +26,8 @@
 #include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/engine.hpp"
 #include "openpit/marketdata.hpp"
-#include "openpit/model.hpp"
-#include "openpit/param.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/param.hpp"
 #include "openpit/pretrade/pretrade.hpp"
 
 #include <gtest/gtest.h>
@@ -99,7 +99,7 @@ TEST(MarketDataPricingWiki, BookTopPricingAndMarkUnavailableReject) {
   seed.operation = Operation::OfBalance(std::move(balanceOp));
   Amount seedAmount;
   seedAmount.balance =
-      AdjustmentAmount::OfAbsolute(PositionSize::FromString("1000"));
+      AdjustmentAmount::Absolute(PositionSize::FromString("1000"));
   seed.amount = std::move(seedAmount);
   const openpit::AdjustmentResult seedResult = engine.ApplyAccountAdjustment(
       accountId, std::vector<AccountAdjustment>{seed});

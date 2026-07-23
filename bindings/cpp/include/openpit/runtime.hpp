@@ -27,14 +27,22 @@ namespace openpit {
 
 // Returns the OpenPit runtime version string. Never fails.
 [[nodiscard]] inline std::string GetVersion() {
-  return StringView(openpit_get_runtime_version()).ToString();
+  const OpenPitStringView version = openpit_get_runtime_version();
+  if (version.ptr == nullptr) {
+    return {};
+  }
+  return {reinterpret_cast<const char*>(version.ptr), version.len};
 }
 
 // Returns the build-profile descriptor of the linked runtime: a stable
 // `key=value;`-delimited string (keys include `version`, `profile`,
 // `debug_assertions`). Never fails.
 [[nodiscard]] inline std::string GetBuildProfile() {
-  return StringView(openpit_get_runtime_build_profile()).ToString();
+  const OpenPitStringView profile = openpit_get_runtime_build_profile();
+  if (profile.ptr == nullptr) {
+    return {};
+  }
+  return {reinterpret_cast<const char*>(profile.ptr), profile.len};
 }
 
 }  // namespace openpit

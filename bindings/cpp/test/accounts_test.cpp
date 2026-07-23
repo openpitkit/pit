@@ -15,13 +15,13 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-#include "openpit/accounts.hpp"
+#include "openpit/accounts/accounts.hpp"
 
-#include "openpit/account_id.hpp"
 #include "openpit/engine.hpp"
-#include "openpit/model.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/pretrade/decision.hpp"
 #include "openpit/pretrade/pretrade.hpp"
-#include "openpit/reject.hpp"
 
 #include <gtest/gtest.h>
 
@@ -107,15 +107,14 @@ void ExpectAccountBlockedWithReason(const Engine& engine,
 
 TEST(AccountId, Uint64RoundTrips) {
   const AccountId id = AccountId::FromUint64(42);
-  EXPECT_EQ(id.Raw(), 42u);
   EXPECT_EQ(id.ToString(), "42");
   EXPECT_EQ(id, AccountId::FromUint64(42));
   EXPECT_NE(id, AccountId::FromUint64(43));
 }
 
-TEST(AccountId, FromRawPreservesValue) {
-  const AccountId id = AccountId::FromRaw(7);
-  EXPECT_EQ(id.Raw(), 7u);
+TEST(AccountId, FromUint64PreservesValue) {
+  const AccountId id = AccountId::FromUint64(7);
+  EXPECT_EQ(id.ToString(), "7");
 }
 
 TEST(AccountId, StringDerivedIsStable) {

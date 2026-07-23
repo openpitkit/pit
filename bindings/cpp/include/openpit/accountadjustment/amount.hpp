@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "openpit/param.hpp"
+#include "openpit/param/param.hpp"
 
 #include <openpit.h>
 
@@ -40,25 +40,30 @@ struct Amount {
 
   Amount() = default;
 
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] static Amount FromRaw(
       const OpenPitAccountAdjustmentAmount& raw) {
     Amount out;
-    out.balance = param::AdjustmentAmount::FromRaw(raw.balance);
-    out.held = param::AdjustmentAmount::FromRaw(raw.held);
-    out.incoming = param::AdjustmentAmount::FromRaw(raw.incoming);
+    out.balance =
+        param::detail::AdjustmentAmountAccess::FromNative(raw.balance);
+    out.held = param::detail::AdjustmentAmountAccess::FromNative(raw.held);
+    out.incoming =
+        param::detail::AdjustmentAmountAccess::FromNative(raw.incoming);
     return out;
   }
 
-  [[nodiscard]] OpenPitAccountAdjustmentAmount Raw() const noexcept {
+  [[nodiscard]] OpenPitAccountAdjustmentAmount Native() const {
     OpenPitAccountAdjustmentAmount raw{};
     if (balance) {
-      raw.balance = balance->Raw();
+      raw.balance = ::openpit::detail::Native(*balance);
     }
     if (held) {
-      raw.held = held->Raw();
+      raw.held = ::openpit::detail::Native(*held);
     }
     if (incoming) {
-      raw.incoming = incoming->Raw();
+      raw.incoming = ::openpit::detail::Native(*incoming);
     }
     return raw;
   }

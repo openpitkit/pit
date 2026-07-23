@@ -18,12 +18,20 @@
 #pragma once
 
 #include "openpit/detail/handle.hpp"
+#include "openpit/detail/native_access.hpp"
 
 #include <openpit.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+
+namespace openpit::detail {
+
+using RawBytesView = ::OpenPitBytesView;
+using RawSharedBytes = ::OpenPitSharedBytes;
+
+}  // namespace openpit::detail
 
 namespace openpit {
 
@@ -34,8 +42,6 @@ namespace openpit {
 class BytesView {
  public:
   BytesView() noexcept = default;
-
-  explicit BytesView(OpenPitBytesView view) noexcept : m_view(view) {}
 
   [[nodiscard]] const std::uint8_t* Data() const noexcept { return m_view.ptr; }
 
@@ -52,10 +58,14 @@ class BytesView {
     return std::vector<std::uint8_t>(m_view.ptr, m_view.ptr + m_view.len);
   }
 
-  [[nodiscard]] OpenPitBytesView Raw() const noexcept { return m_view; }
-
  private:
-  OpenPitBytesView m_view{nullptr, 0};
+  friend class detail::NativeAccess;
+
+  explicit BytesView(detail::RawBytesView view) noexcept : m_view(view) {}
+
+  [[nodiscard]] detail::RawBytesView Native() const noexcept { return m_view; }
+
+  detail::RawBytesView m_view{nullptr, 0};
 };
 
 namespace detail {
@@ -73,28 +83,31 @@ class SharedBytes {
  public:
   SharedBytes() noexcept = default;
 
-  explicit SharedBytes(OpenPitSharedBytes* handle) noexcept
-      : m_handle(handle) {}
-
   [[nodiscard]] explicit operator bool() const noexcept {
     return static_cast<bool>(m_handle);
   }
 
   // Borrows the handle's bytes; valid only while this object is alive.
   [[nodiscard]] BytesView View() const noexcept {
-    return BytesView(openpit_shared_bytes_view(m_handle.Get()));
+    return detail::FromNative<BytesView>(
+        openpit_shared_bytes_view(m_handle.Get()));
   }
 
   [[nodiscard]] std::vector<std::uint8_t> ToVector() const {
     return View().ToVector();
   }
 
-  [[nodiscard]] OpenPitSharedBytes* Get() const noexcept {
+ private:
+  friend class detail::NativeAccess;
+
+  explicit SharedBytes(detail::RawSharedBytes* handle) noexcept
+      : m_handle(handle) {}
+
+  [[nodiscard]] detail::RawSharedBytes* Native() const noexcept {
     return m_handle.Get();
   }
 
- private:
-  detail::Handle<OpenPitSharedBytes, detail::SharedBytesDeleter> m_handle;
+  detail::Handle<detail::RawSharedBytes, detail::SharedBytesDeleter> m_handle;
 };
 
 }  // namespace openpit

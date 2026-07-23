@@ -21,14 +21,14 @@
 #include "openpit/error.hpp"
 #include "openpit/marketdata/instrument_id.hpp"
 #include "openpit/marketdata/service.hpp"
-#include "openpit/param.hpp"
+#include "openpit/param/param.hpp"
+#include "openpit/pretrade/detail/lists.hpp"
 #include "openpit/string.hpp"
 
 #include <openpit.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -38,20 +38,16 @@
 // Built-in pre-trade policy configurations.
 //
 // Each policy is configured by a small value object carrying its barriers, then
-// registered on an `openpit::EngineBuilder` via `AddTo(builder)` (or, from the
-// a config is assembled, then `Build(builder)` is called. Registration crosses
-// the C boundary; failures (no barrier configured, already-consumed builder,
-// argument parsing) surface as a thrown `openpit::Error`.
+// registered on an `openpit::EngineBuilder` via `AddTo(builder)`. Failures such
+// as missing barriers, a consumed builder, or invalid arguments surface as a
+// thrown `openpit::Error`.
 //
-// Financial limits use `openpit::param` value types and assets are owned
-// `std::string`; the raw C barrier arrays are materialized only inside `AddTo`,
-// so every borrowed string view stays valid for the duration of the call.
+// Financial limits use `openpit::param` value types and assets own their
+// storage.
 
 namespace openpit::pretrade::policies {
 
 // Base price the spot-funds policy uses to size market-order reservations.
-// Mirrors the `pricing_source` byte of
-// `openpit_engine_builder_add_builtin_spot_funds_policy`.
 enum class SpotFundsPricingSource : std::uint8_t {
   Mark = 0,
   BookTop = 1,
@@ -59,8 +55,8 @@ enum class SpotFundsPricingSource : std::uint8_t {
 
 // Runtime limit mode for spot-funds reservations.
 enum class SpotFundsLimitMode : std::uint8_t {
-  Enforce = OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_ENFORCE,
-  TrackOnly = OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_LIMIT_MODE_TRACK_ONLY,
+  Enforce = 0,
+  TrackOnly = 1,
 };
 
 inline constexpr std::string_view RateLimitPolicyName = "RateLimitPolicy";
@@ -72,24 +68,33 @@ inline constexpr std::string_view SpotFundsPolicyName = "SpotFundsPolicy";
 
 namespace detail {
 
-[[nodiscard]] inline std::int64_t ToRateLimitWindowNanoseconds(
-    std::uint64_t value) {
-  if (value >
-      static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-    throw ::openpit::Error("rate-limit window exceeds int64 nanoseconds");
+class PnlOptionalAccess final {
+ private:
+  [[nodiscard]] static ::openpit::param::detail::RawPnlOptional Native(
+      const std::optional<::openpit::param::Pnl>& value) noexcept {
+    ::openpit::param::detail::RawPnlOptional raw{};
+    if (value) {
+      raw.value = ::openpit::detail::Native(*value);
+      raw.is_set = true;
+    }
+    return raw;
   }
-  return static_cast<std::int64_t>(value);
-}
 
-[[nodiscard]] inline ::openpit::param::PnlOptional PnlOptional(
-    const std::optional<::openpit::param::Pnl>& value) noexcept {
-  ::openpit::param::PnlOptional raw{};
-  if (value) {
-    raw.value = value->Raw();
-    raw.is_set = true;
-  }
-  return raw;
-}
+  friend class ::openpit::pretrade::policies::PnlBoundsKillSwitchPolicy;
+  friend class ::openpit::pretrade::policies::
+      SpotFundsPnlBoundsGlobalBarrierUpdate;
+  friend class ::openpit::pretrade::policies::
+      SpotFundsPnlBoundsKillSwitchPolicy;
+  friend class ::openpit::pretrade::policies::SpotFundsPolicy;
+  friend class ::openpit::Configurator;
+  friend struct ::openpit::pretrade::policies::PnlBoundsAccountBarrier;
+  friend struct ::openpit::pretrade::policies::PnlBoundsAccountBarrierUpdate;
+  friend struct ::openpit::pretrade::policies::PnlBoundsBrokerBarrier;
+  friend struct ::openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrier;
+  friend struct ::openpit::pretrade::policies::
+      SpotFundsPnlBoundsAccountGroupBarrier;
+  friend struct ::openpit::pretrade::policies::SpotFundsPnlBoundsBarrier;
+};
 
 }  // namespace detail
 
@@ -105,10 +110,13 @@ struct OrderSizeLimit {
                  ::openpit::param::Volume notional)
       : maxQuantity(quantity), maxNotional(notional) {}
 
-  [[nodiscard]] OpenPitPretradePoliciesOrderSizeLimit Raw() const noexcept {
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  [[nodiscard]] OpenPitPretradePoliciesOrderSizeLimit Native() const noexcept {
     OpenPitPretradePoliciesOrderSizeLimit raw{};
-    raw.max_quantity = maxQuantity.Raw();
-    raw.max_notional = maxNotional.Raw();
+    raw.max_quantity = ::openpit::detail::Native(maxQuantity);
+    raw.max_notional = ::openpit::detail::Native(maxNotional);
     return raw;
   }
 };
@@ -119,6 +127,38 @@ struct OrderSizeBrokerBarrier {
 
   explicit OrderSizeBrokerBarrier(OrderSizeLimit barrierLimit)
       : limit(barrierLimit) {}
+};
+
+/// Tri-state runtime update for the singular order-size broker barrier.
+class OrderSizeBrokerBarrierUpdate {
+ public:
+  [[nodiscard]] static OrderSizeBrokerBarrierUpdate Unchanged() noexcept {
+    return OrderSizeBrokerBarrierUpdate(false, std::nullopt);
+  }
+
+  [[nodiscard]] static OrderSizeBrokerBarrierUpdate Clear() noexcept {
+    return OrderSizeBrokerBarrierUpdate(true, std::nullopt);
+  }
+
+  [[nodiscard]] static OrderSizeBrokerBarrierUpdate Set(
+      OrderSizeBrokerBarrier barrier) {
+    return OrderSizeBrokerBarrierUpdate(true, barrier);
+  }
+
+  [[nodiscard]] bool HasUpdate() const noexcept { return m_hasUpdate; }
+
+  [[nodiscard]] const std::optional<OrderSizeBrokerBarrier>& Barrier()
+      const noexcept {
+    return m_barrier;
+  }
+
+ private:
+  OrderSizeBrokerBarrierUpdate(
+      bool hasUpdate, std::optional<OrderSizeBrokerBarrier> barrier) noexcept
+      : m_hasUpdate(hasUpdate), m_barrier(barrier) {}
+
+  bool m_hasUpdate = false;
+  std::optional<OrderSizeBrokerBarrier> m_barrier;
 };
 
 // Per-settlement-asset order-size barrier.
@@ -146,8 +186,7 @@ struct OrderSizeAccountAssetBarrier {
 };
 
 // Built-in order-size-limit policy. At least one barrier axis must be
-// configured before registration. Mirrors
-// `openpit_engine_builder_add_builtin_order_size_limit_policy`.
+// configured before registration.
 class OrderSizeLimitPolicy {
  public:
   OrderSizeLimitPolicy& PolicyGroupId(std::uint16_t policyGroupId) {
@@ -176,7 +215,7 @@ class OrderSizeLimitPolicy {
     OpenPitPretradePoliciesOrderSizeBrokerBarrier brokerRaw{};
     const OpenPitPretradePoliciesOrderSizeBrokerBarrier* brokerPtr = nullptr;
     if (m_broker) {
-      brokerRaw.limit = m_broker->limit.Raw();
+      brokerRaw.limit = ::openpit::detail::Native(m_broker->limit);
       brokerPtr = &brokerRaw;
     }
 
@@ -184,8 +223,8 @@ class OrderSizeLimitPolicy {
     assetRaw.reserve(m_assetBarriers.size());
     for (const OrderSizeAssetBarrier& barrier : m_assetBarriers) {
       OpenPitPretradePoliciesOrderSizeAssetBarrier raw{};
-      raw.limit = barrier.limit.Raw();
-      raw.settlement_asset = barrier.settlementAsset.Raw();
+      raw.limit = ::openpit::detail::Native(barrier.limit);
+      raw.settlement_asset = ::openpit::detail::Native(barrier.settlementAsset);
       assetRaw.push_back(raw);
     }
 
@@ -194,17 +233,17 @@ class OrderSizeLimitPolicy {
     accountAssetRaw.reserve(m_accountAssetBarriers.size());
     for (const OrderSizeAccountAssetBarrier& barrier : m_accountAssetBarriers) {
       OpenPitPretradePoliciesOrderSizeAccountAssetBarrier raw{};
-      raw.limit = barrier.limit.Raw();
-      raw.account_id = barrier.accountId.Raw();
-      raw.settlement_asset = barrier.settlementAsset.Raw();
+      raw.limit = ::openpit::detail::Native(barrier.limit);
+      raw.account_id = ::openpit::detail::Native(barrier.accountId);
+      raw.settlement_asset = ::openpit::detail::Native(barrier.settlementAsset);
       accountAssetRaw.push_back(raw);
     }
 
     OpenPitSharedString* error = nullptr;
     if (!openpit_engine_builder_add_builtin_order_size_limit_policy(
-            builder.Get(), m_policyGroupId, brokerPtr, assetRaw.data(),
-            assetRaw.size(), accountAssetRaw.data(), accountAssetRaw.size(),
-            &error)) {
+            ::openpit::detail::Native(builder), m_policyGroupId, brokerPtr,
+            assetRaw.data(), assetRaw.size(), accountAssetRaw.data(),
+            accountAssetRaw.size(), &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error,
           "openpit_engine_builder_add_builtin_order_size_limit_policy failed");
@@ -215,14 +254,13 @@ class OrderSizeLimitPolicy {
   std::optional<OrderSizeBrokerBarrier> m_broker;
   std::vector<OrderSizeAssetBarrier> m_assetBarriers;
   std::vector<OrderSizeAccountAssetBarrier> m_accountAssetBarriers;
-  std::uint16_t m_policyGroupId = OPENPIT_DEFAULT_POLICY_GROUP_ID;
+  std::uint16_t m_policyGroupId = ::openpit::param::DefaultPolicyGroupId;
 };
 
 //------------------------------------------------------------------------------
 // OrderValidation
 
-// Built-in order-validation policy. Requires no barriers. Mirrors
-// `openpit_engine_builder_add_builtin_order_validation_policy`.
+// Built-in order-validation policy. Requires no barriers.
 class OrderValidationPolicy {
  public:
   OrderValidationPolicy& PolicyGroupId(std::uint16_t policyGroupId) {
@@ -233,7 +271,7 @@ class OrderValidationPolicy {
   void AddTo(::openpit::EngineBuilder& builder) const {
     OpenPitSharedString* error = nullptr;
     if (!openpit_engine_builder_add_builtin_order_validation_policy(
-            builder.Get(), m_policyGroupId, &error)) {
+            ::openpit::detail::Native(builder), m_policyGroupId, &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error,
           "openpit_engine_builder_add_builtin_order_validation_policy failed");
@@ -241,7 +279,7 @@ class OrderValidationPolicy {
   }
 
  private:
-  std::uint16_t m_policyGroupId = OPENPIT_DEFAULT_POLICY_GROUP_ID;
+  std::uint16_t m_policyGroupId = ::openpit::param::DefaultPolicyGroupId;
 };
 
 //------------------------------------------------------------------------------
@@ -291,8 +329,7 @@ struct PnlBoundsAccountBarrierUpdate {
 };
 
 // Built-in P&L bounds kill-switch policy. At least one barrier (broker or
-// account) must be configured. Mirrors
-// `openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy`.
+// account) must be configured.
 class PnlBoundsKillSwitchPolicy {
  public:
   PnlBoundsKillSwitchPolicy& PolicyGroupId(std::uint16_t policyGroupId) {
@@ -315,11 +352,13 @@ class PnlBoundsKillSwitchPolicy {
     brokerRaw.reserve(m_brokerBarriers.size());
     for (const PnlBoundsBrokerBarrier& barrier : m_brokerBarriers) {
       OpenPitPretradePoliciesPnlBoundsBarrier raw{};
-      raw.settlement_asset = barrier.settlementAsset.Raw();
-      raw.lower_bound = ::openpit::pretrade::policies::detail::PnlOptional(
-          barrier.lowerBound);
-      raw.upper_bound = ::openpit::pretrade::policies::detail::PnlOptional(
-          barrier.upperBound);
+      raw.settlement_asset = ::openpit::detail::Native(barrier.settlementAsset);
+      raw.lower_bound =
+          ::openpit::pretrade::policies::detail::PnlOptionalAccess::Native(
+              barrier.lowerBound);
+      raw.upper_bound =
+          ::openpit::pretrade::policies::detail::PnlOptionalAccess::Native(
+              barrier.upperBound);
       brokerRaw.push_back(raw);
     }
 
@@ -327,20 +366,23 @@ class PnlBoundsKillSwitchPolicy {
     accountRaw.reserve(m_accountBarriers.size());
     for (const PnlBoundsAccountBarrier& barrier : m_accountBarriers) {
       OpenPitPretradePoliciesPnlBoundsAccountBarrier raw{};
-      raw.account_id = barrier.accountId.Raw();
-      raw.settlement_asset = barrier.settlementAsset.Raw();
-      raw.lower_bound = ::openpit::pretrade::policies::detail::PnlOptional(
-          barrier.lowerBound);
-      raw.upper_bound = ::openpit::pretrade::policies::detail::PnlOptional(
-          barrier.upperBound);
-      raw.initial_pnl = barrier.initialPnl.Raw();
+      raw.account_id = ::openpit::detail::Native(barrier.accountId);
+      raw.settlement_asset = ::openpit::detail::Native(barrier.settlementAsset);
+      raw.lower_bound =
+          ::openpit::pretrade::policies::detail::PnlOptionalAccess::Native(
+              barrier.lowerBound);
+      raw.upper_bound =
+          ::openpit::pretrade::policies::detail::PnlOptionalAccess::Native(
+              barrier.upperBound);
+      raw.initial_pnl = ::openpit::detail::Native(barrier.initialPnl);
       accountRaw.push_back(raw);
     }
 
     OpenPitSharedString* error = nullptr;
     if (!openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy(
-            builder.Get(), m_policyGroupId, brokerRaw.data(), brokerRaw.size(),
-            accountRaw.data(), accountRaw.size(), &error)) {
+            ::openpit::detail::Native(builder), m_policyGroupId,
+            brokerRaw.data(), brokerRaw.size(), accountRaw.data(),
+            accountRaw.size(), &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error,
           "openpit_engine_builder_add_builtin_pnl_bounds_killswitch_policy "
@@ -351,19 +393,19 @@ class PnlBoundsKillSwitchPolicy {
  private:
   std::vector<PnlBoundsBrokerBarrier> m_brokerBarriers;
   std::vector<PnlBoundsAccountBarrier> m_accountBarriers;
-  std::uint16_t m_policyGroupId = OPENPIT_DEFAULT_POLICY_GROUP_ID;
+  std::uint16_t m_policyGroupId = ::openpit::param::DefaultPolicyGroupId;
 };
 
 //------------------------------------------------------------------------------
 // RateLimit
 
-// Maximum number of orders accepted within a sliding window. The window is
-// expressed in nanoseconds to match the native runtime.
+// Maximum number of orders accepted within a sliding window expressed in
+// nanoseconds.
 struct RateLimit {
   std::size_t maxOrders = 0;
-  std::uint64_t windowNanoseconds = 0;
+  std::int64_t windowNanoseconds = 0;
 
-  RateLimit(std::size_t orders, std::uint64_t windowNanos)
+  RateLimit(std::size_t orders, std::int64_t windowNanos)
       : maxOrders(orders), windowNanoseconds(windowNanos) {}
 };
 
@@ -373,6 +415,38 @@ struct RateLimitBrokerBarrier {
 
   explicit RateLimitBrokerBarrier(RateLimit barrierLimit)
       : limit(barrierLimit) {}
+};
+
+/// Tri-state runtime update for the singular rate-limit broker barrier.
+class RateLimitBrokerBarrierUpdate {
+ public:
+  [[nodiscard]] static RateLimitBrokerBarrierUpdate Unchanged() noexcept {
+    return RateLimitBrokerBarrierUpdate(false, std::nullopt);
+  }
+
+  [[nodiscard]] static RateLimitBrokerBarrierUpdate Clear() noexcept {
+    return RateLimitBrokerBarrierUpdate(true, std::nullopt);
+  }
+
+  [[nodiscard]] static RateLimitBrokerBarrierUpdate Set(
+      RateLimitBrokerBarrier barrier) {
+    return RateLimitBrokerBarrierUpdate(true, barrier);
+  }
+
+  [[nodiscard]] bool HasUpdate() const noexcept { return m_hasUpdate; }
+
+  [[nodiscard]] const std::optional<RateLimitBrokerBarrier>& Barrier()
+      const noexcept {
+    return m_barrier;
+  }
+
+ private:
+  RateLimitBrokerBarrierUpdate(
+      bool hasUpdate, std::optional<RateLimitBrokerBarrier> barrier) noexcept
+      : m_hasUpdate(hasUpdate), m_barrier(barrier) {}
+
+  bool m_hasUpdate = false;
+  std::optional<RateLimitBrokerBarrier> m_barrier;
 };
 
 // Per-settlement-asset rate-limit barrier.
@@ -409,7 +483,6 @@ struct RateLimitAccountAssetBarrier {
 };
 
 // Built-in rate-limit policy. At least one barrier axis must be configured.
-// Mirrors `openpit_engine_builder_add_builtin_rate_limit_policy`.
 class RateLimitPolicy {
  public:
   RateLimitPolicy& PolicyGroupId(std::uint16_t policyGroupId) {
@@ -442,9 +515,7 @@ class RateLimitPolicy {
     const OpenPitPretradePoliciesRateLimitBrokerBarrier* brokerPtr = nullptr;
     if (m_broker) {
       brokerRaw.max_orders = m_broker->limit.maxOrders;
-      brokerRaw.window_nanoseconds =
-          ::openpit::pretrade::policies::detail::ToRateLimitWindowNanoseconds(
-              m_broker->limit.windowNanoseconds);
+      brokerRaw.window_nanoseconds = m_broker->limit.windowNanoseconds;
       brokerPtr = &brokerRaw;
     }
 
@@ -452,11 +523,9 @@ class RateLimitPolicy {
     assetRaw.reserve(m_assetBarriers.size());
     for (const RateLimitAssetBarrier& barrier : m_assetBarriers) {
       OpenPitPretradePoliciesRateLimitAssetBarrier raw{};
-      raw.settlement_asset = barrier.settlementAsset.Raw();
+      raw.settlement_asset = ::openpit::detail::Native(barrier.settlementAsset);
       raw.max_orders = barrier.limit.maxOrders;
-      raw.window_nanoseconds =
-          ::openpit::pretrade::policies::detail::ToRateLimitWindowNanoseconds(
-              barrier.limit.windowNanoseconds);
+      raw.window_nanoseconds = barrier.limit.windowNanoseconds;
       assetRaw.push_back(raw);
     }
 
@@ -464,11 +533,9 @@ class RateLimitPolicy {
     accountRaw.reserve(m_accountBarriers.size());
     for (const RateLimitAccountBarrier& barrier : m_accountBarriers) {
       OpenPitPretradePoliciesRateLimitAccountBarrier raw{};
-      raw.account_id = barrier.accountId.Raw();
+      raw.account_id = ::openpit::detail::Native(barrier.accountId);
       raw.max_orders = barrier.limit.maxOrders;
-      raw.window_nanoseconds =
-          ::openpit::pretrade::policies::detail::ToRateLimitWindowNanoseconds(
-              barrier.limit.windowNanoseconds);
+      raw.window_nanoseconds = barrier.limit.windowNanoseconds;
       accountRaw.push_back(raw);
     }
 
@@ -477,20 +544,19 @@ class RateLimitPolicy {
     accountAssetRaw.reserve(m_accountAssetBarriers.size());
     for (const RateLimitAccountAssetBarrier& barrier : m_accountAssetBarriers) {
       OpenPitPretradePoliciesRateLimitAccountAssetBarrier raw{};
-      raw.account_id = barrier.accountId.Raw();
-      raw.settlement_asset = barrier.settlementAsset.Raw();
+      raw.account_id = ::openpit::detail::Native(barrier.accountId);
+      raw.settlement_asset = ::openpit::detail::Native(barrier.settlementAsset);
       raw.max_orders = barrier.limit.maxOrders;
-      raw.window_nanoseconds =
-          ::openpit::pretrade::policies::detail::ToRateLimitWindowNanoseconds(
-              barrier.limit.windowNanoseconds);
+      raw.window_nanoseconds = barrier.limit.windowNanoseconds;
       accountAssetRaw.push_back(raw);
     }
 
     OpenPitSharedString* error = nullptr;
     if (!openpit_engine_builder_add_builtin_rate_limit_policy(
-            builder.Get(), m_policyGroupId, brokerPtr, assetRaw.data(),
-            assetRaw.size(), accountRaw.data(), accountRaw.size(),
-            accountAssetRaw.data(), accountAssetRaw.size(), &error)) {
+            ::openpit::detail::Native(builder), m_policyGroupId, brokerPtr,
+            assetRaw.data(), assetRaw.size(), accountRaw.data(),
+            accountRaw.size(), accountAssetRaw.data(), accountAssetRaw.size(),
+            &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error, "openpit_engine_builder_add_builtin_rate_limit_policy failed");
     }
@@ -501,7 +567,7 @@ class RateLimitPolicy {
   std::vector<RateLimitAssetBarrier> m_assetBarriers;
   std::vector<RateLimitAccountBarrier> m_accountBarriers;
   std::vector<RateLimitAccountAssetBarrier> m_accountAssetBarriers;
-  std::uint16_t m_policyGroupId = OPENPIT_DEFAULT_POLICY_GROUP_ID;
+  std::uint16_t m_policyGroupId = ::openpit::param::DefaultPolicyGroupId;
 };
 
 //------------------------------------------------------------------------------
@@ -510,8 +576,8 @@ class RateLimitPolicy {
 // Per-instrument slippage override for the spot-funds policy. The target is a
 // tagged union: instrument default, instrument+account, or
 // instrument+account-group. When `slippageBps` is absent the entry is ignored
-// during construction and clears the selected runtime override during
-// reconfiguration. Mirrors `OpenPitPretradePoliciesSpotFundsOverride`.
+// during construction and clears the selected override during
+// reconfiguration.
 struct SpotFundsOverride {
   std::optional<std::uint16_t> slippageBps;
 
@@ -529,8 +595,11 @@ struct SpotFundsOverride {
                     ::openpit::param::AccountGroupId accountGroupId)
       : m_target(InstrumentAccountGroupTarget(instrument, accountGroupId)) {}
 
-  /// Lowers the override to the native C payload.
-  [[nodiscard]] OpenPitPretradePoliciesSpotFundsOverride Raw() const noexcept {
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  [[nodiscard]] OpenPitPretradePoliciesSpotFundsOverride Native()
+      const noexcept {
     OpenPitPretradePoliciesSpotFundsOverride raw{};
     raw.target = m_target;
     if (slippageBps) {
@@ -540,13 +609,13 @@ struct SpotFundsOverride {
     return raw;
   }
 
- private:
   [[nodiscard]] static OpenPitPretradePoliciesSpotFundsOverrideTarget
   InstrumentTarget(::openpit::marketdata::InstrumentId instrument) noexcept {
     OpenPitPretradePoliciesSpotFundsOverrideTarget result{};
     result.tag =
         OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT;
-    result.payload.instrument.instrument_id = instrument.Raw();
+    result.payload.instrument.instrument_id =
+        ::openpit::detail::Native(instrument);
     return result;
   }
 
@@ -556,8 +625,10 @@ struct SpotFundsOverride {
     OpenPitPretradePoliciesSpotFundsOverrideTarget result{};
     result.tag =
         OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT_ACCOUNT;
-    result.payload.instrument_account.instrument_id = instrument.Raw();
-    result.payload.instrument_account.account_id = accountId.Raw();
+    result.payload.instrument_account.instrument_id =
+        ::openpit::detail::Native(instrument);
+    result.payload.instrument_account.account_id =
+        ::openpit::detail::Native(accountId);
     return result;
   }
 
@@ -568,9 +639,10 @@ struct SpotFundsOverride {
     OpenPitPretradePoliciesSpotFundsOverrideTarget result{};
     result.tag =
         OPENPIT_PRETRADE_POLICIES_SPOT_FUNDS_OVERRIDE_TARGET_TAG_INSTRUMENT_ACCOUNT_GROUP;
-    result.payload.instrument_account_group.instrument_id = instrument.Raw();
+    result.payload.instrument_account_group.instrument_id =
+        ::openpit::detail::Native(instrument);
     result.payload.instrument_account_group.account_group_id =
-        accountGroupId.Raw();
+        ::openpit::detail::Native(accountGroupId);
     return result;
   }
 
@@ -586,14 +658,18 @@ struct SpotFundsPnlBoundsBarrier {
   std::optional<::openpit::param::Pnl> lowerBound;
   std::optional<::openpit::param::Pnl> upperBound;
 
-  /// Lowers the barrier to the native C payload.
-  [[nodiscard]] OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier Raw()
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  [[nodiscard]] OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier Native()
       const noexcept {
     OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier raw{};
     raw.lower_bound =
-        ::openpit::pretrade::policies::detail::PnlOptional(lowerBound);
+        ::openpit::pretrade::policies::detail::PnlOptionalAccess::Native(
+            lowerBound);
     raw.upper_bound =
-        ::openpit::pretrade::policies::detail::PnlOptional(upperBound);
+        ::openpit::pretrade::policies::detail::PnlOptionalAccess::Native(
+            upperBound);
     return raw;
   }
 };
@@ -609,12 +685,14 @@ struct SpotFundsPnlBoundsAccountGroupBarrier {
       SpotFundsPnlBoundsBarrier groupBarrier)
       : barrier(groupBarrier), accountGroupId(groupId) {}
 
-  /// Lowers the account-group refinement to the native C payload.
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
   [[nodiscard]] OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier
-  Raw() const noexcept {
+  Native() const noexcept {
     OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier raw{};
-    raw.account_group_id = accountGroupId.Raw();
-    raw.barrier = barrier.Raw();
+    raw.account_group_id = ::openpit::detail::Native(accountGroupId);
+    raw.barrier = ::openpit::detail::Native(barrier);
     return raw;
   }
 };
@@ -629,12 +707,14 @@ struct SpotFundsPnlBoundsAccountBarrier {
                                    SpotFundsPnlBoundsBarrier accountBarrier)
       : barrier(accountBarrier), accountId(account) {}
 
-  /// Lowers the account barrier to the native C payload.
-  [[nodiscard]] OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier Raw()
+ private:
+  friend class ::openpit::detail::NativeAccess;
+
+  [[nodiscard]] OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier Native()
       const noexcept {
     OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier raw{};
-    raw.account_id = accountId.Raw();
-    raw.barrier = barrier.Raw();
+    raw.account_id = ::openpit::detail::Native(accountId);
+    raw.barrier = ::openpit::detail::Native(barrier);
     return raw;
   }
 };
@@ -700,13 +780,7 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
   /// Sets the market-data service used for FX conversion.
   SpotFundsPnlBoundsKillSwitchPolicy& WithMarketData(
       const ::openpit::marketdata::Service& marketData) noexcept {
-    return WithMarketData(marketData.Get());
-  }
-
-  /// Sets the borrowed raw market-data service handle used for FX conversion.
-  SpotFundsPnlBoundsKillSwitchPolicy& WithMarketData(
-      const OpenPitMarketDataService* marketData) noexcept {
-    m_marketData = marketData;
+    m_marketData = ::openpit::detail::Native(marketData);
     return *this;
   }
 
@@ -736,7 +810,7 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
     OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier globalRaw{};
     const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier* globalPtr = nullptr;
     if (m_globalBarrier) {
-      globalRaw = m_globalBarrier->Raw();
+      globalRaw = ::openpit::detail::Native(*m_globalBarrier);
       globalPtr = &globalRaw;
     }
 
@@ -745,21 +819,21 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
     accountGroupRaw.reserve(m_accountGroupBarriers.size());
     for (const SpotFundsPnlBoundsAccountGroupBarrier& barrier :
          m_accountGroupBarriers) {
-      accountGroupRaw.push_back(barrier.Raw());
+      accountGroupRaw.push_back(::openpit::detail::Native(barrier));
     }
 
     std::vector<OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier>
         accountRaw;
     accountRaw.reserve(m_accountBarriers.size());
     for (const SpotFundsPnlBoundsAccountBarrier& barrier : m_accountBarriers) {
-      accountRaw.push_back(barrier.Raw());
+      accountRaw.push_back(::openpit::detail::Native(barrier));
     }
 
     OpenPitSharedString* error = nullptr;
     if (!openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_killswitch_policy(
-            builder.Get(), m_marketData, m_policyGroupId, globalPtr,
-            accountGroupRaw.data(), accountGroupRaw.size(), accountRaw.data(),
-            accountRaw.size(), &error)) {
+            ::openpit::detail::Native(builder), m_marketData, m_policyGroupId,
+            globalPtr, accountGroupRaw.data(), accountGroupRaw.size(),
+            accountRaw.data(), accountRaw.size(), &error)) {
       ::openpit::detail::ThrowFromSharedString(
           error,
           "openpit_engine_builder_add_builtin_spot_funds_pnl_bounds_"
@@ -772,7 +846,7 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
   std::optional<SpotFundsPnlBoundsBarrier> m_globalBarrier;
   std::vector<SpotFundsPnlBoundsAccountGroupBarrier> m_accountGroupBarriers;
   std::vector<SpotFundsPnlBoundsAccountBarrier> m_accountBarriers;
-  std::uint16_t m_policyGroupId = OPENPIT_DEFAULT_POLICY_GROUP_ID;
+  std::uint16_t m_policyGroupId = ::openpit::param::DefaultPolicyGroupId;
 };
 
 // Built-in spot-funds policy, configured inline (no separate accessors).
@@ -780,9 +854,7 @@ class SpotFundsPnlBoundsKillSwitchPolicy {
 // By default market orders are rejected (limit-only mode). Call
 // `WithMarketOrders` to enable them, supplying the borrowed market-data service
 // handle and the worst-case global slippage in basis points. The market-data
-// handle is owned by the caller (the market-data binding slice); it must
-// outlive registration. Mirrors
-// `openpit_engine_builder_add_builtin_spot_funds_policy`.
+// handle is owned by the caller and must outlive registration.
 class SpotFundsPolicy {
  public:
   SpotFundsPolicy& PolicyGroupId(std::uint16_t policyGroupId) {
@@ -797,13 +869,7 @@ class SpotFundsPolicy {
   SpotFundsPolicy& WithMarketOrders(
       const ::openpit::marketdata::Service& marketData,
       std::uint16_t slippageBps) {
-    return WithMarketOrders(marketData.Get(), slippageBps);
-  }
-
-  /// Enables market orders from a borrowed raw market-data service handle.
-  SpotFundsPolicy& WithMarketOrders(const OpenPitMarketDataService* marketData,
-                                    std::uint16_t slippageBps) {
-    m_marketData = marketData;
+    m_marketData = ::openpit::detail::Native(marketData);
     m_marketSlippageBps = slippageBps;
     return *this;
   }
@@ -822,7 +888,7 @@ class SpotFundsPolicy {
     std::vector<OpenPitPretradePoliciesSpotFundsOverride> overridesRaw;
     overridesRaw.reserve(m_overrides.size());
     for (const SpotFundsOverride& override : m_overrides) {
-      overridesRaw.push_back(override.Raw());
+      overridesRaw.push_back(::openpit::detail::Native(override));
     }
 
     const std::uint16_t slippage = m_marketSlippageBps.value_or(0);
@@ -831,7 +897,7 @@ class SpotFundsPolicy {
 
     OpenPitSharedString* error = nullptr;
     if (!openpit_engine_builder_add_builtin_spot_funds_policy(
-            builder.Get(), m_marketData, slippagePtr,
+            ::openpit::detail::Native(builder), m_marketData, slippagePtr,
             static_cast<std::uint8_t>(m_pricingSource), overridesRaw.data(),
             overridesRaw.size(), m_policyGroupId, &error)) {
       ::openpit::detail::ThrowFromSharedString(
@@ -844,404 +910,9 @@ class SpotFundsPolicy {
   std::optional<std::uint16_t> m_marketSlippageBps;
   SpotFundsPricingSource m_pricingSource = SpotFundsPricingSource::Mark;
   std::vector<SpotFundsOverride> m_overrides;
-  std::uint16_t m_policyGroupId = OPENPIT_DEFAULT_POLICY_GROUP_ID;
+  std::uint16_t m_policyGroupId = ::openpit::param::DefaultPolicyGroupId;
 };
 
 }  // namespace openpit::pretrade::policies
 
-namespace openpit {
-
-// Runtime policy-settings updater bound to an engine. Every call forwards to
-// the native runtime and throws `openpit::ConfigureError` on
-// domain/configuration failures.
-class Configurator {
- public:
-  explicit Configurator(const ::openpit::Engine& engine) noexcept
-      : m_engine(engine.Get()) {}
-
-  explicit Configurator(OpenPitEngine* engine) noexcept : m_engine(engine) {}
-
-  void RateLimit(
-      std::string_view name,
-      std::optional<::openpit::pretrade::policies::RateLimitBrokerBarrier>
-          broker,
-      std::optional<
-          std::vector<::openpit::pretrade::policies::RateLimitAssetBarrier>>
-          assets = std::nullopt,
-      std::optional<
-          std::vector<::openpit::pretrade::policies::RateLimitAccountBarrier>>
-          accounts = std::nullopt,
-      std::optional<std::vector<
-          ::openpit::pretrade::policies::RateLimitAccountAssetBarrier>>
-          accountAssets = std::nullopt) const {
-    OpenPitPretradePoliciesRateLimitBrokerBarrier brokerRaw{};
-    const OpenPitPretradePoliciesRateLimitBrokerBarrier* brokerPtr = nullptr;
-    if (broker) {
-      brokerRaw.max_orders = broker->limit.maxOrders;
-      brokerRaw.window_nanoseconds =
-          ::openpit::pretrade::policies::detail::ToRateLimitWindowNanoseconds(
-              broker->limit.windowNanoseconds);
-      brokerPtr = &brokerRaw;
-    }
-
-    std::vector<OpenPitPretradePoliciesRateLimitAssetBarrier> assetRaw;
-    if (assets) {
-      assetRaw.reserve(assets->size());
-      for (const auto& barrier : *assets) {
-        OpenPitPretradePoliciesRateLimitAssetBarrier raw{};
-        raw.settlement_asset = barrier.settlementAsset.Raw();
-        raw.max_orders = barrier.limit.maxOrders;
-        raw.window_nanoseconds =
-            ::openpit::pretrade::policies::detail::ToRateLimitWindowNanoseconds(
-                barrier.limit.windowNanoseconds);
-        assetRaw.push_back(raw);
-      }
-    }
-
-    std::vector<OpenPitPretradePoliciesRateLimitAccountBarrier> accountRaw;
-    if (accounts) {
-      accountRaw.reserve(accounts->size());
-      for (const auto& barrier : *accounts) {
-        OpenPitPretradePoliciesRateLimitAccountBarrier raw{};
-        raw.account_id = barrier.accountId.Raw();
-        raw.max_orders = barrier.limit.maxOrders;
-        raw.window_nanoseconds =
-            ::openpit::pretrade::policies::detail::ToRateLimitWindowNanoseconds(
-                barrier.limit.windowNanoseconds);
-        accountRaw.push_back(raw);
-      }
-    }
-
-    std::vector<OpenPitPretradePoliciesRateLimitAccountAssetBarrier>
-        accountAssetRaw;
-    if (accountAssets) {
-      accountAssetRaw.reserve(accountAssets->size());
-      for (const auto& barrier : *accountAssets) {
-        OpenPitPretradePoliciesRateLimitAccountAssetBarrier raw{};
-        raw.account_id = barrier.accountId.Raw();
-        raw.settlement_asset = barrier.settlementAsset.Raw();
-        raw.max_orders = barrier.limit.maxOrders;
-        raw.window_nanoseconds =
-            ::openpit::pretrade::policies::detail::ToRateLimitWindowNanoseconds(
-                barrier.limit.windowNanoseconds);
-        accountAssetRaw.push_back(raw);
-      }
-    }
-
-    OpenPitConfigureError* error = nullptr;
-    if (!openpit_engine_configure_rate_limit(
-            m_engine, ::openpit::MakeStringView(name), brokerPtr,
-            broker.has_value(), assetRaw.data(), assetRaw.size(),
-            assets.has_value(), accountRaw.data(), accountRaw.size(),
-            accounts.has_value(), accountAssetRaw.data(),
-            accountAssetRaw.size(), accountAssets.has_value(), &error)) {
-      ::openpit::detail::ThrowFromConfigureError(
-          error, "openpit_engine_configure_rate_limit failed");
-    }
-  }
-
-  void OrderSizeLimit(
-      std::string_view name,
-      std::optional<::openpit::pretrade::policies::OrderSizeBrokerBarrier>
-          broker,
-      std::optional<
-          std::vector<::openpit::pretrade::policies::OrderSizeAssetBarrier>>
-          assets = std::nullopt,
-      std::optional<std::vector<
-          ::openpit::pretrade::policies::OrderSizeAccountAssetBarrier>>
-          accountAssets = std::nullopt) const {
-    OpenPitPretradePoliciesOrderSizeBrokerBarrier brokerRaw{};
-    const OpenPitPretradePoliciesOrderSizeBrokerBarrier* brokerPtr = nullptr;
-    if (broker) {
-      brokerRaw.limit = broker->limit.Raw();
-      brokerPtr = &brokerRaw;
-    }
-
-    std::vector<OpenPitPretradePoliciesOrderSizeAssetBarrier> assetRaw;
-    if (assets) {
-      assetRaw.reserve(assets->size());
-      for (const auto& barrier : *assets) {
-        OpenPitPretradePoliciesOrderSizeAssetBarrier raw{};
-        raw.limit = barrier.limit.Raw();
-        raw.settlement_asset = barrier.settlementAsset.Raw();
-        assetRaw.push_back(raw);
-      }
-    }
-
-    std::vector<OpenPitPretradePoliciesOrderSizeAccountAssetBarrier>
-        accountAssetRaw;
-    if (accountAssets) {
-      accountAssetRaw.reserve(accountAssets->size());
-      for (const auto& barrier : *accountAssets) {
-        OpenPitPretradePoliciesOrderSizeAccountAssetBarrier raw{};
-        raw.limit = barrier.limit.Raw();
-        raw.account_id = barrier.accountId.Raw();
-        raw.settlement_asset = barrier.settlementAsset.Raw();
-        accountAssetRaw.push_back(raw);
-      }
-    }
-
-    OpenPitConfigureError* error = nullptr;
-    if (!openpit_engine_configure_order_size_limit(
-            m_engine, ::openpit::MakeStringView(name), brokerPtr,
-            broker.has_value(), assetRaw.data(), assetRaw.size(),
-            assets.has_value(), accountAssetRaw.data(), accountAssetRaw.size(),
-            accountAssets.has_value(), &error)) {
-      ::openpit::detail::ThrowFromConfigureError(
-          error, "openpit_engine_configure_order_size_limit failed");
-    }
-  }
-
-  void PnlBoundsKillSwitch(
-      std::string_view name,
-      std::optional<
-          std::vector<::openpit::pretrade::policies::PnlBoundsBrokerBarrier>>
-          brokers = std::nullopt,
-      std::optional<std::vector<
-          ::openpit::pretrade::policies::PnlBoundsAccountBarrierUpdate>>
-          accounts = std::nullopt) const {
-    std::vector<OpenPitPretradePoliciesPnlBoundsBarrier> brokerRaw;
-    if (brokers) {
-      brokerRaw.reserve(brokers->size());
-      for (const auto& barrier : *brokers) {
-        OpenPitPretradePoliciesPnlBoundsBarrier raw{};
-        raw.settlement_asset = barrier.settlementAsset.Raw();
-        raw.lower_bound = ::openpit::pretrade::policies::detail::PnlOptional(
-            barrier.lowerBound);
-        raw.upper_bound = ::openpit::pretrade::policies::detail::PnlOptional(
-            barrier.upperBound);
-        brokerRaw.push_back(raw);
-      }
-    }
-
-    std::vector<OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate>
-        accountRaw;
-    if (accounts) {
-      accountRaw.reserve(accounts->size());
-      for (const auto& barrier : *accounts) {
-        OpenPitPretradePoliciesPnlBoundsAccountBarrierUpdate raw{};
-        raw.account_id = barrier.accountId.Raw();
-        raw.settlement_asset = barrier.settlementAsset.Raw();
-        raw.lower_bound = ::openpit::pretrade::policies::detail::PnlOptional(
-            barrier.lowerBound);
-        raw.upper_bound = ::openpit::pretrade::policies::detail::PnlOptional(
-            barrier.upperBound);
-        accountRaw.push_back(raw);
-      }
-    }
-
-    OpenPitConfigureError* error = nullptr;
-    if (!openpit_engine_configure_pnl_bounds_killswitch(
-            m_engine, ::openpit::MakeStringView(name), brokerRaw.data(),
-            brokerRaw.size(), brokers.has_value(), accountRaw.data(),
-            accountRaw.size(), accounts.has_value(), &error)) {
-      ::openpit::detail::ThrowFromConfigureError(
-          error, "openpit_engine_configure_pnl_bounds_killswitch failed");
-    }
-  }
-
-  void SetAccountPnl(std::string_view name,
-                     ::openpit::param::AccountId accountId,
-                     const ::openpit::param::Asset& settlementAsset,
-                     ::openpit::param::Pnl pnl) const {
-    OpenPitConfigureError* error = nullptr;
-    if (!openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl(
-            m_engine, ::openpit::MakeStringView(name), accountId.Raw(),
-            settlementAsset.Raw(), pnl.Raw(), &error)) {
-      ::openpit::detail::ThrowFromConfigureError(
-          error,
-          "openpit_engine_configure_pnl_bounds_killswitch_set_account_pnl "
-          "failed");
-    }
-  }
-
-  void SpotFunds(
-      std::string_view name,
-      std::optional<std::uint16_t> globalSlippageBps = std::nullopt,
-      std::optional<::openpit::pretrade::policies::SpotFundsPricingSource>
-          pricingSource = std::nullopt,
-      std::optional<
-          std::vector<::openpit::pretrade::policies::SpotFundsOverride>>
-          overrides = std::nullopt) const {
-    std::vector<OpenPitPretradePoliciesSpotFundsOverride> overridesRaw;
-    if (overrides) {
-      overridesRaw.reserve(overrides->size());
-      for (const auto& override : *overrides) {
-        overridesRaw.push_back(override.Raw());
-      }
-    }
-
-    OpenPitConfigureError* error = nullptr;
-    const std::uint8_t source =
-        pricingSource
-            ? static_cast<std::uint8_t>(*pricingSource)
-            : static_cast<std::uint8_t>(
-                  ::openpit::pretrade::policies::SpotFundsPricingSource::Mark);
-    if (!openpit_engine_configure_spot_funds(
-            m_engine, ::openpit::MakeStringView(name),
-            globalSlippageBps.value_or(0), globalSlippageBps.has_value(),
-            source, pricingSource.has_value(), overridesRaw.data(),
-            overridesRaw.size(), overrides.has_value(), &error)) {
-      ::openpit::detail::ThrowFromConfigureError(
-          error, "openpit_engine_configure_spot_funds failed");
-    }
-  }
-
-  /// Retunes the SpotFunds self-computed P&L bounds axis.
-  ///
-  /// The global update uses the explicitly named `Unchanged`, `Clear`, and
-  /// `Set` operations. Optional group/account vectors are PATCH axes:
-  /// `std::nullopt` leaves the axis unchanged and an engaged empty vector
-  /// clears it. Account updates preserve each live accumulated P&L value.
-  void SpotFundsPnlBoundsKillSwitch(
-      std::string_view name,
-      ::openpit::pretrade::policies::SpotFundsPnlBoundsGlobalBarrierUpdate
-          global = ::openpit::pretrade::policies::
-              SpotFundsPnlBoundsGlobalBarrierUpdate::Unchanged(),
-      std::optional<std::vector<
-          ::openpit::pretrade::policies::SpotFundsPnlBoundsAccountGroupBarrier>>
-          accountGroups = std::nullopt,
-      std::optional<std::vector<
-          ::openpit::pretrade::policies::SpotFundsPnlBoundsAccountBarrier>>
-          accounts = std::nullopt) const {
-    OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier globalRaw{};
-    const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier* globalPtr = nullptr;
-    if (global.HasUpdate() && global.Barrier()) {
-      globalRaw = global.Barrier()->Raw();
-      globalPtr = &globalRaw;
-    }
-
-    std::vector<OpenPitPretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier>
-        accountGroupRaw;
-    if (accountGroups) {
-      accountGroupRaw.reserve(accountGroups->size());
-      for (const auto& barrier : *accountGroups) {
-        accountGroupRaw.push_back(barrier.Raw());
-      }
-    }
-
-    std::vector<OpenPitPretradePoliciesSpotFundsPnlBoundsAccountBarrier>
-        accountRaw;
-    if (accounts) {
-      accountRaw.reserve(accounts->size());
-      for (const auto& barrier : *accounts) {
-        accountRaw.push_back(barrier.Raw());
-      }
-    }
-
-    OpenPitConfigureError* error = nullptr;
-    if (!openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
-            m_engine, ::openpit::MakeStringView(name), globalPtr,
-            global.HasUpdate(), accountGroupRaw.data(), accountGroupRaw.size(),
-            accountGroups.has_value(), accountRaw.data(), accountRaw.size(),
-            accounts.has_value(), &error)) {
-      ::openpit::detail::ThrowFromConfigureError(
-          error,
-          "openpit_engine_configure_spot_funds_pnl_bounds_killswitch failed");
-    }
-  }
-
-  /// Replaces one SpotFunds live account P&L accumulator with a numeric value.
-  ///
-  /// This is separate from barrier retuning and re-arms the accumulator after
-  /// a calculation halt. It does not affect any position-level accumulator.
-  /// A value outside the effective bounds returns the account block recorded
-  /// by the engine immediately; otherwise the returned block list is empty.
-  [[nodiscard]] ::openpit::PolicyConfigurationResult SetSpotFundsAccountPnl(
-      std::string_view name, ::openpit::param::AccountId accountId,
-      ::openpit::param::Pnl pnl) const {
-    return SetSpotFundsAccountPnlRaw(
-        name, accountId,
-        ::openpit::accountadjustment::detail::PnlValueRaw(pnl));
-  }
-
-  /// Replaces one SpotFunds live account P&L accumulator with a halt reason.
-  ///
-  /// This is separate from barrier retuning and does not affect any
-  /// position-level accumulator. When an effective account P&L barrier is
-  /// configured, the result reports the block immediately recorded by the
-  /// engine.
-  [[nodiscard]] ::openpit::PolicyConfigurationResult SetSpotFundsAccountPnl(
-      std::string_view name, ::openpit::param::AccountId accountId,
-      ::openpit::accountadjustment::PnlHaltReason reason) const {
-    return SetSpotFundsAccountPnlRaw(
-        name, accountId,
-        ::openpit::accountadjustment::detail::PnlValueRaw(reason));
-  }
-
-  void SpotFundsGlobalLimitMode(
-      std::string_view name,
-      ::openpit::pretrade::policies::SpotFundsLimitMode mode) const {
-    OpenPitConfigureError* error = nullptr;
-    if (!openpit_engine_configure_spot_funds_global_limit_mode(
-            m_engine, ::openpit::MakeStringView(name),
-            static_cast<std::uint8_t>(mode), &error)) {
-      ::openpit::detail::ThrowFromConfigureError(
-          error,
-          "openpit_engine_configure_spot_funds_global_limit_mode failed");
-    }
-  }
-
-  void SpotFundsAccountLimitMode(
-      std::string_view name, ::openpit::param::AccountId accountId,
-      std::optional<::openpit::pretrade::policies::SpotFundsLimitMode> mode)
-      const {
-    OpenPitConfigureError* error = nullptr;
-    if (!openpit_engine_configure_spot_funds_account_limit_mode(
-            m_engine, ::openpit::MakeStringView(name), accountId.Raw(),
-            mode ? static_cast<std::uint8_t>(*mode) : 0, mode.has_value(),
-            &error)) {
-      ::openpit::detail::ThrowFromConfigureError(
-          error,
-          "openpit_engine_configure_spot_funds_account_limit_mode "
-          "failed");
-    }
-  }
-
-  void SpotFundsAccountGroupLimitMode(
-      std::string_view name, ::openpit::param::AccountGroupId accountGroupId,
-      std::optional<::openpit::pretrade::policies::SpotFundsLimitMode> mode)
-      const {
-    OpenPitConfigureError* error = nullptr;
-    if (!openpit_engine_configure_spot_funds_account_group_limit_mode(
-            m_engine, ::openpit::MakeStringView(name), accountGroupId.Raw(),
-            mode ? static_cast<std::uint8_t>(*mode) : 0, mode.has_value(),
-            &error)) {
-      ::openpit::detail::ThrowFromConfigureError(
-          error,
-          "openpit_engine_configure_spot_funds_account_group_limit_mode "
-          "failed");
-    }
-  }
-
- private:
-  [[nodiscard]] ::openpit::PolicyConfigurationResult SetSpotFundsAccountPnlRaw(
-      std::string_view name, ::openpit::param::AccountId accountId,
-      OpenPitPnlState state) const {
-    OpenPitConfigureError* error = nullptr;
-    OpenPitPretradeAccountBlockList* blocks =
-        openpit_engine_configure_spot_funds_set_account_pnl(
-            m_engine, ::openpit::MakeStringView(name), accountId.Raw(), state,
-            &error);
-    if (blocks == nullptr) {
-      ::openpit::detail::ThrowFromConfigureError(
-          error, "openpit_engine_configure_spot_funds_set_account_pnl failed");
-    }
-    ::openpit::PolicyConfigurationResult result;
-    result.accountBlocks = ::openpit::detail::DrainAccountBlockList(blocks);
-    return result;
-  }
-
-  OpenPitEngine* m_engine = nullptr;
-};
-
-}  // namespace openpit
-
-namespace openpit {
-
-[[nodiscard]] inline ::openpit::Configurator Engine::Configure()
-    const noexcept {
-  return ::openpit::Configurator(*this);
-}
-
-}  // namespace openpit
+#include "openpit/pretrade/configurator.hpp"

@@ -19,16 +19,16 @@
 
 #include "spot_loadtest/generator/event.hpp"
 
-#include "openpit/account_id.hpp"
 #include "openpit/accountadjustment/account_adjustment.hpp"
-#include "openpit/accounts.hpp"
+#include "openpit/accounts/accounts.hpp"
 #include "openpit/asyncengine/typed.hpp"
 #include "openpit/engine.hpp"
-#include "openpit/model.hpp"
-#include "openpit/param.hpp"
+#include "openpit/model/model.hpp"
+#include "openpit/param/account_id.hpp"
+#include "openpit/param/param.hpp"
+#include "openpit/pretrade/decision.hpp"
 #include "openpit/pretrade/policies.hpp"
 #include "openpit/pretrade/pre_trade_lock.hpp"
-#include "openpit/reject.hpp"
 
 #include <memory>
 #include <optional>
@@ -85,7 +85,7 @@ BuildOrder(const generator::Event &ev,
   return order;
 }
 
-// An execution-report payload paired with its pre-trade lock. The lock pins the
+// An execution-report payload carrying its pre-trade lock. The lock pins the
 // reserved price under the default policy group so the spot-funds policy
 // resolves a BUY fill's held leg.
 //
@@ -94,7 +94,10 @@ class ReportWithLock {
 public:
   ReportWithLock(::openpit::model::ExecutionReport report,
                  ::openpit::pretrade::PreTradeLock lock)
-      : m_report(std::move(report)), m_lock(std::move(lock)) {}
+      : m_report(std::move(report)) {
+    m_report.fill->lock =
+        std::make_shared<::openpit::pretrade::PreTradeLock>(std::move(lock));
+  }
 
   ReportWithLock(ReportWithLock &&) noexcept = default;
   ReportWithLock &operator=(ReportWithLock &&) noexcept = default;
@@ -106,13 +109,8 @@ public:
     return m_report;
   }
 
-  [[nodiscard]] const ::openpit::pretrade::PreTradeLock &Lock() const noexcept {
-    return m_lock;
-  }
-
 private:
   ::openpit::model::ExecutionReport m_report;
-  ::openpit::pretrade::PreTradeLock m_lock;
 };
 
 // Maps a Settlement event to a full-fill (leaves = 0, is_final = true) report
@@ -168,8 +166,8 @@ BuildAdjustment(const generator::Event &ev,
 
   ::openpit::param::AdjustmentAmount balance =
       ev.FundingIsDelta()
-          ? ::openpit::param::AdjustmentAmount::OfDelta(amount)
-          : ::openpit::param::AdjustmentAmount::OfAbsolute(amount);
+          ? ::openpit::param::AdjustmentAmount::Delta(amount)
+          : ::openpit::param::AdjustmentAmount::Absolute(amount);
 
   ::openpit::accountadjustment::BalanceOperation balanceOp;
   balanceOp.asset = ::openpit::param::Asset(ev.fundingAsset);
@@ -192,7 +190,7 @@ BuildProbeAdjustment() {
   ::openpit::accountadjustment::BalanceOperation balanceOp;
   balanceOp.asset = ::openpit::param::Asset("USD");
   ::openpit::accountadjustment::Amount amountGroup;
-  amountGroup.balance = ::openpit::param::AdjustmentAmount::OfDelta(zero);
+  amountGroup.balance = ::openpit::param::AdjustmentAmount::Delta(zero);
   ::openpit::accountadjustment::AccountAdjustment adj;
   adj.operation =
       ::openpit::accountadjustment::Operation::OfBalance(std::move(balanceOp));
@@ -223,7 +221,7 @@ public:
   // Applies a report carrying a fill lock, so a BUY fill's held leg resolves.
   [[nodiscard]] ::openpit::PostTradeResult
   ApplyExecutionReport(const ReportWithLock &report) const {
-    return m_engine->ApplyExecutionReport(report.Report(), report.Lock());
+    return m_engine->ApplyExecutionReport(report.Report());
   }
 
   template <typename Adjustment>
