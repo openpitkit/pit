@@ -27,6 +27,7 @@ namespace openpit::pretrade {
 using RejectScope = ::openpit::reject::RejectScope;
 using RejectCode = ::openpit::reject::RejectCode;
 using Reject = ::openpit::reject::Reject;
+using ::openpit::reject::IsEvaluationFailure;
 
 /// Rejections produced by one custom-policy callback.
 struct PolicyDecision {

@@ -39,20 +39,20 @@ import (
 )
 
 // Mirrors public Go examples from:
-// - ../pit.wiki/Account-Adjustments.md
-// - ../pit.wiki/Account-Blocking.md
-// - ../pit.wiki/Account-Groups.md
-// - ../pit.wiki/Async-Engine.md
-// - ../pit.wiki/Balance-Reconciliation.md
-// - ../pit.wiki/Domain-Types.md
-// - ../pit.wiki/Dynamic-Policy-Reconfiguration.md
-// - ../pit.wiki/Getting-Started.md
-// - ../pit.wiki/Non-Mutating-Dry-Run.md
-// - ../pit.wiki/Policies.md
-// - ../pit.wiki/Policy-API.md
-// - ../pit.wiki/Pre-trade-Pipeline.md
-// - ../pit.wiki/Pre-Trade-Lock.md
-// - ../pit.wiki/Spot-Funds.md
+// - https://wiki.openpit.dev/Account-Adjustments/
+// - https://wiki.openpit.dev/Account-Blocking/
+// - https://wiki.openpit.dev/Account-Groups/
+// - https://wiki.openpit.dev/Async-Engine/
+// - https://wiki.openpit.dev/Balance-Reconciliation/
+// - https://wiki.openpit.dev/Domain-Types/
+// - https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+// - https://wiki.openpit.dev/Getting-Started/
+// - https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+// - https://wiki.openpit.dev/Policies/
+// - https://wiki.openpit.dev/Policy-API/
+// - https://wiki.openpit.dev/Pre-trade-Pipeline/
+// - https://wiki.openpit.dev/Pre-Trade-Lock/
+// - https://wiki.openpit.dev/Spot-Funds/
 // If this file changes, update every linked documentation snippet.
 
 // --- Policy-API: Custom Order and Execution Report Models ---
@@ -121,7 +121,8 @@ func (*StrategyTagPolicy) ApplyAccountAdjustment(
 	return pretrade.PolicyAccountAdjustmentResult{}, nil
 }
 
-// Used in: pit.wiki/Policy-API.md - Block an Account from an Adjustment Callback.
+// Source: https://wiki.openpit.dev/Policy-API/
+// - Block an Account from an Adjustment Callback.
 type BlockOnAdjustmentPolicy struct{}
 
 func (*BlockOnAdjustmentPolicy) Close() {}
@@ -178,7 +179,7 @@ func (p *BlockOnAdjustmentPolicy) ApplyAccountAdjustment(
 
 // --- Shared helpers ---
 
-// Used in: pit.wiki/Domain-Types.md - Create Validated Values.
+// Source: https://wiki.openpit.dev/Domain-Types/ - Create Validated Values.
 // Keep this example synced with the wiki snippet when constructor behavior changes.
 func TestExampleWikiDomainTypesCreateValidatedValues(t *testing.T) {
 	asset, err := param.NewAsset("AAPL")
@@ -212,7 +213,7 @@ func TestExampleWikiDomainTypesCreateValidatedValues(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Domain-Types.md - Create Validated Values.
+// Source: https://wiki.openpit.dev/Domain-Types/ - Create Validated Values.
 // Keep this example synced with wiki snippets when constructor behavior changes.
 func TestExampleWikiDomainTypesAssetValidationError(t *testing.T) {
 	_, err := param.NewAsset("  ")
@@ -224,7 +225,7 @@ func TestExampleWikiDomainTypesAssetValidationError(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Domain-Types.md - Account Identifiers.
+// Source: https://wiki.openpit.dev/Domain-Types/ - Account Identifiers.
 // Keep this example synced with wiki snippets when constructor behavior changes.
 func TestExampleWikiDomainTypesAccountIDValidationError(t *testing.T) {
 	_, err := param.NewAccountIDFromString("  ")
@@ -311,6 +312,10 @@ func wikiExampleEngine(t *testing.T) *Engine {
 	}
 	t.Cleanup(engine.Stop)
 	return engine
+}
+
+func persistHistoricalOrderMetadata(_ model.Order) error {
+	return nil
 }
 
 // --- Policy-API: Custom Main-Stage Policy ---
@@ -491,7 +496,8 @@ func (*ReserveThenValidatePolicy) ApplyAccountAdjustment(
 
 // --- Tests ---
 
-// Used in: pit.wiki/Pre-trade-Pipeline.md - Handle a Start-Stage Reject
+// Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+// - Handle a Start-Stage Reject
 func TestExampleWikiPipelineStartStageReject(t *testing.T) {
 	engine := wikiExampleEngine(t)
 	order := wikiExampleOrder(t, "100", "185")
@@ -512,8 +518,8 @@ func TestExampleWikiPipelineStartStageReject(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Pre-trade-Pipeline.md - Execute the Main Stage and
-// Finalize the Reservation
+// Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+// - Execute the Main Stage and Finalize the Reservation
 func TestExampleWikiPipelineMainStageFinalize(t *testing.T) {
 	engine := wikiExampleEngine(t)
 	order := wikiExampleOrder(t, "100", "185")
@@ -544,8 +550,10 @@ func TestExampleWikiPipelineMainStageFinalize(t *testing.T) {
 	reservation.Commit()
 }
 
-// Used in: pit.wiki/Pre-trade-Pipeline.md - Shortcut for Start + Main Stages
-// Used in: pit.wiki/Getting-Started.md - Shortcut for Start + Main Stages
+// Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+// - Shortcut for Start + Main Stages
+// Source: https://wiki.openpit.dev/Getting-Started/
+// - Shortcut for Start + Main Stages
 func TestExampleWikiPipelineShortcutStartAndMain(t *testing.T) {
 	engine := wikiExampleEngine(t)
 	order := wikiExampleOrder(t, "100", "185")
@@ -567,7 +575,52 @@ func TestExampleWikiPipelineShortcutStartAndMain(t *testing.T) {
 	reservation.Commit()
 }
 
-// Used in: pit.wiki/Pre-trade-Pipeline.md - Apply Post-Trade Feedback
+// Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+// - Apply a Historical Order with Drop Copy
+func TestExampleWikiPipelineApplyDropCopy(t *testing.T) {
+	applied := false
+	defer func() {
+		if !applied {
+			t.Fatal("drop copy example did not apply the order")
+		}
+	}()
+
+	engine := wikiExampleEngine(t)
+	order := wikiExampleOrder(t, "100", "185")
+
+	operation, rejects, err := engine.ApplyDropCopy(order)
+	if err != nil {
+		panic(err)
+	}
+	if rejects != nil {
+		for _, r := range rejects {
+			fmt.Printf(
+				"could not apply historical order: %s [%d]: %s\n",
+				r.Policy,
+				r.Code,
+				r.Reason,
+			)
+		}
+		return
+	}
+	defer operation.Close()
+
+	blocked, err := operation.IsAccountBlocked()
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("applied; account blocked: %t\n", blocked)
+
+	if err := persistHistoricalOrderMetadata(order); err != nil {
+		operation.Rollback()
+		panic(err)
+	}
+	operation.Commit()
+	applied = true
+}
+
+// Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+// - Apply Post-Trade Feedback
 func TestExampleWikiPipelineApplyPostTrade(t *testing.T) {
 	engine := wikiExampleEngine(t)
 	report := wikiExampleReport(t, "-50", "3.4")
@@ -587,7 +640,8 @@ func TestExampleWikiPipelineApplyPostTrade(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Policy-API.md - Example: Custom Main-Stage Policy
+// Source: https://wiki.openpit.dev/Policy-API/
+// - Example: Custom Main-Stage Policy
 func TestExampleWikiPolicyNotionalCap(t *testing.T) {
 	maxNotional, err := param.NewVolumeFromString("1000")
 	if err != nil {
@@ -648,7 +702,8 @@ func TestExampleWikiPolicyNotionalCap(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Policy-API.md - Example: Rollback Safety Pattern
+// Source: https://wiki.openpit.dev/Policy-API/
+// - Example: Rollback Safety Pattern
 func TestExampleWikiPolicyRollbackSafety(t *testing.T) {
 	limit, err := param.NewVolumeFromString("50")
 	if err != nil {
@@ -696,7 +751,7 @@ func TestExampleWikiPolicyRollbackSafety(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Getting-Started.md - Build an Engine
+// Source: https://wiki.openpit.dev/Getting-Started/ - Build an Engine
 func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 	usd, err := param.NewAsset("USD")
 	if err != nil {
@@ -823,7 +878,8 @@ func TestExampleWikiGettingStartedBuildEngine(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Getting-Started.md - Run an Order Through the Engine
+// Source: https://wiki.openpit.dev/Getting-Started/
+// - Run an Order Through the Engine
 func TestExampleWikiGettingStartedRunOrder(t *testing.T) {
 	engine := wikiExampleEngine(t)
 	order := wikiExampleOrder(t, "100", "185")
@@ -860,7 +916,8 @@ func TestExampleWikiGettingStartedRunOrder(t *testing.T) {
 	reservation.Commit()
 }
 
-// Used in: pit.wiki/Getting-Started.md - Apply Post-Trade Feedback
+// Source: https://wiki.openpit.dev/Getting-Started/
+// - Apply Post-Trade Feedback
 func TestExampleWikiGettingStartedApplyPostTrade(t *testing.T) {
 	engine := wikiExampleEngine(t)
 	report := wikiExampleReport(t, "-50", "3.4")
@@ -880,7 +937,7 @@ func TestExampleWikiGettingStartedApplyPostTrade(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Policy-API.md - Go Custom Models
+// Source: https://wiki.openpit.dev/Policy-API/ - Go Custom Models
 func TestExampleWikiCustomGoModels(t *testing.T) {
 	engine, err := NewClientPreTradeEngineBuilder[StrategyOrder, StrategyReport]().
 		FullSync().
@@ -968,7 +1025,7 @@ func TestExampleWikiPolicyBlocksAccountFromAdjustment(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Policies.md - SpotFundsPolicy
+// Source: https://wiki.openpit.dev/Policies/ - SpotFundsPolicy
 func TestExampleWikiPoliciesSpotFunds(t *testing.T) {
 	engine, err := NewEngineBuilder().
 		NoSync().
@@ -980,7 +1037,7 @@ func TestExampleWikiPoliciesSpotFunds(t *testing.T) {
 	defer engine.Stop()
 }
 
-// Used in: pit.wiki/Policies.md - OrderValidationPolicy
+// Source: https://wiki.openpit.dev/Policies/ - OrderValidationPolicy
 func TestExampleWikiPoliciesOrderValidation(t *testing.T) {
 	engine, err := NewEngineBuilder().
 		NoSync().
@@ -1011,7 +1068,7 @@ func TestExampleWikiPoliciesOrderValidation(t *testing.T) {
 	reservation.CommitAndClose()
 }
 
-// Used in: pit.wiki/Policies.md - RateLimitPolicy
+// Source: https://wiki.openpit.dev/Policies/ - RateLimitPolicy
 func TestExampleWikiPoliciesRateLimit(t *testing.T) {
 	engine, err := NewEngineBuilder().
 		NoSync().
@@ -1050,7 +1107,7 @@ func TestExampleWikiPoliciesRateLimit(t *testing.T) {
 	reservation.CommitAndClose()
 }
 
-// Used in: pit.wiki/Policies.md - OrderSizeLimitPolicy
+// Source: https://wiki.openpit.dev/Policies/ - OrderSizeLimitPolicy
 func TestExampleWikiPoliciesOrderSizeLimit(t *testing.T) {
 	usd, err := param.NewAsset("USD")
 	if err != nil {
@@ -1111,7 +1168,7 @@ func TestExampleWikiPoliciesOrderSizeLimit(t *testing.T) {
 	reservation.CommitAndClose()
 }
 
-// Used in: pit.wiki/Policies.md - PnlBoundsKillSwitchPolicy
+// Source: https://wiki.openpit.dev/Policies/ - PnlBoundsKillSwitchPolicy
 func TestExampleWikiPoliciesPnlBoundsKillSwitch(t *testing.T) {
 	usd, err := param.NewAsset("USD")
 	if err != nil {
@@ -1162,7 +1219,7 @@ func TestExampleWikiPoliciesPnlBoundsKillSwitch(t *testing.T) {
 	reservation.CommitAndClose()
 }
 
-// Used in: pit.wiki/Policies.md - Synchronization
+// Source: https://wiki.openpit.dev/Policies/ - Synchronization
 //
 // The const/type/worker-pool/dispatch user code mirrors the wiki snippet
 // verbatim. The rest is test harness: the AccountSync engine, the fnv32
@@ -1194,7 +1251,8 @@ func TestExampleWikiPoliciesAccountSyncShardedDispatch(t *testing.T) {
 		return hash
 	}
 
-	// --- Begin wiki snippet (pit.wiki/Policies.md - Synchronization). ---
+	// --- Begin wiki snippet (https://wiki.openpit.dev/Policies/
+	// - Synchronization). ---
 	const shards = 256
 
 	type task struct {
@@ -1288,7 +1346,7 @@ func wikiAccountSyncOrder(t *testing.T, accountID uint64) model.Order {
 	return order
 }
 
-// Used in: pit.wiki/Domain-Types.md - Work With Directional Types
+// Source: https://wiki.openpit.dev/Domain-Types/ - Work With Directional Types
 func TestExampleWikiDomainTypesDirectionalTypes(t *testing.T) {
 	//nolint:staticcheck // explicit types mirror the published snippet verbatim
 	var side param.Side = param.SideBuy
@@ -1303,7 +1361,7 @@ func TestExampleWikiDomainTypesDirectionalTypes(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Domain-Types.md - Create Leverage
+// Source: https://wiki.openpit.dev/Domain-Types/ - Create Leverage
 func TestExampleWikiDomainTypesLeverage(t *testing.T) {
 	fromMultiplier := param.NewLeverageFromUint16(100)
 	fromFloat := param.NewLeverageFromFloat32(100.5)
@@ -1316,7 +1374,7 @@ func TestExampleWikiDomainTypesLeverage(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Account-Adjustments.md - Examples → Go
+// Source: https://wiki.openpit.dev/Account-Adjustments/ - Examples → Go
 func TestExampleWikiAccountAdjustments(t *testing.T) {
 	maxCumulative, err := param.NewPositionSizeFromString("1000000")
 	if err != nil {
@@ -1409,7 +1467,8 @@ func TestExampleWikiAccountAdjustments(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Account-Adjustments.md - Example: Balance Limit Policy → Go
+// Source: https://wiki.openpit.dev/Account-Adjustments/
+// - Example: Balance Limit Policy → Go
 func TestExampleWikiAccountAdjustmentsBalanceLimitPolicy(t *testing.T) {
 	maxCumulative, err := param.NewPositionSizeFromString("100")
 	if err != nil {
@@ -1622,7 +1681,7 @@ func wikiSeedBalanceAdjustment(t *testing.T, amount string) model.AccountAdjustm
 	return adj
 }
 
-// Used in: pit.wiki/Spot-Funds.md - Limit-Only Mode (Default)
+// Source: https://wiki.openpit.dev/Spot-Funds/ - Limit-Only Mode (Default)
 func TestExampleWikiSpotFundsLimitOnly(t *testing.T) {
 	// Limit-only spot funds: register first in the policy list.
 	engine, err := NewEngineBuilder().
@@ -1661,7 +1720,7 @@ func TestExampleWikiSpotFundsLimitOnly(t *testing.T) {
 	reservation.CommitAndClose()
 }
 
-// Used in: pit.wiki/Spot-Funds.md - Market Orders
+// Source: https://wiki.openpit.dev/Spot-Funds/ - Market Orders
 func TestExampleWikiSpotFundsMarketOrders(t *testing.T) {
 	// Obtain the market-data builder from the engine builder so the sync mode
 	// is derived automatically.
@@ -1741,7 +1800,8 @@ func TestExampleWikiSpotFundsMarketOrders(t *testing.T) {
 	reservation.CommitAndClose()
 }
 
-// Used in: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch / Configuring Barriers
+// Source: https://wiki.openpit.dev/Spot-Funds/
+// - Self-Computed PnL Kill Switch / Configuring Barriers
 func TestExampleWikiSpotFundsPnlKillSwitchBuilder(t *testing.T) {
 	account := param.NewAccountIDFromUint64(99224416)
 	lower, _ := param.NewPnlFromString("-1000")
@@ -1770,7 +1830,8 @@ func TestExampleWikiSpotFundsPnlKillSwitchBuilder(t *testing.T) {
 	defer engine.Stop()
 }
 
-// Used in: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch / Runtime Reconfiguration
+// Source: https://wiki.openpit.dev/Spot-Funds/
+// - Self-Computed PnL Kill Switch / Runtime Reconfiguration
 func TestExampleWikiSpotFundsPnlKillSwitchReconfigure(t *testing.T) {
 	// Harness scaffolding: a spot-funds engine with a per-account barrier the
 	// snippet then retunes and force-sets.
@@ -1824,7 +1885,8 @@ func TestExampleWikiSpotFundsPnlKillSwitchReconfigure(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Pre-Trade-Lock.md - Persisting and Restoring a Lock
+// Source: https://wiki.openpit.dev/Pre-Trade-Lock/
+// - Persisting and Restoring a Lock
 func TestExampleWikiPreTradeLockPersistence(t *testing.T) {
 	engine, err := NewEngineBuilder().
 		FullSync().
@@ -1880,7 +1942,10 @@ func TestExampleWikiPreTradeLockPersistence(t *testing.T) {
 	}
 
 	// Persist the lock with its built-in JSON serialization before committing.
-	lock := reservation.Lock()
+	lock, err := reservation.Lock()
+	if err != nil {
+		t.Fatalf("Reservation.Lock() error = %v", err)
+	}
 	payload, err := json.Marshal(lock)
 	if err != nil {
 		t.Fatalf("json.Marshal(lock) error = %v", err)
@@ -1919,7 +1984,8 @@ func TestExampleWikiPreTradeLockPersistence(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Balance-Reconciliation.md - Delta Versus Absolute
+// Source: https://wiki.openpit.dev/Balance-Reconciliation/
+// - Delta Versus Absolute
 func TestExampleWikiBalanceReconciliationDeltaVersusAbsolute(t *testing.T) {
 	engine, err := NewEngineBuilder().
 		FullSync().
@@ -1999,11 +2065,7 @@ func TestExampleWikiBalanceReconciliationDeltaVersusAbsolute(t *testing.T) {
 	}
 }
 
-// --- Async-Engine.md mirror ---
-
-// TestExampleWikiAsyncEngine mirrors the public example in
-// ../pit.wiki/Async-Engine.md ("Example" section). If this test changes,
-// update the wiki snippet to match (and vice versa).
+// Source: https://wiki.openpit.dev/Async-Engine/ - Example
 func TestExampleWikiAsyncEngine(t *testing.T) {
 	// Build an AccountSync engine and wrap it into an async facade in one
 	// chain. BuildAsync is only available on the AccountSync builder; for
@@ -2100,7 +2162,7 @@ func TestExampleWikiAsyncEngine(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Account-Blocking.md - Examples → Go
+// Source: https://wiki.openpit.dev/Account-Blocking/ - Examples → Go
 func TestExampleWikiAccountBlockUnblock(t *testing.T) {
 	engine, err := NewEngineBuilder().
 		FullSync().
@@ -2132,7 +2194,7 @@ func TestExampleWikiAccountBlockUnblock(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Account-Groups.md - Examples → Go
+// Source: https://wiki.openpit.dev/Account-Groups/ - Examples → Go
 func TestExampleWikiAccountGroupsRegisterAndRead(t *testing.T) {
 	engine, err := NewEngineBuilder().
 		FullSync().
@@ -2172,7 +2234,8 @@ func TestExampleWikiAccountGroupsRegisterAndRead(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Retune a Built-in Policy
+// Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+// - Retune a Built-in Policy
 // This mirror is intentionally wider than the wiki snippet: it adds the test
 // harness (t.Fatalf assertions, wikiExampleOrder) so the example runs. The
 // snippet shows idiomatic return-error style; the mirror uses t.Fatalf for the
@@ -2308,7 +2371,8 @@ func (*MyCountingPolicy) PerformPreTradeCheckDryRun(
 	return nil
 }
 
-// Used in: pit.wiki/Non-Mutating-Dry-Run.md - Read the Dry-Run Verdict
+// Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+// - Read the Dry-Run Verdict
 // This mirror is intentionally wider than the wiki snippet: it adds the test
 // harness (t.Fatalf assertions, wikiExampleOrder) so the example runs. The
 // snippet shows idiomatic return-error style; the mirror uses t.Fatalf for the
@@ -2331,10 +2395,18 @@ func TestExampleWikiDryRunVerdict(t *testing.T) {
 	}
 	defer report.Close()
 
-	if report.IsPass() {
+	pass, err := report.IsPass()
+	if err != nil {
+		t.Fatalf("IsPass() error = %v", err)
+	}
+	if pass {
 		fmt.Println("order would be admitted")
 	} else {
-		for _, r := range report.Rejects() {
+		rejects, err := report.Rejects()
+		if err != nil {
+			t.Fatalf("Rejects() error = %v", err)
+		}
+		for _, r := range rejects {
 			t.Logf(
 				"would reject by %s [%d]: %s (%s)",
 				r.Policy,
@@ -2343,13 +2415,12 @@ func TestExampleWikiDryRunVerdict(t *testing.T) {
 				r.Details,
 			)
 		}
-	}
-	if !report.IsPass() {
-		t.Fatalf("expected dry-run to pass, got rejects: %v", report.Rejects())
+		t.Fatal("expected dry-run to pass")
 	}
 }
 
-// Used in: pit.wiki/Non-Mutating-Dry-Run.md - Use the Dry-Run Before a Real Call
+// Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+// - Use the Dry-Run Before a Real Call
 // This mirror is intentionally wider than the wiki snippet: it adds the test
 // harness (t.Fatalf assertions, wikiExampleOrder) so the example runs. The
 // snippet shows idiomatic return-error style; the mirror uses t.Fatalf for the
@@ -2373,7 +2444,11 @@ func TestExampleWikiDryRunBeforeRealCall(t *testing.T) {
 	}
 	defer probe.Close()
 
-	if !probe.IsPass() {
+	pass, err := probe.IsPass()
+	if err != nil {
+		t.Fatalf("IsPass() error = %v", err)
+	}
+	if !pass {
 		return // would have been rejected - skip the real call
 	}
 
@@ -2389,7 +2464,8 @@ func TestExampleWikiDryRunBeforeRealCall(t *testing.T) {
 	reservation.Commit()
 }
 
-// Used in: pit.wiki/Non-Mutating-Dry-Run.md - Read-Only Custom Start-Stage Hook
+// Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+// - Read-Only Custom Start-Stage Hook
 // This mirror is intentionally wider than the wiki snippet: it defines the
 // full MyCountingPolicy type above (the snippet shows only the hook methods)
 // and adds assertions proving the dry-run does not increment the counter.
@@ -2414,7 +2490,11 @@ func TestExampleWikiDryRunCustomPolicyHook(t *testing.T) {
 	}
 	defer probe.Close()
 
-	if !probe.IsPass() {
+	pass, err := probe.IsPass()
+	if err != nil {
+		t.Fatalf("IsPass() error = %v", err)
+	}
+	if !pass {
 		t.Fatalf("dry-run unexpected reject")
 	}
 	if policy.count != 0 {
@@ -2435,7 +2515,8 @@ func TestExampleWikiDryRunCustomPolicyHook(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Spot Funds: Global Limit Mode
+// Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+// - Spot Funds: Global Limit Mode
 // This mirror is intentionally wider than the wiki snippet: it adds the test
 // harness (t.Fatalf assertions, wikiExampleOrder and wikiSeedBalanceAdjustment)
 // so the example runs. Keep the shared user-code flow in sync with the wiki.
@@ -2509,7 +2590,8 @@ func TestExampleWikiSpotFundsGlobalLimitMode(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Spot Funds: Per-Account Limit Mode
+// Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+// - Spot Funds: Per-Account Limit Mode
 // This mirror is intentionally wider than the wiki snippet: it adds the test
 // harness (t.Fatalf assertions, wikiExampleOrder and wikiSeedBalanceAdjustment)
 // so the example runs. Keep the shared user-code flow in sync with the wiki.
@@ -2585,7 +2667,8 @@ func TestExampleWikiSpotFundsPerAccountLimitMode(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Force-set Accumulated P&L
+// Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+// - Force-set Accumulated P&L
 // This mirror is intentionally wider than the wiki snippet: it adds the test
 // harness (t.Fatalf assertions, wikiExampleOrder and the account it carries) so
 // the example runs. The snippet shows idiomatic return-error style; the mirror

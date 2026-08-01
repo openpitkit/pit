@@ -18,14 +18,26 @@
 package pretrade
 
 import (
+	"errors"
+
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/reject"
 )
 
+// ErrDryRunReportClosed is returned by DryRunReport accessors once the report
+// has been released.
+var ErrDryRunReportClosed = errors.New("pre-trade dry-run report already closed")
+
 // DryRunReport holds the result of a non-mutating pre-trade dry-run.
 //
-// The caller takes ownership and must release it with Close when done.
+// Lifecycle: the caller takes ownership and must release it with Close when
+// done. Nothing releases it on the caller's behalf - there is no finalizer, so
+// a report dropped without Close leaks its native handle.
+//
+// Concurrency: callers must serialize methods on the same report. Every
+// accessor reports ErrDryRunReportClosed once Close releases the handle,
+// because the zero value it would otherwise return reads as a verdict.
 type DryRunReport struct {
 	handle native.PretradePreTradeDryRunReport
 }
@@ -48,14 +60,13 @@ func (r *DryRunReport) Close() {
 
 // IsPass reports whether the order would have passed every pre-trade stage.
 //
-// Panics if the report is already closed.
-// The panic is deliberate fail-fast behavior: continuing with a closed
-// native handle would hide wrong behavior.
-func (r *DryRunReport) IsPass() bool {
+// Returns ErrDryRunReportClosed after Close: a fabricated verdict either way
+// would be acted on as if the dry-run had produced it.
+func (r *DryRunReport) IsPass() (bool, error) {
 	if r.handle == nil {
-		panic("pre-trade dry-run report already closed")
+		return false, ErrDryRunReportClosed
 	}
-	return native.PretradePreTradeDryRunReportIsPass(r.handle)
+	return native.PretradePreTradeDryRunReportIsPass(r.handle), nil
 }
 
 // Rejects returns the rejects the order would have collected.
@@ -63,25 +74,24 @@ func (r *DryRunReport) IsPass() bool {
 // Returns nil when the order would have passed. The returned slice is
 // independent of the report lifetime.
 //
-// Panics if the report is already closed.
-// The panic is deliberate fail-fast behavior: continuing with a closed
-// native handle would hide wrong behavior.
-func (r *DryRunReport) Rejects() []reject.Reject {
+// Returns ErrDryRunReportClosed after Close: an empty slice would claim no
+// policy objected.
+func (r *DryRunReport) Rejects() ([]reject.Reject, error) {
 	if r.handle == nil {
-		panic("pre-trade dry-run report already closed")
+		return nil, ErrDryRunReportClosed
 	}
 	handle := native.PretradePreTradeDryRunReportGetRejects(r.handle)
 	count := native.PretradeRejectListLen(handle)
 	if count == 0 {
 		native.DestroyPretradeRejectList(handle)
-		return nil
+		return nil, nil
 	}
 	result := make([]reject.Reject, count)
 	for i := 0; i < count; i++ {
 		result[i] = reject.NewFromHandle(native.PretradeRejectListGet(handle, i))
 	}
 	native.DestroyPretradeRejectList(handle)
-	return result
+	return result, nil
 }
 
 // Lock returns a snapshot of the lock the main stage would have produced.
@@ -89,51 +99,48 @@ func (r *DryRunReport) Rejects() []reject.Reject {
 // The lock is empty when the start stage would have rejected (the main stage
 // never runs in that case) or when no policy locks a price.
 //
-// Panics if the report is already closed.
-// The panic is deliberate fail-fast behavior: continuing with a closed
-// native handle would hide wrong behavior.
-func (r *DryRunReport) Lock() Lock {
+// Returns ErrDryRunReportClosed after Close: Bytes and Equal read the zero Lock
+// without decoding it, so it would pass for the lock the main stage produced.
+func (r *DryRunReport) Lock() (Lock, error) {
 	if r.handle == nil {
-		panic("pre-trade dry-run report already closed")
+		return Lock{}, ErrDryRunReportClosed
 	}
 	handle := native.PretradePreTradeDryRunReportGetLock(r.handle)
 	result := newLockFromHandle(handle)
 	native.DestroyPretradePreTradeLock(handle)
-	return result
+	return result, nil
 }
 
 // AccountAdjustments returns the account-adjustment outcomes the main stage
 // would have produced. Returns nil when none were produced.
 //
-// Panics if the report is already closed.
-// The panic is deliberate fail-fast behavior: continuing with a closed
-// native handle would hide wrong behavior.
-func (r *DryRunReport) AccountAdjustments() []accountadjustment.Outcome {
+// Returns ErrDryRunReportClosed after Close: an empty slice would claim the
+// order would move no funds.
+func (r *DryRunReport) AccountAdjustments() ([]accountadjustment.Outcome, error) {
 	if r.handle == nil {
-		panic("pre-trade dry-run report already closed")
+		return nil, ErrDryRunReportClosed
 	}
 	handle := native.PretradePreTradeDryRunReportGetAccountAdjustments(r.handle)
 	result := accountadjustment.NewListFromHandle(handle)
 	native.DestroyAccountAdjustmentOutcomeList(handle)
-	return result
+	return result, nil
 }
 
 // AccountBlock returns the account block an account-scope reject would have
 // latched. Returns nil when no account-scope reject would have latched a
 // block.
 //
-// Panics if the report is already closed.
-// The panic is deliberate fail-fast behavior: continuing with a closed
-// native handle would hide wrong behavior.
-func (r *DryRunReport) AccountBlock() *reject.AccountBlock {
+// Returns ErrDryRunReportClosed after Close: a nil block would claim the order
+// would leave the account tradable.
+func (r *DryRunReport) AccountBlock() (*reject.AccountBlock, error) {
 	if r.handle == nil {
-		panic("pre-trade dry-run report already closed")
+		return nil, ErrDryRunReportClosed
 	}
 	list := native.PretradePreTradeDryRunReportGetAccountBlock(r.handle)
 	defer native.DestroyPretradeAccountBlockList(list)
 	if native.PretradeAccountBlockListLen(list) == 0 {
-		return nil
+		return nil, nil //nolint:nilnil // a nil block is the documented "none latched" answer, not a missing value
 	}
 	block := reject.NewAccountBlockFromHandle(native.PretradeAccountBlockListGet(list, 0))
-	return &block
+	return &block, nil
 }

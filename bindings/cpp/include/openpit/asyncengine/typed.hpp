@@ -30,8 +30,10 @@
 
 #include <chrono>
 #include <cstddef>
+#include <exception>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -53,20 +55,22 @@
 //
 // ACCOUNT PINNING. Every named method routes through the per-account queue
 // keyed by the order/report account id (read without mutating the caller's
-// payload), or by the supplied id for adjustments and admin ops.
+// payload), or by the supplied id for adjustments and admin ops. An order
+// whose account id cannot be read is refused up front, drop copy included.
 // `StartPreTrade` and `ExecutePreTrade` yield an `AsyncRequest` /
-// `AsyncReservation` whose follow-up calls (`Execute`, `Commit`, `Rollback`,
-// `Close`, ...) re-enter the same per-account queue, preserving the AccountSync
-// invariant across the start->execute->finalize boundary.
+// `AsyncReservation`, while `ApplyDropCopy` yields an
+// `AsyncDropCopyOperation`. Their follow-up calls (`Execute`, `Commit`,
+// `Rollback`, `Close`, ...) re-enter the same per-account queue, preserving the
+// AccountSync invariant across the start->execute->finalize boundary.
 //
 // RESULT SHAPES. The futures carry the same values the synchronous engine
-// returns. Because `pretrade::Request`, `pretrade::Reservation`, and
-// `accountadjustment::BatchError` are move-only RAII handles while the
-// follow-up wrappers are observed from a shared state, the accepted-channel
-// value is held by `shared_ptr`: the worker that resolves the future and the
-// consumer that drives the follow-up calls genuinely share ownership of one
-// wrapper, so `shared_ptr` is the correct model rather than a copy or a raw
-// move.
+// returns. Because `pretrade::Request`, `pretrade::Reservation`,
+// `pretrade::DropCopyOperation`, and `accountadjustment::BatchError` are
+// move-only RAII handles while the follow-up wrappers are observed from a
+// shared state, the accepted-channel value is held by `shared_ptr`: the worker
+// that resolves the future and the consumer that drives the follow-up calls
+// genuinely share ownership of one wrapper, so `shared_ptr` is the correct
+// model rather than a copy or a raw move.
 //
 // ERROR MODEL. A missing account id resolves the future with the value
 // `ErrorCode::MissingAccountId`. Stop/limit/cancel are the same value-typed
@@ -103,9 +107,9 @@ class EngineAdapter {
     return m_engine->ExecutePreTrade(order);
   }
 
-  [[nodiscard]] ::openpit::pretrade::Reservation ExecutePreTradeDropCopy(
+  [[nodiscard]] ::openpit::pretrade::DropCopyResult ApplyDropCopy(
       const ::openpit::model::Order& order) const {
-    return m_engine->ExecutePreTradeDropCopy(order);
+    return m_engine->ApplyDropCopy(order);
   }
 
   [[nodiscard]] ::openpit::PostTradeResult ApplyExecutionReport(
@@ -139,6 +143,8 @@ template <typename Driver>
 class AsyncRequest;
 template <typename Driver>
 class AsyncReservation;
+template <typename Driver>
+class AsyncDropCopyOperation;
 
 /// \brief Result value for an async start-stage call.
 //
@@ -166,6 +172,20 @@ struct ExecuteOutcome {
 
   [[nodiscard]] bool Passed() const noexcept {
     return static_cast<bool>(reservation);
+  }
+};
+
+/// \brief Result value for an async drop-copy call.
+//
+// Applied-or-rejected drop-copy outcome. On accept `operation` is non-null; on
+// a fatal evaluation failure `operation` is null and `rejects` is populated.
+template <typename Driver>
+struct DropCopyOutcome {
+  std::shared_ptr<AsyncDropCopyOperation<Driver>> operation;
+  std::vector<::openpit::pretrade::Reject> rejects;
+
+  [[nodiscard]] bool Passed() const noexcept {
+    return static_cast<bool>(operation);
   }
 };
 
@@ -216,6 +236,35 @@ namespace detail {
                "report");
 }
 
+// Hands a failed submit's handle release to the account lane and deliberately
+// drops the future that tracks it. The error the caller is already waiting for
+// is the actionable outcome, and a cleanup failure must never replace or mask
+// it; cleanup itself reports through the future the caller does observe (see
+// `CompleteMandatoryCleanup`), so nothing is lost by not observing this one.
+// Naming the discard keeps that decision explicit at every call site.
+template <typename Driver>
+void DetachMandatoryCleanup(AsyncEngine<Driver>& engine,
+                            ::openpit::param::AccountId accountId,
+                            std::function<void()> cleanup) {
+  (void)engine.ScheduleMandatoryCleanup(accountId, std::move(cleanup));
+}
+
+template <typename PromiseType, typename Cleanup>
+void CompleteMandatoryCleanup(PromiseType promise, Error originalError,
+                              Cleanup cleanup) {
+  try {
+    cleanup();
+  } catch (const std::exception& ex) {
+    promise.Fail(Error(ErrorCode::TaskFailed, ex.what()));
+    return;
+  } catch (...) {
+    promise.Fail(Error(ErrorCode::TaskFailed,
+                       "mandatory cleanup threw a non-standard exception"));
+    return;
+  }
+  promise.Fail(std::move(originalError));
+}
+
 }  // namespace detail
 
 //------------------------------------------------------------------------------
@@ -249,18 +298,34 @@ class AsyncReservation
     return m_accountId;
   }
 
-  // Enqueues Commit; the reservation is not closed. Pair with Close.
+  // Enqueues Commit; the reservation is not closed. Pair with Close. A throwing
+  // mutation commit callback fails this future with `ErrorCode::TaskFailed` and
+  // arms the engine kill switch, blocking every account; see
+  // `pretrade::Reservation` for that contract.
+  //
+  // A hard stop aborts this task and fails the future with
+  // `ErrorCode::Stopped` without releasing the underlying reservation, so the
+  // caller must still `Close` it (or use `CommitAndClose`) to avoid leaking the
+  // native handle.
   [[nodiscard]] Future<std::monostate> Commit(
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
-    return Run([](::openpit::pretrade::Reservation& r) { r.Commit(); },
-               timeout);
+    return Run([](::openpit::pretrade::Reservation& r) { r.Commit(); }, timeout,
+               /*abortCloses=*/false);
   }
 
-  // Enqueues Rollback; the reservation is not closed. Pair with Close.
+  // Enqueues Rollback; the reservation is not closed. Pair with Close. A
+  // throwing mutation rollback callback fails this future with
+  // `ErrorCode::TaskFailed` and arms the engine kill switch, blocking every
+  // account; see `pretrade::Reservation` for that contract.
+  //
+  // A hard stop aborts this task and fails the future with
+  // `ErrorCode::Stopped` without releasing the underlying reservation, so the
+  // caller must still `Close` it (or use `RollbackAndClose`) to avoid leaking
+  // the native handle.
   [[nodiscard]] Future<std::monostate> Rollback(
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
     return Run([](::openpit::pretrade::Reservation& r) { r.Rollback(); },
-               timeout);
+               timeout, /*abortCloses=*/false);
   }
 
   // Enqueues Commit followed by releasing the reservation handle.
@@ -271,7 +336,7 @@ class AsyncReservation
           r.Commit();
           r = ::openpit::pretrade::Reservation();
         },
-        timeout);
+        timeout, /*abortCloses=*/true);
   }
 
   // Enqueues Rollback followed by releasing the reservation handle.
@@ -282,7 +347,7 @@ class AsyncReservation
           r.Rollback();
           r = ::openpit::pretrade::Reservation();
         },
-        timeout);
+        timeout, /*abortCloses=*/true);
   }
 
   // Enqueues a plain release: destroying the reservation rolls back any
@@ -293,22 +358,157 @@ class AsyncReservation
         [](::openpit::pretrade::Reservation& r) {
           r = ::openpit::pretrade::Reservation();
         },
-        timeout);
+        timeout, /*abortCloses=*/true);
   }
 
  private:
   // Routes `op(reservation)` through the account queue. The task pins this
   // wrapper alive via `shared_from_this`, so dropping the caller's handle while
-  // the task is queued does not dangle. On an aborted task the generic `Submit`
-  // resolves the future with `Stopped`; the reservation is then released by
-  // this wrapper's destruction, so the native handle never leaks.
+  // the task is queued does not dangle. Closing tasks transfer submit failures
+  // and hard-stop aborts to the account lane before releasing the reservation.
   template <typename Op>
   [[nodiscard]] Future<std::monostate> Run(Op op,
-                                           std::chrono::nanoseconds timeout);
+                                           std::chrono::nanoseconds timeout,
+                                           bool abortCloses);
 
   ::openpit::pretrade::Reservation m_reservation;
   AsyncEngine<Driver>* m_engine;
   ::openpit::param::AccountId m_accountId;
+  mutable std::mutex m_mutex;
+};
+
+//------------------------------------------------------------------------------
+// AsyncDropCopyOperation
+
+/// \brief Async wrapper around an applied drop-copy operation.
+//
+// Wraps the operation lifecycle after `ApplyDropCopy`, so that finalization
+// re-enters the same per-account queue as the call that produced it. Obtained
+// from a `DropCopyOutcome`; held by `shared_ptr`.
+//
+// Finalization is idempotent. Snapshot accessors serialize with queued
+// finalization on this wrapper. The void futures resolve with `std::monostate`
+// on success.
+template <typename Driver>
+class AsyncDropCopyOperation
+    : public std::enable_shared_from_this<AsyncDropCopyOperation<Driver>> {
+ public:
+  AsyncDropCopyOperation(::openpit::pretrade::DropCopyOperation operation,
+                         AsyncEngine<Driver>* engine,
+                         ::openpit::param::AccountId accountId)
+      : m_operation(std::move(operation)),
+        m_engine(engine),
+        m_accountId(accountId) {}
+
+  [[nodiscard]] ::openpit::param::AccountId AccountId() const noexcept {
+    return m_accountId;
+  }
+
+  [[nodiscard]] ::openpit::pretrade::PreTradeLock Lock() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_operation.Lock();
+  }
+
+  [[nodiscard]] std::vector<::openpit::accountadjustment::Outcome>
+  AccountAdjustments() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_operation.AccountAdjustments();
+  }
+
+  [[nodiscard]] std::optional<::openpit::accounts::AccountBlock> AccountBlock()
+      const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_operation.AccountBlock();
+  }
+
+  [[nodiscard]] bool IsAccountBlocked() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_operation.IsAccountBlocked();
+  }
+
+  // Enqueues Commit; the operation is not closed. Pair with Close. A throwing
+  // mutation commit callback fails this future with `ErrorCode::TaskFailed` and
+  // arms the engine kill switch, blocking every account; see
+  // `pretrade::DropCopyOperation` for that contract.
+  //
+  // A hard stop aborts this task and fails the future with
+  // `ErrorCode::Stopped` without releasing the underlying operation, so the
+  // caller must still `Close` it (or use `CommitAndClose`) to avoid leaking the
+  // native handle.
+  [[nodiscard]] Future<std::monostate> Commit(
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return Run(
+        [](::openpit::pretrade::DropCopyOperation& operation) {
+          operation.Commit();
+        },
+        timeout, /*abortCloses=*/false);
+  }
+
+  // Enqueues Rollback; the operation is not closed. Pair with Close. A throwing
+  // mutation rollback callback fails this future with `ErrorCode::TaskFailed`
+  // and arms the engine kill switch, blocking every account; see
+  // `pretrade::DropCopyOperation` for that contract.
+  //
+  // A hard stop aborts this task and fails the future with
+  // `ErrorCode::Stopped` without releasing the underlying operation, so the
+  // caller must still `Close` it (or use `RollbackAndClose`) to avoid leaking
+  // the native handle.
+  [[nodiscard]] Future<std::monostate> Rollback(
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return Run(
+        [](::openpit::pretrade::DropCopyOperation& operation) {
+          operation.Rollback();
+        },
+        timeout, /*abortCloses=*/false);
+  }
+
+  // Enqueues Commit followed by releasing the operation handle.
+  [[nodiscard]] Future<std::monostate> CommitAndClose(
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return Run(
+        [](::openpit::pretrade::DropCopyOperation& operation) {
+          operation.Commit();
+          operation = ::openpit::pretrade::DropCopyOperation();
+        },
+        timeout, /*abortCloses=*/true);
+  }
+
+  // Enqueues Rollback followed by releasing the operation handle.
+  [[nodiscard]] Future<std::monostate> RollbackAndClose(
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return Run(
+        [](::openpit::pretrade::DropCopyOperation& operation) {
+          operation.Rollback();
+          operation = ::openpit::pretrade::DropCopyOperation();
+        },
+        timeout, /*abortCloses=*/true);
+  }
+
+  // Enqueues a plain release: destroying the operation rolls back any
+  // still-pending mutations if Commit was not called first.
+  [[nodiscard]] Future<std::monostate> Close(
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    return Run(
+        [](::openpit::pretrade::DropCopyOperation& operation) {
+          operation = ::openpit::pretrade::DropCopyOperation();
+        },
+        timeout, /*abortCloses=*/true);
+  }
+
+ private:
+  // Routes `op(operation)` through the account queue. The task pins this
+  // wrapper alive via `shared_from_this`, so dropping the caller's handle while
+  // the task is queued does not dangle. A closing task transfers a submit
+  // failure or hard-stop abort to the same lane before releasing the operation.
+  template <typename Op>
+  [[nodiscard]] Future<std::monostate> Run(Op op,
+                                           std::chrono::nanoseconds timeout,
+                                           bool abortCloses);
+
+  ::openpit::pretrade::DropCopyOperation m_operation;
+  AsyncEngine<Driver>* m_engine;
+  ::openpit::param::AccountId m_accountId;
+  mutable std::mutex m_mutex;
 };
 
 //------------------------------------------------------------------------------
@@ -354,6 +554,7 @@ class AsyncRequest : public std::enable_shared_from_this<AsyncRequest<Driver>> {
   ::openpit::pretrade::Request m_request;
   AsyncEngine<Driver>* m_engine;
   ::openpit::param::AccountId m_accountId;
+  mutable std::mutex m_mutex;
 };
 
 //------------------------------------------------------------------------------
@@ -366,8 +567,12 @@ class AsyncRequest : public std::enable_shared_from_this<AsyncRequest<Driver>> {
 // the parent engine.
 //
 // Group-scoped ops carry no account, so they pin to a deterministic queue keyed
-// ids share the numeric routing space with account ids, which is benign because
-// admin ops are rare and the native layer is concurrency-safe regardless.
+// by the group id. Group ids share the numeric routing space with account ids,
+// which is benign because admin ops are rare and the native layer is
+// concurrency-safe regardless.
+//
+// The engine-wide unblock names neither an account nor a group, so it pins to
+// its own deterministic queue for the same reason.
 template <typename Driver>
 class AsyncAccounts {
  public:
@@ -402,6 +607,18 @@ class AsyncAccounts {
   // Unblocks `account`; infallible (resolves with `std::monostate`).
   [[nodiscard]] Future<std::monostate> Unblock(
       ::openpit::param::AccountId account,
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0));
+
+  // Clears the engine-wide block; infallible (resolves with `std::monostate`).
+  // Lifting an inactive engine-wide block is a no-op, and accounts and account
+  // groups blocked individually stay blocked. Pinned to the engine-wide queue,
+  // so engine-wide clears serialize against each other.
+  //
+  // An engine-wide block never comes from `Block` or `BlockGroup`: the engine
+  // raises it itself, on a kill switch reported for an execution report with no
+  // readable account, or on a failed mutation finalizer of a custom policy -
+  // which every mutation registered from C++ is.
+  [[nodiscard]] Future<std::monostate> UnblockAll(
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0));
 
   // Replaces a blocked account's reason. Resolves with the optional
@@ -439,6 +656,15 @@ class AsyncAccounts {
         ::openpit::detail::Native(group));
   }
 
+  // Stable routing key for admin ops that name neither an account nor a group,
+  // so they pin to one deterministic queue instead of an arbitrary one. The
+  // collision with account and group keys is benign for the same reason it is
+  // in `GroupRoutingKey`.
+  [[nodiscard]] static ::openpit::param::AccountId
+  EngineWideRoutingKey() noexcept {
+    return ::openpit::param::AccountId::FromUint64(0);
+  }
+
   AsyncEngine<Driver>* m_engine;
 };
 
@@ -456,6 +682,12 @@ class AsyncAccounts {
 // `AsyncReservation` wrappers. Move assignment is disabled because replacing a
 // live target could invalidate wrappers produced by that target. The engine
 // must still outlive every wrapper it produced.
+//
+// SERIALIZATION. This facade adds whole-pipeline isolation beyond a fully
+// synchronized direct engine. Every operation is routed by account id to one
+// queue drained by one worker, so two complete pipelines for the same account
+// never overlap, and follow-up calls on `AsyncRequest` and `AsyncReservation`
+// re-enter that same queue. Callers need no locking of their own on top.
 template <typename Driver>
 class TypedAsyncEngine {
  public:
@@ -534,18 +766,21 @@ class TypedAsyncEngine {
         timeout);
   }
 
-  // Enqueues a full drop-copy pre-trade call for `order`, pinned to its
-  // account. Policy rejects and current account blocks do not prevent the
-  // reservation from being returned; newly raised blocks are retained. A market
-  // order resolves the future with an error before any policy is invoked.
-  [[nodiscard]] Future<ExecuteOutcome<Driver>> ExecutePreTradeDropCopy(
+  // Enqueues a drop-copy call for `order`, pinned to its account. The future
+  // resolves with a `DropCopyOutcome`: a non-null operation on accept,
+  // populated rejects on a fatal evaluation failure. Resolves immediately with
+  // `MissingAccountId` when the order carries no readable account id: drop copy
+  // requires one, and the engine rejects an unreadable one with
+  // `MissingRequiredField` before any policy runs, so there is nothing to gain
+  // by queueing such an order.
+  [[nodiscard]] Future<DropCopyOutcome<Driver>> ApplyDropCopy(
       ::openpit::model::Order order,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
     const std::optional<::openpit::param::AccountId> accountId =
         detail::OrderAccountId(order);
     if (!accountId.has_value()) {
-      Promise<ExecuteOutcome<Driver>> promise;
-      Future<ExecuteOutcome<Driver>> future = promise.GetFuture();
+      Promise<DropCopyOutcome<Driver>> promise;
+      Future<DropCopyOutcome<Driver>> future = promise.GetFuture();
       promise.Fail(detail::MissingAccountId());
       return future;
     }
@@ -554,11 +789,14 @@ class TypedAsyncEngine {
     return m_engine->Call(
         pinned,
         [engine, pinned, order = std::move(order)](Driver& driver) {
-          ::openpit::pretrade::Reservation reservation =
-              driver.ExecutePreTradeDropCopy(order);
-          auto asyncReservation = std::make_shared<AsyncReservation<Driver>>(
-              std::move(reservation), engine, pinned);
-          return ExecuteOutcome<Driver>{std::move(asyncReservation), {}};
+          ::openpit::pretrade::DropCopyResult result =
+              driver.ApplyDropCopy(order);
+          if (!result.Passed()) {
+            return DropCopyOutcome<Driver>{nullptr, std::move(result.rejects)};
+          }
+          auto operation = std::make_shared<AsyncDropCopyOperation<Driver>>(
+              std::move(*result.operation), engine, pinned);
+          return DropCopyOutcome<Driver>{std::move(operation), {}};
         },
         timeout);
   }
@@ -655,6 +893,8 @@ class TypedAsyncEngine {
   template <typename D>
   friend class AsyncReservation;
   template <typename D>
+  friend class AsyncDropCopyOperation;
+  template <typename D>
   friend class AsyncAccounts;
 
   explicit TypedAsyncEngine(AsyncEngine<Driver> engine)
@@ -664,15 +904,86 @@ class TypedAsyncEngine {
 };
 
 //------------------------------------------------------------------------------
-// AsyncRequest / AsyncReservation / AsyncAccounts out-of-line definitions
+// AsyncRequest / AsyncReservation / AsyncDropCopyOperation / AsyncAccounts
+// out-of-line definitions
 
 template <typename Driver>
 template <typename Op>
 [[nodiscard]] Future<std::monostate> AsyncReservation<Driver>::Run(
-    Op op, std::chrono::nanoseconds timeout) {
+    Op op, std::chrono::nanoseconds timeout, bool abortCloses) {
   auto self = this->shared_from_this();
+  if (!abortCloses) {
+    return m_engine->Submit(
+        m_accountId,
+        [self, op = std::move(op)]() {
+          std::lock_guard<std::mutex> lock(self->m_mutex);
+          op(self->m_reservation);
+        },
+        timeout);
+  }
+
+  AsyncEngine<Driver>* engine = m_engine;
+  const ::openpit::param::AccountId accountId = m_accountId;
   return m_engine->Submit(
-      m_accountId, [self, op = std::move(op)]() { op(self->m_reservation); },
+      accountId,
+      [self, op = std::move(op)]() {
+        std::lock_guard<std::mutex> lock(self->m_mutex);
+        op(self->m_reservation);
+      },
+      [self, engine, accountId](Promise<std::monostate> promise, Error error,
+                                bool inAccountLane) mutable {
+        auto cleanup = [self, promise, error = std::move(error)]() mutable {
+          detail::CompleteMandatoryCleanup(promise, std::move(error), [self] {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            self->m_reservation = ::openpit::pretrade::Reservation();
+          });
+        };
+        if (inAccountLane) {
+          cleanup();
+          return;
+        }
+        detail::DetachMandatoryCleanup(*engine, accountId, std::move(cleanup));
+      },
+      timeout);
+}
+
+template <typename Driver>
+template <typename Op>
+[[nodiscard]] Future<std::monostate> AsyncDropCopyOperation<Driver>::Run(
+    Op op, std::chrono::nanoseconds timeout, bool abortCloses) {
+  auto self = this->shared_from_this();
+  if (!abortCloses) {
+    return m_engine->Submit(
+        m_accountId,
+        [self, op = std::move(op)]() {
+          std::lock_guard<std::mutex> lock(self->m_mutex);
+          op(self->m_operation);
+        },
+        timeout);
+  }
+
+  AsyncEngine<Driver>* engine = m_engine;
+  const ::openpit::param::AccountId accountId = m_accountId;
+  return m_engine->Submit(
+      accountId,
+      [self, op = std::move(op)]() {
+        std::lock_guard<std::mutex> lock(self->m_mutex);
+        op(self->m_operation);
+      },
+      [self, engine, accountId](Promise<std::monostate> promise, Error error,
+                                bool inAccountLane) mutable {
+        auto cleanup = [self, promise, error = std::move(error)]() mutable {
+          detail::CompleteMandatoryCleanup(promise, std::move(error), [self] {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            self->m_operation = ::openpit::pretrade::DropCopyOperation();
+          });
+        };
+        if (inAccountLane) {
+          cleanup();
+          return;
+        }
+        detail::DetachMandatoryCleanup(*engine, accountId, std::move(cleanup));
+      },
       timeout);
 }
 
@@ -683,17 +994,19 @@ AsyncRequest<Driver>::Execute(std::chrono::nanoseconds timeout) {
   using ReservationPtr = std::shared_ptr<AsyncReservation<Driver>>;
   using Rejects = std::vector<::openpit::pretrade::Reject>;
   auto self = this->shared_from_this();
-  // Route through `Call2`: the op ignores the driver and acts on the wrapped
-  // request, but the generic seam still owns abort/sync-failure resolution. The
-  // task pins this wrapper alive via `shared_from_this`. On an abort the future
-  // resolves with `Stopped` and this request is released by the wrapper's
-  // destruction, so the native handle never leaks.
+  AsyncEngine<Driver>* engine = m_engine;
+  const ::openpit::param::AccountId accountId = m_accountId;
   return m_engine->template Call2<ReservationPtr, Rejects>(
-      m_accountId,
+      accountId,
       [self](Driver&) -> std::pair<ReservationPtr, Rejects> {
-        ::openpit::pretrade::ExecuteResult result = self->m_request.Execute();
-        // `Request::Execute` consumes the request; release our copy so the
-        // native handle is freed regardless of outcome.
+        std::lock_guard<std::mutex> lock(self->m_mutex);
+        ::openpit::pretrade::ExecuteResult result;
+        try {
+          result = self->m_request.Execute();
+        } catch (...) {
+          self->m_request = ::openpit::pretrade::Request();
+          throw;
+        }
         self->m_request = ::openpit::pretrade::Request();
         if (!result.Passed()) {
           return {nullptr, std::move(result.rejects)};
@@ -702,6 +1015,20 @@ AsyncRequest<Driver>::Execute(std::chrono::nanoseconds timeout) {
             std::move(*result.reservation), self->m_engine, self->m_accountId);
         return {std::move(reservation), Rejects{}};
       },
+      [self, engine, accountId](PairPromise<ReservationPtr, Rejects> promise,
+                                Error error, bool inAccountLane) mutable {
+        auto cleanup = [self, promise, error = std::move(error)]() mutable {
+          detail::CompleteMandatoryCleanup(promise, std::move(error), [self] {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            self->m_request = ::openpit::pretrade::Request();
+          });
+        };
+        if (inAccountLane) {
+          cleanup();
+          return;
+        }
+        detail::DetachMandatoryCleanup(*engine, accountId, std::move(cleanup));
+      },
       timeout);
 }
 
@@ -709,9 +1036,29 @@ template <typename Driver>
 [[nodiscard]] Future<std::monostate> AsyncRequest<Driver>::Close(
     std::chrono::nanoseconds timeout) {
   auto self = this->shared_from_this();
+  AsyncEngine<Driver>* engine = m_engine;
+  const ::openpit::param::AccountId accountId = m_accountId;
   return m_engine->Submit(
-      m_accountId,
-      [self]() { self->m_request = ::openpit::pretrade::Request(); }, timeout);
+      accountId,
+      [self]() {
+        std::lock_guard<std::mutex> lock(self->m_mutex);
+        self->m_request = ::openpit::pretrade::Request();
+      },
+      [self, engine, accountId](Promise<std::monostate> promise, Error error,
+                                bool inAccountLane) mutable {
+        auto cleanup = [self, promise, error = std::move(error)]() mutable {
+          detail::CompleteMandatoryCleanup(promise, std::move(error), [self] {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            self->m_request = ::openpit::pretrade::Request();
+          });
+        };
+        if (inAccountLane) {
+          cleanup();
+          return;
+        }
+        detail::DetachMandatoryCleanup(*engine, accountId, std::move(cleanup));
+      },
+      timeout);
 }
 
 template <typename Driver>
@@ -787,6 +1134,15 @@ template <typename Driver>
       account,
       [engine, account]() { engine->DriverRef().Accounts().Unblock(account); },
       timeout);
+}
+
+template <typename Driver>
+[[nodiscard]] Future<std::monostate> AsyncAccounts<Driver>::UnblockAll(
+    std::chrono::nanoseconds timeout) {
+  AsyncEngine<Driver>* engine = m_engine;
+  return engine->Submit(
+      EngineWideRoutingKey(),
+      [engine]() { engine->DriverRef().Accounts().UnblockAll(); }, timeout);
 }
 
 template <typename Driver>
@@ -961,10 +1317,10 @@ class OwnedTypedAsyncEngine {
     return m_engine.ExecutePreTrade(std::move(order), timeout);
   }
 
-  [[nodiscard]] Future<ExecuteOutcome<Driver>> ExecutePreTradeDropCopy(
+  [[nodiscard]] Future<DropCopyOutcome<Driver>> ApplyDropCopy(
       ::openpit::model::Order order,
       std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
-    return m_engine.ExecutePreTradeDropCopy(std::move(order), timeout);
+    return m_engine.ApplyDropCopy(std::move(order), timeout);
   }
 
   [[nodiscard]] Future<::openpit::PostTradeResult> ApplyExecutionReport(

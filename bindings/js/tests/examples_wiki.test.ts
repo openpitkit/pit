@@ -15,29 +15,26 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 //
-// Mirrors the public JS examples from the project wiki. Each test embeds the
-// body of one wiki ```ts snippet verbatim (the first line of every test is a
-// `// Source:` comment naming the page and section), wrapped with the imports,
-// harness, and assertions that prove the documented outcome. Per the doc-mirror
-// rule in doc/code_style.md, the snippet body here and the wiki snippet are one
-// example: any forced edit to one must be mirrored in the other.
+// Published wiki snippets and these executable mirrors are one entity and must
+// stay in lockstep. Each test starts with a `// Source:` comment naming the
+// public page and section; imports, harness, and assertions remain test-only.
 //
-// Wiki pages mirrored here:
-// - ../../../../pit.wiki/Domain-Types.md
-// - ../../../../pit.wiki/Pre-trade-Pipeline.md
-// - ../../../../pit.wiki/Getting-Started.md
-// - ../../../../pit.wiki/Account-Adjustments.md
-// - ../../../../pit.wiki/Account-Groups.md
-// - ../../../../pit.wiki/Account-Blocking.md
-// - ../../../../pit.wiki/Balance-Reconciliation.md
-// - ../../../../pit.wiki/Pre-Trade-Lock.md
-// - ../../../../pit.wiki/Policies.md
-// - ../../../../pit.wiki/Spot-Funds.md
-// - ../../../../pit.wiki/Policy-API.md
+// Public wiki pages covered here:
+// - https://wiki.openpit.dev/Domain-Types/
+// - https://wiki.openpit.dev/Pre-trade-Pipeline/
+// - https://wiki.openpit.dev/Getting-Started/
+// - https://wiki.openpit.dev/Account-Adjustments/
+// - https://wiki.openpit.dev/Account-Groups/
+// - https://wiki.openpit.dev/Account-Blocking/
+// - https://wiki.openpit.dev/Balance-Reconciliation/
+// - https://wiki.openpit.dev/Pre-Trade-Lock/
+// - https://wiki.openpit.dev/Policies/
+// - https://wiki.openpit.dev/Spot-Funds/
+// - https://wiki.openpit.dev/Policy-API/
 //
-// See engine.test.ts for the import-resolution scheme. Run `npm run build`
-// first. The import block of each snippet is hoisted to this file header (TS
-// forbids in-body imports); everything after the imports is the verbatim body.
+// Run `npm run build` first: these tests import the built package.
+// Imports are hoisted because TypeScript forbids in-body imports; everything
+// after the imports is the verbatim snippet body.
 
 import { describe, expect, it } from "vitest";
 
@@ -106,9 +103,13 @@ function sharedOrder(): OrderInit {
   };
 }
 
+function persistHistoricalOrderMetadata(order: OrderInit): void {
+  void order;
+}
+
 describe("Domain-Types.md wiki examples", () => {
   it("creates validated value objects", () => {
-    // Source: Domain-Types.md - Create Validated Values
+    // Source: https://wiki.openpit.dev/Domain-Types/ - Create Validated Values
     // Build validated value objects at the integration boundary. Assets cross the
     // boundary as plain strings, so there is no asset wrapper to construct.
     const asset = "AAPL";
@@ -128,7 +129,8 @@ describe("Domain-Types.md wiki examples", () => {
   });
 
   it("works with directional types", () => {
-    // Source: Domain-Types.md - Work With Directional Types
+    // Source: https://wiki.openpit.dev/Domain-Types/
+    // - Work With Directional Types
     // Directional helpers keep side logic explicit instead of comparing raw strings.
     const side = Side.buy();
     const positionSide = PositionSide.long();
@@ -142,7 +144,7 @@ describe("Domain-Types.md wiki examples", () => {
   });
 
   it("creates leverage from either representation", () => {
-    // Source: Domain-Types.md - Create Leverage
+    // Source: https://wiki.openpit.dev/Domain-Types/ - Create Leverage
     // Pick the constructor that matches the upstream representation you receive.
     const fromMultiplier = Leverage.fromInt(100);
     const fromFloat = Leverage.fromFloat(100.5);
@@ -157,7 +159,8 @@ describe("Domain-Types.md wiki examples", () => {
 
 describe("Pre-trade-Pipeline.md wiki examples", () => {
   it("handles a start-stage reject", () => {
-    // Source: Pre-trade-Pipeline.md - Handle a Start-Stage Reject
+    // Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    // - Handle a Start-Stage Reject
     const engine = Engine.builder().builtin(buildOrderValidation()).build();
     const order: OrderInit = {
       operation: {
@@ -193,7 +196,8 @@ describe("Pre-trade-Pipeline.md wiki examples", () => {
   });
 
   it("executes the main stage and finalizes the reservation", () => {
-    // Source: Pre-trade-Pipeline.md - Execute the Main Stage and Finalize the Reservation
+    // Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    // - Execute the Main Stage and Finalize the Reservation
     const engine = Engine.builder().builtin(buildOrderValidation()).build();
     const order: OrderInit = {
       operation: {
@@ -234,7 +238,8 @@ describe("Pre-trade-Pipeline.md wiki examples", () => {
   });
 
   it("runs the start + main shortcut", () => {
-    // Source: Pre-trade-Pipeline.md - Shortcut for Start + Main Stages
+    // Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    // - Shortcut for Start + Main Stages
     const engine = Engine.builder().builtin(buildOrderValidation()).build();
     const order: OrderInit = {
       operation: {
@@ -267,8 +272,51 @@ describe("Pre-trade-Pipeline.md wiki examples", () => {
     expect(execute.ok).toBe(true);
   });
 
+  it("applies a historical order with drop copy", () => {
+    // Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    // - Apply a Historical Order with Drop Copy
+    const engine = Engine.builder().builtin(buildOrderValidation()).build();
+    const order: OrderInit = {
+      operation: {
+        underlyingAsset: "AAPL",
+        settlementAsset: "USD",
+        accountId: 99224416,
+        side: "BUY",
+        tradeAmount: TradeAmount.quantity("100"),
+        price: "185",
+      },
+    };
+
+    const result = engine.applyDropCopy(order);
+    if (result.ok) {
+      const operation = result.operation;
+      if (operation === undefined) {
+        throw new Error("applied drop copy is missing its operation");
+      }
+      console.log(`applied; account blocked: ${operation.isAccountBlocked()}`);
+      // Store the historical order, then make the bookkeeping durable.
+      try {
+        persistHistoricalOrderMetadata(order);
+      } catch (error) {
+        operation.rollback();
+        throw error;
+      }
+      operation.commit();
+    } else {
+      for (const reject of result.rejects) {
+        console.log(
+          `could not apply historical order: ${reject.policy} ` +
+            `[${reject.code}]: ${reject.reason}`,
+        );
+      }
+    }
+
+    expect(result.ok).toBe(true);
+  });
+
   it("applies post-trade feedback", () => {
-    // Source: Pre-trade-Pipeline.md - Apply Post-Trade Feedback
+    // Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    // - Apply Post-Trade Feedback
     const engine = Engine.builder().builtin(buildOrderValidation()).build();
     const report: ExecutionReportInit = {
       operation: {
@@ -298,7 +346,7 @@ describe("Pre-trade-Pipeline.md wiki examples", () => {
 
 describe("Getting-Started.md wiki examples", () => {
   it("builds an engine and runs the end-to-end flow", () => {
-    // Source: Getting-Started.md - Build an Engine
+    // Source: https://wiki.openpit.dev/Getting-Started/ - Build an Engine
     // 1. Build the engine (one time at the platform initialization). The WASM
     // engine is single-threaded and has no user-selectable sync mode. The first
     // builtin() advances the staged builder to the ready builder; the rest register
@@ -414,7 +462,8 @@ describe("Getting-Started.md wiki examples", () => {
   });
 
   it("runs the start + main shortcut", () => {
-    // Source: Getting-Started.md - Shortcut for Start + Main Stages
+    // Source: https://wiki.openpit.dev/Getting-Started/
+    // - Shortcut for Start + Main Stages
     const engine = Engine.builder().builtin(buildOrderValidation()).build();
     const order: OrderInit = {
       operation: {
@@ -448,7 +497,8 @@ describe("Getting-Started.md wiki examples", () => {
   });
 
   it("runs an order through the engine", () => {
-    // Source: Getting-Started.md - Run an Order Through the Engine
+    // Source: https://wiki.openpit.dev/Getting-Started/
+    // - Run an Order Through the Engine
     const engine = Engine.builder().builtin(buildOrderValidation()).build();
     const order: OrderInit = {
       operation: {
@@ -492,7 +542,8 @@ describe("Getting-Started.md wiki examples", () => {
   });
 
   it("applies post-trade feedback", () => {
-    // Source: Getting-Started.md - Apply Post-Trade Feedback
+    // Source: https://wiki.openpit.dev/Getting-Started/
+    // - Apply Post-Trade Feedback
     const engine = Engine.builder().builtin(buildOrderValidation()).build();
     const report: ExecutionReportInit = {
       operation: {
@@ -522,7 +573,7 @@ describe("Getting-Started.md wiki examples", () => {
 
 describe("Account-Adjustments.md wiki examples", () => {
   it("applies a mixed balance + position batch atomically", () => {
-    // Source: Account-Adjustments.md - Examples
+    // Source: https://wiki.openpit.dev/Account-Adjustments/ - Examples
     // Build one batch that mixes balance and position adjustments. Each adjustment
     // is a plain object literal; position sizes cross the boundary as decimal
     // strings.
@@ -558,7 +609,8 @@ describe("Account-Adjustments.md wiki examples", () => {
   });
 
   it("drives a balance-limit policy from the adjustment path", () => {
-    // Source: Account-Adjustments.md - Example: Balance Limit Policy
+    // Source: https://wiki.openpit.dev/Account-Adjustments/
+    // - Example: Balance Limit Policy
     // Tracks cumulative totals per asset, rejects the batch on a limit breach.
     class CumulativeLimitPolicy implements Policy {
       readonly name = "CumulativeLimitPolicy";
@@ -692,7 +744,7 @@ describe("Account-Adjustments.md wiki examples", () => {
 
 describe("Account-Groups.md wiki examples", () => {
   it("registers a group and reads membership by id", () => {
-    // Source: Account-Groups.md - Examples
+    // Source: https://wiki.openpit.dev/Account-Groups/ - Examples
     const engine = Engine.builder()
 
       .builtin(buildOrderValidation())
@@ -718,7 +770,7 @@ describe("Account-Groups.md wiki examples", () => {
 
 describe("Account-Blocking.md wiki examples", () => {
   it("blocks and unblocks accounts and groups", () => {
-    // Source: Account-Blocking.md - Examples
+    // Source: https://wiki.openpit.dev/Account-Blocking/ - Examples
     const engine = Engine.builder()
 
       .builtin(buildOrderValidation())
@@ -745,7 +797,8 @@ describe("Account-Blocking.md wiki examples", () => {
 
 describe("Balance-Reconciliation.md wiki examples", () => {
   it("reports delta versus absolute across two seeds", () => {
-    // Source: Balance-Reconciliation.md - Delta Versus Absolute
+    // Source: https://wiki.openpit.dev/Balance-Reconciliation/
+    // - Delta Versus Absolute
     const engine = Engine.builder().builtin(buildSpotFunds()).build();
     const accountId = 99224416;
 
@@ -778,7 +831,8 @@ describe("Balance-Reconciliation.md wiki examples", () => {
 
 describe("Pre-Trade-Lock.md wiki examples", () => {
   it("persists and restores a lock across a simulated restart", () => {
-    // Source: Pre-Trade-Lock.md - Persisting and Restoring a Lock
+    // Source: https://wiki.openpit.dev/Pre-Trade-Lock/
+    // - Persisting and Restoring a Lock
     const engine = Engine.builder().builtin(buildSpotFunds()).build();
 
     const accountId = 99224416;
@@ -842,7 +896,7 @@ describe("Pre-Trade-Lock.md wiki examples", () => {
 
 describe("Policies.md wiki examples", () => {
   it("builds a limit-only SpotFunds engine", () => {
-    // Source: Policies.md - SpotFundsPolicy
+    // Source: https://wiki.openpit.dev/Policies/ - SpotFundsPolicy
     // Limit-only spot funds, registered first in the policy list.
     const engine = Engine.builder().builtin(buildSpotFunds()).build();
 
@@ -850,7 +904,7 @@ describe("Policies.md wiki examples", () => {
   });
 
   it("builds an OrderValidation engine", () => {
-    // Source: Policies.md - OrderValidationPolicy
+    // Source: https://wiki.openpit.dev/Policies/ - OrderValidationPolicy
     const engine = Engine.builder()
 
       .builtin(buildOrderValidation())
@@ -861,7 +915,7 @@ describe("Policies.md wiki examples", () => {
   });
 
   it("builds a RateLimit engine", () => {
-    // Source: Policies.md - RateLimitPolicy
+    // Source: https://wiki.openpit.dev/Policies/ - RateLimitPolicy
     // windowMs is the rolling-window length in milliseconds (1 second here).
     const engine = Engine.builder()
 
@@ -877,7 +931,7 @@ describe("Policies.md wiki examples", () => {
   });
 
   it("builds an OrderSizeLimit engine", () => {
-    // Source: Policies.md - OrderSizeLimitPolicy
+    // Source: https://wiki.openpit.dev/Policies/ - OrderSizeLimitPolicy
     // Quantities and notionals cross as decimal strings.
     const engine = Engine.builder()
 
@@ -900,7 +954,7 @@ describe("Policies.md wiki examples", () => {
   });
 
   it("builds a PnlBoundsKillSwitch engine", () => {
-    // Source: Policies.md - PnlBoundsKillSwitchPolicy
+    // Source: https://wiki.openpit.dev/Policies/ - PnlBoundsKillSwitchPolicy
     // Bounds cross as signed decimal strings; at least one bound must be set.
     const engine = Engine.builder()
 
@@ -918,7 +972,7 @@ describe("Policies.md wiki examples", () => {
 
 describe("Spot-Funds.md wiki examples", () => {
   it("reserves against limit-only available funds", () => {
-    // Source: Spot-Funds.md - Limit-Only Mode (Default)
+    // Source: https://wiki.openpit.dev/Spot-Funds/ - Limit-Only Mode (Default)
     // Limit-only spot funds: register first in the policy list.
     const engine = Engine.builder().builtin(buildSpotFunds()).build();
 
@@ -960,7 +1014,7 @@ describe("Spot-Funds.md wiki examples", () => {
   });
 
   it("prices a market buy from the quote mark", () => {
-    // Source: Spot-Funds.md - Market Orders
+    // Source: https://wiki.openpit.dev/Spot-Funds/ - Market Orders
     const builder = Engine.builder();
 
     // A shared market-data service feeds the policy's market-order pricing.
@@ -1008,7 +1062,7 @@ describe("Spot-Funds.md wiki examples", () => {
 
 describe("Policy-API.md wiki examples", () => {
   it("preserves application fields in custom-policy callbacks", () => {
-    // Source: Policy-API.md - JS Custom Models
+    // Source: https://wiki.openpit.dev/Policy-API/ - JS Custom Models
     type StrategyOrder = Order & {
       strategyTag: string;
     };
@@ -1099,7 +1153,8 @@ describe("Policy-API.md wiki examples", () => {
   });
 
   it("rejects orders above a notional cap", () => {
-    // Source: Policy-API.md - Example: Custom Main-Stage Policy
+    // Source: https://wiki.openpit.dev/Policy-API/
+    // - Example: Custom Main-Stage Policy
     // Reject any order above this absolute notional. Implemented against the
     // public `Policy` interface; the callbacks read the typed `Order` view.
     function notionalCapPolicy(maxAbsNotional: Volume): Policy {
@@ -1226,7 +1281,8 @@ describe("Policy-API.md wiki examples", () => {
   });
 
   it("rolls back eager state when the same hook rejects", () => {
-    // Source: Policy-API.md - Example: Rollback Safety Pattern
+    // Source: https://wiki.openpit.dev/Policy-API/
+    // - Example: Rollback Safety Pattern
     // Updates intermediate in-memory state and may then reject the same request.
     function reserveThenValidatePolicy(): Policy {
       // Policy-local state, captured by the hook closure.
@@ -1313,7 +1369,8 @@ describe("Policy-API.md wiki examples", () => {
   });
 
   it("blocks an account from an adjustment callback", () => {
-    // Source: Policy-API.md - Example: Block an Account from an Adjustment Callback
+    // Source: https://wiki.openpit.dev/Policy-API/
+    // - Example: Block an Account from an Adjustment Callback
     const blockOnAdjustmentPolicy: Policy = {
       name: "BlockOnAdjustmentPolicy",
 

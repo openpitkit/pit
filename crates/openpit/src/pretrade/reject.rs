@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 use std::fmt::{Display, Formatter};
 
@@ -152,6 +152,125 @@ pub enum RejectCode {
 }
 
 impl RejectCode {
+    /// Returns whether this code means that a policy could not determine or
+    /// apply the effect of a historical order.
+    ///
+    /// [`Engine::apply_drop_copy`](crate::Engine::apply_drop_copy) treats an
+    /// evaluation failure as an atomic error. All other codes are ordinary
+    /// policy verdicts: they do not prevent drop-copy from recording an order
+    /// that already happened.
+    ///
+    /// The classification is exhaustive:
+    ///
+    /// - [`MissingRequiredField`](Self::MissingRequiredField) is an evaluation
+    ///   failure because a policy-required input is absent.
+    /// - [`UnknownInstrument`](Self::UnknownInstrument),
+    ///   [`UnknownAccount`](Self::UnknownAccount),
+    ///   [`UnknownVenue`](Self::UnknownVenue),
+    ///   [`UnknownClearingAccount`](Self::UnknownClearingAccount), and
+    ///   [`UnknownCollateralAsset`](Self::UnknownCollateralAsset) are
+    ///   evaluation failures because a required domain entity cannot be
+    ///   resolved.
+    /// - [`RiskConfigurationMissing`](Self::RiskConfigurationMissing),
+    ///   [`ReferenceDataUnavailable`](Self::ReferenceDataUnavailable),
+    ///   [`OrderValueCalculationFailed`](Self::OrderValueCalculationFailed),
+    ///   [`SystemUnavailable`](Self::SystemUnavailable),
+    ///   [`MarkPriceUnavailable`](Self::MarkPriceUnavailable), and
+    ///   [`ArithmeticOverflow`](Self::ArithmeticOverflow) are evaluation
+    ///   failures because required configuration, data, computation, service,
+    ///   price, or representable arithmetic result is unavailable.
+    /// - [`InvalidFieldFormat`](Self::InvalidFieldFormat) and
+    ///   [`InvalidFieldValue`](Self::InvalidFieldValue) are ordinary verdicts:
+    ///   the policy inspected the supplied value and classified it.
+    /// - [`UnsupportedOrderType`](Self::UnsupportedOrderType),
+    ///   [`UnsupportedTimeInForce`](Self::UnsupportedTimeInForce), and
+    ///   [`UnsupportedOrderAttribute`](Self::UnsupportedOrderAttribute) are
+    ///   ordinary verdicts about understood but unsupported semantics.
+    /// - [`DuplicateClientOrderId`](Self::DuplicateClientOrderId),
+    ///   [`TooLateToEnter`](Self::TooLateToEnter), and
+    ///   [`ExchangeClosed`](Self::ExchangeClosed) are ordinary admission
+    ///   verdicts that do not prevent historical bookkeeping.
+    /// - [`InsufficientFunds`](Self::InsufficientFunds),
+    ///   [`InsufficientMargin`](Self::InsufficientMargin),
+    ///   [`InsufficientPosition`](Self::InsufficientPosition),
+    ///   [`CreditLimitExceeded`](Self::CreditLimitExceeded),
+    ///   [`RiskLimitExceeded`](Self::RiskLimitExceeded),
+    ///   [`OrderExceedsLimit`](Self::OrderExceedsLimit),
+    ///   [`OrderQtyExceedsLimit`](Self::OrderQtyExceedsLimit),
+    ///   [`OrderNotionalExceedsLimit`](Self::OrderNotionalExceedsLimit),
+    ///   [`PositionLimitExceeded`](Self::PositionLimitExceeded),
+    ///   [`ConcentrationLimitExceeded`](Self::ConcentrationLimitExceeded),
+    ///   [`LeverageLimitExceeded`](Self::LeverageLimitExceeded), and
+    ///   [`RateLimitExceeded`](Self::RateLimitExceeded) are ordinary risk
+    ///   verdicts produced after evaluating the order.
+    /// - [`PnlKillSwitchTriggered`](Self::PnlKillSwitchTriggered) and
+    ///   [`AccountBlocked`](Self::AccountBlocked) are ordinary control
+    ///   verdicts. Drop-copy may still apply bookkeeping and publish a block.
+    /// - [`AccountNotAuthorized`](Self::AccountNotAuthorized),
+    ///   [`ComplianceRestriction`](Self::ComplianceRestriction),
+    ///   [`InstrumentRestricted`](Self::InstrumentRestricted),
+    ///   [`JurisdictionRestriction`](Self::JurisdictionRestriction),
+    ///   [`WashTradePrevention`](Self::WashTradePrevention),
+    ///   [`SelfMatchPrevention`](Self::SelfMatchPrevention), and
+    ///   [`ShortSaleRestriction`](Self::ShortSaleRestriction) are ordinary
+    ///   authorization or compliance verdicts.
+    /// - [`AccountAdjustmentBoundsExceeded`](Self::AccountAdjustmentBoundsExceeded)
+    ///   is an ordinary account-adjustment verdict, not failure to evaluate a
+    ///   drop-copy order.
+    /// - [`Custom`](Self::Custom) is ordinary because the SDK cannot infer its
+    ///   caller-defined semantics. A custom policy that must abort drop-copy
+    ///   should use a standardized evaluation-failure code.
+    /// - [`Other`](Self::Other) is an ordinary fallback with no
+    ///   evaluation-failure semantics.
+    pub const fn is_evaluation_failure(self) -> bool {
+        match self {
+            Self::MissingRequiredField
+            | Self::UnknownInstrument
+            | Self::UnknownAccount
+            | Self::UnknownVenue
+            | Self::UnknownClearingAccount
+            | Self::UnknownCollateralAsset
+            | Self::RiskConfigurationMissing
+            | Self::ReferenceDataUnavailable
+            | Self::OrderValueCalculationFailed
+            | Self::SystemUnavailable
+            | Self::MarkPriceUnavailable
+            | Self::ArithmeticOverflow => true,
+            Self::InvalidFieldFormat
+            | Self::InvalidFieldValue
+            | Self::UnsupportedOrderType
+            | Self::UnsupportedTimeInForce
+            | Self::UnsupportedOrderAttribute
+            | Self::DuplicateClientOrderId
+            | Self::TooLateToEnter
+            | Self::ExchangeClosed
+            | Self::InsufficientFunds
+            | Self::InsufficientMargin
+            | Self::InsufficientPosition
+            | Self::CreditLimitExceeded
+            | Self::RiskLimitExceeded
+            | Self::OrderExceedsLimit
+            | Self::OrderQtyExceedsLimit
+            | Self::OrderNotionalExceedsLimit
+            | Self::PositionLimitExceeded
+            | Self::ConcentrationLimitExceeded
+            | Self::LeverageLimitExceeded
+            | Self::RateLimitExceeded
+            | Self::PnlKillSwitchTriggered
+            | Self::AccountBlocked
+            | Self::AccountNotAuthorized
+            | Self::ComplianceRestriction
+            | Self::InstrumentRestricted
+            | Self::JurisdictionRestriction
+            | Self::WashTradePrevention
+            | Self::SelfMatchPrevention
+            | Self::ShortSaleRestriction
+            | Self::AccountAdjustmentBoundsExceeded
+            | Self::Custom
+            | Self::Other => false,
+        }
+    }
+
     /// Returns the stable string representation of this code.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -268,45 +387,75 @@ impl std::error::Error for Reject {}
 
 /// Collection of rejects returned by [`PreTradeRequest::execute`].
 ///
-/// Implements `Deref` to `[Reject]` for direct element access.
+/// Implements `Deref` to `[Reject]` for direct element access. Equality
+/// compares only the reject list and deliberately ignores the attached policy
+/// result, which is auxiliary drop-copy output rather than part of the verdict.
 ///
 /// [`PreTradeRequest::execute`]: crate::pretrade::PreTradeRequest::execute
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Rejects(Vec<Reject>);
+#[derive(Clone, Debug)]
+pub struct Rejects {
+    rejects: Vec<Reject>,
+    policy_result: Option<Box<super::PolicyPreTradeResult>>,
+}
+
+impl PartialEq for Rejects {
+    fn eq(&self, other: &Self) -> bool {
+        self.rejects == other.rejects
+    }
+}
+
+impl Eq for Rejects {}
 
 impl Rejects {
     /// Creates a reject collection from a vector.
     pub fn new(rejects: Vec<Reject>) -> Self {
-        Self(rejects)
+        Self {
+            rejects,
+            policy_result: None,
+        }
+    }
+
+    /// Attaches the policy output computed before these rejects were produced.
+    ///
+    /// Drop-copy consumes this output when the rejects are non-enforcing.
+    /// Ordinary pre-trade paths continue to ignore it.
+    #[doc(hidden)]
+    pub fn with_policy_result(mut self, result: super::PolicyPreTradeResult) -> Self {
+        self.policy_result = Some(Box::new(result));
+        self
     }
 
     pub(crate) fn into_vec(self) -> Vec<Reject> {
-        self.0
+        self.rejects
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<Reject>, Option<super::PolicyPreTradeResult>) {
+        (self.rejects, self.policy_result.map(|result| *result))
     }
 }
 
 impl From<Reject> for Rejects {
     fn from(value: Reject) -> Self {
-        Self(vec![value])
+        Self::new(vec![value])
     }
 }
 
 impl From<Vec<Reject>> for Rejects {
     fn from(value: Vec<Reject>) -> Self {
-        Self(value)
+        Self::new(value)
     }
 }
 
 impl std::ops::Deref for Rejects {
     type Target = Vec<Reject>;
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.rejects
     }
 }
 
 impl Display for Rejects {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        for (i, reject) in self.0.iter().enumerate() {
+        for (i, reject) in self.rejects.iter().enumerate() {
             if i > 0 {
                 write!(formatter, "; ")?;
             }
@@ -543,6 +692,60 @@ mod tests {
         for (code, expected_name) in cases {
             assert_eq!(code.as_str(), expected_name);
             assert_eq!(code.to_string(), expected_name);
+        }
+    }
+
+    #[test]
+    fn reject_code_evaluation_failure_classification_covers_all_values() {
+        let cases = [
+            (RejectCode::MissingRequiredField, true),
+            (RejectCode::InvalidFieldFormat, false),
+            (RejectCode::InvalidFieldValue, false),
+            (RejectCode::UnsupportedOrderType, false),
+            (RejectCode::UnsupportedTimeInForce, false),
+            (RejectCode::UnsupportedOrderAttribute, false),
+            (RejectCode::DuplicateClientOrderId, false),
+            (RejectCode::TooLateToEnter, false),
+            (RejectCode::ExchangeClosed, false),
+            (RejectCode::UnknownInstrument, true),
+            (RejectCode::UnknownAccount, true),
+            (RejectCode::UnknownVenue, true),
+            (RejectCode::UnknownClearingAccount, true),
+            (RejectCode::UnknownCollateralAsset, true),
+            (RejectCode::InsufficientFunds, false),
+            (RejectCode::InsufficientMargin, false),
+            (RejectCode::InsufficientPosition, false),
+            (RejectCode::CreditLimitExceeded, false),
+            (RejectCode::RiskLimitExceeded, false),
+            (RejectCode::OrderExceedsLimit, false),
+            (RejectCode::OrderQtyExceedsLimit, false),
+            (RejectCode::OrderNotionalExceedsLimit, false),
+            (RejectCode::PositionLimitExceeded, false),
+            (RejectCode::ConcentrationLimitExceeded, false),
+            (RejectCode::LeverageLimitExceeded, false),
+            (RejectCode::RateLimitExceeded, false),
+            (RejectCode::PnlKillSwitchTriggered, false),
+            (RejectCode::AccountBlocked, false),
+            (RejectCode::AccountNotAuthorized, false),
+            (RejectCode::ComplianceRestriction, false),
+            (RejectCode::InstrumentRestricted, false),
+            (RejectCode::JurisdictionRestriction, false),
+            (RejectCode::WashTradePrevention, false),
+            (RejectCode::SelfMatchPrevention, false),
+            (RejectCode::ShortSaleRestriction, false),
+            (RejectCode::RiskConfigurationMissing, true),
+            (RejectCode::ReferenceDataUnavailable, true),
+            (RejectCode::OrderValueCalculationFailed, true),
+            (RejectCode::SystemUnavailable, true),
+            (RejectCode::MarkPriceUnavailable, true),
+            (RejectCode::AccountAdjustmentBoundsExceeded, false),
+            (RejectCode::ArithmeticOverflow, true),
+            (RejectCode::Custom, false),
+            (RejectCode::Other, false),
+        ];
+
+        for (code, expected) in cases {
+            assert_eq!(code.is_evaluation_failure(), expected, "{code}");
         }
     }
 

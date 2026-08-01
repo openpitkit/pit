@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Market-Data-TTL.md
+// Source: https://wiki.openpit.dev/Market-Data-TTL/
 //
 // Compiling mirror of the C++ snippets published on the Market-Data-TTL wiki
 // page. Each TEST runs the same user code shown in the corresponding C++
@@ -52,7 +52,7 @@ struct NoGroupInfo {
 
 //------------------------------------------------------------------------------
 // Quote Freshness
-// Mirrors the "Quote Freshness" C++ snippet from Market-Data-TTL.md.
+// Mirrors the "Quote Freshness" C++ snippet on the Market-Data-TTL wiki page.
 
 TEST(MarketDataTtlWiki, QuoteFreshnessFiniteTtlExpiresAndFreshPushRestores) {
   // A 50 ms service-wide lifetime: quotes older than that read as absent.

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
@@ -104,6 +104,39 @@ impl OpenPitSharedString {
 }
 
 #[no_mangle]
+/// Copies a UTF-8 view into a new caller-owned shared-string handle.
+///
+/// Returns null only when `value.ptr` is null. Invalid UTF-8 bytes are replaced
+/// with the Unicode replacement character, so callback error details remain
+/// distinguishable from a missing payload. The returned handle MUST be released
+/// with `openpit_destroy_shared_string`. This constructor is intended for
+/// callback error channels whose payload must remain valid after the callback
+/// returns.
+///
+/// # Safety
+///
+/// A non-null `value.ptr` must point to `value.len` readable bytes for the
+/// duration of this call.
+pub unsafe extern "C" fn openpit_create_shared_string(
+    value: OpenPitStringView,
+) -> *mut OpenPitSharedString {
+    if value.ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(value.ptr, value.len) };
+    let value = String::from_utf8_lossy(bytes);
+    OpenPitSharedString::new_handle(&value)
+}
+
+pub(crate) unsafe fn take_shared_string(handle: *mut OpenPitSharedString) -> Option<String> {
+    if handle.is_null() {
+        return None;
+    }
+    let owner = unsafe { Box::from_raw(handle) };
+    Some(owner.as_str().to_owned())
+}
+
+#[no_mangle]
 /// Releases a `OpenPitSharedString` handle.
 ///
 /// Null input is a no-op.
@@ -136,8 +169,8 @@ pub extern "C" fn openpit_shared_string_view(
 #[cfg(test)]
 mod tests {
     use super::{
-        openpit_destroy_shared_string, openpit_shared_string_view, OpenPitSharedString,
-        OpenPitStringView,
+        openpit_create_shared_string, openpit_destroy_shared_string, openpit_shared_string_view,
+        OpenPitSharedString, OpenPitStringView,
     };
 
     #[test]
@@ -175,6 +208,37 @@ mod tests {
         assert_eq!(view.len, 0);
 
         openpit_destroy_shared_string(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn create_shared_string_copies_valid_utf8() {
+        let value = "callback failed";
+        let handle = unsafe { openpit_create_shared_string(OpenPitStringView::from_utf8(value)) };
+        assert_eq!(view_to_string(openpit_shared_string_view(handle)), value);
+        openpit_destroy_shared_string(handle);
+    }
+
+    #[test]
+    fn create_shared_string_preserves_invalid_utf8_lossily() {
+        let invalid = [0xff];
+        let handle = unsafe {
+            openpit_create_shared_string(OpenPitStringView {
+                ptr: invalid.as_ptr(),
+                len: invalid.len(),
+            })
+        };
+        assert_eq!(view_to_string(openpit_shared_string_view(handle)), "�");
+        openpit_destroy_shared_string(handle);
+        let missing = unsafe { openpit_create_shared_string(OpenPitStringView::not_set()) };
+        assert!(missing.is_null());
+    }
+
+    #[test]
+    fn create_shared_string_preserves_empty_payload() {
+        let handle = unsafe { openpit_create_shared_string(OpenPitStringView::from_utf8("")) };
+        assert!(!handle.is_null());
+        assert_eq!(view_to_string(openpit_shared_string_view(handle)), "");
+        openpit_destroy_shared_string(handle);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # OpenPit (Pre-trade Integrity Toolkit) for Go
 
 <!-- markdownlint-disable MD013 -->
-[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://img.shields.io/github/v/release/openpitkit/pit)](https://github.com/openpitkit/pit/releases) [![Go version](https://img.shields.io/badge/go-1.22%2B-00ADD8)](https://pkg.go.dev/go.openpit.dev/openpit) [![Module](https://img.shields.io/badge/module-go.openpit.dev%2Fopenpit-00ADD8)](https://pkg.go.dev/go.openpit.dev/openpit) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://img.shields.io/github/v/release/openpitkit/pit)](https://github.com/openpitkit/pit/releases) [![Go version](https://img.shields.io/badge/go-1.22%2B-00ADD8)](https://pkg.go.dev/go.openpit.dev/openpit) [![Module](https://img.shields.io/badge/module-go.openpit.dev%2Fopenpit-00ADD8)](https://pkg.go.dev/go.openpit.dev/openpit) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/openpitkit/pit/blob/main/LICENSE)
 <!-- markdownlint-enable MD013 -->
 
 > **Read-only mirror.** This repository is a mirror of [`bindings/go/`](https://github.com/openpitkit/pit/tree/main/bindings/go)
@@ -28,11 +28,114 @@ Breaking API changes can appear in minor releases before `1.0`. Pick
 version constraints that tolerate API evolution during the pre-stable
 phase.
 
-## Getting Started
+## Install
 
-Visit the [Go module page](https://go.openpit.dev/openpit) and the
-[project wiki](https://wiki.openpit.dev/) for conceptual pages
-and architecture notes.
+```bash
+go get go.openpit.dev/openpit
+```
+
+## Quick Start
+
+<!-- Test mirror: bindings/go/examples_readme_test.go -->
+
+```go
+package main
+
+import (
+ "log"
+
+ "go.openpit.dev/openpit"
+ "go.openpit.dev/openpit/model"
+ "go.openpit.dev/openpit/param"
+ "go.openpit.dev/openpit/pretrade/policies"
+)
+
+func main() {
+// Build the engine once, at platform initialization.
+engine, err := openpit.NewEngineBuilder().
+ FullSync().
+ Builtin(policies.BuildOrderValidation()).
+ Build()
+if err != nil {
+ log.Fatal(err)
+}
+defer engine.Stop()
+
+aapl, err := param.NewAsset("AAPL")
+if err != nil {
+ log.Fatal(err)
+}
+usd, err := param.NewAsset("USD")
+if err != nil {
+ log.Fatal(err)
+}
+qty, err := param.NewQuantityFromString("100")
+if err != nil {
+ log.Fatal(err)
+}
+price, err := param.NewPriceFromString("185")
+if err != nil {
+ log.Fatal(err)
+}
+
+// Describe the order: buy 100 AAPL at 185 USD.
+order := model.NewOrder()
+operation := order.EnsureOperationView()
+operation.SetInstrument(param.NewInstrument(aapl, usd))
+operation.SetAccountID(param.NewAccountIDFromUint64(99224416))
+operation.SetSide(param.SideBuy)
+operation.SetTradeAmount(param.NewQuantityTradeAmount(qty))
+operation.SetPrice(price)
+
+// Run the pre-trade pipeline and read the verdict.
+reservation, rejects, err := engine.ExecutePreTrade(order)
+if err != nil {
+ log.Fatal(err)
+}
+if rejects != nil {
+ log.Fatalf("order rejected: %v", rejects)
+}
+// Close rolls the reservation back unless it was committed.
+defer reservation.Close()
+
+// The venue accepted the order, so the reserved state stays.
+reservation.Commit()
+}
+```
+
+The explicit two-stage flow, drop copy, and post-trade reports are described
+on the [Pre-trade Pipeline](https://wiki.openpit.dev/Pre-trade-Pipeline/)
+page.
+
+## What Is Inside
+
+- [Spot Funds](https://wiki.openpit.dev/Spot-Funds/) - per-account
+  solvency gate over spendable funds.
+- [Order Validation](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
+  \- structural integrity checks on every order.
+- [Rate Limit](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
+  \- throttle order flow per broker, asset, or account.
+- [Order Size Limit](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
+  \- fat-finger caps on quantity and notional.
+- [P&L Kill Switch](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
+  \- halt an account when realized P&L breaches bounds.
+- [Custom Go policies](https://wiki.openpit.dev/Policy-API/#go-interface)
+  \- the primary integration model.
+- [Account Blocking](https://wiki.openpit.dev/Account-Blocking/),
+  [Account Groups](https://wiki.openpit.dev/Account-Groups/),
+  [Account Adjustments](https://wiki.openpit.dev/Account-Adjustments/), and
+  [Balance Reconciliation](https://wiki.openpit.dev/Balance-Reconciliation/).
+- [Drop Copy](https://wiki.openpit.dev/Pre-trade-Pipeline/#drop-copy) -
+  record already executed orders without pre-trade enforcement.
+- [Market Data](https://wiki.openpit.dev/Market-Data/).
+- [Dynamic Reconfiguration](https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/)
+  of a live policy.
+- [Async Engine](https://wiki.openpit.dev/Async-Engine/) - per-account
+  queues for concurrent submission.
+- [Threading Contract](https://wiki.openpit.dev/Threading-Contract/) -
+  goroutine migration and synchronization modes.
+- [Rejects and errors](https://wiki.openpit.dev/Errors/) with
+  [stable reject codes](https://wiki.openpit.dev/Reject-Codes/).
 
 ## Examples
 
@@ -45,11 +148,24 @@ Runnable end-to-end examples live in [`examples/go/`](https://github.com/openpit
 - [`rate_pnl_killswitch`](https://github.com/openpitkit/pit/tree/main/examples/go/rate_pnl_killswitch)
   \- rate-limit + P&L kill-switch supervisor.
 
-## Install
+## Runtime Delivery
 
-```bash
-go get go.openpit.dev/openpit
-```
+The native runtime library is embedded inside the Go module at build time using
+Go's `embed` package. No network download happens at runtime.
+
+On first use, the embedded library is extracted to the user cache directory
+under a path that includes the SDK version and the `GOOS-GOARCH` target tuple.
+Subsequent process starts find the cached file and skip extraction.
+
+- Target selection uses `runtime.GOOS` and `runtime.GOARCH`.
+- Extraction cache path: `<user-cache>/pit-go/<version>/<goos>-<goarch>/`.
+
+Environment overrides:
+
+- `OPENPIT_RUNTIME_LIBRARY_PATH` - use an explicit pre-extracted library
+  path instead of the embedded copy; extraction is skipped entirely.
+- `OPENPIT_RUNTIME_CACHE_DIR` - override the root directory for extraction
+  instead of the OS user cache directory.
 
 ## Local Repository Testing
 
@@ -116,264 +232,3 @@ Pop-Location
 </details>
 
 <!-- markdownlint-enable MD033 -->
-
-## Engine
-
-### Overview
-
-The engine evaluates an order through a deterministic pre-trade pipeline:
-
-- `engine.StartPreTrade(order)` runs start-stage policies; returns
-  `(*pretrade.Request, []reject.Reject, error)`
-- `request.Execute()` runs main-stage policies; returns
-  `(*pretrade.Reservation, []reject.Reject, error)`
-- `reservation.Commit()` applies reserved state
-- `reservation.Close()` rolls back any uncommitted reservation automatically
-- `engine.ExecutePreTrade(order)` is a shortcut that composes both stages
-- `engine.ApplyExecutionReport(report)` updates post-trade policy state
-
-Start-stage policies aggregate rejects from all registered policies.
-Main-stage policies aggregate rejects and roll back registered mutations
-in reverse order when any reject is produced.
-
-Built-in policies:
-
-- [Spot Funds](https://wiki.openpit.dev/Spot-Funds/) - per-account
-  solvency gate over spendable funds.
-- [Order Validation](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
-  \- structural integrity checks on every order.
-- [Rate Limit](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
-  \- throttle order flow per broker, asset, or account.
-- [Order Size Limit](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
-  \- fat-finger caps on quantity and notional.
-- [P&L Kill Switch](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
-  \- halt an account when realized P&L breaches bounds.
-- plus your own via the [policy SDK](https://wiki.openpit.dev/Policy-API/#go-interface).
-
-The primary integration model is to write project-specific policies against
-the public Go policy API:
-[Custom Go policies](https://wiki.openpit.dev/Policy-API/#go-interface).
-
-Two types of rejections are supported: a full kill switch for the account
-and a rejection of only the current request. Kill switches are intended
-for algorithmic trading where automatic order submission must be halted
-until the situation is analyzed.
-
-## Threading
-
-Canonical contract: [Threading Contract](https://wiki.openpit.dev/Threading-Contract/).
-
-Goroutine migration between OS threads during one SDK call is supported,
-and callbacks invoked by the SDK may run on a different OS thread than the
-goroutine that initiated the call.
-
-Custom policies that need internal state across calls use the built-in
-[Storage](https://wiki.openpit.dev/Storage/) abstraction:
-synchronization-aware key-value storage that handles goroutine migration
-correctly without exposing locks to policy code.
-
-## Usage
-
-<!-- Test mirror: pit/bindings/go/examples_readme_test.go -->
-```go
-package main
-
-import (
- "fmt"
- "log"
- "time"
-
- "go.openpit.dev/openpit"
- "go.openpit.dev/openpit/model"
- "go.openpit.dev/openpit/param"
- "go.openpit.dev/openpit/pkg/optional"
- "go.openpit.dev/openpit/pretrade/policies"
-)
-
-func main() {
- usd, err := param.NewAsset("USD")
- if err != nil {
-  log.Fatal(err)
- }
-
- lowerBound, err := param.NewPnlFromString("-1000")
- if err != nil {
-  log.Fatal(err)
- }
- maxQty, err := param.NewQuantityFromString("500")
- if err != nil {
-  log.Fatal(err)
- }
- maxNotional, err := param.NewVolumeFromString("100000")
- if err != nil {
-  log.Fatal(err)
- }
-
- // 1. Build the engine (one time at the platform initialization).
- engine, err := openpit.NewEngineBuilder().
-  FullSync().
-  Builtin(policies.BuildOrderValidation()).
-  Builtin(
-   policies.BuildPnlBoundsKillSwitch().
-    BrokerBarriers(
-     policies.PnlBoundsBrokerBarrier{
-      SettlementAsset: usd,
-      LowerBound:      optional.Some(lowerBound),
-     },
-    ),
-  ).
-  Builtin(
-   policies.BuildRateLimit().
-    BrokerBarrier(
-     policies.RateLimitBrokerBarrier{
-      Limit: policies.RateLimit{
-       MaxOrders: 100,
-       Window:    time.Second,
-      },
-     },
-    ),
-  ).
-  Builtin(
-   policies.BuildOrderSizeLimit().
-    BrokerBarrier(
-     policies.OrderSizeBrokerBarrier{
-      Limit: policies.OrderSizeLimit{
-       MaxQuantity: maxQty,
-       MaxNotional: maxNotional,
-      },
-     },
-    ).
-    AssetBarriers(
-     policies.OrderSizeAssetBarrier{
-      SettlementAsset: usd,
-      Limit: policies.OrderSizeLimit{
-       MaxQuantity: maxQty,
-       MaxNotional: maxNotional,
-      },
-     },
-    ),
-  ).
-  Build()
- if err != nil {
-  log.Fatal(err)
- }
- defer engine.Stop()
-
- // 3. Check an order.
- order := model.NewOrder()
- op := order.EnsureOperationView()
- aapl, err := param.NewAsset("AAPL")
- if err != nil {
-  log.Fatal(err)
- }
- op.SetInstrument(param.NewInstrument(aapl, usd))
- op.SetAccountID(param.NewAccountIDFromUint64(99224416))
- op.SetSide(param.SideBuy)
- price, _ := param.NewPriceFromString("185")
- qty, _ := param.NewQuantityFromString("100")
- op.SetTradeAmount(param.NewQuantityTradeAmount(qty))
- op.SetPrice(price)
-
- request, rejects, err := engine.StartPreTrade(order)
- if err != nil {
-  log.Fatal(err)
- }
- if rejects != nil {
-  for _, r := range rejects {
-   fmt.Printf("rejected by %s [%d]: %s (%s)\n", r.Policy, r.Code, r.Reason, r.Details)
-  }
-  return
- }
- defer request.Close()
-
- // 4. Quick, lightweight checks were performed during start stage. The system
- // state has not yet changed, except in cases where each request, even
- // rejected ones, must be considered. Before the heavy-duty checks, other
- // work on the request can be performed simply by holding the request object.
-
- // 5. Real pre-trade and risk control.
- reservation, rejects, err := request.Execute()
- if err != nil {
-  log.Fatal(err)
- }
- if rejects != nil {
-  for _, r := range rejects {
-   fmt.Printf("rejected by %s [%d]: %s (%s)\n", r.Policy, r.Code, r.Reason, r.Details)
-  }
-  return
- }
- defer reservation.Close()
-
- // Optional shortcut for the same two-stage flow:
- // reservation, rejects, err := engine.ExecutePreTrade(order)
-
- // 6. If the request is successfully sent to the venue, it must be committed.
- // The rollback must be called otherwise to revert all performed reservations.
- reservation.Commit()
-
- // 7. The order goes to the venue and returns with an execution report.
- report := model.NewExecutionReport()
- reportOp := model.NewExecutionReportOperation()
- reportOp.SetInstrument(param.NewInstrument(aapl, usd))
- reportOp.SetAccountID(param.NewAccountIDFromUint64(99224416))
- reportOp.SetSide(param.SideBuy)
- report.SetOperation(reportOp)
-
- pnl, _ := param.NewPnlFromString("-50")
- fee, _ := param.NewFeeFromString("3.4")
- impact := model.NewExecutionReportFinancialImpact()
- impact.SetPnl(pnl)
- impact.SetFee(fee)
- report.SetFinancialImpact(impact)
-
- result, err := engine.ApplyExecutionReport(report)
- if err != nil {
-  log.Fatal(err)
- }
-
- // 8. After each execution report is applied, the system may report that it
- // has been determined in advance that all subsequent requests will be
- // rejected if the account status does not change.
- if len(result.AccountBlocks) > 0 {
-  fmt.Println("halt new orders until the blocked state is cleared")
- }
-}
-```
-
-## Errors
-
-Policy rejects from `engine.StartPreTrade()` and `request.Execute()` are
-returned as the second return value (`[]reject.Reject`). A non-nil list means the
-request was rejected; a nil list means the stage passed.
-
-Infrastructure failures and API misuse are returned as the third return value
-(`error`):
-
-- `error` from `engine.StartPreTrade()`, `request.Execute()`, or
-  `engine.ApplyExecutionReport()` indicates a transport-level or lifecycle
-  failure, not a business reject
-- `error` from policy builders such as `policies.BuildPnlBoundsKillSwitch()`
-  indicates an invalid configuration
-
-Business rejects use stable codes, for example
-`reject.CodeOrderQtyExceedsLimit` when an order quantity exceeds the configured
-limit.
-
-## Runtime Delivery
-
-The native runtime library is embedded inside the Go module at build time using
-Go's `embed` package. No network download happens at runtime.
-
-On first use, the embedded library is extracted to the user cache directory
-under a path that includes the SDK version and the `GOOS-GOARCH` target tuple.
-Subsequent process starts find the cached file and skip extraction.
-
-- Target selection uses `runtime.GOOS` and `runtime.GOARCH`.
-- Extraction cache path: `<user-cache>/pit-go/<version>/<goos>-<goarch>/`.
-
-Environment overrides:
-
-- `OPENPIT_RUNTIME_LIBRARY_PATH` - use an explicit pre-extracted library
-  path instead of the embedded copy; extraction is skipped entirely.
-- `OPENPIT_RUNTIME_CACHE_DIR` - override the root directory for extraction
-  instead of the OS user cache directory.

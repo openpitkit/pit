@@ -27,7 +27,9 @@
 
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -75,12 +77,16 @@ namespace policies = openpit::pretrade::policies;
   return AccountGroupId::FromUint32(7);
 }
 
-// Drives one StartPreTrade for account 1 and asserts it is accepted.
-void ExpectAccountPasses(const Engine& engine) {
-  openpit::pretrade::StartResult result = engine.StartPreTrade(TestOrder(1));
+// Drives one StartPreTrade for `accountId` and asserts it is accepted.
+void ExpectPasses(const Engine& engine, std::uint64_t accountId) {
+  openpit::pretrade::StartResult result =
+      engine.StartPreTrade(TestOrder(accountId));
   EXPECT_TRUE(result.rejects.empty());
   EXPECT_TRUE(result.request.has_value());
 }
+
+// Drives one StartPreTrade for account 1 and asserts it is accepted.
+void ExpectAccountPasses(const Engine& engine) { ExpectPasses(engine, 1); }
 
 // Drives one StartPreTrade for account 1 and asserts a single AccountBlocked
 // reject and no request.
@@ -385,6 +391,106 @@ TEST(Accounts, IndividualAndGroupBlocksAreIndependentOnUnifiedList) {
   // Lifting the individual block too finally releases the account.
   accounts.Unblock(account);
   ExpectAccountPasses(engine);
+}
+
+//------------------------------------------------------------------------------
+// Engine-wide block: the kill switch a failed mutation finalizer arms, and the
+// operator call that clears it.
+
+// A custom policy whose mutation commit callback throws, so finalizing its
+// reservation makes the finalizer fail.
+class ThrowingCommitPolicy {
+ public:
+  [[nodiscard]] std::string_view Name() const noexcept {
+    return "ThrowingCommitPolicy";
+  }
+
+  void PerformPreTradeCheck(
+      const openpit::pretrade::Context& /*context*/,
+      openpit::tx::Mutations& mutations, openpit::pretrade::Result& /*result*/,
+      openpit::pretrade::PolicyDecision& /*decision*/) const {
+    mutations.Push([] { throw std::runtime_error("mutation commit failed"); },
+                   [] {});
+  }
+};
+
+// An engine whose only policy registers a mutation with a throwing commit
+// callback. The policy accepts every order, so the block state under test stays
+// the only reason a pre-trade is gated.
+[[nodiscard]] Engine NewFailingFinalizerEngine() {
+  EngineBuilder builder(SyncPolicy::Full);
+  openpit::pretrade::CustomPolicy<ThrowingCommitPolicy> policy(
+      "ThrowingCommitPolicy", ThrowingCommitPolicy{});
+  builder.Add(policy);
+  return builder.Build();
+}
+
+// Drives one order for `accountId` to a commit whose mutation callback throws:
+// the exception reaches this caller and the engine-wide block is armed.
+void ArmGlobalBlock(const Engine& engine, std::uint64_t accountId) {
+  openpit::pretrade::StartResult start =
+      engine.StartPreTrade(TestOrder(accountId));
+  ASSERT_TRUE(start.request.has_value());
+  openpit::pretrade::ExecuteResult execute = start.request->Execute();
+  ASSERT_TRUE(execute.reservation.has_value());
+  EXPECT_THROW(execute.reservation->Commit(), std::runtime_error);
+}
+
+// Drives one StartPreTrade for `accountId` and asserts the engine-wide
+// mutation-finalizer block gates it.
+void ExpectGloballyBlocked(const Engine& engine, std::uint64_t accountId) {
+  openpit::pretrade::StartResult result =
+      engine.StartPreTrade(TestOrder(accountId));
+  EXPECT_FALSE(result.request.has_value());
+  ASSERT_EQ(result.rejects.size(), 1u);
+  EXPECT_EQ(result.rejects.front().code, RejectCode::SystemUnavailable);
+  EXPECT_EQ(result.rejects.front().policy, "Engine");
+  EXPECT_EQ(result.rejects.front().reason, "mutation finalizer failed");
+}
+
+// Every mutation registered from C++ is a custom policy's, so the kill switch
+// its failing finalizer arms reaches accounts the pipeline never touched.
+TEST(Accounts, MutationFinalizerFailureBlocksEveryAccount) {
+  Engine engine = NewFailingFinalizerEngine();
+  ExpectPasses(engine, 2);
+
+  ArmGlobalBlock(engine, 1);
+  ExpectGloballyBlocked(engine, 2);
+
+  engine.Accounts().UnblockAll();
+  ExpectPasses(engine, 2);
+}
+
+TEST(Accounts, UnblockAllClearsGlobalBlock) {
+  Engine engine = NewFailingFinalizerEngine();
+  ArmGlobalBlock(engine, 1);
+  ExpectGloballyBlocked(engine, 1);
+
+  engine.Accounts().UnblockAll();
+  ExpectPasses(engine, 1);
+}
+
+TEST(Accounts, UnblockAllLeavesIndividuallyBlockedAccountBlocked) {
+  Engine engine = NewFailingFinalizerEngine();
+  Accounts accounts = engine.Accounts();
+  accounts.Block(AccountId::FromUint64(3), "by operator");
+  ArmGlobalBlock(engine, 1);
+
+  accounts.UnblockAll();
+
+  ExpectPasses(engine, 2);
+  // The admin block outlives the engine-wide one and keeps its own reason.
+  openpit::pretrade::StartResult result = engine.StartPreTrade(TestOrder(3));
+  EXPECT_FALSE(result.request.has_value());
+  ASSERT_EQ(result.rejects.size(), 1u);
+  EXPECT_EQ(result.rejects.front().code, RejectCode::AccountBlocked);
+  EXPECT_EQ(result.rejects.front().reason, "by operator");
+}
+
+TEST(Accounts, UnblockAllWithoutGlobalBlockIsNoOp) {
+  Engine engine = NewFailingFinalizerEngine();
+  engine.Accounts().UnblockAll();
+  ExpectPasses(engine, 1);
 }
 
 }  // namespace

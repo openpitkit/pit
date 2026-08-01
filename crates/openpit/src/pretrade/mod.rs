@@ -24,12 +24,15 @@
 //!   account-adjustment policy hooks;
 //! - [`PreTradeRequest`] is the single-use handle returned after start-stage success;
 //! - [`PreTradeReservation`] is the finalizable handle for reserved state;
+//! - [`DropCopyOperation`] is the finalizable handle for drop-copy
+//!   bookkeeping;
 //! - [`PreTradeDryRunReport`] is the inert verdict of a non-mutating dry-run.
 //!
 //! Custom controls typically start from the policy traits plus [`PreTradeContext`].
 
 mod configurable;
 mod context;
+mod drop_copy_operation;
 mod dry_run_report;
 pub(crate) mod handle;
 pub mod holdings;
@@ -45,7 +48,10 @@ mod reservation;
 pub(crate) mod start_pre_trade_time;
 
 pub(crate) use configurable::ConfigurablePolicy;
+#[doc(hidden)]
+pub use context::DropCopyStartMutationRecorder;
 pub use context::PreTradeContext;
+pub use drop_copy_operation::DropCopyOperation;
 pub use dry_run_report::PreTradeDryRunReport;
 pub use lock::PreTradeLock;
 pub use policies::{

@@ -91,4 +91,5 @@ the wasm is inlined into the bundle, there is no separate `.wasm` asset to serve
 
 Prices, quantities, and money cross the engine boundary as decimal **strings**,
 the only lossless form (`Price.fromString("50000")`, never `50000.0`). See the
-package [`README`](../../../bindings/js/README.md) for the full decimal contract.
+wiki page [Domain Types](https://wiki.openpit.dev/Domain-Types/) for the full
+decimal contract.

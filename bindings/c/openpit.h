@@ -137,6 +137,8 @@ typedef struct OpenPitPretradeAccountAdjustmentResult
 typedef struct OpenPitPretradeAccountBlock OpenPitPretradeAccountBlock;
 typedef struct OpenPitPretradeAccountBlockList OpenPitPretradeAccountBlockList;
 typedef struct OpenPitPretradeContext OpenPitPretradeContext;
+typedef struct OpenPitPretradeDropCopyOperation
+    OpenPitPretradeDropCopyOperation;
 typedef struct OpenPitPretradePoliciesOrderSizeAccountAssetBarrier
     OpenPitPretradePoliciesOrderSizeAccountAssetBarrier;
 typedef struct OpenPitPretradePoliciesOrderSizeAssetBarrier
@@ -1270,6 +1272,12 @@ typedef uint8_t OpenPitMarketDataGetStatus;
  */
 #define OpenPitMarketDataGetStatus_QuoteExpired ((OpenPitMarketDataGetStatus) 3)
 /**
+ * The account-group resolver reported `Failed`, so the reading account's group
+ * is unknown and no bucket may be selected on its behalf.
+ */
+#define OpenPitMarketDataGetStatus_AccountGroupResolutionFailed \
+    ((OpenPitMarketDataGetStatus) 4)
+/**
  * The supplied quote-resolution selector is invalid.
  */
 #define OpenPitMarketDataGetStatus_Error ((OpenPitMarketDataGetStatus) 255)
@@ -1317,6 +1325,35 @@ typedef uint8_t OpenPitMarketDataRegisterStatus;
  */
 #define OpenPitMarketDataRegisterStatus_NoTarget \
     ((OpenPitMarketDataRegisterStatus) 6)
+
+/**
+ * Outcome of one account-group resolver invocation.
+ *
+ * The caller must distinguish "this account has no group" from "the group
+ * could not be determined". Reporting a failure as `None` would silently move
+ * the read onto the default-group bucket and bypass every group-scoped rule.
+ */
+typedef uint8_t OpenPitMarketDataAccountGroupResolution;
+/**
+ * The account belongs to no group; `out_account_group_id` is untouched.
+ *
+ * Zero preserves the previous callback's `false` meaning.
+ */
+#define OpenPitMarketDataAccountGroupResolution_NoGroup \
+    ((OpenPitMarketDataAccountGroupResolution) 0)
+/**
+ * The account belongs to a group; `out_account_group_id` was written.
+ *
+ * One preserves the previous callback's `true` meaning.
+ */
+#define OpenPitMarketDataAccountGroupResolution_Found \
+    ((OpenPitMarketDataAccountGroupResolution) 1)
+/**
+ * The group could not be determined. The enclosing read fails as a whole with
+ * `AccountGroupResolutionFailed` and no quote is produced.
+ */
+#define OpenPitMarketDataAccountGroupResolution_Failed \
+    ((OpenPitMarketDataAccountGroupResolution) 2)
 
 typedef uint8_t OpenPitPretradePreTradeLockPricesStatus;
 #define OpenPitPretradePreTradeLockPricesStatus_Error \
@@ -2782,12 +2819,16 @@ struct OpenPitOrder {
  *   callback runs.
  * - If the callback wants to keep any data from `order`, it must copy that
  *   data before returning.
- * - Return null or an empty list to accept the order.
+ * - Return a non-null empty list to accept the order.
  * - Return a non-empty reject list to reject the order.
+ * - Return null only when the callback could not evaluate the order. The
+ *   engine converts it to a fatal `SystemUnavailable` reject.
  * - A rejected order must set explicit `code` and `scope` values in every
  *   list item.
- * - The returned list ownership is transferred to the engine; create it with
- *   `openpit_pretrade_create_reject_list`.
+ * - Return `openpit_pretrade_reject_list_get_accept_sentinel()` for an
+ *   allocation-free accepted result. Other returned lists transfer ownership
+ *   to the engine and must be created with
+ *   `openpit_create_pretrade_reject_list`.
  * - Every reject payload is copied into internal storage before the callback
  *   returns.
  * - `user_data` is passed through unchanged from policy creation.
@@ -2820,15 +2861,19 @@ typedef OpenPitPretradeRejectList *
  *   `openpit_pretrade_pre_trade_result_push_account_adjustment`. Neither
  *   push carries a `policy_group_id`; the engine assigns the policy group.
  *   The callback must not store or use `out_result` after return.
- * - The reject channel and the `out_result` channel are independent: a
- *   callback may both reject and fill `out_result`, but the engine only
- *   keeps `out_result` when the callback accepts (returns null or an empty
- *   list).
- * - Return null or an empty list to accept the order.
+ * - The reject channel and the `out_result` channel are independent. The
+ *   engine keeps `out_result` when the callback accepts. Drop-copy also
+ *   keeps it with ordinary, non-enforcing rejects; evaluation-failure
+ *   rejects abort drop-copy and discard it.
+ * - Return a non-null empty list to accept the order.
  * - Return a non-empty reject list to reject the order.
+ * - Return null only when the callback could not evaluate the order. The
+ *   engine converts it to a fatal `SystemUnavailable` reject.
  * - Every returned reject must contain explicit `code` and `scope` values.
- * - The returned list ownership is transferred to the engine; create it with
- *   `openpit_pretrade_create_reject_list`.
+ * - Return `openpit_pretrade_reject_list_get_accept_sentinel()` for an
+ *   allocation-free accepted result. Other returned lists transfer ownership
+ *   to the engine and must be created with
+ *   `openpit_create_pretrade_reject_list`.
  * - Every reject payload is copied into internal storage before this
  *   callback returns.
  * - `user_data` is passed through unchanged from policy creation.
@@ -2870,7 +2915,7 @@ typedef OpenPitPretradeRejectList *
  *   callback may populate any combination of them.
  * - Return a non-null account-block list when this policy reports a
  *   kill-switch trigger. The returned list ownership is transferred to the
- *   engine; create it with `openpit_pretrade_create_account_block_list`.
+ *   engine; create it with `openpit_create_pretrade_account_block_list`.
  * - Return null to indicate no kill-switch condition.
  * - A null `apply_execution_report_fn` means that hook returns no blocks,
  *   adjustments, or account-level PnL outcomes.
@@ -2917,11 +2962,16 @@ typedef OpenPitPretradeAccountBlockList *
  *   policy group. The callback must not store or use `out_result` after
  *   return.
  * - The reject and `out_result` channels are independent: the engine keeps
- *   the collector payload only when the callback accepts (returns null or an
+ *   the collector payload only when the callback accepts (returns a non-null
  *   empty list).
- * - Return null to accept the adjustment.
+ * - Return a non-null empty list to accept the adjustment.
  * - Return a non-empty reject list to reject the adjustment.
- * - Returned reject list ownership is transferred to the callee.
+ * - Return null only when the callback could not evaluate the adjustment.
+ *   The engine converts it to a fatal `SystemUnavailable` reject.
+ * - Return `openpit_pretrade_reject_list_get_accept_sentinel()` for an
+ *   allocation-free accepted result. Other returned lists transfer ownership
+ *   to the engine and must be created with
+ *   `openpit_create_pretrade_reject_list`.
  * - `user_data` is passed through unchanged from policy creation.
  *
  * Parameter ordering convention: read-only inputs first (`ctx`, `account_id`,
@@ -2955,9 +3005,30 @@ typedef void (*OpenPitPretradePreTradePolicyFreeUserDataFn)(
 
 /**
  * Callback invoked for either commit or rollback of a registered mutation.
+ *
+ * A finalizer has no right to fail: by the time it runs the decision is
+ * already made and the state it finalizes was applied eagerly, so there is
+ * nothing left to compensate and no caller left to answer.
+ *
+ * Returns `true` on success. On `false`, the callback may write a caller-owned
+ * `OpenPitSharedString` to `out_error`; the engine consumes and destroys it
+ * before returning across the ABI. A null error handle still means failure and
+ * receives generic diagnostics.
+ *
+ * A reported failure never fails the void commit or rollback call that ran the
+ * callback. It arms the engine kill switch instead, and a mutation registered
+ * through this ABI is a custom-policy mutation whose state reach the engine
+ * cannot bound, so EVERY account is blocked: policy `"Engine"`, code
+ * `OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE`, reason `"mutation
+ * finalizer failed"`. The owner of the reservation or the drop-copy operation
+ * is not told directly; the next pre-trade call is rejected. An operator
+ * clears the block with `openpit_engine_unblock_all_accounts`. A failure
+ * reported while drop copy compensates a fatal evaluation reject additionally
+ * surfaces `SystemUnavailable` rejects to that caller.
  */
-typedef void (*OpenPitMutationFn)(
-    void * user_data
+typedef bool (*OpenPitMutationFn)(
+    void * user_data,
+    OpenPitOutError out_error
 );
 
 /**
@@ -2975,16 +3046,22 @@ typedef void (*OpenPitMutationFreeFn)(
 /**
  * Resolves the reading account's group on demand.
  *
- * Returns `true` and writes the group id to `out_account_group_id` when the
- * account belongs to a group; returns `false` when it has none. Invoked lazily
- * by `openpit_marketdata_service_get` — only when the resolution mode would
+ * Writes the group id to `out_account_group_id` and returns `Found` when the
+ * account belongs to a group, `NoGroup` when it has none, and `Failed` when
+ * the group could not be determined. Invoked lazily by
+ * `openpit_marketdata_service_get` — only when the resolution mode would
  * consult the group or default-group bucket and the per-account bucket has no
  * quote.
+ *
+ * Only `NoGroup` (0), `Found` (1), and `Failed` (2) are valid return values.
+ * Returning any other byte is an error and is handled as `Failed`: the
+ * enclosing read fails rather than falling through to a group bucket the
+ * callback never named.
  *
  * The function pointer must not be null; see the contract on
  * `openpit_marketdata_service_get`.
  */
-typedef bool (*OpenPitMarketDataAccountGroupResolver)(
+typedef uint8_t (*OpenPitMarketDataAccountGroupResolver)(
     void * user_data,
     OpenPitParamAccountGroupId * out_account_group_id
 );
@@ -4757,17 +4834,64 @@ OpenPitSharedString * openpit_param_adjustment_amount_to_string(
 );
 
 /**
+ * Reports whether a reject code means the policy could not evaluate the
+ * historical order.
+ *
+ * An evaluation failure aborts drop copy before it produces an operation and
+ * rolls back the prepared mutations. Unknown incoming codes map to `Other` and
+ * return `false`.
+ */
+bool openpit_pretrade_reject_code_is_evaluation_failure(
+    OpenPitPretradeRejectCode code
+);
+
+/**
  * Creates a caller-owned reject list with preallocated capacity.
  *
  * `reserve` is the requested number of elements to preallocate.
  *
  * Contract:
  * - returns a new caller-owned list;
- * - release it with `openpit_pretrade_destroy_reject_list`;
+ * - release it with `openpit_destroy_pretrade_reject_list`;
  * - this function always succeeds.
  */
-OpenPitPretradeRejectList * openpit_pretrade_create_reject_list(
+OpenPitPretradeRejectList * openpit_create_pretrade_reject_list(
     size_t reserve
+);
+
+/**
+ * Returns a borrowed immutable empty reject list that accepts a policy call.
+ *
+ * Contract:
+ * - the returned pointer is non-null and may be returned only as a custom
+ *   policy callback result;
+ * - the caller must not append to, retain, or free it: appending is refused
+ *   by `openpit_pretrade_reject_list_push` and
+ *   `openpit_destroy_pretrade_reject_list` is a no-op for it;
+ * - the engine recognizes it as an accepted callback result without an
+ *   allocation;
+ * - this function always succeeds.
+ */
+OpenPitPretradeRejectList *
+openpit_pretrade_reject_list_get_accept_sentinel(
+    void
+);
+
+/**
+ * Reports whether `list` is the borrowed immutable accept list returned by
+ * `openpit_pretrade_reject_list_get_accept_sentinel`.
+ *
+ * Use it to tell the two `false` outcomes of
+ * `openpit_pretrade_reject_list_push` apart: an unknown reject scope is a bad
+ * reject payload, while the accept list is a bad target pointer.
+ *
+ * Contract:
+ * - passing null is allowed and returns `false`;
+ * - `true` means the list can be neither appended to nor released;
+ * - this function always succeeds.
+ */
+bool openpit_pretrade_reject_list_is_accept_sentinel(
+    const OpenPitPretradeRejectList * list
 );
 
 /**
@@ -4775,9 +4899,12 @@ OpenPitPretradeRejectList * openpit_pretrade_create_reject_list(
  *
  * Contract:
  * - passing null is allowed;
+ * - passing the borrowed accept list returned by
+ *   `openpit_pretrade_reject_list_get_accept_sentinel` is allowed and does
+ *   nothing, since that instance is shared and not caller-owned;
  * - this function always succeeds.
  */
-void openpit_pretrade_destroy_reject_list(
+void openpit_destroy_pretrade_reject_list(
     OpenPitPretradeRejectList * rejects
 );
 
@@ -4788,7 +4915,12 @@ void openpit_pretrade_destroy_reject_list(
  * - `list` must be a valid non-null pointer;
  * - string views in `reject` are copied before this function returns;
  * - returns `true` after appending a reject with a valid scope;
- * - returns `false` for an unknown scope and leaves the list unchanged;
+ * - returns `false` and leaves the list unchanged when `reject` carries an
+ *   unknown scope, or when `list` is the immutable accept list returned by
+ *   `openpit_pretrade_reject_list_get_accept_sentinel`;
+ * - call `openpit_pretrade_reject_list_is_accept_sentinel` to separate those
+ *   two outcomes: the first is a bad reject payload, the second is a bad
+ *   target pointer, and reporting one as the other hides the real defect;
  * - violating the pointer contract aborts the call.
  */
 bool openpit_pretrade_reject_list_push(
@@ -4836,10 +4968,10 @@ bool openpit_pretrade_reject_list_get(
  *
  * Contract:
  * - returns a new caller-owned list;
- * - release it with `openpit_pretrade_destroy_account_block_list`;
+ * - release it with `openpit_destroy_pretrade_account_block_list`;
  * - this function always succeeds.
  */
-OpenPitPretradeAccountBlockList * openpit_pretrade_create_account_block_list(
+OpenPitPretradeAccountBlockList * openpit_create_pretrade_account_block_list(
     size_t reserve
 );
 
@@ -4850,7 +4982,7 @@ OpenPitPretradeAccountBlockList * openpit_pretrade_create_account_block_list(
  * - passing null is allowed;
  * - this function always succeeds.
  */
-void openpit_pretrade_destroy_account_block_list(
+void openpit_destroy_pretrade_account_block_list(
     OpenPitPretradeAccountBlockList * blocks
 );
 
@@ -5142,30 +5274,65 @@ OpenPitPretradeStatus openpit_engine_execute_pre_trade(
 );
 
 /**
- * Runs the complete pre-trade pipeline without enforcing policy rejects.
+ * Applies a drop-copy operation without enforcing ordinary policy rejects.
  *
- * Returns `true` on success and `false` when input pointers are invalid, the
- * order payload cannot be decoded, or the drop-copy cannot be admitted.
- * Drop-copy requires a readable limit price; a market order or price-field
- * access failure returns `false` before any policy is evaluated. Existing
- * account and account-group blocks are ignored. Every policy still runs and
- * keeps its normal mutations, locks, account adjustments, and account blocks,
- * while its rejects are discarded.
+ * Existing account and account-group blocks are ignored. Policies run in
+ * registration order and keep their normal mutations, locks, account
+ * adjustments, and account blocks. Ordinary rejects are discarded. Any reject
+ * code classified by `openpit_pretrade_reject_code_is_evaluation_failure`
+ * aborts the operation and rolls back all collected mutations; when that
+ * compensation fails, a `SystemUnavailable` reject is appended after the
+ * policy rejects and the engine kill switch is armed. On success the returned
+ * operation retains the prepared mutations exactly like a pre-trade
+ * reservation. Account-control operations and rate-limit attempts are applied
+ * before this call returns and stay outside that finalization boundary.
  *
- * On success, if `out_reservation` is not null, writes one caller-owned
- * reservation pointer. Release it with
- * `openpit_pretrade_pre_trade_reservation_commit`,
- * `openpit_pretrade_pre_trade_reservation_rollback`, or
- * `openpit_destroy_pretrade_pre_trade_reservation`.
+ * A mutation registered through `openpit_mutations_push` is a custom-policy
+ * mutation, so a finalizer of that mutation that fails - while compensating a
+ * fatal exit here or later, when the owner finalizes the returned operation -
+ * blocks EVERY account with reason `"mutation finalizer failed"` until an
+ * operator calls `openpit_engine_unblock_all_accounts`. See
+ * `OpenPitMutationFn`.
  *
- * On error, `out_reservation` is left untouched. If `out_error` is not null,
- * it receives a caller-owned error string that MUST be released with
- * `openpit_destroy_shared_string`.
+ * Success:
+ * - returns `Passed` when the request was applied; read `out_operation`;
+ * - returns `Rejected` when the request was not applied; read `out_rejects`.
+ *
+ * Error:
+ * - returns `Error` when input pointers are invalid or the order payload
+ *   cannot be decoded;
+ * - on `Error`, if `out_error` is not null, it is filled with a caller-owned
+ *   `OpenPitSharedString` that MUST be destroyed by the caller.
+ *
+ * Cleanup:
+ * - release a successful operation with
+ *   `openpit_pretrade_drop_copy_operation_commit`,
+ *   `openpit_pretrade_drop_copy_operation_rollback`, or
+ *   `openpit_destroy_pretrade_drop_copy_operation`.
+ *
+ * Output ownership contract:
+ * - on `Passed`, a non-null operation pointer is written to `out_operation`
+ *   if it is not null; when it is null, the operation is rolled back
+ *   immediately;
+ * - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written
+ *   to `out_rejects` if it is not null;
+ * - the caller owns either returned object and MUST release it with the
+ *   corresponding destroy function;
+ * - no thread-local state is involved, and returned pointers are safe to
+ *   read on any thread;
+ * - on `Passed` and `Error`, `out_rejects` is left untouched;
+ * - on `Rejected` and `Error`, `out_operation` is left untouched.
+ *
+ * Order lifetime contract:
+ * - `order` is read as a borrowed view during this call only;
+ * - the operation does not retain any pointer into source memory after this
+ *   function returns.
  */
-bool openpit_engine_execute_pre_trade_drop_copy(
+OpenPitPretradeStatus openpit_engine_apply_drop_copy(
     OpenPitEngine * engine,
     const OpenPitOrder * order,
-    OpenPitPretradePreTradeReservation ** out_reservation,
+    OpenPitPretradeDropCopyOperation ** out_operation,
+    OpenPitPretradeRejectList ** out_rejects,
     OpenPitOutError out_error
 );
 
@@ -5317,12 +5484,19 @@ void openpit_destroy_pretrade_pre_trade_request(
 /**
  * Finalizes a reservation and applies the reserved state permanently.
  *
- * This call is idempotent at the pointer level: if the reservation was already
- * consumed, nothing happens. Passing null is allowed.
+ * This call is idempotent at the pointer level: the first commit or rollback
+ * finalizes the reservation and every later commit or rollback on the same
+ * pointer does nothing. Passing null is allowed.
  *
  * Contract:
  * - passing null is allowed;
- * - this function always succeeds.
+ * - the reserved state is applied at most once, on the first call;
+ * - this function always succeeds;
+ * - a mutation `commit_fn` that reports failure never fails this call and is
+ *   never ignored either: it arms the engine kill switch, which blocks EVERY
+ *   account for a mutation registered through `openpit_mutations_push`. The
+ *   next pre-trade call is rejected until an operator calls
+ *   `openpit_engine_unblock_all_accounts`. See `OpenPitMutationFn`.
  */
 void openpit_pretrade_pre_trade_reservation_commit(
     OpenPitPretradePreTradeReservation * reservation
@@ -5331,12 +5505,21 @@ void openpit_pretrade_pre_trade_reservation_commit(
 /**
  * Cancels a reservation and releases the reserved state.
  *
- * This call is idempotent at the pointer level: if the reservation was already
- * consumed, nothing happens. Passing null is allowed.
+ * This call is idempotent at the pointer level: the first commit or rollback
+ * finalizes the reservation and every later commit or rollback on the same
+ * pointer does nothing. In particular, a rollback after a commit never reverts
+ * the committed state. Passing null is allowed.
  *
  * Contract:
  * - passing null is allowed;
- * - this function always succeeds.
+ * - the reserved state is released at most once, on the first call;
+ * - this function always succeeds;
+ * - a mutation `rollback_fn` that reports failure never fails this call and
+ *   is never ignored either: it arms the engine kill switch, which blocks
+ *   EVERY account for a mutation registered through
+ *   `openpit_mutations_push`. The next pre-trade call is rejected until an
+ *   operator calls `openpit_engine_unblock_all_accounts`. See
+ *   `OpenPitMutationFn`.
  */
 void openpit_pretrade_pre_trade_reservation_rollback(
     OpenPitPretradePreTradeReservation * reservation
@@ -5377,25 +5560,6 @@ openpit_pretrade_pre_trade_reservation_get_account_adjustments(
 );
 
 /**
- * Returns the winning account block produced by the reservation's pipeline.
- *
- * Contract:
- * - `reservation` must be a valid non-null pointer;
- * - violating the pointer contract aborts the call;
- * - this function never fails;
- * - always returns a caller-owned `OpenPitPretradeAccountBlockList`
- *   (possibly empty); release it with
- *   `openpit_pretrade_destroy_account_block_list`.
- *
- * Lifetime contract:
- * - the returned list is detached from the reservation state.
- */
-OpenPitPretradeAccountBlockList *
-openpit_pretrade_pre_trade_reservation_get_account_block(
-    const OpenPitPretradePreTradeReservation * reservation
-);
-
-/**
  * Releases a reservation pointer owned by the caller.
  *
  * Contract:
@@ -5404,10 +5568,152 @@ openpit_pretrade_pre_trade_reservation_get_account_block(
  *   mutations;
  * - callers that need explicit resolution should call commit or rollback
  *   first;
- * - this function always succeeds.
+ * - this function always succeeds;
+ * - a mutation `rollback_fn` that reports failure during that rollback arms
+ *   the engine kill switch, exactly as in
+ *   `openpit_pretrade_pre_trade_reservation_rollback`.
  */
 void openpit_destroy_pretrade_pre_trade_reservation(
     OpenPitPretradePreTradeReservation * reservation
+);
+
+/**
+ * Finalizes a drop-copy operation and applies the prepared state permanently.
+ *
+ * This call is idempotent at the pointer level: the first commit or rollback
+ * finalizes the operation and every later commit or rollback on the same
+ * pointer does nothing. Passing null is allowed.
+ *
+ * Contract:
+ * - passing null is allowed;
+ * - the prepared state is applied at most once, on the first call;
+ * - this function always succeeds;
+ * - a mutation `commit_fn` that reports failure never fails this call and is
+ *   never ignored either: it arms the engine kill switch, which blocks EVERY
+ *   account for a mutation registered through `openpit_mutations_push` or
+ *   `openpit_pretrade_context_record_drop_copy_start_mutation`. The next
+ *   pre-trade call is rejected until an operator calls
+ *   `openpit_engine_unblock_all_accounts`. See `OpenPitMutationFn`.
+ */
+void openpit_pretrade_drop_copy_operation_commit(
+    OpenPitPretradeDropCopyOperation * operation
+);
+
+/**
+ * Cancels a drop-copy operation and compensates the prepared state.
+ *
+ * This call is idempotent at the pointer level: the first commit or rollback
+ * finalizes the operation and every later commit or rollback on the same
+ * pointer does nothing. In particular, a rollback after a commit never reverts
+ * the committed state. Account-control operations and rate-limit attempts
+ * applied by `openpit_engine_apply_drop_copy` are outside this boundary and
+ * stay applied. Passing null is allowed.
+ *
+ * Contract:
+ * - passing null is allowed;
+ * - the prepared state is compensated at most once, on the first call;
+ * - this function always succeeds;
+ * - a mutation `rollback_fn` that reports failure never fails this call and
+ *   is never ignored either: it arms the engine kill switch, which blocks
+ *   EVERY account for a mutation registered through `openpit_mutations_push`
+ *   or `openpit_pretrade_context_record_drop_copy_start_mutation`. The next
+ *   pre-trade call is rejected until an operator calls
+ *   `openpit_engine_unblock_all_accounts`. See `OpenPitMutationFn`.
+ */
+void openpit_pretrade_drop_copy_operation_rollback(
+    OpenPitPretradeDropCopyOperation * operation
+);
+
+/**
+ * Returns a snapshot of the lock attached to a drop-copy operation.
+ *
+ * Contract:
+ * - `operation` must be a valid non-null pointer;
+ * - violating the pointer contract aborts the call;
+ * - this function never fails;
+ * - always returns a caller-owned `OpenPitPretradePreTradeLock`; release it
+ *   with `openpit_destroy_pretrade_pre_trade_lock`.
+ *
+ * Lifetime contract:
+ * - the returned snapshot is detached from the operation state.
+ */
+OpenPitPretradePreTradeLock * openpit_pretrade_drop_copy_operation_get_lock(
+    const OpenPitPretradeDropCopyOperation * operation
+);
+
+/**
+ * Returns the account-adjustment outcomes collected by drop copy.
+ *
+ * Contract:
+ * - `operation` must be a valid non-null pointer;
+ * - violating the pointer contract aborts the call;
+ * - this function never fails;
+ * - always returns a caller-owned `OpenPitAccountAdjustmentOutcomeList`
+ *   (possibly empty); release it with
+ *   `openpit_destroy_account_adjustment_outcome_list`.
+ *
+ * Lifetime contract:
+ * - the returned list is detached from the operation state.
+ */
+OpenPitAccountAdjustmentOutcomeList *
+openpit_pretrade_drop_copy_operation_get_account_adjustments(
+    const OpenPitPretradeDropCopyOperation * operation
+);
+
+/**
+ * Returns the first account block requested by the applied pipeline.
+ *
+ * Contract:
+ * - `operation` must be a valid non-null pointer;
+ * - violating the pointer contract aborts the call;
+ * - this function never fails;
+ * - always returns a caller-owned `OpenPitPretradeAccountBlockList` carrying
+ *   the request's first block, or empty when no policy requested one;
+ *   release it with `openpit_destroy_pretrade_account_block_list`. This
+ *   request-local value can differ from the apply-time registry snapshot: an
+ *   earlier block may remain the stored cause, or a deferred unblock may
+ *   remove this block. Use
+ *   `openpit_pretrade_drop_copy_operation_is_account_blocked` for the
+ *   snapshot captured before `openpit_engine_apply_drop_copy` returned.
+ *
+ * Lifetime contract:
+ * - the returned list is detached from the operation state.
+ */
+OpenPitPretradeAccountBlockList *
+openpit_pretrade_drop_copy_operation_get_account_block(
+    const OpenPitPretradeDropCopyOperation * operation
+);
+
+/**
+ * Returns the apply-time blocked-state snapshot for the order account.
+ *
+ * Contract:
+ * - `operation` must be a valid non-null pointer;
+ * - violating the pointer contract aborts the call;
+ * - this function never fails;
+ * - the snapshot was captured before `openpit_engine_apply_drop_copy`
+ *   returned and does not track later registry changes.
+ */
+bool openpit_pretrade_drop_copy_operation_is_account_blocked(
+    const OpenPitPretradeDropCopyOperation * operation
+);
+
+/**
+ * Releases a drop-copy operation pointer owned by the caller.
+ *
+ * Contract:
+ * - passing null is allowed;
+ * - destroying an unresolved operation triggers rollback of any pending
+ *   mutations;
+ * - callers that need explicit resolution should call commit or rollback
+ *   first;
+ * - this function always succeeds;
+ * - a mutation `rollback_fn` that reports failure during that rollback arms
+ *   the engine kill switch, exactly as in
+ *   `openpit_pretrade_drop_copy_operation_rollback`.
+ */
+void openpit_destroy_pretrade_drop_copy_operation(
+    OpenPitPretradeDropCopyOperation * operation
 );
 
 /**
@@ -5433,7 +5739,7 @@ bool openpit_pretrade_pre_trade_dry_run_report_is_pass(
  * - this function never fails;
  * - always returns a caller-owned `OpenPitPretradeRejectList` (empty when
  *   the order would have passed); release it with
- *   `openpit_pretrade_destroy_reject_list`.
+ *   `openpit_destroy_pretrade_reject_list`.
  *
  * Lifetime contract:
  * - the returned list is detached from the report state.
@@ -5492,7 +5798,7 @@ openpit_pretrade_pre_trade_dry_run_report_get_account_adjustments(
  * - always returns a caller-owned `OpenPitPretradeAccountBlockList` carrying
  *   the single would-be block, or empty when no account-scope reject would
  *   have latched one; release it with
- *   `openpit_pretrade_destroy_account_block_list`. A real call records this
+ *   `openpit_destroy_pretrade_account_block_list`. A real call records this
  *   block in the engine's blocked-accounts registry; a dry-run reports it
  *   here without recording it.
  *
@@ -5666,7 +5972,7 @@ openpit_account_adjustment_batch_error_get_rejects(
  * - on `Applied`, if `out_blocks` is not null and a policy reported one or
  *   more account blocks, writes a caller-owned
  *   `OpenPitPretradeAccountBlockList` pointer; release it with
- *   `openpit_pretrade_destroy_account_block_list`; if no block was produced,
+ *   `openpit_destroy_pretrade_account_block_list`; if no block was produced,
  *   `out_blocks` is left untouched. The engine has already recorded every
  *   returned block;
  * - `Rejected` stores batch error details in `out_reject`, the caller must
@@ -5684,7 +5990,7 @@ openpit_account_adjustment_batch_error_get_rejects(
  * - release a returned batch error with
  *   `openpit_destroy_account_adjustment_batch_error`;
  * - release a returned account-block list with
- *   `openpit_pretrade_destroy_account_block_list`.
+ *   `openpit_destroy_pretrade_account_block_list`.
  */
 OpenPitAccountAdjustmentApplyStatus openpit_engine_apply_account_adjustment(
     OpenPitEngine * engine,
@@ -6084,6 +6390,27 @@ void openpit_engine_unblock_account(
 );
 
 /**
+ * Clears the engine-wide block, letting every account through again.
+ *
+ * A global block is raised by the engine itself, never by an admin call: a
+ * kill switch reported by an execution report with no readable account, or a
+ * mutation finalizer registered by a custom policy that failed, including
+ * every mutation registered through `openpit_mutations_push`. This is the
+ * operator's counterpart, so the engine can be returned to service once the
+ * inconsistency has been investigated.
+ *
+ * Idempotent: a no-op when no global block is active. Accounts and account
+ * groups blocked individually stay blocked; clear those with
+ * `openpit_engine_unblock_account` and `openpit_engine_unblock_account_group`.
+ *
+ * Contract:
+ * - `engine` must be a valid non-null engine pointer.
+ */
+void openpit_engine_unblock_all_accounts(
+    OpenPitEngine * engine
+);
+
+/**
  * Replaces the stored reason of an already-blocked account.
  *
  * Unlike `openpit_engine_block_account`, which preserves the first cause, this
@@ -6423,8 +6750,16 @@ bool openpit_engine_builder_add_pre_trade_policy(
  * - `commit_fn` and `rollback_fn` must remain callable until one of them is
  *   executed.
  * - `user_data` is passed to both callbacks.
- * - Exactly one of `commit_fn` or `rollback_fn` runs for each successful
- *   push.
+ * - Apply tentative state before registration. Pre-trade and drop-copy
+ *   finalization each run exactly one callback per mutation, when the caller
+ *   commits or rolls back the returned handle. A fatal drop-copy evaluation
+ *   reject runs every collected `rollback_fn` instead, including mutations
+ *   whose `commit_fn` was not reached.
+ * - Neither callback may fail. A failure reported by either one never fails
+ *   the void commit or rollback call; it arms the engine kill switch. A
+ *   mutation registered here is a custom-policy mutation, so that kill
+ *   switch blocks EVERY account until an operator calls
+ *   `openpit_engine_unblock_all_accounts`. See `OpenPitMutationFn`.
  * - After the executed callback returns, `free_fn` is called exactly once
  *   when provided.
  * - If neither callback runs (for example collector drop), only `free_fn`
@@ -6961,7 +7296,7 @@ bool openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
  *
  * Contract:
  * - on success, returns a caller-owned account-block list, possibly empty;
- *   release it with `openpit_pretrade_destroy_account_block_list`;
+ *   release it with `openpit_destroy_pretrade_account_block_list`;
  * - on failure, returns null and, when `out_error` is non-null, writes a
  *   caller-owned `OpenPitConfigureError` that must be released with
  *   `openpit_destroy_configure_error`.
@@ -7192,6 +7527,41 @@ void openpit_destroy_account_control(
  */
 OpenPitAccountControl * openpit_pretrade_context_get_account_control(
     const OpenPitPretradeContext * ctx
+);
+
+/**
+ * Returns whether the current pre-trade callback belongs to drop copy.
+ *
+ * Returns `false` for a null context and for ordinary pre-trade operations.
+ */
+bool openpit_pretrade_context_is_drop_copy(
+    const OpenPitPretradeContext * ctx
+);
+
+/**
+ * Records a start-stage mutation for the current drop-copy operation.
+ *
+ * The callback pair follows the same ownership and success contract as
+ * `openpit_mutations_push`. Apply tentative state before registration. The
+ * mutation joins the operation returned by `openpit_engine_apply_drop_copy`:
+ * commit finalizes it when the caller commits that operation, and rollback
+ * reverses it when the caller rolls the operation back or destroys it without
+ * finalizing, and when a fatal evaluation reject aborts the pipeline before an
+ * operation exists. Ownership of `user_data` transfers to the engine only when
+ * this function returns `true`; on `false`, the caller remains responsible for
+ * cleanup.
+ *
+ * Returns `false` when `ctx` is null, does not belong to drop copy, or has
+ * already been finalized. When provided, `out_error` receives a caller-owned
+ * error string on failure.
+ */
+bool openpit_pretrade_context_record_drop_copy_start_mutation(
+    const OpenPitPretradeContext * ctx,
+    OpenPitMutationFn commit_fn,
+    OpenPitMutationFn rollback_fn,
+    void * user_data,
+    OpenPitMutationFreeFn free_fn,
+    OpenPitOutError out_error
 );
 
 /**
@@ -8125,9 +8495,10 @@ bool openpit_marketdata_service_push_by_instrument_patch(
  * would consult a group or default-group bucket and the per-account bucket has
  * no quote. The callback receives the caller-supplied `user_data` context
  * pointer and, when the account belongs to a group, writes the group id to
- * `out_account_group_id` and returns `true`; when the account has no group it
- * returns `false`. Pass `OPENPIT_DEFAULT_ACCOUNT_GROUP` (`0`) to target the
- * default group bucket.
+ * `out_account_group_id` and returns `Found`; when the account has no group it
+ * returns `NoGroup`; when the group cannot be determined it returns `Failed`.
+ * Pass `OPENPIT_DEFAULT_ACCOUNT_GROUP` (`0`) to target the default group
+ * bucket.
  *
  * `resolution` controls which buckets are consulted, in order, when the
  * more-specific bucket has no quote.
@@ -8138,6 +8509,10 @@ bool openpit_marketdata_service_push_by_instrument_patch(
  * - `UnknownInstrument`: `instrument_id` is not registered;
  * - `QuoteExpired`: selected quote aged past TTL; the stale quote was
  *   written to `out_quote`;
+ * - `AccountGroupResolutionFailed`: `resolve_account_group` returned
+ *   `Failed`; `out_quote` is left untouched. A failed resolution is never
+ *   degraded into "the account has no group", because that would silently
+ *   move the read onto the default-group bucket;
  * - `Error`: `resolution` is not one of the documented selector constants.
  *
  * Contract:
@@ -8679,6 +9054,25 @@ OpenPitReferenceBookStatus openpit_reference_book_get_settlement_scheme(
     OpenPitSettlementScheme * out_scheme,
     bool * out_is_set,
     OpenPitOutError out_error
+);
+
+/**
+ * Copies a UTF-8 view into a new caller-owned shared-string handle.
+ *
+ * Returns null only when `value.ptr` is null. Invalid UTF-8 bytes are replaced
+ * with the Unicode replacement character, so callback error details remain
+ * distinguishable from a missing payload. The returned handle MUST be released
+ * with `openpit_destroy_shared_string`. This constructor is intended for
+ * callback error channels whose payload must remain valid after the callback
+ * returns.
+ *
+ * # Safety
+ *
+ * A non-null `value.ptr` must point to `value.len` readable bytes for the
+ * duration of this call.
+ */
+OpenPitSharedString * openpit_create_shared_string(
+    OpenPitStringView value
 );
 
 /**

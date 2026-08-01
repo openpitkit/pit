@@ -91,7 +91,8 @@ func NewSafeClientPreTradePolicy[
 // without payload validation.
 //
 // It is intended for SDK-controlled paths such as ClientEngine. A missing or
-// wrong payload panics.
+// wrong payload panics inside the adapter and is recovered by the SDK callback
+// boundary as a SystemUnavailable policy failure.
 func NewUnsafeFastClientPreTradePolicy[
 	Order ClientOrder,
 	Report ClientExecutionReport,
@@ -271,7 +272,7 @@ func unsafeFastPayload[Payload any](userData unsafe.Pointer) Payload {
 
 func clientPayloadMismatchReject[Order ClientOrder](policyName string) []reject.Reject {
 	return reject.NewSingleItemList(
-		reject.CodeOther,
+		reject.CodeSystemUnavailable,
 		policyName,
 		"client order payload mismatch",
 		fmt.Sprintf("expected client order payload type %T", *new(Order)),

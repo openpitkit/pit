@@ -115,7 +115,7 @@ if [[ -n "${OPENPIT_RELEASE_DOWNLOAD_TOKEN:-}" ]]; then
   runtime_args+=("-DOPENPIT_RUNTIME_LIBRARY=${runtime_path}")
 fi
 
-# Source: bindings/cpp/README.md - Getting Started / CMake find_package
+# Source: bindings/cpp/README.md - Install / CMake find_package
 echo "==> Building minimal C++ consumer"
 cmake -S /opt/e2e/cpp-consumer -B "${work_root}/consumer-build" \
   -DCMAKE_PREFIX_PATH="${install_dir}" \

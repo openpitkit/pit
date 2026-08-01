@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 use super::{
     define_non_negative_value_type, CashFlow, Error, Notional, ParamKind, PositionSize, Price,

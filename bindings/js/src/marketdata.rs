@@ -54,6 +54,7 @@ use crate::domain::{
 use crate::error::{make_error, make_error_with, make_quote_expired_error, ErrorKind};
 use crate::param::ids::{JsAccountGroupId, JsInstrumentId};
 use crate::param::value_types::JsPrice;
+use crate::policy::CallbackErrorScope;
 
 #[wasm_bindgen(typescript_custom_section)]
 const MARKET_DATA_INIT_TS: &'static str = r#"
@@ -728,6 +729,9 @@ fn get_with_account_info(
 /// `getOrErr(...)`. `accountInfo` is any object exposing an `accountGroup`
 /// getter returning an `AccountGroupId` or `null`; the group is read only when
 /// the read needs it.
+///
+/// Every method touches shared service state, so every one of them throws
+/// `InternalError` once an engine defect has poisoned the module instance.
 #[wasm_bindgen(js_name = MarketDataService)]
 #[derive(Clone)]
 pub struct JsMarketDataService {
@@ -749,6 +753,7 @@ impl JsMarketDataService {
     /// `AssetError`/`ParamError` on an invalid literal.
     #[wasm_bindgen(js_name = register)]
     pub fn register(&self, instrument: InstrumentLike) -> Result<JsInstrumentId, JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument = JsInstrument::coerce(instrument.into())?;
         self.inner
             .register(instrument)
@@ -771,6 +776,7 @@ impl JsMarketDataService {
         instrument: InstrumentLike,
         ttl: &JsQuoteTtl,
     ) -> Result<JsInstrumentId, JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument = JsInstrument::coerce(instrument.into())?;
         self.inner
             .register_with_ttl(instrument, ttl.inner())
@@ -793,6 +799,7 @@ impl JsMarketDataService {
         instrument: InstrumentLike,
         id: InstrumentIdLike,
     ) -> Result<JsInstrumentId, JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument = JsInstrument::coerce(instrument.into())?;
         let id = resolve_instrument_id(id.into())?;
         self.inner
@@ -817,6 +824,7 @@ impl JsMarketDataService {
         id: InstrumentIdLike,
         ttl: &JsQuoteTtl,
     ) -> Result<JsInstrumentId, JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument = JsInstrument::coerce(instrument.into())?;
         let id = resolve_instrument_id(id.into())?;
         self.inner
@@ -835,6 +843,7 @@ impl JsMarketDataService {
     /// Throws `AssetError`/`ParamError` on an invalid literal.
     #[wasm_bindgen(js_name = resolve)]
     pub fn resolve(&self, instrument: InstrumentLike) -> Result<Option<JsInstrumentId>, JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument = JsInstrument::coerce(instrument.into())?;
         Ok(self
             .inner
@@ -857,6 +866,7 @@ impl JsMarketDataService {
         account_id: AccountIdLike,
         ttl: &JsQuoteTtl,
     ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         self.inner
             .set_account_ttl(resolve_account_id(account_id.into())?, ttl.inner());
         Ok(())
@@ -871,6 +881,7 @@ impl JsMarketDataService {
     /// Throws `AccountIdError` on an invalid identifier.
     #[wasm_bindgen(js_name = clearAccountTtl)]
     pub fn clear_account_ttl(&self, account_id: AccountIdLike) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         self.inner
             .clear_account_ttl(resolve_account_id(account_id.into())?);
         Ok(())
@@ -891,6 +902,7 @@ impl JsMarketDataService {
         account_group_id: AccountGroupIdLike,
         ttl: &JsQuoteTtl,
     ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         self.inner.set_account_group_ttl(
             resolve_account_group_id(account_group_id.into())?,
             ttl.inner(),
@@ -912,6 +924,7 @@ impl JsMarketDataService {
         &self,
         account_group_id: AccountGroupIdLike,
     ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         self.inner
             .clear_account_group_ttl(resolve_account_group_id(account_group_id.into())?);
         Ok(())
@@ -931,6 +944,7 @@ impl JsMarketDataService {
         instrument_id: InstrumentIdLike,
         ttl: &JsQuoteTtl,
     ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         self.inner
             .set_instrument_ttl(instrument_id, ttl.inner())
@@ -947,6 +961,7 @@ impl JsMarketDataService {
     /// `ParamError` on an invalid identifier.
     #[wasm_bindgen(js_name = clearInstrumentTtl)]
     pub fn clear_instrument_ttl(&self, instrument_id: InstrumentIdLike) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         self.inner
             .clear_instrument_ttl(instrument_id)
@@ -968,6 +983,7 @@ impl JsMarketDataService {
         account_id: AccountIdLike,
         ttl: &JsQuoteTtl,
     ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         let account_id = resolve_account_id(account_id.into())?;
         self.inner
@@ -989,6 +1005,7 @@ impl JsMarketDataService {
         instrument_id: InstrumentIdLike,
         account_id: AccountIdLike,
     ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         let account_id = resolve_account_id(account_id.into())?;
         self.inner
@@ -1013,6 +1030,7 @@ impl JsMarketDataService {
         account_group_id: AccountGroupIdLike,
         ttl: &JsQuoteTtl,
     ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         let account_group_id = resolve_account_group_id(account_group_id.into())?;
         self.inner
@@ -1036,6 +1054,7 @@ impl JsMarketDataService {
         instrument_id: InstrumentIdLike,
         account_group_id: AccountGroupIdLike,
     ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         let account_group_id = resolve_account_group_id(account_group_id.into())?;
         self.inner
@@ -1054,6 +1073,7 @@ impl JsMarketDataService {
     /// Throws `ParamError` on an invalid identifier.
     #[wasm_bindgen(js_name = clear)]
     pub fn clear(&self, instrument_id: InstrumentIdLike) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         self.inner
             .clear(resolve_instrument_id(instrument_id.into())?);
         Ok(())
@@ -1070,6 +1090,7 @@ impl JsMarketDataService {
     /// `ParamError` on an invalid identifier or quote literal.
     #[wasm_bindgen(js_name = push)]
     pub fn push(&self, instrument_id: InstrumentIdLike, quote: QuoteLike) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         let quote = JsQuote::coerce(quote.into())?;
         self.inner
@@ -1092,6 +1113,7 @@ impl JsMarketDataService {
         instrument_id: InstrumentIdLike,
         quote: QuoteLike,
     ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         let quote = JsQuote::coerce(quote.into())?;
         self.inner
@@ -1114,6 +1136,7 @@ impl JsMarketDataService {
         instrument: InstrumentLike,
         quote: QuoteLike,
     ) -> Result<JsInstrumentId, JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument = JsInstrument::coerce(instrument.into())?;
         let quote = JsQuote::coerce(quote.into())?;
         Ok(JsInstrumentId::from_inner(
@@ -1136,6 +1159,7 @@ impl JsMarketDataService {
         instrument: InstrumentLike,
         quote: QuoteLike,
     ) -> Result<JsInstrumentId, JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument = JsInstrument::coerce(instrument.into())?;
         let quote = JsQuote::coerce(quote.into())?;
         Ok(JsInstrumentId::from_inner(
@@ -1164,6 +1188,7 @@ impl JsMarketDataService {
         account_ids: AccountIdIterable,
         account_group_ids: AccountGroupIdIterable,
     ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         let quote = JsQuote::coerce(quote.into())?;
         let accounts = collect_account_ids(account_ids.into())?;
@@ -1194,6 +1219,7 @@ impl JsMarketDataService {
         account_ids: AccountIdIterable,
         account_group_ids: AccountGroupIdIterable,
     ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         let quote = JsQuote::coerce(quote.into())?;
         let accounts = collect_account_ids(account_ids.into())?;
@@ -1226,6 +1252,7 @@ impl JsMarketDataService {
         account_info: AccountInfoLike,
         resolution: QuoteResolutionLike,
     ) -> Result<Option<JsQuote>, JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         let account_id = resolve_account_id(account_id.into())?;
         let resolution = resolve_resolution(resolution.into())?;
@@ -1270,6 +1297,7 @@ impl JsMarketDataService {
         account_info: AccountInfoLike,
         resolution: QuoteResolutionLike,
     ) -> Result<JsQuote, JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         let account_id = resolve_account_id(account_id.into())?;
         let resolution = resolve_resolution(resolution.into())?;

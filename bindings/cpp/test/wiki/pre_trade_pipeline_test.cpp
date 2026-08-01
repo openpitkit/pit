@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Pre-trade-Pipeline.md
+// Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
 //
 // Each TEST runs the exact C++ snippet published in the wiki page (modulo the
 // minimal harness that builds the engine, order, and execution report and the
@@ -59,6 +59,8 @@ namespace policies = openpit::pretrade::policies;
   order.operation = std::move(op);
   return order;
 }
+
+void PersistHistoricalOrderMetadata(const openpit::model::Order&) {}
 
 // Builds an execution report carrying the operation identity for `accountId`.
 [[nodiscard]] openpit::model::ExecutionReport TestReport(
@@ -169,6 +171,38 @@ TEST(PreTradePipeline, ShortcutForStartPlusMainStages) {
   // --- end wiki snippet ---
 
   EXPECT_TRUE(executeResult.Passed());
+}
+
+//------------------------------------------------------------------------------
+// Example: Apply a Historical Order with Drop Copy
+
+TEST(PreTradePipeline, ApplyAHistoricalOrderWithDropCopy) {
+  const Engine engine = ValidationEngine();
+  const openpit::model::Order order = TestOrder(1);
+
+  // --- begin wiki snippet ---
+  openpit::pretrade::DropCopyResult dropCopyResult =
+      engine.ApplyDropCopy(order);
+  if (!dropCopyResult.Passed()) {
+    for (const openpit::pretrade::Reject& reject : dropCopyResult.rejects) {
+      std::cout << "could not apply historical order: " << reject.policy << " ["
+                << static_cast<int>(reject.code) << "]: " << reject.reason
+                << '\n';
+    }
+  } else {
+    std::cout << "applied; account blocked: "
+              << dropCopyResult.operation->IsAccountBlocked() << '\n';
+    try {
+      PersistHistoricalOrderMetadata(order);
+    } catch (...) {
+      dropCopyResult.operation->Rollback();
+      throw;
+    }
+    dropCopyResult.operation->Commit();
+  }
+  // --- end wiki snippet ---
+
+  EXPECT_TRUE(dropCopyResult.Passed());
 }
 
 //------------------------------------------------------------------------------

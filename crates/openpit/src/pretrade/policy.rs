@@ -54,6 +54,22 @@ use crate::{AccountAdjustmentContext, Mutations};
 /// All registered policies are evaluated in registration order. Stage-specific
 /// rejects are merged before the engine returns to the caller.
 ///
+/// # Drop-copy rejects
+///
+/// [`Engine::apply_drop_copy`](crate::Engine::apply_drop_copy) runs the same
+/// policy hooks for an order that already executed. Ordinary policy rejects do
+/// not enforce a pre-trade refusal there, but a reject whose
+/// [`RejectCode::is_evaluation_failure`](crate::pretrade::RejectCode::is_evaluation_failure)
+/// is `true` aborts the whole drop-copy atomically. Custom policies should use
+/// such a standardized code only when they cannot determine or apply the
+/// historical order's effect; caller-defined [`RejectCode::Custom`](crate::pretrade::RejectCode::Custom)
+/// remains an ordinary verdict because the engine cannot infer its semantics.
+/// A custom policy may still attach its own reason and details to a
+/// standardized evaluation-failure code. Mutations registered before an
+/// ordinary reject remain part of the applied drop-copy because that reject
+/// means the policy evaluated the historical order successfully and only its
+/// live admission verdict is being ignored.
+///
 /// # Rollback safety
 ///
 /// Mutations registered during main-stage pre-trade checks may be committed or

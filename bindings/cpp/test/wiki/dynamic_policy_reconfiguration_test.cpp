@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Dynamic-Policy-Reconfiguration.md
+// Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
 //
 // Compiling mirror of the C++ snippets published on the Dynamic Policy
 // Reconfiguration wiki page. Each TEST keeps the same user code as the
@@ -57,8 +57,8 @@ using openpit::param::Quantity;
   return order;
 }
 
-// Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Retune a Built-in
-// Policy
+// Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+// - Retune a Built-in Policy
 TEST(DynamicPolicyReconfigurationWiki, RateLimit) {
   const openpit::model::Order order = WikiOrder("1", "100");
 
@@ -97,8 +97,8 @@ TEST(DynamicPolicyReconfigurationWiki, RateLimit) {
   EXPECT_EQ(rejected.rejects[0].reason, "rate limit exceeded: broker barrier");
 }
 
-// Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Force-set Accumulated
-// P&L
+// Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+// - Force-set Accumulated P&L
 TEST(DynamicPolicyReconfigurationWiki, SetAccountPnl) {
   const AccountId account = AccountId::FromUint64(99224416);
   const openpit::model::Order order = WikiOrder("1", "100");
@@ -134,8 +134,8 @@ TEST(DynamicPolicyReconfigurationWiki, SetAccountPnl) {
             "pnl kill switch triggered: broker barrier");
 }
 
-// Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Spot Funds: Global
-// Limit Mode
+// Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+// - Spot Funds: Global Limit Mode
 TEST(DynamicPolicyReconfigurationWiki, SpotFundsGlobalLimitMode) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
   builder.Add(policies::SpotFundsPolicy{});
@@ -192,8 +192,8 @@ TEST(DynamicPolicyReconfigurationWiki, SpotFundsGlobalLimitMode) {
   EXPECT_EQ(rejected.rejects[0].reason, "spot funds insufficient");
 }
 
-// Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Spot Funds: Per-Account
-// Limit Mode
+// Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+// - Spot Funds: Per-Account Limit Mode
 TEST(DynamicPolicyReconfigurationWiki, SpotFundsPerAccountLimitMode) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
   builder.Add(policies::SpotFundsPolicy{});

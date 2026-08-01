@@ -13,17 +13,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package asyncengine
 
 import "errors"
 
-// ErrMissingAccountID is returned by StartPreTrade, ExecutePreTrade, and
-// ApplyExecutionReport when the supplied order or execution report does
-// not carry an account identifier.
+// ErrMissingAccountID is returned when a call carries no account to route it
+// by: from StartPreTrade, ExecutePreTrade, ApplyDropCopy, and
+// ApplyExecutionReport when the supplied order or execution report has no
+// account identifier, and from AsyncAccounts.RegisterGroup and
+// AsyncAccounts.UnregisterGroup when the accounts slice is empty.
 var ErrMissingAccountID = errors.New(
-	"openpit/asyncengine: account ID is not set on the order or report",
+	"openpit/asyncengine: no account ID to route the call by",
 )
 
 // ErrStopped is returned by Submit and engine methods after the

@@ -42,6 +42,7 @@ type acceptingDriver struct {
 	executeCount int64
 	reportCount  int64
 	adjustCount  int64
+	startHook    func()
 
 	concurrentByAccount map[uint64]int64
 	maxConcurrent       map[uint64]int64
@@ -77,6 +78,9 @@ func (d *acceptingDriver) StartPreTrade(
 	accountID, _ := op.AccountID().Get()
 	done := d.recordStart(accountID)
 	defer done()
+	if d.startHook != nil {
+		d.startHook()
+	}
 	atomic.AddInt64(&d.startCount, 1)
 	// Return a zero-valued Request (nil inner handle) with nil rejects - accept
 	// path.
@@ -96,11 +100,17 @@ func (d *acceptingDriver) ExecutePreTrade(
 	return pretrade.NewReservationFromHandle(nil), nil, nil
 }
 
-func (d *acceptingDriver) ExecutePreTradeDropCopy(
+func (d *acceptingDriver) ApplyDropCopy(
 	order model.Order,
-) (*pretrade.Reservation, error) {
-	reservation, _, err := d.ExecutePreTrade(order)
-	return reservation, err
+) (*pretrade.DropCopyOperation, []reject.Reject, error) {
+	op, _ := order.Operation().Get()
+	accountID, _ := op.AccountID().Get()
+	done := d.recordStart(accountID)
+	defer done()
+	atomic.AddInt64(&d.executeCount, 1)
+	// Return a zero-valued DropCopyOperation (nil inner handle) with nil
+	// rejects - accept path.
+	return pretrade.NewDropCopyOperationFromHandle(nil), nil, nil
 }
 
 func (d *acceptingDriver) ApplyExecutionReport(
@@ -165,7 +175,7 @@ func TestAsyncEngineExecutePreTradeHappyPath(t *testing.T) {
 	}
 }
 
-func TestAsyncEngineExecutePreTradeDropCopyHappyPath(t *testing.T) {
+func TestAsyncEngineApplyDropCopyHappyPath(t *testing.T) {
 	t.Parallel()
 	driver := newAcceptingDriver()
 	async, err := NewBuilder(driver).Dynamic().Build()
@@ -178,21 +188,210 @@ func TestAsyncEngineExecutePreTradeDropCopyHappyPath(t *testing.T) {
 		}
 	}()
 
-	f := async.ExecutePreTradeDropCopy(
+	f := async.ApplyDropCopy(
 		context.Background(), buildTestOrder(t, 42),
 	)
-	reservation, err := f.Await(context.Background())
+	operation, rejects, err := f.Await(context.Background())
 	if err != nil {
 		t.Fatalf("Await() err = %v", err)
 	}
-	if reservation == nil {
-		t.Fatal("reservation = nil, want non-nil")
+	if operation == nil {
+		t.Fatal("operation = nil, want non-nil")
 	}
-	if reservation.AccountID() != param.NewAccountIDFromUint64(42) {
-		t.Errorf(
-			"reservation.AccountID() = %v, want %v",
-			reservation.AccountID(), param.NewAccountIDFromUint64(42),
-		)
+	if rejects != nil {
+		t.Errorf("rejects = %v, want nil on accept", rejects)
+	}
+	if operation.AccountID() != param.NewAccountIDFromUint64(42) {
+		t.Errorf("operation.AccountID() = %v, want %v",
+			operation.AccountID(), param.NewAccountIDFromUint64(42))
+	}
+	if _, err := operation.Close(context.Background()).Await(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+// TestAsyncDropCopyFinalizersRunOnTheAccountWorker walks every queued finalizer
+// through a real worker: each future must resolve without error, which is the
+// path a hard-stop abort or a refused submit never reaches.
+func TestAsyncDropCopyFinalizersRunOnTheAccountWorker(t *testing.T) {
+	t.Parallel()
+	async, err := NewBuilder(newAcceptingDriver()).Dynamic().Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer func() {
+		if err := async.StopGraceful(context.Background()); err != nil {
+			t.Fatalf("StopGraceful() error = %v", err)
+		}
+	}()
+
+	ctx := context.Background()
+	finalizers := []struct {
+		finalize func(*AsyncDropCopyOperation) error
+		name     string
+	}{
+		{name: "Commit", finalize: func(o *AsyncDropCopyOperation) error {
+			_, err := o.Commit(ctx).Await(ctx)
+			return err
+		}},
+		{name: "CommitAndClose", finalize: func(o *AsyncDropCopyOperation) error {
+			_, err := o.CommitAndClose(ctx).Await(ctx)
+			return err
+		}},
+		{name: "Rollback", finalize: func(o *AsyncDropCopyOperation) error {
+			_, err := o.Rollback(ctx).Await(ctx)
+			return err
+		}},
+		{name: "RollbackAndClose", finalize: func(o *AsyncDropCopyOperation) error {
+			_, err := o.RollbackAndClose(ctx).Await(ctx)
+			return err
+		}},
+		{name: "Close", finalize: func(o *AsyncDropCopyOperation) error {
+			_, err := o.Close(ctx).Await(ctx)
+			return err
+		}},
+	}
+	for _, finalizer := range finalizers {
+		operation, _, err := async.ApplyDropCopy(ctx, buildTestOrder(t, 42)).Await(ctx)
+		if err != nil {
+			t.Fatalf("%s: ApplyDropCopy Await() error = %v", finalizer.name, err)
+		}
+		if err := finalizer.finalize(operation); err != nil {
+			t.Fatalf("%s: Await() error = %v", finalizer.name, err)
+		}
+		// Close after any finalizer is a no-op or the release itself.
+		if _, err := operation.Close(ctx).Await(ctx); err != nil {
+			t.Fatalf("%s: Close() error = %v", finalizer.name, err)
+		}
+	}
+}
+
+func TestAsyncEngineApplyDropCopyWaitsForSameAccountLane(t *testing.T) {
+	t.Parallel()
+	driver := newAcceptingDriver()
+	gate := make(chan struct{})
+	started := make(chan struct{})
+	var once sync.Once
+	driver.startHook = func() {
+		once.Do(func() { close(started) })
+		<-gate
+	}
+	async, err := NewBuilder(driver).Dynamic().Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer func() {
+		if err := async.StopGraceful(context.Background()); err != nil {
+			t.Fatalf("StopGraceful() error = %v", err)
+		}
+	}()
+
+	account := uint64(42)
+	first := async.StartPreTrade(context.Background(), buildTestOrder(t, account))
+	<-started
+	dropCopy := async.ApplyDropCopy(context.Background(), buildTestOrder(t, account))
+
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for !dropCopy.Done() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if dropCopy.Done() {
+		t.Fatal("drop-copy completed before the same account lane was released")
+	}
+
+	close(gate)
+	if _, _, err := first.Await(context.Background()); err != nil {
+		t.Fatalf("start Await() error = %v", err)
+	}
+	operation, _, err := dropCopy.Await(context.Background())
+	if err != nil {
+		t.Fatalf("drop-copy Await() error = %v", err)
+	}
+	if operation == nil {
+		t.Fatal("drop-copy operation = nil, want non-nil")
+	}
+	if _, err := operation.Close(context.Background()).Await(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+// TestAsyncDropCopyFinalizerAbortsOnHardStop pins the abort branch of a queued
+// finalizer: a task that never reaches its worker resolves with ErrStopped.
+func TestAsyncDropCopyFinalizerAbortsOnHardStop(t *testing.T) {
+	t.Parallel()
+	async, err := NewBuilder(newAcceptingDriver()).
+		WithQueueCapacity(8).
+		Sharded(1).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	accountID := param.NewAccountIDFromUint64(42)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	first := async.Submit(context.Background(), accountID, func() error {
+		close(started)
+		<-release
+		return nil
+	})
+	<-started
+
+	operation := newAsyncDropCopyOperation(
+		pretrade.NewDropCopyOperationFromHandle(nil), async, accountID,
+	)
+	closeFuture := operation.RollbackAndClose(context.Background())
+	hardStopDone := make(chan error, 1)
+	go func() {
+		hardStopDone <- async.StopHard(context.Background())
+	}()
+	hardStopDeadline := time.Now().Add(5 * time.Second)
+	for !isStrategyHardStopped(async.strategy) {
+		if time.Now().After(hardStopDeadline) {
+			t.Fatal("timeout waiting for hard-stopped strategy")
+		}
+		time.Sleep(time.Microsecond)
+	}
+	close(release)
+	if err := <-hardStopDone; err != nil {
+		t.Fatalf("StopHard() error = %v", err)
+	}
+	if _, err := first.Await(context.Background()); err != nil {
+		t.Fatalf("first Submit() error = %v", err)
+	}
+	if _, err := closeFuture.Await(context.Background()); !errors.Is(
+		err, ErrStopped,
+	) {
+		t.Fatalf("RollbackAndClose() error = %v, want ErrStopped", err)
+	}
+}
+
+// Drop copy requires a readable account ID: the core rejects an unreadable one
+// with MissingRequiredField before any policy runs, so the facade refuses the
+// order up front rather than queueing a guaranteed failure.
+func TestAsyncEngineApplyDropCopyFailsFastWithoutAccount(t *testing.T) {
+	t.Parallel()
+	driver := newAcceptingDriver()
+	async, err := NewBuilder(driver).Sharded(1).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer func() {
+		if err := async.StopGraceful(context.Background()); err != nil {
+			t.Fatalf("StopGraceful() error = %v", err)
+		}
+	}()
+
+	operation, rejects, err := async.ApplyDropCopy(
+		context.Background(), model.NewOrder(),
+	).Await(context.Background())
+	if !errors.Is(err, ErrMissingAccountID) {
+		t.Fatalf("Await() err = %v, want ErrMissingAccountID", err)
+	}
+	if operation != nil {
+		t.Fatalf("operation = %v, want nil", operation)
+	}
+	if rejects != nil {
+		t.Fatalf("rejects = %v, want nil", rejects)
 	}
 }
 

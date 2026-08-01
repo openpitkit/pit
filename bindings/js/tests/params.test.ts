@@ -28,7 +28,12 @@ import {
   RoundingStrategies,
   type RoundingStrategy,
 } from "@openpit/engine/param";
-import { RejectCode, RejectScope } from "@openpit/engine/reject";
+import {
+  isEvaluationFailure,
+  RejectCode,
+  RejectScope,
+  type RejectCode as RejectCodeValue,
+} from "@openpit/engine/reject";
 import { SpotFundsPricingSource } from "@openpit/engine/pretrade/policies";
 
 describe("decimal string round-trips", () => {
@@ -49,6 +54,29 @@ describe("decimal string round-trips", () => {
     expect(JSON.stringify({ price: Price.fromString("185.25") })).toBe(
       '{"price":"185.25"}',
     );
+  });
+});
+
+describe("reject code evaluation failures", () => {
+  it("classifies every reject code", () => {
+    const evaluationFailures = new Set<RejectCodeValue>([
+      RejectCode.MissingRequiredField,
+      RejectCode.UnknownInstrument,
+      RejectCode.UnknownAccount,
+      RejectCode.UnknownVenue,
+      RejectCode.UnknownClearingAccount,
+      RejectCode.UnknownCollateralAsset,
+      RejectCode.RiskConfigurationMissing,
+      RejectCode.ReferenceDataUnavailable,
+      RejectCode.OrderValueCalculationFailed,
+      RejectCode.SystemUnavailable,
+      RejectCode.MarkPriceUnavailable,
+      RejectCode.ArithmeticOverflow,
+    ]);
+
+    for (const code of Object.values(RejectCode)) {
+      expect(isEvaluationFailure(code)).toBe(evaluationFailures.has(code));
+    }
   });
 });
 

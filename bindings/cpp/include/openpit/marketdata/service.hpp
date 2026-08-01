@@ -322,13 +322,17 @@ class Service {
   // `accountInfo` supplies the reading account's group lazily — the core
   // invokes its `AccountGroup()` only when the fallback chain reaches the
   // per-group bucket. `resolution` selects the fallback chain.
+  //
+  // A throwing `AccountGroup()` fails the read as a whole: the exception is
+  // rethrown with its original type, and no quote is produced. The group is
+  // never assumed absent on failure.
   template <typename AccountInfo>
   [[nodiscard]] GetResult Get(InstrumentId instrumentId,
                               param::AccountId accountId,
                               const AccountInfo& accountInfo,
                               QuoteResolution resolution) const {
     OpenPitMarketDataQuote raw{};
-    ::openpit::detail::ClearPendingCallbackException();
+    ::openpit::detail::CallbackExceptionScope callbackExceptions;
     const OpenPitMarketDataGetStatus status = openpit_marketdata_service_get(
         m_handle.Get(), ::openpit::detail::Native(instrumentId),
         ::openpit::detail::Native(accountId),
@@ -337,9 +341,14 @@ class Service {
         // cast is required by the native runtime `void*` user-data parameter.
         const_cast<AccountInfo*>(&accountInfo), detail::ToNative(resolution),
         &raw);
-    ::openpit::detail::ThrowIfPendingCallbackException();
+    callbackExceptions.ThrowIfPending();
     if (status == OpenPitMarketDataGetStatus_Error) {
       throw ::openpit::Error("invalid market-data quote resolution");
+    }
+    if (status == OpenPitMarketDataGetStatus_AccountGroupResolutionFailed) {
+      // Only reachable when the trampoline reported a failure without a
+      // catchable exception; the latched-exception path above already threw.
+      throw ::openpit::Error("market-data account group resolution failed");
     }
     GetResult result;
     result.status = static_cast<GetStatus>(status);
@@ -456,21 +465,26 @@ class Service {
 
  private:
   // The native runtime borrows `accountInfo` only for the enclosing `Get` call.
+  //
+  // A throwing `AccountGroup()` reports `Failed`, never `NoGroup`: treating the
+  // account as group-less would move the read onto the default-group bucket and
+  // bypass every group-scoped rule. The exception itself is latched and
+  // rethrown by `Get` once the native frame is unwound.
   template <typename AccountInfo>
-  static bool AccountGroupResolverTrampoline(
+  static OpenPitMarketDataAccountGroupResolution AccountGroupResolverTrampoline(
       void* userData, OpenPitParamAccountGroupId* outAccountGroupId) noexcept {
     try {
       const auto* accountInfo = static_cast<const AccountInfo*>(userData);
       const std::optional<param::AccountGroupId> group =
           accountInfo->AccountGroup();
       if (!group.has_value()) {
-        return false;
+        return OpenPitMarketDataAccountGroupResolution_NoGroup;
       }
       *outAccountGroupId = ::openpit::detail::Native(*group);
-      return true;
+      return OpenPitMarketDataAccountGroupResolution_Found;
     } catch (...) {
       ::openpit::detail::CaptureCurrentCallbackException();
-      return false;
+      return OpenPitMarketDataAccountGroupResolution_Failed;
     }
   }
 

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package native
 
@@ -69,6 +69,10 @@ func PretradeRejectGetUserData(reject PretradeReject) unsafe.Pointer {
 	return reject.user_data
 }
 
+func PretradeRejectCodeIsEvaluationFailure(code PretradeRejectCode) bool {
+	return bool(C.openpit_pretrade_reject_code_is_evaluation_failure(code))
+}
+
 //------------------------------------------------------------------------------
 // PretradeRejectList
 
@@ -76,11 +80,15 @@ func CreatePretradeRejectList(reserve int) PretradeRejectList {
 	if reserve < 0 {
 		reserve = 0
 	}
-	return C.openpit_pretrade_create_reject_list(C.size_t(reserve))
+	return C.openpit_create_pretrade_reject_list(C.size_t(reserve))
+}
+
+func AcceptPretradeRejectList() PretradeRejectList {
+	return C.openpit_pretrade_reject_list_get_accept_sentinel()
 }
 
 func DestroyPretradeRejectList(rejects PretradeRejectList) {
-	C.openpit_pretrade_destroy_reject_list(rejects)
+	C.openpit_destroy_pretrade_reject_list(rejects)
 }
 
 func PretradeRejectListPush(list PretradeRejectList, reject PretradeReject) bool {
@@ -145,11 +153,11 @@ func CreatePretradeAccountBlockList(reserve int) PretradeAccountBlockList {
 	if reserve < 0 {
 		reserve = 0
 	}
-	return C.openpit_pretrade_create_account_block_list(C.size_t(reserve))
+	return C.openpit_create_pretrade_account_block_list(C.size_t(reserve))
 }
 
 func DestroyPretradeAccountBlockList(blocks PretradeAccountBlockList) {
-	C.openpit_pretrade_destroy_account_block_list(blocks)
+	C.openpit_destroy_pretrade_account_block_list(blocks)
 }
 
 func PretradeAccountBlockListPush(list PretradeAccountBlockList, block PretradeAccountBlock) {

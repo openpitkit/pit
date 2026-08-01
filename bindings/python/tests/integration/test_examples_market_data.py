@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://github.com/openpitkit and the OWNERS file for details.
+# Please see https://openpit.dev and the OWNERS file for details.
 
 
 import time
@@ -24,9 +24,9 @@ import openpit
 import pytest
 
 # Mirrors public Python examples from:
-# - ../pit.wiki/Market-Data.md
-# - ../pit.wiki/Market-Data-TTL.md
-# - ../pit.wiki/Market-Data-Pricing.md
+# - https://wiki.openpit.dev/Market-Data/
+# - https://wiki.openpit.dev/Market-Data-TTL/
+# - https://wiki.openpit.dev/Market-Data-Pricing/
 # If this file changes, update every linked documentation snippet.
 
 # Convenience aliases used throughout this file. account_info is the no-group
@@ -48,7 +48,8 @@ def _seed_usd_balance(amount: int) -> openpit.AccountAdjustment:
 
 @pytest.mark.integration
 def test_example_wiki_market_data_register_push_get() -> None:
-    # Used in: pit.wiki/Market-Data.md - Pushing and Reading Quotes
+    # Source: https://wiki.openpit.dev/Market-Data/
+    # - Pushing and Reading Quotes
     service = (
         openpit.Engine.builder()
         .no_sync()
@@ -78,7 +79,7 @@ def test_example_wiki_market_data_register_push_get() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_market_data_replace_vs_patch() -> None:
-    # Used in: pit.wiki/Market-Data.md - Replace Versus Patch
+    # Source: https://wiki.openpit.dev/Market-Data/ - Replace Versus Patch
     service = (
         openpit.Engine.builder()
         .no_sync()
@@ -104,7 +105,7 @@ def test_example_wiki_market_data_replace_vs_patch() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_market_data_finite_ttl_hides_stale_quote() -> None:
-    # Used in: pit.wiki/Market-Data-TTL.md - Quote Freshness
+    # Source: https://wiki.openpit.dev/Market-Data-TTL/ - Quote Freshness
     # A 50 ms service-wide lifetime: quotes older than that read as absent.
     service = (
         openpit.Engine.builder()
@@ -139,7 +140,7 @@ def test_example_wiki_market_data_finite_ttl_hides_stale_quote() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_market_data_clear_then_recover() -> None:
-    # Used in: pit.wiki/Market-Data.md - Clearing a Quote
+    # Source: https://wiki.openpit.dev/Market-Data/ - Clearing a Quote
     service = (
         openpit.Engine.builder()
         .no_sync()
@@ -180,7 +181,8 @@ def test_example_wiki_market_data_clear_then_recover() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_market_data_market_orders_book_top_override() -> None:
-    # Used in: pit.wiki/Market-Data-Pricing.md - Pricing Market Orders → Python
+    # Source: https://wiki.openpit.dev/Market-Data-Pricing/
+    # - Pricing Market Orders → Python
     builder = openpit.Engine.builder().no_sync()
 
     # A shared market-data service feeds the policy's market-order pricing.
@@ -249,7 +251,8 @@ def test_example_wiki_market_data_market_orders_book_top_override() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_market_data_push_for_fan_out() -> None:
-    # Used in: pit.wiki/Market-Data.md - Targeted Fan-Out: push for
+    # Source: https://wiki.openpit.dev/Market-Data/
+    # - Targeted Fan-Out: push for
     service = (
         openpit.Engine.builder()
         .no_sync()

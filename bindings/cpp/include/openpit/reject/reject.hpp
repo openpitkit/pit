@@ -94,6 +94,14 @@ enum class RejectCode : std::uint16_t {
   Other = 255,
 };
 
+// Reports whether `code` means a policy could not evaluate the historical
+// order. Evaluation failures abort an atomic drop-copy operation without
+// applying any of its effects.
+[[nodiscard]] inline bool IsEvaluationFailure(RejectCode code) noexcept {
+  return openpit_pretrade_reject_code_is_evaluation_failure(
+      static_cast<OpenPitPretradeRejectCode>(static_cast<std::uint16_t>(code)));
+}
+
 // A single pre-trade rejection record.
 //
 // `userData` is an opaque caller-defined token the SDK never inspects; zero

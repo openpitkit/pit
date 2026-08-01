@@ -94,6 +94,7 @@ export {
   AccountGroupRegistrationError,
   AccountBlockError,
   LifecycleError,
+  InternalError,
   EngineBuildError,
   PolicyConfigureError,
   PolicyCallbackError,

@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Account-Adjustments.md
+// Source: https://wiki.openpit.dev/Account-Adjustments/
 //
 // Compiling mirror of the C++ snippets published on the Account-Adjustments
 // wiki page. Each TEST runs the same user code shown in a wiki code block

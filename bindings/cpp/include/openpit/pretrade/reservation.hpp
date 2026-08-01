@@ -18,17 +18,14 @@
 #pragma once
 
 #include "openpit/accountadjustment/account_adjustment.hpp"
-#include "openpit/accounts/accounts.hpp"
 #include "openpit/detail/callback_error.hpp"
 #include "openpit/detail/native_access.hpp"
 #include "openpit/error.hpp"
-#include "openpit/pretrade/detail/lists.hpp"
 #include "openpit/pretrade/detail/request.hpp"
 #include "openpit/pretrade/pre_trade_lock.hpp"
 
 #include <openpit.h>
 
-#include <optional>
 #include <vector>
 
 namespace openpit::pretrade {
@@ -37,6 +34,16 @@ namespace openpit::pretrade {
 // exactly once with `Commit()` or `Rollback()`; destruction rolls back any
 // still-pending mutations. Both resolutions are idempotent at the pointer
 // level.
+//
+// Finalization has no right to fail. A mutation callback that throws never
+// fails `Commit()` or `Rollback()`: its original exception is rethrown once the
+// rest of the batch has run, and independently the engine arms its kill switch.
+// Every mutation a C++ policy registers is a custom policy's, so that kill
+// switch blocks EVERY account; the finalizing caller is not told, it surfaces
+// when the next pre-trade call is rejected with
+// `RejectCode::SystemUnavailable`, and an operator clears it with
+// `accounts::Accounts::UnblockAll()`. The implicit rollback on destruction arms
+// the same kill switch but cannot rethrow.
 class Reservation {
  public:
   Reservation() = default;
@@ -45,20 +52,24 @@ class Reservation {
     return static_cast<bool>(m_handle);
   }
 
-  // Finalizes the reservation, applying the reserved state permanently.
+  // Finalizes the reservation, applying the reserved state permanently. A
+  // throwing mutation commit callback rethrows here and arms the engine kill
+  // switch; see the class documentation.
   void Commit() {
     detail::RawReservation* handle = RequireHandle();
-    ::openpit::detail::ClearPendingCallbackException();
+    ::openpit::detail::CallbackExceptionScope callbackExceptions;
     openpit_pretrade_pre_trade_reservation_commit(handle);
-    ::openpit::detail::ThrowIfPendingCallbackException();
+    callbackExceptions.ThrowIfPending();
   }
 
-  // Cancels the reservation, releasing the reserved state.
+  // Cancels the reservation, releasing the reserved state. A throwing mutation
+  // rollback callback rethrows here and arms the engine kill switch; see the
+  // class documentation.
   void Rollback() {
     detail::RawReservation* handle = RequireHandle();
-    ::openpit::detail::ClearPendingCallbackException();
+    ::openpit::detail::CallbackExceptionScope callbackExceptions;
     openpit_pretrade_pre_trade_reservation_rollback(handle);
-    ::openpit::detail::ThrowIfPendingCallbackException();
+    callbackExceptions.ThrowIfPending();
   }
 
   // Returns an owned lock snapshot detached from the reservation state.
@@ -74,28 +85,6 @@ class Reservation {
         openpit_pretrade_pre_trade_reservation_get_account_adjustments(
             RequireHandle()));
     return outcomes.ToVector();
-  }
-
-  /// Returns the winning account block produced by this reservation's
-  /// pre-trade pipeline.
-  [[nodiscard]] std::optional<::openpit::accounts::AccountBlock> AccountBlock()
-      const {
-    OpenPitPretradeAccountBlockList* blocks =
-        openpit_pretrade_pre_trade_reservation_get_account_block(
-            RequireHandle());
-    ::openpit::detail::Handle<OpenPitPretradeAccountBlockList,
-                              detail::AccountBlockListDeleter>
-        owner(blocks);
-    if (blocks == nullptr) {
-      return std::nullopt;
-    }
-    OpenPitPretradeAccountBlock raw{};
-    std::optional<::openpit::accounts::AccountBlock> out;
-    if (openpit_pretrade_account_block_list_get(owner.Get(), 0, &raw)) {
-      out =
-          ::openpit::detail::FromNative<::openpit::accounts::AccountBlock>(raw);
-    }
-    return out;
   }
 
  private:

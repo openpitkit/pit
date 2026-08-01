@@ -23,10 +23,10 @@ use super::account_outcome::{AccountAdjustmentBatchResult, AccountAdjustmentOutc
 use super::accounts::Accounts;
 use super::engine_builder::EngineBuilder;
 use super::engine_trait::{EngineTrait, EngineTraitOf};
+use super::mutation::{MutationFailure, MutationFailureKillSwitch};
 use super::sync_mode::{AccountSync, FullSync, LocalSync, SyncMode};
 use super::{
     AccountCurrencies, AccountGroups, BlockedAccounts, ConfigRegistry, Configurator, HasAccountId,
-    HasOrderPrice, RequestFieldAccessError,
 };
 use crate::param::AccountId;
 use crate::pretrade::handle::{RequestHandleImpl, ReservationHandleImpl};
@@ -34,9 +34,9 @@ use crate::pretrade::start_pre_trade_time::with_start_pre_trade_now;
 use crate::pretrade::PostTradeContext;
 use crate::pretrade::PreTradePolicy;
 use crate::pretrade::{
-    AccountBlock, PolicyAccountAdjustmentResult, PolicyPreTradeResult, PostTradeResult,
-    PreTradeContext, PreTradeDryRunReport, PreTradeLock, PreTradeRequest, PreTradeReservation,
-    Reject, RejectCode, RejectScope, Rejects,
+    AccountBlock, DropCopyOperation, PolicyAccountAdjustmentResult, PolicyPreTradeResult,
+    PostTradeResult, PreTradeContext, PreTradeDryRunReport, PreTradeLock, PreTradeRequest,
+    PreTradeReservation, Reject, RejectCode, RejectScope, Rejects,
 };
 use crate::time::Instant;
 use crate::{AccountAdjustmentContext, Mutations};
@@ -243,9 +243,24 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// `instrument` or `side`). Policies that depend on extension fields must
     /// validate their presence.
     ///
+    /// # Account blocks
+    ///
+    /// The blocked set is consulted first: an order whose account is blocked
+    /// individually, belongs to a blocked group, or arrives while a global block
+    /// is active is rejected before any policy runs. While anything is blocked,
+    /// an order whose account ID cannot be read is rejected too, because the
+    /// engine cannot clear it against the blocked set.
+    ///
+    /// A start-stage reject with [`RejectScope::Account`] latches a block for
+    /// the order's account, so later requests for it are rejected up front. The
+    /// block is recorded only for a readable account: an unreadable one records
+    /// nothing, since a rejected request created no exposure that would justify
+    /// the irreversible global block. The order is rejected either way.
+    ///
     /// # Errors
     ///
-    /// Returns [`Rejects`] when any start-stage policy rejects the order.
+    /// Returns [`Rejects`] when the account is blocked or when any start-stage
+    /// policy rejects the order.
     pub fn start_pre_trade(
         &self,
         order: Trait::Order,
@@ -281,7 +296,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
         debug_assert!(account_block.is_none() || start_rejects.is_some());
         if let Some(rejects) = start_rejects {
             if let Some(block) = account_block {
-                self.inner.blocked_accounts.record(&order, block);
+                self.inner.blocked_accounts.record_pre_trade(&order, block);
             }
             return Err(rejects);
         }
@@ -297,7 +312,9 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// Runs start-stage checks and executes main-stage checks immediately.
     ///
     /// This is a convenience shortcut equivalent to
-    /// `engine.start_pre_trade(order)?.execute()`.
+    /// `engine.start_pre_trade(order)?.execute()`, including its account-block
+    /// behavior: see [`Self::start_pre_trade`] and
+    /// [`PreTradeRequest::execute`].
     ///
     /// # Errors
     ///
@@ -310,45 +327,69 @@ impl<Trait: EngineTrait> Engine<Trait> {
             .and_then(PreTradeRequest::execute)
     }
 
-    /// Executes the full pre-trade pipeline without enforcing policy rejects.
+    /// Applies a drop-copy operation without enforcing policy rejects.
     ///
-    /// Every policy runs in registration order and keeps its normal side
-    /// effects, mutations, locks, account adjustments, and account blocks.
-    /// Policy rejects do not stop the pipeline or appear in the result.
-    /// Existing account and account-group blocks are ignored for this request.
-    /// The returned reservation has the same commit and rollback lifecycle as
-    /// an accepted regular pre-trade request.
+    /// Policies run in registration order and keep their normal mutations,
+    /// locks, account adjustments, and account blocks. Ordinary policy rejects
+    /// do not stop the pipeline or appear in the operation. Rejects that mean a
+    /// policy could not evaluate or apply the historical order fail the whole
+    /// operation. On such a failure, collected mutations are rolled back and
+    /// deferred start-stage effects and account blocks are discarded. Rate-limit
+    /// attempts are the deliberate exception: they consume budget exactly like
+    /// an ordinary pre-trade request, including when a later policy fails.
+    /// Existing account and account-group blocks are ignored for admission.
+    ///
+    /// The returned [`DropCopyOperation`] is finalized by its owner exactly
+    /// like the [`PreTradeReservation`] returned by [`Self::execute_pre_trade`]:
+    /// it retains the prepared mutations, [`DropCopyOperation::commit`] applies
+    /// them, and an explicit or implicit rollback compensates them. Deferred
+    /// account-control operations and consumed rate-limit attempts are applied
+    /// before this method returns and stay outside that boundary.
+    ///
+    /// A mutation finalizer that fails is never ignored, whether it fails while
+    /// this method compensates a fatal exit or later, when the owner finalizes
+    /// the returned operation. Both raise the engine kill switch described by
+    /// the finalizer contract on [`Mutation`](crate::Mutation): the account for
+    /// an engine-owned mutation, every account for a custom-policy one.
+    ///
+    /// Order fields are requested by policies when needed; the engine does not
+    /// prevalidate a common field set. The account ID is the exception because
+    /// it is the engine's routing and account-control key: when it cannot be
+    /// read, the operation fails immediately with
+    /// [`RejectCode::MissingRequiredField`], before any policy runs and before
+    /// any other order field is touched. [`FullSync`](crate::FullSync) permits
+    /// concurrent calls for the same account, but their individual storage
+    /// accesses may interleave. Callers that need whole-pipeline isolation must
+    /// serialize those calls externally.
     ///
     /// # Errors
     ///
-    /// Returns a request-field error before evaluating any policy when the
-    /// order has no limit price or its price field cannot be read.
-    pub fn execute_pre_trade_drop_copy(
-        &self,
-        order: Trait::Order,
-    ) -> Result<PreTradeReservation, RequestFieldAccessError>
+    /// Returns [`RejectCode::MissingRequiredField`] when the account ID is
+    /// unreadable, or the fatal evaluation rejects produced by the policy
+    /// pipeline.
+    ///
+    /// When compensating a fatal pipeline exit fails, an engine
+    /// [`RejectCode::SystemUnavailable`] reject is **appended** after the fatal
+    /// policy rejects, and the kill switch is armed. The first reject stays the
+    /// policy cause, so a caller reading `rejects[0]` always sees why the
+    /// operation failed rather than how the cleanup failed.
+    pub fn apply_drop_copy(&self, order: Trait::Order) -> Result<DropCopyOperation, Rejects>
     where
-        Trait::Order: HasAccountId + HasOrderPrice,
+        Trait::Order: HasAccountId,
     {
-        if order.price()?.is_none() {
-            return Err(RequestFieldAccessError::new("limit price"));
-        }
-
         let now = Instant::now();
-        let account = order.account_id().ok();
-        let account_control = account.map(|id| {
-            let handle = AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone());
-            AccountControl::new(handle, id)
-        });
-        let account_groups = AccountGroupsHandle::from_inner(self.inner.account_groups.clone());
-        let ctx = PreTradeContext::with_groups_and_drop_copy(
-            account_control,
-            account_groups,
+        let account = order
+            .account_id()
+            .map_err(|_| new_drop_copy_unreadable_account_rejects())?;
+        let account_control = AccountControl::new(
+            AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone()),
             account,
-            true,
         );
+        let account_groups = AccountGroupsHandle::from_inner(self.inner.account_groups.clone());
+        let ctx =
+            PreTradeContext::with_groups_and_drop_copy(account_control, account_groups, account);
 
-        let (_start_rejects, start_account_block) = with_start_pre_trade_now(now, || {
+        let (start_rejects, _) = with_start_pre_trade_now(now, || {
             run_pre_trade_start_stage::<Trait, _>(
                 &self.inner,
                 &ctx,
@@ -356,32 +397,78 @@ impl<Trait: EngineTrait> Engine<Trait> {
                 |policy, ctx, order| policy.check_pre_trade_start(ctx, order),
             )
         });
-        if let Some(block) = &start_account_block {
-            self.inner.blocked_accounts.record(&order, block.clone());
+        if let Some(rejects) = fatal_drop_copy_rejects(start_rejects) {
+            ctx.abandon_drop_copy_account_operations();
+            let rollback = ctx.take_drop_copy_start_mutations().rollback_all();
+            if rollback.callback_failed() {
+                let details = rollback.callback_failure_details();
+                self.record_mutation_failure(Some(account), rollback.failure());
+                return Err(append_drop_copy_mutation_callback_rejects(rejects, details));
+            }
+            return Err(rejects);
         }
 
-        let (_rejects, main_account_block, mutations, lock, outcomes) = run_pre_trade_main_stage::<
-            Trait,
-            _,
-        >(
+        let (rejects, _, mutations, lock, outcomes) = run_pre_trade_main_stage::<Trait, _>(
             &self.inner,
             &ctx,
             &order,
             |policy, ctx, order, mutations| policy.perform_pre_trade_check(ctx, order, mutations),
         );
-        if let Some(block) = &main_account_block {
-            self.inner.blocked_accounts.record(&order, block.clone());
+        if let Some(rejects) = fatal_drop_copy_rejects(rejects) {
+            ctx.abandon_drop_copy_account_operations();
+            let mut rollback = mutations.rollback_all();
+            rollback.append(ctx.take_drop_copy_start_mutations().rollback_all());
+            if rollback.callback_failed() {
+                let details = rollback.callback_failure_details();
+                self.record_mutation_failure(Some(account), rollback.failure());
+                return Err(append_drop_copy_mutation_callback_rejects(rejects, details));
+            }
+            return Err(rejects);
         }
 
-        let account_block = start_account_block.or(main_account_block);
-
-        let reservation_handle = ReservationHandleImpl::new(mutations);
-        Ok(PreTradeReservation::from_handle_with_account_block(
-            Box::new(reservation_handle),
+        let mut all_mutations = ctx.take_drop_copy_start_mutations();
+        all_mutations.append(mutations);
+        let account_block = ctx.drop_copy_account_block();
+        ctx.apply_drop_copy_account_operations(&self.inner.blocked_accounts);
+        let account_blocked = self
+            .inner
+            .blocked_accounts
+            .is_blocked(&self.inner.account_groups, account);
+        Ok(DropCopyOperation::from_handle(
+            Box::new(ReservationHandleImpl::new(
+                all_mutations,
+                self.mutation_failure_kill_switch(Some(account)),
+            )),
             lock,
             outcomes,
             account_block,
+            account_blocked,
         ))
+    }
+
+    /// Builds the kill switch handed to an owner-finalized mutation batch.
+    ///
+    /// The engine is the only place that can name its storage factory, so the
+    /// blocked-set access is captured here and type-erased for the
+    /// finalization path. See the finalizer contract on
+    /// [`Mutation`](crate::Mutation).
+    fn mutation_failure_kill_switch(
+        &self,
+        account: Option<AccountId>,
+    ) -> MutationFailureKillSwitch {
+        let handle = self.block_handle();
+        MutationFailureKillSwitch::new(move |scope| handle.record_mutation_failure(account, scope))
+    }
+
+    /// Arms the kill switch for a batch the engine finalized itself.
+    fn record_mutation_failure(&self, account: Option<AccountId>, failure: &MutationFailure) {
+        if let Some(scope) = failure.scope() {
+            self.block_handle().record_mutation_failure(account, scope);
+        }
+    }
+
+    fn block_handle(&self) -> AccountBlockHandleOf<Trait> {
+        AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone())
     }
 
     /// Runs start-stage checks as a non-mutating dry-run.
@@ -540,7 +627,9 @@ impl<Trait: EngineTrait> Engine<Trait> {
         }
 
         if let Some(first) = blocks.first() {
-            inner.blocked_accounts.record(report, first.clone());
+            inner
+                .blocked_accounts
+                .record_execution_report(report, first.clone());
         }
 
         PostTradeResult {
@@ -567,6 +656,11 @@ impl<Trait: EngineTrait> Engine<Trait> {
     /// The engine commits accepted mutations, records every policy-reported account block for
     /// `account_id`, and then returns the same blocks in `account_blocks`. The first reported
     /// block remains the stored cause if more than one block is reported for the account.
+    ///
+    /// A commit or rollback callback that fails is never ignored: it arms the
+    /// engine kill switch described by the finalizer contract on
+    /// [`Mutation`](crate::Mutation) before the policy-reported blocks are
+    /// recorded, so the more severe cause is the one that wins the account.
     ///
     /// # Errors
     ///
@@ -626,11 +720,14 @@ impl<Trait: EngineTrait> Engine<Trait> {
         }
 
         if let Some(err) = batch_error {
-            mutations.rollback_all();
+            let rollback = mutations.rollback_all();
+            self.record_mutation_failure(Some(account_id), rollback.failure());
             return Err(err);
         }
 
-        mutations.commit_all();
+        // A failed commit finalizer is raised before the policy-reported
+        // blocks, so the more severe cause is the one that wins the account.
+        self.record_mutation_failure(Some(account_id), &mutations.commit_all());
         for block in &account_blocks {
             inner
                 .blocked_accounts
@@ -655,8 +752,12 @@ type PreTradePolicyObjectOf<Trait> =
 type PreTradeContextOf<Trait> =
     PreTradeContext<<<Trait as EngineTrait>::Sync as SyncMode>::StorageLockingPolicyFactory>;
 
+/// Blocked-accounts handle type for an engine of `Trait`.
+type AccountBlockHandleOf<Trait> =
+    AccountBlockHandle<<<Trait as EngineTrait>::Sync as SyncMode>::StorageLockingPolicyFactory>;
+
 /// Runs the start stage over every policy and reports the merged verdict
-/// **without** applying any side effect.
+/// without recording an account block in the engine registry.
 ///
 /// `hook` selects the per-policy entry point (the normal
 /// [`check_pre_trade_start`](PreTradePolicy::check_pre_trade_start) or its
@@ -681,17 +782,24 @@ where
     let mut total_rejects_len = 0;
     let mut account_block: Option<AccountBlock> = None;
     for policy in &inner.pre_trade_policies {
-        if let Err(rejects) = hook(&**policy, ctx, order) {
+        let result = hook(&**policy, ctx, order);
+        if let Err(rejects) = result {
             debug_assert!(
                 !rejects.is_empty(),
                 "policy returned Err with empty Rejects"
             );
             total_rejects_len += rejects.len();
+            let reject_account_block = rejects
+                .iter()
+                .find(|r| r.scope == RejectScope::Account)
+                .map(|r| r.account_block_with_code(RejectCode::AccountBlocked));
+            if ctx.is_drop_copy() {
+                if let Some(block) = &reject_account_block {
+                    ctx.record_drop_copy_account_block(block.clone());
+                }
+            }
             if account_block.is_none() {
-                account_block = rejects
-                    .iter()
-                    .find(|r| r.scope == RejectScope::Account)
-                    .map(|r| r.account_block_with_code(RejectCode::AccountBlocked));
+                account_block = reject_account_block;
             }
             rejects_collection.push(rejects);
         }
@@ -710,10 +818,11 @@ where
 /// `hook` selects the per-policy entry point (the normal
 /// [`perform_pre_trade_check`](PreTradePolicy::perform_pre_trade_check) or its
 /// dry-run variant); the loop, reject merge, first-account-block selection, lock
-/// assembly, and outcome tagging are identical for both. Drop-copy policies may
-/// also report a non-enforcing account block through the context. The caller
-/// decides what to do with the returned [`Mutations`] (commit, roll back, or
-/// drop) and whether to record the returned [`AccountBlock`].
+/// assembly, and outcome tagging are identical for both. The caller decides
+/// what to do with the returned [`Mutations`] (commit, roll back, or drop) and
+/// whether to record the returned reject-derived [`AccountBlock`]. Drop-copy
+/// blocks reported directly through the context remain there until the caller
+/// applies or abandons its deferred operations.
 fn run_pre_trade_main_stage<Trait, Hook>(
     inner: &EngineInner<Trait>,
     ctx: &PreTradeContextOf<Trait>,
@@ -743,46 +852,56 @@ where
     let mut lock = PreTradeLock::new();
     let mut first_account_block: Option<AccountBlock> = None;
     for policy in &inner.pre_trade_policies {
-        match hook(&**policy, ctx, order, &mut mutations) {
+        let result = hook(&**policy, ctx, order, &mut mutations);
+        match result {
             Ok(None) => {}
             Ok(Some(outcome)) => {
-                let PolicyPreTradeResult {
-                    account_adjustments,
-                    lock_prices,
-                } = outcome;
-                let policy_group_id = policy.policy_group_id();
-                lock.push_many(policy_group_id, lock_prices);
-                outcomes.extend(account_adjustments.into_iter().map(|entry| {
-                    AccountAdjustmentOutcome {
-                        policy_group_id,
-                        entry,
-                    }
-                }));
+                append_pre_trade_policy_result(
+                    outcome,
+                    policy.policy_group_id(),
+                    &mut lock,
+                    &mut outcomes,
+                );
             }
             Err(rejects) => {
+                let (rejects, recorded_result) = rejects.into_parts();
+                if ctx.is_drop_copy()
+                    && !rejects
+                        .iter()
+                        .any(|reject| reject.code.is_evaluation_failure())
+                {
+                    if let Some(outcome) = recorded_result {
+                        append_pre_trade_policy_result(
+                            outcome,
+                            policy.policy_group_id(),
+                            &mut lock,
+                            &mut outcomes,
+                        );
+                    }
+                }
                 debug_assert!(
                     !rejects.is_empty(),
                     "policy returned Err with empty Rejects"
                 );
                 total_rejects_len += rejects.len();
-                if first_account_block.is_none() {
-                    first_account_block = rejects
-                        .iter()
-                        .find(|r| r.scope == RejectScope::Account)
-                        .map(|r| r.account_block_with_code(RejectCode::AccountBlocked));
+                let reject_account_block = rejects
+                    .iter()
+                    .find(|r| r.scope == RejectScope::Account)
+                    .map(|r| r.account_block_with_code(RejectCode::AccountBlocked));
+                if ctx.is_drop_copy() {
+                    if let Some(block) = &reject_account_block {
+                        ctx.record_drop_copy_account_block(block.clone());
+                    }
                 }
-                rejects_collection.push(rejects);
+                if first_account_block.is_none() {
+                    first_account_block = reject_account_block;
+                }
+                rejects_collection.push(Rejects::new(rejects));
             }
-        }
-        let context_account_block = ctx.take_drop_copy_account_block();
-        if first_account_block.is_none() {
-            first_account_block = context_account_block;
         }
     }
 
-    // A block with no reject is legitimate only in drop-copy, where the P&L halt
-    // surfaces through the context rather than an enforced reject.
-    debug_assert!(first_account_block.is_none() || total_rejects_len > 0 || ctx.is_drop_copy());
+    debug_assert!(first_account_block.is_none() || total_rejects_len > 0);
     (
         merge_reject_lists(rejects_collection, total_rejects_len),
         first_account_block,
@@ -790,6 +909,69 @@ where
         lock,
         outcomes,
     )
+}
+
+/// Rejects returned when a drop-copy order carries no readable account ID.
+///
+/// Drop-copy ignores existing blocks for admission, so this is not a failed
+/// blocked-set lookup: the operation has no routing and account-control key at
+/// all, and the caller must fix the order rather than look for a stuck block.
+fn new_drop_copy_unreadable_account_rejects() -> Rejects {
+    Reject::new(
+        "Engine",
+        RejectScope::Order,
+        RejectCode::MissingRequiredField,
+        "drop-copy requires a readable account ID",
+        "the account ID routes the drop-copy pipeline and its account control".to_owned(),
+    )
+    .into()
+}
+
+fn fatal_drop_copy_rejects(rejects: Option<Rejects>) -> Option<Rejects> {
+    let fatal = rejects?
+        .into_vec()
+        .into_iter()
+        .filter(|reject| reject.code.is_evaluation_failure())
+        .collect::<Vec<_>>();
+    (!fatal.is_empty()).then(|| Rejects::new(fatal))
+}
+
+fn drop_copy_mutation_callback_rejects(details: String) -> Rejects {
+    Reject::new(
+        "Engine",
+        RejectScope::Order,
+        RejectCode::SystemUnavailable,
+        "mutation callback failed",
+        details,
+    )
+    .into()
+}
+
+fn append_drop_copy_mutation_callback_rejects(rejects: Rejects, details: String) -> Rejects {
+    let mut rejects = rejects.into_vec();
+    rejects.extend(drop_copy_mutation_callback_rejects(details).into_vec());
+    Rejects::new(rejects)
+}
+
+fn append_pre_trade_policy_result(
+    outcome: PolicyPreTradeResult,
+    policy_group_id: crate::core::PolicyGroupId,
+    lock: &mut PreTradeLock,
+    outcomes: &mut Vec<AccountAdjustmentOutcome>,
+) {
+    let PolicyPreTradeResult {
+        account_adjustments,
+        lock_prices,
+    } = outcome;
+    lock.push_many(policy_group_id, lock_prices);
+    outcomes.extend(
+        account_adjustments
+            .into_iter()
+            .map(|entry| AccountAdjustmentOutcome {
+                policy_group_id,
+                entry,
+            }),
+    );
 }
 
 fn execute_pre_trade_request<Trait: EngineTrait>(
@@ -827,15 +1009,30 @@ where
             |policy, ctx, order, mutations| policy.perform_pre_trade_check(ctx, order, mutations),
         );
 
+    let account = order.account_id().ok();
+    let block_handle: AccountBlockHandleOf<Trait> =
+        AccountBlockHandle::from_inner(inner.blocked_accounts.clone());
+
     if let Some(rejects) = rejects {
-        if let Some(block) = first_account_block {
-            inner.blocked_accounts.record(&order, block);
+        let rollback = mutations.rollback_all();
+        if let Some(scope) = rollback.failure().scope() {
+            block_handle.record_mutation_failure(account, scope);
         }
-        mutations.rollback_all();
+        if let Some(block) = first_account_block {
+            // The first block for an account wins. A rollback failure therefore
+            // keeps its account-scoped cause, while a global failure still
+            // records the policy block for this account.
+            inner.blocked_accounts.record_pre_trade(&order, block);
+        }
         return Err(rejects);
     }
 
-    let reservation_handle = ReservationHandleImpl::new(mutations);
+    let reservation_handle = ReservationHandleImpl::new(
+        mutations,
+        MutationFailureKillSwitch::new(move |scope| {
+            block_handle.record_mutation_failure(account, scope)
+        }),
+    );
     Ok(PreTradeReservation::from_handle(
         Box::new(reservation_handle),
         lock,
@@ -858,7 +1055,9 @@ fn merge_reject_lists(lists: Vec<Rejects>, len: usize) -> Option<Rejects> {
 mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+    use std::time::Duration;
 
+    use crate::core::mutation::MutationRollbackResult;
     use crate::core::{
         ExecutionReportOperation, FinancialImpact, Instrument, OrderOperation,
         WithExecutionReportOperation, WithFinancialImpact, WithOrderOperation,
@@ -867,10 +1066,15 @@ mod tests {
         AccountGroupId, AccountId, Asset, Fee, Pnl, PositionSize, Price, Quantity, Side,
         TradeAmount, Volume,
     };
+    use crate::pretrade::policies::{
+        OrderSizeBrokerBarrier, OrderSizeLimit, OrderSizeLimitPolicy, OrderSizeLimitSettings,
+        OrderValidationPolicy, RateLimit, RateLimitAccountAssetBarrier, RateLimitAccountBarrier,
+        RateLimitBrokerBarrier, RateLimitPolicy, RateLimitSettings,
+    };
     use crate::pretrade::{
-        PolicyAccountAdjustmentResult, PolicyPreTradeResult, PostTradeResult, PreTradeContext,
-        PreTradeDryRunReport, PreTradePolicy, Reject, RejectCode, RejectScope, Rejects,
-        DEFAULT_POLICY_GROUP_ID,
+        AccountBlock, PolicyAccountAdjustmentResult, PolicyPreTradeResult, PostTradeResult,
+        PreTradeContext, PreTradeDryRunReport, PreTradePolicy, Reject, RejectCode, RejectScope,
+        Rejects, DEFAULT_POLICY_GROUP_ID,
     };
     use crate::storage::NoLocking;
     use crate::{
@@ -898,7 +1102,29 @@ mod tests {
         }
     }
 
-    /// Minimal order stub that fails before any account or policy access.
+    struct SingleReadAccountOrder {
+        calls: Rc<Cell<u32>>,
+    }
+
+    impl HasAccountId for SingleReadAccountOrder {
+        fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+            let calls = self.calls.get();
+            self.calls.set(calls + 1);
+            if calls == 0 {
+                Ok(AccountId::from_u64(99224416))
+            } else {
+                Err(RequestFieldAccessError::new("account_id"))
+            }
+        }
+    }
+
+    impl HasOrderPrice for NoAccountOrder {
+        fn price(&self) -> Result<Option<Price>, RequestFieldAccessError> {
+            Ok(Some(Price::from_str("1").expect("price must be valid")))
+        }
+    }
+
+    /// Minimal order stub whose price cannot be read.
     #[derive(Clone)]
     struct PriceAccessErrorOrder;
 
@@ -970,6 +1196,401 @@ mod tests {
                 calls.set(calls.get() + 1);
             }
             Ok(())
+        }
+    }
+
+    struct DropCopyRejectedResultPolicy;
+
+    fn drop_copy_policy_result(delta: &str, absolute: &str, lock: &str) -> PolicyPreTradeResult {
+        let mut result = PolicyPreTradeResult::with_capacity(1, 1);
+        result.account_adjustments.push(AccountOutcomeEntry {
+            asset: Asset::new("USD").expect("asset must be valid"),
+            balance: Some(OutcomeAmount {
+                delta: PositionSize::from_str(delta).expect("delta must be valid"),
+                absolute: PositionSize::from_str(absolute).expect("amount must be valid"),
+            }),
+            held: None,
+            incoming: None,
+            realized_pnl: None,
+            average_entry_price: None,
+        });
+        result
+            .lock_prices
+            .push(Price::from_str(lock).expect("price must be valid"));
+        result
+    }
+
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for DropCopyRejectedResultPolicy
+    {
+        fn name(&self) -> &str {
+            "drop_copy_rejected_result"
+        }
+
+        fn policy_group_id(&self) -> crate::core::PolicyGroupId {
+            crate::core::PolicyGroupId::new(7)
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &TestOrder,
+            _mutations: &mut Mutations,
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+            Err(Rejects::from(Reject::new(
+                "drop_copy_rejected_result",
+                RejectScope::Account,
+                RejectCode::Other,
+                "rejected with output",
+                "drop-copy must preserve output attached to an ignored reject",
+            ))
+            .with_policy_result(drop_copy_policy_result("-5", "95", "13")))
+        }
+    }
+
+    struct DropCopySuccessfulRecordedResultPolicy;
+
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for DropCopySuccessfulRecordedResultPolicy
+    {
+        fn name(&self) -> &str {
+            "successful_recorded_result"
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &TestOrder,
+            _mutations: &mut Mutations,
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+            Ok(Some(drop_copy_policy_result("-2", "98", "12")))
+        }
+    }
+
+    struct DropCopyRejectPolicy {
+        name: &'static str,
+        code: RejectCode,
+    }
+
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for DropCopyRejectPolicy
+    {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn check_pre_trade_start(
+            &self,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &TestOrder,
+        ) -> Result<(), Rejects> {
+            Ok(())
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &TestOrder,
+            _mutations: &mut Mutations,
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+            Err(Rejects::from(Reject::new(
+                self.name,
+                RejectScope::Order,
+                self.code,
+                "drop-copy test reject",
+                "drop-copy test policy rejected the order",
+            )))
+        }
+    }
+
+    struct DropCopyFatalStartPolicy;
+
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for DropCopyFatalStartPolicy
+    {
+        fn name(&self) -> &str {
+            "fatal_start"
+        }
+
+        fn check_pre_trade_start(
+            &self,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &TestOrder,
+        ) -> Result<(), Rejects> {
+            Err(Rejects::from(Reject::new(
+                "fatal_start",
+                RejectScope::Order,
+                RejectCode::MissingRequiredField,
+                "missing start field",
+                "start field is unavailable",
+            )))
+        }
+    }
+
+    struct DropCopyDirectBlockPolicy;
+
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for DropCopyDirectBlockPolicy
+    {
+        fn name(&self) -> &str {
+            "direct_block"
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &TestOrder,
+            _mutations: &mut Mutations,
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+            ctx.account_control
+                .as_ref()
+                .expect("test order has an account")
+                .block(AccountBlock::new(
+                    "direct_block",
+                    RejectCode::AccountBlocked,
+                    "direct block",
+                    "direct block requested before a later fatal evaluation",
+                ));
+            Ok(None)
+        }
+    }
+
+    struct DropCopyDirectBlockAndRejectPolicy;
+
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for DropCopyDirectBlockAndRejectPolicy
+    {
+        fn name(&self) -> &str {
+            "direct_block_and_reject"
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &TestOrder,
+            _mutations: &mut Mutations,
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+            ctx.account_control
+                .as_ref()
+                .expect("test order has an account")
+                .block(AccountBlock::new(
+                    "direct_block_and_reject",
+                    RejectCode::AccountBlocked,
+                    "first direct block",
+                    "direct block requested before returning a later reject",
+                ));
+            Err(Rejects::from(Reject::new(
+                "direct_block_and_reject",
+                RejectScope::Account,
+                RejectCode::RiskLimitExceeded,
+                "later account reject",
+                "ordinary reject emitted after the direct block",
+            )))
+        }
+    }
+
+    #[derive(Clone)]
+    enum TestDeferredAccountOperation {
+        Block {
+            reason: &'static str,
+            provenance: u64,
+        },
+        InvalidateProvenance(u64),
+    }
+
+    struct DropCopyAccountOperationsPolicy {
+        operations: Rc<RefCell<Vec<TestDeferredAccountOperation>>>,
+    }
+
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for DropCopyAccountOperationsPolicy
+    {
+        fn name(&self) -> &str {
+            "drop_copy_account_operations"
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &TestOrder,
+            _mutations: &mut Mutations,
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+            let control = ctx
+                .account_control
+                .as_ref()
+                .expect("test order has an account");
+            for operation in self.operations.borrow().iter().cloned() {
+                match operation {
+                    TestDeferredAccountOperation::Block { reason, provenance } => {
+                        control.block(
+                            AccountBlock::new(
+                                "drop_copy_account_operations",
+                                RejectCode::AccountBlocked,
+                                reason,
+                                "ordered drop-copy account operation",
+                            )
+                            .with_provenance(Some(provenance)),
+                        );
+                    }
+                    TestDeferredAccountOperation::InvalidateProvenance(provenance) => {
+                        let _ = control.invalidate_provenance(provenance);
+                    }
+                }
+            }
+            Ok(None)
+        }
+    }
+
+    struct ConditionalDropCopyFatalPolicy {
+        fatal: Rc<Cell<bool>>,
+    }
+
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for ConditionalDropCopyFatalPolicy
+    {
+        fn name(&self) -> &str {
+            "conditional_drop_copy_fatal"
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &TestOrder,
+            _mutations: &mut Mutations,
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+            if self.fatal.get() {
+                return Err(Rejects::from(Reject::new(
+                    "conditional_drop_copy_fatal",
+                    RejectScope::Order,
+                    RejectCode::SystemUnavailable,
+                    "fatal evaluation",
+                    "failure after a deferred account operation",
+                )));
+            }
+            Ok(None)
+        }
+    }
+
+    struct DropCopyEagerStartMutationPolicy {
+        value: Rc<Cell<usize>>,
+    }
+
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for DropCopyEagerStartMutationPolicy
+    {
+        fn name(&self) -> &str {
+            "drop_copy_eager_start_mutation"
+        }
+
+        fn check_pre_trade_start(
+            &self,
+            ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &TestOrder,
+        ) -> Result<(), Rejects> {
+            let previous = self.value.get();
+            self.value.set(previous + 1);
+            let rollback_value = Rc::clone(&self.value);
+            assert!(ctx
+                .record_drop_copy_start_mutation(Mutation::new(
+                    || {},
+                    move || rollback_value.set(previous),
+                ))
+                .is_ok());
+            Ok(())
+        }
+    }
+
+    struct DropCopyFailingStartRollbackPolicy;
+
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for DropCopyFailingStartRollbackPolicy
+    {
+        fn name(&self) -> &str {
+            "failing_start_rollback"
+        }
+
+        fn check_pre_trade_start(
+            &self,
+            ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &TestOrder,
+        ) -> Result<(), Rejects> {
+            assert!(ctx
+                .record_drop_copy_start_mutation(Mutation::new_fallible_with_error(
+                    || Ok(()),
+                    || Err("start rollback failed".to_owned()),
+                ))
+                .is_ok());
+            Ok(())
+        }
+    }
+
+    struct DropCopyFatalMainWithFailingRollbackPolicy;
+
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for DropCopyFatalMainWithFailingRollbackPolicy
+    {
+        fn name(&self) -> &str {
+            "failing_main_rollback"
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &TestOrder,
+            mutations: &mut Mutations,
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+            mutations.push(Mutation::new_fallible_with_error(
+                || Ok(()),
+                || Err("main rollback failed".to_owned()),
+            ));
+            Err(Rejects::from(Reject::new(
+                "failing_main_rollback",
+                RejectScope::Order,
+                RejectCode::MissingRequiredField,
+                "required field is unavailable",
+                "the main policy cannot evaluate the historical order",
+            )))
+        }
+    }
+
+    struct DropCopyRollbackBlockPolicy;
+
+    impl<Sync: crate::core::SyncMode> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+        for DropCopyRollbackBlockPolicy
+    {
+        fn name(&self) -> &str {
+            "drop_copy_rollback_block"
+        }
+
+        fn perform_pre_trade_check(
+            &self,
+            ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+            _order: &TestOrder,
+            mutations: &mut Mutations,
+        ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+            let control = ctx
+                .account_control
+                .clone()
+                .expect("drop-copy test context must carry account control");
+            mutations.push(Mutation::new(
+                || {},
+                move || {
+                    control.block(AccountBlock::new(
+                        "drop_copy_rollback_block",
+                        RejectCode::SystemUnavailable,
+                        "rollback could not restore policy state",
+                        "policy requested a safety block during compensation",
+                    ));
+                },
+            ));
+            Err(Reject::new(
+                "drop_copy_rollback_block",
+                RejectScope::Order,
+                RejectCode::MissingRequiredField,
+                "historical order cannot be evaluated",
+                "forced fatal reject",
+            )
+            .into())
         }
     }
 
@@ -1326,7 +1947,6 @@ mod tests {
         let mut reservation = engine
             .execute_pre_trade(order_with_settlement("USD"))
             .expect("shortcut must pass");
-        assert!(reservation.account_block().is_none());
         reservation.rollback();
     }
 
@@ -1436,11 +2056,13 @@ mod tests {
             .pre_trade(CoreStartPolicyMock {
                 name: "core_start",
                 reject: false,
+                reject_scope: RejectScope::Order,
             })
             .pre_trade(CoreMainPolicyMock {
                 name: "core_main",
                 on_apply: None,
                 reject: false,
+                reject_scope: RejectScope::Order,
             })
             .build()
             .expect("engine must build");
@@ -1463,11 +2085,13 @@ mod tests {
             .pre_trade(CoreStartPolicyMock {
                 name: "dup",
                 reject: false,
+                reject_scope: RejectScope::Order,
             })
             .pre_trade(CoreMainPolicyMock {
                 name: "dup",
                 on_apply: None,
                 reject: false,
+                reject_scope: RejectScope::Order,
             })
             .build();
 
@@ -1484,10 +2108,12 @@ mod tests {
             .pre_trade(CoreStartPolicyMock {
                 name: "dup",
                 reject: false,
+                reject_scope: RejectScope::Order,
             })
             .pre_trade(CoreStartPolicyMock {
                 name: "dup",
                 reject: false,
+                reject_scope: RejectScope::Order,
             })
             .build();
 
@@ -1504,6 +2130,7 @@ mod tests {
             .pre_trade(CoreStartPolicyMock {
                 name: "core_start_reject",
                 reject: true,
+                reject_scope: RejectScope::Order,
             })
             .build()
             .expect("engine must build");
@@ -1521,6 +2148,73 @@ mod tests {
         assert!(post_trade.account_blocks.is_empty());
     }
 
+    // An account-scope reject blocks only a known account. With an unreadable
+    // account ID nothing is recorded: a rejected request created no exposure
+    // that would justify the irreversible global block.
+    #[test]
+    fn accountless_start_stage_account_reject_records_no_block() {
+        let engine = Engine::builder::<NoAccountOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(CoreStartPolicyMock {
+                name: "core_start_account_reject",
+                reject: true,
+                reject_scope: RejectScope::Account,
+            })
+            .build()
+            .expect("engine must build");
+
+        let Err(rejects) = engine.start_pre_trade(NoAccountOrder) else {
+            panic!("start stage must reject");
+        };
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].scope, RejectScope::Account);
+
+        assert!(!engine.inner.blocked_accounts.is_all_blocked());
+        assert!(engine
+            .inner
+            .blocked_accounts
+            .check(
+                &engine.inner.account_groups,
+                &NoAccountOrder,
+                RejectScope::Order,
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn accountless_main_stage_account_reject_records_no_block() {
+        let engine = Engine::builder::<NoAccountOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(CoreMainPolicyMock {
+                name: "core_main_account_reject",
+                on_apply: None,
+                reject: true,
+                reject_scope: RejectScope::Account,
+            })
+            .build()
+            .expect("engine must build");
+
+        let request = engine
+            .start_pre_trade(NoAccountOrder)
+            .expect("start stage must pass");
+        let Err(rejects) = request.execute() else {
+            panic!("main stage must reject");
+        };
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].scope, RejectScope::Account);
+
+        assert!(!engine.inner.blocked_accounts.is_all_blocked());
+        assert!(engine
+            .inner
+            .blocked_accounts
+            .check(
+                &engine.inner.account_groups,
+                &NoAccountOrder,
+                RejectScope::Order,
+            )
+            .is_none());
+    }
+
     #[test]
     fn order_core_execute_rejects_and_rolls_back_mutations() {
         let state = Rc::new(RefCell::new(None));
@@ -1529,6 +2223,7 @@ mod tests {
             .pre_trade(CoreStartPolicyMock {
                 name: "core_start",
                 reject: false,
+                reject_scope: RejectScope::Order,
             })
             .pre_trade(CoreMainPolicyMock {
                 name: "core_main",
@@ -1539,6 +2234,7 @@ mod tests {
                     false,
                 ))),
                 reject: true,
+                reject_scope: RejectScope::Order,
             })
             .build()
             .expect("engine must build");
@@ -1573,6 +2269,7 @@ mod tests {
                 .pre_trade(CoreStartPolicyMock {
                     name: "core_start",
                     reject: false,
+                    reject_scope: RejectScope::Order,
                 })
                 .pre_trade(CoreMainPolicyMock {
                     name: "core_main",
@@ -1583,6 +2280,7 @@ mod tests {
                         false,
                     ))),
                     reject: false,
+                    reject_scope: RejectScope::Order,
                 })
                 .build()
                 .expect("engine must build");
@@ -1979,6 +2677,7 @@ mod tests {
                 .pre_trade(CoreStartPolicyMock {
                     name: "core_start",
                     reject: false,
+                    reject_scope: RejectScope::Order,
                 })
                 .pre_trade(CoreMainPolicyMock {
                     name: "core_main",
@@ -1989,6 +2688,7 @@ mod tests {
                         false,
                     ))),
                     reject: false,
+                    reject_scope: RejectScope::Order,
                 })
                 .build()
                 .expect("engine must build");
@@ -2095,7 +2795,7 @@ mod tests {
     }
 
     #[test]
-    fn drop_copy_runs_all_stages_and_commits_rejecting_mutations() {
+    fn drop_copy_runs_all_stages_and_applies_rejecting_mutations() {
         let start_calls = Rc::new(Cell::new(0));
         let mutation_state = Rc::new(RefCell::new(None));
         let engine = Engine::builder()
@@ -2122,23 +2822,92 @@ mod tests {
             .build()
             .expect("engine must build");
 
-        let mut reservation = engine
-            .execute_pre_trade_drop_copy(order_with_settlement("USD"))
+        let mut operation = engine
+            .apply_drop_copy(order_with_settlement("USD"))
             .expect("limit drop-copy must be admitted");
+        operation.commit();
         assert_eq!(start_calls.get(), 1);
-        assert_eq!(*mutation_state.borrow(), None);
-
-        reservation.commit();
         assert_eq!(*mutation_state.borrow(), Some(true));
     }
 
     #[test]
-    fn drop_copy_returns_market_order_input_error_before_policy_evaluation() {
+    fn drop_copy_preserves_owned_rejected_result_with_policy_group() {
+        let group = crate::core::PolicyGroupId::new(7);
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyRejectedResultPolicy)
+            .build()
+            .expect("engine must build");
+
+        let result = engine
+            .apply_drop_copy(order_with_settlement("USD"))
+            .expect("limit drop-copy must be admitted");
+
+        assert_eq!(
+            result.lock().prices_of(group).collect::<Vec<_>>(),
+            vec![Price::from_str("13").expect("price must be valid")]
+        );
+        assert_eq!(result.account_adjustments().len(), 1);
+        assert_eq!(result.account_adjustments()[0].policy_group_id, group);
+        assert_eq!(
+            result.account_block().map(|block| block.reason.as_str()),
+            Some("rejected with output")
+        );
+    }
+
+    #[test]
+    fn ordinary_dry_run_ignores_policy_result_attached_to_reject() {
+        let group = crate::core::PolicyGroupId::new(7);
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyRejectedResultPolicy)
+            .build()
+            .expect("engine must build");
+
+        let report = engine.execute_pre_trade_dry_run(order_with_settlement("USD"));
+
+        assert!(!report.is_pass());
+        assert!(report.account_adjustments().is_empty());
+        assert_eq!(report.lock().prices_of(group).count(), 0);
+    }
+
+    #[test]
+    fn drop_copy_uses_successful_policy_result() {
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopySuccessfulRecordedResultPolicy)
+            .build()
+            .expect("engine must build");
+
+        let result = engine
+            .apply_drop_copy(order_with_settlement("USD"))
+            .expect("successful drop-copy policy must pass");
+
+        assert_eq!(result.account_adjustments().len(), 1);
+        assert_eq!(
+            result.account_adjustments()[0]
+                .entry
+                .balance
+                .expect("balance outcome must be present")
+                .delta,
+            PositionSize::from_str("-2").expect("delta must be valid")
+        );
+        assert_eq!(
+            result
+                .lock()
+                .prices_of(crate::pretrade::DEFAULT_POLICY_GROUP_ID)
+                .collect::<Vec<_>>(),
+            vec![Price::from_str("12").expect("price must be valid")]
+        );
+    }
+
+    #[test]
+    fn drop_copy_does_not_require_price_when_policies_do_not_need_it() {
         let start_calls = Rc::new(Cell::new(0));
         let engine = Engine::builder()
             .no_sync()
             .pre_trade(StartPolicyMock::new(
-                "must_not_run",
+                "start",
                 Rc::clone(&start_calls),
                 false,
                 false,
@@ -2150,31 +2919,1328 @@ mod tests {
         let mut order = order_with_settlement("USD");
         order.operation.price = None;
 
-        let error = match engine.execute_pre_trade_drop_copy(order) {
-            Ok(_) => panic!("market drop-copy must return an input error before policies run"),
-            Err(error) => error,
-        };
-
-        assert_eq!(error, RequestFieldAccessError::new("limit price"));
-        assert_eq!(start_calls.get(), 0);
+        engine
+            .apply_drop_copy(order)
+            .expect("a policy-independent market order must pass");
+        assert_eq!(start_calls.get(), 1);
     }
 
     #[test]
-    fn drop_copy_returns_price_access_error_before_policy_evaluation() {
+    fn drop_copy_does_not_read_price_for_a_policy_that_does_not_need_it() {
         let calls = Rc::new(Cell::new(0));
         let engine = Engine::builder::<PriceAccessErrorOrder, TestReport, TestAdjustment>()
             .no_sync()
-            .pre_trade(NoopPolicy::new("must_not_run").with_calls(Rc::clone(&calls)))
+            .pre_trade(NoopPolicy::new("noop").with_calls(Rc::clone(&calls)))
             .build()
             .expect("engine must build");
 
-        let error = match engine.execute_pre_trade_drop_copy(PriceAccessErrorOrder) {
-            Ok(_) => panic!("unreadable drop-copy price must fail before policies run"),
-            Err(error) => error,
-        };
+        engine
+            .apply_drop_copy(PriceAccessErrorOrder)
+            .expect("unused price access must not fail the request");
+        assert_eq!(calls.get(), 1);
+    }
 
-        assert_eq!(error, RequestFieldAccessError::new("price"));
+    #[test]
+    fn drop_copy_requires_a_readable_account_before_running_policies() {
+        let calls = Rc::new(Cell::new(0));
+        let engine = Engine::builder::<NoAccountOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(NoopPolicy::new("noop").with_calls(Rc::clone(&calls)))
+            .build()
+            .expect("engine must build");
+
+        engine.inner.blocked_accounts.block_account(
+            AccountId::from_u64(77),
+            AccountBlock::new(
+                "unrelated",
+                RejectCode::AccountBlocked,
+                "unrelated account block",
+                "must not affect an order without an account",
+            ),
+        );
+
+        let rejects = engine
+            .apply_drop_copy(NoAccountOrder)
+            .expect_err("drop-copy must reject without a routing account");
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].policy, "Engine");
+        assert_eq!(rejects[0].scope, RejectScope::Order);
+        assert_eq!(rejects[0].code, RejectCode::MissingRequiredField);
+        // Drop-copy ignores blocks for admission, so the guard must describe the
+        // unreadable account and never send the integrator after a stuck block.
+        assert_eq!(
+            rejects[0].reason,
+            "drop-copy requires a readable account ID"
+        );
+        assert_eq!(
+            rejects[0].details,
+            "the account ID routes the drop-copy pipeline and its account control"
+        );
         assert_eq!(calls.get(), 0);
+        assert!(!engine.inner.blocked_accounts.is_all_blocked());
+    }
+
+    #[test]
+    fn drop_copy_without_an_account_does_not_activate_a_global_block() {
+        let engine = Engine::builder::<NoAccountOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(CoreMainPolicyMock {
+                name: "account_reject",
+                on_apply: None,
+                reject: true,
+                reject_scope: RejectScope::Account,
+            })
+            .build()
+            .expect("engine must build");
+
+        let rejects = engine
+            .apply_drop_copy(NoAccountOrder)
+            .expect_err("drop-copy must reject before running the policy");
+
+        assert_eq!(rejects[0].code, RejectCode::MissingRequiredField);
+        assert!(!engine.inner.blocked_accounts.is_all_blocked());
+    }
+
+    #[test]
+    fn drop_copy_reads_the_engine_account_key_once() {
+        let calls = Rc::new(Cell::new(0));
+        // NoopPolicy never touches order accessors, so every read of
+        // `account_id()` still comes solely from the engine's own cached key.
+        let engine = Engine::builder::<SingleReadAccountOrder, (), ()>()
+            .no_sync()
+            .pre_trade(NoopPolicy::new("noop"))
+            .build()
+            .expect("engine must build");
+
+        let result = engine
+            .apply_drop_copy(SingleReadAccountOrder {
+                calls: Rc::clone(&calls),
+            })
+            .expect("the cached account key must remain readable");
+
+        assert!(!result.is_account_blocked());
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn drop_copy_commit_applies_mutations_and_drop_rolls_back_implicitly() {
+        let state = Rc::new(Cell::new(0));
+        let commits = Rc::new(Cell::new(0));
+        let rollbacks = Rc::new(Cell::new(0));
+        let state_for_policy = Rc::clone(&state);
+        let commits_for_policy = Rc::clone(&commits);
+        let rollbacks_for_policy = Rc::clone(&rollbacks);
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                "caller_finalized_mutation",
+                move |mutations| {
+                    state_for_policy.set(1);
+                    let commits = Rc::clone(&commits_for_policy);
+                    let state = Rc::clone(&state_for_policy);
+                    let rollbacks = Rc::clone(&rollbacks_for_policy);
+                    mutations.push(Mutation::new(
+                        move || commits.set(commits.get() + 1),
+                        move || {
+                            state.set(0);
+                            rollbacks.set(rollbacks.get() + 1);
+                        },
+                    ));
+                },
+                false,
+                RejectScope::Order,
+            ))
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        // Policies apply tentative state eagerly, so the commit callback runs
+        // only when the caller finalizes the operation.
+        let operation = engine
+            .apply_drop_copy(order.clone())
+            .expect("limit drop-copy must be admitted");
+        assert_eq!(state.get(), 1);
+        assert_eq!(commits.get(), 0);
+        assert_eq!(rollbacks.get(), 0);
+        drop(operation);
+        assert_eq!(state.get(), 0);
+        assert_eq!(commits.get(), 0);
+        assert_eq!(rollbacks.get(), 1);
+
+        let mut operation = engine
+            .apply_drop_copy(order)
+            .expect("limit drop-copy must be admitted");
+        operation.commit();
+        drop(operation);
+        assert_eq!(state.get(), 1);
+        assert_eq!(commits.get(), 1);
+        assert_eq!(rollbacks.get(), 1);
+    }
+
+    #[test]
+    fn drop_copy_explicit_rollback_runs_mutations_in_reverse_order() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let calls_for_policy = Rc::clone(&calls);
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                "ordered_finalization",
+                move |mutations| {
+                    let commit = Rc::clone(&calls_for_policy);
+                    let rollback = Rc::clone(&calls_for_policy);
+                    mutations.push(Mutation::new(
+                        move || commit.borrow_mut().push("commit-first"),
+                        move || rollback.borrow_mut().push("rollback-first"),
+                    ));
+                    let commit = Rc::clone(&calls_for_policy);
+                    let rollback = Rc::clone(&calls_for_policy);
+                    mutations.push(Mutation::new(
+                        move || commit.borrow_mut().push("commit-second"),
+                        move || rollback.borrow_mut().push("rollback-second"),
+                    ));
+                },
+                false,
+                RejectScope::Order,
+            ))
+            .build()
+            .expect("engine must build");
+
+        let mut operation = engine
+            .apply_drop_copy(order_with_settlement("USD"))
+            .expect("limit drop-copy must be admitted");
+        operation.rollback();
+
+        assert_eq!(&*calls.borrow(), &["rollback-second", "rollback-first"]);
+    }
+
+    #[test]
+    fn drop_copy_caller_rollback_kills_the_engine_when_a_callback_fails() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let calls_for_policy = Rc::clone(&calls);
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                "failing_caller_rollback",
+                move |mutations| {
+                    let rollback = Rc::clone(&calls_for_policy);
+                    mutations.push(Mutation::new_fallible_with_error(
+                        || Ok(()),
+                        move || {
+                            rollback.borrow_mut().push("rollback-first");
+                            Ok(())
+                        },
+                    ));
+                    let rollback = Rc::clone(&calls_for_policy);
+                    mutations.push(Mutation::new_fallible_with_error(
+                        || Ok(()),
+                        move || {
+                            rollback.borrow_mut().push("rollback-second");
+                            Err("second rollback failed".to_owned())
+                        },
+                    ));
+                },
+                false,
+                RejectScope::Order,
+            ))
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        let mut operation = engine
+            .apply_drop_copy(order.clone())
+            .expect("limit drop-copy must be admitted");
+        operation.rollback();
+
+        // Every rollback still runs; the failure is reported to the engine,
+        // not to the owner, whose `rollback` stays void.
+        assert_eq!(&*calls.borrow(), &["rollback-second", "rollback-first"]);
+        let rejects = engine
+            .start_pre_trade(order)
+            .expect_err("a failed finalizer must arm the kill switch");
+        assert_eq!(rejects[0].code, RejectCode::SystemUnavailable);
+    }
+
+    // ─── Mutation finalizer failure: kill-switch scope by provenance ──────
+    //
+    // A finalizer has no right to fail. When one does, the engine blocks: the
+    // account when the mutation is engine-owned, everything when it comes from
+    // a custom policy, whose state reach the engine cannot bound. Each case
+    // therefore probes a second, untouched account to pin the reach down.
+
+    const PIPELINE_ACCOUNT: u64 = 99224416;
+    const OTHER_ACCOUNT: u64 = 11223344;
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum FailingFinalizer {
+        Commit,
+        Rollback,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum MutationOwner {
+        EngineOwned,
+        CustomPolicy,
+    }
+
+    const OWNERS: [MutationOwner; 2] = [MutationOwner::EngineOwned, MutationOwner::CustomPolicy];
+
+    fn order_for_account(account: u64) -> TestOrder {
+        let mut order = order_with_settlement("USD");
+        order.operation.account_id = AccountId::from_u64(account);
+        order
+    }
+
+    fn failing_mutation(owner: MutationOwner, finalizer: FailingFinalizer) -> Mutation {
+        let commit_succeeds = finalizer != FailingFinalizer::Commit;
+        let rollback_succeeds = finalizer != FailingFinalizer::Rollback;
+        match owner {
+            MutationOwner::EngineOwned => Mutation::new_reporting(
+                move || commit_succeeds,
+                move || {
+                    if rollback_succeeds {
+                        MutationRollbackResult::default()
+                    } else {
+                        MutationRollbackResult::engine_owned_callback_failure(
+                            "engine-owned rollback callback failed",
+                        )
+                    }
+                },
+            ),
+            MutationOwner::CustomPolicy => {
+                Mutation::new_fallible(move || commit_succeeds, move || rollback_succeeds)
+            }
+        }
+    }
+
+    fn failing_mutation_hook(
+        owner: MutationOwner,
+        finalizer: FailingFinalizer,
+    ) -> impl Fn(&mut Mutations) + 'static {
+        move |mutations: &mut Mutations| mutations.push(failing_mutation(owner, finalizer))
+    }
+
+    /// Asserts that the kill switch fired with the reach `owner` implies.
+    fn assert_kill_switch(
+        owner: MutationOwner,
+        pipeline_account: Option<Rejects>,
+        other_account: Option<Rejects>,
+    ) {
+        let rejects = pipeline_account.expect("a failed finalizer must block its own account");
+        assert_mutation_failure_reject(&rejects[0]);
+
+        match owner {
+            MutationOwner::EngineOwned => assert!(
+                other_account.is_none(),
+                "an engine-owned mutation has a known reach: only its account is blocked"
+            ),
+            MutationOwner::CustomPolicy => {
+                let rejects = other_account
+                    .expect("a custom-policy mutation has an unknown reach: block everything");
+                assert_mutation_failure_reject(&rejects[0]);
+            }
+        }
+    }
+
+    fn assert_mutation_failure_reject(reject: &Reject) {
+        assert_eq!(reject.code, RejectCode::SystemUnavailable);
+        assert_eq!(reject.reason, "mutation finalizer failed");
+        // A finalizer failure never names an account or a group.
+        assert!(!reject.details.contains(&PIPELINE_ACCOUNT.to_string()));
+        assert!(!reject.reason.contains(&PIPELINE_ACCOUNT.to_string()));
+    }
+
+    #[test]
+    fn reservation_commit_failure_arms_the_kill_switch() {
+        for owner in OWNERS {
+            let engine = Engine::builder()
+                .no_sync()
+                .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                    "finalizer",
+                    failing_mutation_hook(owner, FailingFinalizer::Commit),
+                    false,
+                    RejectScope::Order,
+                ))
+                .build()
+                .expect("engine must build");
+
+            let mut reservation = engine
+                .execute_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                .expect("pipeline must pass");
+            reservation.commit();
+
+            assert_kill_switch(
+                owner,
+                engine
+                    .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                    .err(),
+                engine
+                    .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+                    .err(),
+            );
+        }
+    }
+
+    #[test]
+    fn reservation_rollback_failure_arms_the_kill_switch() {
+        for owner in OWNERS {
+            let engine = Engine::builder()
+                .no_sync()
+                .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                    "finalizer",
+                    failing_mutation_hook(owner, FailingFinalizer::Rollback),
+                    false,
+                    RejectScope::Order,
+                ))
+                .build()
+                .expect("engine must build");
+
+            let mut reservation = engine
+                .execute_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                .expect("pipeline must pass");
+            reservation.rollback();
+
+            assert_kill_switch(
+                owner,
+                engine
+                    .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                    .err(),
+                engine
+                    .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+                    .err(),
+            );
+        }
+    }
+
+    #[test]
+    fn pre_trade_account_reject_rollback_failure_prioritizes_the_kill_switch() {
+        for owner in OWNERS {
+            let engine = Engine::builder()
+                .no_sync()
+                .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                    "finalizer",
+                    failing_mutation_hook(owner, FailingFinalizer::Rollback),
+                    false,
+                    RejectScope::Order,
+                ))
+                .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                    "rejecting",
+                    |_| {},
+                    true,
+                    RejectScope::Account,
+                ))
+                .build()
+                .expect("engine must build");
+
+            let rejects = engine
+                .execute_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                .err()
+                .expect("the second policy must reject");
+            assert_eq!(rejects[0].reason, "main reject");
+
+            let pipeline_rejects = engine
+                .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                .expect_err("the pipeline account must remain blocked");
+            let other_rejects = engine
+                .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+                .err();
+
+            match owner {
+                MutationOwner::EngineOwned => {
+                    assert!(!engine.inner.blocked_accounts.is_all_blocked());
+                    assert_mutation_failure_reject(&pipeline_rejects[0]);
+                    assert!(
+                        other_rejects.is_none(),
+                        "an engine-owned rollback failure must not block another account"
+                    );
+                }
+                MutationOwner::CustomPolicy => {
+                    assert!(engine.inner.blocked_accounts.is_all_blocked());
+                    assert_eq!(pipeline_rejects[0].reason, "main reject");
+
+                    let other_rejects = other_rejects
+                        .expect("a custom-policy rollback failure must block all accounts");
+                    assert_mutation_failure_reject(&other_rejects[0]);
+
+                    engine.accounts().unblock_all();
+
+                    let pipeline_rejects = engine
+                        .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                        .expect_err("the policy account block must survive global unblock");
+                    assert_eq!(pipeline_rejects[0].reason, "main reject");
+                    assert!(
+                        engine
+                            .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+                            .is_ok(),
+                        "global unblock must release unrelated accounts"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn drop_copy_commit_failure_arms_the_kill_switch() {
+        for owner in OWNERS {
+            let engine = Engine::builder()
+                .no_sync()
+                .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                    "finalizer",
+                    failing_mutation_hook(owner, FailingFinalizer::Commit),
+                    false,
+                    RejectScope::Order,
+                ))
+                .build()
+                .expect("engine must build");
+
+            let mut operation = engine
+                .apply_drop_copy(order_for_account(PIPELINE_ACCOUNT))
+                .expect("drop copy must be admitted");
+            operation.commit();
+
+            assert_kill_switch(
+                owner,
+                engine
+                    .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                    .err(),
+                engine
+                    .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+                    .err(),
+            );
+        }
+    }
+
+    #[test]
+    fn drop_copy_explicit_rollback_failure_arms_the_kill_switch() {
+        for owner in OWNERS {
+            let engine = Engine::builder()
+                .no_sync()
+                .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                    "finalizer",
+                    failing_mutation_hook(owner, FailingFinalizer::Rollback),
+                    false,
+                    RejectScope::Order,
+                ))
+                .build()
+                .expect("engine must build");
+
+            let mut operation = engine
+                .apply_drop_copy(order_for_account(PIPELINE_ACCOUNT))
+                .expect("drop copy must be admitted");
+            operation.rollback();
+
+            assert_kill_switch(
+                owner,
+                engine
+                    .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                    .err(),
+                engine
+                    .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+                    .err(),
+            );
+        }
+    }
+
+    #[test]
+    fn drop_copy_rollback_on_drop_failure_arms_the_kill_switch() {
+        for owner in OWNERS {
+            let engine = Engine::builder()
+                .no_sync()
+                .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                    "finalizer",
+                    failing_mutation_hook(owner, FailingFinalizer::Rollback),
+                    false,
+                    RejectScope::Order,
+                ))
+                .build()
+                .expect("engine must build");
+
+            drop(
+                engine
+                    .apply_drop_copy(order_for_account(PIPELINE_ACCOUNT))
+                    .expect("drop copy must be admitted"),
+            );
+
+            assert_kill_switch(
+                owner,
+                engine
+                    .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                    .err(),
+                engine
+                    .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+                    .err(),
+            );
+        }
+    }
+
+    #[test]
+    fn drop_copy_fatal_compensation_failure_arms_the_kill_switch() {
+        for owner in OWNERS {
+            let engine = Engine::builder()
+                .no_sync()
+                .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                    "finalizer",
+                    failing_mutation_hook(owner, FailingFinalizer::Rollback),
+                    false,
+                    RejectScope::Order,
+                ))
+                .pre_trade(DropCopyRejectPolicy {
+                    name: "fatal_main",
+                    code: RejectCode::ReferenceDataUnavailable,
+                })
+                .build()
+                .expect("engine must build");
+
+            let rejects = engine
+                .apply_drop_copy(order_for_account(PIPELINE_ACCOUNT))
+                .expect_err("a fatal evaluation reject must fail the operation");
+            // The policy cause stays first; the cleanup failure is appended.
+            assert_eq!(rejects[0].code, RejectCode::ReferenceDataUnavailable);
+            assert_eq!(
+                rejects[rejects.len() - 1].code,
+                RejectCode::SystemUnavailable
+            );
+
+            assert_kill_switch(
+                owner,
+                engine
+                    .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                    .err(),
+                engine
+                    .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+                    .err(),
+            );
+        }
+    }
+
+    #[test]
+    fn account_adjustment_commit_failure_arms_the_kill_switch() {
+        for owner in OWNERS {
+            let engine = Engine::builder()
+                .no_sync()
+                .pre_trade(AdjustmentPolicyMock::with_side_effect(
+                    "finalizer",
+                    Rc::new(RefCell::new(Vec::new())),
+                    failing_mutation_hook(owner, FailingFinalizer::Commit),
+                ))
+                .build()
+                .expect("engine must build");
+
+            engine
+                .apply_account_adjustment(
+                    AccountId::from_u64(PIPELINE_ACCOUNT),
+                    &[MockAdjustment { id: 1, amount: 10 }],
+                )
+                .expect("the batch itself must be accepted");
+
+            assert_kill_switch(
+                owner,
+                engine
+                    .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                    .err(),
+                engine
+                    .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+                    .err(),
+            );
+        }
+    }
+
+    #[test]
+    fn account_adjustment_rollback_failure_arms_the_kill_switch() {
+        for owner in OWNERS {
+            let engine = Engine::builder()
+                .no_sync()
+                .pre_trade(AdjustmentPolicyMock::with_side_effect(
+                    "finalizer",
+                    Rc::new(RefCell::new(Vec::new())),
+                    failing_mutation_hook(owner, FailingFinalizer::Rollback),
+                ))
+                .pre_trade(AdjustmentPolicyMock::reject_on_id(
+                    "rejecting",
+                    Rc::new(RefCell::new(Vec::new())),
+                    1,
+                ))
+                .build()
+                .expect("engine must build");
+
+            engine
+                .apply_account_adjustment(
+                    AccountId::from_u64(PIPELINE_ACCOUNT),
+                    &[MockAdjustment { id: 1, amount: 10 }],
+                )
+                .expect_err("the second policy must reject the batch");
+
+            assert_kill_switch(
+                owner,
+                engine
+                    .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+                    .err(),
+                engine
+                    .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+                    .err(),
+            );
+        }
+    }
+
+    #[test]
+    fn a_global_finalizer_block_is_cleared_through_the_admin_surface() {
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                "finalizer",
+                failing_mutation_hook(MutationOwner::CustomPolicy, FailingFinalizer::Commit),
+                false,
+                RejectScope::Order,
+            ))
+            .build()
+            .expect("engine must build");
+
+        let mut reservation = engine
+            .execute_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+            .expect("pipeline must pass");
+        reservation.commit();
+        assert!(engine
+            .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+            .is_err());
+
+        engine.accounts().unblock_all();
+
+        assert!(
+            engine
+                .start_pre_trade(order_for_account(OTHER_ACCOUNT))
+                .is_ok(),
+            "the operator must be able to return the engine to service"
+        );
+        // The account the pipeline ran for keeps its own block: the global
+        // block and the per-account one are separate causes.
+        engine
+            .accounts()
+            .unblock(AccountId::from_u64(PIPELINE_ACCOUNT));
+        assert!(engine
+            .start_pre_trade(order_for_account(PIPELINE_ACCOUNT))
+            .is_ok());
+    }
+
+    #[test]
+    fn drop_copy_rollback_does_not_revert_account_control_effects() {
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyDirectBlockAndRejectPolicy)
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        let mut operation = engine
+            .apply_drop_copy(order.clone())
+            .expect("ordinary account reject must not abort drop-copy");
+        operation.rollback();
+
+        let blocked = engine
+            .start_pre_trade(order)
+            .expect_err("drop-copy account-control effects stay published");
+        assert_eq!(blocked[0].reason, "first direct block");
+    }
+
+    #[test]
+    fn drop_copy_rollback_does_not_refund_rate_limit_attempt() {
+        let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().no_sync();
+        let settings = RateLimitSettings::new(
+            Some(RateLimitBrokerBarrier {
+                limit: RateLimit {
+                    max_orders: 1,
+                    window: Duration::from_secs(60),
+                },
+            }),
+            [],
+            [],
+            [],
+        )
+        .expect("rate-limit settings must be valid");
+        let rate_limit = RateLimitPolicy::new(settings, builder.storage_builder());
+        let engine = builder
+            .pre_trade(rate_limit)
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        let mut operation = engine
+            .apply_drop_copy(order.clone())
+            .expect("limit drop-copy must be admitted");
+        operation.rollback();
+
+        let rejects = engine
+            .start_pre_trade(order)
+            .expect_err("drop-copy must still spend the rate-limit attempt");
+        assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+    }
+
+    #[test]
+    fn drop_copy_fatal_start_reject_skips_main_stage() {
+        let main_calls = Rc::new(Cell::new(0));
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyFatalStartPolicy)
+            .pre_trade(MainPolicyMock::with_calls(
+                "must_not_run",
+                Rc::clone(&main_calls),
+                false,
+                false,
+                None,
+            ))
+            .build()
+            .expect("engine must build");
+
+        let rejects = engine
+            .apply_drop_copy(order_with_settlement("USD"))
+            .expect_err("missing start field must fail drop-copy");
+
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].policy, "fatal_start");
+        assert_eq!(rejects[0].code, RejectCode::MissingRequiredField);
+        assert_eq!(main_calls.get(), 0);
+    }
+
+    #[test]
+    fn drop_copy_fatal_main_reject_reports_start_and_main_rollback_failures() {
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyFailingStartRollbackPolicy)
+            .pre_trade(DropCopyFatalMainWithFailingRollbackPolicy)
+            .build()
+            .expect("engine must build");
+
+        let rejects = engine
+            .apply_drop_copy(order_with_settlement("USD"))
+            .expect_err("fatal main reject with failed rollbacks must reject drop-copy");
+
+        assert_eq!(rejects.len(), 2);
+        assert_eq!(rejects[0].code, RejectCode::MissingRequiredField);
+        assert_eq!(rejects[1].code, RejectCode::SystemUnavailable);
+        assert_eq!(
+            rejects[1].details,
+            "main rollback failed; start rollback failed"
+        );
+    }
+
+    #[test]
+    fn drop_copy_fatal_main_reject_rolls_back_collected_mutations() {
+        let mutation_state = Rc::new(RefCell::new(None));
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                "mutating",
+                shared_kill_switch_mutation(
+                    Rc::clone(&mutation_state),
+                    "drop_copy_rollback",
+                    true,
+                    false,
+                ),
+                false,
+                RejectScope::Order,
+            ))
+            .pre_trade(DropCopyRejectPolicy {
+                name: "fatal_main",
+                code: RejectCode::MissingRequiredField,
+            })
+            .build()
+            .expect("engine must build");
+
+        let rejects = engine
+            .apply_drop_copy(order_with_settlement("USD"))
+            .expect_err("missing main field must fail drop-copy");
+
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].policy, "fatal_main");
+        assert_eq!(*mutation_state.borrow(), Some(false));
+    }
+
+    #[test]
+    fn drop_copy_rollback_failure_preserves_the_fatal_reject() {
+        let rollback_calls = Rc::new(Cell::new(0));
+        let rollback_calls_for_policy = Rc::clone(&rollback_calls);
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(MainPolicyMock::with_custom_mutation_and_optional_reject(
+                "rollback_failure",
+                move |mutations| {
+                    let rollback = Rc::clone(&rollback_calls_for_policy);
+                    mutations.push(Mutation::new_fallible(
+                        || true,
+                        move || {
+                            rollback.set(rollback.get() + 1);
+                            false
+                        },
+                    ));
+                },
+                false,
+                RejectScope::Order,
+            ))
+            .pre_trade(DropCopyRejectPolicy {
+                name: "fatal_main",
+                code: RejectCode::MissingRequiredField,
+            })
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        let rejects = engine
+            .apply_drop_copy(order.clone())
+            .expect_err("fatal drop-copy exit must reject");
+
+        assert_eq!(rejects.len(), 2);
+        assert_eq!(rejects[0].policy, "fatal_main");
+        assert_eq!(rejects[0].code, RejectCode::MissingRequiredField);
+        assert_eq!(rejects[1].policy, "Engine");
+        assert_eq!(rejects[1].code, RejectCode::SystemUnavailable);
+        assert_eq!(rollback_calls.get(), 1);
+        assert_eq!(
+            engine
+                .start_pre_trade(order)
+                .expect_err("rollback failure must safety-block the account")[0]
+                .code,
+            RejectCode::SystemUnavailable
+        );
+    }
+
+    #[test]
+    fn drop_copy_fatal_start_reject_rolls_back_eager_start_mutation() {
+        let value = Rc::new(Cell::new(7));
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyEagerStartMutationPolicy {
+                value: Rc::clone(&value),
+            })
+            .pre_trade(DropCopyFatalStartPolicy)
+            .build()
+            .expect("engine must build");
+
+        engine
+            .apply_drop_copy(order_with_settlement("USD"))
+            .expect_err("fatal start evaluation must reject drop-copy");
+
+        assert_eq!(value.get(), 7);
+    }
+
+    #[test]
+    fn drop_copy_fatal_start_rollback_failure_safety_blocks_account() {
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyFailingStartRollbackPolicy)
+            .pre_trade(DropCopyFatalStartPolicy)
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        let rejects = engine
+            .apply_drop_copy(order.clone())
+            .expect_err("fatal start exit with failed rollback must reject");
+
+        assert_eq!(rejects.len(), 2);
+        assert_eq!(rejects[0].policy, "fatal_start");
+        assert_eq!(rejects[0].code, RejectCode::MissingRequiredField);
+        assert_eq!(rejects[1].policy, "Engine");
+        assert_eq!(rejects[1].code, RejectCode::SystemUnavailable);
+        assert_eq!(rejects[1].details, "start rollback failed");
+        assert_eq!(
+            engine
+                .start_pre_trade(order)
+                .expect_err("start rollback failure must safety-block the account")[0]
+                .code,
+            RejectCode::SystemUnavailable
+        );
+    }
+
+    #[test]
+    fn drop_copy_fatal_main_reject_rolls_back_eager_start_mutation() {
+        let value = Rc::new(Cell::new(11));
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyEagerStartMutationPolicy {
+                value: Rc::clone(&value),
+            })
+            .pre_trade(DropCopyRejectPolicy {
+                name: "fatal_main",
+                code: RejectCode::SystemUnavailable,
+            })
+            .build()
+            .expect("engine must build");
+
+        engine
+            .apply_drop_copy(order_with_settlement("USD"))
+            .expect_err("fatal main evaluation must reject drop-copy");
+
+        assert_eq!(value.get(), 11);
+    }
+
+    #[test]
+    fn drop_copy_fatal_reject_discards_earlier_account_block() {
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(MainPolicyMock::with_mutation_and_optional_reject(
+                "blocking_main",
+                "discarded_block",
+                true,
+                RejectScope::Account,
+            ))
+            .pre_trade(DropCopyRejectPolicy {
+                name: "fatal_main",
+                code: RejectCode::MissingRequiredField,
+            })
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        engine
+            .apply_drop_copy(order.clone())
+            .expect_err("fatal evaluation must reject the whole operation");
+
+        assert!(engine.start_pre_trade(order).is_ok());
+    }
+
+    #[test]
+    fn drop_copy_fatal_reject_discards_direct_account_block() {
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyDirectBlockPolicy)
+            .pre_trade(DropCopyRejectPolicy {
+                name: "fatal_main",
+                code: RejectCode::SystemUnavailable,
+            })
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        engine
+            .apply_drop_copy(order.clone())
+            .expect_err("callback-style failure must reject the whole operation");
+
+        assert!(engine.start_pre_trade(order).is_ok());
+    }
+
+    #[test]
+    fn drop_copy_rollback_callback_can_safety_block_account() {
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyRollbackBlockPolicy)
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        engine
+            .apply_drop_copy(order.clone())
+            .expect_err("fatal evaluation must roll back the policy mutation");
+
+        let rejects = engine
+            .start_pre_trade(order)
+            .expect_err("rollback-requested safety block must be effective");
+        assert_eq!(rejects[0].reason, "rollback could not restore policy state");
+    }
+
+    #[test]
+    fn drop_copy_direct_block_precedes_later_account_reject_block() {
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyDirectBlockAndRejectPolicy)
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        let result = engine
+            .apply_drop_copy(order.clone())
+            .expect("ordinary account reject must not abort drop-copy");
+
+        assert_eq!(
+            result
+                .account_block()
+                .expect("the first request block must be reported")
+                .reason,
+            "first direct block"
+        );
+        assert!(result.is_account_blocked());
+        let rejects = engine
+            .start_pre_trade(order)
+            .expect_err("the direct block must be effective");
+        assert_eq!(rejects[0].reason, "first direct block");
+    }
+
+    #[test]
+    fn drop_copy_fatal_reject_discards_direct_account_unblock() {
+        let operations = Rc::new(RefCell::new(vec![TestDeferredAccountOperation::Block {
+            reason: "initial block",
+            provenance: 41,
+        }]));
+        let fatal = Rc::new(Cell::new(false));
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyAccountOperationsPolicy {
+                operations: Rc::clone(&operations),
+            })
+            .pre_trade(ConditionalDropCopyFatalPolicy {
+                fatal: Rc::clone(&fatal),
+            })
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        engine
+            .apply_drop_copy(order.clone())
+            .expect("initial block must be applied");
+        *operations.borrow_mut() = vec![TestDeferredAccountOperation::InvalidateProvenance(41)];
+        fatal.set(true);
+
+        engine
+            .apply_drop_copy(order.clone())
+            .expect_err("later fatal evaluation must discard the unblock");
+        let rejects = engine
+            .start_pre_trade(order)
+            .expect_err("the original block must remain published");
+        assert_eq!(rejects[0].reason, "initial block");
+    }
+
+    #[test]
+    fn drop_copy_applies_block_then_unblock_in_recorded_order() {
+        let operations = Rc::new(RefCell::new(vec![
+            TestDeferredAccountOperation::Block {
+                reason: "transient block",
+                provenance: 51,
+            },
+            TestDeferredAccountOperation::InvalidateProvenance(51),
+        ]));
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyAccountOperationsPolicy { operations })
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        let result = engine
+            .apply_drop_copy(order.clone())
+            .expect("ordered operations must apply");
+
+        assert_eq!(
+            result
+                .account_block()
+                .expect("request-produced block must be reported")
+                .reason,
+            "transient block"
+        );
+        assert!(!result.is_account_blocked());
+        assert!(engine.start_pre_trade(order).is_ok());
+    }
+
+    #[test]
+    fn drop_copy_preserves_first_block_result_across_ordered_unblock_and_reblock() {
+        let operations = Rc::new(RefCell::new(vec![
+            TestDeferredAccountOperation::Block {
+                reason: "first request block",
+                provenance: 61,
+            },
+            TestDeferredAccountOperation::InvalidateProvenance(61),
+            TestDeferredAccountOperation::Block {
+                reason: "effective replacement block",
+                provenance: 62,
+            },
+        ]));
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyAccountOperationsPolicy { operations })
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        let result = engine
+            .apply_drop_copy(order.clone())
+            .expect("ordered operations must apply");
+
+        assert_eq!(
+            result
+                .account_block()
+                .expect("the first request block must win the result")
+                .reason,
+            "first request block"
+        );
+        assert!(result.is_account_blocked());
+        let rejects = engine
+            .start_pre_trade(order)
+            .expect_err("the replacement block must be effective");
+        assert_eq!(rejects[0].reason, "effective replacement block");
+    }
+
+    #[test]
+    fn drop_copy_fatal_reject_consumes_rate_limit_like_ordinary_pre_trade() {
+        let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().no_sync();
+        let settings = RateLimitSettings::new(
+            Some(RateLimitBrokerBarrier {
+                limit: RateLimit {
+                    max_orders: 1,
+                    window: Duration::from_secs(60),
+                },
+            }),
+            [],
+            [],
+            [],
+        )
+        .expect("rate-limit settings must be valid");
+        let rate_limit = RateLimitPolicy::new(settings, builder.storage_builder());
+        let engine = builder
+            .pre_trade(rate_limit)
+            .pre_trade(DropCopyRejectPolicy {
+                name: "fatal_main",
+                code: RejectCode::MissingRequiredField,
+            })
+            .build()
+            .expect("engine must build");
+        let order = order_with_settlement("USD");
+
+        engine
+            .apply_drop_copy(order.clone())
+            .expect_err("fatal evaluation must reject the whole operation");
+
+        let rejects = engine
+            .start_pre_trade(order)
+            .expect_err("fatal drop-copy must still spend the rate-limit attempt");
+        assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+    }
+
+    #[test]
+    fn drop_copy_fatal_reject_consumes_per_account_rate_limit() {
+        let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().no_sync();
+        let order = order_with_settlement("USD");
+        let settings = RateLimitSettings::new(
+            None,
+            [],
+            [RateLimitAccountBarrier {
+                account_id: order.account_id().expect("test order has an account"),
+                limit: RateLimit {
+                    max_orders: 1,
+                    window: Duration::from_secs(60),
+                },
+            }],
+            [],
+        )
+        .expect("rate-limit settings must be valid");
+        let rate_limit = RateLimitPolicy::new(settings, builder.storage_builder());
+        let engine = builder
+            .pre_trade(rate_limit)
+            .pre_trade(DropCopyRejectPolicy {
+                name: "fatal_main",
+                code: RejectCode::MissingRequiredField,
+            })
+            .build()
+            .expect("engine must build");
+
+        engine
+            .apply_drop_copy(order.clone())
+            .expect_err("fatal evaluation must reject the whole operation");
+        let rejects = engine
+            .start_pre_trade(order)
+            .expect_err("fatal drop-copy must spend the account slot");
+        assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+    }
+
+    #[test]
+    fn drop_copy_fatal_reject_consumes_per_account_asset_rate_limit() {
+        let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().no_sync();
+        let order = order_with_settlement("USD");
+        let settings = RateLimitSettings::new(
+            None,
+            [],
+            [],
+            [RateLimitAccountAssetBarrier {
+                account_id: order.account_id().expect("test order has an account"),
+                settlement_asset: Asset::new("USD").expect("asset must be valid"),
+                limit: RateLimit {
+                    max_orders: 1,
+                    window: Duration::from_secs(60),
+                },
+            }],
+        )
+        .expect("rate-limit settings must be valid");
+        let rate_limit = RateLimitPolicy::new(settings, builder.storage_builder());
+        let engine = builder
+            .pre_trade(rate_limit)
+            .pre_trade(DropCopyRejectPolicy {
+                name: "fatal_main",
+                code: RejectCode::MissingRequiredField,
+            })
+            .build()
+            .expect("engine must build");
+
+        engine
+            .apply_drop_copy(order.clone())
+            .expect_err("fatal evaluation must reject the whole operation");
+        let rejects = engine
+            .start_pre_trade(order)
+            .expect_err("fatal drop-copy must spend the account-asset slot");
+        assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+    }
+
+    #[test]
+    fn drop_copy_skips_order_size_limit() {
+        let settings = OrderSizeLimitSettings::new(
+            Some(OrderSizeBrokerBarrier {
+                limit: OrderSizeLimit {
+                    max_quantity: Quantity::from_str("100").expect("quantity must be valid"),
+                    max_notional: Volume::from_str("10000").expect("volume must be valid"),
+                },
+            }),
+            [],
+            [],
+        )
+        .expect("order-size settings must be valid");
+        let engine = Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(OrderSizeLimitPolicy::new(settings))
+            .build()
+            .expect("engine must build");
+        let mut order = order_with_settlement("USD");
+        order.operation.price = None;
+
+        engine
+            .apply_drop_copy(order)
+            .expect("historical orders are not subject to order-size admission limits");
+    }
+
+    #[test]
+    fn drop_copy_skips_order_validation() {
+        let engine = Engine::builder::<TestOrder, TestReport, TestAdjustment>()
+            .no_sync()
+            .pre_trade(OrderValidationPolicy::new())
+            .build()
+            .expect("engine must build");
+        let mut order = order_with_settlement("USD");
+        order.operation.trade_amount = TradeAmount::Quantity(Quantity::ZERO);
+
+        engine
+            .apply_drop_copy(order)
+            .expect("historical orders are not subject to order validation");
+    }
+
+    #[test]
+    fn drop_copy_filters_fatal_rejects_in_policy_order() {
+        let engine = Engine::builder()
+            .no_sync()
+            .pre_trade(DropCopyRejectPolicy {
+                name: "ordinary",
+                code: RejectCode::RiskLimitExceeded,
+            })
+            .pre_trade(DropCopyRejectPolicy {
+                name: "missing_one",
+                code: RejectCode::MissingRequiredField,
+            })
+            .pre_trade(DropCopyRejectPolicy {
+                name: "missing_two",
+                code: RejectCode::MissingRequiredField,
+            })
+            .build()
+            .expect("engine must build");
+
+        let rejects = engine
+            .apply_drop_copy(order_with_settlement("USD"))
+            .expect_err("missing fields must fail drop-copy");
+
+        assert_eq!(rejects.len(), 2);
+        assert_eq!(rejects[0].policy, "missing_one");
+        assert_eq!(rejects[1].policy, "missing_two");
     }
 
     #[test]
@@ -2196,10 +4262,10 @@ mod tests {
             .block_group(group, "group halt".to_owned())
             .expect("group block must succeed");
 
-        let mut reservation = engine
-            .execute_pre_trade_drop_copy(order_with_settlement("USD"))
+        let result = engine
+            .apply_drop_copy(order_with_settlement("USD"))
             .expect("limit drop-copy must be admitted");
-        reservation.commit();
+        assert!(result.is_account_blocked());
 
         let account_rejects = match engine.start_pre_trade(order_with_settlement("USD")) {
             Ok(_) => panic!("account block must remain"),
@@ -2234,16 +4300,15 @@ mod tests {
         let accounts = engine.accounts();
         accounts.block(account, "existing account halt".to_owned());
 
-        let mut reservation = engine
-            .execute_pre_trade_drop_copy(order_with_settlement("USD"))
+        let result = engine
+            .apply_drop_copy(order_with_settlement("USD"))
             .expect("limit drop-copy must be admitted");
-        let block = reservation
+        let block = result
             .account_block()
             .expect("drop-copy must expose its account block");
+        assert!(result.is_account_blocked());
         assert_eq!(block.policy, "blocking_main");
         assert_eq!(block.reason, "main reject");
-        reservation.rollback();
-
         let rejects = match engine.start_pre_trade(order_with_settlement("USD")) {
             Ok(_) => panic!("existing account block must remain"),
             Err(rejects) => rejects,
@@ -2278,16 +4343,15 @@ mod tests {
             .build()
             .expect("engine must build");
 
-        let mut reservation = engine
-            .execute_pre_trade_drop_copy(order_with_settlement("USD"))
+        let result = engine
+            .apply_drop_copy(order_with_settlement("USD"))
             .expect("limit drop-copy must be admitted");
-        let block = reservation
+        let block = result
             .account_block()
             .expect("the first account block must win");
+        assert!(result.is_account_blocked());
         assert_eq!(block.policy, "blocking_start");
         assert_eq!(block.reason, "pnl kill switch triggered");
-        reservation.commit();
-
         assert_eq!(start_calls.get(), 1);
         assert_eq!(main_calls.get(), 1);
         start_block.set(false);
@@ -2300,7 +4364,7 @@ mod tests {
     }
 
     #[test]
-    fn drop_copy_records_main_stage_policy_block_and_commits_mutation() {
+    fn drop_copy_records_main_stage_policy_block_and_applies_mutation() {
         let mutation_state = Rc::new(RefCell::new(None));
         let engine = Engine::builder()
             .no_sync()
@@ -2318,11 +4382,14 @@ mod tests {
             .build()
             .expect("engine must build");
 
-        let mut reservation = engine
-            .execute_pre_trade_drop_copy(order_with_settlement("USD"))
+        let mut operation = engine
+            .apply_drop_copy(order_with_settlement("USD"))
             .expect("limit drop-copy must be admitted");
-        reservation.commit();
-
+        operation.commit();
+        assert_eq!(
+            operation.account_block().map(|block| block.policy.as_str()),
+            Some("blocking_main")
+        );
         assert_eq!(*mutation_state.borrow(), Some(true));
         let rejects = match engine.start_pre_trade(order_with_settlement("USD")) {
             Ok(_) => panic!("main-stage policy block must be recorded"),
@@ -3217,6 +5284,7 @@ mod tests {
     struct CoreStartPolicyMock {
         name: &'static str,
         reject: bool,
+        reject_scope: RejectScope,
     }
 
     impl<Sync: crate::core::SyncMode>
@@ -3234,7 +5302,7 @@ mod tests {
             if self.reject {
                 return Err(Rejects::from(Reject::new(
                     self.name,
-                    RejectScope::Order,
+                    self.reject_scope.clone(),
                     RejectCode::Other,
                     "core start reject",
                     "order core start policy rejected the order",
@@ -3258,6 +5326,7 @@ mod tests {
         name: &'static str,
         on_apply: Option<MutationHook>,
         reject: bool,
+        reject_scope: RejectScope,
     }
 
     impl<Sync: crate::core::SyncMode>
@@ -3280,7 +5349,7 @@ mod tests {
             if self.reject {
                 return Err(Rejects::from(Reject::new(
                     self.name,
-                    RejectScope::Order,
+                    self.reject_scope.clone(),
                     RejectCode::Other,
                     "core main reject",
                     "order core main policy rejected the order",

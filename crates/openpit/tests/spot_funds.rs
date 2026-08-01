@@ -15,6 +15,9 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use openpit::param::{
     AccountGroupId, AccountId, AdjustmentAmount, Asset, Fee, MonetaryAmount, Pnl, PositionSize,
     Price, Quantity, Side, Trade, TradeAmount,
@@ -26,8 +29,8 @@ use openpit::pretrade::policies::{
 };
 use openpit::pretrade::SpotFundsLimitMode;
 use openpit::pretrade::{
-    PolicyPreTradeResult, PreTradeContext, PreTradeDryRunReport, PreTradeLock, PreTradePolicy,
-    Reject, RejectCode, RejectScope, Rejects, DEFAULT_POLICY_GROUP_ID,
+    DropCopyOperation, PolicyPreTradeResult, PreTradeContext, PreTradeDryRunReport, PreTradeLock,
+    PreTradePolicy, Reject, RejectCode, RejectScope, Rejects, DEFAULT_POLICY_GROUP_ID,
 };
 use openpit::{
     Engine, FullSync, FullSyncEngine, HasAccountAdjustmentBalance,
@@ -38,13 +41,37 @@ use openpit::{
     HasAccountAdjustmentIncomingUpperBound, HasAccountId, HasBalanceAsset,
     HasExecutionReportFillFee, HasExecutionReportIsFinal, HasExecutionReportLastTrade,
     HasInstrument, HasLeavesQuantity, HasPreTradeLock, HasSide, Instrument, Mutations,
-    OrderOperation, RequestFieldAccessError, SpotFundsMarketData, SyncMode,
+    OrderOperation, OutcomeAmount, RequestFieldAccessError, SpotFundsMarketData, SyncMode,
 };
 
 type TestOrder = OrderOperation;
 type TestEngine = FullSyncEngine<TestOrder, TestReport, TestAdjustment>;
 
 const ACC: u64 = 99224416;
+
+fn commit_drop_copy(engine: &TestEngine, order: TestOrder, message: &str) -> DropCopyOperation {
+    let mut operation = engine.apply_drop_copy(order).expect(message);
+    operation.commit();
+    operation
+}
+
+fn settlement_balance_and_held(operation: &DropCopyOperation) -> (OutcomeAmount, OutcomeAmount) {
+    let settlement = operation
+        .account_adjustments()
+        .iter()
+        .find(|outcome| outcome.entry.asset == asset("USD"))
+        .expect("settlement outcome must be present");
+    (
+        settlement
+            .entry
+            .balance
+            .expect("settlement balance outcome must be present"),
+        settlement
+            .entry
+            .held
+            .expect("settlement held outcome must be present"),
+    )
+}
 
 // ── TestReport ────────────────────────────────────────────────────────────────
 
@@ -572,21 +599,23 @@ fn runtime_limit_mode_switch_toggles_insufficient_funds_gating() {
 }
 
 #[test]
-fn drop_copy_records_underfunded_spot_funds_reservation() {
+fn drop_copy_applies_underfunded_spot_funds_changes() {
     let engine = build_engine();
     seed(&engine, "USD", "1000");
     let aapl_usd = instr("AAPL", "USD");
 
-    let mut reservation = engine
-        .execute_pre_trade_drop_copy(make_order(
+    let result = commit_drop_copy(
+        &engine,
+        make_order(
             Side::Buy,
             aapl_usd.clone(),
             TradeAmount::Quantity(qty("10")),
             Some(px("200")),
-        ))
-        .expect("limit drop-copy must be admitted");
+        ),
+        "limit drop-copy must be admitted",
+    );
 
-    let settlement = reservation
+    let settlement = result
         .account_adjustments()
         .iter()
         .find(|outcome| outcome.entry.asset == asset("USD"))
@@ -604,7 +633,7 @@ fn drop_copy_records_underfunded_spot_funds_reservation() {
     assert_eq!(held.delta, ps("2000"));
     assert_eq!(held.absolute, ps("2000"));
 
-    let underlying = reservation
+    let underlying = result
         .account_adjustments()
         .iter()
         .find(|outcome| outcome.entry.asset == asset("AAPL"))
@@ -616,8 +645,6 @@ fn drop_copy_records_underfunded_spot_funds_reservation() {
     assert_eq!(incoming.delta, ps("10"));
     assert_eq!(incoming.absolute, ps("10"));
 
-    reservation.commit();
-
     let Err(rejects) = engine.execute_pre_trade(make_order(
         Side::Buy,
         aapl_usd,
@@ -627,6 +654,65 @@ fn drop_copy_records_underfunded_spot_funds_reservation() {
         panic!("ordinary pre-trade must enforce the negative available balance")
     };
     assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
+}
+
+#[test]
+fn drop_copy_rollback_restores_spot_funds_held_and_available() {
+    let engine = build_engine();
+    seed(&engine, "USD", "1000");
+    let order = make_order(
+        Side::Buy,
+        instr("AAPL", "USD"),
+        TradeAmount::Quantity(qty("5")),
+        Some(px("200")),
+    );
+
+    let mut operation = engine
+        .apply_drop_copy(order.clone())
+        .expect("limit drop-copy must be admitted");
+    let (balance, held) = settlement_balance_and_held(&operation);
+    assert_eq!(balance.absolute, ps("0"));
+    assert_eq!(held.absolute, ps("1000"));
+
+    operation.rollback();
+
+    // The whole notional is spendable again, which is only true when both the
+    // balance debit and the hold were compensated.
+    let mut reservation = engine
+        .execute_pre_trade(order.clone())
+        .expect("rolled-back drop-copy must release the spot-funds hold");
+    reservation.rollback();
+
+    let replayed = commit_drop_copy(&engine, order, "limit drop-copy must be admitted");
+    let (balance, held) = settlement_balance_and_held(&replayed);
+    assert_eq!(balance.delta, ps("-1000"));
+    assert_eq!(balance.absolute, ps("0"));
+    assert_eq!(held.delta, ps("1000"));
+    assert_eq!(held.absolute, ps("1000"));
+}
+
+#[test]
+fn drop_copy_market_order_is_rejected_as_missing_required_field() {
+    let engine = build_engine();
+    seed(&engine, "USD", "1000");
+
+    let rejects = engine
+        .apply_drop_copy(make_order(
+            Side::Buy,
+            instr("AAPL", "USD"),
+            TradeAmount::Quantity(qty("10")),
+            None,
+        ))
+        .expect_err("SpotFunds needs a limit price for drop-copy accounting");
+
+    assert_eq!(rejects.len(), 1);
+    assert_eq!(rejects[0].code, RejectCode::MissingRequiredField);
+    assert_eq!(rejects[0].policy, "SpotFundsPolicy");
+    assert_eq!(rejects[0].reason, "limit price is required for drop-copy");
+    assert_eq!(
+        rejects[0].details,
+        "historical market orders cannot be valued at the current market price"
+    );
 }
 
 fn assert_insufficient_funds<R>(result: Result<R, Rejects>, ctx: &str) {
@@ -1150,25 +1236,27 @@ fn drop_copy_spends_rate_limit_budget_and_ignores_its_reject() {
     seed_rate_limited(&engine, "USD", "10000");
     let aapl_usd = instr("AAPL", "USD");
 
-    let mut first = engine
-        .execute_pre_trade_drop_copy(make_order(
+    commit_drop_copy(
+        &engine,
+        make_order(
             Side::Buy,
             aapl_usd.clone(),
             TradeAmount::Quantity(qty("1")),
             Some(px("100")),
-        ))
-        .expect("limit drop-copy must be admitted");
-    first.commit();
+        ),
+        "limit drop-copy must be admitted",
+    );
 
-    let mut over_limit = engine
-        .execute_pre_trade_drop_copy(make_order(
+    commit_drop_copy(
+        &engine,
+        make_order(
             Side::Buy,
             aapl_usd.clone(),
             TradeAmount::Quantity(qty("1")),
             Some(px("100")),
-        ))
-        .expect("limit drop-copy must be admitted");
-    over_limit.commit();
+        ),
+        "limit drop-copy must be admitted",
+    );
 
     let Err(rejects) = engine.execute_pre_trade(make_order(
         Side::Buy,
@@ -1178,6 +1266,62 @@ fn drop_copy_spends_rate_limit_budget_and_ignores_its_reject() {
     )) else {
         panic!("ordinary pre-trade must observe the drop-copy rate-limit charge")
     };
+    assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
+}
+
+#[test]
+fn fatal_drop_copy_rolls_back_spot_funds_but_spends_rate_limit_budget() {
+    let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    let rate_limit = RateLimitPolicy::new(
+        RateLimitSettings::new(
+            Some(RateLimitBrokerBarrier {
+                limit: RateLimit {
+                    max_orders: 2,
+                    window: std::time::Duration::from_secs(60),
+                },
+            }),
+            [],
+            [],
+            [],
+        )
+        .expect("rate-limit settings must build"),
+        builder.storage_builder(),
+    );
+    let spot_funds = SpotFundsPolicy::<FullSync, FullSync>::new(
+        SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, std::iter::empty())
+            .expect("spot-funds settings must build"),
+        None::<SpotFundsMarketData<FullSync>>,
+        builder.storage_builder(),
+    );
+    let engine = builder
+        .pre_trade(rate_limit)
+        .pre_trade(spot_funds)
+        .pre_trade(ConditionalFatalMainStagePolicy {
+            reject_next: Arc::new(AtomicBool::new(true)),
+        })
+        .build()
+        .expect("engine must build");
+    seed_rate_limited(&engine, "USD", "10000");
+    let order = make_order(
+        Side::Buy,
+        instr("AAPL", "USD"),
+        TradeAmount::Quantity(qty("50")),
+        Some(px("200")),
+    );
+
+    let rejects = engine
+        .apply_drop_copy(order.clone())
+        .expect_err("late evaluation failure must reject drop-copy");
+    assert_eq!(rejects[0].code, RejectCode::MissingRequiredField);
+
+    let mut reservation = engine
+        .execute_pre_trade(order.clone())
+        .expect("spot-funds hold from failed drop-copy must be rolled back");
+    reservation.rollback();
+
+    let rejects = engine
+        .start_pre_trade(order)
+        .expect_err("failed drop-copy must remain counted by rate limit");
     assert_eq!(rejects[0].code, RejectCode::RateLimitExceeded);
 }
 
@@ -1293,6 +1437,10 @@ where
 
 struct MainStageRejectPolicy;
 
+struct ConditionalFatalMainStagePolicy {
+    reject_next: Arc<AtomicBool>,
+}
+
 impl<Sync> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync> for MainStageRejectPolicy
 where
     Sync: SyncMode,
@@ -1317,6 +1465,34 @@ where
     }
 }
 
+impl<Sync> PreTradePolicy<TestOrder, TestReport, TestAdjustment, Sync>
+    for ConditionalFatalMainStagePolicy
+where
+    Sync: SyncMode,
+{
+    fn name(&self) -> &str {
+        "ConditionalFatalMainStagePolicy"
+    }
+
+    fn perform_pre_trade_check(
+        &self,
+        _ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        _order: &TestOrder,
+        _mutations: &mut Mutations,
+    ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+        if self.reject_next.swap(false, Ordering::Relaxed) {
+            return Err(Rejects::from(Reject::new(
+                "ConditionalFatalMainStagePolicy",
+                RejectScope::Order,
+                RejectCode::MissingRequiredField,
+                "fatal test reject",
+                "fatal test policy rejects the first request",
+            )));
+        }
+        Ok(None)
+    }
+}
+
 fn build_start_stage_reject_engine() -> TestEngine {
     Engine::builder::<TestOrder, TestReport, TestAdjustment>()
         .full_sync()
@@ -1333,8 +1509,8 @@ fn build_main_stage_reject_engine() -> TestEngine {
         .expect("main-stage reject engine must build")
 }
 
-// Only account-scoped rejects surface through a drop-copy reservation: a plain
-// policy reject latches no account block, in either pipeline stage.
+// Only account-scoped rejects surface through a drop-copy result: a plain
+// policy reject requests no account block, in either pipeline stage.
 #[test]
 fn drop_copy_plain_policy_reject_latches_no_account_block() {
     let aapl_usd = instr("AAPL", "USD");
@@ -1351,19 +1527,20 @@ fn drop_copy_plain_policy_reject_latches_no_account_block() {
         .expect("the start-stage policy must reject an ordinary order");
     assert_eq!(rejects[0].code, RejectCode::RiskLimitExceeded);
 
-    let mut start_reject = start_engine
-        .execute_pre_trade_drop_copy(make_order(
+    let start_reject = commit_drop_copy(
+        &start_engine,
+        make_order(
             Side::Buy,
             aapl_usd.clone(),
             TradeAmount::Quantity(qty("1")),
             Some(px("100")),
-        ))
-        .expect("limit drop-copy must be admitted");
+        ),
+        "limit drop-copy must be admitted",
+    );
     assert!(
         start_reject.account_block().is_none(),
         "an order-scoped start-stage reject must latch no account block"
     );
-    start_reject.rollback();
 
     let main_engine = build_main_stage_reject_engine();
     let rejects = main_engine
@@ -1377,19 +1554,20 @@ fn drop_copy_plain_policy_reject_latches_no_account_block() {
         .expect("the main-stage policy must reject an ordinary order");
     assert_eq!(rejects[0].code, RejectCode::RiskLimitExceeded);
 
-    let mut main_reject = main_engine
-        .execute_pre_trade_drop_copy(make_order(
+    let main_reject = commit_drop_copy(
+        &main_engine,
+        make_order(
             Side::Buy,
             aapl_usd,
             TradeAmount::Quantity(qty("1")),
             Some(px("100")),
-        ))
-        .expect("limit drop-copy must be admitted");
+        ),
+        "limit drop-copy must be admitted",
+    );
     assert!(
         main_reject.account_block().is_none(),
         "an order-scoped main-stage reject must latch no account block"
     );
-    main_reject.rollback();
 }
 
 // A drop-copy that breaches nothing carries no account block.
@@ -1398,17 +1576,18 @@ fn drop_copy_clean_order_latches_no_account_block() {
     let engine = build_engine();
     seed(&engine, "USD", "10000");
 
-    let mut reservation = engine
-        .execute_pre_trade_drop_copy(make_order(
+    let result = commit_drop_copy(
+        &engine,
+        make_order(
             Side::Buy,
             instr("AAPL", "USD"),
             TradeAmount::Quantity(qty("10")),
             Some(px("200")),
-        ))
-        .expect("limit drop-copy must be admitted");
-    assert!(reservation.account_block().is_none());
-    assert_eq!(reservation.account_adjustments().len(), 2);
-    reservation.commit();
+        ),
+        "limit drop-copy must be admitted",
+    );
+    assert!(result.account_block().is_none());
+    assert_eq!(result.account_adjustments().len(), 2);
 }
 
 // ── realized PnL / average entry price outcomes (public API) ───────────────────
@@ -1699,22 +1878,22 @@ fn drop_copy_reinstates_spot_funds_pnl_block_and_accepts_current_order() {
     assert_eq!(result.account_blocks.len(), 1);
     engine.accounts().unblock(acc);
 
-    let mut reservation = engine
-        .execute_pre_trade_drop_copy(make_order_for(
+    let result = commit_drop_copy(
+        &engine,
+        make_order_for(
             acc,
             Side::Buy,
             instrument.clone(),
             TradeAmount::Quantity(qty("1")),
             Some(px("100")),
-        ))
-        .expect("limit drop-copy must be admitted");
-    let block = reservation
+        ),
+        "limit drop-copy must be admitted",
+    );
+    let block = result
         .account_block()
         .expect("drop-copy must expose the restored account block");
     assert_eq!(block.code, RejectCode::AccountBlocked);
     assert_eq!(block.reason, "pnl kill switch triggered");
-    reservation.commit();
-
     let rejects = match engine.execute_pre_trade(make_order_for(
         acc,
         Side::Buy,
@@ -1762,32 +1941,31 @@ fn drop_copy_on_already_blocked_account_ignores_the_existing_block() {
         .expect("blocked account must reject a regular pre-trade");
     assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
 
-    let mut reservation = engine
-        .execute_pre_trade_drop_copy(make_order_for(
+    let result = commit_drop_copy(
+        &engine,
+        make_order_for(
             acc,
             Side::Buy,
             instrument,
             TradeAmount::Quantity(qty("1")),
             Some(px("100")),
-        ))
-        .expect("limit drop-copy must be admitted");
-    let block = reservation
+        ),
+        "limit drop-copy must be admitted",
+    );
+    let block = result
         .account_block()
         .expect("the still-breaching account re-derives its block");
     assert_eq!(block.code, RejectCode::AccountBlocked);
     assert_eq!(block.reason, "pnl kill switch triggered");
     assert_eq!(
-        reservation.account_adjustments().len(),
+        result.account_adjustments().len(),
         2,
         "the pipeline still ran: settlement hold plus base incoming"
     );
-    reservation.commit();
 }
 
-// Rolling back a drop-copy releases its reservation only: the account block the
-// pipeline latched belongs to the engine and outlives the reservation.
 #[test]
-fn drop_copy_rollback_keeps_the_latched_account_block() {
+fn drop_copy_spot_funds_pnl_block_is_applied_before_return() {
     let acc = AccountId::from_u64(40000006);
     let grp = AccountGroupId::from_u32(16).expect("valid group id");
     let instrument = instr("AAPL", "USD");
@@ -1803,31 +1981,30 @@ fn drop_copy_rollback_keeps_the_latched_account_block() {
     assert_eq!(result.account_blocks.len(), 1);
     engine.accounts().unblock(acc);
 
-    let mut reservation = engine
-        .execute_pre_trade_drop_copy(make_order_for(
+    let result = commit_drop_copy(
+        &engine,
+        make_order_for(
             acc,
             Side::Buy,
             instrument.clone(),
             TradeAmount::Quantity(qty("1")),
             Some(px("100")),
-        ))
-        .expect("limit drop-copy must be admitted");
-    assert!(
-        reservation.account_block().is_some(),
-        "drop-copy must latch the restored account block"
+        ),
+        "limit drop-copy must be admitted",
     );
-    reservation.rollback();
-
+    let block = result
+        .account_block()
+        .expect("drop-copy must expose the restored account block");
+    assert_eq!(block.code, RejectCode::AccountBlocked);
     let rejects = engine
-        .execute_pre_trade(make_order_for(
+        .start_pre_trade(make_order_for(
             acc,
             Side::Buy,
             instrument,
             TradeAmount::Quantity(qty("1")),
             Some(px("100")),
         ))
-        .err()
-        .expect("the rolled-back drop-copy must leave the account blocked");
+        .expect_err("the applied drop-copy must leave the account blocked");
     assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
     assert_eq!(rejects[0].reason, "pnl kill switch triggered");
 }

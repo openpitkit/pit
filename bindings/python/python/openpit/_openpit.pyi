@@ -26,6 +26,8 @@ import typing
 from . import param, pretrade
 from .pretrade import Policy
 
+def _reject_code_is_evaluation_failure(value: str) -> bool: ...
+
 class _AccountInfo(typing.Protocol):
     """Any object that exposes an ``account_group`` property.
 
@@ -41,6 +43,12 @@ class _AccountInfo(typing.Protocol):
 
     @property
     def account_group(self) -> AccountGroupId | None: ...
+
+class _Mutation(typing.Protocol):
+    """Finalizing commit and rollback callbacks for eagerly applied state."""
+
+    commit: typing.Callable[[], None]
+    rollback: typing.Callable[[], None]
 
 _ROUNDING_STRATEGY_DEFAULT: str
 _ROUNDING_STRATEGY_BANKER: str
@@ -1590,22 +1598,126 @@ class Reservation:
 
     Exactly one of ``commit`` or ``rollback`` must be called to finalize the
     reserved state.
+
+    Finalization must not fail. A mutation callable that raises is re-raised to
+    the caller once the rest of the batch has run, and independently arms the
+    engine kill switch: every :class:`openpit.Mutation` registered from Python
+    belongs to a custom policy whose state reach the engine cannot bound, so
+    **every** account is blocked until an operator calls
+    :meth:`openpit.Accounts.unblock_all`.
     """
 
+    @property
     def lock(self) -> Lock:
         """Current reservation lock payload."""
 
+    @property
     def account_adjustments(self) -> list[AccountAdjustmentOutcome]:
         """Account adjustment outcomes captured by the reservation."""
 
-    def account_block(self) -> AccountBlock | None:
-        """Return the winning account block, or ``None`` when absent."""
-
     def commit(self) -> None:
-        """Finalize reservation as committed."""
+        """Finalize reservation as committed.
+
+        Raises:
+            Exception: Re-raises the original exception from a mutation commit
+                callback, once every callback has run.
+            RuntimeError: The reservation has already been finalized.
+        """
 
     def rollback(self) -> None:
-        """Finalize reservation as rolled back."""
+        """Finalize reservation as rolled back.
+
+        Raises:
+            Exception: Re-raises the original exception from a mutation
+                rollback callback, once every callback has run.
+            RuntimeError: The reservation has already been finalized.
+        """
+
+class DropCopyOperation:
+    """
+    Single-use handle for applied drop-copy bookkeeping.
+
+    Exactly one of ``commit`` or ``rollback`` must be called to finalize the
+    applied bookkeeping. Every accessor raises ``RuntimeError`` afterwards.
+
+    Finalization must not fail, exactly as on :class:`Reservation`: a mutation
+    callable that raises is re-raised to the caller once the rest of the batch
+    has run, and independently arms the engine kill switch, blocking **every**
+    account until an operator calls :meth:`openpit.Accounts.unblock_all`.
+    """
+
+    @property
+    def lock(self) -> Lock:
+        """Lock context produced by the applied request.
+
+        Raises:
+            RuntimeError: The operation has already been finalized.
+        """
+
+    @property
+    def account_adjustments(self) -> list[AccountAdjustmentOutcome]:
+        """Applied account-adjustment outcomes.
+
+        Raises:
+            RuntimeError: The operation has already been finalized.
+        """
+
+    @property
+    def account_block(self) -> AccountBlock | None:
+        """First account block requested by this operation.
+
+        This is request-local history; ``is_account_blocked`` reports the
+        apply-time registry snapshot captured before ``apply_drop_copy`` returned.
+
+        Raises:
+            RuntimeError: The operation has already been finalized.
+        """
+
+    @property
+    def is_account_blocked(self) -> bool:
+        """Apply-time blocked-state snapshot for the order account.
+
+        The snapshot does not track later registry changes.
+
+        Raises:
+            RuntimeError: The operation has already been finalized.
+        """
+
+    def commit(self) -> None:
+        """Finalize the applied bookkeeping as committed.
+
+        Raises:
+            Exception: Re-raises the original exception from a mutation commit
+                callback, once every callback has run.
+            RuntimeError: The operation has already been finalized.
+        """
+
+    def rollback(self) -> None:
+        """Finalize the applied bookkeeping as rolled back.
+
+        Raises:
+            Exception: Re-raises the original exception from a mutation
+                rollback callback, once every callback has run.
+            RuntimeError: The operation has already been finalized.
+        """
+
+class DropCopyResult:
+    """Result of ``Engine.apply_drop_copy``."""
+
+    @property
+    def ok(self) -> bool:
+        """Whether the historical order was applied."""
+
+    @property
+    def operation(self) -> DropCopyOperation | None:
+        """Single-use operation handle when ``ok`` is true."""
+
+    @property
+    def rejects(self) -> list[Reject]:
+        """Fatal evaluation rejects, empty on success."""
+
+    def __bool__(self) -> bool:
+        """Boolean convenience alias for ``ok``."""
 
 class StartResult:
     """
@@ -1670,9 +1782,11 @@ class DryRunReport:
     def rejects(self) -> list[Reject] | None:
         """Reject list when checks would fail."""
 
+    @property
     def lock(self) -> Lock:
         """Lock payload the main stage would have produced."""
 
+    @property
     def account_adjustments(self) -> list[AccountAdjustmentOutcome]:
         """Account adjustment outcomes the main stage would have produced."""
 
@@ -1967,6 +2081,9 @@ class Context:
     """Context of the current pre-trade operation."""
 
     @property
+    def is_drop_copy(self) -> bool: ...
+    def record_drop_copy_start_mutation(self, mutation: _Mutation) -> None: ...
+    @property
     def account_control(self) -> AccountControl | None: ...
     @property
     def account_group(self) -> AccountGroupId | None: ...
@@ -2046,11 +2163,31 @@ class Engine:
     def start_pre_trade(self, order: object) -> StartResult: ...
     def start_pre_trade_dry_run(self, order: object) -> DryRunReport: ...
     def execute_pre_trade(self, order: object) -> ExecuteResult: ...
-    def execute_pre_trade_drop_copy(self, order: object) -> Reservation:
-        """Execute a limit-price drop-copy order without enforcing rejects.
+    def apply_drop_copy(
+        self,
+        order: object,
+    ) -> DropCopyResult:
+        """Apply drop copy without enforcing ordinary rejects.
+
+        ``order`` must carry a readable account id. An order whose account id
+        cannot be read is reported as a ``MISSING_REQUIRED_FIELD`` reject in
+        ``DropCopyResult.rejects`` before any policy runs.
+
+        On success the result carries a single-use ``DropCopyOperation`` to
+        commit or roll back; fatal evaluation failures are returned in
+        ``DropCopyResult.rejects``. Account-control operations and rate-limit
+        attempts are applied before this method returns and stay outside the
+        operation's finalization boundary.
+
+        A fully synchronized engine accepts concurrent calls for the same
+        account, but individual storage accesses may interleave. Callers that
+        require whole-pipeline isolation must serialize those calls externally.
 
         Raises:
-            ValueError: If the order has no readable limit price.
+            Exception: Re-raises the original exception from a custom policy
+                or mutation callback. No successful result is returned.
+            TypeError: The order does not expose the required Python model
+                interface.
         """
         ...
 
@@ -2132,6 +2269,7 @@ class Accounts:
 
     def block(self, account: AccountId, reason: str) -> None: ...
     def unblock(self, account: AccountId) -> None: ...
+    def unblock_all(self) -> None: ...
     def replace_block_reason(self, account: AccountId, reason: str) -> None: ...
     def block_group(self, group: AccountGroupId, reason: str) -> None: ...
     def unblock_group(self, group: AccountGroupId) -> None: ...

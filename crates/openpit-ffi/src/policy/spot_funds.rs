@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 #![allow(clippy::missing_safety_doc, clippy::not_unsafe_ptr_arg_deref)]
 
@@ -978,7 +978,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
 ///
 /// Contract:
 /// - on success, returns a caller-owned account-block list, possibly empty;
-///   release it with `openpit_pretrade_destroy_account_block_list`;
+///   release it with `openpit_destroy_pretrade_account_block_list`;
 /// - on failure, returns null and, when `out_error` is non-null, writes a
 ///   caller-owned `OpenPitConfigureError` that must be released with
 ///   `openpit_destroy_configure_error`.

@@ -17,8 +17,8 @@
 //
 // Mirrors the public JS runtime-configuration examples from the project wiki.
 // The tests marked with `// Source:` keep the snippet body in lockstep with:
-// - ../../../../pit.wiki/Dynamic-Policy-Reconfiguration.md
-// - ../../../../pit.wiki/Spot-Funds.md
+// - https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+// - https://wiki.openpit.dev/Spot-Funds/
 
 import { describe, expect, it } from "vitest";
 
@@ -132,7 +132,8 @@ function expectConfigureError(
 
 describe("runtime configurator", () => {
   it("retunes a built-in rate-limit policy", () => {
-    // Source: Dynamic-Policy-Reconfiguration.md - Retune a Built-in Policy
+    // Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+    // - Retune a Built-in Policy
     const order = (): OrderInit => ({
       operation: {
         underlyingAsset: "AAPL",
@@ -334,7 +335,8 @@ describe("runtime configurator", () => {
   });
 
   it("force-sets accumulated generic pnl", () => {
-    // Source: Dynamic-Policy-Reconfiguration.md - Force-set Accumulated P&L
+    // Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+    // - Force-set Accumulated P&L
     const accountId = 99_224_416n;
     const order = (): OrderInit => ({
       operation: {
@@ -389,7 +391,8 @@ describe("runtime configurator", () => {
   });
 
   it("switches spot funds global limit mode at runtime", () => {
-    // Source: Dynamic-Policy-Reconfiguration.md - Spot Funds: Global Limit Mode
+    // Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+    // - Spot Funds: Global Limit Mode
     const accountId = 99_224_416n;
     const engine = Engine.builder().builtin(buildSpotFunds()).build();
 
@@ -442,7 +445,8 @@ describe("runtime configurator", () => {
   });
 
   it("switches spot funds per-account limit mode at runtime", () => {
-    // Source: Dynamic-Policy-Reconfiguration.md - Spot Funds: Per-Account Limit Mode
+    // Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+    // - Spot Funds: Per-Account Limit Mode
     const accountId = 99_224_416n;
     const engine = Engine.builder().builtin(buildSpotFunds()).build();
 
@@ -495,7 +499,7 @@ describe("runtime configurator", () => {
   });
 
   it("builds spot-funds pnl barriers from the public builder", () => {
-    // Source: Spot-Funds.md - Configuring Barriers
+    // Source: https://wiki.openpit.dev/Spot-Funds/ - Configuring Barriers
     const accountId = 99_224_416n;
 
     // The PnL kill switch is a distinct spot-funds builder entry point; it
@@ -665,7 +669,7 @@ describe("runtime configurator", () => {
   });
 
   it("retunes spot-funds pnl barriers and force-sets the live accumulator", () => {
-    // Source: Spot-Funds.md - Runtime Reconfiguration
+    // Source: https://wiki.openpit.dev/Spot-Funds/ - Runtime Reconfiguration
     const accountId = 99_224_416n;
     const engine = Engine.builder()
 

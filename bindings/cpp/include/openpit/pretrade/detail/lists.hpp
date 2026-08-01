@@ -31,13 +31,13 @@ namespace openpit::pretrade::detail {
 
 struct RejectListDeleter {
   void operator()(OpenPitPretradeRejectList* list) const noexcept {
-    openpit_pretrade_destroy_reject_list(list);
+    openpit_destroy_pretrade_reject_list(list);
   }
 };
 
 struct AccountBlockListDeleter {
   void operator()(OpenPitPretradeAccountBlockList* list) const noexcept {
-    openpit_pretrade_destroy_account_block_list(list);
+    openpit_destroy_pretrade_account_block_list(list);
   }
 };
 

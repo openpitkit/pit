@@ -27,11 +27,12 @@
 #include <gtest/gtest.h>
 
 // SpotFundsReservationFlow drives the same shared helpers main() uses and
-// asserts the three outcomes that make the example a lesson: the first buy is
+// asserts the four outcomes that make the example a lesson: the first buy is
 // accepted (reserving funds), the second identical buy is rejected with
-// InsufficientFunds (those funds are held), and the fill - carrying the first
-// reservation's lock - settles without an account block. This is the C++ mirror
-// of TestSpotFundsReservationFlow in examples/go/spot_funds/main_test.go.
+// InsufficientFunds (those funds are held), the fill - carrying the first
+// reservation's lock - settles without an account block, and after the switch
+// to track-only mode a third identical buy is accepted despite the same
+// shortfall.
 TEST(SpotFunds, ReservationFlow) {
   const ::openpit::param::AccountId account =
       ::openpit::param::AccountId::FromUint64(spot_funds::kScenarioAccount);
@@ -69,4 +70,17 @@ TEST(SpotFunds, ReservationFlow) {
   EXPECT_TRUE(result.accountBlocks.empty())
       << "fill produced " << result.accountBlocks.size()
       << " account block(s), want 0";
+
+  // Track-only mode drops the insufficient-funds gate, so buy #3 - identical
+  // to the rejected buy #2 and facing the same 40000 available against 60000
+  // needed - is accepted and still produces a lock.
+  spot_funds::EnableTrackOnly(engine);
+  const ::openpit::model::Order buy3 = spot_funds::BuildOrder(account);
+  const spot_funds::PlaceResult place3 = spot_funds::PlaceOrder(engine, buy3);
+  ASSERT_TRUE(place3.Accepted()) << "buy #3 rejected in track-only mode: "
+                                 << spot_funds::Describe(place3.rejects);
+  EXPECT_TRUE(place3.rejects.empty()) << "buy #3 accepted but still reported: "
+                                      << spot_funds::Describe(place3.rejects);
+  EXPECT_FALSE(place3.lock->IsEmpty())
+      << "buy #3 accepted but produced an empty pre-trade lock";
 }

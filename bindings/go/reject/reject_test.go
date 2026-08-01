@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package reject
 
@@ -23,6 +23,72 @@ import (
 
 	"go.openpit.dev/openpit/internal/native"
 )
+
+func TestCodeIsEvaluationFailure(t *testing.T) {
+	evaluationFailures := []Code{
+		CodeMissingRequiredField,
+		CodeUnknownInstrument,
+		CodeUnknownAccount,
+		CodeUnknownVenue,
+		CodeUnknownClearingAccount,
+		CodeUnknownCollateralAsset,
+		CodeRiskConfigurationMissing,
+		CodeReferenceDataUnavailable,
+		CodeOrderValueCalculationFailed,
+		CodeSystemUnavailable,
+		CodeMarkPriceUnavailable,
+		CodeArithmeticOverflow,
+	}
+	for _, code := range evaluationFailures {
+		if !code.IsEvaluationFailure() {
+			t.Errorf("Code(%d).IsEvaluationFailure() = false, want true", code)
+		}
+	}
+
+	nonEvaluationFailures := []Code{
+		CodeInvalidFieldFormat,
+		CodeInvalidFieldValue,
+		CodeUnsupportedOrderType,
+		CodeUnsupportedTimeInForce,
+		CodeUnsupportedOrderAttribute,
+		CodeDuplicateClientOrderID,
+		CodeTooLateToEnter,
+		CodeExchangeClosed,
+		CodeInsufficientFunds,
+		CodeInsufficientMargin,
+		CodeInsufficientPosition,
+		CodeCreditLimitExceeded,
+		CodeRiskLimitExceeded,
+		CodeOrderExceedsLimit,
+		CodeOrderQtyExceedsLimit,
+		CodeOrderNotionalExceedsLimit,
+		CodePositionLimitExceeded,
+		CodeConcentrationLimitExceeded,
+		CodeLeverageLimitExceeded,
+		CodeRateLimitExceeded,
+		CodePnlKillSwitchTriggered,
+		CodeAccountBlocked,
+		CodeAccountNotAuthorized,
+		CodeComplianceRestriction,
+		CodeInstrumentRestricted,
+		CodeJurisdictionRestriction,
+		CodeWashTradePrevention,
+		CodeSelfMatchPrevention,
+		CodeShortSaleRestriction,
+		CodeAccountAdjustmentBoundsExceeded,
+		CodeCustom,
+		CodeOther,
+	}
+	for _, code := range nonEvaluationFailures {
+		if code.IsEvaluationFailure() {
+			t.Errorf("Code(%d).IsEvaluationFailure() = true, want false", code)
+		}
+	}
+
+	if Code(65535).IsEvaluationFailure() {
+		t.Error("unknown Code.IsEvaluationFailure() = true, want false")
+	}
+}
 
 func TestRejectWithUserDataReturnsCopyWithToken(t *testing.T) {
 	base := New(

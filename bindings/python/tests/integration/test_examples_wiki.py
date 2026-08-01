@@ -22,19 +22,19 @@ import openpit
 import pytest
 
 # Mirrors public Python examples from:
-# - ../pit.wiki/Account-Adjustments.md
-# - ../pit.wiki/Account-Blocking.md
-# - ../pit.wiki/Account-Groups.md
-# - ../pit.wiki/Balance-Reconciliation.md
-# - ../pit.wiki/Domain-Types.md
-# - ../pit.wiki/Dynamic-Policy-Reconfiguration.md
-# - ../pit.wiki/Getting-Started.md
-# - ../pit.wiki/Non-Mutating-Dry-Run.md
-# - ../pit.wiki/Policies.md
-# - ../pit.wiki/Policy-API.md
-# - ../pit.wiki/Pre-trade-Pipeline.md
-# - ../pit.wiki/Pre-Trade-Lock.md
-# - ../pit.wiki/Spot-Funds.md
+# - https://wiki.openpit.dev/Account-Adjustments/
+# - https://wiki.openpit.dev/Account-Blocking/
+# - https://wiki.openpit.dev/Account-Groups/
+# - https://wiki.openpit.dev/Balance-Reconciliation/
+# - https://wiki.openpit.dev/Domain-Types/
+# - https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+# - https://wiki.openpit.dev/Getting-Started/
+# - https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+# - https://wiki.openpit.dev/Policies/
+# - https://wiki.openpit.dev/Policy-API/
+# - https://wiki.openpit.dev/Pre-trade-Pipeline/
+# - https://wiki.openpit.dev/Pre-Trade-Lock/
+# - https://wiki.openpit.dev/Spot-Funds/
 # If this file changes, update every linked documentation snippet.
 
 # --- Shared helpers ---
@@ -53,6 +53,10 @@ def _aapl_usd_order(quantity: str, price: str) -> openpit.Order:
             price=openpit.param.Price(price),
         ),
     )
+
+
+def persist_historical_order_metadata(_order: openpit.Order) -> None:
+    pass
 
 
 def _aapl_usd_report(pnl: str, fee: str) -> openpit.ExecutionReport:
@@ -290,7 +294,7 @@ class BlockOnAdjustmentPolicy(openpit.pretrade.Policy):
 
 @pytest.mark.integration
 def test_example_wiki_domain_types_create_validated_values() -> None:
-    # Used in: pit.wiki/Domain-Types.md - Create Validated Values
+    # Source: https://wiki.openpit.dev/Domain-Types/ - Create Validated Values
     from decimal import Decimal
 
     import openpit
@@ -312,7 +316,8 @@ def test_example_wiki_domain_types_create_validated_values() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_domain_types_directional_types() -> None:
-    # Used in: pit.wiki/Domain-Types.md - Work With Directional Types
+    # Source: https://wiki.openpit.dev/Domain-Types/
+    # - Work With Directional Types
     import openpit
 
     # Directional helpers keep side logic explicit instead of comparing raw strings.
@@ -326,7 +331,7 @@ def test_example_wiki_domain_types_directional_types() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_domain_types_leverage() -> None:
-    # Used in: pit.wiki/Domain-Types.md - Create Leverage
+    # Source: https://wiki.openpit.dev/Domain-Types/ - Create Leverage
     import openpit
 
     # Leverage is a plain multiplier with direct int/float constructors.
@@ -340,7 +345,8 @@ def test_example_wiki_domain_types_leverage() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_pipeline_start_stage_reject() -> None:
-    # Used in: pit.wiki/Pre-trade-Pipeline.md - Handle a Start-Stage Reject
+    # Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    # - Handle a Start-Stage Reject
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -365,8 +371,8 @@ def test_example_wiki_pipeline_start_stage_reject() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_pipeline_main_stage_finalize() -> None:
-    # Used in: pit.wiki/Pre-trade-Pipeline.md - Execute the Main Stage and Finalize the
-    # Reservation
+    # Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    # - Execute the Main Stage and Finalize the Reservation
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -392,8 +398,10 @@ def test_example_wiki_pipeline_main_stage_finalize() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_pipeline_shortcut_start_and_main() -> None:
-    # Used in: pit.wiki/Pre-trade-Pipeline.md - Shortcut for Start + Main Stages
-    # Used in: pit.wiki/Getting-Started.md - Shortcut for Start + Main Stages
+    # Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    # - Shortcut for Start + Main Stages
+    # Source: https://wiki.openpit.dev/Getting-Started/
+    # - Shortcut for Start + Main Stages
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -416,8 +424,42 @@ def test_example_wiki_pipeline_shortcut_start_and_main() -> None:
 
 
 @pytest.mark.integration
+def test_example_wiki_pipeline_apply_drop_copy() -> None:
+    # Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    # - Apply a Historical Order with Drop Copy
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(openpit.pretrade.policies.build_order_validation())
+        .build()
+    )
+    order = _aapl_usd_order("100", "185")
+
+    result = engine.apply_drop_copy(order=order)
+    if result:
+        operation = result.operation
+        print(f"applied; account blocked: {operation.is_account_blocked}")
+        # Store the historical order, then make the bookkeeping durable.
+        try:
+            persist_historical_order_metadata(order)
+        except Exception:
+            operation.rollback()
+            raise
+        else:
+            operation.commit()
+    else:
+        for reject in result.rejects:
+            print(
+                "could not apply historical order: "
+                f"{reject.policy} [{reject.code}]: {reject.reason}"
+            )
+
+    assert result.ok
+
+
+@pytest.mark.integration
 def test_example_wiki_account_adjustments() -> None:
-    # Used in: pit.wiki/Account-Adjustments.md - Examples → Python
+    # Source: https://wiki.openpit.dev/Account-Adjustments/ - Examples → Python
     # Build one batch that mixes balance and position adjustments.
     account_id = openpit.param.AccountId.from_int(99224416)
 
@@ -466,7 +508,8 @@ def test_example_wiki_account_adjustments() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_account_adjustments_cumulative_limit() -> None:
-    # Used in: pit.wiki/Account-Adjustments.md - Example: Balance Limit Policy;
+    # Source: https://wiki.openpit.dev/Account-Adjustments/
+    # - Example: Balance Limit Policy;
     # bindings/python/docs/examples/index.md - Account-adjustment check.
     def balance_adjustment(
         amount: openpit.param.AdjustmentAmount,
@@ -519,7 +562,8 @@ def test_example_wiki_account_adjustments_cumulative_limit() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_account_control_block() -> None:
-    # Used in: pit.wiki/Policy-API.md - Block an Account from an Adjustment Callback
+    # Source: https://wiki.openpit.dev/Policy-API/
+    # - Block an Account from an Adjustment Callback
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -558,7 +602,8 @@ def test_example_wiki_account_control_block() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_policy_rollback_safety() -> None:
-    # Used in: pit.wiki/Policy-API.md - Example: Rollback Safety Pattern
+    # Source: https://wiki.openpit.dev/Policy-API/
+    # - Example: Rollback Safety Pattern
     reserve_policy = ReserveThenValidatePolicy()
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=reserve_policy).build()
 
@@ -575,7 +620,8 @@ def test_example_wiki_policy_rollback_safety() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_policy_notional_cap() -> None:
-    # Used in: pit.wiki/Policy-API.md - Example: Custom Main-Stage Check
+    # Source: https://wiki.openpit.dev/Policy-API/
+    # - Example: Custom Main-Stage Policy
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -676,7 +722,7 @@ class StrategyTagPolicy(openpit.pretrade.Policy):
 
 @pytest.mark.integration
 def test_example_wiki_custom_python_models() -> None:
-    # Used in: pit.wiki/Policy-API.md - Python Custom Models
+    # Source: https://wiki.openpit.dev/Policy-API/ - Python Custom Models
     policy = StrategyTagPolicy()
     engine = openpit.Engine.builder().no_sync().pre_trade(policy).build()
 
@@ -732,7 +778,7 @@ def test_example_wiki_custom_python_models() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_policies_order_validation() -> None:
-    # Used in: pit.wiki/Policies.md - OrderValidationPolicy
+    # Source: https://wiki.openpit.dev/Policies/ - OrderValidationPolicy
     # Keep this example in sync with the matching wiki example.
     import openpit
     import openpit.pretrade.policies
@@ -754,7 +800,7 @@ def test_example_wiki_policies_order_validation() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_policies_rate_limit() -> None:
-    # Used in: pit.wiki/Policies.md - RateLimitPolicy
+    # Source: https://wiki.openpit.dev/Policies/ - RateLimitPolicy
     # Keep this example in sync with the matching wiki example.
     import datetime
 
@@ -785,7 +831,7 @@ def test_example_wiki_policies_rate_limit() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_policies_order_size_limit() -> None:
-    # Used in: pit.wiki/Policies.md - OrderSizeLimitPolicy
+    # Source: https://wiki.openpit.dev/Policies/ - OrderSizeLimitPolicy
     # Keep this example in sync with the matching wiki example.
     import openpit
     import openpit.pretrade.policies
@@ -824,8 +870,10 @@ def test_example_wiki_policies_order_size_limit() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_pipeline_apply_post_trade_feedback() -> None:
-    # Used in: pit.wiki/Pre-trade-Pipeline.md - Apply Post-Trade Feedback
-    # Used in: pit.wiki/Getting-Started.md - Apply Post-Trade Feedback
+    # Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    # - Apply Post-Trade Feedback
+    # Source: https://wiki.openpit.dev/Getting-Started/
+    # - Apply Post-Trade Feedback
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -848,7 +896,8 @@ def test_example_wiki_pipeline_apply_post_trade_feedback() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_getting_started_run_order() -> None:
-    # Used in: pit.wiki/Getting-Started.md - Run an Order Through the Engine
+    # Source: https://wiki.openpit.dev/Getting-Started/
+    # - Run an Order Through the Engine
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -877,7 +926,7 @@ def test_example_wiki_getting_started_run_order() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_policies_pnl_bounds_killswitch() -> None:
-    # Used in: pit.wiki/Policies.md - PnlBoundsKillSwitchPolicy
+    # Source: https://wiki.openpit.dev/Policies/ - PnlBoundsKillSwitchPolicy
     # Keep this example in sync with the matching wiki example.
     import openpit
     import openpit.pretrade.policies
@@ -905,7 +954,7 @@ def test_example_wiki_policies_pnl_bounds_killswitch() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_policies_spot_funds() -> None:
-    # Used in: pit.wiki/Policies.md - SpotFundsPolicy → Python
+    # Source: https://wiki.openpit.dev/Policies/ - SpotFundsPolicy → Python
     # Limit-only spot funds, registered first in the policy list.
     engine = (
         openpit.Engine.builder()
@@ -918,7 +967,7 @@ def test_example_wiki_policies_spot_funds() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_spot_funds_limit_only() -> None:
-    # Used in: pit.wiki/Spot-Funds.md - Limit-Only Mode → Python
+    # Source: https://wiki.openpit.dev/Spot-Funds/ - Limit-Only Mode → Python
     # Limit-only spot funds: register first in the policy list.
     engine = (
         openpit.Engine.builder()
@@ -960,8 +1009,8 @@ def test_example_wiki_spot_funds_limit_only() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_spot_funds_pnl_kill_switch_builder() -> None:
-    # Used in: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch /
-    # Configuring Barriers → Python
+    # Source: https://wiki.openpit.dev/Spot-Funds/
+    # - Self-Computed PnL Kill Switch / Configuring Barriers → Python
     account_id = openpit.param.AccountId.from_int(99224416)
 
     # The PnL kill switch is a distinct spot-funds builder entry point; it
@@ -992,8 +1041,8 @@ def test_example_wiki_spot_funds_pnl_kill_switch_builder() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> None:
-    # Used in: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch /
-    # Runtime Reconfiguration → Python
+    # Source: https://wiki.openpit.dev/Spot-Funds/
+    # - Self-Computed PnL Kill Switch / Runtime Reconfiguration → Python
     # Harness scaffolding: a spot-funds engine with a per-account barrier the
     # snippet then retunes and force-sets.
     seed_account = openpit.param.AccountId.from_int(99224416)
@@ -1034,7 +1083,7 @@ def test_example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_spot_funds_market_orders() -> None:
-    # Used in: pit.wiki/Spot-Funds.md - Market Orders → Python
+    # Source: https://wiki.openpit.dev/Spot-Funds/ - Market Orders → Python
     builder = openpit.Engine.builder().no_sync()
 
     # A shared market-data service feeds the policy's market-order pricing.
@@ -1080,7 +1129,8 @@ def test_example_wiki_spot_funds_market_orders() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_pre_trade_lock_persistence() -> None:
-    # Used in: pit.wiki/Pre-Trade-Lock.md - Persisting and Restoring a Lock → Python
+    # Source: https://wiki.openpit.dev/Pre-Trade-Lock/
+    # - Persisting and Restoring a Lock → Python
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -1114,7 +1164,7 @@ def test_example_wiki_pre_trade_lock_persistence() -> None:
     result = engine.execute_pre_trade(order=order)
 
     # Persist the lock with its built-in JSON serialization before committing.
-    payload = result.reservation.lock().to_json()
+    payload = result.reservation.lock.to_json()
     result.reservation.commit()
 
     # --- After a process restart, rebuild the lock from your store. ---
@@ -1144,7 +1194,8 @@ def test_example_wiki_pre_trade_lock_persistence() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_balance_reconciliation_delta_absolute() -> None:
-    # Used in: pit.wiki/Balance-Reconciliation.md - Delta Versus Absolute → Python
+    # Source: https://wiki.openpit.dev/Balance-Reconciliation/
+    # - Delta Versus Absolute → Python
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -1185,7 +1236,7 @@ def test_example_wiki_balance_reconciliation_delta_absolute() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_account_block_unblock() -> None:
-    # Used in: pit.wiki/Account-Blocking.md - Examples → Python
+    # Source: https://wiki.openpit.dev/Account-Blocking/ - Examples → Python
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -1209,7 +1260,7 @@ def test_example_wiki_account_block_unblock() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_account_groups_register_and_read() -> None:
-    # Used in: pit.wiki/Account-Groups.md - Examples → Python
+    # Source: https://wiki.openpit.dev/Account-Groups/ - Examples → Python
     engine = (
         openpit.Engine.builder()
         .no_sync()
@@ -1238,7 +1289,7 @@ def test_example_wiki_account_groups_register_and_read() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_spot_funds_global_limit_mode() -> None:
-    # Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md
+    # Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
     # Section: Spot Funds: Global Limit Mode
     # This mirror is intentionally wider than the wiki snippet: it adds the test
     # harness (seed adjustment via helper) so the example runs. Keep the shared
@@ -1301,7 +1352,7 @@ def test_example_wiki_spot_funds_global_limit_mode() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_spot_funds_per_account_limit_mode() -> None:
-    # Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md
+    # Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
     # Section: Spot Funds: Per-Account Limit Mode
     # This mirror is intentionally wider than the wiki snippet: it adds the test
     # harness (seed adjustment via helper) so the example runs. Keep the shared
@@ -1374,7 +1425,8 @@ def test_example_wiki_spot_funds_per_account_limit_mode() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_dynamic_policy_reconfiguration_rate_limit() -> None:
-    # Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Retune a Built-in Policy
+    # Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+    # - Retune a Built-in Policy
     # This mirror is intentionally wider than the wiki snippet: it adds the test
     # harness (`order` built via `_aapl_usd_order`) so the example runs. Keep
     # the shared user-code flow in sync with the wiki.
@@ -1431,7 +1483,8 @@ def test_example_wiki_dynamic_policy_reconfiguration_rate_limit() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_dynamic_policy_reconfiguration_set_account_pnl() -> None:
-    # Used in: pit.wiki/Dynamic-Policy-Reconfiguration.md - Force-set Accumulated P&L
+    # Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+    # - Force-set Accumulated P&L
     # This mirror is intentionally wider than the wiki snippet: it adds the test
     # harness (`order` built via `_aapl_usd_order` and its `account`) so the
     # example runs. Keep the shared user-code flow in sync with the wiki.
@@ -1484,7 +1537,8 @@ def test_example_wiki_dynamic_policy_reconfiguration_set_account_pnl() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_dry_run_verdict() -> None:
-    # Used in: pit.wiki/Non-Mutating-Dry-Run.md - Read the Dry-Run Verdict
+    # Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+    # - Read the Dry-Run Verdict
     # This mirror is intentionally wider than the wiki snippet: it adds the test
     # harness (`order` built via `_aapl_usd_order` and the engine setup) so the
     # example runs. Keep the shared user-code flow in sync with the wiki.
@@ -1513,7 +1567,8 @@ def test_example_wiki_dry_run_verdict() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_dry_run_before_real_call() -> None:
-    # Used in: pit.wiki/Non-Mutating-Dry-Run.md - Use the Dry-Run Before a Real Call
+    # Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+    # - Use the Dry-Run Before a Real Call
     # This mirror is intentionally wider than the wiki snippet: it adds the test
     # harness (`order` built via `_aapl_usd_order` and the engine setup) so the
     # example runs. Keep the shared user-code flow in sync with the wiki.
@@ -1542,7 +1597,8 @@ def test_example_wiki_dry_run_before_real_call() -> None:
 
 @pytest.mark.integration
 def test_example_wiki_dry_run_custom_policy_hook() -> None:
-    # Used in: pit.wiki/Non-Mutating-Dry-Run.md - Read-Only Custom Start-Stage Hook
+    # Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+    # - Read-Only Custom Start-Stage Hook
     # This mirror is intentionally wider than the wiki snippet: it defines the
     # full MyCountingPolicy class (the snippet shows only the dry-run hooks) and
     # adds assertions proving the dry-run does not increment the counter.

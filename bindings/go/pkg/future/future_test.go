@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package future
 
@@ -165,6 +165,18 @@ func TestFuture2CtxCancelDuringAwait(t *testing.T) {
 	}
 	if first != "" || second != 0 {
 		t.Fatalf("Await() = (%q, %d), want zero values", first, second)
+	}
+
+	f.Resolve("owned", 7, nil)
+	first, second, ok, err := f.TryGet()
+	if err != nil {
+		t.Fatalf("TryGet() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("TryGet() ok = false after resolution")
+	}
+	if first != "owned" || second != 7 {
+		t.Fatalf("TryGet() = (%q, %d), want (owned, 7)", first, second)
 	}
 }
 

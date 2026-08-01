@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 use crate::OpenPitStringView;
 use openpit::pretrade::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
@@ -129,6 +129,19 @@ pub const OPENPIT_PRETRADE_REJECT_CODE_CUSTOM: OpenPitPretradeRejectCode = 254;
 /// A catch-all code for rejects that do not fit a more specific class.
 pub const OPENPIT_PRETRADE_REJECT_CODE_OTHER: OpenPitPretradeRejectCode = 255;
 
+#[no_mangle]
+/// Reports whether a reject code means the policy could not evaluate the
+/// historical order.
+///
+/// An evaluation failure aborts drop copy before it produces an operation and
+/// rolls back the prepared mutations. Unknown incoming codes map to `Other` and
+/// return `false`.
+pub extern "C" fn openpit_pretrade_reject_code_is_evaluation_failure(
+    code: OpenPitPretradeRejectCode,
+) -> bool {
+    import_reject_code(code).is_evaluation_failure()
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Single rejection record returned by checks.
@@ -182,9 +195,25 @@ impl OpenPitPretradeReject {
     }
 }
 
-/// Caller-owned list of rejects.
+/// List of rejects.
+///
+/// Every list is caller-owned except the one returned by
+/// `openpit_pretrade_reject_list_get_accept_sentinel`: that single borrowed
+/// instance is immutable and shared, so appending to it is refused and
+/// destroying it is a no-op. Use
+/// `openpit_pretrade_reject_list_is_accept_sentinel` to tell the two apart.
 pub struct OpenPitPretradeRejectList {
     pub(crate) items: Vec<Reject>,
+}
+
+// The callback ABI needs a non-null success value but accepting policy calls
+// are hot. This immutable empty list is borrowed by the engine and must never
+// be mutated or freed by callers.
+static ACCEPTED_REJECT_LIST: OpenPitPretradeRejectList =
+    OpenPitPretradeRejectList { items: Vec::new() };
+
+pub(crate) fn is_accepted_reject_list(value: *const OpenPitPretradeRejectList) -> bool {
+    std::ptr::eq(value, &ACCEPTED_REJECT_LIST)
 }
 
 fn import_reject_code(value: OpenPitPretradeRejectCode) -> RejectCode {
@@ -370,9 +399,9 @@ pub(crate) fn rejects_to_list_owned(values: Rejects) -> OpenPitPretradeRejectLis
 ///
 /// Contract:
 /// - returns a new caller-owned list;
-/// - release it with `openpit_pretrade_destroy_reject_list`;
+/// - release it with `openpit_destroy_pretrade_reject_list`;
 /// - this function always succeeds.
-pub extern "C" fn openpit_pretrade_create_reject_list(
+pub extern "C" fn openpit_create_pretrade_reject_list(
     reserve: usize,
 ) -> *mut OpenPitPretradeRejectList {
     Box::into_raw(Box::new(OpenPitPretradeRejectList {
@@ -381,13 +410,51 @@ pub extern "C" fn openpit_pretrade_create_reject_list(
 }
 
 #[no_mangle]
+/// Returns a borrowed immutable empty reject list that accepts a policy call.
+///
+/// Contract:
+/// - the returned pointer is non-null and may be returned only as a custom
+///   policy callback result;
+/// - the caller must not append to, retain, or free it: appending is refused by
+///   `openpit_pretrade_reject_list_push` and
+///   `openpit_destroy_pretrade_reject_list` is a no-op for it;
+/// - the engine recognizes it as an accepted callback result without an
+///   allocation;
+/// - this function always succeeds.
+pub extern "C" fn openpit_pretrade_reject_list_get_accept_sentinel(
+) -> *mut OpenPitPretradeRejectList {
+    (&ACCEPTED_REJECT_LIST as *const OpenPitPretradeRejectList).cast_mut()
+}
+
+#[no_mangle]
+/// Reports whether `list` is the borrowed immutable accept list returned by
+/// `openpit_pretrade_reject_list_get_accept_sentinel`.
+///
+/// Use it to tell the two `false` outcomes of
+/// `openpit_pretrade_reject_list_push` apart: an unknown reject scope is a bad
+/// reject payload, while the accept list is a bad target pointer.
+///
+/// Contract:
+/// - passing null is allowed and returns `false`;
+/// - `true` means the list can be neither appended to nor released;
+/// - this function always succeeds.
+pub extern "C" fn openpit_pretrade_reject_list_is_accept_sentinel(
+    list: *const OpenPitPretradeRejectList,
+) -> bool {
+    is_accepted_reject_list(list)
+}
+
+#[no_mangle]
 /// Releases a caller-owned reject list.
 ///
 /// Contract:
 /// - passing null is allowed;
+/// - passing the borrowed accept list returned by
+///   `openpit_pretrade_reject_list_get_accept_sentinel` is allowed and does
+///   nothing, since that instance is shared and not caller-owned;
 /// - this function always succeeds.
-pub extern "C" fn openpit_pretrade_destroy_reject_list(rejects: *mut OpenPitPretradeRejectList) {
-    if rejects.is_null() {
+pub extern "C" fn openpit_destroy_pretrade_reject_list(rejects: *mut OpenPitPretradeRejectList) {
+    if rejects.is_null() || is_accepted_reject_list(rejects) {
         return;
     }
     unsafe { drop(Box::from_raw(rejects)) };
@@ -400,13 +467,21 @@ pub extern "C" fn openpit_pretrade_destroy_reject_list(rejects: *mut OpenPitPret
 /// - `list` must be a valid non-null pointer;
 /// - string views in `reject` are copied before this function returns;
 /// - returns `true` after appending a reject with a valid scope;
-/// - returns `false` for an unknown scope and leaves the list unchanged;
+/// - returns `false` and leaves the list unchanged when `reject` carries an
+///   unknown scope, or when `list` is the immutable accept list returned by
+///   `openpit_pretrade_reject_list_get_accept_sentinel`;
+/// - call `openpit_pretrade_reject_list_is_accept_sentinel` to separate those
+///   two outcomes: the first is a bad reject payload, the second is a bad
+///   target pointer, and reporting one as the other hides the real defect;
 /// - violating the pointer contract aborts the call.
 pub extern "C" fn openpit_pretrade_reject_list_push(
     list: *mut OpenPitPretradeRejectList,
     reject: OpenPitPretradeReject,
 ) -> bool {
     assert!(!list.is_null(), "reject list pointer is null");
+    if is_accepted_reject_list(list) {
+        return false;
+    }
     let Some(reject) = reject.to_reject() else {
         return false;
     };
@@ -518,9 +593,9 @@ pub(crate) fn blocks_to_list_owned(values: Vec<AccountBlock>) -> OpenPitPretrade
 ///
 /// Contract:
 /// - returns a new caller-owned list;
-/// - release it with `openpit_pretrade_destroy_account_block_list`;
+/// - release it with `openpit_destroy_pretrade_account_block_list`;
 /// - this function always succeeds.
-pub extern "C" fn openpit_pretrade_create_account_block_list(
+pub extern "C" fn openpit_create_pretrade_account_block_list(
     reserve: usize,
 ) -> *mut OpenPitPretradeAccountBlockList {
     Box::into_raw(Box::new(OpenPitPretradeAccountBlockList {
@@ -534,7 +609,7 @@ pub extern "C" fn openpit_pretrade_create_account_block_list(
 /// Contract:
 /// - passing null is allowed;
 /// - this function always succeeds.
-pub extern "C" fn openpit_pretrade_destroy_account_block_list(
+pub extern "C" fn openpit_destroy_pretrade_account_block_list(
     blocks: *mut OpenPitPretradeAccountBlockList,
 ) {
     if blocks.is_null() {
@@ -621,7 +696,7 @@ mod tests {
 
     #[test]
     fn reject_list_destroy_is_null_safe() {
-        openpit_pretrade_destroy_reject_list(std::ptr::null_mut());
+        openpit_destroy_pretrade_reject_list(std::ptr::null_mut());
     }
 
     #[test]
@@ -642,7 +717,7 @@ mod tests {
 
     #[test]
     fn reject_list_push_len_get_roundtrip() {
-        let list = openpit_pretrade_create_reject_list(1);
+        let list = openpit_create_pretrade_reject_list(1);
         let reject = OpenPitPretradeReject {
             policy: OpenPitStringView::from_utf8("policy"),
             reason: OpenPitStringView::from_utf8("reason"),
@@ -668,7 +743,7 @@ mod tests {
         assert_eq!(first.user_data, 55usize as *mut std::ffi::c_void);
         assert_eq!(string_view_to_string(first.policy), "policy");
         assert!(!openpit_pretrade_reject_list_get(list, 1, &mut first));
-        openpit_pretrade_destroy_reject_list(list);
+        openpit_destroy_pretrade_reject_list(list);
     }
 
     #[test]
@@ -746,8 +821,109 @@ mod tests {
     }
 
     #[test]
+    fn reject_code_evaluation_failure_matches_core_for_all_ffi_variants() {
+        let all = [
+            OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD,
+            OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_FORMAT,
+            OPENPIT_PRETRADE_REJECT_CODE_INVALID_FIELD_VALUE,
+            OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_TYPE,
+            OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_TIME_IN_FORCE,
+            OPENPIT_PRETRADE_REJECT_CODE_UNSUPPORTED_ORDER_ATTRIBUTE,
+            OPENPIT_PRETRADE_REJECT_CODE_DUPLICATE_CLIENT_ORDER_ID,
+            OPENPIT_PRETRADE_REJECT_CODE_TOO_LATE_TO_ENTER,
+            OPENPIT_PRETRADE_REJECT_CODE_EXCHANGE_CLOSED,
+            OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_INSTRUMENT,
+            OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_ACCOUNT,
+            OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_VENUE,
+            OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_CLEARING_ACCOUNT,
+            OPENPIT_PRETRADE_REJECT_CODE_UNKNOWN_COLLATERAL_ASSET,
+            OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_FUNDS,
+            OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_MARGIN,
+            OPENPIT_PRETRADE_REJECT_CODE_INSUFFICIENT_POSITION,
+            OPENPIT_PRETRADE_REJECT_CODE_CREDIT_LIMIT_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_ORDER_EXCEEDS_LIMIT,
+            OPENPIT_PRETRADE_REJECT_CODE_ORDER_QTY_EXCEEDS_LIMIT,
+            OPENPIT_PRETRADE_REJECT_CODE_ORDER_NOTIONAL_EXCEEDS_LIMIT,
+            OPENPIT_PRETRADE_REJECT_CODE_POSITION_LIMIT_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_CONCENTRATION_LIMIT_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_LEVERAGE_LIMIT_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_RATE_LIMIT_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED,
+            OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_BLOCKED,
+            OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_NOT_AUTHORIZED,
+            OPENPIT_PRETRADE_REJECT_CODE_COMPLIANCE_RESTRICTION,
+            OPENPIT_PRETRADE_REJECT_CODE_INSTRUMENT_RESTRICTED,
+            OPENPIT_PRETRADE_REJECT_CODE_JURISDICTION_RESTRICTION,
+            OPENPIT_PRETRADE_REJECT_CODE_WASH_TRADE_PREVENTION,
+            OPENPIT_PRETRADE_REJECT_CODE_SELF_MATCH_PREVENTION,
+            OPENPIT_PRETRADE_REJECT_CODE_SHORT_SALE_RESTRICTION,
+            OPENPIT_PRETRADE_REJECT_CODE_RISK_CONFIGURATION_MISSING,
+            OPENPIT_PRETRADE_REJECT_CODE_REFERENCE_DATA_UNAVAILABLE,
+            OPENPIT_PRETRADE_REJECT_CODE_ORDER_VALUE_CALCULATION_FAILED,
+            OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE,
+            OPENPIT_PRETRADE_REJECT_CODE_MARK_PRICE_UNAVAILABLE,
+            OPENPIT_PRETRADE_REJECT_CODE_ACCOUNT_ADJUSTMENT_BOUNDS_EXCEEDED,
+            OPENPIT_PRETRADE_REJECT_CODE_ARITHMETIC_OVERFLOW,
+            OPENPIT_PRETRADE_REJECT_CODE_CUSTOM,
+            OPENPIT_PRETRADE_REJECT_CODE_OTHER,
+        ];
+        for code in all {
+            assert_eq!(
+                openpit_pretrade_reject_code_is_evaluation_failure(code),
+                import_reject_code(code).is_evaluation_failure(),
+            );
+        }
+        assert!(!openpit_pretrade_reject_code_is_evaluation_failure(
+            u16::MAX
+        ));
+    }
+
+    // A push onto the shared accept list is a wrong-pointer bug, not a bad
+    // reject payload. Both refuse the append, so the two must stay separately
+    // detectable or a caller reports the wrong cause.
+    #[test]
+    fn accept_sentinel_refuses_push_and_stays_detectable() {
+        let sentinel = openpit_pretrade_reject_list_get_accept_sentinel();
+        assert!(openpit_pretrade_reject_list_is_accept_sentinel(sentinel));
+        assert!(!openpit_pretrade_reject_list_is_accept_sentinel(
+            std::ptr::null()
+        ));
+
+        let reject = OpenPitPretradeReject {
+            policy: OpenPitStringView::from_utf8("policy"),
+            reason: OpenPitStringView::from_utf8("reason"),
+            details: OpenPitStringView::from_utf8("details"),
+            user_data: std::ptr::null_mut(),
+            code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
+            scope: OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+        };
+        assert!(!openpit_pretrade_reject_list_push(sentinel, reject));
+        assert_eq!(openpit_pretrade_reject_list_len(sentinel), 0);
+
+        // The very same reject is valid: only the target pointer was wrong.
+        let owned = openpit_create_pretrade_reject_list(1);
+        assert!(!openpit_pretrade_reject_list_is_accept_sentinel(owned));
+        assert!(openpit_pretrade_reject_list_push(owned, reject));
+        assert_eq!(openpit_pretrade_reject_list_len(owned), 1);
+        openpit_destroy_pretrade_reject_list(owned);
+    }
+
+    #[test]
+    fn destroying_the_accept_sentinel_is_a_noop() {
+        let sentinel = openpit_pretrade_reject_list_get_accept_sentinel();
+        openpit_destroy_pretrade_reject_list(sentinel);
+
+        // The shared instance survives: it is borrowed, never caller-owned.
+        assert!(openpit_pretrade_reject_list_is_accept_sentinel(
+            openpit_pretrade_reject_list_get_accept_sentinel()
+        ));
+        assert_eq!(openpit_pretrade_reject_list_len(sentinel), 0);
+    }
+
+    #[test]
     fn reject_list_push_rejects_unknown_scope_without_appending() {
-        let list = openpit_pretrade_create_reject_list(1);
+        let list = openpit_create_pretrade_reject_list(1);
         let reject = OpenPitPretradeReject {
             policy: OpenPitStringView::from_utf8("policy"),
             reason: OpenPitStringView::from_utf8("reason"),
@@ -759,7 +935,7 @@ mod tests {
 
         assert!(!openpit_pretrade_reject_list_push(list, reject));
         assert_eq!(openpit_pretrade_reject_list_len(list), 0);
-        openpit_pretrade_destroy_reject_list(list);
+        openpit_destroy_pretrade_reject_list(list);
     }
 
     #[test]
@@ -778,7 +954,7 @@ mod tests {
 
     #[test]
     fn account_block_list_destroy_is_null_safe() {
-        openpit_pretrade_destroy_account_block_list(std::ptr::null_mut());
+        openpit_destroy_pretrade_account_block_list(std::ptr::null_mut());
     }
 
     #[test]
@@ -788,7 +964,7 @@ mod tests {
             openpit_pretrade_account_block_list_push,
         };
 
-        let list = openpit_pretrade_create_account_block_list(1);
+        let list = openpit_create_pretrade_account_block_list(1);
         let block = OpenPitPretradeAccountBlock {
             policy: OpenPitStringView::from_utf8("policy"),
             reason: OpenPitStringView::from_utf8("reason"),
@@ -815,7 +991,7 @@ mod tests {
         assert_eq!(out.user_data, 42usize as *mut std::ffi::c_void);
         assert_eq!(string_view_to_string(out.policy), "policy");
         assert!(!openpit_pretrade_account_block_list_get(list, 1, &mut out));
-        openpit_pretrade_destroy_account_block_list(list);
+        openpit_destroy_pretrade_account_block_list(list);
     }
 
     #[test]

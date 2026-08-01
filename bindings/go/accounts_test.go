@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package openpit
 
@@ -258,10 +258,17 @@ func TestAccountsExecutePreTradeDryRunMatchesExecutePreTradeBlockRejectText(t *t
 		t.Fatalf("ExecutePreTradeDryRun() error = %v", err)
 	}
 	defer report.Close()
-	if report.IsPass() {
+	pass, err := report.IsPass()
+	if err != nil {
+		t.Fatalf("ExecutePreTradeDryRun().IsPass() error = %v", err)
+	}
+	if pass {
 		t.Fatal("ExecutePreTradeDryRun().IsPass() = true, want account-block reject")
 	}
-	dryRunRejects := report.Rejects()
+	dryRunRejects, err := report.Rejects()
+	if err != nil {
+		t.Fatalf("ExecutePreTradeDryRun().Rejects() error = %v", err)
+	}
 	if len(dryRunRejects) != 1 {
 		t.Fatalf("ExecutePreTradeDryRun().Rejects() len = %d, want 1", len(dryRunRejects))
 	}
@@ -275,6 +282,27 @@ func TestAccountsUnblockAbsentIsNoOp(t *testing.T) {
 	// Unblocking an account that was never blocked must not gate it.
 	engine.Accounts().Unblock(param.NewAccountIDFromUint64(1))
 	assertAccountPasses(t, engine)
+}
+
+func TestAccountsUnblockAllWithoutEngineWideBlockIsNoOp(t *testing.T) {
+	engine := newAccountsTestEngine(t)
+	defer engine.Stop()
+
+	// Lifting an engine-wide block that was never armed must not gate anything.
+	engine.Accounts().UnblockAll()
+	assertAccountPasses(t, engine)
+}
+
+func TestAccountsUnblockAllKeepsIndividuallyBlockedAccountBlocked(t *testing.T) {
+	engine := newAccountsTestEngine(t)
+	defer engine.Stop()
+
+	accounts := engine.Accounts()
+	accounts.Block(param.NewAccountIDFromUint64(1), "manual kill-switch")
+
+	// UnblockAll owns the engine-wide block only; per-account blocks survive it.
+	accounts.UnblockAll()
+	assertAccountBlockedWithReason(t, engine, "manual kill-switch")
 }
 
 func TestAccountsReplaceBlockReasonUpdatesBlockedAccount(t *testing.T) {

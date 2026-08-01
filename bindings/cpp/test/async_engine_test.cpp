@@ -52,6 +52,8 @@ constexpr std::uint64_t kAccountARaw = 1001;
 constexpr std::uint64_t kAccountBRaw = 2002;
 const AccountId kAccountA = AccountId::FromUint64(kAccountARaw);
 const AccountId kAccountB = AccountId::FromUint64(kAccountBRaw);
+constexpr std::uint64_t kAccountCRaw = 3003;
+const AccountId kAccountC = AccountId::FromUint64(kAccountCRaw);
 
 // A deterministic 5-second cap so a wedged test fails fast rather than hanging
 // the suite. Every Await uses it; correct code resolves well within it.
@@ -484,8 +486,44 @@ TEST(AsyncEngineErrors, SubmitClosureExceptionBecomesTaskFailed) {
 
 TEST(AsyncEngineErrors, DynamicQueueLimitRejectsNewAccount) {
   MockDriver driver;
-  // Cap at one live queue; a gate keeps that one queue's account occupied so
-  // it cannot be reused, forcing a distinct account to hit the cap.
+  // A cap of n means n usable account queues. A gate keeps the two permitted
+  // accounts occupied, forcing a third to hit the cap.
+  auto engine = ae::Builder<MockDriver>(driver)
+                    .Dynamic()
+                    .MaxQueues(2)
+                    .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                    .Build();
+
+  Gate gate;
+  ae::Future<int> occupiedA = engine.Call(kAccountA, [&](MockDriver&) {
+    gate.Wait();
+    return 1;
+  });
+  ae::Future<int> occupiedB = engine.Call(kAccountB, [&](MockDriver&) {
+    gate.Wait();
+    return 2;
+  });
+
+  // A third, distinct account cannot get a queue: the cap is reached.
+  ae::Future<int> rejected =
+      engine.Call(kAccountC, [](MockDriver&) { return 3; });
+  try {
+    (void)rejected.Await(kAwaitCap);
+    FAIL() << "expected a QueueLimit error";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::QueueLimit);
+  }
+
+  gate.Open();
+  ASSERT_TRUE(occupiedA.Await(kAwaitCap).has_value());
+  ASSERT_TRUE(occupiedB.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(engine.StopGraceful(seconds(10)));
+}
+
+// A cap of one must leave one usable account queue. It previously left none:
+// the first account submit hit the limit and every later one did too.
+TEST(AsyncEngineErrors, DynamicMaxQueuesOneAllowsOneAccountQueue) {
+  MockDriver driver;
   auto engine = ae::Builder<MockDriver>(driver)
                     .Dynamic()
                     .MaxQueues(1)
@@ -498,7 +536,7 @@ TEST(AsyncEngineErrors, DynamicQueueLimitRejectsNewAccount) {
     return 1;
   });
 
-  // A second, distinct account cannot get a queue: the cap is reached.
+  // A second, distinct account cannot get a queue: the single slot is taken.
   ae::Future<int> rejected =
       engine.Call(kAccountB, [](MockDriver&) { return 2; });
   try {
@@ -509,7 +547,7 @@ TEST(AsyncEngineErrors, DynamicQueueLimitRejectsNewAccount) {
   }
 
   gate.Open();
-  ASSERT_TRUE(occupied.Await(kAwaitCap).has_value());
+  ASSERT_EQ(occupied.Await(kAwaitCap).value(), 1);
   EXPECT_TRUE(engine.StopGraceful(seconds(10)));
 }
 

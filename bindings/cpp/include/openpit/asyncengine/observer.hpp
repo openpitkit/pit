@@ -33,6 +33,10 @@
 // counters and hand heavy work to a separate thread. Exceptions are ignored so
 // diagnostics cannot change dispatcher behavior.
 //
+// Every callback carries the account id the task was routed by, so a reported
+// account is always a real account: the dispatcher never queues work it cannot
+// key, and never substitutes a sentinel such as AccountId(0).
+//
 //   - OnComplete fires for aborted tasks (ran == 0), but OnDequeue does NOT.
 //     Pairing dequeue/complete counts will see unmatched completes per abort.
 //   - A submit that fails synchronously with Stopped or QueueLimit emits no

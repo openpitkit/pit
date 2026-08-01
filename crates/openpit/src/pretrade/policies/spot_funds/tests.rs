@@ -26,8 +26,8 @@ use crate::param::{
     Price, Quantity, Side, Trade, TradeAmount, Volume,
 };
 use crate::pretrade::{
-    holdings::Holdings, PreTradeContext, PreTradeLock, PreTradePolicy, RejectCode,
-    DEFAULT_POLICY_GROUP_ID,
+    holdings::Holdings, PolicyPreTradeResult, PreTradeContext, PreTradeLock, PreTradePolicy,
+    Reject, RejectCode, RejectScope, Rejects, DEFAULT_POLICY_GROUP_ID,
 };
 use crate::{
     FullSync, HasAccountAdjustmentBalance, HasAccountAdjustmentBalanceAverageEntryPrice,
@@ -47,6 +47,37 @@ type TestPolicy = SpotFundsPolicy<FullSync, FullSync>;
 type TestOrder = OrderOperation;
 type AccountPnlAdjustment = crate::AccountAdjustmentAccountPnlOperation;
 type AccountPnlTestEngine = crate::FullSyncEngine<TestOrder, TestReport, AccountPnlAdjustment>;
+
+struct DropCopyHoldShiftPolicy<Shift> {
+    shift: Shift,
+}
+
+impl<Shift> PreTradePolicy<TestOrder, TestReport, TestAdjustment, FullSync>
+    for DropCopyHoldShiftPolicy<Shift>
+where
+    Shift: Fn() + Send + Sync,
+{
+    fn name(&self) -> &str {
+        "drop_copy_hold_shift"
+    }
+
+    fn perform_pre_trade_check(
+        &self,
+        _ctx: &PreTradeContext<<FullSync as crate::SyncMode>::StorageLockingPolicyFactory>,
+        _order: &TestOrder,
+        _mutations: &mut Mutations,
+    ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+        (self.shift)();
+        Err(Reject::new(
+            self.name(),
+            RejectScope::Order,
+            RejectCode::MissingRequiredField,
+            "drop-copy test reject",
+            "force a fatal exit after shifting the held slot".to_owned(),
+        )
+        .into())
+    }
+}
 
 // ── TestReport ────────────────────────────────────────────────────────────
 
@@ -604,7 +635,7 @@ fn seed(policy: &TestPolicy, account_id: AccountId, asset: Asset, amount: &str) 
         &mut mutations,
     )
     .expect("seed must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 }
 
 fn holdings_of(policy: &TestPolicy, account_id: AccountId, asset: &Asset) -> Option<Holdings> {
@@ -1544,7 +1575,7 @@ fn rollback_restores_holdings_to_pre_reserve_state() {
     assert_eq!(after_check.held(), ps("2000"));
     assert_eq!(after_check.available(), ps("8000"));
 
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
 
     let after_rollback = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(after_rollback.held(), ps("0"));
@@ -1583,7 +1614,7 @@ fn concurrent_second_check_rejects_when_first_already_reserved() {
     assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
 
     // Rolling back A returns the funds; B would now fit.
-    mutations_a.rollback_all();
+    let _ = mutations_a.rollback_all();
     let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(h.held(), ps("0"));
     assert_eq!(h.available(), ps("100"));
@@ -1611,7 +1642,7 @@ fn buy_partial_fill_consumes_held_settlement_and_credits_underlying() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // held(USD)=2000, available(USD)=8000
 
     let report = make_report(
@@ -1661,7 +1692,7 @@ fn sell_partial_fill_consumes_held_underlying_and_credits_settlement() {
     );
     let mut mutations = Mutations::with_capacity(2);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // held(AAPL)=10, available(AAPL)=0; incoming(USD)=2000
 
     // The fill carries the lock so the settlement leg reconciles; a sell fill
@@ -1710,7 +1741,7 @@ fn buy_fill_without_lock_price_blocks_account() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // held=2000, available=8000
 
     // Report with empty lock - no price for group.
@@ -1756,7 +1787,7 @@ fn sell_fill_without_lock_price_blocks_account() {
     );
     let mut mutations = Mutations::with_capacity(2);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // held(AAPL)=10, available(AAPL)=0, incoming(USD)=2000.
 
     // The fill arrives without its lock: the settlement leg cannot reconcile, so
@@ -1803,7 +1834,7 @@ fn sell_cancel_without_lock_price_blocks_account() {
     );
     let mut mutations = Mutations::with_capacity(2);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // held(AAPL)=10, available(AAPL)=0, incoming(USD)=2000.
 
     // The final cancel arrives without its lock: the settlement release cannot
@@ -1838,7 +1869,7 @@ fn buy_fill_with_multiple_lock_prices_blocks_account() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // held=2000, available=8000
 
     // Lock with two prices for the same group - ambiguous, must block.
@@ -1887,7 +1918,7 @@ fn buy_limit_cancel_leftover_releases_held_by_leaves_times_price() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // held=2000, available=8000
 
     let fill = make_report(
@@ -1949,7 +1980,7 @@ fn buy_market_cancel_uses_lock_price_for_release() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = make_report(
         acc,
@@ -2009,7 +2040,7 @@ fn buy_market_cancel_without_lock_price_blocks() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let cancel = make_report(acc, aapl_usd, Side::Buy, None, qty("10"), true, None);
     let blocks = report_blocks(&policy, &cancel);
@@ -2035,7 +2066,7 @@ fn buy_market_cancel_with_multiple_lock_prices_blocks() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let cancel = make_report(
         acc,
@@ -2073,7 +2104,7 @@ fn buy_market_cancel_no_fills_with_lock_price_releases_full_amount() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Cancel with the propagated lock price = 230:
     // release = 10*230 = 2300; held=0; available=7700+2300=10000.
@@ -2144,7 +2175,7 @@ fn sell_cancel_leftover_releases_underlying_held() {
     );
     let mut mutations = Mutations::with_capacity(2);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Partial fill 4@200 (lock replayed): consume(4) from held → held=6
     let fill = make_report(
@@ -2205,7 +2236,7 @@ fn final_report_with_zero_leaves_triggers_no_release() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // held=2000
 
     // Full fill, leaves=0, is_final=true: consume(2000), no release triggered
@@ -2248,7 +2279,7 @@ fn buy_fill_creates_underlying_entry_in_holdings() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // The reservation now projects the acquired base quantity as `incoming`, so
     // the AAPL slot exists carrying only `incoming`, with no available or held.
@@ -2294,7 +2325,7 @@ fn absolute_positive_sets_available() {
     let adjustment = adj(asset("USD"), Some(AdjustmentAmount::Absolute(ps("15000"))));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(h.available(), ps("15000"));
@@ -2310,7 +2341,7 @@ fn absolute_negative_sets_available() {
     let adjustment = adj(asset("USD"), Some(AdjustmentAmount::Absolute(ps("-100"))));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(h.available(), ps("-100"));
@@ -2327,7 +2358,7 @@ fn delta_positive_adds_to_available() {
     let adjustment = adj(asset("USD"), Some(AdjustmentAmount::Delta(ps("5000"))));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(h.available(), ps("15000"));
@@ -2344,7 +2375,7 @@ fn delta_negative_reduces_available() {
     let adjustment = adj(asset("USD"), Some(AdjustmentAmount::Delta(ps("-3000"))));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(h.available(), ps("7000"));
@@ -2361,7 +2392,7 @@ fn delta_below_zero_sets_negative_available() {
     let adjustment = adj(asset("USD"), Some(AdjustmentAmount::Delta(ps("-15000"))));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(h.available(), ps("-5000"));
@@ -2377,7 +2408,7 @@ fn delta_on_missing_creates_entry_from_zero() {
     let adjustment = adj(asset("EUR"), Some(AdjustmentAmount::Delta(ps("100"))));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let h = holdings_of(&policy, acc, &asset("EUR")).expect("entry must be created");
     assert_eq!(h.available(), ps("100"));
@@ -2440,7 +2471,7 @@ fn absolute_creates_entry_for_new_asset() {
     let adjustment = adj(asset("EUR"), Some(AdjustmentAmount::Absolute(ps("1000"))));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let h = holdings_of(&policy, acc, &asset("EUR")).expect("entry must be created");
     assert_eq!(h.available(), ps("1000"));
@@ -2463,7 +2494,7 @@ fn adjustment_rollback_restores_previous_state() {
     let after_adj = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(after_adj.available(), ps("15000"));
 
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
 
     let after_rollback = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(after_rollback.available(), ps("10000"));
@@ -2480,7 +2511,7 @@ fn adjustment_rollback_removes_newly_created_entry() {
 
     assert!(holdings_of(&policy, acc, &asset("EUR")).is_some());
 
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
 
     assert!(holdings_of(&policy, acc, &asset("EUR")).is_none());
 }
@@ -2502,7 +2533,7 @@ fn adjustment_rollback_restores_pruned_existing_entry() {
     // Slot was pruned because the result is zero.
     assert!(holdings_of(&policy, acc, &asset("USD")).is_none());
 
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
 
     let after_rollback =
         holdings_of(&policy, acc, &asset("USD")).expect("rollback must restore the pruned entry");
@@ -2526,7 +2557,7 @@ fn adjustment_rollback_restores_pruned_existing_entry_all_fields() {
     );
     let mut setup_mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &setup, &mut setup_mutations).expect("seed must succeed");
-    setup_mutations.commit_all();
+    let _ = setup_mutations.commit_all();
 
     // Drive all three fields to zero so the slot is pruned.
     let zeroing = all_fields_adj(
@@ -2542,7 +2573,7 @@ fn adjustment_rollback_restores_pruned_existing_entry_all_fields() {
         "slot must be pruned after all-zero adjustment"
     );
 
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
 
     let after_rollback =
         holdings_of(&policy, acc, &asset("USD")).expect("rollback must restore the pruned entry");
@@ -2676,7 +2707,7 @@ fn held_absolute_sets_held_directly() {
     );
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(h.held(), ps("3000"));
@@ -2707,7 +2738,7 @@ fn held_delta_modifies_held() {
     );
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(h.held(), ps("700"));
@@ -2726,7 +2757,7 @@ fn held_negative_value_is_allowed() {
     );
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(h.held(), ps("-200"));
@@ -2789,7 +2820,7 @@ fn incoming_absolute_sets_incoming_directly() {
     );
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(h.incoming(), ps("2000"));
@@ -2819,7 +2850,7 @@ fn incoming_delta_modifies_incoming() {
     );
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(h.incoming(), ps("700"));
@@ -2838,7 +2869,7 @@ fn incoming_negative_value_is_allowed() {
     );
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist");
     assert_eq!(h.incoming(), ps("-500"));
@@ -2904,7 +2935,7 @@ fn all_three_fields_applied_and_reported() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let entries = run_adjustment(&policy, acc, &adjustment, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     assert_eq!(entries.len(), 1);
     let entry = &entries[0];
@@ -2973,7 +3004,7 @@ fn all_three_rollback_restores_all_fields() {
     assert_eq!(h.held(), ps("900"));
     assert_eq!(h.incoming(), ps("400"));
 
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
 
     let h = holdings_of(&policy, acc, &asset("USD")).expect("must exist after rollback");
     assert_eq!(h.available(), ps("5000"));
@@ -3278,7 +3309,7 @@ fn execution_report_buy_fill_returns_charge_and_counter_outcomes() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = make_report(
         acc,
@@ -3345,7 +3376,7 @@ fn execution_report_buy_final_with_fill_and_release_merges_charge_outcome() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let final_report = make_report(
         acc,
@@ -3401,7 +3432,7 @@ fn execution_report_buy_release_with_missing_lock_price_emits_block() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let cancel = make_report(acc, aapl_usd, Side::Buy, None, qty("10"), true, None);
     let result = run_report(&policy, &cancel);
@@ -3430,7 +3461,7 @@ fn execution_report_buy_release_with_multiple_lock_prices_emits_block() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let mut lock = PreTradeLock::new();
     lock.push(DEFAULT_POLICY_GROUP_ID, px("200"));
@@ -3460,7 +3491,7 @@ fn execution_report_sell_final_release_consults_lock_for_settlement_incoming() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     assert_eq!(incoming_of(&policy, acc, "USD"), ps("2000"));
 
     // The cancel replays the lock, so the full underlying held releases and the
@@ -3593,7 +3624,7 @@ fn fill_inflow_overflow_blocks_account() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Buy fill of 1 AAPL credits 1 to AAPL.available = MAX + 1 → overflow.
     let fill = make_report(
@@ -3931,7 +3962,7 @@ fn slot_removed_when_fill_outflow_brings_all_fields_to_zero() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Final fill 25 @ 200 = 5000 notional; lock_consume = 5000 → held goes 0.
     let report = make_report(
@@ -3980,7 +4011,7 @@ fn buy_qty_zero_pre_trade_check_does_not_create_phantom_slot() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("zero-qty hold must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     assert!(
         holdings_of(&policy, acc, &asset("USD")).is_none(),
@@ -4003,7 +4034,7 @@ fn buy_volume_zero_pre_trade_check_does_not_create_phantom_slot() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("zero-volume hold must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     assert!(
         holdings_of(&policy, acc, &asset("USD")).is_none(),
@@ -4056,7 +4087,7 @@ fn hold_rollback_restores_pruned_existing_entry() {
     );
     let mut adj_mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &zeroing, &mut adj_mutations).expect("zeroing must succeed");
-    adj_mutations.commit_all();
+    let _ = adj_mutations.commit_all();
     assert!(
         holdings_of(&policy, acc, &usd).is_none(),
         "slot must be pruned after zero adjustment",
@@ -4068,7 +4099,7 @@ fn hold_rollback_restores_pruned_existing_entry() {
     // lost. The resulting `held=-200` reflects the concurrent zeroing
     // that took precedence; what matters is that the slot exists again
     // and the cumulative `available` shift was applied.
-    hold_mutations.rollback_all();
+    let _ = hold_mutations.rollback_all();
 
     let restored = holdings_of(&policy, acc, &usd).expect("rollback must recreate the pruned slot");
     assert_eq!(restored.available(), ps("200"));
@@ -4246,6 +4277,46 @@ fn hold_rollback_overflow_blocks_account_via_engine() {
     // blocked-accounts sink.
     drop(reservation);
 
+    assert_account_blocked_with_arithmetic_overflow(&engine, acc);
+}
+
+#[test]
+fn drop_copy_rollback_overflow_blocks_account_after_fatal_exit() {
+    use rust_decimal::Decimal;
+
+    let acc = account(99224418);
+    let aapl = asset("AAPL");
+    let order = make_order(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Sell,
+        TradeAmount::Quantity(qty("50")),
+        Some(px("1")),
+    );
+    let builder = crate::Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    let policy: SpotFundsPolicy<FullSync, FullSync> =
+        SpotFundsPolicy::new(settings(0), None, builder.storage_builder());
+    let holdings = policy.holdings.clone();
+    let key = (acc, aapl.clone());
+    let engine = builder
+        .pre_trade(policy)
+        .pre_trade(DropCopyHoldShiftPolicy {
+            shift: move || {
+                holdings.with_mut(key.clone(), Holdings::zero, |slot, _| {
+                    *slot = Holdings::new(PositionSize::new(Decimal::MAX), slot.held());
+                });
+            },
+        })
+        .build()
+        .expect("engine must build");
+
+    let max_minus_fifty = PositionSize::new(Decimal::MAX - Decimal::from(50));
+    seed_balance_via_engine(&engine, acc, aapl, max_minus_fifty);
+
+    let rejects = engine
+        .apply_drop_copy(order)
+        .expect_err("fatal policy reject must roll back the drop-copy hold");
+    assert_eq!(rejects[0].code, RejectCode::MissingRequiredField);
     assert_account_blocked_with_arithmetic_overflow(&engine, acc);
 }
 
@@ -4533,7 +4604,7 @@ fn hold_rollback_overflow_blocks_account_with_account_sync_storage() {
         &mut seed_mutations,
     )
     .expect("seed adjustment must succeed");
-    seed_mutations.commit_all();
+    let _ = seed_mutations.commit_all();
 
     // Reserve a Sell hold of qty=50: available = MAX - 100, held = 50, and a
     // hold-rollback closure is registered.
@@ -4578,12 +4649,12 @@ fn hold_rollback_overflow_blocks_account_with_account_sync_storage() {
         &mut bump_mutations,
     )
     .expect("bump adjustment must succeed");
-    bump_mutations.commit_all();
+    let _ = bump_mutations.commit_all();
 
     // Roll back the hold: `available + 50 = MAX + 50` overflows; the policy
     // records the overflow on the `IndexLocking`-backed blocked-accounts
     // store through the sealed adapter.
-    hold_mutations.rollback_all();
+    let _ = hold_mutations.rollback_all();
 
     let probe = make_order(
         acc,
@@ -4669,7 +4740,7 @@ fn buy_qty_zero_price_reserves_nothing_and_settles() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let result = pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // A zero-price buy owes no settlement held, but the base inflow is still
     // projected: incoming = order quantity (10), regardless of price sign.
     assert_eq!(result.account_adjustments.len(), 1);
@@ -4738,7 +4809,7 @@ fn buy_qty_zero_price_cancel_releases_nothing() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let cancel = make_report(
         acc,
@@ -4774,7 +4845,7 @@ fn buy_qty_negative_price_reserves_nothing_and_receives_cash_on_fill() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let result = pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // A negative-price buy owes no settlement held, but the base inflow is
     // still projected: incoming = order quantity (10).
     assert_eq!(result.account_adjustments.len(), 1);
@@ -4843,7 +4914,7 @@ fn buy_qty_negative_price_cancel_releases_nothing() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Fill 4 @ -50 then cancel the unfilled 6: nothing was reserved, so the
     // cancel releases nothing and leaves only the received inflow.
@@ -4896,7 +4967,7 @@ fn buy_volume_zero_price_reserves_nothing() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let result = pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     assert!(
         result.account_adjustments.is_empty(),
         "zero-price volume buy reserves no settlement (no stuck held)",
@@ -4922,7 +4993,7 @@ fn buy_volume_negative_price_projects_base_incoming() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let result = pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Only the base inflow projection is emitted: no settlement held, no
     // settlement slot, just AAPL incoming = 40.
@@ -4958,7 +5029,7 @@ fn buy_volume_negative_price_reserve_fill_lifecycle_nets_incoming_to_zero() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("40"));
 
     // Full fill of 40 @ -50: receive 40 AAPL and 40 * 50 = 2000 USD. The fill
@@ -5000,7 +5071,7 @@ fn buy_volume_negative_price_partial_fill_then_cancel_nets_incoming_to_zero() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Partial fill 16 @ -50 drains incoming by 16 (40 -> 24); receive 16 AAPL
     // and 16 * 50 = 800 USD.
@@ -5060,7 +5131,7 @@ fn sell_qty_zero_price_reserves_only_underlying() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let result = pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // Only the underlying leg is reserved (both settlement legs are zero at a
     // zero price), but the resolved zero price is still recorded as the lock:
     // every accepted sell records a lock_price.
@@ -5123,7 +5194,7 @@ fn sell_qty_zero_price_cancel_releases_underlying() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // The zero lock is mandatory on the cancel too - a sell cancel without it
     // would block the account.
@@ -5161,7 +5232,7 @@ fn sell_qty_negative_price_reserves_both_legs_and_settles() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let result = pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // BOTH legs reserved: 10 AAPL underlying and 10*50 = 500 USD settlement.
     assert_eq!(
         result.account_adjustments.len(),
@@ -5231,7 +5302,7 @@ fn sell_qty_negative_price_cancel_releases_both_legs() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Fill 4 @ -50 then cancel the unfilled 6: both legs release their
     // remainder; held returns to zero on both assets.
@@ -5291,7 +5362,7 @@ fn sell_volume_negative_price_reserves_both_legs() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let result = pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     assert_eq!(result.account_adjustments.len(), 2);
     assert_eq!(result.lock_prices.as_slice(), &[px("-50")]);
     assert_balance(&policy, acc, "AAPL", "0", "40");
@@ -5335,7 +5406,7 @@ fn sell_volume_zero_price_reserves_nothing() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let result = pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // Nothing reserved on either leg, but the resolved zero price is still
     // recorded as the lock, like every accepted sell.
     assert!(result.account_adjustments.is_empty());
@@ -5361,7 +5432,7 @@ fn buy_qty_positive_price_held_returns_to_zero_after_full_settlement() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     assert_balance(&policy, acc, "USD", "8000", "2000");
 
     let partial = make_report(
@@ -5420,7 +5491,7 @@ fn sell_volume_positive_price_reserves_underlying_held_and_settlement_incoming()
     );
     let mut mutations = Mutations::with_capacity(2);
     let result = pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // Underlying held leg plus settlement incoming projection; a priced sell
     // now records its lock.
     assert_eq!(result.account_adjustments.len(), 2);
@@ -5483,7 +5554,7 @@ fn sell_negative_price_rollback_restores_both_legs() {
 
     // Rolling back the reservation must undo BOTH legs back to their
     // pre-reservation levels.
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
     assert_balance(&policy, acc, "AAPL", "10", "0");
     assert_balance(&policy, acc, "USD", "1000", "0");
 }
@@ -5533,6 +5604,34 @@ fn sell_negative_price_settlement_insufficient_rolls_back_underlying_leg() {
     reservation.rollback();
 }
 
+#[test]
+fn partial_reservation_reject_rolls_back_the_completed_leg() {
+    let acc = account(99224419);
+    let policy = build_policy(None, None);
+    seed(&policy, acc, asset("AAPL"), "10");
+    seed(&policy, acc, asset("USD"), "100");
+    let order = make_order(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Sell,
+        TradeAmount::Quantity(qty("10")),
+        Some(px("-50")),
+    );
+    let mut mutations = Mutations::with_capacity(2);
+
+    let rejects = pre_trade_full(&policy, &order, &mut mutations)
+        .expect_err("settlement leg must reject after the underlying leg");
+    let (rejects, outcome) = rejects.into_parts();
+    assert_eq!(rejects[0].code, RejectCode::InsufficientFunds);
+    // The completed leg's bookkeeping is undone rather than reported: a reject
+    // never publishes reservation outcomes to a caller.
+    assert!(outcome.is_none());
+
+    let _ = mutations.rollback_all();
+    assert_balance(&policy, acc, "AAPL", "10", "0");
+    assert_balance(&policy, acc, "USD", "100", "0");
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Incoming projection: the acquiring leg's expected inflow is reserved into
 // the `incoming` bucket in parallel with the existing `held` outflow leg,
@@ -5563,7 +5662,7 @@ fn buy_reservation_projects_base_incoming_and_settlement_held() {
     );
     let mut mutations = Mutations::with_capacity(2);
     let result = pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Settlement held leg (USD) and base incoming projection (AAPL),
     // [settlement, base] order.
@@ -5607,7 +5706,7 @@ fn sell_reservation_projects_settlement_incoming_and_underlying_held() {
     );
     let mut mutations = Mutations::with_capacity(2);
     let result = pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Underlying held leg (AAPL) and settlement incoming projection (USD =
     // proceeds 4 * 200 = 800), [underlying, settlement] order.
@@ -5675,7 +5774,7 @@ fn buy_full_fill_drains_base_incoming_and_credits_available() {
     );
     let mut mutations = Mutations::with_capacity(2);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("10"));
 
     let fill = make_report(
@@ -5738,7 +5837,7 @@ fn buy_partial_fill_drains_base_incoming_proportionally() {
     );
     let mut mutations = Mutations::with_capacity(2);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let partial = make_report(
         acc,
@@ -5779,7 +5878,7 @@ fn sell_fill_drains_settlement_incoming_by_lock_price() {
     );
     let mut mutations = Mutations::with_capacity(2);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // proceeds projection = 10 * 200 = 2000.
     assert_eq!(incoming_of(&policy, acc, "USD"), ps("2000"));
 
@@ -5822,7 +5921,7 @@ fn buy_cancel_releases_unfilled_base_incoming() {
     );
     let mut mutations = Mutations::with_capacity(2);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Fill 4, then cancel the unfilled 6.
     let partial = make_report(
@@ -5878,7 +5977,7 @@ fn sell_cancel_releases_unfilled_settlement_incoming_by_lock_price() {
     );
     let mut mutations = Mutations::with_capacity(2);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     assert_eq!(incoming_of(&policy, acc, "USD"), ps("2000"));
 
     // Fill 4 (drains 800), cancel the unfilled 6 (releases 200 * 6 = 1200).
@@ -5939,7 +6038,7 @@ fn buy_reservation_rollback_restores_held_and_incoming() {
     assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("10"));
 
     // Rolling back must reverse BOTH the held leg and the incoming projection.
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
     assert_balance(&policy, acc, "USD", "10000", "0");
     assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("0"));
     assert!(
@@ -5967,7 +6066,7 @@ fn sell_reservation_rollback_restores_held_and_settlement_incoming() {
     assert_balance(&policy, acc, "AAPL", "0", "10");
     assert_eq!(incoming_of(&policy, acc, "USD"), ps("2000"));
 
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
     assert_balance(&policy, acc, "AAPL", "10", "0");
     assert_eq!(incoming_of(&policy, acc, "USD"), ps("0"));
     assert!(
@@ -5997,7 +6096,7 @@ fn incoming_projection_does_not_gate_any_order() {
     );
     let mut first = Mutations::with_capacity(2);
     pre_trade_full(&policy, &order, &mut first).expect("first must pass");
-    first.commit_all();
+    let _ = first.commit_all();
     // AAPL now carries incoming 10, but that must not become spendable.
     assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("10"));
 
@@ -6033,7 +6132,7 @@ fn buy_fill_zero_price_nonzero_qty_consumes_held_by_lock_price() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // USD: available=9800, held=200
 
     let fill = make_report(
@@ -6099,7 +6198,7 @@ fn buy_fill_negative_trade_price_uses_signed_not_abs() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // USD: available=9800, held=200
 
     let fill = make_report(
@@ -6275,7 +6374,7 @@ fn seed_with_avg(
         &mut mutations,
     )
     .expect("seed must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let pnl_adjustment = adj_with_realized_pnl(asset, Pnl::ZERO);
     let mut mutations = Mutations::with_capacity(1);
@@ -6287,7 +6386,7 @@ fn seed_with_avg(
         &mut mutations,
     )
     .expect("PnL seed must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 }
 
 #[test]
@@ -6302,7 +6401,7 @@ fn balance_adjustment_with_avg_sets_slot_average_and_emits_it() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let outcome = run_adjustment(&policy, acc, &adjustment, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     assert_eq!(outcome.len(), 1);
     let entry = &outcome[0];
@@ -6325,7 +6424,7 @@ fn position_adjustment_sets_quantity_average_and_emits_both() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let outcome = run_adjustment(&policy, acc, &adjustment, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     assert_eq!(outcome.len(), 1);
     assert!(outcome[0].balance.is_some());
@@ -6347,7 +6446,7 @@ fn balance_adjustment_without_avg_leaves_prior_average() {
     let adjustment = adj(asset("AAPL"), Some(AdjustmentAmount::Delta(ps("5"))));
     let mut mutations = Mutations::with_capacity(1);
     let outcome = run_adjustment(&policy, acc, &adjustment, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     assert_eq!(outcome[0].average_entry_price, Some(px("150")));
     let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
@@ -6363,7 +6462,7 @@ fn balance_adjustment_to_flat_clears_average_and_prunes_zero_slot() {
     let adjustment = adj(asset("AAPL"), Some(AdjustmentAmount::Absolute(ps("0"))));
     let mut mutations = Mutations::with_capacity(1);
     let outcome = run_adjustment(&policy, acc, &adjustment, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     assert_eq!(outcome.len(), 1);
     assert!(outcome[0].average_entry_price.is_none());
@@ -6387,7 +6486,7 @@ fn held_adjustment_to_net_flat_clears_average() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let outcome = run_adjustment(&policy, acc, &adjustment, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     assert_eq!(outcome.len(), 1);
     assert!(outcome[0].average_entry_price.is_none());
@@ -6411,7 +6510,7 @@ fn held_only_adjustment_emits_no_average() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let outcome = run_adjustment(&policy, acc, &adjustment, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Held-only request: no balance, so no average is surfaced and no PnL.
     assert!(outcome[0].average_entry_price.is_none());
@@ -6437,7 +6536,7 @@ fn buy_fill_emits_average_entry_price_and_no_pnl() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = make_report(
         acc,
@@ -6495,7 +6594,7 @@ fn fill_without_account_currency_halts_position_pnl() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = make_report(
         acc,
@@ -6578,7 +6677,7 @@ fn fill_without_account_currency_halts_position_pnl() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &close_order, &mut mutations).expect("close must reserve");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let close = make_report(
         acc,
         instr("AAPL", "USD"),
@@ -6636,7 +6735,7 @@ fn opening_fill_zero_fee_without_account_currency_does_not_halt_account_pnl() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // An explicit zero fee is an economic no-op: the opening fill still halts
     // the position ledger because its cost basis needs an account currency,
@@ -6686,7 +6785,7 @@ fn non_position_touching_fill_without_account_currency_preserves_tracking() {
     let seed = adj_with_realized_pnl(asset("AAPL"), pnl_value("7"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = make_report(
         acc,
@@ -6738,7 +6837,7 @@ fn quote_equals_account_currency_tracks_without_market_data() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = make_report(
         acc,
@@ -6786,7 +6885,7 @@ fn fresh_fx_tracks_average_and_realized_pnl_in_account_currency() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &buy, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let buy_fill = make_report(
         acc,
         aapl_usd.clone(),
@@ -6828,7 +6927,7 @@ fn fresh_fx_tracks_average_and_realized_pnl_in_account_currency() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &sell, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let sell_fill = make_report(
         acc,
         aapl_usd,
@@ -6923,7 +7022,7 @@ fn shared_asset_holding_tracks_two_quote_currencies_in_account_currency() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &usd_sell_order, &mut mutations).expect("USD sell must reserve");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let usd_sell = report(aapl_usd, Side::Sell, "120", "4");
     run_report_with_currency(&policy, &usd_sell, asset("EUR"));
 
@@ -6936,7 +7035,7 @@ fn shared_asset_holding_tracks_two_quote_currencies_in_account_currency() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &gbp_sell_order, &mut mutations).expect("GBP sell must reserve");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let gbp_sell = report(aapl_gbp, Side::Sell, "90", "6");
     let result = run_report_with_currency(&policy, &gbp_sell, asset("EUR"));
 
@@ -6980,7 +7079,7 @@ fn stale_fx_quote_is_used_for_accounting() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = make_report(
         acc,
@@ -7024,7 +7123,7 @@ fn missing_fx_on_opening_fill_keeps_pnl_active_until_basis_is_needed() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = make_report(
         acc,
@@ -7088,7 +7187,7 @@ fn missing_fx_on_opening_fill_keeps_pnl_active_until_basis_is_needed() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &close_order, &mut mutations).expect("close must reserve");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let close = make_report(
         acc,
         instr("AAPL", "USD"),
@@ -7979,7 +8078,7 @@ fn fee_report_delta_overflow_halts_position_and_account_pnl() {
     let adjustment = adj_with_realized_pnl(asset("AAPL"), Pnl::new(Decimal::MIN));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("seed must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = fill_with_fee(
         acc,
@@ -8029,7 +8128,7 @@ fn fee_only_position_pnl_overflow_still_updates_account_pnl() {
     let adjustment = adj_with_realized_pnl(asset("AAPL"), Pnl::new(Decimal::MIN));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("seed must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let report = fee_only_report(acc, aapl_usd, Side::Buy, "0", false, money_fee("1", "USD"));
     let result = run_report_with_currency(&policy, &report, asset("USD"));
@@ -8064,7 +8163,7 @@ fn fill_position_pnl_overflow_still_updates_account_pnl() {
     let adjustment = adj_with_realized_pnl(asset("AAPL"), Pnl::new(Decimal::MIN));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("seed must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = fill_with_fee(acc, aapl_usd, Side::Buy, "100", "1", money_fee("1", "USD"));
     let result = run_report_with_currency(&policy, &fill, asset("USD"));
@@ -8683,7 +8782,7 @@ fn committed_account_pnl_assertion_keeps_its_block() {
         },
     );
 
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let blocked = control
         .invalidate_provenance(token)
@@ -9264,7 +9363,7 @@ fn halted_position_with_basis_still_contributes_to_active_account_pnl() {
     };
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let sell = make_report(
         acc,
         aapl_usd,
@@ -9326,11 +9425,11 @@ fn halted_position_with_basis_still_contributes_to_active_account_pnl() {
     };
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &force, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let force_pnl = adj_with_realized_pnl(asset("AAPL"), Pnl::ZERO);
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &force_pnl, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let resumed = run_report_with_currency(&policy, &sell, asset("USD"));
     assert!(resumed
         .account_adjustments
@@ -9361,11 +9460,11 @@ fn missing_cost_basis_is_sticky_until_position_force_set() {
     };
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let seed_pnl = adj_with_realized_pnl(asset("AAPL"), Pnl::ZERO);
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed_pnl, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let sell = make_report(
         acc,
@@ -9430,11 +9529,11 @@ fn missing_cost_basis_is_sticky_until_position_force_set() {
     };
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &force, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let force_pnl = adj_with_realized_pnl(asset("AAPL"), Pnl::ZERO);
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &force_pnl, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let resumed = run_report_with_currency(&policy, &sell, asset("USD"));
     assert!(resumed
         .account_adjustments
@@ -9459,11 +9558,11 @@ fn missing_cost_basis_is_sticky_until_position_force_set() {
     };
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &flatten, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let reopen = adj(asset("AAPL"), Some(AdjustmentAmount::Absolute(ps("10"))));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &reopen, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let flatten_position = adj_with_avg(
         asset("AAPL"),
@@ -9472,7 +9571,7 @@ fn missing_cost_basis_is_sticky_until_position_force_set() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &flatten_position, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let reopen_position = adj_with_avg(
         asset("AAPL"),
         Some(AdjustmentAmount::Absolute(ps("10"))),
@@ -9480,7 +9579,7 @@ fn missing_cost_basis_is_sticky_until_position_force_set() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &reopen_position, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let rehalted = run_report_with_currency(&policy, &sell, asset("USD"));
     assert!(rehalted
@@ -9892,7 +9991,7 @@ fn profitable_close_with_missing_foreign_fee_fx_has_no_partial_pnl() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = fill_with_fee(
         acc,
@@ -9960,7 +10059,7 @@ fn rolling_back_position_force_set_restores_prior_halt() {
         Some(Pnl::ZERO)
     );
 
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
     assert_eq!(
         holdings_of(&policy, acc, &asset("AAPL"))
             .expect("AAPL slot must exist")
@@ -9986,7 +10085,7 @@ fn sell_fill_against_seeded_long_realizes_pnl() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     // Reservation moved 10 AAPL available -> held; owned still 10 @ 100.
 
     let fill = make_report(
@@ -10045,7 +10144,7 @@ fn second_fill_with_same_settlement_asset_accumulates_position_accounting() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &first_order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let first_fill = make_report(
         acc,
         aapl_usd.clone(),
@@ -10072,7 +10171,7 @@ fn second_fill_with_same_settlement_asset_accumulates_position_accounting() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &second_order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     let second_fill = make_report(
         acc,
         aapl_usd,
@@ -10118,7 +10217,7 @@ fn short_open_then_buy_to_close_realizes_pnl() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = make_report(
         acc,
@@ -10173,7 +10272,7 @@ fn exact_close_fill_resets_average_to_none_and_keeps_realized_pnl() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = make_report(
         acc,
@@ -10234,7 +10333,7 @@ fn reservation_then_cancel_leaves_average_and_pnl_untouched() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // A final report with no fill and a leftover quantity cancels the
     // reservation; the priced sell's cancel must replay its lock.
@@ -10280,7 +10379,7 @@ fn adjustment_rollback_restores_prior_average() {
     assert_eq!(after_forward.avg_entry_price(), Some(px("200")));
     assert_eq!(after_forward.available(), ps("15"));
 
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
 
     let after_rollback = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
     assert_eq!(after_rollback.avg_entry_price(), Some(px("100")));
@@ -10298,13 +10397,13 @@ fn balance_adjustment_force_sets_realized_pnl_and_emits_delta_and_absolute() {
     let seed_pnl = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed_pnl, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Force-set realized PnL to 50: delta = 50 - 30 = 20, absolute = 50.
     let adjustment = adj_with_realized_pnl(asset("AAPL"), pnl_value("50"));
     let mut mutations = Mutations::with_capacity(1);
     let outcome = run_adjustment(&policy, acc, &adjustment, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     assert_eq!(outcome.len(), 1);
     let pnl = outcome[0]
@@ -10328,12 +10427,12 @@ fn metadata_only_realized_pnl_adjustment_sets_and_emits_delta() {
     let seed_pnl = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed_pnl, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let adjustment = adj_with_realized_pnl(asset("AAPL"), pnl_value("50"));
     let mut mutations = Mutations::with_capacity(1);
     let outcome = run_adjustment(&policy, acc, &adjustment, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     assert_eq!(outcome.len(), 1);
     assert!(outcome[0].balance.is_none());
@@ -10358,14 +10457,14 @@ fn balance_adjustment_without_realized_pnl_emits_no_pnl_and_leaves_it() {
     let seed_pnl = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed_pnl, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // A balance-only adjustment that does not force-set realized PnL must leave
     // the booked PnL untouched and emit no realized-PnL outcome.
     let adjustment = adj(asset("AAPL"), Some(AdjustmentAmount::Delta(ps("5"))));
     let mut mutations = Mutations::with_capacity(1);
     let outcome = run_adjustment(&policy, acc, &adjustment, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     assert!(outcome[0].realized_pnl.is_none());
     let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
@@ -10380,7 +10479,7 @@ fn adjustment_rollback_restores_realized_pnl_to_prior() {
     let seed_pnl = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed_pnl, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Force-set realized PnL to 50, then roll back without committing.
     let adjustment = adj_with_realized_pnl(asset("AAPL"), pnl_value("50"));
@@ -10389,7 +10488,7 @@ fn adjustment_rollback_restores_realized_pnl_to_prior() {
     let after_forward = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
     assert_eq!(after_forward.realized_pnl(), Some(pnl_value("50")));
 
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
 
     // Realized PnL is restored from the prior snapshot (30), symmetric to the
     // average entry price.
@@ -10406,7 +10505,7 @@ fn adjustment_rollback_restores_untracked_realized_pnl_to_none() {
     let seed = adj(asset("AAPL"), Some(AdjustmentAmount::Absolute(ps("10"))));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     assert_eq!(
         holdings_of(&policy, acc, &asset("AAPL"))
             .expect("must exist")
@@ -10425,7 +10524,7 @@ fn adjustment_rollback_restores_untracked_realized_pnl_to_none() {
         Some(pnl_value("25")),
     );
 
-    adj_mutations.rollback_all();
+    let _ = adj_mutations.rollback_all();
 
     // The snapshot restore returns the slot to the untracked `None` state, not
     // to `Some(0)` (which a delta-based reversal would have produced).
@@ -10448,7 +10547,7 @@ fn realized_pnl_halts_after_rollback_restores_missing_initial_value() {
     );
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed_position, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     assert_eq!(
         holdings_of(&policy, acc, &asset("AAPL"))
             .expect("must exist")
@@ -10460,7 +10559,7 @@ fn realized_pnl_halts_after_rollback_restores_missing_initial_value() {
     let force = adj_with_realized_pnl(asset("AAPL"), pnl_value("25"));
     let mut adj_mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &force, &mut adj_mutations);
-    adj_mutations.rollback_all();
+    let _ = adj_mutations.rollback_all();
     assert_eq!(
         holdings_of(&policy, acc, &asset("AAPL"))
             .expect("must exist")
@@ -10480,7 +10579,7 @@ fn realized_pnl_halts_after_rollback_restores_missing_initial_value() {
     );
     let mut pt_mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut pt_mutations).expect("pretrade must succeed");
-    pt_mutations.commit_all();
+    let _ = pt_mutations.commit_all();
     let fill = make_report(
         acc,
         aapl_usd,
@@ -10522,7 +10621,7 @@ fn metadata_only_average_and_pnl_roll_back_to_prior_values() {
     let seed = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let adjustment = TestAdjustment {
         asset: asset("AAPL"),
@@ -10546,7 +10645,7 @@ fn metadata_only_average_and_pnl_roll_back_to_prior_values() {
     assert_eq!(after_forward.avg_entry_price(), Some(px("150")));
     assert_eq!(after_forward.realized_pnl(), Some(pnl_value("50")));
 
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
 
     let after_rollback = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
     assert_eq!(after_rollback.avg_entry_price(), Some(px("100")));
@@ -10563,7 +10662,7 @@ fn adjustment_rollback_preserves_newer_realized_pnl() {
     let seed = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Force-set realized PnL to 50 but hold the rollback. The snapshot captured
     // for rollback is the prior value, 30.
@@ -10589,7 +10688,7 @@ fn adjustment_rollback_preserves_newer_realized_pnl() {
     );
     let mut pt_mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut pt_mutations).expect("pretrade must succeed");
-    pt_mutations.commit_all();
+    let _ = pt_mutations.commit_all();
     let fill = make_report(
         acc,
         aapl_usd,
@@ -10617,7 +10716,7 @@ fn adjustment_rollback_preserves_newer_realized_pnl() {
     // The rollback may restore its snapshots only while the complete slot still
     // equals the adjustment-asserted slot. The fill changed both quantity and
     // realized PnL, so the newer slot must survive intact.
-    adj_mutations.rollback_all();
+    let _ = adj_mutations.rollback_all();
     let after = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
     assert_eq!(after.realized_pnl(), Some(pnl_value("170")));
     assert_eq!(after.available(), ps("6"));
@@ -10657,7 +10756,7 @@ fn adjustment_rollback_preserves_newer_average_entry_price() {
     );
     let mut pretrade_mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut pretrade_mutations).expect("pretrade must succeed");
-    pretrade_mutations.commit_all();
+    let _ = pretrade_mutations.commit_all();
     let fill = make_report(
         acc,
         aapl_usd,
@@ -10681,7 +10780,7 @@ fn adjustment_rollback_preserves_newer_average_entry_price() {
         Some(px("175"))
     );
 
-    adjustment_mutations.rollback_all();
+    let _ = adjustment_mutations.rollback_all();
     let after = holdings_of(&policy, acc, &asset("AAPL")).expect("AAPL slot must exist");
     assert_eq!(after.avg_entry_price(), Some(px("175")));
     assert_eq!(after.available(), ps("20"));
@@ -10705,7 +10804,7 @@ fn buy_fill_adding_to_long_recomputes_weighted_average() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = make_report(
         acc,
@@ -10757,7 +10856,7 @@ fn sell_fill_flipping_long_to_short_realizes_and_reopens_at_price() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("pretrade must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = make_report(
         acc,
@@ -10810,7 +10909,7 @@ fn batch_force_setting_realized_pnl_then_rejected_rolls_back_to_prior() {
     let seed_pnl = adj_with_realized_pnl(asset("AAPL"), pnl_value("30"));
     let mut mutations = Mutations::with_capacity(1);
     let _ = run_adjustment(&policy, acc, &seed_pnl, &mut mutations);
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     // Force-set realized PnL to 50, then drive the same closure to reject via an
     // out-of-range balance bound so the whole adjustment is rolled back.
@@ -10829,7 +10928,7 @@ fn batch_force_setting_realized_pnl_then_rejected_rolls_back_to_prior() {
     assert!(rejected.is_err());
 
     // Roll back the force-set adjustment: realized PnL returns to the prior 30.
-    mutations.rollback_all();
+    let _ = mutations.rollback_all();
     let aapl = holdings_of(&policy, acc, &asset("AAPL")).expect("must exist");
     assert_eq!(aapl.realized_pnl(), Some(pnl_value("30")));
 }
@@ -10985,7 +11084,7 @@ fn track_only_still_rejects_arithmetic_overflow_without_panicking() {
     );
     let mut seed_mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut seed_mutations).expect("seed must succeed");
-    seed_mutations.commit_all();
+    let _ = seed_mutations.commit_all();
 
     let order = make_order(
         acc,
@@ -11123,7 +11222,7 @@ fn track_only_dry_run_still_rejects_arithmetic_overflow_without_panicking() {
     );
     let mut seed_mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut seed_mutations).expect("seed must succeed");
-    seed_mutations.commit_all();
+    let _ = seed_mutations.commit_all();
 
     let order = make_order(
         acc,
@@ -11170,7 +11269,7 @@ fn buy_volume_price_divergent_full_fill_nets_incoming_and_held_to_zero() {
     );
     let mut mutations = Mutations::with_capacity(2);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("10"));
     assert_balance(&policy, acc, "USD", "9000", "1000");
 
@@ -11242,7 +11341,7 @@ fn buy_volume_price_divergent_partial_then_fill_nets_incoming_and_held_to_zero()
     );
     let mut mutations = Mutations::with_capacity(2);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("10"));
 
     // Partial fill 6 @ 90 (leaves 4, non-final): drains base incoming by 6.
@@ -11305,7 +11404,7 @@ fn buy_volume_price_divergent_partial_then_cancel_nets_incoming_and_held_to_zero
     );
     let mut mutations = Mutations::with_capacity(2);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     assert_eq!(incoming_of(&policy, acc, "AAPL"), ps("10"));
 
     // Partial fill 6 @ 90 (leaves 4, non-final): drains base incoming by 6, and
@@ -11371,7 +11470,7 @@ fn sell_volume_price_divergent_full_fill_nets_held_and_incoming_to_zero() {
     );
     let mut mutations = Mutations::with_capacity(2);
     pre_trade_full(&policy, &order, &mut mutations).expect("must pass");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
     assert_balance(&policy, acc, "AAPL", "0", "10");
     assert_eq!(incoming_of(&policy, acc, "USD"), ps("1000"));
 
@@ -11535,7 +11634,7 @@ fn account_id_is_not_leaked_into_fill_overflow_block() {
     );
     let mut mutations = Mutations::with_capacity(1);
     pre_trade_check(&policy, &order, &mut mutations).expect("must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let fill = make_report(
         acc,
@@ -11608,7 +11707,7 @@ fn account_id_is_not_leaked_into_fee_realized_pnl_overflow_block() {
     let adjustment = adj_with_realized_pnl(asset("AAPL"), Pnl::new(Decimal::MIN));
     let mut mutations = Mutations::with_capacity(1);
     apply_adj(&policy, acc, &adjustment, &mut mutations).expect("seed must succeed");
-    mutations.commit_all();
+    let _ = mutations.commit_all();
 
     let report = fee_only_report(acc, aapl_usd, Side::Buy, "0", false, money_fee("1", "USD"));
     let result = run_report_with_currency(&policy, &report, asset("USD"));

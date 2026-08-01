@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package custompolicy
 
@@ -30,8 +30,8 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
-func newNativeRejectListOrNil(source []reject.Reject) *C.OpenPitPretradeRejectList {
-	return (*C.OpenPitPretradeRejectList)(unsafe.Pointer(convert.NewNativeRejectListOrNil(source)))
+func newNativeRejectList(source []reject.Reject) *C.OpenPitPretradeRejectList {
+	return (*C.OpenPitPretradeRejectList)(unsafe.Pointer(convert.NewNativeRejectList(source)))
 }
 
 func newNativeAccountBlockListOrNil(

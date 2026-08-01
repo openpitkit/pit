@@ -28,6 +28,7 @@ use crate::domain::{parse_u64_bigint, resolve_instrument_id, BigIntLike, Instrum
 use crate::error::{make_error_with, ErrorKind};
 use crate::marketdata::{InstrumentLike, JsInstrument};
 use crate::param::ids::JsInstrumentId;
+use crate::policy::CallbackErrorScope;
 
 /// Unit used to measure one settlement delay.
 #[wasm_bindgen(js_name = SettlementUnit)]
@@ -172,6 +173,9 @@ impl JsSettlementScheme {
 }
 
 /// Caller-owned registry of stable instrument identities and attributes.
+///
+/// Every method reads or writes the shared book, so every one of them throws
+/// `InternalError` once an engine defect has poisoned the module instance.
 #[wasm_bindgen(js_name = ReferenceBook)]
 pub struct JsReferenceBook {
     inner: ReferenceBook,
@@ -196,6 +200,7 @@ impl JsReferenceBook {
     /// Registers `instrument` under the next available instrument id.
     #[wasm_bindgen(js_name = register)]
     pub fn register(&mut self, instrument: InstrumentLike) -> Result<JsInstrumentId, JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument = JsInstrument::coerce(instrument.into())?;
         self.inner
             .register(instrument)
@@ -210,6 +215,7 @@ impl JsReferenceBook {
         instrument: InstrumentLike,
         instrument_id: InstrumentIdLike,
     ) -> Result<JsInstrumentId, JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument = JsInstrument::coerce(instrument.into())?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         self.inner
@@ -221,6 +227,7 @@ impl JsReferenceBook {
     /// Resolves `instrument` to a registered id, or returns `undefined`.
     #[wasm_bindgen(js_name = resolve)]
     pub fn resolve(&self, instrument: InstrumentLike) -> Result<Option<JsInstrumentId>, JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument = JsInstrument::coerce(instrument.into())?;
         Ok(self
             .inner
@@ -235,6 +242,7 @@ impl JsReferenceBook {
         instrument_id: InstrumentIdLike,
         settlement_scheme: &JsSettlementScheme,
     ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         self.inner
             .set_settlement_scheme(instrument_id, settlement_scheme.inner())
@@ -247,6 +255,7 @@ impl JsReferenceBook {
         &mut self,
         instrument_id: InstrumentIdLike,
     ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         self.inner
             .clear_settlement_scheme(instrument_id)
@@ -259,6 +268,7 @@ impl JsReferenceBook {
         &self,
         instrument_id: InstrumentIdLike,
     ) -> Result<Option<JsSettlementScheme>, JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         let instrument_id = resolve_instrument_id(instrument_id.into())?;
         self.inner
             .settlement_scheme(instrument_id)

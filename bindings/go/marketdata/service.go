@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 // Package marketdata exposes the Go binding for the OpenPit market-data
 // service: a registry of instruments and their latest quotes, shared between
@@ -24,8 +24,10 @@ import (
 	"errors"
 	"runtime"
 	"runtime/cgo"
+	"sync"
 
 	"go.openpit.dev/openpit/internal/callback"
+	"go.openpit.dev/openpit/internal/mdhandle"
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
@@ -33,6 +35,9 @@ import (
 
 // Errors returned by Service.Get, mirroring the SDK MarketDataError variants.
 var (
+	// ErrServiceClosed reports an operation attempted after Close released this
+	// service handle.
+	ErrServiceClosed = errors.New("market-data service already closed")
 	// ErrUnknownInstrument reports that the requested instrument is not
 	// registered with the service.
 	ErrUnknownInstrument = errors.New("unknown instrument")
@@ -45,6 +50,10 @@ var (
 	// ErrInvalidQuoteResolution reports that a quote-resolution value is not
 	// one of the documented selectors.
 	ErrInvalidQuoteResolution = errors.New("invalid quote resolution")
+	// ErrAccountGroupResolution reports that the caller's AccountInfo could not
+	// supply the reading account's group, so no bucket could be selected on its
+	// behalf.
+	ErrAccountGroupResolution = errors.New("account group resolution failed")
 )
 
 // ErrNoTarget is returned by PushFor and PushForPatch when both the account and
@@ -59,7 +68,17 @@ var ErrNoTarget = errors.New("no target accounts or groups specified")
 // A service is a shared, reference-counted registry: Clone hands out an
 // additional handle to the same underlying service so that, for example, a feed
 // and a policy can operate on identical state.
-type Service struct{ handle native.MarketDataService }
+//
+// Lifecycle and concurrency: the caller owns this handle and releases it with
+// Close. Close is idempotent and may be called concurrently with itself and
+// with any other method on the same value. Methods with an error result return
+// ErrServiceClosed after Close; other methods return their zero value or do
+// nothing. Concurrent use of the underlying service itself additionally
+// requires FullSync, chosen at builder time.
+type Service struct {
+	mu     sync.RWMutex
+	handle native.MarketDataService
+}
 
 func newServiceFromHandle(handle native.MarketDataService) *Service {
 	return &Service{handle: handle}
@@ -70,24 +89,60 @@ func newServiceFromHandle(handle native.MarketDataService) *Service {
 //
 // Idempotency: safe to call more than once; subsequent calls are no-ops.
 func (s *Service) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.handle == nil {
+		return
+	}
 	native.DestroyMarketDataService(s.handle)
 	s.handle = nil
 }
 
 // Clone returns a new handle referring to the same market-data service. The
-// returned handle must be released independently with Close.
-func (s *Service) Clone() *Service {
-	return newServiceFromHandle(native.MarketDataServiceClone(s.handle))
+// returned handle must be released independently with Close. Returns
+// ErrServiceClosed after Close: a nil *Service would only surface later, as a
+// nil-pointer dereference far from the closed handle that caused it.
+func (s *Service) Clone() (*Service, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return nil, ErrServiceClosed
+	}
+	return newServiceFromHandle(native.MarketDataServiceClone(s.handle)), nil
 }
 
-// Handle returns the underlying native handle.
-func (s *Service) Handle() native.MarketDataService {
-	return s.handle
+// cloneHandle returns a caller-owned native handle to the same service. Unlike
+// the old borrowed Handle escape hatch, this handle remains valid if
+// Service.Close runs concurrently. It stays off the public API because
+// releasing it needs internal/native; mdhandle carries it to the policy
+// builders of this module.
+func (s *Service) cloneHandle() (native.MarketDataService, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return nil, ErrServiceClosed
+	}
+	return native.MarketDataServiceClone(s.handle), nil
+}
+
+func init() {
+	mdhandle.Clone = func(service any) (native.MarketDataService, error) {
+		s, ok := service.(*Service)
+		if !ok {
+			return nil, mdhandle.ErrUnknownService
+		}
+		return s.cloneHandle()
+	}
 }
 
 // Register registers instrument with the service-wide default TTL and returns
 // its auto-assigned id.
 func (s *Service) Register(instrument param.Instrument) (InstrumentID, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return InstrumentID{}, ErrServiceClosed
+	}
 	status, id, err := native.MarketDataServiceRegister(s.handle, instrument.Handle())
 	runtime.KeepAlive(instrument)
 	switch status {
@@ -106,6 +161,11 @@ func (s *Service) RegisterWithTTL(
 	instrument param.Instrument,
 	ttl QuoteTTL,
 ) (InstrumentID, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return InstrumentID{}, ErrServiceClosed
+	}
 	status, id, err := native.MarketDataServiceRegisterWithTTL(
 		s.handle,
 		instrument.Handle(),
@@ -128,6 +188,11 @@ func (s *Service) RegisterWithID(
 	instrument param.Instrument,
 	id InstrumentID,
 ) (InstrumentID, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return InstrumentID{}, ErrServiceClosed
+	}
 	status, outID, err := native.MarketDataServiceRegisterWithID(
 		s.handle,
 		instrument.Handle(),
@@ -159,6 +224,11 @@ func (s *Service) RegisterWithIDAndTTL(
 	id InstrumentID,
 	ttl QuoteTTL,
 ) (InstrumentID, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return InstrumentID{}, ErrServiceClosed
+	}
 	status, outID, err := native.MarketDataServiceRegisterWithIDAndTTL(
 		s.handle,
 		instrument.Handle(),
@@ -195,6 +265,11 @@ func (s *Service) PushFor(
 	accountIDs []param.AccountID,
 	accountGroupIDs []param.AccountGroupID,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return ErrServiceClosed
+	}
 	nativeAccounts := make([]native.ParamAccountID, len(accountIDs))
 	for i, a := range accountIDs {
 		nativeAccounts[i] = a.Handle()
@@ -233,6 +308,11 @@ func (s *Service) PushForPatch(
 	accountIDs []param.AccountID,
 	accountGroupIDs []param.AccountGroupID,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return ErrServiceClosed
+	}
 	nativeAccounts := make([]native.ParamAccountID, len(accountIDs))
 	for i, a := range accountIDs {
 		nativeAccounts[i] = a.Handle()
@@ -262,6 +342,11 @@ func (s *Service) PushForPatch(
 
 // SetInstrumentTTL updates the TTL of an already-registered instrument.
 func (s *Service) SetInstrumentTTL(instrumentID InstrumentID, ttl QuoteTTL) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return ErrServiceClosed
+	}
 	status := native.MarketDataServiceSetInstrumentTTL(
 		s.handle,
 		instrumentID.Handle(),
@@ -276,6 +361,11 @@ func (s *Service) SetInstrumentTTL(instrumentID InstrumentID, ttl QuoteTTL) erro
 // ClearInstrumentTTL removes the per-instrument TTL override for instrumentID,
 // reverting to the service-wide default.
 func (s *Service) ClearInstrumentTTL(instrumentID InstrumentID) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return ErrServiceClosed
+	}
 	status := native.MarketDataServiceClearInstrumentTTL(s.handle, instrumentID.Handle())
 	if status == native.MarketDataRegisterStatusOk {
 		return nil
@@ -286,11 +376,21 @@ func (s *Service) ClearInstrumentTTL(instrumentID InstrumentID) error {
 // SetAccountTTL sets a service-wide TTL override for all instruments when
 // read by accountID.
 func (s *Service) SetAccountTTL(accountID param.AccountID, ttl QuoteTTL) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return
+	}
 	native.MarketDataServiceSetAccountTTL(s.handle, accountID.Handle(), ttl.Handle())
 }
 
 // ClearAccountTTL removes the per-account TTL override.
 func (s *Service) ClearAccountTTL(accountID param.AccountID) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return
+	}
 	native.MarketDataServiceClearAccountTTL(s.handle, accountID.Handle())
 }
 
@@ -298,12 +398,22 @@ func (s *Service) ClearAccountTTL(accountID param.AccountID) {
 // read by accountGroupID. Pass [param.DefaultAccountGroup] to target the
 // service-level default-group TTL.
 func (s *Service) SetAccountGroupTTL(accountGroupID param.AccountGroupID, ttl QuoteTTL) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return
+	}
 	native.MarketDataServiceSetAccountGroupTTL(s.handle, accountGroupID.Handle(), ttl.Handle())
 }
 
 // ClearAccountGroupTTL removes the per-group TTL override. Pass
 // [param.DefaultAccountGroup] to target the service-level default-group TTL.
 func (s *Service) ClearAccountGroupTTL(accountGroupID param.AccountGroupID) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return
+	}
 	native.MarketDataServiceClearAccountGroupTTL(s.handle, accountGroupID.Handle())
 }
 
@@ -313,6 +423,11 @@ func (s *Service) SetInstrumentAccountTTL(
 	accountID param.AccountID,
 	ttl QuoteTTL,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return ErrServiceClosed
+	}
 	status := native.MarketDataServiceSetInstrumentAccountTTL(
 		s.handle,
 		instrumentID.Handle(),
@@ -331,6 +446,11 @@ func (s *Service) ClearInstrumentAccountTTL(
 	instrumentID InstrumentID,
 	accountID param.AccountID,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return ErrServiceClosed
+	}
 	status := native.MarketDataServiceClearInstrumentAccountTTL(
 		s.handle,
 		instrumentID.Handle(),
@@ -350,6 +470,11 @@ func (s *Service) SetInstrumentAccountGroupTTL(
 	accountGroupID param.AccountGroupID,
 	ttl QuoteTTL,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return ErrServiceClosed
+	}
 	status := native.MarketDataServiceSetInstrumentAccountGroupTTL(
 		s.handle,
 		instrumentID.Handle(),
@@ -369,6 +494,11 @@ func (s *Service) ClearInstrumentAccountGroupTTL(
 	instrumentID InstrumentID,
 	accountGroupID param.AccountGroupID,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return ErrServiceClosed
+	}
 	status := native.MarketDataServiceClearInstrumentAccountGroupTTL(
 		s.handle,
 		instrumentID.Handle(),
@@ -383,11 +513,21 @@ func (s *Service) ClearInstrumentAccountGroupTTL(
 // Clear clears the stored quote for instrumentID. It is a no-op if
 // instrumentID is not registered.
 func (s *Service) Clear(instrumentID InstrumentID) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return
+	}
 	native.MarketDataServiceClear(s.handle, instrumentID.Handle())
 }
 
 // Push publishes a quote for instrumentID, replacing the entire stored snapshot.
 func (s *Service) Push(instrumentID InstrumentID, quote Quote) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return ErrServiceClosed
+	}
 	status, err := native.MarketDataServicePush(s.handle, instrumentID.Handle(), quote.Handle())
 	switch status {
 	case native.MarketDataRegisterStatusOk:
@@ -402,6 +542,11 @@ func (s *Service) Push(instrumentID InstrumentID, quote Quote) error {
 // PushPatch publishes a partial update for instrumentID, merging it into the
 // stored snapshot.
 func (s *Service) PushPatch(instrumentID InstrumentID, quote Quote) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return ErrServiceClosed
+	}
 	status, err := native.MarketDataServicePushPatch(s.handle, instrumentID.Handle(), quote.Handle())
 	switch status {
 	case native.MarketDataRegisterStatusOk:
@@ -420,6 +565,11 @@ func (s *Service) PushByInstrument(
 	instrument param.Instrument,
 	quote Quote,
 ) (InstrumentID, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return InstrumentID{}, ErrServiceClosed
+	}
 	id, err := native.MarketDataServicePushByInstrument(
 		s.handle,
 		instrument.Handle(),
@@ -438,6 +588,11 @@ func (s *Service) PushByInstrumentPatch(
 	instrument param.Instrument,
 	quote Quote,
 ) (InstrumentID, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return InstrumentID{}, ErrServiceClosed
+	}
 	id, err := native.MarketDataServicePushByInstrumentPatch(
 		s.handle,
 		instrument.Handle(),
@@ -457,27 +612,48 @@ func (s *Service) PushByInstrumentPatch(
 // the per-group bucket. resolution controls the fallback chain.
 //
 // The returned option is set only when a usable quote was found. An
-// unavailable, expired, or unknown instrument yields optional.None.
+// unavailable, expired, or unknown instrument yields optional.None, and so does
+// a failing accountInfo. Use Get when the reason matters: it reports a failed
+// group resolution as ErrAccountGroupResolution instead of hiding it.
 func (s *Service) GetOptional(
 	instrumentID InstrumentID,
 	accountID param.AccountID,
 	accountInfo AccountInfo,
 	resolution QuoteResolution,
 ) optional.Option[Quote] {
-	accountInfoHandle := cgo.NewHandle(accountInfo)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return optional.None[Quote]()
+	}
+	status, quote, _ := s.get(instrumentID, accountID, accountInfo, resolution)
+	if status != native.MarketDataGetStatusFound {
+		return optional.None[Quote]()
+	}
+	return optional.Some(newQuoteFromHandle(quote))
+}
+
+// get performs the native read, keeping the caller's AccountInfo reachable for
+// the duration of the call and returning whatever the account-group resolver
+// failed with.
+func (s *Service) get(
+	instrumentID InstrumentID,
+	accountID param.AccountID,
+	accountInfo AccountInfo,
+	resolution QuoteResolution,
+) (native.MarketDataGetStatus, native.MarketDataQuote, any) {
+	state := &resolverState{info: accountInfo}
+	stateHandle := cgo.NewHandle(state)
 	status, quote := native.MarketDataServiceGet(
 		s.handle,
 		instrumentID.Handle(),
 		accountID.Handle(),
 		accountGroupResolverFnAddr(),
-		callback.NewUserDataFromHandle(accountInfoHandle),
+		callback.NewUserDataFromHandle(stateHandle),
 		resolution,
 	)
-	accountInfoHandle.Delete()
-	if status != native.MarketDataGetStatusFound {
-		return optional.None[Quote]()
-	}
-	return optional.Some(newQuoteFromHandle(quote))
+	stateHandle.Delete()
+	return status, quote, state.failure
 }
 
 // Get reads the latest quote for instrumentID with account-aware resolution,
@@ -485,6 +661,12 @@ func (s *Service) GetOptional(
 // registered, ErrQuoteUnavailable when it is registered but holds no usable
 // quote under the given resolution, and ErrQuoteExpired when the selected quote
 // aged past TTL.
+//
+// When accountInfo cannot answer AccountGroup - it panics - the read fails with
+// ErrAccountGroupResolution (an *AccountGroupResolutionError carrying the panic
+// value). A failed resolution is never degraded into "the account has no
+// group", which would move the read onto the default-group bucket and bypass
+// every group-scoped rule.
 //
 // On ErrQuoteExpired, the returned Quote is the stale quote selected by the
 // core service. Other errors return a zero Quote.
@@ -494,16 +676,12 @@ func (s *Service) Get(
 	accountInfo AccountInfo,
 	resolution QuoteResolution,
 ) (Quote, error) {
-	accountInfoHandle := cgo.NewHandle(accountInfo)
-	status, quote := native.MarketDataServiceGet(
-		s.handle,
-		instrumentID.Handle(),
-		accountID.Handle(),
-		accountGroupResolverFnAddr(),
-		callback.NewUserDataFromHandle(accountInfoHandle),
-		resolution,
-	)
-	accountInfoHandle.Delete()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return Quote{}, ErrServiceClosed
+	}
+	status, quote, failure := s.get(instrumentID, accountID, accountInfo, resolution)
 	switch status {
 	case native.MarketDataGetStatusFound:
 		return newQuoteFromHandle(quote), nil
@@ -511,6 +689,8 @@ func (s *Service) Get(
 		return Quote{}, ErrUnknownInstrument
 	case native.MarketDataGetStatusQuoteExpired:
 		return newQuoteFromHandle(quote), ErrQuoteExpired
+	case native.MarketDataGetStatusAccountGroupFailed:
+		return Quote{}, newAccountGroupResolutionError(failure)
 	case native.MarketDataGetStatusError:
 		return Quote{}, ErrInvalidQuoteResolution
 	default:
@@ -521,6 +701,11 @@ func (s *Service) Get(
 // Resolve resolves instrument to its registered id. The boolean result is true
 // only when the instrument is registered by name.
 func (s *Service) Resolve(instrument param.Instrument) (InstrumentID, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.handle == nil {
+		return InstrumentID{}, false
+	}
 	id, ok := native.MarketDataServiceResolve(s.handle, instrument.Handle())
 	runtime.KeepAlive(instrument)
 	if !ok {

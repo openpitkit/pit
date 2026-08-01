@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Market-Data-Pricing.md
+// Source: https://wiki.openpit.dev/Market-Data-Pricing/
 //
 // Compiling mirror of the C++ snippet published on the Market-Data-Pricing wiki
 // page.  Each TEST runs the same user code shown in the corresponding C++
@@ -60,9 +60,10 @@ using openpit::pretrade::RejectCode;
 //------------------------------------------------------------------------------
 // Pricing Market Orders
 
-// Mirrors the "Pricing Market Orders" C++ subsection of Market-Data-Pricing.md:
-// book-top pricing, per-instrument slippage override, and the BookTop
-// no-fallback rejection when the ask is absent from the latest quote.
+// Mirrors the "Pricing Market Orders" C++ subsection of the
+// Market-Data-Pricing wiki page: book-top pricing, per-instrument slippage
+// override, and the BookTop no-fallback rejection when the ask is absent from
+// the latest quote.
 TEST(MarketDataPricingWiki, BookTopPricingAndMarkUnavailableReject) {
   // A shared market-data service feeds the policy's market-order pricing.
   EngineBuilder builder(SyncPolicy::None);

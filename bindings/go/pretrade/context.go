@@ -13,12 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 // Package pretrade provides pre-trade risk checking types and interfaces.
 package pretrade
 
 import (
+	"go.openpit.dev/openpit/internal/mutation"
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
@@ -26,11 +27,31 @@ import (
 )
 
 // Context carries engine-provided context passed to policy callbacks.
-type Context struct{ handle native.PretradeContext }
+//
+// The context is non-owning and callback-scoped: it borrows engine state that
+// is valid only for the duration of the hook that received it. Retaining the
+// context or using it after that hook has returned is undefined.
+type Context struct {
+	handle native.PretradeContext
+}
 
 // NewContextFromHandle creates a Context from a native handle.
 func NewContextFromHandle(handle native.PretradeContext) Context {
 	return Context{handle: handle}
+}
+
+// IsDropCopy reports whether ordinary policy rejects are non-enforcing for the
+// current operation.
+func (c Context) IsDropCopy() bool {
+	return native.PretradeContextIsDropCopy(c.handle)
+}
+
+// RecordDropCopyStartMutation registers an atomic start-stage mutation for the
+// current drop-copy operation. It returns an error outside an active drop-copy
+// callback. Apply tentative state before registering it; commit finalizes that
+// state, while rollback must reverse it even if commit was not reached.
+func (c Context) RecordDropCopyStartMutation(commit, rollback func()) error {
+	return mutation.RecordDropCopyStartMutation(c.handle, commit, rollback)
 }
 
 // AccountControl returns the account-control handle bound to this main-stage
@@ -44,7 +65,9 @@ func NewContextFromHandle(handle native.PretradeContext) Context {
 // for deferred blocking); using it afterwards is unspecified. Its memory is
 // reclaimed by the garbage collector; callers do not manage its lifetime.
 func (c Context) AccountControl() (*reject.AccountControl, bool) {
-	control := reject.NewAccountControlFromHandle(native.PretradeContextGetAccountControl(c.handle))
+	control := reject.NewAccountControlFromHandle(
+		native.PretradeContextGetAccountControl(c.handle),
+	)
 	return control, control != nil
 }
 

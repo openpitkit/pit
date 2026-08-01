@@ -111,29 +111,7 @@ If you need only the release C runtime library:
 cargo build -p openpit-ffi --release
 ```
 
-## Engine
-
-### Overview
-
-The engine evaluates an order through a deterministic pre-trade pipeline:
-
-- `openpit_engine_start_pre_trade(...)` runs start-stage policies and creates a
-  deferred request
-- `openpit_pretrade_pre_trade_request_execute(...)` runs main-stage check
-  policies
-- `openpit_engine_execute_pre_trade(...)` runs the start and main stages in a
-  single call
-- `openpit_pretrade_pre_trade_reservation_commit(...)` applies reserved state
-- `openpit_pretrade_pre_trade_reservation_rollback(...)` reverts reserved state
-- `openpit_engine_apply_execution_report(...)` updates post-trade policy state
-- `openpit_engine_apply_account_adjustment(...)` validates and applies account
-  adjustments
-
-Start-stage policies aggregate rejects from all registered policies. Main-stage
-policies aggregate rejects and run rollback mutations in reverse order when any
-reject is produced.
-
-Built-in policies:
+## What Is Inside
 
 - [Spot Funds](https://wiki.openpit.dev/Spot-Funds/) - per-account
   solvency gate over spendable funds.
@@ -145,27 +123,26 @@ Built-in policies:
   \- fat-finger caps on quantity and notional.
 - [P&L Kill Switch](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
   \- halt an account when realized P&L breaches bounds.
-- plus your own via the [policy SDK](https://wiki.openpit.dev/Policy-API/).
+- [Custom policies](https://wiki.openpit.dev/Policy-API/) against the
+  [C API](https://docs.openpit.dev/c-api/) - the primary integration model.
+- [Account Blocking](https://wiki.openpit.dev/Account-Blocking/),
+  [Account Groups](https://wiki.openpit.dev/Account-Groups/),
+  [Account Adjustments](https://wiki.openpit.dev/Account-Adjustments/), and
+  [Balance Reconciliation](https://wiki.openpit.dev/Balance-Reconciliation/).
+- [Drop Copy](https://wiki.openpit.dev/Pre-trade-Pipeline/#drop-copy) and
+  [Market Data](https://wiki.openpit.dev/Market-Data/) through
+  `openpit_create_marketdata_service(...)`.
+- [Threading Contract](https://wiki.openpit.dev/Threading-Contract/) - the
+  consumer owns the contract on the SDK handle.
+- [Rejects and errors](https://wiki.openpit.dev/Errors/) with
+  [stable reject codes](https://wiki.openpit.dev/Reject-Codes/); out-pointer
+  messages are read with `openpit_shared_string_view()` and released with
+  `openpit_destroy_shared_string()`.
 
-The primary integration model is to build project-specific policies against the
-public C API: [the C API docs](https://docs.openpit.dev/c-api/).
+## Quick Start
 
-Two types of rejections are supported: a full kill switch for the account and a
-rejection of only the current request. Kill switches are intended for
-algorithmic trading where automatic order submission must be halted until the
-situation is analyzed.
-
-Built-in policies that maintain state across calls use the SDK's [Storage](https://wiki.openpit.dev/Storage/)
-abstraction internally. The runtime library handles the necessary memory
-synchronization for policy state; the C consumer is responsible only for the
-threading contract on the SDK handle.
-
-Policies that need live prices (such as spot funds) read quotes from a
-market-data service built with `openpit_create_marketdata_builder(...)` and
-updated through the `openpit_marketdata_service_*` functions; one service handle
-can be shared between a quote feed and the engine.
-
-## Usage
+The pipeline itself is described on the
+[Pre-trade Pipeline](https://wiki.openpit.dev/Pre-trade-Pipeline/) page.
 
 <!-- Test mirror: none; C snippets are intentionally not mirrored. -->
 ```c
@@ -177,7 +154,7 @@ can be shared between a quote feed and the engine.
 
 #include "openpit.h"
 
-static int report_last_error(const char *context) {
+static int report_failure(const char *context) {
     fprintf(stderr, "%s failed\n", context);
     return 1;
 }
@@ -208,7 +185,7 @@ static int make_quantity(
                 .scale = scale},
             out,
             NULL)) {
-        return report_last_error("openpit_create_param_quantity");
+        return report_failure("openpit_create_param_quantity");
     }
     return 0;
 }
@@ -225,7 +202,7 @@ static int make_volume(
                 .scale = scale},
             out,
             NULL)) {
-        return report_last_error("openpit_create_param_volume");
+        return report_failure("openpit_create_param_volume");
     }
     return 0;
 }
@@ -238,7 +215,7 @@ static int make_price(int64_t mantissa, int32_t scale, OpenPitParamPrice *out) {
                 .scale = scale},
             out,
             NULL)) {
-        return report_last_error("openpit_create_param_price");
+        return report_failure("openpit_create_param_price");
     }
     return 0;
 }
@@ -251,7 +228,7 @@ static int make_pnl(int64_t mantissa, int32_t scale, OpenPitParamPnl *out) {
                 .scale = scale},
             out,
             NULL)) {
-        return report_last_error("openpit_create_param_pnl");
+        return report_failure("openpit_create_param_pnl");
     }
     return 0;
 }
@@ -264,7 +241,7 @@ static int make_fee(int64_t mantissa, int32_t scale, OpenPitParamFee *out) {
                 .scale = scale},
             out,
             NULL)) {
-        return report_last_error("openpit_create_param_fee");
+        return report_failure("openpit_create_param_fee");
     }
     return 0;
 }
@@ -400,7 +377,7 @@ int main(void) {
      */
     engine = openpit_engine_builder_build(builder, NULL, &error);
     if (engine == NULL) {
-        report_last_error("openpit_engine_builder_build");
+        report_failure("openpit_engine_builder_build");
         if (error != NULL) {
             openpit_destroy_shared_string(error);
             error = NULL;
@@ -459,7 +436,7 @@ int main(void) {
 
     /* 6. If the order was sent successfully, commit the reservation. */
     if (reservation == NULL) {
-        report_last_error(
+        report_failure(
             "openpit_pretrade_pre_trade_request_execute: no rejects and no reservation");
         goto cleanup;
     }
@@ -540,10 +517,10 @@ cleanup:
         openpit_destroy_pretrade_pre_trade_request(request);
     }
     if (execute_rejects != NULL) {
-        openpit_pretrade_destroy_reject_list(execute_rejects);
+        openpit_destroy_pretrade_reject_list(execute_rejects);
     }
     if (start_rejects != NULL) {
-        openpit_pretrade_destroy_reject_list(start_rejects);
+        openpit_destroy_pretrade_reject_list(start_rejects);
     }
     if (post_trade_result != NULL) {
         openpit_destroy_post_trade_result(post_trade_result);
@@ -571,28 +548,6 @@ those outcomes describe state changes that have already been committed.
 
 For the full type and ownership reference, use the C manual:
 [the C API docs](https://docs.openpit.dev/c-api/).
-
-## Errors
-
-Business rejects are returned through `OpenPitPretradeRejectList*` and
-related APIs such as `openpit_engine_start_pre_trade(...)` and
-`openpit_pretrade_pre_trade_request_execute(...)`.
-
-Input validation errors and API misuse are reported through two channels:
-
-- thread-local: call `openpit_get_last_error()` after a function returns a failure
-  status
-- out-pointer: pass `OpenPitSharedString **out_error` where supported; read the
-  message with `openpit_shared_string_view()`, then release with
-  `openpit_destroy_shared_string()`
-- read `OpenPitPretradeRejectCode` for stable machine-readable business reject categories
-- use the C docs for ownership and lifetime rules of every returned pointer
-
-The example above uses both channels:
-
-- `report_last_error(...)` for APIs that only use `openpit_get_last_error()`
-- `report_out_error(...)` for APIs that expose `OpenPitSharedString **out_error`
-- `print_reject(...)` and `print_reject_list(...)` for business-level rejects
 
 ## Local Testing
 

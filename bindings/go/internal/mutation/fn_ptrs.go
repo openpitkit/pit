@@ -13,16 +13,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package mutation
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../../internal/native
+#cgo CFLAGS: -I${SRCDIR}/../native
 #include "openpit.h"
 
-extern void pitMutationCommit(void* user_data);
-extern void pitMutationRollback(void* user_data);
+extern bool pitMutationCommit(
+	void* user_data,
+	OpenPitSharedString** out_error
+);
+extern bool pitMutationRollback(
+	void* user_data,
+	OpenPitSharedString** out_error
+);
 extern void pitMutationFree(void* user_data);
 
 static OpenPitMutationFn openpit_mutation_commit_fn = pitMutationCommit;

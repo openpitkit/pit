@@ -24,7 +24,7 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
-func TestNewNativeRejectListOrNilReplacesInvalidScope(t *testing.T) {
+func TestNewNativeRejectListReplacesInvalidScope(t *testing.T) {
 	input := reject.New(
 		reject.CodeRiskLimitExceeded,
 		"custom-policy",
@@ -33,9 +33,9 @@ func TestNewNativeRejectListOrNilReplacesInvalidScope(t *testing.T) {
 		reject.Scope(255),
 	)
 
-	list := NewNativeRejectListOrNil([]reject.Reject{input})
+	list := NewNativeRejectList([]reject.Reject{input})
 	if list == nil {
-		t.Fatal("NewNativeRejectListOrNil() = nil, want fallback reject")
+		t.Fatal("NewNativeRejectList() = nil, want fallback reject")
 	}
 	defer native.DestroyPretradeRejectList(list)
 	if got := native.PretradeRejectListLen(list); got != 1 {
@@ -60,7 +60,7 @@ func TestNewNativeRejectListOrNilReplacesInvalidScope(t *testing.T) {
 	}
 }
 
-func TestNewNativeRejectListOrNilReplacesWholeBatchOnInvalidScope(t *testing.T) {
+func TestNewNativeRejectListReplacesWholeBatchOnInvalidScope(t *testing.T) {
 	valid := reject.New(
 		reject.CodeRiskLimitExceeded,
 		"custom-policy",
@@ -76,9 +76,9 @@ func TestNewNativeRejectListOrNilReplacesWholeBatchOnInvalidScope(t *testing.T) 
 		reject.Scope(255),
 	)
 
-	list := NewNativeRejectListOrNil([]reject.Reject{valid, invalid})
+	list := NewNativeRejectList([]reject.Reject{valid, invalid})
 	if list == nil {
-		t.Fatal("NewNativeRejectListOrNil() = nil, want fallback reject")
+		t.Fatal("NewNativeRejectList() = nil, want fallback reject")
 	}
 	defer native.DestroyPretradeRejectList(list)
 	if got := native.PretradeRejectListLen(list); got != 1 {
@@ -88,5 +88,17 @@ func TestNewNativeRejectListOrNilReplacesWholeBatchOnInvalidScope(t *testing.T) 
 	got := reject.NewFromHandle(native.PretradeRejectListGet(list, 0))
 	if got.Code != reject.CodeSystemUnavailable || got.Policy != "openpit.callback" {
 		t.Fatalf("fallback reject = %#v", got)
+	}
+}
+
+func TestNewNativeRejectListAllocatesEmptySuccessList(t *testing.T) {
+	list := NewNativeRejectList(nil)
+	if list == nil {
+		t.Fatal("NewNativeRejectList(nil) = nil, want allocated empty list")
+	}
+	defer native.DestroyPretradeRejectList(list)
+
+	if got := native.PretradeRejectListLen(list); got != 0 {
+		t.Fatalf("PretradeRejectListLen() = %d, want 0", got)
 	}
 }

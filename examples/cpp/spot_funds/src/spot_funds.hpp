@@ -58,7 +58,8 @@ inline constexpr const char *kScenarioOrderPrice = "2000";
 inline constexpr const char *kScenarioOrderQty = "30";
 
 // Derived amounts used only in the narration. One buy's notional (qty * price)
-// and what stays available after the first buy's funds are held.
+// and what stays available once the first buy's funds are held - the fill
+// spends the held amount, so that figure still stands after settlement.
 inline constexpr int kOrderNotional = 60'000;      // qty * price
 inline constexpr int kAvailableAfterBuy1 = 40'000; // seed - notional
 
@@ -81,7 +82,7 @@ struct FillResult {
 };
 
 //------------------------------------------------------------------------------
-// buildEngine wires a limit-only engine with the SpotFunds policy.
+// BuildEngine wires a limit-only engine with the SpotFunds policy.
 // OrderValidation is registered first so the engine refuses malformed orders
 // before SpotFunds sees them. SpotFunds is not given WithMarketOrders, so
 // market orders (no limit price) are rejected with UnsupportedOrderType - this
@@ -93,7 +94,7 @@ struct FillResult {
   return builder.Build();
 }
 
-// seedFunds sets the account's available settlement balance to an absolute
+// SeedFunds sets the account's available settlement balance to an absolute
 // amount. An absolute adjustment overwrites the balance (unlike a relative
 // delta), so it reads as "set available USD to funds". SpotFunds has no
 // initial-balance builder option; the balance is established through the
@@ -124,7 +125,7 @@ inline void SeedFunds(const ::openpit::Engine &engine,
   }
 }
 
-// buildOrder assembles a BUY limit order for the scenario instrument. A real
+// BuildOrder assembles a BUY limit order for the scenario instrument. A real
 // strategy builds this from a signal and current market data.
 [[nodiscard]] inline ::openpit::model::Order
 BuildOrder(::openpit::param::AccountId account) {
@@ -143,14 +144,10 @@ BuildOrder(::openpit::param::AccountId account) {
   return order;
 }
 
-// placeOrder runs the pre-trade check for an order and, on accept, commits the
-// reservation. It returns the committed reservation's pre-trade lock (a
-// detached snapshot) so the caller can later attach it to the matching fill; on
-// reject it returns no lock and the rejects.
-//
-// The reservation wrapper does not expose its lock snapshot directly, so this
-// reconstructs the equivalent lock: one record under the default policy group
-// at the reservation price.
+// PlaceOrder runs the pre-trade check for an order and, on accept, commits the
+// reservation. It returns that reservation's pre-trade lock - an owned snapshot
+// detached from the reservation - so the caller can later attach it to the
+// matching fill; on reject it returns no lock and the rejects.
 [[nodiscard]] inline PlaceResult
 PlaceOrder(const ::openpit::Engine &engine,
            const ::openpit::model::Order &order) {
@@ -163,23 +160,20 @@ PlaceOrder(const ::openpit::Engine &engine,
     return out;
   }
 
-  // Build the lock the engine assigned to this reservation, then commit.
-  // Commit moves the reserved settlement funds from available to held; Rollback
-  // would release them instead.
-  ::openpit::pretrade::PreTradeLock lock;
-  lock.Push(::openpit::param::DefaultPolicyGroupId,
-            ::openpit::param::Price::FromString(kScenarioOrderPrice));
+  // Read the lock the engine assigned to this reservation, then commit. The
+  // snapshot is detached, so it outlives the reservation it came from. Commit
+  // moves the reserved settlement funds from available to held; Rollback would
+  // release them instead.
+  out.lock = result.reservation->Lock();
   result.reservation->Commit();
-
-  out.lock = std::move(lock);
   return out;
 }
 
-// buildFillReport assembles a full, final execution report for a buy order.
+// BuildFillReport assembles a full, final execution report for a buy order.
 // Carrying the pre-trade lock is what ties the fill back to the reservation:
-// SpotFunds reads the lock to find which held funds to settle. The lock is
-// attached when the report is applied (applyFill), because the C++ model layer
-// intentionally does not surface the fill's lock pointer.
+// SpotFunds reads the lock to find which held funds to settle. This helper
+// leaves model::Fill::lock unset; ApplyFill sets it on its own copy of the
+// report, so a report can be built before its reservation's lock is known.
 [[nodiscard]] inline ::openpit::model::ExecutionReport
 BuildFillReport(::openpit::param::AccountId account) {
   ::openpit::model::ExecutionReportOperation op;
@@ -211,10 +205,9 @@ BuildFillReport(::openpit::param::AccountId account) {
   return report;
 }
 
-// applyFill feeds a completed execution report to the engine, carrying the
+// ApplyFill feeds a completed execution report to the engine, carrying the
 // pre-trade lock captured when the order's reservation was committed so
 // SpotFunds matches the fill to that reservation and settles the held amount.
-//
 [[nodiscard]] inline FillResult
 ApplyFill(const ::openpit::Engine &engine,
           const ::openpit::model::ExecutionReport &report,
@@ -229,8 +222,19 @@ ApplyFill(const ::openpit::Engine &engine,
   return out;
 }
 
+// EnableTrackOnly switches the SpotFunds policy to global track-only mode
+// without rebuilding the engine. TrackOnly drops the insufficient-funds gate:
+// the pre-trade check always records a reservation, so holdings keep being
+// tracked and available funds are allowed to go negative. Failures - an unknown
+// policy name above all - surface as a thrown openpit::Error.
+inline void EnableTrackOnly(const ::openpit::Engine &engine) {
+  namespace policies = ::openpit::pretrade::policies;
+  engine.Configure().SpotFundsGlobalLimitMode(
+      policies::SpotFundsPolicyName, policies::SpotFundsLimitMode::TrackOnly);
+}
+
 //------------------------------------------------------------------------------
-// containsCode reports whether the rejects include the given business code.
+// ContainsCode reports whether the rejects include the given business code.
 [[nodiscard]] inline bool
 ContainsCode(const std::vector<::openpit::reject::Reject> &rejects,
              ::openpit::reject::RejectCode want) {
@@ -242,7 +246,7 @@ ContainsCode(const std::vector<::openpit::reject::Reject> &rejects,
   return false;
 }
 
-// describe renders rejects as "reason (details)" pairs for a one-line message.
+// Describe renders rejects as "reason (details)" pairs for a one-line message.
 [[nodiscard]] inline std::string
 Describe(const std::vector<::openpit::reject::Reject> &rejects) {
   if (rejects.empty()) {

@@ -36,9 +36,30 @@ class Mutations {
   Mutations(Mutations&&) = delete;
   Mutations& operator=(Mutations&&) = delete;
 
-  // Registers one commit/rollback pair. Exactly one callback runs when the
-  // request is finalized. The callbacks may capture ordinary C++ state by
-  // value; their storage is released after execution or collector drop.
+  // Applies tentative state before registering one commit/rollback pair.
+  // Ordinary pre-trade finalization calls one callback. A drop-copy operation
+  // registers the same pair and finalizes it the same way, from `Commit()` or
+  // `Rollback()` on the operation. A rollback also runs for pairs whose commit
+  // was not reached, because their tentative state was already applied. Their
+  // storage is released after execution or collector drop.
+  //
+  // Neither callback has the right to fail: by the time a finalizer runs the
+  // decision is already made and the state it finalizes was applied eagerly, so
+  // there is nothing left to compensate. A callback that throws anyway never
+  // stops the batch, and it is reported on two independent channels. Its
+  // original exception is rethrown from the finalizing call - `Commit()` or
+  // `Rollback()` on the reservation or the drop-copy operation - once every
+  // remaining callback of the batch has run. Separately, and never as a failure
+  // of that void call, the engine arms its kill switch, because its own
+  // bookkeeping is now in an unknown state: a mutation pushed here belongs to a
+  // custom policy whose state reach the engine cannot bound, so EVERY account
+  // is blocked, not only the order's own. Nothing reports that block to the
+  // finalizing caller - it surfaces when the next pre-trade call is rejected
+  // with `pretrade::RejectCode::SystemUnavailable`, and an operator clears it
+  // with `accounts::Accounts::UnblockAll()`, which leaves accounts and account
+  // groups blocked individually intact. The implicit rollback of an unresolved
+  // reservation or operation arms the same kill switch, but a destructor cannot
+  // rethrow, so there the block is the only channel left.
   template <typename Commit, typename Rollback>
   void Push(Commit&& commit, Rollback&& rollback) {
     auto* callbacks =
@@ -69,19 +90,25 @@ class Mutations {
     std::function<void()> rollback;
   };
 
-  static void CommitTrampoline(void* userData) noexcept {
+  static bool CommitTrampoline(void* userData,
+                               OpenPitSharedString** outError) noexcept {
     try {
       static_cast<Callbacks*>(userData)->commit();
+      return true;
     } catch (...) {
-      ::openpit::detail::CaptureCurrentCallbackException();
+      ::openpit::detail::CaptureCurrentCallbackException(outError);
+      return false;
     }
   }
 
-  static void RollbackTrampoline(void* userData) noexcept {
+  static bool RollbackTrampoline(void* userData,
+                                 OpenPitSharedString** outError) noexcept {
     try {
       static_cast<Callbacks*>(userData)->rollback();
+      return true;
     } catch (...) {
-      ::openpit::detail::CaptureCurrentCallbackException();
+      ::openpit::detail::CaptureCurrentCallbackException(outError);
+      return false;
     }
   }
 

@@ -20,7 +20,9 @@
  *
  * Exposes the {@link Mutation} a custom policy returns from a decision to
  * register a side effect the engine commits or rolls back with the surrounding
- * pre-trade transaction.
+ * pre-trade transaction or drop-copy operation.
+ * Start-stage policies register drop-copy-only work with
+ * `ctx.recordDropCopyStartMutation(mutation)`.
  *
  * This is a JS-only helper (it carries closures the engine invokes); there is
  * no wasm class behind it.

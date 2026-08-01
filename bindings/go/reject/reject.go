@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package reject
 
@@ -35,6 +35,13 @@ const (
 
 // Code is a stable machine-readable reject code.
 type Code native.PretradeRejectCode
+
+// IsEvaluationFailure reports whether the code means a policy could not
+// evaluate the historical order. Evaluation failures abort an atomic drop-copy
+// operation without applying any of its effects.
+func (c Code) IsEvaluationFailure() bool {
+	return native.PretradeRejectCodeIsEvaluationFailure(native.PretradeRejectCode(c))
+}
 
 // Predefined reject codes used by built-in policies and available to custom policies.
 const (

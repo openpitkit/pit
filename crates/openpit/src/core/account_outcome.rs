@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 use crate::core::PolicyGroupId;
 use crate::param::{AccountId, Asset, Pnl, PositionSize, Price};
@@ -98,7 +98,10 @@ pub enum PnlHaltReason {
 /// Policies return `Vec<AccountOutcomeEntry>` without group information;
 /// the engine attaches the policy's [`PolicyGroupId`] when assembling the final
 /// [`AccountAdjustmentBatchResult`] (for batch hooks) or
-/// [`crate::pretrade::PreTradeReservation::account_adjustments`] (for pre-trade).
+/// [`crate::pretrade::PreTradeReservation::account_adjustments`] (for regular
+/// pre-trade) or
+/// [`crate::pretrade::DropCopyOperation::account_adjustments`] (for
+/// an applied drop-copy operation).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountOutcomeEntry {
     /// Asset this outcome refers to.

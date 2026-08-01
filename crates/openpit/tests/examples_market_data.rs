@@ -13,17 +13,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 // Mirrors public Rust examples from:
-// - ../pit.wiki/Market-Data.md
-// - ../pit.wiki/Market-Data-TTL.md
-// - ../pit.wiki/Market-Data-Pricing.md
+// - https://wiki.openpit.dev/Market-Data/
+// - https://wiki.openpit.dev/Market-Data-TTL/
+// - https://wiki.openpit.dev/Market-Data-Pricing/
 // If this file changes, update every linked documentation snippet.
 
 #[test]
 fn example_wiki_market_data_register_push_get() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Market-Data.md - Pushing and Reading Quotes
+    // Source: https://wiki.openpit.dev/Market-Data/
+    // - Pushing and Reading Quotes
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{AccountGroupId, AccountId, Asset, Price};
     use openpit::{Engine, Instrument, Quote, QuoteResolution, QuoteTtl};
@@ -66,7 +67,8 @@ fn example_wiki_market_data_register_push_get() -> Result<(), Box<dyn std::error
 
 #[test]
 fn example_wiki_market_data_replace_vs_patch() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Market-Data.md - Replace Versus Patch
+    // Source: https://wiki.openpit.dev/Market-Data/
+    // - Replace Versus Patch
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{AccountGroupId, AccountId, Asset, Price};
     use openpit::{Engine, Instrument, Quote, QuoteResolution, QuoteTtl};
@@ -106,7 +108,7 @@ fn example_wiki_market_data_replace_vs_patch() -> Result<(), Box<dyn std::error:
 #[test]
 fn example_wiki_market_data_finite_ttl_hides_stale_quote() -> Result<(), Box<dyn std::error::Error>>
 {
-    // Wiki example: pit.wiki/Market-Data-TTL.md - Quote Freshness
+    // Source: https://wiki.openpit.dev/Market-Data-TTL/ - Quote Freshness
     // Keep this example in sync with the matching wiki example.
     use std::time::Duration;
 
@@ -148,7 +150,7 @@ fn example_wiki_market_data_finite_ttl_hides_stale_quote() -> Result<(), Box<dyn
 
 #[test]
 fn example_wiki_market_data_clear_then_recover() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Market-Data.md - Clearing a Quote
+    // Source: https://wiki.openpit.dev/Market-Data/ - Clearing a Quote
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{AccountGroupId, AccountId, Asset, Price};
     use openpit::{Engine, Instrument, Quote, QuoteResolution, QuoteTtl};
@@ -188,7 +190,8 @@ fn example_wiki_market_data_clear_then_recover() -> Result<(), Box<dyn std::erro
 #[test]
 fn example_wiki_market_data_market_orders_book_top_override(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Market-Data-Pricing.md - Pricing Market Orders
+    // Source: https://wiki.openpit.dev/Market-Data-Pricing/
+    // - Pricing Market Orders
     // Keep this example in sync with the matching wiki example.
     use std::sync::Arc;
 
@@ -291,7 +294,8 @@ fn example_wiki_market_data_market_orders_book_top_override(
 
 #[test]
 fn example_wiki_market_data_push_for_fan_out() -> Result<(), Box<dyn std::error::Error>> {
-    // Used in: pit.wiki/Market-Data.md - Targeted Fan-Out: push for
+    // Source: https://wiki.openpit.dev/Market-Data/
+    // - Targeted Fan-Out: push for
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{AccountGroupId, AccountId, Asset, Price};
     use openpit::{Engine, Instrument, Quote, QuoteResolution, QuoteTtl};

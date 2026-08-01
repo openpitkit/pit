@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
 
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/param"
@@ -42,6 +43,8 @@ var (
 	// ErrInvalidSettlementUnit reports a settlement scheme with an unsupported
 	// unit value.
 	ErrInvalidSettlementUnit = errors.New("reference book: invalid settlement unit")
+	// ErrReferenceBookClosed reports an operation attempted after Close.
+	ErrReferenceBookClosed = errors.New("reference book: already closed")
 )
 
 // ReferenceBookRegistrationErrorKind identifies a reference-book conflict.
@@ -130,7 +133,15 @@ func UniformSettlementScheme(n uint64) SettlementScheme {
 
 // ReferenceBook stores stable instrument identities and typed per-instrument
 // reference attributes independently from market data.
-type ReferenceBook struct{ handle native.ReferenceBook }
+//
+// Lifecycle and concurrency: the caller owns this handle and releases it with
+// Close. Close is idempotent and may be called concurrently with itself and
+// with any other method on the same value. Methods with an error result return
+// ErrReferenceBookClosed after Close; Resolve returns its zero result.
+type ReferenceBook struct {
+	mu     sync.RWMutex
+	handle native.ReferenceBook
+}
 
 // NewReferenceBook creates an empty instrument reference book.
 func NewReferenceBook() *ReferenceBook {
@@ -140,12 +151,22 @@ func NewReferenceBook() *ReferenceBook {
 // Close releases this reference-book handle. It is safe to call more than
 // once; subsequent calls have no effect.
 func (b *ReferenceBook) Close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.handle == nil {
+		return
+	}
 	native.DestroyReferenceBook(b.handle)
 	b.handle = nil
 }
 
 // Register assigns the next available ID to instrument.
 func (b *ReferenceBook) Register(instrument param.Instrument) (InstrumentID, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.handle == nil {
+		return InstrumentID{}, ErrReferenceBookClosed
+	}
 	status, id, err := native.ReferenceBookRegister(b.handle, instrument.Handle())
 	runtime.KeepAlive(instrument)
 	switch status {
@@ -168,6 +189,11 @@ func (b *ReferenceBook) RegisterWithID(
 	instrument param.Instrument,
 	id InstrumentID,
 ) (InstrumentID, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.handle == nil {
+		return InstrumentID{}, ErrReferenceBookClosed
+	}
 	status, outID, err := native.ReferenceBookRegisterWithID(
 		b.handle,
 		instrument.Handle(),
@@ -194,6 +220,11 @@ func (b *ReferenceBook) RegisterWithID(
 
 // Resolve returns instrument's registered ID and whether it is present.
 func (b *ReferenceBook) Resolve(instrument param.Instrument) (InstrumentID, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.handle == nil {
+		return InstrumentID{}, false
+	}
 	id, ok := native.ReferenceBookResolve(b.handle, instrument.Handle())
 	runtime.KeepAlive(instrument)
 	return newInstrumentIDFromHandle(id), ok
@@ -202,6 +233,11 @@ func (b *ReferenceBook) Resolve(instrument param.Instrument) (InstrumentID, bool
 // SetSettlementScheme sets settlement configuration for a registered
 // instrument.
 func (b *ReferenceBook) SetSettlementScheme(id InstrumentID, scheme SettlementScheme) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.handle == nil {
+		return ErrReferenceBookClosed
+	}
 	raw, err := scheme.toNative()
 	if err != nil {
 		return err
@@ -219,6 +255,11 @@ func (b *ReferenceBook) SetSettlementScheme(id InstrumentID, scheme SettlementSc
 // ClearSettlementScheme removes settlement configuration from a registered
 // instrument.
 func (b *ReferenceBook) ClearSettlementScheme(id InstrumentID) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.handle == nil {
+		return ErrReferenceBookClosed
+	}
 	status, err := native.ReferenceBookClearSettlementScheme(b.handle, id.Handle())
 	if status == native.ReferenceBookStatusOK {
 		return nil
@@ -233,6 +274,11 @@ func (b *ReferenceBook) ClearSettlementScheme(id InstrumentID) error {
 // result mean that id is registered but has no scheme. An unknown id returns
 // ErrReferenceBookUnknownInstrument.
 func (b *ReferenceBook) SettlementScheme(id InstrumentID) (SettlementScheme, bool, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.handle == nil {
+		return SettlementScheme{}, false, ErrReferenceBookClosed
+	}
 	status, raw, ok, err := native.ReferenceBookGetSettlementScheme(b.handle, id.Handle())
 	switch status {
 	case native.ReferenceBookStatusOK:

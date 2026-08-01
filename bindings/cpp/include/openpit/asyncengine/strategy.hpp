@@ -29,12 +29,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -63,9 +65,18 @@
 //     run on any thread, so it must not rely on thread-local OS state.
 //
 // No exception escapes a worker thread: `Task::Run`/`Task::Abort` are the only
-// things a worker invokes, and concrete tasks resolve their future instead of
-// throwing. A worker thread therefore never terminates the process via an
-// uncaught exception.
+// things a worker invokes, and every concrete task contains its exceptions at
+// that boundary - it resolves its future instead of throwing, and swallows
+// whatever a future continuation raises after that resolution. A worker thread
+// therefore never terminates the process via an uncaught exception.
+//
+// STOP AND BLOCKED PRODUCERS. A graceful stop keeps every worker draining, so a
+// producer blocked on a full queue still makes progress and is allowed to
+// finish its send. A hard stop makes no such promise (workers abort instead of
+// running, and the destructor's stop must terminate), so it releases blocked
+// producers with `ErrorCode::Stopped`. Queues themselves are closed only after
+// every registered producer has left, which is a separate concern from waking
+// them: closing earlier would race a queue one of those producers is creating.
 
 namespace openpit::asyncengine {
 
@@ -101,6 +112,7 @@ class Task {
 };
 
 using TaskPtr = std::unique_ptr<Task>;
+using SubmitFailureHandler = std::function<void(Error)>;
 
 // Closure task: runs a caller-supplied `std::function<void()>` and resolves a
 // void future. The closure is built by the engine layer to call the driver and
@@ -110,12 +122,67 @@ class ClosureTask final : public Task {
   ClosureTask(std::function<void()> run, std::function<void(Error)> abort)
       : m_run(std::move(run)), m_abort(std::move(abort)) {}
 
-  void Run() override { m_run(); }
-  void Abort(Error error) override { m_abort(std::move(error)); }
+  void Run() override {
+    Contain([this] { m_run(); });
+  }
+
+  void Abort(Error error) override {
+    Contain([this, &error] { m_abort(std::move(error)); });
+  }
 
  private:
+  // Containment sits at the task boundary the threading contract names rather
+  // than above it, so it holds for every closure the strategy is handed and not
+  // only for the ones a caller happened to wrap. Both closures resolve their
+  // future before returning, so anything still escaping was raised by a
+  // continuation that ran after that resolution and must take down neither the
+  // account lane nor the process.
+  template <typename Body>
+  static void Contain(Body&& body) noexcept {
+    try {
+      body();
+    } catch (...) {
+      // Deliberately swallowed: see above.
+    }
+  }
+
   std::function<void()> m_run;
   std::function<void(Error)> m_abort;
+};
+
+inline void ResolveMandatoryCleanup(Promise<std::monostate> promise,
+                                    const std::function<void()>& cleanup) {
+  try {
+    cleanup();
+  } catch (const std::exception& ex) {
+    promise.Fail(Error(ErrorCode::TaskFailed, ex.what()));
+    return;
+  } catch (...) {
+    promise.Fail(Error(ErrorCode::TaskFailed,
+                       "mandatory cleanup threw a non-standard exception"));
+    return;
+  }
+  promise.Resolve(std::monostate{});
+}
+
+// Mandatory cleanup reports its own failure and never lets a caller exception
+// escape the worker boundary. Run and Abort intentionally have the same
+// behavior: cleanup must happen even when hard stop drops queued work.
+class MandatoryCleanupTask final : public Task {
+ public:
+  MandatoryCleanupTask(Promise<std::monostate> promise,
+                       std::function<void()> cleanup)
+      : m_promise(std::move(promise)), m_cleanup(std::move(cleanup)) {}
+
+  void Run() override { ResolveMandatoryCleanup(m_promise, m_cleanup); }
+
+  void Abort(Error /*error*/) override {
+    ResolveMandatoryCleanup(m_promise, m_cleanup);
+  }
+
+ private:
+  Promise<std::monostate> m_promise;
+  std::function<void()> m_cleanup;
 };
 
 // One queued task plus the metadata observer callbacks need.
@@ -164,8 +231,11 @@ struct KeyQueue {
   std::condition_variable notEmpty;
   std::condition_variable notFull;
   std::deque<QueuedTask> buffer;
+  std::deque<QueuedTask> deferredMandatoryCleanups;
   bool closed = false;
   bool retired = false;
+  bool workerExited = false;
+  bool deferredWakeRegistered = false;
   std::atomic<std::int64_t> lastActive{0};
   std::atomic<std::int64_t> pending{0};
   std::thread worker;
@@ -178,6 +248,17 @@ struct BaseConfig {
   Observer* observer = nullptr;  // null -> the shared no-op.
   std::size_t queueCapacity = 0;
   std::chrono::nanoseconds slowSubmitThreshold{0};
+};
+
+// Deterministic rendezvous points for the binding's own concurrency tests. They
+// are kept out of `BaseConfig` (and off every constructor the public builder
+// calls) so no configuration a user can reach carries them. A strategy built
+// without seams runs a worker loop compiled without the seam check at all.
+struct WorkerSeams {
+  // Runs under the lane mutex, immediately before the worker waits.
+  std::function<void()> beforeWorkerWait;
+  // Runs after deferred cleanup publication, before its registration.
+  std::function<void()> afterDeferredPublication;
 };
 
 // Outcome of a single `SendToQueue` attempt.
@@ -200,7 +281,7 @@ struct SendResult {
 // skips entirely.
 class Base {
  public:
-  Base(const BaseConfig& cfg, bool tracksIdle)
+  Base(const BaseConfig& cfg, bool tracksIdle, WorkerSeams seams)
       : m_observer(cfg.observer != nullptr ? cfg.observer : SharedNoop()),
         m_queueCapacity(cfg.queueCapacity > 0 ? cfg.queueCapacity
                                               : kDefaultQueueCapacity),
@@ -208,6 +289,7 @@ class Base {
                                       std::chrono::nanoseconds(0)
                                   ? cfg.slowSubmitThreshold
                                   : kDefaultSlowSubmitThreshold),
+        m_seams(std::move(seams)),
         m_observerActive(m_observer != SharedNoop()),
         m_tracksIdle(tracksIdle) {}
 
@@ -215,6 +297,42 @@ class Base {
   Base& operator=(const Base&) = delete;
 
  protected:
+  class ProducerGuard {
+   public:
+    explicit ProducerGuard(Base& base)
+        : m_base(&base), m_registered(base.RegisterProducer()) {}
+
+    ~ProducerGuard() {
+      if (m_registered) {
+        m_base->FinishProducer();
+      }
+    }
+
+    ProducerGuard(const ProducerGuard&) = delete;
+    ProducerGuard& operator=(const ProducerGuard&) = delete;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+      return m_registered;
+    }
+
+   private:
+    Base* m_base;
+    bool m_registered;
+  };
+
+  class MandatoryCleanupRegistration {
+   public:
+    explicit MandatoryCleanupRegistration(Base& base) : m_base(&base) {}
+    ~MandatoryCleanupRegistration() { m_base->FinishMandatoryCleanup(); }
+
+    MandatoryCleanupRegistration(const MandatoryCleanupRegistration&) = delete;
+    MandatoryCleanupRegistration& operator=(
+        const MandatoryCleanupRegistration&) = delete;
+
+   private:
+    Base* m_base;
+  };
+
   [[nodiscard]] static ::openpit::param::AccountId PublicAccountId(
       OpenPitParamAccountId raw) noexcept {
     return ::openpit::detail::FromNative<::openpit::param::AccountId>(raw);
@@ -223,6 +341,13 @@ class Base {
   [[nodiscard]] std::size_t queueCapacity() const { return m_queueCapacity; }
   [[nodiscard]] bool observerActive() const { return m_observerActive; }
   [[nodiscard]] bool tracksIdle() const { return m_tracksIdle; }
+
+  [[nodiscard]] std::function<void()> TrackMandatoryCleanup(
+      std::function<void()> cleanup) {
+    auto registration = RegisterMandatoryCleanup();
+    return [registration = std::move(registration),
+            cleanup = std::move(cleanup)] { cleanup(); };
+  }
 
   template <typename Callback>
   void Notify(Callback&& callback) const noexcept {
@@ -242,10 +367,11 @@ class Base {
   }
 
   // Sends `task` into `q`, blocking with periodic slow-submit notifications
-  // until queued, the deadline passes, the strategy stops, or (Dynamic) the
-  // queue is retired. See `SendResult`: on the retired path the task is handed
-  // back for a retry; on every other failure it is dropped and `error` is set.
-  // `deadline` of `time_point::max()` means "wait indefinitely".
+  // until queued, the deadline passes, the strategy hard-stops, or (Dynamic)
+  // the queue is retired. See `SendResult`: on the retired path the task is
+  // handed back for a retry; on every other failure it is dropped and `error`
+  // is set. `deadline` of `time_point::max()` means "wait indefinitely", which
+  // only a hard stop can cut short.
   [[nodiscard]] SendResult SendToQueue(
       const KeyQueuePtr& q, OpenPitParamAccountId accountId, TaskPtr task,
       std::chrono::steady_clock::time_point deadline) {
@@ -297,8 +423,19 @@ class Base {
         });
         return {std::nullopt, nullptr, false};
       }
-      // Queue full: wait. With an active observer, wake periodically to emit
-      // slow-submit signals; otherwise wait straight to the deadline.
+      // Queue full. A hard stop stops promising that room will ever appear -
+      // workers abort instead of running and the RAII stop joins them - so the
+      // producer leaves with the outcome a stopped submit gets rather than
+      // making stop wait for space. Checked while holding the lane mutex, the
+      // same mutex the wake takes, so the decision to wait cannot be lost.
+      if (HardStopped()) {
+        UndoPending(q);
+        lock.unlock();
+        return {Error(ErrorCode::Stopped, "async engine is stopped"), nullptr,
+                false};
+      }
+      // With an active observer, wake periodically to emit slow-submit signals;
+      // otherwise wait straight to the deadline.
       const auto wakeAt =
           m_observerActive ? std::min(nextSlow, deadline) : deadline;
       std::cv_status status = std::cv_status::no_timeout;
@@ -336,23 +473,217 @@ class Base {
     }
   }
 
+  // Outcome of appending mandatory cleanup to one lane.
+  enum class CleanupAppend {
+    Queued,    // the lane worker runs it after the work it already accepted.
+    Retired,   // Dynamic only: recreate the lane and retry there.
+    NoWorker,  // the lane has no worker left; the caller must run it itself.
+  };
+
+  // Appends cleanup after a synchronous submit failure without ever blocking
+  // its caller: that caller may already have spent its deadline, so waiting for
+  // lane capacity here could hold it for an unbounded time. Cleanup is instead
+  // appended past the lane capacity, still behind everything the lane has
+  // already accepted, and a full or closed lane changes nothing. The whole
+  // decision is taken under the lane mutex so retirement cannot slip between
+  // the check and the append. Exactly one cleanup task is ever created, so the
+  // caller-side fallback and the lane path cannot both run it.
+  [[nodiscard]] CleanupAppend AppendMandatoryCleanup(
+      const KeyQueuePtr& q, OpenPitParamAccountId accountId,
+      const Promise<std::monostate>& promise,
+      const std::function<void()>& cleanup) {
+    QueuedTask queued;
+    queued.accountId = accountId;
+    queued.task = std::make_unique<MandatoryCleanupTask>(promise, cleanup);
+    if (m_observerActive) {
+      queued.enqueuedAt = std::chrono::steady_clock::now();
+    }
+
+    std::size_t depth = 0;
+    {
+      std::lock_guard<std::mutex> lock(q->mutex);
+      if (q->retired) {
+        return CleanupAppend::Retired;
+      }
+      if (q->workerExited) {
+        return CleanupAppend::NoWorker;
+      }
+      q->buffer.push_back(std::move(queued));
+      depth = q->buffer.size();
+      if (m_tracksIdle) {
+        q->pending.fetch_add(1, std::memory_order_relaxed);
+        q->Touch();
+      }
+    }
+    q->notEmpty.notify_one();
+    Notify([&](Observer& observer) {
+      observer.OnEnqueue(PublicAccountId(accountId), depth);
+    });
+    return CleanupAppend::Queued;
+  }
+
+  // Queues cleanup on `q`. Returns true when the lane retired and the caller
+  // must retry against a fresh one. Once the worker no longer accepts lane
+  // work, no operation can overlap the immediate caller-thread cleanup.
+  [[nodiscard]] bool ScheduleMandatoryCleanupOn(
+      const KeyQueuePtr& q, OpenPitParamAccountId accountId,
+      Promise<std::monostate> promise, const std::function<void()>& cleanup) {
+    switch (AppendMandatoryCleanup(q, accountId, promise, cleanup)) {
+      case CleanupAppend::Retired:
+        return true;
+      case CleanupAppend::NoWorker:
+        ResolveMandatoryCleanup(std::move(promise), cleanup);
+        break;
+      case CleanupAppend::Queued:
+        break;
+    }
+    return false;
+  }
+
+  // A stopped submit can still have registered predecessors that have not
+  // acquired their lane mutex. Keep cleanup outside the bounded buffer until
+  // they finish: the sole lane worker must remain free to drain tasks that
+  // unblock those producers.
+  void EnqueueMandatoryCleanupAfterProducerFenceOn(
+      const KeyQueuePtr& q, OpenPitParamAccountId accountId,
+      Promise<std::monostate> promise, const std::function<void()>& cleanup) {
+    QueuedTask queued;
+    queued.accountId = accountId;
+    queued.task = std::make_unique<MandatoryCleanupTask>(promise, cleanup);
+    if (m_observerActive) {
+      queued.enqueuedAt = std::chrono::steady_clock::now();
+    }
+
+    std::size_t depth = 0;
+    bool workerExited = false;
+    bool registerDeferredWake = false;
+    {
+      std::lock_guard<std::mutex> lock(q->mutex);
+      if (q->workerExited) {
+        workerExited = true;
+      } else {
+        q->deferredMandatoryCleanups.push_back(std::move(queued));
+        depth = q->buffer.size() + q->deferredMandatoryCleanups.size();
+        if (m_tracksIdle) {
+          q->pending.fetch_add(1, std::memory_order_relaxed);
+          q->Touch();
+        }
+        if (!q->deferredWakeRegistered) {
+          q->deferredWakeRegistered = true;
+          registerDeferredWake = true;
+        }
+      }
+    }
+    if (workerExited) {
+      ResolveMandatoryCleanup(std::move(promise), cleanup);
+      return;
+    }
+    if (m_seams.afterDeferredPublication) {
+      m_seams.afterDeferredPublication();
+    }
+    if (registerDeferredWake) {
+      RegisterDeferredQueue(q);
+    }
+    // RegisterDeferredQueue has released m_deferredMutex before this lock, so
+    // publication and producer-zero wakes share the lane mutex without a
+    // deferred-registry -> lane lock inversion.
+    {
+      std::lock_guard<std::mutex> lock(q->mutex);
+      q->notEmpty.notify_one();
+    }
+    Notify([&](Observer& observer) {
+      observer.OnEnqueue(PublicAccountId(accountId), depth);
+    });
+  }
+
+  [[nodiscard]] bool ProducersDrained() {
+    std::lock_guard<std::mutex> lock(m_producerMutex);
+    return m_liveProducers == 0;
+  }
+
+  void RegisterDeferredQueue(const KeyQueuePtr& q) {
+    std::lock_guard<std::mutex> lock(m_deferredMutex);
+    m_deferredQueues.emplace_back(q);
+  }
+
+  // Wakes every lane that parked cleanup behind the producer fence. Runs on a
+  // producer's unwind path (`ProducerGuard`), which cannot report a failure, so
+  // it must not allocate: the registry is walked and pruned in place instead of
+  // being copied into a temporary.
+  //
+  // WorkerReady reads the producer count while holding the lane mutex, so
+  // notifying under that mutex closes the false-check/wait window. The lock
+  // order is deferred registry -> lane mutex -> producer mutex; nothing takes
+  // them in the opposite order (registration holds the registry alone, and
+  // FinishProducer releases the producer mutex before calling this).
+  void WakeDeferredQueues() {
+    std::lock_guard<std::mutex> lock(m_deferredMutex);
+    auto it = m_deferredQueues.begin();
+    while (it != m_deferredQueues.end()) {
+      const KeyQueuePtr q = it->lock();
+      if (!q) {
+        it = m_deferredQueues.erase(it);
+        continue;
+      }
+      {
+        std::lock_guard<std::mutex> queueLock(q->mutex);
+        q->notEmpty.notify_all();
+      }
+      ++it;
+    }
+  }
+
   // Drains and dispatches `q` on its dedicated worker thread. Exits when the
   // queue is closed (stop) or retired (idle cleanup) and emptied.
   void Worker(const KeyQueuePtr& q) {
+    // Resolved once per worker thread so the drain loop a user's build runs
+    // carries no test-only branch at all.
+    if (m_seams.beforeWorkerWait) {
+      WorkerLoop</*WithSeams=*/true>(q);
+      return;
+    }
+    WorkerLoop</*WithSeams=*/false>(q);
+  }
+
+  template <bool WithSeams>
+  void WorkerLoop(const KeyQueuePtr& q) {
     while (true) {
       std::unique_lock<std::mutex> lock(q->mutex);
-      q->notEmpty.wait(
-          lock, [&] { return !q->buffer.empty() || q->closed || q->retired; });
-      if (q->buffer.empty()) {
-        // Closed or retired with nothing left: exit.
+      while (!WorkerReady(q)) {
+        if constexpr (WithSeams) {
+          m_seams.beforeWorkerWait();
+        }
+        q->notEmpty.wait(lock);
+      }
+
+      QueuedTask qt;
+      bool freedCapacity = false;
+      if (!q->buffer.empty()) {
+        qt = std::move(q->buffer.front());
+        q->buffer.pop_front();
+        freedCapacity = true;
+      } else if (!q->deferredMandatoryCleanups.empty()) {
+        qt = std::move(q->deferredMandatoryCleanups.front());
+        q->deferredMandatoryCleanups.pop_front();
+      } else {
+        // Publish lane quiescence under the same mutex used by mandatory
+        // cleanup enqueue, leaving no gap where work can be appended after the
+        // worker has committed to exit.
+        q->workerExited = true;
         return;
       }
-      QueuedTask qt = std::move(q->buffer.front());
-      q->buffer.pop_front();
       lock.unlock();
-      q->notFull.notify_one();
+      if (freedCapacity) {
+        q->notFull.notify_one();
+      }
       HandleTask(q, std::move(qt));
     }
+  }
+
+  [[nodiscard]] bool WorkerReady(const KeyQueuePtr& q) {
+    return !q->buffer.empty() ||
+           (!q->deferredMandatoryCleanups.empty() && ProducersDrained()) ||
+           ((q->closed || q->retired) && q->deferredMandatoryCleanups.empty());
   }
 
   // Runs (or, under hard stop, aborts) one dequeued task. For idle-tracking
@@ -399,8 +730,12 @@ class Base {
     }
   }
 
-  // Marks the strategy stopped so later submits short-circuit. Idempotent.
-  void SignalStop() { m_stopRequested.store(true, std::memory_order_release); }
+  // Marks the strategy stopped under the producer gate. A producer is either
+  // fully registered before this point or observes stop and never enters.
+  void SignalStop() {
+    std::lock_guard<std::mutex> lock(m_producerMutex);
+    m_stopRequested.store(true, std::memory_order_release);
+  }
 
   // Marks a hard stop so workers abort rather than run dequeued tasks.
   // Idempotent.
@@ -421,6 +756,10 @@ class Base {
           SignalStop();
         }
         {
+          std::lock_guard<std::mutex> lock(q->mutex);
+          q->workerExited = true;
+        }
+        {
           std::lock_guard<std::mutex> lock(m_doneMutex);
           m_liveWorkers.fetch_sub(1, std::memory_order_relaxed);
         }
@@ -432,16 +771,38 @@ class Base {
     }
   }
 
-  // Closes every queue so its worker drains and exits. Producers blocked on a
-  // full queue are woken and observe `closed`.
+  // Closes a queue so its worker drains and exits. Producers blocked on a full
+  // queue are woken and observe `closed`.
+  static void CloseQueue(const KeyQueuePtr& q) {
+    {
+      std::lock_guard<std::mutex> lock(q->mutex);
+      q->closed = true;
+    }
+    q->notEmpty.notify_all();
+    q->notFull.notify_all();
+  }
+
   static void CloseQueues(const std::vector<KeyQueuePtr>& queues) {
     for (const KeyQueuePtr& q : queues) {
-      {
-        std::lock_guard<std::mutex> lock(q->mutex);
-        q->closed = true;
-      }
-      q->notEmpty.notify_all();
-      q->notFull.notify_all();
+      CloseQueue(q);
+    }
+  }
+
+  // Releases producers blocked on a full queue after a hard stop, without
+  // closing the queue: closing is a separate step that may only happen once
+  // every registered producer has left, or it would race a queue one of them is
+  // still creating. Notifying under the lane mutex is what makes the wake
+  // race-free - a producer decides to wait while holding that mutex, so it
+  // either has not decided yet (and then observes the hard stop) or is already
+  // waiting (and is woken here).
+  static void WakeBlockedProducers(const KeyQueuePtr& q) {
+    std::lock_guard<std::mutex> lock(q->mutex);
+    q->notFull.notify_all();
+  }
+
+  static void WakeBlockedProducers(const std::vector<KeyQueuePtr>& queues) {
+    for (const KeyQueuePtr& q : queues) {
+      WakeBlockedProducers(q);
     }
   }
 
@@ -462,6 +823,37 @@ class Base {
     return m_doneCv.wait_until(lock, deadline, drained);
   }
 
+  [[nodiscard]] bool WaitLifecycleDrained(
+      std::chrono::steady_clock::time_point deadline) {
+    std::unique_lock<std::mutex> lock(m_producerMutex);
+    const auto drained = [this] {
+      return m_liveProducers == 0 && m_liveMandatoryCleanups == 0;
+    };
+    if (deadline == std::chrono::steady_clock::time_point::max()) {
+      m_producerCv.wait(lock, drained);
+      return true;
+    }
+    return m_producerCv.wait_until(lock, deadline, drained);
+  }
+
+  // The final stop handoff rechecks zero and seals registration under one
+  // mutex. A cleanup racing worker drain is therefore either included in this
+  // wait or linearized after the completed stop.
+  [[nodiscard]] bool SealLifecycleDrained(
+      std::chrono::steady_clock::time_point deadline) {
+    std::unique_lock<std::mutex> lock(m_producerMutex);
+    const auto drained = [this] {
+      return m_liveProducers == 0 && m_liveMandatoryCleanups == 0;
+    };
+    if (deadline == std::chrono::steady_clock::time_point::max()) {
+      m_producerCv.wait(lock, drained);
+    } else if (!m_producerCv.wait_until(lock, deadline, drained)) {
+      return false;
+    }
+    m_lifecycleSealed = true;
+    return true;
+  }
+
   // Joins every queue-owned worker thread unconditionally. Called only once the
   // workers are guaranteed to be exiting (queues closed and, in the destructor,
   // a hard stop signalled). Safe to call on already-exited threads.
@@ -479,6 +871,49 @@ class Base {
   }
 
  private:
+  [[nodiscard]] bool RegisterProducer() {
+    std::lock_guard<std::mutex> lock(m_producerMutex);
+    if (m_stopRequested.load(std::memory_order_relaxed)) {
+      return false;
+    }
+    ++m_liveProducers;
+    return true;
+  }
+
+  void FinishProducer() {
+    {
+      std::lock_guard<std::mutex> lock(m_producerMutex);
+      --m_liveProducers;
+    }
+    m_producerCv.notify_all();
+    WakeDeferredQueues();
+  }
+
+  [[nodiscard]] std::shared_ptr<MandatoryCleanupRegistration>
+  RegisterMandatoryCleanup() {
+    {
+      std::lock_guard<std::mutex> lock(m_producerMutex);
+      if (m_lifecycleSealed) {
+        return nullptr;
+      }
+      ++m_liveMandatoryCleanups;
+    }
+    try {
+      return std::make_shared<MandatoryCleanupRegistration>(*this);
+    } catch (...) {
+      FinishMandatoryCleanup();
+      throw;
+    }
+  }
+
+  void FinishMandatoryCleanup() {
+    {
+      std::lock_guard<std::mutex> lock(m_producerMutex);
+      --m_liveMandatoryCleanups;
+    }
+    m_producerCv.notify_all();
+  }
+
   void UndoPending(const KeyQueuePtr& q) const {
     if (m_tracksIdle) {
       q->pending.fetch_sub(1, std::memory_order_relaxed);
@@ -488,8 +923,16 @@ class Base {
   Observer* m_observer;
   std::size_t m_queueCapacity;
   std::chrono::nanoseconds m_slowSubmitThreshold;
+  WorkerSeams m_seams;
   bool m_observerActive;
   bool m_tracksIdle;
+  std::mutex m_deferredMutex;
+  std::vector<std::weak_ptr<KeyQueue>> m_deferredQueues;
+  std::mutex m_producerMutex;
+  std::condition_variable m_producerCv;
+  std::size_t m_liveProducers = 0;
+  std::size_t m_liveMandatoryCleanups = 0;
+  bool m_lifecycleSealed = false;
   std::mutex m_doneMutex;
   std::condition_variable m_doneCv;
   std::atomic<std::size_t> m_liveWorkers{0};
@@ -507,11 +950,17 @@ class Strategy {
   virtual ~Strategy() = default;
 
   // Enqueues `task` for `accountId`, blocking up to `deadline` for queue space.
-  // Returns nullopt on success, or the failure the caller must fail the future
-  // with.
-  [[nodiscard]] virtual std::optional<Error> Submit(
-      OpenPitParamAccountId accountId, TaskPtr task,
-      std::chrono::steady_clock::time_point deadline) = 0;
+  // A synchronous failure invokes `onFailure` before the producer lifecycle
+  // obligation is released; accepted tasks transfer that obligation to their
+  // worker lane.
+  virtual void Submit(OpenPitParamAccountId accountId, TaskPtr task,
+                      std::chrono::steady_clock::time_point deadline,
+                      SubmitFailureHandler onFailure) = 0;
+
+  // Guarantees cleanup is ordered after the account lane's existing work and
+  // reports cleanup exceptions without stopping the worker.
+  [[nodiscard]] virtual Future<std::monostate> ScheduleMandatoryCleanup(
+      OpenPitParamAccountId accountId, std::function<void()> cleanup) = 0;
 
   // Refuses new submits and waits for every queued task to run. Returns false
   // if `deadline` passes before workers drain (partial stop; a hard stop may
@@ -535,9 +984,15 @@ class Strategy {
 class ShardedStrategy final : public Strategy, private Base {
  public:
   ShardedStrategy(const BaseConfig& cfg, std::size_t shardCount)
-      : Base(cfg, /*tracksIdle=*/false) {
-    m_shards.reserve(shardCount);
+      : ShardedStrategy(cfg, shardCount, WorkerSeams{}) {}
+
+  // Seamed construction is internal to the binding: the builder chain never
+  // exposes it, so a user-built strategy always takes the empty seams above.
+  ShardedStrategy(const BaseConfig& cfg, std::size_t shardCount,
+                  WorkerSeams seams)
+      : Base(cfg, /*tracksIdle=*/false, std::move(seams)) {
     try {
+      m_shards.reserve(shardCount);
       for (std::size_t i = 0; i < shardCount; ++i) {
         auto q = std::make_shared<KeyQueue>(queueCapacity());
         m_shards.push_back(q);
@@ -555,39 +1010,68 @@ class ShardedStrategy final : public Strategy, private Base {
 
   ~ShardedStrategy() override { StopInDestructor(); }
 
-  [[nodiscard]] std::optional<Error> Submit(
-      OpenPitParamAccountId accountId, TaskPtr task,
-      std::chrono::steady_clock::time_point deadline) override {
-    if (IsStopped()) {
-      return Error(ErrorCode::Stopped, "async engine is stopped");
+  void Submit(OpenPitParamAccountId accountId, TaskPtr task,
+              std::chrono::steady_clock::time_point deadline,
+              SubmitFailureHandler onFailure) override {
+    ProducerGuard producer(*this);
+    if (!producer) {
+      onFailure(Error(ErrorCode::Stopped, "async engine is stopped"));
+      return;
     }
     // Sharded queues are never retired, so `retired` cannot be set here.
     SendResult result =
         SendToQueue(ShardFor(accountId), accountId, std::move(task), deadline);
-    return result.error;
+    if (result.error.has_value()) {
+      onFailure(std::move(*result.error));
+    }
+  }
+
+  [[nodiscard]] Future<std::monostate> ScheduleMandatoryCleanup(
+      OpenPitParamAccountId accountId, std::function<void()> cleanup) override {
+    cleanup = TrackMandatoryCleanup(std::move(cleanup));
+    Promise<std::monostate> promise;
+    Future<std::monostate> future = promise.GetFuture();
+    ProducerGuard producer(*this);
+    if (!producer) {
+      EnqueueMandatoryCleanupAfterProducerFenceOn(
+          ShardFor(accountId), accountId, std::move(promise), cleanup);
+      return future;
+    }
+    (void)ScheduleMandatoryCleanupOn(ShardFor(accountId), accountId,
+                                     std::move(promise), cleanup);
+    return future;
   }
 
   [[nodiscard]] bool StopGraceful(
       std::chrono::steady_clock::time_point deadline) override {
     SignalStop();
+    if (!WaitLifecycleDrained(deadline)) {
+      return false;
+    }
     CloseQueues(m_shards);
     const bool drained = WaitWorkersDrained(deadline);
-    if (drained) {
-      JoinAll(m_shards);
+    if (!drained || !SealLifecycleDrained(deadline)) {
+      return false;
     }
-    return drained;
+    JoinAll(m_shards);
+    return true;
   }
 
   [[nodiscard]] bool StopHard(
       std::chrono::steady_clock::time_point deadline) override {
     SignalHardStop();
     SignalStop();
+    WakeBlockedProducers(m_shards);
+    if (!WaitLifecycleDrained(deadline)) {
+      return false;
+    }
     CloseQueues(m_shards);
     const bool drained = WaitWorkersDrained(deadline);
-    if (drained) {
-      JoinAll(m_shards);
+    if (!drained || !SealLifecycleDrained(deadline)) {
+      return false;
     }
-    return drained;
+    JoinAll(m_shards);
+    return true;
   }
 
  private:
@@ -625,12 +1109,17 @@ class ShardedStrategy final : public Strategy, private Base {
 
   void StopInDestructor() {
     // RAII backstop: if the owner never stopped us, hard-stop now so no worker
-    // thread outlives this object. After a hard stop every worker exits, so the
-    // unconditional join always completes.
+    // thread outlives this object. After a hard stop every worker exits and
+    // every blocked producer is released, so both waits below terminate.
+    // Nothing on this path allocates - a destructor has no way to report a
+    // failed allocation.
     SignalHardStop();
     SignalStop();
+    WakeBlockedProducers(m_shards);
+    (void)WaitLifecycleDrained(std::chrono::steady_clock::time_point::max());
     CloseQueues(m_shards);
     JoinAll(m_shards);
+    (void)SealLifecycleDrained(std::chrono::steady_clock::time_point::max());
   }
 
   std::vector<KeyQueuePtr> m_shards;
@@ -640,48 +1129,71 @@ class ShardedStrategy final : public Strategy, private Base {
 // Dynamic
 
 // Lazily creates one queue (and worker) per active account. Idle queues are
-// retired by a background cleanup thread. Live queue count is bounded by
-// `maxQueues` (0 = unbounded). Full per-account isolation and per-account
-// observer signals at the cost of a map lookup per submit and a cleanup thread.
+// retired by a background cleanup thread. The live per-account queue count is
+// bounded by `maxQueues` (0 = unbounded), so a cap of n means n usable account
+// queues. Full per-account isolation and per-account observer signals come at
+// the cost of a map lookup per submit and a cleanup thread.
 class DynamicStrategy final : public Strategy, private Base {
  public:
   DynamicStrategy(const BaseConfig& cfg, std::size_t maxQueues,
                   std::chrono::nanoseconds idleCleanupAfter, bool capEnabled)
+      : DynamicStrategy(cfg, maxQueues, idleCleanupAfter, capEnabled,
+                        WorkerSeams{}) {}
+
+  // Seamed construction is internal to the binding: the builder chain never
+  // exposes it, so a user-built strategy always takes the empty seams above.
+  DynamicStrategy(const BaseConfig& cfg, std::size_t maxQueues,
+                  std::chrono::nanoseconds idleCleanupAfter, bool capEnabled,
+                  WorkerSeams seams)
       : Base(cfg,
-             /*tracksIdle=*/idleCleanupAfter > std::chrono::nanoseconds(0)),
+             /*tracksIdle=*/idleCleanupAfter > std::chrono::nanoseconds(0),
+             std::move(seams)),
         m_maxQueues(maxQueues),
         m_capEnabled(capEnabled),
         m_idleCleanupAfter(idleCleanupAfter) {
-    if (tracksIdle()) {
-      // Scan at a fifth of the idle window, never tighter than the default.
-      auto period = idleCleanupAfter / 5;
-      if (period < std::chrono::seconds(1)) {
-        period = kDefaultIdleCleanupPeriod;
+    try {
+      if (tracksIdle()) {
+        // Scan at a fifth of the idle window, never tighter than the default.
+        auto period = idleCleanupAfter / 5;
+        if (period < std::chrono::seconds(1)) {
+          period = kDefaultIdleCleanupPeriod;
+        }
+        m_cleanupPeriod = period;
+        m_cleanup = std::thread([this] { CleanupLoop(); });
       }
-      m_cleanupPeriod = period;
-      m_cleanup = std::thread([this] { CleanupLoop(); });
+    } catch (...) {
+      SignalHardStop();
+      SignalStop();
+      const std::vector<KeyQueuePtr> queues = MarkStoppingAndSnapshot();
+      CloseQueues(queues);
+      (void)WaitWorkersDrained(std::chrono::steady_clock::time_point::max());
+      JoinAll(queues);
+      throw;
     }
   }
 
   ~DynamicStrategy() override { StopInDestructor(); }
 
-  [[nodiscard]] std::optional<Error> Submit(
-      OpenPitParamAccountId accountId, TaskPtr task,
-      std::chrono::steady_clock::time_point deadline) override {
+  void Submit(OpenPitParamAccountId accountId, TaskPtr task,
+              std::chrono::steady_clock::time_point deadline,
+              SubmitFailureHandler onFailure) override {
     // A queue can be retired by idle cleanup between lookup and send; the send
     // hands the task back and we loop to recreate a fresh queue. The loop is
     // bounded in practice: retirement requires an idle window, so a live
     // producer re-creates faster than cleanup can retire.
+    ProducerGuard producer(*this);
+    if (!producer) {
+      onFailure(Error(ErrorCode::Stopped, "async engine is stopped"));
+      return;
+    }
     while (true) {
-      if (IsStopped()) {
-        return Error(ErrorCode::Stopped, "async engine is stopped");
-      }
       bool created = false;
       std::size_t total = 0;
       std::optional<Error> err;
       KeyQueuePtr q = GetOrCreate(accountId, created, total, err);
       if (err.has_value()) {
-        return err;
+        onFailure(std::move(*err));
+        return;
       }
       if (created) {
         Notify([&](Observer& observer) {
@@ -694,7 +1206,59 @@ class DynamicStrategy final : public Strategy, private Base {
         task = std::move(result.task);
         continue;
       }
-      return result.error;
+      if (result.error.has_value()) {
+        onFailure(std::move(*result.error));
+      }
+      return;
+    }
+  }
+
+  [[nodiscard]] Future<std::monostate> ScheduleMandatoryCleanup(
+      OpenPitParamAccountId accountId, std::function<void()> cleanup) override {
+    cleanup = TrackMandatoryCleanup(std::move(cleanup));
+    Promise<std::monostate> promise;
+    Future<std::monostate> future = promise.GetFuture();
+    ProducerGuard producer(*this);
+    if (!producer) {
+      CleanupAfterStoppedLane(accountId, std::move(promise), cleanup);
+      return future;
+    }
+    // Every iteration makes progress: a retried lane is one that has just been
+    // recreated, and the two error paths below either return or wait for a
+    // routing fence to clear. No branch loops on a condition that cannot
+    // change, so the loop cannot spin.
+    while (true) {
+      bool created = false;
+      std::size_t total = 0;
+      std::optional<Error> err;
+      KeyQueuePtr q = GetOrCreate(accountId, created, total, err);
+      if (err.has_value()) {
+        // Stop is terminal for lane creation: retrying would never see a
+        // different answer, so hand cleanup to the stopped-lane path, which
+        // either finds the surviving lane or runs cleanup itself.
+        if (err->Code() == ErrorCode::Stopped) {
+          CleanupAfterStoppedLane(accountId, std::move(promise), cleanup);
+          return future;
+        }
+        // The queue cap is transient: retry only after the routing fence
+        // confirms an account lane exists to queue behind.
+        if (err->Code() == ErrorCode::QueueLimit) {
+          if (CleanupWithoutLiveLane(accountId, promise, cleanup)) {
+            return future;
+          }
+          continue;
+        }
+        ResolveMandatoryCleanup(std::move(promise), cleanup);
+        return future;
+      }
+      if (created) {
+        Notify([&](Observer& observer) {
+          observer.OnQueueCreated(PublicAccountId(accountId), total);
+        });
+      }
+      if (!ScheduleMandatoryCleanupOn(q, accountId, promise, cleanup)) {
+        return future;
+      }
     }
   }
 
@@ -702,13 +1266,17 @@ class DynamicStrategy final : public Strategy, private Base {
       std::chrono::steady_clock::time_point deadline) override {
     StopCleanup();
     SignalStop();
+    if (!WaitLifecycleDrained(deadline)) {
+      return false;
+    }
     std::vector<KeyQueuePtr> queues = MarkStoppingAndSnapshot();
     CloseQueues(queues);
     const bool drained = WaitWorkersDrained(deadline);
-    if (drained) {
-      JoinAll(queues);
+    if (!drained || !SealLifecycleDrained(deadline)) {
+      return false;
     }
-    return drained;
+    JoinAll(queues);
+    return true;
   }
 
   [[nodiscard]] bool StopHard(
@@ -716,20 +1284,84 @@ class DynamicStrategy final : public Strategy, private Base {
     StopCleanup();
     SignalHardStop();
     SignalStop();
+    WakeBlockedLaneProducers();
+    if (!WaitLifecycleDrained(deadline)) {
+      return false;
+    }
     std::vector<KeyQueuePtr> queues = MarkStoppingAndSnapshot();
     CloseQueues(queues);
     const bool drained = WaitWorkersDrained(deadline);
-    if (drained) {
-      JoinAll(queues);
+    if (!drained || !SealLifecycleDrained(deadline)) {
+      return false;
     }
-    return drained;
+    JoinAll(queues);
+    return true;
   }
 
  private:
+  void CleanupAfterStoppedLane(OpenPitParamAccountId accountId,
+                               Promise<std::monostate> promise,
+                               const std::function<void()>& cleanup) {
+    KeyQueuePtr q;
+    {
+      std::unique_lock<std::mutex> lock(m_mutex);
+      m_routeCv.wait(lock, [this, accountId] {
+        return m_cleanupAccounts.find(accountId) == m_cleanupAccounts.end();
+      });
+      auto it = m_queues.find(accountId);
+      if (it != m_queues.end()) {
+        q = it->second;
+      } else {
+        m_cleanupAccounts.insert(accountId);
+      }
+    }
+    if (q) {
+      EnqueueMandatoryCleanupAfterProducerFenceOn(q, accountId,
+                                                  std::move(promise), cleanup);
+      return;
+    }
+    ResolveMandatoryCleanup(std::move(promise), cleanup);
+    {
+      std::lock_guard<std::mutex> lock(m_mutex);
+      m_cleanupAccounts.erase(accountId);
+    }
+    m_routeCv.notify_all();
+  }
+
+  [[nodiscard]] bool CleanupWithoutLiveLane(
+      OpenPitParamAccountId accountId, Promise<std::monostate> promise,
+      const std::function<void()>& cleanup) {
+    {
+      std::unique_lock<std::mutex> lock(m_mutex);
+      if (m_stopping || m_queues.find(accountId) != m_queues.end()) {
+        return false;
+      }
+      if (m_cleanupAccounts.find(accountId) != m_cleanupAccounts.end()) {
+        m_routeCv.wait(lock, [this, accountId] {
+          return m_stopping ||
+                 m_cleanupAccounts.find(accountId) == m_cleanupAccounts.end();
+        });
+        return false;
+      }
+      m_cleanupAccounts.insert(accountId);
+    }
+    ResolveMandatoryCleanup(std::move(promise), cleanup);
+    {
+      std::lock_guard<std::mutex> lock(m_mutex);
+      m_cleanupAccounts.erase(accountId);
+    }
+    m_routeCv.notify_all();
+    return true;
+  }
+
   [[nodiscard]] KeyQueuePtr GetOrCreate(OpenPitParamAccountId accountId,
                                         bool& created, std::size_t& total,
                                         std::optional<Error>& err) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
+    m_routeCv.wait(lock, [this, accountId] {
+      return m_stopping ||
+             m_cleanupAccounts.find(accountId) == m_cleanupAccounts.end();
+    });
     if (m_stopping) {
       err = Error(ErrorCode::Stopped, "async engine is stopped");
       return nullptr;
@@ -754,6 +1386,44 @@ class DynamicStrategy final : public Strategy, private Base {
     created = true;
     total = m_queues.size();
     return q;
+  }
+
+  // Releases producers blocked on a full lane after a hard stop. A lane created
+  // after this pass cannot strand a producer: a producer that reaches a full
+  // lane later observes the hard stop before deciding to wait.
+  void WakeBlockedLaneProducers() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (const auto& entry : m_queues) {
+      WakeBlockedProducers(entry.second);
+    }
+  }
+
+  // Closes and joins every live lane without allocating, for the destructor
+  // path where a failed allocation could not be reported. Closing all lanes
+  // before joining any keeps the teardown order of the stop methods: a worker
+  // never waits for a lane that has not been closed yet.
+  void CloseAndJoinLanes() {
+    {
+      std::lock_guard<std::mutex> lock(m_mutex);
+      m_stopping = true;
+      for (const auto& entry : m_queues) {
+        CloseQueue(entry.second);
+      }
+    }
+    m_routeCv.notify_all();
+    while (true) {
+      KeyQueuePtr q;
+      {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_queues.begin();
+        if (it == m_queues.end()) {
+          return;
+        }
+        q = std::move(it->second);
+        m_queues.erase(it);
+      }
+      q->Join();
+    }
   }
 
   // Snapshots every live queue and sets `m_stopping` so `GetOrCreate` starts no
@@ -863,20 +1533,24 @@ class DynamicStrategy final : public Strategy, private Base {
 
   void StopInDestructor() {
     // RAII backstop: stop the cleanup thread first (it joins retired workers
-    // inline), then hard-stop so every live worker exits, then join them all
-    // unconditionally. No worker thread outlives this object.
+    // inline), then hard-stop so every live worker exits and every blocked
+    // producer is released, then close and join the lanes. No worker thread
+    // outlives this object, and nothing on this path allocates - a destructor
+    // has no way to report a failed allocation.
     StopCleanup();
     SignalHardStop();
     SignalStop();
-    std::vector<KeyQueuePtr> queues = MarkStoppingAndSnapshot();
-    CloseQueues(queues);
-    (void)WaitWorkersDrained(std::chrono::steady_clock::time_point::max());
-    JoinAll(queues);
+    WakeBlockedLaneProducers();
+    (void)WaitLifecycleDrained(std::chrono::steady_clock::time_point::max());
+    CloseAndJoinLanes();
+    (void)SealLifecycleDrained(std::chrono::steady_clock::time_point::max());
   }
 
   std::mutex m_mutex;
+  std::condition_variable m_routeCv;
   bool m_stopping = false;
   std::unordered_map<OpenPitParamAccountId, KeyQueuePtr> m_queues;
+  std::unordered_set<OpenPitParamAccountId> m_cleanupAccounts;
   std::size_t m_maxQueues;
   bool m_capEnabled;
   std::chrono::nanoseconds m_idleCleanupAfter;

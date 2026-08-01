@@ -101,6 +101,20 @@ pub(crate) fn parse_reject_code(value: &str) -> Result<RejectCode, JsValue> {
         })
 }
 
+/// Reports whether a reject code means a policy could not evaluate the
+/// historical order.
+///
+/// An evaluation failure aborts drop-copy evaluation: `applyDropCopy` returns
+/// the rejects instead of an operation, and no policy effect stays applied.
+///
+/// # Errors
+///
+/// Throws `ParamError` when `value` is not a recognized reject code.
+#[wasm_bindgen(js_name = isRejectCodeEvaluationFailure)]
+pub fn is_reject_code_evaluation_failure(value: &str) -> Result<bool, JsValue> {
+    Ok(parse_reject_code(value)?.is_evaluation_failure())
+}
+
 /// Read-only rejection record produced by the engine.
 #[wasm_bindgen(js_name = Reject)]
 #[derive(Clone)]

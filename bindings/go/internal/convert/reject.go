@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package convert
 
@@ -22,14 +22,18 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
-// NewNativeRejectListOrNil copies callback rejects into a native list.
+// NewNativeRejectList copies callback rejects into a native list.
 //
-// An invalid scope invalidates the whole callback result. The native list is
-// replaced with one SystemUnavailable reject so the engine never applies a
-// partial decision.
-func NewNativeRejectListOrNil(source []reject.Reject) native.PretradeRejectList {
+// A shared immutable empty list represents a successful callback without a
+// heap allocation. A nil list is reserved for callback failure at the C
+// boundary.
+//
+// A rejected push invalidates the whole callback result. The native list is
+// replaced with one SystemUnavailable reject naming the real cause, so the
+// engine never applies a partial decision and the diagnosis is not misleading.
+func NewNativeRejectList(source []reject.Reject) native.PretradeRejectList {
 	if len(source) == 0 {
-		return nil
+		return native.AcceptPretradeRejectList()
 	}
 	result := native.CreatePretradeRejectList(len(source))
 	for _, r := range source {

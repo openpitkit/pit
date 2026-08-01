@@ -13,12 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package asyncengine
 
 import (
 	"context"
+	"sync"
 
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/future"
@@ -41,6 +42,20 @@ type AsyncRequest struct {
 	inner     *pretrade.Request
 	engine    *AsyncEngine
 	accountID param.AccountID
+	mu        sync.Mutex
+}
+
+func (r *AsyncRequest) closeInner() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inner.Close()
+}
+
+func (r *AsyncRequest) executeInner() (*pretrade.Reservation, []reject.Reject, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	defer r.inner.Close()
+	return r.inner.Execute()
 }
 
 func newAsyncRequest(
@@ -69,12 +84,14 @@ func (r *AsyncRequest) Execute(
 ) *future.Future2[*AsyncReservation, []reject.Reject] {
 	f := future.New2[*AsyncReservation, []reject.Reject]()
 	task := &executeRequestTask{f: f, req: r}
-	if err := r.engine.strategy.submit(
-		ctx, r.accountID, task,
-	); err != nil {
-		r.inner.Close()
-		f.Resolve(nil, nil, err)
-	}
+	_ = submitWithFailureHandoff(
+		ctx, r.engine.strategy, r.accountID, task, func(err error) {
+			r.engine.strategy.scheduleSubmitFailureCleanup(r.accountID, func() {
+				r.closeInner()
+				f.Resolve(nil, nil, err)
+			})
+		},
+	)
 	return f
 }
 
@@ -88,8 +105,7 @@ type executeRequestTask struct {
 
 func (t *executeRequestTask) run() {
 	r := t.req
-	defer r.inner.Close()
-	reservation, rejects, err := r.inner.Execute()
+	reservation, rejects, err := r.executeInner()
 	if err != nil {
 		t.f.Resolve(nil, nil, err)
 		return
@@ -102,7 +118,7 @@ func (t *executeRequestTask) run() {
 }
 
 func (t *executeRequestTask) abort(err error) {
-	t.req.inner.Close()
+	t.req.closeInner()
 	t.f.Resolve(nil, nil, err)
 }
 
@@ -115,12 +131,14 @@ func (t *executeRequestTask) abort(err error) {
 func (r *AsyncRequest) Close(ctx context.Context) *future.Future[struct{}] {
 	f := future.New[struct{}]()
 	task := &closeRequestTask{f: f, req: r}
-	if err := r.engine.strategy.submit(
-		ctx, r.accountID, task,
-	); err != nil {
-		r.inner.Close()
-		f.Resolve(struct{}{}, err)
-	}
+	_ = submitWithFailureHandoff(
+		ctx, r.engine.strategy, r.accountID, task, func(err error) {
+			r.engine.strategy.scheduleSubmitFailureCleanup(r.accountID, func() {
+				r.closeInner()
+				f.Resolve(struct{}{}, err)
+			})
+		},
+	)
 	return f
 }
 
@@ -133,12 +151,12 @@ type closeRequestTask struct {
 }
 
 func (t *closeRequestTask) run() {
-	t.req.inner.Close()
+	t.req.closeInner()
 	t.f.Resolve(struct{}{}, nil)
 }
 
 func (t *closeRequestTask) abort(err error) {
-	t.req.inner.Close()
+	t.req.closeInner()
 	t.f.Resolve(struct{}{}, err)
 }
 

@@ -16,7 +16,7 @@
 # Please see https://openpit.dev and the OWNERS file for details.
 
 """Prove that the incoming bucket on reservation outcomes surfaces through
-the Python binding's Reservation.account_adjustments() without any new
+the Python binding's Reservation.account_adjustments without any new
 binding code - only engine-side behavior is under test."""
 
 import openpit
@@ -76,7 +76,7 @@ def test_spot_funds_buy_reservation_base_incoming_surfaces() -> None:
     reservation = result.reservation
 
     # Read adjustments before finalizing; rollback releases the held state.
-    adjustments = reservation.account_adjustments()
+    adjustments = reservation.account_adjustments
     reservation.rollback()
 
     # Two entries: [0] settlement (USD) held, [1] base (AAPL) incoming.
@@ -147,7 +147,7 @@ def test_spot_funds_sell_reservation_quote_incoming_surfaces() -> None:
     reservation = result.reservation
 
     # Read adjustments before finalizing; rollback releases the held state.
-    adjustments = reservation.account_adjustments()
+    adjustments = reservation.account_adjustments
     reservation.rollback()
 
     # Two entries: [0] underlying (AAPL) held, [1] settlement (USD) incoming.

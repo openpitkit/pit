@@ -31,7 +31,8 @@
 // `openpit/asyncengine/typed.hpp` layers the concrete typed surface on top: an
 // `openpit::Engine`-backed driver and a `TypedAsyncEngine` exposing the named
 // pre-trade pipeline operations (StartPreTrade / ExecutePreTrade /
-// ApplyAccountAdjustment), while leaving the generic driver seam intact.
+// ApplyDropCopy / ApplyAccountAdjustment), while leaving the generic driver
+// seam intact.
 
 #include "openpit/asyncengine/engine.hpp"
 #include "openpit/asyncengine/future.hpp"

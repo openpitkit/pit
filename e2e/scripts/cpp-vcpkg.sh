@@ -139,6 +139,9 @@ PY
   export OPENPIT_VCPKG_REGISTRY_BASELINE
 }
 
+# Source: https://wiki.openpit.dev/Getting-Started/ - Managed OpenPit registry
+# The filesystem branch is test-only; the git branch below mirrors the
+# published vcpkg-configuration.json snippet.
 write_vcpkg_configuration() {
   if [[ -n "${OPENPIT_VCPKG_REGISTRY_PATH:-}" ]]; then
     cat > "${work_root}/vcpkg-configuration.json" <<EOF
@@ -176,7 +179,8 @@ echo "==> Bootstrapping isolated vcpkg"
 git clone --depth 1 https://github.com/microsoft/vcpkg.git "${vcpkg_root}"
 "${vcpkg_root}/bootstrap-vcpkg.sh" -disableMetrics
 vcpkg_baseline="$(git -C "${vcpkg_root}" rev-parse HEAD)"
-# Source: bindings/cpp/README.md - Getting Started / vcpkg
+# Source: bindings/cpp/README.md - Install
+# Source: https://wiki.openpit.dev/Getting-Started/ - C++ Through vcpkg
 cat > "${work_root}/vcpkg.json" <<EOF
 {
   "name": "openpit-release-e2e-cpp-vcpkg",

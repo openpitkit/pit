@@ -13,12 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package asyncengine
 
 import (
 	"context"
+	"sync"
 
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/future"
@@ -43,6 +44,24 @@ type AsyncReservation struct {
 	inner     *pretrade.Reservation
 	engine    *AsyncEngine
 	accountID param.AccountID
+	mu        sync.Mutex
+}
+
+func (r *AsyncReservation) runInner(op reservationOp) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch op {
+	case reservationCommit:
+		r.inner.Commit()
+	case reservationCommitAndClose:
+		r.inner.CommitAndClose()
+	case reservationRollback:
+		r.inner.Rollback()
+	case reservationRollbackAndClose:
+		r.inner.RollbackAndClose()
+	case reservationClose:
+		r.inner.Close()
+	}
 }
 
 func newAsyncReservation(
@@ -120,10 +139,18 @@ func (r *AsyncReservation) runVoid(
 ) *future.Future[struct{}] {
 	f := future.New[struct{}]()
 	task := &reservationTask{f: f, res: r, op: op, abortCloses: abortCloses}
+	if abortCloses {
+		_ = submitWithFailureHandoff(
+			ctx, r.engine.strategy, r.accountID, task, func(err error) {
+				r.engine.strategy.scheduleSubmitFailureCleanup(r.accountID, func() {
+					r.runInner(reservationClose)
+					f.Resolve(struct{}{}, err)
+				})
+			},
+		)
+		return f
+	}
 	if err := r.engine.strategy.submit(ctx, r.accountID, task); err != nil {
-		if abortCloses {
-			r.inner.Close()
-		}
 		f.Resolve(struct{}{}, err)
 	}
 	return f
@@ -141,24 +168,13 @@ type reservationTask struct {
 }
 
 func (t *reservationTask) run() {
-	switch t.op {
-	case reservationCommit:
-		t.res.inner.Commit()
-	case reservationCommitAndClose:
-		t.res.inner.CommitAndClose()
-	case reservationRollback:
-		t.res.inner.Rollback()
-	case reservationRollbackAndClose:
-		t.res.inner.RollbackAndClose()
-	case reservationClose:
-		t.res.inner.Close()
-	}
+	t.res.runInner(t.op)
 	t.f.Resolve(struct{}{}, nil)
 }
 
 func (t *reservationTask) abort(err error) {
 	if t.abortCloses {
-		t.res.inner.Close()
+		t.res.runInner(reservationClose)
 	}
 	t.f.Resolve(struct{}{}, err)
 }

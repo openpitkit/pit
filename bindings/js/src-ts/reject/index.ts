@@ -35,6 +35,19 @@
 // one module graph when callers mix public entries.
 import "#runtime";
 
+import { isRejectCodeEvaluationFailure } from "../wasm/openpit_js.js";
+import type { RejectCode as RejectCodeValue } from "../types.js";
+
+/**
+ * Reports whether `code` means a policy could not evaluate the historical
+ * order. An evaluation failure aborts drop-copy evaluation: `applyDropCopy`
+ * returns the rejects instead of an operation, and no policy effect stays
+ * applied.
+ */
+export function isEvaluationFailure(code: RejectCodeValue): boolean {
+  return isRejectCodeEvaluationFailure(code);
+}
+
 export {
   // Reject + block + account-control handle.
   Reject,

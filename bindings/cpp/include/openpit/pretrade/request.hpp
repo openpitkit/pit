@@ -97,16 +97,16 @@ struct ExecuteResult {
   if (m_order != nullptr) {
     orderGuard.emplace(*m_order);
   }
-  ::openpit::detail::ClearPendingCallbackException();
+  ::openpit::detail::CallbackExceptionScope callbackExceptions;
   const OpenPitPretradeStatus status =
       openpit_pretrade_pre_trade_request_execute(RequireHandle(), &reservation,
                                                  &rejects, &error);
-  if (::openpit::detail::HasPendingCallbackException()) {
+  if (callbackExceptions.HasPending()) {
     openpit_destroy_pretrade_pre_trade_reservation(reservation);
-    openpit_pretrade_destroy_reject_list(rejects);
+    openpit_destroy_pretrade_reject_list(rejects);
     openpit_destroy_shared_string(error);
   }
-  ::openpit::detail::ThrowIfPendingCallbackException();
+  callbackExceptions.ThrowIfPending();
   if (status == OpenPitPretradeStatus_Error) {
     ::openpit::detail::ThrowFromSharedString(
         error, "openpit_pretrade_pre_trade_request_execute failed");

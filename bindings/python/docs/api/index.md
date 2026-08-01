@@ -97,6 +97,12 @@ reservation that must be committed or rolled back.
 .. autoclass:: openpit.pretrade.ExecuteResult
    :members:
 
+.. autoclass:: openpit.pretrade.DropCopyResult
+   :members:
+
+.. autoclass:: openpit.pretrade.DropCopyOperation
+   :members:
+
 .. autoclass:: openpit.pretrade.PostTradeResult
    :members:
 

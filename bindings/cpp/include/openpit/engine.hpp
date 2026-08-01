@@ -25,6 +25,7 @@
 #include "openpit/model/model.hpp"
 #include "openpit/param/account_id.hpp"
 #include "openpit/pretrade/detail/lists.hpp"
+#include "openpit/pretrade/drop_copy_operation.hpp"
 #include "openpit/pretrade/dry_run_report.hpp"
 #include "openpit/pretrade/start_result.hpp"
 #include "openpit/string.hpp"
@@ -209,15 +210,15 @@ class Engine {
     OpenPitPretradeRejectList* rejects = nullptr;
     OpenPitSharedString* error = nullptr;
     const ::openpit::detail::CurrentOrderGuard orderGuard(*order);
-    detail::ClearPendingCallbackException();
+    detail::CallbackExceptionScope callbackExceptions;
     const OpenPitPretradeStatus status = openpit_engine_start_pre_trade(
         m_handle.Get(), &raw, &request, &rejects, &error);
-    if (detail::HasPendingCallbackException()) {
+    if (callbackExceptions.HasPending()) {
       openpit_destroy_pretrade_pre_trade_request(request);
-      openpit_pretrade_destroy_reject_list(rejects);
+      openpit_destroy_pretrade_reject_list(rejects);
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException();
+    callbackExceptions.ThrowIfPending();
     if (status == OpenPitPretradeStatus_Error) {
       detail::ThrowFromSharedString(error,
                                     "openpit_engine_start_pre_trade failed");
@@ -261,15 +262,15 @@ class Engine {
     OpenPitPretradeRejectList* rejects = nullptr;
     OpenPitSharedString* error = nullptr;
     const ::openpit::detail::CurrentOrderGuard orderGuard(order);
-    detail::ClearPendingCallbackException();
+    detail::CallbackExceptionScope callbackExceptions;
     const OpenPitPretradeStatus status = openpit_engine_execute_pre_trade(
         m_handle.Get(), &raw, &reservation, &rejects, &error);
-    if (detail::HasPendingCallbackException()) {
+    if (callbackExceptions.HasPending()) {
       openpit_destroy_pretrade_pre_trade_reservation(reservation);
-      openpit_pretrade_destroy_reject_list(rejects);
+      openpit_destroy_pretrade_reject_list(rejects);
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException();
+    callbackExceptions.ThrowIfPending();
     if (status == OpenPitPretradeStatus_Error) {
       detail::ThrowFromSharedString(error,
                                     "openpit_engine_execute_pre_trade failed");
@@ -287,30 +288,56 @@ class Engine {
     return out;
   }
 
-  /// Runs the complete pre-trade pipeline without enforcing policy rejects.
-  /// Existing account and account-group blocks are ignored. Every policy keeps
-  /// its normal mutations, locks, account adjustments, and account blocks.
-  /// A market order throws before any policy is invoked.
-  [[nodiscard]] ::openpit::pretrade::Reservation ExecutePreTradeDropCopy(
+  /// Applies an already executed order without enforcing existing account and
+  /// account-group blocks or ordinary policy rejects. On accept the result
+  /// carries a `pretrade::DropCopyOperation` representing applied-but-not-
+  /// finalized state; a fatal evaluation failure carries the rejects instead.
+  /// Throws `openpit::Error` on a boundary failure.
+  ///
+  /// The returned operation owns finalization exactly like a reservation:
+  /// commit applies the prepared state, rollback compensates it, and
+  /// destruction rolls back an unresolved operation. Account-control operations
+  /// and rate-limit attempts are applied before this call returns and stay
+  /// outside that finalization boundary.
+  ///
+  /// Drop copy requires a readable account id: an order whose account id cannot
+  /// be read is rejected with `RejectCode::MissingRequiredField` before any
+  /// policy runs, so no policy observes it and no state is touched.
+  ///
+  /// A fully synchronized engine accepts concurrent calls for the same account,
+  /// but individual storage accesses may interleave. Callers that require
+  /// whole-pipeline isolation must serialize those calls externally.
+  [[nodiscard]] ::openpit::pretrade::DropCopyResult ApplyDropCopy(
       const ::openpit::Order& order) const {
     const OpenPitOrder raw = ::openpit::detail::Native(order);
-    OpenPitPretradePreTradeReservation* reservation = nullptr;
+    OpenPitPretradeDropCopyOperation* operation = nullptr;
+    OpenPitPretradeRejectList* rejects = nullptr;
     OpenPitSharedString* error = nullptr;
     const ::openpit::detail::CurrentOrderGuard orderGuard(order);
-    detail::ClearPendingCallbackException();
-    const bool ok = openpit_engine_execute_pre_trade_drop_copy(
-        m_handle.Get(), &raw, &reservation, &error);
-    if (detail::HasPendingCallbackException()) {
-      openpit_destroy_pretrade_pre_trade_reservation(reservation);
+    detail::CallbackExceptionScope callbackExceptions;
+    const OpenPitPretradeStatus status = openpit_engine_apply_drop_copy(
+        m_handle.Get(), &raw, &operation, &rejects, &error);
+    if (callbackExceptions.HasPending()) {
+      openpit_destroy_pretrade_drop_copy_operation(operation);
+      openpit_destroy_pretrade_reject_list(rejects);
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException();
-    if (!ok) {
-      detail::ThrowFromSharedString(
-          error, "openpit_engine_execute_pre_trade_drop_copy failed");
+    callbackExceptions.ThrowIfPending();
+    if (status == OpenPitPretradeStatus_Error) {
+      detail::ThrowFromSharedString(error,
+                                    "openpit_engine_apply_drop_copy failed");
     }
-    return ::openpit::detail::FromNative<::openpit::pretrade::Reservation>(
-        reservation);
+    ::openpit::pretrade::DropCopyResult out;
+    if (status == OpenPitPretradeStatus_Rejected) {
+      if (rejects != nullptr) {
+        out.rejects = pretrade::detail::ListAccess::DrainRejects(rejects);
+      }
+      return out;
+    }
+    out.operation =
+        ::openpit::detail::FromNative<::openpit::pretrade::DropCopyOperation>(
+            operation);
+    return out;
   }
 
   // Runs the start stage as a non-mutating dry-run. The returned report carries
@@ -321,14 +348,14 @@ class Engine {
     OpenPitPretradePreTradeDryRunReport* report = nullptr;
     OpenPitSharedString* error = nullptr;
     const ::openpit::detail::CurrentOrderGuard orderGuard(order);
-    detail::ClearPendingCallbackException();
+    detail::CallbackExceptionScope callbackExceptions;
     const bool ok = openpit_engine_start_pre_trade_dry_run(m_handle.Get(), &raw,
                                                            &report, &error);
-    if (detail::HasPendingCallbackException()) {
+    if (callbackExceptions.HasPending()) {
       openpit_destroy_pretrade_pre_trade_dry_run_report(report);
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException();
+    callbackExceptions.ThrowIfPending();
     if (!ok) {
       detail::ThrowFromSharedString(
           error, "openpit_engine_start_pre_trade_dry_run failed");
@@ -346,14 +373,14 @@ class Engine {
     OpenPitPretradePreTradeDryRunReport* report = nullptr;
     OpenPitSharedString* error = nullptr;
     const ::openpit::detail::CurrentOrderGuard orderGuard(order);
-    detail::ClearPendingCallbackException();
+    detail::CallbackExceptionScope callbackExceptions;
     const bool ok = openpit_engine_execute_pre_trade_dry_run(
         m_handle.Get(), &raw, &report, &error);
-    if (detail::HasPendingCallbackException()) {
+    if (callbackExceptions.HasPending()) {
       openpit_destroy_pretrade_pre_trade_dry_run_report(report);
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException();
+    callbackExceptions.ThrowIfPending();
     if (!ok) {
       detail::ThrowFromSharedString(
           error, "openpit_engine_execute_pre_trade_dry_run failed");
@@ -394,7 +421,7 @@ class Engine {
     OpenPitAccountAdjustmentOutcomeList* outcomes = nullptr;
     OpenPitPretradeAccountBlockList* blocks = nullptr;
     OpenPitSharedString* error = nullptr;
-    detail::ClearPendingCallbackException();
+    detail::CallbackExceptionScope callbackExceptions;
     const OpenPitAccountAdjustmentApplyStatus status =
         openpit_engine_apply_account_adjustment(
             m_handle.Get(), ::openpit::detail::Native(accountId),
@@ -403,12 +430,12 @@ class Engine {
     detail::Handle<OpenPitPretradeAccountBlockList,
                    ::openpit::pretrade::detail::AccountBlockListDeleter>
         blocksOwner(blocks);
-    if (detail::HasPendingCallbackException()) {
+    if (callbackExceptions.HasPending()) {
       openpit_destroy_account_adjustment_batch_error(reject);
       openpit_destroy_account_adjustment_outcome_list(outcomes);
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException();
+    callbackExceptions.ThrowIfPending();
     if (status == OpenPitAccountAdjustmentApplyStatus_Error) {
       detail::ThrowFromSharedString(
           error, "openpit_engine_apply_account_adjustment failed");
@@ -462,15 +489,15 @@ class Engine {
     OpenPitPostTradeResult* result = nullptr;
     OpenPitSharedString* error = nullptr;
     const ::openpit::detail::CurrentReportGuard reportGuard(report);
-    detail::ClearPendingCallbackException();
+    detail::CallbackExceptionScope callbackExceptions;
     const bool ok = openpit_engine_apply_execution_report(m_handle.Get(), &raw,
                                                           &result, &error);
     detail::Handle<OpenPitPostTradeResult, detail::PostTradeResultDeleter>
         resultHandle(result);
-    if (detail::HasPendingCallbackException()) {
+    if (callbackExceptions.HasPending()) {
       openpit_destroy_shared_string(error);
     }
-    detail::ThrowIfPendingCallbackException();
+    callbackExceptions.ThrowIfPending();
     if (!ok) {
       detail::ThrowFromSharedString(
           error, "openpit_engine_apply_execution_report failed");

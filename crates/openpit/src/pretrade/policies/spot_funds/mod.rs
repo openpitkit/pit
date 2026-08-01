@@ -677,7 +677,7 @@ mod lease_tests {
             .expect("initial account PnL lease must be acquired");
         let mut mutations = Mutations::new();
         mutations.push(Mutation::new_reporting_with_guard(
-            || {},
+            || true,
             MutationRollbackResult::default,
             guard,
         ));
@@ -698,7 +698,7 @@ mod lease_tests {
             .expect("account PnL lease must be acquired");
         let mut mutations = Mutations::new();
         mutations.push(Mutation::new_reporting_with_guard(
-            || {},
+            || true,
             || -> MutationRollbackResult { panic!("rollback action panic") },
             guard,
         ));

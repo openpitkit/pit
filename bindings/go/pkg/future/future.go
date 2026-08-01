@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 // Package future provides the abstract future/promise primitives shared
 // across the SDK. They are deliberately transport-agnostic and carry no
@@ -63,7 +63,9 @@ func (f *Future[T]) Resolve(value T, err error) {
 
 // Await blocks until the future is resolved or ctx is cancelled. On ctx
 // cancellation the future's resolution is unaffected; the caller simply
-// gives up waiting and receives the zero value with ctx.Err().
+// gives up waiting and receives the zero value with ctx.Err(). The caller can
+// call Await again or retrieve the eventual value with TryGet. If that value
+// owns resources, cancellation does not transfer or release that ownership.
 func (f *Future[T]) Await(ctx context.Context) (T, error) {
 	select {
 	case <-f.done:
@@ -137,7 +139,9 @@ func (f *Future2[A, B]) Resolve(first A, second B, err error) {
 }
 
 // Await blocks until the future is resolved or ctx is cancelled. On ctx
-// cancellation the caller receives zero values with ctx.Err().
+// cancellation the caller receives zero values with ctx.Err(). The future
+// remains usable through Await or TryGet, and any resource-owning eventual
+// values still belong to the caller.
 func (f *Future2[A, B]) Await(ctx context.Context) (A, B, error) {
 	value, err := f.inner.Await(ctx)
 	return value.first, value.second, err

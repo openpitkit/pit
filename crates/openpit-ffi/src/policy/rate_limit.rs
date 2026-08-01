@@ -801,7 +801,7 @@ mod tests {
             crate::engine::OpenPitPretradeStatus::Rejected,
             "start_pre_trade should be rejected after retune"
         );
-        crate::reject::openpit_pretrade_destroy_reject_list(out_rejects);
+        crate::reject::openpit_destroy_pretrade_reject_list(out_rejects);
     }
 
     fn configure_error_message(

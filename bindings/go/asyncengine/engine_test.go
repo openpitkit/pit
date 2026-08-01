@@ -100,15 +100,15 @@ func (d *fakeDriver) ExecutePreTrade(
 	return nil, []reject.Reject{}, nil
 }
 
-func (d *fakeDriver) ExecutePreTradeDropCopy(
+func (d *fakeDriver) ApplyDropCopy(
 	order model.Order,
-) (*pretrade.Reservation, error) {
+) (*pretrade.DropCopyOperation, []reject.Reject, error) {
 	op, _ := order.Operation().Get()
 	accountID, _ := op.AccountID().Get()
 	done := d.recordStart(accountID)
 	defer done()
 	atomic.AddInt64(&d.executeCount, 1)
-	return pretrade.NewReservationFromHandle(nil), nil
+	return pretrade.NewDropCopyOperationFromHandle(nil), nil, nil
 }
 
 func (d *fakeDriver) ApplyExecutionReport(
@@ -343,7 +343,8 @@ func TestAsyncEngineDynamicMaxQueuesEnforced(t *testing.T) {
 		t.Fatal("timeout waiting for both workers to start")
 	}
 
-	// Third account should hit the cap.
+	// Third account should hit the cap: the two account queues consumed both
+	// slots.
 	f3 := async.StartPreTrade(
 		context.Background(), buildTestOrder(t, 3),
 	)
@@ -359,6 +360,45 @@ func TestAsyncEngineDynamicMaxQueuesEnforced(t *testing.T) {
 	}
 	if _, _, err := f2.Await(context.Background()); err != nil {
 		t.Fatalf("f2 Await error = %v", err)
+	}
+}
+
+// TestAsyncEngineDynamicMaxQueuesOneAllowsOneAccountQueue asserts that a cap of
+// one leaves one usable account queue.
+func TestAsyncEngineDynamicMaxQueuesOneAllowsOneAccountQueue(t *testing.T) {
+	t.Parallel()
+	driver := newFakeDriver()
+	async, err := NewBuilder(driver).
+		Dynamic().
+		MaxQueues(1).
+		IdleCleanupAfter(0).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer func() {
+		if err := async.StopGraceful(context.Background()); err != nil {
+			t.Fatalf("StopGraceful() error = %v", err)
+		}
+	}()
+
+	first := async.StartPreTrade(context.Background(), buildTestOrder(t, 1))
+	if _, _, err := first.Await(context.Background()); err != nil {
+		t.Fatalf("first Await() error = %v", err)
+	}
+	second := async.StartPreTrade(context.Background(), buildTestOrder(t, 2))
+	if _, _, err := second.Await(context.Background()); !errors.Is(err, ErrQueueLimit) {
+		t.Fatalf("second Await() error = %v, want ErrQueueLimit", err)
+	}
+
+	strategy, ok := async.strategy.(*dynamicStrategy)
+	if !ok {
+		t.Fatalf("strategy type = %T, want *dynamicStrategy", async.strategy)
+	}
+	strategy.mu.RLock()
+	defer strategy.mu.RUnlock()
+	if len(strategy.queues) != 1 {
+		t.Fatalf("account queues = %d, want 1 with MaxQueues(1)", len(strategy.queues))
 	}
 }
 
@@ -947,6 +987,13 @@ func (s *recordingStrategy) submit(
 	return nil
 }
 
+func (*recordingStrategy) scheduleSubmitFailureCleanup(
+	_ param.AccountID,
+	cleanup func(),
+) {
+	cleanup()
+}
+
 func (*recordingStrategy) stopGraceful(context.Context) error { return nil }
 
 func (*recordingStrategy) stopHard(context.Context) error { return nil }
@@ -960,11 +1007,53 @@ func (s *recordingStrategy) last() (param.AccountID, bool) {
 	return s.accounts[len(s.accounts)-1], true
 }
 
+func TestAsyncEngineApplyDropCopyRoutesWithAccountLane(t *testing.T) {
+	t.Parallel()
+	strategy := &recordingStrategy{}
+	engine := newAsyncEngine(newFakeDriver(), nil, strategy)
+	account := param.NewAccountIDFromUint64(99)
+
+	future := engine.ApplyDropCopy(
+		context.Background(),
+		buildTestOrder(t, uint64(account.Handle())),
+	)
+	if future.Done() {
+		t.Fatal("future resolved even though recording strategy did not run task")
+	}
+	got, ok := strategy.last()
+	if !ok {
+		t.Fatal("strategy recorded no account-lane submit")
+	}
+	if got != account {
+		t.Fatalf("submit account = %v, want %v", got, account)
+	}
+}
+
+// TestAsyncEngineApplyDropCopyRefusesOrderWithoutAccount asserts that drop copy
+// refuses an unreadable account id up front, exactly as StartPreTrade and
+// ExecutePreTrade do: the core rejects such an order with MissingRequiredField
+// before any policy runs, so queueing it could only produce a guaranteed
+// failure.
+func TestAsyncEngineApplyDropCopyRefusesOrderWithoutAccount(t *testing.T) {
+	t.Parallel()
+	strategy := &recordingStrategy{}
+	engine := newAsyncEngine(newFakeDriver(), nil, strategy)
+
+	future := engine.ApplyDropCopy(context.Background(), model.NewOrder())
+	_, _, err := future.Await(context.Background())
+	if !errors.Is(err, ErrMissingAccountID) {
+		t.Fatalf("ApplyDropCopy() err = %v, want ErrMissingAccountID", err)
+	}
+	if _, ok := strategy.last(); ok {
+		t.Fatal("a drop copy without an account id reached a queue")
+	}
+}
+
 // TestAsyncEngineWrapperObjectsRouteToPinnedAccount asserts that wrapper
-// objects (AsyncRequest, AsyncReservation) route their callbacks to the
-// account they were pinned to. The recordingStrategy drops tasks without
-// running them; as a result every returned future remains unresolved — this is
-// the explicit invariant tested below: routing is proven, not execution.
+// objects route their callbacks to the account they were pinned to. The
+// recordingStrategy drops tasks without running them; as a result every
+// returned future remains unresolved - this is the explicit invariant tested
+// below: routing is proven, not execution.
 func TestAsyncEngineWrapperObjectsRouteToPinnedAccount(t *testing.T) {
 	t.Parallel()
 	strategy := &recordingStrategy{}
@@ -1001,4 +1090,19 @@ func TestAsyncEngineWrapperObjectsRouteToPinnedAccount(t *testing.T) {
 	assertRouted("AsyncReservation.Rollback", res.Rollback(ctx))
 	assertRouted("AsyncReservation.RollbackAndClose", res.RollbackAndClose(ctx))
 	assertRouted("AsyncReservation.Close", res.Close(ctx))
+
+	dropCopy := newAsyncDropCopyOperation(
+		pretrade.NewDropCopyOperationFromHandle(nil), eng, acc,
+	)
+	assertRouted("AsyncDropCopyOperation.Commit", dropCopy.Commit(ctx))
+	assertRouted(
+		"AsyncDropCopyOperation.CommitAndClose",
+		dropCopy.CommitAndClose(ctx),
+	)
+	assertRouted("AsyncDropCopyOperation.Rollback", dropCopy.Rollback(ctx))
+	assertRouted(
+		"AsyncDropCopyOperation.RollbackAndClose",
+		dropCopy.RollbackAndClose(ctx),
+	)
+	assertRouted("AsyncDropCopyOperation.Close", dropCopy.Close(ctx))
 }

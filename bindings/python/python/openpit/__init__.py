@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://github.com/openpitkit and the OWNERS file for details.
+# Please see https://openpit.dev and the OWNERS file for details.
 
 """Embeddable pre-trade risk SDK for trading systems.
 
@@ -245,10 +245,10 @@ _set_doc(
 
 Returns:
     Accounts: Handle for registering, unregistering, and reading account-group
-    membership, plus account/group pre-trade blocks. The handle shares the
-    engine's single account-control state, so changes are visible to every
-    other handle and to running policies; it inherits the engine's
-    synchronization mode.
+    membership, plus account/group pre-trade blocks and the engine-wide block.
+    The handle shares the engine's single account-control state, so changes are
+    visible to every other handle and to running policies; it inherits the
+    engine's synchronization mode.
 
 Every account starts in :data:`openpit.param.DEFAULT_ACCOUNT_GROUP` and joins
 another group only through ``register_group``.
@@ -376,6 +376,23 @@ Idempotent: a no-op when the account is not blocked.
 
 Args:
     account: :class:`openpit.param.AccountId` to unblock.
+    """,
+)
+_set_doc(
+    Accounts.unblock_all,
+    """Clear the engine-wide block, letting every account trade again.
+
+An engine-wide block is never raised by an admin call. The engine raises it
+itself when a kill switch is reported for an execution report whose account
+cannot be read, and when a mutation finalizer fails for a mutation a custom
+policy registered - which every :class:`openpit.Mutation` registered from
+Python is - because the engine cannot bound how far that policy's state
+reaches. The reject the block produces carries
+:attr:`openpit.pretrade.RejectCode.SYSTEM_UNAVAILABLE`.
+
+Idempotent: a no-op when no engine-wide block is active. Accounts and groups
+blocked individually remain blocked; clear those with :meth:`unblock` and
+:meth:`unblock_group`.
     """,
 )
 _set_doc(

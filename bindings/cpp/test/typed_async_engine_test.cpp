@@ -51,6 +51,7 @@
 #include <string_view>
 #include <thread>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -72,6 +73,15 @@ namespace policies = openpit::pretrade::policies;
 
 // Deterministic 5-second await cap so a wedged test fails fast.
 constexpr seconds kAwaitCap{5};
+// Idle retirement is timer-driven: the idle window plus up to one sweep
+// period, and any lane touch restarts the window. Tests that must observe a
+// retirement therefore wait with a wide margin instead of a bound tuned to the
+// configured window, which would turn ordinary scheduling jitter into a
+// failure.
+constexpr seconds kIdleRetireCap{30};
+// Short probe for assertions that something must NOT happen. Only a negative
+// direction may use it: a positive-direction wait uses `kAwaitCap`.
+constexpr std::chrono::milliseconds kNegativeProbe{100};
 constexpr std::uint64_t kAccountA = 1001;
 
 //------------------------------------------------------------------------------
@@ -198,30 +208,205 @@ class Gate {
     m_cv.notify_all();
   }
 
+  template <typename Rep, typename Period>
+  [[nodiscard]] bool WaitFor(std::chrono::duration<Rep, Period> timeout) {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    return m_cv.wait_for(lock, timeout, [this] { return m_open; });
+  }
+
  private:
   std::mutex m_mutex;
   std::condition_variable m_cv;
   bool m_open = false;
 };
 
+class BlockingCreateObserver final : public ae::Observer {
+ public:
+  BlockingCreateObserver(Gate* entered, Gate* release)
+      : m_entered(entered), m_release(release) {}
+
+  void OnQueueCreated(AccountId, std::size_t) override {
+    if (m_first.exchange(false, std::memory_order_relaxed)) {
+      m_entered->Open();
+      m_release->Wait();
+    }
+  }
+
+ private:
+  Gate* m_entered;
+  Gate* m_release;
+  std::atomic<bool> m_first{true};
+};
+
+class RetiringCreateObserver final : public ae::Observer {
+ public:
+  RetiringCreateObserver(Gate* firstCreated, Gate* releaseFirstCreate,
+                         Gate* removed)
+      : m_firstCreated(firstCreated),
+        m_releaseFirstCreate(releaseFirstCreate),
+        m_removed(removed) {}
+
+  void OnQueueCreated(AccountId, std::size_t) override {
+    if (m_creates.fetch_add(1, std::memory_order_relaxed) == 0) {
+      m_firstCreated->Open();
+      m_releaseFirstCreate->Wait();
+    }
+  }
+
+  void OnQueueRemoved(AccountId, std::size_t) override { m_removed->Open(); }
+
+  [[nodiscard]] std::size_t Creates() const {
+    return m_creates.load(std::memory_order_relaxed);
+  }
+
+ private:
+  Gate* m_firstCreated;
+  Gate* m_releaseFirstCreate;
+  Gate* m_removed;
+  std::atomic<std::size_t> m_creates{0};
+};
+
+class QueueFullGateObserver final : public ae::Observer {
+ public:
+  explicit QueueFullGateObserver(Gate* blocked, Gate* removed = nullptr)
+      : m_blocked(blocked), m_removed(removed) {}
+
+  void OnQueueFullBlocked(AccountId, std::chrono::nanoseconds) override {
+    m_blocked->Open();
+  }
+
+  void OnQueueRemoved(AccountId accountId, std::size_t) override {
+    if (m_removed != nullptr && accountId == AccountId::FromUint64(kAccountA)) {
+      m_removed->Open();
+    }
+  }
+
+ private:
+  Gate* m_blocked;
+  Gate* m_removed;
+};
+
+class QueueFullProducerCountObserver final : public ae::Observer {
+ public:
+  QueueFullProducerCountObserver(Gate* blocked, std::size_t expected)
+      : m_blocked(blocked), m_expected(expected) {}
+
+  void OnQueueFullBlocked(AccountId, std::chrono::nanoseconds) override {
+    bool ready = false;
+    {
+      std::lock_guard<std::mutex> lock(m_mutex);
+      m_blockedProducers.insert(std::this_thread::get_id());
+      ready = m_blockedProducers.size() >= m_expected;
+    }
+    if (ready) {
+      m_blocked->Open();
+    }
+  }
+
+ private:
+  Gate* m_blocked;
+  std::size_t m_expected;
+  std::mutex m_mutex;
+  std::unordered_set<std::thread::id> m_blockedProducers;
+};
+
+// Pushes a fatal evaluation reject, so drop copy aborts and produces rejects
+// instead of an operation.
+class FatalRejectPolicy {
+ public:
+  void PerformPreTradeCheck(const openpit::pretrade::Context& /*context*/,
+                            openpit::pretrade::PolicyDecision& decision) const {
+    decision.Push(openpit::pretrade::Reject(
+        "FatalRejectPolicy", openpit::pretrade::RejectScope::Order,
+        RejectCode::MissingRequiredField, "fatal evaluation failure",
+        "forced failure"));
+  }
+};
+
+class BlockingRollbackPolicy {
+ public:
+  BlockingRollbackPolicy(Gate* started, Gate* release)
+      : m_started(started), m_release(release) {}
+
+  void PerformPreTradeCheck(
+      const openpit::pretrade::Context& /*context*/,
+      openpit::tx::Mutations& mutations, openpit::pretrade::Result& /*result*/,
+      openpit::pretrade::PolicyDecision& /*decision*/) const {
+    Gate* started = m_started;
+    Gate* release = m_release;
+    mutations.Push([] {},
+                   [started, release] {
+                     started->Open();
+                     release->Wait();
+                   });
+  }
+
+ private:
+  Gate* m_started;
+  Gate* m_release;
+};
+
+class CountingRollbackPolicy {
+ public:
+  explicit CountingRollbackPolicy(
+      std::atomic<std::size_t>* rollbacks,
+      std::atomic<bool>* producerRan = nullptr,
+      std::atomic<bool>* cleanupOvertookProducer = nullptr)
+      : m_rollbacks(rollbacks),
+        m_producerRan(producerRan),
+        m_cleanupOvertookProducer(cleanupOvertookProducer) {}
+
+  void PerformPreTradeCheck(
+      const openpit::pretrade::Context& /*context*/,
+      openpit::tx::Mutations& mutations, openpit::pretrade::Result& /*result*/,
+      openpit::pretrade::PolicyDecision& /*decision*/) const {
+    std::atomic<std::size_t>* rollbacks = m_rollbacks;
+    std::atomic<bool>* producerRan = m_producerRan;
+    std::atomic<bool>* cleanupOvertookProducer = m_cleanupOvertookProducer;
+    mutations.Push(
+        [] {},
+        [rollbacks, producerRan, cleanupOvertookProducer] {
+          if (producerRan != nullptr && cleanupOvertookProducer != nullptr) {
+            cleanupOvertookProducer->store(
+                !producerRan->load(std::memory_order_acquire),
+                std::memory_order_release);
+          }
+          rollbacks->fetch_add(1, std::memory_order_relaxed);
+        });
+  }
+
+ private:
+  std::atomic<std::size_t>* m_rollbacks;
+  std::atomic<bool>* m_producerRan;
+  std::atomic<bool>* m_cleanupOvertookProducer;
+};
+
 // Accounts stub: records block/unblock so admin routing is observable.
 class MockAccounts {
  public:
-  explicit MockAccounts(std::atomic<std::size_t>* blocks) : m_blocks(blocks) {}
+  MockAccounts(std::atomic<std::size_t>* blocks,
+               std::atomic<std::size_t>* globalUnblocks)
+      : m_blocks(blocks), m_globalUnblocks(globalUnblocks) {}
 
   void Block(AccountId, std::string_view) const noexcept {
     m_blocks->fetch_add(1, std::memory_order_relaxed);
   }
   void Unblock(AccountId) const noexcept {}
+  void UnblockAll() const noexcept {
+    m_globalUnblocks->fetch_add(1, std::memory_order_relaxed);
+  }
 
  private:
   std::atomic<std::size_t>* m_blocks;
+  std::atomic<std::size_t>* m_globalUnblocks;
 };
 
 struct MockEngineAdapter {
   ConcurrencyProbe* probe = nullptr;
   std::atomic<std::size_t> starts{0};
   std::atomic<std::size_t> blocks{0};
+  std::atomic<std::size_t> globalUnblocks{0};
+  std::atomic<std::size_t> dropCopies{0};
 
   [[nodiscard]] openpit::pretrade::StartResult StartPreTrade(
       const openpit::model::Order& order) {
@@ -245,6 +430,18 @@ struct MockEngineAdapter {
     return result;
   }
 
+  [[nodiscard]] openpit::pretrade::DropCopyResult ApplyDropCopy(
+      const openpit::model::Order&) {
+    dropCopies.fetch_add(1, std::memory_order_relaxed);
+    openpit::pretrade::DropCopyResult result;
+    result.operation.emplace(openpit::pretrade::DropCopyOperation());
+    return result;
+  }
+
+  [[nodiscard]] std::size_t DropCopyCalls() const {
+    return dropCopies.load(std::memory_order_relaxed);
+  }
+
   [[nodiscard]] openpit::PostTradeResult ApplyExecutionReport(
       const openpit::model::ExecutionReport&) {
     return openpit::PostTradeResult{};
@@ -256,7 +453,9 @@ struct MockEngineAdapter {
     return openpit::AdjustmentResult{};
   }
 
-  [[nodiscard]] MockAccounts Accounts() { return MockAccounts(&blocks); }
+  [[nodiscard]] MockAccounts Accounts() {
+    return MockAccounts(&blocks, &globalUnblocks);
+  }
 };
 
 static_assert(
@@ -320,6 +519,188 @@ TEST(TypedAsyncLifecycle, RealEngineExecutePreTradeThenCommit) {
   EXPECT_TRUE(async.StopGraceful(seconds(10)));
 }
 
+TEST(TypedAsyncLifecycle, RealEngineDropCopyThenCommitAndClose) {
+  Engine engine = SingleOrderEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::DropCopyOutcome<ae::EngineAdapter> outcome =
+      async.ApplyDropCopy(TestOrder(kAccountA)).Await(kAwaitCap).value();
+
+  ASSERT_TRUE(outcome.Passed());
+  EXPECT_TRUE(outcome.rejects.empty());
+  EXPECT_EQ(outcome.operation->AccountId(),
+            ::openpit::param::AccountId::FromUint64(kAccountA));
+  EXPECT_TRUE(outcome.operation->Lock().IsEmpty());
+  EXPECT_TRUE(outcome.operation->AccountAdjustments().empty());
+  EXPECT_FALSE(outcome.operation->AccountBlock().has_value());
+  EXPECT_FALSE(outcome.operation->IsAccountBlocked());
+  EXPECT_TRUE(outcome.operation->CommitAndClose().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+// Commit and Close are separate finalizers: the operation stays alive between
+// them, exactly like the reservation pair.
+TEST(TypedAsyncLifecycle, RealEngineDropCopyCommitThenClose) {
+  Engine engine = SingleOrderEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::DropCopyOutcome<ae::EngineAdapter> outcome =
+      async.ApplyDropCopy(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(outcome.Passed());
+
+  EXPECT_TRUE(outcome.operation->Commit().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(outcome.operation->Close().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncLifecycle, RealEngineDropCopyRollbackThenClose) {
+  Engine engine = SingleOrderEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::DropCopyOutcome<ae::EngineAdapter> outcome =
+      async.ApplyDropCopy(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(outcome.Passed());
+
+  EXPECT_TRUE(outcome.operation->Rollback().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(outcome.operation->Close().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncLifecycle, RealEngineDropCopyRollbackAndClose) {
+  Engine engine = SingleOrderEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::DropCopyOutcome<ae::EngineAdapter> outcome =
+      async.ApplyDropCopy(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(outcome.Passed());
+
+  EXPECT_TRUE(
+      outcome.operation->RollbackAndClose().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+// A Close submitted after a graceful stop cannot enter the closed queue, but
+// it must still release the native operation before reporting Stopped.
+TEST(TypedAsyncShutdown, DropCopyCloseAfterShardedStopReleasesOperation) {
+  Engine engine = SingleOrderEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::DropCopyOutcome<ae::EngineAdapter> outcome =
+      async.ApplyDropCopy(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(outcome.Passed());
+  ASSERT_TRUE(async.StopGraceful(seconds(10)));
+
+  ae::Future<std::monostate> close = outcome.operation->Close();
+  try {
+    (void)close.Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+  EXPECT_THROW({ (void)outcome.operation->Lock(); }, openpit::Error);
+}
+
+TEST(TypedAsyncShutdown, DropCopyCloseAfterDynamicStopReleasesOperation) {
+  Engine engine = SingleOrderEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = ae::TypedBuilder<ae::EngineAdapter>(driver).Dynamic().Build();
+
+  ae::DropCopyOutcome<ae::EngineAdapter> outcome =
+      async.ApplyDropCopy(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(outcome.Passed());
+  ASSERT_TRUE(async.StopGraceful(seconds(10)));
+
+  ae::Future<std::monostate> close = outcome.operation->Close();
+  try {
+    (void)close.Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+  EXPECT_THROW({ (void)outcome.operation->Lock(); }, openpit::Error);
+}
+
+TEST(TypedAsyncLifecycle, ReservationAndRequestRejectAccessAfterClose) {
+  Engine engine = OrderValidationEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::ExecuteOutcome<ae::EngineAdapter> executed =
+      async.ExecutePreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(executed.Passed());
+  ASSERT_TRUE(executed.reservation->Close().Await(kAwaitCap).has_value());
+  try {
+    (void)executed.reservation->Commit().Await(kAwaitCap);
+    FAIL() << "expected TaskFailed after reservation Close";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::TaskFailed);
+  }
+
+  ae::StartOutcome<ae::EngineAdapter> started =
+      async.StartPreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(started.Passed());
+  ASSERT_TRUE(started.request->Close().Await(kAwaitCap).has_value());
+  try {
+    (void)started.request->Execute().Await(kAwaitCap);
+    FAIL() << "expected TaskFailed after request Close";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::TaskFailed);
+  }
+
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+// A fatal evaluation reject is a VALUE in the outcome, never thrown, and no
+// operation is produced.
+TEST(TypedAsyncErrorModel, DropCopyFatalRejectIsValueNotThrow) {
+  EngineBuilder builder(SyncPolicy::Account);
+  openpit::pretrade::CustomPolicy<FatalRejectPolicy> policy(
+      "FatalRejectPolicy", FatalRejectPolicy{});
+  builder.Add(policy);
+  Engine engine = builder.Build();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::DropCopyOutcome<ae::EngineAdapter> outcome =
+      async.ApplyDropCopy(TestOrder(kAccountA)).Await(kAwaitCap).value();
+
+  EXPECT_FALSE(outcome.Passed());
+  EXPECT_FALSE(outcome.operation);
+  ASSERT_EQ(outcome.rejects.size(), 1u);
+  EXPECT_EQ(outcome.rejects.front().code, RejectCode::MissingRequiredField);
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncThreading, DropCopyFinalizationBlocksNextSameAccountCall) {
+  Gate rollbackStarted;
+  Gate releaseRollback;
+  EngineBuilder builder(SyncPolicy::Account);
+  openpit::pretrade::CustomPolicy<BlockingRollbackPolicy> policy(
+      "BlockingRollbackPolicy",
+      BlockingRollbackPolicy(&rollbackStarted, &releaseRollback));
+  builder.Add(policy);
+  Engine engine = builder.Build();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::DropCopyOutcome<ae::EngineAdapter> outcome =
+      async.ApplyDropCopy(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(outcome.Passed());
+  const std::shared_ptr<ae::AsyncDropCopyOperation<ae::EngineAdapter>>
+      operation = outcome.operation;
+
+  ae::Future<std::monostate> rollback = operation->Rollback();
+  rollbackStarted.Wait();
+  ae::Future<ae::StartOutcome<ae::EngineAdapter>> next =
+      async.StartPreTrade(TestOrder(kAccountA));
+  EXPECT_FALSE(next.Done());
+
+  releaseRollback.Open();
+  EXPECT_TRUE(rollback.Await(kAwaitCap).has_value());
+  ae::StartOutcome<ae::EngineAdapter> started = next.Await(kAwaitCap).value();
+  ASSERT_TRUE(started.Passed());
+  EXPECT_TRUE(started.request->Close().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(operation->Close().Await(kAwaitCap).has_value());
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
 //------------------------------------------------------------------------------
 // Reject vs throw (real engine).
 
@@ -362,6 +743,23 @@ TEST(TypedAsyncErrorModel, MissingAccountIdResolvesWithError) {
       async.StartPreTrade(OrderWithoutAccount());
   try {
     (void)future.Await();
+    FAIL() << "expected MissingAccountId";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::MissingAccountId);
+  }
+
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+// Drop copy needs a readable account id just as much as the other two entry
+// points, so the facade refuses the order up front instead of queueing work the
+// core would reject with MissingRequiredField anyway.
+TEST(TypedAsyncErrorModel, DropCopyMissingAccountFailsWithMissingAccountId) {
+  Engine engine = OrderValidationEngine();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  try {
+    (void)async.ApplyDropCopy(OrderWithoutAccount()).Await(kAwaitCap);
     FAIL() << "expected MissingAccountId";
   } catch (const ae::Error& err) {
     EXPECT_EQ(err.Code(), ae::ErrorCode::MissingAccountId);
@@ -424,6 +822,7 @@ TEST(TypedAsyncThreading, PerAccountSerializationHolds) {
   auto async = ae::TypedBuilder<MockEngineAdapter>(driver).Sharded(4).Build();
 
   std::vector<std::uint64_t> accounts;
+  accounts.reserve(kAccounts);
   for (int i = 0; i < kAccounts; ++i) {
     accounts.push_back(static_cast<std::uint64_t>(100 + i));
   }
@@ -453,6 +852,53 @@ TEST(TypedAsyncThreading, PerAccountSerializationHolds) {
     EXPECT_LE(probe.PeakFor(AccountId::FromUint64(account)), 1)
         << "account " << account << " saw overlapping driver calls";
   }
+}
+
+// A drop-copy order with no readable account id is refused before it reaches a
+// queue: the core rejects such an order with MissingRequiredField before any
+// policy runs, so queueing it could only produce a guaranteed failure - and
+// account 0, which is a real account, must never absorb its traffic.
+void ExpectDropCopyWithoutAccountIsRefused(
+    ae::TypedAsyncEngine<MockEngineAdapter>& async, MockEngineAdapter& driver) {
+  Gate accountZeroGate;
+  Gate accountZeroStarted;
+  ae::Future<std::monostate> accountZero =
+      async.Submit(AccountId::FromUint64(0), [&] {
+        accountZeroStarted.Open();
+        accountZeroGate.Wait();
+      });
+  accountZeroStarted.Wait();
+
+  ae::Future<ae::DropCopyOutcome<MockEngineAdapter>> dropCopy =
+      async.ApplyDropCopy(OrderWithoutAccount());
+  try {
+    (void)dropCopy.Await(std::chrono::seconds(1));
+    ADD_FAILURE() << "expected a MissingAccountId error";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::MissingAccountId);
+  }
+  accountZeroGate.Open();
+
+  EXPECT_EQ(driver.DropCopyCalls(), 0u);
+  EXPECT_TRUE(accountZero.Await(kAwaitCap).has_value());
+}
+
+TEST(TypedAsyncThreading, ShardedRefusesDropCopyWithoutAccount) {
+  MockEngineAdapter driver;
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver).Sharded(1).Build();
+
+  ExpectDropCopyWithoutAccountIsRefused(async, driver);
+
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncThreading, DynamicRefusesDropCopyWithoutAccount) {
+  MockEngineAdapter driver;
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver).Dynamic().Build();
+
+  ExpectDropCopyWithoutAccountIsRefused(async, driver);
+
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
 }
 
 //------------------------------------------------------------------------------
@@ -540,6 +986,1243 @@ TEST(TypedAsyncShutdown, HardStopAbortsQueuedCall) {
   }
 }
 
+TEST(TypedAsyncShutdown, DynamicStopWaitsForRegisteredProducer) {
+  MockEngineAdapter driver;
+  Gate createEntered;
+  Gate releaseCreate;
+  BlockingCreateObserver observer(&createEntered, &releaseCreate);
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .WithObserver(observer)
+                   .Dynamic()
+                   .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                   .Build();
+
+  std::atomic<bool> producerResolved{false};
+  std::thread producer([&] {
+    ae::Future<std::monostate> future =
+        async.Submit(AccountId::FromUint64(kAccountA), [] {});
+    try {
+      (void)future.Await(kAwaitCap);
+    } catch (const ae::Error&) {
+    }
+    producerResolved.store(true, std::memory_order_relaxed);
+  });
+  ASSERT_TRUE(createEntered.WaitFor(kAwaitCap));
+
+  Gate stopReturned;
+  std::thread stopper([&] {
+    (void)async.StopGraceful(seconds(10));
+    stopReturned.Open();
+  });
+  EXPECT_FALSE(stopReturned.WaitFor(std::chrono::milliseconds(100)));
+
+  releaseCreate.Open();
+  producer.join();
+  stopper.join();
+  EXPECT_TRUE(producerResolved.load(std::memory_order_relaxed));
+}
+
+TEST(TypedAsyncCleanup, DynamicRetriesCleanupAfterLaneRetires) {
+  MockEngineAdapter driver;
+  Gate firstCreated;
+  Gate releaseFirstCreate;
+  Gate removed;
+  Gate cleanupRan;
+  RetiringCreateObserver observer(&firstCreated, &releaseFirstCreate, &removed);
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .WithObserver(observer)
+                   .Dynamic()
+                   .IdleCleanupAfter(seconds(5))
+                   .Build();
+
+  std::thread cleanup([&] {
+    (void)async.Generic().ScheduleMandatoryCleanup(
+        AccountId::FromUint64(kAccountA), [&] { cleanupRan.Open(); });
+  });
+  const bool created = firstCreated.WaitFor(kAwaitCap);
+  const bool retired = removed.WaitFor(kIdleRetireCap);
+  releaseFirstCreate.Open();
+  const bool ran = cleanupRan.WaitFor(kAwaitCap);
+  cleanup.join();
+
+  EXPECT_TRUE(created);
+  EXPECT_TRUE(retired);
+  EXPECT_TRUE(ran);
+  EXPECT_GE(observer.Creates(), 2u);
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncCleanup, DynamicQueueLimitCleanupHoldsRoutingFence) {
+  MockEngineAdapter driver;
+  Gate firstCreated;
+  Gate releaseFirstCreate;
+  Gate removed;
+  Gate cleanupStarted;
+  Gate releaseCleanup;
+  releaseFirstCreate.Open();
+  RetiringCreateObserver observer(&firstCreated, &releaseFirstCreate, &removed);
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .WithObserver(observer)
+                   .Dynamic()
+                   .MaxQueues(1)
+                   .IdleCleanupAfter(seconds(5))
+                   .Build();
+
+  ASSERT_TRUE(async.Submit(AccountId::FromUint64(kAccountA), [] {})
+                  .Await(kAwaitCap)
+                  .has_value());
+
+  std::atomic<ae::ErrorCode> rejectedCode{ae::ErrorCode::TaskFailed};
+  std::thread rejected([&] {
+    ae::Future<std::monostate> future = async.Generic().Submit(
+        AccountId::FromUint64(kAccountA + 1), [] {},
+        [&](ae::Promise<std::monostate> promise, ae::Error error,
+            bool inAccountLane) mutable {
+          EXPECT_FALSE(inAccountLane);
+          (void)async.Generic().ScheduleMandatoryCleanup(
+              AccountId::FromUint64(kAccountA + 1),
+              [promise, error = std::move(error), &cleanupStarted,
+               &releaseCleanup]() mutable {
+                cleanupStarted.Open();
+                releaseCleanup.Wait();
+                promise.Fail(std::move(error));
+              });
+        });
+    try {
+      (void)future.Await(kAwaitCap);
+    } catch (const ae::Error& err) {
+      rejectedCode.store(err.Code(), std::memory_order_relaxed);
+    }
+  });
+
+  const bool startedCleanup = cleanupStarted.WaitFor(kAwaitCap);
+  Gate unrelatedRan;
+  std::atomic<bool> unrelatedResolved{false};
+  std::thread unrelated([&] {
+    ae::Future<std::monostate> future = async.Submit(
+        AccountId::FromUint64(kAccountA), [&] { unrelatedRan.Open(); });
+    try {
+      unrelatedResolved.store(future.Await(kAwaitCap).has_value(),
+                              std::memory_order_relaxed);
+    } catch (const ae::Error&) {
+    }
+  });
+  const bool unrelatedProceeded = unrelatedRan.WaitFor(kAwaitCap);
+  const bool removedDuringCleanup = removed.WaitFor(kIdleRetireCap);
+  Gate sameAccountRan;
+  std::atomic<bool> sameAccountResolved{false};
+  std::thread sameAccount([&] {
+    ae::Future<std::monostate> future = async.Submit(
+        AccountId::FromUint64(kAccountA + 1), [&] { sameAccountRan.Open(); });
+    try {
+      sameAccountResolved.store(future.Await(kAwaitCap).has_value(),
+                                std::memory_order_relaxed);
+    } catch (const ae::Error&) {
+    }
+  });
+  const bool sameAccountProceededDuringCleanup =
+      sameAccountRan.WaitFor(std::chrono::milliseconds(100));
+  releaseCleanup.Open();
+  rejected.join();
+  unrelated.join();
+  sameAccount.join();
+  EXPECT_TRUE(startedCleanup);
+  EXPECT_TRUE(unrelatedProceeded);
+  EXPECT_TRUE(unrelatedResolved.load(std::memory_order_relaxed));
+  EXPECT_TRUE(removedDuringCleanup);
+  EXPECT_FALSE(sameAccountProceededDuringCleanup);
+  EXPECT_TRUE(sameAccountResolved.load(std::memory_order_relaxed));
+  EXPECT_EQ(rejectedCode.load(std::memory_order_relaxed),
+            ae::ErrorCode::QueueLimit);
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncCleanup, GenericThrowingCleanupDoesNotStopEngine) {
+  MockEngineAdapter driver;
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .Dynamic()
+                   .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                   .Build();
+  ASSERT_TRUE(async.Submit(AccountId::FromUint64(kAccountA), [] {})
+                  .Await(kAwaitCap)
+                  .has_value());
+
+  Gate cleanupEntered;
+  ae::Future<std::monostate> cleanup = async.Generic().ScheduleMandatoryCleanup(
+      AccountId::FromUint64(kAccountA), [&] {
+        cleanupEntered.Open();
+        throw std::runtime_error("generic mandatory cleanup failed");
+      });
+  ASSERT_TRUE(cleanupEntered.WaitFor(kAwaitCap));
+  try {
+    (void)cleanup.Await(kAwaitCap);
+    FAIL() << "expected cleanup failure";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::TaskFailed);
+    EXPECT_EQ(err.Message(), "generic mandatory cleanup failed");
+  }
+
+  try {
+    EXPECT_TRUE(async.Submit(AccountId::FromUint64(kAccountA), [] {})
+                    .Await(kAwaitCap)
+                    .has_value());
+  } catch (const ae::Error& err) {
+    FAIL() << "cleanup stopped the engine: " << err.Message();
+  }
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncCleanup, ThrowingMandatoryCleanupDoesNotStopEngine) {
+  MockEngineAdapter driver;
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .Dynamic()
+                   .MaxQueues(1)
+                   .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                   .Build();
+  ASSERT_TRUE(async.Submit(AccountId::FromUint64(kAccountA), [] {})
+                  .Await(kAwaitCap)
+                  .has_value());
+
+  ae::Future<std::monostate> failed;
+  try {
+    failed = async.Generic().Submit(
+        AccountId::FromUint64(kAccountA + 1), [] {},
+        [](ae::Promise<std::monostate>, ae::Error, bool) { throw 7; });
+  } catch (...) {
+    FAIL() << "mandatory cleanup escaped the task boundary";
+  }
+  try {
+    (void)failed.Await(kAwaitCap);
+    FAIL() << "expected TaskFailed";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::TaskFailed);
+    EXPECT_EQ(err.Message(),
+              "mandatory cleanup threw a non-standard exception");
+  }
+
+  EXPECT_TRUE(async.Submit(AccountId::FromUint64(kAccountA), [] {})
+                  .Await(kAwaitCap)
+                  .has_value());
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncCleanup, WorkerAbortCleanupFailureResolvesFuture) {
+  MockEngineAdapter driver;
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver).Sharded(1).Build();
+  Gate running;
+  Gate release;
+  ae::Future<std::monostate> blocker =
+      async.Submit(AccountId::FromUint64(kAccountA), [&] {
+        running.Open();
+        release.Wait();
+      });
+  ASSERT_TRUE(running.WaitFor(kAwaitCap));
+
+  ae::Future<std::monostate> failed = async.Generic().Submit(
+      AccountId::FromUint64(kAccountA), [] {},
+      [](ae::Promise<std::monostate>, ae::Error, bool) {
+        throw std::runtime_error("mandatory cleanup failed");
+      });
+  EXPECT_FALSE(async.StopHard(std::chrono::milliseconds(1)));
+  release.Open();
+  EXPECT_TRUE(async.StopHard(seconds(10)));
+  ASSERT_TRUE(blocker.Await(kAwaitCap).has_value());
+  try {
+    (void)failed.Await(kAwaitCap);
+    FAIL() << "expected TaskFailed";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::TaskFailed);
+    EXPECT_EQ(err.Message(), "mandatory cleanup failed");
+  }
+}
+
+void ExpectPartialStopCleanupReturnsBeforeWorkerExit(
+    ae::TypedAsyncEngine<ae::EngineAdapter>& async,
+    std::atomic<std::size_t>& rollbacks, Gate& producerBlocked,
+    std::atomic<bool>& producerRan,
+    std::atomic<bool>& cleanupOvertookProducer) {
+  ae::ExecuteOutcome<ae::EngineAdapter> executed =
+      async.ExecutePreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(executed.Passed());
+
+  Gate workerEntered;
+  Gate releaseWorker;
+  ae::Future<std::monostate> running =
+      async.Submit(AccountId::FromUint64(kAccountA), [&] {
+        workerEntered.Open();
+        releaseWorker.Wait();
+      });
+  const bool workerStarted = workerEntered.WaitFor(kAwaitCap);
+  ae::Future<std::monostate> accepted =
+      async.Submit(AccountId::FromUint64(kAccountA), [] {});
+
+  ae::Future<std::monostate> blocked;
+  std::thread producer([&] {
+    blocked = async.Submit(AccountId::FromUint64(kAccountA), [&] {
+      producerRan.store(true, std::memory_order_release);
+    });
+  });
+  const bool producerWasBlocked = producerBlocked.WaitFor(kAwaitCap);
+  const bool partialStop = !async.StopGraceful(std::chrono::milliseconds(1));
+
+  Gate closeReturned;
+  ae::Future<std::monostate> close;
+  std::thread closer([&] {
+    close = executed.reservation->Close();
+    closeReturned.Open();
+  });
+  const bool returnedPromptly =
+      closeReturned.WaitFor(std::chrono::milliseconds(500));
+
+  releaseWorker.Open();
+  if (!returnedPromptly) {
+    // Recovery for the pre-fix implementation: otherwise its synchronous
+    // worker-exit wait would leave this regression test wedged forever.
+    (void)async.StopGraceful(seconds(10));
+  }
+  closer.join();
+  producer.join();
+
+  EXPECT_TRUE(workerStarted);
+  EXPECT_TRUE(producerWasBlocked);
+  EXPECT_TRUE(partialStop);
+  EXPECT_TRUE(returnedPromptly);
+  EXPECT_TRUE(running.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(accepted.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(blocked.Await(kAwaitCap).has_value());
+  try {
+    (void)close.Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+  EXPECT_EQ(rollbacks.load(std::memory_order_relaxed), 1u);
+  EXPECT_TRUE(producerRan.load(std::memory_order_acquire));
+  EXPECT_FALSE(cleanupOvertookProducer.load(std::memory_order_acquire));
+
+  if (!returnedPromptly) {
+    return;
+  }
+
+  Gate cleanupEntered;
+  Gate releaseCleanup;
+  ae::Future<std::monostate> cleanup = async.Generic().ScheduleMandatoryCleanup(
+      AccountId::FromUint64(kAccountA), [&] {
+        cleanupEntered.Open();
+        releaseCleanup.Wait();
+      });
+  const bool cleanupStarted = cleanupEntered.WaitFor(kAwaitCap);
+  Gate stopReturned;
+  std::atomic<bool> stopSucceeded{false};
+  std::thread stopper([&] {
+    stopSucceeded.store(async.StopGraceful(seconds(10)),
+                        std::memory_order_relaxed);
+    stopReturned.Open();
+  });
+  const bool stopWaitedForCleanup =
+      !stopReturned.WaitFor(std::chrono::milliseconds(100));
+  releaseCleanup.Open();
+  stopper.join();
+
+  EXPECT_TRUE(cleanupStarted);
+  EXPECT_TRUE(stopWaitedForCleanup);
+  EXPECT_TRUE(stopSucceeded.load(std::memory_order_relaxed));
+  EXPECT_TRUE(cleanup.Await(kAwaitCap).has_value());
+}
+
+TEST(TypedAsyncCleanup, ShardedPartialStopCleanupReturnsBeforeWorkerExit) {
+  std::atomic<std::size_t> rollbacks{0};
+  std::atomic<bool> producerRan{false};
+  std::atomic<bool> cleanupOvertookProducer{false};
+  EngineBuilder builder(SyncPolicy::Account);
+  openpit::pretrade::CustomPolicy<CountingRollbackPolicy> policy(
+      "CountingRollbackPolicy",
+      CountingRollbackPolicy(&rollbacks, &producerRan,
+                             &cleanupOvertookProducer));
+  builder.Add(policy);
+  Engine engine = builder.Build();
+  ae::EngineAdapter driver(engine);
+  Gate producerBlocked;
+  QueueFullGateObserver observer(&producerBlocked);
+  auto async = ae::TypedBuilder<ae::EngineAdapter>(driver)
+                   .WithObserver(observer)
+                   .WithQueueCapacity(1)
+                   .WithSlowSubmitThreshold(std::chrono::milliseconds(1))
+                   .Sharded(1)
+                   .Build();
+
+  ExpectPartialStopCleanupReturnsBeforeWorkerExit(
+      async, rollbacks, producerBlocked, producerRan, cleanupOvertookProducer);
+}
+
+TEST(TypedAsyncCleanup, DynamicPartialStopCleanupReturnsBeforeWorkerExit) {
+  std::atomic<std::size_t> rollbacks{0};
+  std::atomic<bool> producerRan{false};
+  std::atomic<bool> cleanupOvertookProducer{false};
+  EngineBuilder builder(SyncPolicy::Account);
+  openpit::pretrade::CustomPolicy<CountingRollbackPolicy> policy(
+      "CountingRollbackPolicy",
+      CountingRollbackPolicy(&rollbacks, &producerRan,
+                             &cleanupOvertookProducer));
+  builder.Add(policy);
+  Engine engine = builder.Build();
+  ae::EngineAdapter driver(engine);
+  Gate producerBlocked;
+  QueueFullGateObserver observer(&producerBlocked);
+  auto async = ae::TypedBuilder<ae::EngineAdapter>(driver)
+                   .WithObserver(observer)
+                   .WithQueueCapacity(1)
+                   .WithSlowSubmitThreshold(std::chrono::milliseconds(1))
+                   .Dynamic()
+                   .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                   .Build();
+
+  ExpectPartialStopCleanupReturnsBeforeWorkerExit(
+      async, rollbacks, producerBlocked, producerRan, cleanupOvertookProducer);
+}
+
+void ExpectStoppedLaneCleanupDrainsMultipleBlockedProducers(
+    ae::TypedAsyncEngine<MockEngineAdapter>& async, Gate& producersBlocked) {
+  const AccountId account = AccountId::FromUint64(kAccountA);
+  Gate workerEntered;
+  Gate releaseWorker;
+  ae::Future<std::monostate> running = async.Submit(account, [&] {
+    workerEntered.Open();
+    releaseWorker.Wait();
+  });
+  ASSERT_TRUE(workerEntered.WaitFor(kAwaitCap));
+  ae::Future<std::monostate> accepted = async.Submit(account, [] {});
+
+  std::atomic<std::size_t> producersRan{0};
+  ae::Future<std::monostate> first;
+  ae::Future<std::monostate> second;
+  std::thread firstProducer([&] {
+    first = async.Submit(
+        account, [&] { producersRan.fetch_add(1, std::memory_order_release); },
+        seconds(2));
+  });
+  std::thread secondProducer([&] {
+    second = async.Submit(
+        account, [&] { producersRan.fetch_add(1, std::memory_order_release); },
+        seconds(2));
+  });
+  const bool bothProducersBlocked = producersBlocked.WaitFor(kAwaitCap);
+  const bool partialStop = !async.StopGraceful(std::chrono::milliseconds(1));
+
+  std::atomic<bool> cleanupOvertookProducer{false};
+  Gate cleanupRan;
+  ae::Future<std::monostate> cleanup =
+      async.Generic().ScheduleMandatoryCleanup(account, [&] {
+        cleanupOvertookProducer.store(
+            producersRan.load(std::memory_order_acquire) != 2,
+            std::memory_order_release);
+        cleanupRan.Open();
+      });
+
+  Gate retryReturned;
+  std::atomic<bool> retrySucceeded{false};
+  std::thread retryStop([&] {
+    retrySucceeded.store(async.StopGraceful(seconds(4)),
+                         std::memory_order_relaxed);
+    retryReturned.Open();
+  });
+  releaseWorker.Open();
+  const bool retryReturnedWhileProducersCouldStillSubmit =
+      retryReturned.WaitFor(seconds(1));
+
+  firstProducer.join();
+  secondProducer.join();
+  retryStop.join();
+
+  EXPECT_TRUE(bothProducersBlocked);
+  EXPECT_TRUE(partialStop);
+  EXPECT_TRUE(retryReturnedWhileProducersCouldStillSubmit);
+  EXPECT_TRUE(retrySucceeded.load(std::memory_order_relaxed));
+  EXPECT_TRUE(running.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(accepted.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(first.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(second.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(cleanupRan.WaitFor(kAwaitCap));
+  EXPECT_TRUE(cleanup.Await(kAwaitCap).has_value());
+  EXPECT_FALSE(cleanupOvertookProducer.load(std::memory_order_acquire));
+}
+
+TEST(TypedAsyncCleanup,
+     ShardedStoppedLaneCleanupDrainsMultipleBlockedProducers) {
+  MockEngineAdapter driver;
+  Gate producersBlocked;
+  QueueFullProducerCountObserver observer(&producersBlocked, 2);
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .WithObserver(observer)
+                   .WithQueueCapacity(1)
+                   .WithSlowSubmitThreshold(std::chrono::milliseconds(1))
+                   .Sharded(1)
+                   .Build();
+
+  ExpectStoppedLaneCleanupDrainsMultipleBlockedProducers(async,
+                                                         producersBlocked);
+}
+
+TEST(TypedAsyncCleanup,
+     DynamicStoppedLaneCleanupDrainsMultipleBlockedProducers) {
+  MockEngineAdapter driver;
+  Gate producersBlocked;
+  QueueFullProducerCountObserver observer(&producersBlocked, 2);
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .WithObserver(observer)
+                   .WithQueueCapacity(1)
+                   .WithSlowSubmitThreshold(std::chrono::milliseconds(1))
+                   .Dynamic()
+                   .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                   .Build();
+
+  ExpectStoppedLaneCleanupDrainsMultipleBlockedProducers(async,
+                                                         producersBlocked);
+}
+
+void ExpectDeferredCleanupCannotLoseProducerWake(bool dynamic, bool hardStop,
+                                                 bool publicationRace = false) {
+  Gate workerAtWaitGap;
+  Gate allowProducerFinish;
+  Gate producerReturned;
+  Gate deferredPublished;
+  Gate allowDeferredRegistration;
+  Gate cleanupScheduled;
+  std::atomic<bool> armWaitGap{false};
+  std::atomic<bool> armPublicationGap{false};
+  std::atomic<bool> producerReturnedBeforeWait{false};
+  std::atomic<bool> cleanupScheduledBeforeWait{false};
+
+  ae::detail::BaseConfig config;
+  config.queueCapacity = 1;
+  // Without the publication race the producer is expected NOT to return while
+  // the worker holds the lane, so a short probe is the whole point; with it the
+  // producer is expected to return, so that direction gets the full cap.
+  const std::chrono::milliseconds producerProbe =
+      publicationRace ? std::chrono::milliseconds(kAwaitCap) : kNegativeProbe;
+
+  ae::detail::WorkerSeams seams;
+  seams.beforeWorkerWait = [&] {
+    if (!armWaitGap.exchange(false, std::memory_order_acq_rel)) {
+      return;
+    }
+    workerAtWaitGap.Open();
+    allowProducerFinish.Open();
+    producerReturnedBeforeWait.store(producerReturned.WaitFor(producerProbe),
+                                     std::memory_order_release);
+    if (publicationRace) {
+      allowDeferredRegistration.Open();
+      cleanupScheduledBeforeWait.store(cleanupScheduled.WaitFor(kNegativeProbe),
+                                       std::memory_order_release);
+    }
+  };
+  seams.afterDeferredPublication = [&] {
+    if (!armPublicationGap.exchange(false, std::memory_order_acq_rel)) {
+      return;
+    }
+    deferredPublished.Open();
+    allowDeferredRegistration.Wait();
+  };
+
+  std::unique_ptr<ae::detail::Strategy> strategy;
+  if (dynamic) {
+    strategy = std::make_unique<ae::detail::DynamicStrategy>(
+        config, 0, std::chrono::nanoseconds(0), false, std::move(seams));
+  } else {
+    strategy = std::make_unique<ae::detail::ShardedStrategy>(config, 1,
+                                                             std::move(seams));
+  }
+
+  const OpenPitParamAccountId account = kAccountA;
+  const auto noDeadline = std::chrono::steady_clock::time_point::max();
+  Gate workerEntered;
+  Gate releaseWorker;
+  std::atomic<bool> setupFailed{false};
+  strategy->Submit(account,
+                   std::make_unique<ae::detail::ClosureTask>(
+                       [&] {
+                         workerEntered.Open();
+                         releaseWorker.Wait();
+                       },
+                       [](ae::Error) {}),
+                   noDeadline, [&](ae::Error) {
+                     setupFailed.store(true, std::memory_order_relaxed);
+                   });
+  ASSERT_TRUE(workerEntered.WaitFor(kAwaitCap));
+  strategy->Submit(
+      account,
+      std::make_unique<ae::detail::ClosureTask>([] {}, [](ae::Error) {}),
+      noDeadline,
+      [&](ae::Error) { setupFailed.store(true, std::memory_order_relaxed); });
+
+  Gate failureHandlerEntered;
+  ae::ErrorCode producerError = ae::ErrorCode::Stopped;
+  std::thread producer([&] {
+    strategy->Submit(
+        account,
+        std::make_unique<ae::detail::ClosureTask>([] {}, [](ae::Error) {}),
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(50),
+        [&](ae::Error error) {
+          producerError = error.Code();
+          failureHandlerEntered.Open();
+          allowProducerFinish.Wait();
+        });
+    producerReturned.Open();
+  });
+  ASSERT_TRUE(failureHandlerEntered.WaitFor(kAwaitCap));
+
+  const auto initialDeadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
+  const bool partialStop = hardStop ? !strategy->StopHard(initialDeadline)
+                                    : !strategy->StopGraceful(initialDeadline);
+
+  Gate cleanupRan;
+  std::optional<ae::Future<std::monostate>> cleanup;
+  std::thread cleanupScheduler;
+  if (publicationRace) {
+    armPublicationGap.store(true, std::memory_order_release);
+    cleanupScheduler = std::thread([&] {
+      cleanup.emplace(strategy->ScheduleMandatoryCleanup(
+          account, [&] { cleanupRan.Open(); }));
+      cleanupScheduled.Open();
+    });
+    ASSERT_TRUE(deferredPublished.WaitFor(kAwaitCap));
+  } else {
+    cleanup.emplace(strategy->ScheduleMandatoryCleanup(
+        account, [&] { cleanupRan.Open(); }));
+  }
+  armWaitGap.store(true, std::memory_order_release);
+
+  std::atomic<bool> retrySucceeded{false};
+  std::thread retryStop([&] {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    retrySucceeded.store(hardStop ? strategy->StopHard(deadline)
+                                  : strategy->StopGraceful(deadline),
+                         std::memory_order_relaxed);
+  });
+  releaseWorker.Open();
+  retryStop.join();
+  producer.join();
+  if (cleanupScheduler.joinable()) {
+    cleanupScheduler.join();
+  }
+
+  bool recoverySucceeded = true;
+  std::optional<ae::Future<std::monostate>> recovery;
+  if (!retrySucceeded.load(std::memory_order_relaxed)) {
+    recovery.emplace(strategy->ScheduleMandatoryCleanup(account, [] {}));
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    recoverySucceeded = hardStop ? strategy->StopHard(deadline)
+                                 : strategy->StopGraceful(deadline);
+  }
+
+  EXPECT_FALSE(setupFailed.load(std::memory_order_relaxed));
+  EXPECT_EQ(producerError, ae::ErrorCode::SubmitCancelled);
+  EXPECT_TRUE(partialStop);
+  EXPECT_TRUE(workerAtWaitGap.WaitFor(kAwaitCap));
+  if (publicationRace) {
+    EXPECT_TRUE(producerReturnedBeforeWait.load(std::memory_order_acquire));
+    EXPECT_FALSE(cleanupScheduledBeforeWait.load(std::memory_order_acquire));
+  } else {
+    EXPECT_FALSE(producerReturnedBeforeWait.load(std::memory_order_acquire));
+  }
+  EXPECT_TRUE(retrySucceeded.load(std::memory_order_relaxed));
+  EXPECT_TRUE(recoverySucceeded);
+  EXPECT_TRUE(cleanupRan.WaitFor(kAwaitCap));
+  ASSERT_TRUE(cleanup.has_value());
+  EXPECT_TRUE(cleanup->Await(kAwaitCap).has_value());
+  if (recovery.has_value()) {
+    EXPECT_TRUE(recovery->Await(kAwaitCap).has_value());
+  }
+}
+
+TEST(TypedAsyncCleanup, ShardedGracefulRetryDoesNotLoseProducerWake) {
+  ExpectDeferredCleanupCannotLoseProducerWake(false, false);
+}
+
+TEST(TypedAsyncCleanup, ShardedHardRetryDoesNotLoseProducerWake) {
+  ExpectDeferredCleanupCannotLoseProducerWake(false, true);
+}
+
+TEST(TypedAsyncCleanup, DynamicGracefulRetryDoesNotLoseProducerWake) {
+  ExpectDeferredCleanupCannotLoseProducerWake(true, false);
+}
+
+TEST(TypedAsyncCleanup, DynamicHardRetryDoesNotLoseProducerWake) {
+  ExpectDeferredCleanupCannotLoseProducerWake(true, true);
+}
+
+TEST(TypedAsyncCleanup, ShardedGracefulDeferredPublicationDoesNotLoseWake) {
+  ExpectDeferredCleanupCannotLoseProducerWake(false, false, true);
+}
+
+TEST(TypedAsyncCleanup, ShardedHardDeferredPublicationDoesNotLoseWake) {
+  ExpectDeferredCleanupCannotLoseProducerWake(false, true, true);
+}
+
+TEST(TypedAsyncCleanup, DynamicGracefulDeferredPublicationDoesNotLoseWake) {
+  ExpectDeferredCleanupCannotLoseProducerWake(true, false, true);
+}
+
+TEST(TypedAsyncCleanup, DynamicHardDeferredPublicationDoesNotLoseWake) {
+  ExpectDeferredCleanupCannotLoseProducerWake(true, true, true);
+}
+
+TEST(TypedAsyncCleanup, DynamicRetryStopWaitsForNoLaneCleanup) {
+  MockEngineAdapter driver;
+  Gate producerBlocked;
+  Gate accountRemoved;
+  QueueFullGateObserver observer(&producerBlocked, &accountRemoved);
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .WithObserver(observer)
+                   .WithQueueCapacity(1)
+                   .WithSlowSubmitThreshold(std::chrono::milliseconds(1))
+                   .Dynamic()
+                   .IdleCleanupAfter(seconds(5))
+                   .Build();
+
+  ASSERT_TRUE(async.Submit(AccountId::FromUint64(kAccountA), [] {})
+                  .Await(kAwaitCap)
+                  .has_value());
+  ASSERT_TRUE(accountRemoved.WaitFor(kIdleRetireCap));
+
+  Gate workerEntered;
+  Gate releaseWorker;
+  ae::Future<std::monostate> running =
+      async.Submit(AccountId::FromUint64(kAccountA + 1), [&] {
+        workerEntered.Open();
+        releaseWorker.Wait();
+      });
+  ASSERT_TRUE(workerEntered.WaitFor(kAwaitCap));
+  ae::Future<std::monostate> accepted =
+      async.Submit(AccountId::FromUint64(kAccountA + 1), [] {});
+  ae::Future<std::monostate> blocked;
+  std::thread producer([&] {
+    blocked = async.Submit(AccountId::FromUint64(kAccountA + 1), [] {});
+  });
+  ASSERT_TRUE(producerBlocked.WaitFor(kAwaitCap));
+  EXPECT_FALSE(async.StopGraceful(std::chrono::milliseconds(1)));
+
+  Gate cleanupEntered;
+  Gate releaseCleanup;
+  Gate cleanupScheduled;
+  ae::Future<std::monostate> cleanup;
+  std::thread cleanupCaller([&] {
+    cleanup = async.Generic().ScheduleMandatoryCleanup(
+        AccountId::FromUint64(kAccountA), [&] {
+          cleanupEntered.Open();
+          releaseCleanup.Wait();
+        });
+    cleanupScheduled.Open();
+  });
+  ASSERT_TRUE(cleanupEntered.WaitFor(kAwaitCap));
+
+  releaseWorker.Open();
+  producer.join();
+  EXPECT_TRUE(running.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(accepted.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(blocked.Await(kAwaitCap).has_value());
+
+  Gate retryReturned;
+  std::atomic<bool> retrySucceeded{false};
+  std::thread retryStop([&] {
+    retrySucceeded.store(async.StopGraceful(seconds(10)),
+                         std::memory_order_relaxed);
+    retryReturned.Open();
+  });
+  const bool retryWaitedForCleanup =
+      !retryReturned.WaitFor(std::chrono::milliseconds(100));
+  releaseCleanup.Open();
+  cleanupCaller.join();
+  retryStop.join();
+
+  EXPECT_TRUE(cleanupScheduled.WaitFor(kAwaitCap));
+  EXPECT_TRUE(retryWaitedForCleanup);
+  EXPECT_TRUE(retrySucceeded.load(std::memory_order_relaxed));
+  EXPECT_TRUE(cleanup.Await(kAwaitCap).has_value());
+}
+
+void ExpectStopWaitsForSynchronousAbortHandoff(bool hardStop) {
+  MockEngineAdapter driver;
+  Gate producerBlocked;
+  QueueFullGateObserver observer(&producerBlocked);
+  Gate underlyingReleased;
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .WithStopUnderlying([&] { underlyingReleased.Open(); })
+                   .WithObserver(observer)
+                   .WithQueueCapacity(1)
+                   .WithSlowSubmitThreshold(std::chrono::milliseconds(1))
+                   .Sharded(1)
+                   .Build();
+
+  Gate workerEntered;
+  Gate releaseWorker;
+  ae::Future<std::monostate> running =
+      async.Submit(AccountId::FromUint64(kAccountA), [&] {
+        workerEntered.Open();
+        releaseWorker.Wait();
+      });
+  ASSERT_TRUE(workerEntered.WaitFor(kAwaitCap));
+  ae::Future<std::monostate> accepted =
+      async.Submit(AccountId::FromUint64(kAccountA), [] {});
+
+  Gate abortHandlerEntered;
+  Gate allowCleanupHandoff;
+  Gate cleanupEntered;
+  Gate releaseCleanup;
+  Gate submitReturned;
+  // A hard stop releases the producer blocked on the full lane, so that variant
+  // needs no deadline of its own and fails with Stopped; a graceful stop leaves
+  // the producer alone, so there its own deadline is what fails the submit.
+  const std::chrono::nanoseconds submitTimeout =
+      hardStop ? std::chrono::nanoseconds(seconds(30))
+               : std::chrono::nanoseconds(std::chrono::milliseconds(50));
+  const ae::ErrorCode expectedFailure =
+      hardStop ? ae::ErrorCode::Stopped : ae::ErrorCode::SubmitCancelled;
+  ae::Future<std::monostate> failed;
+  std::thread submitter([&] {
+    failed = async.Generic().Submit(
+        AccountId::FromUint64(kAccountA), [] {},
+        [&](ae::Promise<std::monostate> promise, ae::Error error,
+            bool inAccountLane) mutable {
+          EXPECT_FALSE(inAccountLane);
+          abortHandlerEntered.Open();
+          allowCleanupHandoff.Wait();
+          (void)async.Generic().ScheduleMandatoryCleanup(
+              AccountId::FromUint64(kAccountA),
+              [promise, error = std::move(error), &cleanupEntered,
+               &releaseCleanup]() mutable {
+                cleanupEntered.Open();
+                releaseCleanup.Wait();
+                promise.Fail(std::move(error));
+              });
+        },
+        submitTimeout);
+    submitReturned.Open();
+  });
+  ASSERT_TRUE(producerBlocked.WaitFor(kAwaitCap));
+
+  Gate stopReturned;
+  std::atomic<bool> stopSucceeded{false};
+  std::thread stopper([&] {
+    const bool stopped = hardStop ? async.StopHard(seconds(10))
+                                  : async.StopGraceful(seconds(10));
+    stopSucceeded.store(stopped, std::memory_order_relaxed);
+    stopReturned.Open();
+  });
+  const bool handlerStarted = abortHandlerEntered.WaitFor(kAwaitCap);
+  releaseWorker.Open();
+  const bool stopPassedHandoff =
+      stopReturned.WaitFor(std::chrono::milliseconds(500));
+  const bool underlyingPassedHandoff =
+      underlyingReleased.WaitFor(std::chrono::milliseconds(1));
+
+  allowCleanupHandoff.Open();
+  const bool cleanupStarted = cleanupEntered.WaitFor(kAwaitCap);
+  const bool stopPassedCleanup =
+      stopReturned.WaitFor(std::chrono::milliseconds(100));
+  releaseCleanup.Open();
+  submitter.join();
+  stopper.join();
+
+  EXPECT_TRUE(handlerStarted);
+  EXPECT_FALSE(stopPassedHandoff);
+  EXPECT_FALSE(underlyingPassedHandoff);
+  EXPECT_TRUE(cleanupStarted);
+  EXPECT_FALSE(stopPassedCleanup);
+  EXPECT_TRUE(stopSucceeded.load(std::memory_order_relaxed));
+  EXPECT_TRUE(stopReturned.WaitFor(kAwaitCap));
+  EXPECT_TRUE(underlyingReleased.WaitFor(kAwaitCap));
+  EXPECT_TRUE(submitReturned.WaitFor(kAwaitCap));
+  EXPECT_TRUE(running.Await(kAwaitCap).has_value());
+  if (hardStop) {
+    try {
+      (void)accepted.Await(kAwaitCap);
+      FAIL() << "expected Stopped";
+    } catch (const ae::Error& err) {
+      EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+    }
+  } else {
+    EXPECT_TRUE(accepted.Await(kAwaitCap).has_value());
+  }
+  try {
+    (void)failed.Await(kAwaitCap);
+    FAIL() << "expected a failed submit";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), expectedFailure);
+  }
+}
+
+TEST(TypedAsyncCleanup, GracefulStopWaitsForSynchronousAbortHandoff) {
+  ExpectStopWaitsForSynchronousAbortHandoff(false);
+}
+
+TEST(TypedAsyncCleanup, HardStopWaitsForSynchronousAbortHandoff) {
+  ExpectStopWaitsForSynchronousAbortHandoff(true);
+}
+
+TEST(TypedAsyncCleanup, HardStopAbortReleasesReservationInAccountLane) {
+  std::atomic<std::size_t> rollbacks{0};
+  EngineBuilder builder(SyncPolicy::Account);
+  openpit::pretrade::CustomPolicy<CountingRollbackPolicy> policy(
+      "CountingRollbackPolicy", CountingRollbackPolicy(&rollbacks));
+  builder.Add(policy);
+  Engine engine = builder.Build();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::ExecuteOutcome<ae::EngineAdapter> executed =
+      async.ExecutePreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(executed.Passed());
+  Gate running;
+  Gate release;
+  ae::Future<std::monostate> blocker =
+      async.Submit(AccountId::FromUint64(kAccountA), [&] {
+        running.Open();
+        release.Wait();
+      });
+  ASSERT_TRUE(running.WaitFor(kAwaitCap));
+  ae::Future<std::monostate> close = executed.reservation->Close();
+
+  EXPECT_FALSE(async.StopHard(std::chrono::milliseconds(1)));
+  release.Open();
+  EXPECT_TRUE(async.StopHard(seconds(10)));
+  ASSERT_TRUE(blocker.Await(kAwaitCap).has_value());
+  try {
+    (void)close.Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+  EXPECT_EQ(rollbacks.load(std::memory_order_relaxed), 1u);
+}
+
+TEST(TypedAsyncCleanup, SubmitFailureReleasesReservationAfterStop) {
+  std::atomic<std::size_t> rollbacks{0};
+  EngineBuilder builder(SyncPolicy::Account);
+  openpit::pretrade::CustomPolicy<CountingRollbackPolicy> policy(
+      "CountingRollbackPolicy", CountingRollbackPolicy(&rollbacks));
+  builder.Add(policy);
+  Engine engine = builder.Build();
+  auto async = ae::MakeTypedAsyncEngine(engine, 1);
+
+  ae::ExecuteOutcome<ae::EngineAdapter> executed =
+      async.ExecutePreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  ASSERT_TRUE(executed.Passed());
+  ASSERT_TRUE(async.StopGraceful(seconds(10)));
+
+  ae::Future<std::monostate> close = executed.reservation->Close();
+  try {
+    (void)close.Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+  EXPECT_EQ(rollbacks.load(std::memory_order_relaxed), 1u);
+}
+
+TEST(TypedAsyncCleanup, HardStopAbortReleasesRequestInAccountLane) {
+  Engine engine = OrderValidationEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = ae::TypedBuilder<ae::EngineAdapter>(driver).Sharded(1).Build();
+
+  auto order = std::make_shared<openpit::model::Order>(TestOrder(kAccountA));
+  std::weak_ptr<const openpit::Order> orderLifetime = order;
+  openpit::pretrade::StartResult started = engine.StartPreTrade(order);
+  ASSERT_TRUE(started.Passed());
+  auto request = std::make_shared<ae::AsyncRequest<ae::EngineAdapter>>(
+      std::move(*started.request), &async.Generic(),
+      AccountId::FromUint64(kAccountA));
+  order.reset();
+  ASSERT_FALSE(orderLifetime.expired());
+
+  Gate running;
+  Gate release;
+  ae::Future<std::monostate> blocker =
+      async.Submit(AccountId::FromUint64(kAccountA), [&] {
+        running.Open();
+        release.Wait();
+      });
+  ASSERT_TRUE(running.WaitFor(kAwaitCap));
+  ae::Future<std::monostate> close = request->Close();
+
+  EXPECT_FALSE(async.StopHard(std::chrono::milliseconds(1)));
+  release.Open();
+  EXPECT_TRUE(async.StopHard(seconds(10)));
+  ASSERT_TRUE(blocker.Await(kAwaitCap).has_value());
+  try {
+    (void)close.Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+  EXPECT_TRUE(orderLifetime.expired());
+}
+
+TEST(TypedAsyncCleanup, SubmitFailureReleasesRequestAfterStop) {
+  Engine engine = OrderValidationEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = ae::TypedBuilder<ae::EngineAdapter>(driver)
+                   .Dynamic()
+                   .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                   .Build();
+
+  auto order = std::make_shared<openpit::model::Order>(TestOrder(kAccountA));
+  std::weak_ptr<const openpit::Order> orderLifetime = order;
+  openpit::pretrade::StartResult started = engine.StartPreTrade(order);
+  ASSERT_TRUE(started.Passed());
+  auto request = std::make_shared<ae::AsyncRequest<ae::EngineAdapter>>(
+      std::move(*started.request), &async.Generic(),
+      AccountId::FromUint64(kAccountA));
+  order.reset();
+  ASSERT_FALSE(orderLifetime.expired());
+  ASSERT_TRUE(async.StopGraceful(seconds(10)));
+
+  ae::Future<std::monostate> close = request->Close();
+  try {
+    (void)close.Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+  EXPECT_TRUE(orderLifetime.expired());
+}
+
+//------------------------------------------------------------------------------
+// Bounded waits: neither a producer blocked on a full lane nor the cleanup that
+// repairs a failed submit may wait on something a stop cannot deliver.
+
+// A producer blocked on a full lane waits with no deadline of its own, so only
+// the engine can release it. A hard stop no longer promises the lane will make
+// room, so it must release that producer promptly and must not wait for it.
+void ExpectHardStopReleasesBlockedProducer(
+    ae::TypedAsyncEngine<MockEngineAdapter>& async, Gate& producerBlocked) {
+  const AccountId account = AccountId::FromUint64(kAccountA);
+  Gate workerEntered;
+  Gate releaseWorker;
+  ae::Future<std::monostate> running = async.Submit(account, [&] {
+    workerEntered.Open();
+    releaseWorker.Wait();
+  });
+  ASSERT_TRUE(workerEntered.WaitFor(kAwaitCap));
+  ae::Future<std::monostate> accepted = async.Submit(account, [] {});
+
+  Gate producerReturned;
+  std::atomic<bool> blockedTaskRan{false};
+  ae::Future<std::monostate> blocked;
+  std::thread producer([&] {
+    blocked = async.Submit(account, [&] {
+      blockedTaskRan.store(true, std::memory_order_release);
+    });
+    producerReturned.Open();
+  });
+  ASSERT_TRUE(producerBlocked.WaitFor(kAwaitCap));
+
+  Gate stopReturned;
+  std::atomic<bool> stopSucceeded{false};
+  std::thread stopper([&] {
+    stopSucceeded.store(async.StopHard(seconds(10)), std::memory_order_relaxed);
+    stopReturned.Open();
+  });
+  const bool producerReleased = producerReturned.WaitFor(kAwaitCap);
+  // Released unconditionally: a regression must fail this test rather than
+  // wedge the suite behind a producer that can no longer make progress.
+  releaseWorker.Open();
+  producer.join();
+  stopper.join();
+
+  EXPECT_TRUE(producerReleased);
+  EXPECT_TRUE(stopSucceeded.load(std::memory_order_relaxed));
+  EXPECT_FALSE(blockedTaskRan.load(std::memory_order_acquire));
+  EXPECT_TRUE(running.Await(kAwaitCap).has_value());
+  try {
+    (void)blocked.Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+  try {
+    (void)accepted.Await(kAwaitCap);
+    FAIL() << "expected Stopped";
+  } catch (const ae::Error& err) {
+    EXPECT_EQ(err.Code(), ae::ErrorCode::Stopped);
+  }
+}
+
+TEST(TypedAsyncShutdown, ShardedHardStopReleasesProducerBlockedOnFullLane) {
+  MockEngineAdapter driver;
+  Gate producerBlocked;
+  QueueFullGateObserver observer(&producerBlocked);
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .WithObserver(observer)
+                   .WithQueueCapacity(1)
+                   .WithSlowSubmitThreshold(std::chrono::milliseconds(1))
+                   .Sharded(1)
+                   .Build();
+
+  ExpectHardStopReleasesBlockedProducer(async, producerBlocked);
+}
+
+TEST(TypedAsyncShutdown, DynamicHardStopReleasesProducerBlockedOnFullLane) {
+  MockEngineAdapter driver;
+  Gate producerBlocked;
+  QueueFullGateObserver observer(&producerBlocked);
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .WithObserver(observer)
+                   .WithQueueCapacity(1)
+                   .WithSlowSubmitThreshold(std::chrono::milliseconds(1))
+                   .Dynamic()
+                   .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                   .Build();
+
+  ExpectHardStopReleasesBlockedProducer(async, producerBlocked);
+}
+
+// Cleanup repairs a submit that may already have spent its deadline, so its
+// enqueue must never wait for lane capacity - while still running behind the
+// work the lane has already accepted, and exactly once.
+void ExpectCleanupEnqueueNeverBlocksOnFullLane(
+    ae::TypedAsyncEngine<MockEngineAdapter>& async) {
+  const AccountId account = AccountId::FromUint64(kAccountA);
+  Gate workerEntered;
+  Gate releaseWorker;
+  ae::Future<std::monostate> running = async.Submit(account, [&] {
+    workerEntered.Open();
+    releaseWorker.Wait();
+  });
+  ASSERT_TRUE(workerEntered.WaitFor(kAwaitCap));
+  std::atomic<bool> acceptedRan{false};
+  ae::Future<std::monostate> accepted = async.Submit(
+      account, [&] { acceptedRan.store(true, std::memory_order_release); });
+
+  std::atomic<std::size_t> cleanupRuns{0};
+  std::atomic<bool> cleanupOvertookAcceptedWork{false};
+  Gate cleanupScheduled;
+  Gate cleanupRan;
+  ae::Future<std::monostate> cleanup;
+  std::thread scheduler([&] {
+    cleanup = async.Generic().ScheduleMandatoryCleanup(account, [&] {
+      cleanupOvertookAcceptedWork.store(
+          !acceptedRan.load(std::memory_order_acquire),
+          std::memory_order_release);
+      cleanupRuns.fetch_add(1, std::memory_order_relaxed);
+      cleanupRan.Open();
+    });
+    cleanupScheduled.Open();
+  });
+
+  const bool scheduledWhileLaneFull = cleanupScheduled.WaitFor(kAwaitCap);
+  const bool orderedBehindAcceptedWork = !cleanupRan.WaitFor(kNegativeProbe);
+  releaseWorker.Open();
+  scheduler.join();
+
+  EXPECT_TRUE(scheduledWhileLaneFull);
+  EXPECT_TRUE(orderedBehindAcceptedWork);
+  EXPECT_TRUE(cleanupRan.WaitFor(kAwaitCap));
+  EXPECT_EQ(cleanupRuns.load(std::memory_order_relaxed), 1u);
+  EXPECT_FALSE(cleanupOvertookAcceptedWork.load(std::memory_order_acquire));
+  EXPECT_TRUE(running.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(accepted.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(cleanup.Await(kAwaitCap).has_value());
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+}
+
+TEST(TypedAsyncCleanup, ShardedCleanupEnqueueNeverBlocksOnFullLane) {
+  MockEngineAdapter driver;
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .WithQueueCapacity(1)
+                   .Sharded(1)
+                   .Build();
+
+  ExpectCleanupEnqueueNeverBlocksOnFullLane(async);
+}
+
+TEST(TypedAsyncCleanup, DynamicCleanupEnqueueNeverBlocksOnFullLane) {
+  MockEngineAdapter driver;
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver)
+                   .WithQueueCapacity(1)
+                   .Dynamic()
+                   .IdleCleanupAfter(std::chrono::nanoseconds(0))
+                   .Build();
+
+  ExpectCleanupEnqueueNeverBlocksOnFullLane(async);
+}
+
+//------------------------------------------------------------------------------
+// Task-boundary exception containment, exercised on a raw closure task the
+// engine layer would normally wrap.
+
+TEST(TypedAsyncErrorModel, ThrowingRunClosureKeepsTheLaneUsable) {
+  const ae::detail::BaseConfig config;
+  ae::detail::ShardedStrategy strategy(config, 1);
+  const OpenPitParamAccountId account = kAccountA;
+  const auto noDeadline = std::chrono::steady_clock::time_point::max();
+  std::atomic<bool> submitFailed{false};
+  const ae::detail::SubmitFailureHandler onFailure = [&](ae::Error) {
+    submitFailed.store(true, std::memory_order_relaxed);
+  };
+
+  strategy.Submit(account,
+                  std::make_unique<ae::detail::ClosureTask>(
+                      [] { throw std::runtime_error("run closure escaped"); },
+                      [](ae::Error) {}),
+                  noDeadline, onFailure);
+  Gate laneStillRuns;
+  strategy.Submit(account,
+                  std::make_unique<ae::detail::ClosureTask>(
+                      [&] { laneStillRuns.Open(); }, [](ae::Error) {}),
+                  noDeadline, onFailure);
+
+  EXPECT_TRUE(laneStillRuns.WaitFor(kAwaitCap));
+  EXPECT_FALSE(submitFailed.load(std::memory_order_relaxed));
+  EXPECT_TRUE(
+      strategy.StopGraceful(std::chrono::steady_clock::now() + seconds(10)));
+}
+
+TEST(TypedAsyncErrorModel, ThrowingAbortClosureStillDrainsTheLane) {
+  const ae::detail::BaseConfig config;
+  ae::detail::ShardedStrategy strategy(config, 1);
+  const OpenPitParamAccountId account = kAccountA;
+  const auto noDeadline = std::chrono::steady_clock::time_point::max();
+  std::atomic<bool> submitFailed{false};
+  const ae::detail::SubmitFailureHandler onFailure = [&](ae::Error) {
+    submitFailed.store(true, std::memory_order_relaxed);
+  };
+
+  Gate workerEntered;
+  Gate releaseWorker;
+  strategy.Submit(account,
+                  std::make_unique<ae::detail::ClosureTask>(
+                      [&] {
+                        workerEntered.Open();
+                        releaseWorker.Wait();
+                      },
+                      [](ae::Error) {}),
+                  noDeadline, onFailure);
+  ASSERT_TRUE(workerEntered.WaitFor(kAwaitCap));
+  strategy.Submit(
+      account,
+      std::make_unique<ae::detail::ClosureTask>(
+          [] {},
+          [](ae::Error) { throw std::runtime_error("abort closure escaped"); }),
+      noDeadline, onFailure);
+  Gate lastTaskAborted;
+  strategy.Submit(account,
+                  std::make_unique<ae::detail::ClosureTask>(
+                      [] {}, [&](ae::Error) { lastTaskAborted.Open(); }),
+                  noDeadline, onFailure);
+
+  EXPECT_FALSE(strategy.StopHard(std::chrono::steady_clock::now() +
+                                 std::chrono::milliseconds(1)));
+  releaseWorker.Open();
+
+  EXPECT_TRUE(lastTaskAborted.WaitFor(kAwaitCap));
+  EXPECT_FALSE(submitFailed.load(std::memory_order_relaxed));
+  EXPECT_TRUE(
+      strategy.StopHard(std::chrono::steady_clock::now() + seconds(10)));
+}
+
 //------------------------------------------------------------------------------
 // Account-admin routing (mock driver): Block routes to the account queue.
 
@@ -557,6 +2240,42 @@ TEST(TypedAsyncAccounts, BlockRoutesThroughAccountQueue) {
 
   EXPECT_TRUE(async.StopGraceful(seconds(10)));
   EXPECT_EQ(driver.blocks.load(), 1u);
+}
+
+// UnblockAll names neither an account nor a group, so it pins to the
+// engine-wide queue and still reaches the driver.
+TEST(TypedAsyncAccounts, UnblockAllRoutesThroughEngineWideQueue) {
+  MockEngineAdapter driver;
+  auto async = ae::TypedBuilder<MockEngineAdapter>(driver).Dynamic().Build();
+
+  ae::AsyncAccounts<MockEngineAdapter> accounts = async.Accounts();
+  ASSERT_TRUE(accounts.UnblockAll().Await(kAwaitCap).has_value());
+
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
+  EXPECT_EQ(driver.globalUnblocks.load(), 1u);
+}
+
+// Clearing the engine-wide block leaves an individually blocked account
+// blocked, exactly as on the synchronous admin surface.
+TEST(TypedAsyncAccounts, UnblockAllLeavesIndividuallyBlockedAccountBlocked) {
+  Engine engine = OrderValidationEngine();
+  ae::EngineAdapter driver(engine);
+  auto async = ae::TypedBuilder<ae::EngineAdapter>(driver).Sharded(1).Build();
+
+  ae::AsyncAccounts<ae::EngineAdapter> accounts = async.Accounts();
+  ASSERT_TRUE(accounts.Block(AccountId::FromUint64(kAccountA), "by operator")
+                  .Await(kAwaitCap)
+                  .has_value());
+  ASSERT_TRUE(accounts.UnblockAll().Await(kAwaitCap).has_value());
+
+  const ae::StartOutcome<ae::EngineAdapter> start =
+      async.StartPreTrade(TestOrder(kAccountA)).Await(kAwaitCap).value();
+  EXPECT_FALSE(start.Passed());
+  ASSERT_EQ(start.rejects.size(), 1u);
+  EXPECT_EQ(start.rejects.front().code, RejectCode::AccountBlocked);
+  EXPECT_EQ(start.rejects.front().reason, "by operator");
+
+  EXPECT_TRUE(async.StopGraceful(seconds(10)));
 }
 
 //------------------------------------------------------------------------------

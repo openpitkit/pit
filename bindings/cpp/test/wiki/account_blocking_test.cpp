@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Account-Blocking.md
+// Source: https://wiki.openpit.dev/Account-Blocking/
 
 #include "openpit/accounts/accounts.hpp"
 #include "openpit/engine.hpp"
@@ -28,8 +28,8 @@ namespace {
 
 // Examples block: by-account block/unblock and by-group block/unblock.
 //
-// The snippet shown in Account-Blocking.md (C++ section) is reproduced
-// verbatim below, wrapped only in the minimal gtest harness.
+// The C++ snippet is reproduced verbatim below, wrapped only in the minimal
+// gtest harness.
 TEST(AccountBlockingWiki, ByAccountAndByGroup) {
   // --- snippet begin ---
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);

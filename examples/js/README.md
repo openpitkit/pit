@@ -57,4 +57,5 @@ examples use the idiomatic plain inputs the engine accepts everywhere: orders,
 reports, and adjustments are written as plain object literals, scalars pass as
 plain values (an account id as a bigint, a side as a string). The wrapper classes
 (`Price`, `AccountId`, ...) remain available as a typed alternative. See the
-package [`README`](../../bindings/js/README.md) for the full input contract.
+wiki page [Domain Types](https://wiki.openpit.dev/Domain-Types/) for the full
+input contract.

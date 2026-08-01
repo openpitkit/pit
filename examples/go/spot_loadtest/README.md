@@ -444,7 +444,7 @@ settings.
 
 ## Build and run
 
-<!-- Test mirror: internal/driver/doc_backing_test.go
+<!-- Test mirror: examples/go/spot_loadtest/internal/driver/doc_backing_test.go
      TestDocBackingBaselineRecipe -->
 
 ### 1. Build the native core in release mode

@@ -290,7 +290,8 @@ func buildOrder(account param.AccountID) (model.Order, error) {
 // reservation. It returns the committed reservation's pre-trade lock bytes so
 // the caller can later attach them to the matching fill; on reject it returns
 // nil lock bytes and the rejects. The lock MUST be read before CommitAndClose,
-// because Reservation.Lock panics once the reservation is closed.
+// because Reservation.Lock reports ErrReservationClosed once the reservation
+// is closed.
 func placeOrder(
 	engine *openpit.Engine, order model.Order,
 ) ([]byte, []reject.Reject, error) {
@@ -306,9 +307,10 @@ func placeOrder(
 	// Snapshot the lock the engine assigned to this reservation, then commit.
 	// CommitAndClose moves the reserved settlement funds from available to
 	// held; RollbackAndClose would release them instead.
-	lock := reservation.Lock().Bytes()
+	// The fresh reservation is open and serialized here, so Lock cannot fail.
+	lock, _ := reservation.Lock()
 	reservation.CommitAndClose()
-	return lock, nil, nil
+	return lock.Bytes(), nil, nil
 }
 
 // buildFillReport assembles a full, final execution report for a buy order and

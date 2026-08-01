@@ -97,7 +97,10 @@ func TestSpotFundsReservationIncoming_BuyBaseIncomingSurfacesOnReservation(t *te
 	}
 	defer reservation.RollbackAndClose()
 
-	adjustments := reservation.AccountAdjustments()
+	adjustments, err := reservation.AccountAdjustments()
+	if err != nil {
+		t.Fatalf("AccountAdjustments() error = %v", err)
+	}
 
 	// Two entries expected: [0] settlement (USD) held, [1] base (AAPL) incoming.
 	if len(adjustments) != 2 {
@@ -227,7 +230,10 @@ func TestSpotFundsReservationIncoming_SellQuoteIncomingSurfacesOnReservation(t *
 	}
 	defer reservation.RollbackAndClose()
 
-	adjustments := reservation.AccountAdjustments()
+	adjustments, err := reservation.AccountAdjustments()
+	if err != nil {
+		t.Fatalf("AccountAdjustments() error = %v", err)
+	}
 
 	// Two entries expected: [0] underlying (AAPL) held, [1] settlement (USD) incoming.
 	if len(adjustments) != 2 {

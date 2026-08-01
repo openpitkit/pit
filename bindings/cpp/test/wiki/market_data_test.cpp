@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Market-Data.md
+// Source: https://wiki.openpit.dev/Market-Data/
 //
 // Compiling mirror of the C++ snippets published on the Market-Data wiki page.
 // Each TEST runs the same user code shown in the corresponding C++ subsection,

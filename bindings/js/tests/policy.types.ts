@@ -294,3 +294,41 @@ const synchronousMutationDecision: PolicyPreTradeResult = {
   ],
 };
 void synchronousMutationDecision;
+
+// A callback may reach through the bound `this`, whose members are `unknown`,
+// and the mutation stays assignable wherever a policy registers one.
+const thisReadingMutation = new Mutation(
+  function () {
+    mutationEvents.push(typeof this.label);
+  },
+  function () {
+    mutationEvents.push(typeof this.rollback);
+  },
+);
+const thisReadingDecision: PolicyPreTradeResult = {
+  mutations: [thisReadingMutation],
+};
+void thisReadingDecision;
+
+new Mutation(
+  // @ts-expect-error - a callback cannot narrow the `this` the engine binds.
+  function (this: { readonly label: string }) {
+    mutationEvents.push(this.label);
+  },
+  () => undefined,
+);
+
+const dropCopyMutationPolicy: Policy = {
+  name: "typed-drop-copy-mutation",
+  checkPreTradeStart(ctx) {
+    ctx.recordDropCopyStartMutation({
+      commit: () => undefined,
+      rollback: () => undefined,
+    });
+    // @ts-expect-error - both mutation callbacks are required.
+    ctx.recordDropCopyStartMutation({ commit: () => undefined });
+    return [];
+  },
+  performPreTradeCheck: () => ({}),
+};
+void dropCopyMutationPolicy;

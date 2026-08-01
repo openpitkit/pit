@@ -939,7 +939,7 @@ mod tests {
             "order must be rejected after the P&L override"
         );
         crate::engine::openpit_destroy_pretrade_pre_trade_request(request);
-        crate::reject::openpit_pretrade_destroy_reject_list(out_rejects);
+        crate::reject::openpit_destroy_pretrade_reject_list(out_rejects);
         crate::engine::openpit_destroy_engine(engine);
     }
 

@@ -18,12 +18,14 @@
 #pragma once
 
 #include "openpit/accounts/accounts.hpp"
+#include "openpit/detail/callback_error.hpp"
 #include "openpit/model/model.hpp"
 #include "openpit/param/account_id.hpp"
 #include "openpit/pretrade/decision.hpp"
 
 #include <openpit.h>
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -84,6 +86,33 @@ class Context {
     return *m_order;
   }
 
+  // Whether ordinary policy rejects are non-enforcing for this operation.
+  [[nodiscard]] bool IsDropCopy() const noexcept {
+    return m_native != nullptr &&
+           openpit_pretrade_context_is_drop_copy(m_native);
+  }
+
+  // Registers a start-stage mutation owned by the current atomic drop-copy
+  // operation. Apply tentative state before registration: commit finalizes it,
+  // while rollback reverses it even if commit was not reached. The context
+  // must come from a drop-copy callback.
+  template <typename Commit, typename Rollback>
+  void RecordDropCopyStartMutation(Commit&& commit, Rollback&& rollback) const {
+    auto* callbacks = new StartMutationCallbacks(
+        std::function<void()>(std::forward<Commit>(commit)),
+        std::function<void()>(std::forward<Rollback>(rollback)));
+    OpenPitSharedString* error = nullptr;
+    if (!openpit_pretrade_context_record_drop_copy_start_mutation(
+            m_native, &StartMutationCommitTrampoline,
+            &StartMutationRollbackTrampoline, callbacks,
+            &FreeStartMutationTrampoline, &error)) {
+      delete callbacks;
+      ::openpit::detail::ThrowFromSharedString(
+          error,
+          "openpit_pretrade_context_record_drop_copy_start_mutation failed");
+    }
+  }
+
   // Account-control handle for the account bound to this request, or
   // `std::nullopt` when the order carries no account id. The handle may be
   // cloned into a mutation callback, but must not outlive this pre-trade
@@ -119,6 +148,41 @@ class Context {
   }
 
  private:
+  struct StartMutationCallbacks {
+    StartMutationCallbacks(std::function<void()> onCommit,
+                           std::function<void()> onRollback)
+        : commit(std::move(onCommit)), rollback(std::move(onRollback)) {}
+
+    std::function<void()> commit;
+    std::function<void()> rollback;
+  };
+
+  static bool StartMutationCommitTrampoline(
+      void* userData, OpenPitSharedString** outError) noexcept {
+    try {
+      static_cast<StartMutationCallbacks*>(userData)->commit();
+      return true;
+    } catch (...) {
+      ::openpit::detail::CaptureCurrentCallbackException(outError);
+      return false;
+    }
+  }
+
+  static bool StartMutationRollbackTrampoline(
+      void* userData, OpenPitSharedString** outError) noexcept {
+    try {
+      static_cast<StartMutationCallbacks*>(userData)->rollback();
+      return true;
+    } catch (...) {
+      ::openpit::detail::CaptureCurrentCallbackException(outError);
+      return false;
+    }
+  }
+
+  static void FreeStartMutationTrampoline(void* userData) noexcept {
+    delete static_cast<StartMutationCallbacks*>(userData);
+  }
+
   friend class ::openpit::detail::NativeAccess;
 
   explicit Context(detail::ContextInit init) noexcept

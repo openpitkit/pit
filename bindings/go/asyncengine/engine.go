@@ -34,6 +34,13 @@ import (
 // public method queues the corresponding engine operation behind the
 // per-account dispatcher chosen at build time and returns a Future that
 // resolves once the worker has run the call.
+//
+// The facade adds whole-pipeline isolation beyond a fully synchronized direct
+// engine. Every operation is routed by account ID to one queue drained by one
+// worker, so two complete pipelines for the same account never overlap, and
+// follow-up calls on AsyncRequest, AsyncReservation, and
+// AsyncDropCopyOperation re-enter that same queue. Callers need no locking of
+// their own on top.
 type AsyncEngine struct {
 	driver         Driver
 	strategy       strategy
@@ -142,46 +149,62 @@ func (t *executePreTradeTask) run() {
 
 func (t *executePreTradeTask) abort(err error) { t.f.Resolve(nil, nil, err) }
 
-// ExecutePreTradeDropCopy enqueues a full pre-trade pipeline call that ignores
-// existing account blocks and policy rejects while preserving normal policy
-// state, including newly raised account blocks. A market order resolves with
-// an error before any policy is invoked.
-func (e *AsyncEngine) ExecutePreTradeDropCopy(
+// ApplyDropCopy enqueues a drop-copy call for a historical order. Existing
+// account blocks and ordinary policy rejects are ignored. Account-ID
+// requirements and the future's tuple shape match ExecutePreTrade, except the
+// accepted value is a non-nil *AsyncDropCopyOperation and the rejects are the
+// evaluation failures that prevented historical bookkeeping.
+//
+// Drop copy requires a readable account ID: the engine rejects an unreadable
+// one with MissingRequiredField before any policy runs, so there is nothing to
+// gain by queueing such an order.
+//
+// Serialization: the dispatcher pins every operation for one account to a
+// single queue drained by one worker. This provides whole-pipeline isolation;
+// callers do not need their own locking on top.
+//
+// If the context passed to Future2.Await is cancelled before resolution, the
+// caller still owns this future. Await it again or use TryGet and close any
+// eventual AsyncDropCopyOperation.
+func (e *AsyncEngine) ApplyDropCopy(
 	ctx context.Context,
 	order model.Order,
-) *future.Future[*AsyncReservation] {
-	f := future.New[*AsyncReservation]()
+) *future.Future2[*AsyncDropCopyOperation, []reject.Reject] {
+	f := future.New2[*AsyncDropCopyOperation, []reject.Reject]()
 	accountID, err := extractOrderAccountID(order)
 	if err != nil {
-		f.Resolve(nil, err)
+		f.Resolve(nil, nil, err)
 		return f
 	}
-	task := &executePreTradeDropCopyTask{
-		f: f, engine: e, order: order, accountID: accountID,
-	}
+	task := &applyDropCopyTask{f: f, engine: e, order: order, accountID: accountID}
 	if err := e.strategy.submit(ctx, accountID, task); err != nil {
-		f.Resolve(nil, err)
+		f.Resolve(nil, nil, err)
 	}
 	return f
 }
 
-type executePreTradeDropCopyTask struct {
-	f         *future.Future[*AsyncReservation]
+// applyDropCopyTask carries one ApplyDropCopy call to its worker.
+type applyDropCopyTask struct {
+	f         *future.Future2[*AsyncDropCopyOperation, []reject.Reject]
 	engine    *AsyncEngine
 	order     model.Order
 	accountID param.AccountID
 }
 
-func (t *executePreTradeDropCopyTask) run() {
-	reservation, err := t.engine.driver.ExecutePreTradeDropCopy(t.order)
+func (t *applyDropCopyTask) run() {
+	operation, rejects, err := t.engine.driver.ApplyDropCopy(t.order)
 	if err != nil {
-		t.f.Resolve(nil, err)
+		t.f.Resolve(nil, nil, err)
 		return
 	}
-	t.f.Resolve(newAsyncReservation(reservation, t.engine, t.accountID), nil)
+	if rejects != nil {
+		t.f.Resolve(nil, rejects, nil)
+		return
+	}
+	t.f.Resolve(newAsyncDropCopyOperation(operation, t.engine, t.accountID), nil, nil)
 }
 
-func (t *executePreTradeDropCopyTask) abort(err error) { t.f.Resolve(nil, err) }
+func (t *applyDropCopyTask) abort(err error) { t.f.Resolve(nil, nil, err) }
 
 // ApplyExecutionReport enqueues a post-trade call for the report's
 // account. The report must have an operation with an account ID set.
@@ -462,6 +485,40 @@ func (t *unblockTask) run() {
 
 func (t *unblockTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
 
+// UnblockAll enqueues an engine-wide unblock routed through the queue derived
+// from engineWideRoutingKey, so engine-wide unblocks are serialized against
+// each other.
+//
+// An engine-wide block never comes from Block or BlockGroup: the engine raises
+// it itself, when a kill switch is reported for an execution report whose
+// account cannot be read, or when a mutation finalizer registered by a custom
+// policy fails - which every mutation registered from Go is.
+//
+// The future resolves with a nil error: unblocking is infallible, lifting an
+// engine-wide block that is not active is a no-op, and accounts and groups
+// blocked individually stay blocked.
+func (a AsyncAccounts) UnblockAll(ctx context.Context) *future.Future[struct{}] {
+	f := future.New[struct{}]()
+	task := &unblockAllTask{f: f, engine: a.engine}
+	if err := a.engine.strategy.submit(ctx, engineWideRoutingKey(), task); err != nil {
+		f.Resolve(struct{}{}, err)
+	}
+	return f
+}
+
+// unblockAllTask carries one UnblockAll call to its worker.
+type unblockAllTask struct {
+	f      *future.Future[struct{}]
+	engine *AsyncEngine
+}
+
+func (t *unblockAllTask) run() {
+	t.engine.driver.Accounts().UnblockAll()
+	t.f.Resolve(struct{}{}, nil)
+}
+
+func (t *unblockAllTask) abort(err error) { t.f.Resolve(struct{}{}, err) }
+
 // ReplaceBlockReason enqueues a block-reason replacement routed through the
 // queue of account.
 //
@@ -605,6 +662,14 @@ func (t *replaceGroupBlockReasonTask) abort(err error) { t.f.Resolve(struct{}{},
 // concurrency-safe regardless of dispatch order.
 func groupRoutingKey(group param.AccountGroupID) param.AccountID {
 	return param.NewAccountIDFromUint64(uint64(group.Handle()))
+}
+
+// engineWideRoutingKey derives the routing key for admin operations that carry
+// neither an account nor a group, so they are pinned to a deterministic queue.
+// The collision with account and group keys is benign for the same reason it is
+// in groupRoutingKey.
+func engineWideRoutingKey() param.AccountID {
+	return param.NewAccountIDFromUint64(0)
 }
 
 // submitTask carries one caller-supplied Submit closure to its worker.

@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use openpit::pretrade::PostTradeContext;
 use openpit::pretrade::{
-    PolicyPreTradeResult, PostTradeResult, PreTradeContext, PreTradePolicy, RejectCode,
+    PolicyPreTradeResult, PostTradeResult, PreTradeContext, PreTradePolicy, Reject, RejectCode,
     RejectScope, Rejects,
 };
 use openpit::{AccountAdjustmentContext, Mutations, PolicyAccountAdjustmentResult, PolicyGroupId};
@@ -78,12 +78,16 @@ pub type OpenPitPretradePreTradePolicy = PolicyHandle<UnifiedPreTradePolicy>;
 ///   callback runs.
 /// - If the callback wants to keep any data from `order`, it must copy that
 ///   data before returning.
-/// - Return null or an empty list to accept the order.
+/// - Return a non-null empty list to accept the order.
 /// - Return a non-empty reject list to reject the order.
+/// - Return null only when the callback could not evaluate the order. The
+///   engine converts it to a fatal `SystemUnavailable` reject.
 /// - A rejected order must set explicit `code` and `scope` values in every
 ///   list item.
-/// - The returned list ownership is transferred to the engine; create it with
-///   `openpit_pretrade_create_reject_list`.
+/// - Return `openpit_pretrade_reject_list_get_accept_sentinel()` for an
+///   allocation-free accepted result. Other returned lists transfer ownership
+///   to the engine and must be created with
+///   `openpit_create_pretrade_reject_list`.
 /// - Every reject payload is copied into internal storage before the callback
 ///   returns.
 /// - `user_data` is passed through unchanged from policy creation.
@@ -113,14 +117,19 @@ pub type OpenPitPretradePreTradePolicyCheckPreTradeStartFn =
 ///   `openpit_pretrade_pre_trade_result_push_account_adjustment`. Neither push
 ///   carries a `policy_group_id`; the engine assigns the policy group. The
 ///   callback must not store or use `out_result` after return.
-/// - The reject channel and the `out_result` channel are independent: a
-///   callback may both reject and fill `out_result`, but the engine only keeps
-///   `out_result` when the callback accepts (returns null or an empty list).
-/// - Return null or an empty list to accept the order.
+/// - The reject channel and the `out_result` channel are independent. The
+///   engine keeps `out_result` when the callback accepts. Drop-copy also keeps
+///   it with ordinary, non-enforcing rejects; evaluation-failure rejects abort
+///   drop-copy and discard it.
+/// - Return a non-null empty list to accept the order.
 /// - Return a non-empty reject list to reject the order.
+/// - Return null only when the callback could not evaluate the order. The
+///   engine converts it to a fatal `SystemUnavailable` reject.
 /// - Every returned reject must contain explicit `code` and `scope` values.
-/// - The returned list ownership is transferred to the engine; create it with
-///   `openpit_pretrade_create_reject_list`.
+/// - Return `openpit_pretrade_reject_list_get_accept_sentinel()` for an
+///   allocation-free accepted result. Other returned lists transfer ownership
+///   to the engine and must be created with
+///   `openpit_create_pretrade_reject_list`.
 /// - Every reject payload is copied into internal storage before this callback
 ///   returns.
 /// - `user_data` is passed through unchanged from policy creation.
@@ -160,7 +169,7 @@ pub type OpenPitPretradePreTradePolicyPerformPreTradeCheckFn =
 ///   callback may populate any combination of them.
 /// - Return a non-null account-block list when this policy reports a
 ///   kill-switch trigger. The returned list ownership is transferred to the
-///   engine; create it with `openpit_pretrade_create_account_block_list`.
+///   engine; create it with `openpit_create_pretrade_account_block_list`.
 /// - Return null to indicate no kill-switch condition.
 /// - A null `apply_execution_report_fn` means that hook returns no blocks,
 ///   adjustments, or account-level PnL outcomes.
@@ -204,11 +213,16 @@ pub type OpenPitPretradePreTradePolicyApplyExecutionReportFn =
 ///   policy group. The callback must not store or use `out_result` after
 ///   return.
 /// - The reject and `out_result` channels are independent: the engine keeps
-///   the collector payload only when the callback accepts (returns null or an
+///   the collector payload only when the callback accepts (returns a non-null
 ///   empty list).
-/// - Return null to accept the adjustment.
+/// - Return a non-null empty list to accept the adjustment.
 /// - Return a non-empty reject list to reject the adjustment.
-/// - Returned reject list ownership is transferred to the callee.
+/// - Return null only when the callback could not evaluate the adjustment. The
+///   engine converts it to a fatal `SystemUnavailable` reject.
+/// - Return `openpit_pretrade_reject_list_get_accept_sentinel()` for an
+///   allocation-free accepted result. Other returned lists transfer ownership
+///   to the engine and must be created with
+///   `openpit_create_pretrade_reject_list`.
 /// - `user_data` is passed through unchanged from policy creation.
 ///
 /// Parameter ordering convention: read-only inputs first (`ctx`, `account_id`,
@@ -343,21 +357,12 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, openpit_interop::
                     lock_prices: out_result.lock_prices.into(),
                 })
             };
-        if ctx.is_drop_copy() {
-            if let Err(rejects) = &reject_result {
-                if let Some(reject) = rejects
-                    .iter()
-                    .find(|reject| reject.scope == RejectScope::Account)
-                {
-                    ctx.record_drop_copy_account_block(
-                        reject.account_block_with_code(RejectCode::AccountBlocked),
-                    );
-                }
-            }
-            Ok(result)
-        } else {
-            reject_result?;
-            Ok(result)
+        match reject_result {
+            Ok(()) => Ok(result),
+            Err(rejects) => Err(match result {
+                Some(result) => rejects.with_policy_result(result),
+                None => rejects,
+            }),
         }
     }
 
@@ -534,6 +539,15 @@ pub(super) fn import_reject_list_result(
     rejects: *mut OpenPitPretradeRejectList,
 ) -> Result<(), Rejects> {
     if rejects.is_null() {
+        return Err(Rejects::from(Reject::new(
+            "openpit.callback",
+            RejectScope::Order,
+            RejectCode::SystemUnavailable,
+            "custom policy callback failed",
+            "callback returned no result",
+        )));
+    }
+    if crate::reject::is_accepted_reject_list(rejects) {
         return Ok(());
     }
     let rejects = unsafe { Box::from_raw(rejects) };
@@ -784,12 +798,42 @@ mod tests {
 
     use crate::reject::{OpenPitPretradeAccountBlockList, OpenPitPretradeRejectList};
 
+    fn accepted_rejects() -> *mut OpenPitPretradeRejectList {
+        crate::reject::openpit_pretrade_reject_list_get_accept_sentinel()
+    }
+
+    #[test]
+    fn null_reject_list_is_a_fatal_callback_failure() {
+        let rejects = import_reject_list_result(std::ptr::null_mut())
+            .expect_err("null callback output must fail closed");
+
+        assert_eq!(rejects.len(), 1);
+        assert_eq!(rejects[0].code, RejectCode::SystemUnavailable);
+        assert!(rejects[0].code.is_evaluation_failure());
+    }
+
+    #[test]
+    fn shared_empty_reject_list_accepts() {
+        assert!(import_reject_list_result(accepted_rejects()).is_ok());
+    }
+
     unsafe extern "C" fn custom_check_fn(
         _ctx: *const OpenPitPretradeContext,
         _order: *const OpenPitOrder,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList {
-        std::ptr::null_mut()
+        accepted_rejects()
+    }
+
+    unsafe extern "C" fn observe_drop_copy_check_fn(
+        ctx: *const OpenPitPretradeContext,
+        _order: *const OpenPitOrder,
+        user_data: *mut c_void,
+    ) -> *mut OpenPitPretradeRejectList {
+        let saw_drop_copy = unsafe { &mut *user_data.cast::<bool>() };
+        *saw_drop_copy =
+            unsafe { crate::account_control::openpit_pretrade_context_is_drop_copy(ctx) };
+        accepted_rejects()
     }
 
     unsafe extern "C" fn custom_apply_report_fn(
@@ -810,7 +854,7 @@ mod tests {
         _out_result: *mut OpenPitPretradePreTradeResult,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList {
-        std::ptr::null_mut()
+        accepted_rejects()
     }
 
     unsafe extern "C" fn custom_account_adjustment_apply_fn(
@@ -833,7 +877,7 @@ mod tests {
                 },
             );
         }
-        std::ptr::null_mut()
+        accepted_rejects()
     }
 
     unsafe fn create_pre_trade_policy_with_start_hook(
@@ -972,12 +1016,21 @@ mod tests {
             .expect("main pre-trade must succeed")
     }
 
-    unsafe extern "C" fn tracked_mutation_commit(user_data: *mut c_void) {
+    unsafe extern "C" fn tracked_mutation_commit(
+        user_data: *mut c_void,
+        _out_error: crate::last_error::OpenPitOutError,
+    ) -> bool {
         let data = unsafe { &*(user_data as *const MutationUserData) };
         data.state.borrow_mut().commit_calls += 1;
+        true
     }
 
-    unsafe extern "C" fn tracked_mutation_rollback(_user_data: *mut c_void) {}
+    unsafe extern "C" fn tracked_mutation_rollback(
+        _user_data: *mut c_void,
+        _out_error: crate::last_error::OpenPitOutError,
+    ) -> bool {
+        true
+    }
 
     unsafe extern "C" fn tracked_mutation_free(user_data: *mut c_void) {
         let data = unsafe { Box::from_raw(user_data as *mut MutationUserData) };
@@ -1005,7 +1058,7 @@ mod tests {
             };
             assert!(ok, "{}", cstr_to_string(std::ptr::null_mut()));
         }
-        std::ptr::null_mut()
+        accepted_rejects()
     }
 
     #[test]
@@ -1030,6 +1083,39 @@ mod tests {
         let state = state.borrow();
         assert_eq!(state.commit_calls, 1);
         assert_eq!(state.free_calls, 1);
+    }
+
+    #[test]
+    fn drop_copy_context_getter_is_true_inside_callback() {
+        let mut saw_drop_copy = false;
+        let policy = unsafe {
+            create_pre_trade_policy_with_start_hook(
+                OpenPitStringView::from_utf8("drop.copy.context"),
+                observe_drop_copy_check_fn,
+                custom_apply_report_fn,
+                custom_free_user_data_fn,
+                (&mut saw_drop_copy as *mut bool).cast(),
+                std::ptr::null_mut(),
+            )
+        };
+        let engine = build_engine_with_custom_policy(policy);
+        let order = export_order(&sample_order());
+        let mut operation = std::ptr::null_mut();
+
+        let status = crate::engine::openpit_engine_apply_drop_copy(
+            engine,
+            &order,
+            &mut operation,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+
+        assert_eq!(status, crate::engine::OpenPitPretradeStatus::Passed);
+        assert!(saw_drop_copy);
+        assert!(!operation.is_null());
+        crate::engine::openpit_pretrade_drop_copy_operation_commit(operation);
+        crate::engine::openpit_destroy_pretrade_drop_copy_operation(operation);
+        crate::engine::openpit_destroy_engine(engine);
     }
 
     #[test]
@@ -1483,7 +1569,7 @@ mod tests {
             crate::reject::openpit_pretrade_account_block_list_len(out_blocks),
             1
         );
-        crate::reject::openpit_pretrade_destroy_account_block_list(out_blocks);
+        crate::reject::openpit_destroy_pretrade_account_block_list(out_blocks);
 
         crate::engine::openpit_destroy_engine(engine);
         crate::engine::openpit_destroy_engine_builder(builder);
@@ -1496,7 +1582,7 @@ mod tests {
         _out_result: *mut OpenPitPretradePreTradeResult,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList {
-        let rejects = crate::reject::openpit_pretrade_create_reject_list(1);
+        let rejects = crate::reject::openpit_create_pretrade_reject_list(1);
         crate::reject::openpit_pretrade_reject_list_push(
             rejects,
             crate::reject::OpenPitPretradeReject {
@@ -1518,7 +1604,7 @@ mod tests {
         _out_result: *mut OpenPitPretradePreTradeResult,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList {
-        std::ptr::null_mut()
+        accepted_rejects()
     }
 
     fn build_engine_with_custom_policy(
@@ -1581,7 +1667,7 @@ mod tests {
         let rejects =
             crate::engine::openpit_pretrade_pre_trade_dry_run_report_get_rejects(out_report);
         assert_eq!(crate::reject::openpit_pretrade_reject_list_len(rejects), 1);
-        crate::reject::openpit_pretrade_destroy_reject_list(rejects);
+        crate::reject::openpit_destroy_pretrade_reject_list(rejects);
 
         crate::engine::openpit_destroy_pretrade_pre_trade_dry_run_report(out_report);
         crate::engine::openpit_destroy_engine(engine);
@@ -1629,7 +1715,7 @@ mod tests {
         let rejects =
             crate::engine::openpit_pretrade_pre_trade_dry_run_report_get_rejects(out_report);
         assert_eq!(crate::reject::openpit_pretrade_reject_list_len(rejects), 0);
-        crate::reject::openpit_pretrade_destroy_reject_list(rejects);
+        crate::reject::openpit_destroy_pretrade_reject_list(rejects);
 
         crate::engine::openpit_destroy_pretrade_pre_trade_dry_run_report(out_report);
 
@@ -1646,7 +1732,7 @@ mod tests {
         );
         assert_eq!(status, crate::engine::OpenPitPretradeStatus::Rejected);
         assert!(!out_rejects.is_null());
-        crate::reject::openpit_pretrade_destroy_reject_list(out_rejects);
+        crate::reject::openpit_destroy_pretrade_reject_list(out_rejects);
 
         crate::engine::openpit_destroy_engine(engine);
     }

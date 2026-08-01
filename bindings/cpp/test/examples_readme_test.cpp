@@ -15,46 +15,42 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: bindings/cpp/README.md - Usage. Keep this code in sync with the
-// public README snippet.
+// Source: bindings/cpp/README.md - Quick Start. Keep this code in sync
+// with the public README snippet.
 
 #include <openpit/openpit.hpp>
 
-#include <stdexcept>
-#include <string>
+#include <iostream>
 
 int main() {
   namespace model = openpit::model;
+  namespace param = openpit::param;
   namespace policies = openpit::pretrade::policies;
 
+  // Build the engine once, at platform initialization.
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
   builder.Add(policies::OrderValidationPolicy{});
   openpit::Engine engine = builder.Build();
 
-  model::Order order = model::Order::Limit(
-      model::Instrument(::openpit::param::Asset("AAPL"),
-                        ::openpit::param::Asset("USD")),
-      openpit::param::AccountId::FromUint64(99224416), model::Side::Buy,
-      model::TradeAmount::OfQuantity(
-          openpit::param::Quantity::FromString("100")),
-      openpit::param::Price::FromString("185"));
+  // Describe the order: buy 100 AAPL at 185 USD.
+  const model::Order order = model::Order::Limit(
+      model::Instrument(param::Asset("AAPL"), param::Asset("USD")),
+      param::AccountId::FromUint64(99224416), model::Side::Buy,
+      model::TradeAmount::OfQuantity(param::Quantity::FromString("100")),
+      param::Price::FromString("185"));
 
-  openpit::pretrade::StartResult start = engine.StartPreTrade(order);
-  if (!start.Passed()) {
-    const std::string reason = start.rejects.empty()
-                                   ? "pre-trade start rejected"
-                                   : start.rejects.front().reason;
-    throw std::runtime_error(reason);
+  // Run the pre-trade pipeline and read the verdict.
+  openpit::pretrade::ExecuteResult result = engine.ExecutePreTrade(order);
+  if (!result.Passed()) {
+    for (const openpit::pretrade::Reject& rejection : result.rejects) {
+      std::cout << "rejected by " << rejection.policy << ": "
+                << rejection.reason << '\n';
+    }
+    return 1;
   }
 
-  openpit::pretrade::ExecuteResult execute = start.request->Execute();
-  if (!execute.Passed()) {
-    const std::string reason = execute.rejects.empty()
-                                   ? "pre-trade execute rejected"
-                                   : execute.rejects.front().reason;
-    throw std::runtime_error(reason);
-  }
-
-  execute.reservation->Commit();
+  // The venue accepted the order, so the reserved state stays. Destroying an
+  // unresolved reservation rolls it back instead.
+  result.reservation->Commit();
   return 0;
 }

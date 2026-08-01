@@ -28,7 +28,7 @@
 //! into the core builder through the `BoxedPreTradePolicy` shim and advance the
 //! builder to the `Ready` state.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use js_sys::{Object, Reflect};
 use openpit::param::AccountId;
@@ -68,8 +68,7 @@ extern "C" {
 }
 use crate::account_adjustment::JsAccountAdjustment;
 use crate::error::{
-    account_block_error_to_js, account_group_error_to_js, make_error, make_error_with,
-    policy_callback_error, ErrorKind,
+    account_block_error_to_js, account_group_error_to_js, make_error, make_error_with, ErrorKind,
 };
 use crate::execution_report::{ExecutionReportLike, JsExecutionReport};
 use crate::marketdata::{JsMarketDataBuilder, JsQuoteTtl};
@@ -82,9 +81,21 @@ use crate::policy::rate_limit::JsRateLimitBuilder;
 use crate::policy::spot_funds::{JsSpotFundsBuilder, JsSpotFundsPnlBoundsKillswitchBuilder};
 use crate::policy::{BuiltinReadyBuilder, CallbackErrorScope, JsPreTradePolicyAdapter, PolicyLike};
 use crate::result::{
-    JsAccountAdjustmentBatchResult, JsDryRunReport, JsExecuteResult, JsPostTradeResult,
-    JsReservation, JsStartResult,
+    JsAccountAdjustmentBatchResult, JsDropCopyResult, JsDryRunReport, JsExecuteResult,
+    JsPostTradeResult, JsStartResult,
 };
+
+thread_local! {
+    static NEXT_CALLBACK_SCOPE_ID: Cell<u64> = const { Cell::new(1) };
+}
+
+fn next_callback_scope_id() -> u64 {
+    NEXT_CALLBACK_SCOPE_ID.with(|next| {
+        let id = next.get();
+        next.set(id.wrapping_add(1));
+        id
+    })
+}
 
 #[wasm_bindgen(inline_js = r#"
 function cloneGraph(value, initialSeen) {
@@ -497,9 +508,17 @@ impl BuilderState {
 ///
 /// Built from [`JsEngineBuilder`] via `Engine.builder()`. The handle drives the
 /// two-stage pre-trade flow plus the post-trade and account-adjustment paths.
+///
+/// The WASM binding is no-sync and every policy callback runs synchronously on
+/// the calling thread. While one of this engine's callbacks is running, this
+/// engine must not be re-entered: every method below, the `Request` and
+/// `Reservation` methods it hands out, and the `Accounts` and `Configurator`
+/// facades retained from `accounts()` / `configure()` throw `LifecycleError` on
+/// such re-entry. A callback may drive a different engine instance freely.
 #[wasm_bindgen(js_name = Engine)]
 pub struct JsEngine {
     inner: openpit::Engine<EngineTrait>,
+    callback_scope_id: u64,
 }
 
 #[wasm_bindgen(js_class = Engine)]
@@ -521,14 +540,15 @@ impl JsEngine {
     /// # Errors
     ///
     /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
-    /// nor a valid `OrderInit` literal. Re-throws the original error a custom
-    /// policy callback threw, if any.
+    /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
+    /// engine is re-entered synchronously from one of its policy callbacks.
+    /// Re-throws the original error a custom policy callback threw, if any.
     #[wasm_bindgen(js_name = startPreTrade)]
     pub fn start_pre_trade(&self, order: OrderLike) -> Result<JsStartResult, JsValue> {
         let original: JsValue = order.into();
         let order = JsOrder::coerce(original.clone())?;
-        let (request, lifecycle) = build_order_request(&order, &original)?;
-        let callback_scope = CallbackErrorScope::capture();
+        let (request, lifecycle) = build_order_request(&order, &original, self.callback_scope_id)?;
+        let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
         let result = match self.inner.start_pre_trade(request) {
             Ok(request) => JsStartResult::accepted(request, lifecycle.clone()),
             Err(rejects) => {
@@ -550,14 +570,15 @@ impl JsEngine {
     /// # Errors
     ///
     /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
-    /// nor a valid `OrderInit` literal. Re-throws the original error a custom
-    /// policy callback threw, if any.
+    /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
+    /// engine is re-entered synchronously from one of its policy callbacks.
+    /// Re-throws the original error a custom policy callback threw, if any.
     #[wasm_bindgen(js_name = executePreTrade)]
     pub fn execute_pre_trade(&self, order: OrderLike) -> Result<JsExecuteResult, JsValue> {
         let original: JsValue = order.into();
         let order = JsOrder::coerce(original.clone())?;
-        let (request, lifecycle) = build_order_request(&order, &original)?;
-        let callback_scope = CallbackErrorScope::capture();
+        let (request, lifecycle) = build_order_request(&order, &original, self.callback_scope_id)?;
+        let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
         let result = match self.inner.execute_pre_trade(request) {
             Ok(reservation) => JsExecuteResult::accepted(reservation, lifecycle.clone()),
             Err(rejects) => {
@@ -569,25 +590,40 @@ impl JsEngine {
         Ok(result)
     }
 
-    /// Runs the full pre-trade pipeline without enforcing policy rejects.
+    /// Applies the full pre-trade pipeline as a drop-copy operation.
     ///
-    /// Existing account and account-group blocks are ignored. Every policy
-    /// keeps its normal mutations, locks, account adjustments, and account
-    /// blocks. A market order or unreadable price throws `TypeError` before any
-    /// policy is invoked. Re-throws the original error a custom policy callback
-    /// threw, if any.
-    #[wasm_bindgen(js_name = executePreTradeDropCopy)]
-    pub fn execute_pre_trade_drop_copy(&self, order: OrderLike) -> Result<JsReservation, JsValue> {
+    /// `order` must carry a readable account id: an order whose account id
+    /// cannot be read is reported as a `MissingRequiredField` reject before any
+    /// policy runs. On success the result carries a single-use
+    /// `DropCopyOperation` to commit or roll back; on a fatal evaluation
+    /// failure it carries the rejects.
+    ///
+    /// Existing account and account-group blocks are ignored and ordinary
+    /// rejects are non-enforcing. Account-control operations published by the
+    /// pipeline and consumed rate-limit attempts stay outside the operation's
+    /// finalization boundary.
+    ///
+    /// # Errors
+    ///
+    /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
+    /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
+    /// engine is re-entered synchronously from one of its policy callbacks.
+    /// Re-throws the original error a custom policy callback threw, if any.
+    #[wasm_bindgen(js_name = applyDropCopy)]
+    pub fn apply_drop_copy(&self, order: OrderLike) -> Result<JsDropCopyResult, JsValue> {
         let original: JsValue = order.into();
         let order = JsOrder::coerce(original.clone())?;
-        let (request, lifecycle) = build_order_request(&order, &original)?;
-        let callback_scope = CallbackErrorScope::capture();
-        let reservation = self
-            .inner
-            .execute_pre_trade_drop_copy(request)
-            .map_err(|error| make_error(ErrorKind::Type, &error.to_string(), None))?;
+        let (request, lifecycle) = build_order_request(&order, &original, self.callback_scope_id)?;
+        let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
+        let result = match self.inner.apply_drop_copy(request) {
+            Ok(operation) => JsDropCopyResult::accepted(operation, lifecycle.clone()),
+            Err(rejects) => {
+                lifecycle.invalidate();
+                JsDropCopyResult::rejected(&rejects)
+            }
+        };
         finish_callback_scope(callback_scope, JsValue::UNDEFINED)?;
-        Ok(JsReservation::new(reservation, lifecycle))
+        Ok(result)
     }
 
     /// Runs start-stage checks as a non-mutating dry-run.
@@ -599,14 +635,15 @@ impl JsEngine {
     /// # Errors
     ///
     /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
-    /// nor a valid `OrderInit` literal. Re-throws the original error a custom
-    /// policy callback threw, if any.
+    /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
+    /// engine is re-entered synchronously from one of its policy callbacks.
+    /// Re-throws the original error a custom policy callback threw, if any.
     #[wasm_bindgen(js_name = startPreTradeDryRun)]
     pub fn start_pre_trade_dry_run(&self, order: OrderLike) -> Result<JsDryRunReport, JsValue> {
         let original: JsValue = order.into();
         let order = JsOrder::coerce(original.clone())?;
-        let (request, lifecycle) = build_order_request(&order, &original)?;
-        let callback_scope = CallbackErrorScope::capture();
+        let (request, lifecycle) = build_order_request(&order, &original, self.callback_scope_id)?;
+        let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
         let report = self.inner.start_pre_trade_dry_run(request);
         lifecycle.invalidate();
         finish_callback_scope(callback_scope, JsValue::UNDEFINED)?;
@@ -622,14 +659,15 @@ impl JsEngine {
     /// # Errors
     ///
     /// Throws `ParamError`/`AssetError` when `order` is neither a valid `Order`
-    /// nor a valid `OrderInit` literal. Re-throws the original error a custom
-    /// policy callback threw, if any.
+    /// nor a valid `OrderInit` literal. Throws `LifecycleError` when this same
+    /// engine is re-entered synchronously from one of its policy callbacks.
+    /// Re-throws the original error a custom policy callback threw, if any.
     #[wasm_bindgen(js_name = executePreTradeDryRun)]
     pub fn execute_pre_trade_dry_run(&self, order: OrderLike) -> Result<JsDryRunReport, JsValue> {
         let original: JsValue = order.into();
         let order = JsOrder::coerce(original.clone())?;
-        let (request, lifecycle) = build_order_request(&order, &original)?;
-        let callback_scope = CallbackErrorScope::capture();
+        let (request, lifecycle) = build_order_request(&order, &original, self.callback_scope_id)?;
+        let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
         let report = self.inner.execute_pre_trade_dry_run(request);
         lifecycle.invalidate();
         finish_callback_scope(callback_scope, JsValue::UNDEFINED)?;
@@ -646,8 +684,10 @@ impl JsEngine {
     /// # Errors
     ///
     /// Throws `ParamError`/`AssetError` when `report` is neither a valid
-    /// `ExecutionReport` nor a valid `ExecutionReportInit` literal. Re-throws
-    /// the original error a custom policy callback threw, if any.
+    /// `ExecutionReport` nor a valid `ExecutionReportInit` literal. Throws
+    /// `LifecycleError` when this same engine is re-entered synchronously from
+    /// one of its policy callbacks. Re-throws the original error a custom
+    /// policy callback threw, if any.
     #[wasm_bindgen(js_name = applyExecutionReport)]
     pub fn apply_execution_report(
         &self,
@@ -656,10 +696,10 @@ impl JsEngine {
         let original: JsValue = report.into();
         let report = JsExecutionReport::coerce(original.clone())?;
         let request = build_report_request(&report, &original)?;
-        let callback_scope = CallbackErrorScope::capture();
+        let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
         let result = JsPostTradeResult::from_core(&self.inner.apply_execution_report(&request));
-        if let Some(cause) = callback_scope.finish() {
-            return Err(policy_callback_error(cause, JsValue::from(result)));
+        if let Some(failure) = callback_scope.finish() {
+            return Err(failure.into_error(JsValue::from(result)));
         }
         Ok(result)
     }
@@ -676,8 +716,9 @@ impl JsEngine {
     /// # Errors
     ///
     /// Throws `ParamError`/`AssetError`/`AccountIdError` when `accountId` or an
-    /// adjustment in the batch is invalid. Re-throws the original error a
-    /// custom policy callback threw, if any.
+    /// adjustment in the batch is invalid. Throws `LifecycleError` when this
+    /// same engine is re-entered synchronously from one of its policy callbacks.
+    /// Re-throws the original error a custom policy callback threw, if any.
     #[wasm_bindgen(js_name = applyAccountAdjustment)]
     pub fn apply_account_adjustment(
         &self,
@@ -685,31 +726,37 @@ impl JsEngine {
         adjustments: AccountAdjustmentIterable,
     ) -> Result<JsAccountAdjustmentBatchResult, JsValue> {
         let account_id = resolve_account_id(account_id.into())?;
-        let (batch, lifecycle) = collect_adjustments(adjustments.into())?;
-        let callback_scope = CallbackErrorScope::capture();
+        let (batch, lifecycle) = collect_adjustments(adjustments.into(), self.callback_scope_id)?;
+        let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
         let result = match self.inner.apply_account_adjustment(account_id, &batch) {
             Ok(result) => JsAccountAdjustmentBatchResult::accepted(&result),
             Err(error) => JsAccountAdjustmentBatchResult::rejected(&error),
         };
         lifecycle.invalidate();
-        if let Some(cause) = callback_scope.finish() {
-            return Err(policy_callback_error(cause, JsValue::from(result)));
+        if let Some(failure) = callback_scope.finish() {
+            return Err(failure.into_error(JsValue::from(result)));
         }
         Ok(result)
     }
 
     /// Returns the engine's account registry and block facility.
     #[wasm_bindgen(js_name = accounts)]
-    pub fn accounts(&self) -> JsAccounts {
-        JsAccounts {
+    pub fn accounts(&self) -> Result<JsAccounts, JsValue> {
+        CallbackErrorScope::ensure_callable(self.callback_scope_id)?;
+        Ok(JsAccounts {
             inner: self.inner.accounts(),
-        }
+            callback_scope_id: self.callback_scope_id,
+        })
     }
 
     /// Returns the engine's runtime policy configurator.
     #[wasm_bindgen(js_name = configure)]
-    pub fn configure(&self) -> JsConfigurator {
-        JsConfigurator::from_inner(self.inner.configure())
+    pub fn configure(&self) -> Result<JsConfigurator, JsValue> {
+        CallbackErrorScope::ensure_callable(self.callback_scope_id)?;
+        Ok(JsConfigurator::from_inner(
+            self.inner.configure(),
+            self.callback_scope_id,
+        ))
     }
 }
 
@@ -721,8 +768,9 @@ impl JsEngine {
 fn build_order_request(
     order: &JsOrder,
     original: &JsValue,
+    callback_scope_id: u64,
 ) -> Result<(Order, LifecycleToken), JsValue> {
-    let lifecycle = LifecycleToken::new();
+    let lifecycle = LifecycleToken::new(callback_scope_id);
     let normalized = JsValue::from(order.clone());
     let payload = OrderPayload {
         snapshot: make_order_policy_payload(&normalized, original)?,
@@ -764,6 +812,7 @@ fn build_report_request(
 /// `AccountAdjustment` nor a valid literal.
 fn collect_adjustments(
     adjustments: JsValue,
+    callback_scope_id: u64,
 ) -> Result<(Vec<AccountAdjustment>, LifecycleToken), JsValue> {
     let iterator = js_sys::try_iter(&adjustments)?.ok_or_else(|| {
         make_error(
@@ -773,7 +822,7 @@ fn collect_adjustments(
         )
     })?;
 
-    let lifecycle = LifecycleToken::new();
+    let lifecycle = LifecycleToken::new(callback_scope_id);
     let mut batch = Vec::new();
     for item in iterator {
         let item = item?;
@@ -794,10 +843,12 @@ fn collect_adjustments(
 ///
 /// Obtained from `Engine.accounts()`. It shares the engine's single account
 /// control state, so changes made through it are visible to every other handle
-/// and to running policies.
+/// and to later policy calls. Calling it from a callback of the same engine
+/// throws `LifecycleError`.
 #[wasm_bindgen(js_name = Accounts)]
 pub struct JsAccounts {
     inner: openpit::Accounts<StorageFactory>,
+    callback_scope_id: u64,
 }
 
 #[wasm_bindgen(js_class = Accounts)]
@@ -817,6 +868,7 @@ impl JsAccounts {
         accounts: AccountIdIterable,
         group: AccountGroupIdLike,
     ) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let account_ids = collect_account_ids(accounts.into())?;
         let group = resolve_account_group_id(group.into())?;
         self.inner
@@ -839,6 +891,7 @@ impl JsAccounts {
         accounts: AccountIdIterable,
         group: AccountGroupIdLike,
     ) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let account_ids = collect_account_ids(accounts.into())?;
         let group = resolve_account_group_id(group.into())?;
         self.inner
@@ -855,6 +908,7 @@ impl JsAccounts {
     /// Throws `AccountIdError` on an invalid identifier.
     #[wasm_bindgen(js_name = groupOf)]
     pub fn group_of(&self, account: AccountIdLike) -> Result<Option<JsAccountGroupId>, JsValue> {
+        self.ensure_callable()?;
         let account = resolve_account_id(account.into())?;
         Ok(self
             .inner
@@ -876,6 +930,7 @@ impl JsAccounts {
     /// on an invalid asset identifier.
     #[wasm_bindgen(js_name = setCurrency)]
     pub fn set_currency(&self, account: AccountIdLike, asset: &str) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let account = resolve_account_id(account.into())?;
         let asset = parse_asset(asset)?;
         self.inner.set_currency(account, asset);
@@ -894,6 +949,7 @@ impl JsAccounts {
     /// Throws `AccountIdError` on an invalid account identifier.
     #[wasm_bindgen(js_name = clearCurrency)]
     pub fn clear_currency(&self, account: AccountIdLike) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let account = resolve_account_id(account.into())?;
         self.inner.clear_currency(account);
         Ok(())
@@ -918,6 +974,7 @@ impl JsAccounts {
         group: AccountGroupIdLike,
         asset: &str,
     ) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let group = resolve_account_group_id(group.into())?;
         let asset = parse_asset(asset)?;
         self.inner.set_group_currency(group, asset);
@@ -937,6 +994,7 @@ impl JsAccounts {
     /// Throws `ParamError` on an invalid group identifier.
     #[wasm_bindgen(js_name = clearGroupCurrency)]
     pub fn clear_group_currency(&self, group: AccountGroupIdLike) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let group = resolve_account_group_id(group.into())?;
         self.inner.clear_group_currency(group);
         Ok(())
@@ -951,6 +1009,7 @@ impl JsAccounts {
     /// Throws `AccountIdError` on an invalid identifier.
     #[wasm_bindgen(js_name = block)]
     pub fn block(&self, account: AccountIdLike, reason: String) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let account = resolve_account_id(account.into())?;
         self.inner.block(account, reason);
         Ok(())
@@ -965,8 +1024,34 @@ impl JsAccounts {
     /// Throws `AccountIdError` on an invalid identifier.
     #[wasm_bindgen(js_name = unblock)]
     pub fn unblock(&self, account: AccountIdLike) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let account = resolve_account_id(account.into())?;
         self.inner.unblock(account);
+        Ok(())
+    }
+
+    /// Clears the engine-wide block, letting every account trade again.
+    ///
+    /// An engine-wide block is never raised by an admin call. The engine raises
+    /// it itself when a kill switch is reported for an execution report whose
+    /// account cannot be read, and when a mutation finalizer fails for a
+    /// mutation a custom policy registered - which every `Mutation` registered
+    /// from JavaScript is - because the engine cannot bound how far that
+    /// policy's state reaches. The reject the block produces carries
+    /// `"SystemUnavailable"`.
+    ///
+    /// Idempotent: a no-op when no engine-wide block is active. Accounts and
+    /// groups blocked individually stay blocked; clear those with `unblock()`
+    /// and `unblockGroup()`.
+    ///
+    /// # Errors
+    ///
+    /// Throws `LifecycleError` when the owning engine is re-entered
+    /// synchronously from one of its policy callbacks.
+    #[wasm_bindgen(js_name = unblockAll)]
+    pub fn unblock_all(&self) -> Result<(), JsValue> {
+        self.ensure_callable()?;
+        self.inner.unblock_all();
         Ok(())
     }
 
@@ -985,6 +1070,7 @@ impl JsAccounts {
         account: AccountIdLike,
         reason: String,
     ) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let account = resolve_account_id(account.into())?;
         self.inner
             .replace_block_reason(account, reason)
@@ -1001,6 +1087,7 @@ impl JsAccounts {
     /// is the reserved default group, or `ParamError` on an invalid identifier.
     #[wasm_bindgen(js_name = blockGroup)]
     pub fn block_group(&self, group: AccountGroupIdLike, reason: String) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let group = resolve_account_group_id(group.into())?;
         self.inner
             .block_group(group, reason)
@@ -1017,6 +1104,7 @@ impl JsAccounts {
     /// is the reserved default group, or `ParamError` on an invalid identifier.
     #[wasm_bindgen(js_name = unblockGroup)]
     pub fn unblock_group(&self, group: AccountGroupIdLike) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let group = resolve_account_group_id(group.into())?;
         self.inner
             .unblock_group(group)
@@ -1039,10 +1127,17 @@ impl JsAccounts {
         group: AccountGroupIdLike,
         reason: String,
     ) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let group = resolve_account_group_id(group.into())?;
         self.inner
             .replace_group_block_reason(group, reason)
             .map_err(|error| account_block_error_to_js(&error))
+    }
+}
+
+impl JsAccounts {
+    fn ensure_callable(&self) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_callable(self.callback_scope_id)
     }
 }
 
@@ -1184,7 +1279,10 @@ impl JsReadyEngineBuilder {
         match state {
             BuilderState::Ready(builder) => builder
                 .build()
-                .map(|inner| JsEngine { inner })
+                .map(|inner| JsEngine {
+                    inner,
+                    callback_scope_id: next_callback_scope_id(),
+                })
                 .map_err(|error| engine_build_error_to_js(&error)),
             BuilderState::Synced(_) => {
                 let payload = Object::new();
@@ -1313,14 +1411,15 @@ fn build_builtin_policy(
     ))
 }
 
-/// Finishes one callback scope and surfaces its first error.
+/// Finishes one callback scope and surfaces its first failure.
 ///
 /// # Errors
 ///
-/// Throws `PolicyCallbackError` with the original value as `cause`.
+/// Throws `PolicyCallbackError` with the original value as `cause`, or the
+/// `InternalError` of the panic that abandoned the operation.
 fn finish_callback_scope(scope: CallbackErrorScope, result: JsValue) -> Result<(), JsValue> {
     match scope.finish() {
-        Some(cause) => Err(policy_callback_error(cause, result)),
+        Some(failure) => Err(failure.into_error(result)),
         None => Ok(()),
     }
 }

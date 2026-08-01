@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 use crate::core::HasTradeAmount;
 use crate::param::TradeAmount;
@@ -25,6 +25,9 @@ use crate::pretrade::{PreTradeContext, PreTradePolicy, Reject, RejectCode, Rejec
 ///
 /// The current implementation validates only explicitly provided fields:
 /// `trade_amount` must be non-zero when present.
+///
+/// Drop-copy operations replay historical orders and bypass this admission
+/// check. The policy does not request or validate their trade amount.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OrderValidationPolicy {
     group_id: PolicyGroupId,
@@ -72,9 +75,13 @@ where
 
     fn check_pre_trade_start(
         &self,
-        _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+        ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
         order: &Order,
     ) -> Result<(), Rejects> {
+        // Historical orders have already passed admission validation.
+        if ctx.is_drop_copy() {
+            return Ok(());
+        }
         match order
             .trade_amount()
             .map_err(|e| Rejects::from(missing_required_field_reject(self, "trade amount", &e)))?
@@ -335,5 +342,35 @@ mod tests {
             "failed to access required field 'trade amount'"
         );
         assert_eq!(reject.details, "failed to access field 'trade_amount'");
+    }
+
+    #[test]
+    fn drop_copy_does_not_request_the_trade_amount() {
+        struct UnreadableTradeAmountOrder;
+
+        impl crate::HasTradeAmount for UnreadableTradeAmountOrder {
+            fn trade_amount(&self) -> Result<TradeAmount, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("trade_amount"))
+            }
+        }
+
+        impl crate::HasAccountId for UnreadableTradeAmountOrder {
+            fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+                Ok(AccountId::from_u64(99224416))
+            }
+        }
+
+        // Ordinary admission maps the unreadable field to a fatal
+        // MissingRequiredField reject, so a drop copy that still read the field
+        // would fail the whole operation.
+        let engine = crate::Engine::builder::<UnreadableTradeAmountOrder, (), ()>()
+            .no_sync()
+            .pre_trade(OrderValidationPolicy::new())
+            .build()
+            .expect("engine must build");
+
+        engine
+            .apply_drop_copy(UnreadableTradeAmountOrder)
+            .expect("drop copy must not request the trade amount");
     }
 }

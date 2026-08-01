@@ -13,11 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package pretrade
 
 import (
+	"errors"
 	"testing"
 
 	"go.openpit.dev/openpit/internal/native"
@@ -94,8 +95,8 @@ func TestRequestExecuteAfterCloseReturnsError(t *testing.T) {
 	if executeRejects != nil {
 		t.Fatalf("Execute() rejects = %v, want nil", executeRejects)
 	}
-	if err == nil {
-		t.Fatal("Execute() error = nil, want non-nil")
+	if !errors.Is(err, ErrRequestClosed) {
+		t.Fatalf("Execute() error = %v, want ErrRequestClosed", err)
 	}
 }
 
@@ -105,22 +106,10 @@ func TestReservationCommit(t *testing.T) {
 	reservation.Close()
 }
 
-func TestReservationCommitAndClosePanicsOnClosedReservation(t *testing.T) {
+func TestReservationCommitAndCloseAllowsSubsequentCommit(t *testing.T) {
 	reservation := newReservationForPreTradeTests(t, newValidOrderForPreTradeTests(t))
 	reservation.CommitAndClose()
-
-	didPanic := false
-	func() {
-		defer func() {
-			if recover() != nil {
-				didPanic = true
-			}
-		}()
-		reservation.Commit()
-	}()
-	if !didPanic {
-		t.Fatal("Commit() panic = nil, want non-nil")
-	}
+	reservation.Commit()
 }
 
 func TestReservationRollback(t *testing.T) {
@@ -135,9 +124,162 @@ func TestReservationRollbackAndCloseAllowsSubsequentRollback(t *testing.T) {
 	reservation.Rollback()
 }
 
+func TestReservationCloseIsIdempotent(t *testing.T) {
+	reservation := newReservationForPreTradeTests(t, newValidOrderForPreTradeTests(t))
+	reservation.Close()
+	reservation.Close()
+	if reservation.handle != nil {
+		t.Fatal("Reservation handle remains after repeated Close calls")
+	}
+}
+
+// TestReservationCommitAfterRollbackIsNoOp pins the resolve-once contract on
+// the sequential path: the first of Commit/Rollback wins and the second call
+// does nothing rather than re-entering the native finalizer.
+func TestReservationCommitAfterRollbackIsNoOp(t *testing.T) {
+	reservation := newReservationForPreTradeTests(t, newValidOrderForPreTradeTests(t))
+	defer reservation.Close()
+
+	reservation.Rollback()
+	reservation.Commit()
+	if !reservation.resolved {
+		t.Fatal("reservation not resolved after Rollback")
+	}
+}
+
+func TestDropCopyOperationCommit(t *testing.T) {
+	operation := newDropCopyOperationForPreTradeTests(t)
+	operation.Commit()
+	operation.Close()
+}
+
+func TestDropCopyOperationCommitAndCloseAllowsSubsequentCommit(t *testing.T) {
+	operation := newDropCopyOperationForPreTradeTests(t)
+	operation.CommitAndClose()
+	operation.Commit()
+}
+
+func TestDropCopyOperationRollback(t *testing.T) {
+	operation := newDropCopyOperationForPreTradeTests(t)
+	operation.Rollback()
+	operation.Close()
+}
+
+func TestDropCopyOperationRollbackAndCloseAllowsSubsequentRollback(t *testing.T) {
+	operation := newDropCopyOperationForPreTradeTests(t)
+	operation.RollbackAndClose()
+	operation.Rollback()
+}
+
+func TestDropCopyOperationCloseIsIdempotent(t *testing.T) {
+	operation := newDropCopyOperationForPreTradeTests(t)
+	operation.Close()
+	operation.Close()
+	if operation.handle != nil {
+		t.Fatal("DropCopyOperation handle remains after repeated Close calls")
+	}
+}
+
+// TestDropCopyOperationCommitAfterRollbackIsNoOp pins the resolve-once contract
+// on the sequential path: the first of Commit/Rollback wins and the second call
+// does nothing rather than re-entering the native finalizer.
+func TestDropCopyOperationCommitAfterRollbackIsNoOp(t *testing.T) {
+	operation := newDropCopyOperationForPreTradeTests(t)
+	defer operation.Close()
+
+	operation.Rollback()
+	operation.Commit()
+	if !operation.resolved {
+		t.Fatal("operation not resolved after Rollback")
+	}
+}
+
+// TestDropCopyOperationAccessorsAfterCloseReportClosed releases a real native
+// operation and then checks that every accessor returns an explicit lifecycle
+// error.
+func TestDropCopyOperationAccessorsAfterCloseReportClosed(t *testing.T) {
+	operation := newDropCopyOperationForPreTradeTests(t)
+	operation.Close()
+
+	if _, err := operation.Lock(); !errors.Is(err, ErrDropCopyOperationClosed) {
+		t.Fatalf("Lock() after Close error = %v, want ErrDropCopyOperationClosed", err)
+	}
+	if _, err := operation.AccountAdjustments(); !errors.Is(err, ErrDropCopyOperationClosed) {
+		t.Fatalf("AccountAdjustments() after Close error = %v, want ErrDropCopyOperationClosed", err)
+	}
+	if _, err := operation.AccountBlock(); !errors.Is(err, ErrDropCopyOperationClosed) {
+		t.Fatalf("AccountBlock() after Close error = %v, want ErrDropCopyOperationClosed", err)
+	}
+	if _, err := operation.IsAccountBlocked(); !errors.Is(err, ErrDropCopyOperationClosed) {
+		t.Fatalf("IsAccountBlocked() after Close error = %v, want ErrDropCopyOperationClosed", err)
+	}
+}
+
+// TestDropCopyOperationAccessorsOnLiveHandleAnswer proves the sentinel marks a
+// released handle rather than an empty result.
+func TestDropCopyOperationAccessorsOnLiveHandleAnswer(t *testing.T) {
+	operation := newDropCopyOperationForPreTradeTests(t)
+
+	if _, err := operation.AccountAdjustments(); err != nil {
+		t.Fatalf("AccountAdjustments() on live operation error = %v", err)
+	}
+	if _, err := operation.IsAccountBlocked(); err != nil {
+		t.Fatalf("IsAccountBlocked() on live operation error = %v", err)
+	}
+}
+
+// TestReservationAccessorsAfterCloseReportClosed pins the same contract on the
+// reservation.
+func TestReservationAccessorsAfterCloseReportClosed(t *testing.T) {
+	reservation := newReservationForPreTradeTests(t, newValidOrderForPreTradeTests(t))
+	reservation.Close()
+
+	if _, err := reservation.Lock(); !errors.Is(err, ErrReservationClosed) {
+		t.Fatalf("Lock() after Close error = %v, want ErrReservationClosed", err)
+	}
+	if _, err := reservation.AccountAdjustments(); !errors.Is(err, ErrReservationClosed) {
+		t.Fatalf("AccountAdjustments() after Close error = %v, want ErrReservationClosed", err)
+	}
+}
+
+// TestReservationAccessorsOnLiveHandleAnswer proves the sentinel marks a
+// released handle rather than an empty result.
+func TestReservationAccessorsOnLiveHandleAnswer(t *testing.T) {
+	reservation := newReservationForPreTradeTests(t, newValidOrderForPreTradeTests(t))
+
+	if _, err := reservation.AccountAdjustments(); err != nil {
+		t.Fatalf("AccountAdjustments() on live reservation error = %v", err)
+	}
+}
+
+func TestRequestCloseIsIdempotent(t *testing.T) {
+	engine := newNativeEngineForPreTradeTests(t)
+	requestHandle, rejects, err := native.EngineStartPreTrade(
+		engine,
+		newValidOrderForPreTradeTests(t).Handle(),
+	)
+	if err != nil {
+		t.Fatalf("EngineStartPreTrade() error = %v", err)
+	}
+	if rejects != nil {
+		native.DestroyPretradeRejectList(rejects)
+		t.Fatalf("EngineStartPreTrade() rejects = %v, want nil", rejects)
+	}
+	request := NewRequestFromHandle(requestHandle)
+
+	request.Close()
+	request.Close()
+	if request.handle != nil {
+		t.Fatal("Request handle remains after repeated Close calls")
+	}
+}
+
 func TestReservationLockOnFreshReservationProducesNonZeroBlob(t *testing.T) {
 	reservation := newReservationForPreTradeTests(t, newValidOrderForPreTradeTests(t))
-	lock := reservation.Lock()
+	lock, err := reservation.Lock()
+	if err != nil {
+		t.Fatalf("Reservation.Lock() error = %v", err)
+	}
 	if len(lock.Bytes()) == 0 {
 		t.Fatal("Reservation.Lock().Bytes() is empty, want canonical empty-lock blob")
 	}
@@ -145,7 +287,10 @@ func TestReservationLockOnFreshReservationProducesNonZeroBlob(t *testing.T) {
 
 func TestLockMsgPackRoundTripPreservesIdentity(t *testing.T) {
 	reservation := newReservationForPreTradeTests(t, newValidOrderForPreTradeTests(t))
-	original := reservation.Lock()
+	original, err := reservation.Lock()
+	if err != nil {
+		t.Fatalf("Reservation.Lock() error = %v", err)
+	}
 
 	msgpackBlob, err := original.MarshalMsgpack()
 	if err != nil {
@@ -246,6 +391,27 @@ func newReservationForPreTradeTests(t *testing.T, order model.Order) *Reservatio
 	reservation := NewReservationFromHandle(reservationHandle)
 	t.Cleanup(reservation.Close)
 	return reservation
+}
+
+func newDropCopyOperationForPreTradeTests(t *testing.T) *DropCopyOperation {
+	t.Helper()
+
+	engine := newNativeEngineForPreTradeTests(t)
+	operationHandle, rejects, err := native.EngineApplyDropCopy(
+		engine,
+		newValidOrderForPreTradeTests(t).Handle(),
+	)
+	if err != nil {
+		t.Fatalf("EngineApplyDropCopy() error = %v", err)
+	}
+	if rejects != nil {
+		native.DestroyPretradeRejectList(rejects)
+		t.Fatalf("EngineApplyDropCopy() rejects = %v, want nil", rejects)
+	}
+
+	operation := NewDropCopyOperationFromHandle(operationHandle)
+	t.Cleanup(operation.Close)
+	return operation
 }
 
 func mustPriceForPreTradeTests(t *testing.T, value string) param.Price {

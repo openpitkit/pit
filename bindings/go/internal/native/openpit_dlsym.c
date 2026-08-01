@@ -272,13 +272,16 @@ static OpenPitSharedString * (*_fn_openpit_param_position_effect_to_string)(Open
 static OpenPitSharedString * (*_fn_openpit_param_position_mode_to_string)(OpenPitParamPositionMode, OpenPitOutParamError) = NULL;
 static OpenPitSharedString * (*_fn_openpit_param_trade_amount_to_string)(OpenPitParamTradeAmount, OpenPitOutParamError) = NULL;
 static OpenPitSharedString * (*_fn_openpit_param_adjustment_amount_to_string)(OpenPitParamAdjustmentAmount, OpenPitOutParamError) = NULL;
-static OpenPitPretradeRejectList * (*_fn_openpit_pretrade_create_reject_list)(size_t) = NULL;
-static void (*_fn_openpit_pretrade_destroy_reject_list)(OpenPitPretradeRejectList *) = NULL;
+static bool (*_fn_openpit_pretrade_reject_code_is_evaluation_failure)(OpenPitPretradeRejectCode) = NULL;
+static OpenPitPretradeRejectList * (*_fn_openpit_create_pretrade_reject_list)(size_t) = NULL;
+static OpenPitPretradeRejectList * (*_fn_openpit_pretrade_reject_list_get_accept_sentinel)(void) = NULL;
+static bool (*_fn_openpit_pretrade_reject_list_is_accept_sentinel)(const OpenPitPretradeRejectList *) = NULL;
+static void (*_fn_openpit_destroy_pretrade_reject_list)(OpenPitPretradeRejectList *) = NULL;
 static bool (*_fn_openpit_pretrade_reject_list_push)(OpenPitPretradeRejectList *, OpenPitPretradeReject) = NULL;
 static size_t (*_fn_openpit_pretrade_reject_list_len)(const OpenPitPretradeRejectList *) = NULL;
 static bool (*_fn_openpit_pretrade_reject_list_get)(const OpenPitPretradeRejectList *, size_t, OpenPitPretradeReject *) = NULL;
-static OpenPitPretradeAccountBlockList * (*_fn_openpit_pretrade_create_account_block_list)(size_t) = NULL;
-static void (*_fn_openpit_pretrade_destroy_account_block_list)(OpenPitPretradeAccountBlockList *) = NULL;
+static OpenPitPretradeAccountBlockList * (*_fn_openpit_create_pretrade_account_block_list)(size_t) = NULL;
+static void (*_fn_openpit_destroy_pretrade_account_block_list)(OpenPitPretradeAccountBlockList *) = NULL;
 static void (*_fn_openpit_pretrade_account_block_list_push)(OpenPitPretradeAccountBlockList *, OpenPitPretradeAccountBlock) = NULL;
 static size_t (*_fn_openpit_pretrade_account_block_list_len)(const OpenPitPretradeAccountBlockList *) = NULL;
 static bool (*_fn_openpit_pretrade_account_block_list_get)(const OpenPitPretradeAccountBlockList *, size_t, OpenPitPretradeAccountBlock *) = NULL;
@@ -293,7 +296,7 @@ static uint16_t (*_fn_openpit_engine_build_error_get_policy_group_id)(const Open
 static void (*_fn_openpit_destroy_engine)(OpenPitEngine *) = NULL;
 static OpenPitPretradeStatus (*_fn_openpit_engine_start_pre_trade)(OpenPitEngine *, const OpenPitOrder *, OpenPitPretradePreTradeRequest **, OpenPitPretradeRejectList **, OpenPitOutError) = NULL;
 static OpenPitPretradeStatus (*_fn_openpit_engine_execute_pre_trade)(OpenPitEngine *, const OpenPitOrder *, OpenPitPretradePreTradeReservation **, OpenPitPretradeRejectList **, OpenPitOutError) = NULL;
-static bool (*_fn_openpit_engine_execute_pre_trade_drop_copy)(OpenPitEngine *, const OpenPitOrder *, OpenPitPretradePreTradeReservation **, OpenPitOutError) = NULL;
+static OpenPitPretradeStatus (*_fn_openpit_engine_apply_drop_copy)(OpenPitEngine *, const OpenPitOrder *, OpenPitPretradeDropCopyOperation **, OpenPitPretradeRejectList **, OpenPitOutError) = NULL;
 static bool (*_fn_openpit_engine_start_pre_trade_dry_run)(OpenPitEngine *, const OpenPitOrder *, OpenPitPretradePreTradeDryRunReport **, OpenPitOutError) = NULL;
 static bool (*_fn_openpit_engine_execute_pre_trade_dry_run)(OpenPitEngine *, const OpenPitOrder *, OpenPitPretradePreTradeDryRunReport **, OpenPitOutError) = NULL;
 static OpenPitPretradeStatus (*_fn_openpit_pretrade_pre_trade_request_execute)(OpenPitPretradePreTradeRequest *, OpenPitPretradePreTradeReservation **, OpenPitPretradeRejectList **, OpenPitOutError) = NULL;
@@ -302,8 +305,14 @@ static void (*_fn_openpit_pretrade_pre_trade_reservation_commit)(OpenPitPretrade
 static void (*_fn_openpit_pretrade_pre_trade_reservation_rollback)(OpenPitPretradePreTradeReservation *) = NULL;
 static OpenPitPretradePreTradeLock * (*_fn_openpit_pretrade_pre_trade_reservation_get_lock)(const OpenPitPretradePreTradeReservation *) = NULL;
 static OpenPitAccountAdjustmentOutcomeList * (*_fn_openpit_pretrade_pre_trade_reservation_get_account_adjustments)(const OpenPitPretradePreTradeReservation *) = NULL;
-static OpenPitPretradeAccountBlockList * (*_fn_openpit_pretrade_pre_trade_reservation_get_account_block)(const OpenPitPretradePreTradeReservation *) = NULL;
 static void (*_fn_openpit_destroy_pretrade_pre_trade_reservation)(OpenPitPretradePreTradeReservation *) = NULL;
+static void (*_fn_openpit_pretrade_drop_copy_operation_commit)(OpenPitPretradeDropCopyOperation *) = NULL;
+static void (*_fn_openpit_pretrade_drop_copy_operation_rollback)(OpenPitPretradeDropCopyOperation *) = NULL;
+static OpenPitPretradePreTradeLock * (*_fn_openpit_pretrade_drop_copy_operation_get_lock)(const OpenPitPretradeDropCopyOperation *) = NULL;
+static OpenPitAccountAdjustmentOutcomeList * (*_fn_openpit_pretrade_drop_copy_operation_get_account_adjustments)(const OpenPitPretradeDropCopyOperation *) = NULL;
+static OpenPitPretradeAccountBlockList * (*_fn_openpit_pretrade_drop_copy_operation_get_account_block)(const OpenPitPretradeDropCopyOperation *) = NULL;
+static bool (*_fn_openpit_pretrade_drop_copy_operation_is_account_blocked)(const OpenPitPretradeDropCopyOperation *) = NULL;
+static void (*_fn_openpit_destroy_pretrade_drop_copy_operation)(OpenPitPretradeDropCopyOperation *) = NULL;
 static bool (*_fn_openpit_pretrade_pre_trade_dry_run_report_is_pass)(const OpenPitPretradePreTradeDryRunReport *) = NULL;
 static OpenPitPretradeRejectList * (*_fn_openpit_pretrade_pre_trade_dry_run_report_get_rejects)(const OpenPitPretradePreTradeDryRunReport *) = NULL;
 static OpenPitPretradePreTradeLock * (*_fn_openpit_pretrade_pre_trade_dry_run_report_get_lock)(const OpenPitPretradePreTradeDryRunReport *) = NULL;
@@ -340,6 +349,7 @@ static OpenPitStringView (*_fn_openpit_configure_error_get_message)(const OpenPi
 static OpenPitConfigureErrorKind (*_fn_openpit_configure_error_get_kind)(const OpenPitConfigureError *) = NULL;
 static void (*_fn_openpit_engine_block_account)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView) = NULL;
 static void (*_fn_openpit_engine_unblock_account)(OpenPitEngine *, OpenPitParamAccountId) = NULL;
+static void (*_fn_openpit_engine_unblock_all_accounts)(OpenPitEngine *) = NULL;
 static bool (*_fn_openpit_engine_replace_account_block_reason)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView, OpenPitAccountBlockError **) = NULL;
 static bool (*_fn_openpit_engine_block_account_group)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitStringView, OpenPitAccountBlockError **) = NULL;
 static bool (*_fn_openpit_engine_unblock_account_group)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitAccountBlockError **) = NULL;
@@ -372,6 +382,8 @@ static void (*_fn_openpit_account_control_block)(const OpenPitAccountControl *, 
 static OpenPitAccountControl * (*_fn_openpit_account_control_clone)(const OpenPitAccountControl *) = NULL;
 static void (*_fn_openpit_destroy_account_control)(OpenPitAccountControl *) = NULL;
 static OpenPitAccountControl * (*_fn_openpit_pretrade_context_get_account_control)(const OpenPitPretradeContext *) = NULL;
+static bool (*_fn_openpit_pretrade_context_is_drop_copy)(const OpenPitPretradeContext *) = NULL;
+static bool (*_fn_openpit_pretrade_context_record_drop_copy_start_mutation)(const OpenPitPretradeContext *, OpenPitMutationFn, OpenPitMutationFn, void *, OpenPitMutationFreeFn, OpenPitOutError) = NULL;
 static OpenPitAccountControl * (*_fn_openpit_account_adjustment_context_get_account_control)(const OpenPitAccountAdjustmentContext *) = NULL;
 static bool (*_fn_openpit_pretrade_context_get_account_group)(const OpenPitPretradeContext *, OpenPitParamAccountGroupId *) = NULL;
 static bool (*_fn_openpit_account_adjustment_context_get_account_group)(const OpenPitAccountAdjustmentContext *, OpenPitParamAccountGroupId *) = NULL;
@@ -451,6 +463,7 @@ static bool (*_fn_openpit_reference_book_resolve)(const OpenPitReferenceBook *, 
 static OpenPitReferenceBookStatus (*_fn_openpit_reference_book_set_settlement_scheme)(OpenPitReferenceBook *, OpenPitInstrumentId, OpenPitSettlementScheme, OpenPitOutError) = NULL;
 static OpenPitReferenceBookStatus (*_fn_openpit_reference_book_clear_settlement_scheme)(OpenPitReferenceBook *, OpenPitInstrumentId, OpenPitOutError) = NULL;
 static OpenPitReferenceBookStatus (*_fn_openpit_reference_book_get_settlement_scheme)(const OpenPitReferenceBook *, OpenPitInstrumentId, OpenPitSettlementScheme *, bool *, OpenPitOutError) = NULL;
+static OpenPitSharedString * (*_fn_openpit_create_shared_string)(OpenPitStringView) = NULL;
 static void (*_fn_openpit_destroy_shared_string)(OpenPitSharedString *) = NULL;
 static OpenPitStringView (*_fn_openpit_shared_string_view)(const OpenPitSharedString *) = NULL;
 
@@ -937,20 +950,26 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_param_trade_amount_to_string == NULL) return "openpit_param_trade_amount_to_string";
     _fn_openpit_param_adjustment_amount_to_string = (OpenPitSharedString * (*)(OpenPitParamAdjustmentAmount, OpenPitOutParamError))openpit_dlsym(handle, "openpit_param_adjustment_amount_to_string");
     if (_fn_openpit_param_adjustment_amount_to_string == NULL) return "openpit_param_adjustment_amount_to_string";
-    _fn_openpit_pretrade_create_reject_list = (OpenPitPretradeRejectList * (*)(size_t))openpit_dlsym(handle, "openpit_pretrade_create_reject_list");
-    if (_fn_openpit_pretrade_create_reject_list == NULL) return "openpit_pretrade_create_reject_list";
-    _fn_openpit_pretrade_destroy_reject_list = (void (*)(OpenPitPretradeRejectList *))openpit_dlsym(handle, "openpit_pretrade_destroy_reject_list");
-    if (_fn_openpit_pretrade_destroy_reject_list == NULL) return "openpit_pretrade_destroy_reject_list";
+    _fn_openpit_pretrade_reject_code_is_evaluation_failure = (bool (*)(OpenPitPretradeRejectCode))openpit_dlsym(handle, "openpit_pretrade_reject_code_is_evaluation_failure");
+    if (_fn_openpit_pretrade_reject_code_is_evaluation_failure == NULL) return "openpit_pretrade_reject_code_is_evaluation_failure";
+    _fn_openpit_create_pretrade_reject_list = (OpenPitPretradeRejectList * (*)(size_t))openpit_dlsym(handle, "openpit_create_pretrade_reject_list");
+    if (_fn_openpit_create_pretrade_reject_list == NULL) return "openpit_create_pretrade_reject_list";
+    _fn_openpit_pretrade_reject_list_get_accept_sentinel = (OpenPitPretradeRejectList * (*)(void))openpit_dlsym(handle, "openpit_pretrade_reject_list_get_accept_sentinel");
+    if (_fn_openpit_pretrade_reject_list_get_accept_sentinel == NULL) return "openpit_pretrade_reject_list_get_accept_sentinel";
+    _fn_openpit_pretrade_reject_list_is_accept_sentinel = (bool (*)(const OpenPitPretradeRejectList *))openpit_dlsym(handle, "openpit_pretrade_reject_list_is_accept_sentinel");
+    if (_fn_openpit_pretrade_reject_list_is_accept_sentinel == NULL) return "openpit_pretrade_reject_list_is_accept_sentinel";
+    _fn_openpit_destroy_pretrade_reject_list = (void (*)(OpenPitPretradeRejectList *))openpit_dlsym(handle, "openpit_destroy_pretrade_reject_list");
+    if (_fn_openpit_destroy_pretrade_reject_list == NULL) return "openpit_destroy_pretrade_reject_list";
     _fn_openpit_pretrade_reject_list_push = (bool (*)(OpenPitPretradeRejectList *, OpenPitPretradeReject))openpit_dlsym(handle, "openpit_pretrade_reject_list_push");
     if (_fn_openpit_pretrade_reject_list_push == NULL) return "openpit_pretrade_reject_list_push";
     _fn_openpit_pretrade_reject_list_len = (size_t (*)(const OpenPitPretradeRejectList *))openpit_dlsym(handle, "openpit_pretrade_reject_list_len");
     if (_fn_openpit_pretrade_reject_list_len == NULL) return "openpit_pretrade_reject_list_len";
     _fn_openpit_pretrade_reject_list_get = (bool (*)(const OpenPitPretradeRejectList *, size_t, OpenPitPretradeReject *))openpit_dlsym(handle, "openpit_pretrade_reject_list_get");
     if (_fn_openpit_pretrade_reject_list_get == NULL) return "openpit_pretrade_reject_list_get";
-    _fn_openpit_pretrade_create_account_block_list = (OpenPitPretradeAccountBlockList * (*)(size_t))openpit_dlsym(handle, "openpit_pretrade_create_account_block_list");
-    if (_fn_openpit_pretrade_create_account_block_list == NULL) return "openpit_pretrade_create_account_block_list";
-    _fn_openpit_pretrade_destroy_account_block_list = (void (*)(OpenPitPretradeAccountBlockList *))openpit_dlsym(handle, "openpit_pretrade_destroy_account_block_list");
-    if (_fn_openpit_pretrade_destroy_account_block_list == NULL) return "openpit_pretrade_destroy_account_block_list";
+    _fn_openpit_create_pretrade_account_block_list = (OpenPitPretradeAccountBlockList * (*)(size_t))openpit_dlsym(handle, "openpit_create_pretrade_account_block_list");
+    if (_fn_openpit_create_pretrade_account_block_list == NULL) return "openpit_create_pretrade_account_block_list";
+    _fn_openpit_destroy_pretrade_account_block_list = (void (*)(OpenPitPretradeAccountBlockList *))openpit_dlsym(handle, "openpit_destroy_pretrade_account_block_list");
+    if (_fn_openpit_destroy_pretrade_account_block_list == NULL) return "openpit_destroy_pretrade_account_block_list";
     _fn_openpit_pretrade_account_block_list_push = (void (*)(OpenPitPretradeAccountBlockList *, OpenPitPretradeAccountBlock))openpit_dlsym(handle, "openpit_pretrade_account_block_list_push");
     if (_fn_openpit_pretrade_account_block_list_push == NULL) return "openpit_pretrade_account_block_list_push";
     _fn_openpit_pretrade_account_block_list_len = (size_t (*)(const OpenPitPretradeAccountBlockList *))openpit_dlsym(handle, "openpit_pretrade_account_block_list_len");
@@ -979,8 +998,8 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_engine_start_pre_trade == NULL) return "openpit_engine_start_pre_trade";
     _fn_openpit_engine_execute_pre_trade = (OpenPitPretradeStatus (*)(OpenPitEngine *, const OpenPitOrder *, OpenPitPretradePreTradeReservation **, OpenPitPretradeRejectList **, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_execute_pre_trade");
     if (_fn_openpit_engine_execute_pre_trade == NULL) return "openpit_engine_execute_pre_trade";
-    _fn_openpit_engine_execute_pre_trade_drop_copy = (bool (*)(OpenPitEngine *, const OpenPitOrder *, OpenPitPretradePreTradeReservation **, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_execute_pre_trade_drop_copy");
-    if (_fn_openpit_engine_execute_pre_trade_drop_copy == NULL) return "openpit_engine_execute_pre_trade_drop_copy";
+    _fn_openpit_engine_apply_drop_copy = (OpenPitPretradeStatus (*)(OpenPitEngine *, const OpenPitOrder *, OpenPitPretradeDropCopyOperation **, OpenPitPretradeRejectList **, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_apply_drop_copy");
+    if (_fn_openpit_engine_apply_drop_copy == NULL) return "openpit_engine_apply_drop_copy";
     _fn_openpit_engine_start_pre_trade_dry_run = (bool (*)(OpenPitEngine *, const OpenPitOrder *, OpenPitPretradePreTradeDryRunReport **, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_start_pre_trade_dry_run");
     if (_fn_openpit_engine_start_pre_trade_dry_run == NULL) return "openpit_engine_start_pre_trade_dry_run";
     _fn_openpit_engine_execute_pre_trade_dry_run = (bool (*)(OpenPitEngine *, const OpenPitOrder *, OpenPitPretradePreTradeDryRunReport **, OpenPitOutError))openpit_dlsym(handle, "openpit_engine_execute_pre_trade_dry_run");
@@ -997,10 +1016,22 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_pretrade_pre_trade_reservation_get_lock == NULL) return "openpit_pretrade_pre_trade_reservation_get_lock";
     _fn_openpit_pretrade_pre_trade_reservation_get_account_adjustments = (OpenPitAccountAdjustmentOutcomeList * (*)(const OpenPitPretradePreTradeReservation *))openpit_dlsym(handle, "openpit_pretrade_pre_trade_reservation_get_account_adjustments");
     if (_fn_openpit_pretrade_pre_trade_reservation_get_account_adjustments == NULL) return "openpit_pretrade_pre_trade_reservation_get_account_adjustments";
-    _fn_openpit_pretrade_pre_trade_reservation_get_account_block = (OpenPitPretradeAccountBlockList * (*)(const OpenPitPretradePreTradeReservation *))openpit_dlsym(handle, "openpit_pretrade_pre_trade_reservation_get_account_block");
-    if (_fn_openpit_pretrade_pre_trade_reservation_get_account_block == NULL) return "openpit_pretrade_pre_trade_reservation_get_account_block";
     _fn_openpit_destroy_pretrade_pre_trade_reservation = (void (*)(OpenPitPretradePreTradeReservation *))openpit_dlsym(handle, "openpit_destroy_pretrade_pre_trade_reservation");
     if (_fn_openpit_destroy_pretrade_pre_trade_reservation == NULL) return "openpit_destroy_pretrade_pre_trade_reservation";
+    _fn_openpit_pretrade_drop_copy_operation_commit = (void (*)(OpenPitPretradeDropCopyOperation *))openpit_dlsym(handle, "openpit_pretrade_drop_copy_operation_commit");
+    if (_fn_openpit_pretrade_drop_copy_operation_commit == NULL) return "openpit_pretrade_drop_copy_operation_commit";
+    _fn_openpit_pretrade_drop_copy_operation_rollback = (void (*)(OpenPitPretradeDropCopyOperation *))openpit_dlsym(handle, "openpit_pretrade_drop_copy_operation_rollback");
+    if (_fn_openpit_pretrade_drop_copy_operation_rollback == NULL) return "openpit_pretrade_drop_copy_operation_rollback";
+    _fn_openpit_pretrade_drop_copy_operation_get_lock = (OpenPitPretradePreTradeLock * (*)(const OpenPitPretradeDropCopyOperation *))openpit_dlsym(handle, "openpit_pretrade_drop_copy_operation_get_lock");
+    if (_fn_openpit_pretrade_drop_copy_operation_get_lock == NULL) return "openpit_pretrade_drop_copy_operation_get_lock";
+    _fn_openpit_pretrade_drop_copy_operation_get_account_adjustments = (OpenPitAccountAdjustmentOutcomeList * (*)(const OpenPitPretradeDropCopyOperation *))openpit_dlsym(handle, "openpit_pretrade_drop_copy_operation_get_account_adjustments");
+    if (_fn_openpit_pretrade_drop_copy_operation_get_account_adjustments == NULL) return "openpit_pretrade_drop_copy_operation_get_account_adjustments";
+    _fn_openpit_pretrade_drop_copy_operation_get_account_block = (OpenPitPretradeAccountBlockList * (*)(const OpenPitPretradeDropCopyOperation *))openpit_dlsym(handle, "openpit_pretrade_drop_copy_operation_get_account_block");
+    if (_fn_openpit_pretrade_drop_copy_operation_get_account_block == NULL) return "openpit_pretrade_drop_copy_operation_get_account_block";
+    _fn_openpit_pretrade_drop_copy_operation_is_account_blocked = (bool (*)(const OpenPitPretradeDropCopyOperation *))openpit_dlsym(handle, "openpit_pretrade_drop_copy_operation_is_account_blocked");
+    if (_fn_openpit_pretrade_drop_copy_operation_is_account_blocked == NULL) return "openpit_pretrade_drop_copy_operation_is_account_blocked";
+    _fn_openpit_destroy_pretrade_drop_copy_operation = (void (*)(OpenPitPretradeDropCopyOperation *))openpit_dlsym(handle, "openpit_destroy_pretrade_drop_copy_operation");
+    if (_fn_openpit_destroy_pretrade_drop_copy_operation == NULL) return "openpit_destroy_pretrade_drop_copy_operation";
     _fn_openpit_pretrade_pre_trade_dry_run_report_is_pass = (bool (*)(const OpenPitPretradePreTradeDryRunReport *))openpit_dlsym(handle, "openpit_pretrade_pre_trade_dry_run_report_is_pass");
     if (_fn_openpit_pretrade_pre_trade_dry_run_report_is_pass == NULL) return "openpit_pretrade_pre_trade_dry_run_report_is_pass";
     _fn_openpit_pretrade_pre_trade_dry_run_report_get_rejects = (OpenPitPretradeRejectList * (*)(const OpenPitPretradePreTradeDryRunReport *))openpit_dlsym(handle, "openpit_pretrade_pre_trade_dry_run_report_get_rejects");
@@ -1073,6 +1104,8 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_engine_block_account == NULL) return "openpit_engine_block_account";
     _fn_openpit_engine_unblock_account = (void (*)(OpenPitEngine *, OpenPitParamAccountId))openpit_dlsym(handle, "openpit_engine_unblock_account");
     if (_fn_openpit_engine_unblock_account == NULL) return "openpit_engine_unblock_account";
+    _fn_openpit_engine_unblock_all_accounts = (void (*)(OpenPitEngine *))openpit_dlsym(handle, "openpit_engine_unblock_all_accounts");
+    if (_fn_openpit_engine_unblock_all_accounts == NULL) return "openpit_engine_unblock_all_accounts";
     _fn_openpit_engine_replace_account_block_reason = (bool (*)(OpenPitEngine *, OpenPitParamAccountId, OpenPitStringView, OpenPitAccountBlockError **))openpit_dlsym(handle, "openpit_engine_replace_account_block_reason");
     if (_fn_openpit_engine_replace_account_block_reason == NULL) return "openpit_engine_replace_account_block_reason";
     _fn_openpit_engine_block_account_group = (bool (*)(OpenPitEngine *, OpenPitParamAccountGroupId, OpenPitStringView, OpenPitAccountBlockError **))openpit_dlsym(handle, "openpit_engine_block_account_group");
@@ -1137,6 +1170,10 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_destroy_account_control == NULL) return "openpit_destroy_account_control";
     _fn_openpit_pretrade_context_get_account_control = (OpenPitAccountControl * (*)(const OpenPitPretradeContext *))openpit_dlsym(handle, "openpit_pretrade_context_get_account_control");
     if (_fn_openpit_pretrade_context_get_account_control == NULL) return "openpit_pretrade_context_get_account_control";
+    _fn_openpit_pretrade_context_is_drop_copy = (bool (*)(const OpenPitPretradeContext *))openpit_dlsym(handle, "openpit_pretrade_context_is_drop_copy");
+    if (_fn_openpit_pretrade_context_is_drop_copy == NULL) return "openpit_pretrade_context_is_drop_copy";
+    _fn_openpit_pretrade_context_record_drop_copy_start_mutation = (bool (*)(const OpenPitPretradeContext *, OpenPitMutationFn, OpenPitMutationFn, void *, OpenPitMutationFreeFn, OpenPitOutError))openpit_dlsym(handle, "openpit_pretrade_context_record_drop_copy_start_mutation");
+    if (_fn_openpit_pretrade_context_record_drop_copy_start_mutation == NULL) return "openpit_pretrade_context_record_drop_copy_start_mutation";
     _fn_openpit_account_adjustment_context_get_account_control = (OpenPitAccountControl * (*)(const OpenPitAccountAdjustmentContext *))openpit_dlsym(handle, "openpit_account_adjustment_context_get_account_control");
     if (_fn_openpit_account_adjustment_context_get_account_control == NULL) return "openpit_account_adjustment_context_get_account_control";
     _fn_openpit_pretrade_context_get_account_group = (bool (*)(const OpenPitPretradeContext *, OpenPitParamAccountGroupId *))openpit_dlsym(handle, "openpit_pretrade_context_get_account_group");
@@ -1295,6 +1332,8 @@ const char *openpit_native_init(void *handle) {
     if (_fn_openpit_reference_book_clear_settlement_scheme == NULL) return "openpit_reference_book_clear_settlement_scheme";
     _fn_openpit_reference_book_get_settlement_scheme = (OpenPitReferenceBookStatus (*)(const OpenPitReferenceBook *, OpenPitInstrumentId, OpenPitSettlementScheme *, bool *, OpenPitOutError))openpit_dlsym(handle, "openpit_reference_book_get_settlement_scheme");
     if (_fn_openpit_reference_book_get_settlement_scheme == NULL) return "openpit_reference_book_get_settlement_scheme";
+    _fn_openpit_create_shared_string = (OpenPitSharedString * (*)(OpenPitStringView))openpit_dlsym(handle, "openpit_create_shared_string");
+    if (_fn_openpit_create_shared_string == NULL) return "openpit_create_shared_string";
     _fn_openpit_destroy_shared_string = (void (*)(OpenPitSharedString *))openpit_dlsym(handle, "openpit_destroy_shared_string");
     if (_fn_openpit_destroy_shared_string == NULL) return "openpit_destroy_shared_string";
     _fn_openpit_shared_string_view = (OpenPitStringView (*)(const OpenPitSharedString *))openpit_dlsym(handle, "openpit_shared_string_view");
@@ -2254,12 +2293,24 @@ OpenPitSharedString * openpit_param_adjustment_amount_to_string(OpenPitParamAdju
     return _fn_openpit_param_adjustment_amount_to_string(value, out_error);
 }
 
-OpenPitPretradeRejectList * openpit_pretrade_create_reject_list(size_t reserve) {
-    return _fn_openpit_pretrade_create_reject_list(reserve);
+bool openpit_pretrade_reject_code_is_evaluation_failure(OpenPitPretradeRejectCode code) {
+    return _fn_openpit_pretrade_reject_code_is_evaluation_failure(code);
 }
 
-void openpit_pretrade_destroy_reject_list(OpenPitPretradeRejectList * rejects) {
-    _fn_openpit_pretrade_destroy_reject_list(rejects);
+OpenPitPretradeRejectList * openpit_create_pretrade_reject_list(size_t reserve) {
+    return _fn_openpit_create_pretrade_reject_list(reserve);
+}
+
+OpenPitPretradeRejectList * openpit_pretrade_reject_list_get_accept_sentinel(void) {
+    return _fn_openpit_pretrade_reject_list_get_accept_sentinel();
+}
+
+bool openpit_pretrade_reject_list_is_accept_sentinel(const OpenPitPretradeRejectList * list) {
+    return _fn_openpit_pretrade_reject_list_is_accept_sentinel(list);
+}
+
+void openpit_destroy_pretrade_reject_list(OpenPitPretradeRejectList * rejects) {
+    _fn_openpit_destroy_pretrade_reject_list(rejects);
 }
 
 bool openpit_pretrade_reject_list_push(OpenPitPretradeRejectList * list, OpenPitPretradeReject reject) {
@@ -2274,12 +2325,12 @@ bool openpit_pretrade_reject_list_get(const OpenPitPretradeRejectList * list, si
     return _fn_openpit_pretrade_reject_list_get(list, index, out_reject);
 }
 
-OpenPitPretradeAccountBlockList * openpit_pretrade_create_account_block_list(size_t reserve) {
-    return _fn_openpit_pretrade_create_account_block_list(reserve);
+OpenPitPretradeAccountBlockList * openpit_create_pretrade_account_block_list(size_t reserve) {
+    return _fn_openpit_create_pretrade_account_block_list(reserve);
 }
 
-void openpit_pretrade_destroy_account_block_list(OpenPitPretradeAccountBlockList * blocks) {
-    _fn_openpit_pretrade_destroy_account_block_list(blocks);
+void openpit_destroy_pretrade_account_block_list(OpenPitPretradeAccountBlockList * blocks) {
+    _fn_openpit_destroy_pretrade_account_block_list(blocks);
 }
 
 void openpit_pretrade_account_block_list_push(OpenPitPretradeAccountBlockList * list, OpenPitPretradeAccountBlock block) {
@@ -2338,8 +2389,8 @@ OpenPitPretradeStatus openpit_engine_execute_pre_trade(OpenPitEngine * engine, c
     return _fn_openpit_engine_execute_pre_trade(engine, order, out_reservation, out_rejects, out_error);
 }
 
-bool openpit_engine_execute_pre_trade_drop_copy(OpenPitEngine * engine, const OpenPitOrder * order, OpenPitPretradePreTradeReservation ** out_reservation, OpenPitOutError out_error) {
-    return _fn_openpit_engine_execute_pre_trade_drop_copy(engine, order, out_reservation, out_error);
+OpenPitPretradeStatus openpit_engine_apply_drop_copy(OpenPitEngine * engine, const OpenPitOrder * order, OpenPitPretradeDropCopyOperation ** out_operation, OpenPitPretradeRejectList ** out_rejects, OpenPitOutError out_error) {
+    return _fn_openpit_engine_apply_drop_copy(engine, order, out_operation, out_rejects, out_error);
 }
 
 bool openpit_engine_start_pre_trade_dry_run(OpenPitEngine * engine, const OpenPitOrder * order, OpenPitPretradePreTradeDryRunReport ** out_report, OpenPitOutError out_error) {
@@ -2374,12 +2425,36 @@ OpenPitAccountAdjustmentOutcomeList * openpit_pretrade_pre_trade_reservation_get
     return _fn_openpit_pretrade_pre_trade_reservation_get_account_adjustments(reservation);
 }
 
-OpenPitPretradeAccountBlockList * openpit_pretrade_pre_trade_reservation_get_account_block(const OpenPitPretradePreTradeReservation * reservation) {
-    return _fn_openpit_pretrade_pre_trade_reservation_get_account_block(reservation);
-}
-
 void openpit_destroy_pretrade_pre_trade_reservation(OpenPitPretradePreTradeReservation * reservation) {
     _fn_openpit_destroy_pretrade_pre_trade_reservation(reservation);
+}
+
+void openpit_pretrade_drop_copy_operation_commit(OpenPitPretradeDropCopyOperation * operation) {
+    _fn_openpit_pretrade_drop_copy_operation_commit(operation);
+}
+
+void openpit_pretrade_drop_copy_operation_rollback(OpenPitPretradeDropCopyOperation * operation) {
+    _fn_openpit_pretrade_drop_copy_operation_rollback(operation);
+}
+
+OpenPitPretradePreTradeLock * openpit_pretrade_drop_copy_operation_get_lock(const OpenPitPretradeDropCopyOperation * operation) {
+    return _fn_openpit_pretrade_drop_copy_operation_get_lock(operation);
+}
+
+OpenPitAccountAdjustmentOutcomeList * openpit_pretrade_drop_copy_operation_get_account_adjustments(const OpenPitPretradeDropCopyOperation * operation) {
+    return _fn_openpit_pretrade_drop_copy_operation_get_account_adjustments(operation);
+}
+
+OpenPitPretradeAccountBlockList * openpit_pretrade_drop_copy_operation_get_account_block(const OpenPitPretradeDropCopyOperation * operation) {
+    return _fn_openpit_pretrade_drop_copy_operation_get_account_block(operation);
+}
+
+bool openpit_pretrade_drop_copy_operation_is_account_blocked(const OpenPitPretradeDropCopyOperation * operation) {
+    return _fn_openpit_pretrade_drop_copy_operation_is_account_blocked(operation);
+}
+
+void openpit_destroy_pretrade_drop_copy_operation(OpenPitPretradeDropCopyOperation * operation) {
+    _fn_openpit_destroy_pretrade_drop_copy_operation(operation);
 }
 
 bool openpit_pretrade_pre_trade_dry_run_report_is_pass(const OpenPitPretradePreTradeDryRunReport * report) {
@@ -2526,6 +2601,10 @@ void openpit_engine_unblock_account(OpenPitEngine * engine, OpenPitParamAccountI
     _fn_openpit_engine_unblock_account(engine, account_id);
 }
 
+void openpit_engine_unblock_all_accounts(OpenPitEngine * engine) {
+    _fn_openpit_engine_unblock_all_accounts(engine);
+}
+
 bool openpit_engine_replace_account_block_reason(OpenPitEngine * engine, OpenPitParamAccountId account_id, OpenPitStringView reason, OpenPitAccountBlockError ** out_error) {
     return _fn_openpit_engine_replace_account_block_reason(engine, account_id, reason, out_error);
 }
@@ -2652,6 +2731,14 @@ void openpit_destroy_account_control(OpenPitAccountControl * control) {
 
 OpenPitAccountControl * openpit_pretrade_context_get_account_control(const OpenPitPretradeContext * ctx) {
     return _fn_openpit_pretrade_context_get_account_control(ctx);
+}
+
+bool openpit_pretrade_context_is_drop_copy(const OpenPitPretradeContext * ctx) {
+    return _fn_openpit_pretrade_context_is_drop_copy(ctx);
+}
+
+bool openpit_pretrade_context_record_drop_copy_start_mutation(const OpenPitPretradeContext * ctx, OpenPitMutationFn commit_fn, OpenPitMutationFn rollback_fn, void * user_data, OpenPitMutationFreeFn free_fn, OpenPitOutError out_error) {
+    return _fn_openpit_pretrade_context_record_drop_copy_start_mutation(ctx, commit_fn, rollback_fn, user_data, free_fn, out_error);
 }
 
 OpenPitAccountControl * openpit_account_adjustment_context_get_account_control(const OpenPitAccountAdjustmentContext * ctx) {
@@ -2968,6 +3055,10 @@ OpenPitReferenceBookStatus openpit_reference_book_clear_settlement_scheme(OpenPi
 
 OpenPitReferenceBookStatus openpit_reference_book_get_settlement_scheme(const OpenPitReferenceBook * book, OpenPitInstrumentId instrument_id, OpenPitSettlementScheme * out_scheme, bool * out_is_set, OpenPitOutError out_error) {
     return _fn_openpit_reference_book_get_settlement_scheme(book, instrument_id, out_scheme, out_is_set, out_error);
+}
+
+OpenPitSharedString * openpit_create_shared_string(OpenPitStringView value) {
+    return _fn_openpit_create_shared_string(value);
 }
 
 void openpit_destroy_shared_string(OpenPitSharedString * handle) {

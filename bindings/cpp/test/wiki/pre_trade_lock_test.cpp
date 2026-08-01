@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Pre-Trade-Lock.md
+// Source: https://wiki.openpit.dev/Pre-Trade-Lock/
 //
 // Compiling mirror of the C++ snippet published on the Pre-Trade-Lock wiki
 // page. Each TEST runs the same user code shown in the corresponding C++

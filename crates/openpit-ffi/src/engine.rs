@@ -171,6 +171,47 @@ pub struct OpenPitPretradePreTradeRequest {
 /// `openpit_pretrade_pre_trade_reservation_rollback`, or `openpit_destroy_pretrade_pre_trade_reservation`.
 pub struct OpenPitPretradePreTradeReservation {
     inner: openpit::pretrade::PreTradeReservation,
+    /// Finalization state of this handle.
+    ///
+    /// The core reservation owns its capability exactly once and treats a
+    /// second commit as a programmer error, which it reports by panicking. A
+    /// panic must never cross the C ABI, so the wrapper tracks consumption
+    /// itself and never forwards a repeated finalization into the core.
+    finalized: bool,
+}
+
+impl OpenPitPretradePreTradeReservation {
+    fn new(inner: openpit::pretrade::PreTradeReservation) -> Self {
+        Self {
+            inner,
+            finalized: false,
+        }
+    }
+}
+
+/// Opaque operation pointer returned by an applied drop copy.
+///
+/// An operation carries bookkeeping that policies prepared but did not
+/// finalize. The caller must resolve it exactly once by calling
+/// `openpit_pretrade_drop_copy_operation_commit`,
+/// `openpit_pretrade_drop_copy_operation_rollback`, or
+/// `openpit_destroy_pretrade_drop_copy_operation`.
+pub struct OpenPitPretradeDropCopyOperation {
+    inner: openpit::pretrade::DropCopyOperation,
+    /// Finalization state of this handle.
+    ///
+    /// The wrapper tracks consumption so repeated calls stay at the ABI
+    /// boundary and never invoke mutation callbacks more than once.
+    finalized: bool,
+}
+
+impl OpenPitPretradeDropCopyOperation {
+    fn new(inner: openpit::pretrade::DropCopyOperation) -> Self {
+        Self {
+            inner,
+            finalized: false,
+        }
+    }
 }
 
 /// Opaque report pointer returned by a pre-trade dry-run.
@@ -665,9 +706,9 @@ pub extern "C" fn openpit_engine_execute_pre_trade(
         Ok(reservation) => {
             if !out_reservation.is_null() {
                 unsafe {
-                    *out_reservation = Box::into_raw(Box::new(OpenPitPretradePreTradeReservation {
-                        inner: reservation,
-                    }))
+                    *out_reservation = Box::into_raw(Box::new(
+                        OpenPitPretradePreTradeReservation::new(reservation),
+                    ))
                 }
             }
             OpenPitPretradeStatus::Passed
@@ -685,63 +726,101 @@ pub extern "C" fn openpit_engine_execute_pre_trade(
 }
 
 #[no_mangle]
-/// Runs the complete pre-trade pipeline without enforcing policy rejects.
+/// Applies a drop-copy operation without enforcing ordinary policy rejects.
 ///
-/// Returns `true` on success and `false` when input pointers are invalid, the
-/// order payload cannot be decoded, or the drop-copy cannot be admitted.
-/// Drop-copy requires a readable limit price; a market order or price-field
-/// access failure returns `false` before any policy is evaluated. Existing
-/// account and account-group blocks are ignored.
-/// Every policy still runs and keeps its normal mutations, locks, account
-/// adjustments, and account blocks, while its rejects are discarded.
+/// Existing account and account-group blocks are ignored. Policies run in
+/// registration order and keep their normal mutations, locks, account
+/// adjustments, and account blocks. Ordinary rejects are discarded. Any reject
+/// code classified by `openpit_pretrade_reject_code_is_evaluation_failure`
+/// aborts the operation and rolls back all collected mutations; when that
+/// compensation fails, a `SystemUnavailable` reject is appended after the policy
+/// rejects and the engine kill switch is armed. On success the returned
+/// operation retains the prepared mutations exactly like a pre-trade
+/// reservation. Account-control operations and rate-limit attempts are applied
+/// before this call returns and stay outside that finalization boundary.
 ///
-/// On success, if `out_reservation` is not null, writes one caller-owned
-/// reservation pointer. Release it with
-/// `openpit_pretrade_pre_trade_reservation_commit`,
-/// `openpit_pretrade_pre_trade_reservation_rollback`, or
-/// `openpit_destroy_pretrade_pre_trade_reservation`.
+/// A mutation registered through `openpit_mutations_push` is a custom-policy
+/// mutation, so a finalizer of that mutation that fails - while compensating a
+/// fatal exit here or later, when the owner finalizes the returned operation -
+/// blocks EVERY account with reason `"mutation finalizer failed"` until an
+/// operator calls `openpit_engine_unblock_all_accounts`. See `OpenPitMutationFn`.
 ///
-/// On error, `out_reservation` is left untouched. If `out_error` is not null,
-/// it receives a caller-owned error string that MUST be released with
-/// `openpit_destroy_shared_string`.
-pub extern "C" fn openpit_engine_execute_pre_trade_drop_copy(
+/// Success:
+/// - returns `Passed` when the request was applied; read `out_operation`;
+/// - returns `Rejected` when the request was not applied; read `out_rejects`.
+///
+/// Error:
+/// - returns `Error` when input pointers are invalid or the order payload cannot
+///   be decoded;
+/// - on `Error`, if `out_error` is not null, it is filled with a caller-owned
+///   `OpenPitSharedString` that MUST be destroyed by the caller.
+///
+/// Cleanup:
+/// - release a successful operation with
+///   `openpit_pretrade_drop_copy_operation_commit`,
+///   `openpit_pretrade_drop_copy_operation_rollback`, or
+///   `openpit_destroy_pretrade_drop_copy_operation`.
+///
+/// Output ownership contract:
+/// - on `Passed`, a non-null operation pointer is written to `out_operation` if
+///   it is not null; when it is null, the operation is rolled back immediately;
+/// - on `Rejected`, a non-null `OpenPitPretradeRejectList` pointer is written to
+///   `out_rejects` if it is not null;
+/// - the caller owns either returned object and MUST release it with the
+///   corresponding destroy function;
+/// - no thread-local state is involved, and returned pointers are safe to read
+///   on any thread;
+/// - on `Passed` and `Error`, `out_rejects` is left untouched;
+/// - on `Rejected` and `Error`, `out_operation` is left untouched.
+///
+/// Order lifetime contract:
+/// - `order` is read as a borrowed view during this call only;
+/// - the operation does not retain any pointer into source memory after this
+///   function returns.
+pub extern "C" fn openpit_engine_apply_drop_copy(
     engine: *mut OpenPitEngine,
     order: *const OpenPitOrder,
-    out_reservation: *mut *mut OpenPitPretradePreTradeReservation,
+    out_operation: *mut *mut OpenPitPretradeDropCopyOperation,
+    out_rejects: *mut *mut OpenPitPretradeRejectList,
     out_error: OpenPitOutError,
-) -> bool {
+) -> OpenPitPretradeStatus {
     if engine.is_null() {
         write_error(out_error, "engine is null");
-        return false;
+        return OpenPitPretradeStatus::Error;
     }
     if order.is_null() {
         write_error(out_error, "order is null");
-        return false;
+        return OpenPitPretradeStatus::Error;
     }
 
     let order = match import_order(unsafe { &*order }) {
         Ok(value) => value,
         Err(error) => {
             write_error(out_error, &error);
-            return false;
-        }
-    };
-    let reservation = match unsafe { &*engine }.inner.execute_pre_trade_drop_copy(order) {
-        Ok(reservation) => reservation,
-        Err(error) => {
-            write_error(out_error, &error.to_string());
-            return false;
+            return OpenPitPretradeStatus::Error;
         }
     };
 
-    if !out_reservation.is_null() {
-        unsafe {
-            *out_reservation = Box::into_raw(Box::new(OpenPitPretradePreTradeReservation {
-                inner: reservation,
-            }));
+    match unsafe { &*engine }.inner.apply_drop_copy(order) {
+        Ok(operation) => {
+            if !out_operation.is_null() {
+                unsafe {
+                    *out_operation =
+                        Box::into_raw(Box::new(OpenPitPretradeDropCopyOperation::new(operation)))
+                }
+            }
+            OpenPitPretradeStatus::Passed
+        }
+        Err(rejects) => {
+            if !out_rejects.is_null() {
+                let OpenPitPretradeRejectList { items } = rejects_to_list_owned(rejects);
+                unsafe {
+                    *out_rejects = Box::into_raw(Box::new(OpenPitPretradeRejectList { items }));
+                }
+            }
+            OpenPitPretradeStatus::Rejected
         }
     }
-    true
 }
 
 #[no_mangle]
@@ -942,9 +1021,9 @@ pub extern "C" fn openpit_pretrade_pre_trade_request_execute(
         Ok(reservation) => {
             if !out_reservation.is_null() {
                 unsafe {
-                    *out_reservation = Box::into_raw(Box::new(OpenPitPretradePreTradeReservation {
-                        inner: reservation,
-                    }))
+                    *out_reservation = Box::into_raw(Box::new(
+                        OpenPitPretradePreTradeReservation::new(reservation),
+                    ))
                 };
             }
             OpenPitPretradeStatus::Passed
@@ -981,37 +1060,62 @@ pub extern "C" fn openpit_destroy_pretrade_pre_trade_request(
 #[no_mangle]
 /// Finalizes a reservation and applies the reserved state permanently.
 ///
-/// This call is idempotent at the pointer level: if the reservation was already
-/// consumed, nothing happens. Passing null is allowed.
+/// This call is idempotent at the pointer level: the first commit or rollback
+/// finalizes the reservation and every later commit or rollback on the same
+/// pointer does nothing. Passing null is allowed.
 ///
 /// Contract:
 /// - passing null is allowed;
-/// - this function always succeeds.
+/// - the reserved state is applied at most once, on the first call;
+/// - this function always succeeds;
+/// - a mutation `commit_fn` that reports failure never fails this call and is
+///   never ignored either: it arms the engine kill switch, which blocks EVERY
+///   account for a mutation registered through `openpit_mutations_push`. The
+///   next pre-trade call is rejected until an operator calls
+///   `openpit_engine_unblock_all_accounts`. See `OpenPitMutationFn`.
 pub extern "C" fn openpit_pretrade_pre_trade_reservation_commit(
     reservation: *mut OpenPitPretradePreTradeReservation,
 ) {
     if reservation.is_null() {
         return;
     }
-    unsafe { &mut *reservation }.inner.commit();
+    let reservation = unsafe { &mut *reservation };
+    if reservation.finalized {
+        return;
+    }
+    reservation.finalized = true;
+    reservation.inner.commit();
 }
 
 #[no_mangle]
 /// Cancels a reservation and releases the reserved state.
 ///
-/// This call is idempotent at the pointer level: if the reservation was already
-/// consumed, nothing happens. Passing null is allowed.
+/// This call is idempotent at the pointer level: the first commit or rollback
+/// finalizes the reservation and every later commit or rollback on the same
+/// pointer does nothing. In particular, a rollback after a commit never
+/// reverts the committed state. Passing null is allowed.
 ///
 /// Contract:
 /// - passing null is allowed;
-/// - this function always succeeds.
+/// - the reserved state is released at most once, on the first call;
+/// - this function always succeeds;
+/// - a mutation `rollback_fn` that reports failure never fails this call and is
+///   never ignored either: it arms the engine kill switch, which blocks EVERY
+///   account for a mutation registered through `openpit_mutations_push`. The
+///   next pre-trade call is rejected until an operator calls
+///   `openpit_engine_unblock_all_accounts`. See `OpenPitMutationFn`.
 pub extern "C" fn openpit_pretrade_pre_trade_reservation_rollback(
     reservation: *mut OpenPitPretradePreTradeReservation,
 ) {
     if reservation.is_null() {
         return;
     }
-    unsafe { &mut *reservation }.inner.rollback();
+    let reservation = unsafe { &mut *reservation };
+    if reservation.finalized {
+        return;
+    }
+    reservation.finalized = true;
+    reservation.inner.rollback();
 }
 
 #[no_mangle]
@@ -1056,30 +1160,6 @@ pub extern "C" fn openpit_pretrade_pre_trade_reservation_get_account_adjustments
 }
 
 #[no_mangle]
-/// Returns the winning account block produced by the reservation's pipeline.
-///
-/// Contract:
-/// - `reservation` must be a valid non-null pointer;
-/// - violating the pointer contract aborts the call;
-/// - this function never fails;
-/// - always returns a caller-owned `OpenPitPretradeAccountBlockList`
-///   (possibly empty); release it with
-///   `openpit_pretrade_destroy_account_block_list`.
-///
-/// Lifetime contract:
-/// - the returned list is detached from the reservation state.
-pub extern "C" fn openpit_pretrade_pre_trade_reservation_get_account_block(
-    reservation: *const OpenPitPretradePreTradeReservation,
-) -> *mut OpenPitPretradeAccountBlockList {
-    assert!(!reservation.is_null());
-    let blocks = match unsafe { &*reservation }.inner.account_block() {
-        Some(block) => vec![block.clone()],
-        None => Vec::new(),
-    };
-    Box::into_raw(Box::new(blocks_to_list_owned(blocks)))
-}
-
-#[no_mangle]
 /// Releases a reservation pointer owned by the caller.
 ///
 /// Contract:
@@ -1088,7 +1168,10 @@ pub extern "C" fn openpit_pretrade_pre_trade_reservation_get_account_block(
 ///   mutations;
 /// - callers that need explicit resolution should call commit or rollback
 ///   first;
-/// - this function always succeeds.
+/// - this function always succeeds;
+/// - a mutation `rollback_fn` that reports failure during that rollback arms
+///   the engine kill switch, exactly as in
+///   `openpit_pretrade_pre_trade_reservation_rollback`.
 pub extern "C" fn openpit_destroy_pretrade_pre_trade_reservation(
     reservation: *mut OpenPitPretradePreTradeReservation,
 ) {
@@ -1096,6 +1179,177 @@ pub extern "C" fn openpit_destroy_pretrade_pre_trade_reservation(
         return;
     }
     unsafe { drop(Box::from_raw(reservation)) };
+}
+
+#[no_mangle]
+/// Finalizes a drop-copy operation and applies the prepared state permanently.
+///
+/// This call is idempotent at the pointer level: the first commit or rollback
+/// finalizes the operation and every later commit or rollback on the same
+/// pointer does nothing. Passing null is allowed.
+///
+/// Contract:
+/// - passing null is allowed;
+/// - the prepared state is applied at most once, on the first call;
+/// - this function always succeeds;
+/// - a mutation `commit_fn` that reports failure never fails this call and is
+///   never ignored either: it arms the engine kill switch, which blocks EVERY
+///   account for a mutation registered through `openpit_mutations_push` or
+///   `openpit_pretrade_context_record_drop_copy_start_mutation`. The next
+///   pre-trade call is rejected until an operator calls
+///   `openpit_engine_unblock_all_accounts`. See `OpenPitMutationFn`.
+pub extern "C" fn openpit_pretrade_drop_copy_operation_commit(
+    operation: *mut OpenPitPretradeDropCopyOperation,
+) {
+    if operation.is_null() {
+        return;
+    }
+    let operation = unsafe { &mut *operation };
+    if operation.finalized {
+        return;
+    }
+    operation.finalized = true;
+    operation.inner.commit();
+}
+
+#[no_mangle]
+/// Cancels a drop-copy operation and compensates the prepared state.
+///
+/// This call is idempotent at the pointer level: the first commit or rollback
+/// finalizes the operation and every later commit or rollback on the same
+/// pointer does nothing. In particular, a rollback after a commit never reverts
+/// the committed state. Account-control operations and rate-limit attempts
+/// applied by `openpit_engine_apply_drop_copy` are outside this boundary and
+/// stay applied. Passing null is allowed.
+///
+/// Contract:
+/// - passing null is allowed;
+/// - the prepared state is compensated at most once, on the first call;
+/// - this function always succeeds;
+/// - a mutation `rollback_fn` that reports failure never fails this call and is
+///   never ignored either: it arms the engine kill switch, which blocks EVERY
+///   account for a mutation registered through `openpit_mutations_push` or
+///   `openpit_pretrade_context_record_drop_copy_start_mutation`. The next
+///   pre-trade call is rejected until an operator calls
+///   `openpit_engine_unblock_all_accounts`. See `OpenPitMutationFn`.
+pub extern "C" fn openpit_pretrade_drop_copy_operation_rollback(
+    operation: *mut OpenPitPretradeDropCopyOperation,
+) {
+    if operation.is_null() {
+        return;
+    }
+    let operation = unsafe { &mut *operation };
+    if operation.finalized {
+        return;
+    }
+    operation.finalized = true;
+    operation.inner.rollback();
+}
+
+#[no_mangle]
+/// Returns a snapshot of the lock attached to a drop-copy operation.
+///
+/// Contract:
+/// - `operation` must be a valid non-null pointer;
+/// - violating the pointer contract aborts the call;
+/// - this function never fails;
+/// - always returns a caller-owned `OpenPitPretradePreTradeLock`; release it
+///   with `openpit_destroy_pretrade_pre_trade_lock`.
+///
+/// Lifetime contract:
+/// - the returned snapshot is detached from the operation state.
+pub extern "C" fn openpit_pretrade_drop_copy_operation_get_lock(
+    operation: *const OpenPitPretradeDropCopyOperation,
+) -> *mut OpenPitPretradePreTradeLock {
+    assert!(!operation.is_null(), "drop-copy operation is null");
+    export_pre_trade_lock(unsafe { &*operation }.inner.lock())
+}
+
+#[no_mangle]
+/// Returns the account-adjustment outcomes collected by drop copy.
+///
+/// Contract:
+/// - `operation` must be a valid non-null pointer;
+/// - violating the pointer contract aborts the call;
+/// - this function never fails;
+/// - always returns a caller-owned `OpenPitAccountAdjustmentOutcomeList`
+///   (possibly empty); release it with
+///   `openpit_destroy_account_adjustment_outcome_list`.
+///
+/// Lifetime contract:
+/// - the returned list is detached from the operation state.
+pub extern "C" fn openpit_pretrade_drop_copy_operation_get_account_adjustments(
+    operation: *const OpenPitPretradeDropCopyOperation,
+) -> *mut OpenPitAccountAdjustmentOutcomeList {
+    assert!(!operation.is_null(), "drop-copy operation is null");
+    let outcomes = unsafe { &*operation }.inner.account_adjustments().to_vec();
+    Box::into_raw(Box::new(outcomes_to_list_owned(outcomes)))
+}
+
+#[no_mangle]
+/// Returns the first account block requested by the applied pipeline.
+///
+/// Contract:
+/// - `operation` must be a valid non-null pointer;
+/// - violating the pointer contract aborts the call;
+/// - this function never fails;
+/// - always returns a caller-owned `OpenPitPretradeAccountBlockList` carrying
+///   the request's first block, or empty when no policy requested one; release
+///   it with `openpit_destroy_pretrade_account_block_list`. This request-local
+///   value can differ from the apply-time registry snapshot: an earlier block
+///   may remain the stored cause, or a deferred unblock may remove this block.
+///   Use `openpit_pretrade_drop_copy_operation_is_account_blocked` for the
+///   snapshot captured before `openpit_engine_apply_drop_copy` returned.
+///
+/// Lifetime contract:
+/// - the returned list is detached from the operation state.
+pub extern "C" fn openpit_pretrade_drop_copy_operation_get_account_block(
+    operation: *const OpenPitPretradeDropCopyOperation,
+) -> *mut OpenPitPretradeAccountBlockList {
+    assert!(!operation.is_null(), "drop-copy operation is null");
+    let blocks = match unsafe { &*operation }.inner.account_block() {
+        Some(block) => vec![block.clone()],
+        None => Vec::new(),
+    };
+    Box::into_raw(Box::new(blocks_to_list_owned(blocks)))
+}
+
+#[no_mangle]
+/// Returns the apply-time blocked-state snapshot for the order account.
+///
+/// Contract:
+/// - `operation` must be a valid non-null pointer;
+/// - violating the pointer contract aborts the call;
+/// - this function never fails;
+/// - the snapshot was captured before `openpit_engine_apply_drop_copy` returned
+///   and does not track later registry changes.
+pub extern "C" fn openpit_pretrade_drop_copy_operation_is_account_blocked(
+    operation: *const OpenPitPretradeDropCopyOperation,
+) -> bool {
+    assert!(!operation.is_null(), "drop-copy operation is null");
+    unsafe { &*operation }.inner.is_account_blocked()
+}
+
+#[no_mangle]
+/// Releases a drop-copy operation pointer owned by the caller.
+///
+/// Contract:
+/// - passing null is allowed;
+/// - destroying an unresolved operation triggers rollback of any pending
+///   mutations;
+/// - callers that need explicit resolution should call commit or rollback
+///   first;
+/// - this function always succeeds;
+/// - a mutation `rollback_fn` that reports failure during that rollback arms
+///   the engine kill switch, exactly as in
+///   `openpit_pretrade_drop_copy_operation_rollback`.
+pub extern "C" fn openpit_destroy_pretrade_drop_copy_operation(
+    operation: *mut OpenPitPretradeDropCopyOperation,
+) {
+    if operation.is_null() {
+        return;
+    }
+    unsafe { drop(Box::from_raw(operation)) };
 }
 
 #[no_mangle]
@@ -1123,7 +1377,7 @@ pub extern "C" fn openpit_pretrade_pre_trade_dry_run_report_is_pass(
 /// - this function never fails;
 /// - always returns a caller-owned `OpenPitPretradeRejectList` (empty when the
 ///   order would have passed); release it with
-///   `openpit_pretrade_destroy_reject_list`.
+///   `openpit_destroy_pretrade_reject_list`.
 ///
 /// Lifetime contract:
 /// - the returned list is detached from the report state.
@@ -1190,7 +1444,7 @@ pub extern "C" fn openpit_pretrade_pre_trade_dry_run_report_get_account_adjustme
 /// - always returns a caller-owned `OpenPitPretradeAccountBlockList` carrying the
 ///   single would-be block, or empty when no account-scope reject would have
 ///   latched one; release it with
-///   `openpit_pretrade_destroy_account_block_list`. A real call records this
+///   `openpit_destroy_pretrade_account_block_list`. A real call records this
 ///   block in the engine's blocked-accounts registry; a dry-run reports it here
 ///   without recording it.
 ///
@@ -1413,7 +1667,7 @@ pub extern "C" fn openpit_account_adjustment_batch_error_get_rejects(
 /// - on `Applied`, if `out_blocks` is not null and a policy reported one or
 ///   more account blocks, writes a caller-owned
 ///   `OpenPitPretradeAccountBlockList` pointer; release it with
-///   `openpit_pretrade_destroy_account_block_list`; if no block was produced,
+///   `openpit_destroy_pretrade_account_block_list`; if no block was produced,
 ///   `out_blocks` is left untouched. The engine has already recorded every
 ///   returned block;
 /// - `Rejected` stores batch error details in `out_reject`, the caller must
@@ -1430,7 +1684,7 @@ pub extern "C" fn openpit_account_adjustment_batch_error_get_rejects(
 /// - release a returned batch error with
 ///   `openpit_destroy_account_adjustment_batch_error`;
 /// - release a returned account-block list with
-///   `openpit_pretrade_destroy_account_block_list`.
+///   `openpit_destroy_pretrade_account_block_list`.
 pub extern "C" fn openpit_engine_apply_account_adjustment(
     engine: *mut OpenPitEngine,
     account_id: OpenPitParamAccountId,
@@ -2333,6 +2587,29 @@ pub extern "C" fn openpit_engine_unblock_account(
 }
 
 #[no_mangle]
+/// Clears the engine-wide block, letting every account through again.
+///
+/// A global block is raised by the engine itself, never by an admin call: a
+/// kill switch reported by an execution report with no readable account, or a
+/// mutation finalizer registered by a custom policy that failed, including
+/// every mutation registered through `openpit_mutations_push`. This is the
+/// operator's counterpart, so the engine can be returned to service once the
+/// inconsistency has been investigated.
+///
+/// Idempotent: a no-op when no global block is active. Accounts and account
+/// groups blocked individually stay blocked; clear those with
+/// `openpit_engine_unblock_account` and
+/// `openpit_engine_unblock_account_group`.
+///
+/// Contract:
+/// - `engine` must be a valid non-null engine pointer.
+pub extern "C" fn openpit_engine_unblock_all_accounts(engine: *mut OpenPitEngine) {
+    assert!(!engine.is_null(), "engine is null");
+    let engine = unsafe { &*engine };
+    engine.inner.accounts().unblock_all();
+}
+
+#[no_mangle]
 /// Replaces the stored reason of an already-blocked account.
 ///
 /// Unlike `openpit_engine_block_account`, which preserves the first cause, this
@@ -2598,9 +2875,10 @@ mod tests {
         OpenPitPretradePreTradePolicyApplyExecutionReportFn,
         OpenPitPretradePreTradePolicyCheckPreTradeStartFn,
         OpenPitPretradePreTradePolicyFreeUserDataFn,
+        OpenPitPretradePreTradePolicyPerformPreTradeCheckFn,
     };
     use crate::reject::{
-        openpit_pretrade_create_reject_list, openpit_pretrade_destroy_reject_list,
+        openpit_create_pretrade_reject_list, openpit_destroy_pretrade_reject_list,
         openpit_pretrade_reject_list_get, openpit_pretrade_reject_list_len,
         OpenPitPretradeAccountBlockList, OpenPitPretradeReject, OpenPitPretradeRejectList,
     };
@@ -2611,15 +2889,23 @@ mod tests {
         openpit_account_adjustment_batch_error_get_rejects, openpit_create_engine_builder,
         openpit_destroy_account_adjustment_batch_error, openpit_destroy_engine,
         openpit_destroy_engine_build_error, openpit_destroy_engine_builder,
-        openpit_destroy_post_trade_result, openpit_destroy_pretrade_pre_trade_dry_run_report,
+        openpit_destroy_post_trade_result, openpit_destroy_pretrade_drop_copy_operation,
+        openpit_destroy_pretrade_pre_trade_dry_run_report,
         openpit_destroy_pretrade_pre_trade_request, openpit_destroy_pretrade_pre_trade_reservation,
-        openpit_engine_apply_account_adjustment, openpit_engine_apply_execution_report,
-        openpit_engine_block_account, openpit_engine_build_error_get_code,
-        openpit_engine_build_error_get_policy_group_id, openpit_engine_build_error_get_policy_name,
-        openpit_engine_builder_build, openpit_engine_execute_pre_trade,
-        openpit_engine_execute_pre_trade_dry_run, openpit_engine_start_pre_trade,
-        openpit_engine_start_pre_trade_dry_run, openpit_post_trade_result_get_account_adjustments,
+        openpit_engine_apply_account_adjustment, openpit_engine_apply_drop_copy,
+        openpit_engine_apply_execution_report, openpit_engine_block_account,
+        openpit_engine_build_error_get_code, openpit_engine_build_error_get_policy_group_id,
+        openpit_engine_build_error_get_policy_name, openpit_engine_builder_build,
+        openpit_engine_execute_pre_trade, openpit_engine_execute_pre_trade_dry_run,
+        openpit_engine_start_pre_trade, openpit_engine_start_pre_trade_dry_run,
+        openpit_post_trade_result_get_account_adjustments,
         openpit_post_trade_result_get_account_blocks, openpit_post_trade_result_get_account_pnls,
+        openpit_pretrade_drop_copy_operation_commit,
+        openpit_pretrade_drop_copy_operation_get_account_adjustments,
+        openpit_pretrade_drop_copy_operation_get_account_block,
+        openpit_pretrade_drop_copy_operation_get_lock,
+        openpit_pretrade_drop_copy_operation_is_account_blocked,
+        openpit_pretrade_drop_copy_operation_rollback,
         openpit_pretrade_pre_trade_dry_run_report_get_account_adjustments,
         openpit_pretrade_pre_trade_dry_run_report_get_account_block,
         openpit_pretrade_pre_trade_dry_run_report_get_lock,
@@ -2630,6 +2916,10 @@ mod tests {
         openpit_pretrade_pre_trade_reservation_rollback, OpenPitAccountAdjustmentBatchError,
         OpenPitEngineBuildError, OpenPitEngineBuildErrorCode, OpenPitPostTradeResult,
     };
+
+    fn accepted_rejects() -> *mut OpenPitPretradeRejectList {
+        openpit_create_pretrade_reject_list(0)
+    }
 
     #[test]
     fn post_trade_result_exposes_stable_empty_borrowed_lists() {
@@ -2696,7 +2986,7 @@ mod tests {
         _out_result: *mut crate::account_outcome::OpenPitPretradeAccountAdjustmentResult,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList {
-        let rejects = openpit_pretrade_create_reject_list(1);
+        let rejects = openpit_create_pretrade_reject_list(1);
         crate::reject::openpit_pretrade_reject_list_push(
             rejects,
             OpenPitPretradeReject {
@@ -2716,7 +3006,7 @@ mod tests {
         _order: *const crate::order::OpenPitOrder,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList {
-        std::ptr::null_mut()
+        accepted_rejects()
     }
 
     unsafe extern "C" fn always_reject_start_check(
@@ -2724,7 +3014,7 @@ mod tests {
         _order: *const crate::order::OpenPitOrder,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList {
-        let rejects = openpit_pretrade_create_reject_list(1);
+        let rejects = openpit_create_pretrade_reject_list(1);
         crate::reject::openpit_pretrade_reject_list_push(
             rejects,
             OpenPitPretradeReject {
@@ -2746,13 +3036,33 @@ mod tests {
         _out_result: *mut crate::account_outcome::OpenPitPretradePreTradeResult,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList {
-        let rejects = openpit_pretrade_create_reject_list(1);
+        let rejects = openpit_create_pretrade_reject_list(1);
         let reject = OpenPitPretradeReject {
             policy: OpenPitStringView::from_utf8("pretrade.reject"),
             reason: OpenPitStringView::from_utf8("blocked"),
             details: OpenPitStringView::from_utf8("by test"),
             user_data: std::ptr::null_mut(),
             code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_RISK_LIMIT_EXCEEDED,
+            scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
+        };
+        crate::reject::openpit_pretrade_reject_list_push(rejects, reject);
+        rejects
+    }
+
+    unsafe extern "C" fn always_reject_missing_pre_trade(
+        _ctx: *const crate::policy::OpenPitPretradeContext,
+        _order: *const crate::order::OpenPitOrder,
+        _mutations: *mut crate::policy::OpenPitMutations,
+        _out_result: *mut crate::account_outcome::OpenPitPretradePreTradeResult,
+        _user_data: *mut c_void,
+    ) -> *mut OpenPitPretradeRejectList {
+        let rejects = openpit_create_pretrade_reject_list(1);
+        let reject = OpenPitPretradeReject {
+            policy: OpenPitStringView::from_utf8("pretrade.missing"),
+            reason: OpenPitStringView::from_utf8("missing field"),
+            details: OpenPitStringView::from_utf8("by test"),
+            user_data: std::ptr::null_mut(),
+            code: crate::reject::OPENPIT_PRETRADE_REJECT_CODE_MISSING_REQUIRED_FIELD,
             scope: crate::reject::OPENPIT_PRETRADE_REJECT_SCOPE_ORDER,
         };
         crate::reject::openpit_pretrade_reject_list_push(rejects, reject);
@@ -2770,6 +3080,524 @@ mod tests {
     }
 
     unsafe extern "C" fn noop_free_user_data(_user_data: *mut c_void) {}
+
+    /// Finalization counters a main-stage test callback shares with the
+    /// mutation it registers, through the policy's `user_data` slot.
+    #[derive(Default)]
+    struct MutationCounters {
+        commits: std::sync::atomic::AtomicUsize,
+        rollbacks: std::sync::atomic::AtomicUsize,
+    }
+
+    impl MutationCounters {
+        fn as_user_data(&self) -> *mut c_void {
+            (self as *const Self).cast_mut().cast::<c_void>()
+        }
+
+        fn commits(&self) -> usize {
+            self.commits.load(std::sync::atomic::Ordering::Relaxed)
+        }
+
+        fn rollbacks(&self) -> usize {
+            self.rollbacks.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    unsafe extern "C" fn count_mutation_commit(
+        user_data: *mut c_void,
+        _out_error: crate::last_error::OpenPitOutError,
+    ) -> bool {
+        unsafe { &*user_data.cast::<MutationCounters>() }
+            .commits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+
+    unsafe extern "C" fn count_mutation_rollback(
+        user_data: *mut c_void,
+        _out_error: crate::last_error::OpenPitOutError,
+    ) -> bool {
+        unsafe { &*user_data.cast::<MutationCounters>() }
+            .rollbacks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+
+    unsafe extern "C" fn push_counting_mutation(
+        _ctx: *const crate::policy::OpenPitPretradeContext,
+        _order: *const crate::order::OpenPitOrder,
+        mutations: *mut crate::policy::OpenPitMutations,
+        _out_result: *mut crate::account_outcome::OpenPitPretradePreTradeResult,
+        user_data: *mut c_void,
+    ) -> *mut OpenPitPretradeRejectList {
+        let pushed = unsafe {
+            crate::policy::openpit_mutations_push(
+                mutations,
+                count_mutation_commit,
+                count_mutation_rollback,
+                user_data,
+                None,
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(pushed, "counting mutation must be registered");
+        crate::reject::openpit_pretrade_reject_list_get_accept_sentinel()
+    }
+
+    /// Builds an engine whose single main-stage policy registers one mutation
+    /// counting its own commit and rollback into `counters`.
+    fn build_engine_with_counting_mutation(
+        name: &str,
+        counters: &MutationCounters,
+    ) -> *mut super::OpenPitEngine {
+        let builder =
+            openpit_create_engine_builder(OpenPitSyncPolicy::Full as u8, std::ptr::null_mut());
+        let policy = unsafe {
+            openpit_create_pretrade_custom_pre_trade_policy(
+                OpenPitStringView::from_utf8(name),
+                0,
+                None,
+                Some(push_counting_mutation),
+                None,
+                None,
+                noop_free_user_data,
+                counters.as_user_data(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(!policy.is_null(), "failed to create counting policy");
+        assert!(
+            openpit_engine_builder_add_pre_trade_policy(builder, policy, std::ptr::null_mut()),
+            "failed to add counting policy"
+        );
+        openpit_destroy_pretrade_pre_trade_policy(policy);
+        let engine =
+            openpit_engine_builder_build(builder, std::ptr::null_mut(), std::ptr::null_mut());
+        assert!(!engine.is_null(), "engine build failed");
+        engine
+    }
+
+    fn execute_pre_trade_reservation(
+        engine: *mut super::OpenPitEngine,
+    ) -> *mut super::OpenPitPretradePreTradeReservation {
+        let order = OpenPitOrder::default();
+        let mut out_reservation = std::ptr::null_mut();
+        let mut out_rejects: *mut OpenPitPretradeRejectList = std::ptr::null_mut();
+        let status = openpit_engine_execute_pre_trade(
+            engine,
+            &order,
+            &mut out_reservation,
+            &mut out_rejects,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(status, OpenPitPretradeStatus::Passed);
+        assert!(!out_reservation.is_null());
+        out_reservation
+    }
+
+    fn apply_drop_copy_operation(
+        engine: *mut super::OpenPitEngine,
+    ) -> *mut super::OpenPitPretradeDropCopyOperation {
+        let order = order_for_account(42);
+        let mut out_operation = std::ptr::null_mut();
+        let mut out_rejects: *mut OpenPitPretradeRejectList = std::ptr::null_mut();
+        let status = openpit_engine_apply_drop_copy(
+            engine,
+            &order,
+            &mut out_operation,
+            &mut out_rejects,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(status, OpenPitPretradeStatus::Passed);
+        assert!(!out_operation.is_null());
+        assert!(out_rejects.is_null());
+        out_operation
+    }
+
+    #[test]
+    fn drop_copy_without_an_operation_output_rolls_the_operation_back() {
+        let counters = MutationCounters::default();
+        let engine = build_engine_with_counting_mutation("dropped.output", &counters);
+        let order = order_for_account(42);
+
+        let status = openpit_engine_apply_drop_copy(
+            engine,
+            &order,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+
+        assert_eq!(status, OpenPitPretradeStatus::Passed);
+        assert_eq!(counters.commits(), 0);
+        assert_eq!(counters.rollbacks(), 1);
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn drop_copy_commit_is_idempotent_and_applies_state_once() {
+        let counters = MutationCounters::default();
+        let engine = build_engine_with_counting_mutation("drop-copy.commit", &counters);
+        let operation = apply_drop_copy_operation(engine);
+        assert_eq!(counters.commits(), 0);
+
+        openpit_pretrade_drop_copy_operation_commit(operation);
+        openpit_pretrade_drop_copy_operation_commit(operation);
+        assert_eq!(counters.commits(), 1);
+        assert_eq!(counters.rollbacks(), 0);
+
+        // A rollback after a commit must not revert the committed state.
+        openpit_pretrade_drop_copy_operation_rollback(operation);
+        openpit_destroy_pretrade_drop_copy_operation(operation);
+        assert_eq!(counters.commits(), 1);
+        assert_eq!(counters.rollbacks(), 0);
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn drop_copy_rollback_is_idempotent_and_destroy_does_not_repeat_it() {
+        let counters = MutationCounters::default();
+        let engine = build_engine_with_counting_mutation("drop-copy.rollback", &counters);
+        let operation = apply_drop_copy_operation(engine);
+
+        openpit_pretrade_drop_copy_operation_rollback(operation);
+        openpit_pretrade_drop_copy_operation_rollback(operation);
+
+        // A commit after a rollback must not apply the released state.
+        openpit_pretrade_drop_copy_operation_commit(operation);
+        openpit_destroy_pretrade_drop_copy_operation(operation);
+
+        assert_eq!(counters.commits(), 0);
+        assert_eq!(counters.rollbacks(), 1);
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn drop_copy_destroy_rolls_an_active_operation_back_once() {
+        let counters = MutationCounters::default();
+        let engine = build_engine_with_counting_mutation("drop-copy.destroy", &counters);
+        let operation = apply_drop_copy_operation(engine);
+
+        openpit_destroy_pretrade_drop_copy_operation(operation);
+
+        assert_eq!(counters.commits(), 0);
+        assert_eq!(counters.rollbacks(), 1);
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn drop_copy_refused_commit_arms_the_kill_switch_through_the_ffi() {
+        let engine = build_engine_with_refusing_mutation("drop-copy.commit-failure");
+        let operation = apply_drop_copy_operation(engine);
+
+        openpit_pretrade_drop_copy_operation_commit(operation);
+
+        assert_mutation_finalizer_block_reject(pre_trade_rejects_for_account(engine, 2));
+        openpit_destroy_pretrade_drop_copy_operation(operation);
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn drop_copy_refused_rollback_arms_the_kill_switch_through_the_ffi() {
+        let engine = build_engine_with_refusing_rollback_mutation("drop-copy.rollback-failure");
+        let operation = apply_drop_copy_operation(engine);
+
+        openpit_pretrade_drop_copy_operation_rollback(operation);
+
+        assert_mutation_finalizer_block_reject(pre_trade_rejects_for_account(engine, 2));
+        openpit_destroy_pretrade_drop_copy_operation(operation);
+        openpit_destroy_engine(engine);
+    }
+
+    // The published C contract calls a repeated commit a no-op. The core
+    // reservation treats it as a programmer error and panics, which must never
+    // cross the ABI, so the wrapper has to absorb the repetition itself.
+    #[test]
+    fn reservation_commit_is_idempotent_and_applies_state_once() {
+        let counters = MutationCounters::default();
+        let engine = build_engine_with_counting_mutation("commit.idempotent", &counters);
+        let reservation = execute_pre_trade_reservation(engine);
+
+        openpit_pretrade_pre_trade_reservation_commit(reservation);
+        openpit_pretrade_pre_trade_reservation_commit(reservation);
+        openpit_pretrade_pre_trade_reservation_commit(reservation);
+
+        assert_eq!(counters.commits(), 1);
+        assert_eq!(counters.rollbacks(), 0);
+
+        // A rollback after a commit must not revert the committed state.
+        openpit_pretrade_pre_trade_reservation_rollback(reservation);
+        assert_eq!(counters.rollbacks(), 0);
+
+        openpit_destroy_pretrade_pre_trade_reservation(reservation);
+        assert_eq!(counters.commits(), 1);
+        assert_eq!(counters.rollbacks(), 0);
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn reservation_rollback_is_idempotent_and_releases_state_once() {
+        let counters = MutationCounters::default();
+        let engine = build_engine_with_counting_mutation("rollback.idempotent", &counters);
+        let reservation = execute_pre_trade_reservation(engine);
+
+        openpit_pretrade_pre_trade_reservation_rollback(reservation);
+        openpit_pretrade_pre_trade_reservation_rollback(reservation);
+
+        assert_eq!(counters.rollbacks(), 1);
+        assert_eq!(counters.commits(), 0);
+
+        // A commit after a rollback must not apply the released state.
+        openpit_pretrade_pre_trade_reservation_commit(reservation);
+        assert_eq!(counters.commits(), 0);
+
+        openpit_destroy_pretrade_pre_trade_reservation(reservation);
+        assert_eq!(counters.rollbacks(), 1);
+        assert_eq!(counters.commits(), 0);
+        openpit_destroy_engine(engine);
+    }
+
+    unsafe extern "C" fn refuse_mutation_commit(
+        _user_data: *mut c_void,
+        out_error: crate::last_error::OpenPitOutError,
+    ) -> bool {
+        unsafe {
+            if let Some(out_error) = out_error.as_mut() {
+                *out_error =
+                    crate::string::OpenPitSharedString::new_handle("commit refused by test");
+            }
+        }
+        false
+    }
+
+    unsafe extern "C" fn accept_mutation_rollback(
+        _user_data: *mut c_void,
+        _out_error: crate::last_error::OpenPitOutError,
+    ) -> bool {
+        true
+    }
+
+    unsafe extern "C" fn accept_mutation_commit(
+        _user_data: *mut c_void,
+        _out_error: crate::last_error::OpenPitOutError,
+    ) -> bool {
+        true
+    }
+
+    unsafe extern "C" fn refuse_mutation_rollback(
+        _user_data: *mut c_void,
+        out_error: crate::last_error::OpenPitOutError,
+    ) -> bool {
+        unsafe {
+            if let Some(out_error) = out_error.as_mut() {
+                *out_error =
+                    crate::string::OpenPitSharedString::new_handle("rollback refused by test");
+            }
+        }
+        false
+    }
+
+    unsafe extern "C" fn push_refusing_mutation(
+        _ctx: *const crate::policy::OpenPitPretradeContext,
+        _order: *const crate::order::OpenPitOrder,
+        mutations: *mut crate::policy::OpenPitMutations,
+        _out_result: *mut crate::account_outcome::OpenPitPretradePreTradeResult,
+        _user_data: *mut c_void,
+    ) -> *mut OpenPitPretradeRejectList {
+        let pushed = unsafe {
+            crate::policy::openpit_mutations_push(
+                mutations,
+                refuse_mutation_commit,
+                accept_mutation_rollback,
+                std::ptr::null_mut(),
+                None,
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(pushed, "refusing mutation must be registered");
+        crate::reject::openpit_pretrade_reject_list_get_accept_sentinel()
+    }
+
+    unsafe extern "C" fn push_refusing_rollback_mutation(
+        _ctx: *const crate::policy::OpenPitPretradeContext,
+        _order: *const crate::order::OpenPitOrder,
+        mutations: *mut crate::policy::OpenPitMutations,
+        _out_result: *mut crate::account_outcome::OpenPitPretradePreTradeResult,
+        _user_data: *mut c_void,
+    ) -> *mut OpenPitPretradeRejectList {
+        let pushed = unsafe {
+            crate::policy::openpit_mutations_push(
+                mutations,
+                accept_mutation_commit,
+                refuse_mutation_rollback,
+                std::ptr::null_mut(),
+                None,
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(pushed, "refusing rollback mutation must be registered");
+        crate::reject::openpit_pretrade_reject_list_get_accept_sentinel()
+    }
+
+    /// Builds an engine whose single main-stage policy runs `perform_pre_trade_check_fn`.
+    fn build_engine_with_mutation_policy(
+        name: &str,
+        perform_pre_trade_check_fn: OpenPitPretradePreTradePolicyPerformPreTradeCheckFn,
+    ) -> *mut super::OpenPitEngine {
+        let builder =
+            openpit_create_engine_builder(OpenPitSyncPolicy::Full as u8, std::ptr::null_mut());
+        let policy = unsafe {
+            openpit_create_pretrade_custom_pre_trade_policy(
+                OpenPitStringView::from_utf8(name),
+                0,
+                None,
+                Some(perform_pre_trade_check_fn),
+                None,
+                None,
+                noop_free_user_data,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(!policy.is_null(), "failed to create refusing policy");
+        assert!(
+            openpit_engine_builder_add_pre_trade_policy(builder, policy, std::ptr::null_mut()),
+            "failed to add refusing policy"
+        );
+        openpit_destroy_pretrade_pre_trade_policy(policy);
+        let engine =
+            openpit_engine_builder_build(builder, std::ptr::null_mut(), std::ptr::null_mut());
+        assert!(!engine.is_null(), "engine build failed");
+        engine
+    }
+
+    fn build_engine_with_refusing_mutation(name: &str) -> *mut super::OpenPitEngine {
+        build_engine_with_mutation_policy(name, push_refusing_mutation)
+    }
+
+    fn build_engine_with_refusing_rollback_mutation(name: &str) -> *mut super::OpenPitEngine {
+        build_engine_with_mutation_policy(name, push_refusing_rollback_mutation)
+    }
+
+    /// Runs a pre-trade request for `account_id` and returns the reject list,
+    /// or null when the request passed. A passing request is finalized by
+    /// rollback so the engine keeps no reserved state.
+    fn pre_trade_rejects_for_account(
+        engine: *mut super::OpenPitEngine,
+        account_id: crate::param::OpenPitParamAccountId,
+    ) -> *mut OpenPitPretradeRejectList {
+        let order = order_for_account(account_id);
+        let mut out_reservation = std::ptr::null_mut();
+        let mut out_rejects: *mut OpenPitPretradeRejectList = std::ptr::null_mut();
+        let status = openpit_engine_execute_pre_trade(
+            engine,
+            &order,
+            &mut out_reservation,
+            &mut out_rejects,
+            std::ptr::null_mut(),
+        );
+        if status == OpenPitPretradeStatus::Passed {
+            openpit_destroy_pretrade_pre_trade_reservation(out_reservation);
+            return std::ptr::null_mut();
+        }
+        assert_eq!(status, OpenPitPretradeStatus::Rejected);
+        assert!(!out_rejects.is_null());
+        out_rejects
+    }
+
+    /// Arms the kill switch by committing a reservation whose only mutation
+    /// refuses its commit finalizer.
+    fn arm_mutation_kill_switch(
+        engine: *mut super::OpenPitEngine,
+        account_id: crate::param::OpenPitParamAccountId,
+    ) {
+        let order = order_for_account(account_id);
+        let mut out_reservation = std::ptr::null_mut();
+        let status = openpit_engine_execute_pre_trade(
+            engine,
+            &order,
+            &mut out_reservation,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        assert_eq!(status, OpenPitPretradeStatus::Passed);
+        openpit_pretrade_pre_trade_reservation_commit(out_reservation);
+        openpit_destroy_pretrade_pre_trade_reservation(out_reservation);
+    }
+
+    fn assert_mutation_finalizer_block_reject(rejects: *mut OpenPitPretradeRejectList) {
+        let reject = reject_at(rejects, 0);
+        assert_eq!(
+            reject.code,
+            crate::reject::OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE
+        );
+        assert_eq!(string_view_to_string(reject.policy), "Engine");
+        assert_eq!(
+            string_view_to_string(reject.reason),
+            "mutation finalizer failed"
+        );
+        assert_eq!(
+            string_view_to_string(reject.details),
+            "a mutation commit or rollback callback failed; engine state may be inconsistent"
+        );
+        openpit_destroy_pretrade_reject_list(rejects);
+    }
+
+    // A mutation registered through the ABI is a custom-policy mutation, so a
+    // refused finalizer must block accounts the pipeline never touched.
+    #[test]
+    fn refused_mutation_commit_blocks_an_account_outside_the_pipeline() {
+        let engine = build_engine_with_refusing_mutation("killswitch.scope");
+        assert!(pre_trade_rejects_for_account(engine, 2).is_null());
+
+        arm_mutation_kill_switch(engine, 1);
+
+        let rejects = pre_trade_rejects_for_account(engine, 2);
+        assert!(
+            !rejects.is_null(),
+            "a custom-policy finalizer failure must block every account"
+        );
+        assert_mutation_finalizer_block_reject(rejects);
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn engine_unblock_all_accounts_clears_the_global_block() {
+        let engine = build_engine_with_refusing_mutation("killswitch.clear");
+        arm_mutation_kill_switch(engine, 1);
+        assert!(!pre_trade_rejects_for_account(engine, 2).is_null());
+
+        super::openpit_engine_unblock_all_accounts(engine);
+
+        assert!(pre_trade_rejects_for_account(engine, 2).is_null());
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn engine_unblock_all_accounts_leaves_per_account_blocks_intact() {
+        let engine = build_engine_with_refusing_mutation("killswitch.per-account");
+        super::openpit_engine_block_account(engine, 3, OpenPitStringView::from_utf8("by operator"));
+        arm_mutation_kill_switch(engine, 1);
+
+        super::openpit_engine_unblock_all_accounts(engine);
+
+        assert!(pre_trade_rejects_for_account(engine, 2).is_null());
+        let rejects = pre_trade_rejects_for_account(engine, 3);
+        assert!(!rejects.is_null(), "the admin block must survive");
+        assert_engine_account_block_reject(reject_at(rejects, 0), "by operator");
+        openpit_destroy_pretrade_reject_list(rejects);
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
+    fn engine_unblock_all_accounts_without_a_global_block_is_noop() {
+        let engine = build_engine_with_refusing_mutation("killswitch.noop");
+
+        super::openpit_engine_unblock_all_accounts(engine);
+
+        assert!(pre_trade_rejects_for_account(engine, 2).is_null());
+        openpit_destroy_engine(engine);
+    }
 
     unsafe fn create_pre_trade_policy_with_start_hook(
         name: OpenPitStringView,
@@ -2863,6 +3691,36 @@ mod tests {
             std::ptr::null_mut(),
         );
         assert!(ok, "failed to add policy");
+        crate::policy::openpit_destroy_pretrade_pre_trade_policy(policy);
+        let engine =
+            openpit_engine_builder_build(builder, std::ptr::null_mut(), std::ptr::null_mut());
+        assert!(!engine.is_null(), "engine build failed");
+        engine
+    }
+
+    fn build_engine_with_missing_field_policy() -> *mut super::OpenPitEngine {
+        let builder =
+            openpit_create_engine_builder(OpenPitSyncPolicy::Full as u8, std::ptr::null_mut());
+        let name = OpenPitStringView::from_utf8("pretrade.missing");
+        let policy = unsafe {
+            crate::policy::openpit_create_pretrade_custom_pre_trade_policy(
+                name,
+                0,
+                None,
+                Some(always_reject_missing_pre_trade),
+                Some(null_apply_report),
+                None,
+                noop_free_user_data,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(!policy.is_null(), "failed to create policy");
+        assert!(crate::policy::openpit_engine_builder_add_pre_trade_policy(
+            builder,
+            policy,
+            std::ptr::null_mut(),
+        ));
         crate::policy::openpit_destroy_pretrade_pre_trade_policy(policy);
         let engine =
             openpit_engine_builder_build(builder, std::ptr::null_mut(), std::ptr::null_mut());
@@ -3243,7 +4101,7 @@ mod tests {
         );
         assert_eq!(status, OpenPitPretradeStatus::Rejected);
         assert!(!out_rejects.is_null());
-        openpit_pretrade_destroy_reject_list(out_rejects);
+        openpit_destroy_pretrade_reject_list(out_rejects);
 
         let status = openpit_engine_start_pre_trade(
             engine,
@@ -3254,7 +4112,7 @@ mod tests {
         );
         assert_eq!(status, OpenPitPretradeStatus::Rejected);
         assert!(!out_rejects.is_null());
-        openpit_pretrade_destroy_reject_list(out_rejects);
+        openpit_destroy_pretrade_reject_list(out_rejects);
 
         openpit_destroy_engine(engine);
     }
@@ -3301,6 +4159,127 @@ mod tests {
     }
 
     #[test]
+    fn drop_copy_status_keeps_inactive_outputs_untouched() {
+        let operation_sentinel =
+            core::ptr::NonNull::<super::OpenPitPretradeDropCopyOperation>::dangling().as_ptr();
+        let rejects_sentinel = core::ptr::NonNull::<OpenPitPretradeRejectList>::dangling().as_ptr();
+        let error_sentinel =
+            core::ptr::NonNull::<crate::string::OpenPitSharedString>::dangling().as_ptr();
+
+        let mut out_operation = operation_sentinel;
+        let mut out_rejects = rejects_sentinel;
+        let mut out_error = error_sentinel;
+        let status = openpit_engine_apply_drop_copy(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            &mut out_operation,
+            &mut out_rejects,
+            &mut out_error,
+        );
+        assert_eq!(status, OpenPitPretradeStatus::Error);
+        assert_eq!(out_operation, operation_sentinel);
+        assert_eq!(out_rejects, rejects_sentinel);
+        assert_ne!(out_error, error_sentinel);
+        crate::string::openpit_destroy_shared_string(out_error);
+
+        let order = order_for_account(41);
+        let engine = build_passthrough_engine();
+        out_operation = std::ptr::null_mut();
+        out_rejects = rejects_sentinel;
+        out_error = error_sentinel;
+        let status = openpit_engine_apply_drop_copy(
+            engine,
+            &order,
+            &mut out_operation,
+            &mut out_rejects,
+            &mut out_error,
+        );
+        assert_eq!(status, OpenPitPretradeStatus::Passed);
+        assert!(!out_operation.is_null());
+        assert_eq!(out_rejects, rejects_sentinel);
+        assert_eq!(out_error, error_sentinel);
+
+        let lock = openpit_pretrade_drop_copy_operation_get_lock(out_operation);
+        assert!(!lock.is_null());
+        crate::pre_trade_lock::openpit_destroy_pretrade_pre_trade_lock(lock);
+
+        let adjustments =
+            openpit_pretrade_drop_copy_operation_get_account_adjustments(out_operation);
+        assert!(!adjustments.is_null());
+        unsafe {
+            crate::account_outcome::openpit_destroy_account_adjustment_outcome_list(adjustments);
+        }
+
+        let block = openpit_pretrade_drop_copy_operation_get_account_block(out_operation);
+        assert!(!block.is_null());
+        assert_eq!(
+            crate::reject::openpit_pretrade_account_block_list_len(block),
+            0
+        );
+        crate::reject::openpit_destroy_pretrade_account_block_list(block);
+        assert!(!openpit_pretrade_drop_copy_operation_is_account_blocked(
+            out_operation
+        ));
+
+        openpit_pretrade_drop_copy_operation_commit(out_operation);
+        openpit_destroy_pretrade_drop_copy_operation(out_operation);
+
+        let account_id = 42;
+        openpit_engine_block_account(
+            engine,
+            account_id,
+            OpenPitStringView::from_utf8("pre-existing block"),
+        );
+        let order = order_for_account(account_id);
+        out_operation = std::ptr::null_mut();
+        out_rejects = rejects_sentinel;
+        out_error = error_sentinel;
+        let status = openpit_engine_apply_drop_copy(
+            engine,
+            &order,
+            &mut out_operation,
+            &mut out_rejects,
+            &mut out_error,
+        );
+        assert_eq!(status, OpenPitPretradeStatus::Passed);
+        assert!(!out_operation.is_null());
+        assert_eq!(out_rejects, rejects_sentinel);
+        assert_eq!(out_error, error_sentinel);
+
+        let block = openpit_pretrade_drop_copy_operation_get_account_block(out_operation);
+        assert_eq!(
+            crate::reject::openpit_pretrade_account_block_list_len(block),
+            0
+        );
+        crate::reject::openpit_destroy_pretrade_account_block_list(block);
+        assert!(openpit_pretrade_drop_copy_operation_is_account_blocked(
+            out_operation
+        ));
+        openpit_pretrade_drop_copy_operation_commit(out_operation);
+        openpit_destroy_pretrade_drop_copy_operation(out_operation);
+        openpit_destroy_engine(engine);
+
+        let engine = build_engine_with_missing_field_policy();
+        out_operation = operation_sentinel;
+        out_rejects = std::ptr::null_mut();
+        out_error = error_sentinel;
+        let status = openpit_engine_apply_drop_copy(
+            engine,
+            &order,
+            &mut out_operation,
+            &mut out_rejects,
+            &mut out_error,
+        );
+        assert_eq!(status, OpenPitPretradeStatus::Rejected);
+        assert_eq!(out_operation, operation_sentinel);
+        assert!(!out_rejects.is_null());
+        assert_eq!(out_error, error_sentinel);
+        assert_eq!(openpit_pretrade_reject_list_len(out_rejects), 1);
+        openpit_destroy_pretrade_reject_list(out_rejects);
+        openpit_destroy_engine(engine);
+    }
+
+    #[test]
     fn execute_pre_trade_covers_null_order_and_optional_output_paths() {
         let order = OpenPitOrder::default();
         let mut out_rejects: *mut OpenPitPretradeRejectList = std::ptr::null_mut();
@@ -3336,7 +4315,7 @@ mod tests {
         );
         assert_eq!(status, OpenPitPretradeStatus::Rejected);
         assert!(!out_rejects.is_null());
-        openpit_pretrade_destroy_reject_list(out_rejects);
+        openpit_destroy_pretrade_reject_list(out_rejects);
 
         openpit_destroy_engine(reject_engine);
     }
@@ -3422,7 +4401,7 @@ mod tests {
         );
         assert_eq!(status, OpenPitPretradeStatus::Rejected);
         assert!(!out_rejects.is_null());
-        openpit_pretrade_destroy_reject_list(out_rejects);
+        openpit_destroy_pretrade_reject_list(out_rejects);
         openpit_destroy_pretrade_pre_trade_request(reject_request);
         openpit_destroy_engine(reject_engine);
     }
@@ -3779,8 +4758,11 @@ mod tests {
         openpit_destroy_engine(std::ptr::null_mut());
         openpit_destroy_pretrade_pre_trade_request(std::ptr::null_mut());
         openpit_destroy_pretrade_pre_trade_reservation(std::ptr::null_mut());
+        openpit_destroy_pretrade_drop_copy_operation(std::ptr::null_mut());
         openpit_pretrade_pre_trade_reservation_commit(std::ptr::null_mut());
         openpit_pretrade_pre_trade_reservation_rollback(std::ptr::null_mut());
+        openpit_pretrade_drop_copy_operation_commit(std::ptr::null_mut());
+        openpit_pretrade_drop_copy_operation_rollback(std::ptr::null_mut());
         let engine = build_passthrough_engine();
 
         let order = OpenPitOrder::default();
@@ -4147,7 +5129,7 @@ mod tests {
         );
         assert_eq!(status, OpenPitPretradeStatus::Rejected);
         assert!(!out_rejects.is_null());
-        openpit_pretrade_destroy_reject_list(out_rejects);
+        openpit_destroy_pretrade_reject_list(out_rejects);
         openpit_destroy_engine(engine);
     }
 
@@ -4173,7 +5155,7 @@ mod tests {
         assert!(!out_rejects.is_null());
         assert_eq!(openpit_pretrade_reject_list_len(out_rejects), 1);
         assert_engine_account_block_reject(reject_at(out_rejects, 0), reason);
-        openpit_pretrade_destroy_reject_list(out_rejects);
+        openpit_destroy_pretrade_reject_list(out_rejects);
 
         let mut out_report = std::ptr::null_mut();
         assert!(openpit_engine_execute_pre_trade_dry_run(
@@ -4190,7 +5172,7 @@ mod tests {
         assert!(!dry_run_rejects.is_null());
         assert_eq!(openpit_pretrade_reject_list_len(dry_run_rejects), 1);
         assert_engine_account_block_reject(reject_at(dry_run_rejects, 0), reason);
-        openpit_pretrade_destroy_reject_list(dry_run_rejects);
+        openpit_destroy_pretrade_reject_list(dry_run_rejects);
         openpit_destroy_pretrade_pre_trade_dry_run_report(out_report);
         openpit_destroy_engine(engine);
     }
@@ -4244,7 +5226,7 @@ mod tests {
         _order: *const crate::order::OpenPitOrder,
         _user_data: *mut c_void,
     ) -> *mut OpenPitPretradeRejectList {
-        let rejects = openpit_pretrade_create_reject_list(1);
+        let rejects = openpit_create_pretrade_reject_list(1);
         crate::reject::openpit_pretrade_reject_list_push(
             rejects,
             OpenPitPretradeReject {
@@ -4355,7 +5337,7 @@ mod tests {
         let rejects = openpit_pretrade_pre_trade_dry_run_report_get_rejects(out_report);
         assert!(!rejects.is_null());
         assert_eq!(openpit_pretrade_reject_list_len(rejects), 0);
-        openpit_pretrade_destroy_reject_list(rejects);
+        openpit_destroy_pretrade_reject_list(rejects);
 
         let lock = openpit_pretrade_pre_trade_dry_run_report_get_lock(out_report);
         assert!(!lock.is_null());
@@ -4384,7 +5366,7 @@ mod tests {
             crate::reject::openpit_pretrade_account_block_list_len(blocks),
             0
         );
-        crate::reject::openpit_pretrade_destroy_account_block_list(blocks);
+        crate::reject::openpit_destroy_pretrade_account_block_list(blocks);
 
         openpit_destroy_pretrade_pre_trade_dry_run_report(out_report);
         openpit_destroy_engine(engine);
@@ -4412,7 +5394,7 @@ mod tests {
         let rejects = openpit_pretrade_pre_trade_dry_run_report_get_rejects(out_report);
         assert!(!rejects.is_null());
         assert_eq!(openpit_pretrade_reject_list_len(rejects), 1);
-        openpit_pretrade_destroy_reject_list(rejects);
+        openpit_destroy_pretrade_reject_list(rejects);
 
         let blocks = openpit_pretrade_pre_trade_dry_run_report_get_account_block(out_report);
         assert!(!blocks.is_null());
@@ -4420,7 +5402,7 @@ mod tests {
             crate::reject::openpit_pretrade_account_block_list_len(blocks),
             0
         );
-        crate::reject::openpit_pretrade_destroy_account_block_list(blocks);
+        crate::reject::openpit_destroy_pretrade_account_block_list(blocks);
 
         openpit_destroy_pretrade_pre_trade_dry_run_report(out_report);
         openpit_destroy_engine(engine);
@@ -4448,7 +5430,7 @@ mod tests {
         let rejects = openpit_pretrade_pre_trade_dry_run_report_get_rejects(out_report);
         assert!(!rejects.is_null());
         assert_eq!(openpit_pretrade_reject_list_len(rejects), 1);
-        openpit_pretrade_destroy_reject_list(rejects);
+        openpit_destroy_pretrade_reject_list(rejects);
 
         let blocks = openpit_pretrade_pre_trade_dry_run_report_get_account_block(out_report);
         assert!(!blocks.is_null());
@@ -4467,7 +5449,7 @@ mod tests {
             blocks, 0, &mut block
         ));
         assert_eq!(string_view_to_string(block.policy), "start.account.reject");
-        crate::reject::openpit_pretrade_destroy_account_block_list(blocks);
+        crate::reject::openpit_destroy_pretrade_account_block_list(blocks);
 
         openpit_destroy_pretrade_pre_trade_dry_run_report(out_report);
 

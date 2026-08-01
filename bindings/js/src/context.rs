@@ -31,11 +31,13 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use openpit::param::AccountGroupId;
+use openpit::pretrade::DropCopyStartMutationRecorder;
 use wasm_bindgen::prelude::*;
 
 use crate::engine::StorageFactory;
 use crate::error::{make_error, ErrorKind};
 use crate::param::ids::JsAccountGroupId;
+use crate::policy::CallbackErrorScope;
 use crate::reject::JsAccountBlock;
 
 /// Shared validity flag for every binding handle created for one engine
@@ -48,22 +50,33 @@ use crate::reject::JsAccountBlock;
 /// through deferred execution and invalidate it exactly when the operation is
 /// rejected, committed, rolled back, or dropped.
 #[derive(Clone)]
-pub(crate) struct LifecycleToken(Rc<Cell<bool>>);
+pub(crate) struct LifecycleToken {
+    valid: Rc<Cell<bool>>,
+    callback_scope_id: u64,
+}
 
 impl LifecycleToken {
     /// Creates a fresh valid token.
-    pub(crate) fn new() -> Self {
-        Self(Rc::new(Cell::new(true)))
+    pub(crate) fn new(callback_scope_id: u64) -> Self {
+        Self {
+            valid: Rc::new(Cell::new(true)),
+            callback_scope_id,
+        }
     }
 
     /// Returns whether handles associated with this operation remain usable.
     fn is_valid(&self) -> bool {
-        self.0.get()
+        self.valid.get()
     }
 
     /// Invalidates every context/control clone sharing this token.
     pub(crate) fn invalidate(&self) {
-        self.0.set(false);
+        self.valid.set(false);
+    }
+
+    /// Returns the owning engine's callback re-entrancy scope ID.
+    pub(crate) fn callback_scope_id(&self) -> u64 {
+        self.callback_scope_id
     }
 }
 
@@ -74,6 +87,9 @@ impl LifecycleToken {
 /// the owning request's pre-trade processing (through commit or rollback); once
 /// invalidated, further calls throw a `LifecycleError` rather than recording
 /// against a completed transaction.
+///
+/// A panic abandons the operation without invalidating its token, so the handle
+/// also rejects every call once an engine defect has poisoned the module.
 #[wasm_bindgen(js_name = AccountControl)]
 pub struct JsAccountControl {
     inner: openpit::AccountControl<StorageFactory>,
@@ -89,10 +105,12 @@ impl JsAccountControl {
     ///
     /// # Errors
     ///
-    /// Throws `LifecycleError` when the owning transaction has already been
-    /// finalized, or `ParamError` when the block code is not recognized.
+    /// Throws `InternalError` when a panic has poisoned the module,
+    /// `LifecycleError` when the owning transaction has already been finalized,
+    /// or `ParamError` when the block code is not recognized.
     #[wasm_bindgen(js_name = block)]
     pub fn block(&self, block: &JsAccountBlock) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
         if !self.lifecycle.is_valid() {
             return Err(make_error(
                 ErrorKind::Lifecycle,
@@ -128,12 +146,60 @@ fn group_getter(group: Option<AccountGroupId>) -> Option<JsAccountGroupId> {
 #[wasm_bindgen(js_name = Context)]
 pub struct JsContext {
     account_control: Option<openpit::AccountControl<StorageFactory>>,
+    drop_copy_start_mutations: Option<DropCopyStartMutationRecorder>,
     group: Option<AccountGroupId>,
     lifecycle: LifecycleToken,
+    is_drop_copy: bool,
 }
 
 #[wasm_bindgen(js_class = Context)]
 impl JsContext {
+    /// Whether ordinary rejects are non-enforcing for this operation.
+    #[wasm_bindgen(getter, js_name = isDropCopy)]
+    pub fn is_drop_copy(&self) -> bool {
+        self.is_drop_copy
+    }
+
+    /// Registers a start-stage mutation owned by the current drop-copy
+    /// operation.
+    ///
+    /// # Errors
+    ///
+    /// Throws `InternalError` when a panic has poisoned the module,
+    /// `LifecycleError` outside an active drop-copy callback, or `TypeError`
+    /// when `mutation` is not a valid commit/rollback pair.
+    #[wasm_bindgen(js_name = recordDropCopyStartMutation)]
+    pub fn record_drop_copy_start_mutation(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "PolicyMutation")] mutation: JsValue,
+    ) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_not_poisoned()?;
+        let recorder = self.drop_copy_start_mutations.as_ref().ok_or_else(|| {
+            make_error(
+                ErrorKind::Lifecycle,
+                "context is not an active drop-copy operation",
+                None,
+            )
+        })?;
+        if !self.lifecycle.is_valid() || !recorder.is_active() {
+            return Err(make_error(
+                ErrorKind::Lifecycle,
+                "context is not an active drop-copy operation",
+                None,
+            ));
+        }
+        let mutation = crate::policy::parse_policy_mutation(&mutation)?;
+        if recorder.record(mutation).is_ok() {
+            Ok(())
+        } else {
+            Err(make_error(
+                ErrorKind::Lifecycle,
+                "context is not an active drop-copy operation",
+                None,
+            ))
+        }
+    }
+
     /// The per-account block handle, or `undefined` when the request carries no
     /// account id.
     #[wasm_bindgen(getter, js_name = accountControl)]
@@ -155,13 +221,17 @@ impl JsContext {
     /// Builds a pre-trade context from its parts.
     pub(crate) fn from_parts(
         account_control: Option<openpit::AccountControl<StorageFactory>>,
+        drop_copy_start_mutations: Option<DropCopyStartMutationRecorder>,
         group: Option<AccountGroupId>,
         lifecycle: LifecycleToken,
+        is_drop_copy: bool,
     ) -> Self {
         Self {
             account_control,
+            drop_copy_start_mutations,
             group,
             lifecycle,
+            is_drop_copy,
         }
     }
 }

@@ -33,6 +33,7 @@ namespace openpit::pretrade::detail {
 using RawRequest = ::OpenPitPretradePreTradeRequest;
 using RawReservation = ::OpenPitPretradePreTradeReservation;
 using RawDryRunReport = ::OpenPitPretradePreTradeDryRunReport;
+using RawDropCopyOperation = ::OpenPitPretradeDropCopyOperation;
 
 struct RequestInit {
   RawRequest* handle;
@@ -49,16 +50,29 @@ struct PreTradeReservationDeleter {
   void operator()(RawReservation* handle) const noexcept {
     // An unresolved reservation rolls back during destruction. Destructors
     // cannot report user callback failures, so suppress only that rollback's
-    // captured exception; explicit Rollback() reports it to the caller.
-    ::openpit::detail::ClearPendingCallbackException();
+    // captured exception; explicit Rollback() reports it to the caller. The
+    // engine kill switch a failed finalizer arms is not suppressed: it still
+    // blocks every account, and only that block reports the failure here.
+    ::openpit::detail::CallbackExceptionScope callbackExceptions;
     openpit_destroy_pretrade_pre_trade_reservation(handle);
-    ::openpit::detail::ClearPendingCallbackException();
   }
 };
 
 struct PreTradeDryRunReportDeleter {
   void operator()(RawDryRunReport* handle) const noexcept {
     openpit_destroy_pretrade_pre_trade_dry_run_report(handle);
+  }
+};
+
+struct DropCopyOperationDeleter {
+  void operator()(RawDropCopyOperation* handle) const noexcept {
+    // An unresolved operation rolls back during destruction. Destructors cannot
+    // report user callback failures, so suppress only that rollback's captured
+    // exception; explicit Rollback() reports it to the caller. The engine kill
+    // switch a failed finalizer arms is not suppressed: it still blocks every
+    // account, and only that block reports the failure here.
+    ::openpit::detail::CallbackExceptionScope callbackExceptions;
+    openpit_destroy_pretrade_drop_copy_operation(handle);
   }
 };
 

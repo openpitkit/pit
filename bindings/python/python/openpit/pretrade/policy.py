@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://github.com/openpitkit and the OWNERS file for details.
+# Please see https://openpit.dev and the OWNERS file for details.
 
 """
 Python policy interfaces and decision types exposed by openpit.
@@ -126,8 +126,8 @@ class PolicyReject:
         scope: Reject scope, either ``"order"`` or ``"account"``.
         user_data: Opaque caller-defined integer token copied through reject
             flows. ``0`` means "not set". The SDK never inspects it; lifetime
-            and thread-safety are caller-managed (see
-            ``pit.wiki/Threading-Contract.md``).
+            and thread-safety are caller-managed. See the
+            `Threading Contract <https://wiki.openpit.dev/Threading-Contract/>`_.
     """
 
     code: str
@@ -145,6 +145,10 @@ class PolicyReject:
 class PolicyDecision:
     """
     Return type of :meth:`Policy.perform_pre_trade_check`.
+
+    Ordinary pre-trade keeps its contribution only on acceptance. Drop-copy
+    also keeps it alongside ordinary, non-enforcing rejects; an evaluation-
+    failure reject aborts drop-copy and discards the contribution.
 
     Attributes:
         rejects: Rejects produced by the policy.
@@ -229,7 +233,8 @@ class PolicyPreTradeResult:
         lock_prices: typing.Iterable[Price] = (),
     ) -> PolicyPreTradeResult:
         """
-        Build a rejecting pre-trade result.
+        Build a rejecting pre-trade result. Drop-copy retains its contribution
+        only when every reject is non-enforcing.
         """
         return cls(
             rejects=tuple(rejects),
@@ -278,6 +283,11 @@ class Policy(abc.ABC):
     - return :class:`PolicyAccountAdjustmentResult` from account adjustments;
       its ``account_adjustments`` field carries per-asset outcomes
     - raise exceptions only for programming/runtime failures
+
+    Callback exceptions belong to the operation that invoked them. If multiple
+    sibling callbacks fail during one operation, the first exception is
+    re-raised after the stage finishes; later exceptions from that operation do
+    not replace it.
     """
 
     @property

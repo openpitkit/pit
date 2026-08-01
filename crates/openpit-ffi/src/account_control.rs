@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 #![allow(
     clippy::arc_with_non_send_sync,
@@ -21,10 +21,16 @@
     clippy::not_unsafe_ptr_arg_deref
 )]
 
+use std::ffi::c_void;
+
 use openpit::pretrade::PreTradeContext;
 use openpit::AccountAdjustmentContext;
 
-use crate::policy::{OpenPitAccountAdjustmentContext, OpenPitPretradeContext};
+use crate::last_error::{write_error, OpenPitOutError};
+use crate::policy::{
+    mutation_from_ffi_callbacks, OpenPitAccountAdjustmentContext, OpenPitMutationFn,
+    OpenPitMutationFreeFn, OpenPitPretradeContext,
+};
 use crate::reject::OpenPitPretradeAccountBlock;
 
 type StorageFactory = openpit_interop::StorageLockingPolicyFactory;
@@ -179,6 +185,72 @@ pub unsafe extern "C" fn openpit_pretrade_context_get_account_control(
     match ctx.account_control.as_ref() {
         Some(account_control) => OpenPitAccountControl::into_raw(account_control.clone()),
         None => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+/// Returns whether the current pre-trade callback belongs to drop copy.
+///
+/// Returns `false` for a null context and for ordinary pre-trade operations.
+pub unsafe extern "C" fn openpit_pretrade_context_is_drop_copy(
+    ctx: *const OpenPitPretradeContext,
+) -> bool {
+    if ctx.is_null() {
+        return false;
+    }
+    let ctx = unsafe { &*ctx.cast::<PreTradeContext<StorageFactory>>() };
+    ctx.is_drop_copy()
+}
+
+#[no_mangle]
+/// Records a start-stage mutation for the current drop-copy operation.
+///
+/// The callback pair follows the same ownership and success contract as
+/// `openpit_mutations_push`. Apply tentative state before registration. The
+/// mutation joins the operation returned by `openpit_engine_apply_drop_copy`:
+/// commit finalizes it when the caller commits that operation, and rollback
+/// reverses it when the caller rolls the operation back or destroys it without
+/// finalizing, and when a fatal evaluation reject aborts the pipeline before an
+/// operation exists.
+/// Ownership of `user_data` transfers to the engine only when this function
+/// returns `true`; on `false`, the caller remains responsible for cleanup.
+///
+/// Returns `false` when `ctx` is null, does not belong to drop copy, or has
+/// already been finalized. When provided, `out_error` receives a caller-owned
+/// error string on failure.
+pub unsafe extern "C" fn openpit_pretrade_context_record_drop_copy_start_mutation(
+    ctx: *const OpenPitPretradeContext,
+    commit_fn: OpenPitMutationFn,
+    rollback_fn: OpenPitMutationFn,
+    user_data: *mut c_void,
+    free_fn: Option<OpenPitMutationFreeFn>,
+    out_error: OpenPitOutError,
+) -> bool {
+    if ctx.is_null() {
+        write_error(
+            out_error,
+            "openpit_pretrade_context_record_drop_copy_start_mutation: context is null",
+        );
+        return false;
+    }
+    let ctx = unsafe { &*ctx.cast::<PreTradeContext<StorageFactory>>() };
+    let Some(recorder) = ctx.drop_copy_start_mutation_recorder() else {
+        write_error(
+            out_error,
+            "pre-trade context is not an active drop-copy operation",
+        );
+        return false;
+    };
+    if recorder
+        .record_with(|| mutation_from_ffi_callbacks(commit_fn, rollback_fn, user_data, free_fn))
+    {
+        true
+    } else {
+        write_error(
+            out_error,
+            "pre-trade context is not an active drop-copy operation",
+        );
+        false
     }
 }
 

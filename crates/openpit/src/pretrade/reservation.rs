@@ -13,9 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
-use super::{AccountBlock, PreTradeLock};
+use super::PreTradeLock;
 use crate::core::account_outcome::AccountAdjustmentOutcome;
 
 /// Opaque capability object representing reserved state.
@@ -43,6 +43,17 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 /// pre-trade validation.
 ///
 /// If dropped without explicit finalization, rollback is executed automatically.
+///
+/// # Finalization
+///
+/// Both [`commit`](Self::commit) and [`rollback`](Self::rollback) are void:
+/// the state they finalize was applied eagerly, so there is nothing left for
+/// the owner to decide or compensate. A mutation finalizer that fails anyway is
+/// never ignored - the engine raises a kill switch instead, and the owner learns
+/// about it when its next pre-trade request is rejected with
+/// [`RejectCode::SystemUnavailable`](super::RejectCode::SystemUnavailable). See
+/// the finalizer contract on [`Mutation`](crate::Mutation) for the reach of
+/// that block.
 ///
 /// # Lifecycle guidance
 ///
@@ -92,13 +103,14 @@ use crate::core::account_outcome::AccountAdjustmentOutcome;
 /// # }
 /// ```
 pub struct PreTradeReservation {
-    account_block: Option<AccountBlock>,
     account_adjustments: Vec<AccountAdjustmentOutcome>,
     lock: PreTradeLock,
     inner: Option<Box<dyn ReservationHandle>>,
 }
 
-/// Internal capability interface used by [`PreTradeReservation`].
+/// Internal capability interface used by [`PreTradeReservation`] and by
+/// [`DropCopyOperation`](super::DropCopyOperation), which follows the same
+/// finalization contract.
 ///
 /// Provides only finalization: commit or rollback. Lock context and account
 /// adjustments are passed directly to [`PreTradeReservation::from_handle`] so
@@ -118,6 +130,10 @@ impl PreTradeReservation {
     /// finalization call other than [`Self::rollback`] (which is a no-op
     /// after consumption) is a programmer error.
     ///
+    /// Void by contract: a commit callback that fails does not fail this call,
+    /// it arms the engine kill switch. See the finalizer contract on
+    /// [`Mutation`](crate::Mutation).
+    ///
     /// # Panics
     ///
     /// Panics with `"pre-trade reservation already consumed"` if `commit`
@@ -134,12 +150,12 @@ impl PreTradeReservation {
     ///
     /// The panic is the API contract: each reservation must be finalized
     /// at most once and the caller is responsible for tracking ownership.
-    /// Language bindings (Python, Go, C) that expose this method MUST
-    /// wrap the call in [`std::panic::catch_unwind`] and translate the
-    /// resulting unwind into the host language's idiomatic error type
-    /// (Python: `RuntimeError` or a custom exception; Go: returned
-    /// `error`; C: an out-parameter error code). Letting the panic
-    /// propagate across the language boundary is undefined behaviour.
+    /// A panic must never cross a language boundary, and it cannot be
+    /// caught in a build that aborts on panic, so language bindings
+    /// (Python, Go, C) MUST track finalization in their own reservation
+    /// handle and never forward a repeated finalization into this method.
+    /// Their published contract is what a foreign caller sees; the C ABI,
+    /// for example, makes a repeated commit a no-op.
     pub fn commit(&mut self) {
         self.inner
             .take()
@@ -157,6 +173,10 @@ impl PreTradeReservation {
     /// owner must be safe so callers can defensively roll back without
     /// tracking whether they have already done so.
     ///
+    /// Void by contract: a rollback callback that fails does not fail this
+    /// call, it arms the engine kill switch. See the finalizer contract on
+    /// [`Mutation`](crate::Mutation).
+    ///
     /// # Panics
     ///
     /// This method does not panic on its own. Panics can only originate
@@ -165,11 +185,11 @@ impl PreTradeReservation {
     /// The reservation API itself imposes no panic on double-rollback or
     /// rollback-after-commit; both are silent no-ops.
     ///
-    /// Language bindings (Python, Go, C) that expose this method should
-    /// still wrap the call in [`std::panic::catch_unwind`] because a
-    /// misbehaving policy mutation closure can still unwind. Letting the
-    /// panic propagate across the language boundary is undefined
-    /// behaviour.
+    /// A misbehaving policy mutation closure can still unwind, and that
+    /// unwind must never cross a language boundary. Language bindings
+    /// (Python, Go, C) that expose this method own that guarantee for
+    /// their surface; they cannot rely on catching the unwind, because a
+    /// build that aborts on panic gives them nothing to catch.
     pub fn rollback(&mut self) {
         if let Some(inner) = self.inner.take() {
             inner.rollback();
@@ -194,37 +214,12 @@ impl PreTradeReservation {
         &self.account_adjustments
     }
 
-    /// Returns the winning account block produced by this reservation's pipeline.
-    ///
-    /// Regular accepted reservations carry none because an account block is an
-    /// enforcing reject. A drop-copy reservation may carry the first block
-    /// derived from an account-scoped reject that was deliberately not enforced,
-    /// even when the account registry already contains an earlier block.
-    pub fn account_block(&self) -> Option<&AccountBlock> {
-        self.account_block.as_ref()
-    }
-
     pub(crate) fn from_handle(
         inner: Box<dyn ReservationHandle>,
         lock: PreTradeLock,
         account_adjustments: Vec<AccountAdjustmentOutcome>,
     ) -> Self {
         Self {
-            account_block: None,
-            account_adjustments,
-            lock,
-            inner: Some(inner),
-        }
-    }
-
-    pub(crate) fn from_handle_with_account_block(
-        inner: Box<dyn ReservationHandle>,
-        lock: PreTradeLock,
-        account_adjustments: Vec<AccountAdjustmentOutcome>,
-        account_block: Option<AccountBlock>,
-    ) -> Self {
-        Self {
-            account_block,
             account_adjustments,
             lock,
             inner: Some(inner),
@@ -246,6 +241,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::{PreTradeLock, PreTradeReservation, ReservationHandle};
+    use crate::core::mutation::MutationFailureKillSwitch;
     use crate::core::DEFAULT_POLICY_GROUP_ID;
     use crate::param::Price;
     use crate::pretrade::handle::ReservationHandleImpl;
@@ -267,7 +263,10 @@ mod tests {
         }));
 
         let reservation = PreTradeReservation::from_handle(
-            Box::new(ReservationHandleImpl::new(mutations)),
+            Box::new(ReservationHandleImpl::new(
+                mutations,
+                MutationFailureKillSwitch::inert(),
+            )),
             PreTradeLock::default(),
             Vec::new(),
         );
@@ -288,7 +287,10 @@ mod tests {
         mutations.push(Mutation::new(noop_action, noop_action));
 
         let reservation = PreTradeReservation::from_handle(
-            Box::new(ReservationHandleImpl::new(mutations)),
+            Box::new(ReservationHandleImpl::new(
+                mutations,
+                MutationFailureKillSwitch::inert(),
+            )),
             PreTradeLock::default(),
             Vec::new(),
         );
@@ -302,7 +304,6 @@ mod tests {
     #[should_panic(expected = "pre-trade reservation already consumed")]
     fn commit_panics_for_finalized_reservation() {
         let mut reservation = PreTradeReservation {
-            account_block: None,
             account_adjustments: Vec::new(),
             lock: PreTradeLock::default(),
             inner: None,
@@ -313,7 +314,6 @@ mod tests {
     #[test]
     fn rollback_is_noop_for_finalized_reservation() {
         let mut reservation = PreTradeReservation {
-            account_block: None,
             account_adjustments: Vec::new(),
             lock: PreTradeLock::default(),
             inner: None,
@@ -375,7 +375,10 @@ mod tests {
         ));
 
         let mut reservation = PreTradeReservation::from_handle(
-            Box::new(ReservationHandleImpl::new(mutations)),
+            Box::new(ReservationHandleImpl::new(
+                mutations,
+                MutationFailureKillSwitch::inert(),
+            )),
             PreTradeLock::default(),
             Vec::new(),
         );
@@ -394,7 +397,10 @@ mod tests {
         }));
 
         let mut reservation = PreTradeReservation::from_handle(
-            Box::new(ReservationHandleImpl::new(mutations)),
+            Box::new(ReservationHandleImpl::new(
+                mutations,
+                MutationFailureKillSwitch::inert(),
+            )),
             PreTradeLock::default(),
             Vec::new(),
         );

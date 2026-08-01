@@ -673,7 +673,6 @@ where
             } else {
                 None
             };
-
             let broker = s.broker.as_ref().map(|slot| {
                 let count = slot.counter.push(now_nanos, window_nanos(&slot.limit));
                 over_limit(count, &slot.limit, RejectScope::Order, "broker barrier")

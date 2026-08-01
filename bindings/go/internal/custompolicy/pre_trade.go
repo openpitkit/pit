@@ -24,21 +24,26 @@ package custompolicy
 import "C"
 
 import (
+	"errors"
+	"fmt"
 	"runtime/cgo"
 	"unsafe"
 
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/internal/callback"
+	"go.openpit.dev/openpit/internal/diag"
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade"
+	"go.openpit.dev/openpit/reject"
 	"go.openpit.dev/openpit/tx"
 )
 
 type PreTrade struct {
 	impl   pretrade.Policy
 	dryRun pretrade.DryRunPolicy
+	name   string
 	handle cgo.Handle
 }
 
@@ -47,14 +52,14 @@ type PreTrade struct {
 // When impl also satisfies pretrade.DryRunPolicy, the engine is given
 // explicit dry-run hooks; otherwise the normal hooks delegate for dry-runs.
 func StartPreTrade(impl pretrade.Policy) (native.PretradePreTradePolicy, error) {
-	implHandle := &PreTrade{impl: impl}
+	implHandle := &PreTrade{impl: impl, name: impl.Name()}
 	if dryRun, ok := impl.(pretrade.DryRunPolicy); ok {
 		implHandle.dryRun = dryRun
 	}
 	implHandle.handle = cgo.NewHandle(implHandle)
 
 	userData := callback.NewUserDataFromHandle(implHandle.handle)
-	name := impl.Name()
+	name := implHandle.name
 	groupID := native.PolicyGroupID(impl.PolicyGroupID())
 
 	var policyHandle native.PretradePreTradePolicy
@@ -94,8 +99,30 @@ func StartPreTrade(impl pretrade.Policy) (native.PretradePreTradePolicy, error) 
 }
 
 func (p *PreTrade) Close() {
+	defer p.handle.Delete()
 	p.impl.Close()
-	p.handle.Delete()
+}
+
+func callbackPanicRejects(policyName string, recovered any) []reject.Reject {
+	return reject.NewSingleItemList(
+		reject.CodeSystemUnavailable,
+		policyName,
+		"custom policy callback panicked",
+		fmt.Sprintf("panic: %v", recovered),
+		reject.ScopeOrder,
+	)
+}
+
+func callbackPanicAccountBlocks(
+	policyName string,
+	recovered any,
+) []reject.AccountBlock {
+	return []reject.AccountBlock{reject.NewAccountBlock(
+		reject.CodeSystemUnavailable,
+		policyName,
+		"custom policy callback panicked",
+		fmt.Sprintf("panic: %v", recovered),
+	)}
 }
 
 //export pitPretradePreTradePolicyCheckPreTradeStart
@@ -103,17 +130,20 @@ func pitPretradePreTradePolicyCheckPreTradeStart(
 	ctx *C.OpenPitPretradeContext,
 	order *C.OpenPitOrder,
 	userData unsafe.Pointer,
-) *C.OpenPitPretradeRejectList {
-	// Panics from the user implementation are deliberately allowed to propagate.
-	// A panic unwinding across the FFI boundary may terminate the process;
-	// containing it is the implementer's responsibility, as stated on the Policy
-	// interface.
-
-	return newNativeRejectListOrNil(
-		getPreTrade(userData).impl.CheckPreTradeStart(
-			pretrade.NewContextFromHandle(
-				native.PretradeContext(ctx),
-			),
+) (result *C.OpenPitPretradeRejectList) {
+	policyName := "openpit.callback"
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = newNativeRejectList(
+				callbackPanicRejects(policyName, recovered),
+			)
+		}
+	}()
+	policy := getPreTrade(userData)
+	policyName = policy.name
+	return newNativeRejectList(
+		policy.impl.CheckPreTradeStart(
+			pretrade.NewContextFromHandle(native.PretradeContext(ctx)),
 			model.NewOrderFromHandle(*(*native.Order)(unsafe.Pointer(order))),
 		),
 	)
@@ -126,17 +156,20 @@ func pitPretradePreTradePolicyPerformPreTradeCheck(
 	mutations *C.OpenPitMutations,
 	outResult *C.OpenPitPretradePreTradeResult,
 	userData unsafe.Pointer,
-) *C.OpenPitPretradeRejectList {
-	// Panics from the user implementation are deliberately allowed to propagate.
-	// A panic unwinding across the FFI boundary may terminate the process;
-	// containing it is the implementer's responsibility, as stated on the Policy
-	// interface.
-
-	return newNativeRejectListOrNil(
-		getPreTrade(userData).impl.PerformPreTradeCheck(
-			pretrade.NewContextFromHandle(
-				native.PretradeContext(ctx),
-			),
+) (result *C.OpenPitPretradeRejectList) {
+	policyName := "openpit.callback"
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = newNativeRejectList(
+				callbackPanicRejects(policyName, recovered),
+			)
+		}
+	}()
+	policy := getPreTrade(userData)
+	policyName = policy.name
+	return newNativeRejectList(
+		policy.impl.PerformPreTradeCheck(
+			pretrade.NewContextFromHandle(native.PretradeContext(ctx)),
 			model.NewOrderFromHandle(*(*native.Order)(unsafe.Pointer(order))),
 			tx.NewMutationsFromHandle(
 				native.Mutations(mutations),
@@ -155,14 +188,19 @@ func pitPretradePreTradePolicyApplyExecutionReport(
 	outAdjustments *C.OpenPitPostTradeAdjustmentList,
 	outAccountPnls *C.OpenPitPostTradeAccountPnlList,
 	userData unsafe.Pointer,
-) *C.OpenPitPretradeAccountBlockList {
-	// Panics from the user implementation are deliberately allowed to
-	// propagate. A panic unwinding across the FFI boundary may terminate the
-	// process; containing it is the implementer's responsibility, as stated
-	// on the Policy interface.
-
+) (result *C.OpenPitPretradeAccountBlockList) {
+	policyName := "openpit.callback"
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = newNativeAccountBlockListOrNil(
+				callbackPanicAccountBlocks(policyName, recovered),
+			)
+		}
+	}()
+	policy := getPreTrade(userData)
+	policyName = policy.name
 	return newNativeAccountBlockListOrNil(
-		getPreTrade(userData).impl.ApplyExecutionReport(
+		policy.impl.ApplyExecutionReport(
 			pretrade.NewPostTradeContextFromHandle(
 				native.PostTradeContext(ctx),
 			),
@@ -187,13 +225,18 @@ func pitPretradePreTradePolicyApplyAccountAdjustment(
 	mutations *C.OpenPitMutations,
 	outResult *C.OpenPitPretradeAccountAdjustmentResult,
 	userData unsafe.Pointer,
-) *C.OpenPitPretradeRejectList {
-	// Panics from the user implementation are deliberately allowed to propagate.
-	// A panic unwinding across the FFI boundary may terminate the process;
-	// containing it is the implementer's responsibility, as stated on the Policy
-	// interface.
-
-	result, rejects := getPreTrade(userData).impl.ApplyAccountAdjustment(
+) (rejectList *C.OpenPitPretradeRejectList) {
+	policyName := "openpit.callback"
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			rejectList = newNativeRejectList(
+				callbackPanicRejects(policyName, recovered),
+			)
+		}
+	}()
+	policy := getPreTrade(userData)
+	policyName = policy.name
+	result, rejects := policy.impl.ApplyAccountAdjustment(
 		accountadjustment.NewContextFromHandle(native.AccountAdjustmentContext(ctx)),
 		param.NewAccountIDFromHandle(native.ParamAccountID(accountID)),
 		model.NewAccountAdjustmentFromHandle(
@@ -209,12 +252,29 @@ func pitPretradePreTradePolicyApplyAccountAdjustment(
 			native.PretradeAccountAdjustmentResult(outResult), block.NewHandle(),
 		)
 	}
-	return newNativeRejectListOrNil(rejects)
+	return newNativeRejectList(rejects)
 }
 
 //export pitPretradePreTradePolicyClose
 func pitPretradePreTradePolicyClose(userData unsafe.Pointer) {
-	getPreTrade(userData).Close()
+	// Close carries no result, so a panic here has no reject to travel on. Keep
+	// it contained so one failing policy cannot unwind across the cgo frame, and
+	// report it through the SDK diagnostic sink instead of the embedder's logger.
+	handle := callback.NewHandleFromUserData(userData)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			diag.Report(fmt.Errorf("custom pre-trade policy close callback panicked: %v", recovered))
+		}
+	}()
+	policy, ok := handle.Value().(*PreTrade)
+	if !ok {
+		// The handle is still allocated, and no PreTrade.Close will ever reach it,
+		// so release it here rather than leak it.
+		handle.Delete()
+		diag.Report(errors.New("custom pre-trade policy close callback got foreign user data"))
+		return
+	}
+	policy.Close()
 }
 
 //export pitPretradePreTradePolicyCheckPreTradeStartDryRun
@@ -222,17 +282,20 @@ func pitPretradePreTradePolicyCheckPreTradeStartDryRun(
 	ctx *C.OpenPitPretradeContext,
 	order *C.OpenPitOrder,
 	userData unsafe.Pointer,
-) *C.OpenPitPretradeRejectList {
-	// Panics from the user implementation are deliberately allowed to propagate.
-	// A panic unwinding across the FFI boundary may terminate the process;
-	// containing it is the implementer's responsibility, as stated on the Policy
-	// interface.
-
-	return newNativeRejectListOrNil(
-		getPreTrade(userData).dryRun.CheckPreTradeStartDryRun(
-			pretrade.NewContextFromHandle(
-				native.PretradeContext(ctx),
-			),
+) (result *C.OpenPitPretradeRejectList) {
+	policyName := "openpit.callback"
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = newNativeRejectList(
+				callbackPanicRejects(policyName, recovered),
+			)
+		}
+	}()
+	policy := getPreTrade(userData)
+	policyName = policy.name
+	return newNativeRejectList(
+		policy.dryRun.CheckPreTradeStartDryRun(
+			pretrade.NewContextFromHandle(native.PretradeContext(ctx)),
 			model.NewOrderFromHandle(*(*native.Order)(unsafe.Pointer(order))),
 		),
 	)
@@ -245,17 +308,20 @@ func pitPretradePreTradePolicyPerformPreTradeCheckDryRun(
 	mutations *C.OpenPitMutations,
 	outResult *C.OpenPitPretradePreTradeResult,
 	userData unsafe.Pointer,
-) *C.OpenPitPretradeRejectList {
-	// Panics from the user implementation are deliberately allowed to propagate.
-	// A panic unwinding across the FFI boundary may terminate the process;
-	// containing it is the implementer's responsibility, as stated on the Policy
-	// interface.
-
-	return newNativeRejectListOrNil(
-		getPreTrade(userData).dryRun.PerformPreTradeCheckDryRun(
-			pretrade.NewContextFromHandle(
-				native.PretradeContext(ctx),
-			),
+) (result *C.OpenPitPretradeRejectList) {
+	policyName := "openpit.callback"
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = newNativeRejectList(
+				callbackPanicRejects(policyName, recovered),
+			)
+		}
+	}()
+	policy := getPreTrade(userData)
+	policyName = policy.name
+	return newNativeRejectList(
+		policy.dryRun.PerformPreTradeCheckDryRun(
+			pretrade.NewContextFromHandle(native.PretradeContext(ctx)),
 			model.NewOrderFromHandle(*(*native.Order)(unsafe.Pointer(order))),
 			tx.NewMutationsFromHandle(
 				native.Mutations(mutations),

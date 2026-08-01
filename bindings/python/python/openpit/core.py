@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://github.com/openpitkit and the OWNERS file for details.
+# Please see https://openpit.dev and the OWNERS file for details.
 
 from __future__ import annotations
 
@@ -102,7 +102,27 @@ def _require_instance(
 
 @dataclasses.dataclass(frozen=True)
 class Mutation:
-    """Commit/rollback action pair registered by a policy."""
+    """Commit/rollback action pair registered by a policy.
+
+    Apply tentative state before registering the pair. Reservation and
+    drop-copy finalization each call one callback. A rollback also runs for
+    pairs whose commit was not reached, because their tentative state was
+    already applied.
+
+    Neither callable has the right to fail: by the time a finalizer runs the
+    decision is already made and the state it finalizes was applied eagerly,
+    so there is nothing left to compensate. A callable that raises anyway
+    never stops the batch, and the failure is reported on two independent
+    channels. The exception is re-raised to the caller of ``commit()`` /
+    ``rollback()`` once the rest of the batch has run. Separately the engine
+    arms its kill switch, because its own bookkeeping is now in an unknown
+    state; every :class:`Mutation` registered from Python belongs to a custom
+    policy whose state reach the engine cannot bound, so **every** account is
+    blocked, not only the order's own. That block reaches nobody directly - it
+    surfaces when the next pre-trade call is rejected with
+    :attr:`openpit.pretrade.RejectCode.SYSTEM_UNAVAILABLE` - and an operator
+    clears it with :meth:`openpit.Accounts.unblock_all`.
+    """
 
     commit: typing.Callable[[], None]
     rollback: typing.Callable[[], None]

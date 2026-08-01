@@ -18,7 +18,8 @@
 // Example spot_funds is the smallest end-to-end integration of OpenPit's
 // built-in SpotFunds pre-trade policy: it shows how a buy order reserves
 // settlement cash, how a second order is rejected because that cash is still
-// held, and how a fill settles the held reservation.
+// held, how a fill settles the held reservation, and how the policy's limit
+// mode is retuned at runtime.
 //
 // What is illustrated:
 //
@@ -28,6 +29,8 @@
 //     follow-up BUY that needs the same cash is rejected with InsufficientFunds
 //   - tying a fill back to its reservation by carrying the pre-trade lock on
 //     the execution report, so SpotFunds settles the right held amount
+//   - retuning the policy's limit mode on a running engine: in track-only mode
+//     the same underfunded BUY is accepted instead of rejected
 //
 // Audience: an integrator who wants to lift the SpotFunds call pattern into
 // their own order/fill pipeline.
@@ -43,8 +46,8 @@
 //
 // The example is deliberately flat: RunExample() reads top-to-bottom as a
 // story, and every engine call is factored into a small named helper (in
-// spot_funds.hpp) that the smoke test reuses. This is the C++ mirror of the Go
-// example at examples/go/spot_funds/main.go.
+// spot_funds.hpp) that the smoke test reuses. main() wraps RunExample() in a
+// try/catch that reports an openpit::Error and exits non-zero on failure.
 
 #include "spot_funds.hpp"
 
@@ -121,6 +124,24 @@ void RunExample() {
   }
   std::printf("buy #1 filled: %d %s reservation settled, no account block\n",
               spot_funds::kOrderNotional, spot_funds::kScenarioAssetSettle);
+
+  // Step 6 - retune the policy's limit mode on the running engine. The fill
+  // spent the 60000 it was holding, so only the 40000 left over from the seed
+  // is available; an identical BUY still needs 60000 and would be rejected
+  // exactly like Buy #2. Track-only mode drops that gate: the reservation is
+  // recorded anyway and available funds go negative. Use it to observe what a
+  // limit would have caught before switching it on.
+  spot_funds::EnableTrackOnly(engine);
+  const ::openpit::model::Order buy3 = spot_funds::BuildOrder(account);
+  const spot_funds::PlaceResult place3 = spot_funds::PlaceOrder(engine, buy3);
+  if (!place3.Accepted()) {
+    throw ::openpit::Error("buy #3 unexpectedly rejected in track-only mode: " +
+                           spot_funds::Describe(place3.rejects));
+  }
+  std::printf(
+      "buy #3 accepted in track-only mode: needed %d %s with %d %s available\n",
+      spot_funds::kOrderNotional, spot_funds::kScenarioAssetSettle,
+      spot_funds::kAvailableAfterBuy1, spot_funds::kScenarioAssetSettle);
 }
 
 } // namespace

@@ -443,24 +443,43 @@ func EngineExecutePreTrade(
 	}
 }
 
-func EngineExecutePreTradeDropCopy(
+func EngineApplyDropCopy(
 	engine Engine,
 	order Order,
-) (PretradePreTradeReservation, error) {
-	var reservation PretradePreTradeReservation
+) (PretradeDropCopyOperation, PretradeRejectList, error) {
+	var operation PretradeDropCopyOperation
+	var rejects PretradeRejectList
 	var outError SharedString
-	if !C.openpit_engine_execute_pre_trade_drop_copy(
+	status := C.openpit_engine_apply_drop_copy(
 		engine,
 		&order,
-		&reservation,
+		&operation,
+		&rejects,
 		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
-	) {
-		return nil, consumeSharedStringAsError(
+	)
+
+	switch status {
+	case C.OpenPitPretradeStatus_Passed:
+		return operation, nil, nil
+	case C.OpenPitPretradeStatus_Rejected:
+		if rejects == nil {
+			return nil, nil, errors.New("drop copy rejected, but no reject reason provided")
+		}
+		return nil, rejects, nil
+	case C.OpenPitPretradeStatus_Error:
+		return nil, nil, consumeSharedStringAsError(
 			outError,
-			"openpit_engine_execute_pre_trade_drop_copy failed",
+			"openpit_engine_apply_drop_copy failed",
+		)
+	default:
+		DestroyPretradeDropCopyOperation(operation)
+		DestroyPretradeRejectList(rejects)
+		DestroySharedString(outError)
+		return nil, nil, fmt.Errorf(
+			"openpit_engine_apply_drop_copy failed with unexpected status %d",
+			status,
 		)
 	}
-	return reservation, nil
 }
 
 // EngineApplyExecutionReport returns one native aggregate. Its lists are
@@ -712,13 +731,49 @@ func PretradePreTradeReservationGetAccountAdjustments(
 	return C.openpit_pretrade_pre_trade_reservation_get_account_adjustments(reservation)
 }
 
-// PretradePreTradeReservationGetAccountBlock returns the winning account block
-// produced by the reservation's pipeline. The caller owns the returned list and
-// must release it with DestroyPretradeAccountBlockList.
-func PretradePreTradeReservationGetAccountBlock(
-	reservation PretradePreTradeReservation,
+//------------------------------------------------------------------------------
+// PretradeDropCopyOperation
+
+func DestroyPretradeDropCopyOperation(operation PretradeDropCopyOperation) {
+	C.openpit_destroy_pretrade_drop_copy_operation(operation)
+}
+
+func PretradeDropCopyOperationCommit(operation PretradeDropCopyOperation) {
+	C.openpit_pretrade_drop_copy_operation_commit(operation)
+}
+
+func PretradeDropCopyOperationRollback(operation PretradeDropCopyOperation) {
+	C.openpit_pretrade_drop_copy_operation_rollback(operation)
+}
+
+func PretradeDropCopyOperationGetLock(
+	operation PretradeDropCopyOperation,
+) PretradePreTradeLock {
+	return C.openpit_pretrade_drop_copy_operation_get_lock(operation)
+}
+
+// PretradeDropCopyOperationGetAccountAdjustments returns the native
+// account-adjustment outcome list produced by the operation. The caller owns it
+// and must release it with DestroyAccountAdjustmentOutcomeList.
+func PretradeDropCopyOperationGetAccountAdjustments(
+	operation PretradeDropCopyOperation,
+) AccountAdjustmentOutcomeList {
+	return C.openpit_pretrade_drop_copy_operation_get_account_adjustments(operation)
+}
+
+// PretradeDropCopyOperationGetAccountBlock returns the native account-block
+// list (0-or-1 element) requested by the operation. The caller owns it and must
+// release it with DestroyPretradeAccountBlockList.
+func PretradeDropCopyOperationGetAccountBlock(
+	operation PretradeDropCopyOperation,
 ) PretradeAccountBlockList {
-	return C.openpit_pretrade_pre_trade_reservation_get_account_block(reservation)
+	return C.openpit_pretrade_drop_copy_operation_get_account_block(operation)
+}
+
+func PretradeDropCopyOperationIsAccountBlocked(
+	operation PretradeDropCopyOperation,
+) bool {
+	return bool(C.openpit_pretrade_drop_copy_operation_is_account_blocked(operation))
 }
 
 //------------------------------------------------------------------------------

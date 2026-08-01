@@ -18,9 +18,11 @@
 package custompolicy
 
 import (
+	"runtime/cgo"
 	"testing"
 
 	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/internal/callback"
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
@@ -158,5 +160,25 @@ func TestStartPreTradeWithoutDryRunLeavesFieldNil(t *testing.T) {
 	}
 	if impl.dryRun != nil {
 		t.Fatal("dryRun field != nil, want nil when policy does not implement DryRunPolicy")
+	}
+}
+
+type panicClosePolicy struct{ fakePreTradePolicy }
+
+func (panicClosePolicy) Close() { panic("close callback failed") }
+
+func TestCloseCallbackRecoversAndDeletesHandleAfterPanic(t *testing.T) {
+	impl := &PreTrade{impl: panicClosePolicy{fakePreTradePolicy{name: "panic-close"}}}
+	impl.handle = cgo.NewHandle(impl)
+
+	pitPretradePreTradePolicyClose(callback.NewUserDataFromHandle(impl.handle))
+
+	didPanic := false
+	func() {
+		defer func() { didPanic = recover() != nil }()
+		_ = impl.handle.Value()
+	}()
+	if !didPanic {
+		t.Fatal("Close callback left its cgo handle alive after panic")
 	}
 }

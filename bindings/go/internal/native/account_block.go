@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package native
 
@@ -66,6 +66,13 @@ func EngineBlockAccount(engine Engine, account ParamAccountID, reason string) {
 // blocked is a no-op. It is infallible.
 func EngineUnblockAccount(engine Engine, account ParamAccountID) {
 	C.openpit_engine_unblock_account(engine, account)
+}
+
+// EngineUnblockAllAccounts clears the engine-wide block. Clearing it when no
+// engine-wide block is active is a no-op. Accounts and groups blocked
+// individually stay blocked. It is infallible.
+func EngineUnblockAllAccounts(engine Engine) {
+	C.openpit_engine_unblock_all_accounts(engine)
 }
 
 // EngineReplaceAccountBlockReason replaces the block reason of account.

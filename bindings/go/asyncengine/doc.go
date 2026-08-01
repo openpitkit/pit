@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 // Package asyncengine wraps the AccountSync engine into an asynchronous
 // facade that serializes every call by account identifier.
@@ -53,7 +53,8 @@
 // is preserved across the Start - Execute boundary. ExecutePreTrade and
 // AsyncRequest.Execute both return an AsyncReservation; its Commit,
 // Rollback, Close, CommitAndClose, and RollbackAndClose methods are
-// likewise queued.
+// likewise queued. ApplyDropCopy returns an AsyncDropCopyOperation with the
+// same set of queued finalizers.
 //
 // # Stopping
 //

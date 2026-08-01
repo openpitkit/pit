@@ -118,6 +118,45 @@ func TestReferenceBookReportsDomainErrorsAndValidatesUnits(t *testing.T) {
 	}
 }
 
+func TestReferenceBookCloseIsIdempotentAndReportsClosed(t *testing.T) {
+	book := NewReferenceBook()
+	instrument := referenceBookInstrument(t, "AAPL")
+	id := NewInstrumentIDFromUint64(7)
+	book.Close()
+	book.Close()
+
+	checks := map[string]func() error{
+		"Register": func() error {
+			_, err := book.Register(instrument)
+			return err
+		},
+		"RegisterWithID": func() error {
+			_, err := book.RegisterWithID(instrument, id)
+			return err
+		},
+		"SetSettlementScheme": func() error {
+			return book.SetSettlementScheme(id, UniformSettlementScheme(1))
+		},
+		"ClearSettlementScheme": func() error {
+			return book.ClearSettlementScheme(id)
+		},
+		"SettlementScheme": func() error {
+			_, _, err := book.SettlementScheme(id)
+			return err
+		},
+	}
+	for name, check := range checks {
+		t.Run(name, func(t *testing.T) {
+			if err := check(); !errors.Is(err, ErrReferenceBookClosed) {
+				t.Fatalf("error = %v, want ErrReferenceBookClosed", err)
+			}
+		})
+	}
+	if _, ok := book.Resolve(instrument); ok {
+		t.Fatal("Resolve() after Close found an instrument")
+	}
+}
+
 func TestInstrumentIDIsSharedWithMarketData(_ *testing.T) {
 	root := NewInstrumentIDFromUint64(7)
 	acceptMarketDataInstrumentID(root)

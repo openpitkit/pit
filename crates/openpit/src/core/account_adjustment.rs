@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 use crate::param::{AdjustmentAmount, Asset, Leverage, PositionMode, PositionSize, Price};
 use crate::{impl_request_has_field, impl_request_has_field_passthrough, PnlState};

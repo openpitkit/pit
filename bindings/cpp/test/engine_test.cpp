@@ -24,6 +24,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -139,6 +140,117 @@ class ThrowingMainPolicy {
       const openpit::pretrade::Context& /*context*/,
       openpit::pretrade::PolicyDecision& /*decision*/) const {
     throw std::runtime_error("main callback failed");
+  }
+};
+
+class ThrowingMutationCommitPolicy {
+ public:
+  explicit ThrowingMutationCommitPolicy(
+      std::shared_ptr<std::array<bool, 2>> state)
+      : m_state(std::move(state)) {}
+
+  [[nodiscard]] std::string_view Name() const noexcept {
+    return "ThrowingMutationCommitPolicy";
+  }
+
+  void PerformPreTradeCheck(
+      const openpit::pretrade::Context& /*context*/,
+      openpit::tx::Mutations& mutations, openpit::pretrade::Result& /*result*/,
+      openpit::pretrade::PolicyDecision& /*decision*/) const {
+    const auto first = m_state;
+    mutations.Push([first] { (*first)[0] = true; },
+                   [first] { (*first)[0] = false; });
+    const auto second = m_state;
+    mutations.Push(
+        [second] {
+          (*second)[1] = true;
+          throw std::runtime_error("mutation commit failed");
+        },
+        [second] { (*second)[1] = false; });
+  }
+
+ private:
+  std::shared_ptr<std::array<bool, 2>> m_state;
+};
+
+// Throws a non-`std::exception` from a mutation commit callback, so the
+// trampoline has no `what()` to copy into the native error string.
+class ThrowingIntMutationCommitPolicy {
+ public:
+  [[nodiscard]] std::string_view Name() const noexcept {
+    return "ThrowingIntMutationCommitPolicy";
+  }
+
+  void PerformPreTradeCheck(
+      const openpit::pretrade::Context& /*context*/,
+      openpit::tx::Mutations& mutations, openpit::pretrade::Result& /*result*/,
+      openpit::pretrade::PolicyDecision& /*decision*/) const {
+    mutations.Push([] { throw 17; }, [] {});
+  }
+};
+
+// Compensation runs in reverse order: the failing rollback is captured by the
+// outer Rollback scope first, and the earlier mutation's rollback then calls a
+// different engine, which creates a nested callback scope and must not clear
+// the already captured outer exception.
+class NestedCallDuringRollbackPolicy {
+ public:
+  explicit NestedCallDuringRollbackPolicy(const Engine* nested)
+      : m_nested(nested) {}
+
+  [[nodiscard]] std::string_view Name() const noexcept {
+    return "NestedCallDuringRollbackPolicy";
+  }
+
+  void PerformPreTradeCheck(
+      const openpit::pretrade::Context& /*context*/,
+      openpit::tx::Mutations& mutations, openpit::pretrade::Result& /*result*/,
+      openpit::pretrade::PolicyDecision& /*decision*/) const {
+    const Engine* nested = m_nested;
+    mutations.Push(
+        [] {},
+        [nested] { static_cast<void>(nested->StartPreTrade(TestOrder(2))); });
+    mutations.Push(
+        [] {},
+        [] { throw std::runtime_error("outer rollback callback failed"); });
+  }
+
+ private:
+  const Engine* m_nested;
+};
+
+class FatalRollbackFailurePolicy {
+ public:
+  [[nodiscard]] std::string_view Name() const noexcept {
+    return "FatalRollbackFailurePolicy";
+  }
+
+  void PerformPreTradeCheck(const openpit::pretrade::Context& /*context*/,
+                            openpit::tx::Mutations& mutations,
+                            openpit::pretrade::Result& /*result*/,
+                            openpit::pretrade::PolicyDecision& decision) const {
+    mutations.Push(
+        [] {}, [] { throw std::runtime_error("drop-copy rollback failed"); });
+    decision.Push(Reject(std::string(Name()),
+                         openpit::pretrade::RejectScope::Order,
+                         RejectCode::MissingRequiredField,
+                         "fatal evaluation failure", "forced failure"));
+  }
+};
+
+class AppliedRollbackFailurePolicy {
+ public:
+  [[nodiscard]] std::string_view Name() const noexcept {
+    return "AppliedRollbackFailurePolicy";
+  }
+
+  void PerformPreTradeCheck(
+      const openpit::pretrade::Context& /*context*/,
+      openpit::tx::Mutations& mutations, openpit::pretrade::Result& /*result*/,
+      openpit::pretrade::PolicyDecision& /*decision*/) const {
+    mutations.Push(
+        [] {},
+        [] { throw std::runtime_error("explicit drop-copy rollback failed"); });
   }
 };
 
@@ -328,6 +440,32 @@ TEST(EngineExecutePreTrade, HappyPathReturnsReservation) {
   EXPECT_NO_THROW(result.reservation->Commit());
 }
 
+TEST(EngineExecutePreTrade, ReservationResolutionIsIdempotent) {
+  Engine engine = SingleOrderEngine();
+  openpit::pretrade::ExecuteResult result =
+      engine.ExecutePreTrade(TestOrder(1));
+  ASSERT_TRUE(result.reservation.has_value());
+
+  EXPECT_NO_THROW(result.reservation->Commit());
+  EXPECT_NO_THROW(result.reservation->Commit());
+  EXPECT_NO_THROW(result.reservation->Rollback());
+}
+
+// ReservationResolutionIsIdempotent only reaches Rollback() after two Commit()
+// calls, so it cannot catch a regression confined to the rollback-after-
+// rollback path (the finalization flag guarding against a double finalization
+// reaching the core, which panics across the C boundary). This test drives
+// Rollback() twice in a row with no preceding Commit() to close that gap.
+TEST(EngineExecutePreTrade, ReservationRepeatedRollbackIsIdempotent) {
+  Engine engine = SingleOrderEngine();
+  openpit::pretrade::ExecuteResult result =
+      engine.ExecutePreTrade(TestOrder(1));
+  ASSERT_TRUE(result.reservation.has_value());
+
+  EXPECT_NO_THROW(result.reservation->Rollback());
+  EXPECT_NO_THROW(result.reservation->Rollback());
+}
+
 // A spot-funds insufficient-funds reject surfaced through the C++ binding must
 // not carry the account id in its reason or details. 424242 is the sentinel
 // account id; the order operands never contain it.
@@ -399,6 +537,171 @@ TEST(EngineExecutePreTrade, CallbackExceptionRethrowsOriginalType) {
   EXPECT_THROW(
       { static_cast<void>(engine.ExecutePreTrade(TestOrder(1))); },
       std::runtime_error);
+}
+
+//------------------------------------------------------------------------------
+// ApplyDropCopy + operation resolution.
+
+TEST(EngineDropCopy, HappyPathReturnsOperation) {
+  Engine engine = SingleOrderEngine();
+
+  openpit::pretrade::DropCopyResult result = engine.ApplyDropCopy(TestOrder(1));
+  EXPECT_TRUE(result.Passed());
+  EXPECT_TRUE(result.rejects.empty());
+  ASSERT_TRUE(result.operation.has_value());
+  // Resolving the operation must not throw.
+  EXPECT_NO_THROW(result.operation->Commit());
+}
+
+TEST(EngineDropCopy, OperationResolutionIsIdempotent) {
+  Engine engine = SingleOrderEngine();
+  openpit::pretrade::DropCopyResult result = engine.ApplyDropCopy(TestOrder(1));
+  ASSERT_TRUE(result.operation.has_value());
+
+  EXPECT_NO_THROW(result.operation->Commit());
+  EXPECT_NO_THROW(result.operation->Commit());
+  EXPECT_NO_THROW(result.operation->Rollback());
+}
+
+// Mirrors ReservationRepeatedRollbackIsIdempotent: drive Rollback() twice with
+// no preceding Commit() so a regression confined to the rollback-after-rollback
+// path cannot hide behind the commit-first ordering.
+TEST(EngineDropCopy, OperationRepeatedRollbackIsIdempotent) {
+  Engine engine = SingleOrderEngine();
+  openpit::pretrade::DropCopyResult result = engine.ApplyDropCopy(TestOrder(1));
+  ASSERT_TRUE(result.operation.has_value());
+
+  EXPECT_NO_THROW(result.operation->Rollback());
+  EXPECT_NO_THROW(result.operation->Rollback());
+}
+
+// The rate-limit attempt is consumed by the drop-copy call itself and stays
+// outside the finalization boundary, so abandoning the operation at scope exit
+// cannot return the consumed slot.
+TEST(EngineDropCopy, AbandonedOperationKeepsRateLimitBudgetConsumed) {
+  Engine engine = SingleOrderEngine();
+
+  {
+    openpit::pretrade::DropCopyResult applied =
+        engine.ApplyDropCopy(TestOrder(1));
+    ASSERT_TRUE(applied.Passed());
+  }
+  const openpit::pretrade::StartResult blocked =
+      engine.StartPreTrade(TestOrder(1));
+  EXPECT_FALSE(blocked.Passed());
+  ASSERT_EQ(blocked.rejects.size(), 1u);
+  EXPECT_EQ(blocked.rejects.front().code, RejectCode::RateLimitExceeded);
+}
+
+TEST(EngineDropCopy, AbiFailureThrows) {
+  const Engine engine;
+  EXPECT_THROW(
+      { auto result = engine.ApplyDropCopy(TestOrder(1)); }, openpit::Error);
+}
+
+TEST(EngineDropCopy, CallbackExceptionRethrowsOriginalType) {
+  Engine engine = CustomPolicyEngine(ThrowingMainPolicy{});
+
+  EXPECT_THROW(
+      { static_cast<void>(engine.ApplyDropCopy(TestOrder(1))); },
+      std::runtime_error);
+}
+
+// Prepared mutations are committed by the operation, not by the drop-copy call,
+// so a failing commit callback surfaces from Commit() with its original type.
+TEST(EngineDropCopy, MutationCommitExceptionRethrowsOriginalType) {
+  const auto state = std::make_shared<std::array<bool, 2>>();
+  Engine engine = CustomPolicyEngine(ThrowingMutationCommitPolicy{state});
+
+  openpit::pretrade::DropCopyResult result = engine.ApplyDropCopy(TestOrder(1));
+  ASSERT_TRUE(result.Passed());
+  EXPECT_EQ(*state, (std::array<bool, 2>{false, false}));
+
+  try {
+    result.operation->Commit();
+    FAIL() << "expected the mutation commit exception";
+  } catch (const std::runtime_error& cause) {
+    EXPECT_STREQ(cause.what(), "mutation commit failed");
+  }
+}
+
+// A non-standard exception has no `what()` to copy, so the trampoline falls
+// back to its own text. The failure must still reach the caller rather than
+// being swallowed by a silent commit.
+TEST(EngineDropCopy, NonStandardMutationCommitExceptionStillFails) {
+  Engine engine = CustomPolicyEngine(ThrowingIntMutationCommitPolicy{});
+
+  openpit::pretrade::DropCopyResult result = engine.ApplyDropCopy(TestOrder(1));
+  ASSERT_TRUE(result.Passed());
+
+  try {
+    result.operation->Commit();
+    FAIL() << "expected the mutation commit exception";
+  } catch (int value) {
+    EXPECT_EQ(value, 17);
+  } catch (...) {
+    FAIL() << "callback exception type was not preserved";
+  }
+}
+
+TEST(EngineDropCopy, NestedOperationPreservesOuterCallbackException) {
+  Engine nested = SingleOrderEngine();
+  Engine engine = CustomPolicyEngine(NestedCallDuringRollbackPolicy{&nested});
+
+  openpit::pretrade::DropCopyResult result = engine.ApplyDropCopy(TestOrder(1));
+  ASSERT_TRUE(result.Passed());
+
+  try {
+    result.operation->Rollback();
+    FAIL() << "expected the outer rollback exception";
+  } catch (const std::runtime_error& cause) {
+    EXPECT_STREQ(cause.what(), "outer rollback callback failed");
+  }
+}
+
+// A fatal evaluation reject aborts the operation and compensates the prepared
+// mutations before ApplyDropCopy returns. A failing compensation callback is
+// reported to the caller and safety-blocks the account.
+TEST(EngineDropCopy, FatalRejectRollbackFailureSafetyBlocksAccount) {
+  Engine engine = CustomPolicyEngine(FatalRollbackFailurePolicy{});
+
+  try {
+    static_cast<void>(engine.ApplyDropCopy(TestOrder(1)));
+    FAIL() << "expected the rollback callback exception";
+  } catch (const std::runtime_error& cause) {
+    EXPECT_STREQ(cause.what(), "drop-copy rollback failed");
+  }
+
+  const openpit::pretrade::StartResult blocked =
+      engine.StartPreTrade(TestOrder(1));
+  ASSERT_FALSE(blocked.Passed());
+  ASSERT_EQ(blocked.rejects.size(), 1u);
+  EXPECT_EQ(blocked.rejects.front().code, RejectCode::SystemUnavailable);
+}
+
+TEST(EngineDropCopy, ExplicitRollbackFailureRethrowsOriginalType) {
+  Engine engine = CustomPolicyEngine(AppliedRollbackFailurePolicy{});
+  openpit::pretrade::DropCopyResult result = engine.ApplyDropCopy(TestOrder(1));
+  ASSERT_TRUE(result.Passed());
+
+  try {
+    result.operation->Rollback();
+    FAIL() << "expected the explicit rollback callback exception";
+  } catch (const std::runtime_error& cause) {
+    EXPECT_STREQ(cause.what(), "explicit drop-copy rollback failed");
+  }
+
+  EXPECT_NO_THROW(result.operation->Rollback());
+}
+
+TEST(EngineDropCopy, DestructorSuppressesRollbackFailure) {
+  Engine engine = CustomPolicyEngine(AppliedRollbackFailurePolicy{});
+
+  EXPECT_NO_THROW({
+    const openpit::pretrade::DropCopyResult result =
+        engine.ApplyDropCopy(TestOrder(1));
+    EXPECT_TRUE(result.Passed());
+  });
 }
 
 //------------------------------------------------------------------------------

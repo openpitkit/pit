@@ -105,11 +105,40 @@ that must be finalized or rolled back by the engine.
 
 A `Mutation` is a pair of callables:
 
-- `commit`: called when the reservation is committed.
-- `rollback`: called when the main stage rejects or the reservation rolls back.
+- `commit`: called when the reservation or drop-copy operation is committed.
+- `rollback`: called when the main stage rejects, when the reservation or
+  drop-copy operation rolls back, and as compensation when the engine unwinds
+  a fatal drop-copy evaluation failure - even for a mutation whose own commit
+  was never reached.
+
+Apply tentative state before registering a mutation. A drop-copy operation
+carries the registered mutations to its owner and finalizes them exactly like
+a reservation: `commit()` runs every commit callback in registration order,
+while explicit or implicit `rollback()` runs every rollback callback in
+reverse registration order.
 
 Register mutations when policy state changes before the final order-submission
 outcome is known.
+
+### Finalizers must not fail
+
+Neither callable has the right to fail. By the time a finalizer runs the
+decision is already made and the state it finalizes was applied eagerly, so
+there is nothing left to compensate. A callable that raises anyway never stops
+the batch - every remaining callback still runs - and the failure is reported
+on two independent channels:
+
+- the exception is re-raised to the caller of `commit()` / `rollback()` with
+  its original type and message;
+- the engine arms its kill switch, because its own bookkeeping is now in an
+  unknown state. Every `Mutation` registered from Python belongs to a custom
+  policy whose state reach the engine cannot bound, so **every** account is
+  blocked, not only the order's own.
+
+The block is not reported to the finalizing caller. It surfaces when the next
+pre-trade call is rejected with `SystemUnavailable`, and an operator clears it
+with `engine.accounts().unblock_all()`. That call leaves accounts and groups
+blocked individually in place.
 
 ## Built-in policies
 

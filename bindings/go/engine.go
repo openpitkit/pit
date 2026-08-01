@@ -71,8 +71,8 @@ func newEngineFromHandle(handle native.Engine) *Engine {
 // Idempotency: safe to call more than once; subsequent calls are no-ops.
 //
 // Outstanding objects previously produced by this engine
-// (pretrade.Request, pretrade.Reservation) remain owned by the caller and
-// must be released independently.
+// (pretrade.Request, pretrade.Reservation, pretrade.DropCopyOperation) remain
+// owned by the caller and must be released independently.
 func (e *Engine) Stop() {
 	native.DestroyEngine(e.handle)
 	e.handle = nil
@@ -136,20 +136,53 @@ func (e *Engine) ExecutePreTrade(
 	return pretrade.NewReservationFromHandle(reservation), nil, nil
 }
 
-// ExecutePreTradeDropCopy runs the full pre-trade pipeline without enforcing
-// policy rejects. Existing account and account-group blocks are ignored. Every
-// policy keeps its normal mutations, locks, account adjustments, and account
-// blocks. The returned reservation has the ordinary commit and rollback
-// lifecycle. A market order returns an error before any policy is invoked.
-func (e *Engine) ExecutePreTradeDropCopy(
+// ApplyDropCopy applies the full pre-trade pipeline without enforcing ordinary
+// policy rejects and, on accept, returns an operation representing the prepared
+// but not yet finalized state. Existing account and account-group blocks are
+// ignored.
+//
+// Drop copy requires a readable account ID: an order whose account ID cannot be
+// read is rejected with reject.CodeMissingRequiredField before any policy runs,
+// so no policy observes it and no state is touched.
+//
+// A fully synchronized engine accepts concurrent calls for the same account,
+// but their individual storage accesses may interleave. Callers that require
+// whole-pipeline isolation must serialize those calls externally.
+//
+// Return contract:
+//   - on accept, returns a non-nil *pretrade.DropCopyOperation; the caller
+//     takes ownership and must resolve it exactly once via CommitAndClose,
+//     RollbackAndClose, or Close (which rolls back any pending mutations
+//     implicitly);
+//   - on reject, returns a non-nil []reject.Reject carrying the evaluation
+//     failures that prevented historical bookkeeping; no DropCopyOperation is
+//     produced;
+//   - on transport error, returns a Go error; no DropCopyOperation is produced.
+//
+// A custom-policy panic is recovered and rejected as a SystemUnavailable
+// evaluation failure whose details preserve the panic value.
+func (e *Engine) ApplyDropCopy(
 	order model.Order,
-) (*pretrade.Reservation, error) {
-	reservation, err := native.EngineExecutePreTradeDropCopy(e.handle, order.Handle())
+) (*pretrade.DropCopyOperation, []reject.Reject, error) {
+	operation, dropCopyRejects, err := native.EngineApplyDropCopy(
+		e.handle,
+		order.Handle(),
+	)
 	runtime.KeepAlive(order)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return pretrade.NewReservationFromHandle(reservation), nil
+	if dropCopyRejects != nil {
+		rejectResult, err := reject.NewListFromHandle(dropCopyRejects)
+		native.DestroyPretradeRejectList(dropCopyRejects)
+		if err != nil {
+			return nil,
+				nil,
+				fmt.Errorf("failed to create reject list for rejected drop copy: %w", err)
+		}
+		return nil, rejectResult, nil
+	}
+	return pretrade.NewDropCopyOperationFromHandle(operation), nil, nil
 }
 
 // StartPreTradeDryRun runs the start stage as a non-mutating dry-run.

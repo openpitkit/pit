@@ -185,7 +185,10 @@ func applySpotFundsLifecycleFillWithFee(
 	if reservation == nil {
 		t.Fatal("ExecutePreTrade() reservation = nil, want non-nil")
 	}
-	lock := reservation.Lock()
+	lock, err := reservation.Lock()
+	if err != nil {
+		t.Fatalf("Reservation.Lock() error = %v", err)
+	}
 	reservation.CommitAndClose()
 
 	report := model.NewExecutionReport()

@@ -216,6 +216,18 @@ def test_engine_unblock_lifts_block() -> None:
 
 
 @pytest.mark.unit
+def test_engine_unblock_all_without_an_engine_wide_block_is_noop() -> None:
+    engine = openpit.Engine.builder().no_sync().pre_trade(policy=AcceptPolicy()).build()
+    a = openpit.param.AccountId.from_int(99224416)
+
+    engine.accounts().unblock_all()
+    result = engine.start_pre_trade(order=conftest.make_order(account_id=a))
+
+    assert result.ok
+    result.request.execute().reservation.rollback()
+
+
+@pytest.mark.unit
 def test_engine_replace_block_reason_updates_stored_reason() -> None:
     engine = openpit.Engine.builder().no_sync().pre_trade(policy=AcceptPolicy()).build()
     a = openpit.param.AccountId.from_int(99224416)

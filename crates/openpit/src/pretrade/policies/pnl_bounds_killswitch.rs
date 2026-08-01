@@ -432,19 +432,34 @@ where
 
     fn check_pre_trade_start(
         &self,
-        _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+        ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
         order: &Order,
     ) -> Result<(), Rejects> {
-        let instrument = order
-            .instrument()
-            .map_err(|e| Rejects::from(missing_required_field_reject(self, "instrument", &e)))?;
-        let account_id = order
-            .account_id()
-            .map_err(|e| Rejects::from(missing_required_field_reject(self, "account ID", &e)))?;
-
+        // Order accessors may call foreign code, so never invoke them while a
+        // settings snapshot guard is held. A drop-copy fast-path that finds no
+        // possible barrier is linearized at that snapshot. Otherwise the later
+        // snapshot performs both applicability and breach evaluation.
+        let (instrument, account_id) = if let Some(account_id) = ctx.drop_copy_account_id() {
+            if self.settings.with(|s| {
+                s.broker_barriers.is_empty() && !s.account_barriers.contains_key(&account_id)
+            }) {
+                return Ok(());
+            }
+            let instrument = order.instrument().map_err(|e| {
+                Rejects::from(missing_required_field_reject(self, "instrument", &e))
+            })?;
+            (instrument, account_id)
+        } else {
+            let instrument = order.instrument().map_err(|e| {
+                Rejects::from(missing_required_field_reject(self, "instrument", &e))
+            })?;
+            let account_id = order.account_id().map_err(|e| {
+                Rejects::from(missing_required_field_reject(self, "account ID", &e))
+            })?;
+            (instrument, account_id)
+        };
         let settlement = instrument.settlement_asset();
 
-        // Read barriers from the cell; no allocation on the hot path.
         let (broker_breach, account_breach) = self.settings.with(|s| {
             let broker_barrier = s.broker_barriers.get(settlement);
             let account_barrier = s
@@ -676,6 +691,9 @@ fn validate_bounds(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
     use crate::core::{HasAccountId, HasFee, HasInstrument, HasPnl, Instrument, OrderOperation};
     use crate::param::TradeAmount;
     use crate::param::{AccountId, Asset, Fee, Pnl, Price, Quantity, Side};
@@ -1310,6 +1328,120 @@ mod tests {
             "failed to access required field 'instrument'"
         );
         assert_eq!(reject.details, "failed to access field 'instrument'");
+    }
+
+    #[test]
+    fn drop_copy_skips_fields_when_no_account_barrier_can_apply() {
+        struct InstrumentAccessErrorOrder;
+
+        impl HasInstrument for InstrumentAccessErrorOrder {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Err(RequestFieldAccessError::new("instrument"))
+            }
+        }
+
+        impl HasAccountId for InstrumentAccessErrorOrder {
+            fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+                Ok(account(2))
+            }
+        }
+
+        let builder =
+            crate::Engine::builder::<InstrumentAccessErrorOrder, TestReport, ()>().no_sync();
+        let settings = PnlBoundsKillSwitchSettings::new(
+            [],
+            [PnlBoundsAccountAssetBarrier {
+                barrier: barrier("USD", Some(pnl("-100")), None),
+                account_id: account(1),
+                initial_pnl: Pnl::ZERO,
+            }],
+        )
+        .expect("settings must be valid");
+        let policy = PnlBoundsKillSwitchPolicy::new(settings, builder.storage_builder());
+        let engine = builder
+            .pre_trade(policy)
+            .build()
+            .expect("engine must build");
+
+        engine
+            .apply_drop_copy(InstrumentAccessErrorOrder)
+            .expect("uncovered account must not require an instrument");
+    }
+
+    #[test]
+    fn drop_copy_reuses_account_key_for_uncovered_broker_settlement() {
+        struct SingleReadAccountOrder {
+            instrument: Instrument,
+            account_calls: Rc<Cell<u32>>,
+        }
+
+        impl HasInstrument for SingleReadAccountOrder {
+            fn instrument(&self) -> Result<&Instrument, RequestFieldAccessError> {
+                Ok(&self.instrument)
+            }
+        }
+
+        impl HasAccountId for SingleReadAccountOrder {
+            fn account_id(&self) -> Result<AccountId, RequestFieldAccessError> {
+                let calls = self.account_calls.get();
+                self.account_calls.set(calls + 1);
+                if calls == 0 {
+                    Ok(account(1))
+                } else {
+                    Err(RequestFieldAccessError::new("account_id"))
+                }
+            }
+        }
+
+        let builder = crate::Engine::builder::<SingleReadAccountOrder, TestReport, ()>().no_sync();
+        let settings =
+            PnlBoundsKillSwitchSettings::new([barrier("USD", Some(pnl("-100")), None)], [])
+                .expect("settings must be valid");
+        let policy = PnlBoundsKillSwitchPolicy::new(settings, builder.storage_builder());
+        let engine = builder
+            .pre_trade(policy)
+            .build()
+            .expect("engine must build");
+        let account_calls = Rc::new(Cell::new(0));
+
+        engine
+            .apply_drop_copy(SingleReadAccountOrder {
+                instrument: Instrument::new(
+                    Asset::new("AAPL").expect("must be valid"),
+                    Asset::new("EUR").expect("must be valid"),
+                ),
+                account_calls: Rc::clone(&account_calls),
+            })
+            .expect("an uncovered settlement must not reread the account");
+
+        assert_eq!(account_calls.get(), 1);
+    }
+
+    #[test]
+    fn drop_copy_breach_applies_and_returns_account_block() {
+        let builder = crate::Engine::builder::<OrderOperation, TestReport, ()>().no_sync();
+        let settings = PnlBoundsKillSwitchSettings::new(
+            [],
+            [PnlBoundsAccountAssetBarrier {
+                barrier: barrier("USD", Some(pnl("-100")), None),
+                account_id: account(1),
+                initial_pnl: pnl("-150"),
+            }],
+        )
+        .expect("settings must be valid");
+        let policy = PnlBoundsKillSwitchPolicy::new(settings, builder.storage_builder());
+        let engine = builder
+            .pre_trade(policy)
+            .build()
+            .expect("engine must build");
+
+        let result = engine
+            .apply_drop_copy(order("USD", account(1)))
+            .expect("a P&L admission reject must not abort drop-copy");
+
+        assert!(result.account_block().is_some());
+        assert!(result.is_account_blocked());
+        assert!(engine.start_pre_trade(order("USD", account(1))).is_err());
     }
 
     // ── settings-cell tests ─────────────────────────────────────────────────

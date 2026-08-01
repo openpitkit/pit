@@ -15,24 +15,20 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 //
-// Mirrors the public JS market-data examples from the project wiki. Each test
-// embeds the body of one wiki ```ts snippet verbatim (the first line of every
-// test is a `// Source:` comment naming the page and section), wrapped with the
-// imports, harness, and assertions that prove the documented outcome. Per the
-// doc-mirror rule in doc/code_style.md, the snippet body here and the wiki
-// snippet are one example and must stay in lockstep.
+// Published market-data snippets and these executable mirrors are one entity
+// and must stay in lockstep. Each test starts with a `// Source:` comment naming
+// the public wiki page and section; imports, harness, and assertions remain
+// test-only.
 //
-// Wiki pages mirrored here:
-// - ../../../../pit.wiki/Market-Data.md
-// - ../../../../pit.wiki/Market-Data-TTL.md
-// - ../../../../pit.wiki/Market-Data-Pricing.md
+// Public wiki pages covered here:
+// - https://wiki.openpit.dev/Market-Data/
+// - https://wiki.openpit.dev/Market-Data-TTL/
+// - https://wiki.openpit.dev/Market-Data-Pricing/
 //
-// See engine.test.ts for the import-resolution scheme. Run `npm run build`
-// first. The import block of each snippet is hoisted to this file header (TS
-// forbids in-body imports); everything after the imports is the verbatim body.
-// The Market-Data-TTL snippet times real elapsed wall-clock time: the wasm
-// clock reads performance.now via web-time in Node, so the snippet's own short
-// asynchronous delay advances it past the 50 ms lifetime.
+// Run `npm run build` first: these tests import the built package.
+// Imports are hoisted because TypeScript forbids in-body imports; everything
+// after the imports is the verbatim snippet body. The Market Data TTL example
+// uses a short asynchronous delay to advance past the 50 ms lifetime.
 
 import { describe, expect, it } from "vitest";
 
@@ -57,7 +53,8 @@ import {
 
 describe("Market-Data.md wiki examples", () => {
   it("registers, pushes, and reads a quote", () => {
-    // Source: Market-Data.md - Pushing and Reading Quotes
+    // Source: https://wiki.openpit.dev/Market-Data/
+    // - Pushing and Reading Quotes
     // The engine spawns no threads; each call runs on the caller's thread.
     // See Threading-Contract for the full model.
     const service = Engine.builder().marketData(QuoteTtl.infinite()).build();
@@ -105,7 +102,8 @@ describe("Market-Data.md wiki examples", () => {
   });
 
   it("fans a quote out to specific accounts and a group", () => {
-    // Source: Market-Data.md - Targeted Fan-Out: push for
+    // Source: https://wiki.openpit.dev/Market-Data/
+    // - Targeted Fan-Out: push for
     const service = Engine.builder().marketData(QuoteTtl.infinite()).build();
     const aaplId = service.register(new Instrument("AAPL", "USD")).value;
 
@@ -128,7 +126,7 @@ describe("Market-Data.md wiki examples", () => {
   });
 
   it("patches only the mark, preserving bid and ask", () => {
-    // Source: Market-Data.md - Replace Versus Patch
+    // Source: https://wiki.openpit.dev/Market-Data/ - Replace Versus Patch
     const service = Engine.builder().marketData(QuoteTtl.infinite()).build();
     const aaplId = service.register(new Instrument("AAPL", "USD")).value;
 
@@ -160,7 +158,7 @@ describe("Market-Data.md wiki examples", () => {
   });
 
   it("clears a quote and recovers it with a fresh push", () => {
-    // Source: Market-Data.md - Clearing a Quote
+    // Source: https://wiki.openpit.dev/Market-Data/ - Clearing a Quote
     const service = Engine.builder().marketData(QuoteTtl.infinite()).build();
     const aaplId = service.register(new Instrument("AAPL", "USD")).value;
 
@@ -188,7 +186,7 @@ describe("Market-Data.md wiki examples", () => {
 
 describe("Market-Data-TTL.md wiki examples", () => {
   it("surfaces an expired quote with its stale snapshot", async () => {
-    // Source: Market-Data-TTL.md - Quote Freshness
+    // Source: https://wiki.openpit.dev/Market-Data-TTL/ - Quote Freshness
     // A 50 ms service-wide lifetime: getOrErr distinguishes expired quotes.
     const service = Engine.builder().marketData(QuoteTtl.within(50)).build();
     const aaplId = service.register({
@@ -243,7 +241,8 @@ describe("Market-Data-TTL.md wiki examples", () => {
 
 describe("Market-Data-Pricing.md wiki examples", () => {
   it("prices market orders from the book top with an instrument override", () => {
-    // Source: Market-Data-Pricing.md - Pricing Market Orders
+    // Source: https://wiki.openpit.dev/Market-Data-Pricing/
+    // - Pricing Market Orders
     const builder = Engine.builder();
 
     // A shared market-data service feeds the policy's market-order pricing.

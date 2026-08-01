@@ -52,9 +52,9 @@ use openpit::pretrade::policies::{
 };
 use openpit::pretrade::PostTradeContext;
 use openpit::pretrade::{
-    PolicyAccountAdjustmentResult, PolicyPreTradeResult, PreTradeContext, PreTradeDryRunReport,
-    PreTradeLock, PreTradePolicy, PreTradeRequest, PreTradeReservation, Reject, RejectCode,
-    RejectScope, Rejects,
+    DropCopyOperation, DropCopyStartMutationRecorder, PolicyAccountAdjustmentResult,
+    PolicyPreTradeResult, PreTradeContext, PreTradeDryRunReport, PreTradeLock, PreTradePolicy,
+    PreTradeRequest, PreTradeReservation, Reject, RejectCode, RejectScope, Rejects,
 };
 use openpit::storage::StorageBuilder;
 use openpit::AccountAdjustmentContext;
@@ -104,23 +104,58 @@ create_exception!(openpit, AccountBlockError, PyException);
 create_exception!(openpit, PolicyConfigureError, PyException);
 
 thread_local! {
-    static PY_CALLBACK_ERROR: RefCell<Option<PyErr>> = const { RefCell::new(None) };
+    /// Operation-scoped stack of the exceptions raised by Python callbacks.
+    ///
+    /// The core traits report a policy failure as a sentinel reject and cannot
+    /// carry a `PyErr`, so the exception is parked here until the operation
+    /// that invoked the callback can re-raise it. One frame per binding
+    /// operation keeps that ownership exact: a nested engine or market-data
+    /// call made from inside a callback owns its own frame, so it can neither
+    /// consume nor overwrite the exception of the operation that encloses it.
+    static PY_CALLBACK_ERRORS: RefCell<Vec<Option<PyErr>>> = const { RefCell::new(Vec::new()) };
 }
 
+/// Records the first callback exception of the innermost running operation.
+///
+/// Without an active operation the exception is dropped on purpose: no caller
+/// is left to receive it, and carrying it into a later unrelated call would
+/// report the failure against the wrong operation.
 fn set_python_callback_error(error: PyErr) {
-    PY_CALLBACK_ERROR.with(|slot| {
-        slot.borrow_mut().replace(error);
+    PY_CALLBACK_ERRORS.with(|frames| {
+        if let Some(frame) = frames.borrow_mut().last_mut() {
+            if frame.is_none() {
+                *frame = Some(error);
+            }
+        }
     });
 }
 
-fn take_python_callback_error() -> Option<PyErr> {
-    PY_CALLBACK_ERROR.with(|slot| slot.borrow_mut().take())
+/// RAII boundary around one binding operation that may invoke Python callbacks.
+struct PythonCallbackScope {
+    active: bool,
 }
 
-fn clear_python_callback_error() {
-    PY_CALLBACK_ERROR.with(|slot| {
-        slot.borrow_mut().take();
-    });
+impl PythonCallbackScope {
+    fn enter() -> Self {
+        PY_CALLBACK_ERRORS.with(|frames| frames.borrow_mut().push(None));
+        Self { active: true }
+    }
+
+    /// Ends the operation and returns the exception it owns, if any.
+    fn finish(mut self) -> Option<PyErr> {
+        self.active = false;
+        PY_CALLBACK_ERRORS.with(|frames| frames.borrow_mut().pop().flatten())
+    }
+}
+
+impl Drop for PythonCallbackScope {
+    fn drop(&mut self) {
+        if self.active {
+            PY_CALLBACK_ERRORS.with(|frames| {
+                frames.borrow_mut().pop();
+            });
+        }
+    }
 }
 
 struct DetachedFromGil<T>(T);
@@ -712,10 +747,13 @@ impl PyQuote {
 /// `MarketDataService::get` / `get_optional` — callers must NOT use
 /// `py.detach` around those calls.
 ///
-/// Errors (attribute missing, wrong type, etc.) are stored in the thread-local
-/// `PY_CALLBACK_ERROR` slot and `group()` returns `None` so the core can
-/// complete; the caller drains the slot immediately after `get`/`get_optional`
-/// returns and surfaces the stored error as a `PyResult`.
+/// The core trait answers with `Option<AccountGroupId>` and has no failure
+/// channel, so the resolution is really tri-state here: a group, no group, or a
+/// failed read. A failure (attribute missing, wrong type, throwing property) is
+/// parked in the caller's [`PythonCallbackScope`] frame and `group()` returns
+/// `None` only so the core call can unwind; `get`/`get_optional` then drain
+/// that frame and raise before interpreting the lookup, so a failed read never
+/// reaches the caller as a legitimate "this account has no group" answer.
 struct PyAccountInfo<'py> {
     obj: &'py Bound<'py, PyAny>,
 }
@@ -1066,12 +1104,15 @@ impl PyMarketDataService {
     ) -> PyResult<Option<PyQuote>> {
         let account_id = parse_account_id_input(account_id)?;
         // GIL is held throughout so the adapter can read Python attributes lazily.
-        clear_python_callback_error();
+        let scope = PythonCallbackScope::enter();
         let adapter = PyAccountInfo { obj: account_info };
         let result = self
             .inner
             .get(instrument_id.inner, account_id, &adapter, resolution.into());
-        if let Some(err) = take_python_callback_error() {
+        // A failed group answer is not a "no group" answer, so the bucket it
+        // selected is not trustworthy either: fail the read instead of
+        // reporting its quote.
+        if let Some(err) = scope.finish() {
             return Err(err);
         }
         match result {
@@ -1094,12 +1135,15 @@ impl PyMarketDataService {
     ) -> PyResult<PyQuote> {
         let account_id = parse_account_id_input(account_id)?;
         // GIL is held throughout so the adapter can read Python attributes lazily.
-        clear_python_callback_error();
+        let scope = PythonCallbackScope::enter();
         let adapter = PyAccountInfo { obj: account_info };
         let result = self
             .inner
             .get(instrument_id.inner, account_id, &adapter, resolution.into());
-        if let Some(err) = take_python_callback_error() {
+        // A failed group answer is not a "no group" answer, so the bucket it
+        // selected is not trustworthy either: fail the read instead of
+        // reporting its quote.
+        if let Some(err) = scope.finish() {
             return Err(err);
         }
         result
@@ -1183,11 +1227,11 @@ impl PyEngine {
         py: Python<'_>,
         order: Bound<'_, PyAny>,
     ) -> PyResult<PyStartPreTradeResult> {
-        clear_python_callback_error();
         let order = extract_python_order(&order)?;
+        let scope = PythonCallbackScope::enter();
         match allow_threads_detached(py, || self.inner.start_pre_trade(order)) {
             Ok(request) => {
-                if let Some(error) = take_python_callback_error() {
+                if let Some(error) = scope.finish() {
                     return Err(error);
                 }
 
@@ -1202,7 +1246,7 @@ impl PyEngine {
                 })
             }
             Err(rejects) => {
-                if let Some(error) = take_python_callback_error() {
+                if let Some(error) = scope.finish() {
                     return Err(error);
                 }
 
@@ -1220,11 +1264,11 @@ impl PyEngine {
         py: Python<'_>,
         order: Bound<'_, PyAny>,
     ) -> PyResult<PyExecuteResult> {
-        clear_python_callback_error();
         let order = extract_python_order(&order)?;
+        let scope = PythonCallbackScope::enter();
         match allow_threads_detached(py, || self.inner.execute_pre_trade(order)) {
             Ok(reservation) => {
-                if let Some(error) = take_python_callback_error() {
+                if let Some(error) = scope.finish() {
                     return Err(error);
                 }
                 Ok(PyExecuteResult {
@@ -1238,7 +1282,7 @@ impl PyEngine {
                 })
             }
             Err(rejects) => {
-                if let Some(error) = take_python_callback_error() {
+                if let Some(error) = scope.finish() {
                     return Err(error);
                 }
                 Ok(PyExecuteResult {
@@ -1249,27 +1293,57 @@ impl PyEngine {
         }
     }
 
-    /// Execute a limit-price drop-copy without enforcing rejects while retaining blocks.
+    /// Apply a drop-copy operation without enforcing ordinary rejects.
+    ///
+    /// ``order`` must carry a readable account id. An order whose account id
+    /// cannot be read is reported as a ``MISSING_REQUIRED_FIELD`` reject
+    /// before any policy runs.
+    ///
+    /// On success the result carries a single-use ``DropCopyOperation`` to
+    /// commit or roll back; fatal evaluation failures are returned in
+    /// ``rejects``. Exceptions raised by custom policy or mutation callbacks
+    /// are re-raised with their original Python type and message.
+    ///
+    /// Account-control operations published by the pipeline and consumed
+    /// rate-limit attempts are applied before this method returns and stay
+    /// outside the operation's finalization boundary.
+    ///
+    /// A fully synchronized engine accepts concurrent calls for the same
+    /// account, but individual storage accesses may interleave. Callers that
+    /// require whole-pipeline isolation must serialize those calls externally.
     #[pyo3(signature = (order))]
-    fn execute_pre_trade_drop_copy(
+    fn apply_drop_copy(
         &self,
         py: Python<'_>,
         order: Bound<'_, PyAny>,
-    ) -> PyResult<Py<PyReservation>> {
-        clear_python_callback_error();
+    ) -> PyResult<PyDropCopyResult> {
         let order = extract_python_order(&order)?;
-        let reservation =
-            allow_threads_detached(py, || self.inner.execute_pre_trade_drop_copy(order))
-                .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        if let Some(error) = take_python_callback_error() {
-            return Err(error);
+        let scope = PythonCallbackScope::enter();
+        match allow_threads_detached(py, || self.inner.apply_drop_copy(order)) {
+            Ok(operation) => {
+                if let Some(error) = scope.finish() {
+                    return Err(error);
+                }
+                Ok(PyDropCopyResult {
+                    operation: Some(Py::new(
+                        py,
+                        PyDropCopyOperation {
+                            inner: RefCell::new(Some(operation)),
+                        },
+                    )?),
+                    rejects: Vec::new(),
+                })
+            }
+            Err(rejects) => {
+                if let Some(error) = scope.finish() {
+                    return Err(error);
+                }
+                Ok(PyDropCopyResult {
+                    operation: None,
+                    rejects: rejects.iter().map(convert_reject).collect(),
+                })
+            }
         }
-        Py::new(
-            py,
-            PyReservation {
-                inner: RefCell::new(Some(reservation)),
-            },
-        )
     }
 
     #[pyo3(signature = (order))]
@@ -1278,10 +1352,10 @@ impl PyEngine {
         py: Python<'_>,
         order: Bound<'_, PyAny>,
     ) -> PyResult<PyPreTradeDryRunReport> {
-        clear_python_callback_error();
         let order = extract_python_order(&order)?;
+        let scope = PythonCallbackScope::enter();
         let report = allow_threads_detached(py, || self.inner.start_pre_trade_dry_run(order));
-        if let Some(error) = take_python_callback_error() {
+        if let Some(error) = scope.finish() {
             return Err(error);
         }
         Ok(PyPreTradeDryRunReport { inner: report })
@@ -1293,10 +1367,10 @@ impl PyEngine {
         py: Python<'_>,
         order: Bound<'_, PyAny>,
     ) -> PyResult<PyPreTradeDryRunReport> {
-        clear_python_callback_error();
         let order = extract_python_order(&order)?;
+        let scope = PythonCallbackScope::enter();
         let report = allow_threads_detached(py, || self.inner.execute_pre_trade_dry_run(order));
-        if let Some(error) = take_python_callback_error() {
+        if let Some(error) = scope.finish() {
             return Err(error);
         }
         Ok(PyPreTradeDryRunReport { inner: report })
@@ -1308,12 +1382,12 @@ impl PyEngine {
         py: Python<'_>,
         report: &Bound<'_, PyAny>,
     ) -> PyResult<PyPostTradeResult> {
-        clear_python_callback_error();
         let report = extract_python_execution_report(report)?;
+        let scope = PythonCallbackScope::enter();
         let result = PyPostTradeResult {
             inner: py.detach(|| self.inner.apply_execution_report(&report)),
         };
-        if let Some(error) = take_python_callback_error() {
+        if let Some(error) = scope.finish() {
             return Err(error);
         }
         Ok(result)
@@ -1332,17 +1406,16 @@ impl PyEngine {
         account_id: &Bound<'_, PyAny>,
         adjustments: &Bound<'_, PyAny>,
     ) -> PyResult<PyAccountAdjustmentBatchResult> {
-        clear_python_callback_error();
-
         let account_id = parse_account_id_input(account_id)?;
         let batch = adjustments
             .try_iter()?
             .map(|item| extract_python_account_adjustment(&item?))
             .collect::<PyResult<Vec<_>>>()?;
 
+        let scope = PythonCallbackScope::enter();
         match py.detach(|| self.inner.apply_account_adjustment(account_id, &batch)) {
             Ok(result) => {
-                if let Some(error) = take_python_callback_error() {
+                if let Some(error) = scope.finish() {
                     return Err(error);
                 }
                 Ok(PyAccountAdjustmentBatchResult {
@@ -1361,7 +1434,7 @@ impl PyEngine {
                 })
             }
             Err(error) => {
-                if let Some(py_error) = take_python_callback_error() {
+                if let Some(py_error) = scope.finish() {
                     return Err(py_error);
                 }
                 let mut rejects = Vec::with_capacity(error.rejects.len());
@@ -1912,6 +1985,10 @@ impl PyAccounts {
         Ok(())
     }
 
+    fn unblock_all(&self, py: Python<'_>) {
+        py.detach(|| self.inner.unblock_all());
+    }
+
     #[pyo3(signature = (account, reason))]
     fn replace_block_reason(
         &self,
@@ -2047,6 +2124,44 @@ impl PyStartPreTradeResult {
 struct PyExecuteResult {
     reservation: Option<Py<PyReservation>>,
     rejects: Vec<PyReject>,
+}
+
+#[pyclass(name = "DropCopyResult", module = "openpit.pretrade")]
+struct PyDropCopyResult {
+    operation: Option<Py<PyDropCopyOperation>>,
+    rejects: Vec<PyReject>,
+}
+
+#[pymethods]
+impl PyDropCopyResult {
+    #[getter]
+    fn ok(&self) -> bool {
+        self.rejects.is_empty()
+    }
+
+    #[getter]
+    fn operation(&self, py: Python<'_>) -> Option<Py<PyDropCopyOperation>> {
+        self.operation
+            .as_ref()
+            .map(|operation| operation.clone_ref(py))
+    }
+
+    #[getter]
+    fn rejects(&self) -> Vec<PyReject> {
+        self.rejects.clone()
+    }
+
+    fn __bool__(&self) -> bool {
+        self.ok()
+    }
+
+    fn __repr__(&self) -> String {
+        if self.ok() {
+            "DropCopyResult(ok=True)".to_owned()
+        } else {
+            format!("DropCopyResult(ok=False, rejects={})", self.rejects.len())
+        }
+    }
 }
 
 #[pymethods]
@@ -2528,7 +2643,7 @@ impl PyAccountAdjustmentOutcome {
 /// callback context.
 ///
 /// It is valid to use only within the pre-trade processing of the request it
-/// belongs to — from the callback that produced it through the commit or
+/// belongs to - from the callback that produced it through the commit or
 /// rollback of that request's reservation (so it may be retained and used from
 /// a deferred mutation commit/rollback callback). Recording a block through it
 /// after that pre-trade transaction has completed is unspecified and must not
@@ -2553,10 +2668,12 @@ impl PyAccountControl {
     }
 }
 
-#[pyclass(name = "Context", module = "openpit.pretrade", frozen)]
+#[pyclass(name = "Context", module = "openpit.pretrade", frozen, unsendable)]
 struct PyPreTradeContext {
     account_control: Option<openpit::AccountControl<PyStorageFactory>>,
+    drop_copy_start_mutations: Option<DropCopyStartMutationRecorder>,
     group: Option<AccountGroupId>,
+    is_drop_copy: bool,
 }
 
 #[pyclass(name = "AccountAdjustmentContext", module = "openpit", frozen)]
@@ -2572,6 +2689,30 @@ struct PyPostTradeContext {
 
 #[pymethods]
 impl PyPreTradeContext {
+    #[getter]
+    fn is_drop_copy(&self) -> bool {
+        self.is_drop_copy
+    }
+
+    fn record_drop_copy_start_mutation(&self, mutation: &Bound<'_, PyAny>) -> PyResult<()> {
+        let recorder = self.drop_copy_start_mutations.as_ref().ok_or_else(|| {
+            PyRuntimeError::new_err("context is not an active drop-copy operation")
+        })?;
+        if !recorder.is_active() {
+            return Err(PyRuntimeError::new_err(
+                "context is not an active drop-copy operation",
+            ));
+        }
+        let mutation = parse_policy_mutation(mutation)?;
+        if recorder.record(mutation).is_ok() {
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err(
+                "context is not an active drop-copy operation",
+            ))
+        }
+    }
+
     #[getter]
     fn account_control(&self, py: Python<'_>) -> PyResult<Option<Py<PyAccountControl>>> {
         self.account_control
@@ -2635,7 +2776,9 @@ impl From<&PreTradeContext<PyStorageFactory>> for PyPreTradeContext {
     fn from(context: &PreTradeContext<PyStorageFactory>) -> Self {
         Self {
             account_control: context.account_control.clone(),
+            drop_copy_start_mutations: context.drop_copy_start_mutation_recorder(),
             group: context.account_group(),
+            is_drop_copy: context.is_drop_copy(),
         }
     }
 }
@@ -2815,20 +2958,14 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, PyEngineSync>
                     return Err(python_callback_rejects(&self.name));
                 }
             };
-            if ctx.is_drop_copy() {
-                if let Some(reject) = rejects
-                    .iter()
-                    .find(|reject| reject.scope == RejectScope::Account)
-                {
-                    ctx.record_drop_copy_account_block(
-                        reject.account_block_with_code(RejectCode::AccountBlocked),
-                    );
-                }
-                Ok(result)
-            } else if rejects.is_empty() {
+            if rejects.is_empty() {
                 Ok(result)
             } else {
-                Err(Rejects::from(rejects))
+                let rejects = Rejects::from(rejects);
+                Err(match result {
+                    Some(result) => rejects.with_policy_result(result),
+                    None => rejects,
+                })
             }
         })
     }
@@ -3420,20 +3557,28 @@ fn parse_policy_mutation(value: &Bound<'_, PyAny>) -> PyResult<Mutation> {
     let commit_callable = value.getattr("commit")?.unbind();
     let rollback_callable = value.getattr("rollback")?.unbind();
 
-    Ok(Mutation::new(
+    Ok(Mutation::new_fallible_with_error(
         move || {
             Python::attach(|py| {
                 if let Err(error) = commit_callable.bind(py).call0() {
+                    let details = error.to_string();
                     set_python_callback_error(error);
+                    Err(details)
+                } else {
+                    Ok(())
                 }
-            });
+            })
         },
         move || {
             Python::attach(|py| {
                 if let Err(error) = rollback_callable.bind(py).call0() {
+                    let details = error.to_string();
                     set_python_callback_error(error);
+                    Err(details)
+                } else {
+                    Ok(())
                 }
-            });
+            })
         },
     ))
 }
@@ -3898,6 +4043,11 @@ fn parse_reject_code(value: &str) -> PyResult<RejectCode> {
             "unsupported reject code {value:?}"
         ))),
     }
+}
+
+#[pyfunction]
+fn _reject_code_is_evaluation_failure(value: &str) -> PyResult<bool> {
+    Ok(parse_reject_code(value)?.is_evaluation_failure())
 }
 
 use openpit_interop::SyncMode as PySyncPolicy;
@@ -7224,11 +7374,11 @@ impl PyRequest {
             .borrow_mut()
             .take()
             .ok_or_else(|| PyRuntimeError::new_err("request has already been executed"))?;
-        clear_python_callback_error();
+        let scope = PythonCallbackScope::enter();
 
         match request.execute() {
             Ok(reservation) => {
-                if let Some(error) = take_python_callback_error() {
+                if let Some(error) = scope.finish() {
                     return Err(error);
                 }
                 Ok(PyExecuteResult {
@@ -7242,7 +7392,7 @@ impl PyRequest {
                 })
             }
             Err(rejects) => {
-                if let Some(error) = take_python_callback_error() {
+                if let Some(error) = scope.finish() {
                     return Err(error);
                 }
                 Ok(PyExecuteResult {
@@ -7267,6 +7417,7 @@ struct PyPreTradeLock {
 
 #[pymethods]
 impl PyReservation {
+    #[getter]
     fn lock(&self) -> PyResult<PyPreTradeLock> {
         let reservation_ref = self.inner.borrow();
         let reservation = reservation_ref
@@ -7277,6 +7428,7 @@ impl PyReservation {
         })
     }
 
+    #[getter]
     fn account_adjustments(&self) -> PyResult<Vec<PyAccountAdjustmentOutcome>> {
         let reservation_ref = self.inner.borrow();
         let reservation = reservation_ref
@@ -7289,28 +7441,198 @@ impl PyReservation {
             .collect())
     }
 
-    /// Returns the winning account block produced by this reservation's pipeline,
-    /// or `None` when no account-scoped reject was produced.
+    /// Commits the reserved state.
     ///
-    /// Raises `RuntimeError` when the reservation has been finalized.
-    fn account_block(&self) -> PyResult<Option<PyAccountBlock>> {
-        let reservation_ref = self.inner.borrow();
-        let reservation = reservation_ref
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("reservation has already been finalized"))?;
-        Ok(reservation.account_block().map(convert_account_block))
-    }
-
+    /// Exceptions raised by mutation commit callbacks are re-raised with their
+    /// original Python type and message once every callback has run.
+    ///
+    /// A finalizer has no right to fail, so such a failure independently arms
+    /// the engine kill switch. Every `Mutation` registered from Python belongs
+    /// to a custom policy whose state reach the engine cannot bound, so every
+    /// account is blocked and later pre-trade calls are rejected with
+    /// `SystemUnavailable` until an operator calls `Accounts.unblock_all`.
+    ///
+    /// Raises `RuntimeError` when the reservation was already finalized.
     fn commit(&self) -> PyResult<()> {
         let mut reservation = self.take_reservation()?;
+        let scope = PythonCallbackScope::enter();
         reservation.commit();
-        Ok(())
+        match scope.finish() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
+    /// Rolls the reserved state back.
+    ///
+    /// Exceptions raised by mutation rollback callbacks are re-raised with
+    /// their original Python type and message once every callback has run.
+    ///
+    /// A finalizer has no right to fail, so such a failure independently arms
+    /// the engine kill switch. Every `Mutation` registered from Python belongs
+    /// to a custom policy whose state reach the engine cannot bound, so every
+    /// account is blocked and later pre-trade calls are rejected with
+    /// `SystemUnavailable` until an operator calls `Accounts.unblock_all`.
+    ///
+    /// Raises `RuntimeError` when the reservation was already finalized.
     fn rollback(&self) -> PyResult<()> {
         let mut reservation = self.take_reservation()?;
+        let scope = PythonCallbackScope::enter();
         reservation.rollback();
-        Ok(())
+        match scope.finish() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for PyReservation {
+    fn drop(&mut self) {
+        let Some(reservation) = self.inner.get_mut().take() else {
+            return;
+        };
+        // The implicit rollback runs without a caller that could receive an
+        // exception, and it may run in the middle of an unrelated operation.
+        // Its own scope keeps a failing rollback callback from being reported
+        // against that operation.
+        let _scope = PythonCallbackScope::enter();
+        drop(reservation);
+    }
+}
+
+/// Single-use handle for applied drop-copy bookkeeping.
+///
+/// Every accessor raises `RuntimeError` once the operation is finalized, so
+/// read them before committing or rolling back. Account-control operations
+/// published by the drop-copy pipeline and consumed rate-limit attempts stay
+/// outside that finalization boundary.
+#[pyclass(name = "DropCopyOperation", module = "openpit.pretrade", unsendable)]
+struct PyDropCopyOperation {
+    inner: RefCell<Option<DropCopyOperation>>,
+}
+
+#[pymethods]
+impl PyDropCopyOperation {
+    /// Returns the lock context produced by the applied request.
+    #[getter]
+    fn lock(&self) -> PyResult<PyPreTradeLock> {
+        let operation_ref = self.inner.borrow();
+        let operation = operation_ref
+            .as_ref()
+            .ok_or_else(finalized_drop_copy_operation)?;
+        Ok(PyPreTradeLock {
+            inner: operation.lock().clone(),
+        })
+    }
+
+    /// Returns the applied account position modifications.
+    #[getter]
+    fn account_adjustments(&self) -> PyResult<Vec<PyAccountAdjustmentOutcome>> {
+        let operation_ref = self.inner.borrow();
+        let operation = operation_ref
+            .as_ref()
+            .ok_or_else(finalized_drop_copy_operation)?;
+        Ok(operation
+            .account_adjustments()
+            .iter()
+            .map(convert_adjustment_outcome)
+            .collect())
+    }
+
+    /// Returns the first account block requested by this operation.
+    ///
+    /// This is request-local history. Use `is_account_blocked` for the
+    /// apply-time registry snapshot captured before `apply_drop_copy` returned.
+    #[getter]
+    fn account_block(&self) -> PyResult<Option<PyAccountBlock>> {
+        let operation_ref = self.inner.borrow();
+        let operation = operation_ref
+            .as_ref()
+            .ok_or_else(finalized_drop_copy_operation)?;
+        Ok(operation.account_block().map(convert_account_block))
+    }
+
+    /// Returns the apply-time blocked-state snapshot for the order account.
+    ///
+    /// The snapshot does not track later registry changes.
+    #[getter]
+    fn is_account_blocked(&self) -> PyResult<bool> {
+        let operation_ref = self.inner.borrow();
+        let operation = operation_ref
+            .as_ref()
+            .ok_or_else(finalized_drop_copy_operation)?;
+        Ok(operation.is_account_blocked())
+    }
+
+    /// Commits the applied bookkeeping.
+    ///
+    /// Exceptions raised by mutation commit callbacks are re-raised with their
+    /// original Python type and message once every callback has run.
+    ///
+    /// A finalizer has no right to fail, so such a failure independently arms
+    /// the engine kill switch. Every `Mutation` registered from Python belongs
+    /// to a custom policy whose state reach the engine cannot bound, so every
+    /// account is blocked and later pre-trade calls are rejected with
+    /// `SystemUnavailable` until an operator calls `Accounts.unblock_all`.
+    ///
+    /// Raises `RuntimeError` when the operation was already finalized.
+    fn commit(&self) -> PyResult<()> {
+        let mut operation = self.take_operation()?;
+        let scope = PythonCallbackScope::enter();
+        operation.commit();
+        match scope.finish() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    /// Rolls the applied bookkeeping back.
+    ///
+    /// Exceptions raised by mutation rollback callbacks are re-raised with
+    /// their original Python type and message once every callback has run.
+    ///
+    /// A finalizer has no right to fail, so such a failure independently arms
+    /// the engine kill switch. Every `Mutation` registered from Python belongs
+    /// to a custom policy whose state reach the engine cannot bound, so every
+    /// account is blocked and later pre-trade calls are rejected with
+    /// `SystemUnavailable` until an operator calls `Accounts.unblock_all`.
+    ///
+    /// Raises `RuntimeError` when the operation was already finalized.
+    fn rollback(&self) -> PyResult<()> {
+        let mut operation = self.take_operation()?;
+        let scope = PythonCallbackScope::enter();
+        operation.rollback();
+        match scope.finish() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+fn finalized_drop_copy_operation() -> PyErr {
+    PyRuntimeError::new_err("drop-copy operation has already been finalized")
+}
+
+impl PyDropCopyOperation {
+    fn take_operation(&self) -> PyResult<DropCopyOperation> {
+        self.inner
+            .borrow_mut()
+            .take()
+            .ok_or_else(finalized_drop_copy_operation)
+    }
+}
+
+impl Drop for PyDropCopyOperation {
+    fn drop(&mut self) {
+        let Some(operation) = self.inner.get_mut().take() else {
+            return;
+        };
+        // The implicit rollback runs without a caller that could receive an
+        // exception, and it may run in the middle of an unrelated operation.
+        // Its own scope keeps a failing rollback callback from being reported
+        // against that operation.
+        let _scope = PythonCallbackScope::enter();
+        drop(operation);
     }
 }
 
@@ -7346,6 +7668,7 @@ impl PyPreTradeDryRunReport {
     }
 
     /// Returns the lock context the main stage would have produced.
+    #[getter]
     fn lock(&self) -> PyPreTradeLock {
         PyPreTradeLock {
             inner: self.inner.lock().clone(),
@@ -7354,6 +7677,7 @@ impl PyPreTradeDryRunReport {
 
     /// Returns the account position modifications the main stage would have
     /// produced.
+    #[getter]
     fn account_adjustments(&self) -> Vec<PyAccountAdjustmentOutcome> {
         self.inner
             .account_adjustments()
@@ -8888,6 +9212,10 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("_LEVERAGE_MAX", Leverage::MAX)?;
     module.add("_LEVERAGE_STEP", Leverage::STEP)?;
     module.add_function(wrap_pyfunction!(_validate_asset, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        _reject_code_is_evaluation_failure,
+        module
+    )?)?;
     module.add_class::<PyAccountId>()?;
     module.add_class::<PyAccountGroupId>()?;
     module.add_class::<PyQuantity>()?;
@@ -8938,6 +9266,8 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyOrder>()?;
     module.add_class::<PyRequest>()?;
     module.add_class::<PyReservation>()?;
+    module.add_class::<PyDropCopyResult>()?;
+    module.add_class::<PyDropCopyOperation>()?;
     module.add_class::<PyPreTradeDryRunReport>()?;
     module.add_class::<PyExecutionReportOperation>()?;
     module.add_class::<PyFinancialImpact>()?;

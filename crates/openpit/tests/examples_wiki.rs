@@ -31,20 +31,20 @@ use openpit::{
 };
 
 // Mirrors public Rust examples from:
-// - ../pit.wiki/Account-Adjustments.md
-// - ../pit.wiki/Account-Blocking.md
-// - ../pit.wiki/Account-Groups.md
-// - ../pit.wiki/Balance-Reconciliation.md
-// - ../pit.wiki/Domain-Types.md
-// - ../pit.wiki/Dynamic-Policy-Reconfiguration.md
-// - ../pit.wiki/Getting-Started.md
-// - ../pit.wiki/Non-Mutating-Dry-Run.md
-// - ../pit.wiki/Policies.md
-// - ../pit.wiki/Policy-API.md
-// - ../pit.wiki/Pre-trade-Pipeline.md
-// - ../pit.wiki/Pre-Trade-Lock.md
-// - ../pit.wiki/Spot-Funds.md
-// - ../pit.wiki/Storage.md
+// - https://wiki.openpit.dev/Account-Adjustments/
+// - https://wiki.openpit.dev/Account-Blocking/
+// - https://wiki.openpit.dev/Account-Groups/
+// - https://wiki.openpit.dev/Balance-Reconciliation/
+// - https://wiki.openpit.dev/Domain-Types/
+// - https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+// - https://wiki.openpit.dev/Getting-Started/
+// - https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+// - https://wiki.openpit.dev/Policies/
+// - https://wiki.openpit.dev/Policy-API/
+// - https://wiki.openpit.dev/Pre-trade-Pipeline/
+// - https://wiki.openpit.dev/Pre-Trade-Lock/
+// - https://wiki.openpit.dev/Spot-Funds/
+// - https://wiki.openpit.dev/Storage/
 // If this file changes, update every linked documentation snippet.
 
 type PitExecutionReport = WithExecutionReportOperation<WithFinancialImpact<()>>;
@@ -62,6 +62,18 @@ fn aapl_usd_order(quantity: &str, price: &str) -> OrderOperation {
         ),
         price: Some(Price::from_str(price).expect("price must be valid")),
     }
+}
+
+struct HistoricalOrderMetadata;
+
+fn historical_order_metadata(_order: &OrderOperation) -> HistoricalOrderMetadata {
+    HistoricalOrderMetadata
+}
+
+fn persist_historical_order_metadata(
+    _metadata: &HistoricalOrderMetadata,
+) -> Result<(), std::io::Error> {
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -287,7 +299,8 @@ where
 
 #[test]
 fn example_wiki_domain_types_create_validated_values() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Domain-Types.md - Create Validated Values
+    // Source: https://wiki.openpit.dev/Domain-Types/
+    // - Create Validated Values
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{Asset, Pnl, Price, Quantity};
 
@@ -307,7 +320,8 @@ fn example_wiki_domain_types_create_validated_values() -> Result<(), Box<dyn std
 
 #[test]
 fn example_wiki_domain_types_directional_types() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Domain-Types.md - Work With Directional Types
+    // Source: https://wiki.openpit.dev/Domain-Types/
+    // - Work With Directional Types
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{PositionSide, Side};
 
@@ -320,7 +334,7 @@ fn example_wiki_domain_types_directional_types() -> Result<(), Box<dyn std::erro
 
 #[test]
 fn example_wiki_domain_types_leverage() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Domain-Types.md - Create Leverage
+    // Source: https://wiki.openpit.dev/Domain-Types/ - Create Leverage
     // Keep this example in sync with the matching wiki example.
     use openpit::param::Leverage;
 
@@ -336,7 +350,7 @@ fn example_wiki_domain_types_leverage() -> Result<(), Box<dyn std::error::Error>
 
 #[test]
 fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Getting-Started.md - Build an Engine
+    // Source: https://wiki.openpit.dev/Getting-Started/ - Build an Engine
     // Keep this example in sync with the matching wiki example.
     use std::time::Duration;
 
@@ -500,7 +514,8 @@ fn example_wiki_getting_started_build_engine() -> Result<(), Box<dyn std::error:
 
 #[test]
 fn example_wiki_pipeline_start_stage_reject() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Pre-trade-Pipeline.md - Handle a Start-Stage Reservation
+    // Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    // - Handle a Start-Stage Reservation
     // Keep this example in sync with the matching wiki example.
     let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
@@ -528,7 +543,8 @@ fn example_wiki_pipeline_start_stage_reject() -> Result<(), Box<dyn std::error::
 
 #[test]
 fn example_wiki_pipeline_main_stage_finalize() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Pre-trade-Pipeline.md - Execute the Main Stage and Finalize the Reservation
+    // Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    // - Execute the Main Stage and Finalize the Reservation
     // Keep this example in sync with the matching wiki example.
     let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
@@ -560,7 +576,7 @@ fn example_wiki_pipeline_main_stage_finalize() -> Result<(), Box<dyn std::error:
 
 #[test]
 fn example_wiki_getting_started_run_order() {
-    // Wiki example: pit.wiki/Getting-Started.md
+    // Source: https://wiki.openpit.dev/Getting-Started/
     // - Run an Order Through the Engine
     // Keep this example in sync with the matching wiki example.
     let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
@@ -601,8 +617,10 @@ fn example_wiki_getting_started_run_order() {
 
 #[test]
 fn example_wiki_pipeline_shortcut_start_and_main() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Pre-trade-Pipeline.md - Shortcut for Start + Main Stages
-    // Wiki example: pit.wiki/Getting-Started.md - Shortcut for Start + Main Stages
+    // Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    // - Shortcut for Start + Main Stages
+    // Source: https://wiki.openpit.dev/Getting-Started/
+    // - Shortcut for Start + Main Stages
     // Keep this example in sync with the matching wiki example.
     let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
@@ -629,9 +647,55 @@ fn example_wiki_pipeline_shortcut_start_and_main() -> Result<(), Box<dyn std::er
 }
 
 #[test]
+fn example_wiki_pipeline_apply_drop_copy() -> Result<(), Box<dyn std::error::Error>> {
+    // Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    // - Apply a Historical Order with Drop Copy
+    // Keep this example in sync with the matching wiki example.
+    let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
+        .no_sync()
+        .pre_trade(OrderValidationPolicy::new())
+        .build()?;
+    let order = aapl_usd_order("100", "185");
+    let mut applied = false;
+
+    let metadata = historical_order_metadata(&order);
+    match engine.apply_drop_copy(order) {
+        Ok(mut operation) => {
+            eprintln!(
+                "applied; account blocked: {}",
+                operation.is_account_blocked()
+            );
+            applied = true;
+            // Store the historical order, then make the bookkeeping durable.
+            match persist_historical_order_metadata(&metadata) {
+                Ok(()) => operation.commit(),
+                Err(persistence_error) => {
+                    operation.rollback();
+                    return Err(persistence_error.into());
+                }
+            }
+        }
+        Err(rejects) => {
+            for reject in rejects.iter() {
+                eprintln!(
+                    "could not apply historical order: {} [{}]: {}",
+                    reject.policy, reject.code, reject.reason
+                );
+            }
+        }
+    }
+
+    assert!(applied, "apply_drop_copy rejected the wiki example");
+
+    Ok(())
+}
+
+#[test]
 fn example_wiki_pipeline_apply_post_trade_feedback() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Pre-trade-Pipeline.md - Apply Post-Trade Feedback
-    // Wiki example: pit.wiki/Getting-Started.md - Apply Post-Trade Feedback
+    // Source: https://wiki.openpit.dev/Pre-trade-Pipeline/
+    // - Apply Post-Trade Feedback
+    // Source: https://wiki.openpit.dev/Getting-Started/
+    // - Apply Post-Trade Feedback
     // Keep this example in sync with the matching wiki example.
     let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
@@ -660,7 +724,8 @@ fn example_wiki_pipeline_apply_post_trade_feedback() -> Result<(), Box<dyn std::
 
 #[test]
 fn example_wiki_account_adjustments() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Account-Adjustments.md - Examples → Rust
+    // Source: https://wiki.openpit.dev/Account-Adjustments/
+    // - Examples → Rust
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{AdjustmentAmount, PositionMode, PositionSize};
     use openpit::{
@@ -754,7 +819,8 @@ fn example_wiki_account_adjustments() -> Result<(), Box<dyn std::error::Error>> 
 #[test]
 fn example_wiki_account_adjustments_balance_limit_policy() -> Result<(), Box<dyn std::error::Error>>
 {
-    // Wiki example: pit.wiki/Account-Adjustments.md - Balance Limit Policy → Rust
+    // Source: https://wiki.openpit.dev/Account-Adjustments/
+    // - Balance Limit Policy → Rust
     // Keep this example in sync with the matching wiki example.
     use std::sync::Arc;
 
@@ -907,7 +973,8 @@ fn example_wiki_account_adjustments_balance_limit_policy() -> Result<(), Box<dyn
 
 #[test]
 fn example_wiki_policy_rollback_safety() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Policy-API.md - Rollback Safety Pattern → Rust
+    // Source: https://wiki.openpit.dev/Policy-API/
+    // - Rollback Safety Pattern → Rust
     // Keep this example in sync with the matching wiki example.
     let reserved = Rc::new(RefCell::new(Volume::from_str("0")?));
 
@@ -934,7 +1001,8 @@ fn example_wiki_policy_rollback_safety() -> Result<(), Box<dyn std::error::Error
 
 #[test]
 fn example_wiki_policy_notional_cap() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Policy-API.md - Custom Main-Stage Policy → Rust
+    // Source: https://wiki.openpit.dev/Policy-API/
+    // - Custom Main-Stage Policy → Rust
     // Keep this example in sync with the matching wiki example.
     let engine = Engine::builder::<OrderOperation, PitExecutionReport, ()>()
         .no_sync()
@@ -957,7 +1025,8 @@ fn example_wiki_policy_notional_cap() -> Result<(), Box<dyn std::error::Error>> 
 
 #[test]
 fn example_wiki_policy_blocks_account_from_adjustment() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Policy-API.md - Block an Account from an Adjustment Callback
+    // Source: https://wiki.openpit.dev/Policy-API/
+    // - Block an Account from an Adjustment Callback
     let engine = Engine::builder::<OrderOperation, (), ()>()
         .no_sync()
         .pre_trade(BlockOnAdjustmentPolicy)
@@ -976,7 +1045,7 @@ fn example_wiki_policy_blocks_account_from_adjustment() -> Result<(), Box<dyn st
 
 #[test]
 fn example_wiki_policy_api_custom_rust_models() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Policy-API.md - Rust Custom Models
+    // Source: https://wiki.openpit.dev/Policy-API/ - Rust Custom Models
     // Keep the model definitions in sync with the matching wiki example.
     use std::ops::Deref;
 
@@ -1030,7 +1099,7 @@ fn example_wiki_policy_api_custom_rust_models() -> Result<(), Box<dyn std::error
 
 #[test]
 fn example_wiki_policies_order_validation() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Policies.md - OrderValidationPolicy
+    // Source: https://wiki.openpit.dev/Policies/ - OrderValidationPolicy
     // Keep this example in sync with the matching wiki example.
     use openpit::pretrade::policies::OrderValidationPolicy;
 
@@ -1046,7 +1115,7 @@ fn example_wiki_policies_order_validation() -> Result<(), Box<dyn std::error::Er
 
 #[test]
 fn example_wiki_policies_rate_limit() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Policies.md - RateLimitPolicy
+    // Source: https://wiki.openpit.dev/Policies/ - RateLimitPolicy
     // Keep this example in sync with the matching wiki example.
     use std::time::Duration;
 
@@ -1078,7 +1147,7 @@ fn example_wiki_policies_rate_limit() -> Result<(), Box<dyn std::error::Error>> 
 
 #[test]
 fn example_wiki_policies_order_size_limit() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Policies.md - OrderSizeLimitPolicy
+    // Source: https://wiki.openpit.dev/Policies/ - OrderSizeLimitPolicy
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{Asset, Quantity, Volume};
     use openpit::pretrade::policies::{
@@ -1116,7 +1185,8 @@ fn example_wiki_policies_order_size_limit() -> Result<(), Box<dyn std::error::Er
 
 #[test]
 fn example_wiki_policies_pnl_bounds_killswitch() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Policies.md - PnlBoundsKillSwitchPolicy
+    // Source: https://wiki.openpit.dev/Policies/
+    // - PnlBoundsKillSwitchPolicy
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{Asset, Pnl};
     use openpit::pretrade::policies::{
@@ -1144,7 +1214,8 @@ fn example_wiki_policies_pnl_bounds_killswitch() -> Result<(), Box<dyn std::erro
 
 #[test]
 fn example_wiki_storage_custom_policy() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Storage.md - Custom Policy with Storage
+    // Source: https://wiki.openpit.dev/Storage/
+    // - Custom Policy with Storage
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{AccountId, Asset, Pnl};
     use openpit::storage::{LockingPolicyFactory, Storage, StorageBuilder};
@@ -1199,7 +1270,8 @@ fn example_wiki_storage_custom_policy() -> Result<(), Box<dyn std::error::Error>
 
 #[test]
 fn example_wiki_storage_engine_builder() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Storage.md - Engine-Owned Builder Use
+    // Source: https://wiki.openpit.dev/Storage/
+    // - Engine-Owned Builder Use
     // Keep this example in sync with the matching wiki example.
     let builder = Engine::builder::<(), (), ()>().full_sync();
     let counters = builder
@@ -1221,7 +1293,7 @@ fn example_wiki_storage_engine_builder() -> Result<(), Box<dyn std::error::Error
 
 #[test]
 fn example_wiki_policies_spot_funds() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Policies.md - SpotFundsPolicy
+    // Source: https://wiki.openpit.dev/Policies/ - SpotFundsPolicy
     // Keep this example in sync with the matching wiki example.
     use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
     use openpit::{
@@ -1251,7 +1323,7 @@ fn example_wiki_policies_spot_funds() -> Result<(), Box<dyn std::error::Error>> 
 
 #[test]
 fn example_wiki_spot_funds_limit_only() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Spot-Funds.md - Limit-Only Mode
+    // Source: https://wiki.openpit.dev/Spot-Funds/ - Limit-Only Mode
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{
         AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, TradeAmount,
@@ -1317,7 +1389,7 @@ fn example_wiki_spot_funds_limit_only() -> Result<(), Box<dyn std::error::Error>
 
 #[test]
 fn example_wiki_spot_funds_market_orders() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Spot-Funds.md - Market Orders
+    // Source: https://wiki.openpit.dev/Spot-Funds/ - Market Orders
     // Keep this example in sync with the matching wiki example.
     use std::sync::Arc;
 
@@ -1391,7 +1463,8 @@ fn example_wiki_spot_funds_market_orders() -> Result<(), Box<dyn std::error::Err
 
 #[test]
 fn example_wiki_spot_funds_pnl_kill_switch_builder() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch / Configuring Barriers
+    // Source: https://wiki.openpit.dev/Spot-Funds/
+    // - Self-Computed PnL Kill Switch / Configuring Barriers
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{AccountId, Pnl};
     use openpit::pretrade::policies::{
@@ -1445,7 +1518,8 @@ fn example_wiki_spot_funds_pnl_kill_switch_builder() -> Result<(), Box<dyn std::
 
 #[test]
 fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Spot-Funds.md - Self-Computed PnL Kill Switch / Runtime Reconfiguration
+    // Source: https://wiki.openpit.dev/Spot-Funds/
+    // - Self-Computed PnL Kill Switch / Runtime Reconfiguration
     // Keep this example in sync with the matching wiki example. The engine and
     // account below are harness scaffolding built to match the snippet's world.
     use openpit::param::{AccountId, Pnl};
@@ -1500,7 +1574,8 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
 
 #[test]
 fn example_wiki_balance_reconciliation_delta_absolute() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Balance-Reconciliation.md - Delta Versus Absolute
+    // Source: https://wiki.openpit.dev/Balance-Reconciliation/
+    // - Delta Versus Absolute
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{AccountId, AdjustmentAmount, Asset, PositionSize};
     use openpit::pretrade::policies::{SpotFundsPolicy, SpotFundsSettings};
@@ -1566,7 +1641,8 @@ fn example_wiki_balance_reconciliation_delta_absolute() -> Result<(), Box<dyn st
 
 #[test]
 fn example_wiki_pre_trade_lock_persistence() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Pre-Trade-Lock.md - Persisting and Restoring a Lock
+    // Source: https://wiki.openpit.dev/Pre-Trade-Lock/
+    // - Persisting and Restoring a Lock
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{
         AccountId, AdjustmentAmount, Asset, PositionSize, Price, Quantity, Side, Trade, TradeAmount,
@@ -1680,7 +1756,7 @@ fn example_wiki_pre_trade_lock_persistence() -> Result<(), Box<dyn std::error::E
 
 #[test]
 fn example_wiki_account_groups_register_and_read() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Account-Groups.md - Examples → Rust
+    // Source: https://wiki.openpit.dev/Account-Groups/ - Examples → Rust
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{AccountGroupId, AccountId};
     use openpit::pretrade::policies::OrderValidationPolicy;
@@ -1714,7 +1790,8 @@ fn example_wiki_account_groups_register_and_read() -> Result<(), Box<dyn std::er
 
 #[test]
 fn example_wiki_account_block_unblock() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Account-Blocking.md - Examples → Rust
+    // Source: https://wiki.openpit.dev/Account-Blocking/
+    // - Examples → Rust
     // Keep this example in sync with the matching wiki example.
     use openpit::param::{AccountGroupId, AccountId};
     use openpit::pretrade::policies::OrderValidationPolicy;
@@ -1742,7 +1819,8 @@ fn example_wiki_account_block_unblock() -> Result<(), Box<dyn std::error::Error>
 
 #[test]
 fn example_wiki_spot_funds_global_limit_mode() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Dynamic-Policy-Reconfiguration.md - Spot Funds: Global Limit Mode
+    // Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+    // - Spot Funds: Global Limit Mode
     // This mirror is intentionally wider than the wiki snippet: it adds the test
     // harness (the fn -> Result wrapper and seed/order helpers) so the example runs.
     // Keep the shared user-code flow in sync with the wiki.
@@ -1836,7 +1914,8 @@ fn example_wiki_spot_funds_global_limit_mode() -> Result<(), Box<dyn std::error:
 
 #[test]
 fn example_wiki_spot_funds_per_account_limit_mode() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Dynamic-Policy-Reconfiguration.md - Spot Funds: Per-Account Limit Mode
+    // Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+    // - Spot Funds: Per-Account Limit Mode
     // This mirror is intentionally wider than the wiki snippet: it adds the test
     // harness (the fn -> Result wrapper and seed/order helpers) so the example runs.
     // Keep the shared user-code flow in sync with the wiki.
@@ -1931,7 +2010,8 @@ fn example_wiki_spot_funds_per_account_limit_mode() -> Result<(), Box<dyn std::e
 #[test]
 fn example_wiki_dynamic_policy_reconfiguration_rate_limit() -> Result<(), Box<dyn std::error::Error>>
 {
-    // Wiki example: pit.wiki/Dynamic-Policy-Reconfiguration.md - Retune a Built-in Policy
+    // Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+    // - Retune a Built-in Policy
     // This mirror is intentionally wider than the wiki snippet: it adds the test
     // harness (the fn -> Result wrapper and `order` helper) so the example runs.
     // Keep this example in sync with the wiki.
@@ -2002,7 +2082,8 @@ fn example_wiki_dynamic_policy_reconfiguration_rate_limit() -> Result<(), Box<dy
 #[test]
 fn example_wiki_dynamic_policy_reconfiguration_set_account_pnl(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Dynamic-Policy-Reconfiguration.md - Force-set Accumulated P&L
+    // Source: https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/
+    // - Force-set Accumulated P&L
     // This mirror is intentionally wider than the wiki snippet: it adds the test
     // harness (the fn -> Result wrapper, the `order` helper, and the `account`
     // binding) so the example runs. Keep this example in sync with the wiki.
@@ -2066,7 +2147,8 @@ fn example_wiki_dynamic_policy_reconfiguration_set_account_pnl(
 
 #[test]
 fn example_wiki_dry_run_verdict() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Non-Mutating-Dry-Run.md - Read the Dry-Run Verdict
+    // Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+    // - Read the Dry-Run Verdict
     // This mirror is intentionally wider than the wiki snippet: it adds the test
     // harness (the fn -> Result wrapper and assertions) so the example runs.
     // Keep the shared user-code flow in sync with the wiki.
@@ -2095,7 +2177,8 @@ fn example_wiki_dry_run_verdict() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn example_wiki_dry_run_before_real_call() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Non-Mutating-Dry-Run.md - Use the Dry-Run Before a Real Call
+    // Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+    // - Use the Dry-Run Before a Real Call
     // This mirror is intentionally wider than the wiki snippet: it adds the test
     // harness (the fn -> Result wrapper and assertions) so the example runs.
     // Keep the shared user-code flow in sync with the wiki.
@@ -2168,7 +2251,8 @@ where
 
 #[test]
 fn example_wiki_dry_run_custom_policy_hook() -> Result<(), Box<dyn std::error::Error>> {
-    // Wiki example: pit.wiki/Non-Mutating-Dry-Run.md - Read-Only Custom Start-Stage Hook
+    // Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+    // - Read-Only Custom Start-Stage Hook
     // This mirror is intentionally wider than the wiki snippet: it defines the full
     // MyCountingPolicy struct above (the snippet shows only the hook bodies) and
     // exercises the dry-run and real-call paths to confirm compilation and correct

@@ -19,143 +19,64 @@ package openpit
 
 import (
 	"testing"
-	"time"
 
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
-	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade/policies"
 )
 
-// Mirrors public examples from:
-// - bindings/go/README.md
-// - ../pit.wiki/Getting-Started.md
+// Mirrors public examples from bindings/go/README.md.
 // If this test changes, update every linked documentation snippet.
 
-// Source: bindings/go/README.md - Usage
-func TestReadmeQuickstart(t *testing.T) {
-	usd, err := param.NewAsset("USD")
-	if err != nil {
-		t.Fatalf("NewAsset(USD) error = %v", err)
-	}
-
-	lowerBound, err := param.NewPnlFromString("-1000")
-	if err != nil {
-		t.Fatalf("NewPnlFromString(-1000) error = %v", err)
-	}
-	maxQty, err := param.NewQuantityFromString("500")
-	if err != nil {
-		t.Fatalf("NewQuantityFromString() error = %v", err)
-	}
-	maxNotional, err := param.NewVolumeFromString("100000")
-	if err != nil {
-		t.Fatalf("NewVolumeFromString() error = %v", err)
-	}
-
-	// 1. Configure and build the engine.
+// Source: bindings/go/README.md - Quick Start
+func TestReadmeCheckOrder(t *testing.T) {
+	// Build the engine once, at platform initialization.
 	engine, err := NewEngineBuilder().
 		FullSync().
 		Builtin(policies.BuildOrderValidation()).
-		Builtin(
-			policies.BuildPnlBoundsKillSwitch().BrokerBarriers(
-				policies.PnlBoundsBrokerBarrier{
-					SettlementAsset: usd,
-					LowerBound:      optional.Some(lowerBound),
-				},
-			),
-		).
-		Builtin(
-			policies.BuildRateLimit().BrokerBarrier(
-				policies.RateLimitBrokerBarrier{
-					Limit: policies.RateLimit{MaxOrders: 100, Window: time.Second},
-				},
-			),
-		).
-		Builtin(
-			policies.BuildOrderSizeLimit().
-				BrokerBarrier(
-					policies.OrderSizeBrokerBarrier{
-						Limit: policies.OrderSizeLimit{
-							MaxQuantity: maxQty,
-							MaxNotional: maxNotional,
-						},
-					},
-				).
-				AssetBarriers(
-					policies.OrderSizeAssetBarrier{
-						SettlementAsset: usd,
-						Limit: policies.OrderSizeLimit{
-							MaxQuantity: maxQty,
-							MaxNotional: maxNotional,
-						},
-					},
-				),
-		).
 		Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
 	defer engine.Stop()
 
-	// 2. Check an order.
-	order := model.NewOrder()
-	op := order.EnsureOperationView()
 	aapl, err := param.NewAsset("AAPL")
 	if err != nil {
 		t.Fatalf("NewAsset(AAPL) error = %v", err)
 	}
-	op.SetInstrument(param.NewInstrument(aapl, usd))
-	op.SetAccountID(param.NewAccountIDFromUint64(99224416))
-	op.SetSide(param.SideBuy)
-	price, _ := param.NewPriceFromString("185")
-	qty, _ := param.NewQuantityFromString("100")
-	op.SetTradeAmount(param.NewQuantityTradeAmount(qty))
-	op.SetPrice(price)
-
-	request, rejects, err := engine.StartPreTrade(order)
+	usd, err := param.NewAsset("USD")
 	if err != nil {
-		t.Fatalf("StartPreTrade() error = %v", err)
+		t.Fatalf("NewAsset(USD) error = %v", err)
+	}
+	qty, err := param.NewQuantityFromString("100")
+	if err != nil {
+		t.Fatalf("NewQuantityFromString() error = %v", err)
+	}
+	price, err := param.NewPriceFromString("185")
+	if err != nil {
+		t.Fatalf("NewPriceFromString() error = %v", err)
+	}
+
+	// Describe the order: buy 100 AAPL at 185 USD.
+	order := model.NewOrder()
+	operation := order.EnsureOperationView()
+	operation.SetInstrument(param.NewInstrument(aapl, usd))
+	operation.SetAccountID(param.NewAccountIDFromUint64(99224416))
+	operation.SetSide(param.SideBuy)
+	operation.SetTradeAmount(param.NewQuantityTradeAmount(qty))
+	operation.SetPrice(price)
+
+	// Run the pre-trade pipeline and read the verdict.
+	reservation, rejects, err := engine.ExecutePreTrade(order)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
 	}
 	if rejects != nil {
-		t.Fatalf("StartPreTrade() unexpected rejects: %v", rejects)
+		t.Fatalf("ExecutePreTrade() unexpected rejects: %v", rejects)
 	}
-	defer request.Close()
-
-	// 3. Real pre-trade and risk control.
-	reservation, rejects, err := request.Execute()
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	if rejects != nil {
-		t.Fatalf("Execute() unexpected rejects: %v", rejects)
-	}
+	// Close rolls the reservation back unless it was committed.
 	defer reservation.Close()
 
-	// 4. Commit the reservation.
+	// The venue accepted the order, so the reserved state stays.
 	reservation.Commit()
-
-	// 5. Apply execution report.
-	report := model.NewExecutionReport()
-	reportOp := model.NewExecutionReportOperation()
-	reportOp.SetInstrument(param.NewInstrument(aapl, usd))
-	reportOp.SetAccountID(param.NewAccountIDFromUint64(99224416))
-	reportOp.SetSide(param.SideBuy)
-	report.SetOperation(reportOp)
-
-	pnl, _ := param.NewPnlFromString("-50")
-	fee, _ := param.NewFeeFromString("3.4")
-	impact := model.NewExecutionReportFinancialImpact()
-	impact.SetPnl(pnl)
-	impact.SetFee(fee)
-	report.SetFinancialImpact(impact)
-
-	result, err := engine.ApplyExecutionReport(report)
-	if err != nil {
-		t.Fatalf("ApplyExecutionReport() error = %v", err)
-	}
-
-	// 6. Kill switch must not be triggered after a small loss.
-	if len(result.AccountBlocks) > 0 {
-		t.Fatalf("AccountBlocks = %v, want none after small loss", result.AccountBlocks)
-	}
 }

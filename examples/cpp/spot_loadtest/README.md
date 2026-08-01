@@ -148,7 +148,8 @@ the full settings glossary, which apply verbatim.
 
 ## Build and run
 
-<!-- Test mirror: test/driver_test.cpp Driver.DocBackingBaselineRecipe -->
+<!-- Test mirror: examples/cpp/spot_loadtest/test/driver_test.cpp
+     Driver.DocBackingBaselineRecipe -->
 
 ### 1. Build the native core in release mode
 

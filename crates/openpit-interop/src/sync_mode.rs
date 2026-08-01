@@ -68,7 +68,8 @@ impl<T: ?Sized> std::ops::Deref for EngineHandle<T> {
 //   `T: !Sync` shared across threads.
 // - Under `SyncMode::None` and `SyncMode::Account`, the binding caller
 //   serialises per-handle invocation per the SDK threading contract
-//   documented in Threading-Contract.md and the `SyncMode` enum's variant
+//   documented in https://wiki.openpit.dev/Threading-Contract/
+//   and the `SyncMode` enum's variant
 //   docs. Only one binding thread observes `&EngineInner` at a time; no
 //   Sync is needed in practice.
 //

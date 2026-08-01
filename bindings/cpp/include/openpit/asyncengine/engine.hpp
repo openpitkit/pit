@@ -27,12 +27,10 @@
 
 #include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -83,6 +81,11 @@ namespace openpit::asyncengine {
 // a successful stop. Used to release the wrapped engine atomically with the
 using StopUnderlying = std::function<void()>;
 
+// Receives a submit failure or worker-side hard-stop abort. `inAccountLane` is
+// true only when the worker invokes the handler, so lane cleanup may run there.
+using SubmitAbortHandler = std::function<void(Promise<std::monostate> promise,
+                                              Error error, bool inAccountLane)>;
+
 namespace detail {
 
 // Resolves a `Promise<void-like>`-style task. The engine builds one closure
@@ -92,6 +95,19 @@ namespace detail {
 template <typename RunFn, typename AbortFn>
 [[nodiscard]] TaskPtr MakeTask(RunFn run, AbortFn abort) {
   return std::make_unique<ClosureTask>(std::move(run), std::move(abort));
+}
+
+template <typename PromiseType, typename AbortHandler>
+void InvokeAbortHandler(PromiseType promise, AbortHandler& handler, Error error,
+                        bool inAccountLane) {
+  try {
+    handler(promise, std::move(error), inAccountLane);
+  } catch (const std::exception& ex) {
+    promise.Fail(Error(ErrorCode::TaskFailed, ex.what()));
+  } catch (...) {
+    promise.Fail(Error(ErrorCode::TaskFailed,
+                       "mandatory cleanup threw a non-standard exception"));
+  }
 }
 
 }  // namespace detail
@@ -161,6 +177,48 @@ class AsyncEngine {
     return future;
   }
 
+  // Enqueues a closure with a handler for a synchronous submit failure or a
+  // worker-side hard-stop abort. The handler owns resolving the future.
+  [[nodiscard]] Future<std::monostate> Submit(
+      ::openpit::param::AccountId accountId, std::function<void()> fn,
+      SubmitAbortHandler onAbort,
+      std::chrono::nanoseconds timeout = std::chrono::nanoseconds(0)) {
+    Promise<std::monostate> promise;
+    Future<std::monostate> future = promise.GetFuture();
+    auto run = [promise, fn = std::move(fn)] {
+      try {
+        fn();
+        promise.Resolve(std::monostate{});
+      } catch (const std::exception& ex) {
+        promise.Fail(Error(ErrorCode::TaskFailed, ex.what()));
+      } catch (...) {
+        promise.Fail(Error(ErrorCode::TaskFailed,
+                           "async submit closure threw a non-standard "
+                           "exception"));
+      }
+    };
+    SubmitAbortHandler submitAbort = onAbort;
+    auto abort = [promise, onAbort = std::move(onAbort)](Error error) mutable {
+      detail::InvokeAbortHandler(promise, onAbort, std::move(error), true);
+    };
+    m_strategy->Submit(
+        accountId.Value(), detail::MakeTask(std::move(run), std::move(abort)),
+        Deadline(timeout),
+        [promise, submitAbort = std::move(submitAbort)](Error error) mutable {
+          detail::InvokeAbortHandler(promise, submitAbort, std::move(error),
+                                     false);
+        });
+    return future;
+  }
+
+  // Preserves account-lane ordering for cleanup after a synchronous submit
+  // failure. The strategy either queues it or waits for the retired lane.
+  [[nodiscard]] Future<std::monostate> ScheduleMandatoryCleanup(
+      ::openpit::param::AccountId accountId, std::function<void()> cleanup) {
+    return m_strategy->ScheduleMandatoryCleanup(accountId.Value(),
+                                                std::move(cleanup));
+  }
+
   // Enqueues `op(driver)` for `accountId`, returning a `Future<R>` over its
   // result. `op` is invoked on the worker thread with a reference to the
   // borrowed driver; its return type `R` is deduced. Use this to express any
@@ -211,13 +269,49 @@ class AsyncEngine {
       }
     };
     auto abort = [promise](Error error) { promise.Fail(std::move(error)); };
-    std::optional<Error> err = m_strategy->Submit(
+    m_strategy->Submit(accountId.Value(),
+                       detail::MakeTask(std::move(run), std::move(abort)),
+                       Deadline(timeout), [promise](Error error) mutable {
+                         // Submit failed before queueing: fail the future on
+                         // the caller's thread while its producer lifecycle
+                         // obligation is still held.
+                         promise.Fail(std::move(error));
+                       });
+    return future;
+  }
+
+  // Two-value call with cleanup-aware submit/abort handling. The handler owns
+  // resolving the pair promise when submission fails or hard stop aborts it.
+  template <typename FirstValue, typename SecondValue, typename Operation,
+            typename AbortHandler>
+  [[nodiscard]] PairFuture<FirstValue, SecondValue> Call2(
+      ::openpit::param::AccountId accountId, Operation operation,
+      AbortHandler onAbort, std::chrono::nanoseconds timeout) {
+    PairPromise<FirstValue, SecondValue> promise;
+    PairFuture<FirstValue, SecondValue> future = promise.GetFuture();
+    Driver* driver = m_driver;
+    auto run = [promise, driver, operation = std::move(operation)] {
+      try {
+        std::pair<FirstValue, SecondValue> result = operation(*driver);
+        promise.Resolve(std::move(result.first), std::move(result.second));
+      } catch (const std::exception& ex) {
+        promise.Fail(Error(ErrorCode::TaskFailed, ex.what()));
+      } catch (...) {
+        promise.Fail(Error(ErrorCode::TaskFailed,
+                           "async engine call threw a non-standard exception"));
+      }
+    };
+    AbortHandler submitAbort = onAbort;
+    auto abort = [promise, onAbort = std::move(onAbort)](Error error) mutable {
+      detail::InvokeAbortHandler(promise, onAbort, std::move(error), true);
+    };
+    m_strategy->Submit(
         accountId.Value(), detail::MakeTask(std::move(run), std::move(abort)),
-        Deadline(timeout));
-    if (err.has_value()) {
-      // Submit failed before queueing: fail the future on the caller's thread,
-      promise.Fail(std::move(*err));
-    }
+        Deadline(timeout),
+        [promise, submitAbort = std::move(submitAbort)](Error error) mutable {
+          detail::InvokeAbortHandler(promise, submitAbort, std::move(error),
+                                     false);
+        });
     return future;
   }
 
@@ -271,16 +365,15 @@ class AsyncEngine {
     return std::chrono::steady_clock::now() + timeout;
   }
 
-  // Submits a single-value task and, if the synchronous submit failed (the task
-  // where a submit failure resolves the future synchronously on the submitter.
+  // Submits a single-value task. A submit that fails before the task is queued
+  // fails `promise` on the submitting thread, while that thread still holds its
+  // producer obligation, so the failure is ordered before any stop completes.
   template <typename T>
   void SubmitTask(OpenPitParamAccountId accountId, detail::TaskPtr task,
                   const Promise<T>& promise, std::chrono::nanoseconds timeout) {
-    std::optional<Error> err =
-        m_strategy->Submit(accountId, std::move(task), Deadline(timeout));
-    if (err.has_value()) {
-      promise.Fail(std::move(*err));
-    }
+    m_strategy->Submit(
+        accountId, std::move(task), Deadline(timeout),
+        [promise](Error error) mutable { promise.Fail(std::move(error)); });
   }
 
   void ReleaseUnderlying() {
@@ -402,7 +495,7 @@ class ShardedBuilder {
   friend class Builder<Driver>;
 
   ShardedBuilder(Driver& driver, StopUnderlying stopUnderlying,
-                 detail::BaseConfig config, std::size_t workers)
+                 const detail::BaseConfig& config, std::size_t workers)
       : m_driver(&driver),
         m_stopUnderlying(std::move(stopUnderlying)),
         m_config(config),
@@ -421,11 +514,12 @@ class ShardedBuilder {
 template <typename Driver>
 class DynamicBuilder {
  public:
-  // Caps the number of concurrent live per-account queues. Zero removes the cap
-  // (submit never fails for new accounts). When the cap is reached, submitting
-  // for an unknown account fails the future with `ErrorCode::QueueLimit`. The
-  // default cap is `hardware_concurrency() * 32` (a non-restrictive bound that
-  // still guards against pathological growth).
+  // Caps the number of concurrent live per-account queues: a cap of n means n
+  // usable account queues. Zero removes the cap (submit never fails for new
+  // accounts). When the cap is reached, submitting for an unknown account fails
+  // the future with `ErrorCode::QueueLimit`. The default cap is
+  // `hardware_concurrency() * 32` (a non-restrictive bound that still guards
+  // against pathological growth).
   DynamicBuilder& MaxQueues(std::size_t maxQueues) {
     m_maxQueues = maxQueues;
     m_maxQueuesSet = true;
@@ -457,7 +551,7 @@ class DynamicBuilder {
   friend class Builder<Driver>;
 
   DynamicBuilder(Driver& driver, StopUnderlying stopUnderlying,
-                 detail::BaseConfig config)
+                 const detail::BaseConfig& config)
       : m_driver(&driver),
         m_stopUnderlying(std::move(stopUnderlying)),
         m_config(config) {}

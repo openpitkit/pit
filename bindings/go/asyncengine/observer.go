@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package asyncengine
 
@@ -30,6 +30,10 @@ import (
 // long. To export metrics into Prometheus, OpenTelemetry, or a logging
 // pipeline, accumulate counters and dispatch the heavy work to a separate
 // goroutine.
+//
+// Every callback carries the account id the task was routed by, so a reported
+// account is always a real account: the dispatcher never queues work it cannot
+// key, and never substitutes a sentinel such as AccountID(0).
 //
 // Callback asymmetries to be aware of:
 //   - OnComplete fires for aborted tasks (ran = 0), but OnDequeue is NOT

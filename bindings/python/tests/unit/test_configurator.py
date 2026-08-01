@@ -989,7 +989,7 @@ def test_spot_funds_configuration_uses_named_entities() -> None:
     )
     assert result.ok
     assert result.reservation is not None
-    locked_prices = result.reservation.lock().entries()
+    locked_prices = result.reservation.lock.entries()
     assert locked_prices, "expected at least one locked price"
     _, locked_price = locked_prices[0]
     assert locked_price == openpit.param.Price("100")

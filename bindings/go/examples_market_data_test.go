@@ -37,12 +37,12 @@ func (noGroupInfo) AccountGroup() optional.Option[param.AccountGroupID] {
 }
 
 // Mirrors public Go examples from:
-// - ../pit.wiki/Market-Data.md
-// - ../pit.wiki/Market-Data-TTL.md
-// - ../pit.wiki/Market-Data-Pricing.md
+// - https://wiki.openpit.dev/Market-Data/
+// - https://wiki.openpit.dev/Market-Data-TTL/
+// - https://wiki.openpit.dev/Market-Data-Pricing/
 // If this file changes, update every linked documentation snippet.
 
-// Used in: pit.wiki/Market-Data.md - Pushing and Reading Quotes
+// Source: https://wiki.openpit.dev/Market-Data/ - Pushing and Reading Quotes
 func TestExampleWikiMarketDataPushAndRead(t *testing.T) {
 	service, err := NewEngineBuilder().
 		FullSync().
@@ -106,7 +106,7 @@ func TestExampleWikiMarketDataPushAndRead(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Market-Data.md - Replace Versus Patch
+// Source: https://wiki.openpit.dev/Market-Data/ - Replace Versus Patch
 func TestExampleWikiMarketDataReplaceVersusPatch(t *testing.T) {
 	service, err := NewEngineBuilder().
 		FullSync().
@@ -170,7 +170,7 @@ func TestExampleWikiMarketDataReplaceVersusPatch(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Market-Data-TTL.md - Quote Freshness
+// Source: https://wiki.openpit.dev/Market-Data-TTL/ - Quote Freshness
 func TestExampleWikiMarketDataFiniteTTLHidesStaleQuote(t *testing.T) {
 	// A 50 ms service-wide lifetime: quotes older than that read as absent.
 	service, err := NewEngineBuilder().
@@ -228,7 +228,7 @@ func TestExampleWikiMarketDataFiniteTTLHidesStaleQuote(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Market-Data.md - Clearing a Quote
+// Source: https://wiki.openpit.dev/Market-Data/ - Clearing a Quote
 func TestExampleWikiMarketDataClearThenRecover(t *testing.T) {
 	service, err := NewEngineBuilder().
 		FullSync().
@@ -278,7 +278,8 @@ func TestExampleWikiMarketDataClearThenRecover(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Market-Data-Pricing.md - Pricing Market Orders
+// Source: https://wiki.openpit.dev/Market-Data-Pricing/
+// - Pricing Market Orders
 func TestExampleWikiMarketDataMarketOrdersBookTopOverride(t *testing.T) {
 	// Obtain the market-data builder from the engine builder so the sync mode
 	// is derived automatically.
@@ -368,7 +369,7 @@ func TestExampleWikiMarketDataMarketOrdersBookTopOverride(t *testing.T) {
 	}
 }
 
-// Used in: pit.wiki/Market-Data.md - Targeted Fan-Out: push for
+// Source: https://wiki.openpit.dev/Market-Data/ - Targeted Fan-Out: push for
 func TestExampleWikiMarketDataPushForFanOut(t *testing.T) {
 	service, err := NewEngineBuilder().
 		FullSync().

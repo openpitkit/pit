@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
@@ -23,6 +23,7 @@
 //! external quote feed: handles are safe to use concurrently, so a feed can
 //! push quotes while the engine reads them.
 
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::time::Duration;
 
@@ -230,6 +231,9 @@ pub enum OpenPitMarketDataGetStatus {
     /// The selected quote exists but aged past its effective TTL; the stale
     /// quote was written to `out_quote`.
     QuoteExpired = 3,
+    /// The account-group resolver reported `Failed`, so the reading account's
+    /// group is unknown and no bucket may be selected on its behalf.
+    AccountGroupResolutionFailed = 4,
     /// The supplied quote-resolution selector is invalid.
     Error = 255,
 }
@@ -312,13 +316,40 @@ fn import_group(raw: OpenPitParamAccountGroupId) -> AccountGroupId {
 //--------------------------------------------------------------------------------------------------
 // Account-group resolver callback
 
+/// Outcome of one account-group resolver invocation.
+///
+/// The caller must distinguish "this account has no group" from "the group
+/// could not be determined". Reporting a failure as `None` would silently move
+/// the read onto the default-group bucket and bypass every group-scoped rule.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenPitMarketDataAccountGroupResolution {
+    /// The account belongs to no group; `out_account_group_id` is untouched.
+    ///
+    /// Zero preserves the previous callback's `false` meaning.
+    NoGroup = 0,
+    /// The account belongs to a group; `out_account_group_id` was written.
+    ///
+    /// One preserves the previous callback's `true` meaning.
+    Found = 1,
+    /// The group could not be determined. The enclosing read fails as a whole
+    /// with `AccountGroupResolutionFailed` and no quote is produced.
+    Failed = 2,
+}
+
 /// Resolves the reading account's group on demand.
 ///
-/// Returns `true` and writes the group id to `out_account_group_id` when the
-/// account belongs to a group; returns `false` when it has none. Invoked lazily
-/// by `openpit_marketdata_service_get` — only when the resolution mode would
+/// Writes the group id to `out_account_group_id` and returns `Found` when the
+/// account belongs to a group, `NoGroup` when it has none, and `Failed` when
+/// the group could not be determined. Invoked lazily by
+/// `openpit_marketdata_service_get` — only when the resolution mode would
 /// consult the group or default-group bucket and the per-account bucket has no
 /// quote.
+///
+/// Only `NoGroup` (0), `Found` (1), and `Failed` (2) are valid return values.
+/// Returning any other byte is an error and is handled as `Failed`: the
+/// enclosing read fails rather than falling through to a group bucket the
+/// callback never named.
 ///
 /// The function pointer must not be null; see the contract on
 /// `openpit_marketdata_service_get`.
@@ -326,24 +357,33 @@ pub type OpenPitMarketDataAccountGroupResolver = Option<
     extern "C" fn(
         user_data: *mut c_void,
         out_account_group_id: *mut OpenPitParamAccountGroupId,
-    ) -> bool,
+    ) -> u8,
 >;
 
 /// Adapter that wraps a `(resolve, user_data)` callback pair and implements
 /// the core [`AccountInfo`] trait so the callback is only invoked when the
 /// resolution logic actually needs the group.
+///
+/// The core trait has no failure channel, so a `Failed` answer is latched here
+/// and turned into a read-level failure once the core call returns.
 struct CallbackAccountInfo {
-    resolve: extern "C" fn(*mut c_void, *mut OpenPitParamAccountGroupId) -> bool,
+    resolve: extern "C" fn(*mut c_void, *mut OpenPitParamAccountGroupId) -> u8,
     user_data: *mut c_void,
+    failed: Cell<bool>,
 }
 
 impl AccountInfo for CallbackAccountInfo {
     fn group(&self) -> Option<AccountGroupId> {
         let mut raw: OpenPitParamAccountGroupId = 0;
-        if (self.resolve)(self.user_data, &mut raw) {
-            Some(import_group(raw))
-        } else {
-            None
+        match (self.resolve)(self.user_data, &mut raw) {
+            value if value == OpenPitMarketDataAccountGroupResolution::Found as u8 => {
+                Some(import_group(raw))
+            }
+            value if value == OpenPitMarketDataAccountGroupResolution::NoGroup as u8 => None,
+            _ => {
+                self.failed.set(true);
+                None
+            }
         }
     }
 }
@@ -1245,11 +1285,12 @@ pub extern "C" fn openpit_marketdata_service_push_by_instrument_patch(
 /// `resolve_account_group` is a **required** callback that supplies the reading
 /// account's group **lazily** — it is invoked only when the resolution mode
 /// would consult a group or default-group bucket and the per-account bucket has
-/// no quote. The callback receives the caller-supplied `user_data`
-/// context pointer and, when the account belongs to a group, writes the group id
-/// to `out_account_group_id` and returns `true`; when the account has no group
-/// it returns `false`. Pass `OPENPIT_DEFAULT_ACCOUNT_GROUP` (`0`) to target the
-/// default group bucket.
+/// no quote. The callback receives the caller-supplied `user_data` context
+/// pointer and, when the account belongs to a group, writes the group id to
+/// `out_account_group_id` and returns `Found`; when the account has no group it
+/// returns `NoGroup`; when the group cannot be determined it returns `Failed`.
+/// Pass `OPENPIT_DEFAULT_ACCOUNT_GROUP` (`0`) to target the default group
+/// bucket.
 ///
 /// `resolution` controls which buckets are consulted, in order, when the
 /// more-specific bucket has no quote.
@@ -1260,6 +1301,10 @@ pub extern "C" fn openpit_marketdata_service_push_by_instrument_patch(
 /// - `UnknownInstrument`: `instrument_id` is not registered;
 /// - `QuoteExpired`: selected quote aged past TTL; the stale quote was written
 ///   to `out_quote`;
+/// - `AccountGroupResolutionFailed`: `resolve_account_group` returned `Failed`;
+///   `out_quote` is left untouched. A failed resolution is never degraded into
+///   "the account has no group", because that would silently move the read onto
+///   the default-group bucket;
 /// - `Error`: `resolution` is not one of the documented selector constants.
 ///
 /// Contract:
@@ -1287,13 +1332,20 @@ pub extern "C" fn openpit_marketdata_service_get(
     let adapter = CallbackAccountInfo {
         resolve: resolve_account_group.unwrap(),
         user_data,
+        failed: Cell::new(false),
     };
-    match unsafe { &*service }.handle.get(
+    let outcome = unsafe { &*service }.handle.get(
         InstrumentId::new(instrument_id),
         AccountId::from_u64(account_id),
         &adapter,
         resolution,
-    ) {
+    );
+    // The group answer fed into the lookup was not trustworthy, so neither is
+    // the bucket it selected: fail the read instead of reporting its quote.
+    if adapter.failed.get() {
+        return OpenPitMarketDataGetStatus::AccountGroupResolutionFailed;
+    }
+    match outcome {
         Ok(quote) => {
             unsafe { *out_quote = OpenPitMarketDataQuote::from_quote(quote) };
             OpenPitMarketDataGetStatus::Found
@@ -1379,21 +1431,37 @@ mod tests {
         }
     }
 
-    /// Resolver that always returns false — the account has no group.
+    /// Resolver reporting that the account belongs to no group.
     extern "C" fn no_group_resolver(
         _user_data: *mut c_void,
         _out: *mut OpenPitParamAccountGroupId,
-    ) -> bool {
-        false
+    ) -> u8 {
+        OpenPitMarketDataAccountGroupResolution::NoGroup as u8
     }
 
     /// Resolver that always returns group id 1 (a fixed non-default group).
     extern "C" fn fixed_group_resolver(
         _user_data: *mut c_void,
         out: *mut OpenPitParamAccountGroupId,
-    ) -> bool {
+    ) -> u8 {
         unsafe { *out = 1 };
-        true
+        OpenPitMarketDataAccountGroupResolution::Found as u8
+    }
+
+    /// Resolver that cannot determine the account's group.
+    extern "C" fn failing_group_resolver(
+        _user_data: *mut c_void,
+        _out: *mut OpenPitParamAccountGroupId,
+    ) -> u8 {
+        OpenPitMarketDataAccountGroupResolution::Failed as u8
+    }
+
+    /// Resolver returning an invalid raw discriminant.
+    extern "C" fn invalid_group_resolver(
+        _user_data: *mut c_void,
+        _out: *mut OpenPitParamAccountGroupId,
+    ) -> u8 {
+        u8::MAX
     }
 
     /// Calls `openpit_marketdata_service_get` with no group (via
@@ -1862,9 +1930,9 @@ mod tests {
         openpit_marketdata_service_register(service, &inst, &mut id, &mut err);
         openpit_marketdata_service_push(service, id, quote_with_mark("100"), &mut err);
 
-        // no_group_resolver returns false → group is None; AccountThenGroup
-        // can't fall through to a group bucket, but AccountThenGroupThenDefault
-        // can still fall through to the default bucket.
+        // no_group_resolver reports NoGroup; AccountThenGroup can't fall
+        // through to a group bucket, but AccountThenGroupThenDefault can still
+        // fall through to the default bucket.
         let mut out = OpenPitMarketDataQuote::default();
         let status = openpit_marketdata_service_get(
             service,
@@ -1917,6 +1985,62 @@ mod tests {
         );
         assert_eq!(status, OpenPitMarketDataGetStatus::Found);
         assert!(out.mark.is_set);
+
+        openpit_destroy_marketdata_service(service);
+    }
+
+    #[test]
+    fn get_with_failing_group_resolver_fails_the_read() {
+        let service = build_service();
+        let inst = instrument("AAPL", "USD");
+        let mut id: u64 = 0;
+        let mut err = null_error();
+        openpit_marketdata_service_register(service, &inst, &mut id, &mut err);
+        // Default bucket holds a quote a group-less account would inherit.
+        openpit_marketdata_service_push(service, id, quote_with_mark("100"), &mut err);
+
+        let mut out = OpenPitMarketDataQuote::default();
+        let status = openpit_marketdata_service_get(
+            service,
+            id,
+            7, // account_id — no per-account quote
+            Some(failing_group_resolver),
+            std::ptr::null_mut(),
+            OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT,
+            &mut out,
+        );
+        assert_eq!(
+            status,
+            OpenPitMarketDataGetStatus::AccountGroupResolutionFailed
+        );
+        assert!(!out.mark.is_set);
+
+        openpit_destroy_marketdata_service(service);
+    }
+
+    #[test]
+    fn get_with_invalid_group_resolver_fails_the_read() {
+        let service = build_service();
+        let inst = instrument("AAPL", "USD");
+        let mut id: u64 = 0;
+        let mut err = null_error();
+        openpit_marketdata_service_register(service, &inst, &mut id, &mut err);
+        openpit_marketdata_service_push(service, id, quote_with_mark("100"), &mut err);
+
+        let mut out = OpenPitMarketDataQuote::default();
+        let status = openpit_marketdata_service_get(
+            service,
+            id,
+            7,
+            Some(invalid_group_resolver),
+            std::ptr::null_mut(),
+            OPENPIT_MARKET_DATA_QUOTE_RESOLUTION_ACCOUNT_THEN_GROUP_THEN_DEFAULT,
+            &mut out,
+        );
+        assert_eq!(
+            status,
+            OpenPitMarketDataGetStatus::AccountGroupResolutionFailed
+        );
 
         openpit_destroy_marketdata_service(service);
     }

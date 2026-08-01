@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 //! Public account administration handle for [`Engine`](crate::Engine).
 
@@ -92,7 +92,8 @@ where
 ///   [`replace_block_reason`](Self::replace_block_reason), and their group
 ///   counterparts [`block_group`](Self::block_group),
 ///   [`unblock_group`](Self::unblock_group),
-///   [`replace_group_block_reason`](Self::replace_group_block_reason). A blocked
+///   [`replace_group_block_reason`](Self::replace_group_block_reason), plus
+///   [`unblock_all`](Self::unblock_all) for the engine-wide block. A blocked
 ///   account or a member of a blocked group has every pre-trade request
 ///   rejected before any policy runs; group blocking is a live predicate, so it
 ///   tracks membership changes without re-blocking.
@@ -301,6 +302,23 @@ where
         self.block_handle.unblock_account(account);
     }
 
+    /// Clears the engine-wide block, letting every account through again.
+    ///
+    /// A global block is raised by the engine itself, never by an admin call:
+    /// a kill switch reported by an execution report with no readable account,
+    /// or a failed mutation finalizer registered by a custom policy, whose
+    /// state reach the engine cannot bound (see
+    /// [`Mutation`](crate::Mutation)). This is the operator's counterpart, so
+    /// the engine can be returned to service once the inconsistency has been
+    /// investigated.
+    ///
+    /// Idempotent: a no-op when no global block is active. Accounts and groups
+    /// blocked individually stay blocked; clear those with
+    /// [`unblock`](Self::unblock) and [`unblock_group`](Self::unblock_group).
+    pub fn unblock_all(&self) {
+        self.block_handle.unblock_all();
+    }
+
     /// Replaces the stored reason of an already-blocked account.
     ///
     /// Unlike [`block`](Self::block), which preserves the first cause, this
@@ -467,6 +485,35 @@ mod tests {
             .is_some());
 
         accounts.unblock(account(1));
+        assert!(blocked
+            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .is_none());
+    }
+
+    #[test]
+    fn accounts_unblock_all_clears_the_global_block() {
+        let (accounts, blocked, registry) = new_accounts();
+        blocked.block_all_with_cause(AccountBlock::new(
+            "Engine",
+            RejectCode::SystemUnavailable,
+            "mutation finalizer failed",
+            "engine state may be inconsistent",
+        ));
+        assert!(blocked
+            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .is_some());
+
+        accounts.unblock_all();
+
+        assert!(blocked
+            .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
+            .is_none());
+    }
+
+    #[test]
+    fn accounts_unblock_all_without_a_global_block_is_noop() {
+        let (accounts, blocked, registry) = new_accounts();
+        accounts.unblock_all();
         assert!(blocked
             .check(&registry, &AccountOrder(account(1)), RejectScope::Order)
             .is_none());

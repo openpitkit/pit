@@ -81,6 +81,9 @@ namespace openpit::pretrade {
 
 class Result {
  public:
+  // Ordinary pre-trade keeps these contributions only on acceptance.
+  // Drop-copy also keeps them with ordinary, non-enforcing rejects;
+  // evaluation-failure rejects abort drop-copy and discard them.
   Result(const Result&) = delete;
   Result& operator=(const Result&) = delete;
   Result(Result&&) = delete;

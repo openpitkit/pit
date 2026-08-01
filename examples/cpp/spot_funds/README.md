@@ -4,21 +4,27 @@ The smallest end-to-end integration of OpenPit's built-in **SpotFunds**
 pre-trade policy. `RunExample()` reads top-to-bottom as a story: build a
 limit-only engine, seed an account with 100000 USD, accept a BUY of 30 AAPL @
 2000 (which holds 60000 USD), watch an identical second BUY get rejected with
-`InsufficientFunds` because that cash is still held, then fill the first order
-so its reservation settles. The point is the reservation mechanic - a committed
-order reduces available funds until it fills - and how a fill is tied back to
-its reservation by carrying the pre-trade lock on the execution report.
+`InsufficientFunds` because that cash is still held, fill the first order so its
+reservation settles, then switch the policy to track-only mode on the running
+engine and watch a third identical BUY get accepted against the 40000 USD the
+fill left available. The point is the reservation mechanic - a committed order
+reduces available funds until it fills - how a fill is tied back to its
+reservation by carrying the pre-trade lock on the execution report, and how the
+limit mode is retuned without rebuilding the engine.
 
-This is the C++ mirror of [`examples/go/spot_funds`](../../go/spot_funds); the
-scenario, constants, and outcomes are identical. See
-[Mirror notes](#mirror-notes) for the one binding-shaped difference.
+Everything runs against the `openpit::` C++ API: the engine is an RAII value,
+failures surface as `openpit::Error`, and every engine call is factored into a
+helper in `src/spot_funds.hpp`. See
+[Carrying the pre-trade lock](#carrying-the-pre-trade-lock) for the one piece of
+state those helpers have to thread by hand.
 
 ## Layout
 
-- `src/spot_funds.hpp` - shared helpers (one per Go `main.go` helper): build the
-  engine, seed funds, build an order, place it, build and apply a fill.
+- `src/spot_funds.hpp` - the shared helpers, one per engine interaction: build
+  the engine, seed funds, build an order, place it, build and apply a fill, and
+  switch the limit mode.
 - `src/main.cpp` - the linear story plus `main()`.
-- `test/smoke_test.cpp` - a GoogleTest smoke test mirroring `main_test.go`.
+- `test/smoke_test.cpp` - a GoogleTest smoke test over the same helpers.
 
 ## Building and running
 
@@ -77,22 +83,21 @@ cmake -S . -B build \
 cmake --build build
 ```
 
-## Mirror notes
+## Carrying the pre-trade lock
 
-The Go example reads `reservation.Lock().Bytes()` before committing and carries
-those bytes on the fill's execution report. The C++ binding shapes this
-differently in two spots, so the helpers in `spot_funds.hpp` take the path the
-Go doc comments already point to:
+A fill settles a reservation only when its execution report carries that
+reservation's pre-trade lock, so the lock is the one piece of state the helpers
+in `src/spot_funds.hpp` thread from placement to fill:
 
-- `pretrade::Reservation` surfaces only `Commit()` / `Rollback()`, not a lock
-  accessor. `PlaceOrder` reconstructs the equivalent lock the engine would have
-  produced - a single record under the default policy group at the reservation
-  price - via `pretrade::PreTradeLock::Push`. This is the C++ form of Go's
-  `pretrade.NewLockFromEntries({DefaultPolicyGroupID, lockPrice})`.
-- `model::ExecutionReport` intentionally does not surface the fill's lock
-  pointer (pre-trade locks are a separate handle slice). `ApplyFill` therefore
-  attaches the lock to the borrowed C report view and applies it through the C
-  ABI, draining account blocks back into `accounts::AccountBlock`.
+- `PlaceOrder` reads that lock off the reservation with
+  `pretrade::Reservation::Lock()`, then commits and returns it. The accessor
+  gives back an owned snapshot detached from the reservation, valid before or
+  after `Commit()`, and throws `openpit::Error` on an empty
+  (default-constructed or moved-from) handle.
+- `ApplyFill` copies the report, sets `model::Fill::lock` - a
+  `std::shared_ptr<pretrade::PreTradeLock>` - to a `Clone()` of that lock, and
+  passes the copy to `Engine::ApplyExecutionReport`. The returned
+  `PostTradeResult::accountBlocks` is empty when settlement succeeded.
 
 Everything else - the engine build, the seed adjustment, the orders, the
 reject-code check, and the no-block fill assertion - uses the high-level
@@ -103,5 +108,4 @@ reject-code check, and the no-block fill assertion - uses the high-level
 - [SpotFunds wiki page](https://wiki.openpit.dev/Spot-Funds/) -
   the full policy reference (market orders, slippage, pricing source, fee
   conventions).
-- [`examples/go/spot_funds`](../../go/spot_funds) - the Go mirror this example
-  tracks one-to-one.
+- [`examples/go/spot_funds`](../../go/spot_funds) - the same scenario in Go.

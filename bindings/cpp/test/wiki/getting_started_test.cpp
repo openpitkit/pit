@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Getting-Started.md
+// Source: https://wiki.openpit.dev/Getting-Started/
 //
 // Compiling mirror of the C++ snippets published on the Getting-Started wiki
 // page. Each TEST runs the same user code shown in the corresponding wiki block

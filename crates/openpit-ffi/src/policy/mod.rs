@@ -150,7 +150,28 @@ pub struct OpenPitMutations {
 }
 
 /// Callback invoked for either commit or rollback of a registered mutation.
-pub type OpenPitMutationFn = unsafe extern "C" fn(user_data: *mut c_void);
+///
+/// A finalizer has no right to fail: by the time it runs the decision is already
+/// made and the state it finalizes was applied eagerly, so there is nothing left
+/// to compensate and no caller left to answer.
+///
+/// Returns `true` on success. On `false`, the callback may write a caller-owned
+/// `OpenPitSharedString` to `out_error`; the engine consumes and destroys it
+/// before returning across the ABI. A null error handle still means failure and
+/// receives generic diagnostics.
+///
+/// A reported failure never fails the void commit or rollback call that ran the
+/// callback. It arms the engine kill switch instead, and a mutation registered
+/// through this ABI is a custom-policy mutation whose state reach the engine
+/// cannot bound, so EVERY account is blocked: policy `"Engine"`, code
+/// `OPENPIT_PRETRADE_REJECT_CODE_SYSTEM_UNAVAILABLE`, reason
+/// `"mutation finalizer failed"`. The owner of the reservation or the drop-copy
+/// operation is not told directly; the next pre-trade call is rejected. An
+/// operator clears the block with `openpit_engine_unblock_all_accounts`. A
+/// failure reported while drop copy compensates a fatal evaluation reject
+/// additionally surfaces `SystemUnavailable` rejects to that caller.
+pub type OpenPitMutationFn =
+    unsafe extern "C" fn(user_data: *mut c_void, out_error: OpenPitOutError) -> bool;
 
 /// Optional callback to release mutation user_data after execution.
 ///
@@ -171,6 +192,54 @@ impl Drop for FfiMutationGuard {
             unsafe { free(self.user_data) };
         }
     }
+}
+
+pub(crate) fn mutation_from_ffi_callbacks(
+    commit_fn: OpenPitMutationFn,
+    rollback_fn: OpenPitMutationFn,
+    user_data: *mut c_void,
+    free_fn: Option<OpenPitMutationFreeFn>,
+) -> Mutation {
+    fn call(
+        callback: OpenPitMutationFn,
+        user_data: *mut c_void,
+        fallback: &'static str,
+    ) -> Result<(), String> {
+        let mut error = std::ptr::null_mut();
+        let succeeded = unsafe { callback(user_data, &mut error) };
+        let details = unsafe { crate::string::take_shared_string(error) };
+        if succeeded {
+            Ok(())
+        } else {
+            Err(details.unwrap_or_else(|| fallback.to_owned()))
+        }
+    }
+
+    let guard = Rc::new(FfiMutationGuard { user_data, free_fn });
+    let commit_guard = Rc::clone(&guard);
+    let rollback_guard = Rc::clone(&guard);
+    let mutation = Mutation::new_fallible_with_error(
+        move || {
+            let result = call(
+                commit_fn,
+                user_data,
+                "mutation commit callback failed without error details",
+            );
+            drop(commit_guard);
+            result
+        },
+        move || {
+            let result = call(
+                rollback_fn,
+                user_data,
+                "mutation rollback callback failed without error details",
+            );
+            drop(rollback_guard);
+            result
+        },
+    );
+    drop(guard);
+    mutation
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -487,7 +556,16 @@ pub extern "C" fn openpit_engine_builder_add_pre_trade_policy(
 /// - `commit_fn` and `rollback_fn` must remain callable until one of them is
 ///   executed.
 /// - `user_data` is passed to both callbacks.
-/// - Exactly one of `commit_fn` or `rollback_fn` runs for each successful push.
+/// - Apply tentative state before registration. Pre-trade and drop-copy
+///   finalization each run exactly one callback per mutation, when the caller
+///   commits or rolls back the returned handle. A fatal drop-copy evaluation
+///   reject runs every collected `rollback_fn` instead, including mutations
+///   whose `commit_fn` was not reached.
+/// - Neither callback may fail. A failure reported by either one never fails the
+///   void commit or rollback call; it arms the engine kill switch. A mutation
+///   registered here is a custom-policy mutation, so that kill switch blocks
+///   EVERY account until an operator calls
+///   `openpit_engine_unblock_all_accounts`. See `OpenPitMutationFn`.
 /// - After the executed callback returns, `free_fn` is called exactly once when
 ///   provided.
 /// - If neither callback runs (for example collector drop), only `free_fn`
@@ -516,23 +594,14 @@ pub unsafe extern "C" fn openpit_mutations_push(
         return false;
     }
 
-    let guard = Rc::new(FfiMutationGuard { user_data, free_fn });
-    let commit_guard = Rc::clone(&guard);
-    let rollback_guard = Rc::clone(&guard);
-
     unsafe {
-        (*raw_mutations).push(Mutation::new(
-            move || {
-                commit_fn(user_data);
-                drop(commit_guard);
-            },
-            move || {
-                rollback_fn(user_data);
-                drop(rollback_guard);
-            },
+        (*raw_mutations).push(mutation_from_ffi_callbacks(
+            commit_fn,
+            rollback_fn,
+            user_data,
+            free_fn,
         ));
     }
-    drop(guard);
     true
 }
 
@@ -552,6 +621,10 @@ mod tests {
     use openpit::param::{AccountId, Asset, Quantity, Side, TradeAmount};
     use openpit::Instrument;
     use openpit_interop::{OrderOperationAccess, PopulatedOrderOperation};
+
+    fn accepted_rejects() -> *mut OpenPitPretradeRejectList {
+        crate::reject::openpit_create_pretrade_reject_list(0)
+    }
 
     unsafe extern "C" fn custom_apply_report_fn(
         _ctx: *const super::custom::OpenPitPostTradeContext,
@@ -596,6 +669,10 @@ mod tests {
     struct MutationPushContext {
         entries: Vec<*mut c_void>,
         free_fn: Option<OpenPitMutationFreeFn>,
+    }
+
+    struct FailingMutationUserData {
+        details: Option<&'static str>,
     }
 
     fn sample_order() -> Order {
@@ -649,23 +726,105 @@ mod tests {
             .expect("main pre-trade must succeed")
     }
 
-    unsafe extern "C" fn tracked_mutation_commit(user_data: *mut c_void) {
+    unsafe extern "C" fn tracked_mutation_commit(
+        user_data: *mut c_void,
+        _out_error: OpenPitOutError,
+    ) -> bool {
         let data = unsafe { &*(user_data as *mut MutationUserData) };
         let mut state = data.state.borrow_mut();
         state.commit_calls += 1;
         state.sequence.push(data.marker);
+        true
     }
 
-    unsafe extern "C" fn tracked_mutation_rollback(user_data: *mut c_void) {
+    unsafe extern "C" fn tracked_mutation_rollback(
+        user_data: *mut c_void,
+        _out_error: OpenPitOutError,
+    ) -> bool {
         let data = unsafe { &*(user_data as *mut MutationUserData) };
         let mut state = data.state.borrow_mut();
         state.rollback_calls += 1;
         state.sequence.push(data.marker);
+        true
     }
 
     unsafe extern "C" fn tracked_mutation_free(user_data: *mut c_void) {
         let data = unsafe { Box::from_raw(user_data as *mut MutationUserData) };
         data.state.borrow_mut().free_calls += 1;
+    }
+
+    unsafe extern "C" fn failing_mutation_rollback(
+        user_data: *mut c_void,
+        out_error: OpenPitOutError,
+    ) -> bool {
+        let data = unsafe { &*(user_data as *const FailingMutationUserData) };
+        if let Some(details) = data.details {
+            unsafe {
+                if let Some(out_error) = out_error.as_mut() {
+                    *out_error = crate::string::OpenPitSharedString::new_handle(details);
+                }
+            }
+        }
+        false
+    }
+
+    unsafe extern "C" fn successful_mutation_commit(
+        _user_data: *mut c_void,
+        _out_error: OpenPitOutError,
+    ) -> bool {
+        true
+    }
+
+    unsafe extern "C" fn failing_mutation_free(user_data: *mut c_void) {
+        unsafe { drop(Box::from_raw(user_data as *mut FailingMutationUserData)) };
+    }
+
+    // Pushes a mutation whose rollback callback fails, then aborts the pipeline
+    // with a fatal reject so drop copy has to compensate that mutation.
+    unsafe extern "C" fn push_failing_mutation_check_fn(
+        _ctx: *const OpenPitPretradeContext,
+        _order: *const OpenPitOrder,
+        mutations: *mut OpenPitMutations,
+        _out_result: *mut crate::account_outcome::OpenPitPretradePreTradeResult,
+        user_data: *mut c_void,
+    ) -> *mut OpenPitPretradeRejectList {
+        let ok = unsafe {
+            openpit_mutations_push(
+                mutations,
+                successful_mutation_commit,
+                failing_mutation_rollback,
+                user_data,
+                Some(failing_mutation_free),
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(ok);
+        std::ptr::null_mut()
+    }
+
+    fn apply_drop_copy_with_failing_mutation(details: Option<&'static str>) -> Rejects {
+        let user_data = Box::into_raw(Box::new(FailingMutationUserData { details })).cast();
+        let engine = openpit::EngineBuilder::<Order, ExecutionReport, AccountAdjustment>::new()
+            .sync(openpit_interop::EngineLocking::new(
+                openpit_interop::SyncMode::None,
+            ))
+            .pre_trade(custom::CustomPreTradePolicy {
+                name: "ffi.custom".to_owned(),
+                policy_group_id: openpit::PolicyGroupId::new(0),
+                check_pre_trade_start_fn: None,
+                perform_pre_trade_check_fn: Some(push_failing_mutation_check_fn),
+                check_pre_trade_start_dry_run_fn: None,
+                perform_pre_trade_check_dry_run_fn: None,
+                apply_execution_report_fn: Some(custom_apply_report_fn),
+                apply_account_adjustment_fn: None,
+                free_user_data_fn: custom_free_user_data_fn,
+                user_data,
+            })
+            .build()
+            .expect("engine build must succeed");
+        engine
+            .apply_drop_copy(sample_order())
+            .expect_err("fatal reject must abort drop-copy")
     }
 
     unsafe extern "C" fn push_tracked_mutations_check_fn(
@@ -689,7 +848,7 @@ mod tests {
             };
             assert!(ok, "{}", cstr_to_string(std::ptr::null_mut()));
         }
-        std::ptr::null_mut()
+        accepted_rejects()
     }
 
     #[test]
@@ -777,11 +936,20 @@ mod tests {
 
     #[test]
     fn mutations_push_null_free_fn_no_crash() {
-        unsafe extern "C" fn commit_without_free(user_data: *mut c_void) {
+        unsafe extern "C" fn commit_without_free(
+            user_data: *mut c_void,
+            _out_error: OpenPitOutError,
+        ) -> bool {
             let state = unsafe { &*(user_data as *const RefCell<MutationState>) };
             state.borrow_mut().commit_calls += 1;
+            true
         }
-        unsafe extern "C" fn rollback_without_free(_user_data: *mut c_void) {}
+        unsafe extern "C" fn rollback_without_free(
+            _user_data: *mut c_void,
+            _out_error: OpenPitOutError,
+        ) -> bool {
+            true
+        }
 
         let state = RefCell::new(MutationState::default());
         let entry = (&state as *const RefCell<MutationState>).cast_mut().cast();
@@ -809,7 +977,7 @@ mod tests {
                 )
             };
             assert!(ok, "{}", cstr_to_string(std::ptr::null_mut()));
-            std::ptr::null_mut()
+            accepted_rejects()
         }
 
         let mut reservation = execute_with_custom_pre_trade_policy(
@@ -823,7 +991,9 @@ mod tests {
 
     #[test]
     fn mutations_push_null_handle_returns_false() {
-        unsafe extern "C" fn noop(_user_data: *mut c_void) {}
+        unsafe extern "C" fn noop(_user_data: *mut c_void, _out_error: OpenPitOutError) -> bool {
+            true
+        }
 
         let ok = unsafe {
             openpit_mutations_push(
@@ -836,6 +1006,214 @@ mod tests {
             )
         };
         assert!(!ok);
+    }
+
+    #[test]
+    fn mutation_callback_failure_preserves_owned_error_details() {
+        let rejects =
+            apply_drop_copy_with_failing_mutation(Some("go mutation rollback panic: boom"));
+
+        assert_eq!(rejects.len(), 2);
+        assert_eq!(rejects[1].details, "go mutation rollback panic: boom");
+    }
+
+    #[test]
+    fn mutation_callback_failure_without_payload_fails_closed() {
+        let rejects = apply_drop_copy_with_failing_mutation(None);
+
+        assert_eq!(rejects.len(), 2);
+        assert_eq!(
+            rejects[1].details,
+            "mutation rollback callback failed without error details"
+        );
+    }
+
+    #[test]
+    fn mutation_callback_failure_preserves_empty_error_payload() {
+        let rejects = apply_drop_copy_with_failing_mutation(Some(""));
+
+        assert_eq!(rejects.len(), 2);
+        assert_eq!(rejects[1].details, "");
+    }
+
+    #[test]
+    fn drop_copy_start_recorder_surfaces_failing_ffi_rollback_and_blocks_account() {
+        #[derive(Default)]
+        struct State {
+            rollback_calls: usize,
+        }
+
+        unsafe extern "C" fn commit(_user_data: *mut c_void, _out_error: OpenPitOutError) -> bool {
+            true
+        }
+
+        unsafe extern "C" fn rollback(user_data: *mut c_void, out_error: OpenPitOutError) -> bool {
+            let state = unsafe { &*(user_data as *const RefCell<State>) };
+            state.borrow_mut().rollback_calls += 1;
+            if let Some(out_error) = unsafe { out_error.as_mut() } {
+                *out_error =
+                    crate::string::OpenPitSharedString::new_handle("ffi start rollback failed");
+            }
+            false
+        }
+
+        unsafe extern "C" fn record_start_mutation(
+            ctx: *const OpenPitPretradeContext,
+            _order: *const OpenPitOrder,
+            user_data: *mut c_void,
+        ) -> *mut OpenPitPretradeRejectList {
+            let mut error = std::ptr::null_mut();
+            let recorded = unsafe {
+                crate::account_control::openpit_pretrade_context_record_drop_copy_start_mutation(
+                    ctx, commit, rollback, user_data, None, &mut error,
+                )
+            };
+            assert!(recorded, "{}", cstr_to_string(error));
+            accepted_rejects()
+        }
+
+        unsafe extern "C" fn fail_start(
+            _ctx: *const OpenPitPretradeContext,
+            _order: *const OpenPitOrder,
+            _user_data: *mut c_void,
+        ) -> *mut OpenPitPretradeRejectList {
+            std::ptr::null_mut()
+        }
+
+        let state = RefCell::new(State::default());
+        let user_data = (&state as *const RefCell<State>).cast_mut().cast();
+        let policy = |name: &str, start_fn: OpenPitPretradePreTradePolicyCheckPreTradeStartFn| {
+            custom::CustomPreTradePolicy {
+                name: name.to_owned(),
+                policy_group_id: openpit::PolicyGroupId::new(0),
+                check_pre_trade_start_fn: Some(start_fn),
+                perform_pre_trade_check_fn: None,
+                check_pre_trade_start_dry_run_fn: None,
+                perform_pre_trade_check_dry_run_fn: None,
+                apply_execution_report_fn: Some(custom_apply_report_fn),
+                apply_account_adjustment_fn: None,
+                free_user_data_fn: custom_free_user_data_fn,
+                user_data,
+            }
+        };
+        let engine = openpit::EngineBuilder::<Order, ExecutionReport, AccountAdjustment>::new()
+            .sync(openpit_interop::EngineLocking::new(
+                openpit_interop::SyncMode::None,
+            ))
+            .pre_trade(policy("ffi.record-start", record_start_mutation))
+            .pre_trade(policy("ffi.fail-start", fail_start))
+            .build()
+            .expect("engine build must succeed");
+        let order = sample_order();
+
+        let rejects = engine
+            .apply_drop_copy(order.clone())
+            .expect_err("fatal start callback must roll back the recorded mutation");
+
+        assert_eq!(state.borrow().rollback_calls, 1);
+        assert_eq!(rejects.len(), 2);
+        assert_eq!(rejects[1].details, "ffi start rollback failed");
+        assert_eq!(
+            engine
+                .start_pre_trade(order)
+                .expect_err("failed FFI rollback must safety-block the account")[0]
+                .code,
+            openpit::pretrade::RejectCode::SystemUnavailable
+        );
+    }
+
+    #[test]
+    fn drop_copy_start_recorder_rejects_null_context_and_keeps_user_data() {
+        let state = Rc::new(RefCell::new(MutationState::default()));
+        let entry: *mut c_void = Box::into_raw(Box::new(MutationUserData {
+            state: Rc::clone(&state),
+            marker: 1,
+        }))
+        .cast();
+
+        let mut error = std::ptr::null_mut();
+        let recorded = unsafe {
+            crate::account_control::openpit_pretrade_context_record_drop_copy_start_mutation(
+                std::ptr::null(),
+                tracked_mutation_commit,
+                tracked_mutation_rollback,
+                entry,
+                Some(tracked_mutation_free),
+                &mut error,
+            )
+        };
+
+        assert!(!recorded);
+        assert_eq!(
+            cstr_to_string(error),
+            "openpit_pretrade_context_record_drop_copy_start_mutation: context is null"
+        );
+        assert_eq!(state.borrow().free_calls, 0);
+
+        // Ownership never transferred, so the caller runs its own cleanup.
+        unsafe { tracked_mutation_free(entry) };
+        assert_eq!(state.borrow().free_calls, 1);
+    }
+
+    #[test]
+    fn drop_copy_start_recorder_rejects_ordinary_pre_trade_and_keeps_user_data() {
+        struct RecorderProbe {
+            error: String,
+            entry: *mut c_void,
+            recorded: bool,
+        }
+
+        unsafe extern "C" fn record_start_mutation_check_fn(
+            ctx: *const OpenPitPretradeContext,
+            _order: *const OpenPitOrder,
+            _mutations: *mut OpenPitMutations,
+            _out_result: *mut crate::account_outcome::OpenPitPretradePreTradeResult,
+            user_data: *mut c_void,
+        ) -> *mut OpenPitPretradeRejectList {
+            let probe = unsafe { &mut *(user_data as *mut RecorderProbe) };
+            let mut error = std::ptr::null_mut();
+            probe.recorded = unsafe {
+                crate::account_control::openpit_pretrade_context_record_drop_copy_start_mutation(
+                    ctx,
+                    tracked_mutation_commit,
+                    tracked_mutation_rollback,
+                    probe.entry,
+                    Some(tracked_mutation_free),
+                    &mut error,
+                )
+            };
+            probe.error = cstr_to_string(error);
+            accepted_rejects()
+        }
+
+        let state = Rc::new(RefCell::new(MutationState::default()));
+        let entry: *mut c_void = Box::into_raw(Box::new(MutationUserData {
+            state: Rc::clone(&state),
+            marker: 1,
+        }))
+        .cast();
+        let mut probe = RecorderProbe {
+            error: String::new(),
+            entry,
+            recorded: true,
+        };
+
+        let mut reservation = execute_with_custom_pre_trade_policy(
+            record_start_mutation_check_fn,
+            (&mut probe as *mut RecorderProbe).cast(),
+        );
+        reservation.commit();
+
+        assert!(!probe.recorded);
+        assert_eq!(
+            probe.error,
+            "pre-trade context is not an active drop-copy operation"
+        );
+        assert_eq!(state.borrow().free_calls, 0);
+
+        // Ownership never transferred, so the caller runs its own cleanup.
+        unsafe { tracked_mutation_free(entry) };
+        assert_eq!(state.borrow().free_calls, 1);
     }
 
     #[test]

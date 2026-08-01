@@ -104,6 +104,13 @@ func DestroySharedString(handle SharedString) {
 	C.openpit_destroy_shared_string(handle)
 }
 
+// CreateSharedString copies value into a caller-owned native shared string.
+func CreateSharedString(value string) SharedString {
+	handle := C.openpit_create_shared_string(importString(value))
+	runtime.KeepAlive(value)
+	return handle
+}
+
 // SharedStringViewBytes returns a freshly allocated copy of the bytes backing
 // the handle. The result is independent of the handle and safe to keep beyond
 // its lifetime.

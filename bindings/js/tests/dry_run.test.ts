@@ -16,7 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 //
 // Mirrors the public JS dry-run examples from:
-// - ../../../../pit.wiki/Non-Mutating-Dry-Run.md
+// - https://wiki.openpit.dev/Non-Mutating-Dry-Run/
 
 import { describe, expect, it } from "vitest";
 
@@ -76,7 +76,8 @@ function makeSpotFundsEngine(): Engine {
 
 describe("dry-run surface", () => {
   it("reads the dry-run verdict", () => {
-    // Source: Non-Mutating-Dry-Run.md - Read the Dry-Run Verdict
+    // Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+    // - Read the Dry-Run Verdict
     const engine = Engine.builder().builtin(buildOrderValidation()).build();
     const order: OrderInit = {
       operation: {
@@ -117,7 +118,8 @@ describe("dry-run surface", () => {
   });
 
   it("uses the dry run before a real call", () => {
-    // Source: Non-Mutating-Dry-Run.md - Use the Dry-Run Before a Real Call
+    // Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+    // - Use the Dry-Run Before a Real Call
     const engine = Engine.builder()
       .builtin(
         buildRateLimit().brokerBarrier(
@@ -173,7 +175,8 @@ describe("dry-run surface", () => {
   });
 
   it("uses a custom read-only start hook without running normal side effects", () => {
-    // Source: Non-Mutating-Dry-Run.md - Read-Only Custom Start-Stage Hook
+    // Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+    // - Read-Only Custom Start-Stage Hook
     const counterState: { acceptedOrders: number; limit: number } = {
       acceptedOrders: 0,
       limit: 10,

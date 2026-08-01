@@ -144,6 +144,7 @@ namespace openpit::pretrade {
 class AccountOutcomes;
 class Context;
 class DryRunReport;
+class DropCopyOperation;
 class PostTradeAdjustments;
 class PostTradeContext;
 class PostTradePnls;
@@ -155,6 +156,7 @@ class Reservation;
 template <typename Handler>
 class CustomPolicy;
 
+struct DropCopyResult;
 struct ExecuteResult;
 struct LockEntry;
 struct PolicyAccountAdjustmentResult;
@@ -296,6 +298,8 @@ class AsyncEngine;
 template <typename Driver>
 class AsyncAccounts;
 template <typename Driver>
+class AsyncDropCopyOperation;
+template <typename Driver>
 class AsyncRequest;
 template <typename Driver>
 class AsyncReservation;
@@ -316,6 +320,8 @@ class TypedShardedBuilder;
 
 struct AdjustmentOutcome;
 
+template <typename Driver>
+struct DropCopyOutcome;
 template <typename Driver>
 struct ExecuteOutcome;
 template <typename Driver>

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 // Package tx provides transaction mutation types for the pre-trade pipeline.
 package tx
@@ -21,8 +21,8 @@ package tx
 import (
 	"errors"
 
+	"go.openpit.dev/openpit/internal/mutation"
 	"go.openpit.dev/openpit/internal/native"
-	"go.openpit.dev/openpit/tx/internal/mutation"
 )
 
 // Mutations is a collection of commit/rollback callbacks registered during a pre-trade check.
@@ -35,8 +35,27 @@ func NewMutationsFromHandle(handle native.Mutations) Mutations {
 
 // Push registers one mutation with commit and rollback callbacks.
 //
-// Exactly one of commit or rollback is called by the engine, followed by the
-// free callback.
+// Apply tentative state before Push. Ordinary reservation finalization calls
+// commit to keep that state or rollback to undo it. A drop-copy operation
+// registers the same pair and finalizes it the same way, from Commit or
+// Rollback on the returned operation, or implicitly from an unresolved Close.
+// A rollback also runs for mutations whose commit was never reached, because
+// their tentative state was already applied.
+//
+// Neither callback has the right to fail: by the time a finalizer runs the
+// decision is already made and the state it finalizes was applied eagerly, so
+// there is nothing left to compensate. A callback panic is recovered at the SDK
+// boundary and reported to the core as exactly such a failure. That failure
+// never fails the void Commit or Rollback call that ran the callback, and is
+// never discarded either: it arms the engine kill switch. A mutation registered
+// from Go belongs to a custom policy whose state reach the engine cannot bound,
+// so EVERY account is blocked, not only the order's own. Nothing reports the
+// block to the finalizing caller; it surfaces when the next pre-trade call is
+// rejected with SystemUnavailable, and an operator lifts it with UnblockAll on
+// the engine's Accounts accessor, which leaves accounts and groups blocked
+// individually untouched. A failure reported while the engine compensates a
+// fatal drop-copy evaluation exit additionally appends SystemUnavailable to
+// that call's rejects.
 func (m Mutations) Push(commit, rollback func()) error {
 	if commit == nil {
 		return errors.New("mutation commit callback is nil")

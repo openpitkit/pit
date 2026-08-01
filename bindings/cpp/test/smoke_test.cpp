@@ -42,6 +42,19 @@ TEST(Runtime, BuildProfileReportsKnownKeys) {
   EXPECT_NE(profile.find("debug_assertions="), std::string::npos);
 }
 
+TEST(Reject, EvaluationFailureClassificationIsExposed) {
+  using openpit::pretrade::IsEvaluationFailure;
+  using openpit::pretrade::RejectCode;
+
+  EXPECT_TRUE(IsEvaluationFailure(RejectCode::MissingRequiredField));
+  EXPECT_TRUE(IsEvaluationFailure(RejectCode::MarkPriceUnavailable));
+  EXPECT_TRUE(IsEvaluationFailure(RejectCode::ArithmeticOverflow));
+  EXPECT_FALSE(IsEvaluationFailure(RejectCode::InsufficientFunds));
+  EXPECT_FALSE(IsEvaluationFailure(RejectCode::PnlKillSwitchTriggered));
+  EXPECT_FALSE(IsEvaluationFailure(RejectCode::Other));
+  EXPECT_FALSE(IsEvaluationFailure(static_cast<RejectCode>(65535)));
+}
+
 TEST(Param, PriceRoundTripsExactDecimalFromString) {
   const openpit::param::Price price =
       openpit::param::Price::FromString("185.25");

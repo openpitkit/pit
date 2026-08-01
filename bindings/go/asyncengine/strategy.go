@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package asyncengine
 
@@ -36,8 +36,8 @@ const (
 // pendingTask is the unit of work queued by the strategy. Exactly one of
 // run or abort runs over the task lifetime: run is invoked when the
 // strategy decides to execute the task normally; abort is invoked when
-// the strategy aborts a queued task (typically on hard stop) or when the
-// submit itself fails on the caller goroutine.
+// the strategy aborts a queued task, typically on hard stop. A submit that
+// fails before enqueue is handled by the public operation that submitted it.
 //
 // Each public operation implements pendingTask with a small concrete value
 // carrying its future pointer and the handles it needs, so the hot submit
@@ -49,12 +49,34 @@ type pendingTask interface {
 	abort(err error)
 }
 
+// submitFailureCleanupTask carries mandatory handle cleanup after the public
+// operation's original submit failed. Both worker outcomes run the same
+// cleanup: cancellation has already been reported by the original future, and
+// this task exists only to preserve lane ordering before releasing the handle.
+type submitFailureCleanupTask struct {
+	cleanup func()
+}
+
+func (t submitFailureCleanupTask) run() { t.cleanup() }
+
+func (t submitFailureCleanupTask) abort(error) { t.cleanup() }
+
 // queuedTask wraps a pending task with the metadata needed by observer
 // callbacks.
 type queuedTask struct {
 	task       pendingTask
 	accountID  param.AccountID
 	enqueuedAt time.Time
+}
+
+// submitFailureCleanupEntry is one queued handle release. admittedFence is
+// the value of q.admitted when the entry was queued: the entry runs only once
+// q.settled has caught up with it, so the release stays behind lane work that
+// was already admitted and cannot be held back by work admitted later.
+type submitFailureCleanupEntry struct {
+	task            queuedTask
+	admittedFence   int64
+	waitSubmitFence bool
 }
 
 // keyQueue is a single per-account-or-shard channel-backed queue. The
@@ -71,20 +93,45 @@ type queuedTask struct {
 // false-idle queue mid-send. Idle cleanup reads pending under gate.WLock
 // and refuses to retire a queue with pending != 0, which is what keeps a
 // queue alive across a long-running task even after its channel has
-// drained. Sharded queues do not track it.
+// drained. Mandatory cleanup uses an unbounded per-lane backlog consumed by
+// the same worker, so a full channel never blocks its caller and successful
+// stop cannot outlive cleanup. Sharded queues do not track idle state.
+//
+// admitted and settled are the monotonic pair that orders that backlog:
+// admitted counts every task reserved for ch, settled counts every one of
+// them that has been handled or abandoned. Both strategies maintain them,
+// because a shard carries several accounts and a cleanup there must not wait
+// for the whole shard to fall idle.
 type keyQueue struct {
-	ch         chan queuedTask
-	quit       chan struct{}
-	gate       sync.RWMutex
-	closed     atomic.Bool
-	lastActive atomic.Int64
-	pending    atomic.Int64
+	ch   chan queuedTask
+	quit chan struct{}
+	// done is closed when this lane's worker has exited. Production joins
+	// workers through workersWG; the per-lane signal exists so package tests
+	// can observe the exit of one retired lane.
+	done          chan struct{}
+	mandatoryWake chan struct{}
+	gate          sync.RWMutex
+	mandatoryMu   sync.Mutex
+	mandatory     []submitFailureCleanupEntry
+	// mandatoryProgress is non-nil while mandatory is not empty and is closed
+	// and replaced whenever an entry leaves it, so a producer fenced by an
+	// entry re-checks instead of waiting for the whole backlog to drain.
+	mandatoryProgress chan struct{}
+	retired           bool
+	workerExited      bool
+	closed            atomic.Bool
+	lastActive        atomic.Int64
+	pending           atomic.Int64
+	admitted          atomic.Int64
+	settled           atomic.Int64
 }
 
 func newKeyQueue(capacity int) *keyQueue {
 	q := &keyQueue{
-		ch:   make(chan queuedTask, capacity),
-		quit: make(chan struct{}),
+		ch:            make(chan queuedTask, capacity),
+		quit:          make(chan struct{}),
+		done:          make(chan struct{}),
+		mandatoryWake: make(chan struct{}, 1),
 	}
 	q.touch()
 	return q
@@ -98,14 +145,91 @@ func (q *keyQueue) lastActiveAt() time.Time {
 	return time.Unix(0, q.lastActive.Load())
 }
 
+// settle records that a task reserved by admitTask has been handled, aborted,
+// or given up on. It is what releases mandatory cleanup queued behind it.
+func (q *keyQueue) settle() {
+	q.settled.Add(1)
+}
+
+// markRetired seals the lane against new mandatory cleanup. It refuses while
+// cleanup is still queued, so retirement can never strand a handle release on
+// a lane whose worker is about to stop consuming it.
+func (q *keyQueue) markRetired() bool {
+	q.mandatoryMu.Lock()
+	defer q.mandatoryMu.Unlock()
+	if len(q.mandatory) != 0 {
+		return false
+	}
+	q.retired = true
+	return true
+}
+
+// pendingCleanupForLocked returns the first queued cleanup for accountID.
+// Cleanup for one account must not fence producers of another, which matters
+// for Sharded, where one queue carries many accounts.
+func (q *keyQueue) pendingCleanupForLocked(
+	accountID param.AccountID,
+) (submitFailureCleanupEntry, bool) {
+	for _, entry := range q.mandatory {
+		if entry.task.accountID == accountID {
+			return entry, true
+		}
+	}
+	return submitFailureCleanupEntry{}, false
+}
+
+// noteMandatoryProgressLocked wakes producers fenced by the backlog after an
+// entry left it.
+func (q *keyQueue) noteMandatoryProgressLocked() {
+	close(q.mandatoryProgress)
+	if len(q.mandatory) == 0 {
+		q.mandatoryProgress = nil
+		return
+	}
+	q.mandatoryProgress = make(chan struct{})
+}
+
 // strategy is the internal interface that dispatches a task to a worker
 // goroutine bound to the given account. The chosen strategy is selected
 // at build time.
 type strategy interface {
 	submit(ctx context.Context, accountID param.AccountID, task pendingTask) error
+	scheduleSubmitFailureCleanup(accountID param.AccountID, cleanup func())
 
 	stopGraceful(ctx context.Context) error
 	stopHard(ctx context.Context) error
+}
+
+// submitFailureHandoffStrategy keeps a failed pre-stop producer registered
+// until its caller transfers handle ownership to mandatory cleanup. Concrete
+// production strategies implement it; the fallback preserves compatibility
+// with narrow test strategies that only implement strategy.
+type submitFailureHandoffStrategy interface {
+	submitWithFailureHandoff(
+		ctx context.Context,
+		accountID param.AccountID,
+		task pendingTask,
+		onFailure func(error),
+	) error
+}
+
+func submitWithFailureHandoff(
+	ctx context.Context,
+	s strategy,
+	accountID param.AccountID,
+	task pendingTask,
+	onFailure func(error),
+) error {
+	if handoffStrategy, ok := s.(submitFailureHandoffStrategy); ok {
+		return handoffStrategy.submitWithFailureHandoff(
+			ctx, accountID, task, onFailure,
+		)
+	}
+	err := s.submit(ctx, accountID, task)
+	if err != nil {
+		onFailure(err)
+	}
+	return err
 }
 
 // baseConfig is the configuration shared by every concrete strategy.
@@ -118,16 +242,24 @@ type baseConfig struct {
 // base implements the producer/worker/stop logic common to every
 // strategy. Concrete strategies own the routing of accountID -> *keyQueue.
 type base struct {
-	cfg             baseConfig
-	inFlightSubmits sync.WaitGroup
-	// submitMu orders inFlightSubmits.Add against stop so Add happens-before
-	// Wait. beginSubmit takes the read side so concurrent submits proceed in
-	// parallel; signalStopOnce takes the write side around close(stopCh).
+	cfg baseConfig
+	// submitMu orders inFlightSubmits increments against stop. beginSubmit
+	// takes the read side so concurrent submits proceed in parallel;
+	// signalStopOnce takes the write side around close(stopCh).
 	// RWMutex orders each RLock wholly before or wholly after the Lock: a
-	// submit that runs after the close observes isStopped and skips Add; a
-	// submit that runs before completes its Add before the close, so the
-	// post-stop inFlightSubmits.Wait still observes the matching Done.
-	submitMu sync.RWMutex
+	// submit that runs after the close skips registration; a submit that runs
+	// before increments the counter before stop observes it.
+	submitMu        sync.RWMutex
+	inFlightSubmits atomic.Int64
+	submitFenceCh   chan struct{}
+	submitFenceOnce sync.Once
+	// lifecycleCleanupMu orders no-lane mandatory cleanup registration
+	// against the final successful stop. Cleanup that registers first is
+	// included in that stop; cleanup after sealing is already post-stop.
+	lifecycleCleanupMu     sync.Mutex
+	lifecycleCleanupDone   chan struct{}
+	lifecycleCleanupCount  int
+	lifecycleCleanupSealed bool
 	// observerActive is false when cfg.observer is the shared no-op, letting
 	// the hot path skip the per-task timestamps the observer would discard.
 	observerActive bool
@@ -156,6 +288,7 @@ func newBase(cfg baseConfig, tracksIdle bool) base {
 		cfg:            cfg,
 		observerActive: cfg.observer != noopObserver,
 		tracksIdle:     tracksIdle,
+		submitFenceCh:  make(chan struct{}),
 		stopCh:         make(chan struct{}),
 		hardStopCh:     make(chan struct{}),
 	}
@@ -179,10 +312,10 @@ func (b *base) hardStopped() bool {
 	}
 }
 
-// beginSubmit registers an in-flight submit so that its channel send
+// beginSubmit registers an in-flight producer so that its channel send
 // happens-before any closeQueueChannels. It returns false when the
 // strategy has already been signalled to stop, in which case the caller
-// must not send and must not call inFlightSubmits.Done.
+// must not send and must not call endSubmit.
 func (b *base) beginSubmit() bool {
 	b.submitMu.RLock()
 	defer b.submitMu.RUnlock()
@@ -193,26 +326,22 @@ func (b *base) beginSubmit() bool {
 	return true
 }
 
-// submitToQueue enqueues task into a Dynamic per-account queue. It returns
-// nil once the task is queued, ctx.Err() if the caller's context expires
-// first, ErrStopped if the strategy has been stopped, or errQueueRetired
-// if q was retired by idle cleanup (the caller is expected to retry with a
-// freshly created queue).
-//
-// Producers hold q.gate.RLock for the duration of the send. Cleanup
-// acquires q.gate.WLock to retire a queue; the WLock therefore waits until
-// every in-flight send has either completed or returned.
-func (b *base) submitToQueue(
+func (b *base) endSubmit() {
+	if b.inFlightSubmits.Add(-1) == 0 && b.isStopped() {
+		b.submitFenceOnce.Do(func() { close(b.submitFenceCh) })
+	}
+}
+
+// submitToRegisteredQueue runs one Dynamic queue attempt under a producer
+// obligation already owned by the caller. It releases q.gate before returning,
+// so terminal failure handoff can safely register mandatory cleanup on the
+// same lane.
+func (b *base) submitToRegisteredQueue(
 	ctx context.Context,
 	q *keyQueue,
 	accountID param.AccountID,
 	task pendingTask,
 ) error {
-	if !b.beginSubmit() {
-		return ErrStopped
-	}
-	defer b.inFlightSubmits.Done()
-
 	q.gate.RLock()
 	defer q.gate.RUnlock()
 	if q.closed.Load() {
@@ -221,22 +350,30 @@ func (b *base) submitToQueue(
 	return b.sendToQueue(ctx, q, accountID, task, q.quit)
 }
 
-// submitToShard enqueues task into a Sharded queue. Sharded queues are
-// never retired by cleanup, so there is no gate and no quit case: a closed
-// channel is reachable only after stop, and closeQueueChannels closes a
+// submitToShardWithFailureHandoff enqueues task into a Sharded queue. Sharded
+// queues are never retired by cleanup, so there is no gate and no quit case: a
+// closed channel is reachable only after stop, and closeQueueChannels closes a
 // channel only once every in-flight submit registered by beginSubmit has
 // drained, so no send-on-closed-channel is possible.
-func (b *base) submitToShard(
+func (b *base) submitToShardWithFailureHandoff(
 	ctx context.Context,
 	q *keyQueue,
 	accountID param.AccountID,
 	task pendingTask,
+	onFailure func(error),
 ) error {
 	if !b.beginSubmit() {
+		if onFailure != nil {
+			onFailure(ErrStopped)
+		}
 		return ErrStopped
 	}
-	defer b.inFlightSubmits.Done()
-	return b.sendToQueue(ctx, q, accountID, task, nil)
+	defer b.endSubmit()
+	err := b.sendToQueue(ctx, q, accountID, task, nil)
+	if err != nil && onFailure != nil {
+		onFailure(err)
+	}
+	return err
 }
 
 // sendToQueue is the gate-free core send loop shared by both strategies.
@@ -250,6 +387,9 @@ func (b *base) sendToQueue(
 	task pendingTask,
 	quit <-chan struct{},
 ) error {
+	if err := b.waitForMandatoryCleanup(ctx, q, accountID, quit); err != nil {
+		return err
+	}
 	// Honor an already-cancelled ctx before any enqueue: the fast-path send
 	// below would otherwise sneak a task in when the queue has space, even
 	// though the producer's ctx is already done.
@@ -258,16 +398,18 @@ func (b *base) sendToQueue(
 		return err
 	}
 
-	qt := queuedTask{task: task, accountID: accountID}
+	qt := queuedTask{
+		task:      task,
+		accountID: accountID,
+	}
 	if b.observerActive {
 		qt.enqueuedAt = time.Now()
 	}
 
-	// pending must be bumped before the send so cleanup never observes a
-	// false-idle queue. A failed send undoes the bump on the way out.
-	if b.tracksIdle {
-		q.pending.Add(1)
-	}
+	// The task must be admitted before the send so cleanup never observes a
+	// false-idle queue and never runs ahead of a task already on its way in.
+	// A failed send settles the admission on the way out.
+	b.admitTask(q)
 
 	// Fast path: try a non-blocking send first.
 	select {
@@ -314,26 +456,204 @@ func (b *base) sendToQueue(
 	}
 }
 
-// worker drains a queue's channel. It exits when q.ch is closed (via
-// closeQueueChannels during stop) or when q.quit is closed (via idle
-// cleanup retiring the queue).
+// waitForMandatoryCleanup holds a producer back until this account has no
+// queued handle release left, so nothing the account submits later overtakes
+// it. The fence is per account, not per queue: a Sharded queue carries many
+// accounts and one account's cleanup must not stall the others.
+func (b *base) waitForMandatoryCleanup(
+	ctx context.Context,
+	q *keyQueue,
+	accountID param.AccountID,
+	quit <-chan struct{},
+) error {
+	for {
+		q.mandatoryMu.Lock()
+		entry, fenced := q.pendingCleanupForLocked(accountID)
+		if !fenced {
+			q.mandatoryMu.Unlock()
+			return nil
+		}
+		progress := q.mandatoryProgress
+		q.mandatoryMu.Unlock()
+
+		// A stopped-lane cleanup waits for producers that registered before
+		// stop, so those producers must be allowed to finish their sends.
+		if entry.waitSubmitFence && b.isStopped() {
+			return nil
+		}
+		select {
+		case <-progress:
+			continue
+		case <-quit:
+			return errQueueRetired
+		case <-ctx.Done():
+			b.cfg.observer.OnSubmitCancelled(accountID, ctx.Err())
+			return ctx.Err()
+		case <-b.stopCh:
+			return ErrStopped
+		}
+	}
+}
+
+// worker drains a queue's channel and the mandatory-cleanup backlog that
+// shares the lane. Channel work ends when q.ch is closed (via
+// closeQueueChannels during stop) or when q.quit is closed (via idle cleanup
+// retiring the queue); either way the worker returns only through
+// finishWorker, which refuses to seal a lane that still owes a handle
+// release. Both endings are latched into a local flag and drop their channel
+// from the select, so a channel that stays ready once closed can never spin
+// the loop.
 //
 // When hard stop is active, every task is aborted with ErrStopped rather
 // than executed.
 func (b *base) worker(q *keyQueue) {
 	defer b.workersWG.Done()
+	defer close(q.done)
+	channelClosed := false
+	laneRetired := false
 	for {
+		qt, mandatoryReady, waitSubmitFence := b.takeMandatoryCleanup(q)
+		if mandatoryReady {
+			b.handleTask(q, qt)
+			continue
+		}
+		if channelClosed || laneRetired {
+			if b.finishWorker(q) {
+				return
+			}
+			// Cleanup is queued but not yet runnable, and no further channel
+			// work can reach this lane. Wait for the producer fence that is
+			// holding it rather than re-polling the sealed channel.
+			b.waitForCleanupRelease(q, waitSubmitFence)
+			continue
+		}
+
+		var submitFence <-chan struct{}
+		if waitSubmitFence {
+			submitFence = b.submitFenceCh
+		}
 		select {
 		case qt, ok := <-q.ch:
 			if !ok {
-				return
+				channelClosed = true
+				continue
 			}
 			b.handleTask(q, qt)
+			q.settle()
+		case <-q.mandatoryWake:
+		case <-submitFence:
 		case <-q.quit:
+			laneRetired = true
 			b.drainAndAbort(q)
-			return
 		}
 	}
+}
+
+// waitForCleanupRelease parks a worker whose lane is sealed but whose backlog
+// is not runnable yet. waitSubmitFence is true only while b.submitFenceCh is
+// still open, so neither arm of the select is already ready.
+func (b *base) waitForCleanupRelease(q *keyQueue, waitSubmitFence bool) {
+	var submitFence <-chan struct{}
+	if waitSubmitFence {
+		submitFence = b.submitFenceCh
+	}
+	select {
+	case <-q.mandatoryWake:
+	case <-submitFence:
+	}
+}
+
+// enqueueSubmitFailureCleanup transfers cleanup to the lane-owned backlog and
+// reports whether the lane took it. It refuses a lane that has been retired
+// or whose worker has exited; that refusal is the caller's signal to retry on
+// a live lane or to release the handle itself, and it is what keeps the
+// release exactly once. waitSubmitFence marks cleanup registered after stop
+// was signalled, which must not overtake producers registered before it.
+func (b *base) enqueueSubmitFailureCleanup(
+	q *keyQueue,
+	accountID param.AccountID,
+	cleanup func(),
+	waitSubmitFence bool,
+) bool {
+	qt := queuedTask{
+		task:      submitFailureCleanupTask{cleanup: cleanup},
+		accountID: accountID,
+	}
+	if b.observerActive {
+		qt.enqueuedAt = time.Now()
+	}
+	q.mandatoryMu.Lock()
+	if q.retired || q.workerExited {
+		q.mandatoryMu.Unlock()
+		return false
+	}
+	if b.tracksIdle {
+		q.pending.Add(1)
+	}
+	if q.mandatoryProgress == nil {
+		q.mandatoryProgress = make(chan struct{})
+	}
+	q.mandatory = append(q.mandatory, submitFailureCleanupEntry{
+		task:            qt,
+		admittedFence:   q.admitted.Load(),
+		waitSubmitFence: waitSubmitFence,
+	})
+	q.mandatoryMu.Unlock()
+	b.markSent(q)
+	b.cfg.observer.OnEnqueue(accountID, len(q.ch))
+	select {
+	case q.mandatoryWake <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+// finishWorker is the single exit gate of every worker. It seals the lane and
+// reports true only when nothing is left in the backlog, so no exit path can
+// abandon a queued handle release. Once it returns true,
+// enqueueSubmitFailureCleanup refuses the dead lane and its caller releases
+// the handle itself.
+func (*base) finishWorker(q *keyQueue) bool {
+	q.mandatoryMu.Lock()
+	defer q.mandatoryMu.Unlock()
+	if len(q.mandatory) != 0 {
+		return false
+	}
+	q.workerExited = true
+	return true
+}
+
+func (b *base) takeMandatoryCleanup(
+	q *keyQueue,
+) (task queuedTask, ready bool, waitingForSubmitFence bool) {
+	q.mandatoryMu.Lock()
+	defer q.mandatoryMu.Unlock()
+	if len(q.mandatory) == 0 {
+		return queuedTask{}, false, false
+	}
+	entry := q.mandatory[0]
+	if entry.waitSubmitFence {
+		select {
+		case <-b.submitFenceCh:
+			// Producers registered before stop have all admitted their work
+			// by now, so the release owes that work an ordering too.
+			entry.waitSubmitFence = false
+			entry.admittedFence = q.admitted.Load()
+			q.mandatory[0] = entry
+		default:
+			return queuedTask{}, false, true
+		}
+	}
+	// Wait for the lane work admitted before the entry, and only for that:
+	// tasks admitted afterwards, including those of unrelated accounts on a
+	// shared shard, cannot delay the release.
+	if q.settled.Load() < entry.admittedFence {
+		return queuedTask{}, false, false
+	}
+	q.mandatory[0] = submitFailureCleanupEntry{}
+	q.mandatory = q.mandatory[1:]
+	q.noteMandatoryProgressLocked()
+	return entry.task, true, false
 }
 
 // handleTask runs (or, under hard stop, aborts) a single dequeued task. For
@@ -380,6 +700,7 @@ func (b *base) drainAndAbort(q *keyQueue) {
 				q.pending.Add(-1)
 			}
 			qt.task.abort(ErrStopped)
+			q.settle()
 			b.cfg.observer.OnComplete(qt.accountID, 0)
 		default:
 			return
@@ -387,16 +708,11 @@ func (b *base) drainAndAbort(q *keyQueue) {
 	}
 }
 
-// waitInFlightSubmits blocks until every in-flight submitToQueue has
+// waitInFlightSubmits blocks until every producer registered before stop has
 // returned, or ctx fires.
 func (b *base) waitInFlightSubmits(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() {
-		b.inFlightSubmits.Wait()
-		close(done)
-	}()
 	select {
-	case <-done:
+	case <-b.submitFenceCh:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -419,6 +735,65 @@ func (b *base) waitWorkers(ctx context.Context) error {
 	}
 }
 
+// runLifecycleCleanup accounts mandatory cleanup that has no worker lane.
+// A successful stop cannot return while cleanup registered before its final
+// sealing point is still running.
+func (b *base) runLifecycleCleanup(cleanup func()) {
+	if !b.beginLifecycleCleanup() {
+		cleanup()
+		return
+	}
+	defer b.endLifecycleCleanup()
+	cleanup()
+}
+
+func (b *base) beginLifecycleCleanup() bool {
+	b.lifecycleCleanupMu.Lock()
+	defer b.lifecycleCleanupMu.Unlock()
+	if b.lifecycleCleanupSealed {
+		return false
+	}
+	if b.lifecycleCleanupCount == 0 {
+		b.lifecycleCleanupDone = make(chan struct{})
+	}
+	b.lifecycleCleanupCount++
+	return true
+}
+
+func (b *base) endLifecycleCleanup() {
+	b.lifecycleCleanupMu.Lock()
+	defer b.lifecycleCleanupMu.Unlock()
+	if b.lifecycleCleanupCount == 0 {
+		return
+	}
+	b.lifecycleCleanupCount--
+	if b.lifecycleCleanupCount == 0 {
+		close(b.lifecycleCleanupDone)
+		b.lifecycleCleanupDone = nil
+	}
+}
+
+// finishLifecycleCleanups seals registration once the current cleanup epoch
+// is empty. A timed-out stop leaves registration open for a later retry.
+func (b *base) finishLifecycleCleanups(ctx context.Context) error {
+	for {
+		b.lifecycleCleanupMu.Lock()
+		if b.lifecycleCleanupCount == 0 {
+			b.lifecycleCleanupSealed = true
+			b.lifecycleCleanupMu.Unlock()
+			return nil
+		}
+		done := b.lifecycleCleanupDone
+		b.lifecycleCleanupMu.Unlock()
+
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
 // closeQueueChannels closes q.ch on every queue in queues so that workers
 // drain and exit naturally. The caller must guarantee no producer is
 // holding q.gate.RLock at the time of the call (typically by first
@@ -433,19 +808,32 @@ func (*base) closeQueueChannels(queues []*keyQueue) {
 	}
 }
 
-// signalStopOnce closes stopCh (idempotent). After this call new
-// submitToQueue invocations short-circuit with ErrStopped, and any
-// in-flight submitter waiting on q.gate.RLock returns ErrStopped.
+// signalStopOnce closes stopCh (idempotent). After this call beginSubmit
+// refuses new producers, and any submitter already blocked in sendToQueue
+// returns ErrStopped.
 func (b *base) signalStopOnce() {
 	b.stopOnce.Do(func() {
 		b.submitMu.Lock()
 		close(b.stopCh)
+		if b.inFlightSubmits.Load() == 0 {
+			b.submitFenceOnce.Do(func() { close(b.submitFenceCh) })
+		}
 		b.submitMu.Unlock()
 	})
 }
 
+// admitTask reserves lane capacity for a task about to enter q.ch. It runs
+// before the send so idle cleanup cannot see a false-idle queue and mandatory
+// cleanup cannot run ahead of a task already on its way in.
+func (b *base) admitTask(q *keyQueue) {
+	q.admitted.Add(1)
+	if b.tracksIdle {
+		q.pending.Add(1)
+	}
+}
+
 // markSent records that a task was accepted into q after a successful send.
-// q.pending was already bumped before the send (see sendToQueue), so this
+// The task was already admitted before the send (see sendToQueue), so this
 // only refreshes activity; Sharded leaves q untouched.
 func (b *base) markSent(q *keyQueue) {
 	if b.tracksIdle {
@@ -453,11 +841,12 @@ func (b *base) markSent(q *keyQueue) {
 	}
 }
 
-// unmarkSent undoes the pre-send q.pending bump when the send did not place
-// a task into q.ch (ctx expiry, stop, or queue retirement). Dynamic callers
-// invoke it under q.gate.RLock so the decrement is ordered against cleanup's
-// WLock read; Sharded leaves q.pending untouched.
+// unmarkSent settles the admission when the send did not place a task into
+// q.ch (ctx expiry, stop, or queue retirement). Dynamic callers invoke it
+// under q.gate.RLock so the q.pending decrement is ordered against cleanup's
+// WLock read; Sharded does not track q.pending.
 func (b *base) unmarkSent(q *keyQueue) {
+	q.settle()
 	if b.tracksIdle {
 		q.pending.Add(-1)
 	}

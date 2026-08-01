@@ -33,8 +33,9 @@ import (
 // rejectDriver is a fake driver that always returns non-empty rejects (no
 // request/reservation, no error) — the "policy reject" path.
 type rejectDriver struct {
-	startRejects   []reject.Reject
-	executeRejects []reject.Reject
+	startRejects    []reject.Reject
+	executeRejects  []reject.Reject
+	dropCopyRejects []reject.Reject
 }
 
 func newRejectDriver() *rejectDriver {
@@ -42,8 +43,9 @@ func newRejectDriver() *rejectDriver {
 		// Non-empty slices to trigger the rejects branch. The reject values
 		// themselves are zero-valued structs; the async layer only checks nil
 		// vs non-nil.
-		startRejects:   []reject.Reject{{}},
-		executeRejects: []reject.Reject{{}},
+		startRejects:    []reject.Reject{{}},
+		executeRejects:  []reject.Reject{{}},
+		dropCopyRejects: []reject.Reject{{}},
 	}
 }
 
@@ -59,10 +61,10 @@ func (d *rejectDriver) ExecutePreTrade(
 	return nil, d.executeRejects, nil
 }
 
-func (*rejectDriver) ExecutePreTradeDropCopy(
+func (d *rejectDriver) ApplyDropCopy(
 	_ model.Order,
-) (*pretrade.Reservation, error) {
-	return pretrade.NewReservationFromHandle(nil), nil
+) (*pretrade.DropCopyOperation, []reject.Reject, error) {
+	return nil, d.dropCopyRejects, nil
 }
 
 func (*rejectDriver) ApplyExecutionReport(
@@ -108,10 +110,10 @@ func (d *transportErrorDriver) ExecutePreTrade(
 	return nil, nil, d.executeErr
 }
 
-func (d *transportErrorDriver) ExecutePreTradeDropCopy(
+func (d *transportErrorDriver) ApplyDropCopy(
 	_ model.Order,
-) (*pretrade.Reservation, error) {
-	return nil, d.executeErr
+) (*pretrade.DropCopyOperation, []reject.Reject, error) {
+	return nil, nil, d.executeErr
 }
 
 func (*transportErrorDriver) ApplyExecutionReport(
@@ -237,6 +239,63 @@ func TestAsyncEngineExecutePreTradeTransportErrorPath(t *testing.T) {
 	}
 	if res != nil {
 		t.Errorf("reservation = %v, want nil on transport error", res)
+	}
+	if rejects != nil {
+		t.Errorf("rejects = %v, want nil on transport error", rejects)
+	}
+}
+
+// TestAsyncEngineDropCopyRejectsPath asserts that a non-nil rejects slice from
+// ApplyDropCopy resolves the future as (nil, rejects, nil).
+func TestAsyncEngineDropCopyRejectsPath(t *testing.T) {
+	t.Parallel()
+	async, err := NewBuilder(newRejectDriver()).Sharded(1).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer func() {
+		if err := async.StopGraceful(context.Background()); err != nil {
+			t.Fatalf("StopGraceful() error = %v", err)
+		}
+	}()
+
+	operation, rejects, err := async.ApplyDropCopy(
+		context.Background(), buildTestOrder(t, 1),
+	).Await(context.Background())
+	if err != nil {
+		t.Fatalf("Await() err = %v, want nil", err)
+	}
+	if operation != nil {
+		t.Fatalf("operation = %v, want nil (rejected)", operation)
+	}
+	if len(rejects) == 0 {
+		t.Fatalf("rejects = %v, want non-empty", rejects)
+	}
+}
+
+// TestAsyncEngineDropCopyTransportErrorPath asserts that a non-nil transport
+// error from ApplyDropCopy resolves the future with that error.
+func TestAsyncEngineDropCopyTransportErrorPath(t *testing.T) {
+	t.Parallel()
+	driver := newTransportErrorDriver()
+	async, err := NewBuilder(driver).Sharded(1).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer func() {
+		if err := async.StopGraceful(context.Background()); err != nil {
+			t.Fatalf("StopGraceful() error = %v", err)
+		}
+	}()
+
+	operation, rejects, err := async.ApplyDropCopy(
+		context.Background(), buildTestOrder(t, 1),
+	).Await(context.Background())
+	if !errors.Is(err, driver.executeErr) {
+		t.Fatalf("Await() err = %v, want %v", err, driver.executeErr)
+	}
+	if operation != nil {
+		t.Errorf("operation = %v, want nil on transport error", operation)
 	}
 	if rejects != nil {
 		t.Errorf("rejects = %v, want nil on transport error", rejects)

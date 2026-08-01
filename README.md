@@ -16,62 +16,101 @@ order reaches a venue, it passes through a deterministic risk pipeline that
 can reject the request, reserve state, and later absorb post-trade outcomes
 back into the same control system.
 
-## How The Flow Works
+The engine is in-memory and deterministic, designed to be embedded into a
+larger trading system rather than replace one. The pipeline itself is
+described on the [wiki](https://wiki.openpit.dev/Pre-trade-Pipeline/).
 
-1. The engine is configured once during platform initialization.
-2. Each order first goes through lightweight start-stage checks. This stage
-   makes fast decisions and runs controls that must observe every request,
-   including rejected ones.
-3. If the order passes the start stage, the caller receives a deferred
-   request object. The heavier pre-trade stage has not run yet.
-4. When the deferred request is executed, the engine runs the main-stage
-   risk policies and collects all registered mutations. If any policy
-   rejects, the collected state is rolled back. If the stage succeeds, the
-   caller receives a reservation. The shortcut `engine.execute_pre_trade(order)`
-   composes the two stages into one call when manual request handling is
-   not needed.
-5. The reservation must be finalized explicitly: `commit` keeps the
-   reserved state, `rollback` cancels it. Dropping the reservation without
-   finalization rolls it back automatically.
-6. Post-trade reports are fed back into the engine so policies that depend
-   on realized outcomes can update their state.
+## Quick Start
 
-## Current Scope
+```bash
+go get go.openpit.dev/openpit   # Go
+pip install openpit             # Python
+npm install @openpit/engine     # JavaScript and TypeScript
+cargo add openpit               # Rust
+```
 
-The current implementation focuses on the pre-trade pipeline, a small set
-of built-in controls, and an API for building project-specific strategy and
-risk policies. Built-ins:
+C++ consumes the released CMake package and C integrates through the C ABI;
+see the [C++](bindings/cpp/README.md) and [C](bindings/c/README.md) SDK
+READMEs.
 
-- [Spot Funds](https://wiki.openpit.dev/Spot-Funds/) - per-account
-  solvency gate over spendable funds.
+<!-- Test mirror: crates/openpit/tests/examples_readme.rs -->
+
+```rust
+use openpit::param::{AccountId, Asset, Price, Quantity, Side, TradeAmount, Volume};
+use openpit::pretrade::policies::{
+    OrderSizeBrokerBarrier, OrderSizeLimit, OrderSizeLimitPolicy, OrderSizeLimitSettings,
+};
+use openpit::storage::NoLocking;
+use openpit::{Engine, Instrument, OrderOperation};
+
+// One fat-finger control, wired once at startup.
+let engine = Engine::builder::<OrderOperation, (), ()>()
+    .no_sync()
+    .pre_trade(OrderSizeLimitPolicy::<NoLocking>::new(
+        OrderSizeLimitSettings::new(
+            Some(OrderSizeBrokerBarrier {
+                limit: OrderSizeLimit {
+                    max_quantity: Quantity::from_str("500")?,
+                    max_notional: Volume::from_str("100000")?,
+                },
+            }),
+            [],
+            [],
+        )?,
+    ))
+    .build()?;
+
+let order = OrderOperation {
+    instrument: Instrument::new(Asset::new("AAPL")?, Asset::new("USD")?),
+    account_id: AccountId::from_u64(99224416),
+    side: Side::Buy,
+    trade_amount: TradeAmount::Quantity(Quantity::from_str("1000")?),
+    price: Some(Price::from_str("185")?),
+};
+
+// The verdict: either a reservation to finalize once the venue answers,
+// or the rejects that stopped the order.
+match engine.execute_pre_trade(order) {
+    Ok(mut reservation) => reservation.commit(),
+    Err(rejects) => println!("order rejected: {rejects}"),
+}
+```
+
+Every SDK exposes the same pipeline in its own idiom; the per-language
+READMEs are listed under [Where To Start](#where-to-start).
+
+## What Is Inside
+
+- [Spot Funds](https://wiki.openpit.dev/Spot-Funds/) - per-account solvency
+  gate over spendable funds.
 - [Order Validation](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
   \- structural integrity checks on every order.
-- [Rate Limit](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
-  \- throttle order flow per broker, asset, or account.
+- [Rate Limit](https://wiki.openpit.dev/Policies/#ratelimitpolicy) - throttle
+  order flow per broker, asset, or account.
 - [Order Size Limit](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
   \- fat-finger caps on quantity and notional.
 - [P&L Kill Switch](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
   \- halt an account when realized P&L breaches bounds.
-- plus your own via the [policy SDK](https://wiki.openpit.dev/Policy-API/).
-
-Custom policies that maintain state across calls can use the built-in
-[Storage](https://wiki.openpit.dev/Storage/) abstraction.
-Synchronization is selected once at engine construction and applied
-transparently, with no overhead in single-threaded embeddings.
-
-Controls can act both by account and by group of accounts: register accounts
-under a compact identifier with [Account Groups](https://wiki.openpit.dev/Account-Groups/)
-and let a policy branch on the group instead of an enumerated account list.
-
-The engine is intentionally in-memory and deterministic, designed to be
-embedded into a larger trading system rather than replace one. For custom
-policy APIs:
-
-- [Go custom policies](https://wiki.openpit.dev/Policy-API/#go-interface)
-- [Python custom policies](https://wiki.openpit.dev/Policy-API/#python-interface)
-- [JavaScript custom policies](https://wiki.openpit.dev/Policy-API/)
-- [C++ custom policies](https://wiki.openpit.dev/Policy-API/#c-interface)
-- [Rust custom policies](https://wiki.openpit.dev/Policy-API/#rust-interface)
+- [Custom policies](https://wiki.openpit.dev/Policy-API/) - your own controls
+  in Go, Python, JavaScript, C++, or Rust.
+- [Account Groups](https://wiki.openpit.dev/Account-Groups/) - branch a policy
+  on a compact group identifier instead of an enumerated account list.
+- [Account Blocking](https://wiki.openpit.dev/Account-Blocking/) - kill switch
+  by account, by group, or engine-wide.
+- [Drop Copy](https://wiki.openpit.dev/Pre-trade-Pipeline/#drop-copy) -
+  record already executed orders without pre-trade enforcement.
+- [Account Adjustments](https://wiki.openpit.dev/Account-Adjustments/) and
+  [Balance Reconciliation](https://wiki.openpit.dev/Balance-Reconciliation/)
+  \- keep engine state aligned with the venue.
+- [Market Data](https://wiki.openpit.dev/Market-Data/) - quotes for policies
+  that price an order.
+- [Dynamic Reconfiguration](https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/)
+  \- retune a live policy without rebuilding the engine.
+- [Async Engine](https://wiki.openpit.dev/Async-Engine/) - per-account queues
+  in Go and C++.
+- [Storage](https://wiki.openpit.dev/Storage/) and
+  [Threading Contract](https://wiki.openpit.dev/Threading-Contract/) -
+  synchronization selected once at engine construction.
 
 ## Versioning Policy (Pre‑1.0)
 

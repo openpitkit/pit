@@ -25,6 +25,7 @@
 #include "openpit/pretrade/callbacks.hpp"
 #include "openpit/pretrade/context.hpp"
 #include "openpit/pretrade/custom_policy.hpp"
+#include "openpit/pretrade/drop_copy_operation.hpp"
 #include "openpit/pretrade/dry_run_report.hpp"
 #include "openpit/pretrade/policies.hpp"
 #include "openpit/pretrade/pre_trade_lock.hpp"

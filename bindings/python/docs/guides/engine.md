@@ -54,6 +54,26 @@ execute_result = engine.execute_pre_trade(order=order)
 The shortcut returns the same `ExecuteResult` shape as `request.execute()`. It
 can contain start-stage rejects or main-stage rejects.
 
+## Apply drop copy
+
+`engine.apply_drop_copy(order=order)` evaluates a historical order through the
+same policy pipeline without enforcing ordinary pre-trade rejects. It returns
+a `DropCopyResult` in the same shape as `ExecuteResult`: on success it carries
+a single-use `DropCopyOperation`, otherwise it carries fatal evaluation
+rejects. The operation exposes the applied `lock`, `account_adjustments`,
+`account_block`, and `is_account_blocked`, and is finalized exactly like a
+reservation - `commit()` keeps the applied bookkeeping, `rollback()` reverts
+it, and garbage collection rolls back an unfinalized operation.
+
+Rollback does not reverse account-control operations or refund rate-limit
+attempts. Existing account and group blocks do not prevent drop-copy
+evaluation, and `DropCopyOperation.is_account_blocked` reports the apply-time
+blocked-state snapshot independently from the block requested by this call.
+That snapshot is captured before `apply_drop_copy` returns and does not track
+later registry changes. The engine must read the order account before
+evaluation; an order without a readable account returns a fatal
+`MissingRequiredField` reject before any policy runs or state changes.
+
 ## Finalize reservations
 
 ```python
@@ -74,6 +94,13 @@ if execute_result:
 
 A reservation is single-use. Calling `commit()` or `rollback()` after it has
 already been finalized raises `RuntimeError`.
+
+Finalization must not fail. A mutation callable that raises is re-raised to the
+caller once the rest of the batch has run, and independently arms the engine
+kill switch: a mutation registered by a custom policy - every `Mutation`
+registered from Python - blocks every account, so the next pre-trade call is
+rejected with `SystemUnavailable` until an operator calls
+`engine.accounts().unblock_all()`.
 
 ## Apply post-trade reports
 

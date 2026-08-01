@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package asyncengine
 
@@ -72,10 +72,41 @@ func (s *shardedStrategy) submit(
 	accountID param.AccountID,
 	task pendingTask,
 ) error {
+	return s.submitWithFailureHandoff(ctx, accountID, task, nil)
+}
+
+func (s *shardedStrategy) submitWithFailureHandoff(
+	ctx context.Context,
+	accountID param.AccountID,
+	task pendingTask,
+	onFailure func(error),
+) error {
 	q := s.shardFor(accountID)
 	// Sharded queues are never retired, so the send never reports
 	// errQueueRetired; a stopped strategy short-circuits with ErrStopped.
-	return s.submitToShard(ctx, q, accountID, task)
+	return s.submitToShardWithFailureHandoff(
+		ctx, q, accountID, task, onFailure,
+	)
+}
+
+func (s *shardedStrategy) scheduleSubmitFailureCleanup(
+	accountID param.AccountID,
+	cleanup func(),
+) {
+	q := s.shardFor(accountID)
+	if s.beginSubmit() {
+		scheduled := s.enqueueSubmitFailureCleanup(q, accountID, cleanup, false)
+		s.endSubmit()
+		if scheduled {
+			return
+		}
+	}
+	// Stop was already signalled, so the handoff must not overtake producers
+	// registered before it. A shard whose worker has exited takes nothing:
+	// then the release is accounted against stop instead.
+	if !s.enqueueSubmitFailureCleanup(q, accountID, cleanup, true) {
+		s.runLifecycleCleanup(cleanup)
+	}
 }
 
 func (s *shardedStrategy) stopGraceful(ctx context.Context) error {
@@ -84,7 +115,10 @@ func (s *shardedStrategy) stopGraceful(ctx context.Context) error {
 		return err
 	}
 	s.closeQueueChannels(s.shards)
-	return s.waitWorkers(ctx)
+	if err := s.waitWorkers(ctx); err != nil {
+		return err
+	}
+	return s.finishLifecycleCleanups(ctx)
 }
 
 func (s *shardedStrategy) stopHard(ctx context.Context) error {
@@ -94,5 +128,8 @@ func (s *shardedStrategy) stopHard(ctx context.Context) error {
 		return err
 	}
 	s.closeQueueChannels(s.shards)
-	return s.waitWorkers(ctx)
+	if err := s.waitWorkers(ctx); err != nil {
+		return err
+	}
+	return s.finishLifecycleCleanups(ctx)
 }

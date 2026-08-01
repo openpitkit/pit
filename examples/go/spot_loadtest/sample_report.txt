@@ -63,7 +63,7 @@ Core (native runtime):
   build_profile_raw : version=0.3.0;profile=release;opt_level=3;debug_assertions=false;target=aarch64-apple-darwin;target_cpu=unknown;lto=unknown
 
 Run config:
-  config path: /Users/you/pit/examples/go/spot_loadtest/configs/baseline.ini
+  config path: <repo>/examples/go/spot_loadtest/configs/baseline.ini
   config hash: 47c4beee78936932f021a71dab1e8dacf159e8875bc3f8665ff9359dcac22b55 (SHA-256)
   seed       : 0xC0FFEE
   total_ops  : 2000000

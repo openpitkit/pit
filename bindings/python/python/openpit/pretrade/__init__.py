@@ -30,6 +30,8 @@ from .._openpit import (
     AccountControl,
     AccountOutcomeEntry,
     AccountPnlOutcome,
+    DropCopyOperation,
+    DropCopyResult,
     DryRunReport,
     ExecuteResult,
     OutcomeAmount,
@@ -72,8 +74,14 @@ Context.__doc__ = """
 Opaque context object passed to Python policy callbacks.
 
 The object identifies the current engine evaluation context. Treat it as
-read-only. Future releases may expose additional query methods on this object;
-policies should not create instances directly.
+read-only and do not create instances directly. ``is_drop_copy`` reports
+whether ordinary rejects are non-enforcing for the current operation.
+
+``record_drop_copy_start_mutation(mutation)`` registers bookkeeping applied
+tentatively during the start hook with the current drop-copy operation. Commit
+finalizes that state when the caller commits the operation. Rollback must undo
+it on an evaluation or callback failure and when the caller rolls the operation
+back, including when its commit callback was not reached.
 
 ``account_control`` is an :class:`AccountControl` when the engine exposes the
 account-block facility for the evaluated account, otherwise ``None``. A policy
@@ -166,7 +174,48 @@ Single-use reservation handle returned by successful main-stage execution.
 Call ``commit`` only after the order has been accepted by the downstream venue
 or transport. Call ``rollback`` when submission fails or the caller decides not
 to send the order. Calling either finalizer more than once raises
-``RuntimeError``.
+``RuntimeError``. Both accessors below raise ``RuntimeError`` after the
+reservation is finalized, so read them before committing or rolling back.
+
+Attributes:
+    lock: Current reservation ``Lock`` payload.
+    account_adjustments: List of ``AccountAdjustmentOutcome`` objects captured
+        by the reservation.
+"""
+
+DropCopyOperation.__doc__ = """
+Single-use handle for the bookkeeping applied by ``Engine.apply_drop_copy``.
+
+Call ``commit`` once the historical order is stored, or ``rollback`` when
+storing it failed and the applied bookkeeping must be reverted. Calling either
+finalizer more than once raises ``RuntimeError``, and garbage collection of an
+unfinalized operation rolls it back. Account-control operations published by
+the drop-copy pipeline and consumed rate-limit attempts stay outside that
+boundary. Every accessor below raises ``RuntimeError`` after the operation is
+finalized, so read them before committing or rolling back.
+
+Attributes:
+    lock: ``Lock`` context produced by the applied request.
+    account_adjustments: List of ``AccountAdjustmentOutcome`` objects applied
+        by the request.
+    account_block: First ``AccountBlock`` requested by this operation, or
+        ``None``. This is request-local history; ``is_account_blocked``
+        reports the apply-time registry snapshot captured before
+        ``apply_drop_copy`` returned.
+    is_account_blocked: Apply-time blocked-state snapshot for the order
+        account. It does not track later registry changes.
+"""
+
+DropCopyResult.__doc__ = """
+Result of ``Engine.apply_drop_copy``.
+
+Attributes:
+    ok: ``True`` when the historical order was applied.
+    operation: ``DropCopyOperation`` on success, otherwise ``None``.
+    rejects: Fatal evaluation rejects when ``ok`` is ``False``.
+
+Successful results must be finalized by committing or rolling back the
+operation. Failed results never contain an operation.
 """
 
 StartResult.__doc__ = """
@@ -212,16 +261,14 @@ Attributes:
         Equivalent to ``bool(report)``.
     rejects: List of ``Reject`` objects when ``is_pass`` is ``False``,
         otherwise ``None``.
+    lock: ``Lock`` the main stage would have produced. Empty when the start
+        stage would have rejected or no policy locks a price.
+    account_adjustments: List of ``AccountAdjustmentOutcome`` objects the
+        main stage would have produced. Empty when the start stage would have
+        rejected or no policy reports an adjustment.
     account_block: ``AccountBlock`` that a real call would have recorded in
         the engine's blocked-accounts registry, or ``None`` when the order
         would have passed or produced a non-account reject.
-
-Methods:
-    lock(): ``Lock`` the main stage would have produced. Empty when the start
-        stage would have rejected or no policy locks a price.
-    account_adjustments(): List of ``AccountAdjustmentOutcome`` objects the
-        main stage would have produced. Empty when the start stage would have
-        rejected or no policy reports an adjustment.
 """
 
 Rejects = list[Reject]
@@ -251,6 +298,8 @@ __all__ = [
     "AccountOutcomeEntry",
     "AccountPnlOutcome",
     "DEFAULT_POLICY_GROUP_ID",
+    "DropCopyOperation",
+    "DropCopyResult",
     "DryRunReport",
     "ExecuteResult",
     "PolicyGroupId",

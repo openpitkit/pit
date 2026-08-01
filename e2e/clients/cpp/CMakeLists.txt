@@ -25,7 +25,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Source: bindings/cpp/README.md - Getting Started
+# Source: bindings/cpp/README.md - Install
+# Source: https://wiki.openpit.dev/Getting-Started/ - C++ Through vcpkg
 find_package(OpenPit CONFIG REQUIRED)
 
 add_executable(openpit_cpp_consumer main.cpp)

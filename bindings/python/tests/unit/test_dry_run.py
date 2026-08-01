@@ -102,13 +102,13 @@ def test_execute_dry_run_rejects_invalid_order() -> None:
 def test_dry_run_report_has_lock_and_adjustments_attrs() -> None:
     engine = _make_validation_engine()
     report = engine.execute_pre_trade_dry_run(order=conftest.make_order())
-    # lock() exposes the same entries() view as a reservation lock; adjustments
+    # lock exposes the same entries() view as a reservation lock; adjustments
     # is a list. Both are empty for a policy that produces no lock prices or
     # fund holds. (The native lock is the base type, not the openpit.pretrade
-    # .Lock Python subclass, exactly like Reservation.lock(), so assert via the
+    # .Lock Python subclass, exactly like Reservation.lock, so assert via the
     # API rather than isinstance.)
-    assert report.lock().entries() == []
-    adjustments = report.account_adjustments()
+    assert report.lock.entries() == []
+    adjustments = report.account_adjustments
     assert isinstance(adjustments, list)
     assert adjustments == []
 

@@ -34,7 +34,7 @@
 //! The builtin policy builders live in the sibling modules and are re-exported
 //! through this module; their JS surface is described in their own files.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use js_sys::{Function, Reflect};
 use openpit::param::{AccountId, Price};
@@ -55,7 +55,7 @@ use crate::domain::{
     resolve_price,
 };
 use crate::engine::{AccountAdjustment, EngineLocking, ExecutionReport, Order};
-use crate::error::{make_error, ErrorKind};
+use crate::error::{internal_error, make_error, policy_callback_error, ErrorKind};
 use crate::outcome::{
     JsAccountOutcomeEntry, JsAccountPnlOutcome, JsOutcomeAmount, JsPnlHaltReason, JsPnlOutcome,
     JsPnlOutcomeAmount,
@@ -121,7 +121,9 @@ export interface PolicyReject {
 /**
  * A commit/rollback pair contributed by a policy decision. Either the
  * `Mutation` wrapper class (from `@openpit/engine/tx`) or a plain object with
- * both callbacks is accepted.
+ * both callbacks is accepted. Apply tentative state before registration. The
+ * callbacks receive this object as `this`; drop-copy may call rollback even
+ * when this mutation's commit was not reached.
  */
 export type PolicyMutation =
   | import("../tx/index.js").Mutation
@@ -176,7 +178,9 @@ export interface PolicyDecision {
  * The result of {@link Policy.performPreTradeCheck}. Carries optional rejects
  * and mutations (as in {@link PolicyDecision}) plus optional account
  * adjustments and lock prices. Returning `null`/`undefined` accepts the order
- * with no contribution.
+ * with no contribution. Ordinary pre-trade keeps contributions only on
+ * acceptance. Drop-copy also keeps them with ordinary, non-enforcing rejects;
+ * evaluation-failure rejects abort the operation and discard them.
  */
 export interface PolicyPreTradeResult {
   rejects?: Iterable<PolicyReject>;
@@ -408,59 +412,203 @@ extern "C" {
 /// One nested binding operation's callback-error capture state.
 enum CallbackErrorFrame {
     /// Capture the first error raised while this operation is active.
-    Capture(Option<JsValue>),
+    Capture {
+        engine_id: u64,
+        error: Option<JsValue>,
+    },
     /// Ignore callback errors while an implicit destructor rollback runs.
-    Suppress,
+    Suppress { engine_id: u64 },
+}
+
+impl CallbackErrorFrame {
+    /// The engine whose synchronous re-entry this frame forbids.
+    const fn engine_id(&self) -> u64 {
+        match self {
+            Self::Capture { engine_id, .. } | Self::Suppress { engine_id } => *engine_id,
+        }
+    }
 }
 
 thread_local! {
     /// Operation-scoped callback-error stack.
     ///
-    /// JavaScript is single-threaded here, but callbacks may synchronously
-    /// re-enter another engine method. A stack keeps the nested method from
-    /// draining or overwriting the outer method's error.
+    /// JavaScript is single-threaded here. A frame prevents synchronous
+    /// re-entry into its own engine while allowing a callback to use another
+    /// engine instance.
     static CALLBACK_ERRORS: RefCell<Vec<CallbackErrorFrame>> = const { RefCell::new(Vec::new()) };
+    /// Number of panics that have crossed this boundary so far.
+    static PANIC_EPOCH: Cell<u64> = const { Cell::new(0) };
+    /// Hot-path poison predicate kept separate from the diagnostic report.
+    static PANIC_POISONED: Cell<bool> = const { Cell::new(false) };
+    /// Report of the panic that abandoned the frames of the current epoch.
+    static PANIC_REPORT: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Message used when a panic report could not be recorded.
+const UNAVAILABLE_PANIC_REPORT: &str = "openpit engine panicked; no report available";
+
+/// Records a panic that is about to leave the boundary as a JS exception.
+///
+/// Such an exception destroys wasm frames without running their destructors,
+/// so their guard frames are dropped here. The panic report also poisons the
+/// module: the Rust runtime cannot safely report a second panic from the same
+/// instance, and no surviving outer engine may resume after its guard frame was
+/// abandoned. Every later guarded call therefore returns the same
+/// `InternalError` before touching core state.
+pub(crate) fn report_panic(report: &str) {
+    let _ = PANIC_POISONED.try_with(|poisoned| poisoned.set(true));
+    let _ = CALLBACK_ERRORS.try_with(|frames| {
+        if let Ok(mut frames) = frames.try_borrow_mut() {
+            frames.clear();
+        }
+    });
+    let _ = PANIC_REPORT.try_with(|slot| {
+        if let Ok(mut slot) = slot.try_borrow_mut() {
+            *slot = Some(report.to_owned());
+        }
+    });
+    let _ = PANIC_EPOCH.try_with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
+}
+
+/// Builds the error an operation reports when a panic abandoned its frame.
+fn abandoned_frame_error() -> JsValue {
+    let report = PANIC_REPORT.with(|slot| slot.borrow().clone());
+    internal_error(report.as_deref().unwrap_or(UNAVAILABLE_PANIC_REPORT))
+}
+
+/// Why an operation that ran JS callbacks must report a failure.
+///
+/// The two variants are decided structurally, not by inspecting the thrown
+/// value: only a panic that abandoned the operation's frame produces
+/// [`Self::Abandoned`], so a callback throwing a value that merely looks like an
+/// internal error is still reported as a wrapped callback failure.
+pub(crate) enum CallbackFailure {
+    /// A JS callback threw; the value is wrapped with the completed result.
+    Thrown(JsValue),
+    /// A panic abandoned the operation; its report is surfaced verbatim.
+    Abandoned(JsValue),
+}
+
+impl CallbackFailure {
+    /// Builds the error to throw, attaching `result` only to a wrapped throw.
+    pub(crate) fn into_error(self, result: JsValue) -> JsValue {
+        match self {
+            Self::Thrown(cause) => policy_callback_error(cause, result),
+            Self::Abandoned(report) => report,
+        }
+    }
 }
 
 /// RAII boundary around an engine operation that may invoke JS callbacks.
 pub(crate) struct CallbackErrorScope {
+    epoch: u64,
     active: bool,
 }
 
 impl CallbackErrorScope {
-    /// Starts an operation that captures its first callback error.
-    pub(crate) fn capture() -> Self {
+    /// Whether a prior panic made this module instance unusable.
+    pub(crate) fn is_poisoned() -> bool {
+        PANIC_POISONED.with(Cell::get)
+    }
+
+    /// Rejects any call into a module poisoned by a panic.
+    ///
+    /// Used by the surfaces that carry no engine re-entrancy scope of their
+    /// own: caller-owned registries and the handles a policy callback retains.
+    pub(crate) fn ensure_not_poisoned() -> Result<(), JsValue> {
+        if Self::is_poisoned() {
+            return Err(abandoned_frame_error());
+        }
+        Ok(())
+    }
+
+    /// Rejects calls into an active engine or a module poisoned by a panic.
+    pub(crate) fn ensure_callable(engine_id: u64) -> Result<(), JsValue> {
+        Self::ensure_not_poisoned()?;
         CALLBACK_ERRORS.with(|frames| {
-            frames.borrow_mut().push(CallbackErrorFrame::Capture(None));
-        });
-        Self { active: true }
+            if frames
+                .borrow()
+                .iter()
+                .any(|frame| frame.engine_id() == engine_id)
+            {
+                Err(make_error(
+                    ErrorKind::Lifecycle,
+                    "this engine cannot be re-entered while one of its own policy callbacks is running",
+                    None,
+                ))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    /// Starts an operation that captures its first callback error.
+    ///
+    /// # Errors
+    ///
+    /// Throws `LifecycleError` when a frame for `engine_id` is already active,
+    /// which means this engine is being re-entered from one of its own
+    /// callbacks. Frames of other engines never block the call.
+    pub(crate) fn capture(engine_id: u64) -> Result<Self, JsValue> {
+        Self::ensure_callable(engine_id)?;
+        CALLBACK_ERRORS.with(|frames| {
+            let mut frames = frames.borrow_mut();
+            frames.push(CallbackErrorFrame::Capture {
+                engine_id,
+                error: None,
+            });
+            Ok(Self {
+                epoch: PANIC_EPOCH.with(Cell::get),
+                active: true,
+            })
+        })
     }
 
     /// Starts a nested scope that deliberately discards callback errors.
     ///
     /// Used only for implicit reservation rollback during destruction: there is
     /// no active JS call to receive the exception, and leaking it into a later
-    /// unrelated operation would be worse than suppressing it.
-    pub(crate) fn suppress() -> Self {
+    /// unrelated operation would be worse than suppressing it. The frame still
+    /// carries its engine, so a rollback callback cannot re-enter the engine
+    /// whose state is being rewound.
+    pub(crate) fn suppress(engine_id: u64) -> Self {
         CALLBACK_ERRORS.with(|frames| {
-            frames.borrow_mut().push(CallbackErrorFrame::Suppress);
+            frames
+                .borrow_mut()
+                .push(CallbackErrorFrame::Suppress { engine_id });
         });
-        Self { active: true }
+        Self {
+            epoch: PANIC_EPOCH.with(Cell::get),
+            active: true,
+        }
     }
 
-    /// Finishes this operation and returns its first captured error.
-    pub(crate) fn finish(mut self) -> Option<JsValue> {
+    /// Whether a panic dropped this scope's frame while the operation ran.
+    fn abandoned(&self) -> bool {
+        PANIC_EPOCH.with(Cell::get) != self.epoch
+    }
+
+    /// Finishes this operation and returns its first captured failure.
+    ///
+    /// Reports the panic instead when a panic abandoned this scope's frame:
+    /// the operation ran on after an internal failure, so its result is not
+    /// trustworthy. That distinction is what the caller needs to decide whether
+    /// to wrap the failure, so it is carried in the returned variant.
+    pub(crate) fn finish(mut self) -> Option<CallbackFailure> {
         self.active = false;
+        if self.abandoned() {
+            return Some(CallbackFailure::Abandoned(abandoned_frame_error()));
+        }
         CALLBACK_ERRORS.with(|frames| match frames.borrow_mut().pop() {
-            Some(CallbackErrorFrame::Capture(error)) => error,
-            Some(CallbackErrorFrame::Suppress) | None => None,
+            Some(CallbackErrorFrame::Capture { error, .. }) => error.map(CallbackFailure::Thrown),
+            Some(CallbackErrorFrame::Suppress { .. }) | None => None,
         })
     }
 }
 
 impl Drop for CallbackErrorScope {
     fn drop(&mut self) {
-        if self.active {
+        if self.active && !self.abandoned() {
             CALLBACK_ERRORS.with(|frames| {
                 frames.borrow_mut().pop();
             });
@@ -476,7 +624,7 @@ impl Drop for CallbackErrorScope {
 pub(crate) fn set_callback_error(error: JsValue) {
     CALLBACK_ERRORS.with(|frames| {
         let mut frames = frames.borrow_mut();
-        if let Some(CallbackErrorFrame::Capture(pending)) = frames.last_mut() {
+        if let Some(CallbackErrorFrame::Capture { error: pending, .. }) = frames.last_mut() {
             if pending.is_none() {
                 *pending = Some(error);
             }
@@ -583,8 +731,10 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
     ) -> Result<(), Rejects> {
         let context = JsContext::from_parts(
             ctx.account_control.clone(),
+            ctx.drop_copy_start_mutation_recorder(),
             ctx.account_group(),
             order.payload.lifecycle(),
+            ctx.is_drop_copy(),
         );
         let context = JsValue::from(context);
         let payload = callback_payload(order.payload.fresh_js(), &self.name)?;
@@ -616,8 +766,10 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
             .unwrap_or(&self.check_pre_trade_start);
         let context = JsContext::from_parts(
             ctx.account_control.clone(),
+            ctx.drop_copy_start_mutation_recorder(),
             ctx.account_group(),
             order.payload.lifecycle(),
+            ctx.is_drop_copy(),
         );
         let payload = callback_payload(order.payload.fresh_js(), &self.name)?;
         let result = call_hook(
@@ -645,8 +797,10 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
         let context = JsContext::from_parts(
             ctx.account_control.clone(),
+            ctx.drop_copy_start_mutation_recorder(),
             ctx.account_group(),
             order.payload.lifecycle(),
+            ctx.is_drop_copy(),
         );
         let context = JsValue::from(context);
         let payload = callback_payload(order.payload.fresh_js(), &self.name)?;
@@ -665,20 +819,14 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
                     return Err(callback_failure_rejects(&self.name));
                 }
             };
-        if ctx.is_drop_copy() {
-            if let Some(reject) = rejects
-                .iter()
-                .find(|reject| reject.scope == RejectScope::Account)
-            {
-                ctx.record_drop_copy_account_block(
-                    reject.account_block_with_code(RejectCode::AccountBlocked),
-                );
-            }
-            Ok(result)
-        } else if rejects.is_empty() {
+        if rejects.is_empty() {
             Ok(result)
         } else {
-            Err(Rejects::from(rejects))
+            let rejects = Rejects::from(rejects);
+            Err(match result {
+                Some(result) => rejects.with_policy_result(result),
+                None => rejects,
+            })
         }
     }
 
@@ -694,8 +842,10 @@ impl PreTradePolicy<Order, ExecutionReport, AccountAdjustment, EngineLocking>
             .unwrap_or(&self.perform_pre_trade_check);
         let context = JsContext::from_parts(
             ctx.account_control.clone(),
+            ctx.drop_copy_start_mutation_recorder(),
             ctx.account_group(),
             order.payload.lifecycle(),
+            ctx.is_drop_copy(),
         );
         let payload = callback_payload(order.payload.fresh_js(), &self.name)?;
         let decision = call_hook(
@@ -1157,35 +1307,66 @@ fn apply_policy_pre_trade_result(
 
 /// Parses a `Mutation`-shaped value (a `{ commit, rollback }` pair).
 ///
-/// Both callbacks are bound and invoked with no `this`; a throw inside either
-/// is captured for re-throw rather than panicking.
+/// Both callbacks are invoked with `this` bound to the mutation object; a
+/// throw inside either is captured for re-throw rather than panicking.
 ///
 /// # Errors
 ///
 /// Throws `TypeError` when `commit` or `rollback` is not callable.
-fn parse_policy_mutation(value: &JsValue) -> Result<Mutation, JsValue> {
+pub(crate) fn parse_policy_mutation(value: &JsValue) -> Result<Mutation, JsValue> {
     let commit = read_function(value, "commit")?;
     let rollback = read_function(value, "rollback")?;
-    let commit_undefined = JsValue::UNDEFINED;
-    let rollback_undefined = JsValue::UNDEFINED;
-    Ok(Mutation::new(
+    let commit_this = value.clone();
+    let rollback_this = value.clone();
+    Ok(Mutation::new_fallible_with_error(
         move || {
             let result = commit
-                .call0(&commit_undefined)
+                .call0(&commit_this)
                 .and_then(|value| reject_thenable(&value));
             if let Err(error) = result {
+                let details = mutation_callback_error_details(
+                    &error,
+                    "javascript mutation commit callback failed",
+                );
                 set_callback_error(error);
+                Err(details)
+            } else {
+                Ok(())
             }
         },
         move || {
             let result = rollback
-                .call0(&rollback_undefined)
+                .call0(&rollback_this)
                 .and_then(|value| reject_thenable(&value));
             if let Err(error) = result {
+                let details = mutation_callback_error_details(
+                    &error,
+                    "javascript mutation rollback callback failed",
+                );
                 set_callback_error(error);
+                Err(details)
+            } else {
+                Ok(())
             }
         },
     ))
+}
+
+/// Extracts stable reject details from an arbitrary thrown JavaScript value.
+///
+/// A thrown string is used verbatim, otherwise the value's `message` property.
+/// Reading that property throws for primitives and other non-objects, and that
+/// read failure is swallowed here, so `fallback` names the failing callback
+/// whenever no message could be read.
+fn mutation_callback_error_details(error: &JsValue, fallback: &str) -> String {
+    error
+        .as_string()
+        .or_else(|| {
+            Reflect::get(error, &JsValue::from_str("message"))
+                .ok()
+                .and_then(|message| message.as_string())
+        })
+        .unwrap_or_else(|| fallback.to_owned())
 }
 
 /// Parses an `AccountOutcomeEntry` shape (binding object or plain object).

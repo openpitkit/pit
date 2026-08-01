@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"runtime"
 
+	"go.openpit.dev/openpit/internal/mdhandle"
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/marketdata"
 	"go.openpit.dev/openpit/model"
@@ -358,7 +359,12 @@ func (b *SpotFundsReadyBuilder) PolicyGroupID(groupID model.PolicyGroupID) *Spot
 func (b *SpotFundsReadyBuilder) Build(builder native.EngineBuilder) error {
 	var marketDataHandle native.MarketDataService
 	if b.marketData != nil {
-		marketDataHandle = b.marketData.Handle()
+		var err error
+		marketDataHandle, err = mdhandle.Clone(b.marketData)
+		if err != nil {
+			return err
+		}
+		defer native.DestroyMarketDataService(marketDataHandle)
 	}
 
 	var nativeOverrides []native.PretradePoliciesSpotFundsOverride
@@ -402,7 +408,12 @@ func (b *SpotFundsBuilder) Build(builder native.EngineBuilder) error {
 func (b *SpotFundsPnlBoundsKillSwitchReadyBuilder) Build(builder native.EngineBuilder) error {
 	var marketDataHandle native.MarketDataService
 	if b.marketData != nil {
-		marketDataHandle = b.marketData.Handle()
+		var err error
+		marketDataHandle, err = mdhandle.Clone(b.marketData)
+		if err != nil {
+			return err
+		}
+		defer native.DestroyMarketDataService(marketDataHandle)
 	}
 	err := native.EngineBuilderAddBuiltinSpotFundsPnlBoundsKillSwitch(
 		builder,

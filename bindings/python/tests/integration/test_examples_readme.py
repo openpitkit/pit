@@ -13,16 +13,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://github.com/openpitkit and the OWNERS file for details.
+# Please see https://openpit.dev and the OWNERS file for details.
 
 import datetime
 
 import openpit
 import pytest
+from openpit.param import AccountId, Price, Quantity, Side, TradeAmount, Volume
+from openpit.pretrade.policies import (
+    OrderSizeBrokerBarrier,
+    OrderSizeLimit,
+    build_order_size_limit,
+)
 
 # Mirrors public examples from:
 # - bindings/python/README.md
-# - ../pit.wiki/Getting-Started.md
+# - https://wiki.openpit.dev/Getting-Started/
 # If this test changes, update every linked documentation snippet.
 
 
@@ -64,10 +70,60 @@ def _aapl_usd_report() -> openpit.ExecutionReport:
 
 
 @pytest.mark.integration
+def test_readme_hello_world() -> None:
+    # Source: bindings/python/README.md - Quick Start
+    # The example's import block is hoisted to module scope; the rest below
+    # mirrors the README snippet as published.
+
+    # Build the engine once, at start-up: one broker-wide fat-finger cap.
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            build_order_size_limit().broker_barrier(
+                OrderSizeBrokerBarrier(
+                    limit=OrderSizeLimit(
+                        max_quantity=Quantity("500"),
+                        max_notional=Volume("1000000"),
+                    ),
+                ),
+            ),
+        )
+        .build()
+    )
+
+    order = openpit.Order(
+        operation=openpit.OrderOperation(
+            instrument=openpit.Instrument("AAPL", "USD"),
+            account_id=AccountId.from_int(99224416),
+            side=Side.BUY,
+            trade_amount=TradeAmount.quantity("1000"),
+            price=Price("185"),
+        ),
+    )
+
+    result = engine.execute_pre_trade(order=order)
+    if result.ok:
+        # Send the order to the venue, then commit or roll the reservation back.
+        result.reservation.commit()
+    else:
+        for reject in result.rejects:
+            # OrderSizeLimitPolicy [OrderQtyExceedsLimit]: order quantity exceeded
+            print(f"{reject.policy} [{reject.code}]: {reject.reason}")
+
+    assert not result.ok
+    first = result.rejects[0]
+    assert first.code == openpit.pretrade.RejectCode.ORDER_QTY_EXCEEDS_LIMIT
+    assert (
+        f"{first.policy} [{first.code}]: {first.reason}"
+        == "OrderSizeLimitPolicy [OrderQtyExceedsLimit]: order quantity exceeded"
+    )
+
+
+@pytest.mark.integration
 def test_readme_quickstart() -> None:
-    # Source: bindings/python/README.md - Usage
-    # Shared with: pit.wiki/Getting-Started.md
-    # Keep README and wiki versions of this example in sync.
+    # Source: https://wiki.openpit.dev/Getting-Started/
+    # - Example: Build an Engine
 
     # 1. Build the engine (one time at the platform initialization).
     policies = openpit.pretrade.policies

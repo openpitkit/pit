@@ -144,6 +144,7 @@ class NativeAccess final {
     friend class ::openpit::pretrade::AccountOutcomes;
     friend class ::openpit::pretrade::Context;
     friend class ::openpit::pretrade::DryRunReport;
+    friend class ::openpit::pretrade::DropCopyOperation;
     friend class ::openpit::pretrade::PostTradeAdjustments;
     friend class ::openpit::pretrade::PostTradeContext;
     friend class ::openpit::pretrade::PostTradePnls;
@@ -153,6 +154,7 @@ class NativeAccess final {
     friend class ::openpit::pretrade::Result;
     template <typename Handler>
     friend class ::openpit::pretrade::CustomPolicy;
+    friend struct ::openpit::pretrade::DropCopyResult;
     friend struct ::openpit::pretrade::ExecuteResult;
     friend struct ::openpit::pretrade::LockEntry;
     friend struct ::openpit::pretrade::PolicyAccountAdjustmentResult;
@@ -241,6 +243,8 @@ class NativeAccess final {
     template <typename Driver>
     friend class ::openpit::asyncengine::AsyncAccounts;
     template <typename Driver>
+    friend class ::openpit::asyncengine::AsyncDropCopyOperation;
+    template <typename Driver>
     friend class ::openpit::asyncengine::AsyncRequest;
     template <typename Driver>
     friend class ::openpit::asyncengine::AsyncReservation;
@@ -260,6 +264,8 @@ class NativeAccess final {
     friend class ::openpit::asyncengine::TypedShardedBuilder;
     friend struct ::openpit::asyncengine::AdjustmentOutcome;
     friend class ::openpit::asyncengine::detail::Base;
+    template <typename Driver>
+    friend struct ::openpit::asyncengine::DropCopyOutcome;
     template <typename Driver>
     friend struct ::openpit::asyncengine::ExecuteOutcome;
     template <typename Driver>

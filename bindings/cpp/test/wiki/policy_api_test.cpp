@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Policy-API.md
+// Source: https://wiki.openpit.dev/Policy-API/
 //
 // Compiling mirror of the C++ snippets published on the Policy-API wiki page.
 // Each TEST runs the same policy/engine code shown in a C++ wiki block (modulo

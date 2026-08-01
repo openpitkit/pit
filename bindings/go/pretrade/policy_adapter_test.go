@@ -47,8 +47,15 @@ func TestSafeClientPreTradePolicyCheckPreTradeStartRejectsMissingOrderPayload(t 
 	if len(rejects) != 1 {
 		t.Fatalf("CheckPreTradeStart() reject len = %d, want 1", len(rejects))
 	}
-	if rejects[0].Code != reject.CodeOther {
-		t.Fatalf("reject code = %v, want %v", rejects[0].Code, reject.CodeOther)
+	if rejects[0].Code != reject.CodeSystemUnavailable {
+		t.Fatalf(
+			"reject code = %v, want %v",
+			rejects[0].Code,
+			reject.CodeSystemUnavailable,
+		)
+	}
+	if !rejects[0].Code.IsEvaluationFailure() {
+		t.Fatal("payload mismatch reject is not an evaluation failure")
 	}
 }
 
@@ -73,8 +80,15 @@ func TestSafeClientPreTradePolicyRejectsMissingOrderPayload(t *testing.T) {
 	if len(rejects) != 1 {
 		t.Fatalf("PerformPreTradeCheck() reject len = %d, want 1", len(rejects))
 	}
-	if rejects[0].Code != reject.CodeOther {
-		t.Fatalf("reject code = %v, want %v", rejects[0].Code, reject.CodeOther)
+	if rejects[0].Code != reject.CodeSystemUnavailable {
+		t.Fatalf(
+			"reject code = %v, want %v",
+			rejects[0].Code,
+			reject.CodeSystemUnavailable,
+		)
+	}
+	if !rejects[0].Code.IsEvaluationFailure() {
+		t.Fatal("payload mismatch reject is not an evaluation failure")
 	}
 	if rejects[0].Scope != reject.ScopeOrder {
 		t.Fatalf("reject scope = %v, want %v", rejects[0].Scope, reject.ScopeOrder)

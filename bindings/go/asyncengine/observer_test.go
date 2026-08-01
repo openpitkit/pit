@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package asyncengine
 
@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 )
 
@@ -114,6 +115,34 @@ func (o *recordingObserver) counts() (
 	return o.enqueueCount, o.dequeueCount, o.completeCount,
 		o.slowSubmitCount, o.queueFullBlockedCount,
 		o.queueCreatedCount, o.queueRemovedCount, o.submitCancelledCount
+}
+
+// TestAsyncEngineRefusesDropCopyWithoutAccountID asserts that a drop-copy order
+// with no readable account id never reaches a queue: it is refused up front,
+// exactly as StartPreTrade and ExecutePreTrade refuse one, so no observer event
+// can attribute it to the real account 0.
+func TestAsyncEngineRefusesDropCopyWithoutAccountID(t *testing.T) {
+	t.Parallel()
+	obs := &recordingObserver{}
+	driver := newAcceptingDriver()
+	async, err := NewBuilder(driver).WithObserver(obs).Sharded(1).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer func() {
+		if err := async.StopGraceful(context.Background()); err != nil {
+			t.Fatalf("StopGraceful() error = %v", err)
+		}
+	}()
+
+	operation, _, err := async.ApplyDropCopy(context.Background(), model.NewOrder()).Await(context.Background())
+	if !errors.Is(err, ErrMissingAccountID) {
+		t.Fatalf("ApplyDropCopy() = operation %v, err %v, want ErrMissingAccountID", operation, err)
+	}
+	enqueue, dequeue, complete, _, _, _, _, _ := obs.counts()
+	if enqueue != 0 || dequeue != 0 || complete != 0 {
+		t.Fatalf("observer events = (%d, %d, %d), want none for a refused submit", enqueue, dequeue, complete)
+	}
 }
 
 // TestAsyncEngineObserverEnqueueDequeueCompletePerTask asserts that

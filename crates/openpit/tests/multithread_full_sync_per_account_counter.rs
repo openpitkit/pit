@@ -13,9 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -23,7 +23,7 @@ use openpit::param::{AccountId, Asset, Quantity, Side, TradeAmount};
 use openpit::pretrade::policies::{
     RateLimit, RateLimitAccountBarrier, RateLimitPolicy, RateLimitSettings,
 };
-use openpit::pretrade::{PreTradeContext, PreTradePolicy};
+use openpit::pretrade::{PreTradeContext, PreTradePolicy, Rejects};
 use openpit::storage::FullLocking;
 use openpit::{Engine, FullSync, Instrument, OrderOperation};
 
@@ -31,6 +31,63 @@ type TestPolicy = RateLimitPolicy<FullLocking>;
 
 const TOTAL_THREADS: usize = 8;
 const PER_THREAD: usize = 1_000;
+
+struct StartBarrierPolicy {
+    barrier: Arc<TimedBarrier>,
+}
+
+struct TimedBarrier {
+    arrivals: Mutex<usize>,
+    ready: Condvar,
+    participants: usize,
+}
+
+impl TimedBarrier {
+    fn new(participants: usize) -> Self {
+        Self {
+            arrivals: Mutex::new(0),
+            ready: Condvar::new(),
+            participants,
+        }
+    }
+
+    fn wait(&self) {
+        let mut arrivals = self
+            .arrivals
+            .lock()
+            .expect("barrier mutex must not be poisoned");
+        *arrivals += 1;
+        if *arrivals == self.participants {
+            self.ready.notify_all();
+            return;
+        }
+        let (arrivals, _) = self
+            .ready
+            .wait_timeout_while(arrivals, Duration::from_secs(5), |arrivals| {
+                *arrivals < self.participants
+            })
+            .expect("barrier mutex must not be poisoned");
+        assert_eq!(
+            *arrivals, self.participants,
+            "drop-copy start barrier timed out"
+        );
+    }
+}
+
+impl PreTradePolicy<OrderOperation, (), (), FullSync> for StartBarrierPolicy {
+    fn name(&self) -> &str {
+        "start_barrier"
+    }
+
+    fn check_pre_trade_start(
+        &self,
+        _ctx: &PreTradeContext<FullLocking>,
+        _order: &OrderOperation,
+    ) -> Result<(), Rejects> {
+        self.barrier.wait();
+        Ok(())
+    }
+}
 
 fn build_order(account_id: AccountId) -> OrderOperation {
     OrderOperation {
@@ -104,4 +161,57 @@ fn rate_limit_full_sync_per_account_counter_isolated_under_concurrent_load() {
             "account {tid}: call after exhausting per-account limit must be rejected"
         );
     }
+}
+
+#[test]
+fn concurrent_drop_copy_account_limit_decisions_are_exact() {
+    let account_id = AccountId::from_u64(7);
+    let builder = Engine::builder::<OrderOperation, (), ()>().full_sync();
+    let rate_limit = RateLimitPolicy::<FullLocking>::new(
+        RateLimitSettings::new(
+            None,
+            [],
+            [RateLimitAccountBarrier {
+                account_id,
+                limit: RateLimit {
+                    max_orders: 1,
+                    window: Duration::from_secs(60),
+                },
+            }],
+            [],
+        )
+        .expect("rate limit settings must be valid"),
+        builder.storage_builder(),
+    );
+    let engine = Arc::new(
+        builder
+            .pre_trade(StartBarrierPolicy {
+                barrier: Arc::new(TimedBarrier::new(TOTAL_THREADS)),
+            })
+            .pre_trade(rate_limit)
+            .build()
+            .expect("engine must build"),
+    );
+
+    let blocked_results = thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(TOTAL_THREADS);
+        for _ in 0..TOTAL_THREADS {
+            let engine = Arc::clone(&engine);
+            handles.push(scope.spawn(move || {
+                let mut operation = engine
+                    .apply_drop_copy(build_order(account_id))
+                    .expect("ordinary rate-limit rejects must not abort drop-copy");
+                let blocked = operation.account_block().is_some();
+                operation.commit();
+                blocked
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("drop-copy thread must finish"))
+            .filter(|blocked| *blocked)
+            .count()
+    });
+
+    assert_eq!(blocked_results, TOTAL_THREADS - 1);
 }

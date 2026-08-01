@@ -1262,8 +1262,7 @@ jobs:
         env:
           RELEASE_MODE: ${{ needs.verify-tag.outputs.release_mode }}
           VERSION: ${{ needs.verify-tag.outputs.version }}
-          VCPKG_REGISTRY_BASELINE:
-            ${{ needs.publish-vcpkg-registry.outputs.registry_baseline }}
+          VCPKG_REGISTRY_BASELINE: ${{ needs.publish-vcpkg-registry.outputs.registry_baseline }}
         run: |
           set -euo pipefail
 
@@ -1368,8 +1367,7 @@ jobs:
           OPENPIT_RELEASE_DOWNLOAD_TOKEN: ${{ github.token }}
           OPENPIT_RELEASE_ID: ${{ needs.publish-github-release.outputs.release_id }}
           OPENPIT_RELEASE_E2E_TARGETS: cpp-amd64 cpp-vcpkg-amd64
-          OPENPIT_VCPKG_REGISTRY_PATH:
-            ${{ runner.temp }}/openpit-vcpkg-dry-run-registry
+          OPENPIT_VCPKG_REGISTRY_PATH: ${{ runner.temp }}/openpit-vcpkg-dry-run-registry
         run: just --justfile "$JUSTFILE" test-release-e2e "${{ needs.verify-tag.outputs.version }}"
 
   release-e2e-windows:
@@ -1413,8 +1411,7 @@ jobs:
           OPENPIT_RELEASE_DOWNLOAD_TOKEN: ${{ github.token }}
           OPENPIT_RELEASE_ID: ${{ needs.publish-github-release.outputs.release_id }}
           OPENPIT_RELEASE_E2E_TARGETS: cpp-windows-amd64 cpp-vcpkg-windows-amd64
-          OPENPIT_VCPKG_REGISTRY_PATH:
-            ${{ runner.temp }}/openpit-vcpkg-dry-run-registry
+          OPENPIT_VCPKG_REGISTRY_PATH: ${{ runner.temp }}/openpit-vcpkg-dry-run-registry
         run: just --justfile "$env:JUSTFILE" test-release-e2e "${{ needs.verify-tag.outputs.version }}"
 
   cleanup-dry-run-release:
@@ -1504,8 +1501,7 @@ jobs:
         id: release-e2e
         shell: bash
         env:
-          OPENPIT_VCPKG_REGISTRY_BASELINE:
-            ${{ needs.publish-vcpkg-registry.outputs.registry_baseline }}
+          OPENPIT_VCPKG_REGISTRY_BASELINE: ${{ needs.publish-vcpkg-registry.outputs.registry_baseline }}
         run: just --justfile "$JUSTFILE" test-release-e2e "${{ needs.verify-tag.outputs.version }}"
 
       - name: Summarize release e2e success

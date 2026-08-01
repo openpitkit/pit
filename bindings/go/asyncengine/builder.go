@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package asyncengine
 
@@ -159,9 +159,9 @@ type DynamicBuilder struct {
 	idleCleanupAfter time.Duration
 }
 
-// MaxQueues caps the number of concurrent live per-account queues. Zero
-// removes the cap; submit never fails for new accounts. The default cap
-// is runtime.NumCPU() * 32.
+// MaxQueues caps the number of concurrent live per-account queues: a cap of n
+// means n usable account queues. Zero removes the cap; submit never fails for
+// new accounts. The default cap is runtime.NumCPU() * 32.
 //
 // When the cap is reached, submitting for an unknown account returns
 // ErrQueueLimit; submits for known accounts continue normally.
@@ -192,9 +192,10 @@ func (b *DynamicBuilder) Build() (*AsyncEngine, error) {
 			b.maxQueues,
 		)
 	}
-	strategy := newDynamicStrategy(
-		b.parent.baseConfig(), b.maxQueues, b.idleCleanupAfter,
-	)
+	strategy := newDynamicStrategy(b.parent.baseConfig(), dynamicConfig{
+		idleCleanupAfter: b.idleCleanupAfter,
+		maxQueues:        b.maxQueues,
+	})
 	return newAsyncEngine(
 		b.parent.driver, b.parent.stopUnderlying, strategy,
 	), nil

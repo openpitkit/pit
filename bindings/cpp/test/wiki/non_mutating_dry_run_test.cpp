@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Non-Mutating-Dry-Run.md
+// Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
 //
 // Compiling mirror of the C++ snippets published on the Non-Mutating Dry-Run
 // wiki page. The snippets are wrapped in the minimal engine/order harness and
@@ -56,7 +56,8 @@ using openpit::param::Quantity;
   return builder.Build();
 }
 
-// Used in: pit.wiki/Non-Mutating-Dry-Run.md - Read the Dry-Run Verdict
+// Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+// - Read the Dry-Run Verdict
 TEST(NonMutatingDryRunWiki, ReadDryRunVerdict) {
   openpit::Engine engine = BuildValidationEngine();
   const openpit::model::Order order = WikiOrder();
@@ -76,8 +77,8 @@ TEST(NonMutatingDryRunWiki, ReadDryRunVerdict) {
   EXPECT_TRUE(report.Passed());
 }
 
-// Used in: pit.wiki/Non-Mutating-Dry-Run.md - Use the Dry-Run Before a Real
-// Call
+// Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+// - Use the Dry-Run Before a Real Call
 TEST(NonMutatingDryRunWiki, ProbeBeforeRealCall) {
   openpit::Engine engine = BuildValidationEngine();
   const openpit::model::Order order = WikiOrder();
@@ -135,7 +136,8 @@ class MyCountingPolicy {
   std::uint64_t* m_count;
 };
 
-// Used in: pit.wiki/Non-Mutating-Dry-Run.md - Read-Only Custom Start-Stage Hook
+// Source: https://wiki.openpit.dev/Non-Mutating-Dry-Run/
+// - Read-Only Custom Start-Stage Hook
 TEST(NonMutatingDryRunWiki, CustomPolicyDryRunHook) {
   std::uint64_t count = 0;
   openpit::pretrade::CustomPolicy<MyCountingPolicy> policy(

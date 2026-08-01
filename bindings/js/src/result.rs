@@ -20,14 +20,17 @@
 //! The two-stage flow is reproduced exactly: `startPreTrade` yields a
 //! [`JsStartResult`] carrying a single-use [`JsRequest`]; `request.execute()`
 //! yields a [`JsExecuteResult`] carrying a single-use [`JsReservation`]; the
-//! reservation is committed or rolled back exactly once. Single-use handles
-//! share their core value through an `Rc<RefCell<Option<..>>>` and throw
-//! `LifecycleError` on reuse.
+//! reservation is committed or rolled back exactly once. `applyDropCopy`
+//! repeats that shape with a [`JsDropCopyResult`] carrying a single-use
+//! [`JsDropCopyOperation`]. Single-use handles share their core value through
+//! an `Rc<RefCell<Option<..>>>` and throw `LifecycleError` on reuse.
 
 use std::{cell::RefCell, rc::Rc};
 
 use js_sys::Array;
-use openpit::pretrade::{PreTradeDryRunReport, PreTradeRequest, PreTradeReservation, Rejects};
+use openpit::pretrade::{
+    DropCopyOperation, PreTradeDryRunReport, PreTradeRequest, PreTradeReservation, Rejects,
+};
 use openpit::{AccountAdjustmentBatchError, AccountAdjustmentBatchResult, PostTradeResult};
 use wasm_bindgen::convert::TryFromJsValue;
 use wasm_bindgen::prelude::*;
@@ -35,7 +38,7 @@ use wasm_bindgen::prelude::*;
 use crate::context::LifecycleToken;
 use crate::domain::extract_cloned_wrapper;
 use crate::engine::Order;
-use crate::error::{make_error, policy_callback_error, ErrorKind};
+use crate::error::{make_error, ErrorKind};
 use crate::lock::JsLock;
 use crate::outcome::{JsAccountAdjustmentOutcome, JsAccountPnlOutcome};
 use crate::policy::CallbackErrorScope;
@@ -43,6 +46,7 @@ use crate::reject::{JsAccountBlock, JsReject};
 
 type SharedRequest = Rc<RefCell<Option<(PreTradeRequest<Order>, LifecycleToken)>>>;
 type SharedReservation = Rc<RefCell<Option<(PreTradeReservation, LifecycleToken)>>>;
+type SharedDropCopyOperation = Rc<RefCell<Option<(DropCopyOperation, LifecycleToken)>>>;
 
 /// Maps a core rejects list to an array of binding rejects.
 fn convert_rejects(rejects: &Rejects) -> Vec<JsReject> {
@@ -180,6 +184,7 @@ impl JsExecuteResult {
 #[derive(Clone)]
 pub struct JsRequest {
     inner: SharedRequest,
+    callback_scope_id: u64,
 }
 
 #[wasm_bindgen(js_class = Request)]
@@ -188,15 +193,16 @@ impl JsRequest {
     ///
     /// # Errors
     ///
-    /// Throws `LifecycleError` when the request has already been executed.
+    /// Throws `LifecycleError` when the request has already been executed or
+    /// this request's owning engine is re-entered from one of its callbacks.
     #[wasm_bindgen(js_name = execute)]
     pub fn execute(&self) -> Result<JsExecuteResult, JsValue> {
+        let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
         let (request, lifecycle) = self
             .inner
             .borrow_mut()
             .take()
             .ok_or_else(|| lifecycle_error("request has already been executed"))?;
-        let callback_scope = CallbackErrorScope::capture();
         let result = match request.execute() {
             Ok(reservation) => JsExecuteResult::accepted(reservation, lifecycle.clone()),
             Err(rejects) => {
@@ -204,8 +210,8 @@ impl JsRequest {
                 JsExecuteResult::rejected(&rejects)
             }
         };
-        if let Some(cause) = callback_scope.finish() {
-            return Err(policy_callback_error(cause, JsValue::UNDEFINED));
+        if let Some(failure) = callback_scope.finish() {
+            return Err(failure.into_error(JsValue::UNDEFINED));
         }
         Ok(result)
     }
@@ -214,8 +220,10 @@ impl JsRequest {
 impl JsRequest {
     /// Wraps a core pre-trade request handle.
     fn new(inner: PreTradeRequest<Order>, lifecycle: LifecycleToken) -> Self {
+        let callback_scope_id = lifecycle.callback_scope_id();
         Self {
             inner: Rc::new(RefCell::new(Some((inner, lifecycle)))),
+            callback_scope_id,
         }
     }
 }
@@ -239,10 +247,24 @@ impl Drop for JsRequest {
 /// `lock()` and `accountAdjustments()` may be read while the reservation is
 /// live. `commit()` and `rollback()` each consume the handle; calling either a
 /// second time (or after the other) throws `LifecycleError`.
+///
+/// A mutation finalizer - a `Mutation` commit or rollback callback - has no
+/// right to fail: the decision is already made and the state it finalizes was
+/// applied eagerly. One that throws anyway never stops the batch, and it is
+/// reported on two independent channels. The throw reaches this caller as
+/// `PolicyCallbackError` once every remaining callback has run. Separately the
+/// engine arms its kill switch, because its own bookkeeping is now in an
+/// unknown state; every `Mutation` registered from JavaScript belongs to a
+/// custom policy whose state reach the engine cannot bound, so **every**
+/// account is blocked, not only this order's. That block is not reported here:
+/// it surfaces when the next pre-trade call is rejected with
+/// `SystemUnavailable`, and an operator clears it with
+/// `engine.accounts().unblockAll()`.
 #[wasm_bindgen(js_name = Reservation)]
 #[derive(Clone)]
 pub struct JsReservation {
     inner: SharedReservation,
+    callback_scope_id: u64,
 }
 
 #[wasm_bindgen(js_class = Reservation)]
@@ -254,6 +276,7 @@ impl JsReservation {
     /// Throws `LifecycleError` when the reservation has been finalized.
     #[wasm_bindgen(js_name = lock)]
     pub fn lock(&self) -> Result<JsLock, JsValue> {
+        CallbackErrorScope::ensure_callable(self.callback_scope_id)?;
         let reservation = self.inner.borrow();
         let (reservation, _) = reservation
             .as_ref()
@@ -268,6 +291,7 @@ impl JsReservation {
     /// Throws `LifecycleError` when the reservation has been finalized.
     #[wasm_bindgen(js_name = accountAdjustments)]
     pub fn account_adjustments(&self) -> Result<Vec<JsAccountAdjustmentOutcome>, JsValue> {
+        CallbackErrorScope::ensure_callable(self.callback_scope_id)?;
         let reservation = self.inner.borrow();
         let (reservation, _) = reservation
             .as_ref()
@@ -275,34 +299,21 @@ impl JsReservation {
         Ok(convert_outcomes(reservation.account_adjustments()))
     }
 
-    /// Returns the winning account block produced by this reservation's pipeline,
-    /// or `undefined` when no account-scoped reject was produced.
-    ///
-    /// # Errors
-    ///
-    /// Throws `LifecycleError` when the reservation has been finalized.
-    #[wasm_bindgen(js_name = accountBlock)]
-    pub fn account_block(&self) -> Result<Option<JsAccountBlock>, JsValue> {
-        let reservation = self.inner.borrow();
-        let (reservation, _) = reservation
-            .as_ref()
-            .ok_or_else(|| lifecycle_error("reservation has already been finalized"))?;
-        Ok(reservation.account_block().map(JsAccountBlock::from_core))
-    }
-
     /// Commits the reserved state.
     ///
     /// # Errors
     ///
-    /// Throws `LifecycleError` when the reservation has already been finalized.
+    /// Throws `PolicyCallbackError` when a mutation commit callback throws, or
+    /// `LifecycleError` when the reservation has already been finalized or its
+    /// owning engine is re-entered from one of its callbacks.
     #[wasm_bindgen(js_name = commit)]
     pub fn commit(&self) -> Result<(), JsValue> {
+        let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
         let (mut reservation, lifecycle) = self.take()?;
-        let callback_scope = CallbackErrorScope::capture();
         reservation.commit();
         lifecycle.invalidate();
         match callback_scope.finish() {
-            Some(cause) => Err(policy_callback_error(cause, JsValue::UNDEFINED)),
+            Some(failure) => Err(failure.into_error(JsValue::UNDEFINED)),
             None => Ok(()),
         }
     }
@@ -311,15 +322,17 @@ impl JsReservation {
     ///
     /// # Errors
     ///
-    /// Throws `LifecycleError` when the reservation has already been finalized.
+    /// Throws `PolicyCallbackError` when a mutation rollback callback throws,
+    /// or `LifecycleError` when the reservation has already been finalized or
+    /// its owning engine is re-entered from one of its callbacks.
     #[wasm_bindgen(js_name = rollback)]
     pub fn rollback(&self) -> Result<(), JsValue> {
+        let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
         let (mut reservation, lifecycle) = self.take()?;
-        let callback_scope = CallbackErrorScope::capture();
         reservation.rollback();
         lifecycle.invalidate();
         match callback_scope.finish() {
-            Some(cause) => Err(policy_callback_error(cause, JsValue::UNDEFINED)),
+            Some(failure) => Err(failure.into_error(JsValue::UNDEFINED)),
             None => Ok(()),
         }
     }
@@ -328,8 +341,10 @@ impl JsReservation {
 impl JsReservation {
     /// Wraps a core reservation handle.
     pub(crate) fn new(inner: PreTradeReservation, lifecycle: LifecycleToken) -> Self {
+        let callback_scope_id = lifecycle.callback_scope_id();
         Self {
             inner: Rc::new(RefCell::new(Some((inner, lifecycle)))),
+            callback_scope_id,
         }
     }
 
@@ -353,8 +368,240 @@ impl Drop for JsReservation {
         };
         if let Some((reservation, lifecycle)) = inner.get_mut().take() {
             lifecycle.invalidate();
-            let callback_scope = CallbackErrorScope::suppress();
+            if CallbackErrorScope::is_poisoned() {
+                std::mem::forget(reservation);
+                return;
+            }
+            let callback_scope = CallbackErrorScope::suppress(self.callback_scope_id);
             drop(reservation);
+            callback_scope.finish();
+        }
+    }
+}
+
+// ─── DropCopyResult ──────────────────────────────────────────────────────────
+
+/// Outcome of `engine.applyDropCopy`.
+///
+/// On success `ok` is `true` and `operation` is a single-use
+/// `DropCopyOperation`; on rejection `ok` is `false` and `rejects` is
+/// non-empty.
+#[wasm_bindgen(js_name = DropCopyResult)]
+pub struct JsDropCopyResult {
+    operation: Option<JsDropCopyOperation>,
+    rejects: Vec<JsReject>,
+}
+
+#[wasm_bindgen(js_class = DropCopyResult)]
+impl JsDropCopyResult {
+    /// Whether drop copy applied the historical order.
+    #[wasm_bindgen(getter, js_name = ok)]
+    pub fn ok(&self) -> bool {
+        self.rejects.is_empty()
+    }
+
+    /// The shared single-use operation, or `undefined` on rejection.
+    ///
+    /// Repeated reads return handles sharing the same one-shot lifecycle.
+    #[wasm_bindgen(getter, js_name = operation)]
+    pub fn operation(&self) -> Option<JsDropCopyOperation> {
+        self.operation.clone()
+    }
+
+    /// The fatal evaluation rejects, empty on success.
+    #[wasm_bindgen(getter, js_name = rejects)]
+    pub fn rejects(&self) -> Vec<JsReject> {
+        self.rejects.clone()
+    }
+}
+
+impl JsDropCopyResult {
+    /// Builds an applied drop-copy result wrapping the operation handle.
+    pub(crate) fn accepted(operation: DropCopyOperation, lifecycle: LifecycleToken) -> Self {
+        Self {
+            operation: Some(JsDropCopyOperation::new(operation, lifecycle)),
+            rejects: Vec::new(),
+        }
+    }
+
+    /// Builds a rejected drop-copy result from the core rejects.
+    pub(crate) fn rejected(rejects: &Rejects) -> Self {
+        Self {
+            operation: None,
+            rejects: convert_rejects(rejects),
+        }
+    }
+}
+
+// ─── DropCopyOperation ───────────────────────────────────────────────────────
+
+/// Single-use handle for applied drop-copy bookkeeping.
+///
+/// `lock()`, `accountAdjustments()`, `accountBlock()`, and `isAccountBlocked()`
+/// may be read while the operation is live. `commit()` and `rollback()` each
+/// consume the handle; calling either a second time (or after the other) throws
+/// `LifecycleError`.
+///
+/// Account-control operations published by the drop-copy pipeline and consumed
+/// rate-limit attempts stay outside that finalization boundary.
+///
+/// Mutation finalizers carry the same contract as on `Reservation`: a callback
+/// that throws is re-surfaced here as `PolicyCallbackError` without stopping
+/// the batch, and independently arms the engine kill switch, which blocks every
+/// account for a `Mutation` registered from JavaScript. Later pre-trade calls
+/// are rejected with `SystemUnavailable` until an operator calls
+/// `engine.accounts().unblockAll()`.
+#[wasm_bindgen(js_name = DropCopyOperation)]
+#[derive(Clone)]
+pub struct JsDropCopyOperation {
+    inner: SharedDropCopyOperation,
+    callback_scope_id: u64,
+}
+
+#[wasm_bindgen(js_class = DropCopyOperation)]
+impl JsDropCopyOperation {
+    /// Returns the lock payload accumulated for this operation.
+    ///
+    /// # Errors
+    ///
+    /// Throws `LifecycleError` when the operation has been finalized.
+    #[wasm_bindgen(js_name = lock)]
+    pub fn lock(&self) -> Result<JsLock, JsValue> {
+        CallbackErrorScope::ensure_callable(self.callback_scope_id)?;
+        let operation = self.inner.borrow();
+        let (operation, _) = operation
+            .as_ref()
+            .ok_or_else(|| lifecycle_error("drop-copy operation has already been finalized"))?;
+        Ok(JsLock::from_inner(operation.lock().clone()))
+    }
+
+    /// Returns the account adjustments produced by this operation.
+    ///
+    /// # Errors
+    ///
+    /// Throws `LifecycleError` when the operation has been finalized.
+    #[wasm_bindgen(js_name = accountAdjustments)]
+    pub fn account_adjustments(&self) -> Result<Vec<JsAccountAdjustmentOutcome>, JsValue> {
+        CallbackErrorScope::ensure_callable(self.callback_scope_id)?;
+        let operation = self.inner.borrow();
+        let (operation, _) = operation
+            .as_ref()
+            .ok_or_else(|| lifecycle_error("drop-copy operation has already been finalized"))?;
+        Ok(convert_outcomes(operation.account_adjustments()))
+    }
+
+    /// Returns the first account block requested by this operation, or
+    /// `undefined`.
+    ///
+    /// This request-local history may differ from the apply-time registry
+    /// snapshot reported by `isAccountBlocked()`.
+    ///
+    /// # Errors
+    ///
+    /// Throws `LifecycleError` when the operation has been finalized.
+    #[wasm_bindgen(js_name = accountBlock)]
+    pub fn account_block(&self) -> Result<Option<JsAccountBlock>, JsValue> {
+        CallbackErrorScope::ensure_callable(self.callback_scope_id)?;
+        let operation = self.inner.borrow();
+        let (operation, _) = operation
+            .as_ref()
+            .ok_or_else(|| lifecycle_error("drop-copy operation has already been finalized"))?;
+        Ok(operation.account_block().map(JsAccountBlock::from_core))
+    }
+
+    /// Returns the apply-time blocked-state snapshot for the order account.
+    ///
+    /// The snapshot was captured before `applyDropCopy` returned and does not
+    /// track later registry changes.
+    ///
+    /// # Errors
+    ///
+    /// Throws `LifecycleError` when the operation has been finalized.
+    #[wasm_bindgen(js_name = isAccountBlocked)]
+    pub fn account_blocked(&self) -> Result<bool, JsValue> {
+        CallbackErrorScope::ensure_callable(self.callback_scope_id)?;
+        let operation = self.inner.borrow();
+        let (operation, _) = operation
+            .as_ref()
+            .ok_or_else(|| lifecycle_error("drop-copy operation has already been finalized"))?;
+        Ok(operation.is_account_blocked())
+    }
+
+    /// Commits the applied bookkeeping.
+    ///
+    /// # Errors
+    ///
+    /// Throws `PolicyCallbackError` when a mutation commit callback throws, or
+    /// `LifecycleError` when the operation has already been finalized or its
+    /// owning engine is re-entered from one of its callbacks.
+    #[wasm_bindgen(js_name = commit)]
+    pub fn commit(&self) -> Result<(), JsValue> {
+        let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
+        let (mut operation, lifecycle) = self.take()?;
+        operation.commit();
+        lifecycle.invalidate();
+        match callback_scope.finish() {
+            Some(failure) => Err(failure.into_error(JsValue::UNDEFINED)),
+            None => Ok(()),
+        }
+    }
+
+    /// Rolls the applied bookkeeping back.
+    ///
+    /// # Errors
+    ///
+    /// Throws `PolicyCallbackError` when a mutation rollback callback throws,
+    /// or `LifecycleError` when the operation has already been finalized or its
+    /// owning engine is re-entered from one of its callbacks.
+    #[wasm_bindgen(js_name = rollback)]
+    pub fn rollback(&self) -> Result<(), JsValue> {
+        let callback_scope = CallbackErrorScope::capture(self.callback_scope_id)?;
+        let (mut operation, lifecycle) = self.take()?;
+        operation.rollback();
+        lifecycle.invalidate();
+        match callback_scope.finish() {
+            Some(failure) => Err(failure.into_error(JsValue::UNDEFINED)),
+            None => Ok(()),
+        }
+    }
+}
+
+impl JsDropCopyOperation {
+    /// Wraps a core drop-copy operation handle.
+    pub(crate) fn new(inner: DropCopyOperation, lifecycle: LifecycleToken) -> Self {
+        let callback_scope_id = lifecycle.callback_scope_id();
+        Self {
+            inner: Rc::new(RefCell::new(Some((inner, lifecycle)))),
+            callback_scope_id,
+        }
+    }
+
+    /// Removes and returns the operation, leaving the handle finalized.
+    ///
+    /// # Errors
+    ///
+    /// Throws `LifecycleError` when the operation has already been finalized.
+    fn take(&self) -> Result<(DropCopyOperation, LifecycleToken), JsValue> {
+        self.inner
+            .borrow_mut()
+            .take()
+            .ok_or_else(|| lifecycle_error("drop-copy operation has already been finalized"))
+    }
+}
+
+impl Drop for JsDropCopyOperation {
+    fn drop(&mut self) {
+        let Some(inner) = Rc::get_mut(&mut self.inner) else {
+            return;
+        };
+        if let Some((operation, lifecycle)) = inner.get_mut().take() {
+            lifecycle.invalidate();
+            if CallbackErrorScope::is_poisoned() {
+                std::mem::forget(operation);
+                return;
+            }
+            let callback_scope = CallbackErrorScope::suppress(self.callback_scope_id);
+            drop(operation);
             callback_scope.finish();
         }
     }

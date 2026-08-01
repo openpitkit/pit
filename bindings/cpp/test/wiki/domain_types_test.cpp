@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Domain-Types.md
+// Source: https://wiki.openpit.dev/Domain-Types/
 //
 // Each TEST runs the exact user code published in a C++ snippet of the wiki
 // page, plus the minimal asserts that accompany it. Keep the snippet bodies and

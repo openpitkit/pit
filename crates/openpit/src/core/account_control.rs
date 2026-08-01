@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 //! Account blocking for [`Engine`](crate::Engine).
 //!
@@ -30,8 +30,12 @@
 //!   registry, so membership changes take effect without re-blocking.
 
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use crate::core::account_groups::AccountGroups;
+use crate::core::mutation::MutationFailureScope;
 use crate::core::HasAccountId;
 use crate::param::{AccountGroupId, AccountId, DEFAULT_ACCOUNT_GROUP};
 use crate::pretrade::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
@@ -93,6 +97,7 @@ where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
 {
     handle: AccountBlockHandle<StorageFactory>,
+    deferred_operations: Option<DeferredAccountOperations>,
     account_id: AccountId,
 }
 
@@ -103,6 +108,7 @@ where
     fn clone(&self) -> Self {
         Self {
             handle: self.handle.clone(),
+            deferred_operations: self.deferred_operations.clone(),
             account_id: self.account_id,
         }
     }
@@ -113,21 +119,149 @@ where
     StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
 {
     pub(crate) fn new(handle: AccountBlockHandle<StorageFactory>, account_id: AccountId) -> Self {
-        Self { handle, account_id }
+        Self {
+            handle,
+            deferred_operations: None,
+            account_id,
+        }
+    }
+
+    pub(crate) fn with_deferred_operations(
+        mut self,
+        deferred_operations: DeferredAccountOperations,
+    ) -> Self {
+        self.deferred_operations = Some(deferred_operations);
+        self
     }
 
     /// Records `block` against the bound account on the engine's shared
     /// `BlockedAccounts`. The first cause for the account wins.
     pub fn block(&self, block: AccountBlock) {
-        self.handle.record(self.account_id, block);
+        let write_through = match &self.deferred_operations {
+            Some(deferred_operations) => deferred_operations
+                .record_block(self.account_id, block)
+                .err(),
+            None => Some(block),
+        };
+        if let Some(block) = write_through {
+            self.handle.record(self.account_id, block);
+        }
     }
 
     /// Unblocks the bound account when its cause is the one `provenance`
     /// raised, and does nothing otherwise. See
     /// [`BlockedAccounts::invalidate_provenance`].
     pub(crate) fn invalidate_provenance(&self, provenance: u64) -> Option<AccountBlock> {
+        if let Some(deferred_operations) = &self.deferred_operations {
+            if deferred_operations.record_invalidate_provenance(self.account_id, provenance) {
+                return None;
+            }
+        }
         self.handle
             .invalidate_provenance(self.account_id, provenance)
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct DeferredAccountOperations {
+    state: Arc<Mutex<DeferredAccountOperationsState>>,
+}
+
+struct DeferredAccountOperationsState {
+    first_block: Option<AccountBlock>,
+    operations: Vec<DeferredAccountOperation>,
+    is_active: bool,
+}
+
+impl Default for DeferredAccountOperationsState {
+    fn default() -> Self {
+        Self {
+            first_block: None,
+            operations: Vec::new(),
+            is_active: true,
+        }
+    }
+}
+
+enum DeferredAccountOperation {
+    Block {
+        account: AccountId,
+        block: AccountBlock,
+    },
+    InvalidateProvenance {
+        account: AccountId,
+        provenance: u64,
+    },
+}
+
+impl DeferredAccountOperations {
+    pub(crate) fn record_block(
+        &self,
+        account: AccountId,
+        block: AccountBlock,
+    ) -> Result<(), AccountBlock> {
+        let mut state = self.state.lock();
+        if !state.is_active {
+            return Err(block);
+        }
+        if state.first_block.is_none() {
+            state.first_block = Some(block.clone());
+        }
+        state
+            .operations
+            .push(DeferredAccountOperation::Block { account, block });
+        Ok(())
+    }
+
+    pub(crate) fn record_invalidate_provenance(&self, account: AccountId, provenance: u64) -> bool {
+        let mut state = self.state.lock();
+        if !state.is_active {
+            return false;
+        }
+        state
+            .operations
+            .push(DeferredAccountOperation::InvalidateProvenance {
+                account,
+                provenance,
+            });
+        true
+    }
+
+    pub(crate) fn first_block(&self) -> Option<AccountBlock> {
+        self.state.lock().first_block.clone()
+    }
+
+    pub(crate) fn apply<StorageFactory>(&self, blocked_accounts: &BlockedAccounts<StorageFactory>)
+    where
+        StorageFactory:
+            storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+    {
+        let operations = {
+            let mut state = self.state.lock();
+            state.is_active = false;
+            state.first_block = None;
+            std::mem::take(&mut state.operations)
+        };
+        for operation in operations {
+            match operation {
+                DeferredAccountOperation::Block { account, block } => {
+                    blocked_accounts.block_account(account, block);
+                }
+                DeferredAccountOperation::InvalidateProvenance {
+                    account,
+                    provenance,
+                } => {
+                    let _ = blocked_accounts.invalidate_provenance(account, provenance);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn abandon(&self) {
+        let mut state = self.state.lock();
+        state.is_active = false;
+        state.first_block = None;
+        state.operations = Vec::new();
     }
 }
 
@@ -214,6 +348,35 @@ where
         self.inner.unblock_account(account_id);
     }
 
+    /// Clears the engine-wide block. A no-op when no global block is active.
+    pub(crate) fn unblock_all(&self) {
+        self.inner.unblock_all();
+    }
+
+    /// Arms the engine kill switch for a mutation finalizer that failed.
+    ///
+    /// `scope` comes from the provenance of the failing mutation: an
+    /// engine-owned mutation blocks only `account`, a custom-policy one blocks
+    /// every account because its state reach is unknown. An engine-owned
+    /// failure with no readable account also fails closed and blocks globally:
+    /// state was already applied, so the engine cannot scope the damage.
+    pub(crate) fn record_mutation_failure(
+        &self,
+        account: Option<AccountId>,
+        scope: MutationFailureScope,
+    ) {
+        match (scope, account) {
+            (MutationFailureScope::Account, Some(account)) => {
+                self.inner
+                    .block_account(account, new_mutation_finalizer_block());
+            }
+            (MutationFailureScope::Account, None) | (MutationFailureScope::Global, _) => {
+                self.inner
+                    .block_all_with_cause(new_mutation_finalizer_block());
+            }
+        }
+    }
+
     /// Overwrites the stored cause of an already-blocked account, which makes
     /// the block the caller's own. See
     /// [`BlockedAccounts::replace_reason`].
@@ -285,7 +448,23 @@ fn new_account_blocked_rejects() -> Rejects {
     )])
 }
 
-fn new_unverifiable_blocked_rejects(scope: RejectScope) -> Rejects {
+/// Cause stored for a kill switch raised because a mutation finalizer failed.
+///
+/// Engine-owned and deliberately free of any account or account-group
+/// identifier: the block is the engine reporting a failure to itself, and the
+/// reject it produces is read by whoever calls next.
+fn new_mutation_finalizer_block() -> AccountBlock {
+    AccountBlock::new(
+        "Engine",
+        RejectCode::SystemUnavailable,
+        "mutation finalizer failed",
+        "a mutation commit or rollback callback failed; engine state may be inconsistent",
+    )
+}
+
+/// Rejects returned when blocking is active but the request's account cannot be
+/// identified, so the blocked set cannot be consulted for it.
+fn new_unverifiable_block_check_rejects(scope: RejectScope) -> Rejects {
     Rejects::new(vec![Reject::new(
         "Engine",
         scope,
@@ -304,8 +483,9 @@ fn new_unverifiable_blocked_rejects(scope: RejectScope) -> Rejects {
 ///   per-account set. Set when an account is blocked or a global block fires;
 ///   cleared by `unblock_account` once the per-account set is empty and no
 ///   global block is active, so the all-clear fast path is restored.
-/// - `all_flag`: set when `block_all()` is called; never reset, since a global
-///   block has no unblock operation.
+/// - `all_flag`: set when `block_all*()` is called and cleared by
+///   `unblock_all`, the operator's counterpart exposed as
+///   [`Accounts::unblock_all`](crate::Accounts::unblock_all).
 /// - `blocked_groups_any_flag`: active-blocking indicator gating the group
 ///   branch of [`check`](Self::check). Set when a group is blocked; cleared by
 ///   `unblock_group` once the blocked-group set is empty.
@@ -315,6 +495,10 @@ fn new_unverifiable_blocked_rejects(scope: RejectScope) -> Rejects {
 /// - `blocked_groups`: per-group storage mapping each blocked `AccountGroupId`
 ///   to its admin `AccountBlock`. Group membership is resolved live at check
 ///   time, so this set holds groups, never expanded members.
+/// - `global_block`: single-slot storage holding the cause of an active global
+///   block, when the caller supplied one. A global block armed without a cause
+///   (an execution report with no readable account) leaves the slot empty and
+///   falls back to the generic kill-switch reject.
 ///
 /// # Multi-observer synchronization
 ///
@@ -358,6 +542,7 @@ where
     blocked_groups_any_flag: <StorageFactory as storage::LockingPolicyFactory>::IndexFlag,
     accounts: Storage<AccountId, AccountBlock, StorageFactory::Policy>,
     blocked_groups: Storage<AccountGroupId, AccountBlock, StorageFactory::Policy>,
+    global_block: Storage<(), AccountBlock, StorageFactory::Policy>,
 }
 
 impl<StorageLockingPolicyFactory> BlockedAccounts<StorageLockingPolicyFactory>
@@ -388,6 +573,9 @@ where
             // `create_for_any_key`. This table is engine-owned, never a
             // policy storage, so the sharding guarantee does not apply.
             blocked_groups: builder.create_for_any_key(),
+            // Single-slot table holding the global cause; keyed by the unit
+            // type because an engine has exactly one global block.
+            global_block: builder.create_for_any_key(),
         }
     }
 
@@ -413,40 +601,23 @@ where
         order: &Order,
         operation_scope: RejectScope,
     ) -> Option<Rejects> {
-        let all_blocking = self.all_flag.load();
-        let account_blocking = all_blocking || self.any_flag.load();
-        let group_blocking = self.blocked_groups_any_flag.load();
-        if !account_blocking && !group_blocking {
-            debug_assert!(!all_blocking);
-            return None;
-        }
-        match order.account_id() {
-            Err(_) => Some(new_unverifiable_blocked_rejects(operation_scope)),
-            Ok(id) => {
-                if account_blocking {
-                    if let Some(rejects) = self
-                        .accounts
-                        .with(&id, |b| Rejects::new(vec![Reject::from(b.clone())]))
-                    {
-                        return Some(rejects);
-                    }
-                }
-                if group_blocking {
-                    if let Some(group) = groups.group_of(id) {
-                        if let Some(rejects) = self
-                            .blocked_groups
-                            .with(&group, |b| Rejects::new(vec![Reject::from(b.clone())]))
-                        {
-                            return Some(rejects);
-                        }
-                    }
-                }
-                if all_blocking {
-                    return Some(new_account_blocked_rejects());
-                }
-                None
-            }
-        }
+        self.with_blocking_cause(
+            groups,
+            || order.account_id().ok(),
+            |block| Rejects::new(vec![Reject::from(block.clone())]),
+            new_account_blocked_rejects,
+            || new_unverifiable_block_check_rejects(operation_scope),
+        )
+    }
+
+    /// Returns whether `id` is blocked without constructing a reject payload.
+    pub(crate) fn is_blocked(
+        &self,
+        groups: &AccountGroups<StorageLockingPolicyFactory>,
+        id: AccountId,
+    ) -> bool {
+        self.with_blocking_cause(groups, || Some(id), |_| (), || (), || ())
+            .is_some()
     }
 
     /// Records a kill-switch event from an execution report.
@@ -456,10 +627,26 @@ where
     /// If the report carries no account identifier, activates a global block
     /// instead. The first cause recorded for an account wins; subsequent calls
     /// for the same account are no-ops.
-    pub(crate) fn record<Report: HasAccountId>(&self, report: &Report, cause: AccountBlock) {
+    pub(crate) fn record_execution_report<Report: HasAccountId>(
+        &self,
+        report: &Report,
+        cause: AccountBlock,
+    ) {
         match report.account_id() {
             Ok(id) => self.block_account(id, cause),
             Err(_) => self.block_all(),
+        }
+    }
+
+    /// Records a pre-trade kill-switch event for a readable account only.
+    ///
+    /// Unlike an execution report, a rejected pre-trade request has not created
+    /// exposure. An unreadable account must therefore not activate the global
+    /// block, which halts every account until an operator lifts it with
+    /// [`Accounts::unblock_all`](crate::Accounts::unblock_all).
+    pub(crate) fn record_pre_trade<Order: HasAccountId>(&self, order: &Order, cause: AccountBlock) {
+        if let Ok(account) = order.account_id() {
+            self.block_account(account, cause);
         }
     }
 
@@ -469,6 +656,11 @@ where
         let _guard = self.mutation_guard.write_index();
         self.accounts.with_mut(id, || cause, |_, _| ());
         self.any_flag.store(true);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_all_blocked(&self) -> bool {
+        self.all_flag.load()
     }
 
     /// Retires the block raised by the assertion holding `provenance`: when the
@@ -501,10 +693,35 @@ where
         Some(removed)
     }
 
+    /// Arms the global block without a stored cause, so [`check`](Self::check)
+    /// answers with the generic kill-switch reject.
     fn block_all(&self) {
         let _guard = self.mutation_guard.write_index();
         self.any_flag.store(true);
         self.all_flag.store(true);
+    }
+
+    /// Arms the global block and stores `cause` as the reason returned for
+    /// every account. The first cause wins, like a per-account block.
+    pub(crate) fn block_all_with_cause(&self, cause: AccountBlock) {
+        let _guard = self.mutation_guard.write_index();
+        self.global_block.with_mut((), || cause, |_, _| ());
+        self.any_flag.store(true);
+        self.all_flag.store(true);
+    }
+
+    /// Clears the global block and its cause. A no-op when no global block is
+    /// active.
+    ///
+    /// Clears `any_flag` too once the per-account set is empty, restoring the
+    /// all-clear fast path.
+    pub(crate) fn unblock_all(&self) {
+        let _guard = self.mutation_guard.write_index();
+        self.global_block.remove(&());
+        self.all_flag.store(false);
+        if self.accounts.is_empty() {
+            self.any_flag.store(false);
+        }
     }
 
     /// Removes any block (kill-switch or admin) for `id`. A no-op when the
@@ -612,6 +829,45 @@ where
             .with_mut_if_present_exclusive_index(&group, |slot| *slot = block)
             .ok_or(AccountBlockError::GroupNotBlocked { group })
     }
+
+    fn with_blocking_cause<Output>(
+        &self,
+        groups: &AccountGroups<StorageLockingPolicyFactory>,
+        account_id: impl FnOnce() -> Option<AccountId>,
+        on_specific: impl Fn(&AccountBlock) -> Output,
+        on_global: impl FnOnce() -> Output,
+        on_unverifiable: impl FnOnce() -> Output,
+    ) -> Option<Output> {
+        let all_blocking = self.all_flag.load();
+        let account_blocking = all_blocking || self.any_flag.load();
+        let group_blocking = self.blocked_groups_any_flag.load();
+        if !account_blocking && !group_blocking {
+            debug_assert!(!all_blocking);
+            return None;
+        }
+
+        let Some(id) = account_id() else {
+            return Some(on_unverifiable());
+        };
+        if account_blocking {
+            if let Some(result) = self.accounts.with(&id, |block| on_specific(block)) {
+                return Some(result);
+            }
+        }
+        if group_blocking {
+            if let Some(group) = groups.group_of(id) {
+                if let Some(result) = self.blocked_groups.with(&group, |block| on_specific(block)) {
+                    return Some(result);
+                }
+            }
+        }
+        if !all_blocking {
+            return None;
+        }
+        self.global_block
+            .with(&(), |block| on_specific(block))
+            .or_else(|| Some(on_global()))
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -679,10 +935,62 @@ mod tests {
     }
 
     #[test]
+    fn abandoned_deferred_operations_write_through() {
+        let blocked = <NoLocking as crate::storage::LockingPolicyFactory>::new_shared(new_set());
+        let account_id = account(1);
+        let deferred = DeferredAccountOperations::default();
+        let control: AccountControl<NoLocking> =
+            AccountControl::new(AccountBlockHandle::from_inner(blocked.clone()), account_id)
+                .with_deferred_operations(deferred.clone());
+
+        control.block(cause("deferred", RejectCode::AccountBlocked));
+        assert!(blocked
+            .check(
+                &empty_groups(),
+                &AccountOrder(account_id),
+                RejectScope::Order
+            )
+            .is_none());
+
+        deferred.abandon();
+        control.block(cause("rollback", RejectCode::ArithmeticOverflow));
+        let rejects = blocked
+            .check(
+                &empty_groups(),
+                &AccountOrder(account_id),
+                RejectScope::Order,
+            )
+            .expect("rollback safety block must be visible immediately");
+        assert_eq!(rejects[0].code, RejectCode::ArithmeticOverflow);
+    }
+
+    #[test]
+    fn applied_deferred_operations_write_through() {
+        let blocked = <NoLocking as crate::storage::LockingPolicyFactory>::new_shared(new_set());
+        let account_id = account(1);
+        let deferred = DeferredAccountOperations::default();
+        let control: AccountControl<NoLocking> =
+            AccountControl::new(AccountBlockHandle::from_inner(blocked.clone()), account_id)
+                .with_deferred_operations(deferred.clone());
+
+        deferred.apply(&blocked);
+        control.block(cause("retained", RejectCode::AccountBlocked));
+
+        let rejects = blocked
+            .check(
+                &empty_groups(),
+                &AccountOrder(account_id),
+                RejectScope::Order,
+            )
+            .expect("a retained account-control handle must write through");
+        assert_eq!(rejects[0].policy, "retained");
+    }
+
+    #[test]
     fn record_account_blocks_that_account() {
         let set = new_set();
         let groups = empty_groups();
-        set.record(
+        set.record_execution_report(
             &AccountOrder(account(1)),
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
@@ -695,7 +1003,7 @@ mod tests {
     fn record_account_does_not_block_other_accounts() {
         let set = new_set();
         let groups = empty_groups();
-        set.record(
+        set.record_execution_report(
             &AccountOrder(account(1)),
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
@@ -708,7 +1016,7 @@ mod tests {
     fn record_no_account_blocks_every_account() {
         let set = new_set();
         let groups = empty_groups();
-        set.record(
+        set.record_execution_report(
             &NoAccountOrder,
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
@@ -721,10 +1029,26 @@ mod tests {
     }
 
     #[test]
+    fn pre_trade_record_without_account_does_not_activate_global_block() {
+        let set = new_set();
+        let groups = empty_groups();
+
+        set.record_pre_trade(
+            &NoAccountOrder,
+            cause("Policy", RejectCode::PnlKillSwitchTriggered),
+        );
+
+        assert!(!set.is_all_blocked());
+        assert!(set
+            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .is_none());
+    }
+
+    #[test]
     fn record_no_account_blocks_unidentifiable_orders() {
         let set = new_set();
         let groups = empty_groups();
-        set.record(
+        set.record_execution_report(
             &NoAccountOrder,
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
@@ -737,7 +1061,7 @@ mod tests {
     fn record_account_blocks_unidentifiable_orders() {
         let set = new_set();
         let groups = empty_groups();
-        set.record(
+        set.record_execution_report(
             &AccountOrder(account(1)),
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );
@@ -759,7 +1083,7 @@ mod tests {
     fn check_returns_cause_for_blocked_account() {
         let set = new_set();
         let groups = empty_groups();
-        set.record(
+        set.record_execution_report(
             &AccountOrder(account(1)),
             cause("KillSwitch", RejectCode::PnlKillSwitchTriggered),
         );
@@ -776,11 +1100,11 @@ mod tests {
     fn first_cause_wins_on_repeated_block() {
         let set = new_set();
         let groups = empty_groups();
-        set.record(
+        set.record_execution_report(
             &AccountOrder(account(1)),
             cause("First", RejectCode::PnlKillSwitchTriggered),
         );
-        set.record(
+        set.record_execution_report(
             &AccountOrder(account(1)),
             cause("Second", RejectCode::Other),
         );
@@ -871,6 +1195,149 @@ mod tests {
         assert_eq!(rejects[0].reason, "manual review");
     }
 
+    // ─── Global block ─────────────────────────────────────────────────────
+
+    #[test]
+    fn global_block_with_cause_reports_that_cause_for_every_account() {
+        let set = new_set();
+        let groups = empty_groups();
+        set.block_all_with_cause(cause("Engine", RejectCode::SystemUnavailable));
+
+        for id in [1, 2] {
+            let rejects = set
+                .check(&groups, &AccountOrder(account(id)), RejectScope::Order)
+                .expect("a global block must reject every account");
+            assert_eq!(rejects[0].code, RejectCode::SystemUnavailable);
+            assert_eq!(rejects[0].reason, "test block");
+        }
+    }
+
+    #[test]
+    fn global_block_without_cause_keeps_the_generic_reject() {
+        let set = new_set();
+        let groups = empty_groups();
+        set.record_execution_report(
+            &NoAccountOrder,
+            cause("Policy", RejectCode::PnlKillSwitchTriggered),
+        );
+
+        let rejects = set
+            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .expect("a global block must reject every account");
+        assert_eq!(rejects[0].code, RejectCode::AccountBlocked);
+    }
+
+    #[test]
+    fn per_account_cause_wins_over_the_global_one() {
+        let set = new_set();
+        let groups = empty_groups();
+        set.block_account(account(1), admin("individual"));
+        set.block_all_with_cause(cause("Engine", RejectCode::SystemUnavailable));
+
+        let rejects = set
+            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .expect("the account is blocked");
+        assert_eq!(rejects[0].reason, "individual");
+    }
+
+    #[test]
+    fn unblock_all_clears_the_global_block_and_its_cause() {
+        let set = new_set();
+        let groups = empty_groups();
+        set.block_all_with_cause(cause("Engine", RejectCode::SystemUnavailable));
+        set.unblock_all();
+
+        assert!(!set.is_all_blocked());
+        assert!(set
+            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .is_none());
+        // The all-clear fast path is restored, so an order with no readable
+        // account is admitted again.
+        assert!(set
+            .check(&groups, &NoAccountOrder, RejectScope::Order)
+            .is_none());
+    }
+
+    #[test]
+    fn unblock_all_keeps_individually_blocked_accounts() {
+        let set = new_set();
+        let groups = empty_groups();
+        set.block_account(account(1), admin("individual"));
+        set.block_all_with_cause(cause("Engine", RejectCode::SystemUnavailable));
+        set.unblock_all();
+
+        assert!(set
+            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .is_some());
+        assert!(set
+            .check(&groups, &AccountOrder(account(2)), RejectScope::Order)
+            .is_none());
+    }
+
+    #[test]
+    fn unblock_all_without_a_global_block_is_noop() {
+        let set = new_set();
+        let groups = empty_groups();
+        set.unblock_all();
+        assert!(set
+            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .is_none());
+    }
+
+    // ─── Mutation finalizer kill switch ───────────────────────────────────
+
+    fn new_handle(
+        blocked: <NoLocking as crate::storage::LockingPolicyFactory>::Shared<
+            BlockedAccounts<NoLocking>,
+        >,
+    ) -> AccountBlockHandle<NoLocking> {
+        AccountBlockHandle::from_inner(blocked)
+    }
+
+    #[test]
+    fn engine_owned_finalizer_failure_blocks_only_its_account() {
+        let blocked = <NoLocking as crate::storage::LockingPolicyFactory>::new_shared(new_set());
+        let groups = empty_groups();
+        new_handle(blocked.clone())
+            .record_mutation_failure(Some(account(1)), MutationFailureScope::Account);
+
+        let rejects = blocked
+            .check(&groups, &AccountOrder(account(1)), RejectScope::Order)
+            .expect("the pipeline account must be blocked");
+        assert_eq!(rejects[0].code, RejectCode::SystemUnavailable);
+        assert_eq!(rejects[0].reason, "mutation finalizer failed");
+        assert!(blocked
+            .check(&groups, &AccountOrder(account(2)), RejectScope::Order)
+            .is_none());
+    }
+
+    #[test]
+    fn custom_policy_finalizer_failure_blocks_everything() {
+        let blocked = <NoLocking as crate::storage::LockingPolicyFactory>::new_shared(new_set());
+        let groups = empty_groups();
+        new_handle(blocked.clone())
+            .record_mutation_failure(Some(account(1)), MutationFailureScope::Global);
+
+        for id in [1, 2] {
+            let rejects = blocked
+                .check(&groups, &AccountOrder(account(id)), RejectScope::Order)
+                .expect("a custom-policy finalizer failure blocks every account");
+            assert_eq!(rejects[0].code, RejectCode::SystemUnavailable);
+        }
+    }
+
+    #[test]
+    fn engine_owned_finalizer_failure_without_an_account_fails_closed() {
+        let blocked = <NoLocking as crate::storage::LockingPolicyFactory>::new_shared(new_set());
+        let groups = empty_groups();
+        new_handle(blocked.clone()).record_mutation_failure(None, MutationFailureScope::Account);
+
+        assert!(blocked.is_all_blocked());
+        assert!(blocked
+            .check(&groups, &AccountOrder(account(7)), RejectScope::Order)
+            .is_some());
+    }
+
     // ─── Admin per-account blocking ───────────────────────────────────────
 
     #[test]
@@ -911,7 +1378,7 @@ mod tests {
     fn unblock_clears_kill_switch_block() {
         let set = new_set();
         let groups = empty_groups();
-        set.record(
+        set.record_execution_report(
             &AccountOrder(account(1)),
             cause("KillSwitch", RejectCode::PnlKillSwitchTriggered),
         );
@@ -1240,7 +1707,7 @@ mod tests {
         let set = new_set();
         let groups = empty_groups();
         // A report without an account id activates a global block.
-        set.record(
+        set.record_execution_report(
             &NoAccountOrder,
             cause("Policy", RejectCode::PnlKillSwitchTriggered),
         );

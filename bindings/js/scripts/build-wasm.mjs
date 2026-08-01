@@ -28,11 +28,15 @@
 // The cargo step pins a deterministic release configuration via
 // CARGO_PROFILE_RELEASE_* so the artifact does not depend on local overrides:
 // opt-level=z (smallest code), lto=fat, codegen-units=1. `panic = "abort"` is
-// already the workspace release default and is left as-is - the boundary error
-// model returns `Result<_, JsValue>` and never panics on reachable paths, so
-// abort only fires on unrecoverable traps. wasm-opt is the second half of the
-// size story; on the release path (OPENPIT_WASM_OPT=require) it is mandatory and
-// a missing or failing pass is a hard error, while dev builds keep it optional.
+// the workspace release default and is left as-is on purpose: the shipped
+// `std` for wasm32-unknown-unknown is itself built with `panic = "abort"`, so
+// `-Cpanic=unwind` does not even link and `catch_unwind` could never catch.
+// Reachable panics do exist (for example a host with no `Performance` object),
+// and the crate's panic hook - see `start()` in src/lib.rs - converts them into
+// an `InternalError` thrown into JavaScript instead of a bare wasm trap.
+// wasm-opt is the second half of the size story; on the release path
+// (OPENPIT_WASM_OPT=require) it is mandatory and a missing or failing pass is a
+// hard error, while dev builds keep it optional.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";

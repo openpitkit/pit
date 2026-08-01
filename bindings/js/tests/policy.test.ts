@@ -29,6 +29,7 @@ import {
   PolicyCallbackError,
 } from "@openpit/engine";
 import {
+  AccountGroupId,
   AdjustmentAmount,
   Pnl,
   Price,
@@ -39,6 +40,7 @@ import {
   AccountAdjustmentAccountPnlOperation,
   type ExecutionReport,
   type Order,
+  type OrderInit,
 } from "@openpit/engine/model";
 import {
   type Context,
@@ -58,8 +60,11 @@ import {
   PnlOutcomeAmount,
 } from "@openpit/engine/accountadjustment";
 import { AccountBlock } from "@openpit/engine/reject";
+import { Mutation } from "@openpit/engine/tx";
 
 const ACCOUNT = 99224416;
+const OTHER_ACCOUNT = 99224417;
+const THIRD_ACCOUNT = 99224418;
 const REJECT_CODE = "InvalidFieldValue";
 
 // Assembles a plain-object buy/sell order for the scenario instrument.
@@ -74,6 +79,19 @@ function order(side: "BUY" | "SELL") {
       price: "185.00",
     },
   };
+}
+
+// The same buy order for an account other than the scenario one.
+function orderFor(account: number) {
+  return { operation: { ...order("BUY").operation, accountId: account } };
+}
+
+// Applies drop copy and finalizes the operation the way a caller would. The
+// operation's accessors must be read before it is committed.
+function applyDropCopyAndCommit(engine: Engine, request: Order | OrderInit) {
+  const result = engine.applyDropCopy(request);
+  result.operation?.commit();
+  return result;
 }
 
 // A custom policy that accepts BUY orders and rejects SELL orders with an
@@ -115,7 +133,6 @@ describe("runtime custom policy", () => {
     const result = engine.executePreTrade(order("BUY"));
     expect(result.ok).toBe(true);
     expect(result.rejects).toHaveLength(0);
-    expect(result.reservation!.accountBlock()).toBeUndefined();
     // Finalize the reservation the accept produced.
     expect(() => result.reservation!.commit()).not.toThrow();
   });
@@ -138,6 +155,7 @@ describe("runtime custom policy", () => {
   it("drop copy discards custom rejects and preserves accepted output", () => {
     const policy: Policy = {
       name: "drop-copy-result",
+      policyGroupId: 7,
       checkPreTradeStart: () => [],
       performPreTradeCheck: () => ({
         rejects: [
@@ -148,24 +166,97 @@ describe("runtime custom policy", () => {
             scope: "account",
           },
         ],
+        accountAdjustments: [new AccountOutcomeEntry("USD")],
         lockPrices: [Price.fromString("13")],
       }),
     };
     const engine = Engine.builder().preTrade(policy).build();
 
-    const reservation = engine.executePreTradeDropCopy(order("BUY"));
+    const result = engine.applyDropCopy(order("BUY"));
 
-    expect(reservation.lock().size()).toBe(1);
-    expect(reservation.accountBlock()?.code).toBe("AccountBlocked");
-    expect(reservation.accountBlock()?.reason).toBe("test boundary exceeded");
-    expect(() => reservation.commit()).not.toThrow();
-    expect(() => reservation.accountBlock()).toThrowError(LifecycleError);
+    expect(result.ok).toBe(true);
+    expect(result.rejects).toHaveLength(0);
+    const operation = result.operation!;
+    expect(operation.lock().size()).toBe(1);
+    expect(
+      operation
+        .lock()
+        .pricesOf(7)
+        .map((price) => price.toString()),
+    ).toEqual(["13"]);
+    const adjustments = operation.accountAdjustments();
+    expect(adjustments).toHaveLength(1);
+    expect(adjustments[0]?.policyGroupId).toBe(7);
+    expect(adjustments[0]?.entry.asset).toBe("USD");
+    expect(operation.accountBlock()?.code).toBe("AccountBlocked");
+    expect(operation.accountBlock()?.reason).toBe("test boundary exceeded");
+    operation.commit();
+
     const blocked = engine.startPreTrade(order("BUY"));
     expect(blocked.ok).toBe(false);
     expect(blocked.rejects[0]?.reason).toBe("test boundary exceeded");
   });
 
-  it("drop copy returns an input error for market orders before custom policies", () => {
+  it("applies a custom account block before returning the operation", () => {
+    const policy: Policy = {
+      name: "drop-copy-account-block",
+      checkPreTradeStart: () => [],
+      performPreTradeCheck: () => ({
+        rejects: [
+          {
+            code: REJECT_CODE,
+            reason: "account boundary exceeded",
+            details: "the block is applied before return",
+            scope: "account",
+          },
+        ],
+      }),
+    };
+    const engine = Engine.builder().preTrade(policy).build();
+
+    const result = engine.applyDropCopy(order("BUY"));
+
+    expect(result.ok).toBe(true);
+    const operation = result.operation!;
+    expect(operation.accountBlock()?.reason).toBe("account boundary exceeded");
+    expect(operation.isAccountBlocked()).toBe(true);
+    operation.commit();
+
+    const blocked = engine.startPreTrade(order("BUY"));
+    expect(blocked.ok).toBe(false);
+    expect(blocked.rejects[0]?.code).toBe("AccountBlocked");
+  });
+
+  it("runs on a pre-blocked account and reports the apply-time snapshot", () => {
+    const engine = Engine.builder().preTrade(sellGate).build();
+    engine.accounts().block(ACCOUNT, "existing account block");
+
+    const result = engine.applyDropCopy(order("BUY"));
+
+    expect(result.ok).toBe(true);
+    const operation = result.operation!;
+    expect(operation.accountBlock()).toBeUndefined();
+    expect(operation.isAccountBlocked()).toBe(true);
+    operation.commit();
+  });
+
+  it("runs on a pre-blocked account group", () => {
+    const engine = Engine.builder().preTrade(sellGate).build();
+    const group = AccountGroupId.fromInt(7);
+    const accounts = engine.accounts();
+    accounts.registerGroup([ACCOUNT], group);
+    accounts.blockGroup(group, "existing group block");
+
+    const result = engine.applyDropCopy(order("BUY"));
+
+    expect(result.ok).toBe(true);
+    const operation = result.operation!;
+    expect(operation.accountBlock()).toBeUndefined();
+    expect(operation.isAccountBlocked()).toBe(true);
+    operation.commit();
+  });
+
+  it("drop copy runs price-independent policies for market orders", () => {
     let calls = 0;
     const engine = Engine.builder()
       .preTrade({
@@ -180,15 +271,737 @@ describe("runtime custom policy", () => {
     const market = order("BUY");
     Reflect.deleteProperty(market.operation, "price");
 
+    const result = applyDropCopyAndCommit(engine, market);
+
+    expect(result.ok).toBe(true);
+    expect(result.operation).toBeDefined();
+    expect(calls).toBe(1);
+  });
+
+  it("rejects drop copy without an account before policies run", () => {
+    let calls = 0;
+    const engine = Engine.builder()
+      .preTrade({
+        name: "must-not-run",
+        checkPreTradeStart: () => {
+          calls += 1;
+          return [];
+        },
+        performPreTradeCheck: () => ({}),
+      })
+      .build();
+    const anonymous = order("BUY");
+    Reflect.deleteProperty(anonymous.operation, "accountId");
+
+    const result = applyDropCopyAndCommit(engine, anonymous);
+
+    expect(result.ok).toBe(false);
+    expect(result.operation).toBeUndefined();
+    expect(result.rejects).toHaveLength(1);
+    expect(result.rejects[0]?.code).toBe("MissingRequiredField");
+    expect(calls).toBe(0);
+  });
+
+  it("drop copy exposes missing fields as business rejects", () => {
+    const engine = Engine.builder()
+      .preTrade({
+        name: "missing-field",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => ({
+          rejects: [
+            {
+              code: "MissingRequiredField",
+              reason: "missing limit price",
+              details: "policy needs a limit price",
+            },
+          ],
+        }),
+      })
+      .build();
+
+    const result = applyDropCopyAndCommit(engine, order("BUY"));
+
+    expect(result.ok).toBe(false);
+    expect(result.operation).toBeUndefined();
+    expect(result.rejects).toHaveLength(1);
+    expect(result.rejects[0]?.code).toBe("MissingRequiredField");
+  });
+
+  it("drop copy rethrows custom policy exceptions", () => {
+    const thrown = new Error("drop-copy callback failed");
+    const engine = Engine.builder()
+      .preTrade({
+        name: "throwing-drop-copy",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => {
+          throw thrown;
+        },
+      })
+      .build();
+
     let caught: unknown;
     try {
-      engine.executePreTradeDropCopy(market);
+      engine.applyDropCopy(order("BUY"));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(PolicyCallbackError);
+    expect((caught as PolicyCallbackError).cause).toBe(thrown);
+  });
+
+  it("rejects synchronous engine re-entry without poisoning the engine", () => {
+    let reenter = true;
+    const engine = Engine.builder()
+      .preTrade({
+        name: "reentrant-drop-copy",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => {
+          if (reenter) {
+            engine.applyDropCopy(order("BUY"));
+          }
+          return {};
+        },
+      })
+      .build();
+
+    let caught: unknown;
+    try {
+      engine.applyDropCopy(order("BUY"));
     } catch (error) {
       caught = error;
     }
 
-    expect(caught).toBeInstanceOf(TypeError);
-    expect(calls).toBe(0);
+    expect(caught).toBeInstanceOf(PolicyCallbackError);
+    expect((caught as PolicyCallbackError).cause).toBeInstanceOf(
+      LifecycleError,
+    );
+
+    reenter = false;
+    expect(applyDropCopyAndCommit(engine, order("BUY")).ok).toBe(true);
+  });
+
+  it("allows a distinct engine to run from a policy callback", () => {
+    const nested = Engine.builder().preTrade(sellGate).build();
+    let nestedAccepted = false;
+    const engine = Engine.builder()
+      .preTrade({
+        name: "separate-engine",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => {
+          const nestedResult = nested.executePreTrade(order("BUY"));
+          nestedAccepted = nestedResult.ok;
+          nestedResult.reservation?.commit();
+          return {};
+        },
+      })
+      .build();
+
+    expect(applyDropCopyAndCommit(engine, order("BUY")).ok).toBe(true);
+    expect(nestedAccepted).toBe(true);
+  });
+
+  it("rejects same-engine re-entry from every entry point running callbacks", () => {
+    // `applyDropCopy` is covered above; the same rule holds for every other
+    // entry point that can invoke a policy callback.
+    let reenter: (() => void) | undefined;
+    const probe: Policy = {
+      name: "reentry-probe",
+      checkPreTradeStart: (): Iterable<PolicyReject> => {
+        reenter?.();
+        return [];
+      },
+      performPreTradeCheck: () => {
+        reenter?.();
+        return null;
+      },
+      applyExecutionReport: () => {
+        reenter?.();
+        return null;
+      },
+      applyAccountAdjustment: () => {
+        reenter?.();
+        return null;
+      },
+    };
+    const engine = Engine.builder().preTrade(probe).build();
+    const accounts = engine.accounts();
+    const configurator = engine.configure();
+    const adjustment = {
+      operation: { asset: "USD" },
+      amount: { balance: AdjustmentAmount.absolute("1") },
+    };
+    const entryPoints: ReadonlyArray<readonly [string, () => void]> = [
+      ["startPreTrade", () => void engine.startPreTrade(order("BUY"))],
+      ["executePreTrade", () => void engine.executePreTrade(order("BUY"))],
+      [
+        "startPreTradeDryRun",
+        () => void engine.startPreTradeDryRun(order("BUY")),
+      ],
+      [
+        "executePreTradeDryRun",
+        () => void engine.executePreTradeDryRun(order("BUY")),
+      ],
+      ["applyExecutionReport", () => void engine.applyExecutionReport({})],
+      [
+        "applyAccountAdjustment",
+        () => void engine.applyAccountAdjustment(ACCOUNT, [adjustment]),
+      ],
+    ];
+
+    for (const [name, call] of entryPoints) {
+      reenter = call;
+      let caught: unknown;
+      try {
+        call();
+      } catch (error) {
+        caught = error;
+      } finally {
+        reenter = undefined;
+      }
+      expect(caught, name).toBeInstanceOf(PolicyCallbackError);
+      expect((caught as PolicyCallbackError).cause, name).toBeInstanceOf(
+        LifecycleError,
+      );
+    }
+
+    const facades: ReadonlyArray<readonly [string, () => void]> = [
+      ["accounts facade", () => void accounts.groupOf(ACCOUNT)],
+      [
+        "configure facade",
+        () => void configurator.rateLimit("missing-policy", {}),
+      ],
+    ];
+    for (const [name, facadeCall] of facades) {
+      reenter = facadeCall;
+      let caught: unknown;
+      try {
+        engine.applyDropCopy(order("BUY"));
+      } catch (error) {
+        caught = error;
+      } finally {
+        reenter = undefined;
+      }
+      expect(caught, name).toBeInstanceOf(PolicyCallbackError);
+      expect((caught as PolicyCallbackError).cause, name).toBeInstanceOf(
+        LifecycleError,
+      );
+    }
+
+    // The deferred request handle enforces the same rule.
+    const start = engine.startPreTrade(order("BUY"));
+    const request = start.request;
+    expect(request).toBeDefined();
+    let deferred: unknown;
+    reenter = () => void request?.execute();
+    try {
+      request?.execute();
+    } catch (error) {
+      deferred = error;
+    } finally {
+      reenter = undefined;
+    }
+    expect(deferred).toBeInstanceOf(PolicyCallbackError);
+    expect((deferred as PolicyCallbackError).cause).toBeInstanceOf(
+      LifecycleError,
+    );
+  });
+
+  it("rejects the drop-copy recorder during an ordinary callback", () => {
+    const engine = Engine.builder()
+      .preTrade({
+        name: "ordinary-recorder",
+        checkPreTradeStart: (ctx) => {
+          ctx.recordDropCopyStartMutation(
+            new Mutation(
+              () => undefined,
+              () => undefined,
+            ),
+          );
+          return [];
+        },
+        performPreTradeCheck: () => ({}),
+      })
+      .build();
+
+    let caught: unknown;
+    try {
+      engine.startPreTrade(order("BUY"));
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(PolicyCallbackError);
+    expect((caught as PolicyCallbackError).cause).toBeInstanceOf(
+      LifecycleError,
+    );
+  });
+
+  it("rejects same-engine re-entry from an implicit rollback callback", () => {
+    const other = Engine.builder().preTrade(sellGate).build();
+    let sameEngine: unknown;
+    let otherEngineAccepted = false;
+    const engine = Engine.builder()
+      .preTrade({
+        name: "implicit-rollback-reentry",
+        checkPreTradeStart: (): Iterable<PolicyReject> => [],
+        performPreTradeCheck: () => ({
+          mutations: [
+            new Mutation(
+              () => undefined,
+              () => {
+                try {
+                  engine.applyDropCopy(order("BUY"));
+                } catch (error) {
+                  sameEngine = error;
+                }
+                otherEngineAccepted = applyDropCopyAndCommit(
+                  other,
+                  order("BUY"),
+                ).ok;
+              },
+            ),
+          ],
+        }),
+      })
+      .build();
+
+    const executed = engine.executePreTrade(order("BUY"));
+    expect(executed.ok).toBe(true);
+    // Releasing the only handle runs the implicit rollback, which drives the
+    // mutation's rollback callback with no JS call left to receive an error.
+    (executed as unknown as { free(): void }).free();
+
+    expect(sameEngine).toBeInstanceOf(LifecycleError);
+    expect(otherEngineAccepted).toBe(true);
+  });
+
+  it("exposes drop-copy mode in both policy stages", () => {
+    const startModes: boolean[] = [];
+    const mainModes: boolean[] = [];
+    let value = 0;
+    const engine = Engine.builder()
+      .preTrade({
+        name: "drop-copy-start-mutation",
+        checkPreTradeStart: (ctx) => {
+          startModes.push(ctx.isDropCopy);
+          if (ctx.isDropCopy) {
+            const previous = value;
+            value += 1;
+            ctx.recordDropCopyStartMutation(
+              new Mutation(
+                () => undefined,
+                () => {
+                  value = previous;
+                },
+              ),
+            );
+          }
+          return [];
+        },
+        performPreTradeCheck: (ctx) => {
+          mainModes.push(ctx.isDropCopy);
+          return {};
+        },
+      })
+      .build();
+
+    const ordinary = engine.executePreTrade(order("BUY"));
+    ordinary.reservation?.rollback();
+    const result = applyDropCopyAndCommit(engine, order("BUY"));
+
+    expect(result.ok).toBe(true);
+    expect(startModes).toEqual([false, true]);
+    expect(mainModes).toEqual([false, true]);
+    expect(value).toBe(1);
+  });
+
+  it("finalizes drop-copy operations exactly once", () => {
+    let value = 0;
+    const engine = Engine.builder()
+      .preTrade({
+        name: "drop-copy-finalization",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => {
+          const previous = value;
+          value += 1;
+          return {
+            mutations: [
+              new Mutation(
+                () => undefined,
+                () => {
+                  value = previous;
+                },
+              ),
+            ],
+          };
+        },
+      })
+      .build();
+
+    const committed = engine.applyDropCopy(order("BUY")).operation!;
+    expect(value).toBe(1);
+    committed.commit();
+    expect(value).toBe(1);
+    expect(() => committed.commit()).toThrow(LifecycleError);
+    expect(() => committed.rollback()).toThrow(LifecycleError);
+    // Accessors follow the reservation: they are readable only while live.
+    expect(() => committed.lock()).toThrow(LifecycleError);
+    expect(() => committed.accountAdjustments()).toThrow(LifecycleError);
+    expect(() => committed.accountBlock()).toThrow(LifecycleError);
+    expect(() => committed.isAccountBlocked()).toThrow(LifecycleError);
+
+    const rolledBack = engine.applyDropCopy(order("BUY")).operation!;
+    expect(value).toBe(2);
+    rolledBack.rollback();
+    expect(value).toBe(1);
+    expect(() => rolledBack.rollback()).toThrow(LifecycleError);
+    expect(() => rolledBack.commit()).toThrow(LifecycleError);
+  });
+
+  it("keeps repeated operation property reads on one lifecycle", () => {
+    const engine = Engine.builder().preTrade(sellGate).build();
+
+    const result = engine.applyDropCopy(order("BUY"));
+    const first = result.operation!;
+    const second = result.operation!;
+    first.commit();
+    expect(() => second.rollback()).toThrow(LifecycleError);
+  });
+
+  it("rolls an active drop-copy operation back when freed", () => {
+    let value = 0;
+    const engine = Engine.builder()
+      .preTrade({
+        name: "drop-copy-free-rollback",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => {
+          const previous = value;
+          value += 1;
+          return {
+            mutations: [
+              new Mutation(
+                () => undefined,
+                () => {
+                  value = previous;
+                },
+              ),
+            ],
+          };
+        },
+      })
+      .build();
+
+    const result = engine.applyDropCopy(order("BUY"));
+    expect(result.ok).toBe(true);
+    const operation = result.operation!;
+    expect(value).toBe(1);
+    // Rollback runs once the last handle sharing the lifecycle is released.
+    result.free();
+    operation.free();
+
+    expect(value).toBe(0);
+  });
+
+  it("reports an explicit rollback callback failure", () => {
+    const thrown = new Error("explicit drop-copy rollback failed");
+    const request = order("BUY");
+    const engine = Engine.builder()
+      .preTrade({
+        name: "drop-copy-explicit-rollback-failure",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => ({
+          mutations: [
+            new Mutation(
+              () => undefined,
+              () => {
+                throw thrown;
+              },
+            ),
+          ],
+        }),
+      })
+      .build();
+
+    const operation = engine.applyDropCopy(request).operation!;
+    let caught: unknown;
+    try {
+      operation.rollback();
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(PolicyCallbackError);
+    expect((caught as PolicyCallbackError).cause).toBe(thrown);
+    expect((caught as PolicyCallbackError).result).toBeUndefined();
+    expect(() => operation.rollback()).toThrow(LifecycleError);
+
+    // The throw reaches this caller, and independently arms the kill switch:
+    // a finalizer has no right to fail. The mutation is a custom policy's, so
+    // the block covers every account.
+    const after = engine.startPreTrade(request);
+    expect(after.ok).toBe(false);
+    expect(after.rejects[0]?.code).toBe("SystemUnavailable");
+  });
+
+  it("reports a commit callback failure without rolling mutations back", () => {
+    const thrown = new Error("mutation commit failed");
+    const state = [false, false, false];
+    const engine = Engine.builder()
+      .preTrade({
+        name: "drop-copy-failing-commit",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => ({
+          mutations: [
+            new Mutation(
+              () => {
+                state[0] = true;
+              },
+              () => {
+                state[0] = false;
+              },
+            ),
+            new Mutation(
+              () => {
+                state[1] = true;
+                throw thrown;
+              },
+              () => {
+                state[1] = false;
+              },
+            ),
+            new Mutation(
+              () => {
+                state[2] = true;
+              },
+              () => {
+                state[2] = false;
+              },
+            ),
+          ],
+        }),
+      })
+      .build();
+
+    const operation = engine.applyDropCopy(order("BUY")).operation!;
+    let caught: unknown;
+    try {
+      operation.commit();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(PolicyCallbackError);
+    expect((caught as PolicyCallbackError).cause).toBe(thrown);
+    expect((caught as PolicyCallbackError).result).toBeUndefined();
+    // A failing commit callback never stops the batch and nothing rolls back.
+    expect(state).toEqual([true, true, true]);
+    // It still arms the kill switch: a finalizer has no right to fail.
+    const after = engine.startPreTrade(order("BUY"));
+    expect(after.ok).toBe(false);
+    expect(after.rejects[0]?.code).toBe("SystemUnavailable");
+  });
+
+  it("rolls a registered start mutation back on fatal evaluation", () => {
+    let value = 0;
+    const engine = Engine.builder()
+      .preTrade({
+        name: "drop-copy-start-rollback",
+        checkPreTradeStart: (ctx) => {
+          const previous = value;
+          value += 1;
+          ctx.recordDropCopyStartMutation(
+            new Mutation(
+              () => undefined,
+              () => {
+                value = previous;
+              },
+            ),
+          );
+          return [
+            {
+              code: "MissingRequiredField",
+              reason: "missing field",
+              details: "forced after start-stage mutation",
+            },
+          ];
+        },
+        performPreTradeCheck: () => ({}),
+      })
+      .build();
+
+    const result = applyDropCopyAndCommit(engine, order("BUY"));
+
+    expect(result.ok).toBe(false);
+    expect(value).toBe(0);
+  });
+
+  it("safety-blocks when compensating a fatal drop-copy exit fails", () => {
+    const thrown = new Error("drop-copy rollback failed");
+    const engine = Engine.builder()
+      .preTrade({
+        name: "failing-drop-copy-rollback",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => ({
+          rejects: [
+            {
+              code: "MissingRequiredField",
+              reason: "fatal evaluation failure",
+              details: "forced failure",
+            },
+          ],
+          mutations: [
+            new Mutation(
+              () => undefined,
+              () => {
+                throw thrown;
+              },
+            ),
+          ],
+        }),
+      })
+      .build();
+
+    let caught: unknown;
+    try {
+      engine.applyDropCopy(order("BUY"));
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(PolicyCallbackError);
+    const failure = caught as PolicyCallbackError;
+    expect(failure.cause).toBe(thrown);
+    expect(failure.result).toBeUndefined();
+    const blocked = engine.startPreTrade(order("BUY"));
+    expect(blocked.ok).toBe(false);
+    expect(blocked.rejects[0]?.code).toBe("SystemUnavailable");
+  });
+
+  it("rolls back a main-stage mutation on a fatal drop-copy reject", () => {
+    let value = 0;
+    const engine = Engine.builder()
+      .preTrade({
+        name: "main-stage-fatal-mutation",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => {
+          value += 1;
+          return {
+            rejects: [
+              {
+                code: "MissingRequiredField",
+                reason: "missing field",
+                details: "forced fatal result",
+              },
+            ],
+            mutations: [
+              new Mutation(
+                () => undefined,
+                () => {
+                  value -= 1;
+                },
+              ),
+            ],
+          };
+        },
+      })
+      .build();
+
+    const result = applyDropCopyAndCommit(engine, order("BUY"));
+
+    expect(result.ok).toBe(false);
+    expect(value).toBe(0);
+  });
+
+  it("commits a main-stage mutation with an ordinary drop-copy reject", () => {
+    let committed = false;
+    const engine = Engine.builder()
+      .preTrade({
+        name: "main-stage-ordinary-mutation",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => ({
+          rejects: [
+            {
+              code: REJECT_CODE,
+              reason: "ordinary reject",
+              details: "drop copy keeps this result",
+            },
+          ],
+          mutations: [
+            new Mutation(
+              () => {
+                committed = true;
+              },
+              () => {
+                committed = false;
+              },
+            ),
+          ],
+        }),
+      })
+      .build();
+
+    const result = applyDropCopyAndCommit(engine, order("BUY"));
+
+    expect(result.ok).toBe(true);
+    expect(committed).toBe(true);
+  });
+
+  // Only a panic that abandons the operation bypasses the wrapper, and that is
+  // decided structurally. A thrown value that merely looks like an engine
+  // defect must still arrive wrapped.
+  it("wraps a callback error that mimics the internal-error name", () => {
+    const lookalike = new Error("thrown by the policy, not by the engine");
+    lookalike.name = "InternalError";
+    const engine = Engine.builder()
+      .preTrade({
+        name: "internal-error-lookalike",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => ({
+          mutations: [
+            new Mutation(
+              () => {
+                throw lookalike;
+              },
+              () => undefined,
+            ),
+          ],
+        }),
+      })
+      .build();
+
+    const operation = engine.applyDropCopy(order("BUY")).operation!;
+    let caught: unknown;
+    try {
+      operation.commit();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(PolicyCallbackError);
+    const failure = caught as PolicyCallbackError;
+    expect(failure.cause).toBe(lookalike);
+    expect(failure.result).toBeUndefined();
+  });
+
+  it("binds mutation callbacks to their mutation object", () => {
+    const mutation = {
+      value: 0,
+      commit() {
+        this.value = 1;
+      },
+      rollback() {
+        this.value = -1;
+      },
+    };
+    const engine = Engine.builder()
+      .preTrade({
+        name: "bound-mutation",
+        checkPreTradeStart: () => [],
+        performPreTradeCheck: () => ({ mutations: [mutation] }),
+      })
+      .build();
+
+    expect(applyDropCopyAndCommit(engine, order("BUY")).ok).toBe(true);
+    expect(mutation.value).toBe(1);
   });
 
   it("validates policy reject userData before narrowing to wasm32", () => {
@@ -1130,9 +1943,91 @@ describe("runtime custom policy", () => {
     (first as unknown as { free(): void }).free();
     (reservation as unknown as { free(): void }).free();
 
+    // The implicit rollback had no caller to throw to, so the failure reaches
+    // the kill switch only: the later call is rejected, never thrown at.
+    const blocked = engine.startPreTrade(order("BUY"));
+    expect(blocked.ok).toBe(false);
+    expect(blocked.rejects[0]?.code).toBe("SystemUnavailable");
+    engine.accounts().unblockAll();
+
     const next = engine.startPreTrade(order("BUY"));
     const request = next.request!;
     (next as unknown as { free(): void }).free();
     (request as unknown as { free(): void }).free();
+  });
+});
+
+describe("engine-wide block", () => {
+  // Arms the kill switch the only way a JS caller can: a custom policy whose
+  // commit finalizer throws.
+  function armKillSwitch(engine: Engine) {
+    const reservation = engine.executePreTrade(order("BUY")).reservation!;
+    expect(() => reservation.commit()).toThrow(PolicyCallbackError);
+  }
+
+  function engineWithFailingCommit() {
+    return Engine.builder()
+      .preTrade({
+        name: "failing-commit-finalizer",
+        checkPreTradeStart: (): Iterable<PolicyReject> => [],
+        performPreTradeCheck: (): PolicyPreTradeResult => ({
+          mutations: [
+            new Mutation(
+              () => {
+                throw new Error("commit finalizer failed");
+              },
+              () => undefined,
+            ),
+          ],
+        }),
+      })
+      .build();
+  }
+
+  it("blocks an account the failing pipeline never touched", () => {
+    const engine = engineWithFailingCommit();
+    armKillSwitch(engine);
+
+    // The mutation belongs to a custom policy, so its reach is unknown and the
+    // block is engine-wide, not scoped to the order's own account.
+    const other = engine.startPreTrade(orderFor(OTHER_ACCOUNT));
+    expect(other.ok).toBe(false);
+    expect(other.rejects[0]?.code).toBe("SystemUnavailable");
+  });
+
+  it("unblockAll clears the engine-wide block", () => {
+    const engine = engineWithFailingCommit();
+    armKillSwitch(engine);
+    expect(engine.startPreTrade(orderFor(OTHER_ACCOUNT)).ok).toBe(false);
+
+    engine.accounts().unblockAll();
+
+    const restored = engine.startPreTrade(orderFor(OTHER_ACCOUNT));
+    expect(restored.ok).toBe(true);
+    restored.request!.execute().reservation!.rollback();
+  });
+
+  it("unblockAll leaves an individually blocked account blocked", () => {
+    const engine = engineWithFailingCommit();
+    engine.accounts().block(OTHER_ACCOUNT, "compliance hold");
+    armKillSwitch(engine);
+
+    engine.accounts().unblockAll();
+
+    const blocked = engine.startPreTrade(orderFor(OTHER_ACCOUNT));
+    expect(blocked.ok).toBe(false);
+    expect(blocked.rejects[0]?.code).toBe("AccountBlocked");
+    expect(blocked.rejects[0]?.reason).toBe("compliance hold");
+    expect(engine.startPreTrade(orderFor(THIRD_ACCOUNT)).ok).toBe(true);
+  });
+
+  it("unblockAll is a no-op when no engine-wide block is active", () => {
+    const engine = Engine.builder().preTrade(sellGate).build();
+
+    engine.accounts().unblockAll();
+
+    const result = engine.startPreTrade(order("BUY"));
+    expect(result.ok).toBe(true);
+    result.request!.execute().reservation!.rollback();
   });
 });

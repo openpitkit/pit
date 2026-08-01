@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://github.com/openpitkit and the OWNERS file for details.
+# Please see https://openpit.dev and the OWNERS file for details.
 
 """Example spot_funds.
 
@@ -230,7 +230,7 @@ def place_order(
     Returns the committed reservation's pre-trade lock so the caller can
     later attach it to the matching fill; on reject it returns ``None`` lock
     and the rejects. The lock MUST be read before ``commit()``, because
-    ``reservation.lock()`` raises once the reservation is finalized.
+    ``reservation.lock`` raises once the reservation is finalized.
     """
     result = engine.execute_pre_trade(order=order)
     if not result:
@@ -240,7 +240,7 @@ def place_order(
     # Snapshot the lock the engine assigned to this reservation, then commit.
     # commit() moves the reserved settlement funds from available to held;
     # rollback() would release them instead.
-    lock = result.reservation.lock()
+    lock = result.reservation.lock
     result.reservation.commit()
     return lock, []
 

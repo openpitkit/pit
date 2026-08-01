@@ -39,13 +39,14 @@
 // membership and records or lifts pre-trade blocks, addressable both by
 // individual `param::AccountId` and by an account-group predicate
 // (`param::AccountGroupId`, i.e. membership in that group), over the one
-// unified blocked-accounts list the engine owns. Account blocking is owned by
-// the engine; this handle only forwards to it.
+// unified blocked-accounts list the engine owns. It also clears the engine-wide
+// block the engine raises on its own. Account blocking is owned by the engine;
+// this handle only forwards to it.
 //
-// Block/unblock by id are infallible. Reason-replacement and every group-scoped
-// operation can fail with an expected, structured outcome - returned as a
-// `std::optional` value, never thrown. SDK boundary failures throw
-// `openpit::Error`.
+// Block/unblock by id and clearing the engine-wide block are infallible.
+// Reason-replacement and every group-scoped operation can fail with an
+// expected, structured outcome - returned as a `std::optional` value, never
+// thrown. SDK boundary failures throw `openpit::Error`.
 //
 // `AccountControl` is the engine-provided handle a custom callback uses to
 // record a kill-switch block against the account bound to its context; it is
@@ -362,6 +363,22 @@ class Accounts {
   void Unblock(::openpit::param::AccountId account) const noexcept {
     openpit_engine_unblock_account(m_engine,
                                    ::openpit::detail::Native(account));
+  }
+
+  // Clears the engine-wide block, letting every account through again.
+  //
+  // A global block is raised by the engine itself, never by an admin call: a
+  // kill switch reported for an execution report with no readable account, or a
+  // mutation finalizer of a custom policy that failed - every mutation a C++
+  // policy registers through `tx::Mutations::Push` is one. This is the
+  // operator's counterpart, so the engine can be returned to service once the
+  // inconsistency has been investigated.
+  //
+  // Idempotent: a no-op when no global block is active. Accounts and account
+  // groups blocked individually stay blocked; clear those with `Unblock` and
+  // `UnblockGroup`.
+  void UnblockAll() const noexcept {
+    openpit_engine_unblock_all_accounts(m_engine);
   }
 
   // Replaces the recorded reason of a blocked account. Returns an

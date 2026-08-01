@@ -295,7 +295,7 @@ assert engine.apply_account_adjustment(
 
 Use this pattern when administrative account changes must obey custom limits.
 
-<!-- Test mirror: pit/bindings/python/tests/integration/test_examples_wiki.py -->
+<!-- Test mirror: bindings/python/tests/integration/test_examples_wiki.py -->
 ```python
 import openpit
 

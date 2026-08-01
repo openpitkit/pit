@@ -218,6 +218,10 @@ impl OrderSizeLimitSettings {
 ///
 /// 4. No applicable limits → pass with no reject.
 ///
+/// Drop-copy operations replay historical orders and bypass these admission
+/// limits. The policy does not request their instrument, account, trade amount,
+/// or price.
+///
 /// Constructor rules:
 /// - at least one barrier across all three axes must be configured;
 /// - if all are omitted, the constructor returns
@@ -336,9 +340,14 @@ where
 
     fn check_pre_trade_start(
         &self,
-        _ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
+        ctx: &PreTradeContext<<Sync as crate::core::SyncMode>::StorageLockingPolicyFactory>,
         order: &Order,
     ) -> Result<(), Rejects> {
+        // This policy owns live admission only. Once an order has executed it
+        // has no historical bookkeeping or account-control effect to apply.
+        if ctx.is_drop_copy() {
+            return Ok(());
+        }
         let instrument = order
             .instrument()
             .map_err(|e| Rejects::from(missing_required_field_reject(self, "instrument", &e)))?;

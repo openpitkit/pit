@@ -39,6 +39,8 @@ export {
   Reservation,
   StartResult,
   ExecuteResult,
+  DropCopyOperation,
+  DropCopyResult,
   DryRunReport,
   AccountAdjustmentBatchResult,
   PolicyConfigurationResult,

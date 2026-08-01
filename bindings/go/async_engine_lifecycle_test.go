@@ -19,6 +19,7 @@ package openpit
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -108,6 +109,264 @@ func TestAsyncEngineRequestExecuteCommitLifecycle(t *testing.T) {
 		t.Fatalf("StopGraceful() error = %v", err)
 	}
 	engine.Stop()
+}
+
+// buildDropCopyAsyncEngine wraps an AccountSync engine that runs one
+// mutation-tracking policy, so a test can observe which mutation callbacks a
+// queued drop-copy finalizer actually ran.
+func buildDropCopyAsyncEngine(
+	t *testing.T,
+	policy pretrade.Policy,
+) *asyncengine.AsyncEngine {
+	t.Helper()
+	engine, err := NewEngineBuilder().AccountSync().PreTrade(policy).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	t.Cleanup(engine.Stop)
+	asyncEngine, err := asyncengine.NewBuilder(engine).Sharded(1).Build()
+	if err != nil {
+		t.Fatalf("Sharded.Build() error = %v", err)
+	}
+	return asyncEngine
+}
+
+// applyAsyncDropCopy runs one drop copy through the account queue and returns
+// the accepted operation.
+func applyAsyncDropCopy(
+	t *testing.T,
+	asyncEngine *asyncengine.AsyncEngine,
+) *asyncengine.AsyncDropCopyOperation {
+	t.Helper()
+	ctx := context.Background()
+	operation, rejects, err := asyncEngine.ApplyDropCopy(
+		ctx, newValidOrderForNativeE2E(t),
+	).Await(ctx)
+	if err != nil {
+		t.Fatalf("ApplyDropCopy Await() error = %v", err)
+	}
+	if operation == nil {
+		t.Fatalf("ApplyDropCopy rejected: %v", rejects)
+	}
+	return operation
+}
+
+// TestAsyncEngineDropCopyFinalizationLifecycle exercises every queued
+// drop-copy finalizer on a real engine and asserts which mutation callbacks the
+// worker ran: commit applies the prepared state, rollback compensates it, and
+// an abandoned operation compensates implicitly.
+func TestAsyncEngineDropCopyFinalizationLifecycle(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("commit-and-close", func(t *testing.T) {
+		policy := &mutationTrackingPolicy{name: "async-drop-copy-commit"}
+		operation := applyAsyncDropCopy(t, buildDropCopyAsyncEngine(t, policy))
+		if _, err := operation.CommitAndClose(ctx).Await(ctx); err != nil {
+			t.Fatalf("CommitAndClose Await() error = %v", err)
+		}
+		if policy.commitCalls != 1 || policy.rollbackCalls != 0 {
+			t.Fatalf(
+				"callbacks = commit %d, rollback %d; want 1, 0",
+				policy.commitCalls, policy.rollbackCalls,
+			)
+		}
+	})
+
+	t.Run("commit-then-close", func(t *testing.T) {
+		policy := &mutationTrackingPolicy{name: "async-drop-copy-commit-close"}
+		operation := applyAsyncDropCopy(t, buildDropCopyAsyncEngine(t, policy))
+		if _, err := operation.Commit(ctx).Await(ctx); err != nil {
+			t.Fatalf("Commit Await() error = %v", err)
+		}
+		if _, err := operation.Close(ctx).Await(ctx); err != nil {
+			t.Fatalf("Close Await() error = %v", err)
+		}
+		if policy.commitCalls != 1 || policy.rollbackCalls != 0 {
+			t.Fatalf(
+				"callbacks = commit %d, rollback %d; want 1, 0",
+				policy.commitCalls, policy.rollbackCalls,
+			)
+		}
+	})
+
+	t.Run("rollback-and-close", func(t *testing.T) {
+		policy := &mutationTrackingPolicy{name: "async-drop-copy-rollback"}
+		operation := applyAsyncDropCopy(t, buildDropCopyAsyncEngine(t, policy))
+		if _, err := operation.RollbackAndClose(ctx).Await(ctx); err != nil {
+			t.Fatalf("RollbackAndClose Await() error = %v", err)
+		}
+		if policy.commitCalls != 0 || policy.rollbackCalls != 1 {
+			t.Fatalf(
+				"callbacks = commit %d, rollback %d; want 0, 1",
+				policy.commitCalls, policy.rollbackCalls,
+			)
+		}
+	})
+
+	t.Run("rollback-then-close", func(t *testing.T) {
+		policy := &mutationTrackingPolicy{name: "async-drop-copy-rollback-close"}
+		operation := applyAsyncDropCopy(t, buildDropCopyAsyncEngine(t, policy))
+		if _, err := operation.Rollback(ctx).Await(ctx); err != nil {
+			t.Fatalf("Rollback Await() error = %v", err)
+		}
+		if _, err := operation.Close(ctx).Await(ctx); err != nil {
+			t.Fatalf("Close Await() error = %v", err)
+		}
+		if policy.commitCalls != 0 || policy.rollbackCalls != 1 {
+			t.Fatalf(
+				"callbacks = commit %d, rollback %d; want 0, 1",
+				policy.commitCalls, policy.rollbackCalls,
+			)
+		}
+	})
+
+	t.Run("close-abandons", func(t *testing.T) {
+		policy := &mutationTrackingPolicy{name: "async-drop-copy-close"}
+		operation := applyAsyncDropCopy(t, buildDropCopyAsyncEngine(t, policy))
+		if _, err := operation.Close(ctx).Await(ctx); err != nil {
+			t.Fatalf("Close Await() error = %v", err)
+		}
+		if policy.commitCalls != 0 || policy.rollbackCalls != 1 {
+			t.Fatalf(
+				"callbacks = commit %d, rollback %d; want 0, 1",
+				policy.commitCalls, policy.rollbackCalls,
+			)
+		}
+	})
+}
+
+func TestAsyncDropCopyOperationForwardsSnapshotAccessors(t *testing.T) {
+	ctx := context.Background()
+	operation := applyAsyncDropCopy(
+		t,
+		buildDropCopyAsyncEngine(t, &mutationTrackingPolicy{name: "async-accessors"}),
+	)
+
+	if _, err := operation.Lock(); err != nil {
+		t.Fatalf("Lock() error = %v", err)
+	}
+	adjustments, err := operation.AccountAdjustments()
+	if err != nil {
+		t.Fatalf("AccountAdjustments() error = %v", err)
+	}
+	if len(adjustments) != 0 {
+		t.Fatalf("AccountAdjustments() = %v, want empty", adjustments)
+	}
+	block, err := operation.AccountBlock()
+	if err != nil {
+		t.Fatalf("AccountBlock() error = %v", err)
+	}
+	if block != nil {
+		t.Fatalf("AccountBlock() = %v, want nil", block)
+	}
+	blocked, err := operation.IsAccountBlocked()
+	if err != nil {
+		t.Fatalf("IsAccountBlocked() error = %v", err)
+	}
+	if blocked {
+		t.Fatal("IsAccountBlocked() = true, want false")
+	}
+
+	if _, err := operation.Close(ctx).Await(ctx); err != nil {
+		t.Fatalf("Close Await() error = %v", err)
+	}
+	if _, err := operation.Lock(); !errors.Is(err, pretrade.ErrDropCopyOperationClosed) {
+		t.Fatalf("Lock() after Close error = %v, want ErrDropCopyOperationClosed", err)
+	}
+}
+
+// TestAsyncEngineUnblockAllClearsMutationFinalizerBlock exercises the queued
+// operator counterpart of the kill switch: a commit finalizer that fails during
+// a queued finalization blocks every account, including one the failing order
+// never touched, and UnblockAll lifts that engine-wide block.
+func TestAsyncEngineUnblockAllClearsMutationFinalizerBlock(t *testing.T) {
+	const untouchedAccountID uint64 = 2002
+	ctx := context.Background()
+	asyncEngine := buildDropCopyAsyncEngine(t, &mutationTrackingPolicy{
+		name:             "async-mutation-failing-commit",
+		commitPanicValue: "go mutation commit exploded",
+	})
+
+	operation := applyAsyncDropCopy(t, asyncEngine)
+	if _, err := operation.CommitAndClose(ctx).Await(ctx); err != nil {
+		t.Fatalf("CommitAndClose Await() error = %v", err)
+	}
+
+	request, rejects, err := asyncEngine.StartPreTrade(
+		ctx, rateLimitTestOrder(t, untouchedAccountID),
+	).Await(ctx)
+	if err != nil {
+		t.Fatalf("StartPreTrade Await() error = %v", err)
+	}
+	if request != nil {
+		t.Fatal("StartPreTrade() request != nil, want kill-switch block")
+	}
+	if len(rejects) != 1 || rejects[0].Code != reject.CodeSystemUnavailable {
+		t.Fatalf("StartPreTrade() rejects = %v, want SystemUnavailable", rejects)
+	}
+
+	if _, err := asyncEngine.Accounts().UnblockAll(ctx).Await(ctx); err != nil {
+		t.Fatalf("UnblockAll Await() error = %v", err)
+	}
+
+	request, rejects, err = asyncEngine.StartPreTrade(
+		ctx, rateLimitTestOrder(t, untouchedAccountID),
+	).Await(ctx)
+	if err != nil {
+		t.Fatalf("StartPreTrade Await() after UnblockAll error = %v", err)
+	}
+	if request == nil {
+		t.Fatalf("StartPreTrade() after UnblockAll rejects = %v, want request", rejects)
+	}
+	if _, err := request.Close(ctx).Await(ctx); err != nil {
+		t.Fatalf("Close Await() error = %v", err)
+	}
+}
+
+// TestAsyncEngineDropCopyCloseFallbackReleasesOperation pins the caller-side
+// fallback of a Close-flavored finalizer: when the queue refuses the task, the
+// operation is released on the caller's goroutine - which compensates it - and
+// the future still reports why the submit failed.
+func TestAsyncEngineDropCopyCloseFallbackReleasesOperation(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("cancelled-submit", func(t *testing.T) {
+		policy := &mutationTrackingPolicy{name: "async-drop-copy-cancelled"}
+		operation := applyAsyncDropCopy(t, buildDropCopyAsyncEngine(t, policy))
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		if _, err := operation.Close(cancelled).Await(ctx); !errors.Is(
+			err, context.Canceled,
+		) {
+			t.Fatalf("Close Await() error = %v, want context.Canceled", err)
+		}
+		if policy.commitCalls != 0 || policy.rollbackCalls != 1 {
+			t.Fatalf(
+				"fallback callbacks = commit %d, rollback %d; want 0, 1",
+				policy.commitCalls, policy.rollbackCalls,
+			)
+		}
+	})
+
+	t.Run("stopped-engine", func(t *testing.T) {
+		policy := &mutationTrackingPolicy{name: "async-drop-copy-stopped"}
+		asyncEngine := buildDropCopyAsyncEngine(t, policy)
+		operation := applyAsyncDropCopy(t, asyncEngine)
+		if err := asyncEngine.StopGraceful(ctx); err != nil {
+			t.Fatalf("StopGraceful() error = %v", err)
+		}
+		if _, err := operation.CommitAndClose(ctx).Await(ctx); !errors.Is(
+			err, asyncengine.ErrStopped,
+		) {
+			t.Fatalf("CommitAndClose Await() error = %v, want ErrStopped", err)
+		}
+		if policy.commitCalls != 0 || policy.rollbackCalls != 1 {
+			t.Fatalf(
+				"fallback callbacks = commit %d, rollback %d; want 0, 1",
+				policy.commitCalls, policy.rollbackCalls,
+			)
+		}
+	})
 }
 
 // TestAsyncEngineWrapperConcurrentLifecyclesNoRace runs the full

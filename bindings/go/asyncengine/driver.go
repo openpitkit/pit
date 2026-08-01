@@ -38,7 +38,9 @@ import (
 type Driver interface {
 	StartPreTrade(model.Order) (*pretrade.Request, []reject.Reject, error)
 	ExecutePreTrade(model.Order) (*pretrade.Reservation, []reject.Reject, error)
-	ExecutePreTradeDropCopy(model.Order) (*pretrade.Reservation, error)
+	ApplyDropCopy(
+		model.Order,
+	) (*pretrade.DropCopyOperation, []reject.Reject, error)
 	ApplyExecutionReport(model.ExecutionReport) (pretrade.PostTradeResult, error)
 	ApplyAccountAdjustment(
 		param.AccountID,

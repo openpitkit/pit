@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Balance-Reconciliation.md
+// Source: https://wiki.openpit.dev/Balance-Reconciliation/
 
 #include "openpit/accountadjustment/account_adjustment.hpp"
 #include "openpit/engine.hpp"

@@ -171,6 +171,7 @@ where
                         entry.assertion_token = None;
                     }
                 });
+                true
             },
             move || {
                 #[cfg(test)]
@@ -289,7 +290,7 @@ where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         let holdings_arc = self.holdings.clone();
-        mutations.push(Mutation::new(
+        mutations.push(Mutation::new_engine_owned(
             // Commit is intentionally a no-op: the hold was written
             // synchronously inside `perform_pre_trade_check` so that
             // any subsequent policy check in the same pipeline observes
@@ -358,7 +359,7 @@ where
             prior_realized,
         } = rollback;
         let holdings_arc = self.holdings.clone();
-        mutations.push(Mutation::new(
+        mutations.push(Mutation::new_engine_owned(
             // Commit is a no-op: the new value was written synchronously
             // inside `apply_account_adjustment` so that later policies and
             // checks in the same pipeline observe the adjustment. See the

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package native
 
@@ -21,6 +21,7 @@ package native
 #include "openpit.h"
 */
 import "C"
+import "unsafe"
 
 //------------------------------------------------------------------------------
 // AccountControl
@@ -39,6 +40,34 @@ func DestroyAccountControl(control AccountControl) {
 
 func PretradeContextGetAccountControl(ctx PretradeContext) AccountControl {
 	return C.openpit_pretrade_context_get_account_control(ctx)
+}
+
+func PretradeContextIsDropCopy(ctx PretradeContext) bool {
+	return bool(C.openpit_pretrade_context_is_drop_copy(ctx))
+}
+
+func PretradeContextRecordDropCopyStartMutation(
+	ctx PretradeContext,
+	commitFnAddr unsafe.Pointer,
+	rollbackFnAddr unsafe.Pointer,
+	userData unsafe.Pointer,
+	freeFnAddr unsafe.Pointer,
+) error {
+	var outError SharedString
+	if !C.openpit_pretrade_context_record_drop_copy_start_mutation(
+		ctx,
+		*(*C.OpenPitMutationFn)(commitFnAddr),
+		*(*C.OpenPitMutationFn)(rollbackFnAddr),
+		userData,
+		*(*C.OpenPitMutationFreeFn)(freeFnAddr),
+		C.OpenPitOutError(&outError), //nolint:gocritic // CGo out-parameter requires address-of operator
+	) {
+		return consumeSharedStringAsError(
+			outError,
+			"openpit_pretrade_context_record_drop_copy_start_mutation failed",
+		)
+	}
+	return nil
 }
 
 func AccountAdjustmentContextGetAccountControl(ctx AccountAdjustmentContext) AccountControl {

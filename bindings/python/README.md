@@ -3,7 +3,7 @@
 <!-- markdownlint-disable MD033 -->
 
 <!-- markdownlint-disable MD013 -->
-[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://img.shields.io/github/v/release/openpitkit/pit)](https://github.com/openpitkit/pit/releases) [![Python versions](https://img.shields.io/pypi/pyversions/openpit)](https://pypi.org/project/openpit/) [![PyPI](https://img.shields.io/pypi/v/openpit)](https://pypi.org/project/openpit/) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
+[![Verify](https://github.com/openpitkit/pit/actions/workflows/verify.yml/badge.svg)](https://github.com/openpitkit/pit/actions/workflows/verify.yml) [![Release](https://img.shields.io/github/v/release/openpitkit/pit)](https://github.com/openpitkit/pit/releases) [![Python versions](https://img.shields.io/pypi/pyversions/openpit)](https://pypi.org/project/openpit/) [![PyPI](https://img.shields.io/pypi/v/openpit)](https://pypi.org/project/openpit/) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/openpitkit/pit/blob/main/LICENSE)
 <!-- markdownlint-enable MD013 -->
 
 `openpit` is an embeddable pre-trade risk SDK for integrating policy-driven
@@ -115,208 +115,89 @@ python -m venv .venv
 
 </details>
 
-## Engine
+## Quick Start
 
-### Overview
+<!-- Test mirror: bindings/python/tests/integration/test_examples_readme.py -->
 
-The engine evaluates an order through a deterministic pre-trade pipeline:
-
-- `engine.start_pre_trade(order=...)` runs lightweight start-stage checks
-- `request.execute()` runs main-stage check policies
-- `reservation.commit()` applies reserved state
-- `reservation.rollback()` reverts reserved state
-- `engine.apply_execution_report(report=...)` updates post-trade policy
-  state
-
-Start-stage checks aggregate rejects from all registered policies.
-Main-stage checks aggregate rejects and run rollback mutations in reverse
-order when any reject is produced.
-
-Built-in policies:
-
-- `SpotFundsPolicy` -
-  [per-account solvency gate over spendable funds](https://wiki.openpit.dev/Spot-Funds/)
-- `OrderValidationPolicy` - [structural integrity checks on every order](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
-- `RateLimitPolicy` - [throttle order flow per broker, asset, or account](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
-- `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
-- `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
-
-The primary integration model is to write project-specific policies against
-the public Python policy API:
-[Custom Python policies](https://wiki.openpit.dev/Policy-API/#python-interface).
-
-## Threading
-
-Canonical contract: [Threading Contract](https://wiki.openpit.dev/Threading-Contract/).
-
-Public methods acquire the GIL when needed; the SDK does not release the
-GIL across callback boundaries, so Python policies execute on the calling
-thread.
-
-Custom policies that need internal state across calls can use the built-in
-[Storage](https://wiki.openpit.dev/Storage/) abstraction. In
-typical Python usage (synchronous code or an asyncio loop pinned to one
-thread) the no-sync policy is sufficient and the storage compiles down to
-direct dictionary access. A synchronizing policy is needed only when the
-engine is genuinely shared across OS threads.
-
-## Usage
-
-<!-- markdownlint-disable-next-line MD013 -->
-<!-- Test mirror: pit/bindings/python/tests/integration/test_examples_readme.py -->
 ```python
-import datetime
 import openpit
-import openpit.pretrade.policies
-
-# 1. Configure policies.
-pnl_policy = (
-    openpit.pretrade.policies.build_pnl_bounds_killswitch()
-    .broker_barriers(
-        openpit.pretrade.policies.PnlBoundsBrokerBarrier(
-            settlement_asset="USD",
-            lower_bound=openpit.param.Pnl("-1000"),
-        ),
-    )
+from openpit.param import AccountId, Price, Quantity, Side, TradeAmount, Volume
+from openpit.pretrade.policies import (
+    OrderSizeBrokerBarrier,
+    OrderSizeLimit,
+    build_order_size_limit,
 )
 
-rate_limit_policy = (
-    openpit.pretrade.policies.build_rate_limit()
-    .broker_barrier(
-        openpit.pretrade.policies.RateLimitBrokerBarrier(
-            limit=openpit.pretrade.policies.RateLimit(
-                max_orders=100,
-                window=datetime.timedelta(seconds=1),
-            ),
-        ),
-    )
-)
-
-max_qty = openpit.param.Quantity("500")
-max_notional = openpit.param.Volume("100000")
-order_size_policy = (
-    openpit.pretrade.policies.build_order_size_limit()
-    .broker_barrier(
-        openpit.pretrade.policies.OrderSizeBrokerBarrier(
-            limit=openpit.pretrade.policies.OrderSizeLimit(
-                max_quantity=max_qty,
-                max_notional=max_notional,
-            ),
-        )
-    )
-    .asset_barriers(
-        openpit.pretrade.policies.OrderSizeAssetBarrier(
-            limit=openpit.pretrade.policies.OrderSizeLimit(
-                max_quantity=max_qty,
-                max_notional=max_notional,
-            ),
-            settlement_asset="USD",
-        ),
-    )
-)
-
-# 2. Build the engine (one time at the platform initialization).
+# Build the engine once, at start-up: one broker-wide fat-finger cap.
 engine = (
     openpit.Engine.builder()
     .no_sync()
-    .builtin(openpit.pretrade.policies.build_order_validation())
-    .builtin(pnl_policy)
-    .builtin(rate_limit_policy)
-    .builtin(order_size_policy)
+    .builtin(
+        build_order_size_limit().broker_barrier(
+            OrderSizeBrokerBarrier(
+                limit=OrderSizeLimit(
+                    max_quantity=Quantity("500"),
+                    max_notional=Volume("1000000"),
+                ),
+            ),
+        ),
+    )
     .build()
 )
 
-# 3. Check an order.
 order = openpit.Order(
     operation=openpit.OrderOperation(
         instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_int(99224416),
-        side=openpit.param.Side.BUY,
-        trade_amount=openpit.param.TradeAmount.quantity(100.0),
-        price=openpit.param.Price(185.0),
+        account_id=AccountId.from_int(99224416),
+        side=Side.BUY,
+        trade_amount=TradeAmount.quantity("1000"),
+        price=Price("185"),
     ),
 )
 
-start_result = engine.start_pre_trade(order=order)
-
-if not start_result:
-    messages = ", ".join(
-        f"{r.policy} [{r.code}]: {r.reason}: {r.details}"
-        for r in start_result.rejects
-    )
-    raise RuntimeError(messages)
-
-request = start_result.request
-
-# 4. Quick, lightweight checks, such as fat-finger scope or enabled kill
-# switch, were performed during pre-trade request creation. The system state
-# has not yet changed, except in cases where each request, even rejected ones,
-# must be considered. Before the heavy-duty checks, other work on the request
-# can be performed simply by holding the request object.
-
-# 5. Real pre-trade and risk control.
-execute_result = request.execute()
-
-# Optional shortcut for the same two-stage flow:
-# execute_result = engine.execute_pre_trade(order=order)
-
-if not execute_result:
-    messages = ", ".join(
-        f"{reject.policy} [{reject.code}]: {reject.reason}: {reject.details}"
-        for reject in execute_result.rejects
-    )
-    raise RuntimeError(messages)
-
-reservation = execute_result.reservation
-
-# 6. If the request is successfully sent to the venue, it must be committed.
-# The rollback must be called otherwise to revert all performed reservations.
-try:
-    send_order_to_venue(order)
-except Exception:
-    reservation.rollback()
-    raise
-
-reservation.commit()
-
-# 7. The order goes to the venue and returns with an execution report.
-report = openpit.ExecutionReport(
-    operation=openpit.ExecutionReportOperation(
-        instrument=openpit.Instrument("AAPL", "USD"),
-        account_id=openpit.param.AccountId.from_int(99224416),
-        side=openpit.param.Side.BUY,
-    ),
-    financial_impact=openpit.FinancialImpact(
-        pnl=openpit.param.Pnl("-50"),
-        fee=openpit.param.Fee("3.4"),
-    ),
-)
-
-result = engine.apply_execution_report(report=report)
-for outcome in result.account_pnls:
-    print(f"account P&L outcome for {outcome.account_id}")
-for outcome in result.account_adjustments:
-    print(f"account adjustment from group {outcome.policy_group_id}")
-
-# 8. After each execution report is applied, the system may report that it has
-# been determined in advance that all subsequent requests will be rejected if
-# the account status does not change.
-assert not result.account_blocks
+result = engine.execute_pre_trade(order=order)
+if result.ok:
+    # Send the order to the venue, then commit or roll the reservation back.
+    result.reservation.commit()
+else:
+    for reject in result.rejects:
+        # OrderSizeLimitPolicy [OrderQtyExceedsLimit]: order quantity exceeded
+        print(f"{reject.policy} [{reject.code}]: {reject.reason}")
 ```
 
-## Errors
+The explicit two-stage flow, drop copy, and post-trade reports are described
+on the [Pre-trade Pipeline](https://wiki.openpit.dev/Pre-trade-Pipeline/)
+page.
 
-Policy rejects from `engine.start_pre_trade()` and `request.execute()` are
-returned as `StartResult` and `ExecuteResult`.
+## What Is Inside
 
-Input validation errors and API misuse still raise exceptions:
-
-- `ValueError` for invalid assets/sides/malformed numeric inputs
-- `RuntimeError` for lifecycle misuse, for example executing the same request
-  twice or finalizing the same reservation twice
-- Business rejects use stable reject codes such as
-  `openpit.pretrade.RejectCode.ORDER_VALUE_CALCULATION_FAILED` when a policy
-  cannot evaluate order value without `price`
+- [Spot Funds](https://wiki.openpit.dev/Spot-Funds/) - per-account
+  solvency gate over spendable funds.
+- [Order Validation](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
+  \- structural integrity checks on every order.
+- [Rate Limit](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
+  \- throttle order flow per broker, asset, or account.
+- [Order Size Limit](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
+  \- fat-finger caps on quantity and notional.
+- [P&L Kill Switch](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
+  \- halt an account when realized P&L breaches bounds.
+- [Custom Python policies](https://wiki.openpit.dev/Policy-API/#python-interface)
+  \- the primary integration model.
+- [Account Blocking](https://wiki.openpit.dev/Account-Blocking/),
+  [Account Groups](https://wiki.openpit.dev/Account-Groups/),
+  [Account Adjustments](https://wiki.openpit.dev/Account-Adjustments/), and
+  [Balance Reconciliation](https://wiki.openpit.dev/Balance-Reconciliation/).
+- [Drop Copy](https://wiki.openpit.dev/Pre-trade-Pipeline/#drop-copy) -
+  record already executed orders without pre-trade enforcement.
+- [Market Data](https://wiki.openpit.dev/Market-Data/).
+- [Dynamic Reconfiguration](https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/)
+  of a live policy.
+- [Threading Contract](https://wiki.openpit.dev/Threading-Contract/) - the GIL
+  is held across callbacks, so Python policies run on the calling thread.
+- [Rejects and errors](https://wiki.openpit.dev/Errors/) with
+  [stable reject codes](https://wiki.openpit.dev/Reject-Codes/); the full
+  Python exception guide is on
+  [readthedocs](https://openpit.readthedocs.io/en/stable/guides/errors.html).
 
 ## Local Testing
 

@@ -659,12 +659,12 @@ def test_spot_funds_policy_group_id_tags_outcomes_and_lock_prices() -> None:
 
     assert result.ok
     assert result.reservation is not None
-    assert result.reservation.lock().entries() == [
+    assert result.reservation.lock.entries() == [
         (policy_group_id, openpit.param.Price("200"))
     ]
-    assert result.reservation.account_adjustments()
+    assert result.reservation.account_adjustments
     assert {
-        outcome.policy_group_id for outcome in result.reservation.account_adjustments()
+        outcome.policy_group_id for outcome in result.reservation.account_adjustments
     } == {policy_group_id}
 
 

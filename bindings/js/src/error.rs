@@ -26,8 +26,10 @@
 //! failures the `code` field carries a stable [`openpit::param::ErrorCode`]; for
 //! account-block failures it carries the `AccountBlockErrorKind` discriminant.
 //!
-//! No reachable path panics: panics become unrecoverable wasm traps under
-//! `panic = "abort"`, so every failure flows out as a `JsValue`.
+//! Expected failures flow out as a `JsValue` from a `Result`. A Rust panic is
+//! not an expected failure but is still possible, so the panic boundary
+//! installed by [`crate::start`] converts it into an [`ErrorKind::Internal`]
+//! error built by the same factory (see [`internal_error`]).
 
 use js_sys::{Object, Reflect};
 use openpit::param::{Error as ParamError, ErrorCode};
@@ -101,6 +103,8 @@ pub enum ErrorKind {
     Type,
     /// JavaScript range/value validation failure.
     Range,
+    /// Rust panic caught at the WebAssembly boundary.
+    Internal,
 }
 
 impl ErrorKind {
@@ -127,6 +131,7 @@ impl ErrorKind {
             Self::PolicyCallback => "PolicyCallbackError",
             Self::Type => "TypeError",
             Self::Range => "RangeError",
+            Self::Internal => "InternalError",
         }
     }
 }
@@ -167,9 +172,10 @@ pub(crate) fn make_error_with(
 
 /// Wraps a custom-policy exception after the core operation has completed.
 ///
-/// `result` is the completed post-trade/account-adjustment reconciliation
-/// object when one exists, otherwise `undefined`.  The original thrown value is
-/// retained verbatim as the standard JavaScript `cause`.
+/// `result` is the completed drop-copy/post-trade/account-adjustment
+/// reconciliation object when one exists, otherwise `undefined`.  The original
+/// thrown value is retained verbatim as the standard JavaScript `cause`,
+/// whatever its type or `name`.
 pub(crate) fn policy_callback_error(cause: JsValue, result: JsValue) -> JsValue {
     let payload = Object::new();
     // A fresh plain object cannot reject this property definition.
@@ -186,6 +192,14 @@ pub(crate) fn policy_callback_error(cause: JsValue, result: JsValue) -> JsValue 
         payload.into(),
         cause,
     )
+}
+
+/// Builds the `InternalError` thrown when a Rust panic reaches the boundary.
+///
+/// `message` is the panic message together with its source location, so the
+/// JavaScript caller keeps a diagnosable report instead of a bare wasm trap.
+pub(crate) fn internal_error(message: &str) -> JsValue {
+    make_error(ErrorKind::Internal, message, None)
 }
 
 /// Builds an engine-build error for invalid builtin-policy configuration.

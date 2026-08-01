@@ -19,7 +19,7 @@
 FROM mcr.microsoft.com/dotnet/framework/runtime:4.8.1-windowsservercore-ltsc2022
 
 # Visual Studio Build Tools requires cmd.exe for its bootstrapper. See
-# https://learn.microsoft.com/visualstudio/install/build-tools-container.
+# https://learn.microsoft.com/visualstudio/install/build-tools-container
 SHELL ["cmd", "/S", "/C"]
 
 RUN curl.exe -SL --output vs_buildtools.exe https://aka.ms/vs/17/release/vs_buildtools.exe `

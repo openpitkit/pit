@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package marketdata
 
@@ -21,7 +21,7 @@ package marketdata
 #cgo CFLAGS: -I${SRCDIR}/../internal/native
 #include "openpit.h"
 
-extern bool pitMarketDataAccountGroupResolver(void *user_data, OpenPitParamAccountGroupId *out_account_group_id);
+extern OpenPitMarketDataAccountGroupResolution pitMarketDataAccountGroupResolver(void *user_data, OpenPitParamAccountGroupId *out_account_group_id);
 
 static OpenPitMarketDataAccountGroupResolver
     openpit_market_data_account_group_resolver_fn = pitMarketDataAccountGroupResolver;
@@ -47,16 +47,51 @@ func accountGroupResolverFnAddr() unsafe.Pointer {
 	return C.pitMarketDataAccountGroupResolverFnAddr()
 }
 
+// resolverState carries the caller's AccountInfo into the native resolver and
+// carries a resolution failure back out. The C answer only says "failed", so
+// the panic value has to survive the C frame in Go-owned memory for Service.Get
+// to report the real cause.
+type resolverState struct {
+	info    AccountInfo
+	failure any
+}
+
 //export pitMarketDataAccountGroupResolver
 func pitMarketDataAccountGroupResolver(
 	userData unsafe.Pointer,
 	outAccountGroupID *C.OpenPitParamAccountGroupId,
-) C.bool {
-	info := callback.NewHandleFromUserData(userData).Value().(AccountInfo)
-	group, ok := info.AccountGroup().Get()
-	if !ok {
-		return C.bool(false)
-	}
-	*outAccountGroupID = C.OpenPitParamAccountGroupId(group.Handle())
-	return C.bool(true)
+) C.OpenPitMarketDataAccountGroupResolution {
+	var state *resolverState
+	resolution := C.OpenPitMarketDataAccountGroupResolution(
+		C.OpenPitMarketDataAccountGroupResolution_Failed,
+	)
+	// A panic must never unwind across the cgo frame. Report the failure to the
+	// native reader instead: it fails the whole read rather than treating the
+	// account as group-less, which would bypass every group-scoped rule.
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if state != nil {
+					state.failure = recovered
+				}
+				resolution = C.OpenPitMarketDataAccountGroupResolution_Failed
+			}
+		}()
+		if outAccountGroupID == nil {
+			return
+		}
+		var ok bool
+		state, ok = callback.NewHandleFromUserData(userData).Value().(*resolverState)
+		if !ok {
+			return
+		}
+		group, hasGroup := state.info.AccountGroup().Get()
+		if !hasGroup {
+			resolution = C.OpenPitMarketDataAccountGroupResolution_NoGroup
+			return
+		}
+		*outAccountGroupID = C.OpenPitParamAccountGroupId(group.Handle())
+		resolution = C.OpenPitMarketDataAccountGroupResolution_Found
+	}()
+	return resolution
 }

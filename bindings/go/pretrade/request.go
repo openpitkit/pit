@@ -13,18 +13,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package pretrade
 
 import (
+	"errors"
 	"fmt"
 
 	"go.openpit.dev/openpit/internal/native"
 	"go.openpit.dev/openpit/reject"
 )
 
+// ErrRequestClosed is returned by Execute once the request has been released.
+var ErrRequestClosed = errors.New("pre-trade request already closed")
+
 // Request is a pre-trade check request returned by the engine.
+//
+// Lifecycle: the caller owns the request and must release it with Close, after
+// Execute or when the request is abandoned. Nothing releases it on the caller's
+// behalf - no caller-owned handle in this binding has a finalizer, so a request
+// dropped without Close leaks its native handle.
+//
+// Concurrency: callers must serialize methods on the same request. Distinct
+// request handles may be used concurrently when the engine sync mode permits.
 type Request struct {
 	handle native.PretradePreTradeRequest
 }
@@ -43,6 +55,9 @@ func NewRequestFromHandle(handle native.PretradePreTradeRequest) *Request {
 //
 // Idempotency: safe to call more than once; subsequent calls are no-ops.
 func (r *Request) Close() {
+	if r.handle == nil {
+		return
+	}
 	native.DestroyPretradePreTradeRequest(r.handle)
 	r.handle = nil
 }
@@ -53,9 +68,13 @@ func (r *Request) Close() {
 // Execute does not close the request; the caller must still call Close on
 // it afterwards, regardless of Execute's outcome.
 //
-// A request can be executed at most once; a second call to Execute
-// returns a transport error.
+// A request can be executed at most once. A call after Close returns
+// [ErrRequestClosed]. A second Execute that reaches the native request returns
+// the native execution error instead.
 func (r *Request) Execute() (*Reservation, []reject.Reject, error) {
+	if r.handle == nil {
+		return nil, nil, ErrRequestClosed
+	}
 	reservation, rejects, err := native.PretradePreTradeRequestExecute(r.handle)
 	if err != nil {
 		return nil, nil, err

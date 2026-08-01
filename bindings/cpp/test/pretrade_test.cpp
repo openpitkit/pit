@@ -64,6 +64,10 @@ static_assert(
 static_assert(!std::is_move_constructible_v<openpit::pretrade::Context>);
 static_assert(!std::is_move_constructible_v<openpit::pretrade::Result>);
 static_assert(
+    !std::is_copy_constructible_v<openpit::pretrade::DropCopyOperation>);
+static_assert(
+    std::is_nothrow_move_constructible_v<openpit::pretrade::DropCopyOperation>);
+static_assert(
     !std::is_move_constructible_v<openpit::pretrade::PostTradeContext>);
 static_assert(
     !std::is_move_constructible_v<openpit::pretrade::PostTradeAdjustments>);
@@ -177,7 +181,18 @@ TEST(Reservation, EmptyHandleOperationsThrow) {
   EXPECT_THROW(static_cast<void>(reservation.Lock()), openpit::Error);
   EXPECT_THROW(static_cast<void>(reservation.AccountAdjustments()),
                openpit::Error);
-  EXPECT_THROW(static_cast<void>(reservation.AccountBlock()), openpit::Error);
+}
+
+TEST(DropCopyOperation, EmptyHandleOperationsThrow) {
+  openpit::pretrade::DropCopyOperation operation;
+
+  EXPECT_THROW(operation.Commit(), openpit::Error);
+  EXPECT_THROW(operation.Rollback(), openpit::Error);
+  EXPECT_THROW(static_cast<void>(operation.Lock()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(operation.AccountAdjustments()),
+               openpit::Error);
+  EXPECT_THROW(static_cast<void>(operation.AccountBlock()), openpit::Error);
+  EXPECT_THROW(static_cast<void>(operation.IsAccountBlocked()), openpit::Error);
 }
 
 TEST(DryRunReport, EmptyHandleObserversThrow) {
@@ -416,8 +431,12 @@ TEST(CustomPolicy, RejectListPushFailureRethrowsInvalidScope) {
   const openpit::Engine engine = builder.Build();
   const openpit::model::Order order;
 
-  EXPECT_THROW(static_cast<void>(engine.StartPreTrade(order)),
-               std::invalid_argument);
+  try {
+    static_cast<void>(engine.StartPreTrade(order));
+    FAIL() << "expected an invalid_argument for the unknown reject scope";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_STREQ(error.what(), "reject scope is invalid");
+  }
 }
 
 struct LegacyThreeArgumentPostTradePolicy {
@@ -563,8 +582,15 @@ class DryRunHookPolicy {
 class DropCopyBlockingPolicy {
  public:
   void PerformPreTradeCheck(const Context& context,
+                            openpit::tx::Mutations& mutations,
+                            openpit::pretrade::Result& result,
                             PolicyDecision& decision) const {
     static_cast<void>(context);
+    static_cast<void>(mutations);
+    result.PushLockPrice(Price::FromString("13"));
+    result.PushAccountAdjustment(
+        ::openpit::accountadjustment::AccountOutcomeEntry(
+            ::openpit::param::Asset("USD")));
     PushReject(decision,
                MakeTypeMismatchReject(
                    "DropCopyBlockingPolicy", RejectScope::Account,
@@ -583,6 +609,47 @@ class AcceptingPolicy {
   }
 };
 
+class MissingFieldPolicy {
+ public:
+  void PerformPreTradeCheck(const Context& context,
+                            PolicyDecision& decision) const {
+    static_cast<void>(context);
+    PushReject(decision,
+               MakeTypeMismatchReject("MissingFieldPolicy", RejectScope::Order,
+                                      RejectCode::MissingRequiredField,
+                                      "missing limit price",
+                                      "policy needs a limit price"));
+  }
+};
+
+class DropCopyStartMutationPolicy {
+ public:
+  DropCopyStartMutationPolicy(int* value, bool* sawDropCopy, bool fatal)
+      : m_value(value), m_sawDropCopy(sawDropCopy), m_fatal(fatal) {}
+
+  [[nodiscard]] std::optional<Reject> CheckPreTradeStart(
+      const Context& context, const openpit::Order& order) const {
+    static_cast<void>(order);
+    *m_sawDropCopy = context.IsDropCopy();
+    const int previous = *m_value;
+    ++*m_value;
+    context.RecordDropCopyStartMutation(
+        [] {}, [value = m_value, previous] { *value = previous; });
+    if (!m_fatal) {
+      return std::nullopt;
+    }
+    return MakeTypeMismatchReject(
+        "DropCopyStartMutationPolicy", RejectScope::Order,
+        RejectCode::MissingRequiredField, "missing field",
+        "forced after start-stage mutation");
+  }
+
+ private:
+  int* m_value;
+  bool* m_sawDropCopy;
+  bool m_fatal;
+};
+
 [[nodiscard]] openpit::model::Order MakeDryRunHookOrder() {
   openpit::model::Order order;
   openpit::model::OrderOperation op;
@@ -595,6 +662,18 @@ class AcceptingPolicy {
   op.price = Price::FromString("100");
   order.operation = std::move(op);
   return order;
+}
+
+// Applies a drop copy and commits an accepted operation, so the caller can
+// assert on state that must survive finalization. A rejected result is returned
+// untouched.
+[[nodiscard]] openpit::pretrade::DropCopyResult ApplyDropCopyAndCommit(
+    const openpit::Engine& engine, const openpit::Order& order) {
+  openpit::pretrade::DropCopyResult result = engine.ApplyDropCopy(order);
+  if (result.Passed()) {
+    result.operation->Commit();
+  }
+  return result;
 }
 
 TEST(CustomPolicy, UsesExplicitDryRunHooksForDryRunPipeline) {
@@ -623,39 +702,113 @@ TEST(CustomPolicy, UsesExplicitDryRunHooksForDryRunPipeline) {
   EXPECT_EQ(counters.main, 1u);
 }
 
-TEST(CustomPolicy, DropCopyReservationSurfacesRecordedAccountBlock) {
+TEST(CustomPolicy, DropCopySurfacesAppliedAccountBlock) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
   CustomPolicy<DropCopyBlockingPolicy> policy("DropCopyBlockingPolicy",
                                               DropCopyBlockingPolicy{});
   builder.Add(policy);
   openpit::Engine engine = builder.Build();
 
-  openpit::pretrade::Reservation reservation =
-      engine.ExecutePreTradeDropCopy(MakeDryRunHookOrder());
+  const openpit::pretrade::DropCopyResult result =
+      ApplyDropCopyAndCommit(engine, MakeDryRunHookOrder());
+  ASSERT_TRUE(result.Passed());
+  const openpit::pretrade::DropCopyOperation& operation = *result.operation;
   const std::optional<openpit::accounts::AccountBlock> block =
-      reservation.AccountBlock();
+      operation.AccountBlock();
 
   ASSERT_TRUE(block.has_value());
   EXPECT_EQ(block->policy, "DropCopyBlockingPolicy");
   EXPECT_EQ(block->code, RejectCode::AccountBlocked);
   EXPECT_EQ(block->reason, "forced account block");
-  reservation.Commit();
+  EXPECT_TRUE(operation.IsAccountBlocked());
+  const std::vector<Price> prices = operation.Lock().Prices();
+  ASSERT_EQ(prices.size(), 1u);
+  EXPECT_EQ(prices.front().ToString(), "13");
+  EXPECT_FALSE(engine.StartPreTrade(MakeDryRunHookOrder()).Passed());
 }
 
-TEST(CustomPolicy, DropCopyReservationReturnsNoBlockWhenNoneWasProduced) {
+TEST(CustomPolicy, DropCopyCommitPreservesAppliedState) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<DropCopyBlockingPolicy> policy("DropCopyBlockingPolicy",
+                                              DropCopyBlockingPolicy{});
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+
+  const openpit::pretrade::DropCopyResult result =
+      ApplyDropCopyAndCommit(engine, MakeDryRunHookOrder());
+
+  ASSERT_TRUE(result.Passed());
+  ASSERT_TRUE(result.operation->AccountBlock().has_value());
+  EXPECT_FALSE(engine.StartPreTrade(MakeDryRunHookOrder()).Passed());
+}
+
+TEST(CustomPolicy, DropCopyReturnsNoBlockWhenNoneWasProduced) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
   CustomPolicy<AcceptingPolicy> policy("AcceptingPolicy", AcceptingPolicy{});
   builder.Add(policy);
   openpit::Engine engine = builder.Build();
 
-  openpit::pretrade::Reservation reservation =
-      engine.ExecutePreTradeDropCopy(MakeDryRunHookOrder());
+  const openpit::pretrade::DropCopyResult result =
+      ApplyDropCopyAndCommit(engine, MakeDryRunHookOrder());
 
-  EXPECT_FALSE(reservation.AccountBlock().has_value());
-  reservation.Rollback();
+  ASSERT_TRUE(result.Passed());
+  EXPECT_FALSE(result.operation->AccountBlock().has_value());
 }
 
-TEST(CustomPolicy, DropCopyMarketOrderThrowsInputError) {
+TEST(CustomPolicy, DropCopyRunsOnPreBlockedAccountAndReportsFinalState) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<AcceptingPolicy> policy("AcceptingPolicy", AcceptingPolicy{});
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+  const auto account = openpit::param::AccountId::FromUint64(42);
+  engine.Accounts().Block(account, "existing account block");
+
+  const openpit::pretrade::DropCopyResult result =
+      ApplyDropCopyAndCommit(engine, MakeDryRunHookOrder());
+
+  ASSERT_TRUE(result.Passed());
+  EXPECT_FALSE(result.operation->AccountBlock().has_value());
+  EXPECT_TRUE(result.operation->IsAccountBlocked());
+}
+
+TEST(CustomPolicy, DropCopyRunsOnPreBlockedAccountGroup) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<AcceptingPolicy> policy("AcceptingPolicy", AcceptingPolicy{});
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+  const auto account = openpit::param::AccountId::FromUint64(42);
+  const auto group = openpit::param::AccountGroupId::FromUint32(7);
+  ASSERT_FALSE(engine.Accounts().RegisterGroup({account}, group).has_value());
+  ASSERT_FALSE(
+      engine.Accounts().BlockGroup(group, "existing group block").has_value());
+
+  const openpit::pretrade::DropCopyResult result =
+      ApplyDropCopyAndCommit(engine, MakeDryRunHookOrder());
+
+  ASSERT_TRUE(result.Passed());
+  EXPECT_FALSE(result.operation->AccountBlock().has_value());
+  EXPECT_TRUE(result.operation->IsAccountBlocked());
+}
+
+TEST(CustomPolicy, DropCopyReportsGroupTaggedAdjustments) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<DropCopyBlockingPolicy> policy("DropCopyBlockingPolicy",
+                                              DropCopyBlockingPolicy{}, 7);
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+
+  const openpit::pretrade::DropCopyResult result =
+      ApplyDropCopyAndCommit(engine, MakeDryRunHookOrder());
+  ASSERT_TRUE(result.Passed());
+  const std::vector<::openpit::accountadjustment::Outcome> adjustments =
+      result.operation->AccountAdjustments();
+
+  ASSERT_EQ(adjustments.size(), 1u);
+  EXPECT_EQ(adjustments.front().policyGroupId.Value(), 7u);
+  EXPECT_EQ(adjustments.front().entry.asset.View(), "USD");
+}
+
+TEST(CustomPolicy, DropCopyMarketOrderRunsPriceIndependentPolicy) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
   CustomPolicy<AcceptingPolicy> policy("AcceptingPolicy", AcceptingPolicy{});
   builder.Add(policy);
@@ -663,25 +816,129 @@ TEST(CustomPolicy, DropCopyMarketOrderThrowsInputError) {
   openpit::model::Order market = MakeDryRunHookOrder();
   market.operation->price.reset();
 
-  EXPECT_THROW(static_cast<void>(engine.ExecutePreTradeDropCopy(market)),
-               openpit::Error);
+  const openpit::pretrade::DropCopyResult result =
+      ApplyDropCopyAndCommit(engine, market);
+
+  EXPECT_TRUE(result.Passed());
+  EXPECT_TRUE(result.rejects.empty());
 }
 
-// The block accessor is not drop-copy only: an ordinary accepted reservation
-// exposes it and reports no block.
-TEST(CustomPolicy, AcceptedReservationCarriesNoAccountBlock) {
+TEST(CustomPolicy, DropCopyOrderWithoutAccountRejectsBeforePolicies) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
   CustomPolicy<AcceptingPolicy> policy("AcceptingPolicy", AcceptingPolicy{});
   builder.Add(policy);
   openpit::Engine engine = builder.Build();
+  openpit::model::Order anonymous = MakeDryRunHookOrder();
+  anonymous.operation->accountId.reset();
 
-  openpit::pretrade::ExecuteResult result =
-      engine.ExecutePreTrade(MakeDryRunHookOrder());
+  const openpit::pretrade::DropCopyResult result =
+      ApplyDropCopyAndCommit(engine, anonymous);
 
-  ASSERT_TRUE(result.Passed());
-  EXPECT_TRUE(result.rejects.empty());
-  EXPECT_FALSE(result.reservation->AccountBlock().has_value());
-  result.reservation->Commit();
+  EXPECT_FALSE(result.Passed());
+  EXPECT_FALSE(result.operation.has_value());
+  ASSERT_EQ(result.rejects.size(), 1u);
+  EXPECT_EQ(result.rejects.front().code, RejectCode::MissingRequiredField);
+}
+
+TEST(CustomPolicy, DropCopyReturnsMissingFieldAsBusinessReject) {
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<MissingFieldPolicy> policy("MissingFieldPolicy",
+                                          MissingFieldPolicy{});
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+
+  const openpit::pretrade::DropCopyResult result =
+      ApplyDropCopyAndCommit(engine, MakeDryRunHookOrder());
+
+  EXPECT_FALSE(result.Passed());
+  EXPECT_FALSE(result.operation.has_value());
+  ASSERT_EQ(result.rejects.size(), 1u);
+  EXPECT_EQ(result.rejects.front().code, RejectCode::MissingRequiredField);
+}
+
+TEST(CustomPolicy, DropCopyStartContextCommitsRegisteredMutation) {
+  int value = 0;
+  bool sawDropCopy = false;
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<DropCopyStartMutationPolicy> policy(
+      "DropCopyStartMutationPolicy",
+      DropCopyStartMutationPolicy{&value, &sawDropCopy, false});
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+
+  const openpit::pretrade::DropCopyResult result =
+      ApplyDropCopyAndCommit(engine, MakeDryRunHookOrder());
+
+  EXPECT_TRUE(result.Passed());
+  EXPECT_TRUE(sawDropCopy);
+  EXPECT_EQ(value, 1);
+}
+
+TEST(CustomPolicy, DropCopyOperationFinalizationIsIdempotent) {
+  int value = 0;
+  bool sawDropCopy = false;
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<DropCopyStartMutationPolicy> policy(
+      "DropCopyStartMutationPolicy",
+      DropCopyStartMutationPolicy{&value, &sawDropCopy, false});
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+
+  openpit::pretrade::DropCopyResult committed =
+      engine.ApplyDropCopy(MakeDryRunHookOrder());
+  ASSERT_TRUE(committed.Passed());
+  EXPECT_EQ(value, 1);
+  committed.operation->Commit();
+  committed.operation->Commit();
+  committed.operation->Rollback();
+  EXPECT_EQ(value, 1);
+
+  openpit::pretrade::DropCopyResult rolledBack =
+      engine.ApplyDropCopy(MakeDryRunHookOrder());
+  ASSERT_TRUE(rolledBack.Passed());
+  EXPECT_EQ(value, 2);
+  rolledBack.operation->Rollback();
+  rolledBack.operation->Rollback();
+  rolledBack.operation->Commit();
+  EXPECT_EQ(value, 1);
+}
+
+TEST(CustomPolicy, DropCopyOperationDestructorRollsBackImplicitly) {
+  int value = 0;
+  bool sawDropCopy = false;
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<DropCopyStartMutationPolicy> policy(
+      "DropCopyStartMutationPolicy",
+      DropCopyStartMutationPolicy{&value, &sawDropCopy, false});
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+
+  {
+    const openpit::pretrade::DropCopyResult result =
+        engine.ApplyDropCopy(MakeDryRunHookOrder());
+    EXPECT_TRUE(result.Passed());
+    EXPECT_EQ(value, 1);
+  }
+
+  EXPECT_EQ(value, 0);
+}
+
+TEST(CustomPolicy, DropCopyStartContextRollsBackRegisteredMutation) {
+  int value = 0;
+  bool sawDropCopy = false;
+  openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
+  CustomPolicy<DropCopyStartMutationPolicy> policy(
+      "DropCopyStartMutationPolicy",
+      DropCopyStartMutationPolicy{&value, &sawDropCopy, true});
+  builder.Add(policy);
+  openpit::Engine engine = builder.Build();
+
+  const openpit::pretrade::DropCopyResult result =
+      ApplyDropCopyAndCommit(engine, MakeDryRunHookOrder());
+
+  EXPECT_FALSE(result.Passed());
+  EXPECT_TRUE(sawDropCopy);
+  EXPECT_EQ(value, 0);
 }
 
 //------------------------------------------------------------------------------

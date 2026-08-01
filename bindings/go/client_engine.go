@@ -18,6 +18,7 @@
 package openpit
 
 import (
+	"errors"
 	"runtime"
 	"runtime/cgo"
 	"sync"
@@ -33,6 +34,10 @@ import (
 	"go.openpit.dev/openpit/reject"
 )
 
+// ErrClientRequestClosed is returned by ClientRequest.Execute once the request
+// and its client payload have been released.
+var ErrClientRequestClosed = errors.New("client pre-trade request already closed")
+
 // ClientEngineOption configures a ClientEngine at build time.
 type ClientEngineOption func(*clientEngineOptions)
 
@@ -40,7 +45,8 @@ type ClientEngineOption func(*clientEngineOptions)
 // client payload reaching client policies to carry the builder's declared type.
 //
 // This mode removes safe adapter checks from every callback. A missing payload
-// or a wrong payload type panics.
+// or a wrong payload type panics inside the adapter; the SDK callback boundary
+// recovers it as a SystemUnavailable policy failure.
 func UnsafeFastClientPayloadCallbacks() ClientEngineOption {
 	return func(options *clientEngineOptions) {
 		options.unsafeFastPayloadCallbacks = true
@@ -111,17 +117,17 @@ func (e *ClientEngine[Order, Report, Adjustment]) ExecutePreTrade(
 	return reservation, rejects, err
 }
 
-// ExecutePreTradeDropCopy runs the full non-enforcing pre-trade pipeline with
-// a client order payload. The payload handle is released before the method
-// returns. A market order returns an error before any policy is invoked.
-func (e *ClientEngine[Order, Report, Adjustment]) ExecutePreTradeDropCopy(
+// ApplyDropCopy applies the full non-enforcing pre-trade pipeline with a client
+// order payload. The payload handle is released before ApplyDropCopy returns
+// because all order callbacks have completed by then.
+func (e *ClientEngine[Order, Report, Adjustment]) ApplyDropCopy(
 	order Order,
-) (*pretrade.Reservation, error) {
+) (*pretrade.DropCopyOperation, []reject.Reject, error) {
 	engineOrder, payload := newClientOrderPayload(order)
 	defer payload.release()
-	reservation, err := e.engine.ExecutePreTradeDropCopy(engineOrder)
+	operation, rejects, err := e.engine.ApplyDropCopy(engineOrder)
 	runtime.KeepAlive(order)
-	return reservation, err
+	return operation, rejects, err
 }
 
 // ApplyExecutionReport applies a client execution report payload.
@@ -170,7 +176,16 @@ func (e *ClientEngine[Order, Report, Adjustment]) Configure() configure.Configur
 
 // ClientRequest is a deferred pre-trade request that keeps the original client
 // order payload alive until the request is executed or closed.
+//
+// Lifecycle: the caller owns the request and must release it with Close.
+// Nothing releases it on the caller's behalf - there is no finalizer, so a
+// request dropped without Close leaks its native handle and the client order
+// payload it keeps alive.
+//
+// Concurrency: every method is safe to call concurrently with every other
+// method on the same value, including Close.
 type ClientRequest struct {
+	mu      sync.Mutex
 	request *pretrade.Request
 	payload *clientPayloadHandle
 }
@@ -180,7 +195,11 @@ func newClientRequest(request *pretrade.Request, payload *clientPayloadHandle) *
 }
 
 // Close releases the request and the client order payload.
+//
+// Idempotency: safe to call more than once; subsequent calls are no-ops.
 func (r *ClientRequest) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.request != nil {
 		r.request.Close()
 		r.request = nil
@@ -193,7 +212,17 @@ func (r *ClientRequest) Close() {
 //
 // Execute does not close the underlying request; call Close after Execute just
 // as with a standard pretrade.Request.
+//
+// A call after Close returns [ErrClientRequestClosed]. Native execution
+// failures remain distinguishable through the returned error value.
 func (r *ClientRequest) Execute() (*pretrade.Reservation, []reject.Reject, error) {
+	// Execute consumes the native request, so it takes the exclusive lock: a
+	// concurrent Close must not release the handle mid-call.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.request == nil {
+		return nil, nil, ErrClientRequestClosed
+	}
 	reservation, rejects, err := r.request.Execute()
 	r.payload.release()
 	return reservation, rejects, err

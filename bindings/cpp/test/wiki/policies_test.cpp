@@ -15,14 +15,14 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Policies.md
+// Source: https://wiki.openpit.dev/Policies/
 //
 // Compiling mirror of the C++ snippets published on the Policies wiki page.
 // Each TEST runs the exact user code shown in a
 // `<details><summary>C++</summary>` block (modulo the minimal harness: the
 // engine builder is named, and a build assertion stands in for the prose). When
-// a snippet here changes, update the matching block in Policies.md and vice
-// versa.
+// a snippet here changes, update the matching block in
+// https://wiki.openpit.dev/Policies/ and vice versa.
 
 #include "openpit/openpit.hpp"
 #include "openpit/pretrade/pretrade.hpp"

@@ -125,6 +125,7 @@ type PretradePreTradeLockPricesView = C.OpenPitPretradePreTradeLockPricesView
 type PretradePreTradePolicy = *C.OpenPitPretradePreTradePolicy
 type PretradePreTradeRequest = *C.OpenPitPretradePreTradeRequest
 type PretradePreTradeReservation = *C.OpenPitPretradePreTradeReservation
+type PretradeDropCopyOperation = *C.OpenPitPretradeDropCopyOperation
 type PretradeAccountBlock = C.OpenPitPretradeAccountBlock
 type PretradeAccountBlockList = *C.OpenPitPretradeAccountBlockList
 type PretradeReject = C.OpenPitPretradeReject
@@ -150,6 +151,7 @@ type MarketDataQuoteTTL = C.OpenPitMarketDataQuoteTtl
 type InstrumentID = C.OpenPitInstrumentId
 type MarketDataInstrumentID = InstrumentID
 type MarketDataGetStatus = C.OpenPitMarketDataGetStatus
+type MarketDataAccountGroupResolution = C.OpenPitMarketDataAccountGroupResolution
 type MarketDataRegisterStatus = C.OpenPitMarketDataRegisterStatus
 type MarketDataQuoteResolution = C.OpenPitMarketDataQuoteResolution
 
@@ -248,6 +250,14 @@ const (
 	MarketDataGetStatusUnknownInstrument MarketDataGetStatus = C.OpenPitMarketDataGetStatus_UnknownInstrument
 	MarketDataGetStatusQuoteExpired      MarketDataGetStatus = C.OpenPitMarketDataGetStatus_QuoteExpired
 	MarketDataGetStatusError             MarketDataGetStatus = C.OpenPitMarketDataGetStatus_Error
+
+	MarketDataGetStatusAccountGroupFailed MarketDataGetStatus = C.OpenPitMarketDataGetStatus_AccountGroupResolutionFailed
+)
+
+const (
+	MarketDataAccountGroupFound  MarketDataAccountGroupResolution = C.OpenPitMarketDataAccountGroupResolution_Found
+	MarketDataAccountGroupNone   MarketDataAccountGroupResolution = C.OpenPitMarketDataAccountGroupResolution_NoGroup
+	MarketDataAccountGroupFailed MarketDataAccountGroupResolution = C.OpenPitMarketDataAccountGroupResolution_Failed
 )
 
 const (

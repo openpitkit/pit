@@ -18,6 +18,7 @@
 package openpit
 
 import (
+	"errors"
 	"runtime/cgo"
 	"testing"
 
@@ -44,6 +45,18 @@ type clientEngineTestReport struct {
 type clientEngineTestAdjustment struct {
 	model.AccountAdjustment
 	Source string
+}
+
+func TestClientRequestExecuteAfterCloseReturnsExportedError(t *testing.T) {
+	request := &ClientRequest{}
+	request.Close()
+	reservation, rejects, err := request.Execute()
+	if reservation != nil || rejects != nil {
+		t.Fatalf("Execute() = (%v, %v, %v), want (nil, nil, ErrClientRequestClosed)", reservation, rejects, err)
+	}
+	if !errors.Is(err, ErrClientRequestClosed) {
+		t.Fatalf("Execute() error = %v, want ErrClientRequestClosed", err)
+	}
 }
 
 func TestClientEnginePassesClientOrderThroughDeferredRequest(t *testing.T) {
@@ -284,7 +297,7 @@ func TestClientEngineApplyAccountAdjustmentBatchHandlesMultipleAdjustments(t *te
 	}
 }
 
-func TestClientEngineUnsafeFastPanicsOnMismatchedPayload(t *testing.T) {
+func TestClientEngineUnsafeFastPayloadMismatchReturnsSystemUnavailable(t *testing.T) {
 	engine, err := NewClientEngineBuilder[
 		clientEngineTestOrder,
 		clientEngineTestReport,
@@ -298,17 +311,50 @@ func TestClientEngineUnsafeFastPanicsOnMismatchedPayload(t *testing.T) {
 	}
 	defer engine.Stop()
 
-	didPanic := false
-	func() {
-		defer func() {
-			if recover() != nil {
-				didPanic = true
-			}
-		}()
-		_, _, _ = engine.engine.StartPreTrade(orderWithMismatchedPayload(t, 42))
-	}()
-	if !didPanic {
-		t.Fatal("StartPreTrade() panic = nil, want non-nil")
+	request, rejects, err := engine.engine.StartPreTrade(
+		orderWithMismatchedPayload(t, 42),
+	)
+	if err != nil {
+		t.Fatalf("StartPreTrade() error = %v", err)
+	}
+	if request != nil {
+		request.Close()
+		t.Fatal("StartPreTrade() request != nil, want nil")
+	}
+	if len(rejects) != 1 || rejects[0].Code != reject.CodeSystemUnavailable {
+		t.Fatalf("StartPreTrade() rejects = %v, want SystemUnavailable", rejects)
+	}
+}
+
+func TestClientEngineDropCopyPayloadMismatchIsEvaluationFailure(t *testing.T) {
+	engine, err := NewClientEngineBuilder[
+		clientEngineTestOrder,
+		clientEngineTestReport,
+		clientEngineTestAdjustment,
+	]().
+		FullSync().
+		PreTrade(&clientEngineTestMainPolicy{}).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	rejects := requireRejectedDropCopy(
+		t,
+		engine.engine,
+		orderWithMismatchedPayload(t, 42),
+	)
+	if len(rejects) == 0 {
+		t.Fatal("ApplyDropCopy() rejects is empty, want evaluation failure")
+	}
+	for _, item := range rejects {
+		if item.Code != reject.CodeSystemUnavailable {
+			t.Fatalf("reject code = %v, want SystemUnavailable", item.Code)
+		}
+		if !item.Code.IsEvaluationFailure() {
+			t.Fatalf("reject code %v is not an evaluation failure", item.Code)
+		}
 	}
 }
 
@@ -585,6 +631,8 @@ func orderWithMismatchedPayload(t *testing.T, payload any) model.Order {
 	t.Helper()
 
 	order := model.NewOrder()
+	operation := order.EnsureOperationView()
+	operation.SetAccountID(param.NewAccountIDFromUint64(1))
 	nativeOrder := order.Handle()
 	handle := cgo.NewHandle(payload)
 	t.Cleanup(handle.Delete)

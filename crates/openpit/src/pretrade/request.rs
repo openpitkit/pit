@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 use super::reject::Rejects;
 use super::reservation::PreTradeReservation;
@@ -83,11 +83,26 @@ impl<Order> PreTradeRequest<Order> {
     /// # }
     /// ```
     ///
+    /// # Account blocks
+    ///
+    /// The blocked set is consulted again before main-stage policies run, so a
+    /// block latched between the two stages rejects this request. While
+    /// anything is blocked, an order whose account ID cannot be read is
+    /// rejected too, because the engine cannot clear it against the blocked
+    /// set.
+    ///
+    /// A main-stage reject with [`crate::pretrade::RejectScope::Account`]
+    /// latches a block for the order's account, so later requests for it are
+    /// rejected up front. The block is recorded only for a readable account: an
+    /// unreadable one records nothing, since a rejected request created no
+    /// exposure that would justify the irreversible global block. The order is
+    /// rejected either way.
+    ///
     /// # Errors
     ///
-    /// Returns [`Rejects`] when any main-stage policy rejects the order.
-    /// All policies run before returning, and all registered mutations are
-    /// rolled back in reverse order.
+    /// Returns [`Rejects`] when the account is blocked or when any main-stage
+    /// policy rejects the order. All policies run before returning, and all
+    /// registered mutations are rolled back in reverse order.
     pub fn execute(self) -> Result<PreTradeReservation, Rejects> {
         self.inner.execute()
     }

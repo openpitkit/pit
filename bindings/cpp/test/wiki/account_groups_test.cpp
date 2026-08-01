@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Account-Groups.md
+// Source: https://wiki.openpit.dev/Account-Groups/
 
 #include "openpit/accounts/accounts.hpp"
 #include "openpit/engine.hpp"
@@ -38,7 +38,7 @@ using openpit::param::AccountId;
 
 namespace policies = openpit::pretrade::policies;
 
-// Account-Groups.md § Examples
+// Source: https://wiki.openpit.dev/Account-Groups/ - Examples
 // Register two accounts into one group, read membership back by id,
 // and unregister the group.
 TEST(AccountGroupsWiki, RegisterReadUnregister) {

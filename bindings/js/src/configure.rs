@@ -46,6 +46,7 @@ use crate::policy::spot_funds::{
     JsSpotFundsPnlBoundsAccountBarrier, JsSpotFundsPnlBoundsAccountGroupBarrier,
     JsSpotFundsPnlBoundsBarrier,
 };
+use crate::policy::CallbackErrorScope;
 use crate::result::JsPolicyConfigurationResult;
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -146,10 +147,15 @@ extern "C" {
 }
 
 /// Runtime built-in policy configurator.
+///
+/// Obtained from `Engine.configure()`. It reconfigures the policies of that one
+/// engine, so changes made through it are visible to every later call on it.
+/// Calling it from a callback of the same engine throws `LifecycleError`.
 #[wasm_bindgen(js_name = Configurator)]
 #[derive(Clone)]
 pub struct JsConfigurator {
     inner: openpit::Configurator<EngineTrait>,
+    callback_scope_id: u64,
 }
 
 type SpotFundsLimitModeEntry<Id> = (Id, Option<openpit::pretrade::SpotFundsLimitMode>);
@@ -161,13 +167,16 @@ impl JsConfigurator {
     /// # Errors
     ///
     /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
-    /// validation failure. Throws `ParamError` for malformed options.
+    /// validation failure. Throws `ParamError` for malformed options. Throws
+    /// `LifecycleError` when the owning engine is re-entered synchronously from
+    /// one of its policy callbacks.
     #[wasm_bindgen(js_name = rateLimit)]
     pub fn rate_limit(
         &self,
         name: &str,
         options: RateLimitConfigureOptionsLike,
     ) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let options = options.into();
         require_object(&options, "rateLimit options")?;
         let broker = optional_wrapper_field::<JsRateLimitBrokerBarrier>(&options, "broker")?
@@ -220,12 +229,20 @@ impl JsConfigurator {
     }
 
     /// Retunes a registered P&L-bounds kill-switch policy at runtime.
+    ///
+    /// # Errors
+    ///
+    /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
+    /// validation failure. Throws `ParamError` for malformed options. Throws
+    /// `LifecycleError` when the owning engine is re-entered synchronously from
+    /// one of its policy callbacks.
     #[wasm_bindgen(js_name = pnlBoundsKillswitch)]
     pub fn pnl_bounds_killswitch(
         &self,
         name: &str,
         options: PnlBoundsKillswitchConfigureOptionsLike,
     ) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let options = options.into();
         require_object(&options, "pnlBoundsKillswitch options")?;
         let brokers =
@@ -254,12 +271,20 @@ impl JsConfigurator {
     }
 
     /// Force-sets live accumulated P&L for one generic P&L kill-switch entry.
+    ///
+    /// # Errors
+    ///
+    /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
+    /// validation failure. Throws `ParamError`/`AssetError`/`AccountIdError`
+    /// for malformed options. Throws `LifecycleError` when the owning engine is
+    /// re-entered synchronously from one of its policy callbacks.
     #[wasm_bindgen(js_name = setAccountPnl)]
     pub fn set_account_pnl(
         &self,
         name: &str,
         options: SetAccountPnlOptionsLike,
     ) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let options = options.into();
         require_object(&options, "setAccountPnl options")?;
         let account = resolve_account_id(required_field(&options, "account")?)?;
@@ -271,12 +296,20 @@ impl JsConfigurator {
     }
 
     /// Retunes a registered order-size-limit policy at runtime.
+    ///
+    /// # Errors
+    ///
+    /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
+    /// validation failure. Throws `ParamError` for malformed options. Throws
+    /// `LifecycleError` when the owning engine is re-entered synchronously from
+    /// one of its policy callbacks.
     #[wasm_bindgen(js_name = orderSizeLimit)]
     pub fn order_size_limit(
         &self,
         name: &str,
         options: OrderSizeLimitConfigureOptionsLike,
     ) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let options = options.into();
         require_object(&options, "orderSizeLimit options")?;
         let broker = optional_wrapper_field::<JsOrderSizeBrokerBarrier>(&options, "broker")?
@@ -319,12 +352,20 @@ impl JsConfigurator {
     }
 
     /// Retunes a registered spot-funds policy at runtime.
+    ///
+    /// # Errors
+    ///
+    /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
+    /// validation failure. Throws `ParamError`/`AssetError`/`AccountIdError`
+    /// for malformed options. Throws `LifecycleError` when the owning engine is
+    /// re-entered synchronously from one of its policy callbacks.
     #[wasm_bindgen(js_name = spotFunds)]
     pub fn spot_funds(
         &self,
         name: &str,
         options: SpotFundsConfigureOptionsLike,
     ) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let options = options.into();
         require_object(&options, "spotFunds options")?;
         let global_slippage_bps = optional_u16_field(&options, "globalSlippageBps")?;
@@ -380,12 +421,20 @@ impl JsConfigurator {
     }
 
     /// Retunes the spot-funds account-wide P&L-bounds axis.
+    ///
+    /// # Errors
+    ///
+    /// Throws `PolicyConfigureError` on unknown policy, type mismatch, or
+    /// validation failure. Throws `ParamError` for malformed options. Throws
+    /// `LifecycleError` when the owning engine is re-entered synchronously from
+    /// one of its policy callbacks.
     #[wasm_bindgen(js_name = spotFundsPnlBoundsKillswitch)]
     pub fn spot_funds_pnl_bounds_killswitch(
         &self,
         name: &str,
         options: SpotFundsPnlBoundsKillswitchConfigureOptionsLike,
     ) -> Result<(), JsValue> {
+        self.ensure_callable()?;
         let options = options.into();
         require_object(&options, "spotFundsPnlBoundsKillswitch options")?;
         let global = optional_nullable_wrapper_field::<JsSpotFundsPnlBoundsBarrier>(
@@ -437,13 +486,16 @@ impl JsConfigurator {
     ///
     /// Throws `TypeError`, `RangeError`, or `ParamError` for an invalid state,
     /// `AccountIdError` for an invalid account, or `PolicyConfigureError` when
-    /// the target policy cannot apply the configuration.
+    /// the target policy cannot apply the configuration. Throws
+    /// `LifecycleError` when the owning engine is re-entered synchronously from
+    /// one of its policy callbacks.
     #[wasm_bindgen(js_name = setSpotFundsAccountPnl)]
     pub fn set_spot_funds_account_pnl(
         &self,
         name: &str,
         options: SetSpotFundsAccountPnlOptionsLike,
     ) -> Result<JsPolicyConfigurationResult, JsValue> {
+        self.ensure_callable()?;
         let options = options.into();
         require_object(&options, "setSpotFundsAccountPnl options")?;
         let account = resolve_account_id(required_field(&options, "account")?)?;
@@ -456,8 +508,18 @@ impl JsConfigurator {
 }
 
 impl JsConfigurator {
-    pub(crate) fn from_inner(inner: openpit::Configurator<EngineTrait>) -> Self {
-        Self { inner }
+    fn ensure_callable(&self) -> Result<(), JsValue> {
+        CallbackErrorScope::ensure_callable(self.callback_scope_id)
+    }
+
+    pub(crate) fn from_inner(
+        inner: openpit::Configurator<EngineTrait>,
+        callback_scope_id: u64,
+    ) -> Self {
+        Self {
+            inner,
+            callback_scope_id,
+        }
     }
 }
 

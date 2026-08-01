@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 package marketdata
 
@@ -111,3 +111,28 @@ func (e *UnknownInstrumentIDError) Error() string {
 
 // Unwrap preserves compatibility with ErrUnknownInstrument and errors.Is.
 func (*UnknownInstrumentIDError) Unwrap() error { return ErrUnknownInstrument }
+
+// AccountGroupResolutionError reports that the supplied AccountInfo could not
+// answer AccountGroup, so the reading account's group stayed unknown and the
+// read failed as a whole. Panic carries the recovered value when the failure
+// came from a panicking AccountGroup implementation.
+//
+// The group is never assumed absent on failure: that would silently move the
+// read onto the default-group bucket and bypass every group-scoped rule.
+type AccountGroupResolutionError struct {
+	Panic any
+}
+
+func newAccountGroupResolutionError(recovered any) error {
+	return &AccountGroupResolutionError{Panic: recovered}
+}
+
+func (e *AccountGroupResolutionError) Error() string {
+	if e.Panic == nil {
+		return "account group resolution failed"
+	}
+	return fmt.Sprintf("account group resolution failed: panic: %v", e.Panic)
+}
+
+// Unwrap preserves compatibility with ErrAccountGroupResolution and errors.Is.
+func (*AccountGroupResolutionError) Unwrap() error { return ErrAccountGroupResolution }

@@ -473,6 +473,25 @@ export class LifecycleError extends OpenpitError {
   }
 }
 
+/**
+ * A defect inside the engine surfaced at the WebAssembly boundary.
+ *
+ * The message carries the Rust panic text and its source location. The wasm
+ * module is poisoned after this error: every later call that would reach core
+ * state returns an `InternalError` instead of touching it. That covers every
+ * `Engine` method and the `Request`, `Reservation`, `Accounts`, `Configurator`,
+ * `AccountControl`, `Context`, `MarketDataService`, and `ReferenceBook` handles
+ * - the whole surface that reads or writes engine state. Report the message,
+ * discard all handles from that module instance, and reload the module before
+ * continuing.
+ */
+export class InternalError extends OpenpitError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "InternalError";
+  }
+}
+
 /** Engine construction failure. */
 export class EngineBuildError extends OpenpitError {
   readonly kind: EngineBuildErrorKind;
@@ -540,8 +559,11 @@ export class PolicyConfigureError extends OpenpitError {
 /**
  * A JavaScript policy callback failed after the engine reconciled all callbacks
  * that could still run. `cause` is the original thrown value; `result` carries
- * the completed post-trade/account-adjustment result when that operation has
- * one, and is undefined for pre-trade or mutation callbacks.
+ * the completed post-trade or account-adjustment result when that operation has
+ * one, and is undefined for other pre-trade, drop-copy, or mutation calls.
+ * Any thrown value reaches `cause` unchanged, whatever its class or `name`. An
+ * operation that an engine defect abandoned reports that `InternalError`
+ * instead of this class, so callers cannot miss the module-reload rule.
  */
 export class PolicyCallbackError extends OpenpitError {
   override readonly cause: unknown;
@@ -658,6 +680,8 @@ export function makeError(
       });
     case "LifecycleError":
       return new LifecycleError(message, { cause });
+    case "InternalError":
+      return new InternalError(message, { cause });
     case "EngineBuildError":
       return new EngineBuildError(message, {
         kind: (payload?.kind ?? code) as EngineBuildErrorKind,

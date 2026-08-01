@@ -47,9 +47,8 @@ type Policy interface {
 	// order and their reject lists are merged before the engine returns to the
 	// caller.
 	//
-	// Implementations must not let panics escape this method. A panic raised
-	// here may propagate across the SDK boundary and terminate the process;
-	// recovering from such panics is the implementer's responsibility.
+	// A panic is recovered at the SDK boundary and reported as a
+	// SystemUnavailable reject with the panic value in its details.
 	CheckPreTradeStart(Context, model.Order) []reject.Reject
 
 	// PerformPreTradeCheck performs main-stage checks and can emit mutations
@@ -58,8 +57,10 @@ type Policy interface {
 	// Policies may inspect the order, append mutations to be committed or
 	// rolled back later, fill the result collector with lock prices and
 	// account-adjustment outcomes, and return zero or more rejects.
-	// An empty rejects list means accept. The engine keeps the result
-	// collector content only when the policy accepts.
+	// An empty rejects list means accept. The engine keeps the result collector
+	// content on acceptance. Drop-copy also keeps it with ordinary,
+	// non-enforcing rejects; evaluation-failure rejects discard it and abort the
+	// drop-copy operation.
 	//
 	// Rollback safety:
 	// In this pre-trade pipeline, rollback may happen after external systems
@@ -67,9 +68,8 @@ type Policy interface {
 	// mutations registered here; prefer delta-based undo or restore values
 	// captured at registration time.
 	//
-	// Implementations must not let panics escape this method. A panic raised
-	// here may propagate across the SDK boundary and terminate the process;
-	// recovering from such panics is the implementer's responsibility.
+	// A panic is recovered at the SDK boundary and reported as a
+	// SystemUnavailable reject with the panic value in its details.
 	PerformPreTradeCheck(Context, model.Order, tx.Mutations, Result) []reject.Reject
 
 	// ApplyExecutionReport applies post-trade updates from execution reports.
@@ -79,9 +79,8 @@ type Policy interface {
 	// blocked state after the report was applied. Policies may independently
 	// fill the adjustment and account-PnL collectors.
 	//
-	// Implementations must not let panics escape this method. A panic raised
-	// here may propagate across the SDK boundary and terminate the process;
-	// recovering from such panics is the implementer's responsibility.
+	// A panic is recovered at the SDK boundary and reported as an account
+	// block with code SystemUnavailable and the panic value in its details.
 	ApplyExecutionReport(
 		PostTradeContext,
 		model.ExecutionReport,
@@ -95,9 +94,8 @@ type Policy interface {
 	// may fill the outcomes collector with account-outcome entries; the engine
 	// keeps outcomes and account blocks only when the policy accepts.
 	//
-	// Implementations must not let panics escape this method. A panic raised
-	// here may propagate across the SDK boundary and terminate the process;
-	// recovering from such panics is the implementer's responsibility.
+	// A panic is recovered at the SDK boundary and reported as a
+	// SystemUnavailable reject with the panic value in its details.
 	ApplyAccountAdjustment(
 		accountadjustment.Context,
 		param.AccountID,

@@ -18,6 +18,7 @@
 package pretrade
 
 import (
+	"errors"
 	"testing"
 
 	"go.openpit.dev/openpit/internal/native"
@@ -40,12 +41,7 @@ func TestDryRunReportStartIsPassOnValidOrder(t *testing.T) {
 	r := NewDryRunReportFromHandle(report)
 	defer r.Close()
 
-	if !r.IsPass() {
-		t.Fatal("IsPass() = false, want true for valid order")
-	}
-	if rejects := r.Rejects(); rejects != nil {
-		t.Fatalf("Rejects() = %v, want nil on pass", rejects)
-	}
+	assertDryRunReportPasses(t, r)
 }
 
 // ---------------------------------------------------------------------------
@@ -62,10 +58,24 @@ func TestDryRunReportExecuteIsPassOnValidOrder(t *testing.T) {
 	r := NewDryRunReportFromHandle(report)
 	defer r.Close()
 
-	if !r.IsPass() {
+	assertDryRunReportPasses(t, r)
+}
+
+func assertDryRunReportPasses(t *testing.T, r *DryRunReport) {
+	t.Helper()
+
+	pass, err := r.IsPass()
+	if err != nil {
+		t.Fatalf("IsPass() error = %v", err)
+	}
+	if !pass {
 		t.Fatal("IsPass() = false, want true for valid order")
 	}
-	if rejects := r.Rejects(); rejects != nil {
+	rejects, err := r.Rejects()
+	if err != nil {
+		t.Fatalf("Rejects() error = %v", err)
+	}
+	if rejects != nil {
 		t.Fatalf("Rejects() = %v, want nil on pass", rejects)
 	}
 }
@@ -84,7 +94,10 @@ func TestDryRunReportLockIsNonZeroOnPassingExecute(t *testing.T) {
 	r := NewDryRunReportFromHandle(report)
 	defer r.Close()
 
-	lock := r.Lock()
+	lock, err := r.Lock()
+	if err != nil {
+		t.Fatalf("DryRunReport.Lock() error = %v", err)
+	}
 	if len(lock.Bytes()) == 0 {
 		t.Fatal("DryRunReport.Lock().Bytes() is empty, want non-empty for passing order")
 	}
@@ -102,7 +115,10 @@ func TestDryRunReportLockIsEmptyOnStartStageDryRun(t *testing.T) {
 	r := NewDryRunReportFromHandle(report)
 	defer r.Close()
 
-	lock := r.Lock()
+	lock, err := r.Lock()
+	if err != nil {
+		t.Fatalf("DryRunReport.Lock() error = %v", err)
+	}
 	isEmpty, err := lock.IsEmpty()
 	if err != nil {
 		t.Fatalf("Lock.IsEmpty() error = %v", err)
@@ -127,7 +143,11 @@ func TestDryRunReportAccountAdjustmentsNilOnNoPolicy(t *testing.T) {
 	defer r.Close()
 
 	// The built-in order-validation policy produces no account adjustments.
-	if adj := r.AccountAdjustments(); adj != nil {
+	adj, err := r.AccountAdjustments()
+	if err != nil {
+		t.Fatalf("AccountAdjustments() error = %v", err)
+	}
+	if adj != nil {
 		t.Fatalf("AccountAdjustments() = %v, want nil when no adjustment policy is registered", adj)
 	}
 }
@@ -146,7 +166,11 @@ func TestDryRunReportAccountBlockNilOnPassingOrder(t *testing.T) {
 	r := NewDryRunReportFromHandle(report)
 	defer r.Close()
 
-	if block := r.AccountBlock(); block != nil {
+	block, err := r.AccountBlock()
+	if err != nil {
+		t.Fatalf("AccountBlock() error = %v", err)
+	}
+	if block != nil {
 		t.Fatalf("AccountBlock() = %v, want nil on passing order", block)
 	}
 }
@@ -168,46 +192,36 @@ func TestDryRunReportCloseIsIdempotent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// DryRunReport panics when closed
+// DryRunReport accessors after Close
 
-func TestDryRunReportIsPassPanicsWhenClosed(t *testing.T) {
-	r := &DryRunReport{}
-	assertPanics(t, "IsPass() on closed report", func() { r.IsPass() })
-}
+// TestDryRunReportAccessorsAfterCloseReportClosed releases a real native report
+// and then reads it: a zero value here would answer "no reject, no block" for a
+// verdict the report no longer holds.
+func TestDryRunReportAccessorsAfterCloseReportClosed(t *testing.T) {
+	engine := newNativeEngineForPreTradeTests(t)
+	order := newValidOrderForPreTradeTests(t)
 
-func TestDryRunReportRejectsPanicsWhenClosed(t *testing.T) {
-	r := &DryRunReport{}
-	assertPanics(t, "Rejects() on closed report", func() { r.Rejects() })
-}
+	report, err := native.EngineExecutePreTradeDryRun(engine, order.Handle())
+	if err != nil {
+		t.Fatalf("EngineExecutePreTradeDryRun() error = %v", err)
+	}
+	r := NewDryRunReportFromHandle(report)
+	r.Close()
 
-func TestDryRunReportLockPanicsWhenClosed(t *testing.T) {
-	r := &DryRunReport{}
-	assertPanics(t, "Lock() on closed report", func() { r.Lock() })
-}
-
-func TestDryRunReportAccountAdjustmentsPanicsWhenClosed(t *testing.T) {
-	r := &DryRunReport{}
-	assertPanics(t, "AccountAdjustments() on closed report", func() { r.AccountAdjustments() })
-}
-
-func TestDryRunReportAccountBlockPanicsWhenClosed(t *testing.T) {
-	r := &DryRunReport{}
-	assertPanics(t, "AccountBlock() on closed report", func() { r.AccountBlock() })
-}
-
-func assertPanics(t *testing.T, label string, fn func()) {
-	t.Helper()
-	didPanic := false
-	func() {
-		defer func() {
-			if recover() != nil {
-				didPanic = true
-			}
-		}()
-		fn()
-	}()
-	if !didPanic {
-		t.Fatalf("%s: expected panic, got none", label)
+	if _, err := r.IsPass(); !errors.Is(err, ErrDryRunReportClosed) {
+		t.Fatalf("IsPass() after Close error = %v, want ErrDryRunReportClosed", err)
+	}
+	if _, err := r.Rejects(); !errors.Is(err, ErrDryRunReportClosed) {
+		t.Fatalf("Rejects() after Close error = %v, want ErrDryRunReportClosed", err)
+	}
+	if _, err := r.Lock(); !errors.Is(err, ErrDryRunReportClosed) {
+		t.Fatalf("Lock() after Close error = %v, want ErrDryRunReportClosed", err)
+	}
+	if _, err := r.AccountAdjustments(); !errors.Is(err, ErrDryRunReportClosed) {
+		t.Fatalf("AccountAdjustments() after Close error = %v, want ErrDryRunReportClosed", err)
+	}
+	if _, err := r.AccountBlock(); !errors.Is(err, ErrDryRunReportClosed) {
+		t.Fatalf("AccountBlock() after Close error = %v, want ErrDryRunReportClosed", err)
 	}
 }
 

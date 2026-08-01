@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Source: Spot-Funds.md
+// Source: https://wiki.openpit.dev/Spot-Funds/
 //
 // Compiling mirror of the C++ snippets published on the Spot-Funds wiki page.
 // Each TEST runs the same user code shown in the corresponding C++ subsection,

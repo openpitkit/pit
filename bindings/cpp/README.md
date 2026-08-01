@@ -113,6 +113,80 @@ cost is one extra file next to the manifest, `vcpkg-configuration.json`:
 This `baseline` is a commit of the managed registry, not of `microsoft/vcpkg`;
 every OpenPit release note publishes the commit to use.
 
+## Quick Start
+
+<!-- Test mirror: bindings/cpp/test/examples_readme_test.cpp -->
+
+```cpp
+#include <openpit/openpit.hpp>
+
+#include <iostream>
+
+int main() {
+  namespace model = openpit::model;
+  namespace param = openpit::param;
+  namespace policies = openpit::pretrade::policies;
+
+  // Build the engine once, at platform initialization.
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(policies::OrderValidationPolicy{});
+  openpit::Engine engine = builder.Build();
+
+  // Describe the order: buy 100 AAPL at 185 USD.
+  const model::Order order = model::Order::Limit(
+      model::Instrument(param::Asset("AAPL"), param::Asset("USD")),
+      param::AccountId::FromUint64(99224416), model::Side::Buy,
+      model::TradeAmount::OfQuantity(param::Quantity::FromString("100")),
+      param::Price::FromString("185"));
+
+  // Run the pre-trade pipeline and read the verdict.
+  openpit::pretrade::ExecuteResult result = engine.ExecutePreTrade(order);
+  if (!result.Passed()) {
+    for (const openpit::pretrade::Reject& rejection : result.rejects) {
+      std::cout << "rejected by " << rejection.policy << ": "
+                << rejection.reason << '\n';
+    }
+    return 1;
+  }
+
+  // The venue accepted the order, so the reserved state stays. Destroying an
+  // unresolved reservation rolls it back instead.
+  result.reservation->Commit();
+  return 0;
+}
+```
+
+The explicit two-stage flow, drop copy, and post-trade reports are described
+on the [Pre-trade Pipeline](https://wiki.openpit.dev/Pre-trade-Pipeline/)
+page.
+
+## What Is Inside
+
+- `SpotFundsPolicy` -
+  [per-account solvency gate over spendable funds](https://wiki.openpit.dev/Spot-Funds/)
+- `OrderValidationPolicy` - [structural integrity checks on every order](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
+- `RateLimitPolicy` - [throttle order flow per broker, asset, or account](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
+- `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
+- `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
+- [Custom C++ policies](https://wiki.openpit.dev/Policy-API/#c-interface)
+  \- the primary integration model.
+- [Account Blocking](https://wiki.openpit.dev/Account-Blocking/),
+  [Account Groups](https://wiki.openpit.dev/Account-Groups/),
+  [Account Adjustments](https://wiki.openpit.dev/Account-Adjustments/), and
+  [Balance Reconciliation](https://wiki.openpit.dev/Balance-Reconciliation/).
+- [Drop Copy](https://wiki.openpit.dev/Pre-trade-Pipeline/#drop-copy) -
+  record already executed orders without pre-trade enforcement.
+- [Market Data](https://wiki.openpit.dev/Market-Data/).
+- [Dynamic Reconfiguration](https://wiki.openpit.dev/Dynamic-Policy-Reconfiguration/)
+  of a live policy.
+- [Async Engine](https://wiki.openpit.dev/Async-Engine/) -
+  `openpit::asyncengine::MakeTypedAsyncEngine(engine, workers)` for
+  per-account queues.
+- [Threading Contract](https://wiki.openpit.dev/Threading-Contract/) -
+  `SyncPolicy::None`, `Full`, or `Account`, chosen when the engine is built.
+- [Rejects and errors](https://wiki.openpit.dev/Errors/) with
+  [stable reject codes](https://wiki.openpit.dev/Reject-Codes/).
+
 ## Examples
 
 Runnable end-to-end examples live in [`examples/cpp/`](https://github.com/openpitkit/pit/tree/main/examples/cpp):
@@ -188,117 +262,3 @@ REQUIRED)`, the runtime resolver uses this order:
 - `OPENPIT_RUNTIME_DIR` - directory containing the platform runtime library.
 - Download the matching release asset from GitHub and verify its SHA-256
   sidecar.
-
-## Engine
-
-### Overview
-
-The engine evaluates an order through a deterministic pre-trade pipeline:
-
-- `engine.StartPreTrade(order)` runs start-stage policies.
-- `request.Execute()` runs main-stage policies.
-- `reservation.Commit()` applies reserved state.
-- `reservation.Rollback()` reverts reserved state.
-- `engine.ExecutePreTrade(order)` is a shortcut that composes both stages.
-- `engine.ApplyExecutionReport(report)` updates post-trade policy state.
-
-`ApplyExecutionReport` returns account blocks, account-PnL outcomes, and
-account-adjustment outcomes. Post-trade policies commit independently, so
-always consume both outcome vectors even when the account-block vector is
-non-empty.
-
-Start-stage policies aggregate rejects from all registered policies.
-Main-stage policies aggregate rejects and roll back registered mutations
-in reverse order when any reject is produced.
-
-Built-in policies:
-
-- `SpotFundsPolicy` -
-  [per-account solvency gate over spendable funds](https://wiki.openpit.dev/Spot-Funds/)
-- `OrderValidationPolicy` - [structural integrity checks on every order](https://wiki.openpit.dev/Policies/#ordervalidationpolicy)
-- `RateLimitPolicy` - [throttle order flow per broker, asset, or account](https://wiki.openpit.dev/Policies/#ratelimitpolicy)
-- `OrderSizeLimitPolicy` - [fat-finger caps on quantity and notional](https://wiki.openpit.dev/Policies/#ordersizelimitpolicy)
-- `PnlBoundsKillSwitchPolicy` - [halt an account when realized P&L breaches bounds](https://wiki.openpit.dev/Policies/#pnlboundskillswitchpolicy)
-
-The primary integration model is to write project-specific policies against
-the public C++ policy API:
-[Custom C++ policies](https://wiki.openpit.dev/Policy-API/#c-interface).
-
-## Usage
-
-<!-- Test mirror: pit/bindings/cpp/test/examples_readme_test.cpp -->
-```cpp
-#include <openpit/openpit.hpp>
-
-#include <stdexcept>
-#include <string>
-
-int main() {
-  namespace model = openpit::model;
-  namespace policies = openpit::pretrade::policies;
-
-  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
-  builder.Add(policies::OrderValidationPolicy{});
-  openpit::Engine engine = builder.Build();
-
-  model::Order order = model::Order::Limit(
-      model::Instrument(openpit::param::Asset("AAPL"),
-                        openpit::param::Asset("USD")),
-      openpit::param::AccountId::FromUint64(99224416), model::Side::Buy,
-      model::TradeAmount::OfQuantity(
-          openpit::param::Quantity::FromString("100")),
-      openpit::param::Price::FromString("185"));
-
-  openpit::pretrade::StartResult start = engine.StartPreTrade(order);
-  if (!start.Passed()) {
-    const std::string reason = start.rejects.empty()
-                                   ? "pre-trade start rejected"
-                                   : start.rejects.front().reason;
-    throw std::runtime_error(reason);
-  }
-
-  openpit::pretrade::ExecuteResult execute = start.request->Execute();
-  if (!execute.Passed()) {
-    const std::string reason = execute.rejects.empty()
-                                   ? "pre-trade execute rejected"
-                                   : execute.rejects.front().reason;
-    throw std::runtime_error(reason);
-  }
-
-  execute.reservation->Commit();
-  return 0;
-}
-```
-
-For per-account asynchronous submission, use
-`openpit::asyncengine::MakeTypedAsyncEngine(engine, workers)`. The returned
-wrapper owns the default C++ engine adapter and exposes the typed async methods
-(`StartPreTrade`, `ExecutePreTrade`, `ApplyExecutionReport`,
-`ApplyAccountAdjustment`) without manual driver lifetime plumbing.
-
-## Threading
-
-Canonical contract: [Threading Contract](https://wiki.openpit.dev/Threading-Contract/).
-
-Choose the storage synchronization policy when building the engine:
-
-- `openpit::SyncPolicy::None` - single-threaded engine ownership.
-- `openpit::SyncPolicy::Full` - concurrent calls on one engine handle.
-- `openpit::SyncPolicy::Account` - account-sharded synchronization.
-
-Custom policies that need internal state across calls use the built-in
-[Storage](https://wiki.openpit.dev/Storage/) abstraction:
-synchronization-aware key-value storage that keeps locking details out of
-policy code.
-
-## Errors
-
-Expected business outcomes are returned as values:
-
-- Pre-trade rejects from `StartPreTrade`, `ExecutePreTrade`, and
-  `Request::Execute`.
-- Account operation outcomes from account-control and adjustment APIs.
-
-Programmer mistakes, invalid input, lifecycle misuse, and runtime boundary
-failures throw `openpit::Error` or a more specific derived error such as
-`openpit::EngineBuildError` or `openpit::ConfigureError`.

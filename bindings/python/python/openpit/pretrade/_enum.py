@@ -13,13 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Please see https://github.com/openpitkit and the OWNERS file for details.
+# Please see https://openpit.dev and the OWNERS file for details.
 
 from __future__ import annotations
 
 import enum
 
 from .. import _enum
+from .._openpit import _reject_code_is_evaluation_failure
 
 
 @enum.unique
@@ -83,6 +84,11 @@ class RejectCode(_enum.StrEnum):
     ARITHMETIC_OVERFLOW = "ArithmeticOverflow"
     CUSTOM = "Custom"
     OTHER = "Other"
+
+    def is_evaluation_failure(self) -> bool:
+        """Whether this code aborts drop copy without applying effects."""
+
+        return _reject_code_is_evaluation_failure(self.value)
 
 
 RejectScope.ORDER.__doc__ = "Reject that applies only to the current order."

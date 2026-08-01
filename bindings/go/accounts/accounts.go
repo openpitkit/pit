@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Please see https://github.com/openpitkit and the OWNERS file for details.
+// Please see https://openpit.dev and the OWNERS file for details.
 
 // Package accounts provides account-group management and pre-trade account
 // blocking bound to an engine.
@@ -155,6 +155,24 @@ func (a Accounts) Block(account param.AccountID, reason string) {
 // is a no-op.
 func (a Accounts) Unblock(account param.AccountID) {
 	native.EngineUnblockAccount(a.engine, account.Handle())
+}
+
+// UnblockAll lifts the engine-wide block, letting every account through
+// again.
+//
+// An engine-wide block never comes from Block or BlockGroup: the engine raises
+// it itself, when a kill switch is reported for an execution report whose
+// account cannot be read, or when a mutation finalizer registered by a custom
+// policy fails - which every mutation registered from Go is, so its state reach
+// is unbounded and the block covers every account. This is the operator's
+// counterpart, so the engine can be returned to service once the inconsistency
+// has been investigated.
+//
+// Unblocking when no engine-wide block is active is a no-op. Accounts and
+// groups blocked individually stay blocked, and their recorded reason still
+// wins over the engine-wide one; lift those with Unblock and UnblockGroup.
+func (a Accounts) UnblockAll() {
+	native.EngineUnblockAllAccounts(a.engine)
 }
 
 // ReplaceBlockReason replaces the recorded reason of a blocked account.

@@ -347,6 +347,16 @@ where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         let request = self.read_order_request(order)?;
+        if ctx.is_drop_copy() && request.price.is_none() {
+            return Err(Reject::new(
+                Self::NAME,
+                RejectScope::Order,
+                RejectCode::MissingRequiredField,
+                "limit price is required for drop-copy",
+                "historical market orders cannot be valued at the current market price",
+            )
+            .into());
+        }
         let pnl_rejects = self.reject_halted_account_pnl(request.account_id, ctx);
         if ctx.is_drop_copy() {
             if let Err(rejects) = &pnl_rejects {
