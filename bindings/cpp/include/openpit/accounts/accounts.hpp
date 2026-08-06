@@ -290,15 +290,11 @@ class Accounts {
   // Atomically registers every account into `group`; all-or-nothing. Returns an
   // `AccountGroupError` when any account is already in a group or when `group`
   // is the reserved `param::DefaultAccountGroup`. Throws `openpit::Error` on a
-  // boundary failure. Effective currency resolves from the account, then its
-  // group, then the default group. Stored realized PnL and cost basis are bare
-  // numbers whose denomination is implied by the effective currency when they
-  // were computed. Membership changes do not inspect that state. If joining
-  // changes the currency, existing numbers remain in the previous currency
-  // while the engine treats them as the new one. The SDK does not convert,
-  // detect, report, halt, sweep, or block on this mismatch. Avoiding it is the
-  // caller's responsibility. If it changes the effective P&L barrier, current
-  // account P&L is checked in the same call (unset is zero and halted is a
+  // boundary failure. If joining changes effective currency, stored PnL and
+  // cost basis accumulated under the previous one lose their meaning; the SDK
+  // guarantees nothing about them.
+  // If it changes the effective PnL barrier, current account PnL is checked in
+  // the same call (unset is zero and halted is a
   // breach), and any resulting block is latched before return. An unchanged
   // barrier is not checked again.
   [[nodiscard]] std::optional<AccountGroupError> RegisterGroup(
@@ -311,15 +307,11 @@ class Accounts {
   // Atomically removes every account from `group`; all-or-nothing. Returns an
   // `AccountGroupError` when any account is not in `group` or when `group` is
   // the reserved `param::DefaultAccountGroup`. Throws `openpit::Error` on a
-  // boundary failure. Effective currency resolves from the account, then its
-  // group, then the default group. Stored realized PnL and cost basis are bare
-  // numbers whose denomination is implied by the effective currency when they
-  // were computed. Membership changes do not inspect that state. If leaving
-  // changes the currency, existing numbers remain in the previous currency
-  // while the engine treats them as the new one. The SDK does not convert,
-  // detect, report, halt, sweep, or block on this mismatch. Avoiding it is the
-  // caller's responsibility. If it changes the effective P&L barrier, current
-  // account P&L is checked in the same call (unset is zero and halted is a
+  // boundary failure. If leaving changes effective currency, stored PnL and
+  // cost basis accumulated under the previous one lose their meaning; the SDK
+  // guarantees nothing about them.
+  // If it changes the effective PnL barrier, current account PnL is checked in
+  // the same call (unset is zero and halted is a
   // breach), and any resulting block is latched before return. An unchanged
   // barrier is not checked again.
   [[nodiscard]] std::optional<AccountGroupError> UnregisterGroup(
@@ -342,14 +334,13 @@ class Accounts {
   }
 
   // Sets the explicit currency used by account-aware policies. Effective
-  // currency resolves from the account, then its group, then the default
-  // group. Stored realized PnL and cost basis are bare numbers whose
-  // denomination is implied by the effective currency when they were
-  // computed. The SDK writes `asset` without checking that state. If this
-  // changes the currency, existing numbers remain in the previous currency
-  // while the engine treats them as the new one. The SDK does not convert,
-  // detect, report, halt, sweep, or block on this mismatch. Avoiding it is the
-  // caller's responsibility.
+  // currency resolves from the account, then its group, then
+  // param::DefaultAccountGroup. This write is unchecked and re-evaluates
+  // nothing. Stored PnL and cost basis accumulated under a different effective
+  // currency lose their meaning; the SDK guarantees nothing about them and does
+  // not convert, detect, or report the change. Barrier selection itself stays
+  // deterministic: the next policy access re-resolves the cascade with the new
+  // effective currency.
   void SetCurrency(::openpit::param::AccountId account,
                    const ::openpit::param::Asset& asset) const {
     OpenPitSharedString* error = nullptr;
@@ -361,26 +352,25 @@ class Accounts {
     }
   }
 
-  // Clears the explicit account currency without checking realized PnL or cost
-  // basis. Effective currency resolves from the account, then its group, then
-  // the default group. Stored values are bare numbers whose denomination is
-  // implied by the currency when they were computed. If the currency changes,
-  // existing numbers remain in the previous currency while the engine treats
-  // them as the new one. The SDK does not convert, detect, report, halt, sweep,
-  // or block on this mismatch. Avoiding it is the caller's responsibility.
+  // Clears the explicit account currency. Effective currency resolves from the
+  // account, then its group, then param::DefaultAccountGroup. This write is
+  // unchecked and re-evaluates nothing. Stored PnL and cost basis accumulated
+  // under a different effective currency lose their meaning; the SDK guarantees
+  // nothing about them and does not convert, detect, or report the change.
+  // Barrier selection itself stays deterministic: the next policy access
+  // re-resolves the cascade with the new effective currency.
   void ClearCurrency(::openpit::param::AccountId account) const noexcept {
     openpit_engine_clear_account_currency(m_engine,
                                           ::openpit::detail::Native(account));
   }
 
   // Sets the currency shared by a group. Effective currency resolves from the
-  // account, then its group, then the default group. Stored realized PnL and
-  // cost basis are bare numbers whose denomination is implied by the currency
-  // when they were computed. The SDK writes the value without checking any
-  // account state. If a currency changes, existing numbers remain in the
-  // previous currency while the engine treats them as the new one. The SDK
-  // does not convert, detect, report, halt, sweep, or block on this mismatch.
-  // Avoiding it is the caller's responsibility.
+  // account, then its group, then param::DefaultAccountGroup. This write is
+  // unchecked and re-evaluates nothing. Stored PnL and cost basis accumulated
+  // under a different effective currency lose their meaning; the SDK guarantees
+  // nothing about them and does not convert, detect, or report the change.
+  // Barrier selection itself stays deterministic: the next policy access
+  // re-resolves the cascade with the new effective currency.
   void SetGroupCurrency(::openpit::param::AccountGroupId group,
                         const ::openpit::param::Asset& asset) const {
     OpenPitSharedString* error = nullptr;
@@ -392,14 +382,13 @@ class Accounts {
     }
   }
 
-  // Clears the group currency without checking account state. Effective
-  // currency resolves from the account, then its group, then the default
-  // group. Stored realized PnL and cost basis are bare numbers whose
-  // denomination is implied by the currency when they were computed. If a
-  // currency changes, existing numbers remain in the previous currency while
-  // the engine treats them as the new one. The SDK does not convert, detect,
-  // report, halt, sweep, or block on this mismatch. Avoiding it is the caller's
-  // responsibility.
+  // Clears the group currency. Effective currency resolves from the account,
+  // then its group, then param::DefaultAccountGroup. This write is unchecked
+  // and re-evaluates nothing. Stored PnL and cost basis accumulated under a
+  // different effective currency lose their meaning; the SDK guarantees nothing
+  // about them and does not convert, detect, or report the change. Barrier
+  // selection itself stays deterministic: the next policy access re-resolves
+  // the cascade with the new effective currency.
   void ClearGroupCurrency(
       ::openpit::param::AccountGroupId group) const noexcept {
     openpit_engine_clear_account_group_currency(

@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-use crate::param::{AccountGroupId, AccountId};
+use crate::param::{AccountGroupId, AccountId, Asset};
 use crate::storage::{self, StorageBuilder};
 
 use super::{AccountControl, AccountGroups, AccountGroupsHandle, Accounts, GroupLookup};
@@ -48,12 +48,16 @@ where
 {
     pub(crate) fn with_rollback<R>(
         &self,
-        operation: impl FnOnce(Option<AccountGroupId>) -> R,
+        operation: impl FnOnce(Option<AccountGroupId>, Option<Asset>) -> R,
     ) -> R {
         let Some(accounts) = self.accounts.as_ref() else {
-            return operation(self.group);
+            return operation(self.group, None);
         };
-        accounts.with_state_rollback(|| operation(accounts.group_of(self.account)))
+        accounts.with_state_rollback(|| {
+            let account_group = accounts.group_of(self.account);
+            let account_currency = accounts.currency_of_in_group(self.account, account_group);
+            operation(account_group, account_currency)
+        })
     }
 }
 
@@ -143,6 +147,17 @@ where
             || self.group_lookup.group(),
             |accounts| accounts.group_of(self.account),
         )
+    }
+
+    /// Returns the effective currency for the adjusted account.
+    ///
+    /// The caller supplies `account_group`; this method resolves only the
+    /// account -> group -> default currency cascade. Standalone contexts have
+    /// no account registry, so they return `None`.
+    pub(crate) fn account_currency(&self, account_group: Option<AccountGroupId>) -> Option<Asset> {
+        self.accounts
+            .as_ref()
+            .and_then(|accounts| accounts.currency_of_in_group(self.account, account_group))
     }
 
     pub(crate) fn with_state_writer<R>(&self, operation: impl FnOnce() -> R) -> R {

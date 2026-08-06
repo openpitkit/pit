@@ -669,13 +669,20 @@ class SpotFundsOverrideEntry:
 class SpotFundsPnlBoundsBarrier:
     """Account P&L bounds used by the spot-funds policy.
 
+    With a known effective account currency, only exact matches apply and
+    mismatching levels are skipped. Without one, the first in-scope barrier
+    applies. If no level matches a known currency, P&L keeps accumulating and
+    publishing without P&L control.
+
     Args:
+        currency: Currency matched when the account has an effective currency.
         lower_bound: Optional lower P&L bound (typically a negative loss limit).
         upper_bound: Optional upper P&L bound (typically a positive profit limit).
 
     At least one of *lower_bound* or *upper_bound* must be provided.
     """
 
+    currency: param.Asset
     lower_bound: param.Pnl | None = None
     upper_bound: param.Pnl | None = None
 
@@ -828,6 +835,10 @@ class SpotFundsPnlBoundsKillswitchReadyBuilder:
 
     The resulting preset uses ``SpotFundsLimitMode.TRACK_ONLY`` funds limits
     and does not produce ``RejectCode.INSUFFICIENT_FUNDS`` rejects.
+    With a known effective account currency, only exact barrier matches apply
+    and mismatching levels are skipped. Without one, the first in-scope barrier
+    applies; no match leaves P&L accumulating and publishing without P&L
+    control.
     """
 
     def __init__(self) -> None:

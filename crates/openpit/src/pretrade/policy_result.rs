@@ -18,7 +18,7 @@
 use smallvec::SmallVec;
 
 use crate::core::account_outcome::AccountOutcomeEntry;
-use crate::param::{AccountGroupId, AccountId, Price};
+use crate::param::{AccountGroupId, AccountId, Asset, Price};
 use crate::pretrade::AccountBlock;
 use crate::PnlState;
 
@@ -104,7 +104,7 @@ pub struct PolicyConfigurationResult {
 
 /// Runtime configuration operation dispatched to a built-in policy.
 #[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PolicyRuntimeConfiguration {
     /// Sets the account-scoped SpotFunds realized-PnL state.
     SetSpotFundsAccountPnl {
@@ -112,6 +112,8 @@ pub enum PolicyRuntimeConfiguration {
         account_id: AccountId,
         /// Account-group membership observed for this operation.
         account_group_id: Option<AccountGroupId>,
+        /// Effective account currency observed for this operation.
+        account_currency: Option<Asset>,
         /// Replacement account PnL state.
         state: PnlState,
     },

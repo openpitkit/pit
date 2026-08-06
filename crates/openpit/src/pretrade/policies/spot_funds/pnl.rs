@@ -15,11 +15,18 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-use crate::param::{AccountGroupId, AccountId, Pnl};
+use crate::param::{AccountGroupId, AccountId, Asset, Pnl};
 
 /// Account P&L bounds used by the spot-funds policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpotFundsPnlBoundsBarrier {
+    /// Currency matched when the account has an effective currency.
+    ///
+    /// With a known effective account currency, only exact matches apply and
+    /// mismatching levels are skipped. Without one, the first in-scope barrier
+    /// applies. If no level matches a known currency, P&L keeps accumulating
+    /// and publishing without P&L control.
+    pub currency: Asset,
     /// Optional lower bound, typically a negative loss limit.
     pub lower_bound: Option<Pnl>,
     /// Optional upper bound, typically a positive profit-taking limit.

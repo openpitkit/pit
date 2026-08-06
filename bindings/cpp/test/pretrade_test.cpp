@@ -1114,7 +1114,7 @@ TEST(BuiltinPolicy, SpotFundsMarketOrdersAcceptServiceWrapper) {
 }
 
 TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierPreservesBounds) {
-  policies::SpotFundsPnlBoundsBarrier barrier;
+  policies::SpotFundsPnlBoundsBarrier barrier(openpit::param::Asset("USD"));
   barrier.lowerBound = openpit::param::Pnl::FromString("-1000");
   barrier.upperBound = openpit::param::Pnl::FromString("250");
 
@@ -1124,16 +1124,51 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierPreservesBounds) {
   EXPECT_EQ(barrier.upperBound->ToString(), "250");
 }
 
+TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierIgnoresNonMatchingCurrency) {
+  const openpit::param::AccountId account =
+      openpit::param::AccountId::FromUint64(83019);
+  policies::SpotFundsPnlBoundsBarrier barrier(openpit::param::Asset("EUR"));
+  barrier.lowerBound = openpit::param::Pnl::FromString("-100");
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(
+      policies::SpotFundsPnlBoundsKillSwitchPolicy{}.GlobalBarrier(barrier));
+  const openpit::Engine engine = builder.Build();
+  engine.Accounts().SetCurrency(account, openpit::param::Asset("USD"));
+
+  const auto result = engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, account,
+      openpit::param::Pnl::FromString("-150"));
+  EXPECT_TRUE(result.accountBlocks.empty());
+}
+
+TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierAppliesMatchingCurrency) {
+  const openpit::param::AccountId account =
+      openpit::param::AccountId::FromUint64(83020);
+  policies::SpotFundsPnlBoundsBarrier barrier(openpit::param::Asset("USD"));
+  barrier.lowerBound = openpit::param::Pnl::FromString("-100");
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(
+      policies::SpotFundsPnlBoundsKillSwitchPolicy{}.GlobalBarrier(barrier));
+  const openpit::Engine engine = builder.Build();
+  engine.Accounts().SetCurrency(account, openpit::param::Asset("USD"));
+
+  const auto result = engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, account,
+      openpit::param::Pnl::FromString("-150"));
+  ASSERT_EQ(result.accountBlocks.size(), 1U);
+  EXPECT_EQ(result.accountBlocks[0].code, RejectCode::PnlKillSwitchTriggered);
+}
+
 TEST(BuiltinPolicy, SpotFundsPnlBoundsPolicyBuildsWithAllBarrierAxes) {
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
 
-  policies::SpotFundsPnlBoundsBarrier global;
+  policies::SpotFundsPnlBoundsBarrier global(openpit::param::Asset("USD"));
   global.lowerBound = openpit::param::Pnl::FromString("-1000");
 
-  policies::SpotFundsPnlBoundsBarrier group;
+  policies::SpotFundsPnlBoundsBarrier group(openpit::param::Asset("USD"));
   group.upperBound = openpit::param::Pnl::FromString("1000");
 
-  policies::SpotFundsPnlBoundsBarrier account;
+  policies::SpotFundsPnlBoundsBarrier account(openpit::param::Asset("USD"));
   account.lowerBound = openpit::param::Pnl::FromString("-250");
 
   builder.Add(
@@ -1160,7 +1195,7 @@ TEST(BuiltinPolicy, SpotFundsGroupMembershipArmsEffectivePnlBarrier) {
       openpit::param::AccountId::FromUint64(83010);
   const openpit::param::AccountGroupId group =
       openpit::param::AccountGroupId::FromUint32(84);
-  policies::SpotFundsPnlBoundsBarrier barrier;
+  policies::SpotFundsPnlBoundsBarrier barrier(openpit::param::Asset("USD"));
   barrier.lowerBound = openpit::param::Pnl::FromString("1");
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
   builder.Add(
@@ -1176,7 +1211,7 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
   const openpit::param::AccountId account =
       openpit::param::AccountId::FromUint64(83016);
 
-  policies::SpotFundsPnlBoundsBarrier barrier;
+  policies::SpotFundsPnlBoundsBarrier barrier(openpit::param::Asset("USD"));
   barrier.lowerBound = openpit::param::Pnl::FromString("-100");
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
   builder.Add(
@@ -1197,9 +1232,9 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
   openpit::model::Fill fill;
   fill.lastTrade = openpit::model::Trade(Price::FromString("100"),
                                          Quantity::FromString("1"));
-  // The fee has to be denominated in the account currency, so it is what
-  // makes this fill's account line uncomputable without one. A fee-less
-  // opening fill would omit the account line instead.
+  // The fee has to be denominated in the account currency, so it is what makes
+  // this fill's account line uncomputable without one. A fee-less opening fill
+  // would omit the account line instead.
   fill.fee = openpit::param::MonetaryAmount(
       openpit::param::Fee::FromString("0.25"), openpit::param::Asset("USD"));
   fill.leavesQuantity = Quantity::FromString("0");
@@ -1218,7 +1253,6 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
   ASSERT_EQ(halted.accountBlocks.size(), 1u);
   ExpectSpotFundsPnlPreTradeReject(engine, account);
 
-  engine.Accounts().SetCurrency(account, openpit::param::Asset("USD"));
   const openpit::PolicyConfigurationResult rearmed =
       engine.Configure().SetSpotFundsAccountPnl(
           policies::SpotFundsPolicyName, account,
@@ -1232,6 +1266,36 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
       engine.ExecutePreTrade(SpotFundsLifecycleOrder(account));
   ASSERT_TRUE(accepted.Passed());
   accepted.reservation->Rollback();
+}
+
+TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeBarrierRechecksChangedCurrency) {
+  const openpit::param::AccountId account =
+      openpit::param::AccountId::FromUint64(83021);
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(policies::SpotFundsPolicy{});
+  const openpit::Engine engine = builder.Build();
+  engine.Accounts().SetCurrency(account, openpit::param::Asset("USD"));
+
+  const auto seeded = engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, account,
+      openpit::param::Pnl::FromString("-150"));
+  EXPECT_TRUE(seeded.accountBlocks.empty());
+
+  policies::SpotFundsPnlBoundsBarrier mismatched(openpit::param::Asset("EUR"));
+  mismatched.lowerBound = openpit::param::Pnl::FromString("-100");
+  const auto first = engine.Configure().SpotFundsPnlBoundsKillSwitch(
+      policies::SpotFundsPolicyName,
+      policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Set(mismatched));
+  EXPECT_TRUE(first.accountBlocks.empty());
+
+  policies::SpotFundsPnlBoundsBarrier matching(openpit::param::Asset("USD"));
+  matching.lowerBound = openpit::param::Pnl::FromString("-100");
+  const auto second = engine.Configure().SpotFundsPnlBoundsKillSwitch(
+      policies::SpotFundsPolicyName,
+      policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Set(matching));
+  ASSERT_EQ(second.accountBlocks.size(), 1U);
+  EXPECT_EQ(second.accountBlocks[0].block.code,
+            RejectCode::PnlKillSwitchTriggered);
 }
 
 // Applies one AAPL/USD buy fill through the full reserve/commit lifecycle.
@@ -1269,7 +1333,7 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
 }
 
 [[nodiscard]] openpit::Engine SpotFundsPnlKillSwitchEngine() {
-  policies::SpotFundsPnlBoundsBarrier barrier;
+  policies::SpotFundsPnlBoundsBarrier barrier(openpit::param::Asset("USD"));
   barrier.lowerBound = openpit::param::Pnl::FromString("-100");
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
   builder.Add(
@@ -1339,7 +1403,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsConfiguratorUpdatesAxesAndPnl) {
                                          policies::SpotFundsPnlBoundsBarrier>);
 
   openpit::EngineBuilder builder(openpit::SyncPolicy::Full);
-  policies::SpotFundsPnlBoundsBarrier account;
+  policies::SpotFundsPnlBoundsBarrier account(openpit::param::Asset("USD"));
   account.lowerBound = openpit::param::Pnl::FromString("-10");
   builder.Add(policies::SpotFundsPnlBoundsKillSwitchPolicy{}.AccountBarrier(
       policies::SpotFundsPnlBoundsAccountBarrier(
@@ -1347,11 +1411,11 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsConfiguratorUpdatesAxesAndPnl) {
           std::move(account))));
   openpit::Engine engine = builder.Build();
 
-  policies::SpotFundsPnlBoundsBarrier global;
+  policies::SpotFundsPnlBoundsBarrier global(openpit::param::Asset("USD"));
   global.lowerBound = openpit::param::Pnl::FromString("-100");
-  policies::SpotFundsPnlBoundsBarrier group;
+  policies::SpotFundsPnlBoundsBarrier group(openpit::param::Asset("USD"));
   group.upperBound = openpit::param::Pnl::FromString("100");
-  policies::SpotFundsPnlBoundsBarrier update;
+  policies::SpotFundsPnlBoundsBarrier update(openpit::param::Asset("USD"));
   update.lowerBound = openpit::param::Pnl::FromString("-20");
   update.upperBound = openpit::param::Pnl::FromString("20");
 
@@ -1426,11 +1490,13 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAxisReplacementAndClear) {
       policies::SpotFundsPolicyName, accountSafe,
       openpit::param::Pnl::FromString("-5")));
 
-  policies::SpotFundsPnlBoundsBarrier global;
+  policies::SpotFundsPnlBoundsBarrier global(openpit::param::Asset("USD"));
   global.lowerBound = openpit::param::Pnl::FromString("-20");
-  policies::SpotFundsPnlBoundsBarrier groupBarrier;
+  policies::SpotFundsPnlBoundsBarrier groupBarrier(
+      openpit::param::Asset("USD"));
   groupBarrier.lowerBound = openpit::param::Pnl::FromString("-10");
-  policies::SpotFundsPnlBoundsBarrier accountBarrier;
+  policies::SpotFundsPnlBoundsBarrier accountBarrier(
+      openpit::param::Asset("USD"));
   accountBarrier.lowerBound = openpit::param::Pnl::FromString("-10");
   const auto armed = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
@@ -1518,7 +1584,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAdditionRetainsLivePnl) {
   EXPECT_TRUE(setResult.accountBlocks.empty());
 
   // Arming the bound decides the already-stored -40 immediately.
-  policies::SpotFundsPnlBoundsBarrier initial;
+  policies::SpotFundsPnlBoundsBarrier initial(openpit::param::Asset("USD"));
   initial.lowerBound = openpit::param::Pnl::FromString("-30");
   const auto armed = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
@@ -1528,7 +1594,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAdditionRetainsLivePnl) {
 
   // Replacing the global bound must preserve the live accumulator instead of
   // resetting it.
-  policies::SpotFundsPnlBoundsBarrier replacement;
+  policies::SpotFundsPnlBoundsBarrier replacement(openpit::param::Asset("USD"));
   replacement.lowerBound = openpit::param::Pnl::FromString("-20");
   const auto replaced = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,

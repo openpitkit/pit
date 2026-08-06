@@ -175,10 +175,11 @@ TEST(SpotFundsWiki, PnlBoundsKillSwitchBuilder) {
 
   // The PnL kill switch is a distinct spot-funds builder entry point; it
   // produces the same SpotFundsPolicy, registered under the same name.
-  policies::SpotFundsPnlBoundsBarrier global;
+  policies::SpotFundsPnlBoundsBarrier global(openpit::param::Asset("USD"));
   global.lowerBound = Pnl::FromString("-1000");
 
-  policies::SpotFundsPnlBoundsBarrier accountBarrier;
+  policies::SpotFundsPnlBoundsBarrier accountBarrier(
+      openpit::param::Asset("USD"));
   accountBarrier.lowerBound = Pnl::FromString("-250");
 
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
@@ -202,7 +203,7 @@ TEST(SpotFundsWiki, PnlBoundsKillSwitchRuntimeReconfiguration) {
 
   const AccountId retunedAccount = AccountId::FromUint64(99224416);
   const AccountId forcedAccount = AccountId::FromUint64(99224417);
-  policies::SpotFundsPnlBoundsBarrier initial;
+  policies::SpotFundsPnlBoundsBarrier initial(openpit::param::Asset("USD"));
   initial.lowerBound = Pnl::FromString("-1000");
 
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
@@ -216,7 +217,7 @@ TEST(SpotFundsWiki, PnlBoundsKillSwitchRuntimeReconfiguration) {
   EXPECT_TRUE(seed.accountBlocks.empty());
 
   // Tightening the barrier checks the known account and records the block now.
-  policies::SpotFundsPnlBoundsBarrier global;
+  policies::SpotFundsPnlBoundsBarrier global(openpit::param::Asset("USD"));
   global.lowerBound = Pnl::FromString("-500");
   const auto retune = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,

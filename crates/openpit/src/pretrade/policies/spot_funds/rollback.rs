@@ -23,7 +23,7 @@ use crate::core::mutation::MutationRollbackResult;
 use crate::core::sync_mode::SyncMode;
 use crate::core::{AccountControl, AccountStateSnapshot, Accounts};
 use crate::marketdata::MarketDataSync;
-use crate::param::{AccountId, PositionSize, Price};
+use crate::param::{AccountId, Asset, PositionSize, Price};
 use crate::pretrade::holdings::{Holdings, PositionPnlState};
 use crate::pretrade::{AccountBlock, RejectCode};
 use crate::storage::ConfigCell;
@@ -213,13 +213,13 @@ where
                     });
                 };
                 match commit_state_snapshot.as_ref() {
-                    Some(state_snapshot) => state_snapshot.with_rollback(|_| commit()),
+                    Some(state_snapshot) => state_snapshot.with_rollback(|_, _| commit()),
                     None => commit(),
                 }
                 true
             },
             move || {
-                let rollback = |current_group| {
+                let rollback = |current_group, current_currency: Option<Asset>| {
                     #[cfg(test)]
                     let mut reconciliation = None;
                     let final_state =
@@ -285,7 +285,13 @@ where
                     }
                     let current_barrier = if refresh_barrier {
                         settings.with(|settings| {
-                            settings.pnl_barrier_for(account_id, current_group).cloned()
+                            settings
+                                .pnl_barrier_for(
+                                    account_id,
+                                    current_group,
+                                    current_currency.as_ref(),
+                                )
+                                .cloned()
                         })
                     } else {
                         barrier.clone()
@@ -318,7 +324,7 @@ where
                 };
                 match state_snapshot.as_ref() {
                     Some(state_snapshot) => state_snapshot.with_rollback(rollback),
-                    None => rollback(None),
+                    None => rollback(None, None),
                 }
             },
             lease,
@@ -440,7 +446,7 @@ where
             // hold-rollback comment for the underlying reason.
             || {},
             move || {
-                state_snapshot.with_rollback(|_| {
+                state_snapshot.with_rollback(|_, _| {
                     // Apply the inverse of the forward delta to whatever the
                     // slot holds right now, so concurrent changes by other
                     // threads are not overwritten. `with_mut` (not

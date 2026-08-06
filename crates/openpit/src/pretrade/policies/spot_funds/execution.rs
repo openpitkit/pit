@@ -171,10 +171,11 @@ where
         &self,
         account_id: AccountId,
         account_group_id: Option<crate::param::AccountGroupId>,
+        account_currency: Option<&Asset>,
     ) -> Option<super::SpotFundsPnlBoundsBarrier> {
         self.settings.with(|settings| {
             settings
-                .pnl_barrier_for(account_id, account_group_id)
+                .pnl_barrier_for(account_id, account_group_id, account_currency)
                 .cloned()
         })
     }
@@ -462,7 +463,8 @@ where
             });
         }
 
-        let account_currency = ctx.account_currency();
+        let account_group = ctx.state_account_group();
+        let account_currency = ctx.account_currency(account_group);
         let account_pnl_halt_reason_before = match self.account_pnl_state(account_id) {
             crate::PnlState::Value(_) => None,
             crate::PnlState::Halted(reason) => Some(reason),
@@ -475,7 +477,8 @@ where
             .unwrap_or(false);
         let mut position_pnl_halt = false;
         let mut position_pnl_halt_reason = None;
-        let pnl_barrier = self.pnl_barrier_for(account_id, ctx.state_account_group());
+        let pnl_barrier =
+            self.pnl_barrier_for(account_id, account_group, account_currency.as_ref());
         let mut account_pnl_halt_reason = None;
         let fee_pnl_delta = match account_currency.as_ref() {
             Some(account_currency) => {
@@ -819,8 +822,10 @@ where
             })
             .flatten();
         let position_pnl_was_halted = position_pnl_halt_reason_before.is_some();
-        let account_currency = ctx.account_currency();
-        let pnl_barrier = self.pnl_barrier_for(account_id, ctx.state_account_group());
+        let account_group = ctx.state_account_group();
+        let account_currency = ctx.account_currency(account_group);
+        let pnl_barrier =
+            self.pnl_barrier_for(account_id, account_group, account_currency.as_ref());
         let mut position_pnl_halt = false;
         let mut position_pnl_halt_reason = None;
         let mut account_pnl_halt_reason = None;

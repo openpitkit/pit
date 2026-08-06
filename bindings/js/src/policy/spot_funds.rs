@@ -28,7 +28,7 @@
 //! builder). The core `SpotFundsPolicy::new(market_orders, storage_builder)`
 //! takes the optional market-data bundle and the engine's storage builder.
 
-use openpit::param::Pnl;
+use openpit::param::{Asset, Pnl};
 use openpit::pretrade::policies::{
     SpotFundsLimitMode, SpotFundsMarketData, SpotFundsOverride, SpotFundsOverrideTarget,
     SpotFundsPnlBoundsAccountBarrier, SpotFundsPnlBoundsAccountGroupBarrier,
@@ -39,7 +39,7 @@ use openpit_interop::EngineLocking;
 use wasm_bindgen::prelude::*;
 
 use crate::domain::{
-    collect_cloned_wrappers, extract_cloned_wrapper, parse_bounded_number,
+    collect_cloned_wrappers, extract_cloned_wrapper, parse_asset, parse_bounded_number,
     resolve_account_group_id, resolve_account_id, resolve_instrument_id,
     resolve_optional_account_group_id, resolve_optional_account_id, resolve_optional_pnl,
     AccountGroupIdLike, AccountIdLike, InstrumentIdLike, IntegerNumber, OptionalAccountGroupIdLike,
@@ -198,29 +198,36 @@ pub(crate) fn parse_limit_mode(value: &JsValue) -> Result<Option<SpotFundsLimitM
 
 /// Reusable account-P&L bounds for spot funds.
 ///
-/// Bounds are denominated in the account currency. At least one bound must be
-/// present when the barrier is registered with a builder or configurator.
+/// With a known effective account currency, only exact matches apply and
+/// mismatching levels are skipped. Without one, the first in-scope barrier
+/// applies. If no level matches a known currency, P&L keeps accumulating and
+/// publishing without P&L control. At least one bound must be present when the
+/// barrier is registered with a builder or configurator.
 #[wasm_bindgen(js_name = SpotFundsPnlBoundsBarrier)]
 #[derive(Clone)]
 pub struct JsSpotFundsPnlBoundsBarrier {
+    currency: Asset,
     lower_bound: Option<Pnl>,
     upper_bound: Option<Pnl>,
 }
 
 #[wasm_bindgen(js_class = SpotFundsPnlBoundsBarrier)]
 impl JsSpotFundsPnlBoundsBarrier {
-    /// Constructs reusable spot-funds P&L bounds.
+    /// Constructs reusable currency-specific spot-funds P&L bounds.
     ///
     /// # Errors
     ///
-    /// Throws `TypeError`, `RangeError`, or `ParamError` when a present bound
-    /// is not a valid P&L value.
+    /// Throws `AssetError` when `currency` is invalid, or `TypeError`,
+    /// `RangeError`, or `ParamError` when a present bound is not a valid P&L
+    /// value.
     #[wasm_bindgen(constructor)]
     pub fn new(
+        currency: &str,
         lower_bound: OptionalPnlLike,
         upper_bound: OptionalPnlLike,
     ) -> Result<JsSpotFundsPnlBoundsBarrier, JsValue> {
         Ok(Self {
+            currency: parse_asset(currency)?,
             lower_bound: resolve_optional_pnl(lower_bound.into())?,
             upper_bound: resolve_optional_pnl(upper_bound.into())?,
         })
@@ -235,6 +242,7 @@ impl JsSpotFundsPnlBoundsBarrier {
 impl JsSpotFundsPnlBoundsBarrier {
     pub(crate) fn to_core(&self) -> SpotFundsPnlBoundsBarrier {
         SpotFundsPnlBoundsBarrier {
+            currency: self.currency.clone(),
             lower_bound: self.lower_bound,
             upper_bound: self.upper_bound,
         }

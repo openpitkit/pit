@@ -17,7 +17,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { Engine, EngineBuildError, ParamError } from "@openpit/engine";
+import {
+  AssetError,
+  Engine,
+  EngineBuildError,
+  ParamError,
+} from "@openpit/engine";
 import { QuoteTtl } from "@openpit/engine/marketdata";
 import { TradeAmount } from "@openpit/engine/param";
 import type { Policy } from "@openpit/engine/pretrade";
@@ -138,6 +143,12 @@ describe("native JS validation categories", () => {
 });
 
 describe("spot-funds validation", () => {
+  it("rejects an invalid spot-funds P&L barrier currency", () => {
+    expect(() => new SpotFundsPnlBoundsBarrier("", "-100", undefined)).toThrow(
+      AssetError,
+    );
+  });
+
   it("accepts account, group, and instrument override targets separately", () => {
     expect(() => new SpotFundsOverride(1n, 2n, undefined, 0)).not.toThrow();
     expect(() => new SpotFundsOverride(1n, undefined, 3, 0)).not.toThrow();
@@ -182,7 +193,7 @@ describe("spot-funds validation", () => {
       Engine.builder()
         .builtin(
           buildSpotFundsPnlBoundsKillswitch().globalBarrier(
-            new SpotFundsPnlBoundsBarrier(undefined, undefined),
+            new SpotFundsPnlBoundsBarrier("USD", undefined, undefined),
           ),
         )
         .build(),
@@ -194,7 +205,7 @@ describe("spot-funds validation", () => {
       Engine.builder()
         .builtin(
           buildSpotFundsPnlBoundsKillswitch().globalBarrier(
-            new SpotFundsPnlBoundsBarrier("-100", undefined),
+            new SpotFundsPnlBoundsBarrier("USD", "-100", undefined),
           ),
         )
         .build(),
@@ -202,7 +213,8 @@ describe("spot-funds validation", () => {
   });
 
   it("wires market data into the P&L-bounds builder", () => {
-    const barrier = () => new SpotFundsPnlBoundsBarrier("-100", undefined);
+    const barrier = () =>
+      new SpotFundsPnlBoundsBarrier("USD", "-100", undefined);
     const marketOrder = {
       operation: {
         underlyingAsset: "AAPL",

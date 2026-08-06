@@ -293,6 +293,16 @@ where
         self.groups.with(&group, |currency| currency.clone())
     }
 
+    pub(crate) fn currency_of(
+        &self,
+        account: AccountId,
+        account_group: Option<AccountGroupId>,
+    ) -> Option<Asset> {
+        self.account_currency(account)
+            .or_else(|| account_group.and_then(|group| self.group_currency(group)))
+            .or_else(|| self.group_currency(DEFAULT_ACCOUNT_GROUP))
+    }
+
     pub(crate) fn known_account_keys(&self) -> Vec<AccountId> {
         self.accounts.keys()
     }
@@ -412,19 +422,15 @@ where
     /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP) is not a
     /// valid target, since accounts belong to it implicitly.
     ///
-    /// When membership changes the effective account P&L barrier, the stored
+    /// When membership changes the effective account PnL barrier, the stored
     /// state (including implicit zero or a halt) is evaluated in the same call.
     /// An unchanged effective barrier is not re-evaluated.
     ///
     /// # Warning
     ///
-    /// Currency effects are unchecked. Effective currency resolves through the
-    /// account, then its group, then the default group. Stored realized PnL and
-    /// cost basis are bare numbers whose denomination is implied by the
-    /// effective currency when they were computed. If joining `group` changes
-    /// that currency, the old numbers remain while the engine treats them as
-    /// the new currency. The SDK does not convert, detect, or report this. The
-    /// caller is entirely responsible for avoiding it.
+    /// If joining `group` changes effective currency, stored PnL and cost
+    /// basis accumulated under the previous one lose their meaning; the SDK
+    /// guarantees nothing about them.
     ///
     /// # Errors
     ///
@@ -458,19 +464,15 @@ where
     /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP) is not a
     /// valid target, since accounts belong to it implicitly.
     ///
-    /// When membership changes the effective account P&L barrier, the stored
+    /// When membership changes the effective account PnL barrier, the stored
     /// state (including implicit zero or a halt) is evaluated in the same call.
     /// An unchanged effective barrier is not re-evaluated.
     ///
     /// # Warning
     ///
-    /// Currency effects are unchecked. Effective currency resolves through the
-    /// account, then its group, then the default group. Stored realized PnL and
-    /// cost basis are bare numbers whose denomination is implied by the
-    /// effective currency when they were computed. If leaving `group` changes
-    /// that currency, the old numbers remain while the engine treats them as
-    /// the new currency. The SDK does not convert, detect, or report this. The
-    /// caller is entirely responsible for avoiding it.
+    /// If leaving `group` changes effective currency, stored PnL and cost
+    /// basis accumulated under the previous one lose their meaning; the SDK
+    /// guarantees nothing about them.
     ///
     /// # Errors
     ///
@@ -503,34 +505,34 @@ where
     /// The account-level value overrides group and default-group currency
     /// settings for this account.
     ///
+    /// Effective currency resolves through the account, then its group, then
+    /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP).
+    ///
     /// # Warning
     ///
-    /// This write is unchecked. Effective currency resolves through the
-    /// account, then its group, then the default group. Stored realized PnL and
-    /// cost basis are bare numbers whose denomination is implied by the
-    /// effective currency when they were computed. Changing it leaves the old
-    /// numbers in the previous currency while the engine treats them as the
-    /// new currency. The SDK does not convert, detect, or report this. The
-    /// caller is entirely responsible for avoiding it.
+    /// This write is unchecked and re-evaluates nothing. Stored PnL and cost
+    /// basis accumulated under a different effective currency lose their
+    /// meaning; the SDK guarantees nothing about them and does not convert,
+    /// detect, or report the change. Barrier selection itself stays
+    /// deterministic: the next policy access re-resolves the cascade with the
+    /// new effective currency.
     pub fn set_currency(&self, account: AccountId, currency: Asset) {
         self.currencies.set_account_currency(account, currency);
     }
 
     /// Clears the currency set directly on `account`.
     ///
-    /// After clearing, currency resolution falls back to the account's group
-    /// and then to [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP).
+    /// Effective currency resolves through the account, then its group, then
+    /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP).
     ///
     /// # Warning
     ///
-    /// This write is unchecked. Effective currency resolves through the
-    /// account, then its group, then the default group. Stored realized PnL and
-    /// cost basis are bare numbers whose denomination is implied by the
-    /// effective currency when they were computed. Clearing an effective
-    /// currency leaves the old numbers in the previous currency while the
-    /// engine treats them as the fallback currency or as undenominated. The SDK
-    /// does not convert, detect, or report this. The caller is entirely
-    /// responsible for avoiding it.
+    /// This write is unchecked and re-evaluates nothing. Stored PnL and cost
+    /// basis accumulated under a different effective currency lose their
+    /// meaning; the SDK guarantees nothing about them and does not convert,
+    /// detect, or report the change. Barrier selection itself stays
+    /// deterministic: the next policy access re-resolves the cascade with the
+    /// new effective currency.
     pub fn clear_currency(&self, account: AccountId) {
         self.currencies.clear_account_currency(account);
     }
@@ -540,15 +542,17 @@ where
     /// Passing [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP)
     /// sets the global default currency tier.
     ///
+    /// Effective currency resolves through the account, then its group, then
+    /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP).
+    ///
     /// # Warning
     ///
-    /// This write is unchecked. Effective currency resolves through the
-    /// account, then its group, then the default group. Stored realized PnL and
-    /// cost basis are bare numbers whose denomination is implied by the
-    /// effective currency when they were computed. Changing a group's value
-    /// leaves affected old numbers in the previous currency while the engine
-    /// treats them as the new currency. The SDK does not convert, detect, or
-    /// report this. The caller is entirely responsible for avoiding it.
+    /// This write is unchecked and re-evaluates nothing. Stored PnL and cost
+    /// basis accumulated under a different effective currency lose their
+    /// meaning; the SDK guarantees nothing about them and does not convert,
+    /// detect, or report the change. Barrier selection itself stays
+    /// deterministic: the next policy access re-resolves the cascade with the
+    /// new effective currency.
     pub fn set_group_currency(&self, group: AccountGroupId, currency: Asset) {
         self.currencies.set_group_currency(group, currency);
     }
@@ -558,16 +562,17 @@ where
     /// Passing [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP)
     /// clears the global default currency tier.
     ///
+    /// Effective currency resolves through the account, then its group, then
+    /// [`DEFAULT_ACCOUNT_GROUP`](crate::param::DEFAULT_ACCOUNT_GROUP).
+    ///
     /// # Warning
     ///
-    /// This write is unchecked. Effective currency resolves through the
-    /// account, then its group, then the default group. Stored realized PnL and
-    /// cost basis are bare numbers whose denomination is implied by the
-    /// effective currency when they were computed. Clearing a group's value
-    /// leaves affected old numbers in the previous currency while the engine
-    /// treats them as the fallback currency or as undenominated. The SDK does
-    /// not convert, detect, or report this. The caller is entirely responsible
-    /// for avoiding it.
+    /// This write is unchecked and re-evaluates nothing. Stored PnL and cost
+    /// basis accumulated under a different effective currency lose their
+    /// meaning; the SDK guarantees nothing about them and does not convert,
+    /// detect, or report the change. Barrier selection itself stays
+    /// deterministic: the next policy access re-resolves the cascade with the
+    /// new effective currency.
     pub fn clear_group_currency(&self, group: AccountGroupId) {
         self.currencies.clear_group_currency(group);
     }
@@ -585,22 +590,31 @@ where
         self.currencies.set_state_transition_wait_hook(hook);
     }
 
+    #[cfg(test)]
+    /// Test-only; production resolves the group, then calls `currency_of_in_group`.
     pub(crate) fn currency_of(&self, account: AccountId) -> Option<Asset> {
-        self.currencies
-            .account_currency(account)
-            .or_else(|| {
-                self.group_of(account)
-                    .and_then(|group| self.currencies.group_currency(group))
-            })
-            .or_else(|| self.currencies.group_currency(DEFAULT_ACCOUNT_GROUP))
+        self.currency_of_in_group(account, self.group_of(account))
+    }
+
+    pub(crate) fn currency_of_in_group(
+        &self,
+        account: AccountId,
+        account_group: Option<AccountGroupId>,
+    ) -> Option<Asset> {
+        self.currencies.currency_of(account, account_group)
     }
 
     fn block_effective_barrier_changes(&self, previous: Vec<(AccountId, Option<AccountGroupId>)>) {
         for (account, previous_group) in previous {
+            let current_group = self.group_of(account);
+            let previous_currency = self.currencies.currency_of(account, previous_group);
+            let current_currency = self.currencies.currency_of(account, current_group);
             for block in self.config_registry.account_pnl_membership_change_blocks(
                 account,
                 previous_group,
-                self.group_of(account),
+                current_group,
+                previous_currency,
+                current_currency,
             ) {
                 self.block_handle.block_account(account, block);
             }

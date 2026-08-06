@@ -147,9 +147,13 @@ ready.builtin(buildSpotFunds().withPolicyGroupId(3));
 const orderSizeReady = buildOrderSizeLimit().assetBarriers([]);
 const rateLimitReady = buildRateLimit().assetBarriers([]);
 const pnlReady = buildPnlBoundsKillswitch().brokerBarriers([]);
-const spotFundsPnlReady = buildSpotFundsPnlBoundsKillswitch().globalBarrier(
-  new SpotFundsPnlBoundsBarrier("-100", undefined),
+const spotFundsBarrier = new SpotFundsPnlBoundsBarrier(
+  "USD",
+  "-100",
+  undefined,
 );
+const spotFundsPnlReady =
+  buildSpotFundsPnlBoundsKillswitch().globalBarrier(spotFundsBarrier);
 ready.builtin(orderSizeReady);
 ready.builtin(rateLimitReady);
 ready.builtin(pnlReady);

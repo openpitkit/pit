@@ -1882,14 +1882,9 @@ pub extern "C" fn openpit_account_group_error_get_current_group(
 /// The operation is all-or-nothing: if any listed account is already a member
 /// of any group (including `group`), no account is registered.
 ///
-/// Effective currency resolves from the account, then its group, then the
-/// default group. Stored realized PnL and cost basis are bare numbers whose
-/// denomination is implied by the effective currency when they were computed.
-/// This operation does not inspect that state. If joining `group` changes the
-/// effective currency, existing numbers remain in the previous currency while
-/// the engine treats them as the new one. The SDK does not convert, detect,
-/// report, halt, sweep, or block on this mismatch. Avoiding it is entirely the
-/// caller's responsibility.
+/// If joining `group` changes effective currency, stored PnL and cost basis
+/// accumulated under the previous one lose their meaning; the SDK guarantees
+/// nothing about them.
 ///
 /// If membership changes the effective P&L barrier, the same call checks the
 /// current account P&L, treating an unset ledger as zero and `Halted` as a
@@ -1978,14 +1973,9 @@ pub extern "C" fn openpit_engine_register_account_group(
 /// The operation is all-or-nothing: if any listed account is not currently a
 /// member of `group`, no account is removed.
 ///
-/// Effective currency resolves from the account, then its group, then the
-/// default group. Stored realized PnL and cost basis are bare numbers whose
-/// denomination is implied by the effective currency when they were computed.
-/// This operation does not inspect that state. If leaving `group` changes the
-/// effective currency, existing numbers remain in the previous currency while
-/// the engine treats them as the new one. The SDK does not convert, detect,
-/// report, halt, sweep, or block on this mismatch. Avoiding it is entirely the
-/// caller's responsibility.
+/// If leaving `group` changes effective currency, stored PnL and cost basis
+/// accumulated under the previous one lose their meaning; the SDK guarantees
+/// nothing about them.
 ///
 /// If membership changes the effective P&L barrier, the same call checks the
 /// current account P&L, treating an unset ledger as zero and `Halted` as a
@@ -2118,14 +2108,14 @@ fn import_account_group_id_allow_default(group: u32) -> Result<AccountGroupId, (
 #[no_mangle]
 /// Sets the explicit currency of `account`.
 ///
-/// Effective currency resolves from the account, then its group, then the
-/// default group. Stored realized PnL and cost basis are bare numbers whose
-/// denomination is implied by the effective currency when they were computed.
-/// The SDK writes `asset` without checking that state. If this changes the
-/// effective currency, existing numbers remain in the previous currency while
-/// the engine treats them as the new one. The SDK does not convert, detect,
-/// report, halt, sweep, or block on this mismatch. Avoiding it is entirely the
-/// caller's responsibility.
+/// Effective currency resolves from the account, then its group, then
+/// `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
+///
+/// This write is unchecked and re-evaluates nothing. Stored PnL and cost basis
+/// accumulated under a different effective currency lose their meaning; the
+/// SDK guarantees nothing about them and does not convert, detect, or report
+/// the change. Barrier selection itself stays deterministic: the next policy
+/// access re-resolves the cascade with the new effective currency.
 ///
 /// For an example of good practice in building a control plane on this SDK,
 /// see Pit Officer at <http://officer.openpit.dev/>.
@@ -2164,14 +2154,14 @@ pub extern "C" fn openpit_engine_set_account_currency(
 #[no_mangle]
 /// Clears the explicit currency of `account`.
 ///
-/// Effective currency resolves from the account, then its group, then the
-/// default group. Stored realized PnL and cost basis are bare numbers whose
-/// denomination is implied by the effective currency when they were computed.
-/// The SDK clears the account value without checking that state. If this
-/// changes the effective currency, existing numbers remain in the previous
-/// currency while the engine treats them as the new one. The SDK does not
-/// convert, detect, report, halt, sweep, or block on this mismatch. Avoiding it
-/// is entirely the caller's responsibility.
+/// Effective currency resolves from the account, then its group, then
+/// `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
+///
+/// This write is unchecked and re-evaluates nothing. Stored PnL and cost basis
+/// accumulated under a different effective currency lose their meaning; the
+/// SDK guarantees nothing about them and does not convert, detect, or report
+/// the change. Barrier selection itself stays deterministic: the next policy
+/// access re-resolves the cascade with the new effective currency.
 ///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer.
@@ -2191,14 +2181,14 @@ pub extern "C" fn openpit_engine_clear_account_currency(
 /// `OPENPIT_DEFAULT_ACCOUNT_GROUP` (value `0`) is allowed and represents the
 /// global default tier.
 ///
-/// Effective currency resolves from the account, then its group, then the
-/// default group. Stored realized PnL and cost basis are bare numbers whose
-/// denomination is implied by the effective currency when they were computed.
-/// The SDK writes `asset` without checking any affected account state. If an
-/// effective currency changes, existing numbers remain in the previous
-/// currency while the engine treats them as the new one. The SDK does not
-/// convert, detect, report, halt, sweep, or block on this mismatch. Avoiding it
-/// is entirely the caller's responsibility.
+/// Effective currency resolves from the account, then its group, then
+/// `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
+///
+/// This write is unchecked and re-evaluates nothing. Stored PnL and cost basis
+/// accumulated under a different effective currency lose their meaning; the
+/// SDK guarantees nothing about them and does not convert, detect, or report
+/// the change. Barrier selection itself stays deterministic: the next policy
+/// access re-resolves the cascade with the new effective currency.
 ///
 /// Contract:
 /// - passing null for `engine` returns `false` and writes `out_error`;
@@ -2246,14 +2236,14 @@ pub extern "C" fn openpit_engine_set_account_group_currency(
 /// `OPENPIT_DEFAULT_ACCOUNT_GROUP` (value `0`) is allowed and represents the
 /// global default tier.
 ///
-/// Effective currency resolves from the account, then its group, then the
-/// default group. Stored realized PnL and cost basis are bare numbers whose
-/// denomination is implied by the effective currency when they were computed.
-/// The SDK clears the group value without checking any affected account state.
-/// If an effective currency changes, existing numbers remain in the previous
-/// currency while the engine treats them as the new one. The SDK does not
-/// convert, detect, report, halt, sweep, or block on this mismatch. Avoiding it
-/// is entirely the caller's responsibility.
+/// Effective currency resolves from the account, then its group, then
+/// `OPENPIT_DEFAULT_ACCOUNT_GROUP`.
+///
+/// This write is unchecked and re-evaluates nothing. Stored PnL and cost basis
+/// accumulated under a different effective currency lose their meaning; the
+/// SDK guarantees nothing about them and does not convert, detect, or report
+/// the change. Barrier selection itself stays deterministic: the next policy
+/// access re-resolves the cascade with the new effective currency.
 ///
 /// Contract:
 /// - `engine` must be a valid non-null engine pointer;

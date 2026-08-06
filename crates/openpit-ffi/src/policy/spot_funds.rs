@@ -197,10 +197,15 @@ pub struct OpenPitPretradePoliciesSpotFundsOverride {
     pub has_slippage_bps: bool,
 }
 
-/// Spot-funds account P&L bounds.
+/// Spot-funds account P&L bounds selected by exact currency match when known,
+/// or by the first in-scope barrier otherwise. No matching known currency
+/// leaves P&L accumulating and publishing without P&L control.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+    /// Currency matched when the account has an effective currency; mismatching
+    /// levels are skipped.
+    pub currency: OpenPitStringView,
     /// Optional lower bound for accumulated P&L.
     pub lower_bound: OpenPitParamPnlOptional,
     /// Optional upper bound for accumulated P&L.
@@ -233,6 +238,7 @@ fn parse_pnl_barrier_or_error(
     index: usize,
     out_error: OpenPitOutError,
 ) -> Option<SpotFundsPnlBoundsBarrier> {
+    let currency = parse_asset_or_error(entry.currency, label, index, "currency", out_error)?;
     let lower_bound = match parse_optional_pnl_or_error(
         entry.lower_bound,
         label,
@@ -254,6 +260,7 @@ fn parse_pnl_barrier_or_error(
         Err(()) => return None,
     };
     Some(SpotFundsPnlBoundsBarrier {
+        currency,
         lower_bound,
         upper_bound,
     })
@@ -264,9 +271,11 @@ fn parse_configure_pnl_barrier(
     label: &str,
     index: usize,
 ) -> Result<SpotFundsPnlBoundsBarrier, OpenPitConfigureError> {
+    let currency = parse_configure_asset(entry.currency, label, index, "currency")?;
     let lower_bound = parse_configure_optional_pnl(entry.lower_bound, label, index, "lower_bound")?;
     let upper_bound = parse_configure_optional_pnl(entry.upper_bound, label, index, "upper_bound")?;
     Ok(SpotFundsPnlBoundsBarrier {
+        currency,
         lower_bound,
         upper_bound,
     })
@@ -508,6 +517,8 @@ pub unsafe extern "C" fn openpit_engine_builder_add_builtin_spot_funds_policy(
 ///   compute P&L will be blocked by the core policy fail-safe.
 /// - At least one barrier must be provided across `global`,
 ///   `account_group`, or `account`.
+/// - Each `currency` string view inside a barrier must be valid for the
+///   duration of the call.
 /// - Barrier configuration never seeds or resets live account P&L.
 ///
 /// Success / error: mirrors
@@ -807,6 +818,8 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds(
 /// - When `has_account` is `true`, the `account_len` entries at `account`
 ///   replace the whole per-account axis; an engaged empty list
 ///   (`has_account == true`, `account_len == 0`) clears it.
+/// - Each `currency` string view inside a barrier must be valid for the
+///   duration of the call.
 /// - Barrier retuning never resets a live accumulated P&L value.
 ///
 /// Success:
@@ -1416,6 +1429,7 @@ mod tests {
     fn add_builtin_spot_funds_pnl_bounds_delegates_to_policy_preset() {
         let builder = make_builder();
         let global = OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier {
+            currency: OpenPitStringView::from_utf8("USD"),
             lower_bound: OpenPitParamPnlOptional {
                 value: crate::param::OpenPitParamPnl(
                     Pnl::from_str("-100").expect("pnl").to_decimal().into(),

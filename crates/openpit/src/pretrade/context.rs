@@ -23,7 +23,7 @@ use crate::core::account_control::DeferredAccountOperations;
 use crate::core::{
     AccountControl, AccountGroups, AccountGroupsHandle, Accounts, BlockedAccounts, GroupLookup,
 };
-use crate::param::{AccountGroupId, AccountId};
+use crate::param::{AccountGroupId, AccountId, Asset};
 use crate::storage::{self, StorageBuilder};
 use crate::{Mutation, Mutations};
 
@@ -222,6 +222,19 @@ where
             (Some(accounts), Some(account)) => accounts.group_of(account),
             _ => self.group_lookup.group(),
         }
+    }
+
+    /// Returns the effective currency for the order's account.
+    ///
+    /// The caller supplies `account_group`; this method resolves only the
+    /// account -> group -> default currency cascade. Standalone contexts have
+    /// no account registry, so they return `None`.
+    pub(crate) fn account_currency(&self, account_group: Option<AccountGroupId>) -> Option<Asset> {
+        self.account.and_then(|account| {
+            self.accounts
+                .as_ref()?
+                .currency_of_in_group(account, account_group)
+        })
     }
 
     pub(crate) fn with_state_writer<R>(&self, operation: impl FnOnce() -> R) -> R {

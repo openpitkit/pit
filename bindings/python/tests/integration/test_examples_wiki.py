@@ -1022,6 +1022,7 @@ def test_example_wiki_spot_funds_pnl_kill_switch_builder() -> None:
             openpit.pretrade.policies.build_spot_funds_pnl_bounds_killswitch()
             .global_barrier(
                 openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
+                    currency=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl(-1000),
                 ),
             )
@@ -1029,6 +1030,7 @@ def test_example_wiki_spot_funds_pnl_kill_switch_builder() -> None:
                 openpit.pretrade.policies.SpotFundsPnlBoundsAccountBarrier(
                     account_id=account_id,
                     barrier=openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
+                        currency=openpit.param.Asset("USD"),
                         lower_bound=openpit.param.Pnl(-250),
                     ),
                 ),
@@ -1050,6 +1052,7 @@ def test_example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> None:
         .builtin(
             openpit.pretrade.policies.build_spot_funds_pnl_bounds_killswitch().global_barrier(
                 openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
+                    currency=openpit.param.Asset("USD"),
                     lower_bound=openpit.param.Pnl(-1000),
                 ),
             )
@@ -1072,6 +1075,7 @@ def test_example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> None:
     retune = engine.configure().spot_funds_pnl_bounds_killswitch(
         openpit.pretrade.policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
         global_barrier=openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
+            currency=openpit.param.Asset("USD"),
             lower_bound=openpit.param.Pnl(-500),
         ),
     )

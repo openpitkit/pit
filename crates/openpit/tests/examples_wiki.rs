@@ -1466,7 +1466,7 @@ fn example_wiki_spot_funds_pnl_kill_switch_builder() -> Result<(), Box<dyn std::
     // Source: https://wiki.openpit.dev/Spot-Funds/
     // - Self-Computed PnL Kill Switch / Configuring Barriers
     // Keep this example in sync with the matching wiki example.
-    use openpit::param::{AccountId, Pnl};
+    use openpit::param::{AccountId, Asset, Pnl};
     use openpit::pretrade::policies::{
         SpotFundsPnlBoundsAccountBarrier, SpotFundsPnlBoundsBarrier, SpotFundsPolicy,
     };
@@ -1484,14 +1484,17 @@ fn example_wiki_spot_funds_pnl_kill_switch_builder() -> Result<(), Box<dyn std::
     >;
 
     let account = AccountId::from_u64(99224416);
+    let usd = Asset::new("USD")?;
 
     // A global loss barrier of -1000, plus a tighter per-account barrier.
     let global_barrier = SpotFundsPnlBoundsBarrier {
+        currency: usd.clone(),
         lower_bound: Some(Pnl::from_str("-1000")?),
         upper_bound: None,
     };
     let account_barrier = SpotFundsPnlBoundsAccountBarrier {
         barrier: SpotFundsPnlBoundsBarrier {
+            currency: usd.clone(),
             lower_bound: Some(Pnl::from_str("-250")?),
             upper_bound: None,
         },
@@ -1522,7 +1525,7 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
     // - Self-Computed PnL Kill Switch / Runtime Reconfiguration
     // Keep this example in sync with the matching wiki example. The engine and
     // account below are harness scaffolding built to match the snippet's world.
-    use openpit::param::{AccountId, Pnl};
+    use openpit::param::{AccountId, Asset, Pnl};
     use openpit::pretrade::policies::{
         SpotFundsConfigError, SpotFundsPnlBoundsBarrier, SpotFundsPolicy,
     };
@@ -1541,9 +1544,11 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
 
     let retuned_account = AccountId::from_u64(99224416);
     let forced_account = AccountId::from_u64(99224417);
+    let usd = Asset::new("USD")?;
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
     let policy = SpotFundsPolicy::<FullSync, FullSync>::pnl_bounds_kill_switch(
         Some(SpotFundsPnlBoundsBarrier {
+            currency: usd.clone(),
             lower_bound: Some(Pnl::from_str("-1000")?),
             upper_bound: None,
         }),
@@ -1571,6 +1576,7 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
         .configure()
         .spot_funds::<SpotFundsConfigError>(name, |settings| {
             settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+                currency: usd.clone(),
                 lower_bound: Some(new_lower),
                 upper_bound: None,
             }))

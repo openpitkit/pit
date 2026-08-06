@@ -266,6 +266,10 @@ class Configurator {
   /// `Set` operations. Optional group/account vectors are PATCH axes:
   /// `std::nullopt` leaves the axis unchanged and an engaged empty vector
   /// clears it. Account updates preserve each live accumulated P&L value.
+  /// With a known effective account currency, only exact barrier matches apply
+  /// and mismatching levels are skipped; without one, the first in-scope
+  /// barrier applies, while no match leaves P&L accumulating and publishing
+  /// without P&L control.
   ///
   /// An account whose effective barrier changed is evaluated against its
   /// stored account P&L in the same call: an already halted account, or one

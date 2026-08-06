@@ -63,11 +63,11 @@ configurator.spotFunds(SpotFundsBuilder.NAME, {
 const sweptPnlConfiguration = configurator.spotFundsPnlBoundsKillswitch(
   SpotFundsPnlBoundsKillswitchBuilder.NAME,
   {
-    globalBarrier: new SpotFundsPnlBoundsBarrier("-500", undefined),
+    globalBarrier: new SpotFundsPnlBoundsBarrier("USD", "-500", undefined),
     accountBarriers: [
       new SpotFundsPnlBoundsAccountBarrier(
         99_224_416n,
-        new SpotFundsPnlBoundsBarrier("-250", "250"),
+        new SpotFundsPnlBoundsBarrier("USD", "-250", "250"),
       ),
     ],
   },
@@ -106,7 +106,7 @@ Engine.builder()
     buildSpotFundsPnlBoundsKillswitch().accountBarriers([
       new SpotFundsPnlBoundsAccountBarrier(
         99_224_416n,
-        new SpotFundsPnlBoundsBarrier("-250", "250"),
+        new SpotFundsPnlBoundsBarrier("USD", "-250", "250"),
       ),
     ]),
   )

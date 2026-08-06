@@ -34,7 +34,7 @@ use crate::core::instrument::Instrument;
 use crate::marketdata::{
     AccountInfo, InstrumentId, MarketDataService, MarketDataSync, Quote, QuoteResolution,
 };
-use crate::param::{AccountGroupId, AccountId, Price};
+use crate::param::{AccountGroupId, AccountId, Asset, Price};
 
 use super::super::pnl_bounds;
 use super::market_order_pricer::WithSlippage;
@@ -322,6 +322,11 @@ impl SpotFundsSettings {
     }
 
     /// Replaces or clears the global account P&L bounds.
+    ///
+    /// With a known effective account currency, only exact barrier matches
+    /// apply and mismatching levels are skipped. Without one, the first
+    /// in-scope barrier applies; no match leaves P&L accumulating and
+    /// publishing without P&L control.
     pub fn set_pnl_global_barrier(
         &mut self,
         barrier: Option<SpotFundsPnlBoundsBarrier>,
@@ -334,6 +339,11 @@ impl SpotFundsSettings {
     }
 
     /// Replaces account-group account P&L bounds.
+    ///
+    /// With a known effective account currency, only exact barrier matches
+    /// apply and mismatching levels are skipped. Without one, the first
+    /// in-scope barrier applies; no match leaves P&L accumulating and
+    /// publishing without P&L control.
     pub fn set_pnl_account_group_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountGroupBarrier>,
@@ -345,6 +355,11 @@ impl SpotFundsSettings {
 
     /// Replaces account-specific account P&L bounds without changing
     /// accumulated P&L.
+    ///
+    /// With a known effective account currency, only exact barrier matches
+    /// apply and mismatching levels are skipped. Without one, the first
+    /// in-scope barrier applies; no match leaves P&L accumulating and
+    /// publishing without P&L control.
     pub fn set_pnl_account_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountBarrier>,
@@ -365,6 +380,11 @@ impl SpotFundsSettings {
     }
 
     /// Installs the complete construction-time P&L-bounds configuration.
+    ///
+    /// With a known effective account currency, only exact barrier matches
+    /// apply and mismatching levels are skipped. Without one, the first
+    /// in-scope barrier applies; no match leaves P&L accumulating and
+    /// publishing without P&L control.
     ///
     /// # Errors
     ///
@@ -393,16 +413,36 @@ impl SpotFundsSettings {
         &self,
         account_id: AccountId,
         account_group_id: Option<AccountGroupId>,
+        account_currency: Option<&Asset>,
     ) -> Option<&SpotFundsPnlBoundsBarrier> {
-        if let Some(barrier) = self.pnl_account_barriers.get(&account_id) {
-            return Some(&barrier.barrier);
-        }
-        if let Some(account_group_id) = account_group_id {
-            if let Some(barrier) = self.pnl_account_group_barriers.get(&account_group_id) {
-                return Some(&barrier.barrier);
-            }
-        }
-        self.pnl_global_barrier.as_ref()
+        let matches_currency = |barrier: &&SpotFundsPnlBoundsBarrier| {
+            account_currency.map_or(true, |currency| &barrier.currency == currency)
+        };
+        self.pnl_account_barriers
+            .get(&account_id)
+            .map(|entry| &entry.barrier)
+            .filter(matches_currency)
+            .or_else(|| {
+                account_group_id
+                    .and_then(|group| self.pnl_account_group_barriers.get(&group))
+                    .map(|entry| &entry.barrier)
+                    .filter(matches_currency)
+            })
+            .or_else(|| self.pnl_global_barrier.as_ref().filter(matches_currency))
+    }
+
+    // This currency-blind early-out lets `reject_halted_account_pnl` avoid
+    // currency resolution. Do not use it as a control predicate: it is true
+    // when no barrier matches the account currency.
+    pub(super) fn has_pnl_barrier_scope(
+        &self,
+        account_id: AccountId,
+        account_group_id: Option<AccountGroupId>,
+    ) -> bool {
+        self.pnl_account_barriers.contains_key(&account_id)
+            || account_group_id
+                .is_some_and(|group| self.pnl_account_group_barriers.contains_key(&group))
+            || self.pnl_global_barrier.is_some()
     }
 
     pub(super) fn pnl_global_barrier(&self) -> Option<&SpotFundsPnlBoundsBarrier> {
@@ -677,6 +717,7 @@ mod tests {
             .expect("base settings must build")
             .with_pnl_barriers(
                 Some(SpotFundsPnlBoundsBarrier {
+                    currency: asset("USD"),
                     lower_bound: Some(Pnl::from_str("-100").expect("valid pnl")),
                     upper_bound: None,
                 }),
@@ -685,6 +726,63 @@ mod tests {
             );
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn pnl_barrier_resolution_filters_each_scope_by_currency() {
+        let account_id = account(99224416);
+        let group_id = group(7);
+        let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])
+            .expect("base settings must build")
+            .with_pnl_barriers(
+                Some(SpotFundsPnlBoundsBarrier {
+                    currency: asset("USD"),
+                    lower_bound: Some(Pnl::from_str("-100").expect("valid pnl")),
+                    upper_bound: None,
+                }),
+                [SpotFundsPnlBoundsAccountGroupBarrier {
+                    barrier: SpotFundsPnlBoundsBarrier {
+                        currency: asset("USD"),
+                        lower_bound: Some(Pnl::from_str("-50").expect("valid pnl")),
+                        upper_bound: None,
+                    },
+                    account_group_id: group_id,
+                }],
+                [SpotFundsPnlBoundsAccountBarrier {
+                    barrier: SpotFundsPnlBoundsBarrier {
+                        currency: asset("EUR"),
+                        lower_bound: Some(Pnl::from_str("-10").expect("valid pnl")),
+                        upper_bound: None,
+                    },
+                    account_id,
+                }],
+            )
+            .expect("P&L barriers must build");
+
+        let eur = asset("EUR");
+        let usd = asset("USD");
+        let chf = asset("CHF");
+        assert_eq!(
+            settings
+                .pnl_barrier_for(account_id, Some(group_id), Some(&eur))
+                .map(|barrier| &barrier.currency),
+            Some(&eur)
+        );
+        assert_eq!(
+            settings
+                .pnl_barrier_for(account_id, Some(group_id), Some(&usd))
+                .and_then(|barrier| barrier.lower_bound),
+            Some(Pnl::from_str("-50").expect("valid pnl"))
+        );
+        assert!(settings
+            .pnl_barrier_for(account_id, Some(group_id), Some(&chf))
+            .is_none());
+        assert_eq!(
+            settings
+                .pnl_barrier_for(account_id, Some(group_id), None)
+                .map(|barrier| &barrier.currency),
+            Some(&eur)
+        );
     }
 
     /// Registers `AAPL/USD` with `mark = 100` in the default bucket and returns

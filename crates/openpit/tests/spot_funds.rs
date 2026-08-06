@@ -1791,12 +1791,14 @@ fn build_pnl_killswitch_engine(grp: AccountGroupId) -> TestEngine {
     let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
     let policy = SpotFundsPolicy::<FullSync, FullSync>::pnl_bounds_kill_switch(
         Some(SpotFundsPnlBoundsBarrier {
+            currency: asset("USD"),
             lower_bound: Some(pnl_value("-1000")),
             upper_bound: None,
         }),
         [SpotFundsPnlBoundsAccountGroupBarrier {
             account_group_id: grp,
             barrier: SpotFundsPnlBoundsBarrier {
+                currency: asset("USD"),
                 lower_bound: Some(pnl_value("-10")),
                 upper_bound: None,
             },
@@ -1863,6 +1865,100 @@ fn pnl_killswitch_account_group_barrier_blocks_on_cumulative_fee_loss() {
         .err()
         .expect("blocked account must reject");
     assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+}
+
+// End-to-end through the public engine surface: the account has no effective
+// currency at any level, so no barrier is filtered out and the first in-scope
+// one - the account group's - resolves. The account P&L halts with
+// `MissingAccountCurrency`, and that halt blocks the account under the resolved
+// barrier.
+#[test]
+fn pnl_killswitch_without_effective_currency_uses_the_first_in_scope_barrier() {
+    let acc = AccountId::from_u64(40000006);
+    let grp = AccountGroupId::from_u32(16).expect("valid group id");
+    let aapl_usd = instr("AAPL", "USD");
+    let engine = build_pnl_killswitch_engine(grp);
+    engine
+        .accounts()
+        .register_group(&[acc], grp)
+        .expect("registration must succeed");
+
+    assert!(engine
+        .execute_pre_trade(make_order_for(
+            acc,
+            Side::Buy,
+            aapl_usd.clone(),
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .is_ok());
+
+    let post = engine.apply_execution_report(&fill_with_fee(
+        acc,
+        aapl_usd.clone(),
+        "100",
+        "1",
+        money_fee("1", "USD"),
+    ));
+    assert_eq!(post.account_blocks.len(), 1);
+    assert_eq!(
+        post.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+
+    let rejects = engine
+        .execute_pre_trade(make_order_for(
+            acc,
+            Side::Buy,
+            aapl_usd,
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .err()
+        .expect("blocked account must reject");
+    assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+}
+
+#[test]
+fn pnl_killswitch_skips_nonmatching_currency_through_the_public_engine() {
+    let acc = AccountId::from_u64(40000005);
+    let grp = AccountGroupId::from_u32(15).expect("valid group id");
+    let aapl_usd = instr("AAPL", "USD");
+    let engine = build_pnl_killswitch_engine(grp);
+    engine
+        .accounts()
+        .register_group(&[acc], grp)
+        .expect("registration must succeed");
+    engine.accounts().set_currency(acc, asset("EUR"));
+
+    assert!(engine
+        .execute_pre_trade(make_order_for(
+            acc,
+            Side::Buy,
+            aapl_usd.clone(),
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .is_ok());
+
+    let post = engine.apply_execution_report(&fill_with_fee(
+        acc,
+        aapl_usd.clone(),
+        "100",
+        "1",
+        money_fee("12", "EUR"),
+    ));
+    assert!(post.account_blocks.is_empty());
+
+    assert!(engine
+        .execute_pre_trade(make_order_for(
+            acc,
+            Side::Buy,
+            aapl_usd,
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .is_ok());
 }
 
 #[test]

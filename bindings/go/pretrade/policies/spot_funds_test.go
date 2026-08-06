@@ -873,22 +873,33 @@ func TestSpotFundsWithoutPnlBarriersReturnsFeeInclusiveAccountPnl(t *testing.T) 
 
 func TestSpotFundsAccountPnlHaltIsStickyUntilExactForceSet(t *testing.T) {
 	usd := mustAsset(t, "USD")
+	eur := mustAsset(t, "EUR")
 	account := param.NewAccountIDFromUint64(83017)
+	service := mustMarketDataService(t)
+	defer service.Close()
+	fxID, err := service.Register(param.NewInstrument(usd, eur))
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
 	engine, err := openpit.NewEngineBuilder().NoSync().
-		Builtin(policies.BuildSpotFunds()).
+		Builtin(policies.BuildSpotFunds().WithMarketOrders(service, 0)).
 		Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
 	defer engine.Stop()
+	if err := engine.Accounts().SetCurrency(account, eur); err != nil {
+		t.Fatalf("Accounts().SetCurrency() error = %v", err)
+	}
 
-	report := directSpotFundsFillReport(t, account)
-	// The fee has to be denominated in the account currency, so it is what
-	// makes this fill's account line uncomputable without one. A fee-less
-	// opening fill would omit the account line instead.
+	// The fee is denominated in USD while the account is in EUR, so it is what
+	// makes this fill's account line uncomputable until the FX quote arrives. A
+	// fee-less opening fill would omit the account line instead.
 	feeReport := directSpotFundsFillReport(t, account)
-	feeFill := feeReport.EnsureFillView()
-	feeFill.SetFee(param.NewMonetaryAmount(mustFee(t, "1"), usd))
+	fill := feeReport.EnsureFillView()
+	fill.SetFee(
+		param.NewMonetaryAmount(mustFee(t, "1"), usd),
+	)
 	first, err := engine.ApplyExecutionReport(feeReport)
 	if err != nil {
 		t.Fatalf("first ApplyExecutionReport() error = %v", err)
@@ -897,45 +908,23 @@ func TestSpotFundsAccountPnlHaltIsStickyUntilExactForceSet(t *testing.T) {
 		t.Fatalf("first AccountPnls len = %d, want 1", len(first.AccountPnls))
 	}
 	reason, ok := first.AccountPnls[0].HaltReason()
-	if !ok || reason != model.PnlHaltReasonMissingAccountCurrency {
-		t.Fatalf("first HaltReason() = (%v, %v)", reason, ok)
+	if !ok || reason != model.PnlHaltReasonMissingFx {
+		t.Fatalf("first HaltReason() = (%v, %v), want MissingFx", reason, ok)
 	}
-	second, err := engine.ApplyExecutionReport(report)
+
+	fxRate, err := param.NewPriceFromString("0.9")
+	if err != nil {
+		t.Fatalf("NewPriceFromString() error = %v", err)
+	}
+	if err := service.Push(fxID, marketdata.NewQuote().WithMark(fxRate)); err != nil {
+		t.Fatalf("Push() error = %v", err)
+	}
+	second, err := engine.ApplyExecutionReport(feeReport)
 	if err != nil {
 		t.Fatalf("second ApplyExecutionReport() error = %v", err)
 	}
 	if len(second.AccountPnls) != 0 {
-		t.Fatalf("second AccountPnls = %v, want omitted", second.AccountPnls)
-	}
-
-	if err := engine.Accounts().SetCurrency(account, usd); err != nil {
-		t.Fatalf("Accounts().SetCurrency() error = %v", err)
-	}
-	aapl := mustAsset(t, "AAPL")
-	forceSpotFundsPositionPnl(t, engine, account, aapl)
-	third, err := engine.ApplyExecutionReport(report)
-	if err != nil {
-		t.Fatalf("third ApplyExecutionReport() error = %v", err)
-	}
-	if len(third.AccountPnls) != 0 {
-		t.Fatalf("third AccountPnls = %v, want still omitted", third.AccountPnls)
-	}
-	foundAapl := false
-	for _, outcome := range third.AccountAdjustments {
-		if !outcome.Entry.Asset.Equal(aapl) {
-			continue
-		}
-		foundAapl = true
-		if _, ok := outcome.Entry.RealizedPnl.Get(); ok {
-			t.Fatal("third position PnL is emitted for a non-realizing fill")
-		}
-		if _, ok := outcome.Entry.AverageEntryPrice.Get(); !ok {
-			t.Fatal("third average entry price is absent while position tracking is active")
-		}
-		break
-	}
-	if !foundAapl {
-		t.Fatal("third AAPL account-adjustment outcome is absent")
+		t.Fatalf("second AccountPnls = %v, want omitted while halted", second.AccountPnls)
 	}
 
 	configuration, err := engine.Configure().SetSpotFundsAccountPnl(
@@ -949,15 +938,19 @@ func TestSpotFundsAccountPnlHaltIsStickyUntilExactForceSet(t *testing.T) {
 	if len(configuration.AccountBlocks) != 0 {
 		t.Fatalf("numeric force-set account blocks = %v, want none", configuration.AccountBlocks)
 	}
-	fourth, err := engine.ApplyExecutionReport(feeReport)
+	third, err := engine.ApplyExecutionReport(feeReport)
 	if err != nil {
-		t.Fatalf("fourth ApplyExecutionReport() error = %v", err)
+		t.Fatalf("third ApplyExecutionReport() error = %v", err)
 	}
-	if len(fourth.AccountPnls) != 1 {
-		t.Fatalf("fourth AccountPnls len = %d, want 1", len(fourth.AccountPnls))
+	if len(third.AccountPnls) != 1 {
+		t.Fatalf("third AccountPnls len = %d, want 1", len(third.AccountPnls))
 	}
-	if _, ok := fourth.AccountPnls[0].Amount(); !ok {
-		t.Fatal("fourth account PnL is halted after exact force-set")
+	pnl, ok := third.AccountPnls[0].Amount()
+	if !ok {
+		t.Fatal("third account PnL is halted after exact force-set")
+	}
+	if !pnl.Absolute.Equal(mustPnl(t, "9.1")) {
+		t.Fatalf("third AccountPnls absolute = %v, want 9.1", pnl.Absolute)
 	}
 }
 
@@ -1055,17 +1048,20 @@ func TestSpotFundsPnlBoundsKillSwitchBuilder(t *testing.T) {
 	engine, err := openpit.NewEngineBuilder().NoSync().
 		Builtin(policies.BuildSpotFundsPnlBoundsKillSwitch().
 			GlobalBarrier(policies.SpotFundsPnlBoundsBarrier{
+				Currency:   mustAsset(t, "USD"),
 				LowerBound: optional.Some(mustPnl(t, "-100")),
 			}).
 			AccountGroupBarriers(policies.SpotFundsPnlBoundsAccountGroupBarrier{
 				AccountGroupID: group,
 				Barrier: policies.SpotFundsPnlBoundsBarrier{
+					Currency:   mustAsset(t, "USD"),
 					UpperBound: optional.Some(mustPnl(t, "250")),
 				},
 			}).
 			AccountBarriers(policies.SpotFundsPnlBoundsAccountBarrier{
 				AccountID: account,
 				Barrier: policies.SpotFundsPnlBoundsBarrier{
+					Currency:   mustAsset(t, "USD"),
 					LowerBound: optional.Some(mustPnl(t, "-10")),
 					UpperBound: optional.Some(mustPnl(t, "10")),
 				},
@@ -1075,6 +1071,156 @@ func TestSpotFundsPnlBoundsKillSwitchBuilder(t *testing.T) {
 		t.Fatalf("Build() error = %v", err)
 	}
 	engine.Stop()
+}
+
+func TestSpotFundsPnlBoundsBarrierIgnoresNonMatchingCurrency(t *testing.T) {
+	usd := mustAsset(t, "USD")
+	eur := mustAsset(t, "EUR")
+	account := param.NewAccountIDFromUint64(83019)
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFundsPnlBoundsKillSwitch().
+			GlobalBarrier(policies.SpotFundsPnlBoundsBarrier{
+				Currency:   eur,
+				LowerBound: optional.Some(mustPnl(t, "-100")),
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	if err := engine.Accounts().SetCurrency(account, usd); err != nil {
+		t.Fatalf("Accounts().SetCurrency() error = %v", err)
+	}
+	result, err := engine.Configure().SetSpotFundsAccountPnl(
+		policies.SpotFundsPolicyName,
+		account,
+		model.NewPnlState(mustPnl(t, "-150")),
+	)
+	if err != nil {
+		t.Fatalf("SetSpotFundsAccountPnl() error = %v", err)
+	}
+	if len(result.AccountBlocks) != 0 {
+		t.Fatalf("AccountBlocks = %v, want none", result.AccountBlocks)
+	}
+}
+
+func TestSpotFundsPnlBoundsBarrierAppliesMatchingCurrency(t *testing.T) {
+	usd := mustAsset(t, "USD")
+	account := param.NewAccountIDFromUint64(83020)
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFundsPnlBoundsKillSwitch().
+			GlobalBarrier(policies.SpotFundsPnlBoundsBarrier{
+				Currency:   usd,
+				LowerBound: optional.Some(mustPnl(t, "-100")),
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	if err := engine.Accounts().SetCurrency(account, usd); err != nil {
+		t.Fatalf("Accounts().SetCurrency() error = %v", err)
+	}
+	result, err := engine.Configure().SetSpotFundsAccountPnl(
+		policies.SpotFundsPolicyName,
+		account,
+		model.NewPnlState(mustPnl(t, "-150")),
+	)
+	if err != nil {
+		t.Fatalf("SetSpotFundsAccountPnl() error = %v", err)
+	}
+	if len(result.AccountBlocks) != 1 ||
+		result.AccountBlocks[0].Code != reject.CodePnlKillSwitchTriggered {
+		t.Fatalf("AccountBlocks = %v, want one PnL block", result.AccountBlocks)
+	}
+}
+
+func TestSpotFundsPnlBoundsRuntimeBarrierHonorsAccountCurrency(t *testing.T) {
+	usd := mustAsset(t, "USD")
+	eur := mustAsset(t, "EUR")
+	account := param.NewAccountIDFromUint64(83021)
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFunds()).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	seedSpotFundsLifecycleAccount(t, engine, account, usd)
+	if _, err := engine.Configure().SetSpotFundsAccountPnl(
+		policies.SpotFundsPolicyName,
+		account,
+		model.NewPnlState(mustPnl(t, "-150")),
+	); err != nil {
+		t.Fatalf("SetSpotFundsAccountPnl() error = %v", err)
+	}
+
+	mismatchedBarrier := policies.SpotFundsPnlBoundsBarrier{
+		Currency:   eur,
+		LowerBound: optional.Some(mustPnl(t, "-100")),
+	}
+	mismatched, err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
+		policies.SpotFundsPolicyName,
+		optional.Some(&mismatchedBarrier),
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf(
+			"SpotFundsPnlBoundsKillSwitch() nonmatching retune error = %v",
+			err,
+		)
+	}
+	if len(mismatched.AccountBlocks) != 0 {
+		t.Fatalf(
+			"nonmatching retune AccountBlocks = %v, want none",
+			mismatched.AccountBlocks,
+		)
+	}
+
+	reservation, rejects, err := engine.ExecutePreTrade(
+		spotFundsLifecycleOrder(t, account),
+	)
+	if err != nil {
+		t.Fatalf(
+			"nonmatching retune ExecutePreTrade() error = %v",
+			err,
+		)
+	}
+	if reservation == nil || len(rejects) != 0 {
+		t.Fatalf(
+			"nonmatching retune result = (%v, %v), want reservation",
+			reservation,
+			rejects,
+		)
+	}
+	reservation.RollbackAndClose()
+
+	matchingBarrier := mismatchedBarrier
+	matchingBarrier.Currency = usd
+	matching, err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
+		policies.SpotFundsPolicyName,
+		optional.Some(&matchingBarrier),
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf(
+			"SpotFundsPnlBoundsKillSwitch() matching retune error = %v",
+			err,
+		)
+	}
+	if len(matching.AccountBlocks) != 1 ||
+		matching.AccountBlocks[0].Block.Code != reject.CodePnlKillSwitchTriggered {
+		t.Fatalf(
+			"matching retune AccountBlocks = %v, want one PnL block",
+			matching.AccountBlocks,
+		)
+	}
+	assertSpotFundsPnlPreTradeReject(t, engine, account)
 }
 
 func TestSpotFundsPnlBoundsKillSwitchBuilderRequiresBarrier(t *testing.T) {
@@ -1094,6 +1240,7 @@ func TestSpotFundsGroupMembershipArmsEffectivePnlBarrier(t *testing.T) {
 			AccountGroupBarriers(policies.SpotFundsPnlBoundsAccountGroupBarrier{
 				AccountGroupID: group,
 				Barrier: policies.SpotFundsPnlBoundsBarrier{
+					Currency:   mustAsset(t, "USD"),
 					LowerBound: optional.Some(mustPnl(t, "1")),
 				},
 			}),
@@ -1139,6 +1286,7 @@ func TestSpotFundsPnlBoundsRuntimeAxisReplacementAndClear(t *testing.T) {
 		t.Fatalf("Accounts().RegisterGroup() error = %v", err)
 	}
 	globalBarrier := policies.SpotFundsPnlBoundsBarrier{
+		Currency:   usd,
 		LowerBound: optional.Some(mustPnl(t, "-20")),
 	}
 
@@ -1173,12 +1321,14 @@ func TestSpotFundsPnlBoundsRuntimeAxisReplacementAndClear(t *testing.T) {
 		[]policies.SpotFundsPnlBoundsAccountGroupBarrier{{
 			AccountGroupID: group,
 			Barrier: policies.SpotFundsPnlBoundsBarrier{
+				Currency:   usd,
 				LowerBound: optional.Some(mustPnl(t, "-10")),
 			},
 		}},
 		[]policies.SpotFundsPnlBoundsAccountBarrier{{
 			AccountID: accountSpecific,
 			Barrier: policies.SpotFundsPnlBoundsBarrier{
+				Currency:   usd,
 				LowerBound: optional.Some(mustPnl(t, "-10")),
 			},
 		}},
@@ -1333,6 +1483,7 @@ func TestSpotFundsPnlBoundsRuntimeAdditionRetainsLivePnl(t *testing.T) {
 	}
 
 	globalBarrier := policies.SpotFundsPnlBoundsBarrier{
+		Currency:   usd,
 		LowerBound: optional.Some(mustPnl(t, "-30")),
 	}
 	if _, err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
@@ -1370,6 +1521,7 @@ func TestSpotFundsPnlBoundsRuntimeAdditionRetainsLivePnl(t *testing.T) {
 }
 
 func TestSpotFundsPnlBoundsConfiguratorRoundTrip(t *testing.T) {
+	usd := mustAsset(t, "USD")
 	account := param.NewAccountIDFromUint64(83002)
 	group := mustAccountGroupID(t, 84)
 
@@ -1378,6 +1530,7 @@ func TestSpotFundsPnlBoundsConfiguratorRoundTrip(t *testing.T) {
 			AccountBarriers(policies.SpotFundsPnlBoundsAccountBarrier{
 				AccountID: account,
 				Barrier: policies.SpotFundsPnlBoundsBarrier{
+					Currency:   usd,
 					LowerBound: optional.Some(mustPnl(t, "-10")),
 					UpperBound: optional.Some(mustPnl(t, "10")),
 				},
@@ -1388,6 +1541,7 @@ func TestSpotFundsPnlBoundsConfiguratorRoundTrip(t *testing.T) {
 	}
 	defer engine.Stop()
 	globalBarrier := policies.SpotFundsPnlBoundsBarrier{
+		Currency:   usd,
 		LowerBound: optional.Some(mustPnl(t, "-100")),
 	}
 
@@ -1398,6 +1552,7 @@ func TestSpotFundsPnlBoundsConfiguratorRoundTrip(t *testing.T) {
 			{
 				AccountGroupID: group,
 				Barrier: policies.SpotFundsPnlBoundsBarrier{
+					Currency:   usd,
 					UpperBound: optional.Some(mustPnl(t, "100")),
 				},
 			},
@@ -1406,6 +1561,7 @@ func TestSpotFundsPnlBoundsConfiguratorRoundTrip(t *testing.T) {
 			{
 				AccountID: account,
 				Barrier: policies.SpotFundsPnlBoundsBarrier{
+					Currency:   usd,
 					LowerBound: optional.Some(mustPnl(t, "-20")),
 					UpperBound: optional.Some(mustPnl(t, "20")),
 				},

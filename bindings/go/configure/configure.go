@@ -549,6 +549,10 @@ func (c Configurator) SpotFundsAccountGroupLimitMode(
 // unchanged, optional.Some(nil) clears it, and optional.Some(&barrier) sets it.
 // Nil slices leave their axes untouched; non-nil empty slices clear them.
 // Barrier updates preserve live accumulated P&L.
+// With a known effective account currency, only exact barrier matches apply and
+// mismatching levels are skipped; without one, the first in-scope
+// barrier applies, while no match leaves P&L accumulating and publishing
+// without P&L control.
 //
 // An account whose effective barrier changed is evaluated against its stored
 // account P&L before this call returns: an already halted account, or one
@@ -737,6 +741,7 @@ func nativeSpotFundsPnlBoundsBarrier(
 	barrier policies.SpotFundsPnlBoundsBarrier,
 ) native.PretradePoliciesSpotFundsPnlBoundsBarrier {
 	return native.NewPretradePoliciesSpotFundsPnlBoundsBarrier(
+		barrier.Currency.Handle(),
 		pnlOptionalToNative(barrier.LowerBound),
 		pnlOptionalToNative(barrier.UpperBound),
 	)

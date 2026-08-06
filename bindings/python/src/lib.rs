@@ -1772,6 +1772,10 @@ impl PyConfigurator {
     /// clears the singular global barrier; a barrier value replaces it. A
     /// supplied group/account list replaces that axis wholesale, and an empty
     /// list clears it. Each barrier must still configure at least one bound.
+    /// With a known effective account currency, only exact barrier matches
+    /// apply and mismatching levels are skipped; without one, the first
+    /// in-scope barrier applies, while no match leaves PnL accumulating and
+    /// publishing without PnL control.
     ///
     /// An account whose effective barrier changed is evaluated against its
     /// stored account P&L before this call returns: an already halted account,
@@ -1881,18 +1885,13 @@ struct PyAccounts {
 impl PyAccounts {
     /// Register accounts in a group atomically.
     ///
-    /// Effective currency resolves from the account, then its group, then the
-    /// default group. Stored realized PnL and cost basis are bare numbers whose
-    /// denomination is implied by the effective currency when they were
-    /// computed. This operation does not inspect that state. If joining changes
-    /// the effective currency, existing numbers remain in the previous currency
-    /// while the engine treats them as the new one. The SDK does not convert,
-    /// detect, report, halt, sweep, or block on this mismatch. Avoiding it is
-    /// entirely the caller's responsibility. If membership changes the effective
-    /// P&L barrier, this call checks current account P&L, treating an unset
-    /// ledger as zero and halted state as a breach, and latches any resulting
-    /// account block before returning. An unchanged effective barrier is not
-    /// checked again.
+    /// If joining changes effective currency, stored PnL and cost basis
+    /// accumulated under the previous one lose their meaning; the SDK
+    /// guarantees nothing about them.
+    /// If membership changes the effective PnL barrier, this call checks
+    /// current account PnL, treating an unset ledger as zero and halted state
+    /// as a breach, and latches any resulting account block before returning.
+    /// An unchanged effective barrier is not checked again.
     #[pyo3(signature = (accounts, group))]
     fn register_group(
         &self,
@@ -1911,18 +1910,13 @@ impl PyAccounts {
 
     /// Remove accounts from a group atomically.
     ///
-    /// Effective currency resolves from the account, then its group, then the
-    /// default group. Stored realized PnL and cost basis are bare numbers whose
-    /// denomination is implied by the effective currency when they were
-    /// computed. This operation does not inspect that state. If leaving changes
-    /// the effective currency, existing numbers remain in the previous currency
-    /// while the engine treats them as the new one. The SDK does not convert,
-    /// detect, report, halt, sweep, or block on this mismatch. Avoiding it is
-    /// entirely the caller's responsibility. If membership changes the effective
-    /// P&L barrier, this call checks current account P&L, treating an unset
-    /// ledger as zero and halted state as a breach, and latches any resulting
-    /// account block before returning. An unchanged effective barrier is not
-    /// checked again.
+    /// If leaving changes effective currency, stored PnL and cost basis
+    /// accumulated under the previous one lose their meaning; the SDK
+    /// guarantees nothing about them.
+    /// If membership changes the effective PnL barrier, this call checks
+    /// current account PnL, treating an unset ledger as zero and halted state
+    /// as a breach, and latches any resulting account block before returning.
+    /// An unchanged effective barrier is not checked again.
     #[pyo3(signature = (accounts, group))]
     fn unregister_group(
         &self,
@@ -1955,14 +1949,15 @@ impl PyAccounts {
 
     /// Set an explicit currency for an account.
     ///
-    /// Effective currency resolves from the account, then its group, then the
-    /// default group. Stored realized PnL and cost basis are bare numbers whose
-    /// denomination is implied by the effective currency when they were
-    /// computed. The SDK writes ``asset`` without checking that state. If this
-    /// changes the effective currency, existing numbers remain in the previous
-    /// currency while the engine treats them as the new one. The SDK does not
-    /// convert, detect, report, halt, sweep, or block on this mismatch. Avoiding
-    /// it is entirely the caller's responsibility.
+    /// Effective currency resolves from the account, then its group, then
+    /// ``AccountGroupId.DEFAULT``.
+    ///
+    /// This write is unchecked and re-evaluates nothing. Stored PnL and cost
+    /// basis accumulated under a different effective currency lose their
+    /// meaning; the SDK guarantees nothing about them and does not convert,
+    /// detect, or report the change. Barrier selection itself stays
+    /// deterministic: the next policy access re-resolves the cascade with the
+    /// new effective currency.
     #[pyo3(signature = (account, asset))]
     fn set_currency(
         &self,
@@ -1978,14 +1973,15 @@ impl PyAccounts {
 
     /// Clear an account's explicit currency.
     ///
-    /// Effective currency resolves from the account, then its group, then the
-    /// default group. Stored realized PnL and cost basis are bare numbers whose
-    /// denomination is implied by the effective currency when they were
-    /// computed. The SDK clears the account value without checking that state.
-    /// If this changes the effective currency, existing numbers remain in the
-    /// previous currency while the engine treats them as the new one. The SDK
-    /// does not convert, detect, report, halt, sweep, or block on this mismatch.
-    /// Avoiding it is entirely the caller's responsibility.
+    /// Effective currency resolves from the account, then its group, then
+    /// ``AccountGroupId.DEFAULT``.
+    ///
+    /// This write is unchecked and re-evaluates nothing. Stored PnL and cost
+    /// basis accumulated under a different effective currency lose their
+    /// meaning; the SDK guarantees nothing about them and does not convert,
+    /// detect, or report the change. Barrier selection itself stays
+    /// deterministic: the next policy access re-resolves the cascade with the
+    /// new effective currency.
     #[pyo3(signature = (account))]
     fn clear_currency(&self, py: Python<'_>, account: &Bound<'_, PyAny>) -> PyResult<()> {
         let account_id = parse_account_id_input(account)?;
@@ -1997,13 +1993,12 @@ impl PyAccounts {
     ///
     /// ``AccountGroupId.DEFAULT`` is allowed and represents the global default
     /// tier. Effective currency resolves from the account, then its group, then
-    /// the default group. Stored realized PnL and cost basis are bare numbers
-    /// whose denomination is implied by the effective currency when they were
-    /// computed. The SDK writes ``asset`` without checking affected account
-    /// state. If an effective currency changes, existing numbers remain in the
-    /// previous currency while the engine treats them as the new one. The SDK
-    /// does not convert, detect, report, halt, sweep, or block on this mismatch.
-    /// Avoiding it is entirely the caller's responsibility.
+    /// ``AccountGroupId.DEFAULT``. This write is unchecked and re-evaluates
+    /// nothing. Stored PnL and cost basis accumulated under a different
+    /// effective currency lose their meaning; the SDK guarantees nothing about
+    /// them and does not convert, detect, or report the change. Barrier
+    /// selection itself stays deterministic: the next policy access re-resolves
+    /// the cascade with the new effective currency.
     #[pyo3(signature = (group, asset))]
     fn set_group_currency(
         &self,
@@ -2021,13 +2016,12 @@ impl PyAccounts {
     ///
     /// ``AccountGroupId.DEFAULT`` is allowed and represents the global default
     /// tier. Effective currency resolves from the account, then its group, then
-    /// the default group. Stored realized PnL and cost basis are bare numbers
-    /// whose denomination is implied by the effective currency when they were
-    /// computed. The SDK clears the group value without checking affected
-    /// account state. If an effective currency changes, existing numbers remain
-    /// in the previous currency while the engine treats them as the new one.
-    /// The SDK does not convert, detect, report, halt, sweep, or block on this
-    /// mismatch. Avoiding it is entirely the caller's responsibility.
+    /// ``AccountGroupId.DEFAULT``. This write is unchecked and re-evaluates
+    /// nothing. Stored PnL and cost basis accumulated under a different
+    /// effective currency lose their meaning; the SDK guarantees nothing about
+    /// them and does not convert, detect, or report the change. Barrier
+    /// selection itself stays deterministic: the next policy access re-resolves
+    /// the cascade with the new effective currency.
     #[pyo3(signature = (group))]
     fn clear_group_currency(&self, py: Python<'_>, group: &Bound<'_, PyAny>) -> PyResult<()> {
         let group_id = parse_account_group_id_input_allow_default(group)?;
@@ -4899,6 +4893,7 @@ fn parse_spot_funds_pnl_bounds_barrier(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<SpotFundsPnlBoundsBarrier> {
     ensure_policy_entity(obj, "SpotFundsPnlBoundsBarrier")?;
+    let currency = parse_asset_input(&obj.getattr("currency")?)?;
     let lower_bound_value = obj.getattr("lower_bound")?;
     let lower_bound = if lower_bound_value.is_none() {
         None
@@ -4912,6 +4907,7 @@ fn parse_spot_funds_pnl_bounds_barrier(
         Some(parse_pnl_input(&upper_bound_value)?)
     };
     Ok(SpotFundsPnlBoundsBarrier {
+        currency,
         lower_bound,
         upper_bound,
     })

@@ -171,10 +171,12 @@ func NewPretradePoliciesPnlBoundsAccountBarrierUpdate(
 }
 
 func NewPretradePoliciesSpotFundsPnlBoundsBarrier(
+	currency string,
 	lowerBound ParamPnlOptional,
 	upperBound ParamPnlOptional,
 ) PretradePoliciesSpotFundsPnlBoundsBarrier {
 	return PretradePoliciesSpotFundsPnlBoundsBarrier{
+		currency:    importString(currency),
 		lower_bound: lowerBound,
 		upper_bound: upperBound,
 	}

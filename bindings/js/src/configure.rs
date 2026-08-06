@@ -108,6 +108,10 @@ export interface SpotFundsConfigureOptions {
  * Omitted axes stay unchanged. `globalBarrier: null` clears the singular
  * barrier, while a barrier value replaces it. Supplied group/account iterables
  * replace their axes.
+ * With a known effective account currency, only exact barrier matches apply and
+ * mismatching levels are skipped; without one, the first in-scope barrier
+ * applies, while no match leaves P&L accumulating and publishing without P&L
+ * control.
  */
 export interface SpotFundsPnlBoundsKillswitchConfigureOptions {
   globalBarrier?: SpotFundsPnlBoundsBarrier | null;
@@ -424,6 +428,11 @@ impl JsConfigurator {
     }
 
     /// Retunes the spot-funds account-wide P&L-bounds axis.
+    ///
+    /// With a known effective account currency, only exact barrier matches
+    /// apply and mismatching levels are skipped; without one, the first
+    /// in-scope barrier applies, while no match leaves P&L accumulating and
+    /// publishing without P&L control.
     ///
     /// An account whose effective barrier changed is evaluated against its
     /// stored account P&L in the same call: an already halted account, or one

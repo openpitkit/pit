@@ -32,7 +32,7 @@ use crate::core::{
     HasOrderPrice, HasPreTradeLock, HasSide, HasTradeAmount,
 };
 use crate::marketdata::MarketDataSync;
-use crate::param::{AccountId, Asset, Pnl};
+use crate::param::{AccountGroupId, AccountId, Asset, Pnl};
 use crate::pretrade::holdings::HoldingsStore;
 use crate::pretrade::policy::{PolicyGroupId, PolicyName};
 use crate::pretrade::ConfigurablePolicy;
@@ -226,8 +226,9 @@ pub(crate) fn account_pnl_barrier_change_blocks<StorageFactory>(
     holdings: &SpotFundsHoldingsStorage<StorageFactory>,
     previous: &SpotFundsSettings,
     current: &SpotFundsSettings,
-    memberships: &[(AccountId, crate::param::AccountGroupId)],
+    memberships: &[(AccountId, AccountGroupId)],
     known_accounts: impl IntoIterator<Item = AccountId>,
+    resolve_account_currency: impl Fn(AccountId, Option<AccountGroupId>) -> Option<Asset>,
 ) -> Vec<(AccountId, crate::pretrade::AccountBlock)>
 where
     StorageFactory: LockingPolicyFactory,
@@ -285,10 +286,15 @@ where
     let mut blocks = Vec::new();
     for account_id in candidates {
         let account_group_id = memberships.get(&account_id).copied();
-        let Some(current_barrier) = current.pnl_barrier_for(account_id, account_group_id) else {
+        let account_currency = resolve_account_currency(account_id, account_group_id);
+        let Some(current_barrier) =
+            current.pnl_barrier_for(account_id, account_group_id, account_currency.as_ref())
+        else {
             continue;
         };
-        if previous.pnl_barrier_for(account_id, account_group_id) == Some(current_barrier) {
+        if previous.pnl_barrier_for(account_id, account_group_id, account_currency.as_ref())
+            == Some(current_barrier)
+        {
             continue;
         }
         let (state, provenance) = pnl
@@ -310,12 +316,14 @@ pub(crate) fn account_pnl_membership_change_block<StorageFactory>(
     account_id: AccountId,
     previous_group: Option<crate::param::AccountGroupId>,
     current_group: Option<crate::param::AccountGroupId>,
+    previous_currency: Option<&Asset>,
+    current_currency: Option<&Asset>,
 ) -> Option<crate::pretrade::AccountBlock>
 where
     StorageFactory: LockingPolicyFactory,
 {
-    let previous = settings.pnl_barrier_for(account_id, previous_group);
-    let current = settings.pnl_barrier_for(account_id, current_group);
+    let previous = settings.pnl_barrier_for(account_id, previous_group, previous_currency);
+    let current = settings.pnl_barrier_for(account_id, current_group, current_currency);
     if previous == current {
         return None;
     }
@@ -377,10 +385,13 @@ fn release_account_pnl_lease<StorageFactory>(
 /// Any unavailable input needed for the account-line aggregate calculation
 /// halts it until an explicit correction.
 /// A configured account PnL barrier rejects pre-trade while that accumulator is
-/// halted and blocks the account after post-trade has applied. Position PnL is
-/// tracked independently per asset and never participates directly in that
-/// barrier. Position and account halts are both sticky until a manager replaces
-/// the corresponding state.
+/// halted and blocks the account after post-trade has applied. With a known
+/// effective account currency, only exact barrier matches apply and mismatching
+/// levels are skipped. Without one, the first in-scope barrier applies; no
+/// match leaves PnL accumulating and publishing without PnL control. Position
+/// PnL is tracked independently per asset and never participates directly in
+/// that barrier. Position and account halts are both sticky until a manager
+/// replaces the corresponding state.
 ///
 /// The runtime-updatable slippage / pricing / override cascade lives in
 /// [`SpotFundsSettings`], stored behind a settings cell read allocation-free
@@ -525,6 +536,11 @@ where
     /// At least one global, account-group, or account barrier must be
     /// configured. Use [`Self::with_policy_group_id`] on the returned policy to
     /// assign a non-default policy group.
+    ///
+    /// With a known effective account currency, only exact barrier matches
+    /// apply and mismatching levels are skipped. Without one, the first
+    /// in-scope barrier applies; no match leaves P&L accumulating and
+    /// publishing without P&L control.
     ///
     /// # Errors
     ///
@@ -798,11 +814,12 @@ where
             PolicyRuntimeConfiguration::SetSpotFundsAccountPnl {
                 account_id,
                 account_group_id,
+                account_currency,
                 state,
             } => {
                 self.set_account_pnl_state(account_id, state);
                 let account_blocks = self
-                    .pnl_barrier_for(account_id, account_group_id)
+                    .pnl_barrier_for(account_id, account_group_id, account_currency.as_ref())
                     .as_ref()
                     .and_then(|barrier| {
                         rejects::account_pnl_block_for_state(

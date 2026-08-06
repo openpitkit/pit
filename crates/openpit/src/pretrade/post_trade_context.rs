@@ -130,14 +130,17 @@ where
         }
     }
 
-    /// Returns the currency resolved for the report's account.
+    /// Returns the effective currency for the report's account.
     ///
-    /// The engine-backed context uses the same account -> group -> default
-    /// cascade as [`Accounts::currency_of`]. Standalone test contexts have no
-    /// account registry, so they return `None`.
-    pub(crate) fn account_currency(&self) -> Option<Asset> {
-        self.account
-            .and_then(|account| self.accounts.as_ref()?.currency_of(account))
+    /// The caller supplies `account_group`; this method resolves only the
+    /// account -> group -> default currency cascade. Standalone test contexts
+    /// have no account registry, so they return `None`.
+    pub(crate) fn account_currency(&self, account_group: Option<AccountGroupId>) -> Option<Asset> {
+        self.account.and_then(|account| {
+            self.accounts
+                .as_ref()?
+                .currency_of_in_group(account, account_group)
+        })
     }
 
     pub(crate) fn with_state_writer<R>(&self, operation: impl FnOnce() -> R) -> R {

@@ -508,11 +508,13 @@ describe("runtime configurator", () => {
 
       .builtin(
         buildSpotFundsPnlBoundsKillswitch()
-          .globalBarrier(new SpotFundsPnlBoundsBarrier("-1000", undefined))
+          .globalBarrier(
+            new SpotFundsPnlBoundsBarrier("USD", "-1000", undefined),
+          )
           .accountBarriers([
             new SpotFundsPnlBoundsAccountBarrier(
               accountId,
-              new SpotFundsPnlBoundsBarrier("-250", undefined),
+              new SpotFundsPnlBoundsBarrier("USD", "-250", undefined),
             ),
           ]),
       )
@@ -522,6 +524,47 @@ describe("runtime configurator", () => {
     expect(engine).toBeDefined();
   });
 
+  it("ignores a spot-funds pnl barrier with a non-matching currency", () => {
+    const engine = Engine.builder()
+      .builtin(
+        buildSpotFundsPnlBoundsKillswitch().globalBarrier(
+          new SpotFundsPnlBoundsBarrier("EUR", "-100", undefined),
+        ),
+      )
+      .build();
+    engine.accounts().setCurrency(ACCOUNT, "USD");
+
+    const result = engine
+      .configure()
+      .setSpotFundsAccountPnl(SpotFundsPnlBoundsKillswitchBuilder.NAME, {
+        account: ACCOUNT,
+        state: "-150",
+      });
+
+    expect(result.accountBlocks).toHaveLength(0);
+  });
+
+  it("applies a spot-funds pnl barrier with a matching currency", () => {
+    const engine = Engine.builder()
+      .builtin(
+        buildSpotFundsPnlBoundsKillswitch().globalBarrier(
+          new SpotFundsPnlBoundsBarrier("USD", "-100", undefined),
+        ),
+      )
+      .build();
+    engine.accounts().setCurrency(ACCOUNT, "USD");
+
+    const result = engine
+      .configure()
+      .setSpotFundsAccountPnl(SpotFundsPnlBoundsKillswitchBuilder.NAME, {
+        account: ACCOUNT,
+        state: "-150",
+      });
+
+    expect(result.accountBlocks).toHaveLength(1);
+    expect(result.accountBlocks[0]!.code).toBe("PnlKillSwitchTriggered");
+  });
+
   it("checks an effective P&L barrier when group membership changes", () => {
     const group = 84;
     const engine = Engine.builder()
@@ -529,7 +572,7 @@ describe("runtime configurator", () => {
         buildSpotFundsPnlBoundsKillswitch().accountGroupBarriers([
           new SpotFundsPnlBoundsAccountGroupBarrier(
             group,
-            new SpotFundsPnlBoundsBarrier("1", undefined),
+            new SpotFundsPnlBoundsBarrier("USD", "1", undefined),
           ),
         ]),
       )
@@ -618,7 +661,7 @@ describe("runtime configurator", () => {
     };
 
     engine.configure().spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
-      globalBarrier: new SpotFundsPnlBoundsBarrier("-10", undefined),
+      globalBarrier: new SpotFundsPnlBoundsBarrier("USD", "-10", undefined),
     });
 
     const firstSurvivorFill = fillWithFee(survivor, "9");
@@ -629,13 +672,13 @@ describe("runtime configurator", () => {
       accountGroupBarriers: [
         new SpotFundsPnlBoundsAccountGroupBarrier(
           group,
-          new SpotFundsPnlBoundsBarrier("-14", undefined),
+          new SpotFundsPnlBoundsBarrier("USD", "-14", undefined),
         ),
       ],
       accountBarriers: [
         new SpotFundsPnlBoundsAccountBarrier(
           accountOverride,
-          new SpotFundsPnlBoundsBarrier("-20", undefined),
+          new SpotFundsPnlBoundsBarrier("USD", "-20", undefined),
         ),
       ],
     });
@@ -710,7 +753,7 @@ describe("runtime configurator", () => {
     const engine = Engine.builder()
       .builtin(
         buildSpotFundsPnlBoundsKillswitch().globalBarrier(
-          new SpotFundsPnlBoundsBarrier("-1000", undefined),
+          new SpotFundsPnlBoundsBarrier("USD", "-1000", undefined),
         ),
       )
       .build();
@@ -728,7 +771,7 @@ describe("runtime configurator", () => {
     const retune = engine
       .configure()
       .spotFundsPnlBoundsKillswitch(SpotFundsPnlBoundsKillswitchBuilder.NAME, {
-        globalBarrier: new SpotFundsPnlBoundsBarrier("-500", undefined),
+        globalBarrier: new SpotFundsPnlBoundsBarrier("USD", "-500", undefined),
       });
     expect(retune.accountBlocks).toHaveLength(1);
     expect(retune.accountBlocks[0]!.accountId.value).toBe(retunedAccount);
@@ -763,7 +806,7 @@ describe("runtime configurator", () => {
     const swept = engine
       .configure()
       .spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
-        globalBarrier: new SpotFundsPnlBoundsBarrier("-10", undefined),
+        globalBarrier: new SpotFundsPnlBoundsBarrier("USD", "-10", undefined),
       });
 
     expect(swept.accountBlocks).toHaveLength(2);

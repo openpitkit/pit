@@ -155,3 +155,49 @@ blocked individually in place.
   the insufficient-funds gate, so available funds may go negative instead of
   producing an `InsufficientFunds` reject. Arithmetic overflow is still
   surfaced.
+
+### Spot Funds P&L barriers and currency
+
+`SpotFundsPnlBoundsBarrier` is a frozen dataclass whose `currency` field is
+required; `lower_bound` and `upper_bound` default to `None`, and at least one
+of them must be given. The same dataclass is used at construction time, through
+`global_barrier()`, `account_group_barriers()` and `account_barriers()` on
+`build_spot_funds_pnl_bounds_killswitch()`, and at runtime, through
+`engine.configure().spot_funds_pnl_bounds_killswitch(...)`.
+
+`currency` decides which accounts the barrier controls, not what it watches:
+
+- When an account has an effective currency, a barrier applies only when
+  `currency` equals it. The effective currency resolves through the account,
+  then its group, then the default group.
+- Resolution walks account -> group -> global and **skips** any level whose
+  barrier carries a different currency, continuing to the next one. An account
+  barrier in `openpit.param.Asset("EUR")` therefore does not shadow a global
+  barrier in `openpit.param.Asset("USD")` for a USD account - the global one
+  becomes effective.
+- If no level carries the account's currency, no barrier is effective. The
+  account has no P&L control at all: bounds are not evaluated and neither a
+  breach nor a halt blocks it, while `openpit.param.Pnl` values keep
+  accumulating and being published.
+- If the account has no effective currency, nothing can mismatch, so no level
+  is filtered by currency and the first barrier in the account -> group ->
+  global cascade applies. Today's missing-currency behaviour is unchanged: the
+  P&L line halts with
+  `openpit.pretrade.PnlHaltReason.MISSING_ACCOUNT_CURRENCY` where it owes a
+  denominated value, and that halt blocks the account.
+
+`lower_bound` and `upper_bound` are plain `openpit.param.Pnl` values in the
+barrier's own currency and are never converted by an FX rate. The barrier stays
+a numeric control with no quote dependency: a missing FX quote can halt the
+accumulator, but it can never move a bound.
+
+Currency writes through `engine.accounts()` - `set_currency()`,
+`clear_currency()`, `set_group_currency()`, and `clear_group_currency()` - are
+unchecked and re-evaluate nothing. Stored P&L and cost basis accumulated under
+a different effective currency lose their meaning; the SDK guarantees nothing
+about them and does not convert, detect, or report the change. Barrier
+selection itself stays deterministic: the cascade above is re-resolved with the
+new effective currency on the next policy access.
+`register_group()` and `unregister_group()` keep their existing
+contract: they resolve the effective currency on each side of the transition
+and evaluate the account against its new effective barrier before returning.

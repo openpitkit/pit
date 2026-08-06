@@ -41,10 +41,11 @@ pub(super) fn account_pnl_block_for_state(
                     super::SPOT_FUNDS_POLICY_NAME,
                     format!(
                         "{} bound breached: realized pnl {absolute}, lower_bound {:?}, \
-                         upper_bound {:?}",
+                         upper_bound {:?}, currency {}",
                         sides.join(" and "),
                         barrier.lower_bound,
-                        barrier.upper_bound
+                        barrier.upper_bound,
+                        barrier.currency,
                     ),
                 )
             })

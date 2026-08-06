@@ -231,6 +231,8 @@ impl<Factory: LockingPolicyFactory> ConfigRegistry<Factory> {
         account: AccountId,
         previous_group: Option<crate::param::AccountGroupId>,
         current_group: Option<crate::param::AccountGroupId>,
+        previous_currency: Option<Asset>,
+        current_currency: Option<Asset>,
     ) -> Vec<crate::pretrade::AccountBlock> {
         self.entries
             .values()
@@ -245,6 +247,8 @@ impl<Factory: LockingPolicyFactory> ConfigRegistry<Factory> {
                         account,
                         previous_group,
                         current_group,
+                        previous_currency.as_ref(),
+                        current_currency.as_ref(),
                     )
                 })
             })
@@ -522,6 +526,9 @@ impl<Trait: EngineTrait> Configurator<Trait> {
                                 .chain(active_holdings_accounts::<RegistryFactory<Trait>>(
                                     active_holdings_mutations,
                                 )),
+                            |account, group| {
+                                self.inner.account_currencies.currency_of(account, group)
+                            },
                         );
                         account_blocks.reserve(blocks.len());
                         for (account, block) in blocks {
@@ -588,9 +595,14 @@ impl<Trait: EngineTrait> Configurator<Trait> {
                     >::from_inner(
                         self.inner.account_groups.clone()
                     );
+                    let account_group_id = account_groups.group_of(account);
                     let configuration = PolicyRuntimeConfiguration::SetSpotFundsAccountPnl {
                         account_id: account,
-                        account_group_id: account_groups.group_of(account),
+                        account_group_id,
+                        account_currency: self
+                            .inner
+                            .account_currencies
+                            .currency_of(account, account_group_id),
                         state,
                     };
                     let result = policy.apply_runtime_configuration(configuration);

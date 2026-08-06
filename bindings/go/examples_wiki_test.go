@@ -1804,6 +1804,7 @@ func TestExampleWikiSpotFundsMarketOrders(t *testing.T) {
 // - Self-Computed PnL Kill Switch / Configuring Barriers
 func TestExampleWikiSpotFundsPnlKillSwitchBuilder(t *testing.T) {
 	account := param.NewAccountIDFromUint64(99224416)
+	currency, _ := param.NewAsset("USD")
 	lower, _ := param.NewPnlFromString("-1000")
 	accountLower, _ := param.NewPnlFromString("-250")
 
@@ -1814,11 +1815,13 @@ func TestExampleWikiSpotFundsPnlKillSwitchBuilder(t *testing.T) {
 		Builtin(
 			policies.BuildSpotFundsPnlBoundsKillSwitch().
 				GlobalBarrier(policies.SpotFundsPnlBoundsBarrier{
+					Currency:   currency,
 					LowerBound: optional.Some(lower),
 				}).
 				AccountBarriers(policies.SpotFundsPnlBoundsAccountBarrier{
 					AccountID: account,
 					Barrier: policies.SpotFundsPnlBoundsBarrier{
+						Currency:   currency,
 						LowerBound: optional.Some(accountLower),
 					},
 				}),
@@ -1834,12 +1837,14 @@ func TestExampleWikiSpotFundsPnlKillSwitchBuilder(t *testing.T) {
 // - Self-Computed PnL Kill Switch / Runtime Reconfiguration
 func TestExampleWikiSpotFundsPnlKillSwitchReconfigure(t *testing.T) {
 	// Harness scaffolding: the wiki snippet starts with a global -1000 barrier.
+	currency, _ := param.NewAsset("USD")
 	initialLower, _ := param.NewPnlFromString("-1000")
 	engine, err := NewEngineBuilder().
 		NoSync().
 		Builtin(
 			policies.BuildSpotFundsPnlBoundsKillSwitch().
 				GlobalBarrier(policies.SpotFundsPnlBoundsBarrier{
+					Currency:   currency,
 					LowerBound: optional.Some(initialLower),
 				}),
 		).
@@ -1854,6 +1859,7 @@ func TestExampleWikiSpotFundsPnlKillSwitchReconfigure(t *testing.T) {
 	newLower, _ := param.NewPnlFromString("-500")
 	outside, _ := param.NewPnlFromString("-600")
 	globalBarrier := policies.SpotFundsPnlBoundsBarrier{
+		Currency:   currency,
 		LowerBound: optional.Some(newLower),
 	}
 

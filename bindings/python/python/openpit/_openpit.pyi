@@ -2280,18 +2280,13 @@ class Accounts:
     ) -> None:
         """Register accounts in a group atomically.
 
-        Effective currency resolves through the account, registered group,
-        default group, then no currency. Stored realized PnL and cost basis are
-        bare numbers whose denomination is implied by the effective currency
-        when they were computed. This method does not inspect that state. If
-        joining changes the effective currency, existing numbers remain in the
-        previous currency while the engine treats them as the new one. The SDK
-        does not convert, detect, report, halt, sweep, or block on this mismatch.
-        Avoiding it is entirely the caller's responsibility. If membership
-        changes the effective PnL barrier, this call checks current account PnL,
-        treating an unset ledger as zero and halted state as a breach, and
-        latches any resulting account block before returning. An unchanged
-        effective barrier is not checked again.
+        If joining changes effective currency, stored PnL and cost basis
+        accumulated under the previous one lose their meaning; the SDK
+        guarantees nothing about them.
+        If membership changes the effective PnL barrier, this call checks
+        current account PnL, treating an unset ledger as zero and halted state
+        as a breach, and latches any resulting account block before returning.
+        An unchanged effective barrier is not checked again.
         """
 
     def unregister_group(
@@ -2301,46 +2296,42 @@ class Accounts:
     ) -> None:
         """Remove accounts from a group atomically.
 
-        Effective currency resolves through the account, registered group,
-        default group, then no currency. Stored realized PnL and cost basis are
-        bare numbers whose denomination is implied by the effective currency
-        when they were computed. This method does not inspect that state. If
-        leaving changes the effective currency, existing numbers remain in the
-        previous currency while the engine treats them as the new one. The SDK
-        does not convert, detect, report, halt, sweep, or block on this mismatch.
-        Avoiding it is entirely the caller's responsibility. If membership
-        changes the effective PnL barrier, this call checks current account PnL,
-        treating an unset ledger as zero and halted state as a breach, and
-        latches any resulting account block before returning. An unchanged
-        effective barrier is not checked again.
+        If leaving changes effective currency, stored PnL and cost basis
+        accumulated under the previous one lose their meaning; the SDK
+        guarantees nothing about them.
+        If membership changes the effective PnL barrier, this call checks
+        current account PnL, treating an unset ledger as zero and halted state
+        as a breach, and latches any resulting account block before returning.
+        An unchanged effective barrier is not checked again.
         """
 
     def group_of(self, account: AccountId) -> AccountGroupId | None: ...
     def set_currency(self, account: AccountId, asset: param.Asset | str) -> None:
         """Set an account's explicit currency.
 
-        Effective currency resolves through the account, registered group,
-        default group, then no currency. Stored realized PnL and cost basis are
-        bare numbers whose denomination is implied by the effective currency
-        when they were computed. The SDK writes ``asset`` without checking that
-        state. If this changes the effective currency, existing numbers remain
-        in the previous currency while the engine treats them as the new one.
-        The SDK does not convert, detect, report, halt, sweep, or block on this
-        mismatch. Avoiding it is entirely the caller's responsibility.
+        Effective currency resolves through the account, then its group, then
+        ``AccountGroupId.DEFAULT``.
+
+        This write is unchecked and re-evaluates nothing. Stored PnL and cost
+        basis accumulated under a different effective currency lose their
+        meaning; the SDK guarantees nothing about them and does not convert,
+        detect, or report the change. Barrier selection itself stays
+        deterministic: the next policy access re-resolves the cascade with the
+        new effective currency.
         """
 
     def clear_currency(self, account: AccountId) -> None:
         """Clear an account's explicit currency.
 
-        Effective currency resolves through the account, registered group,
-        default group, then no currency. Stored realized PnL and cost basis are
-        bare numbers whose denomination is implied by the effective currency
-        when they were computed. The SDK clears the account value without
-        checking that state. If this changes the effective currency, existing
-        numbers remain in the previous currency while the engine treats them as
-        the new one. The SDK does not convert, detect, report, halt, sweep, or
-        block on this mismatch. Avoiding it is entirely the caller's
-        responsibility.
+        Effective currency resolves through the account, then its group, then
+        ``AccountGroupId.DEFAULT``.
+
+        This write is unchecked and re-evaluates nothing. Stored PnL and cost
+        basis accumulated under a different effective currency lose their
+        meaning; the SDK guarantees nothing about them and does not convert,
+        detect, or report the change. Barrier selection itself stays
+        deterministic: the next policy access re-resolves the cascade with the
+        new effective currency.
         """
 
     def set_group_currency(
@@ -2349,30 +2340,26 @@ class Accounts:
         """Set the currency inherited by accounts in a group.
 
         ``AccountGroupId.DEFAULT`` is allowed and represents the global default
-        tier. Effective currency resolves through the account, registered
-        group, default group, then no currency. Stored realized PnL and cost
-        basis are bare numbers whose denomination is implied by the effective
-        currency when they were computed. The SDK writes ``asset`` without
-        checking affected account state. If an effective currency changes,
-        existing numbers remain in the previous currency while the engine
-        treats them as the new one. The SDK does not convert, detect, report,
-        halt, sweep, or block on this mismatch. Avoiding it is entirely the
-        caller's responsibility.
+        tier. Effective currency resolves through the account, then its group,
+        then ``AccountGroupId.DEFAULT``. This write is unchecked and
+        re-evaluates nothing. Stored PnL and cost basis accumulated under a
+        different effective currency lose their meaning; the SDK guarantees
+        nothing about them and does not convert, detect, or report the change.
+        Barrier selection itself stays deterministic: the next policy access
+        re-resolves the cascade with the new effective currency.
         """
 
     def clear_group_currency(self, group: AccountGroupId | int) -> None:
         """Clear the currency inherited by accounts in a group.
 
         ``AccountGroupId.DEFAULT`` is allowed and represents the global default
-        tier. Effective currency resolves through the account, registered
-        group, default group, then no currency. Stored realized PnL and cost
-        basis are bare numbers whose denomination is implied by the effective
-        currency when they were computed. The SDK clears the group value without
-        checking affected account state. If an effective currency changes,
-        existing numbers remain in the previous currency while the engine
-        treats them as the new one. The SDK does not convert, detect, report,
-        halt, sweep, or block on this mismatch. Avoiding it is entirely the
-        caller's responsibility.
+        tier. Effective currency resolves through the account, then its group,
+        then ``AccountGroupId.DEFAULT``. This write is unchecked and
+        re-evaluates nothing. Stored PnL and cost basis accumulated under a
+        different effective currency lose their meaning; the SDK guarantees
+        nothing about them and does not convert, detect, or report the change.
+        Barrier selection itself stays deterministic: the next policy access
+        re-resolves the cascade with the new effective currency.
         """
 
     def block(self, account: AccountId, reason: str) -> None: ...
@@ -2566,7 +2553,13 @@ class Configurator:
         Omitted axes stay unchanged. Passing ``None`` as *global_barrier*
         clears the singular global barrier; a barrier value replaces it. A
         supplied group/account list REPLACES that axis wholesale, and an empty
-        list clears it. Each barrier must still configure at least one bound.
+        list clears it. Each barrier must specify its currency and configure at
+        least one bound.
+
+        With a known effective account currency, only exact barrier matches
+        apply and mismatching levels are skipped; without one, the first
+        in-scope barrier applies, while no match leaves PnL accumulating and
+        publishing without PnL control.
 
         An account whose effective barrier changed is evaluated against its
         stored account P&L before this call returns: an already halted account,

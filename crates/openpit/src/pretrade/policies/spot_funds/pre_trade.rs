@@ -52,12 +52,20 @@ where
 {
     pub(super) fn reject_halted_account_pnl(
         &self,
+        ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         account_id: AccountId,
-        account_info: &impl AccountInfo,
+        account_group_id: Option<crate::param::AccountGroupId>,
     ) -> Result<(), Rejects> {
+        let has_barrier = self
+            .settings
+            .with(|settings| settings.has_pnl_barrier_scope(account_id, account_group_id));
+        if !has_barrier {
+            return Ok(());
+        }
+        let account_currency = ctx.account_currency(account_group_id);
         let barrier = self.settings.with(|settings| {
             settings
-                .pnl_barrier_for(account_id, account_info.group())
+                .pnl_barrier_for(account_id, account_group_id, account_currency.as_ref())
                 .cloned()
         });
         let Some(barrier) = barrier else {
@@ -399,7 +407,7 @@ where
             )
             .into());
         }
-        let pnl_rejects = self.reject_halted_account_pnl(request.account_id, &account_group);
+        let pnl_rejects = self.reject_halted_account_pnl(ctx, request.account_id, account_group);
         if ctx.is_drop_copy() {
             if let Err(rejects) = &pnl_rejects {
                 if let Some(reject) = rejects
@@ -490,7 +498,7 @@ where
         request: OrderRequestView<'_>,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
         let account_group = ctx.state_account_group();
-        self.reject_halted_account_pnl(request.account_id, &account_group)?;
+        self.reject_halted_account_pnl(ctx, request.account_id, account_group)?;
 
         let legs = self
             .compute_reservation_legs(&request, &account_group, ctx)

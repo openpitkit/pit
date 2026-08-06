@@ -347,7 +347,7 @@ export function configureSpotFundsPnlAxis(engine: Engine): void {
     accountBarriers: [
       new SpotFundsPnlBoundsAccountBarrier(
         SCENARIO_ACCOUNT,
-        new SpotFundsPnlBoundsBarrier("-250", "250"),
+        new SpotFundsPnlBoundsBarrier(SCENARIO_ASSET_SETTLE, "-250", "250"),
       ),
     ],
   });
