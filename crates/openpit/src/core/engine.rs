@@ -175,6 +175,7 @@ impl<Trait: EngineTrait> Engine<Trait> {
             AccountGroupsHandle::from_inner(self.inner.account_groups.clone()),
             AccountBlockHandle::from_inner(self.inner.blocked_accounts.clone()),
             self.inner.account_currencies.clone(),
+            self.inner.config_registry.clone(),
         )
     }
 
@@ -283,7 +284,12 @@ impl<Trait: EngineTrait> Engine<Trait> {
             AccountControl::new(handle, id)
         });
         let account_groups = AccountGroupsHandle::from_inner(self.inner.account_groups.clone());
-        let ctx = PreTradeContext::with_groups(account_control, account_groups, account);
+        let ctx = PreTradeContext::with_accounts(
+            account_control,
+            self.accounts(),
+            account_groups,
+            account,
+        );
         let (start_rejects, account_block) = with_start_pre_trade_now(now, || {
             run_pre_trade_start_stage::<Trait, _>(
                 &self.inner,
@@ -386,8 +392,12 @@ impl<Trait: EngineTrait> Engine<Trait> {
             account,
         );
         let account_groups = AccountGroupsHandle::from_inner(self.inner.account_groups.clone());
-        let ctx =
-            PreTradeContext::with_groups_and_drop_copy(account_control, account_groups, account);
+        let ctx = PreTradeContext::with_accounts_and_drop_copy(
+            account_control,
+            self.accounts(),
+            account_groups,
+            account,
+        );
 
         let (start_rejects, _) = with_start_pre_trade_now(now, || {
             run_pre_trade_start_stage::<Trait, _>(
@@ -504,7 +514,12 @@ impl<Trait: EngineTrait> Engine<Trait> {
             AccountControl::new(handle, id)
         });
         let account_groups = AccountGroupsHandle::from_inner(self.inner.account_groups.clone());
-        let ctx = PreTradeContext::with_groups(account_control, account_groups, account);
+        let ctx = PreTradeContext::with_accounts(
+            account_control,
+            self.accounts(),
+            account_groups,
+            account,
+        );
         let (rejects, account_block) = with_start_pre_trade_now(now, || {
             run_pre_trade_start_stage::<Trait, _>(
                 &self.inner,
@@ -552,7 +567,12 @@ impl<Trait: EngineTrait> Engine<Trait> {
             AccountControl::new(handle, id)
         });
         let account_groups = AccountGroupsHandle::from_inner(self.inner.account_groups.clone());
-        let ctx = PreTradeContext::with_groups(account_control, account_groups, account);
+        let ctx = PreTradeContext::with_accounts(
+            account_control,
+            self.accounts(),
+            account_groups,
+            account,
+        );
 
         let (start_rejects, start_account_block) = with_start_pre_trade_now(now, || {
             run_pre_trade_start_stage::<Trait, _>(
@@ -683,8 +703,12 @@ impl<Trait: EngineTrait> Engine<Trait> {
         let handle = AccountBlockHandle::from_inner(inner.blocked_accounts.clone());
         let account_control = AccountControl::new(handle, account_id);
         let account_groups = AccountGroupsHandle::from_inner(inner.account_groups.clone());
-        let ctx =
-            AccountAdjustmentContext::with_groups(account_control, account_groups, account_id);
+        let ctx = AccountAdjustmentContext::with_accounts(
+            account_control,
+            self.accounts(),
+            account_groups,
+            account_id,
+        );
 
         'outer: for (index, adjustment) in adjustments.iter().enumerate() {
             for policy in &inner.pre_trade_policies {

@@ -43,6 +43,8 @@ export {
   DropCopyResult,
   DryRunReport,
   AccountAdjustmentBatchResult,
+  AccountBlockOutcome,
+  AccountBlockOutcomes,
   PolicyConfigurationResult,
   PostTradeResult,
   AccountPnlOutcome,

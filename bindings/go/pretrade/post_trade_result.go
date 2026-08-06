@@ -41,9 +41,14 @@ type PostTradeResult struct {
 	AccountBlocks []reject.AccountBlock
 	// AccountPnls lists policy-tagged account-level realized-PnL
 	// computations. Amount returns an authoritative PnL when available;
-	// HaltReason identifies the failure. SpotFunds emits a halted outcome only
-	// for the report that transitions the accumulator to halted; later reports
-	// omit the unchanged halt. Position force-sets do not re-arm it.
+	// HaltReason identifies the failure. SpotFunds engages the account line
+	// only for a realizing fill or a nonzero fee. Opening, same-direction, and
+	// zero-quantity fills without a nonzero fee, plus zero fees alone, produce
+	// no outcome and require no account currency or FX for this line. A nonzero
+	// fee engages both position and account rows regardless of fill quantity.
+	// SpotFunds emits a halted outcome only for the report that transitions the
+	// accumulator to halted; later reports omit the unchanged halt. Position
+	// force-sets do not re-arm it.
 	AccountPnls []accountadjustment.AccountPnlOutcome
 	// AccountAdjustments lists the account-adjustment outcomes
 	// policies produced while applying the report.

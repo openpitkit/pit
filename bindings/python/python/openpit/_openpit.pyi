@@ -713,7 +713,12 @@ class Volume:
     def to_json_value(self) -> str: ...
     def to_cash_flow_inflow(self) -> CashFlow: ...
     def to_cash_flow_outflow(self) -> CashFlow: ...
-    def calculate_quantity(self, price: Price) -> Quantity: ...
+    def calculate_quantity(self, price: Price) -> Quantity:
+        """Calculate exposure from a legal zero, positive, or negative price.
+
+        Zero returns zero; otherwise returns ``volume / abs(price)``.
+        """
+
     def to_position_size(self) -> PositionSize: ...
     def __add__(self, other: Volume) -> Volume: ...
     def __sub__(self, other: Volume) -> Volume: ...
@@ -1832,7 +1837,12 @@ class PnlOutcomeAmount:
         """Cumulative account-currency realized PnL after this operation."""
 
 class PnlHaltReason:
-    """Reason why a realized-PnL value could not be calculated."""
+    """Reason why a realized-PnL value could not be calculated.
+
+    When failures coincide, SpotFunds uses this priority from highest to lowest:
+    ``ARITHMETIC_OVERFLOW``, ``MISSING_ACCOUNT_CURRENCY``, ``MISSING_FX``,
+    ``MISSING_COST_BASIS``, then ``MISSING_INITIAL_PNL``.
+    """
 
     MISSING_FX: typing.ClassVar[PnlHaltReason]
     """A required FX quote was unavailable."""
@@ -1864,6 +1874,12 @@ class PnlOutcome:
 
 class AccountPnlOutcome:
     """Account-level realized-PnL outcome reported by one policy.
+
+    SpotFunds engages the account line only for a realizing fill or a nonzero
+    fee. Opening, same-direction, and zero-quantity fills without a nonzero fee,
+    plus zero fees alone, emit no account outcome and require no account
+    currency or FX for this line. A nonzero fee engages both position and
+    account rows regardless of fill quantity.
 
     SpotFunds emits a halted outcome only for the report that transitions the
     account accumulator to halted. Later reports omit the unchanged halt until
@@ -1928,11 +1944,14 @@ class AccountOutcomeEntry:
     def realized_pnl(self) -> PnlOutcome | None:
         """Account-currency realized PnL outcome.
 
-        The first failed calculation contains a halt reason. ``None`` means
-        PnL was not tracked or was omitted after a sticky halt. Missing FX,
-        cost basis, initial PnL, or arithmetic failure stops only
-        this position accumulator until an adjustment force-sets a new realized
-        PnL, without re-arming account PnL or another position.
+        Reservations, cancels, settlement legs, opening, same-direction, and
+        zero-quantity fills without a non-zero fee omit it, as do non-PnL
+        adjustments. A realizing fill reports an authoritative result even
+        when its exact contribution is zero. A non-zero fee reports the
+        underlying asset even if the account never held it. The first failed
+        calculation reports a halt reason; later operations omit the field
+        until an asset-scoped adjustment force-sets this position's PnL.
+        Re-arming account PnL or another position does not re-arm it.
         """
 
     @property
@@ -2018,12 +2037,36 @@ class AccountBlock:
     def user_data(self) -> int:
         """Opaque caller-defined integer token."""
 
+class AccountBlockOutcome:
+    """Account block inserted for an account selected by the engine."""
+
+    @property
+    def account_id(self) -> AccountId:
+        """Account for which the engine inserted the block."""
+
+    @property
+    def block(self) -> AccountBlock:
+        """Account block inserted into engine state."""
+
+class AccountBlockOutcomes:
+    """Account-block outcomes for accounts selected by the engine."""
+
+    @property
+    def account_blocks(self) -> list[AccountBlockOutcome]:
+        """Newly inserted blocks paired with their affected accounts."""
+
 class PolicyConfigurationResult:
-    """Accepted runtime policy configuration result."""
+    """Accepted runtime policy configuration result.
+
+    A SpotFunds account-PnL force-set exposes its policy-reported breach or halt
+    block even when the account already has a block. The engine processes each
+    block request before returning and preserves the existing first cause. The
+    caller supplied the affected account, so the blocks do not repeat it.
+    """
 
     @property
     def account_blocks(self) -> list[AccountBlock]:
-        """Account blocks recorded by the accepted configuration operation."""
+        """Account blocks exposed by the accepted configuration operation."""
 
 class PostTradeResult:
     """
@@ -2055,10 +2098,14 @@ class PostTradeResult:
 
         A computed outcome with a nonzero delta changed its ledger; a zero delta
         recomputed it unchanged. A halt-reason outcome has no authoritative PnL
-        value and must not be interpreted as zero. SpotFunds emits a halt reason
-        only when the current report transitions the account accumulator to
-        halted; later reports omit the unchanged halt. Position force-sets do
-        not re-arm it.
+        value and must not be interpreted as zero. SpotFunds engages this line
+        only for a realizing fill or a nonzero fee. Opening, same-direction,
+        and zero-quantity fills without a nonzero fee, plus zero fees alone,
+        emit no outcome and require no account currency or FX for this line. A
+        nonzero fee engages both position and account rows regardless of fill
+        quantity. SpotFunds emits a halt reason only when the current report
+        transitions the account accumulator to halted; later reports omit the
+        unchanged halt. Position force-sets do not re-arm it.
         """
 
     @property
@@ -2220,32 +2267,80 @@ class Engine:
         """Return a handle to the engine's runtime policy settings registry."""
 
 class Accounts:
-    """Handle to the engine's account groups and pre-trade block controls."""
+    """Handle to the engine's account groups and pre-trade block controls.
+
+    For an example of good practice in building a control plane on this SDK,
+    see `Pit Officer <http://officer.openpit.dev/>`_.
+    """
 
     def register_group(
         self,
         accounts: typing.Iterable[AccountId],
         group: AccountGroupId,
-    ) -> None: ...
+    ) -> None:
+        """Register accounts in a group atomically.
+
+        Effective currency resolves through the account, registered group,
+        default group, then no currency. Stored realized PnL and cost basis are
+        bare numbers whose denomination is implied by the effective currency
+        when they were computed. This method does not inspect that state. If
+        joining changes the effective currency, existing numbers remain in the
+        previous currency while the engine treats them as the new one. The SDK
+        does not convert, detect, report, halt, sweep, or block on this mismatch.
+        Avoiding it is entirely the caller's responsibility. If membership
+        changes the effective PnL barrier, this call checks current account PnL,
+        treating an unset ledger as zero and halted state as a breach, and
+        latches any resulting account block before returning. An unchanged
+        effective barrier is not checked again.
+        """
+
     def unregister_group(
         self,
         accounts: typing.Iterable[AccountId],
         group: AccountGroupId,
-    ) -> None: ...
+    ) -> None:
+        """Remove accounts from a group atomically.
+
+        Effective currency resolves through the account, registered group,
+        default group, then no currency. Stored realized PnL and cost basis are
+        bare numbers whose denomination is implied by the effective currency
+        when they were computed. This method does not inspect that state. If
+        leaving changes the effective currency, existing numbers remain in the
+        previous currency while the engine treats them as the new one. The SDK
+        does not convert, detect, report, halt, sweep, or block on this mismatch.
+        Avoiding it is entirely the caller's responsibility. If membership
+        changes the effective PnL barrier, this call checks current account PnL,
+        treating an unset ledger as zero and halted state as a breach, and
+        latches any resulting account block before returning. An unchanged
+        effective barrier is not checked again.
+        """
+
     def group_of(self, account: AccountId) -> AccountGroupId | None: ...
     def set_currency(self, account: AccountId, asset: param.Asset | str) -> None:
         """Set an account's explicit currency.
 
-        Setting or changing currency does not validate existing holdings and
-        does not recompute stored average entry price or realized PnL. The
-        caller owns the risk of changing currency on live state.
+        Effective currency resolves through the account, registered group,
+        default group, then no currency. Stored realized PnL and cost basis are
+        bare numbers whose denomination is implied by the effective currency
+        when they were computed. The SDK writes ``asset`` without checking that
+        state. If this changes the effective currency, existing numbers remain
+        in the previous currency while the engine treats them as the new one.
+        The SDK does not convert, detect, report, halt, sweep, or block on this
+        mismatch. Avoiding it is entirely the caller's responsibility.
         """
 
     def clear_currency(self, account: AccountId) -> None:
         """Clear an account's explicit currency.
 
-        Clearing currency does not validate existing holdings and does not
-        recompute stored average entry price or realized PnL.
+        Effective currency resolves through the account, registered group,
+        default group, then no currency. Stored realized PnL and cost basis are
+        bare numbers whose denomination is implied by the effective currency
+        when they were computed. The SDK clears the account value without
+        checking that state. If this changes the effective currency, existing
+        numbers remain in the previous currency while the engine treats them as
+        the new one. The SDK does not convert, detect, report, halt, sweep, or
+        block on this mismatch. Avoiding it is entirely the caller's
+        responsibility.
         """
 
     def set_group_currency(
@@ -2253,18 +2348,31 @@ class Accounts:
     ) -> None:
         """Set the currency inherited by accounts in a group.
 
-        ``AccountGroupId.DEFAULT`` is allowed and represents the global
-        default tier. Setting or changing currency does not validate existing
-        holdings and does not recompute stored average entry price or realized
-        PnL.
+        ``AccountGroupId.DEFAULT`` is allowed and represents the global default
+        tier. Effective currency resolves through the account, registered
+        group, default group, then no currency. Stored realized PnL and cost
+        basis are bare numbers whose denomination is implied by the effective
+        currency when they were computed. The SDK writes ``asset`` without
+        checking affected account state. If an effective currency changes,
+        existing numbers remain in the previous currency while the engine
+        treats them as the new one. The SDK does not convert, detect, report,
+        halt, sweep, or block on this mismatch. Avoiding it is entirely the
+        caller's responsibility.
         """
 
     def clear_group_currency(self, group: AccountGroupId | int) -> None:
         """Clear the currency inherited by accounts in a group.
 
-        ``AccountGroupId.DEFAULT`` is allowed and represents the global
-        default tier. Clearing currency does not validate existing holdings and
-        does not recompute stored average entry price or realized PnL.
+        ``AccountGroupId.DEFAULT`` is allowed and represents the global default
+        tier. Effective currency resolves through the account, registered
+        group, default group, then no currency. Stored realized PnL and cost
+        basis are bare numbers whose denomination is implied by the effective
+        currency when they were computed. The SDK clears the group value without
+        checking affected account state. If an effective currency changes,
+        existing numbers remain in the previous currency while the engine
+        treats them as the new one. The SDK does not convert, detect, report,
+        halt, sweep, or block on this mismatch. Avoiding it is entirely the
+        caller's responsibility.
         """
 
     def block(self, account: AccountId, reason: str) -> None: ...
@@ -2449,7 +2557,7 @@ class Configurator:
         account_barriers: (
             list[pretrade.policies.SpotFundsPnlBoundsAccountBarrier] | None
         ) = None,
-    ) -> None:
+    ) -> AccountBlockOutcomes:
         """Retune the account P&L bounds axis of a spot-funds policy.
 
         *name* must match the name given to the spot-funds policy at
@@ -2459,6 +2567,16 @@ class Configurator:
         clears the singular global barrier; a barrier value replaces it. A
         supplied group/account list REPLACES that axis wholesale, and an empty
         list clears it. Each barrier must still configure at least one bound.
+
+        An account whose effective barrier changed is evaluated against its
+        stored account P&L before this call returns: an already halted account,
+        or one already beyond the new barrier, is blocked here rather than at
+        its next fill, and the result carries the block the engine has already
+        recorded. Each ``AccountBlockOutcome`` identifies the affected account
+        together with its newly inserted block. Removing the last effective
+        barrier reports no block and does not release an existing block.
+        Clearing an override can expose a fallback barrier; the fallback is
+        evaluated normally and may record and report a block.
 
         Raises:
             PolicyConfigureError: If the policy is not found, has the wrong
@@ -2481,8 +2599,9 @@ class Configurator:
         and never touches accumulated P&L, this is an absolute assignment
         (upsert) of the live accumulator for ``account``. A numeric assignment
         outside an effective account P&L barrier and any halted assignment with
-        such a barrier return the block that the engine records before this
-        method returns.
+        such a barrier return the policy-reported block even when the account is
+        already blocked. The engine processes the block request before returning
+        and preserves the existing first cause.
 
         Raises:
             PolicyConfigureError: If the policy is not found or has a different

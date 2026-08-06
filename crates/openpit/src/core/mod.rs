@@ -45,6 +45,7 @@ pub use account_adjustment::{
     WithAccountAdjustmentPositionOperation,
 };
 pub use account_adjustment_context::AccountAdjustmentContext;
+pub(crate) use account_adjustment_context::AccountStateSnapshot;
 pub(crate) use account_control::BlockedAccounts;
 pub use account_control::{AccountBlockError, AccountBlockHandle, AccountControl};
 pub use account_groups::AccountGroupError;

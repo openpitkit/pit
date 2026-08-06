@@ -1670,12 +1670,16 @@ fn adjustment_outcome_realized_pnl_zero_boundary_is_tracked() {
 }
 
 // Regression for the realized-PnL rollback bug, via the public batch API: a
-// batch whose later element rejects is rolled back as a whole. A non-flat slot
-// that was untracked (realized_pnl = None) and force-set earlier in the batch
-// must return to None, NOT Some(0) — and must therefore not auto-resume realized
-// tracking on a subsequent fill.
+// batch whose later element rejects is rolled back as a whole. A realized-PnL
+// value force-set earlier in the batch must not survive that rejection.
+//
+// The public surface cannot tell an unset ledger from `Value(0)` here by
+// design: emission follows realization, so both states publish the same
+// outcome for a realizing fill and nothing for a non-realizing one. The unit
+// guard on the restored state is
+// `spot_funds::tests::realized_pnl_starts_after_rollback_restores_unset_state`.
 #[test]
-fn rejected_batch_rolls_untracked_realized_pnl_back_to_none() {
+fn rejected_batch_does_not_leak_force_set_pnl_into_first_realization() {
     let engine = build_engine();
     engine.accounts().set_currency(account(), asset("USD"));
     // Seed a long with an average but no realized-PnL tracking, plus an
@@ -1707,11 +1711,8 @@ fn rejected_batch_rolls_untracked_realized_pnl_back_to_none() {
         .expect_err("second element must breach its upper bound");
     assert_eq!(err.failed_adjustment_index, 1);
 
-    // The AAPL slot must be back to untracked realized PnL. We assert this
-    // through a subsequent fill: selling into the long reports the missing
-    // initial-PnL halt rather than a successful realized-PnL outcome, proving
-    // tracking did not auto-resume (it would have if rollback had left
-    // Some(0)).
+    // The first closing fill reports 120. An absolute 145 would prove the
+    // rejected force-set of 25 survived rollback.
     let aapl_usd = instr("AAPL", "USD");
     let mut reservation = engine
         .execute_pre_trade(make_order(
@@ -1740,8 +1741,11 @@ fn rejected_batch_rolls_untracked_realized_pnl_back_to_none() {
         .expect("AAPL post-trade entry must exist");
     assert_eq!(
         aapl_entry.entry.realized_pnl,
-        Some(Err(openpit::PnlHaltReason::MissingInitialPnl)),
-        "untracked slot must not auto-resume realized-PnL tracking after rollback",
+        Some(Ok(openpit::PnlOutcomeAmount {
+            delta: pnl("120"),
+            absolute: pnl("120"),
+        })),
+        "the rejected force-set must not contribute to the first realization",
     );
 }
 

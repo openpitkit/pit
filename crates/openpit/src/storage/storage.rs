@@ -341,6 +341,22 @@ where
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Snapshots every key currently present, in unspecified order.
+    ///
+    /// Cloning into a `Vec` rather than exposing an iterator keeps the index
+    /// hold to this call only, so the caller may re-enter the same storage
+    /// while walking the result. Like [`Storage::len`] the snapshot may be
+    /// stale by the time it is used under a thread-safe policy.
+    pub(crate) fn keys(&self) -> Vec<Key>
+    where
+        Key: Clone,
+    {
+        let _index = self.locking_policy.read_index();
+        // SAFETY: index shared lock prevents concurrent structural mutation
+        // of the map, which is all key enumeration needs.
+        unsafe { (*self.data.get()).keys().cloned().collect() }
+    }
 }
 
 impl<Key, Value, LockingPolicy> Storage<Key, Value, LockingPolicy>

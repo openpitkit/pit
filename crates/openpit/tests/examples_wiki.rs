@@ -1524,8 +1524,7 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
     // account below are harness scaffolding built to match the snippet's world.
     use openpit::param::{AccountId, Pnl};
     use openpit::pretrade::policies::{
-        SpotFundsConfigError, SpotFundsPnlBoundsBarrier, SpotFundsPolicy, SpotFundsPricingSource,
-        SpotFundsSettings,
+        SpotFundsConfigError, SpotFundsPnlBoundsBarrier, SpotFundsPolicy,
     };
     use openpit::{
         Engine, FullSync, OrderOperation, SpotFundsMarketData, WithAccountAdjustmentAmount,
@@ -1540,20 +1539,35 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
         >,
     >;
 
-    let account = AccountId::from_u64(99224416);
+    let retuned_account = AccountId::from_u64(99224416);
+    let forced_account = AccountId::from_u64(99224417);
     let builder = Engine::builder::<OrderOperation, SpotReport, SpotAdjustment>().full_sync();
-    let policy = SpotFundsPolicy::<FullSync, FullSync>::new(
-        SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])?,
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::pnl_bounds_kill_switch(
+        Some(SpotFundsPnlBoundsBarrier {
+            lower_bound: Some(Pnl::from_str("-1000")?),
+            upper_bound: None,
+        }),
+        [],
+        [],
         None::<SpotFundsMarketData<FullSync>>,
         builder.storage_builder(),
-    );
+    )?;
     let engine = builder.pre_trade(policy).build()?;
 
     let name = SpotFundsPolicy::<FullSync, FullSync>::NAME;
     let new_lower = Pnl::from_str("-500")?;
+    let outside = Pnl::from_str("-600")?;
 
-    // Retune the account PnL barrier; live accumulated PnL is untouched.
-    engine
+    // Seed live PnL inside the current -1000 barrier.
+    let seed = engine.configure().set_spot_funds_account_pnl(
+        name,
+        retuned_account,
+        openpit::PnlState::Value(outside),
+    )?;
+    assert!(seed.account_blocks.is_empty());
+
+    // Tightening the barrier checks the known account and records the block now.
+    let retune = engine
         .configure()
         .spot_funds::<SpotFundsConfigError>(name, |settings| {
             settings.set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
@@ -1561,14 +1575,16 @@ fn example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> Result<(), Box<dyn s
                 upper_bound: None,
             }))
         })?;
+    assert_eq!(retune.account_blocks.len(), 1);
+    assert_eq!(retune.account_blocks[0].account_id, retuned_account);
 
-    // Force-set the live accumulated PnL for one account.
-    let result = engine.configure().set_spot_funds_account_pnl(
+    // A force-set beyond the current barrier also returns its recorded block.
+    let forced = engine.configure().set_spot_funds_account_pnl(
         name,
-        account,
-        openpit::PnlState::Value(Pnl::from_str("-600")?),
+        forced_account,
+        openpit::PnlState::Value(outside),
     )?;
-    assert_eq!(result.account_blocks.len(), 1);
+    assert_eq!(forced.account_blocks.len(), 1);
     Ok(())
 }
 

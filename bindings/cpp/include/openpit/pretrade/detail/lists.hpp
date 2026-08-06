@@ -41,6 +41,12 @@ struct AccountBlockListDeleter {
   }
 };
 
+struct AccountBlockOutcomeListDeleter {
+  void operator()(OpenPitPretradeAccountBlockOutcomeList* list) const noexcept {
+    openpit_destroy_pretrade_account_block_outcome_list(list);
+  }
+};
+
 // These ABI lists are transient caller-owned snapshots. Materialize them at
 // the boundary so the public result has ordinary C++ value semantics. Outcome
 // lists remain lazy because their native handle is itself a public owned value.
@@ -81,6 +87,29 @@ class ListAccess final {
       }
     }
     return blocks;
+  }
+
+  [[nodiscard]] static std::vector<::openpit::accounts::AccountBlockOutcome>
+  DrainAccountBlockOutcomes(OpenPitPretradeAccountBlockOutcomeList* list) {
+    ::openpit::detail::Handle<OpenPitPretradeAccountBlockOutcomeList,
+                              AccountBlockOutcomeListDeleter>
+        owner(list);
+    std::vector<::openpit::accounts::AccountBlockOutcome> outcomes;
+    const std::size_t count =
+        openpit_pretrade_account_block_outcome_list_len(owner.Get());
+    outcomes.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+      OpenPitPretradeAccountBlockOutcome raw{};
+      if (openpit_pretrade_account_block_outcome_list_get(owner.Get(), index,
+                                                          &raw)) {
+        outcomes.push_back({
+            ::openpit::param::AccountId::FromUint64(raw.account_id),
+            ::openpit::detail::FromNative<::openpit::accounts::AccountBlock>(
+                raw.block),
+        });
+      }
+    }
+    return outcomes;
   }
 
   friend class ::openpit::Engine;

@@ -35,6 +35,7 @@ class SharedString;
 class StringView;
 
 struct AdjustmentResult;
+struct AccountBlockOutcomes;
 struct PostTradeResult;
 struct PolicyConfigurationResult;
 struct SettlementLag;
@@ -224,6 +225,7 @@ class AccountControl;
 class Accounts;
 
 struct AccountBlock;
+struct AccountBlockOutcome;
 struct AccountBlockError;
 struct AccountGroupError;
 

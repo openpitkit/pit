@@ -179,6 +179,11 @@ impl JsPnlOutcomeAmount {
 }
 
 /// Reason why a realized-PnL value could not be calculated.
+///
+/// When failures coincide, SpotFunds uses this priority from highest to lowest:
+/// `fromArithmeticOverflow()`, `fromMissingAccountCurrency()`,
+/// `fromMissingFx()`, `fromMissingCostBasis()`, then
+/// `fromMissingInitialPnl()`.
 #[wasm_bindgen(js_name = PnlHaltReason)]
 #[derive(Clone, Copy)]
 pub struct JsPnlHaltReason {
@@ -438,6 +443,13 @@ impl JsPnlOutcome {
 ///
 /// SpotFunds denominates both the delta and absolute value in the account
 /// currency.
+///
+/// SpotFunds engages the account line only for a realizing fill or a nonzero
+/// fee. Opening, same-direction, and zero-quantity fills without a nonzero fee,
+/// plus zero fees alone, emit no account outcome and require no account
+/// currency or FX for this line. A nonzero fee engages both the position and
+/// account rows regardless of fill quantity.
+///
 /// SpotFunds emits a halted outcome only for the report that transitions the
 /// account accumulator to halted. Later reports omit the unchanged halt until
 /// its account PnL is explicitly force-set. Re-arming a position does not
@@ -639,8 +651,13 @@ impl JsAccountOutcomeEntry {
 
     /// The account-currency realized-P&L outcome, or `undefined`.
     ///
-    /// The operation that first cannot calculate PnL contains a halt reason;
-    /// later operations omit the field until an adjustment force-sets PnL.
+    /// Reservations, cancels, settlement legs, opening, same-direction, and
+    /// zero-quantity fills without a non-zero fee omit it, as do non-PnL
+    /// adjustments. A realizing fill reports an authoritative result even when
+    /// its exact contribution is zero. A non-zero fee reports the underlying
+    /// asset even if the account never held it. The operation that first fails
+    /// reports a halt reason; later operations omit the field until an
+    /// asset-scoped adjustment force-sets PnL.
     #[wasm_bindgen(getter, js_name = realizedPnl)]
     pub fn realized_pnl(&self) -> Option<JsPnlOutcome> {
         self.realized_pnl.clone()

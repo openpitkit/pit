@@ -1043,42 +1043,48 @@ def test_example_wiki_spot_funds_pnl_kill_switch_builder() -> None:
 def test_example_wiki_spot_funds_pnl_kill_switch_reconfigure() -> None:
     # Source: https://wiki.openpit.dev/Spot-Funds/
     # - Self-Computed PnL Kill Switch / Runtime Reconfiguration → Python
-    # Harness scaffolding: a spot-funds engine with a per-account barrier the
-    # snippet then retunes and force-sets.
-    seed_account = openpit.param.AccountId.from_int(99224416)
+    # Harness scaffolding: the wiki snippet starts with a global -1000 barrier.
     engine = (
         openpit.Engine.builder()
         .no_sync()
         .builtin(
-            openpit.pretrade.policies.build_spot_funds_pnl_bounds_killswitch().account_barriers(
-                openpit.pretrade.policies.SpotFundsPnlBoundsAccountBarrier(
-                    account_id=seed_account,
-                    barrier=openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
-                        lower_bound=openpit.param.Pnl(-250),
-                    ),
+            openpit.pretrade.policies.build_spot_funds_pnl_bounds_killswitch().global_barrier(
+                openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
+                    lower_bound=openpit.param.Pnl(-1000),
                 ),
             )
         )
         .build()
     )
 
-    account_id = openpit.param.AccountId.from_int(99224416)
+    retuned_account = openpit.param.AccountId.from_int(99224416)
+    forced_account = openpit.param.AccountId.from_int(99224417)
 
-    # Retune the account PnL barrier; live accumulated PnL is untouched.
-    engine.configure().spot_funds_pnl_bounds_killswitch(
+    # Seed live PnL inside the current -1000 barrier.
+    seed = engine.configure().set_spot_funds_account_pnl(
+        openpit.pretrade.policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account=retuned_account,
+        state=openpit.param.Pnl(-600),
+    )
+    assert not seed.account_blocks
+
+    # Tightening the barrier checks the known account and records the block now.
+    retune = engine.configure().spot_funds_pnl_bounds_killswitch(
         openpit.pretrade.policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
         global_barrier=openpit.pretrade.policies.SpotFundsPnlBoundsBarrier(
             lower_bound=openpit.param.Pnl(-500),
         ),
     )
+    assert len(retune.account_blocks) == 1
+    assert retune.account_blocks[0].account_id == retuned_account
 
-    # Force-set the live accumulated PnL for one account.
-    result = engine.configure().set_spot_funds_account_pnl(
+    # A force-set beyond the current barrier also returns its recorded block.
+    forced = engine.configure().set_spot_funds_account_pnl(
         openpit.pretrade.policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
-        account=account_id,
+        account=forced_account,
         state=openpit.param.Pnl(-600),
     )
-    assert len(result.account_blocks) == 1
+    assert len(forced.account_blocks) == 1
 
 
 @pytest.mark.integration

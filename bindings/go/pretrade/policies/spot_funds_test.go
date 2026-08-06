@@ -823,29 +823,8 @@ func TestSpotFundsWithoutPnlBarriersExecutesNormalOrder(t *testing.T) {
 	if len(result.AccountBlocks) != 0 {
 		t.Fatalf("AccountBlocks = %v, want none", result.AccountBlocks)
 	}
-	if len(result.AccountPnls) != 1 {
-		t.Fatalf("AccountPnls = %v, want one outcome", result.AccountPnls)
-	}
-	outcome := result.AccountPnls[0]
-	if outcome.AccountID != account {
-		t.Fatalf("AccountPnls[0].AccountID = %v, want %v", outcome.AccountID, account)
-	}
-	pnl, ok := outcome.Amount()
-	if !ok {
-		haltReason, _ := outcome.HaltReason()
-		t.Fatalf("AccountPnls[0] halt reason = %v, want none", haltReason)
-	}
-	if !pnl.Delta.Equal(mustPnl(t, "0")) {
-		t.Fatalf(
-			"AccountPnls[0].Amount() PnL delta = %v, want 0",
-			pnl.Delta,
-		)
-	}
-	if !pnl.Absolute.Equal(mustPnl(t, "0")) {
-		t.Fatalf(
-			"AccountPnls[0].Amount() PnL absolute = %v, want 0",
-			pnl.Absolute,
-		)
+	if len(result.AccountPnls) != 0 {
+		t.Fatalf("AccountPnls = %v, want none for an opening fill", result.AccountPnls)
 	}
 }
 
@@ -906,7 +885,7 @@ func TestSpotFundsAccountPnlHaltIsStickyUntilExactForceSet(t *testing.T) {
 	report := directSpotFundsFillReport(t, account)
 	// The fee has to be denominated in the account currency, so it is what
 	// makes this fill's account line uncomputable without one. A fee-less
-	// opening fill would contribute a computable zero instead.
+	// opening fill would omit the account line instead.
 	feeReport := directSpotFundsFillReport(t, account)
 	feeFill := feeReport.EnsureFillView()
 	feeFill.SetFee(param.NewMonetaryAmount(mustFee(t, "1"), usd))
@@ -948,7 +927,7 @@ func TestSpotFundsAccountPnlHaltIsStickyUntilExactForceSet(t *testing.T) {
 		}
 		foundAapl = true
 		if _, ok := outcome.Entry.RealizedPnl.Get(); ok {
-			t.Fatal("third position PnL is emitted for a zero-realized fill")
+			t.Fatal("third position PnL is emitted for a non-realizing fill")
 		}
 		if _, ok := outcome.Entry.AverageEntryPrice.Get(); !ok {
 			t.Fatal("third average entry price is absent while position tracking is active")
@@ -970,7 +949,7 @@ func TestSpotFundsAccountPnlHaltIsStickyUntilExactForceSet(t *testing.T) {
 	if len(configuration.AccountBlocks) != 0 {
 		t.Fatalf("numeric force-set account blocks = %v, want none", configuration.AccountBlocks)
 	}
-	fourth, err := engine.ApplyExecutionReport(report)
+	fourth, err := engine.ApplyExecutionReport(feeReport)
 	if err != nil {
 		t.Fatalf("fourth ApplyExecutionReport() error = %v", err)
 	}
@@ -1107,13 +1086,37 @@ func TestSpotFundsPnlBoundsKillSwitchBuilderRequiresBarrier(t *testing.T) {
 	}
 }
 
+func TestSpotFundsGroupMembershipArmsEffectivePnlBarrier(t *testing.T) {
+	account := param.NewAccountIDFromUint64(83010)
+	group := mustAccountGroupID(t, 84)
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFundsPnlBoundsKillSwitch().
+			AccountGroupBarriers(policies.SpotFundsPnlBoundsAccountGroupBarrier{
+				AccountGroupID: group,
+				Barrier: policies.SpotFundsPnlBoundsBarrier{
+					LowerBound: optional.Some(mustPnl(t, "1")),
+				},
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	if err := engine.Accounts().RegisterGroup([]param.AccountID{account}, group); err != nil {
+		t.Fatalf("Accounts().RegisterGroup() error = %v", err)
+	}
+	assertSpotFundsPnlPreTradeReject(t, engine, account)
+}
+
 func TestSpotFundsPnlBoundsRuntimeAxisReplacementAndClear(t *testing.T) {
 	usd := mustAsset(t, "USD")
 	group := mustAccountGroupID(t, 85)
 	accountSpecific := param.NewAccountIDFromUint64(83011)
 	accountGroup := param.NewAccountIDFromUint64(83012)
-	accountGlobal := param.NewAccountIDFromUint64(83013)
-	accountAfterClear := param.NewAccountIDFromUint64(83014)
+	accountSafe := param.NewAccountIDFromUint64(83013)
+	accountGlobal := param.NewAccountIDFromUint64(83014)
+	accountAfterClear := param.NewAccountIDFromUint64(83015)
 
 	engine, err := openpit.NewEngineBuilder().NoSync().
 		Builtin(policies.BuildSpotFunds()).
@@ -1128,6 +1131,7 @@ func TestSpotFundsPnlBoundsRuntimeAxisReplacementAndClear(t *testing.T) {
 		accountGroup,
 		accountGlobal,
 		accountAfterClear,
+		accountSafe,
 	} {
 		seedSpotFundsLifecycleAccount(t, engine, account, usd)
 	}
@@ -1138,25 +1142,32 @@ func TestSpotFundsPnlBoundsRuntimeAxisReplacementAndClear(t *testing.T) {
 		LowerBound: optional.Some(mustPnl(t, "-20")),
 	}
 
+	halted, err := model.NewPnlHaltedState(model.PnlHaltReasonMissingFx)
+	if err != nil {
+		t.Fatalf("NewPnlHaltedState() error = %v", err)
+	}
 	for _, account := range []struct {
-		id  param.AccountID
-		pnl string
+		id    param.AccountID
+		state model.PnlState
 	}{
-		{accountSpecific, "-15"},
-		{accountGroup, "-15"},
-		{accountGlobal, "-25"},
-		{accountAfterClear, "-25"},
+		{accountSpecific, model.NewPnlState(mustPnl(t, "-15"))},
+		{accountGroup, model.NewPnlState(mustPnl(t, "-15"))},
+		{accountGlobal, model.NewPnlState(mustPnl(t, "-25"))},
+		{accountAfterClear, halted},
+		{accountSafe, model.NewPnlState(mustPnl(t, "-5"))},
 	} {
 		if _, err := engine.Configure().SetSpotFundsAccountPnl(
 			policies.SpotFundsPolicyName,
 			account.id,
-			model.NewPnlState(mustPnl(t, account.pnl)),
+			account.state,
 		); err != nil {
 			t.Fatalf("SetSpotFundsAccountPnl() error = %v", err)
 		}
 	}
 
-	if err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
+	// Arming the axes evaluates them at once: every seeded account already sits
+	// past its new bound, so all four are blocked before this call returns.
+	armed, err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
 		optional.Some(&globalBarrier),
 		[]policies.SpotFundsPnlBoundsAccountGroupBarrier{{
@@ -1171,19 +1182,116 @@ func TestSpotFundsPnlBoundsRuntimeAxisReplacementAndClear(t *testing.T) {
 				LowerBound: optional.Some(mustPnl(t, "-10")),
 			},
 		}},
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("SpotFundsPnlBoundsKillSwitch() setup error = %v", err)
+	}
+	if len(armed.AccountBlocks) != 4 {
+		t.Fatalf("arming AccountBlocks = %v, want four breached accounts", armed.AccountBlocks)
+	}
+	type accountBlockPair struct {
+		account param.AccountID
+		code    reject.Code
+	}
+	wantOutcomes := []struct {
+		pair   accountBlockPair
+		reason string
+	}{
+		{
+			pair: accountBlockPair{
+				account: accountSpecific,
+				code:    reject.CodePnlKillSwitchTriggered,
+			},
+			reason: "pnl kill switch triggered",
+		},
+		{
+			pair: accountBlockPair{
+				account: accountGroup,
+				code:    reject.CodePnlKillSwitchTriggered,
+			},
+			reason: "pnl kill switch triggered",
+		},
+		{
+			pair: accountBlockPair{
+				account: accountGlobal,
+				code:    reject.CodePnlKillSwitchTriggered,
+			},
+			reason: "pnl kill switch triggered",
+		},
+		{
+			pair: accountBlockPair{
+				account: accountAfterClear,
+				code:    reject.CodePnlKillSwitchTriggered,
+			},
+			reason: "account pnl calculation halted",
+		},
+	}
+	for index, want := range wantOutcomes {
+		outcome := armed.AccountBlocks[index]
+		gotPair := accountBlockPair{
+			account: outcome.AccountID,
+			code:    outcome.Block.Code,
+		}
+		if gotPair != want.pair {
+			t.Fatalf(
+				"AccountBlocks[%d] (account, code) = %v, want %v",
+				index,
+				gotPair,
+				want.pair,
+			)
+		}
+		if outcome.Block.Reason != want.reason {
+			t.Fatalf(
+				"AccountBlocks[%d].Block = %v, want reason %q",
+				index,
+				outcome.Block,
+				want.reason,
+			)
+		}
+	}
+	for _, account := range []param.AccountID{
+		accountSpecific,
+		accountGroup,
+		accountGlobal,
+		accountAfterClear,
+	} {
+		assertSpotFundsPnlPreTradeReject(t, engine, account)
+	}
+	reservation, rejects, err := engine.ExecutePreTrade(
+		spotFundsLifecycleOrder(t, accountSafe),
+	)
+	if err != nil {
+		t.Fatalf("safe account ExecutePreTrade() error = %v", err)
+	}
+	if reservation == nil || len(rejects) != 0 {
+		t.Fatalf("safe account result = (%v, %v), want reservation", reservation, rejects)
+	}
+	reservation.RollbackAndClose()
+	// The operator lifts the arming blocks; the axes themselves stay in force,
+	// so the cascade below is decided by the live barriers.
+	for _, account := range []param.AccountID{
+		accountSpecific,
+		accountGroup,
+		accountGlobal,
+		accountAfterClear,
+	} {
+		engine.Accounts().Unblock(account)
 	}
 
 	// A non-nil empty account axis clears only per-account barriers. The
 	// omitted global and group axes must keep affecting their respective keys.
-	if err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
+	// Only accountSpecific changes tier, and the wider global bound admits it.
+	cleared, err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
 		optional.None[*policies.SpotFundsPnlBoundsBarrier](),
 		nil,
 		[]policies.SpotFundsPnlBoundsAccountBarrier{},
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("SpotFundsPnlBoundsKillSwitch() account clear error = %v", err)
+	}
+	if len(cleared.AccountBlocks) != 0 {
+		t.Fatalf("account-clear AccountBlocks = %v, want none", cleared.AccountBlocks)
 	}
 
 	if result := applySpotFundsLifecycleFill(t, engine, accountSpecific); len(result.AccountBlocks) != 0 {
@@ -1194,7 +1302,7 @@ func TestSpotFundsPnlBoundsRuntimeAxisReplacementAndClear(t *testing.T) {
 
 	// Runtime updates may clear every axis. Unlike the explicit batch builder,
 	// this is a patch operation and has no at-least-one-barrier requirement.
-	if err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
+	if _, err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
 		optional.Some[*policies.SpotFundsPnlBoundsBarrier](nil),
 		[]policies.SpotFundsPnlBoundsAccountGroupBarrier{},
@@ -1227,7 +1335,7 @@ func TestSpotFundsPnlBoundsRuntimeAdditionRetainsLivePnl(t *testing.T) {
 	globalBarrier := policies.SpotFundsPnlBoundsBarrier{
 		LowerBound: optional.Some(mustPnl(t, "-30")),
 	}
-	if err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
+	if _, err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
 		optional.Some(&globalBarrier),
 		nil,
@@ -1250,7 +1358,7 @@ func TestSpotFundsPnlBoundsRuntimeAdditionRetainsLivePnl(t *testing.T) {
 
 	// Replacing the global barrier must preserve the account accumulator instead
 	// of reseeding it.
-	if err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
+	if _, err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
 		optional.Some(&globalBarrier),
 		nil,
@@ -1283,7 +1391,7 @@ func TestSpotFundsPnlBoundsConfiguratorRoundTrip(t *testing.T) {
 		LowerBound: optional.Some(mustPnl(t, "-100")),
 	}
 
-	if err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
+	if _, err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName,
 		optional.Some(&globalBarrier),
 		[]policies.SpotFundsPnlBoundsAccountGroupBarrier{

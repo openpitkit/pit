@@ -381,6 +381,19 @@ impl Mutation {
         Self::new_infallible(MutationProvenance::EngineOwned, commit, rollback)
     }
 
+    pub(crate) fn new_engine_owned_with_guard<Guard>(
+        commit: impl FnOnce() + 'static,
+        rollback: impl FnOnce() + 'static,
+        guard: Guard,
+    ) -> Self
+    where
+        Guard: 'static,
+    {
+        let mut mutation = Self::new_engine_owned(commit, rollback);
+        mutation.lifetime_guard = Some(Box::new(guard));
+        mutation
+    }
+
     fn new_infallible(
         provenance: MutationProvenance,
         commit: impl FnOnce() + 'static,

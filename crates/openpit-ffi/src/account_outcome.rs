@@ -66,6 +66,13 @@ define_optional!(
 /// bytes without creating an invalid Rust enum discriminant at the FFI
 /// boundary. Inbound values are validated before conversion to
 /// `OpenPitPnlHaltReason` values.
+///
+/// When failures coincide, SpotFunds uses this priority from highest to lowest:
+/// `OPENPIT_PNL_HALT_REASON_ARITHMETIC_OVERFLOW`,
+/// `OPENPIT_PNL_HALT_REASON_MISSING_ACCOUNT_CURRENCY`,
+/// `OPENPIT_PNL_HALT_REASON_MISSING_FX`,
+/// `OPENPIT_PNL_HALT_REASON_MISSING_COST_BASIS`, then
+/// `OPENPIT_PNL_HALT_REASON_MISSING_INITIAL_PNL`.
 pub type OpenPitPnlHaltReason = u8;
 
 /// The realized-PnL amount is available.
@@ -123,9 +130,13 @@ define_optional!(
 /// authoritative. Otherwise
 /// `halt_reason` explains why `amount` is not authoritative; do not interpret
 /// it as zero or read any stored PnL value as current. Position accumulators
-/// are independent. SpotFunds emits a halted account outcome only for the
-/// operation that transitions the accumulator to halted; later operations
-/// omit the unchanged halt.
+/// are independent. SpotFunds engages the account line only for a realizing
+/// fill or a nonzero fee. Opening, same-direction, and zero-quantity fills
+/// without a nonzero fee, plus zero fees alone, emit no outcome and require no
+/// account currency or FX for this line. A nonzero fee engages both position
+/// and account rows regardless of fill quantity. SpotFunds emits a halted
+/// account outcome only for the operation that transitions the accumulator to
+/// halted; later operations omit the unchanged halt.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct OpenPitAccountPnlOutcome {
@@ -176,10 +187,15 @@ pub struct OpenPitAccountOutcomeEntry {
     /// Incoming (pending inflow) amount outcome.
     pub incoming: OpenPitOutcomeAmountOptional,
     /// Optional position realized-PnL result in the account currency.
-    /// It is set to either an amount or the halt reason from the operation that
-    /// first failed. Later operations omit it until an asset-scoped balance
-    /// adjustment force-sets a new realized PnL. Position and account PnL halt
-    /// independently; this field never drives the account kill switch.
+    /// It is absent for reservations, cancels, settlement legs, opening,
+    /// same-direction, and zero-quantity fills without a non-zero fee, and for
+    /// non-PnL adjustments. A realizing fill reports an authoritative amount
+    /// even when its exact contribution is zero. A non-zero fee reports the
+    /// underlying asset even when the account never held it. The operation
+    /// that first fails reports its halt reason; later operations omit the
+    /// field until an asset-scoped balance adjustment force-sets a new realized
+    /// PnL. Position and account PnL halt independently; this field never
+    /// drives the account kill switch.
     pub realized_pnl: OpenPitPnlOutcomeOptional,
     /// Current account-currency average entry price (absolute) for the
     /// `(account, asset)` holdings slot. The underlying asset identifies one
@@ -867,6 +883,16 @@ pub unsafe extern "C" fn openpit_pretrade_account_adjustment_result_push_account
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pnl_halt_reason_wire_values_remain_stable() {
+        assert_eq!(OPENPIT_PNL_HALT_REASON_NONE, 0);
+        assert_eq!(OPENPIT_PNL_HALT_REASON_MISSING_FX, 1);
+        assert_eq!(OPENPIT_PNL_HALT_REASON_MISSING_ACCOUNT_CURRENCY, 2);
+        assert_eq!(OPENPIT_PNL_HALT_REASON_MISSING_INITIAL_PNL, 3);
+        assert_eq!(OPENPIT_PNL_HALT_REASON_MISSING_COST_BASIS, 4);
+        assert_eq!(OPENPIT_PNL_HALT_REASON_ARITHMETIC_OVERFLOW, 5);
+    }
 
     #[test]
     fn pnl_halt_reason_mapping_accepts_every_defined_code() {

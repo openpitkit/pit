@@ -324,6 +324,35 @@ def test_spot_funds_pnl_bounds_builder_and_configurator_use_named_entities() -> 
     )
 
 
+@pytest.mark.unit
+def test_group_membership_arms_effective_spot_funds_pnl_barrier() -> None:
+    policies = openpit.pretrade.policies
+    account_id = openpit.param.AccountId.from_int(83010)
+    group_id = openpit.param.AccountGroupId.from_int(84)
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds_pnl_bounds_killswitch().account_group_barriers(
+                policies.SpotFundsPnlBoundsAccountGroupBarrier(
+                    barrier=policies.SpotFundsPnlBoundsBarrier(
+                        lower_bound=openpit.param.Pnl("1"),
+                    ),
+                    account_group_id=group_id,
+                )
+            )
+        )
+        .build()
+    )
+
+    engine.accounts().register_group([account_id], group_id)
+    blocked = engine.start_pre_trade(order=conftest.make_order(account_id=account_id))
+    assert not blocked.ok
+    assert (
+        blocked.rejects[0].code == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    )
+
+
 def test_spot_funds_pnl_axes_can_be_enabled_replaced_and_cleared() -> None:
     policies = openpit.pretrade.policies
     survivor = openpit.param.AccountId.from_int(99224416)
@@ -395,12 +424,18 @@ def test_spot_funds_pnl_axes_can_be_enabled_replaced_and_cleared() -> None:
     assert not override_fill.account_blocks
 
     # Omitted global barriers remain in place while the account axis is cleared.
-    engine.configure().spot_funds_pnl_bounds_killswitch(
+    global_rearm = engine.configure().spot_funds_pnl_bounds_killswitch(
         policies.SpotFundsBuilder.NAME,
         account_barriers=[],
     )
+    assert global_rearm.account_blocks
+    assert (
+        global_rearm.account_blocks[0].block.code
+        == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    )
+    engine.accounts().unblock(account_override)
     override_recheck = engine.apply_execution_report(
-        report=_spot_funds_fee_fill_report(account_override, "0")
+        report=_spot_funds_fee_fill_report(account_override, "0.1")
     )
     assert override_recheck.account_blocks
     assert (
@@ -692,6 +727,48 @@ def test_set_spot_funds_account_pnl_force_sets_live_accumulator() -> None:
 
 
 @pytest.mark.unit
+def test_spot_funds_barrier_sweep_pairs_blocks_with_accounts() -> None:
+    policies = openpit.pretrade.policies
+    blocked_numeric = openpit.param.AccountId.from_int(99224416)
+    safe = openpit.param.AccountId.from_int(99224417)
+    blocked_halted = openpit.param.AccountId.from_int(99224418)
+    engine = (
+        openpit.Engine.builder().no_sync().builtin(policies.build_spot_funds()).build()
+    )
+
+    for account_id, state in (
+        (blocked_numeric, openpit.param.Pnl("-20")),
+        (safe, openpit.param.Pnl("-5")),
+        (blocked_halted, openpit.pretrade.PnlHaltReason.MISSING_FX),
+    ):
+        result = engine.configure().set_spot_funds_account_pnl(
+            policies.SpotFundsBuilder.NAME,
+            account=account_id,
+            state=state,
+        )
+        assert not result.account_blocks
+
+    swept = engine.configure().spot_funds_pnl_bounds_killswitch(
+        policies.SpotFundsBuilder.NAME,
+        global_barrier=policies.SpotFundsPnlBoundsBarrier(
+            lower_bound=openpit.param.Pnl("-10"),
+        ),
+    )
+
+    assert len(swept.account_blocks) == 2
+    assert swept.account_blocks[0].account_id == blocked_numeric
+    assert swept.account_blocks[0].block.reason == "pnl kill switch triggered"
+    assert swept.account_blocks[1].account_id == blocked_halted
+    assert swept.account_blocks[1].block.reason == "account pnl calculation halted"
+    for account_id in (blocked_numeric, blocked_halted):
+        assert not engine.start_pre_trade(
+            order=conftest.make_order(account_id=account_id)
+        ).ok
+    safe_result = engine.start_pre_trade(order=conftest.make_order(account_id=safe))
+    assert safe_result.ok
+
+
+@pytest.mark.unit
 def test_set_spot_funds_account_pnl_accepts_explicit_halt() -> None:
     policies = openpit.pretrade.policies
     account_id = openpit.param.AccountId.from_int(99224416)
@@ -736,7 +813,7 @@ def test_account_pnl_halt_is_sticky_until_exact_force_set() -> None:
 
     # The fee has to be denominated in the account currency, so it is what
     # makes this fill's account line uncomputable without one. A fee-less
-    # opening fill would contribute a computable zero instead.
+    # opening fill would omit the account line instead.
     first = engine.apply_execution_report(
         report=_spot_funds_fee_fill_report(account_id, "1")
     )
@@ -776,7 +853,7 @@ def test_account_pnl_halt_is_sticky_until_exact_force_set() -> None:
         state=openpit.param.Pnl("10"),
     )
     rearmed = engine.apply_execution_report(
-        report=_spot_funds_fee_fill_report(account_id, "0")
+        report=_spot_funds_fee_fill_report(account_id, "1")
     )
     assert len(rearmed.account_pnls) == 1
     assert rearmed.account_pnls[0].pnl is not None

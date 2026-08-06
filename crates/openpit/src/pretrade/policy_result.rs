@@ -69,13 +69,36 @@ pub struct PolicyAccountAdjustmentResult {
     pub account_blocks: Vec<AccountBlock>,
 }
 
+/// Account block produced for an account selected by the engine.
+///
+/// The block remains account-agnostic so it can be reused on paths where the
+/// caller already supplies the account. This outcome carries the identity for
+/// operations whose affected accounts are discovered by the engine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountBlockOutcome {
+    /// Account block inserted into engine state.
+    pub block: AccountBlock,
+    /// Account for which the engine inserted the block.
+    pub account_id: AccountId,
+}
+
+/// Account-block outcomes for accounts selected by the engine.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AccountBlockOutcomes {
+    /// Newly inserted blocks paired with their affected accounts.
+    pub account_blocks: Vec<AccountBlockOutcome>,
+}
+
 /// Per-policy result of a runtime configuration operation.
 ///
-/// The engine records every reported account block before returning the
-/// configuration result to the caller.
+/// A SpotFunds account-P&L force-set exposes its policy-reported breach or halt
+/// block even when an existing first-cause block prevents a new insertion. The
+/// engine processes every exposed block before returning without replacing an
+/// existing cause. The caller supplies the affected account to this operation,
+/// so the blocks do not repeat that identity.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PolicyConfigurationResult {
-    /// Account blocks reported by the accepted configuration operation.
+    /// Account blocks exposed by the accepted configuration operation.
     pub account_blocks: Vec<AccountBlock>,
 }
 

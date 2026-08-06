@@ -60,7 +60,7 @@ configurator.spotFunds(SpotFundsBuilder.NAME, {
   accountGroupLimitModes: [{ accountGroupId: 7, mode: null }],
 });
 
-configurator.spotFundsPnlBoundsKillswitch(
+const sweptPnlConfiguration = configurator.spotFundsPnlBoundsKillswitch(
   SpotFundsPnlBoundsKillswitchBuilder.NAME,
   {
     globalBarrier: new SpotFundsPnlBoundsBarrier("-500", undefined),
@@ -72,6 +72,8 @@ configurator.spotFundsPnlBoundsKillswitch(
     ],
   },
 );
+void sweptPnlConfiguration.accountBlocks[0]?.accountId.value;
+void sweptPnlConfiguration.accountBlocks[0]?.block.code;
 
 const numericPnlConfiguration = configurator.setSpotFundsAccountPnl(
   SpotFundsPnlBoundsKillswitchBuilder.NAME,

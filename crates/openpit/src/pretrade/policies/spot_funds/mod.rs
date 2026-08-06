@@ -73,7 +73,7 @@ const SPOT_FUNDS_POLICY_NAME: &str = "SpotFundsPolicy";
 pub(super) type HoldingsKey = (AccountId, Asset);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct AccountPnlEntry {
+pub(crate) struct AccountPnlEntry {
     pub(super) state: crate::PnlState,
     pub(super) assertion_token: Option<u64>,
 }
@@ -119,11 +119,68 @@ pub(crate) type AccountPnlStorage<LockingPolicyFactory> =
         >,
     >;
 
+pub(crate) type SpotFundsHoldingsStorage<LockingPolicyFactory> =
+    <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
+        HoldingsStore<<LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy>,
+    >;
+
+pub(crate) type ActiveHoldingsMutationStorage<LockingPolicyFactory> =
+    <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
+        Storage<
+            AccountId,
+            usize,
+            <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy,
+        >,
+    >;
+
+pub(super) struct ActiveHoldingsMutationGuard<StorageFactory>
+where
+    StorageFactory: LockingPolicyFactory,
+{
+    active: ActiveHoldingsMutationStorage<StorageFactory>,
+    account_id: AccountId,
+}
+
+impl<StorageFactory> Drop for ActiveHoldingsMutationGuard<StorageFactory>
+where
+    StorageFactory: LockingPolicyFactory,
+{
+    fn drop(&mut self) {
+        self.active.with_mut_if_present(&self.account_id, |count| {
+            *count = count.saturating_sub(1);
+        });
+        self.active.remove_if(&self.account_id, |count| *count == 0);
+    }
+}
+
 type AccountPnlLeaseStorage<LockingPolicyFactory> =
     <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
         Storage<
             AccountId,
             Option<AccountPnlLease>,
+            <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy,
+        >,
+    >;
+
+#[cfg(test)]
+type AccountPnlLeaseWaitHookStorage<LockingPolicyFactory> =
+    <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
+        Storage<
+            AccountId,
+            Option<std::sync::Arc<std::sync::Barrier>>,
+            <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy,
+        >,
+    >;
+
+#[cfg(test)]
+type PreTradeReservationHookStorage<LockingPolicyFactory> =
+    <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Shared<
+        Storage<
+            AccountId,
+            Option<(
+                std::sync::Arc<std::sync::Barrier>,
+                std::sync::Arc<std::sync::Barrier>,
+            )>,
             <LockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy,
         >,
     >;
@@ -144,6 +201,129 @@ where
     fn drop(&mut self) {
         release_account_pnl_lease::<StorageFactory>(&self.leases, self.account_id, self.owner_id);
     }
+}
+
+/// Re-evaluates known accounts against an account P&L barrier change.
+///
+/// A barrier is a control, so arming it, narrowing it, or moving an account
+/// onto a different tier of the cascade must decide the account's fate in that
+/// same call rather than waiting for the account's next fill. Only accounts
+/// whose *effective* barrier changed are evaluated: an unrelated settings
+/// retune therefore never re-blocks an account an operator has just unblocked.
+/// Removing the last effective barrier yields no block. Clearing an override
+/// can expose a fallback barrier, which is evaluated normally and can record a
+/// block. Neither operation releases an existing block - a block belongs to the
+/// engine and only an explicit operator action lifts it.
+///
+/// A global barrier change sweeps every account known through P&L, holdings
+/// (including provisional state), explicit account barriers, group membership,
+/// or account currency. An
+/// account/group-only change is narrower: it checks changed account targets
+/// and members of changed groups. Missing P&L is the implicit numeric zero and
+/// is never materialized by this read-only sweep.
+pub(crate) fn account_pnl_barrier_change_blocks<StorageFactory>(
+    pnl: &AccountPnlStorage<StorageFactory>,
+    holdings: &SpotFundsHoldingsStorage<StorageFactory>,
+    previous: &SpotFundsSettings,
+    current: &SpotFundsSettings,
+    memberships: &[(AccountId, crate::param::AccountGroupId)],
+    known_accounts: impl IntoIterator<Item = AccountId>,
+) -> Vec<(AccountId, crate::pretrade::AccountBlock)>
+where
+    StorageFactory: LockingPolicyFactory,
+{
+    let global_changed = previous.pnl_global_barrier() != current.pnl_global_barrier();
+    let mut changed_accounts = std::collections::BTreeSet::new();
+    for account_id in previous
+        .pnl_account_barriers()
+        .keys()
+        .chain(current.pnl_account_barriers().keys())
+    {
+        if previous.pnl_account_barriers().get(account_id)
+            != current.pnl_account_barriers().get(account_id)
+        {
+            changed_accounts.insert(*account_id);
+        }
+    }
+    let mut changed_groups = std::collections::BTreeSet::new();
+    for group_id in previous
+        .pnl_account_group_barriers()
+        .keys()
+        .chain(current.pnl_account_group_barriers().keys())
+    {
+        if previous.pnl_account_group_barriers().get(group_id)
+            != current.pnl_account_group_barriers().get(group_id)
+        {
+            changed_groups.insert(*group_id);
+        }
+    }
+
+    if !global_changed && changed_accounts.is_empty() && changed_groups.is_empty() {
+        return Vec::new();
+    }
+
+    let memberships = memberships
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut candidates = changed_accounts;
+    if global_changed {
+        candidates.extend(pnl.keys());
+        candidates.extend(holdings.keys().into_iter().map(|(account, _)| account));
+        candidates.extend(previous.pnl_account_barriers().keys().copied());
+        candidates.extend(current.pnl_account_barriers().keys().copied());
+        candidates.extend(memberships.keys().copied());
+        candidates.extend(known_accounts);
+    } else if !changed_groups.is_empty() {
+        candidates.extend(
+            memberships
+                .iter()
+                .filter_map(|(account, group)| changed_groups.contains(group).then_some(*account)),
+        );
+    }
+
+    let mut blocks = Vec::new();
+    for account_id in candidates {
+        let account_group_id = memberships.get(&account_id).copied();
+        let Some(current_barrier) = current.pnl_barrier_for(account_id, account_group_id) else {
+            continue;
+        };
+        if previous.pnl_barrier_for(account_id, account_group_id) == Some(current_barrier) {
+            continue;
+        }
+        let (state, provenance) = pnl
+            .with(&account_id, |entry| (entry.state, entry.assertion_token))
+            .unwrap_or((crate::PnlState::Value(Pnl::ZERO), None));
+        let Some(block) =
+            rejects::account_pnl_block_for_state(account_id, state, current_barrier, provenance)
+        else {
+            continue;
+        };
+        blocks.push((account_id, block));
+    }
+    blocks
+}
+
+pub(crate) fn account_pnl_membership_change_block<StorageFactory>(
+    pnl: &AccountPnlStorage<StorageFactory>,
+    settings: &SpotFundsSettings,
+    account_id: AccountId,
+    previous_group: Option<crate::param::AccountGroupId>,
+    current_group: Option<crate::param::AccountGroupId>,
+) -> Option<crate::pretrade::AccountBlock>
+where
+    StorageFactory: LockingPolicyFactory,
+{
+    let previous = settings.pnl_barrier_for(account_id, previous_group);
+    let current = settings.pnl_barrier_for(account_id, current_group);
+    if previous == current {
+        return None;
+    }
+    let current = current?;
+    let (state, provenance) = pnl
+        .with(&account_id, |entry| (entry.state, entry.assertion_token))
+        .unwrap_or((crate::PnlState::Value(Pnl::ZERO), None));
+    rejects::account_pnl_block_for_state(account_id, state, current, provenance)
 }
 
 fn release_account_pnl_lease<StorageFactory>(
@@ -182,8 +362,20 @@ fn release_account_pnl_lease<StorageFactory>(
 ///
 /// Average entry price and realized PnL accounting uses the account currency
 /// resolved by the engine account registry as calculation context. The account
-/// has one PnL accumulator independent of that currency. Any unavailable input
-/// needed for its aggregate calculation halts it until an explicit correction.
+/// has one PnL accumulator independent of that currency.
+///
+/// The account line is engaged only by an event that creates a realized
+/// contribution: a fill that reduces, closes, or reverses the position, or a
+/// non-zero fee. Opening, same-direction, and zero-quantity fills without a
+/// non-zero fee leave it untouched - they neither publish a zero nor require
+/// an account currency, and an unset accumulator stays unset. A realizing fill
+/// whose contribution is an exact zero still publishes that authoritative
+/// zero. Position PnL follows its own rule: every fill with a non-zero
+/// quantity rewrites the cost basis and therefore needs the account currency,
+/// and so does any non-zero fee.
+///
+/// Any unavailable input needed for the account-line aggregate calculation
+/// halts it until an explicit correction.
 /// A configured account PnL barrier rejects pre-trade while that accumulator is
 /// halted and blocks the account after post-trade has applied. Position PnL is
 /// tracked independently per asset and never participates directly in that
@@ -216,7 +408,14 @@ where
         as LockingPolicyFactory>::Config<SpotFundsSettings>,
     pub(super) market_orders: Option<SpotFundsMarketData<MarketDataSyncMode>>,
     pub(super) pnl: AccountPnlStorage<Sync::StorageLockingPolicyFactory>,
+    active_holdings_mutations:
+        ActiveHoldingsMutationStorage<Sync::StorageLockingPolicyFactory>,
     pnl_leases: AccountPnlLeaseStorage<Sync::StorageLockingPolicyFactory>,
+    #[cfg(test)]
+    pnl_lease_wait_hooks: AccountPnlLeaseWaitHookStorage<Sync::StorageLockingPolicyFactory>,
+    #[cfg(test)]
+    pre_trade_reservation_hooks:
+        PreTradeReservationHookStorage<Sync::StorageLockingPolicyFactory>,
     group_id: PolicyGroupId,
 }
 
@@ -264,6 +463,22 @@ where
             <Sync::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::new_shared(
                 pnl_leases,
             );
+        let active_holdings_mutations = storage_builder.create_shared::<AccountId, usize>();
+        #[cfg(test)]
+        let pnl_lease_wait_hooks =
+            <Sync::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::new_shared(
+                storage_builder
+                    .create_for_bound_key::<AccountId, Option<std::sync::Arc<std::sync::Barrier>>>(
+                    ),
+            );
+        #[cfg(test)]
+        let pre_trade_reservation_hooks =
+            <Sync::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::new_shared(
+                storage_builder.create_for_bound_key::<AccountId, Option<(
+                    std::sync::Arc<std::sync::Barrier>,
+                    std::sync::Arc<std::sync::Barrier>,
+                )>>(),
+            );
         Self {
             holdings: <<Sync as SyncMode>::StorageLockingPolicyFactory
                 as crate::storage::LockingPolicyFactory>::new_shared(
@@ -273,8 +488,28 @@ where
                 as LockingPolicyFactory>::new_config(settings),
             market_orders,
             pnl,
+            active_holdings_mutations,
             pnl_leases,
+            #[cfg(test)]
+            pnl_lease_wait_hooks,
+            #[cfg(test)]
+            pre_trade_reservation_hooks,
             group_id: crate::pretrade::DEFAULT_POLICY_GROUP_ID,
+        }
+    }
+
+    fn begin_holdings_mutation(
+        &self,
+        account_id: AccountId,
+    ) -> ActiveHoldingsMutationGuard<Sync::StorageLockingPolicyFactory> {
+        self.active_holdings_mutations.with_mut(
+            account_id,
+            || 0,
+            |count, _| *count = count.saturating_add(1),
+        );
+        ActiveHoldingsMutationGuard {
+            active: self.active_holdings_mutations.clone(),
+            account_id,
         }
     }
 
@@ -341,7 +576,7 @@ where
     /// than waited on. Single-threaded modes
     /// ([`LocalSync`](crate::core::LocalSync), `NoLocking`) have no other
     /// thread at all, which makes any wait there exactly this assertion.
-    fn acquire_account_pnl_lease(
+    pub(super) fn acquire_account_pnl_lease(
         &self,
         account_id: AccountId,
         owner_id: u64,
@@ -379,6 +614,15 @@ where
                     owner_id,
                 };
             }
+            #[cfg(test)]
+            {
+                let hook =
+                    self.pnl_lease_wait_hooks
+                        .with_mut(account_id, || None, |slot, _| slot.take());
+                if let Some(hook) = hook {
+                    hook.wait();
+                }
+            }
             if attempts < 8 {
                 std::thread::yield_now();
             } else {
@@ -388,6 +632,42 @@ where
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn set_account_pnl_lease_wait_hook(
+        &self,
+        account_id: AccountId,
+        hook: std::sync::Arc<std::sync::Barrier>,
+    ) {
+        self.pnl_lease_wait_hooks
+            .with_mut(account_id, || None, |slot, _| *slot = Some(hook));
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_pre_trade_reservation_hook(
+        &self,
+        account_id: AccountId,
+        entered: std::sync::Arc<std::sync::Barrier>,
+        release: std::sync::Arc<std::sync::Barrier>,
+    ) {
+        self.pre_trade_reservation_hooks.with_mut(
+            account_id,
+            || None,
+            |slot, _| *slot = Some((entered, release)),
+        );
+    }
+
+    #[cfg(test)]
+    pub(super) fn wait_pre_trade_reservation_hook(&self, account_id: AccountId) {
+        let hook =
+            self.pre_trade_reservation_hooks
+                .with_mut(account_id, || None, |slot, _| slot.take());
+        if let Some((entered, release)) = hook {
+            entered.wait();
+            release.wait();
+        }
+    }
+
+    #[cfg(test)]
     pub(super) fn acquire_account_pnl_assertion(
         &self,
         account_id: AccountId,
@@ -503,6 +783,10 @@ where
     ) -> Option<crate::core::ConfigEntry<<Sync as SyncMode>::StorageLockingPolicyFactory>> {
         Some(crate::core::ConfigEntry::SpotFunds {
             settings: crate::pretrade::ConfigurablePolicy::settings_cell(self),
+            transition: parking_lot::Mutex::new(()),
+            pnl: self.pnl.clone(),
+            holdings: self.holdings.clone(),
+            active_holdings_mutations: self.active_holdings_mutations.clone(),
         })
     }
 
@@ -550,8 +834,8 @@ where
         mutations: &mut Mutations,
     ) -> Result<PolicyAccountAdjustmentResult, Rejects> {
         self.apply_account_adjustment_impl(
+            ctx,
             Some(ctx.account_control.clone()),
-            ctx.account_group(),
             account_id,
             adjustment,
             mutations,
@@ -581,7 +865,11 @@ where
         >,
         report: &ExecutionReport,
     ) -> Option<PostTradeResult> {
-        self.apply_execution_report_impl(ctx, report)
+        let request = match self.read_execution_request(report) {
+            Ok(request) => request,
+            Err(block) => return Some(PostTradeResult::blocks_only(vec![block])),
+        };
+        ctx.with_state_writer(|| self.apply_execution_request_impl(ctx, request))
     }
 
     fn perform_pre_trade_check(

@@ -83,9 +83,13 @@ struct AccountOutcomeEntry {
   std::optional<OutcomeAmount> balance;
   std::optional<OutcomeAmount> held;
   std::optional<OutcomeAmount> incoming;
-  /// Realized-PnL result. The first failed calculation has a halt reason;
-  /// later operations omit it until an adjustment force-sets a new PnL. A
-  /// numeric result is denominated in the account currency.
+  /// Account-currency realized-PnL result. Reservations, cancels, settlement
+  /// legs, opening, same-direction, and zero-quantity fills without a non-zero
+  /// fee omit it, as do non-PnL adjustments. A realizing fill reports an
+  /// authoritative result even when its exact contribution is zero. A
+  /// non-zero fee reports the underlying asset even if the account never held
+  /// it. The first failed calculation reports a halt reason; later operations
+  /// omit it until an asset-scoped adjustment force-sets a new PnL.
   std::optional<PnlOutcome> realizedPnl;
   /// Account-currency average entry price after the adjustment.
   std::optional<param::Price> averageEntryPrice;

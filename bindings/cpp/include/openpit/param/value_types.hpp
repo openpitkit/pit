@@ -85,7 +85,8 @@ class Volume final : public detail::ExactValue<Volume, detail::VolumeTraits> {
   using Base = detail::ExactValue<Volume, detail::VolumeTraits>;
 
  public:
-  /// Calculates quantity at a price.
+  /// Calculates quantity as zero at a zero price, or volume divided by the
+  /// absolute price otherwise.
   [[nodiscard]] Quantity CalculateQuantity(const Price& price) const;
   /// Converts the volume to a positive cash inflow.
   [[nodiscard]] CashFlow ToCashFlowInflow() const;

@@ -502,11 +502,15 @@ impl JsVolume {
         JsPositionSize::from_inner(self.inner().to_position_size())
     }
 
-    /// Computes the quantity as `volume / price`.
+    /// Computes quantity from this volume and an explicit price.
+    ///
+    /// Returns zero when `price` is zero. Otherwise returns
+    /// `volume / abs(price)`, so negative prices produce the same quantity
+    /// magnitude as their positive counterparts.
     ///
     /// # Errors
     ///
-    /// Throws `ParamError` on division by zero or overflow.
+    /// Throws `ParamError` on overflow.
     #[wasm_bindgen(js_name = calculateQuantity)]
     pub fn calculate_quantity(&self, price: &JsPrice) -> Result<JsQuantity, JsValue> {
         self.inner()

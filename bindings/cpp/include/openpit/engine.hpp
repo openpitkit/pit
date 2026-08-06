@@ -170,8 +170,16 @@ struct PostTradeResult {
   std::vector<::openpit::accountadjustment::Outcome> accountAdjustments;
 };
 
-// Accepted runtime policy configuration result. `accountBlocks` is non-empty
-// when the accepted change immediately caused the engine to block an account.
+// Newly inserted blocks for accounts selected by the engine.
+struct AccountBlockOutcomes {
+  std::vector<::openpit::accounts::AccountBlockOutcome> accountBlocks;
+};
+
+// Accepted per-account runtime policy configuration result. A SpotFunds
+// account-P&L force-set exposes its policy-reported breach or halt block even
+// when an existing first-cause block prevents insertion. The engine processes
+// each exposed block before returning without replacing that first cause. The
+// caller supplied the affected account, so the blocks do not repeat it.
 struct PolicyConfigurationResult {
   std::vector<::openpit::accounts::AccountBlock> accountBlocks;
 };

@@ -213,8 +213,13 @@ where
     /// A spot order owes, per asset, the net outflow it would incur:
     /// `max(0, amount_owed)`. The underlying leg is owed only when giving the
     /// asset away (sells); the settlement leg is owed only when net cash flows
-    /// out. A negative or zero price is fully legitimate and never rejected:
-    /// it merely flips which legs carry a positive reservation.
+    /// out. A negative price is fully legitimate and never rejected: it merely
+    /// flips which legs carry a positive reservation. A zero price is equally
+    /// valid for a Quantity order; for a Volume one the quantity `v / 0` is
+    /// undefined, so the answer depends on the caller. Pre-trade admission
+    /// rejects it with [`RejectCode::OrderValueCalculationFailed`], while drop
+    /// copy records what the venue already did and sizes an empty leg instead:
+    /// no base inflow projection for a buy, zero quantity for a sell.
     ///
     /// - `Buy`:  underlying owed `0`; settlement owed `max(0, p*q)`.
     /// - `Sell`: underlying owed `q`; settlement owed `max(0, -p*q)`.
@@ -233,40 +238,51 @@ where
     /// [`RejectCode::MarkPriceUnavailable`], never accepted without a lock.
     pub(super) fn compute_reservation_legs(
         &self,
-        side: Side,
-        trade_amount: TradeAmount,
-        order_price: Option<Price>,
-        instrument: &Instrument,
-        account_id: AccountId,
+        request: &OrderRequestView<'_>,
         account_info: &impl AccountInfo,
+        ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
     ) -> Result<ReservationLegs, Reject> {
-        match side {
+        match request.side {
             Side::Buy => {
-                let buy_price = match order_price {
+                let buy_price = match request.price {
                     Some(p) => p,
-                    None => self.compute_buy_with_md(instrument, account_id, account_info)?,
+                    None => self.compute_buy_with_md(
+                        request.instrument,
+                        request.account_id,
+                        account_info,
+                    )?,
                 };
-                let (settlement_notional, base_incoming) = match trade_amount {
+                let (settlement_notional, base_incoming) = match request.trade_amount {
                     TradeAmount::Quantity(q) => {
                         let notional = buy_price
                             .calculate_position_size(q)
                             .map_err(|_| order_value_calculation_failed_reject(Self::NAME, ""))?;
                         (notional, q.to_position_size())
                     }
-                    // A Volume buy spends `v` of settlement, carrying the price
-                    // sign: positive price pays `v`, negative price receives it.
-                    // The acquired base quantity is `v / |p|`, well-defined
-                    // for any non-zero price; only a zero price leaves it
-                    // undefined, so the base inflow projection is then empty
-                    // (informational only, gates nothing) without introducing
-                    // a new reject.
                     TradeAmount::Volume(v) => {
+                        // A Volume buy spends `v` of settlement, carrying the
+                        // price sign: positive price pays `v`, negative price
+                        // receives it. The acquired base quantity is `v / |p|`,
+                        // undefined at a zero price: admission rejects such an
+                        // order, while drop copy may not refuse a historical
+                        // event, so its base inflow projection stays empty.
                         let base_incoming = if buy_price.is_zero() {
-                            PositionSize::ZERO
+                            if ctx.is_drop_copy() {
+                                PositionSize::ZERO
+                            } else {
+                                return Err(order_value_calculation_failed_reject(
+                                    Self::NAME,
+                                    "price or volume could not be used to evaluate order quantity",
+                                ));
+                            }
                         } else {
-                            v.calculate_quantity(buy_price)
-                                .map_err(|_| order_value_calculation_failed_reject(Self::NAME, ""))?
-                                .to_position_size()
+                            let quantity = v.calculate_quantity(buy_price).map_err(|_| {
+                                order_value_calculation_failed_reject(
+                                    Self::NAME,
+                                    "price or volume could not be used to evaluate order quantity",
+                                )
+                            })?;
+                            quantity.to_position_size()
                         };
                         (signed_volume(v, buy_price), base_incoming)
                     }
@@ -289,23 +305,36 @@ where
                 // guarantees a recorded lock price the settlement leg can
                 // reconcile against later, and a missing lock on a later
                 // fill/cancel is then a reconciliation error, not a valid order.
-                let sell_price = match order_price {
+                let sell_price = match request.price {
                     Some(p) => p,
-                    None => self.compute_sell_with_md(instrument, account_id, account_info)?,
+                    None => self.compute_sell_with_md(
+                        request.instrument,
+                        request.account_id,
+                        account_info,
+                    )?,
                 };
-                let quantity = match trade_amount {
+                let quantity = match request.trade_amount {
                     TradeAmount::Quantity(q) => q,
+                    // Sizing a Volume sell needs `v / |p|`, undefined at a zero
+                    // price: admission rejects such an order, while drop copy
+                    // may not refuse a historical event, so the sell sizes
+                    // nothing and still records the resolved price as its lock.
                     TradeAmount::Volume(v) => {
-                        // Sizing a Volume sell needs `v / |p|`, well-defined for
-                        // any non-zero price. A zero price cannot size the
-                        // quantity (`v / 0`), so the sell reserves nothing and
-                        // still passes - a zero price is treated like any other,
-                        // never as an error.
                         if sell_price.is_zero() {
-                            Quantity::ZERO
+                            if ctx.is_drop_copy() {
+                                Quantity::ZERO
+                            } else {
+                                return Err(order_value_calculation_failed_reject(
+                                    Self::NAME,
+                                    "price or volume could not be used to evaluate order quantity",
+                                ));
+                            }
                         } else {
                             v.calculate_quantity(sell_price).map_err(|_| {
-                                order_value_calculation_failed_reject(Self::NAME, "")
+                                order_value_calculation_failed_reject(
+                                    Self::NAME,
+                                    "price or volume could not be used to evaluate order quantity",
+                                )
                             })?
                         }
                     }
@@ -347,6 +376,19 @@ where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
         let request = self.read_order_request(order)?;
+        ctx.with_state_writer(|| self.perform_pre_trade_request_impl(ctx, request, mutations))
+    }
+
+    fn perform_pre_trade_request_impl(
+        &self,
+        ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        request: OrderRequestView<'_>,
+        mutations: &mut Mutations,
+    ) -> Result<Option<PolicyPreTradeResult>, Rejects>
+    where
+        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
+    {
+        let account_group = ctx.state_account_group();
         if ctx.is_drop_copy() && request.price.is_none() {
             return Err(Reject::new(
                 Self::NAME,
@@ -357,7 +399,7 @@ where
             )
             .into());
         }
-        let pnl_rejects = self.reject_halted_account_pnl(request.account_id, ctx);
+        let pnl_rejects = self.reject_halted_account_pnl(request.account_id, &account_group);
         if ctx.is_drop_copy() {
             if let Err(rejects) = &pnl_rejects {
                 if let Some(reject) = rejects
@@ -374,14 +416,7 @@ where
         }
 
         let legs = self
-            .compute_reservation_legs(
-                request.side,
-                request.trade_amount,
-                request.price,
-                request.instrument,
-                request.account_id,
-                ctx,
-            )
+            .compute_reservation_legs(&request, &account_group, ctx)
             .map_err(Rejects::from)?;
 
         let underlying_asset = request.instrument.underlying_asset().clone();
@@ -395,7 +430,7 @@ where
             SpotFundsLimitMode::TrackOnly
         } else {
             self.settings
-                .with(|s| s.limit_mode_for(request.account_id, ctx))
+                .with(|s| s.limit_mode_for(request.account_id, &account_group))
         };
 
         let mut outcome =
@@ -415,6 +450,7 @@ where
                 step.incoming,
                 limit_mode,
                 ctx.account_control.clone(),
+                ctx.state_accounts(),
                 mutations,
                 &mut outcome,
             )?;
@@ -438,24 +474,26 @@ where
     /// to storage and nothing to `mutations`.
     pub(super) fn perform_pre_trade_check_dry_run_impl<Order>(
         &self,
-        account_info: &impl AccountInfo,
+        ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
         order: &Order,
     ) -> Result<Option<PolicyPreTradeResult>, Rejects>
     where
         Order: HasInstrument + HasAccountId + HasSide + HasTradeAmount + HasOrderPrice,
     {
         let request = self.read_order_request(order)?;
-        self.reject_halted_account_pnl(request.account_id, account_info)?;
+        ctx.with_state_writer(|| self.perform_pre_trade_request_dry_run_impl(ctx, request))
+    }
+
+    fn perform_pre_trade_request_dry_run_impl(
+        &self,
+        ctx: &PreTradeContext<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        request: OrderRequestView<'_>,
+    ) -> Result<Option<PolicyPreTradeResult>, Rejects> {
+        let account_group = ctx.state_account_group();
+        self.reject_halted_account_pnl(request.account_id, &account_group)?;
 
         let legs = self
-            .compute_reservation_legs(
-                request.side,
-                request.trade_amount,
-                request.price,
-                request.instrument,
-                request.account_id,
-                account_info,
-            )
+            .compute_reservation_legs(&request, &account_group, ctx)
             .map_err(Rejects::from)?;
 
         let underlying_asset = request.instrument.underlying_asset().clone();
@@ -465,7 +503,7 @@ where
         // so a track-only dry-run mirrors a track-only reservation byte for byte.
         let limit_mode = self
             .settings
-            .with(|s| s.limit_mode_for(request.account_id, account_info));
+            .with(|s| s.limit_mode_for(request.account_id, &account_group));
 
         let mut outcome =
             PolicyPreTradeResult::with_capacity(2, legs.lock_price.is_some() as usize);
@@ -575,9 +613,7 @@ where
     /// rollback, and appends the asset's outcome entry.
     ///
     /// A step with both amounts zero is a clean no-op: no slot is created, no
-    /// rollback is registered, and no outcome entry is emitted. This makes
-    /// "reserve nothing" (e.g. a buy's base step at a zero price) pass the gate
-    /// without side effects.
+    /// rollback is registered, and no outcome entry is emitted.
     #[allow(clippy::too_many_arguments)]
     fn reserve_asset(
         &self,
@@ -587,6 +623,9 @@ where
         incoming_amount: PositionSize,
         limit_mode: SpotFundsLimitMode,
         account_control: Option<AccountControl<<Sync as SyncMode>::StorageLockingPolicyFactory>>,
+        state_accounts: Option<
+            crate::core::Accounts<<Sync as SyncMode>::StorageLockingPolicyFactory>,
+        >,
         mutations: &mut Mutations,
         outcome: &mut PolicyPreTradeResult,
     ) -> Result<(), Rejects>
@@ -597,6 +636,10 @@ where
             return Ok(());
         }
 
+        #[cfg(test)]
+        self.wait_pre_trade_reservation_hook(account_id);
+
+        let active_mutation = self.begin_holdings_mutation(account_id);
         let key = (account_id, asset.clone());
         let key_for_remove = key.clone();
         let (new_holdings, was_new) = self.holdings.with_mut_or_insert_prune_new_if_zero(
@@ -641,9 +684,10 @@ where
         self.register_hold_rollback(
             mutations,
             account_control,
+            state_accounts,
             key,
-            held_amount,
-            incoming_amount,
+            (held_amount, incoming_amount),
+            active_mutation,
         );
 
         outcome.account_adjustments.push(reservation_outcome_entry(
@@ -834,9 +878,9 @@ fn signed_volume(volume: crate::param::Volume, price: Price) -> PositionSize {
         // Positive price: the volume is a settlement outflow (cash paid).
         magnitude
     } else {
-        // Zero price costs nothing; a negative price is a cash inflow. Either
-        // way the buy owes no settlement, so the signed notional is <= 0 and
-        // `non_negative` collapses it to a zero reservation.
+        // A negative price is a cash inflow, so the buy owes no settlement.
+        // Zero also costs nothing. In both cases `non_negative` collapses the
+        // signed notional to a zero reservation.
         neg(magnitude)
     }
 }

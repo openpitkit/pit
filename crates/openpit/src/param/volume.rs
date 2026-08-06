@@ -56,17 +56,17 @@ impl Volume {
 
     /// Calculates quantity from volume and price.
     ///
-    /// Uses absolute value of price to ensure quantity is non-negative.
+    /// Returns zero when price is zero. Otherwise, uses the absolute value of
+    /// price to ensure quantity is non-negative.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidPrice`] when price is zero.
     /// Returns [`Error::Overflow`] with [`ParamKind::Volume`] when division overflows.
     /// Returns [`Error::Underflow`] with [`ParamKind::Quantity`] when result cannot be
     /// represented as [`Quantity`].
     pub fn calculate_quantity(self, price: Price) -> Result<Quantity, Error> {
         if price.is_zero() {
-            return Err(Error::InvalidPrice);
+            return Ok(Quantity::ZERO);
         }
 
         let quantity_decimal = self
@@ -99,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn calculates_quantity() {
+    fn calculates_quantity_for_positive_price() {
         let volume = v("6352.6125");
         let price = Price::new(d("42350.75"));
 
@@ -110,13 +110,26 @@ mod tests {
     }
 
     #[test]
-    fn calculate_quantity_reports_invalid_zero_price() {
+    fn calculates_quantity_for_negative_price() {
+        let volume = v("6352.6125");
+        let price = Price::new(d("-42350.75"));
+
+        assert_eq!(
+            volume.calculate_quantity(price).expect("must be valid"),
+            Quantity::new(d("0.15")).expect("must be valid")
+        );
+    }
+
+    #[test]
+    fn calculates_zero_quantity_for_zero_price() {
         let volume = v("1");
         let zero_price = Price::new(Decimal::ZERO);
 
         assert_eq!(
-            volume.calculate_quantity(zero_price),
-            Err(Error::InvalidPrice)
+            volume
+                .calculate_quantity(zero_price)
+                .expect("must be valid"),
+            Quantity::ZERO
         );
     }
 

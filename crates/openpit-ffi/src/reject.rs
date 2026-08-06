@@ -15,8 +15,11 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
+use crate::param::OpenPitParamAccountId;
 use crate::OpenPitStringView;
-use openpit::pretrade::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
+use openpit::pretrade::{
+    AccountBlock, AccountBlockOutcome, Reject, RejectCode, RejectScope, Rejects,
+};
 use std::ffi::c_void;
 
 /// Raw reject-scope code accepted from C callers.
@@ -679,6 +682,104 @@ pub extern "C" fn openpit_pretrade_account_block_list_get(
     true
 }
 
+/// Account block recorded for an account selected by the engine.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenPitPretradeAccountBlockOutcome {
+    /// Account for which the engine inserted the block.
+    pub account_id: OpenPitParamAccountId,
+    /// Account block inserted into engine state.
+    pub block: OpenPitPretradeAccountBlock,
+}
+
+impl OpenPitPretradeAccountBlockOutcome {
+    fn from_outcome(inner: &AccountBlockOutcome) -> Self {
+        Self {
+            account_id: inner.account_id.as_u64(),
+            block: OpenPitPretradeAccountBlock::from_block(&inner.block),
+        }
+    }
+}
+
+/// Caller-owned list of account-block outcomes.
+pub struct OpenPitPretradeAccountBlockOutcomeList {
+    pub(crate) items: Vec<AccountBlockOutcome>,
+}
+
+pub(crate) fn block_outcomes_to_list_owned(
+    values: Vec<AccountBlockOutcome>,
+) -> OpenPitPretradeAccountBlockOutcomeList {
+    OpenPitPretradeAccountBlockOutcomeList { items: values }
+}
+
+#[no_mangle]
+/// Releases a caller-owned account-block-outcome list.
+///
+/// Contract:
+/// - passing null is allowed;
+/// - this function always succeeds.
+pub extern "C" fn openpit_destroy_pretrade_account_block_outcome_list(
+    outcomes: *mut OpenPitPretradeAccountBlockOutcomeList,
+) {
+    if outcomes.is_null() {
+        return;
+    }
+    unsafe { drop(Box::from_raw(outcomes)) };
+}
+
+#[no_mangle]
+/// Returns the number of account-block outcomes in the list.
+///
+/// Contract:
+/// - `list` must be a valid non-null pointer;
+/// - this function never fails;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_pretrade_account_block_outcome_list_len(
+    list: *const OpenPitPretradeAccountBlockOutcomeList,
+) -> usize {
+    assert!(
+        !list.is_null(),
+        "account block outcome list pointer is null"
+    );
+    let list = unsafe { &*list };
+    list.items.len()
+}
+
+#[no_mangle]
+/// Copies a non-owning account-block outcome at `index` into `out_outcome`.
+///
+/// The copied block view borrows string memory from `list`.
+///
+/// Contract:
+/// - `list` must be a valid non-null pointer;
+/// - `out_outcome` must be a valid non-null pointer;
+/// - returns `true` when a value exists and was copied;
+/// - returns `false` when `index` is out of bounds and does not write
+///   `out_outcome`;
+/// - the copied block view remains valid while `list` is alive and unchanged;
+/// - this function never fails;
+/// - violating the pointer contract aborts the call.
+pub extern "C" fn openpit_pretrade_account_block_outcome_list_get(
+    list: *const OpenPitPretradeAccountBlockOutcomeList,
+    index: usize,
+    out_outcome: *mut OpenPitPretradeAccountBlockOutcome,
+) -> bool {
+    assert!(
+        !list.is_null(),
+        "account block outcome list pointer is null"
+    );
+    assert!(
+        !out_outcome.is_null(),
+        "account block outcome output pointer is null"
+    );
+    let list = unsafe { &*list };
+    let Some(outcome) = list.items.get(index) else {
+        return false;
+    };
+    unsafe { *out_outcome = OpenPitPretradeAccountBlockOutcome::from_outcome(outcome) };
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use crate::OpenPitStringView;
@@ -992,6 +1093,52 @@ mod tests {
         assert_eq!(string_view_to_string(out.policy), "policy");
         assert!(!openpit_pretrade_account_block_list_get(list, 1, &mut out));
         openpit_destroy_pretrade_account_block_list(list);
+    }
+
+    #[test]
+    fn account_block_outcome_list_destroy_is_null_safe() {
+        openpit_destroy_pretrade_account_block_outcome_list(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn account_block_outcome_list_len_get_roundtrip() {
+        use openpit::param::AccountId;
+
+        let list = Box::into_raw(Box::new(block_outcomes_to_list_owned(vec![
+            AccountBlockOutcome {
+                account_id: AccountId::from_u64(42),
+                block: AccountBlock::new(
+                    "policy",
+                    RejectCode::PnlKillSwitchTriggered,
+                    "reason",
+                    "details",
+                ),
+            },
+        ])));
+        assert_eq!(openpit_pretrade_account_block_outcome_list_len(list), 1);
+        let mut out = OpenPitPretradeAccountBlockOutcome {
+            account_id: 0,
+            block: OpenPitPretradeAccountBlock {
+                policy: OpenPitStringView::not_set(),
+                reason: OpenPitStringView::not_set(),
+                details: OpenPitStringView::not_set(),
+                user_data: std::ptr::null_mut(),
+                code: OPENPIT_PRETRADE_REJECT_CODE_OTHER,
+            },
+        };
+        assert!(openpit_pretrade_account_block_outcome_list_get(
+            list, 0, &mut out
+        ));
+        assert_eq!(out.account_id, 42);
+        assert_eq!(
+            out.block.code,
+            OPENPIT_PRETRADE_REJECT_CODE_PNL_KILL_SWITCH_TRIGGERED
+        );
+        assert_eq!(string_view_to_string(out.block.policy), "policy");
+        assert!(!openpit_pretrade_account_block_outcome_list_get(
+            list, 1, &mut out
+        ));
+        openpit_destroy_pretrade_account_block_outcome_list(list);
     }
 
     #[test]

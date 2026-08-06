@@ -845,6 +845,9 @@ fn collect_adjustments(
 /// control state, so changes made through it are visible to every other handle
 /// and to later policy calls. Calling it from a callback of the same engine
 /// throws `LifecycleError`.
+///
+/// For an example of good practice in building a control plane on this SDK,
+/// see [Pit Officer](http://officer.openpit.dev/).
 #[wasm_bindgen(js_name = Accounts)]
 pub struct JsAccounts {
     inner: openpit::Accounts<StorageFactory>,
@@ -857,6 +860,18 @@ impl JsAccounts {
     ///
     /// `accounts` is an iterable of `AccountId` or numeric/string identifiers;
     /// `group` accepts an `AccountGroupId` or a numeric/string identifier.
+    /// Effective currency resolves from the account, then its group, then the
+    /// default group. Stored realized PnL and cost basis are bare numbers whose
+    /// denomination is implied by the effective currency when they were
+    /// computed. This operation does not inspect that state. If joining changes
+    /// the effective currency, existing numbers remain in the previous currency
+    /// while the engine treats them as the new one. The SDK does not convert,
+    /// detect, report, halt, sweep, or block on this mismatch. Avoiding it is
+    /// entirely the caller's responsibility. If membership changes the effective
+    /// P&L barrier, this call checks current account P&L, treating an unset
+    /// ledger as zero and halted state as a breach, and latches any resulting
+    /// account block before returning. An unchanged effective barrier is not
+    /// checked again.
     ///
     /// # Errors
     ///
@@ -880,6 +895,18 @@ impl JsAccounts {
     ///
     /// `accounts` is an iterable of `AccountId` or numeric/string identifiers;
     /// `group` accepts an `AccountGroupId` or a numeric/string identifier.
+    /// Effective currency resolves from the account, then its group, then the
+    /// default group. Stored realized PnL and cost basis are bare numbers whose
+    /// denomination is implied by the effective currency when they were
+    /// computed. This operation does not inspect that state. If leaving changes
+    /// the effective currency, existing numbers remain in the previous currency
+    /// while the engine treats them as the new one. The SDK does not convert,
+    /// detect, report, halt, sweep, or block on this mismatch. Avoiding it is
+    /// entirely the caller's responsibility. If membership changes the effective
+    /// P&L barrier, this call checks current account P&L, treating an unset
+    /// ledger as zero and halted state as a breach, and latches any resulting
+    /// account block before returning. An unchanged effective barrier is not
+    /// checked again.
     ///
     /// # Errors
     ///
@@ -918,8 +945,14 @@ impl JsAccounts {
 
     /// Sets the currency used by account-aware policies for `account`.
     ///
-    /// This changes configuration only; it does not recompute holdings, average
-    /// entry prices, or realized P&L.
+    /// Effective currency resolves from the account, then its group, then the
+    /// default group. Stored realized PnL and cost basis are bare numbers whose
+    /// denomination is implied by the effective currency when they were
+    /// computed. The SDK writes `asset` without checking that state. If this
+    /// changes the effective currency, existing numbers remain in the previous
+    /// currency while the engine treats them as the new one. The SDK does not
+    /// convert, detect, report, halt, sweep, or block on this mismatch. Avoiding
+    /// it is entirely the caller's responsibility.
     ///
     /// `account` accepts an `AccountId` or a numeric/string identifier. `asset`
     /// must be a valid asset identifier.
@@ -939,8 +972,14 @@ impl JsAccounts {
 
     /// Clears the currency configured for `account`.
     ///
-    /// This changes configuration only; it does not recompute holdings, average
-    /// entry prices, or realized P&L.
+    /// Effective currency resolves from the account, then its group, then the
+    /// default group. Stored realized PnL and cost basis are bare numbers whose
+    /// denomination is implied by the effective currency when they were
+    /// computed. The SDK clears the account value without checking that state.
+    /// If this changes the effective currency, existing numbers remain in the
+    /// previous currency while the engine treats them as the new one. The SDK
+    /// does not convert, detect, report, halt, sweep, or block on this mismatch.
+    /// Avoiding it is entirely the caller's responsibility.
     ///
     /// `account` accepts an `AccountId` or a numeric/string identifier.
     ///
@@ -957,9 +996,15 @@ impl JsAccounts {
 
     /// Sets the fallback currency used by account-aware policies for `group`.
     ///
-    /// `AccountGroupId.DEFAULT()` selects the global fallback tier. This changes
-    /// configuration only; it does not recompute holdings, average entry prices,
-    /// or realized P&L.
+    /// `AccountGroupId.DEFAULT()` selects the global fallback tier. Effective
+    /// currency resolves from the account, then its group, then the default
+    /// group. Stored realized PnL and cost basis are bare numbers whose
+    /// denomination is implied by the effective currency when they were
+    /// computed. The SDK writes `asset` without checking affected account
+    /// state. If an effective currency changes, existing numbers remain in the
+    /// previous currency while the engine treats them as the new one. The SDK
+    /// does not convert, detect, report, halt, sweep, or block on this mismatch.
+    /// Avoiding it is entirely the caller's responsibility.
     ///
     /// `group` accepts an `AccountGroupId` or a numeric/string identifier.
     /// `asset` must be a valid asset identifier.
@@ -983,9 +1028,15 @@ impl JsAccounts {
 
     /// Clears the fallback currency configured for `group`.
     ///
-    /// `AccountGroupId.DEFAULT()` selects the global fallback tier. This changes
-    /// configuration only; it does not recompute holdings, average entry prices,
-    /// or realized P&L.
+    /// `AccountGroupId.DEFAULT()` selects the global fallback tier. Effective
+    /// currency resolves from the account, then its group, then the default
+    /// group. Stored realized PnL and cost basis are bare numbers whose
+    /// denomination is implied by the effective currency when they were
+    /// computed. The SDK clears the group value without checking affected
+    /// account state. If an effective currency changes, existing numbers remain
+    /// in the previous currency while the engine treats them as the new one.
+    /// The SDK does not convert, detect, report, halt, sweep, or block on this
+    /// mismatch. Avoiding it is entirely the caller's responsibility.
     ///
     /// `group` accepts an `AccountGroupId` or a numeric/string identifier.
     ///

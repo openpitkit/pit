@@ -28,6 +28,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use js_sys::Array;
+use openpit::param::AccountId;
 use openpit::pretrade::{
     DropCopyOperation, PreTradeDryRunReport, PreTradeRequest, PreTradeReservation, Rejects,
 };
@@ -41,6 +42,7 @@ use crate::engine::Order;
 use crate::error::{make_error, ErrorKind};
 use crate::lock::JsLock;
 use crate::outcome::{JsAccountAdjustmentOutcome, JsAccountPnlOutcome};
+use crate::param::ids::JsAccountId;
 use crate::policy::CallbackErrorScope;
 use crate::reject::{JsAccountBlock, JsReject};
 
@@ -737,6 +739,80 @@ impl JsAccountAdjustmentBatchResult {
     }
 }
 
+// ─── AccountBlockOutcomes ───────────────────────────────────────────────────
+
+/// Account block inserted for an account selected by the engine.
+#[wasm_bindgen(js_name = AccountBlockOutcome)]
+#[derive(Clone)]
+pub struct JsAccountBlockOutcome {
+    account_id: AccountId,
+    block: JsAccountBlock,
+}
+
+#[wasm_bindgen(js_class = AccountBlockOutcome)]
+impl JsAccountBlockOutcome {
+    /// Account for which the engine inserted the block.
+    #[wasm_bindgen(getter, js_name = accountId)]
+    pub fn account_id(&self) -> JsAccountId {
+        JsAccountId::from_inner(self.account_id)
+    }
+
+    /// Account block inserted into engine state.
+    #[wasm_bindgen(getter)]
+    pub fn block(&self) -> JsAccountBlock {
+        self.block.clone()
+    }
+
+    /// Returns a deep copy of this outcome.
+    #[wasm_bindgen(js_name = clone)]
+    pub fn js_clone(&self) -> JsAccountBlockOutcome {
+        self.clone()
+    }
+}
+
+impl JsAccountBlockOutcome {
+    fn from_core(outcome: &openpit::AccountBlockOutcome) -> Self {
+        Self {
+            account_id: outcome.account_id,
+            block: JsAccountBlock::from_core(&outcome.block),
+        }
+    }
+}
+
+/// Account-block outcomes for accounts selected by the engine.
+#[wasm_bindgen(js_name = AccountBlockOutcomes)]
+#[derive(Clone)]
+pub struct JsAccountBlockOutcomes {
+    account_blocks: Vec<JsAccountBlockOutcome>,
+}
+
+#[wasm_bindgen(js_class = AccountBlockOutcomes)]
+impl JsAccountBlockOutcomes {
+    /// Newly inserted blocks paired with their affected accounts.
+    #[wasm_bindgen(getter, js_name = accountBlocks)]
+    pub fn account_blocks(&self) -> Vec<JsAccountBlockOutcome> {
+        self.account_blocks.clone()
+    }
+
+    /// Returns a deep copy of this result.
+    #[wasm_bindgen(js_name = clone)]
+    pub fn js_clone(&self) -> JsAccountBlockOutcomes {
+        self.clone()
+    }
+}
+
+impl JsAccountBlockOutcomes {
+    pub(crate) fn from_core(result: &openpit::AccountBlockOutcomes) -> Self {
+        Self {
+            account_blocks: result
+                .account_blocks
+                .iter()
+                .map(JsAccountBlockOutcome::from_core)
+                .collect(),
+        }
+    }
+}
+
 // ─── PolicyConfigurationResult ───────────────────────────────────────────────
 
 /// Result of an accepted runtime policy configuration operation.
@@ -748,7 +824,13 @@ pub struct JsPolicyConfigurationResult {
 
 #[wasm_bindgen(js_class = PolicyConfigurationResult)]
 impl JsPolicyConfigurationResult {
-    /// Blocks recorded by the engine before configuration returned.
+    /// Blocks exposed by the accepted operation.
+    ///
+    /// A SpotFunds account P&L force-set exposes its policy-reported breach or
+    /// halt block even when an existing first-cause block prevents insertion.
+    /// The engine processes every exposed block before returning without
+    /// replacing that first cause. The caller supplied the affected account, so
+    /// the blocks do not repeat it.
     #[wasm_bindgen(getter, js_name = accountBlocks)]
     pub fn account_blocks(&self) -> Vec<JsAccountBlock> {
         self.account_blocks.clone()

@@ -251,12 +251,26 @@ Returns:
     engine's synchronization mode.
 
 Every account starts in :data:`openpit.param.DEFAULT_ACCOUNT_GROUP` and joins
-another group only through ``register_group``.
+another group only through ``register_group``. Effective currency resolves
+through the account, registered group, default group, then no currency. Account,
+group, default, and membership changes all participate in this cascade.
     """,
 )
 _set_doc(
     Accounts.register_group,
     """Assign accounts to an account group.
+
+Effective currency resolves through the account, registered group, default
+group, then no currency. Stored realized PnL and cost basis are bare numbers
+whose denomination is implied by the effective currency when they were
+computed. This method does not inspect that state. If joining the group changes
+the effective currency, existing numbers remain in the previous currency while
+the engine treats them as the new one. The SDK does not convert, detect,
+report, halt, sweep, or block on this mismatch. Avoiding it is entirely the
+caller's responsibility. If membership changes the effective PnL barrier, this
+call checks current account PnL, treating an unset ledger as zero and halted
+state as a breach, and latches any resulting account block before returning. An
+unchanged effective barrier is not checked again.
 
 Args:
     accounts: Iterable of :class:`openpit.param.AccountId` to place in the
@@ -273,6 +287,18 @@ Raises:
 _set_doc(
     Accounts.unregister_group,
     """Remove accounts from an account group.
+
+Effective currency resolves through the account, registered group, default
+group, then no currency. Stored realized PnL and cost basis are bare numbers
+whose denomination is implied by the effective currency when they were
+computed. This method does not inspect that state. If leaving the group changes
+the effective currency, existing numbers remain in the previous currency while
+the engine treats them as the new one. The SDK does not convert, detect,
+report, halt, sweep, or block on this mismatch. Avoiding it is entirely the
+caller's responsibility. If membership changes the effective PnL barrier, this
+call checks current account PnL, treating an unset ledger as zero and halted
+state as a breach, and latches any resulting account block before returning. An
+unchanged effective barrier is not checked again.
 
 Args:
     accounts: Iterable of :class:`openpit.param.AccountId` to remove. Every
@@ -304,10 +330,14 @@ _set_doc(
     Accounts.set_currency,
     """Set an account's explicit currency.
 
-Setting or changing currency does not validate existing holdings and does not
-recompute stored average entry price or realized PnL. The caller owns the risk
-of changing currency on live state; a control or recompute API may be added
-later.
+Effective currency resolves through the account, registered group, default
+group, then no currency. Stored realized PnL and cost basis are bare numbers
+whose denomination is implied by the effective currency when they were
+computed. The SDK writes ``asset`` without checking that state. If this changes
+the effective currency, existing numbers remain in the previous currency while
+the engine treats them as the new one. The SDK does not convert, detect,
+report, halt, sweep, or block on this mismatch. Avoiding it is entirely the
+caller's responsibility.
 
 Args:
     account: :class:`openpit.param.AccountId` whose currency to set.
@@ -318,8 +348,14 @@ _set_doc(
     Accounts.clear_currency,
     """Clear an account's explicit currency.
 
-Clearing currency does not validate existing holdings and does not recompute
-stored average entry price or realized PnL.
+Effective currency resolves through the account, registered group, default
+group, then no currency. Stored realized PnL and cost basis are bare numbers
+whose denomination is implied by the effective currency when they were
+computed. The SDK clears the account value without checking that state. If
+this changes the effective currency, existing numbers remain in the previous
+currency while the engine treats them as the new one. The SDK does not
+convert, detect, report, halt, sweep, or block on this mismatch. Avoiding it is
+entirely the caller's responsibility.
 
 Args:
     account: :class:`openpit.param.AccountId` whose currency to clear.
@@ -330,10 +366,14 @@ _set_doc(
     """Set the currency inherited by accounts in a group.
 
 :data:`openpit.param.DEFAULT_ACCOUNT_GROUP` is allowed and represents the
-global default tier. Setting or changing currency does not validate existing
-holdings and does not recompute stored average entry price or realized PnL. The
-caller owns the risk of changing currency on live state; a control or recompute
-API may be added later.
+global default tier. Effective currency resolves through the account,
+registered group, default group, then no currency. Stored realized PnL and cost
+basis are bare numbers whose denomination is implied by the effective currency
+when they were computed. The SDK writes ``asset`` without checking affected
+account state. If an effective currency changes, existing numbers remain in
+the previous currency while the engine treats them as the new one. The SDK
+does not convert, detect, report, halt, sweep, or block on this mismatch.
+Avoiding it is entirely the caller's responsibility.
 
 Args:
     group: :class:`openpit.param.AccountGroupId` whose inherited currency to
@@ -346,8 +386,14 @@ _set_doc(
     """Clear the currency inherited by accounts in a group.
 
 :data:`openpit.param.DEFAULT_ACCOUNT_GROUP` is allowed and represents the
-global default tier. Clearing currency does not validate existing holdings and
-does not recompute stored average entry price or realized PnL.
+global default tier. Effective currency resolves through the account,
+registered group, default group, then no currency. Stored realized PnL and cost
+basis are bare numbers whose denomination is implied by the effective currency
+when they were computed. The SDK clears the group value without checking
+affected account state. If an effective currency changes, existing numbers
+remain in the previous currency while the engine treats them as the new one.
+The SDK does not convert, detect, report, halt, sweep, or block on this
+mismatch. Avoiding it is entirely the caller's responsibility.
 
 Args:
     group: :class:`openpit.param.AccountGroupId` whose inherited currency to

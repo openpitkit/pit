@@ -36,10 +36,14 @@ use super::engine_trait::EngineTrait;
 use super::sync_mode::SyncMode;
 use crate::param::{AccountId, Asset, Pnl};
 use crate::pretrade::policies::{
-    OrderSizeLimitSettings, PnlBoundsKillSwitchSettings, RateLimitSettings, RealizedPnlStorage,
-    SpotFundsSettings,
+    account_pnl_barrier_change_blocks, account_pnl_membership_change_block, AccountPnlStorage,
+    ActiveHoldingsMutationStorage, OrderSizeLimitSettings, PnlBoundsKillSwitchSettings,
+    RateLimitSettings, RealizedPnlStorage, SpotFundsHoldingsStorage, SpotFundsSettings,
 };
-use crate::pretrade::{PolicyConfigurationResult, PolicyRuntimeConfiguration, PreTradePolicy};
+use crate::pretrade::{
+    AccountBlockOutcome, AccountBlockOutcomes, PolicyConfigurationResult,
+    PolicyRuntimeConfiguration, PreTradePolicy,
+};
 use crate::storage::{ConfigCell, LockingPolicyFactory};
 
 // ─── ConfigEntry ────────────────────────────────────────────────────────────
@@ -59,13 +63,58 @@ pub(crate) enum ConfigEntry<Factory: LockingPolicyFactory> {
         /// Live accumulated P&L ledger shared with the running policy.
         realized: RealizedPnlStorage<Factory>,
     },
-    /// Spot-funds policy settings.
+    /// Spot-funds policy handles.
+    ///
+    /// Carries the settings cell (barrier retune), shared account P&L ledger,
+    /// and holdings keys, so a barrier change can evaluate every known account
+    /// in the same call.
     SpotFunds {
         /// Settings cell shared with the running policy.
         settings: Factory::Config<SpotFundsSettings>,
+        /// Serializes publication with its barrier-transition sweep.
+        transition: parking_lot::Mutex<()>,
+        /// Live account P&L ledger shared with the running policy.
+        pnl: AccountPnlStorage<Factory>,
+        /// Live position holdings shared with the running policy.
+        holdings: SpotFundsHoldingsStorage<Factory>,
+        /// Accounts with provisional holdings that a finalizer may restore.
+        active_holdings_mutations: ActiveHoldingsMutationStorage<Factory>,
     },
     /// Order-size-limit policy settings.
     OrderSizeLimit(Factory::Config<OrderSizeLimitSettings>),
+}
+
+fn update_serialized_transition<T, Cell, Error>(
+    transition: &parking_lot::Mutex<()>,
+    cell: &Cell,
+    update: impl FnOnce(&mut T) -> Result<(), Error>,
+    observe: impl FnOnce(&T, &T),
+) -> Result<(), Error>
+where
+    T: Clone + 'static,
+    Cell: ConfigCell<T>,
+{
+    let _transition = transition.lock();
+    let previous = cell.with(Clone::clone);
+    let mut current = previous.clone();
+    update(&mut current)?;
+    let published = current.clone();
+    cell.update(|stored| {
+        *stored = current;
+        Ok(())
+    })?;
+    observe(&previous, &published);
+    Ok(())
+}
+
+fn active_holdings_accounts<Factory: LockingPolicyFactory>(
+    active: &ActiveHoldingsMutationStorage<Factory>,
+) -> Vec<AccountId> {
+    active
+        .keys()
+        .into_iter()
+        .filter(|account| active.with(account, |count| *count != 0).unwrap_or(false))
+        .collect()
 }
 
 impl<Factory: LockingPolicyFactory> ConfigEntry<Factory> {
@@ -120,12 +169,10 @@ pub enum ConfigureError {
     /// A configuration call was issued from within another configuration
     /// callback on the same thread.
     ///
-    /// Configuration is non-reentrant: a [`Configurator`] method runs its
-    /// update closure while it owns the settings cell's writer lock, and that
-    /// lock is not reentrant. Re-entering configuration for the same engine
-    /// from inside such a closure - whether for the same policy or a different
-    /// one - is rejected before any lock is taken, so policy authors do not
-    /// have to reason about configuration lock ordering. Configuration from
+    /// Configuration callbacks are non-reentrant. Re-entering configuration
+    /// for the same engine from inside such a callback - whether for the same
+    /// policy or a different one - is rejected before the nested call takes a
+    /// serialization gate or settings-cell writer lock. Configuration from
     /// other threads is unaffected and still serializes. The live settings are
     /// left unchanged.
     NestedConfiguration,
@@ -172,6 +219,38 @@ impl<Factory: LockingPolicyFactory> ConfigRegistry<Factory> {
         Self { entries }
     }
 
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn account_pnl_membership_change_blocks(
+        &self,
+        account: AccountId,
+        previous_group: Option<crate::param::AccountGroupId>,
+        current_group: Option<crate::param::AccountGroupId>,
+    ) -> Vec<crate::pretrade::AccountBlock> {
+        self.entries
+            .values()
+            .filter_map(|entry| {
+                let ConfigEntry::SpotFunds { settings, pnl, .. } = entry else {
+                    return None;
+                };
+                settings.with(|settings| {
+                    account_pnl_membership_change_block::<Factory>(
+                        pnl,
+                        settings,
+                        account,
+                        previous_group,
+                        current_group,
+                    )
+                })
+            })
+            .collect()
+    }
+
     fn entry(&self, name: &str) -> Result<&ConfigEntry<Factory>, ConfigureError> {
         self.entries
             .get(name)
@@ -209,7 +288,8 @@ thread_local! {
 ///
 /// [`Self::enter`] fails with [`ConfigureError::NestedConfiguration`] when a
 /// configuration for the same engine registry is already active on this
-/// thread, so a nested call returns before it can take any cell writer lock.
+/// thread, so a nested call returns before it can wait on configuration
+/// serialization or publish a settings value.
 /// The flag is cleared on drop - including on an early `?` return or a panic
 /// unwinding through the closure - so a single thread can configure again once
 /// the outer call completes.
@@ -389,6 +469,20 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     /// Retunes the [`SpotFundsPolicy`](crate::pretrade::policies::SpotFundsPolicy)
     /// registered under `name`.
     ///
+    /// An update that arms, narrows, or otherwise changes an account's
+    /// effective account P&L barrier evaluates that barrier against the stored
+    /// account P&L before returning: an account already halted or already
+    /// beyond the new barrier is blocked here rather than at its next fill.
+    /// The returned blocks are the ones the engine has already recorded. An
+    /// update that leaves an account's effective barrier as it was does not
+    /// re-evaluate it, so retuning slippage, pricing, or the limit mode never
+    /// re-blocks an account an operator has unblocked. Each returned
+    /// [`AccountBlockOutcome`] identifies the engine-selected account that owns
+    /// its newly inserted block. Removing the last effective barrier reports no
+    /// block, while clearing an override can expose a fallback barrier that is
+    /// evaluated normally and can record a block. Neither operation releases a
+    /// previously recorded block.
+    ///
     /// # Errors
     ///
     /// Returns the same error variants as [`Self::rate_limit`].
@@ -396,13 +490,58 @@ impl<Trait: EngineTrait> Configurator<Trait> {
         &self,
         name: &str,
         f: impl FnOnce(&mut SpotFundsSettings) -> Result<(), Error>,
-    ) -> Result<(), ConfigureError> {
+    ) -> Result<AccountBlockOutcomes, ConfigureError> {
         match self.registry().entry(name)? {
-            ConfigEntry::SpotFunds { settings } => {
+            ConfigEntry::SpotFunds {
+                settings,
+                transition,
+                pnl,
+                holdings,
+                active_holdings_mutations,
+                ..
+            } => {
                 let _guard = self.enter_configuration()?;
-                settings.update(f).map_err(|error| {
-                    ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
+                let account_groups = AccountGroupsHandle::<
+                    <Trait::Sync as SyncMode>::StorageLockingPolicyFactory,
+                >::from_inner(
+                    self.inner.account_groups.clone()
+                );
+                let mut account_blocks = Vec::new();
+                update_serialized_transition(transition, settings, f, |previous, current| {
+                    self.inner.account_currencies.with_state_transition(|| {
+                        let blocks = account_pnl_barrier_change_blocks::<RegistryFactory<Trait>>(
+                            pnl,
+                            holdings,
+                            previous,
+                            current,
+                            &account_groups.memberships(),
+                            self.inner
+                                .account_currencies
+                                .known_account_keys()
+                                .into_iter()
+                                .chain(active_holdings_accounts::<RegistryFactory<Trait>>(
+                                    active_holdings_mutations,
+                                )),
+                        );
+                        account_blocks.reserve(blocks.len());
+                        for (account, block) in blocks {
+                            if self
+                                .inner
+                                .blocked_accounts
+                                .block_account(account, block.clone())
+                            {
+                                account_blocks.push(AccountBlockOutcome {
+                                    account_id: account,
+                                    block,
+                                });
+                            }
+                        }
+                    });
                 })
+                .map_err(|error| {
+                    ConfigRegistry::<RegistryFactory<Trait>>::validation(name, error)
+                })?;
+                Ok(AccountBlockOutcomes { account_blocks })
             }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<SpotFundsSettings>(
                 name, entry,
@@ -414,16 +553,19 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     ///
     /// This updates only the account-scoped current P&L ledger. It does not
     /// retune bounds and does not reset any other accumulator. The policy
-    /// reports an account block when a halted state has an effective P&L
-    /// barrier; the engine records that block before returning it.
+    /// reports an account block when the replacement violates an effective P&L
+    /// barrier, either by exceeding a bound or by being halted. The engine
+    /// processes that block before returning it. If the account is already
+    /// blocked, its first stored cause remains unchanged and the result still
+    /// contains the policy-reported block.
     ///
     /// # Errors
     ///
     /// Returns [`ConfigureError::UnknownPolicy`] for an unknown name or
     /// [`ConfigureError::PolicyTypeMismatch`] when the name belongs to another
     /// built-in policy type. On success returns the policy-reported account
-    /// blocks, including an empty list when the accepted correction does not
-    /// block the account.
+    /// blocks, including an empty list when the replacement does not violate an
+    /// effective barrier.
     pub fn set_spot_funds_account_pnl(
         &self,
         name: &str,
@@ -432,31 +574,33 @@ impl<Trait: EngineTrait> Configurator<Trait> {
     ) -> Result<PolicyConfigurationResult, ConfigureError> {
         match self.registry().entry(name)? {
             ConfigEntry::SpotFunds { .. } => {
-                let account_groups = AccountGroupsHandle::<
-                    <Trait::Sync as SyncMode>::StorageLockingPolicyFactory,
-                >::from_inner(
-                    self.inner.account_groups.clone()
-                );
-                let configuration = PolicyRuntimeConfiguration::SetSpotFundsAccountPnl {
-                    account_id: account,
-                    account_group_id: account_groups.group_of(account),
-                    state,
-                };
-                let result = self
+                let policy = self
                     .inner
                     .pre_trade_policies
                     .iter()
                     .find(|policy| policy.name() == name)
-                    .map(|policy| policy.apply_runtime_configuration(configuration))
                     .ok_or_else(|| ConfigureError::UnknownPolicy {
                         name: name.to_owned(),
                     })?;
-                for block in &result.account_blocks {
-                    self.inner
-                        .blocked_accounts
-                        .block_account(account, block.clone());
-                }
-                Ok(result)
+                self.inner.account_currencies.with_state_writer(|| {
+                    let account_groups = AccountGroupsHandle::<
+                        <Trait::Sync as SyncMode>::StorageLockingPolicyFactory,
+                    >::from_inner(
+                        self.inner.account_groups.clone()
+                    );
+                    let configuration = PolicyRuntimeConfiguration::SetSpotFundsAccountPnl {
+                        account_id: account,
+                        account_group_id: account_groups.group_of(account),
+                        state,
+                    };
+                    let result = policy.apply_runtime_configuration(configuration);
+                    for block in &result.account_blocks {
+                        self.inner
+                            .blocked_accounts
+                            .block_account(account, block.clone());
+                    }
+                    Ok(result)
+                })
             }
             entry => Err(ConfigRegistry::<_>::type_mismatch::<SpotFundsSettings>(
                 name, entry,
@@ -491,6 +635,7 @@ impl<Trait: EngineTrait> Configurator<Trait> {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use crate::param::{AccountId, Asset, Quantity, Side, TradeAmount, Volume};
@@ -499,10 +644,32 @@ mod tests {
         OrderSizeLimitSettings, RateLimit, RateLimitBrokerBarrier, RateLimitPolicy,
         RateLimitPolicyError, RateLimitSettings,
     };
-    use crate::storage::FullLocking;
+    use crate::storage::{ConfigCell, FullLocking, StorageBuilder};
     use crate::{Engine, FullSyncEngine, Instrument, OrderOperation};
 
-    use super::ConfigureError;
+    use super::{active_holdings_accounts, update_serialized_transition, ConfigureError};
+
+    #[derive(Clone)]
+    struct BlockingReadConfigCell<T>(Arc<Mutex<T>>);
+
+    impl<T: Clone + 'static> ConfigCell<T> for BlockingReadConfigCell<T> {
+        fn new(value: T) -> Self {
+            Self(Arc::new(Mutex::new(value)))
+        }
+
+        fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+            let value = self.0.lock().expect("test config mutex must not poison");
+            f(&value)
+        }
+
+        fn update<E>(&self, f: impl FnOnce(&mut T) -> Result<(), E>) -> Result<(), E> {
+            let mut value = self.0.lock().expect("test config mutex must not poison");
+            let mut next = value.clone();
+            f(&mut next)?;
+            *value = next;
+            Ok(())
+        }
+    }
 
     fn broker_barrier(max_orders: usize) -> RateLimitBrokerBarrier {
         RateLimitBrokerBarrier {
@@ -566,10 +733,132 @@ mod tests {
         }
     }
 
+    #[test]
+    fn spot_funds_transition_gate_prevents_a_stale_observer_from_overtaking() {
+        use std::sync::mpsc;
+
+        let gate = Arc::new(parking_lot::Mutex::new(()));
+        let cell = BlockingReadConfigCell::new(0_i32);
+        let (first_observer_tx, first_observer_rx) = mpsc::sync_channel(1);
+        let (release_first_tx, release_first_rx) = mpsc::sync_channel(1);
+        let (second_observer_tx, second_observer_rx) = mpsc::sync_channel(1);
+
+        std::thread::scope(|scope| {
+            let first_gate = Arc::clone(&gate);
+            let first_cell = cell.clone();
+            let first_update_cell = cell.clone();
+            let first_observer_cell = cell.clone();
+            scope.spawn(move || {
+                update_serialized_transition(
+                    &first_gate,
+                    &first_cell,
+                    |value| {
+                        assert_eq!(first_update_cell.with(|value| *value), 0);
+                        *value = 1;
+                        Ok::<_, ()>(())
+                    },
+                    |previous, current| {
+                        assert_eq!(first_observer_cell.with(|value| *value), 1);
+                        first_observer_tx
+                            .send((*previous, *current))
+                            .expect("first transition must be observed");
+                        release_first_rx
+                            .recv()
+                            .expect("first observer must be released");
+                    },
+                )
+                .expect("first update must succeed");
+            });
+
+            assert_eq!(
+                first_observer_rx
+                    .recv()
+                    .expect("first observer must publish"),
+                (0, 1)
+            );
+
+            let second_gate = Arc::clone(&gate);
+            let second_cell = cell.clone();
+            scope.spawn(move || {
+                update_serialized_transition(
+                    &second_gate,
+                    &second_cell,
+                    |value| {
+                        *value = 2;
+                        Ok::<_, ()>(())
+                    },
+                    |previous, current| {
+                        second_observer_tx
+                            .send((*previous, *current))
+                            .expect("second transition must be observed");
+                    },
+                )
+                .expect("second update must succeed");
+            });
+
+            assert_eq!(cell.with(|value| *value), 1);
+            assert!(second_observer_rx
+                .recv_timeout(Duration::from_millis(50))
+                .is_err());
+            release_first_tx
+                .send(())
+                .expect("first observer must still be waiting");
+            assert_eq!(
+                second_observer_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("second observer must run last"),
+                (1, 2)
+            );
+        });
+
+        assert_eq!(cell.with(|value| *value), 2);
+    }
+
+    #[test]
+    fn spot_funds_transition_helper_keeps_rejected_update_transactional() {
+        let gate = parking_lot::Mutex::new(());
+        let cell = BlockingReadConfigCell::new(7_i32);
+        let mut observed = false;
+
+        let rejected = update_serialized_transition(
+            &gate,
+            &cell,
+            |value| {
+                *value = 8;
+                Err("rejected")
+            },
+            |_, _| observed = true,
+        );
+        assert_eq!(rejected, Err("rejected"));
+        assert_eq!(cell.with(|value| *value), 7);
+        assert!(!observed);
+
+        update_serialized_transition(
+            &gate,
+            &cell,
+            |value| {
+                *value = 9;
+                Ok::<_, ()>(())
+            },
+            |previous, current| assert_eq!((*previous, *current), (7, 9)),
+        )
+        .expect("gate must remain usable after rejection");
+        assert_eq!(cell.with(|value| *value), 9);
+    }
+
+    #[test]
+    fn inactive_holdings_marker_is_not_a_retune_candidate() {
+        let active = StorageBuilder::new(FullLocking).create_shared::<AccountId, usize>();
+        let account = AccountId::from_u64(42);
+        active.with_mut(account, || 0, |_, _| {});
+
+        assert!(active_holdings_accounts::<FullLocking>(&active).is_empty());
+    }
+
     // A configuration call issued from within another configuration callback on
     // the same thread must be rejected with `NestedConfiguration` rather than
-    // deadlocking on the settings cell's non-reentrant writer lock. The fact
-    // that this test terminates is itself the no-hang proof.
+    // recursively entering configuration serialization. The fact that this
+    // test terminates is itself the no-hang proof.
     #[test]
     fn nested_same_thread_configuration_is_rejected_without_deadlock() {
         let engine = build_engine(2);

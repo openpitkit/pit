@@ -18,7 +18,44 @@
 use crate::param::{AccountGroupId, AccountId};
 use crate::storage::{self, StorageBuilder};
 
-use super::{AccountControl, AccountGroups, AccountGroupsHandle, GroupLookup};
+use super::{AccountControl, AccountGroups, AccountGroupsHandle, Accounts, GroupLookup};
+
+pub(crate) struct AccountStateSnapshot<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    accounts: Option<Accounts<StorageFactory>>,
+    account: AccountId,
+    group: Option<AccountGroupId>,
+}
+
+impl<StorageFactory> Clone for AccountStateSnapshot<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            accounts: self.accounts.clone(),
+            account: self.account,
+            group: self.group,
+        }
+    }
+}
+
+impl<StorageFactory> AccountStateSnapshot<StorageFactory>
+where
+    StorageFactory: storage::LockingPolicyFactory + storage::CreateStorageFor<AccountId> + 'static,
+{
+    pub(crate) fn with_rollback<R>(
+        &self,
+        operation: impl FnOnce(Option<AccountGroupId>) -> R,
+    ) -> R {
+        let Some(accounts) = self.accounts.as_ref() else {
+            return operation(self.group);
+        };
+        accounts.with_state_rollback(|| operation(accounts.group_of(self.account)))
+    }
+}
 
 /// Context of the current account-adjustment operation.
 ///
@@ -35,6 +72,8 @@ where
 {
     /// Per-account control bound to the account being adjusted.
     pub account_control: AccountControl<StorageFactory>,
+    accounts: Option<Accounts<StorageFactory>>,
+    account: AccountId,
     group_lookup: GroupLookup<StorageFactory>,
 }
 
@@ -49,6 +88,22 @@ where
     ) -> Self {
         Self {
             account_control,
+            accounts: None,
+            account,
+            group_lookup: GroupLookup::new(account_groups, Some(account)),
+        }
+    }
+
+    pub(crate) fn with_accounts(
+        account_control: AccountControl<StorageFactory>,
+        accounts: Accounts<StorageFactory>,
+        account_groups: AccountGroupsHandle<StorageFactory>,
+        account: AccountId,
+    ) -> Self {
+        Self {
+            account_control,
+            accounts: Some(accounts),
+            account,
             group_lookup: GroupLookup::new(account_groups, Some(account)),
         }
     }
@@ -77,9 +132,42 @@ where
     /// Returns the group of the adjusted account, or `None` when it is not
     /// registered.
     ///
-    /// The lookup is performed once and cached for the lifetime of this context.
+    /// The lookup is performed once and cached for the lifetime of this
+    /// context, so repeated calls during one evaluation return the same group.
     pub fn account_group(&self) -> Option<AccountGroupId> {
         self.group_lookup.group()
+    }
+
+    pub(crate) fn state_account_group(&self) -> Option<AccountGroupId> {
+        self.accounts.as_ref().map_or_else(
+            || self.group_lookup.group(),
+            |accounts| accounts.group_of(self.account),
+        )
+    }
+
+    pub(crate) fn with_state_writer<R>(&self, operation: impl FnOnce() -> R) -> R {
+        match self.accounts.as_ref() {
+            Some(accounts) => accounts.with_state_writer(operation),
+            None => operation(),
+        }
+    }
+
+    pub(crate) fn with_state_writer_bypassing_transition<R>(
+        &self,
+        operation: impl FnOnce() -> R,
+    ) -> R {
+        match self.accounts.as_ref() {
+            Some(accounts) => accounts.with_state_rollback(operation),
+            None => operation(),
+        }
+    }
+
+    pub(crate) fn state_snapshot(&self) -> AccountStateSnapshot<StorageFactory> {
+        AccountStateSnapshot {
+            accounts: self.accounts.clone(),
+            account: self.account,
+            group: self.state_account_group(),
+        }
     }
 
     /// Test-only constructor with a placeholder bound account.

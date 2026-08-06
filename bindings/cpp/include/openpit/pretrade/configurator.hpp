@@ -266,7 +266,17 @@ class Configurator {
   /// `Set` operations. Optional group/account vectors are PATCH axes:
   /// `std::nullopt` leaves the axis unchanged and an engaged empty vector
   /// clears it. Account updates preserve each live accumulated P&L value.
-  void SpotFundsPnlBoundsKillSwitch(
+  ///
+  /// An account whose effective barrier changed is evaluated against its
+  /// stored account P&L in the same call: an already halted account, or one
+  /// already beyond the new barrier, is blocked before this call returns and
+  /// its block is reported here as already recorded by the engine. Each
+  /// returned `accounts::AccountBlockOutcome` names the account that owns its
+  /// newly inserted block. Removing the last effective barrier reports no
+  /// block and does not release an existing block. Clearing an override can
+  /// expose a fallback barrier; the fallback is evaluated normally and may
+  /// record and report a block.
+  [[nodiscard]] ::openpit::AccountBlockOutcomes SpotFundsPnlBoundsKillSwitch(
       std::string_view name,
       ::openpit::pretrade::policies::SpotFundsPnlBoundsGlobalBarrierUpdate
           global = ::openpit::pretrade::policies::
@@ -303,23 +313,32 @@ class Configurator {
     }
 
     OpenPitConfigureError* error = nullptr;
-    if (!openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
+    OpenPitPretradeAccountBlockOutcomeList* blocks =
+        openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
             m_engine, ::openpit::detail::MakeStringView(name), globalPtr,
             global.HasUpdate(), accountGroupRaw.data(), accountGroupRaw.size(),
             accountGroups.has_value(), accountRaw.data(), accountRaw.size(),
-            accounts.has_value(), &error)) {
+            accounts.has_value(), &error);
+    if (blocks == nullptr) {
       ::openpit::detail::ThrowFromConfigureError(
           error,
           "openpit_engine_configure_spot_funds_pnl_bounds_killswitch failed");
     }
+    ::openpit::AccountBlockOutcomes result;
+    result.accountBlocks =
+        ::openpit::pretrade::detail::ListAccess::DrainAccountBlockOutcomes(
+            blocks);
+    return result;
   }
 
   /// Replaces one SpotFunds live account P&L accumulator with a numeric value.
   ///
   /// This is separate from barrier retuning and re-arms the accumulator after
   /// a calculation halt. It does not affect any position-level accumulator.
-  /// A value outside the effective bounds returns the account block recorded
-  /// by the engine immediately; otherwise the returned block list is empty.
+  /// A value outside the effective bounds returns the policy-reported block,
+  /// even when the account already has a block. The engine processes the block
+  /// request before returning and preserves the existing first cause. Otherwise
+  /// the returned block list is empty.
   [[nodiscard]] ::openpit::PolicyConfigurationResult SetSpotFundsAccountPnl(
       std::string_view name, ::openpit::param::AccountId accountId,
       ::openpit::param::Pnl pnl) const {
@@ -332,8 +351,9 @@ class Configurator {
   ///
   /// This is separate from barrier retuning and does not affect any
   /// position-level accumulator. When an effective account P&L barrier is
-  /// configured, the result reports the block immediately recorded by the
-  /// engine.
+  /// configured, the result reports the policy block even when the account is
+  /// already blocked. The engine processes the block request before returning
+  /// and preserves the existing first cause.
   [[nodiscard]] ::openpit::PolicyConfigurationResult SetSpotFundsAccountPnl(
       std::string_view name, ::openpit::param::AccountId accountId,
       ::openpit::accountadjustment::PnlHaltReason reason) const {

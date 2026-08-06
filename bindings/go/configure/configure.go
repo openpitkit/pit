@@ -550,13 +550,22 @@ func (c Configurator) SpotFundsAccountGroupLimitMode(
 // Nil slices leave their axes untouched; non-nil empty slices clear them.
 // Barrier updates preserve live accumulated P&L.
 //
+// An account whose effective barrier changed is evaluated against its stored
+// account P&L before this call returns: an already halted account, or one
+// already beyond the new barrier, is blocked here rather than at its next
+// fill, and appears in the returned AccountBlocks. Each outcome identifies the
+// affected account together with its newly inserted block. Removing the last
+// effective barrier reports no block and does not release an existing block.
+// Clearing an override can expose a fallback barrier; the fallback is evaluated
+// normally and may record and report a block.
+//
 // Returns a *Error on a domain error.
 func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 	name string,
 	globalBarrier optional.Option[*policies.SpotFundsPnlBoundsBarrier],
 	accountGroupBarriers []policies.SpotFundsPnlBoundsAccountGroupBarrier,
 	accountBarriers []policies.SpotFundsPnlBoundsAccountBarrier,
-) error {
+) (AccountBlockOutcomes, error) {
 	var nativeGlobal *native.PretradePoliciesSpotFundsPnlBoundsBarrier
 	globalValue, hasGlobal := globalBarrier.Get()
 	if hasGlobal && globalValue != nil {
@@ -600,7 +609,7 @@ func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 		}
 	}
 
-	configErr := native.EngineConfigureSpotFundsPnlBoundsKillSwitch(
+	blocks, configErr := native.EngineConfigureSpotFundsPnlBoundsKillSwitch(
 		c.engine,
 		name,
 		nativeGlobal,
@@ -612,9 +621,49 @@ func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 	runtime.KeepAlive(accountGroupBarriers)
 	runtime.KeepAlive(accountBarriers)
 	if configErr != nil {
-		return newErrorFromHandle(configErr)
+		return AccountBlockOutcomes{}, newErrorFromHandle(configErr)
 	}
-	return nil
+	return newAccountBlockOutcomes(blocks), nil
+}
+
+// AccountBlockOutcome is a block inserted for an account selected by the
+// engine.
+type AccountBlockOutcome struct {
+	// AccountID identifies the account for which the engine inserted Block.
+	AccountID param.AccountID
+	// Block is the account block inserted into engine state.
+	Block reject.AccountBlock
+}
+
+// AccountBlockOutcomes contains newly inserted blocks for accounts selected by
+// the engine.
+type AccountBlockOutcomes struct {
+	// AccountBlocks pairs every newly inserted block with its affected account.
+	AccountBlocks []AccountBlockOutcome
+}
+
+// newAccountBlockOutcomes copies a caller-owned native outcome list into the
+// Go result and releases it.
+func newAccountBlockOutcomes(
+	outcomes native.PretradeAccountBlockOutcomeList,
+) AccountBlockOutcomes {
+	defer native.DestroyPretradeAccountBlockOutcomeList(outcomes)
+	accountBlocks := make(
+		[]AccountBlockOutcome,
+		native.PretradeAccountBlockOutcomeListLen(outcomes),
+	)
+	for index := range accountBlocks {
+		outcome := native.PretradeAccountBlockOutcomeListGet(outcomes, index)
+		accountBlocks[index] = AccountBlockOutcome{
+			AccountID: param.NewAccountIDFromHandle(
+				native.PretradeAccountBlockOutcomeGetAccountID(outcome),
+			),
+			Block: reject.NewAccountBlockFromHandle(
+				native.PretradeAccountBlockOutcomeGetBlock(outcome),
+			),
+		}
+	}
+	return AccountBlockOutcomes{AccountBlocks: accountBlocks}
 }
 
 // SetSpotFundsAccountPnl force-sets the live accumulated account P&L state for
@@ -624,10 +673,11 @@ func (c Configurator) SpotFundsPnlBoundsKillSwitch(
 // [Configurator.SpotFundsPnlBoundsKillSwitch], which retunes bounds and never
 // touches accumulated P&L.
 //
-// On success it returns PolicyConfigurationResult. AccountBlocks is non-empty
-// when the assignment immediately causes the configured P&L kill switch to
-// block the account, including a numeric value beyond a barrier. A
-// configuration failure returns the existing configure error.
+// On success it returns PolicyConfigurationResult. A numeric breach or halted
+// state under an effective barrier returns the policy-reported block even when
+// the account is already blocked. The engine processes the block request before
+// returning and preserves the existing first cause. A configuration failure
+// returns the existing configure error.
 func (c Configurator) SetSpotFundsAccountPnl(
 	name string,
 	account param.AccountID,
@@ -642,6 +692,14 @@ func (c Configurator) SetSpotFundsAccountPnl(
 	if configErr != nil {
 		return PolicyConfigurationResult{}, newErrorFromHandle(configErr)
 	}
+	return newPolicyConfigurationResult(blocks), nil
+}
+
+// newPolicyConfigurationResult copies a caller-owned native account-block list
+// into the Go result and releases it.
+func newPolicyConfigurationResult(
+	blocks native.PretradeAccountBlockList,
+) PolicyConfigurationResult {
 	defer native.DestroyPretradeAccountBlockList(blocks)
 	accountBlocks := make(
 		[]reject.AccountBlock,
@@ -652,14 +710,15 @@ func (c Configurator) SetSpotFundsAccountPnl(
 			native.PretradeAccountBlockListGet(blocks, index),
 		)
 	}
-	return PolicyConfigurationResult{AccountBlocks: accountBlocks}, nil
+	return PolicyConfigurationResult{AccountBlocks: accountBlocks}
 }
 
 // PolicyConfigurationResult describes an accepted runtime policy update.
 //
-// AccountBlocks is non-empty when the update immediately caused the engine to
-// block an account. An empty list means the update was accepted without an
-// account block.
+// AccountBlocks contains policy-reported blocks for the account supplied to the
+// operation, without repeating that identity. SetSpotFundsAccountPnl exposes a
+// breach or halt block even when the account already has a block; the engine
+// processes it before returning and preserves the existing first cause.
 type PolicyConfigurationResult struct {
 	AccountBlocks []reject.AccountBlock
 }

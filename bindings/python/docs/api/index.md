@@ -118,6 +118,12 @@ reservation that must be committed or rolled back.
 .. autoclass:: openpit.pretrade.AccountBlock
    :members:
 
+.. autoclass:: openpit.pretrade.AccountBlockOutcome
+   :members:
+
+.. autoclass:: openpit.pretrade.AccountBlockOutcomes
+   :members:
+
 .. autoclass:: openpit.pretrade.AccountAdjustmentBatchResult
    :members:
 

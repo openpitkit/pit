@@ -26,6 +26,11 @@ import (
 )
 
 // PnlHaltReason identifies why a realized-PnL value could not be calculated.
+//
+// When failures coincide, SpotFunds uses this priority from highest to lowest:
+// PnlHaltReasonArithmeticOverflow, PnlHaltReasonMissingAccountCurrency,
+// PnlHaltReasonMissingFx, PnlHaltReasonMissingCostBasis, then
+// PnlHaltReasonMissingInitialPnl.
 type PnlHaltReason uint8
 
 const (

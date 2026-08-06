@@ -1759,7 +1759,10 @@ impl PyConfigurator {
                 Ok::<_, openpit::pretrade::policies::SpotFundsConfigError>(())
             })
         })
-        .map_err(convert_configure_error)
+        .map_err(convert_configure_error)?;
+        // None of these axes can change a P&L barrier, so no account block is
+        // ever reported here.
+        Ok(())
     }
 
     /// Retune the account P&L bounds axis of a spot-funds policy.
@@ -1769,6 +1772,16 @@ impl PyConfigurator {
     /// clears the singular global barrier; a barrier value replaces it. A
     /// supplied group/account list replaces that axis wholesale, and an empty
     /// list clears it. Each barrier must still configure at least one bound.
+    ///
+    /// An account whose effective barrier changed is evaluated against its
+    /// stored account P&L before this call returns: an already halted account,
+    /// or one already beyond the new barrier, is blocked here rather than at
+    /// its next fill, and the returned result carries the block the engine has
+    /// already recorded. Each ``AccountBlockOutcome`` identifies the affected
+    /// account together with its newly inserted block. Removing the last
+    /// effective barrier reports no block and does not release an existing
+    /// block. Clearing an override can expose a fallback barrier; the fallback
+    /// is evaluated normally and may record and report a block.
     #[pyo3(signature = (name, *, global_barrier = Python::attach(|py| py.Ellipsis()), account_group_barriers = None, account_barriers = None))]
     fn spot_funds_pnl_bounds_killswitch(
         &self,
@@ -1777,7 +1790,7 @@ impl PyConfigurator {
         global_barrier: Py<PyAny>,
         account_group_barriers: Option<Vec<Bound<'_, PyAny>>>,
         account_barriers: Option<Vec<Bound<'_, PyAny>>>,
-    ) -> PyResult<()> {
+    ) -> PyResult<PyAccountBlockOutcomes> {
         let global_barrier = global_barrier.bind(py);
         let ellipsis = py.Ellipsis();
         let global = if global_barrier.is(ellipsis.bind(py)) {
@@ -1803,21 +1816,23 @@ impl PyConfigurator {
             })
             .transpose()?;
 
-        py.detach(|| {
-            self.inner.spot_funds(name, |s| {
-                if let Some(v) = &global {
-                    s.set_pnl_global_barrier(v.clone())?;
-                }
-                if let Some(v) = &account_group {
-                    s.set_pnl_account_group_barriers(v.iter().cloned())?;
-                }
-                if let Some(v) = &account {
-                    s.set_pnl_account_barriers(v.iter().cloned())?;
-                }
-                Ok::<_, openpit::pretrade::policies::SpotFundsConfigError>(())
+        let inner = py
+            .detach(|| {
+                self.inner.spot_funds(name, |s| {
+                    if let Some(v) = &global {
+                        s.set_pnl_global_barrier(v.clone())?;
+                    }
+                    if let Some(v) = &account_group {
+                        s.set_pnl_account_group_barriers(v.iter().cloned())?;
+                    }
+                    if let Some(v) = &account {
+                        s.set_pnl_account_barriers(v.iter().cloned())?;
+                    }
+                    Ok::<_, openpit::pretrade::policies::SpotFundsConfigError>(())
+                })
             })
-        })
-        .map_err(convert_configure_error)
+            .map_err(convert_configure_error)?;
+        Ok(PyAccountBlockOutcomes { inner })
     }
 
     /// Force-set the live accumulated account P&L state for a spot-funds
@@ -1828,7 +1843,9 @@ impl PyConfigurator {
     /// and never touches accumulated P&L, this is an absolute assignment
     /// (upsert) of the live accumulator for ``account``. A numeric value
     /// outside an effective account P&L barrier and any halted value with such
-    /// a barrier return the block that the engine has already recorded.
+    /// a barrier return the policy-reported block even when the account is
+    /// already blocked. The engine processes the block request before returning
+    /// and preserves the existing first cause.
     #[pyo3(signature = (name, *, account, state))]
     fn set_spot_funds_account_pnl(
         &self,
@@ -1852,6 +1869,9 @@ impl PyConfigurator {
 /// account control state, so changes made through it are visible to every other
 /// handle and to running policies. It inherits the engine's synchronization
 /// mode.
+///
+/// For an example of good practice in building a control plane on this SDK,
+/// see `Pit Officer <http://officer.openpit.dev/>`_.
 #[pyclass(name = "Accounts", module = "openpit")]
 struct PyAccounts {
     inner: Accounts<PyStorageFactory>,
@@ -1859,6 +1879,20 @@ struct PyAccounts {
 
 #[pymethods]
 impl PyAccounts {
+    /// Register accounts in a group atomically.
+    ///
+    /// Effective currency resolves from the account, then its group, then the
+    /// default group. Stored realized PnL and cost basis are bare numbers whose
+    /// denomination is implied by the effective currency when they were
+    /// computed. This operation does not inspect that state. If joining changes
+    /// the effective currency, existing numbers remain in the previous currency
+    /// while the engine treats them as the new one. The SDK does not convert,
+    /// detect, report, halt, sweep, or block on this mismatch. Avoiding it is
+    /// entirely the caller's responsibility. If membership changes the effective
+    /// P&L barrier, this call checks current account P&L, treating an unset
+    /// ledger as zero and halted state as a breach, and latches any resulting
+    /// account block before returning. An unchanged effective barrier is not
+    /// checked again.
     #[pyo3(signature = (accounts, group))]
     fn register_group(
         &self,
@@ -1875,6 +1909,20 @@ impl PyAccounts {
             .map_err(convert_account_group_error)
     }
 
+    /// Remove accounts from a group atomically.
+    ///
+    /// Effective currency resolves from the account, then its group, then the
+    /// default group. Stored realized PnL and cost basis are bare numbers whose
+    /// denomination is implied by the effective currency when they were
+    /// computed. This operation does not inspect that state. If leaving changes
+    /// the effective currency, existing numbers remain in the previous currency
+    /// while the engine treats them as the new one. The SDK does not convert,
+    /// detect, report, halt, sweep, or block on this mismatch. Avoiding it is
+    /// entirely the caller's responsibility. If membership changes the effective
+    /// P&L barrier, this call checks current account P&L, treating an unset
+    /// ledger as zero and halted state as a breach, and latches any resulting
+    /// account block before returning. An unchanged effective barrier is not
+    /// checked again.
     #[pyo3(signature = (accounts, group))]
     fn unregister_group(
         &self,
@@ -1907,10 +1955,14 @@ impl PyAccounts {
 
     /// Set an explicit currency for an account.
     ///
-    /// Setting or changing currency does not validate existing holdings and
-    /// does not recompute stored average entry price or realized PnL. The
-    /// caller owns the risk of changing currency on live state; a control or
-    /// recompute API may be added later.
+    /// Effective currency resolves from the account, then its group, then the
+    /// default group. Stored realized PnL and cost basis are bare numbers whose
+    /// denomination is implied by the effective currency when they were
+    /// computed. The SDK writes ``asset`` without checking that state. If this
+    /// changes the effective currency, existing numbers remain in the previous
+    /// currency while the engine treats them as the new one. The SDK does not
+    /// convert, detect, report, halt, sweep, or block on this mismatch. Avoiding
+    /// it is entirely the caller's responsibility.
     #[pyo3(signature = (account, asset))]
     fn set_currency(
         &self,
@@ -1926,10 +1978,14 @@ impl PyAccounts {
 
     /// Clear an account's explicit currency.
     ///
-    /// Clearing currency does not validate existing holdings and does not
-    /// recompute stored average entry price or realized PnL. The caller owns
-    /// the risk of changing currency on live state; a control or recompute API
-    /// may be added later.
+    /// Effective currency resolves from the account, then its group, then the
+    /// default group. Stored realized PnL and cost basis are bare numbers whose
+    /// denomination is implied by the effective currency when they were
+    /// computed. The SDK clears the account value without checking that state.
+    /// If this changes the effective currency, existing numbers remain in the
+    /// previous currency while the engine treats them as the new one. The SDK
+    /// does not convert, detect, report, halt, sweep, or block on this mismatch.
+    /// Avoiding it is entirely the caller's responsibility.
     #[pyo3(signature = (account))]
     fn clear_currency(&self, py: Python<'_>, account: &Bound<'_, PyAny>) -> PyResult<()> {
         let account_id = parse_account_id_input(account)?;
@@ -1940,10 +1996,14 @@ impl PyAccounts {
     /// Set the currency inherited by accounts in a group.
     ///
     /// ``AccountGroupId.DEFAULT`` is allowed and represents the global default
-    /// tier. Setting or changing currency does not validate existing holdings
-    /// and does not recompute stored average entry price or realized PnL. The
-    /// caller owns the risk of changing currency on live state; a control or
-    /// recompute API may be added later.
+    /// tier. Effective currency resolves from the account, then its group, then
+    /// the default group. Stored realized PnL and cost basis are bare numbers
+    /// whose denomination is implied by the effective currency when they were
+    /// computed. The SDK writes ``asset`` without checking affected account
+    /// state. If an effective currency changes, existing numbers remain in the
+    /// previous currency while the engine treats them as the new one. The SDK
+    /// does not convert, detect, report, halt, sweep, or block on this mismatch.
+    /// Avoiding it is entirely the caller's responsibility.
     #[pyo3(signature = (group, asset))]
     fn set_group_currency(
         &self,
@@ -1960,10 +2020,14 @@ impl PyAccounts {
     /// Clear the currency inherited by accounts in a group.
     ///
     /// ``AccountGroupId.DEFAULT`` is allowed and represents the global default
-    /// tier. Clearing currency does not validate existing holdings and does not
-    /// recompute stored average entry price or realized PnL. The caller owns
-    /// the risk of changing currency on live state; a control or recompute API
-    /// may be added later.
+    /// tier. Effective currency resolves from the account, then its group, then
+    /// the default group. Stored realized PnL and cost basis are bare numbers
+    /// whose denomination is implied by the effective currency when they were
+    /// computed. The SDK clears the group value without checking affected
+    /// account state. If an effective currency changes, existing numbers remain
+    /// in the previous currency while the engine treats them as the new one.
+    /// The SDK does not convert, detect, report, halt, sweep, or block on this
+    /// mismatch. Avoiding it is entirely the caller's responsibility.
     #[pyo3(signature = (group))]
     fn clear_group_currency(&self, py: Python<'_>, group: &Bound<'_, PyAny>) -> PyResult<()> {
         let group_id = parse_account_group_id_input_allow_default(group)?;
@@ -2333,6 +2397,10 @@ impl PyPnlOutcomeAmount {
 }
 
 /// Reason why a realized-PnL value could not be calculated.
+///
+/// When failures coincide, SpotFunds uses this priority from highest to lowest:
+/// `ARITHMETIC_OVERFLOW`, `MISSING_ACCOUNT_CURRENCY`, `MISSING_FX`,
+/// `MISSING_COST_BASIS`, then `MISSING_INITIAL_PNL`.
 #[pyclass(
     name = "PnlHaltReason",
     module = "openpit.pretrade",
@@ -2428,9 +2496,15 @@ impl PyPnlOutcome {
 
 /// Account-level realized-PnL outcome.
 ///
-/// Exactly one of `pnl` and `halt_reason` is present. SpotFunds emits a halted
-/// outcome only for the report that transitions the account accumulator to
-/// halted; later reports omit the unchanged halt.
+/// Exactly one of `pnl` and `halt_reason` is present. SpotFunds engages the
+/// account line only for a realizing fill or a nonzero fee. Opening,
+/// same-direction, and zero-quantity fills without a nonzero fee, plus zero
+/// fees alone, emit no account outcome and require no account currency or FX
+/// for this line. A nonzero fee engages both position and account rows
+/// regardless of fill quantity.
+///
+/// SpotFunds emits a halted outcome only for the report that transitions the
+/// account accumulator to halted; later reports omit the unchanged halt.
 #[pyclass(
     name = "AccountPnlOutcome",
     module = "openpit.pretrade",
@@ -6597,6 +6671,11 @@ impl_decimal_pymethods!(PyVolume, Volume, parse_volume_input, "Volume", unsigned
         }
     }
 
+    /// Calculate quantity from this volume and an explicit price.
+    ///
+    /// Returns zero when ``price`` is zero. Otherwise returns
+    /// ``volume / abs(price)``; negative prices therefore produce the same
+    /// quantity magnitude as their positive counterparts.
     fn calculate_quantity(&self, price: &PyPrice) -> PyResult<PyQuantity> {
         Ok(PyQuantity {
             inner: self
@@ -8492,6 +8571,75 @@ fn convert_account_block(block: &openpit::pretrade::AccountBlock) -> PyAccountBl
     }
 }
 
+/// Account block inserted for an account selected by the engine.
+#[pyclass(
+    name = "AccountBlockOutcome",
+    module = "openpit.pretrade",
+    from_py_object
+)]
+#[derive(Clone)]
+struct PyAccountBlockOutcome {
+    inner: openpit::AccountBlockOutcome,
+}
+
+#[pymethods]
+impl PyAccountBlockOutcome {
+    /// Account for which the engine inserted the block.
+    #[getter]
+    fn account_id(&self) -> PyAccountId {
+        PyAccountId {
+            inner: self.inner.account_id,
+        }
+    }
+
+    /// Account block inserted into engine state.
+    #[getter]
+    fn block(&self) -> PyAccountBlock {
+        convert_account_block(&self.inner.block)
+    }
+
+    fn __repr__(&self) -> String {
+        let block = convert_account_block(&self.inner.block).__repr__();
+        format!(
+            "AccountBlockOutcome(account_id={}, block={})",
+            self.inner.account_id.as_u64(),
+            block
+        )
+    }
+}
+
+/// Account-block outcomes for accounts selected by the engine.
+#[pyclass(
+    name = "AccountBlockOutcomes",
+    module = "openpit.pretrade",
+    from_py_object
+)]
+#[derive(Clone)]
+struct PyAccountBlockOutcomes {
+    inner: openpit::AccountBlockOutcomes,
+}
+
+#[pymethods]
+impl PyAccountBlockOutcomes {
+    /// Newly inserted blocks paired with their affected accounts.
+    #[getter]
+    fn account_blocks(&self) -> Vec<PyAccountBlockOutcome> {
+        self.inner
+            .account_blocks
+            .iter()
+            .cloned()
+            .map(|inner| PyAccountBlockOutcome { inner })
+            .collect()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AccountBlockOutcomes(account_blocks={})",
+            self.inner.account_blocks.len()
+        )
+    }
+}
+
 #[pyclass(
     name = "PolicyConfigurationResult",
     module = "openpit.pretrade",
@@ -8580,8 +8728,13 @@ impl PyPostTradeResult {
     /// A computed outcome with a nonzero delta changed the ledger; a zero delta
     /// recomputed it without changing it. A halt reason means no authoritative
     /// PnL value is available and it must not be interpreted as zero. SpotFunds
-    /// emits a halt reason only when the current report transitions the account
-    /// accumulator to halted; later reports omit the unchanged halt.
+    /// engages the account line only for a realizing fill or a nonzero fee.
+    /// Opening, same-direction, and zero-quantity fills without a nonzero fee,
+    /// plus zero fees alone, emit no account outcome and require no account
+    /// currency or FX for this line. A nonzero fee engages both position and
+    /// account rows regardless of fill quantity. SpotFunds emits a halt reason
+    /// only when the current report transitions the account accumulator to
+    /// halted; later reports omit the unchanged halt.
     #[getter]
     fn account_pnls(&self) -> Vec<PyAccountPnlOutcome> {
         self.inner
@@ -9245,6 +9398,8 @@ fn _openpit(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyConfigurator>()?;
     module.add_class::<PyReject>()?;
     module.add_class::<PyAccountBlock>()?;
+    module.add_class::<PyAccountBlockOutcome>()?;
+    module.add_class::<PyAccountBlockOutcomes>()?;
     module.add_class::<PyPolicyConfigurationResult>()?;
     module.add_class::<PyStartPreTradeResult>()?;
     module.add_class::<PyExecuteResult>()?;

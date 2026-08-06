@@ -136,6 +136,10 @@ typedef struct OpenPitPretradeAccountAdjustmentResult
     OpenPitPretradeAccountAdjustmentResult;
 typedef struct OpenPitPretradeAccountBlock OpenPitPretradeAccountBlock;
 typedef struct OpenPitPretradeAccountBlockList OpenPitPretradeAccountBlockList;
+typedef struct OpenPitPretradeAccountBlockOutcome
+    OpenPitPretradeAccountBlockOutcome;
+typedef struct OpenPitPretradeAccountBlockOutcomeList
+    OpenPitPretradeAccountBlockOutcomeList;
 typedef struct OpenPitPretradeContext OpenPitPretradeContext;
 typedef struct OpenPitPretradeDropCopyOperation
     OpenPitPretradeDropCopyOperation;
@@ -360,6 +364,13 @@ typedef uint32_t OpenPitParamAccountGroupId;
  * bytes without creating an invalid Rust enum discriminant at the FFI
  * boundary. Inbound values are validated before conversion to
  * `OpenPitPnlHaltReason` values.
+ *
+ * When failures coincide, SpotFunds uses this priority from highest to lowest:
+ * `OPENPIT_PNL_HALT_REASON_ARITHMETIC_OVERFLOW`,
+ * `OPENPIT_PNL_HALT_REASON_MISSING_ACCOUNT_CURRENCY`,
+ * `OPENPIT_PNL_HALT_REASON_MISSING_FX`,
+ * `OPENPIT_PNL_HALT_REASON_MISSING_COST_BASIS`, then
+ * `OPENPIT_PNL_HALT_REASON_MISSING_INITIAL_PNL`.
  */
 typedef uint8_t OpenPitPnlHaltReason;
 
@@ -2000,9 +2011,14 @@ struct OpenPitPnlOutcomeOptional {
  * When `halt_reason` is `OPENPIT_PNL_HALT_REASON_NONE`, `amount` is
  * authoritative. Otherwise `halt_reason` explains why `amount` is not
  * authoritative; do not interpret it as zero or read any stored PnL value as
- * current. Position accumulators are independent. SpotFunds emits a halted
- * account outcome only for the operation that transitions the accumulator to
- * halted; later operations omit the unchanged halt.
+ * current. Position accumulators are independent. SpotFunds engages the
+ * account line only for a realizing fill or a nonzero fee. Opening,
+ * same-direction, and zero-quantity fills without a nonzero fee, plus zero
+ * fees alone, emit no outcome and require no account currency or FX for this
+ * line. A nonzero fee engages both position and account rows regardless of
+ * fill quantity. SpotFunds emits a halted account outcome only for the
+ * operation that transitions the accumulator to halted; later operations omit
+ * the unchanged halt.
  */
 struct OpenPitAccountPnlOutcome {
     /**
@@ -2343,6 +2359,20 @@ struct OpenPitPretradeAccountBlock {
 };
 
 /**
+ * Account block recorded for an account selected by the engine.
+ */
+struct OpenPitPretradeAccountBlockOutcome {
+    /**
+     * Account for which the engine inserted the block.
+     */
+    OpenPitParamAccountId account_id;
+    /**
+     * Account block inserted into engine state.
+     */
+    OpenPitPretradeAccountBlock block;
+};
+
+/**
  * Per-settlement-asset order-size barrier for
  * `openpit_engine_builder_add_builtin_order_size_limit_policy`.
  */
@@ -2529,11 +2559,15 @@ struct OpenPitAccountOutcomeEntry {
      */
     OpenPitOutcomeAmountOptional incoming;
     /**
-     * Optional position realized-PnL result in the account currency. It is set to
-     * either an amount or the halt reason from the operation that first failed.
-     * Later operations omit it until an asset-scoped balance adjustment force-sets
-     * a new realized PnL. Position and account PnL halt independently; this field
-     * never drives the account kill switch.
+     * Optional position realized-PnL result in the account currency. It is absent
+     * for reservations, cancels, settlement legs, opening, same-direction, and
+     * zero-quantity fills without a non-zero fee, and for non-PnL adjustments. A
+     * realizing fill reports an authoritative amount even when its exact
+     * contribution is zero. A non-zero fee reports the underlying asset even when
+     * the account never held it. The operation that first fails reports its halt
+     * reason; later operations omit the field until an asset-scoped balance
+     * adjustment force-sets a new realized PnL. Position and account PnL halt
+     * independently; this field never drives the account kill switch.
      */
     OpenPitPnlOutcomeOptional realized_pnl;
     /**
@@ -4528,6 +4562,12 @@ bool openpit_param_quantity_calculate_volume(
     OpenPitOutParamError out_error
 );
 
+/**
+ * Calculates quantity from volume and an explicit price.
+ *
+ * A zero price produces zero quantity. Any other price, including a negative
+ * one, produces `volume / abs(price)`.
+ */
 bool openpit_param_volume_calculate_quantity(
     OpenPitParamVolume volume,
     OpenPitParamPrice price,
@@ -5031,6 +5071,50 @@ bool openpit_pretrade_account_block_list_get(
     const OpenPitPretradeAccountBlockList * list,
     size_t index,
     OpenPitPretradeAccountBlock * out_block
+);
+
+/**
+ * Releases a caller-owned account-block-outcome list.
+ *
+ * Contract:
+ * - passing null is allowed;
+ * - this function always succeeds.
+ */
+void openpit_destroy_pretrade_account_block_outcome_list(
+    OpenPitPretradeAccountBlockOutcomeList * outcomes
+);
+
+/**
+ * Returns the number of account-block outcomes in the list.
+ *
+ * Contract:
+ * - `list` must be a valid non-null pointer;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+size_t openpit_pretrade_account_block_outcome_list_len(
+    const OpenPitPretradeAccountBlockOutcomeList * list
+);
+
+/**
+ * Copies a non-owning account-block outcome at `index` into `out_outcome`.
+ *
+ * The copied block view borrows string memory from `list`.
+ *
+ * Contract:
+ * - `list` must be a valid non-null pointer;
+ * - `out_outcome` must be a valid non-null pointer;
+ * - returns `true` when a value exists and was copied;
+ * - returns `false` when `index` is out of bounds and does not write
+ *   `out_outcome`;
+ * - the copied block view remains valid while `list` is alive and unchanged;
+ * - this function never fails;
+ * - violating the pointer contract aborts the call.
+ */
+bool openpit_pretrade_account_block_outcome_list_get(
+    const OpenPitPretradeAccountBlockOutcomeList * list,
+    size_t index,
+    OpenPitPretradeAccountBlockOutcome * out_outcome
 );
 
 /**
@@ -6064,6 +6148,20 @@ bool openpit_account_group_error_get_current_group(
  * The operation is all-or-nothing: if any listed account is already a member
  * of any group (including `group`), no account is registered.
  *
+ * Effective currency resolves from the account, then its group, then the
+ * default group. Stored realized PnL and cost basis are bare numbers whose
+ * denomination is implied by the effective currency when they were computed.
+ * This operation does not inspect that state. If joining `group` changes the
+ * effective currency, existing numbers remain in the previous currency while
+ * the engine treats them as the new one. The SDK does not convert, detect,
+ * report, halt, sweep, or block on this mismatch. Avoiding it is entirely the
+ * caller's responsibility.
+ *
+ * If membership changes the effective P&L barrier, the same call checks the
+ * current account P&L, treating an unset ledger as zero and `Halted` as a
+ * breach, and latches any resulting account block before returning. An
+ * unchanged effective barrier is not checked again.
+ *
  * Contract:
  * - `engine` must be a valid non-null engine pointer;
  * - `accounts` must point to an array of at least `accounts_len` account
@@ -6101,6 +6199,20 @@ bool openpit_engine_register_account_group(
  *
  * The operation is all-or-nothing: if any listed account is not currently a
  * member of `group`, no account is removed.
+ *
+ * Effective currency resolves from the account, then its group, then the
+ * default group. Stored realized PnL and cost basis are bare numbers whose
+ * denomination is implied by the effective currency when they were computed.
+ * This operation does not inspect that state. If leaving `group` changes the
+ * effective currency, existing numbers remain in the previous currency while
+ * the engine treats them as the new one. The SDK does not convert, detect,
+ * report, halt, sweep, or block on this mismatch. Avoiding it is entirely the
+ * caller's responsibility.
+ *
+ * If membership changes the effective P&L barrier, the same call checks the
+ * current account P&L, treating an unset ledger as zero and `Halted` as a
+ * breach, and latches any resulting account block before returning. An
+ * unchanged effective barrier is not checked again.
  *
  * Contract:
  * - `engine` must be a valid non-null engine pointer;
@@ -6160,10 +6272,17 @@ bool openpit_engine_account_group(
 /**
  * Sets the explicit currency of `account`.
  *
- * Setting or changing the account currency does not validate existing holdings
- * and does not recompute stored average entry price or realized PnL. The
- * caller owns the risk of changing currency on live state; a control or
- * recompute API may be added later.
+ * Effective currency resolves from the account, then its group, then the
+ * default group. Stored realized PnL and cost basis are bare numbers whose
+ * denomination is implied by the effective currency when they were computed.
+ * The SDK writes `asset` without checking that state. If this changes the
+ * effective currency, existing numbers remain in the previous currency while
+ * the engine treats them as the new one. The SDK does not convert, detect,
+ * report, halt, sweep, or block on this mismatch. Avoiding it is entirely the
+ * caller's responsibility.
+ *
+ * For an example of good practice in building a control plane on this SDK, see
+ * Pit Officer at <http://officer.openpit.dev/>.
  *
  * Contract:
  * - passing null for `engine` returns `false` and writes `out_error`;
@@ -6182,10 +6301,14 @@ bool openpit_engine_set_account_currency(
 /**
  * Clears the explicit currency of `account`.
  *
- * Clearing the account currency does not validate existing holdings and does
- * not recompute stored average entry price or realized PnL. The caller owns
- * the risk of changing currency on live state; a control or recompute API may
- * be added later.
+ * Effective currency resolves from the account, then its group, then the
+ * default group. Stored realized PnL and cost basis are bare numbers whose
+ * denomination is implied by the effective currency when they were computed.
+ * The SDK clears the account value without checking that state. If this
+ * changes the effective currency, existing numbers remain in the previous
+ * currency while the engine treats them as the new one. The SDK does not
+ * convert, detect, report, halt, sweep, or block on this mismatch. Avoiding it
+ * is entirely the caller's responsibility.
  *
  * Contract:
  * - `engine` must be a valid non-null engine pointer.
@@ -6201,10 +6324,14 @@ void openpit_engine_clear_account_currency(
  * `OPENPIT_DEFAULT_ACCOUNT_GROUP` (value `0`) is allowed and represents the
  * global default tier.
  *
- * Setting or changing the group currency does not validate existing holdings
- * and does not recompute stored average entry price or realized PnL. The
- * caller owns the risk of changing currency on live state; a control or
- * recompute API may be added later.
+ * Effective currency resolves from the account, then its group, then the
+ * default group. Stored realized PnL and cost basis are bare numbers whose
+ * denomination is implied by the effective currency when they were computed.
+ * The SDK writes `asset` without checking any affected account state. If an
+ * effective currency changes, existing numbers remain in the previous currency
+ * while the engine treats them as the new one. The SDK does not convert,
+ * detect, report, halt, sweep, or block on this mismatch. Avoiding it is
+ * entirely the caller's responsibility.
  *
  * Contract:
  * - passing null for `engine` returns `false` and writes `out_error`;
@@ -6229,10 +6356,14 @@ bool openpit_engine_set_account_group_currency(
  * `OPENPIT_DEFAULT_ACCOUNT_GROUP` (value `0`) is allowed and represents the
  * global default tier.
  *
- * Clearing the group currency does not validate existing holdings and does not
- * recompute stored average entry price or realized PnL. The caller owns the
- * risk of changing currency on live state; a control or recompute API may be
- * added later.
+ * Effective currency resolves from the account, then its group, then the
+ * default group. Stored realized PnL and cost basis are bare numbers whose
+ * denomination is implied by the effective currency when they were computed.
+ * The SDK clears the group value without checking any affected account state.
+ * If an effective currency changes, existing numbers remain in the previous
+ * currency while the engine treats them as the new one. The SDK does not
+ * convert, detect, report, halt, sweep, or block on this mismatch. Avoiding it
+ * is entirely the caller's responsibility.
  *
  * Contract:
  * - `engine` must be a valid non-null engine pointer;
@@ -7255,20 +7386,30 @@ bool openpit_engine_configure_spot_funds(
  * - Barrier retuning never resets a live accumulated P&L value.
  *
  * Success:
- * - returns `true`; subsequent P&L-bound evaluations use the new bounds,
- *   including pre-trade checks, execution reports, account-P&L adjustments
- *   and account-P&L force-sets. Retuning alone does not re-evaluate the
- *   stored accumulator or record an account block.
+ * - returns a caller-owned account-block-outcome list, possibly empty;
+ *   release it with `openpit_destroy_pretrade_account_block_outcome_list`.
+ *   Each outcome pairs the engine-selected account with the block inserted
+ *   for it. Subsequent P&L-bound evaluations use the new bounds, including
+ *   pre-trade checks, execution reports, account-P&L adjustments and
+ *   account-P&L force-sets. An account whose effective barrier changed is
+ *   evaluated against its stored account P&L here: an already halted
+ *   account, or one already beyond the new barrier, is blocked before this
+ *   call returns and appears in the list, which reports the blocks the
+ *   engine has already recorded. Removing the last effective barrier reports
+ *   no block and does not release an existing block. Clearing an override
+ *   can expose a fallback barrier; the fallback is evaluated normally and
+ *   may record and report a block.
  *
  * Error:
- * - returns `false`; if `out_error` is non-null, writes a caller-owned
+ * - returns null; if `out_error` is non-null, writes a caller-owned
  *   `OpenPitConfigureError` (release with
  *   `openpit_destroy_configure_error`).
- * - a null `engine` returns `false` and, when `out_error` is non-null,
- *   writes a caller-owned `OpenPitConfigureError` (`Validation`) that must
- *   be released with `openpit_destroy_configure_error`.
+ * - a null `engine` returns null and, when `out_error` is non-null, writes a
+ *   caller-owned `OpenPitConfigureError` (`Validation`) that must be
+ *   released with `openpit_destroy_configure_error`.
  */
-bool openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
+OpenPitPretradeAccountBlockOutcomeList *
+openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
     OpenPitEngine * engine,
     OpenPitStringView name,
     const OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier * global,
@@ -7290,9 +7431,11 @@ bool openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
  * never resets the accumulator. A numeric state re-arms this account
  * accumulator after a calculation halt. A halted state sets or keeps it halted
  * and replaces the stored halt reason. Neither form affects a position-level
- * accumulator. When the policy accepts a halted state while an effective
- * account P&L barrier is configured, the returned list contains the block
- * already recorded by the engine.
+ * accumulator. A numeric state beyond an effective bound, or a halted state
+ * with an effective barrier, returns the policy-reported
+ * `PnlKillSwitchTriggered` block. The engine processes that block request
+ * before returning. An existing first-cause block remains unchanged but does
+ * not suppress the returned block.
  *
  * Contract:
  * - on success, returns a caller-owned account-block list, possibly empty;

@@ -110,6 +110,12 @@ struct AccountBlock {
   }
 };
 
+// Account block inserted for an account selected by the engine.
+struct AccountBlockOutcome {
+  ::openpit::param::AccountId accountId;
+  AccountBlock block;
+};
+
 namespace detail {
 
 using RawAccountControl = ::OpenPitAccountControl;
@@ -274,6 +280,9 @@ struct AccountGroupError {
 // engine. Obtained from `Engine::Accounts()`. It carries no state of its own:
 // every call forwards to the engine it was created from and is valid for as
 // long as that engine is. Non-owning; copyable.
+//
+// For an example of good practice in building a control plane on this SDK,
+// see Pit Officer at <http://officer.openpit.dev/>.
 class Accounts {
  public:
   Accounts() = default;
@@ -281,7 +290,17 @@ class Accounts {
   // Atomically registers every account into `group`; all-or-nothing. Returns an
   // `AccountGroupError` when any account is already in a group or when `group`
   // is the reserved `param::DefaultAccountGroup`. Throws `openpit::Error` on a
-  // boundary failure.
+  // boundary failure. Effective currency resolves from the account, then its
+  // group, then the default group. Stored realized PnL and cost basis are bare
+  // numbers whose denomination is implied by the effective currency when they
+  // were computed. Membership changes do not inspect that state. If joining
+  // changes the currency, existing numbers remain in the previous currency
+  // while the engine treats them as the new one. The SDK does not convert,
+  // detect, report, halt, sweep, or block on this mismatch. Avoiding it is the
+  // caller's responsibility. If it changes the effective P&L barrier, current
+  // account P&L is checked in the same call (unset is zero and halted is a
+  // breach), and any resulting block is latched before return. An unchanged
+  // barrier is not checked again.
   [[nodiscard]] std::optional<AccountGroupError> RegisterGroup(
       const std::vector<::openpit::param::AccountId>& accounts,
       ::openpit::param::AccountGroupId group) const {
@@ -292,7 +311,17 @@ class Accounts {
   // Atomically removes every account from `group`; all-or-nothing. Returns an
   // `AccountGroupError` when any account is not in `group` or when `group` is
   // the reserved `param::DefaultAccountGroup`. Throws `openpit::Error` on a
-  // boundary failure.
+  // boundary failure. Effective currency resolves from the account, then its
+  // group, then the default group. Stored realized PnL and cost basis are bare
+  // numbers whose denomination is implied by the effective currency when they
+  // were computed. Membership changes do not inspect that state. If leaving
+  // changes the currency, existing numbers remain in the previous currency
+  // while the engine treats them as the new one. The SDK does not convert,
+  // detect, report, halt, sweep, or block on this mismatch. Avoiding it is the
+  // caller's responsibility. If it changes the effective P&L barrier, current
+  // account P&L is checked in the same call (unset is zero and halted is a
+  // breach), and any resulting block is latched before return. An unchanged
+  // barrier is not checked again.
   [[nodiscard]] std::optional<AccountGroupError> UnregisterGroup(
       const std::vector<::openpit::param::AccountId>& accounts,
       ::openpit::param::AccountGroupId group) const {
@@ -312,8 +341,15 @@ class Accounts {
     return std::nullopt;
   }
 
-  // Sets the explicit currency used by account-aware policies. Existing
-  // holdings are not recomputed; callers own any live-state migration.
+  // Sets the explicit currency used by account-aware policies. Effective
+  // currency resolves from the account, then its group, then the default
+  // group. Stored realized PnL and cost basis are bare numbers whose
+  // denomination is implied by the effective currency when they were
+  // computed. The SDK writes `asset` without checking that state. If this
+  // changes the currency, existing numbers remain in the previous currency
+  // while the engine treats them as the new one. The SDK does not convert,
+  // detect, report, halt, sweep, or block on this mismatch. Avoiding it is the
+  // caller's responsibility.
   void SetCurrency(::openpit::param::AccountId account,
                    const ::openpit::param::Asset& asset) const {
     OpenPitSharedString* error = nullptr;
@@ -325,13 +361,26 @@ class Accounts {
     }
   }
 
-  // Clears the explicit account currency.
+  // Clears the explicit account currency without checking realized PnL or cost
+  // basis. Effective currency resolves from the account, then its group, then
+  // the default group. Stored values are bare numbers whose denomination is
+  // implied by the currency when they were computed. If the currency changes,
+  // existing numbers remain in the previous currency while the engine treats
+  // them as the new one. The SDK does not convert, detect, report, halt, sweep,
+  // or block on this mismatch. Avoiding it is the caller's responsibility.
   void ClearCurrency(::openpit::param::AccountId account) const noexcept {
     openpit_engine_clear_account_currency(m_engine,
                                           ::openpit::detail::Native(account));
   }
 
-  // Sets the explicit currency shared by a registered account group.
+  // Sets the currency shared by a group. Effective currency resolves from the
+  // account, then its group, then the default group. Stored realized PnL and
+  // cost basis are bare numbers whose denomination is implied by the currency
+  // when they were computed. The SDK writes the value without checking any
+  // account state. If a currency changes, existing numbers remain in the
+  // previous currency while the engine treats them as the new one. The SDK
+  // does not convert, detect, report, halt, sweep, or block on this mismatch.
+  // Avoiding it is the caller's responsibility.
   void SetGroupCurrency(::openpit::param::AccountGroupId group,
                         const ::openpit::param::Asset& asset) const {
     OpenPitSharedString* error = nullptr;
@@ -343,7 +392,14 @@ class Accounts {
     }
   }
 
-  // Clears the explicit account-group currency.
+  // Clears the group currency without checking account state. Effective
+  // currency resolves from the account, then its group, then the default
+  // group. Stored realized PnL and cost basis are bare numbers whose
+  // denomination is implied by the currency when they were computed. If a
+  // currency changes, existing numbers remain in the previous currency while
+  // the engine treats them as the new one. The SDK does not convert, detect,
+  // report, halt, sweep, or block on this mismatch. Avoiding it is the caller's
+  // responsibility.
   void ClearGroupCurrency(
       ::openpit::param::AccountGroupId group) const noexcept {
     openpit_engine_clear_account_group_currency(

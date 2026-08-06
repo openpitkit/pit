@@ -1833,19 +1833,14 @@ func TestExampleWikiSpotFundsPnlKillSwitchBuilder(t *testing.T) {
 // Source: https://wiki.openpit.dev/Spot-Funds/
 // - Self-Computed PnL Kill Switch / Runtime Reconfiguration
 func TestExampleWikiSpotFundsPnlKillSwitchReconfigure(t *testing.T) {
-	// Harness scaffolding: a spot-funds engine with a per-account barrier the
-	// snippet then retunes and force-sets.
-	seedAccount := param.NewAccountIDFromUint64(99224416)
-	seedLower, _ := param.NewPnlFromString("-250")
+	// Harness scaffolding: the wiki snippet starts with a global -1000 barrier.
+	initialLower, _ := param.NewPnlFromString("-1000")
 	engine, err := NewEngineBuilder().
 		NoSync().
 		Builtin(
 			policies.BuildSpotFundsPnlBoundsKillSwitch().
-				AccountBarriers(policies.SpotFundsPnlBoundsAccountBarrier{
-					AccountID: seedAccount,
-					Barrier: policies.SpotFundsPnlBoundsBarrier{
-						LowerBound: optional.Some(seedLower),
-					},
+				GlobalBarrier(policies.SpotFundsPnlBoundsBarrier{
+					LowerBound: optional.Some(initialLower),
 				}),
 		).
 		Build()
@@ -1854,34 +1849,59 @@ func TestExampleWikiSpotFundsPnlKillSwitchReconfigure(t *testing.T) {
 	}
 	defer engine.Stop()
 
-	account := param.NewAccountIDFromUint64(99224416)
+	retunedAccount := param.NewAccountIDFromUint64(99224416)
+	forcedAccount := param.NewAccountIDFromUint64(99224417)
 	newLower, _ := param.NewPnlFromString("-500")
-	forced, _ := param.NewPnlFromString("-600")
+	outside, _ := param.NewPnlFromString("-600")
 	globalBarrier := policies.SpotFundsPnlBoundsBarrier{
 		LowerBound: optional.Some(newLower),
 	}
 
-	// Retune the account PnL barrier; live accumulated PnL is untouched.
-	if err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
+	// Seed live PnL inside the current -1000 barrier.
+	seed, err := engine.Configure().SetSpotFundsAccountPnl(
 		policies.SpotFundsPolicyName,
-		optional.Some(&globalBarrier),
-		nil,
-		nil,
-	); err != nil {
-		t.Fatalf("SpotFundsPnlBoundsKillSwitch() error = %v", err)
-	}
-
-	// Force-set the live accumulated PnL for one account.
-	result, err := engine.Configure().SetSpotFundsAccountPnl(
-		policies.SpotFundsPolicyName,
-		account,
-		model.NewPnlState(forced),
+		retunedAccount,
+		model.NewPnlState(outside),
 	)
 	if err != nil {
 		t.Fatalf("SetSpotFundsAccountPnl() error = %v", err)
 	}
-	if len(result.AccountBlocks) != 1 {
-		t.Fatalf("AccountBlocks = %v, want one PnL block", result.AccountBlocks)
+	if len(seed.AccountBlocks) != 0 {
+		t.Fatalf("AccountBlocks = %v, want none", seed.AccountBlocks)
+	}
+
+	// Tightening the barrier checks the known account and records the block now.
+	retune, err := engine.Configure().SpotFundsPnlBoundsKillSwitch(
+		policies.SpotFundsPolicyName,
+		optional.Some(&globalBarrier),
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("SpotFundsPnlBoundsKillSwitch() error = %v", err)
+	}
+	if len(retune.AccountBlocks) != 1 {
+		t.Fatalf("AccountBlocks = %v, want one retune block", retune.AccountBlocks)
+	}
+	if retune.AccountBlocks[0].AccountID != retunedAccount {
+		t.Fatalf(
+			"AccountID = %v, want %v",
+			retune.AccountBlocks[0].AccountID,
+			retunedAccount,
+		)
+	}
+
+	// A force-set beyond the current barrier also returns its recorded block.
+	forced, err := engine.Configure().SetSpotFundsAccountPnl(
+		policies.SpotFundsPolicyName,
+		forcedAccount,
+		model.NewPnlState(outside),
+	)
+	if err != nil {
+		t.Fatalf("SetSpotFundsAccountPnl() error = %v", err)
+	}
+	if len(forced.AccountBlocks) != 1 {
+		t.Fatalf("AccountBlocks = %v, want one force-set block", forced.AccountBlocks)
 	}
 }
 

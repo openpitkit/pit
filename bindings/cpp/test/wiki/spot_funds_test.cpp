@@ -200,7 +200,8 @@ TEST(SpotFundsWiki, PnlBoundsKillSwitchRuntimeReconfiguration) {
   using openpit::param::AccountId;
   using openpit::param::Pnl;
 
-  const AccountId accountId = AccountId::FromUint64(99224416);
+  const AccountId retunedAccount = AccountId::FromUint64(99224416);
+  const AccountId forcedAccount = AccountId::FromUint64(99224417);
   policies::SpotFundsPnlBoundsBarrier initial;
   initial.lowerBound = Pnl::FromString("-1000");
 
@@ -209,17 +210,24 @@ TEST(SpotFundsWiki, PnlBoundsKillSwitchRuntimeReconfiguration) {
       std::move(initial)));
   openpit::Engine engine = builder.Build();
 
-  // Retune the account PnL barrier; live accumulated PnL is untouched.
+  // Seed live PnL inside the current -1000 barrier.
+  const auto seed = engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, retunedAccount, Pnl::FromString("-600"));
+  EXPECT_TRUE(seed.accountBlocks.empty());
+
+  // Tightening the barrier checks the known account and records the block now.
   policies::SpotFundsPnlBoundsBarrier global;
   global.lowerBound = Pnl::FromString("-500");
-  engine.Configure().SpotFundsPnlBoundsKillSwitch(
+  const auto retune = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
       policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Set(std::move(global)));
+  EXPECT_EQ(retune.accountBlocks.size(), 1U);
+  EXPECT_EQ(retune.accountBlocks[0].accountId, retunedAccount);
 
-  // Force-set the live accumulated PnL for one account.
-  const auto result = engine.Configure().SetSpotFundsAccountPnl(
-      policies::SpotFundsPolicyName, accountId, Pnl::FromString("-600"));
-  EXPECT_EQ(result.accountBlocks.size(), 1U);
+  // A force-set beyond the current barrier also returns its recorded block.
+  const auto forced = engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, forcedAccount, Pnl::FromString("-600"));
+  EXPECT_EQ(forced.accountBlocks.size(), 1U);
 
   // Harness assertion: the engine remains usable after both runtime calls.
   EXPECT_TRUE(static_cast<bool>(engine));

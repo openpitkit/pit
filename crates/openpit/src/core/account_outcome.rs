@@ -65,6 +65,11 @@ pub enum PnlState {
 
 /// Account-level realized PnL outcome for one account ledger.
 ///
+/// SpotFunds emits an outcome only when a fill reduces, closes, or reverses a
+/// position, or when a non-zero fee contributes to the ledger. Opening,
+/// same-direction, and zero-quantity fills without a non-zero fee omit the
+/// account line. A zero fee alone also omits it.
+///
 /// SpotFunds emits a halted outcome only for the operation that transitions
 /// the ledger to halted. Later operations omit the unchanged halt until an
 /// explicit account-PnL correction re-arms the ledger.
@@ -79,6 +84,15 @@ pub struct AccountPnlOutcome {
 }
 
 /// Reason why a realized-PnL calculation halted.
+///
+/// When one operation encounters multiple failures, SpotFunds selects one
+/// reason in this priority order:
+///
+/// 1. [`ArithmeticOverflow`](Self::ArithmeticOverflow)
+/// 2. [`MissingAccountCurrency`](Self::MissingAccountCurrency)
+/// 3. [`MissingFx`](Self::MissingFx)
+/// 4. [`MissingCostBasis`](Self::MissingCostBasis)
+/// 5. [`MissingInitialPnl`](Self::MissingInitialPnl)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PnlHaltReason {
     /// A required FX quote was unavailable.
@@ -125,9 +139,13 @@ pub struct AccountOutcomeEntry {
     /// supplied account-currency value. `Err` reports
     /// the halt reason for the operation that first failed; later operations
     /// omit the value entirely while the position remains halted. It is `None`
-    /// for reservations, cancels, settlement legs, zero-realized fills, and
-    /// non-PnL adjustments. An asset-scoped balance adjustment is required to
-    /// re-arm a halted slot.
+    /// for reservations, cancels, settlement legs, opening, same-direction,
+    /// and zero-quantity fills without a non-zero fee, and non-PnL adjustments.
+    /// A realizing fill with an exact-zero contribution still reports an
+    /// authoritative zero. A non-zero fee is an economic contribution to this
+    /// line regardless of the reported quantity, so it produces an entry for
+    /// the report's underlying asset even when the account never held it. An
+    /// asset-scoped balance adjustment is required to re-arm a halted slot.
     pub realized_pnl: Option<PnlOutcome>,
     /// Absolute account-currency average entry price of the current net
     /// position for this `(account, asset)` holdings slot, or `None` when the

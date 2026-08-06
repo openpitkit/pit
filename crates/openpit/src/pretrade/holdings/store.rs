@@ -159,6 +159,10 @@ where
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
+
+    pub(crate) fn keys(&self) -> Vec<(AccountId, Asset)> {
+        self.inner.keys()
+    }
 }
 
 #[cfg(test)]

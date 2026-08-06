@@ -31,6 +31,10 @@
 namespace openpit::accountadjustment {
 
 /// Reason why a realized-PnL amount could not be calculated.
+///
+/// When failures coincide, SpotFunds uses this priority from highest to lowest:
+/// `ArithmeticOverflow`, `MissingAccountCurrency`, `MissingFx`,
+/// `MissingCostBasis`, then `MissingInitialPnl`.
 enum class PnlHaltReason : std::uint8_t {
   /// No quote has been published for a required FX conversion.
   ///
@@ -228,6 +232,12 @@ class PnlOutcome {
 };
 
 /// Account-level realized-PnL result: either the amount or a halt reason.
+/// SpotFunds engages this account line only for a realizing fill or a nonzero
+/// fee. Opening, same-direction, and zero-quantity fills without a nonzero fee,
+/// plus zero fees alone, emit no outcome and require no account currency or FX
+/// for this line. A nonzero fee engages both position and account rows
+/// regardless of fill quantity.
+///
 /// A newly halted calculation emits its reason once; later checks can reject
 /// or block on the stored halt without emitting another account outcome. A
 /// manager explicitly force-sets the account PnL to re-arm it. Position

@@ -39,6 +39,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -1154,6 +1155,23 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsPolicyRequiresBarrier) {
       openpit::Error);
 }
 
+TEST(BuiltinPolicy, SpotFundsGroupMembershipArmsEffectivePnlBarrier) {
+  const openpit::param::AccountId account =
+      openpit::param::AccountId::FromUint64(83010);
+  const openpit::param::AccountGroupId group =
+      openpit::param::AccountGroupId::FromUint32(84);
+  policies::SpotFundsPnlBoundsBarrier barrier;
+  barrier.lowerBound = openpit::param::Pnl::FromString("1");
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(
+      policies::SpotFundsPnlBoundsKillSwitchPolicy{}.AccountGroupBarrier(
+          policies::SpotFundsPnlBoundsAccountGroupBarrier(group, barrier)));
+  const openpit::Engine engine = builder.Build();
+
+  ASSERT_FALSE(engine.Accounts().RegisterGroup({account}, group).has_value());
+  ExpectSpotFundsPnlPreTradeReject(engine, account);
+}
+
 TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
   const openpit::param::AccountId account =
       openpit::param::AccountId::FromUint64(83016);
@@ -1181,7 +1199,7 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
                                          Quantity::FromString("1"));
   // The fee has to be denominated in the account currency, so it is what
   // makes this fill's account line uncomputable without one. A fee-less
-  // opening fill would contribute a computable zero instead.
+  // opening fill would omit the account line instead.
   fill.fee = openpit::param::MonetaryAmount(
       openpit::param::Fee::FromString("0.25"), openpit::param::Asset("USD"));
   fill.leavesQuantity = Quantity::FromString("0");
@@ -1217,7 +1235,7 @@ TEST(BuiltinPolicy, SpotFundsPnlHaltBlocksAndNumericSetRearms) {
 }
 
 // Applies one AAPL/USD buy fill through the full reserve/commit lifecycle.
-// `fee` engages the account line's need for an account currency.
+// A nonzero `fee` engages the account line's need for an account currency.
 [[nodiscard]] openpit::PostTradeResult ApplySpotFundsBuyFill(
     const openpit::Engine& engine, const openpit::param::AccountId accountId,
     const std::optional<openpit::param::MonetaryAmount>& fee) {
@@ -1274,10 +1292,10 @@ FindAssetEntry(const openpit::PostTradeResult& result,
 }
 
 // The account line and the position ledger halt independently. A fee-less
-// opening fill contributes a computable zero to the account line, so a missing
-// account currency does not halt it; the position ledger must still denominate
-// a cost basis and therefore halts. The ledger halt is also emitted exactly
-// once: a second identical fill stays halted without republishing the reason.
+// opening fill does not engage the account line, while the position ledger
+// must still denominate a cost basis and therefore halts. The ledger halt is
+// also emitted exactly once: a second identical fill stays halted without
+// republishing the reason.
 TEST(BuiltinPolicy, SpotFundsOpeningFillHaltsPositionLedgerOnly) {
   const openpit::param::AccountId account =
       openpit::param::AccountId::FromUint64(83018);
@@ -1285,11 +1303,7 @@ TEST(BuiltinPolicy, SpotFundsOpeningFillHaltsPositionLedgerOnly) {
 
   const openpit::PostTradeResult result =
       ApplySpotFundsBuyFill(engine, account, std::nullopt);
-  ASSERT_EQ(result.accountPnls.size(), 1u);
-  ASSERT_NE(result.accountPnls.front().Amount(), nullptr);
-  const auto& amount = *result.accountPnls.front().Amount();
-  EXPECT_EQ(amount.delta, openpit::param::Pnl::FromString("0"));
-  EXPECT_EQ(amount.absolute, openpit::param::Pnl::FromString("0"));
+  EXPECT_TRUE(result.accountPnls.empty());
   EXPECT_TRUE(result.accountBlocks.empty());
 
   const openpit::accountadjustment::AccountOutcomeEntry* entry =
@@ -1303,15 +1317,11 @@ TEST(BuiltinPolicy, SpotFundsOpeningFillHaltsPositionLedgerOnly) {
   // computed cannot retain an authoritative average price.
   EXPECT_FALSE(entry->averageEntryPrice.has_value());
 
-  // The account accumulator stays live, so the account is still tradable and
-  // the next fill is accepted rather than rejected by the kill switch.
+  // The account line remains unset, so the account is still tradable and the
+  // next fill is accepted rather than rejected by the kill switch.
   const openpit::PostTradeResult second =
       ApplySpotFundsBuyFill(engine, account, std::nullopt);
-  ASSERT_EQ(second.accountPnls.size(), 1u);
-  ASSERT_NE(second.accountPnls.front().Amount(), nullptr);
-  const auto& secondAmount = *second.accountPnls.front().Amount();
-  EXPECT_EQ(secondAmount.delta, openpit::param::Pnl::FromString("0"));
-  EXPECT_EQ(secondAmount.absolute, openpit::param::Pnl::FromString("0"));
+  EXPECT_TRUE(second.accountPnls.empty());
   EXPECT_TRUE(second.accountBlocks.empty());
 
   // The ledger stays halted, so it does not emit the reason a second time.
@@ -1346,7 +1356,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsConfiguratorUpdatesAxesAndPnl) {
   update.upperBound = openpit::param::Pnl::FromString("20");
 
   EXPECT_NO_THROW({
-    engine.Configure().SpotFundsPnlBoundsKillSwitch(
+    const auto retune = engine.Configure().SpotFundsPnlBoundsKillSwitch(
         policies::SpotFundsPolicyName,
         GlobalBarrierUpdate::Set(std::move(global)),
         std::vector<policies::SpotFundsPnlBoundsAccountGroupBarrier>{
@@ -1357,6 +1367,8 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsConfiguratorUpdatesAxesAndPnl) {
             policies::SpotFundsPnlBoundsAccountBarrier(
                 openpit::param::AccountId::FromUint64(99224416),
                 std::move(update))});
+    // No account carries a stored P&L yet, so the retune blocks nothing.
+    EXPECT_TRUE(retune.accountBlocks.empty());
   });
   const auto numericResult = engine.Configure().SetSpotFundsAccountPnl(
       policies::SpotFundsPolicyName,
@@ -1380,16 +1392,19 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAxisReplacementAndClear) {
       openpit::param::AccountId::FromUint64(83011);
   const openpit::param::AccountId accountGroup =
       openpit::param::AccountId::FromUint64(83012);
-  const openpit::param::AccountId accountGlobal =
+  const openpit::param::AccountId accountSafe =
       openpit::param::AccountId::FromUint64(83013);
-  const openpit::param::AccountId accountAfterClear =
+  const openpit::param::AccountId accountGlobal =
       openpit::param::AccountId::FromUint64(83014);
+  const openpit::param::AccountId accountAfterClear =
+      openpit::param::AccountId::FromUint64(83015);
 
   openpit::EngineBuilder builder(openpit::SyncPolicy::None);
   builder.Add(policies::SpotFundsPolicy{});
   const openpit::Engine engine = builder.Build();
   for (const openpit::param::AccountId account :
-       {accountSpecific, accountGroup, accountGlobal, accountAfterClear}) {
+       {accountSpecific, accountGroup, accountGlobal, accountAfterClear,
+        accountSafe}) {
     SeedSpotFundsLifecycleAccount(engine, account);
   }
   ASSERT_FALSE(
@@ -1406,7 +1421,10 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAxisReplacementAndClear) {
       openpit::param::Pnl::FromString("-25")));
   static_cast<void>(engine.Configure().SetSpotFundsAccountPnl(
       policies::SpotFundsPolicyName, accountAfterClear,
-      openpit::param::Pnl::FromString("-25")));
+      openpit::accountadjustment::PnlHaltReason::MissingFx));
+  static_cast<void>(engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, accountSafe,
+      openpit::param::Pnl::FromString("-5")));
 
   policies::SpotFundsPnlBoundsBarrier global;
   global.lowerBound = openpit::param::Pnl::FromString("-20");
@@ -1414,7 +1432,7 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAxisReplacementAndClear) {
   groupBarrier.lowerBound = openpit::param::Pnl::FromString("-10");
   policies::SpotFundsPnlBoundsBarrier accountBarrier;
   accountBarrier.lowerBound = openpit::param::Pnl::FromString("-10");
-  engine.Configure().SpotFundsPnlBoundsKillSwitch(
+  const auto armed = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
       policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Set(global),
       std::vector<policies::SpotFundsPnlBoundsAccountGroupBarrier>{
@@ -1422,24 +1440,65 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAxisReplacementAndClear) {
       std::vector<policies::SpotFundsPnlBoundsAccountBarrier>{
           policies::SpotFundsPnlBoundsAccountBarrier(accountSpecific,
                                                      accountBarrier)});
+  // Four accounts sit past their effective bounds; the safe fifth account is
+  // part of the sweep but remains unblocked.
+  ASSERT_EQ(armed.accountBlocks.size(), 4U);
+  const std::vector<std::pair<openpit::param::AccountId, RejectCode>>
+      expectedPairs{
+          {accountSpecific, RejectCode::PnlKillSwitchTriggered},
+          {accountGroup, RejectCode::PnlKillSwitchTriggered},
+          {accountGlobal, RejectCode::PnlKillSwitchTriggered},
+          {accountAfterClear, RejectCode::PnlKillSwitchTriggered},
+      };
+  const std::vector<std::string_view> expectedReasons{
+      "pnl kill switch triggered",
+      "pnl kill switch triggered",
+      "pnl kill switch triggered",
+      "account pnl calculation halted",
+  };
+  for (std::size_t index = 0; index < expectedPairs.size(); ++index) {
+    const auto actualPair = std::pair{armed.accountBlocks[index].accountId,
+                                      armed.accountBlocks[index].block.code};
+    EXPECT_EQ(actualPair, expectedPairs[index]);
+    EXPECT_EQ(armed.accountBlocks[index].block.reason, expectedReasons[index]);
+  }
+  for (const openpit::param::AccountId account :
+       {accountSpecific, accountGroup, accountGlobal, accountAfterClear}) {
+    ExpectSpotFundsPnlPreTradeReject(engine, account);
+  }
+  openpit::pretrade::ExecuteResult safe =
+      engine.ExecutePreTrade(SpotFundsLifecycleOrder(accountSafe));
+  ASSERT_TRUE(safe.Passed());
+  ASSERT_TRUE(safe.reservation.has_value());
+  safe.reservation->Rollback();
+  // The operator lifts the arming blocks; the axes stay in force, so the
+  // cascade below is decided by the live barriers.
+  for (const openpit::param::AccountId account :
+       {accountSpecific, accountGroup, accountGlobal, accountAfterClear}) {
+    engine.Accounts().Unblock(account);
+  }
 
   // An engaged empty account axis clears only per-account barriers. The
   // omitted global and group axes remain in force for their respective keys.
-  engine.Configure().SpotFundsPnlBoundsKillSwitch(
+  // Only accountSpecific changes tier, and the wider global bound admits it.
+  const auto cleared = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
       policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Unchanged(),
       std::nullopt, std::vector<policies::SpotFundsPnlBoundsAccountBarrier>{});
+  EXPECT_TRUE(cleared.accountBlocks.empty());
   EXPECT_TRUE(ApplySpotFundsLifecycleFill(engine, accountSpecific).empty());
   ExpectSpotFundsPnlPreTradeReject(engine, accountGroup);
   ExpectSpotFundsPnlPreTradeReject(engine, accountGlobal);
 
   // Runtime patches may clear every axis, unlike the explicit PnL batch
-  // builder that requires at least one barrier at construction time.
-  engine.Configure().SpotFundsPnlBoundsKillSwitch(
+  // builder that requires at least one barrier at construction time. Clearing
+  // creates no block.
+  const auto fullClear = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
       policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Clear(),
       std::vector<policies::SpotFundsPnlBoundsAccountGroupBarrier>{},
       std::vector<policies::SpotFundsPnlBoundsAccountBarrier>{});
+  EXPECT_TRUE(fullClear.accountBlocks.empty());
   EXPECT_TRUE(ApplySpotFundsLifecycleFill(engine, accountAfterClear).empty());
 }
 
@@ -1458,19 +1517,23 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsRuntimeAdditionRetainsLivePnl) {
       openpit::param::Pnl::FromString("-40"));
   EXPECT_TRUE(setResult.accountBlocks.empty());
 
+  // Arming the bound decides the already-stored -40 immediately.
   policies::SpotFundsPnlBoundsBarrier initial;
   initial.lowerBound = openpit::param::Pnl::FromString("-30");
-  engine.Configure().SpotFundsPnlBoundsKillSwitch(
+  const auto armed = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
       policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Set(initial));
+  EXPECT_EQ(armed.accountBlocks.size(), 1U);
+  engine.Accounts().Unblock(account);
 
   // Replacing the global bound must preserve the live accumulator instead of
   // resetting it.
   policies::SpotFundsPnlBoundsBarrier replacement;
   replacement.lowerBound = openpit::param::Pnl::FromString("-20");
-  engine.Configure().SpotFundsPnlBoundsKillSwitch(
+  const auto replaced = engine.Configure().SpotFundsPnlBoundsKillSwitch(
       policies::SpotFundsPolicyName,
       policies::SpotFundsPnlBoundsGlobalBarrierUpdate::Set(replacement));
+  EXPECT_EQ(replaced.accountBlocks.size(), 1U);
   ExpectSpotFundsPnlPreTradeReject(engine, account);
 }
 

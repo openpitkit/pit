@@ -30,6 +30,9 @@ import (
 // for an engine. Obtain it from an engine's Accounts accessor. It carries no
 // state of its own: every call forwards to the engine it was created from, and
 // it is valid for as long as that engine is.
+//
+// For an example of good practice in building a control plane on this SDK, see
+// Pit Officer at http://officer.openpit.dev/.
 type Accounts struct {
 	engine native.Engine
 }
@@ -42,6 +45,20 @@ func NewFromHandle(engine native.Engine) Accounts {
 // RegisterGroup atomically registers one or more accounts into group. All
 // accounts in the slice are registered together; the operation is
 // all-or-nothing.
+//
+// Effective currency resolves from the account, then its group, then the
+// default group. Stored realized PnL and cost basis are bare numbers whose
+// denomination is implied by the effective currency when they were computed.
+// This operation does not inspect that state. If joining group changes the
+// effective currency, existing numbers remain in the previous currency while
+// the engine treats them as the new one. The SDK does not convert, detect,
+// report, halt, sweep, or block on this mismatch. Avoiding it is entirely the
+// caller's responsibility.
+//
+// If membership changes the effective P&L barrier, this call checks current
+// account P&L, treating an unset ledger as zero and halted state as a breach,
+// and latches any resulting account block before returning. An unchanged
+// effective barrier is not checked again.
 //
 // Returns a *reject.AccountGroupError when any account is already in a group or
 // when group is the reserved param.DefaultAccountGroup. Returns a Go error on
@@ -64,6 +81,20 @@ func (a Accounts) RegisterGroup(accounts []param.AccountID, group param.AccountG
 // UnregisterGroup atomically removes one or more accounts from group. All
 // accounts in the slice are unregistered together; the operation is
 // all-or-nothing.
+//
+// Effective currency resolves from the account, then its group, then the
+// default group. Stored realized PnL and cost basis are bare numbers whose
+// denomination is implied by the effective currency when they were computed.
+// This operation does not inspect that state. If leaving group changes the
+// effective currency, existing numbers remain in the previous currency while
+// the engine treats them as the new one. The SDK does not convert, detect,
+// report, halt, sweep, or block on this mismatch. Avoiding it is entirely the
+// caller's responsibility.
+//
+// If membership changes the effective P&L barrier, this call checks current
+// account P&L, treating an unset ledger as zero and halted state as a breach,
+// and latches any resulting account block before returning. An unchanged
+// effective barrier is not checked again.
 //
 // Returns a *reject.AccountGroupError when any account is not in group or when
 // group is the reserved param.DefaultAccountGroup. Returns a Go error on
@@ -92,10 +123,14 @@ func (a Accounts) GroupOf(account param.AccountID) optional.Option[param.Account
 
 // SetCurrency sets account's explicit currency.
 //
-// Setting or changing currency does not validate existing holdings and does
-// not recompute stored average entry price or realized PnL. The caller owns
-// the risk of changing currency on live state; a control or recompute API may
-// be added later.
+// Effective currency resolves from the account, then its group, then the
+// default group. Stored realized PnL and cost basis are bare numbers whose
+// denomination is implied by the effective currency when they were computed.
+// The SDK writes asset without checking that state. If this changes the
+// effective currency, existing numbers remain in the previous currency while
+// the engine treats them as the new one. The SDK does not convert, detect,
+// report, halt, sweep, or block on this mismatch. Avoiding it is entirely the
+// caller's responsibility.
 func (a Accounts) SetCurrency(account param.AccountID, asset param.Asset) error {
 	return native.EngineSetAccountCurrency(
 		a.engine,
@@ -106,10 +141,14 @@ func (a Accounts) SetCurrency(account param.AccountID, asset param.Asset) error 
 
 // ClearCurrency clears account's explicit currency.
 //
-// Clearing currency does not validate existing holdings and does not recompute
-// stored average entry price or realized PnL. The caller owns the risk of
-// changing currency on live state; a control or recompute API may be added
-// later.
+// Effective currency resolves from the account, then its group, then the
+// default group. Stored realized PnL and cost basis are bare numbers whose
+// denomination is implied by the effective currency when they were computed.
+// The SDK clears the account value without checking that state. If this changes
+// the effective currency, existing numbers remain in the previous currency
+// while the engine treats them as the new one. The SDK does not convert,
+// detect, report, halt, sweep, or block on this mismatch. Avoiding it is
+// entirely the caller's responsibility.
 func (a Accounts) ClearCurrency(account param.AccountID) {
 	native.EngineClearAccountCurrency(a.engine, account.Handle())
 }
@@ -119,10 +158,14 @@ func (a Accounts) ClearCurrency(account param.AccountID) {
 // The reserved param.DefaultAccountGroup is allowed here and represents the
 // global default tier.
 //
-// Setting or changing currency does not validate existing holdings and does
-// not recompute stored average entry price or realized PnL. The caller owns
-// the risk of changing currency on live state; a control or recompute API may
-// be added later.
+// Effective currency resolves from the account, then its group, then the
+// default group. Stored realized PnL and cost basis are bare numbers whose
+// denomination is implied by the effective currency when they were computed.
+// The SDK writes asset without checking any affected account state. If an
+// effective currency changes, existing numbers remain in the previous currency
+// while the engine treats them as the new one. The SDK does not convert,
+// detect, report, halt, sweep, or block on this mismatch. Avoiding it is
+// entirely the caller's responsibility.
 func (a Accounts) SetGroupCurrency(group param.AccountGroupID, asset param.Asset) error {
 	return native.EngineSetAccountGroupCurrency(
 		a.engine,
@@ -136,10 +179,14 @@ func (a Accounts) SetGroupCurrency(group param.AccountGroupID, asset param.Asset
 // The reserved param.DefaultAccountGroup is allowed here and represents the
 // global default tier.
 //
-// Clearing currency does not validate existing holdings and does not recompute
-// stored average entry price or realized PnL. The caller owns the risk of
-// changing currency on live state; a control or recompute API may be added
-// later.
+// Effective currency resolves from the account, then its group, then the
+// default group. Stored realized PnL and cost basis are bare numbers whose
+// denomination is implied by the effective currency when they were computed.
+// The SDK clears the group value without checking any affected account state.
+// If an effective currency changes, existing numbers remain in the previous
+// currency while the engine treats them as the new one. The SDK does not
+// convert, detect, report, halt, sweep, or block on this mismatch. Avoiding it
+// is entirely the caller's responsibility.
 func (a Accounts) ClearGroupCurrency(group param.AccountGroupID) {
 	native.EngineClearAccountGroupCurrency(a.engine, group.Handle())
 }

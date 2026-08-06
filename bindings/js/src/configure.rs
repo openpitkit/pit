@@ -47,7 +47,7 @@ use crate::policy::spot_funds::{
     JsSpotFundsPnlBoundsBarrier,
 };
 use crate::policy::CallbackErrorScope;
-use crate::result::JsPolicyConfigurationResult;
+use crate::result::{JsAccountBlockOutcomes, JsPolicyConfigurationResult};
 
 #[wasm_bindgen(typescript_custom_section)]
 const CONFIGURE_TS: &'static str = r#"
@@ -417,10 +417,23 @@ impl JsConfigurator {
                 }
                 Ok::<(), SpotFundsConfigError>(())
             })
+            // None of these axes can change a P&L barrier, so no account block
+            // is ever reported here.
+            .map(|_| ())
             .map_err(configure_error_to_js)
     }
 
     /// Retunes the spot-funds account-wide P&L-bounds axis.
+    ///
+    /// An account whose effective barrier changed is evaluated against its
+    /// stored account P&L in the same call: an already halted account, or one
+    /// already beyond the new barrier, is blocked before this call returns and
+    /// appears in the returned result, which reports the blocks the engine has
+    /// already recorded. Each returned `AccountBlockOutcome` identifies the
+    /// affected account together with its newly inserted block. Removing the
+    /// last effective barrier reports no block and does not release an existing
+    /// block. Clearing an override can expose a fallback barrier; the fallback
+    /// is evaluated normally and may record and report a block.
     ///
     /// # Errors
     ///
@@ -433,7 +446,7 @@ impl JsConfigurator {
         &self,
         name: &str,
         options: SpotFundsPnlBoundsKillswitchConfigureOptionsLike,
-    ) -> Result<(), JsValue> {
+    ) -> Result<JsAccountBlockOutcomes, JsValue> {
         self.ensure_callable()?;
         let options = options.into();
         require_object(&options, "spotFundsPnlBoundsKillswitch options")?;
@@ -473,14 +486,17 @@ impl JsConfigurator {
                 }
                 Ok::<(), SpotFundsConfigError>(())
             })
+            .map(|result| JsAccountBlockOutcomes::from_core(&result))
             .map_err(configure_error_to_js)
     }
 
     /// Force-sets live accumulated spot-funds account-wide P&L state.
     ///
     /// The new state is checked against the effective account P&L barrier in
-    /// the same call. The result contains any account block recorded while the
-    /// state was applied, including an immediate numeric barrier breach.
+    /// the same call. A barrier breach or halted state under a barrier returns
+    /// the policy-reported block even when the account already has a block. The
+    /// engine processes the block request before returning and preserves the
+    /// existing first cause.
     ///
     /// # Errors
     ///

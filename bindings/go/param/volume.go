@@ -332,7 +332,8 @@ func (v Volume) CashFlowOutflow() CashFlow {
 	return NewCashFlowFromHandle(newParamValueOrPanic(native.ParamVolumeToCashFlowOutflow(v.native)))
 }
 
-// CalculateQuantity returns the quantity equivalent to volume / price.
+// CalculateQuantity returns zero when price is zero. Otherwise, it returns the
+// quantity equivalent to volume / abs(price).
 func (v Volume) CalculateQuantity(price Price) (Quantity, error) {
 	result, err := native.ParamVolumeCalculateQuantity(v.native, price.native)
 	if err != nil {

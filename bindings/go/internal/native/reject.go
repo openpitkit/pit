@@ -177,3 +177,37 @@ func PretradeAccountBlockListGet(list PretradeAccountBlockList, index int) Pretr
 }
 
 //------------------------------------------------------------------------------
+// PretradeAccountBlockOutcomeList
+
+func DestroyPretradeAccountBlockOutcomeList(outcomes PretradeAccountBlockOutcomeList) {
+	C.openpit_destroy_pretrade_account_block_outcome_list(outcomes)
+}
+
+func PretradeAccountBlockOutcomeListLen(list PretradeAccountBlockOutcomeList) int {
+	return int(C.openpit_pretrade_account_block_outcome_list_len(list))
+}
+
+func PretradeAccountBlockOutcomeListGet(
+	list PretradeAccountBlockOutcomeList,
+	index int,
+) PretradeAccountBlockOutcome {
+	var out PretradeAccountBlockOutcome
+	if !C.openpit_pretrade_account_block_outcome_list_get(list, C.size_t(index), &out) { //nolint:gocritic // CGo out-parameter requires address-of operator
+		return PretradeAccountBlockOutcome{}
+	}
+	return out
+}
+
+func PretradeAccountBlockOutcomeGetAccountID(
+	outcome PretradeAccountBlockOutcome,
+) ParamAccountID {
+	return outcome.account_id
+}
+
+func PretradeAccountBlockOutcomeGetBlock(
+	outcome PretradeAccountBlockOutcome,
+) PretradeAccountBlock {
+	return outcome.block
+}
+
+//------------------------------------------------------------------------------

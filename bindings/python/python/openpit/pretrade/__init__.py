@@ -27,6 +27,8 @@ from .._openpit import (
     AccountAdjustmentBatchResult,
     AccountAdjustmentOutcome,
     AccountBlock,
+    AccountBlockOutcome,
+    AccountBlockOutcomes,
     AccountControl,
     AccountOutcomeEntry,
     AccountPnlOutcome,
@@ -126,6 +128,13 @@ Reason why a realized-PnL value could not be calculated.
 The reason identifies the missing input or arithmetic failure that halted the
 specific position or account accumulator. A halt remains sticky until that
 exact accumulator is explicitly force-set.
+
+When failures coincide, SpotFunds uses this priority from highest to lowest:
+``ARITHMETIC_OVERFLOW``, ``MISSING_ACCOUNT_CURRENCY``, ``MISSING_FX``,
+``MISSING_COST_BASIS``, then ``MISSING_INITIAL_PNL``.
+
+``MISSING_INITIAL_PNL`` is the lowest-priority defensive catch-all when no
+more specific missing input applies.
 """
 
 AccountPnlOutcome.__doc__ = """
@@ -243,9 +252,11 @@ PolicyConfigurationResult.__doc__ = """
 Result of an accepted runtime policy configuration operation.
 
 Attributes:
-    account_blocks: Blocks recorded by the engine before the configuration
-        call returns. The list is empty when the accepted change did not block
-        an account.
+    account_blocks: Policy-reported blocks for the account supplied to the
+        operation. A SpotFunds account-PnL force-set exposes its breach or halt
+        block even when the account already has a block. The engine processes
+        each block request before returning and preserves the existing first
+        cause.
 """
 
 DryRunReport.__doc__ = """
@@ -294,6 +305,8 @@ __all__ = [
     "AccountAdjustmentBatchResult",
     "AccountAdjustmentOutcome",
     "AccountBlock",
+    "AccountBlockOutcome",
+    "AccountBlockOutcomes",
     "AccountControl",
     "AccountOutcomeEntry",
     "AccountPnlOutcome",

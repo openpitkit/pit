@@ -604,8 +604,11 @@ prefer ``str`` or ``Decimal`` values.
 Use ``.decimal`` to access the underlying ``decimal.Decimal`` and
 ``.to_json_value()`` for canonical JSON serialization.
 
-Use :meth:`calculate_quantity`, :meth:`to_cash_flow_inflow`, and
-:meth:`to_cash_flow_outflow` for domain conversions.
+Use :meth:`calculate_quantity` to derive quantity from an explicit price. Zero
+and negative explicit prices are legal: zero returns zero, and any other price
+calculates exposure as ``volume / abs(price)``.
+Use :meth:`to_cash_flow_inflow` and :meth:`to_cash_flow_outflow` for signed
+cash-flow conversions.
 """
 
 Side.BUY.__doc__ = "Buy direction."

@@ -103,7 +103,13 @@ where
             BlockedAccounts::new(&builder),
         ));
         let currencies = StorageFactory::new_shared(AccountCurrencies::new(&builder));
-        let accounts = Accounts::new(account_groups.clone(), block_handle, currencies);
+        let config_registry = StorageFactory::new_shared(crate::core::ConfigRegistry::empty());
+        let accounts = Accounts::new(
+            account_groups.clone(),
+            block_handle,
+            currencies,
+            config_registry,
+        );
         accounts.set_currency(account, currency);
         Self::with_accounts(accounts, account_groups, Some(account))
     }
@@ -111,9 +117,17 @@ where
     /// Returns the group of the report's account, or `None` when the account is
     /// absent or unregistered.
     ///
-    /// The lookup is performed once and cached for the lifetime of this context.
+    /// The lookup is performed once and cached for the lifetime of this
+    /// context, so repeated calls during one evaluation return the same group.
     pub fn account_group(&self) -> Option<AccountGroupId> {
         self.group_lookup.group()
+    }
+
+    pub(crate) fn state_account_group(&self) -> Option<AccountGroupId> {
+        match (self.accounts.as_ref(), self.account) {
+            (Some(accounts), Some(account)) => accounts.group_of(account),
+            _ => self.group_lookup.group(),
+        }
     }
 
     /// Returns the currency resolved for the report's account.
@@ -124,6 +138,13 @@ where
     pub(crate) fn account_currency(&self) -> Option<Asset> {
         self.account
             .and_then(|account| self.accounts.as_ref()?.currency_of(account))
+    }
+
+    pub(crate) fn with_state_writer<R>(&self, operation: impl FnOnce() -> R) -> R {
+        match (self.accounts.as_ref(), self.account) {
+            (Some(accounts), Some(_)) => accounts.with_state_writer(operation),
+            _ => operation(),
+        }
     }
 }
 

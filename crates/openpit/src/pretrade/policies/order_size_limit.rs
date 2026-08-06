@@ -941,21 +941,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_quantity_covers_invalid_volume_conversion_and_missing_price_paths() {
-        let conversion_failed = super::resolve_quantity(
+    fn resolve_quantity_covers_zero_price_and_missing_price_paths() {
+        let zero_quantity = super::resolve_quantity(
             OrderSizeLimitPolicy::<NoLocking>::NAME,
             TradeAmount::Volume(Volume::from_str("10").expect("volume literal must be valid")),
             Some(Price::from_str("0").expect("zero price literal must be valid")),
         )
-        .expect_err("volume-to-quantity conversion with zero price must reject");
-        assert_eq!(
-            conversion_failed.code,
-            RejectCode::OrderValueCalculationFailed
-        );
-        assert_eq!(
-            conversion_failed.details,
-            "price or volume could not be used to evaluate order quantity"
-        );
+        .expect("volume-to-quantity conversion with zero price must pass");
+        assert_eq!(zero_quantity, Quantity::ZERO);
 
         let missing_price = super::resolve_quantity(
             OrderSizeLimitPolicy::<NoLocking>::NAME,

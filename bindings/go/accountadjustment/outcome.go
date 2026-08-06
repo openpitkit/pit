@@ -131,11 +131,15 @@ type AccountOutcomeEntry struct {
 	Held optional.Option[OutcomeAmount]
 	// Incoming is the incoming (pending inflow) amount outcome.
 	Incoming optional.Option[OutcomeAmount]
-	// RealizedPnl is the optional account-currency realized-PnL result. It is
-	// either PnlOutcomeAmount or the halt reason from the operation that first
-	// failed. Later operations omit it until an adjustment force-sets this
-	// position's PnL. Re-arming account PnL or another position does not re-arm
-	// it.
+	// RealizedPnl is the optional account-currency realized-PnL result.
+	// Reservations, cancels, settlement legs, opening, same-direction, and
+	// zero-quantity fills without a non-zero fee omit it, as do non-PnL
+	// adjustments. A realizing fill reports an authoritative result even when
+	// its exact contribution is zero. A non-zero fee reports the underlying
+	// asset even if the account never held it. The operation that first fails
+	// reports a halt reason; later operations omit the field until an
+	// asset-scoped adjustment force-sets this position's PnL. Re-arming account
+	// PnL or another position does not re-arm it.
 	RealizedPnl optional.Option[PnlOutcome]
 	// AverageEntryPrice is the absolute current account-currency average entry
 	// price after the operation. None means it was not tracked or not emitted;

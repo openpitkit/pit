@@ -83,9 +83,9 @@ pub use reject::{is_reject_code_evaluation_failure, JsAccountBlock, JsReject};
 pub use context::{JsAccountAdjustmentContext, JsAccountControl, JsContext, JsPostTradeContext};
 pub use engine::{JsAccounts, JsEngine, JsEngineBuilder, JsReadyEngineBuilder};
 pub use result::{
-    JsAccountAdjustmentBatchResult, JsDropCopyOperation, JsDropCopyResult, JsDryRunReport,
-    JsExecuteResult, JsPolicyConfigurationResult, JsPostTradeResult, JsRequest, JsReservation,
-    JsStartResult,
+    JsAccountAdjustmentBatchResult, JsAccountBlockOutcome, JsAccountBlockOutcomes,
+    JsDropCopyOperation, JsDropCopyResult, JsDryRunReport, JsExecuteResult,
+    JsPolicyConfigurationResult, JsPostTradeResult, JsRequest, JsReservation, JsStartResult,
 };
 
 pub use policy::order_size_limit::{

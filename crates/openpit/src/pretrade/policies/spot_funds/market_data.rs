@@ -405,6 +405,22 @@ impl SpotFundsSettings {
         self.pnl_global_barrier.as_ref()
     }
 
+    pub(super) fn pnl_global_barrier(&self) -> Option<&SpotFundsPnlBoundsBarrier> {
+        self.pnl_global_barrier.as_ref()
+    }
+
+    pub(super) fn pnl_account_group_barriers(
+        &self,
+    ) -> &HashMap<AccountGroupId, SpotFundsPnlBoundsAccountGroupBarrier> {
+        &self.pnl_account_group_barriers
+    }
+
+    pub(super) fn pnl_account_barriers(
+        &self,
+    ) -> &HashMap<AccountId, SpotFundsPnlBoundsAccountBarrier> {
+        &self.pnl_account_barriers
+    }
+
     /// Reads the global funds limit mode applied when no override matches.
     #[cfg(test)]
     pub(super) fn global_limit_mode(&self) -> SpotFundsLimitMode {

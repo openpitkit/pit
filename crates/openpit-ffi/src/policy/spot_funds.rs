@@ -34,7 +34,10 @@ use crate::account_outcome::{import_pnl_state, OpenPitPnlState};
 use crate::engine::{write_configure_error, OpenPitConfigureError};
 use crate::marketdata::{OpenPitMarketDataInstrumentId, OpenPitMarketDataService};
 use crate::param::{OpenPitParamAccountId, OpenPitParamPnlOptional};
-use crate::reject::{blocks_to_list_owned, OpenPitPretradeAccountBlockList};
+use crate::reject::{
+    block_outcomes_to_list_owned, blocks_to_list_owned, OpenPitPretradeAccountBlockList,
+    OpenPitPretradeAccountBlockOutcomeList,
+};
 
 /// Raw selector for the spot-funds insufficient-funds behavior.
 pub type OpenPitPretradePoliciesSpotFundsLimitMode = u8;
@@ -778,13 +781,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds(
             Ok(())
         },
     );
-    match result {
-        Ok(()) => true,
-        Err(err) => {
-            write_configure_error(out_error, OpenPitConfigureError::new(err));
-            false
-        }
-    }
+    finish_configure_spot_funds(result, out_error)
 }
 
 #[no_mangle]
@@ -813,15 +810,24 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds(
 /// - Barrier retuning never resets a live accumulated P&L value.
 ///
 /// Success:
-/// - returns `true`; subsequent P&L-bound evaluations use the new bounds,
-///   including pre-trade checks, execution reports, account-P&L adjustments
-///   and account-P&L force-sets. Retuning alone does not re-evaluate the stored
-///   accumulator or record an account block.
+/// - returns a caller-owned account-block-outcome list, possibly empty; release
+///   it with `openpit_destroy_pretrade_account_block_outcome_list`. Each
+///   outcome pairs the engine-selected account with the block inserted for it.
+///   Subsequent P&L-bound
+///   evaluations use the new bounds, including pre-trade checks, execution
+///   reports, account-P&L adjustments and account-P&L force-sets. An account
+///   whose effective barrier changed is evaluated against its stored account
+///   P&L here: an already halted account, or one already beyond the new
+///   barrier, is blocked before this call returns and appears in the list,
+///   which reports the blocks the engine has already recorded. Removing the
+///   last effective barrier reports no block and does not release an existing
+///   block. Clearing an override can expose a fallback barrier; the fallback
+///   is evaluated normally and may record and report a block.
 ///
 /// Error:
-/// - returns `false`; if `out_error` is non-null, writes a caller-owned
+/// - returns null; if `out_error` is non-null, writes a caller-owned
 ///   `OpenPitConfigureError` (release with `openpit_destroy_configure_error`).
-/// - a null `engine` returns `false` and, when `out_error` is non-null, writes
+/// - a null `engine` returns null and, when `out_error` is non-null, writes
 ///   a caller-owned `OpenPitConfigureError` (`Validation`) that must be
 ///   released with `openpit_destroy_configure_error`.
 pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
@@ -836,10 +842,10 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
     account_len: usize,
     has_account: bool,
     out_error: *mut *mut OpenPitConfigureError,
-) -> bool {
+) -> *mut OpenPitPretradeAccountBlockOutcomeList {
     let name = match unsafe { configure_spot_funds_name(engine, name, out_error) } {
         Some(name) => name,
-        None => return false,
+        None => return std::ptr::null_mut(),
     };
 
     let global_barrier = if has_global && !global.is_null() {
@@ -847,7 +853,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
             Ok(value) => Some(value),
             Err(error) => {
                 write_configure_error(out_error, error);
-                return false;
+                return std::ptr::null_mut();
             }
         }
     } else {
@@ -871,7 +877,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
                         "spot_funds_pnl_bounds account_group is null".to_owned(),
                     ),
                 );
-                return false;
+                return std::ptr::null_mut();
             }
         };
         let mut out = Vec::with_capacity(slice.len());
@@ -886,7 +892,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
                             entry.account_group_id
                         )),
                     );
-                    return false;
+                    return std::ptr::null_mut();
                 }
             };
             let barrier = match parse_configure_pnl_barrier(&entry.barrier, "account_group", index)
@@ -894,7 +900,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
                 Ok(v) => v,
                 Err(e) => {
                     write_configure_error(out_error, e);
-                    return false;
+                    return std::ptr::null_mut();
                 }
             };
             out.push(SpotFundsPnlBoundsAccountGroupBarrier {
@@ -924,7 +930,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
                         "spot_funds_pnl_bounds account is null".to_owned(),
                     ),
                 );
-                return false;
+                return std::ptr::null_mut();
             }
         };
         let mut out = Vec::with_capacity(slice.len());
@@ -933,7 +939,7 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
                 Ok(v) => v,
                 Err(e) => {
                     write_configure_error(out_error, e);
-                    return false;
+                    return std::ptr::null_mut();
                 }
             };
             out.push(SpotFundsPnlBoundsAccountBarrier {
@@ -961,7 +967,15 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
             Ok(())
         },
     );
-    finish_configure_spot_funds(result, out_error)
+    match result {
+        Ok(result) => Box::into_raw(Box::new(block_outcomes_to_list_owned(
+            result.account_blocks,
+        ))),
+        Err(error) => {
+            write_configure_error(out_error, OpenPitConfigureError::new(error));
+            std::ptr::null_mut()
+        }
+    }
 }
 
 #[no_mangle]
@@ -972,9 +986,11 @@ pub unsafe extern "C" fn openpit_engine_configure_spot_funds_pnl_bounds_killswit
 /// never resets the accumulator. A numeric state re-arms this account
 /// accumulator after a calculation halt. A halted state sets or keeps it
 /// halted and replaces the stored halt reason. Neither form affects a
-/// position-level accumulator. When the policy accepts a halted state while
-/// an effective account P&L barrier is configured, the returned list contains
-/// the block already recorded by the engine.
+/// position-level accumulator. A numeric state beyond an effective bound, or a
+/// halted state with an effective barrier, returns the policy-reported
+/// `PnlKillSwitchTriggered` block. The engine processes that block request
+/// before returning. An existing first-cause block remains unchanged but does
+/// not suppress the returned block.
 ///
 /// Contract:
 /// - on success, returns a caller-owned account-block list, possibly empty;
@@ -1212,11 +1228,13 @@ unsafe fn configure_spot_funds_name(
 /// boolean convention, writing a caller-owned `OpenPitConfigureError` on
 /// failure.
 fn finish_configure_spot_funds(
-    result: Result<(), openpit::ConfigureError>,
+    result: Result<openpit::pretrade::AccountBlockOutcomes, openpit::ConfigureError>,
     out_error: *mut *mut OpenPitConfigureError,
 ) -> bool {
     match result {
-        Ok(()) => true,
+        // These retunes cannot change a P&L barrier, so the reported block
+        // list is always empty.
+        Ok(_) => true,
         Err(err) => {
             write_configure_error(out_error, OpenPitConfigureError::new(err));
             false

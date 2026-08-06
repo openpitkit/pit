@@ -21,7 +21,7 @@ use std::rc::Rc;
 use super::reject::AccountBlock;
 use crate::core::account_control::DeferredAccountOperations;
 use crate::core::{
-    AccountControl, AccountGroups, AccountGroupsHandle, BlockedAccounts, GroupLookup,
+    AccountControl, AccountGroups, AccountGroupsHandle, Accounts, BlockedAccounts, GroupLookup,
 };
 use crate::param::{AccountGroupId, AccountId};
 use crate::storage::{self, StorageBuilder};
@@ -121,6 +121,8 @@ where
     /// Per-account control bound to the order's account, or `None` when the
     /// account identifier could not be extracted from the order.
     pub account_control: Option<AccountControl<StorageFactory>>,
+    accounts: Option<Accounts<StorageFactory>>,
+    account: Option<AccountId>,
     group_lookup: GroupLookup<StorageFactory>,
     drop_copy: Option<Box<DropCopyState<StorageFactory>>>,
 }
@@ -136,18 +138,36 @@ where
     ) -> Self {
         Self {
             account_control,
+            accounts: None,
+            account,
             group_lookup: GroupLookup::new(account_groups, account),
             drop_copy: None,
         }
     }
 
-    /// Creates a drop-copy context bound to `account`.
+    pub(crate) fn with_accounts(
+        account_control: Option<AccountControl<StorageFactory>>,
+        accounts: Accounts<StorageFactory>,
+        account_groups: AccountGroupsHandle<StorageFactory>,
+        account: Option<AccountId>,
+    ) -> Self {
+        Self {
+            account_control,
+            accounts: Some(accounts),
+            account,
+            group_lookup: GroupLookup::new(account_groups, account),
+            drop_copy: None,
+        }
+    }
+
+    /// Creates an engine-backed drop-copy context bound to `account`.
     ///
     /// Both the account and its control are mandatory here: drop-copy defers
     /// policy blocks until the operation succeeds, and a deferred block with no
     /// account would be reported to the caller yet never reach the blocked set.
-    pub(crate) fn with_groups_and_drop_copy(
+    pub(crate) fn with_accounts_and_drop_copy(
         account_control: AccountControl<StorageFactory>,
+        accounts: Accounts<StorageFactory>,
         account_groups: AccountGroupsHandle<StorageFactory>,
         account: AccountId,
     ) -> Self {
@@ -155,6 +175,8 @@ where
         let account_control = account_control.with_deferred_operations(account_operations.clone());
         Self {
             account_control: Some(account_control.clone()),
+            accounts: Some(accounts),
+            account: Some(account),
             group_lookup: GroupLookup::new(account_groups, Some(account)),
             drop_copy: Some(Box::new(DropCopyState {
                 account_control,
@@ -189,9 +211,28 @@ where
     /// Returns the group of the order's account, or `None` when the account is
     /// absent or unregistered.
     ///
-    /// The lookup is performed once and cached for the lifetime of this context.
+    /// The lookup is performed once and cached for the lifetime of this
+    /// context, so repeated calls during one evaluation return the same group.
     pub fn account_group(&self) -> Option<AccountGroupId> {
         self.group_lookup.group()
+    }
+
+    pub(crate) fn state_account_group(&self) -> Option<AccountGroupId> {
+        match (self.accounts.as_ref(), self.account) {
+            (Some(accounts), Some(account)) => accounts.group_of(account),
+            _ => self.group_lookup.group(),
+        }
+    }
+
+    pub(crate) fn with_state_writer<R>(&self, operation: impl FnOnce() -> R) -> R {
+        match self.accounts.as_ref() {
+            Some(accounts) => accounts.with_state_writer(operation),
+            None => operation(),
+        }
+    }
+
+    pub(crate) fn state_accounts(&self) -> Option<Accounts<StorageFactory>> {
+        self.accounts.clone()
     }
 
     /// Returns whether policy rejects are non-blocking for this operation.

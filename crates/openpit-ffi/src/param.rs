@@ -1785,6 +1785,10 @@ pub unsafe extern "C" fn openpit_param_quantity_calculate_volume(
     }
 }
 
+/// Calculates quantity from volume and an explicit price.
+///
+/// A zero price produces zero quantity. Any other price, including a negative
+/// one, produces `volume / abs(price)`.
 #[no_mangle]
 pub unsafe extern "C" fn openpit_param_volume_calculate_quantity(
     volume: OpenPitParamVolume,

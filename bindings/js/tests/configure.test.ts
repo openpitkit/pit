@@ -77,9 +77,9 @@ function makeOrder(quantity: string = "1", price: string = "100"): OrderInit {
   };
 }
 
-// `fee` is denominated in the account currency, so passing one engages the
-// account line's need for that currency. A fee-less fill contributes a
-// computable zero to it instead.
+// `fee` is denominated in the account currency, so a nonzero value engages the
+// account line's need for that currency. A fee-less opening fill omits the
+// account line instead.
 function applySpotFundsFill(
   engine: Engine,
   accountId: bigint = ACCOUNT,
@@ -522,6 +522,25 @@ describe("runtime configurator", () => {
     expect(engine).toBeDefined();
   });
 
+  it("checks an effective P&L barrier when group membership changes", () => {
+    const group = 84;
+    const engine = Engine.builder()
+      .builtin(
+        buildSpotFundsPnlBoundsKillswitch().accountGroupBarriers([
+          new SpotFundsPnlBoundsAccountGroupBarrier(
+            group,
+            new SpotFundsPnlBoundsBarrier("1", undefined),
+          ),
+        ]),
+      )
+      .build();
+
+    engine.accounts().registerGroup([ACCOUNT], group);
+    const blocked = engine.executePreTrade(makeOrder());
+    expect(blocked.ok).toBe(false);
+    expect(blocked.rejects[0]!.code).toBe("PnlKillSwitchTriggered");
+  });
+
   it("sets and clears account-currency fallbacks through the public API", () => {
     const accounts = Engine.builder()
       .builtin(buildSpotFunds())
@@ -630,19 +649,35 @@ describe("runtime configurator", () => {
     const overrideFill = fillWithFee(accountOverride, "15");
     expect(overrideFill.accountBlocks).toHaveLength(0);
 
-    // Clearing the direct currency and the account axis reveals the group tier.
-    accounts.clearCurrency(accountOverride);
-    engine.configure().spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
-      accountBarriers: [],
-    });
-    const groupRecheck = fillWithFee(accountOverride, "0");
+    // Clearing the account axis reveals the group tier: the live -15 sits
+    // inside the cleared account bound but past the group's -14, so the
+    // retune itself blocks the account.
+    const groupTier = engine
+      .configure()
+      .spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
+        accountBarriers: [],
+      });
+    expect(groupTier.accountBlocks[0]!.block.code).toBe(
+      "PnlKillSwitchTriggered",
+    );
+    engine.accounts().unblock(accountOverride);
+
+    const groupRecheck = fillWithFee(accountOverride, "0.1");
     expect(groupRecheck.accountBlocks[0]!.code).toBe("PnlKillSwitchTriggered");
+    engine.accounts().unblock(accountOverride);
 
     // Clearing the group axis reveals the unchanged global threshold.
-    engine.configure().spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
-      accountGroupBarriers: [],
-    });
-    const globalRecheck = fillWithFee(accountOverride, "0");
+    const globalTier = engine
+      .configure()
+      .spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
+        accountGroupBarriers: [],
+      });
+    expect(globalTier.accountBlocks[0]!.block.code).toBe(
+      "PnlKillSwitchTriggered",
+    );
+    engine.accounts().unblock(accountOverride);
+
+    const globalRecheck = fillWithFee(accountOverride, "0.1");
     expect(globalRecheck.accountBlocks[0]!.code).toBe("PnlKillSwitchTriggered");
 
     engine.configure().spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
@@ -670,9 +705,9 @@ describe("runtime configurator", () => {
 
   it("retunes spot-funds pnl barriers and force-sets the live accumulator", () => {
     // Source: https://wiki.openpit.dev/Spot-Funds/ - Runtime Reconfiguration
-    const accountId = 99_224_416n;
+    const retunedAccount = 99_224_416n;
+    const forcedAccount = 99_224_417n;
     const engine = Engine.builder()
-
       .builtin(
         buildSpotFundsPnlBoundsKillswitch().globalBarrier(
           new SpotFundsPnlBoundsBarrier("-1000", undefined),
@@ -680,27 +715,76 @@ describe("runtime configurator", () => {
       )
       .build();
 
-    // Retune the account PnL barriers; live accumulated PnL is untouched.
-    engine
+    // Seed live PnL inside the current -1000 barrier.
+    const seed = engine
+      .configure()
+      .setSpotFundsAccountPnl(SpotFundsPnlBoundsKillswitchBuilder.NAME, {
+        account: retunedAccount,
+        state: "-600",
+      });
+    expect(seed.accountBlocks).toHaveLength(0);
+
+    // Tightening the barrier checks the known account and records the block now.
+    const retune = engine
       .configure()
       .spotFundsPnlBoundsKillswitch(SpotFundsPnlBoundsKillswitchBuilder.NAME, {
         globalBarrier: new SpotFundsPnlBoundsBarrier("-500", undefined),
-        accountBarriers: [
-          new SpotFundsPnlBoundsAccountBarrier(
-            accountId,
-            new SpotFundsPnlBoundsBarrier("-250", "250"),
-          ),
-        ],
       });
+    expect(retune.accountBlocks).toHaveLength(1);
+    expect(retune.accountBlocks[0]!.accountId.value).toBe(retunedAccount);
 
-    // Force-set the live accumulated PnL for one account.
-    const result = engine
+    // A force-set beyond the current barrier also returns its recorded block.
+    const forced = engine
       .configure()
       .setSpotFundsAccountPnl(SpotFundsPnlBoundsKillswitchBuilder.NAME, {
-        account: accountId,
+        account: forcedAccount,
         state: "-600",
       });
-    expect(result.accountBlocks).toHaveLength(1);
+    expect(forced.accountBlocks).toHaveLength(1);
+  });
+
+  it("pairs barrier-sweep blocks with engine-selected accounts", () => {
+    const blockedNumeric = ACCOUNT;
+    const safe = ACCOUNT + 1n;
+    const blockedHalted = ACCOUNT + 2n;
+    const engine = Engine.builder().builtin(buildSpotFunds()).build();
+
+    for (const [account, state] of [
+      [blockedNumeric, "-20"],
+      [safe, "-5"],
+      [blockedHalted, PnlHaltReason.fromMissingFx()],
+    ] as const) {
+      const seeded = engine
+        .configure()
+        .setSpotFundsAccountPnl(SpotFundsBuilder.NAME, { account, state });
+      expect(seeded.accountBlocks).toHaveLength(0);
+    }
+
+    const swept = engine
+      .configure()
+      .spotFundsPnlBoundsKillswitch(SpotFundsBuilder.NAME, {
+        globalBarrier: new SpotFundsPnlBoundsBarrier("-10", undefined),
+      });
+
+    expect(swept.accountBlocks).toHaveLength(2);
+    expect(swept.accountBlocks[0]!.accountId.value).toBe(blockedNumeric);
+    expect(swept.accountBlocks[0]!.block.reason).toBe(
+      "pnl kill switch triggered",
+    );
+    expect(swept.accountBlocks[1]!.accountId.value).toBe(blockedHalted);
+    expect(swept.accountBlocks[1]!.block.reason).toBe(
+      "account pnl calculation halted",
+    );
+
+    const orderFor = (accountId: bigint): OrderInit => ({
+      operation: {
+        ...makeOrder().operation,
+        accountId,
+      },
+    });
+    expect(engine.startPreTrade(orderFor(blockedNumeric)).ok).toBe(false);
+    expect(engine.startPreTrade(orderFor(blockedHalted)).ok).toBe(false);
+    expect(engine.startPreTrade(orderFor(safe)).ok).toBe(true);
   });
 
   it("keeps an account P&L halt sticky until that accumulator is force-set", () => {
@@ -732,7 +816,7 @@ describe("runtime configurator", () => {
       account: ACCOUNT,
       state: "10",
     });
-    const rearmed = applySpotFundsFill(engine);
+    const rearmed = applySpotFundsFill(engine, ACCOUNT, "BUY", "1");
     expect(rearmed.accountPnls).toHaveLength(1);
     expect(rearmed.accountPnls[0]?.ok).toBe(true);
   });
@@ -747,13 +831,11 @@ describe("runtime configurator", () => {
       )?.entry.realizedPnl;
 
     const opening = applySpotFundsFill(engine);
-    expect(positionPnl(opening)).toBeUndefined();
-    expect(opening.accountPnls).toHaveLength(1);
-    expect(opening.accountPnls[0]?.ok).toBe(true);
-    expect(opening.accountPnls[0]?.pnl?.delta.toString()).toBe("0");
+    expect(positionPnl(opening)?.haltReason?.isMissingFx).toBe(true);
+    expect(opening.accountPnls).toHaveLength(0);
 
     const first = applySpotFundsFill(engine, ACCOUNT, "SELL");
-    expect(positionPnl(first)?.haltReason?.isMissingFx).toBe(true);
+    expect(positionPnl(first)).toBeUndefined();
     expect(first.accountPnls).toHaveLength(1);
     expect(first.accountPnls[0]?.haltReason?.isMissingFx).toBe(true);
     expect(first.accountBlocks).toHaveLength(0);
@@ -776,10 +858,11 @@ describe("runtime configurator", () => {
     );
     forceSpotFundsBalancePnl(engine);
 
-    expect(positionPnl(applySpotFundsFill(engine))).toBeUndefined();
-    const rearmed = applySpotFundsFill(engine, ACCOUNT, "SELL");
-    expect(positionPnl(rearmed)?.haltReason?.isMissingFx).toBe(true);
-    expect(rearmed.accountPnls).toHaveLength(0);
-    expect(rearmed.accountBlocks).toHaveLength(0);
+    const positionRearmed = applySpotFundsFill(engine);
+    expect(positionPnl(positionRearmed)?.haltReason?.isMissingFx).toBe(true);
+    const positionStickyAgain = applySpotFundsFill(engine, ACCOUNT, "SELL");
+    expect(positionPnl(positionStickyAgain)).toBeUndefined();
+    expect(positionStickyAgain.accountPnls).toHaveLength(0);
+    expect(positionStickyAgain.accountBlocks).toHaveLength(0);
   });
 });

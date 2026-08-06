@@ -237,6 +237,16 @@ where
         let _guard = self.guard.read_index();
         self.memberships.with(&account, |group| *group)
     }
+
+    /// Snapshots every explicit account-group membership.
+    pub(crate) fn memberships(&self) -> Vec<(AccountId, AccountGroupId)> {
+        let _guard = self.guard.read_index();
+        self.memberships
+            .keys()
+            .into_iter()
+            .filter_map(|account| self.memberships.with(&account, |group| (account, *group)))
+            .collect()
+    }
 }
 
 // ─── AccountGroupsHandle ─────────────────────────────────────────────────────
@@ -304,6 +314,11 @@ where
     /// Returns the group of `account`, or `None` when it is not registered.
     pub(crate) fn group_of(&self, account: AccountId) -> Option<AccountGroupId> {
         self.inner.group_of(account)
+    }
+
+    /// Snapshots every explicit account-group membership.
+    pub(crate) fn memberships(&self) -> Vec<(AccountId, AccountGroupId)> {
+        self.inner.memberships()
     }
 }
 
@@ -694,6 +709,77 @@ mod tests {
             .expect("re-registration must succeed");
 
         assert_eq!(ctx.account_group(), Some(group(7)));
+    }
+
+    #[test]
+    fn engine_context_and_account_info_groups_are_cached_for_one_evaluation() {
+        use crate::core::account_control::BlockedAccounts;
+        use crate::core::{AccountBlockHandle, AccountControl, AccountCurrencies, ConfigRegistry};
+        use crate::pretrade::{PostTradeContext, PreTradeContext};
+        use crate::AccountAdjustmentContext;
+
+        let builder = StorageBuilder::new(NoLocking);
+        let handle = new_handle();
+        handle
+            .inner
+            .register_group(&[account(1)], group(7))
+            .expect("registration must succeed");
+        let block_handle =
+            AccountBlockHandle::from_inner(NoLocking::new_shared(BlockedAccounts::new(&builder)));
+        let accounts = crate::Accounts::new(
+            handle.clone(),
+            block_handle.clone(),
+            NoLocking::new_shared(AccountCurrencies::new(&builder)),
+            NoLocking::new_shared(ConfigRegistry::empty()),
+        );
+        let pre_trade = PreTradeContext::with_accounts(
+            None,
+            accounts.clone(),
+            handle.clone(),
+            Some(account(1)),
+        );
+        let post_trade =
+            PostTradeContext::with_accounts(accounts.clone(), handle.clone(), Some(account(1)));
+        let adjustment = AccountAdjustmentContext::with_accounts(
+            AccountControl::new(block_handle, account(1)),
+            accounts.clone(),
+            handle,
+            account(1),
+        );
+
+        assert_eq!(pre_trade.account_group(), Some(group(7)));
+        assert_eq!(post_trade.account_group(), Some(group(7)));
+        assert_eq!(adjustment.account_group(), Some(group(7)));
+        assert_eq!(
+            crate::marketdata::AccountInfo::group(&pre_trade),
+            Some(group(7))
+        );
+        assert_eq!(
+            crate::marketdata::AccountInfo::group(&post_trade),
+            Some(group(7))
+        );
+
+        accounts
+            .unregister_group(&[account(1)], group(7))
+            .expect("unregistration must succeed");
+        accounts
+            .register_group(&[account(1)], group(9))
+            .expect("re-registration must succeed");
+
+        assert_eq!(pre_trade.account_group(), Some(group(7)));
+        assert_eq!(post_trade.account_group(), Some(group(7)));
+        assert_eq!(adjustment.account_group(), Some(group(7)));
+        assert_eq!(
+            crate::marketdata::AccountInfo::group(&pre_trade),
+            Some(group(7))
+        );
+        assert_eq!(
+            crate::marketdata::AccountInfo::group(&post_trade),
+            Some(group(7))
+        );
+        assert_eq!(pre_trade.state_account_group(), Some(group(9)));
+        assert_eq!(post_trade.state_account_group(), Some(group(9)));
+        assert_eq!(adjustment.state_account_group(), Some(group(9)));
     }
 
     #[test]

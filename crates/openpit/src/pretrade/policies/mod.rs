@@ -39,6 +39,10 @@ pub use rate_limit::{
     RateLimitBrokerBarrier, RateLimitPolicy, RateLimitPolicyError, RateLimitSettings,
 };
 pub use spot_funds::SpotFundsPolicy;
+pub(crate) use spot_funds::{
+    account_pnl_barrier_change_blocks, account_pnl_membership_change_block, AccountPnlStorage,
+    ActiveHoldingsMutationStorage, SpotFundsHoldingsStorage,
+};
 pub use spot_funds::{
     SpotFundsConfigError, SpotFundsLimitMode, SpotFundsMarketData, SpotFundsOverride,
     SpotFundsOverrideTarget, SpotFundsPnlBoundsAccountBarrier,

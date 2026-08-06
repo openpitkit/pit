@@ -144,7 +144,7 @@ where
             None => Some(block),
         };
         if let Some(block) = write_through {
-            self.handle.record(self.account_id, block);
+            self.handle.block_account(self.account_id, block);
         }
     }
 
@@ -327,7 +327,7 @@ where
     /// Records `block` against `account_id` on the shared
     /// [`BlockedAccounts`]. The first cause for an account wins; later calls
     /// for the same account are no-ops.
-    pub(crate) fn record(&self, account_id: AccountId, block: AccountBlock) {
+    pub(crate) fn block_account(&self, account_id: AccountId, block: AccountBlock) {
         self.inner.block_account(account_id, block);
     }
 
@@ -633,7 +633,9 @@ where
         cause: AccountBlock,
     ) {
         match report.account_id() {
-            Ok(id) => self.block_account(id, cause),
+            Ok(id) => {
+                self.block_account(id, cause);
+            }
             Err(_) => self.block_all(),
         }
     }
@@ -650,17 +652,25 @@ where
         }
     }
 
-    /// Blocks `id` with `cause`. An account holds one cause: the first one
-    /// wins, so blocking an already-blocked account is a no-op.
-    pub(crate) fn block_account(&self, id: AccountId, cause: AccountBlock) {
+    /// Blocks `id` with `cause`, returning whether this call inserted it.
+    ///
+    /// An account holds one cause: the first one wins, so blocking an
+    /// already-blocked account returns `false` without changing its cause.
+    pub(crate) fn block_account(&self, id: AccountId, cause: AccountBlock) -> bool {
         let _guard = self.mutation_guard.write_index();
-        self.accounts.with_mut(id, || cause, |_, _| ());
+        let inserted = self.accounts.with_mut(id, || cause, |_, inserted| inserted);
         self.any_flag.store(true);
+        inserted
     }
 
     #[cfg(test)]
     pub(crate) fn is_all_blocked(&self) -> bool {
         self.all_flag.load()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn account_block(&self, id: AccountId) -> Option<AccountBlock> {
+        self.accounts.with(&id, Clone::clone)
     }
 
     /// Retires the block raised by the assertion holding `provenance`: when the
@@ -879,7 +889,7 @@ mod tests {
     use crate::core::HasAccountId;
     use crate::param::{AccountGroupId, AccountId};
     use crate::pretrade::RejectCode;
-    use crate::storage::{NoLocking, StorageBuilder};
+    use crate::storage::{LockingPolicyFactory, NoLocking, StorageBuilder};
     use crate::RequestFieldAccessError;
 
     fn new_set() -> BlockedAccounts<NoLocking> {
@@ -1119,20 +1129,39 @@ mod tests {
         let set = new_set();
         let groups = empty_groups();
         let id = account(1);
-        set.block_account(id, admin("first"));
+        assert!(set.block_account(id, admin("first")));
         for provenance in 1..=32 {
-            set.block_account(
+            assert!(!set.block_account(
                 id,
                 cause("Later", RejectCode::PnlKillSwitchTriggered)
                     .with_provenance(Some(provenance)),
-            );
-            set.block_account(id, admin("later"));
+            ));
+            assert!(!set.block_account(id, admin("later")));
         }
 
         let rejects = set
             .check(&groups, &AccountOrder(id), RejectScope::Order)
             .expect("blocked account must return rejects");
         assert_eq!(rejects[0].reason, "first");
+    }
+
+    #[test]
+    fn block_handle_keeps_the_first_cause() {
+        let handle: AccountBlockHandle<NoLocking> =
+            AccountBlockHandle::from_inner(NoLocking::new_shared(new_set()));
+        let id = account(1);
+
+        handle.block_account(id, admin("first"));
+        handle.block_account(id, admin("later"));
+
+        assert_eq!(
+            handle
+                .inner
+                .account_block(id)
+                .expect("the first block must be stored")
+                .reason,
+            "first"
+        );
     }
 
     #[test]

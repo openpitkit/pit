@@ -240,6 +240,10 @@ func EngineConfigureSpotFunds(
 // axis of the named spot-funds policy at runtime.
 //
 // Nil slices leave an axis untouched; non-nil empty slices clear that axis.
+//
+// On success it returns a caller-owned account-block-outcome list, possibly
+// empty. The caller must release it with
+// DestroyPretradeAccountBlockOutcomeList.
 func EngineConfigureSpotFundsPnlBoundsKillSwitch(
 	engine Engine,
 	name string,
@@ -247,7 +251,7 @@ func EngineConfigureSpotFundsPnlBoundsKillSwitch(
 	hasGlobalBarrier bool,
 	accountGroupBarriers []PretradePoliciesSpotFundsPnlBoundsAccountGroupBarrier,
 	accountBarriers []PretradePoliciesSpotFundsPnlBoundsAccountBarrier,
-) ConfigureError {
+) (PretradeAccountBlockOutcomeList, ConfigureError) {
 	var globalPtr *C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier
 	if globalBarrier != nil {
 		globalPtr = (*C.OpenPitPretradePoliciesSpotFundsPnlBoundsBarrier)(
@@ -268,7 +272,7 @@ func EngineConfigureSpotFundsPnlBoundsKillSwitch(
 	}
 
 	var outError ConfigureError
-	ok := C.openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
+	blocks := C.openpit_engine_configure_spot_funds_pnl_bounds_killswitch(
 		engine,
 		importString(name),
 		globalPtr,
@@ -284,10 +288,10 @@ func EngineConfigureSpotFundsPnlBoundsKillSwitch(
 	runtime.KeepAlive(globalBarrier)
 	runtime.KeepAlive(accountGroupBarriers)
 	runtime.KeepAlive(accountBarriers)
-	if !ok {
-		return outError
+	if blocks == nil {
+		return nil, outError
 	}
-	return nil
+	return blocks, nil
 }
 
 // EngineSetSpotFundsAccountPnl force-sets the live accumulated account P&L
