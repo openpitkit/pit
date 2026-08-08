@@ -465,9 +465,12 @@ where
 
         let account_group = ctx.state_account_group();
         let account_currency = ctx.account_currency(account_group);
-        let account_pnl_halt_reason_before = match self.account_pnl_state(account_id) {
-            crate::PnlState::Value(_) => None,
-            crate::PnlState::Halted(reason) => Some(reason),
+        let (account_pnl_halt_reason_before, account_pnl_provenance_before) = match self
+            .pnl
+            .with(&account_id, |entry| (entry.state, entry.assertion_token))
+        {
+            None | Some((crate::PnlState::Value(_), _)) => (None, None),
+            Some((crate::PnlState::Halted(reason), provenance)) => (Some(reason), provenance),
         };
         let position_pnl_was_halted = self
             .holdings
@@ -479,6 +482,15 @@ where
         let mut position_pnl_halt_reason = None;
         let pnl_barrier =
             self.pnl_barrier_for(account_id, account_group, account_currency.as_ref());
+        // A barrier currency mismatch is a static configuration fault rather
+        // than a consequence of this report, so surfacing it must not depend on
+        // the report engaging the account P&L line.
+        let barrier_currency_mismatch_block = pnl_barrier.as_ref().and_then(|barrier| {
+            super::rejects::account_pnl_barrier_currency_mismatch_block(
+                account_currency.as_ref(),
+                barrier,
+            )
+        });
         let mut account_pnl_halt_reason = None;
         let fee_pnl_delta = match account_currency.as_ref() {
             Some(account_currency) => {
@@ -529,14 +541,23 @@ where
             deltas,
         );
         let stored_halt_block = account_pnl_halt_reason_before.and_then(|reason| {
-            pnl_barrier
-                .as_ref()
-                .map(|_| self.account_pnl_halted_block(account_id, reason))
+            pnl_barrier.as_ref().and_then(|barrier| {
+                super::rejects::account_pnl_block_for_state(
+                    account_currency.as_ref(),
+                    crate::PnlState::Halted(reason),
+                    barrier,
+                    account_pnl_provenance_before,
+                )
+            })
         });
         let (account_pnl, new_halt_block) = match (account_pnl_halt_reason, fee_pnl_delta) {
             (None, Some(delta)) if account_pnl_halt_reason_before.is_none() => {
-                let (result, block) =
-                    self.apply_account_pnl_delta(account_id, pnl_barrier.as_ref(), delta);
+                let (result, block) = self.apply_account_pnl_delta(
+                    account_id,
+                    account_currency.as_ref(),
+                    pnl_barrier.as_ref(),
+                    delta,
+                );
                 (
                     result.map(|result| AccountPnlOutcome {
                         result,
@@ -548,9 +569,14 @@ where
             }
             (Some(reason), _) if account_pnl_halt_reason_before.is_none() => {
                 let (reason, transitioned) = self.halt_account_pnl(account_id, reason);
-                let block = pnl_barrier
-                    .as_ref()
-                    .map(|_| self.account_pnl_halted_block(account_id, reason));
+                let block = pnl_barrier.as_ref().and_then(|barrier| {
+                    super::rejects::account_pnl_block_for_state(
+                        account_currency.as_ref(),
+                        crate::PnlState::Halted(reason),
+                        barrier,
+                        None,
+                    )
+                });
                 (
                     transitioned.then_some(AccountPnlOutcome {
                         result: Err(reason),
@@ -564,7 +590,9 @@ where
         };
         Ok(AccountPnlApplication {
             account_pnl,
-            account_block: stored_halt_block.or(new_halt_block),
+            account_block: barrier_currency_mismatch_block
+                .or(stored_halt_block)
+                .or(new_halt_block),
         })
     }
 
@@ -675,17 +703,10 @@ where
         )
     }
 
-    pub(super) fn account_pnl_halted_block(
-        &self,
-        account_id: AccountId,
-        reason: PnlHaltReason,
-    ) -> AccountBlock {
-        super::rejects::account_pnl_halted_block(Self::NAME, account_id, reason)
-    }
-
     fn apply_account_pnl_delta(
         &self,
         account_id: AccountId,
+        account_currency: Option<&Asset>,
         barrier: Option<&super::SpotFundsPnlBoundsBarrier>,
         delta: Pnl,
     ) -> (Option<crate::core::PnlOutcome>, Option<AccountBlock>)
@@ -694,7 +715,12 @@ where
     {
         let (result, state, provenance) = self.update_account_pnl(account_id, delta);
         let block = barrier.and_then(|barrier| {
-            super::rejects::account_pnl_block_for_state(account_id, state, barrier, provenance)
+            super::rejects::account_pnl_block_for_state(
+                account_currency,
+                state,
+                barrier,
+                provenance,
+            )
         });
         (result, block)
     }
@@ -810,11 +836,14 @@ where
         // narrower: it is rechecked only when this call establishes a new
         // realized contribution.
         let observes_account_pnl = touches_position_accounting || nonzero_fee.is_some();
-        let account_pnl_state_before = self.pnl.with(&account_id, |entry| entry.state);
-        let account_pnl_halt_reason_before = match account_pnl_state_before {
-            None | Some(crate::PnlState::Value(_)) => None,
-            Some(crate::PnlState::Halted(reason)) => Some(reason),
-        };
+        let account_pnl_entry_before = self
+            .pnl
+            .with(&account_id, |entry| (entry.state, entry.assertion_token));
+        let (account_pnl_halt_reason_before, account_pnl_provenance_before) =
+            match account_pnl_entry_before {
+                None | Some((crate::PnlState::Value(_), _)) => (None, None),
+                Some((crate::PnlState::Halted(reason), provenance)) => (Some(reason), provenance),
+            };
         let position_pnl_halt_reason_before = self
             .holdings
             .with(&(account_id, underlying_asset.clone()), |h| {
@@ -826,6 +855,15 @@ where
         let account_currency = ctx.account_currency(account_group);
         let pnl_barrier =
             self.pnl_barrier_for(account_id, account_group, account_currency.as_ref());
+        // A barrier currency mismatch is a static configuration fault rather
+        // than a consequence of this report, so surfacing it must not depend on
+        // the report engaging the account P&L line.
+        let barrier_currency_mismatch_block = pnl_barrier.as_ref().and_then(|barrier| {
+            super::rejects::account_pnl_barrier_currency_mismatch_block(
+                account_currency.as_ref(),
+                barrier,
+            )
+        });
         let mut position_pnl_halt = false;
         let mut position_pnl_halt_reason = None;
         let mut account_pnl_halt_reason = None;
@@ -1053,9 +1091,14 @@ where
         );
         let stored_pnl_block = if observes_account_pnl {
             account_pnl_halt_reason_before.and_then(|reason| {
-                pnl_barrier
-                    .as_ref()
-                    .map(|_| self.account_pnl_halted_block(account_id, reason))
+                pnl_barrier.as_ref().and_then(|barrier| {
+                    super::rejects::account_pnl_block_for_state(
+                        account_currency.as_ref(),
+                        crate::PnlState::Halted(reason),
+                        barrier,
+                        account_pnl_provenance_before,
+                    )
+                })
             })
         } else {
             None
@@ -1065,9 +1108,14 @@ where
                 if account_pnl_engaged && account_pnl_halt_reason_before.is_none() =>
             {
                 let (halt_reason, transitioned) = self.halt_account_pnl(account_id, halt_reason);
-                let block = pnl_barrier
-                    .as_ref()
-                    .map(|_| self.account_pnl_halted_block(account_id, halt_reason));
+                let block = pnl_barrier.as_ref().and_then(|barrier| {
+                    super::rejects::account_pnl_block_for_state(
+                        account_currency.as_ref(),
+                        crate::PnlState::Halted(halt_reason),
+                        barrier,
+                        None,
+                    )
+                });
                 (
                     transitioned.then_some(AccountPnlOutcome {
                         result: Err(halt_reason),
@@ -1078,8 +1126,12 @@ where
                 )
             }
             (None, Some(delta)) => {
-                let (result, block) =
-                    self.apply_account_pnl_delta(account_id, pnl_barrier.as_ref(), delta);
+                let (result, block) = self.apply_account_pnl_delta(
+                    account_id,
+                    account_currency.as_ref(),
+                    pnl_barrier.as_ref(),
+                    delta,
+                );
                 (
                     result.map(|result| AccountPnlOutcome {
                         result,
@@ -1093,7 +1145,9 @@ where
         };
         Ok(AccountPnlApplication {
             account_pnl,
-            account_block: stored_pnl_block.or(new_halt_block),
+            account_block: barrier_currency_mismatch_block
+                .or(stored_pnl_block)
+                .or(new_halt_block),
         })
     }
 

@@ -1141,6 +1141,37 @@ TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierIgnoresNonMatchingCurrency) {
   EXPECT_TRUE(result.accountBlocks.empty());
 }
 
+TEST(BuiltinPolicy,
+     SpotFundsPnlBoundsAccountBarrierRejectsNonMatchingCurrency) {
+  const openpit::param::AccountId account =
+      openpit::param::AccountId::FromUint64(83022);
+  policies::SpotFundsPnlBoundsBarrier barrier(openpit::param::Asset("EUR"));
+  barrier.lowerBound = openpit::param::Pnl::FromString("-100");
+  openpit::EngineBuilder builder(openpit::SyncPolicy::None);
+  builder.Add(policies::SpotFundsPnlBoundsKillSwitchPolicy{}.AccountBarrier(
+      policies::SpotFundsPnlBoundsAccountBarrier(account, barrier)));
+  const openpit::Engine engine = builder.Build();
+  engine.Accounts().SetCurrency(account, openpit::param::Asset("USD"));
+
+  const auto result = engine.Configure().SetSpotFundsAccountPnl(
+      policies::SpotFundsPolicyName, account,
+      openpit::param::Pnl::FromString("0"));
+  ASSERT_EQ(result.accountBlocks.size(), 1U);
+  EXPECT_EQ(result.accountBlocks[0].code, RejectCode::PnlKillSwitchTriggered);
+  EXPECT_EQ(result.accountBlocks[0].reason, "pnl barrier currency mismatch");
+  EXPECT_EQ(result.accountBlocks[0].details,
+            "account currency USD, barrier currency EUR");
+
+  const openpit::pretrade::ExecuteResult blocked =
+      engine.ExecutePreTrade(SpotFundsLifecycleOrder(account));
+  EXPECT_FALSE(blocked.Passed());
+  ASSERT_EQ(blocked.rejects.size(), 1U);
+  EXPECT_EQ(blocked.rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+  EXPECT_EQ(blocked.rejects[0].reason, "pnl barrier currency mismatch");
+  EXPECT_EQ(blocked.rejects[0].details,
+            "account currency USD, barrier currency EUR");
+}
+
 TEST(BuiltinPolicy, SpotFundsPnlBoundsBarrierAppliesMatchingCurrency) {
   const openpit::param::AccountId account =
       openpit::param::AccountId::FromUint64(83020);

@@ -1772,10 +1772,13 @@ impl PyConfigurator {
     /// clears the singular global barrier; a barrier value replaces it. A
     /// supplied group/account list replaces that axis wholesale, and an empty
     /// list clears it. Each barrier must still configure at least one bound.
-    /// With a known effective account currency, only exact barrier matches
-    /// apply and mismatching levels are skipped; without one, the first
-    /// in-scope barrier applies, while no match leaves PnL accumulating and
-    /// publishing without PnL control.
+    /// With a known effective account currency, an account-tier mismatch fails
+    /// closed and blocks the account; account-group and global mismatches are
+    /// skipped. A known-currency account with no account barrier and no
+    /// matching fallback has no effective barrier, but its PnL keeps
+    /// accumulating and publishing. Without an effective currency, the first
+    /// in-scope barrier applies. Bounds are compared as stored and are never
+    /// FX-converted.
     ///
     /// An account whose effective barrier changed is evaluated against its
     /// stored account P&L before this call returns: an already halted account,

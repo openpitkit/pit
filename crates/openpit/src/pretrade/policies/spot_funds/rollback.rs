@@ -23,7 +23,7 @@ use crate::core::mutation::MutationRollbackResult;
 use crate::core::sync_mode::SyncMode;
 use crate::core::{AccountControl, AccountStateSnapshot, Accounts};
 use crate::marketdata::MarketDataSync;
-use crate::param::{AccountId, Asset, PositionSize, Price};
+use crate::param::{AccountId, PositionSize, Price};
 use crate::pretrade::holdings::{Holdings, PositionPnlState};
 use crate::pretrade::{AccountBlock, RejectCode};
 use crate::storage::ConfigCell;
@@ -32,7 +32,7 @@ use crate::{Mutation, Mutations, PnlState};
 use super::rejects::account_pnl_block_for_state;
 use super::{
     AccountPnlEntry, AccountPnlLeaseGuard, ActiveHoldingsMutationGuard, HoldingsKey,
-    SpotFundsPnlBoundsBarrier, SpotFundsPolicy, SPOT_FUNDS_POLICY_NAME,
+    SpotFundsPolicy, SPOT_FUNDS_POLICY_NAME,
 };
 
 /// Pre-adjustment average entry price to restore on rollback.
@@ -78,7 +78,6 @@ where
     pub(super) previous: AccountPnlEntry,
     pub(super) asserted: PnlState,
     pub(super) token: u64,
-    pub(super) barrier: Option<SpotFundsPnlBoundsBarrier>,
     pub(super) lease: AccountPnlLeaseGuard<StorageFactory>,
 }
 
@@ -145,20 +144,7 @@ where
     Sync::StorageLockingPolicyFactory: crate::storage::LockingPolicyFactory,
     MarketDataSyncMode: MarketDataSync,
 {
-    #[cfg(test)]
     pub(super) fn register_account_pnl_adjustment_rollback(
-        &self,
-        mutations: &mut Mutations,
-        rollback: AccountPnlAssertionRollback<
-            <Sync as SyncMode>::StorageLockingPolicyFactory,
-        >,
-    ) where
-        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
-    {
-        self.register_account_pnl_adjustment_rollback_impl(mutations, rollback, None);
-    }
-
-    pub(super) fn register_account_pnl_adjustment_rollback_with_state(
         &self,
         mutations: &mut Mutations,
         rollback: AccountPnlAssertionRollback<
@@ -170,62 +156,37 @@ where
     ) where
         <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
     {
-        self.register_account_pnl_adjustment_rollback_impl(
-            mutations,
-            rollback,
-            Some(state_snapshot),
-        );
-    }
-
-    fn register_account_pnl_adjustment_rollback_impl(
-        &self,
-        mutations: &mut Mutations,
-        rollback: AccountPnlAssertionRollback<
-            <Sync as SyncMode>::StorageLockingPolicyFactory,
-        >,
-        state_snapshot: Option<
-            AccountStateSnapshot<<Sync as SyncMode>::StorageLockingPolicyFactory>,
-        >,
-    ) where
-        <<Sync as SyncMode>::StorageLockingPolicyFactory as crate::storage::LockingPolicyFactory>::Policy: 'static,
-    {
         let AccountPnlAssertionRollback {
             account_control,
             account_id,
             previous,
             asserted,
             token,
-            barrier,
             lease,
         } = rollback;
         let commit_pnl = self.pnl.clone();
         let rollback_pnl = self.pnl.clone();
         let commit_state_snapshot = state_snapshot.clone();
-        let refresh_barrier = state_snapshot.is_some();
         let settings = self.settings.clone();
         mutations.push(Mutation::new_reporting_with_guard(
             move || {
-                let commit = || {
+                commit_state_snapshot.with_rollback(|_, _| {
                     commit_pnl.with_mut_if_present(&account_id, |entry| {
                         if entry.assertion_token == Some(token) {
                             entry.assertion_token = None;
                         }
                     });
-                };
-                match commit_state_snapshot.as_ref() {
-                    Some(state_snapshot) => state_snapshot.with_rollback(|_, _| commit()),
-                    None => commit(),
-                }
+                });
                 true
             },
             move || {
-                let rollback = |current_group, current_currency: Option<Asset>| {
+                state_snapshot.with_rollback(|current_group, current_currency| {
                     #[cfg(test)]
                     let mut reconciliation = None;
-                    let final_state =
+                    let (final_state, final_provenance) =
                         rollback_pnl.with_mut(account_id, AccountPnlEntry::zero, |entry, _| {
                             if entry.assertion_token != Some(token) {
-                                return entry.state;
+                                return (entry.state, entry.assertion_token);
                             }
 
                             let restored = match (previous.state, asserted, entry.state) {
@@ -267,7 +228,7 @@ where
                                 state: restored,
                                 assertion_token: previous.assertion_token,
                             };
-                            restored
+                            (restored, previous.assertion_token)
                         });
 
                     #[cfg(test)]
@@ -283,23 +244,18 @@ where
                         #[cfg(not(test))]
                         drop(invalidated);
                     }
-                    let current_barrier = if refresh_barrier {
-                        settings.with(|settings| {
-                            settings
-                                .pnl_barrier_for(
-                                    account_id,
-                                    current_group,
-                                    current_currency.as_ref(),
-                                )
-                                .cloned()
-                        })
-                    } else {
-                        barrier.clone()
-                    };
+                    let current_barrier = settings.with(|settings| {
+                        settings
+                            .pnl_barrier_for(account_id, current_group, current_currency.as_ref())
+                            .cloned()
+                    });
                     if let Some(barrier) = current_barrier.as_ref() {
-                        if let Some(block) =
-                            account_pnl_block_for_state(account_id, final_state, barrier, None)
-                        {
+                        if let Some(block) = account_pnl_block_for_state(
+                            current_currency.as_ref(),
+                            final_state,
+                            barrier,
+                            final_provenance,
+                        ) {
                             #[cfg(test)]
                             match &account_control {
                                 Some(control) => {
@@ -321,11 +277,7 @@ where
                         result.report.reconciliations.push(reconciliation);
                     }
                     result
-                };
-                match state_snapshot.as_ref() {
-                    Some(state_snapshot) => state_snapshot.with_rollback(rollback),
-                    None => rollback(None, None),
-                }
+                })
             },
             lease,
         ));

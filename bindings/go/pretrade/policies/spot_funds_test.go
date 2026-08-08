@@ -1105,6 +1105,64 @@ func TestSpotFundsPnlBoundsBarrierIgnoresNonMatchingCurrency(t *testing.T) {
 	}
 }
 
+func TestSpotFundsPnlBoundsAccountBarrierRejectsNonMatchingCurrency(t *testing.T) {
+	usd := mustAsset(t, "USD")
+	eur := mustAsset(t, "EUR")
+	account := param.NewAccountIDFromUint64(83022)
+	engine, err := openpit.NewEngineBuilder().NoSync().
+		Builtin(policies.BuildSpotFundsPnlBoundsKillSwitch().
+			AccountBarriers(policies.SpotFundsPnlBoundsAccountBarrier{
+				Barrier: policies.SpotFundsPnlBoundsBarrier{
+					Currency:   eur,
+					LowerBound: optional.Some(mustPnl(t, "-100")),
+				},
+				AccountID: account,
+			}),
+		).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer engine.Stop()
+
+	if err := engine.Accounts().SetCurrency(account, usd); err != nil {
+		t.Fatalf("Accounts().SetCurrency() error = %v", err)
+	}
+	result, err := engine.Configure().SetSpotFundsAccountPnl(
+		policies.SpotFundsPolicyName,
+		account,
+		model.NewPnlState(mustPnl(t, "0")),
+	)
+	if err != nil {
+		t.Fatalf("SetSpotFundsAccountPnl() error = %v", err)
+	}
+	if len(result.AccountBlocks) != 1 {
+		t.Fatalf("AccountBlocks = %v, want one mismatch block", result.AccountBlocks)
+	}
+	block := result.AccountBlocks[0]
+	if block.Code != reject.CodePnlKillSwitchTriggered ||
+		block.Reason != "pnl barrier currency mismatch" ||
+		block.Details != "account currency USD, barrier currency EUR" {
+		t.Fatalf("AccountBlocks[0] = %v, want exact currency mismatch block", block)
+	}
+
+	reservation, rejects, err := engine.ExecutePreTrade(
+		spotFundsLifecycleOrder(t, account),
+	)
+	if err != nil {
+		t.Fatalf("ExecutePreTrade() error = %v", err)
+	}
+	if reservation != nil {
+		reservation.RollbackAndClose()
+		t.Fatal("ExecutePreTrade() reservation is set for blocked account")
+	}
+	if len(rejects) != 1 ||
+		rejects[0].Code != reject.CodePnlKillSwitchTriggered ||
+		rejects[0].Reason != "pnl barrier currency mismatch" ||
+		rejects[0].Details != "account currency USD, barrier currency EUR" {
+		t.Fatalf("ExecutePreTrade() rejects = %v, want exact mismatch reject", rejects)
+	}
+}
+
 func TestSpotFundsPnlBoundsBarrierAppliesMatchingCurrency(t *testing.T) {
 	usd := mustAsset(t, "USD")
 	account := param.NewAccountIDFromUint64(83020)

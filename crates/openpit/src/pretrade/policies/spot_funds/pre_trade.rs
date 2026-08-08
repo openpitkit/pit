@@ -38,8 +38,7 @@ use crate::storage::ConfigCell;
 use crate::Mutations;
 
 use super::rejects::{
-    account_pnl_halted_reject, arithmetic_overflow_reject, insufficient_funds_reject,
-    order_value_calculation_failed_reject,
+    arithmetic_overflow_reject, insufficient_funds_reject, order_value_calculation_failed_reject,
 };
 use super::views::OrderRequestView;
 use super::SpotFundsPolicy;
@@ -72,21 +71,15 @@ where
             return Ok(());
         };
         let state = self.account_pnl_state(account_id);
-        match state {
-            crate::PnlState::Halted(reason) => Err(Rejects::from(account_pnl_halted_reject(
-                Self::NAME,
-                account_id,
-                reason,
-            ))),
-            crate::PnlState::Value(_) => {
-                if let Some(block) =
-                    super::rejects::account_pnl_block_for_state(account_id, state, &barrier, None)
-                {
-                    Err(Rejects::from(Reject::from(block)))
-                } else {
-                    Ok(())
-                }
-            }
+        if let Some(block) = super::rejects::account_pnl_block_for_state(
+            account_currency.as_ref(),
+            state,
+            &barrier,
+            None,
+        ) {
+            Err(Rejects::from(Reject::from(block)))
+        } else {
+            Ok(())
         }
     }
 

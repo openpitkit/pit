@@ -165,19 +165,17 @@ of them must be given. The same dataclass is used at construction time, through
 `build_spot_funds_pnl_bounds_killswitch()`, and at runtime, through
 `engine.configure().spot_funds_pnl_bounds_killswitch(...)`.
 
-`currency` decides which accounts the barrier controls, not what it watches:
+`currency` validates account-specific barriers and filters fallback barriers:
 
-- When an account has an effective currency, a barrier applies only when
-  `currency` equals it. The effective currency resolves through the account,
-  then its group, then the default group.
-- Resolution walks account -> group -> global and **skips** any level whose
-  barrier carries a different currency, continuing to the next one. An account
-  barrier in `openpit.param.Asset("EUR")` therefore does not shadow a global
-  barrier in `openpit.param.Asset("USD")` for a USD account - the global one
-  becomes effective.
-- If no level carries the account's currency, no barrier is effective. The
-  account has no P&L control at all: bounds are not evaluated and neither a
-  breach nor a halt blocks it, while `openpit.param.Pnl` values keep
+- An account barrier always belongs to that account. If its `currency` differs
+  from the account's effective currency, the mismatch blocks the account with
+  `RejectCode.PNL_KILL_SWITCH_TRIGGERED`; the cascade does not continue.
+- Account-group and global barriers apply only when their `currency` equals the
+  account's effective currency. A mismatching group barrier is skipped so a
+  matching global barrier can become effective.
+- If there is no account barrier and neither the group nor global fallback
+  matches, the account has no P&L control. Bounds are not evaluated and neither
+  a breach nor a halt blocks it, while `openpit.param.Pnl` values keep
   accumulating and being published.
 - If the account has no effective currency, nothing can mismatch, so no level
   is filtered by currency and the first barrier in the account -> group ->

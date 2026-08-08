@@ -651,13 +651,15 @@ struct SpotFundsOverride {
 
 /// Currency-specific account P&L bounds computed by the spot-funds ledger.
 ///
-/// With a known effective account currency, only exact matches apply and
-/// mismatching levels are skipped. Without one, the first in-scope barrier
-/// applies. If no level matches a known currency, P&L keeps accumulating and
-/// publishing without P&L control. Lower and upper bounds are optional; lower
-/// is typically a negative loss limit and upper is typically a positive
-/// profit-taking limit. At least one bound must be set whenever a barrier is
-/// installed.
+/// With a known effective account currency, an account-tier mismatch fails
+/// closed and blocks the account; account-group and global mismatches are
+/// skipped. A known-currency account with no account barrier and no matching
+/// fallback has no effective barrier, but its P&L keeps accumulating and
+/// publishing. Without an effective currency, the first in-scope barrier
+/// applies. Bounds are compared as stored and are never FX-converted. Lower
+/// and upper bounds are optional; lower is typically a negative loss limit and
+/// upper is typically a positive profit-taking limit. At least one bound must
+/// be set whenever a barrier is installed.
 struct SpotFundsPnlBoundsBarrier {
   /// Currency matched when the account has an effective currency.
   ::openpit::param::Asset currency;

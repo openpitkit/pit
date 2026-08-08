@@ -1919,6 +1919,76 @@ fn pnl_killswitch_without_effective_currency_uses_the_first_in_scope_barrier() {
     assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
 }
 
+// End-to-end through the public engine surface: an account-scope barrier always
+// controls its own account, so a currency its bounds cannot be compared against
+// is a configuration fault. The mismatch blocks the account instead of being
+// skipped like a group or global tier.
+#[test]
+fn pnl_killswitch_account_barrier_currency_mismatch_blocks_through_the_public_engine() {
+    let acc = AccountId::from_u64(40000007);
+    let aapl_usd = instr("AAPL", "USD");
+    let builder = Engine::builder::<TestOrder, TestReport, TestAdjustment>().full_sync();
+    let policy = SpotFundsPolicy::<FullSync, FullSync>::pnl_bounds_kill_switch(
+        Some(SpotFundsPnlBoundsBarrier {
+            currency: asset("USD"),
+            lower_bound: Some(pnl_value("-1000")),
+            upper_bound: None,
+        }),
+        std::iter::empty::<SpotFundsPnlBoundsAccountGroupBarrier>(),
+        [SpotFundsPnlBoundsAccountBarrier {
+            account_id: acc,
+            barrier: SpotFundsPnlBoundsBarrier {
+                currency: asset("EUR"),
+                lower_bound: Some(pnl_value("-1000")),
+                upper_bound: None,
+            },
+        }],
+        None::<SpotFundsMarketData<FullSync>>,
+        builder.storage_builder(),
+    )
+    .expect("P&L kill-switch preset must build");
+    let engine = builder
+        .pre_trade(policy)
+        .build()
+        .expect("engine must build");
+    engine.accounts().set_currency(acc, asset("USD"));
+
+    // Well inside the -1000 bound: only the currency mismatch can block here.
+    let post = engine.apply_execution_report(&fill_with_fee(
+        acc,
+        aapl_usd.clone(),
+        "100",
+        "1",
+        money_fee("1", "USD"),
+    ));
+    assert_eq!(post.account_blocks.len(), 1);
+    assert_eq!(
+        post.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    assert_eq!(
+        post.account_blocks[0].reason,
+        "pnl barrier currency mismatch"
+    );
+    assert_eq!(
+        post.account_blocks[0].details,
+        "account currency USD, barrier currency EUR"
+    );
+
+    // The engine has latched the account block: the next order rejects.
+    let rejects = engine
+        .execute_pre_trade(make_order_for(
+            acc,
+            Side::Buy,
+            aapl_usd,
+            TradeAmount::Quantity(qty("1")),
+            Some(px("100")),
+        ))
+        .err()
+        .expect("blocked account must reject");
+    assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+}
+
 #[test]
 fn pnl_killswitch_skips_nonmatching_currency_through_the_public_engine() {
     let acc = AccountId::from_u64(40000005);

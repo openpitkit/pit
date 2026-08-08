@@ -90,6 +90,24 @@ pub(super) fn pnl_breach_account_block(
     )
 }
 
+/// Blocks the account when its account-tier barrier currency mismatches the
+/// effective account currency.
+///
+/// The account-tier barrier still controls the account, so the mismatch fails
+/// closed as a configuration fault. Group and global mismatches are skipped
+/// before this constructor is called.
+pub(super) fn pnl_barrier_currency_mismatch_account_block(
+    policy_name: &'static str,
+    details: impl Into<String>,
+) -> AccountBlock {
+    AccountBlock::new(
+        policy_name,
+        RejectCode::PnlKillSwitchTriggered,
+        "pnl barrier currency mismatch",
+        details.into(),
+    )
+}
+
 pub(super) fn pnl_calculation_failed_block<Policy: PolicyName + ?Sized>(
     policy: &Policy,
     reason: &'static str,

@@ -323,10 +323,13 @@ impl SpotFundsSettings {
 
     /// Replaces or clears the global account P&L bounds.
     ///
-    /// With a known effective account currency, only exact barrier matches
-    /// apply and mismatching levels are skipped. Without one, the first
-    /// in-scope barrier applies; no match leaves P&L accumulating and
-    /// publishing without P&L control.
+    /// With a known effective account currency, an account-tier mismatch fails
+    /// closed and blocks the account; account-group and global mismatches are
+    /// skipped. A known-currency account with no account barrier and no
+    /// matching fallback has no effective barrier, but its P&L keeps
+    /// accumulating and publishing. Without an effective currency, the first
+    /// in-scope barrier applies. Bounds are compared as stored and are never
+    /// FX-converted.
     pub fn set_pnl_global_barrier(
         &mut self,
         barrier: Option<SpotFundsPnlBoundsBarrier>,
@@ -340,10 +343,13 @@ impl SpotFundsSettings {
 
     /// Replaces account-group account P&L bounds.
     ///
-    /// With a known effective account currency, only exact barrier matches
-    /// apply and mismatching levels are skipped. Without one, the first
-    /// in-scope barrier applies; no match leaves P&L accumulating and
-    /// publishing without P&L control.
+    /// With a known effective account currency, an account-tier mismatch fails
+    /// closed and blocks the account; account-group and global mismatches are
+    /// skipped. A known-currency account with no account barrier and no
+    /// matching fallback has no effective barrier, but its P&L keeps
+    /// accumulating and publishing. Without an effective currency, the first
+    /// in-scope barrier applies. Bounds are compared as stored and are never
+    /// FX-converted.
     pub fn set_pnl_account_group_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountGroupBarrier>,
@@ -356,10 +362,13 @@ impl SpotFundsSettings {
     /// Replaces account-specific account P&L bounds without changing
     /// accumulated P&L.
     ///
-    /// With a known effective account currency, only exact barrier matches
-    /// apply and mismatching levels are skipped. Without one, the first
-    /// in-scope barrier applies; no match leaves P&L accumulating and
-    /// publishing without P&L control.
+    /// With a known effective account currency, an account-tier mismatch fails
+    /// closed and blocks the account; account-group and global mismatches are
+    /// skipped. A known-currency account with no account barrier and no
+    /// matching fallback has no effective barrier, but its P&L keeps
+    /// accumulating and publishing. Without an effective currency, the first
+    /// in-scope barrier applies. Bounds are compared as stored and are never
+    /// FX-converted.
     pub fn set_pnl_account_barriers(
         &mut self,
         barriers: impl IntoIterator<Item = SpotFundsPnlBoundsAccountBarrier>,
@@ -381,10 +390,13 @@ impl SpotFundsSettings {
 
     /// Installs the complete construction-time P&L-bounds configuration.
     ///
-    /// With a known effective account currency, only exact barrier matches
-    /// apply and mismatching levels are skipped. Without one, the first
-    /// in-scope barrier applies; no match leaves P&L accumulating and
-    /// publishing without P&L control.
+    /// With a known effective account currency, an account-tier mismatch fails
+    /// closed and blocks the account; account-group and global mismatches are
+    /// skipped. A known-currency account with no account barrier and no
+    /// matching fallback has no effective barrier, but its P&L keeps
+    /// accumulating and publishing. Without an effective currency, the first
+    /// in-scope barrier applies. Bounds are compared as stored and are never
+    /// FX-converted.
     ///
     /// # Errors
     ///
@@ -415,19 +427,16 @@ impl SpotFundsSettings {
         account_group_id: Option<AccountGroupId>,
         account_currency: Option<&Asset>,
     ) -> Option<&SpotFundsPnlBoundsBarrier> {
+        if let Some(barrier) = self.pnl_account_barriers.get(&account_id) {
+            return Some(&barrier.barrier);
+        }
         let matches_currency = |barrier: &&SpotFundsPnlBoundsBarrier| {
             account_currency.map_or(true, |currency| &barrier.currency == currency)
         };
-        self.pnl_account_barriers
-            .get(&account_id)
+        account_group_id
+            .and_then(|group| self.pnl_account_group_barriers.get(&group))
             .map(|entry| &entry.barrier)
             .filter(matches_currency)
-            .or_else(|| {
-                account_group_id
-                    .and_then(|group| self.pnl_account_group_barriers.get(&group))
-                    .map(|entry| &entry.barrier)
-                    .filter(matches_currency)
-            })
             .or_else(|| self.pnl_global_barrier.as_ref().filter(matches_currency))
     }
 
@@ -729,8 +738,9 @@ mod tests {
     }
 
     #[test]
-    fn pnl_barrier_resolution_filters_each_scope_by_currency() {
+    fn pnl_barrier_resolution_keeps_account_scope_and_filters_fallbacks() {
         let account_id = account(99224416);
+        let fallback_account_id = account(99224417);
         let group_id = group(7);
         let settings = SpotFundsSettings::new(0, SpotFundsPricingSource::Mark, [])
             .expect("base settings must build")
@@ -771,18 +781,30 @@ mod tests {
         assert_eq!(
             settings
                 .pnl_barrier_for(account_id, Some(group_id), Some(&usd))
-                .and_then(|barrier| barrier.lower_bound),
-            Some(Pnl::from_str("-50").expect("valid pnl"))
+                .map(|barrier| &barrier.currency),
+            Some(&eur)
         );
-        assert!(settings
-            .pnl_barrier_for(account_id, Some(group_id), Some(&chf))
-            .is_none());
+        assert_eq!(
+            settings
+                .pnl_barrier_for(account_id, Some(group_id), Some(&chf))
+                .map(|barrier| &barrier.currency),
+            Some(&eur)
+        );
         assert_eq!(
             settings
                 .pnl_barrier_for(account_id, Some(group_id), None)
                 .map(|barrier| &barrier.currency),
             Some(&eur)
         );
+        assert_eq!(
+            settings
+                .pnl_barrier_for(fallback_account_id, Some(group_id), Some(&usd))
+                .and_then(|barrier| barrier.lower_bound),
+            Some(Pnl::from_str("-50").expect("valid pnl"))
+        );
+        assert!(settings
+            .pnl_barrier_for(fallback_account_id, Some(group_id), Some(&chf))
+            .is_none());
     }
 
     /// Registers `AAPL/USD` with `mark = 100` in the default bucket and returns

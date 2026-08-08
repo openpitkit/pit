@@ -59,6 +59,10 @@ struct RejectFirstAdjustmentPolicy {
     calls: std::sync::atomic::AtomicUsize,
 }
 
+struct RejectSecondAdjustmentPolicy {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
 impl<AccountAdjustment> PreTradePolicy<TestOrder, TestReport, AccountAdjustment, FullSync>
     for BlockingFirstAdjustmentPolicy
 where
@@ -112,6 +116,36 @@ where
             "force one rollback after a concurrent repair".to_owned(),
         )
         .into())
+    }
+}
+
+impl<AccountAdjustment> PreTradePolicy<TestOrder, TestReport, AccountAdjustment, FullSync>
+    for RejectSecondAdjustmentPolicy
+where
+    AccountAdjustment: 'static,
+{
+    fn name(&self) -> &str {
+        "reject_second_adjustment"
+    }
+
+    fn apply_account_adjustment(
+        &self,
+        _ctx: &AccountAdjustmentContext<crate::storage::FullLocking>,
+        _account_id: AccountId,
+        _adjustment: &AccountAdjustment,
+        _mutations: &mut Mutations,
+    ) -> Result<crate::pretrade::PolicyAccountAdjustmentResult, Rejects> {
+        if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+            return Err(Reject::new(
+                "reject_second_adjustment",
+                RejectScope::Account,
+                RejectCode::MissingRequiredField,
+                "second adjustment test reject",
+                "force same-owner LIFO rollback".to_owned(),
+            )
+            .into());
+        }
+        Ok(crate::pretrade::PolicyAccountAdjustmentResult::default())
     }
 }
 
@@ -429,6 +463,21 @@ fn build_policy_from_settings(
 ) -> TestPolicy {
     let b = engine_builder();
     SpotFundsPolicy::new(settings, market_data, b.storage_builder())
+}
+
+fn build_policy_with_pnl_global_barrier(barrier: SpotFundsPnlBoundsBarrier) -> TestPolicy {
+    let mut settings = settings(0);
+    settings
+        .set_pnl_global_barrier(Some(barrier))
+        .expect("global account PnL barrier must set");
+    build_policy_from_settings(settings, None)
+}
+
+/// Standalone snapshot for driving an account-PnL rollback outside an engine:
+/// it carries no account registry, so the rollback resolves no group and no
+/// effective currency.
+fn test_state_snapshot() -> crate::core::AccountStateSnapshot<crate::storage::FullLocking> {
+    AccountAdjustmentContext::new_test(dummy_control(account(0))).state_snapshot()
 }
 
 fn build_account_pnl_test_engine(settings: SpotFundsSettings) -> AccountPnlTestEngine {
@@ -8066,32 +8115,14 @@ fn pnl_bounds_cascade_uses_account_group_then_global() {
     }])
     .expect("group pnl barrier must set");
     let s = s
-        .with_pnl_account_barriers([
-            SpotFundsPnlBoundsAccountBarrier {
-                account_id: account_specific,
-                barrier: SpotFundsPnlBoundsBarrier {
-                    currency: asset("USD"),
-                    lower_bound: Some(pnl_value("-10")),
-                    upper_bound: None,
-                },
+        .with_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+            account_id: account_specific,
+            barrier: SpotFundsPnlBoundsBarrier {
+                currency: asset("USD"),
+                lower_bound: Some(pnl_value("-10")),
+                upper_bound: None,
             },
-            SpotFundsPnlBoundsAccountBarrier {
-                account_id: grouped,
-                barrier: SpotFundsPnlBoundsBarrier {
-                    currency: asset("EUR"),
-                    lower_bound: Some(pnl_value("-1")),
-                    upper_bound: None,
-                },
-            },
-            SpotFundsPnlBoundsAccountBarrier {
-                account_id: global_only,
-                barrier: SpotFundsPnlBoundsBarrier {
-                    currency: asset("EUR"),
-                    lower_bound: Some(pnl_value("-1")),
-                    upper_bound: None,
-                },
-            },
-        ])
+        }])
         .expect("account pnl barrier must set");
     let policy = build_policy_from_settings(s, None);
 
@@ -9615,7 +9646,7 @@ fn account_pnl_rollback_preserves_fill_delta_and_rechecks_barrier() {
         lower_bound: Some(pnl_value("-120")),
         upper_bound: None,
     };
-    let policy = build_policy(None, None);
+    let policy = build_policy_with_pnl_global_barrier(barrier);
     policy.set_account_pnl_state(acc, crate::PnlState::Value(pnl_value("-100")));
 
     let mut mutations = Mutations::with_capacity(1);
@@ -9630,9 +9661,9 @@ fn account_pnl_rollback_preserves_fill_delta_and_rechecks_barrier() {
             previous,
             asserted,
             token,
-            barrier: Some(barrier),
             lease,
         },
+        test_state_snapshot(),
     );
 
     let (fill, _, provenance) = policy.update_account_pnl(acc, pnl_value("-30"));
@@ -9774,9 +9805,9 @@ fn committed_account_pnl_assertion_keeps_its_block() {
             previous,
             asserted,
             token,
-            barrier: None,
             lease,
         },
+        test_state_snapshot(),
     );
 
     let _ = mutations.commit_all();
@@ -9818,9 +9849,9 @@ fn an_operator_overwrite_outlives_the_asserting_rollback() {
             previous,
             asserted,
             token,
-            barrier: None,
             lease,
         },
+        test_state_snapshot(),
     );
 
     // The operator overwrites the reason, which makes the block theirs.
@@ -9874,9 +9905,9 @@ fn account_pnl_rearm_rollback_restores_halt_and_reports_discarded_delta() {
             previous,
             asserted,
             token,
-            barrier: None,
             lease,
         },
+        test_state_snapshot(),
     );
     assert!(policy
         .update_account_pnl(acc, pnl_value("-30"))
@@ -9914,9 +9945,9 @@ fn rejected_account_pnl_halt_assertion_restores_prior_value() {
             previous,
             asserted,
             token,
-            barrier: None,
             lease,
         },
+        test_state_snapshot(),
     );
 
     let report = mutations.rollback_all().report;
@@ -9934,7 +9965,7 @@ fn account_pnl_inverse_rollback_overflow_halts_and_blocks() {
         lower_bound: Some(pnl_value("-1")),
         upper_bound: None,
     };
-    let policy = build_policy(None, None);
+    let policy = build_policy_with_pnl_global_barrier(barrier);
     policy.set_account_pnl_state(acc, crate::PnlState::Value(Pnl::new(Decimal::MAX)));
 
     let mut mutations = Mutations::with_capacity(1);
@@ -9949,9 +9980,9 @@ fn account_pnl_inverse_rollback_overflow_halts_and_blocks() {
             previous,
             asserted,
             token,
-            barrier: Some(barrier),
             lease,
         },
+        test_state_snapshot(),
     );
     assert!(policy
         .update_account_pnl(acc, pnl_value("1"))
@@ -9991,9 +10022,9 @@ fn nested_account_pnl_assertions_unwind_lifo_for_same_batch() {
             previous,
             asserted: first,
             token,
-            barrier: None,
             lease,
         },
+        test_state_snapshot(),
     );
 
     let second = crate::PnlState::Value(pnl_value("20"));
@@ -10006,9 +10037,9 @@ fn nested_account_pnl_assertions_unwind_lifo_for_same_batch() {
             previous,
             asserted: second,
             token,
-            barrier: None,
             lease,
         },
+        test_state_snapshot(),
     );
     assert!(policy
         .update_account_pnl(acc, pnl_value("5"))
@@ -10022,6 +10053,53 @@ fn nested_account_pnl_assertions_unwind_lifo_for_same_batch() {
         account_pnl_state_of(&policy, acc),
         Some(crate::PnlState::Value(pnl_value("-95")))
     );
+}
+
+#[test]
+fn rejected_same_owner_account_pnl_batch_clears_intermediate_breach_block() {
+    let acc = account(99224416);
+    let mut configured = settings(0);
+    configured
+        .set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+            account_id: acc,
+            barrier: SpotFundsPnlBoundsBarrier {
+                currency: asset("USD"),
+                lower_bound: Some(pnl_value("-10")),
+                upper_bound: None,
+            },
+        }])
+        .expect("account barrier must set");
+    let builder =
+        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
+    let policy =
+        SpotFundsPolicy::<FullSync, FullSync>::new(configured, None, builder.storage_builder());
+    let pnl = policy.pnl.clone();
+    let engine = builder
+        .pre_trade(policy)
+        .pre_trade(RejectSecondAdjustmentPolicy {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        })
+        .build()
+        .expect("engine must build");
+    engine.accounts().set_currency(acc, asset("USD"));
+
+    let error = engine
+        .apply_account_adjustment(
+            acc,
+            &[
+                account_pnl_adjustment(crate::PnlState::Value(pnl_value("-20"))),
+                account_pnl_adjustment(crate::PnlState::Value(Pnl::ZERO)),
+            ],
+        )
+        .expect_err("the second adjustment policy must reject the batch");
+
+    assert_eq!(error.failed_adjustment_index, 1);
+    assert_eq!(
+        pnl.with(&acc, |entry| (entry.state, entry.assertion_token)),
+        Some((crate::PnlState::Value(Pnl::ZERO), None))
+    );
+    assert!(engine.inner.blocked_accounts.account_block(acc).is_none());
+    assert!(engine.start_pre_trade(account_pnl_probe_order(acc)).is_ok());
 }
 
 #[test]
@@ -10042,9 +10120,9 @@ fn concurrent_calculation_halt_waits_for_rejected_assertion_then_survives() {
             previous,
             asserted,
             token,
-            barrier: None,
             lease,
         },
+        test_state_snapshot(),
     );
 
     let concurrent = Arc::clone(&policy);
@@ -10433,31 +10511,25 @@ fn narrowing_a_barrier_past_a_stored_value_blocks_in_the_same_call() {
 }
 
 #[test]
-fn barrier_without_the_effective_currency_adds_no_control() {
+fn nonmatching_account_barrier_blocks_implicit_zero_pnl() {
     let acc = account(99224416);
     let engine = build_barrier_retune_engine(acc);
-    let seeded = engine
-        .configure()
-        .set_spot_funds_account_pnl(
-            SpotFundsPolicy::<FullSync, FullSync>::NAME,
-            acc,
-            crate::PnlState::Value(pnl_value("-40")),
-        )
-        .expect("PnL seed must succeed");
-    assert!(seeded.account_blocks.is_empty());
 
-    let unmatched =
+    let blocked =
         set_account_barrier_in_currency(&engine, acc, asset("EUR"), Some(pnl_value("-30")));
-    assert!(unmatched.account_blocks.is_empty());
-    assert!(engine.start_pre_trade(account_pnl_probe_order(acc)).is_ok());
-
-    let matched =
-        set_account_barrier_in_currency(&engine, acc, asset("USD"), Some(pnl_value("-30")));
-    assert_eq!(matched.account_blocks.len(), 1);
+    assert_eq!(blocked.account_blocks.len(), 1);
     assert_eq!(
-        matched.account_blocks[0].block.code,
+        blocked.account_blocks[0].block.code,
         RejectCode::PnlKillSwitchTriggered
     );
+    assert_eq!(
+        blocked.account_blocks[0].block.details,
+        "account currency USD, barrier currency EUR"
+    );
+    let rejects = engine
+        .start_pre_trade(account_pnl_probe_order(acc))
+        .expect_err("the currency mismatch must block the account");
+    assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
 }
 
 #[test]
@@ -10534,6 +10606,244 @@ fn halted_account_pnl_under_a_nonmatching_barrier_stays_uncontrolled() {
         money_fee("1", "EUR"),
     ));
     assert!(post_trade.account_blocks.is_empty());
+}
+
+#[test]
+fn pre_trade_halted_account_pnl_reports_account_barrier_currency_mismatch() {
+    let acc = account(99224416);
+    let mut configured = settings(0);
+    configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    configured
+        .set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+            account_id: acc,
+            barrier: SpotFundsPnlBoundsBarrier {
+                currency: asset("EUR"),
+                lower_bound: Some(pnl_value("-10")),
+                upper_bound: None,
+            },
+        }])
+        .expect("account barrier must set");
+    let builder =
+        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
+    let policy =
+        SpotFundsPolicy::<FullSync, FullSync>::new(configured, None, builder.storage_builder());
+    policy.set_account_pnl_state(
+        acc,
+        crate::PnlState::Halted(crate::PnlHaltReason::MissingFx),
+    );
+    let engine = builder
+        .pre_trade(policy)
+        .build()
+        .expect("engine must build");
+    engine.accounts().set_currency(acc, asset("USD"));
+
+    let rejects = engine
+        .execute_pre_trade(account_pnl_probe_order(acc))
+        .err()
+        .expect("the account barrier mismatch must reject pre-trade");
+
+    assert_eq!(rejects.len(), 1);
+    assert_eq!(rejects[0].code, RejectCode::PnlKillSwitchTriggered);
+    assert_eq!(rejects[0].reason, "pnl barrier currency mismatch");
+    assert_eq!(
+        rejects[0].details,
+        "account currency USD, barrier currency EUR"
+    );
+}
+
+#[test]
+fn post_trade_halts_report_account_barrier_currency_mismatch() {
+    let stored_halt_acc = account(99224416);
+    let new_halt_acc = account(99224417);
+    let mut configured = settings(0);
+    configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    configured
+        .set_pnl_account_barriers([
+            SpotFundsPnlBoundsAccountBarrier {
+                account_id: stored_halt_acc,
+                barrier: SpotFundsPnlBoundsBarrier {
+                    currency: asset("EUR"),
+                    lower_bound: Some(pnl_value("-10")),
+                    upper_bound: None,
+                },
+            },
+            SpotFundsPnlBoundsAccountBarrier {
+                account_id: new_halt_acc,
+                barrier: SpotFundsPnlBoundsBarrier {
+                    currency: asset("EUR"),
+                    lower_bound: Some(pnl_value("-10")),
+                    upper_bound: None,
+                },
+            },
+        ])
+        .expect("account barriers must set");
+    let builder =
+        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
+    let policy =
+        SpotFundsPolicy::<FullSync, FullSync>::new(configured, None, builder.storage_builder());
+    let pnl = policy.pnl.clone();
+    policy.set_account_pnl_state(
+        stored_halt_acc,
+        crate::PnlState::Halted(crate::PnlHaltReason::MissingFx),
+    );
+    let engine = builder
+        .pre_trade(policy)
+        .build()
+        .expect("engine must build");
+    engine
+        .accounts()
+        .set_currency(stored_halt_acc, asset("USD"));
+    engine.accounts().set_currency(new_halt_acc, asset("USD"));
+
+    let stored_halt = engine.apply_execution_report(&fill_with_fee(
+        stored_halt_acc,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        "1",
+        "1",
+        money_fee("0", "USD"),
+    ));
+    let new_halt = engine.apply_execution_report(&fee_only_report(
+        new_halt_acc,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        "0",
+        false,
+        money_fee("1", "CHF"),
+    ));
+
+    for result in [&stored_halt, &new_halt] {
+        assert_eq!(result.account_blocks.len(), 1);
+        assert_eq!(
+            result.account_blocks[0].code,
+            RejectCode::PnlKillSwitchTriggered
+        );
+        assert_eq!(
+            result.account_blocks[0].reason,
+            "pnl barrier currency mismatch"
+        );
+        assert_eq!(
+            result.account_blocks[0].details,
+            "account currency USD, barrier currency EUR"
+        );
+    }
+    assert_eq!(
+        pnl.with(&new_halt_acc, |entry| entry.state),
+        Some(crate::PnlState::Halted(crate::PnlHaltReason::MissingFx))
+    );
+}
+
+// The mismatch is a configuration fault that exists before the report arrives,
+// so a report that engages no account P&L line at all - no position movement,
+// no fee - must still fail closed instead of passing silently.
+#[test]
+fn account_barrier_currency_mismatch_blocks_a_report_that_engages_no_account_pnl() {
+    let acc = account(99224416);
+    let mut configured = settings(0);
+    configured
+        .set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+            account_id: acc,
+            barrier: SpotFundsPnlBoundsBarrier {
+                currency: asset("EUR"),
+                lower_bound: Some(pnl_value("-10")),
+                upper_bound: None,
+            },
+        }])
+        .expect("account barrier must set");
+    let policy = build_policy_from_settings(configured, None);
+    policy.set_account_pnl_state(acc, crate::PnlState::Value(pnl_value("-5")));
+
+    let report = fill_with_fee(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        "100",
+        "0",
+        money_fee("0", "USD"),
+    );
+    let result = run_report_with_currency(&policy, &report, asset("USD"));
+
+    assert_eq!(result.account_blocks.len(), 1);
+    assert_eq!(
+        result.account_blocks[0].code,
+        RejectCode::PnlKillSwitchTriggered
+    );
+    assert_eq!(
+        result.account_blocks[0].reason,
+        "pnl barrier currency mismatch"
+    );
+    assert_eq!(
+        result.account_blocks[0].details,
+        "account currency USD, barrier currency EUR"
+    );
+    // Failing closed on the configuration fault must not disturb the healthy
+    // accumulator the report never engaged.
+    assert_eq!(
+        account_pnl_state_of(&policy, acc),
+        Some(crate::PnlState::Value(pnl_value("-5")))
+    );
+}
+
+// Only an account-tier barrier controls its account unconditionally: a group or
+// global barrier in another currency is skipped, so the same no-op report must
+// stay silent instead of inheriting the account-tier fail-closed rule.
+#[test]
+fn group_and_global_barrier_currency_mismatch_leave_a_no_pnl_report_silent() {
+    let acc = account(99224416);
+    let account_group = group(77);
+    let report = fill_with_fee(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        "100",
+        "0",
+        money_fee("0", "USD"),
+    );
+
+    let mut grouped = settings(0);
+    grouped
+        .set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
+            account_group_id: account_group,
+            barrier: SpotFundsPnlBoundsBarrier {
+                currency: asset("EUR"),
+                lower_bound: Some(pnl_value("-10")),
+                upper_bound: None,
+            },
+        }])
+        .expect("group barrier must set");
+    let group_policy = build_policy_from_settings(grouped, None);
+    group_policy.set_account_pnl_state(acc, crate::PnlState::Value(pnl_value("-5")));
+    assert!(group_policy
+        .apply_execution_report_impl(
+            &post_trade_ctx_with_currency_and_group(&report, asset("USD"), account_group),
+            &report,
+        )
+        .is_none());
+    assert_eq!(
+        account_pnl_state_of(&group_policy, acc),
+        Some(crate::PnlState::Value(pnl_value("-5")))
+    );
+
+    let mut global = settings(0);
+    global
+        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+            currency: asset("EUR"),
+            lower_bound: Some(pnl_value("-10")),
+            upper_bound: None,
+        }))
+        .expect("global barrier must set");
+    let global_policy = build_policy_from_settings(global, None);
+    global_policy.set_account_pnl_state(acc, crate::PnlState::Value(pnl_value("-5")));
+    assert!(global_policy
+        .apply_execution_report_impl(
+            &crate::pretrade::PostTradeContext::with_account_currency(acc, asset("USD")),
+            &report,
+        )
+        .is_none());
+    assert_eq!(
+        account_pnl_state_of(&global_policy, acc),
+        Some(crate::PnlState::Value(pnl_value("-5")))
+    );
 }
 
 #[test]
@@ -10755,6 +11065,62 @@ fn currency_matched_pnl_barrier_accepts_values_on_both_bounds() {
             .start_pre_trade(account_pnl_probe_order(account_id))
             .is_ok());
     }
+}
+
+// No account barrier and no fallback carrying the account's currency leaves the
+// account without P&L control at all: the accumulator keeps running and
+// publishing, and neither pre-trade nor the account is stopped.
+#[test]
+fn known_effective_currency_without_matching_fallback_adds_no_control() {
+    let acc = account(99224416);
+    let grp = group(100);
+    let mut configured = settings(0);
+    configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    configured
+        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+            currency: asset("EUR"),
+            lower_bound: Some(pnl_value("-1")),
+            upper_bound: None,
+        }))
+        .expect("global pnl barrier must set");
+    configured
+        .set_pnl_account_group_barriers([SpotFundsPnlBoundsAccountGroupBarrier {
+            account_group_id: grp,
+            barrier: SpotFundsPnlBoundsBarrier {
+                currency: asset("CHF"),
+                lower_bound: Some(pnl_value("-1")),
+                upper_bound: None,
+            },
+        }])
+        .expect("group pnl barrier must set");
+    let engine = build_account_pnl_test_engine(configured);
+    engine
+        .accounts()
+        .register_group(&[acc], grp)
+        .expect("group registration must succeed");
+    engine.accounts().set_currency(acc, asset("USD"));
+
+    let post = engine.apply_execution_report(&fill_with_fee(
+        acc,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("20", "USD"),
+    ));
+
+    assert!(post.account_blocks.is_empty());
+    assert_eq!(
+        post.account_pnls
+            .iter()
+            .map(|outcome| outcome.result)
+            .collect::<Vec<_>>(),
+        vec![Ok(crate::PnlOutcomeAmount {
+            delta: pnl_value("-20"),
+            absolute: pnl_value("-20"),
+        })]
+    );
+    assert!(engine.start_pre_trade(account_pnl_probe_order(acc)).is_ok());
 }
 
 #[test]
@@ -11333,6 +11699,73 @@ fn register_group_uses_the_currency_from_each_side_of_the_transition() {
     );
 }
 
+// Resolving an effective currency does not by itself change control: the same
+// fallback barrier stays in force, so the stored P&L must not be re-asserted
+// against it.
+#[test]
+fn register_group_resolving_the_currency_keeps_an_unchanged_fallback_silent() {
+    let account_id = account(99224423);
+    let group_id = group(98);
+    let mut configured = settings(0);
+    configured
+        .set_pnl_global_barrier(Some(SpotFundsPnlBoundsBarrier {
+            currency: asset("USD"),
+            lower_bound: Some(pnl_value("1")),
+            upper_bound: None,
+        }))
+        .expect("global barrier must set");
+    let engine = build_account_pnl_test_engine(configured);
+    let accounts = engine.accounts();
+    accounts.set_group_currency(group_id, asset("USD"));
+    assert_eq!(accounts.currency_of(account_id), None);
+
+    accounts
+        .register_group(&[account_id], group_id)
+        .expect("group registration must succeed");
+
+    assert_eq!(accounts.currency_of(account_id), Some(asset("USD")));
+    assert!(engine
+        .inner
+        .blocked_accounts
+        .account_block(account_id)
+        .is_none());
+}
+
+// The mismatch itself is the control change: an unchanged account barrier the
+// newly resolved currency cannot be compared against blocks the account.
+#[test]
+fn register_group_resolving_a_mismatching_account_barrier_currency_blocks() {
+    let account_id = account(99224424);
+    let group_id = group(99);
+    let mut configured = settings(0);
+    configured
+        .set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+            account_id,
+            barrier: SpotFundsPnlBoundsBarrier {
+                currency: asset("EUR"),
+                lower_bound: Some(pnl_value("-1000")),
+                upper_bound: None,
+            },
+        }])
+        .expect("account barrier must set");
+    let engine = build_account_pnl_test_engine(configured);
+    let accounts = engine.accounts();
+    accounts.set_group_currency(group_id, asset("USD"));
+    assert_eq!(accounts.currency_of(account_id), None);
+
+    accounts
+        .register_group(&[account_id], group_id)
+        .expect("group registration must succeed");
+
+    let block = engine
+        .inner
+        .blocked_accounts
+        .account_block(account_id)
+        .expect("the newly mismatching account barrier must block");
+    assert_eq!(block.code, RejectCode::PnlKillSwitchTriggered);
+    assert_eq!(block.details, "account currency USD, barrier currency EUR");
+}
+
 #[test]
 fn unregister_group_uses_the_currency_from_each_side_of_the_transition() {
     let account_id = account(99224422);
@@ -11358,11 +11791,13 @@ fn unregister_group_uses_the_currency_from_each_side_of_the_transition() {
         .expect("group registration must succeed");
 
     assert_eq!(accounts.currency_of(account_id), Some(asset("EUR")));
-    assert!(engine
+    let mismatch_block = engine
         .inner
         .blocked_accounts
         .account_block(account_id)
-        .is_none());
+        .expect("the currency mismatch must block in the same call");
+    assert_eq!(mismatch_block.code, RejectCode::PnlKillSwitchTriggered);
+    accounts.unblock(account_id);
 
     accounts
         .unregister_group(&[account_id], group_id)
@@ -14338,7 +14773,7 @@ fn account_id_is_not_leaked_into_pnl_bound_block_and_details_name_currency() {
         upper_bound: None,
     };
     let block = super::rejects::account_pnl_block_for_state(
-        account(SENTINEL),
+        Some(&asset("USD")),
         crate::PnlState::Value(pnl_value("-11")),
         &barrier,
         None,
@@ -14527,7 +14962,10 @@ fn account_id_is_not_leaked_into_fee_realized_pnl_overflow_block() {
         Some(crate::PnlHaltReason::ArithmeticOverflow)
     );
 
-    let block = policy.account_pnl_halted_block(acc, crate::PnlHaltReason::ArithmeticOverflow);
+    let block = super::rejects::account_pnl_halted_block(
+        SpotFundsPolicy::<FullSync, FullSync>::NAME,
+        crate::PnlHaltReason::ArithmeticOverflow,
+    );
     assert_account_id_redacted(&block.reason, &block.details);
 }
 
@@ -14844,6 +15282,191 @@ fn rejected_account_pnl_assertion_invalidates_a_membership_transition_block() {
         .inner
         .blocked_accounts
         .is_blocked(&engine.inner.account_groups, account_id));
+}
+
+#[test]
+fn membership_mismatch_outlives_a_provisional_assertion_rollback() {
+    let account_id = account(99300026);
+    let group_id = group(96);
+    let mut configured = settings(0);
+    configured
+        .set_pnl_account_barriers([SpotFundsPnlBoundsAccountBarrier {
+            account_id,
+            barrier: SpotFundsPnlBoundsBarrier {
+                currency: asset("EUR"),
+                lower_bound: Some(pnl_value("-1000")),
+                upper_bound: None,
+            },
+        }])
+        .expect("account barrier must set");
+    let builder =
+        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
+    let policy =
+        SpotFundsPolicy::<FullSync, FullSync>::new(configured, None, builder.storage_builder());
+    let pnl = policy.pnl.clone();
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let engine = Arc::new(
+        builder
+            .pre_trade(policy)
+            .pre_trade(BlockingAdjustmentRejectPolicy {
+                entered: Arc::clone(&entered),
+                release: Arc::clone(&release),
+            })
+            .build()
+            .expect("engine must build"),
+    );
+    engine.accounts().set_group_currency(group_id, asset("USD"));
+
+    let adjustment = {
+        let engine = Arc::clone(&engine);
+        std::thread::spawn(move || {
+            engine.apply_account_adjustment(
+                account_id,
+                &[account_pnl_adjustment(crate::PnlState::Value(pnl_value(
+                    "-10",
+                )))],
+            )
+        })
+    };
+    entered.wait();
+    assert!(pnl
+        .with(&account_id, |entry| entry.assertion_token)
+        .flatten()
+        .is_some());
+
+    engine
+        .accounts()
+        .register_group(&[account_id], group_id)
+        .expect("group registration must succeed");
+    let mismatch = engine
+        .inner
+        .blocked_accounts
+        .account_block(account_id)
+        .expect("membership mismatch must block the account");
+    assert_eq!(mismatch.provenance(), None);
+    assert_eq!(mismatch.reason, "pnl barrier currency mismatch");
+    assert_eq!(
+        mismatch.details,
+        "account currency USD, barrier currency EUR"
+    );
+
+    release.wait();
+    adjustment
+        .join()
+        .expect("adjustment thread must finish")
+        .expect_err("blocking policy must reject");
+    assert_eq!(
+        pnl.with(&account_id, |entry| (entry.state, entry.assertion_token)),
+        Some((crate::PnlState::Value(Pnl::ZERO), None))
+    );
+    let survivor = engine
+        .inner
+        .blocked_accounts
+        .account_block(account_id)
+        .expect("the untagged mismatch must survive rollback");
+    assert_eq!(survivor.provenance(), None);
+    assert_eq!(survivor.reason, "pnl barrier currency mismatch");
+    assert_eq!(
+        survivor.details,
+        "account currency USD, barrier currency EUR"
+    );
+}
+
+#[test]
+fn fill_mismatch_outlives_a_provisional_assertion_rollback() {
+    let account_id = account(99300027);
+    let mut configured = settings(0);
+    configured.set_global_limit_mode(SpotFundsLimitMode::TrackOnly);
+    let builder =
+        crate::Engine::builder::<TestOrder, TestReport, AccountPnlAdjustment>().full_sync();
+    let policy =
+        SpotFundsPolicy::<FullSync, FullSync>::new(configured, None, builder.storage_builder());
+    let pnl = policy.pnl.clone();
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let engine = Arc::new(
+        builder
+            .pre_trade(policy)
+            .pre_trade(BlockingAdjustmentRejectPolicy {
+                entered: Arc::clone(&entered),
+                release: Arc::clone(&release),
+            })
+            .build()
+            .expect("engine must build"),
+    );
+    engine.accounts().set_currency(account_id, asset("USD"));
+
+    let adjustment = {
+        let engine = Arc::clone(&engine);
+        std::thread::spawn(move || {
+            engine.apply_account_adjustment(
+                account_id,
+                &[account_pnl_adjustment(crate::PnlState::Value(pnl_value(
+                    "-10",
+                )))],
+            )
+        })
+    };
+    entered.wait();
+    assert!(pnl
+        .with(&account_id, |entry| entry.assertion_token)
+        .flatten()
+        .is_some());
+
+    let retuned = set_account_barrier_in_currency(
+        &engine,
+        account_id,
+        asset("EUR"),
+        Some(pnl_value("-1000")),
+    );
+    assert_eq!(retuned.account_blocks.len(), 1);
+    assert_eq!(retuned.account_blocks[0].block.provenance(), None);
+    assert_eq!(
+        retuned.account_blocks[0].block.reason,
+        "pnl barrier currency mismatch"
+    );
+    engine.accounts().unblock(account_id);
+
+    let fill = engine.apply_execution_report(&fill_with_fee(
+        account_id,
+        instr("AAPL", "USD"),
+        Side::Buy,
+        "100",
+        "1",
+        money_fee("1", "USD"),
+    ));
+    assert_eq!(fill.account_blocks.len(), 1);
+    assert_eq!(fill.account_blocks[0].provenance(), None);
+    assert_eq!(
+        fill.account_blocks[0].reason,
+        "pnl barrier currency mismatch"
+    );
+    assert_eq!(
+        fill.account_blocks[0].details,
+        "account currency USD, barrier currency EUR"
+    );
+
+    release.wait();
+    adjustment
+        .join()
+        .expect("adjustment thread must finish")
+        .expect_err("blocking policy must reject");
+    assert_eq!(
+        pnl.with(&account_id, |entry| (entry.state, entry.assertion_token)),
+        Some((crate::PnlState::Value(pnl_value("-1")), None))
+    );
+    let survivor = engine
+        .inner
+        .blocked_accounts
+        .account_block(account_id)
+        .expect("the fill mismatch must survive rollback");
+    assert_eq!(survivor.provenance(), None);
+    assert_eq!(survivor.reason, "pnl barrier currency mismatch");
+    assert_eq!(
+        survivor.details,
+        "account currency USD, barrier currency EUR"
+    );
 }
 
 #[test]

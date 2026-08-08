@@ -198,11 +198,14 @@ pub(crate) fn parse_limit_mode(value: &JsValue) -> Result<Option<SpotFundsLimitM
 
 /// Reusable account-P&L bounds for spot funds.
 ///
-/// With a known effective account currency, only exact matches apply and
-/// mismatching levels are skipped. Without one, the first in-scope barrier
-/// applies. If no level matches a known currency, P&L keeps accumulating and
-/// publishing without P&L control. At least one bound must be present when the
-/// barrier is registered with a builder or configurator.
+/// With a known effective account currency, an account-tier mismatch fails
+/// closed and blocks the account; account-group and global mismatches are
+/// skipped. A known-currency account with no account barrier and no matching
+/// fallback has no effective barrier, but its P&L keeps accumulating and
+/// publishing. Without an effective currency, the first in-scope barrier
+/// applies. Bounds are compared as stored and are never FX-converted. At least
+/// one bound must be present when the barrier is registered with a builder or
+/// configurator.
 #[wasm_bindgen(js_name = SpotFundsPnlBoundsBarrier)]
 #[derive(Clone)]
 pub struct JsSpotFundsPnlBoundsBarrier {

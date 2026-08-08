@@ -22,10 +22,12 @@ use crate::param::{AccountGroupId, AccountId, Asset, Pnl};
 pub struct SpotFundsPnlBoundsBarrier {
     /// Currency matched when the account has an effective currency.
     ///
-    /// With a known effective account currency, only exact matches apply and
-    /// mismatching levels are skipped. Without one, the first in-scope barrier
-    /// applies. If no level matches a known currency, P&L keeps accumulating
-    /// and publishing without P&L control.
+    /// With a known effective account currency, an account-tier mismatch fails
+    /// closed and blocks the account; account-group and global mismatches are
+    /// skipped. A known-currency account with no account barrier and no matching
+    /// fallback has no effective barrier, but its P&L keeps accumulating and
+    /// publishing. Without an effective currency, the first in-scope barrier
+    /// applies. Bounds are compared as stored and are never FX-converted.
     pub currency: Asset,
     /// Optional lower bound, typically a negative loss limit.
     pub lower_bound: Option<Pnl>,

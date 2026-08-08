@@ -207,13 +207,15 @@ where
 ///
 /// A barrier is a control, so arming it, narrowing it, or moving an account
 /// onto a different tier of the cascade must decide the account's fate in that
-/// same call rather than waiting for the account's next fill. Only accounts
-/// whose *effective* barrier changed are evaluated: an unrelated settings
-/// retune therefore never re-blocks an account an operator has just unblocked.
-/// Removing the last effective barrier yields no block. Clearing an override
-/// can expose a fallback barrier, which is evaluated normally and can record a
-/// block. Neither operation releases an existing block - a block belongs to the
-/// engine and only an explicit operator action lifts it.
+/// same call rather than waiting for the account's next fill. Accounts are
+/// evaluated only when their effective barrier changes or an unchanged
+/// account-tier barrier changes currency-match status. An unrelated settings
+/// retune or otherwise unchanged group/global barrier therefore never re-blocks
+/// an account an operator has just unblocked. Removing the last effective
+/// barrier yields no block. Clearing an override can expose a fallback barrier,
+/// which is evaluated normally and can record a block. Neither operation
+/// releases an existing block - a block belongs to the engine and only an
+/// explicit operator action lifts it.
 ///
 /// A global barrier change sweeps every account known through P&L, holdings
 /// (including provisional state), explicit account barriers, group membership,
@@ -300,9 +302,12 @@ where
         let (state, provenance) = pnl
             .with(&account_id, |entry| (entry.state, entry.assertion_token))
             .unwrap_or((crate::PnlState::Value(Pnl::ZERO), None));
-        let Some(block) =
-            rejects::account_pnl_block_for_state(account_id, state, current_barrier, provenance)
-        else {
+        let Some(block) = rejects::account_pnl_block_for_state(
+            account_currency.as_ref(),
+            state,
+            current_barrier,
+            provenance,
+        ) else {
             continue;
         };
         blocks.push((account_id, block));
@@ -324,14 +329,24 @@ where
 {
     let previous = settings.pnl_barrier_for(account_id, previous_group, previous_currency);
     let current = settings.pnl_barrier_for(account_id, current_group, current_currency);
-    if previous == current {
+    // A currency change matters only when it flips the account-barrier currency
+    // mismatch: the same barrier under a still-matching (or still-unknown)
+    // currency controls the account exactly as before, and re-asserting the
+    // stored P&L against it would block on a condition that did not change.
+    let mismatches = |barrier: Option<&SpotFundsPnlBoundsBarrier>, currency: Option<&Asset>| {
+        matches!((barrier, currency), (Some(barrier), Some(currency))
+            if &barrier.currency != currency)
+    };
+    if previous == current
+        && mismatches(previous, previous_currency) == mismatches(current, current_currency)
+    {
         return None;
     }
     let current = current?;
     let (state, provenance) = pnl
         .with(&account_id, |entry| (entry.state, entry.assertion_token))
         .unwrap_or((crate::PnlState::Value(Pnl::ZERO), None));
-    rejects::account_pnl_block_for_state(account_id, state, current, provenance)
+    rejects::account_pnl_block_for_state(current_currency, state, current, provenance)
 }
 
 fn release_account_pnl_lease<StorageFactory>(
@@ -386,12 +401,15 @@ fn release_account_pnl_lease<StorageFactory>(
 /// halts it until an explicit correction.
 /// A configured account PnL barrier rejects pre-trade while that accumulator is
 /// halted and blocks the account after post-trade has applied. With a known
-/// effective account currency, only exact barrier matches apply and mismatching
-/// levels are skipped. Without one, the first in-scope barrier applies; no
-/// match leaves PnL accumulating and publishing without PnL control. Position
-/// PnL is tracked independently per asset and never participates directly in
-/// that barrier. Position and account halts are both sticky until a manager
-/// replaces the corresponding state.
+/// effective account currency, an account-tier mismatch fails closed and blocks
+/// the account; account-group and global mismatches are skipped. A
+/// known-currency account with no account barrier and no matching fallback has
+/// no effective barrier, but its PnL keeps accumulating and publishing. Without
+/// an effective currency, the first in-scope barrier applies. Bounds are
+/// compared as stored and are never FX-converted.
+/// Position PnL is tracked independently per asset and never participates
+/// directly in that barrier. Position and account halts are both sticky until a
+/// manager replaces the corresponding state.
 ///
 /// The runtime-updatable slippage / pricing / override cascade lives in
 /// [`SpotFundsSettings`], stored behind a settings cell read allocation-free
@@ -537,10 +555,13 @@ where
     /// configured. Use [`Self::with_policy_group_id`] on the returned policy to
     /// assign a non-default policy group.
     ///
-    /// With a known effective account currency, only exact barrier matches
-    /// apply and mismatching levels are skipped. Without one, the first
-    /// in-scope barrier applies; no match leaves P&L accumulating and
-    /// publishing without P&L control.
+    /// With a known effective account currency, an account-tier mismatch fails
+    /// closed and blocks the account; account-group and global mismatches are
+    /// skipped. A known-currency account with no account barrier and no
+    /// matching fallback has no effective barrier, but its P&L keeps
+    /// accumulating and publishing. Without an effective currency, the first
+    /// in-scope barrier applies. Bounds are compared as stored and are never
+    /// FX-converted.
     ///
     /// # Errors
     ///
@@ -823,7 +844,7 @@ where
                     .as_ref()
                     .and_then(|barrier| {
                         rejects::account_pnl_block_for_state(
-                            account_id,
+                            account_currency.as_ref(),
                             state,
                             barrier,
                             None,

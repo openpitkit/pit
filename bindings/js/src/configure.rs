@@ -108,10 +108,12 @@ export interface SpotFundsConfigureOptions {
  * Omitted axes stay unchanged. `globalBarrier: null` clears the singular
  * barrier, while a barrier value replaces it. Supplied group/account iterables
  * replace their axes.
- * With a known effective account currency, only exact barrier matches apply and
- * mismatching levels are skipped; without one, the first in-scope barrier
- * applies, while no match leaves P&L accumulating and publishing without P&L
- * control.
+ * With a known effective account currency, an account-tier mismatch fails
+ * closed and blocks the account; account-group and global mismatches are
+ * skipped. A known-currency account with no account barrier and no matching
+ * fallback has no effective barrier, but its P&L keeps accumulating and
+ * publishing. Without an effective currency, the first in-scope barrier
+ * applies. Bounds are compared as stored and are never FX-converted.
  */
 export interface SpotFundsPnlBoundsKillswitchConfigureOptions {
   globalBarrier?: SpotFundsPnlBoundsBarrier | null;
@@ -429,10 +431,13 @@ impl JsConfigurator {
 
     /// Retunes the spot-funds account-wide P&L-bounds axis.
     ///
-    /// With a known effective account currency, only exact barrier matches
-    /// apply and mismatching levels are skipped; without one, the first
-    /// in-scope barrier applies, while no match leaves P&L accumulating and
-    /// publishing without P&L control.
+    /// With a known effective account currency, an account-tier mismatch fails
+    /// closed and blocks the account; account-group and global mismatches are
+    /// skipped. A known-currency account with no account barrier and no
+    /// matching fallback has no effective barrier, but its P&L keeps
+    /// accumulating and publishing. Without an effective currency, the first
+    /// in-scope barrier applies. Bounds are compared as stored and are never
+    /// FX-converted.
     ///
     /// An account whose effective barrier changed is evaluated against its
     /// stored account P&L in the same call: an already halted account, or one

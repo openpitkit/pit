@@ -544,6 +544,45 @@ describe("runtime configurator", () => {
     expect(result.accountBlocks).toHaveLength(0);
   });
 
+  it("rejects a non-matching account-tier spot-funds pnl barrier", () => {
+    const engine = Engine.builder()
+      .builtin(
+        buildSpotFundsPnlBoundsKillswitch().accountBarriers([
+          new SpotFundsPnlBoundsAccountBarrier(
+            ACCOUNT,
+            new SpotFundsPnlBoundsBarrier("EUR", "-100", undefined),
+          ),
+        ]),
+      )
+      .build();
+    engine.accounts().setCurrency(ACCOUNT, "USD");
+
+    const result = engine
+      .configure()
+      .setSpotFundsAccountPnl(SpotFundsPnlBoundsKillswitchBuilder.NAME, {
+        account: ACCOUNT,
+        state: "0",
+      });
+
+    expect(result.accountBlocks).toHaveLength(1);
+    expect(result.accountBlocks[0]!.code).toBe("PnlKillSwitchTriggered");
+    expect(result.accountBlocks[0]!.reason).toBe(
+      "pnl barrier currency mismatch",
+    );
+    expect(result.accountBlocks[0]!.details).toBe(
+      "account currency USD, barrier currency EUR",
+    );
+
+    const blocked = engine.executePreTrade(makeOrder());
+    expect(blocked.ok).toBe(false);
+    expect(blocked.rejects).toHaveLength(1);
+    expect(blocked.rejects[0]!.code).toBe("PnlKillSwitchTriggered");
+    expect(blocked.rejects[0]!.reason).toBe("pnl barrier currency mismatch");
+    expect(blocked.rejects[0]!.details).toBe(
+      "account currency USD, barrier currency EUR",
+    );
+  });
+
   it("applies a spot-funds pnl barrier with a matching currency", () => {
     const engine = Engine.builder()
       .builtin(

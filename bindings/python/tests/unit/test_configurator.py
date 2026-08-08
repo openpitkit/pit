@@ -357,6 +357,51 @@ def test_spot_funds_pnl_barrier_ignores_non_matching_currency() -> None:
 
 
 @pytest.mark.unit
+def test_spot_funds_account_pnl_barrier_rejects_non_matching_currency() -> None:
+    policies = openpit.pretrade.policies
+    account_id = openpit.param.AccountId.from_int(83022)
+    usd = openpit.param.Asset("USD")
+    engine = (
+        openpit.Engine.builder()
+        .no_sync()
+        .builtin(
+            policies.build_spot_funds_pnl_bounds_killswitch().account_barriers(
+                policies.SpotFundsPnlBoundsAccountBarrier(
+                    barrier=policies.SpotFundsPnlBoundsBarrier(
+                        currency=openpit.param.Asset("EUR"),
+                        lower_bound=openpit.param.Pnl("-100"),
+                    ),
+                    account_id=account_id,
+                )
+            )
+        )
+        .build()
+    )
+    engine.accounts().set_currency(account_id, usd)
+
+    result = engine.configure().set_spot_funds_account_pnl(
+        policies.SpotFundsPnlBoundsKillswitchBuilder.NAME,
+        account=account_id,
+        state=openpit.param.Pnl("0"),
+    )
+
+    assert len(result.account_blocks) == 1
+    block = result.account_blocks[0]
+    assert block.code == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    assert block.reason == "pnl barrier currency mismatch"
+    assert block.details == "account currency USD, barrier currency EUR"
+
+    blocked = engine.start_pre_trade(order=conftest.make_order(account_id=account_id))
+    assert not blocked.ok
+    assert len(blocked.rejects) == 1
+    assert (
+        blocked.rejects[0].code == openpit.pretrade.RejectCode.PNL_KILL_SWITCH_TRIGGERED
+    )
+    assert blocked.rejects[0].reason == "pnl barrier currency mismatch"
+    assert blocked.rejects[0].details == "account currency USD, barrier currency EUR"
+
+
+@pytest.mark.unit
 def test_spot_funds_pnl_barrier_applies_matching_currency() -> None:
     policies = openpit.pretrade.policies
     account_id = openpit.param.AccountId.from_int(83020)

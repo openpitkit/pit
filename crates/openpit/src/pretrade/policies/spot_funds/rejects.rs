@@ -18,17 +18,46 @@
 //! Small constructors for [`Reject`] / [`AccountBlock`] values used by
 //! [`SpotFundsPolicy`](super::SpotFundsPolicy).
 
-use crate::param::{AccountId, Asset, PositionSize};
+use crate::param::{Asset, PositionSize};
 use crate::pretrade::policy::{field_access_error_account_adjustment_reject, PolicyName};
 use crate::pretrade::{AccountBlock, Reject, RejectCode, RejectScope, Rejects};
 use crate::PnlHaltReason;
 
+/// Blocks the account when `barrier` is denominated in another currency than
+/// the effective account currency it was resolved with.
+///
+/// Callers must pass the effective currency the barrier was resolved with.
+/// `SpotFundsSettings::pnl_barrier_for` already drops group and global
+/// barriers whose currency does not match, so a mismatch reaching here can only
+/// come from an account-scope barrier, which always controls its account and
+/// therefore faults instead of being skipped. No provenance: the mismatch is a
+/// static configuration condition, independent of the asserted mutation, so a
+/// rollback must not clear it.
+pub(super) fn account_pnl_barrier_currency_mismatch_block(
+    account_currency: Option<&Asset>,
+    barrier: &super::SpotFundsPnlBoundsBarrier,
+) -> Option<AccountBlock> {
+    let account_currency = account_currency.filter(|currency| *currency != &barrier.currency)?;
+    Some(
+        super::super::pnl_bounds::pnl_barrier_currency_mismatch_account_block(
+            super::SPOT_FUNDS_POLICY_NAME,
+            format!(
+                "account currency {account_currency}, barrier currency {}",
+                barrier.currency,
+            ),
+        ),
+    )
+}
+
 pub(super) fn account_pnl_block_for_state(
-    _account_id: AccountId,
+    account_currency: Option<&Asset>,
     state: crate::PnlState,
     barrier: &super::SpotFundsPnlBoundsBarrier,
     provenance: Option<u64>,
 ) -> Option<AccountBlock> {
+    if let Some(block) = account_pnl_barrier_currency_mismatch_block(account_currency, barrier) {
+        return Some(block);
+    }
     let block = match state {
         crate::PnlState::Value(absolute) => {
             let sides = super::super::pnl_bounds::breached_sides(
@@ -52,7 +81,6 @@ pub(super) fn account_pnl_block_for_state(
         }
         crate::PnlState::Halted(reason) => Some(account_pnl_halted_block(
             super::SPOT_FUNDS_POLICY_NAME,
-            _account_id,
             reason,
         )),
     };
@@ -99,25 +127,7 @@ pub(super) fn order_value_calculation_failed_reject(
     )
 }
 
-pub(super) fn account_pnl_halted_reject(
-    policy: &str,
-    _account_id: AccountId,
-    reason: PnlHaltReason,
-) -> Reject {
-    Reject::new(
-        policy,
-        RejectScope::Account,
-        RejectCode::PnlKillSwitchTriggered,
-        "account pnl calculation halted",
-        format!("halt reason {reason:?}"),
-    )
-}
-
-pub(super) fn account_pnl_halted_block(
-    policy: &str,
-    _account_id: AccountId,
-    reason: PnlHaltReason,
-) -> AccountBlock {
+pub(super) fn account_pnl_halted_block(policy: &str, reason: PnlHaltReason) -> AccountBlock {
     AccountBlock::new(
         policy,
         RejectCode::PnlKillSwitchTriggered,

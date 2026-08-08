@@ -500,7 +500,7 @@ where
                         };
                         previous
                     });
-            self.register_account_pnl_adjustment_rollback_with_state(
+            self.register_account_pnl_adjustment_rollback(
                 mutations,
                 AccountPnlAssertionRollback {
                     account_control,
@@ -508,7 +508,6 @@ where
                     previous,
                     asserted: state,
                     token,
-                    barrier: barrier.clone(),
                     lease,
                 },
                 state_snapshot,
@@ -519,7 +518,9 @@ where
             // is left that could invalidate a provenance tag.
             let account_blocks = barrier
                 .as_ref()
-                .and_then(|barrier| account_pnl_block_for_state(account_id, state, barrier, None))
+                .and_then(|barrier| {
+                    account_pnl_block_for_state(account_currency.as_ref(), state, barrier, None)
+                })
                 .into_iter()
                 .collect();
             Ok(PolicyAccountAdjustmentResult {
